@@ -10,7 +10,8 @@
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 pub const SKILL_FILE: &str = "SKILL.md";
@@ -248,6 +249,28 @@ struct Walk {
     found: Vec<PathBuf>,
     errors: Vec<String>,
     stopped: bool,
+    /// Set once the scan stopped waiting for this folder, so a walk past the time limit ends.
+    cancel: Arc<AtomicBool>,
+}
+
+/// A link or junction whose target, at any hop, is on another computer. Reading through it makes
+/// Windows sign in to that machine with the user's credentials (NTLM), so it is never followed.
+/// ponytail: only the hops are judged, not the folders above a hop target; a local link into a
+/// folder that is itself a link to a share still reaches it (follow every ancestor if that matters).
+fn remote_link(p: &Path) -> bool {
+    let mut cur = p.to_path_buf();
+    for _ in 0..16 {
+        let Ok(m) = std::fs::symlink_metadata(&cur) else { return false };
+        if !m.file_type().is_symlink() {
+            return false;
+        }
+        let Ok(t) = std::fs::read_link(&cur) else { return true };
+        if crate::links::host_path(&t.to_string_lossy(), &[]) {
+            return true;
+        }
+        cur = if t.is_absolute() { t } else { cur.parent().map(|d| d.join(&t)).unwrap_or(t) };
+    }
+    true
 }
 
 fn canon(p: &Path) -> Option<PathBuf> {
@@ -272,6 +295,13 @@ fn walk(dir: &Path, depth: usize, seen: &mut HashSet<PathBuf>, limit: usize, w: 
     }
     kids.sort();
     for p in kids {
+        if w.cancel.load(Ordering::Relaxed) {
+            w.stopped = true;
+            return;
+        }
+        if remote_link(&p) {
+            continue;
+        }
         if w.found.len() >= limit {
             w.stopped = true;
             return;
@@ -297,7 +327,7 @@ fn newest_child(dir: &Path) -> Option<PathBuf> {
     let mut kids: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(dir)
         .ok()?
         .flatten()
-        .filter(|e| e.path().is_dir())
+        .filter(|e| !remote_link(&e.path()) && e.path().is_dir())
         .map(|e| (e.metadata().and_then(|m| m.modified()).unwrap_or(UNIX_EPOCH), e.path()))
         .collect();
     kids.sort();
@@ -305,9 +335,12 @@ fn newest_child(dir: &Path) -> Option<PathBuf> {
 }
 
 /// One spot's answer: the skill folders, its state and a note.
-fn scan_spot(spot: &Spot) -> (Vec<PathBuf>, &'static str, Option<String>) {
+fn scan_spot(spot: &Spot, cancel: &Arc<AtomicBool>) -> (Vec<PathBuf>, &'static str, Option<String>) {
     if let Some(why) = &spot.skip {
         return (vec![], "not-scanned", Some(why.clone()));
+    }
+    if remote_link(&spot.path) {
+        return (vec![], "not-scanned", Some("This folder links to another computer, which Kolux never opens".into()));
     }
     if !spot.path.is_dir() {
         return (vec![], "not-found", None);
@@ -316,14 +349,14 @@ fn scan_spot(spot: &Spot) -> (Vec<PathBuf>, &'static str, Option<String>) {
     if let Some(c) = canon(&spot.path) {
         seen.insert(c);
     }
-    let mut w = Walk::default();
+    let mut w = Walk { cancel: cancel.clone(), ..Walk::default() };
     match spot.kind {
         Kind::Skills => walk(&spot.path, DEPTH, &mut seen, usize::MAX, &mut w),
         // <cache>/<marketplace>/<plugin>/<version>/[skills/]<skill>: the newest version of each plugin.
         Kind::CodexCache => {
-            let markets: Vec<PathBuf> = std::fs::read_dir(&spot.path).map(|r| r.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect()).unwrap_or_default();
+            let markets: Vec<PathBuf> = std::fs::read_dir(&spot.path).map(|r| r.flatten().map(|e| e.path()).filter(|p| !remote_link(p) && p.is_dir()).collect()).unwrap_or_default();
             'all: for m in markets {
-                let plugins: Vec<PathBuf> = std::fs::read_dir(&m).map(|r| r.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect()).unwrap_or_default();
+                let plugins: Vec<PathBuf> = std::fs::read_dir(&m).map(|r| r.flatten().map(|e| e.path()).filter(|p| !remote_link(p) && p.is_dir()).collect()).unwrap_or_default();
                 for p in plugins {
                     let Some(v) = newest_child(&p) else { continue };
                     let base = if v.join("skills").is_dir() { v.join("skills") } else { v };
@@ -335,7 +368,15 @@ fn scan_spot(spot: &Spot) -> (Vec<PathBuf>, &'static str, Option<String>) {
             }
         }
         #[cfg(test)]
-        Kind::Hang => std::thread::sleep(Duration::from_secs(3)),
+        Kind::Hang => {
+            let end = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < end && !cancel.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if cancel.load(Ordering::Relaxed) {
+                tests::HANG_STOPPED.fetch_add(1, Ordering::SeqCst);
+            }
+        }
     }
     if !w.errors.is_empty() {
         let n = w.errors.len();
@@ -454,11 +495,13 @@ fn plain(p: &Path) -> String {
 /// Scan every spot at once, each on its own thread with a time limit.
 fn run(spots: Vec<Spot>, bundled: &[(&str, &str)], limit: Duration) -> Scan {
     let (tx, rx) = mpsc::channel();
+    let cancel = Arc::new(AtomicBool::new(false));
     for (i, s) in spots.iter().enumerate() {
         let tx = tx.clone();
         let s = s.clone();
+        let cancel = cancel.clone();
         std::thread::spawn(move || {
-            let answer = scan_spot(&s);
+            let answer = scan_spot(&s, &cancel);
             let read: Vec<(PathBuf, String, Option<String>, Option<u64>)> = answer
                 .0
                 .iter()
@@ -480,6 +523,8 @@ fn run(spots: Vec<Spot>, bundled: &[(&str, &str)], limit: Duration) -> Scan {
             Err(_) => break,
         }
     }
+    // Threads still walking past the limit stop at their next folder entry instead of running on.
+    cancel.store(true, Ordering::Relaxed);
     let mut skills: Vec<Skill> = vec![];
     let mut by_key: HashMap<String, usize> = HashMap::new();
     let mut roots = vec![];
@@ -603,6 +648,66 @@ mod tests {
         assert_eq!(names, vec!["alpha", "beta"]);
         let claude = s.roots.iter().find(|r| r.label == "Claude Code").unwrap();
         assert_eq!((claude.state.as_str(), claude.count), ("scanned", 2));
+    }
+
+    /// Hang folders that saw the cancel flag and stopped (the cancel test reads it).
+    pub(super) static HANG_STOPPED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    /// A link made with a target that never resolves; None where this account may not make links.
+    fn share_link(link: &Path) -> Option<()> {
+        #[cfg(windows)]
+        return std::os::windows::fs::symlink_dir(r"\\kolux-unc-test.invalid\share\skills", link).ok();
+        #[cfg(not(windows))]
+        return std::os::unix::fs::symlink("//kolux-unc-test.invalid/share/skills", link).ok();
+    }
+
+    #[test]
+    fn links_to_another_computer_are_never_followed() {
+        let home = temp("skills-unc");
+        let root = home.join(".claude").join("skills");
+        skill(&root.join("alpha"), "# alpha\n");
+        // A local junction is still followed; its hop is judged and found local.
+        link_dir(&root.join("local"), &root.join("alpha"));
+        assert!(!remote_link(&root.join("local")));
+        assert!(!remote_link(&root.join("alpha")));
+        if share_link(&root.join("share")).is_none() {
+            eprintln!("skipped the share-link half: this account cannot make symbolic links");
+            return;
+        }
+        assert!(remote_link(&root.join("share")));
+        // Two hops: a local link to the share link is judged at its second hop.
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(root.join("share"), root.join("hop")).unwrap();
+        #[cfg(not(windows))]
+        std::os::unix::fs::symlink(root.join("share"), root.join("hop")).unwrap();
+        assert!(remote_link(&root.join("hop")));
+        let s = run(spots(&env(&home), None), &[], ROOT_LIMIT);
+        let claude = s.roots.iter().find(|r| r.label == "Claude Code").unwrap();
+        assert_eq!((claude.state.as_str(), claude.count), ("scanned", 1), "{:?}", claude.note);
+        // A skills folder that is itself a link to a share is not opened at all.
+        let home2 = temp("skills-unc-root");
+        std::fs::create_dir_all(home2.join(".claude")).unwrap();
+        share_link(&home2.join(".claude").join("skills")).unwrap();
+        let s = run(spots(&env(&home2), None), &[], ROOT_LIMIT);
+        let claude = s.roots.iter().find(|r| r.label == "Claude Code").unwrap();
+        assert_eq!(claude.state, "not-scanned");
+        assert!(claude.note.as_deref().unwrap().contains("another computer"));
+    }
+
+    #[test]
+    fn a_walk_past_the_time_limit_is_told_to_stop() {
+        let home = temp("skills-cancel");
+        let mut slow = Spot::new(home.to_path_buf(), "Slow", "home", &["claude"]);
+        slow.kind = Kind::Hang;
+        let before = HANG_STOPPED.load(std::sync::atomic::Ordering::SeqCst);
+        let s = run(vec![slow], &[], Duration::from_millis(100));
+        assert_eq!(s.roots[0].state, "error");
+        // The hang thread notices the flag within a few of its 10 ms naps, well before its 3 s.
+        let end = Instant::now() + Duration::from_secs(2);
+        while HANG_STOPPED.load(std::sync::atomic::Ordering::SeqCst) == before && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(HANG_STOPPED.load(std::sync::atomic::Ordering::SeqCst) > before, "the timed-out walker kept running");
     }
 
     #[test]
