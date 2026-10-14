@@ -975,3 +975,50 @@ fn t_152_c_5_a_temp_folder_too_wide_for_scratch_is_refused_and_lane_variables_fe
     assert!(fenced_by(Path::new(r"G:\Temp\x\profile"), false, none), "a lane profile");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// FIX-2 (S8): a settings file Kolux itself created on the first install (none was there) is
+/// installed into again on every later start, and switching off deletes it instead of leaving `{}`.
+#[test]
+fn fix_2_s8_a_settings_file_kolux_created_installs_again_and_off_deletes_it() {
+    let dir = temp("fix2-created");
+    let (home, file) = (dir.join("home"), dir.join("cfg").join("settings.json"));
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let prev = target_dir(&home, &file).join(STATUS_PREV);
+    for round in 0..2 {
+        assert!(!file.exists());
+        install_claude_at(&home, &file).unwrap();
+        assert!(file.exists() && !backup_of(&file).exists(), "round {round}: created, with nothing to copy");
+        let record = fs::read_to_string(target_dir(&home, &file).join(BACKUP_RECORD)).unwrap();
+        assert!(record.lines().any(|l| l == format!("missing  {}", file.display())), "round {round}: {record}");
+        // The next start: the file holds Kolux's entries and has no copy, which is right for it.
+        install_claude_at(&home, &file).unwrap_or_else(|e| panic!("round {round}: a second start fails: {e}"));
+        assert_eq!(switch::inspect(&file, &CLAUDE_EVENTS).0, "installed");
+        assert!(remove_claude(&file, &prev).unwrap());
+        assert!(!file.exists(), "round {round}: off leaves no file behind, not {:?}", fs::read_to_string(&file).ok());
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// FIX-2 (S8): keys the user put into a file Kolux created stay when the hooks go off; a file
+/// that was the user's before the install is never deleted, even when it read `{}`.
+#[test]
+fn fix_2_s8_user_keys_in_a_created_file_stay_and_a_users_empty_file_stays() {
+    let dir = temp("fix2-keys");
+    let (home, file) = (dir.join("home"), dir.join("cfg").join("settings.json"));
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    install_claude_at(&home, &file).unwrap();
+    let mut v: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+    v["model"] = json!("opus");
+    fs::write(&file, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+    install_claude_at(&home, &file).unwrap();
+    assert!(remove_claude(&file, &target_dir(&home, &file).join(STATUS_PREV)).unwrap());
+    assert_eq!(ev(&fs::read_to_string(&file).unwrap()), json!({"model": "opus"}), "the user's key stays, Kolux's go");
+    // A file of the user's that read `{}` before the install comes back as it was.
+    let own = dir.join("own").join("settings.json");
+    fs::create_dir_all(own.parent().unwrap()).unwrap();
+    fs::write(&own, "{}\n").unwrap();
+    install_claude_at(&home, &own).unwrap();
+    assert!(remove_claude(&own, &target_dir(&home, &own).join(STATUS_PREV)).unwrap());
+    assert_eq!(fs::read_to_string(&own).unwrap(), "{}\n", "the user's own file is never deleted");
+    let _ = fs::remove_dir_all(&dir);
+}

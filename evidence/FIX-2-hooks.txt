@@ -1,0 +1,40 @@
+FIX-2 (lane/hooks, council re-review hooks-f57b3e8-rereview.md), 2026-10-14
+BEFORE f57b3e8; step 0 merge of main 950ba36 = e0e063c (no conflicts; tree equal to 950ba36).
+Every test run with CLAUDE_CONFIG_DIR, CODEX_HOME, USERPROFILE, HOME, APPDATA, LOCALAPPDATA under
+G:\Temp\hooks-w5\ (marker files in place) and TEMP/TMP = G:\Temp\hooks-w5\apptmp (tests' own temp
+folders live there). No app launch, no real agent run, no real config file read or written.
+
+Step 0 gates (on e0e063c):
+- cargo test (full): lib 694 passed / 0 failed / 1 ignored; shim 3 passed.
+- cargo clippy --all-targets -D warnings: clean.
+- tsc --noEmit: clean. pnpm test: 162 files, 1002 tests passed.
+- plan-check: OK; "## Last 10 passes" count 1; duplicate T-ids: none.
+- firewall-check -Baseline: 53 hits in 22 files, 0 new.
+
+(a) S8 + S5: a settings file Kolux created on the first install
+Bug (main): with no ~/.claude/settings.json, the first install created it and wrote no record,
+so every later start failed with "already holds Kolux's hook entries but has no .bak-kolux copy"
+(updates to Kolux's entries never landed); switching off left the file as `{}`. Gemini CLI's and
+Antigravity's files were left as `{}` the same way.
+Fix (src-tauri/src/agent_hooks/mod.rs, vendors.rs):
+- back_up: a file about to be created gets a record line `missing  <file>` (written synced, then
+  renamed, like the hash record). A file holding Kolux's entries with no copy is accepted when its
+  record says it was missing; otherwise the refusal stays (T-152-c (4) test unchanged and green).
+- drop_created: on removal, when what is left is `{}`, there is no kept copy and the record says
+  missing, the file is deleted (only while it still holds the bytes Kolux read, else the usual
+  "changed since it was read" error) and the record goes with it. Used by Claude's remove and by
+  Gemini CLI's and Antigravity's write_back. Gemini/Antigravity keep_copy now runs back_up for a
+  file about to be created, so it is recorded.
+Tests (red on the old code, then green):
+- agent_hooks::tests::fix_2_s8_a_settings_file_kolux_created_installs_again_and_off_deletes_it
+  RED: panicked at tests.rs:991 reading the record: "The system cannot find the path specified"
+  (no record was written for a created file).
+- agent_hooks::tests::fix_2_s8_user_keys_in_a_created_file_stay_and_a_users_empty_file_stays
+  RED: the second start: "...\cfg\settings.json already holds Kolux's hook entries but has no
+  .bak-kolux copy, so no copy is made and hooks are not installed; ..." (the S8 error itself).
+- agent_hooks::vendors::tests::fix_2_s5_a_file_kolux_created_is_deleted_on_removal
+  RED: "gemini round 0: off leaves no file, not Some("{}\n")".
+GREEN: cargo test --lib agent_hooks: 55 passed, 0 failed (all three fix_2 tests ok);
+cargo test --lib hooks: 70 passed, 0 failed; clippy -D warnings clean.
+What the user sees: on a PC with no Claude settings file, Kolux's hooks keep updating on every
+start with no error in the hooks panel, and switching the hooks off leaves no empty settings file.

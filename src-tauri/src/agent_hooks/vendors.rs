@@ -9,7 +9,7 @@
 //! - Amp: a plugin file in `~/.config/amp/plugins/` that posts each event itself.
 
 use super::super::{codex_change, home_dir, install_groups, script, write_atomic, write_json, write_script, Change};
-use super::{back_up, backup_of, fenced, kept, names_mine, read_opt, remove_groups, saved::SPOOL_FILE, scratch_only, switch, target_dir, Plan, BACKUP_RECORD};
+use super::{back_up, backup_of, drop_created, fenced, kept, names_mine, read_opt, remove_groups, saved::SPOOL_FILE, scratch_only, switch, target_dir, Plan, BACKUP_RECORD};
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -193,7 +193,8 @@ fn parse(file: &Path, text: Option<&str>) -> Result<Value, String> {
 /// already holds Kolux's entries with no copy was written by Kolux (or by an install before FIX-1),
 /// so a copy of it would only bring Kolux's entries back on removal.
 fn keep_copy(home: &Path, file: &Path, agent: &str, existed: bool, mine_already: bool) -> Result<(), String> {
-    if !existed || (mine_already && !backup_of(file).exists()) {
+    // FIX-2 (S5): a file about to be created still goes through `back_up`, which records it missing.
+    if existed && mine_already && !backup_of(file).exists() {
         return Ok(());
     }
     if let Some((original, copy)) = back_up(file, &target_dir(home, file).join(BACKUP_RECORD))? {
@@ -204,9 +205,11 @@ fn keep_copy(home: &Path, file: &Path, agent: &str, existed: bool, mine_already:
 
 /// FIX-1 (a): `v` goes back into `file`; when it reads the same as the copy kept before Kolux's
 /// first write, the copy's own bytes are written, so the file is byte for byte the user's again.
-fn write_back(file: &Path, v: &Value, text: &str) -> Result<(), String> {
+/// FIX-2 (S5): a file Kolux created and left holding nothing is deleted instead (`drop_created`).
+fn write_back(home: &Path, file: &Path, v: &Value, text: &str) -> Result<(), String> {
     match kept(file).filter(|(_, c)| c == v) {
         Some((bytes, _)) => write_atomic(file, &bytes, Some(text)),
+        None if drop_created(file, &target_dir(home, file).join(BACKUP_RECORD), v, text)? => Ok(()),
         None => write_json(file, v, Some(text)),
     }
 }
@@ -250,12 +253,12 @@ pub fn install_gemini(home: &Path, file: &Path) -> Result<bool, String> {
 
 /// Takes Kolux's entries out of a `{"hooks": {...}}` file (Gemini CLI's settings). A `hooks`
 /// object left empty goes too unless the copy kept before the install had one (as for Claude Code).
-pub fn remove_hooks(file: &Path) -> Result<bool, String> {
+pub fn remove_hooks(home: &Path, file: &Path) -> Result<bool, String> {
     let Some(text) = read_opt(file)? else { return Ok(false) };
     let mut v = parse(file, Some(&text))?;
     let changed = remove_groups(&mut v, kept(file).is_none_or(|(_, c)| c.get("hooks").is_none()));
     if changed {
-        write_back(file, &v, &text)?;
+        write_back(home, file, &v, &text)?;
     }
     Ok(changed)
 }
@@ -309,7 +312,7 @@ pub fn install_antigravity(home: &Path, file: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
-pub fn remove_antigravity(file: &Path) -> Result<bool, String> {
+pub fn remove_antigravity(home: &Path, file: &Path) -> Result<bool, String> {
     let Some(text) = read_opt(file)? else { return Ok(false) };
     let mut v = parse(file, Some(&text))?;
     let Some(root) = v.as_object_mut() else { return Ok(false) };
@@ -317,7 +320,7 @@ pub fn remove_antigravity(file: &Path) -> Result<bool, String> {
         return Ok(false);
     }
     root.remove(NAME);
-    write_back(file, &v, &text)?;
+    write_back(home, file, &v, &text)?;
     Ok(true)
 }
 
@@ -355,11 +358,11 @@ pub fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'stat
     match id {
         "gemini" => {
             let file = target(profile, gemini_file(home))?;
-            if install { install_gemini(home, &file) } else { remove_hooks(&file) }
+            if install { install_gemini(home, &file) } else { remove_hooks(home, &file) }
         }
         "antigravity" => {
             let file = target(profile, antigravity_file(home))?;
-            if install { install_antigravity(home, &file) } else { remove_antigravity(&file) }
+            if install { install_antigravity(home, &file) } else { remove_antigravity(home, &file) }
         }
         "amp" => {
             let file = target(profile, amp_file(home))?;
@@ -486,7 +489,7 @@ mod tests {
         assert_eq!(v["hooks"]["AfterAgent"][0]["hooks"][0]["timeout"], 10_000);
         assert_eq!(v["hooks"]["BeforeTool"][1]["matcher"], "*");
         assert_eq!(switch::inspect(&file, &GEMINI_EVENTS).0, "installed");
-        assert!(remove_hooks(&file).unwrap());
+        assert!(remove_hooks(&home, &file).unwrap());
         let v: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(v["hooks"]["BeforeTool"][0]["hooks"][0]["command"], "my-check");
         assert!(v["hooks"].get("AfterAgent").is_none());
@@ -503,12 +506,12 @@ mod tests {
         let v: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
         assert!(v[NAME]["PreToolUse"][0]["hooks"][0]["command"].as_str().unwrap().ends_with("antigravity.cmd\" PreToolUse"));
         assert_eq!(inspect_antigravity(&file).0, "installed");
-        assert!(remove_antigravity(&file).unwrap());
+        assert!(remove_antigravity(&home, &file).unwrap());
         let v: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(v, json!({"mine":{"Stop":[{"hooks":[{"type":"command","command":"notify"}]}]}}));
         fs::write(&file, r#"{"kolux-rs":{"Stop":[{"hooks":[{"type":"command","command":"someone else"}]}]}}"#).unwrap();
         assert!(install_antigravity(&home, &file).is_err(), "a same-named bundle of the user's is left alone");
-        assert!(!remove_antigravity(&file).unwrap());
+        assert!(!remove_antigravity(&home, &file).unwrap());
         assert_eq!(inspect_antigravity(&file).0, "error");
         let _ = fs::remove_dir_all(&home);
     }
@@ -562,8 +565,32 @@ mod tests {
         kept_and_recorded(&home, &file, &original);
         assert!(!install_gemini(&home, &file).unwrap(), "a second install changes nothing and keeps the first copy");
         kept_and_recorded(&home, &file, &original);
-        assert!(remove_hooks(&file).unwrap());
+        assert!(remove_hooks(&home, &file).unwrap());
         assert_eq!(fs::read(&file).unwrap(), original, "install then remove is byte for byte the user's file");
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// FIX-2 (S5): a settings file Kolux created (none was there before) is deleted when the
+    /// hooks go off, not left as `{}`; one the user had stays.
+    #[test]
+    fn fix_2_s5_a_file_kolux_created_is_deleted_on_removal() {
+        let home = scratch("fix2-created");
+        for (file, agent) in [(gemini_file(&home), "gemini"), (antigravity_file(&home), "antigravity")] {
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            let on = |f: &Path| if agent == "gemini" { install_gemini(&home, f) } else { install_antigravity(&home, f) };
+            let off = |f: &Path| if agent == "gemini" { remove_hooks(&home, f) } else { remove_antigravity(&home, f) };
+            for round in 0..2 {
+                assert!(!file.exists());
+                assert!(on(&file).unwrap(), "{agent} round {round}");
+                assert!(!on(&file).unwrap(), "{agent} round {round}: a second start changes nothing");
+                assert!(off(&file).unwrap());
+                assert!(!file.exists(), "{agent} round {round}: off leaves no file, not {:?}", fs::read_to_string(&file).ok());
+            }
+            // The user's own empty file stays.
+            fs::write(&file, "{}").unwrap();
+            assert!(on(&file).unwrap() && off(&file).unwrap());
+            assert_eq!(fs::read_to_string(&file).unwrap(), "{}", "{agent}: the user's own file is never deleted");
+        }
         let _ = fs::remove_dir_all(&home);
     }
 
@@ -576,7 +603,7 @@ mod tests {
         fs::write(&file, &original).unwrap();
         assert!(install_antigravity(&home, &file).unwrap());
         kept_and_recorded(&home, &file, &original);
-        assert!(remove_antigravity(&file).unwrap());
+        assert!(remove_antigravity(&home, &file).unwrap());
         assert_eq!(fs::read(&file).unwrap(), original);
         let _ = fs::remove_dir_all(&home);
     }
@@ -638,7 +665,7 @@ mod tests {
             fs::write(&file, text).unwrap();
             assert!(install_antigravity(&home, &file).is_err(), "{text}");
             assert_eq!(fs::read_to_string(&file).unwrap(), text);
-            assert!(!remove_antigravity(&file).unwrap_or(false));
+            assert!(!remove_antigravity(&home, &file).unwrap_or(false));
             assert_eq!(fs::read_to_string(&file).unwrap(), text);
         }
         let _ = fs::remove_dir_all(&home);
