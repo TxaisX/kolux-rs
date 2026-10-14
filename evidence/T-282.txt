@@ -20,3 +20,14 @@ The window stayed responsive: the longest gap between painted frames during the 
 Closing afterwards stopped at the app's own "Quit with unsaved changes? 1 file has unsaved changes: note.md" dialog (the rich view's normal paste was unsaved), the expected guard; the dev app was then stopped by its own pids.
 
 Tests: src/editor/paste.test.ts (5 EDIT-008 tests). Gates for the card: tsc 0; vitest src/usage src/editor 29 files 160 tests passed.
+
+LIVE PROOF PENDING (batched; added 2026-10-14 for the council fixes in evidence/look-FIX-1.txt B; the live check above predates them)
+1. Open a code file tab (a .txt in a project). Copy about 3 MB of text, paste it with Ctrl+V and
+   keep typing letters while it goes in: the text lands whole, none of the typed letters appear
+   inside it, the window keeps drawing. Press Ctrl+Z once: the whole paste is gone.
+2. Paste more than 32 MB in the same tab: toast "Paste refused: ... over the 32 MB limit for one
+   paste. Nothing was pasted."; the file is unchanged.
+3. Open a .md note in the rich view and paste about 1 MB: toast "Paste refused in the rich view:
+   1 MB is over the 600 KB it takes in one paste. Paste it in source view instead. Nothing was
+   pasted."; the note is unchanged. A normal short paste still goes in.
+4. Switch that note to source view and paste the same 1 MB: it goes in.

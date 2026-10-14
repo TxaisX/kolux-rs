@@ -76,3 +76,11 @@ LIVE PROOF PENDING (C, batched): with a stored Claude usage report from an earli
   "At this rate" line yet. Push two live claude-status reports at least 5 minutes apart (40% then
   41% of the weekly window): the hover gains "At this rate: runs out in ..., before the reset".
   With no reset time in the reports the line has no "before the reset".
+
+D. Tick wording (FIX-BEFORE 3 / FB2)
+- PLAN T-282 and T-328 ticks now end with "live proof pending (batched)" and name these fixes;
+  LIVE PROOF PENDING steps appended to evidence/T-282.txt and evidence/T-328.txt.
+
+Not done (AFTER 3, kept as is): the refusal toast still says "32 MB" though the limit counts
+characters (UTF-16 units). "32 million characters" would be wrong too (the limit is 33,554,432
+units); for plain text one character is one byte, so "32 MB" reads true for the usual paste.
