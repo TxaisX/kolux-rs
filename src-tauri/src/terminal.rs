@@ -530,7 +530,7 @@ impl Terminals {
     /// Starts a pane. With no `program` it runs the user's shell; with one (an agent such as
     /// `claude`) it runs that program directly with `args`, in `cwd`.
     #[allow(clippy::too_many_arguments)]
-    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>, own_env: Vec<(String, String)>, env: Vec<(String, String)>, pane_key: Option<u32>) -> Result<u32, String> {
+    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>, own_env: Vec<(String, String)>, env: Vec<(String, String)>, pane_key: Option<u32>, shell: Option<(String, Vec<String>)>) -> Result<u32, String> {
         // TERM-115: a pane's Ctrl+C must reach its program. Windows hands "ignore Ctrl+C" down to
         // every child a process starts, and this app is itself started with CREATE_NEW_PROCESS_GROUP
         // (by `kolux-dev`, and by the dev runner), so its shells never saw the interrupt: the pty got
@@ -563,10 +563,11 @@ impl Terminals {
         // GIT-026: a pull-request link printed in any pane, hidden or parked ones too, attaches to its workspace.
         let mut prs = crate::scm::PrScan::default();
         let link_dir = cwd.clone();
-        // ACCT-046: a program runs as asked; an automatic shell has a line of fallbacks.
+        // ACCT-046: a program runs as asked; a shell pane has a line of fallbacks behind the
+        // chosen default shell (SET-026), when there is one.
         let mut commands = match program.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
             Some(p) => vec![program_command(p, &args, cwd.as_deref())],
-            None => shell_commands(cwd.as_deref()),
+            None => shell_commands(cwd.as_deref(), shell),
         };
         let key = crate::cli::secret();
         let strip_key = crate::claude_key::strip_inherited(program.as_deref(), &env);
@@ -993,17 +994,14 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
     // ACCT-004: a Claude pane in key mode is handed the 1-year key; nothing else ever is.
     // ACCT-005: otherwise a Claude pane runs on the active managed account's own folder.
     let env_own = env.unwrap_or_default();
-    let (mut program, mut args) = (program, args);
     let pinned = resumed.is_some();
-    let (env, cap, account, hooks_on): (Vec<(String, String)>, bool, Option<String>, bool) = {
+    #[allow(clippy::type_complexity)]
+    let (env, cap, account, hooks_on, plain): (Vec<(String, String)>, bool, Option<String>, bool, Option<serde_json::Value>) = {
         let store = store.lock().map_err(|e| e.to_string())?;
         let settings = store.settings();
-        // SET-026: a plain new terminal opens in the chosen default shell.
-        if program.is_none() {
-            if let Some((p, a)) = crate::pty::default_shell(&settings) {
-                (program, args) = (Some(p), Some(a));
-            }
-        }
+        // SET-026: a plain new terminal opens in the chosen default shell; the search for it on
+        // PATH runs after the lock is let go (council), with the settings read here.
+        let plain = program.is_none().then(|| settings.clone());
         let used = codex.then(|| account.clone().or_else(|| crate::codex_accounts::active_account(&store).map(|a| a.id))).flatten();
         let codex_home = resumed.or_else(|| crate::codex_accounts::active_home(&store));
         let token = crate::secrets::read_setting(&store, crate::claude_key::TOKEN_FIELD).ok().flatten();
@@ -1017,8 +1015,9 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
             .map(|(k, v)| (k.to_string(), v))
             .into_iter()
             .collect();
-        (env, crate::cap::on(&settings), used, crate::hooks::agent_hooks::switch::on(&settings))
+        (env, crate::cap::on(&settings), used, crate::hooks::agent_hooks::switch::on(&settings), plain)
     };
+    let shell = plain.and_then(|s| crate::pty::default_shell(&s));
     // ACCT-024: on a managed Claude account, the user's own settings may not sign the pane in.
     if env.iter().any(|(k, _)| k == crate::claude_accounts::CONFIG_ENV) {
         let found = crate::claude_accounts::sign_in_overrides(&env_own, cfg!(windows));
@@ -1059,7 +1058,7 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
     }
     let agent = program.as_deref().and_then(crate::agents::credited_agent);
     let dir = cwd.clone();
-    let id = terminals.spawn(app.clone(), cols, rows, cwd, program, args, env_own, env, pane_key)?;
+    let id = terminals.spawn(app.clone(), cols, rows, cwd, program, args, env_own, env, pane_key, shell)?;
     // AUTO-012: an automation run dispatched to this worktree for this agent is followed here.
     if let Some(dir) = dir {
         crate::automations::follow(&app, |s| crate::automations::claim(s, id, pane_key, &dir, agent));
@@ -1356,7 +1355,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kolux-orch058-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let t = Terminals::default();
-        let s = PtySession::spawn(shell_commands(Some(&dir.to_string_lossy())).remove(0), 80, 24, |_| {}, |_| {}).expect("spawn a shell in the folder");
+        let s = PtySession::spawn(shell_commands(Some(&dir.to_string_lossy()), None).remove(0), 80, 24, |_| {}, |_| {}).expect("spawn a shell in the folder");
         let pid = s.pid().expect("the platform reports the shell's pid");
         {
             let mut inner = t.inner.lock().unwrap();
@@ -1382,7 +1381,7 @@ mod tests {
         unattended(&mut agent, true);
         assert_eq!(agent.get_env("GIT_TERMINAL_PROMPT").and_then(|v| v.to_str()), Some("0"));
         assert_eq!(agent.get_env("GCM_INTERACTIVE").and_then(|v| v.to_str()), Some("never"));
-        let mut shell = crate::pty::shell_commands(None).remove(0);
+        let mut shell = crate::pty::shell_commands(None, None).remove(0);
         let before = shell.get_env("GIT_TERMINAL_PROMPT").map(|v| v.to_os_string());
         unattended(&mut shell, false);
         assert_eq!(shell.get_env("GIT_TERMINAL_PROMPT").map(|v| v.to_os_string()), before, "a shell still prompts");
