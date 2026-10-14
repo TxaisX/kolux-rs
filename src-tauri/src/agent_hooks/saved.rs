@@ -77,7 +77,7 @@ fn agent_of(route: &str) -> Option<(Agent, &'static str)> {
     match route.trim_start_matches('/') {
         "claude" => Some((Agent::Claude, "claude")),
         "codex" => Some((Agent::Codex, "codex")),
-        _ => None,
+        r => super::vendors::agent_of(r).map(|name| (Agent::Vendor, name)),
     }
 }
 
@@ -131,6 +131,8 @@ pub fn replay(text: &str, rows: &mut Vec<Row>, now: u64) -> usize {
         let Some((agent, name)) = agent_of(route) else { continue };
         let Some((pane_key, terminal)) = identity(who) else { continue };
         let Ok(event) = serde_json::from_str::<Value>(body.trim()) else { continue };
+        // T-120-b: a vendor's line holds its raw event, normalized as the listener would.
+        let event = if agent == Agent::Vendor { match super::vendors::normalize(route, &event) { Some(e) => e, None => continue } } else { event };
         let session = sessions.entry(pane_key).or_default();
         let Some((change, child)) = session.apply(agent, &event) else { continue };
         let status = Status { pane_key, terminal, change, children: Vec::new(), stop: session.stop.clone(), reply: None, child, interrupted: false, monitoring: session.monitoring() };

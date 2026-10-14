@@ -1,8 +1,8 @@
 diff --git a/src/App.tsx b/src/App.tsx
-index f593fb0..9f3897b 100644
+index 41aab81..95867c6 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
-@@ -130,7 +130,7 @@ import { draftKey, feedbackMessage, keepDraft, showsReview, stillPending, type P
+@@ -132,7 +132,7 @@ import { draftKey, feedbackMessage, keepDraft, showsReview, stillPending, type P
  export type ShellTarget = { dir: string | null; branch: string | null };
  
  /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
@@ -11,7 +11,7 @@ index f593fb0..9f3897b 100644
  
  /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
  function tabName(p: Pane, titles: Record<number, string>): string {
-@@ -2339,6 +2339,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -2381,6 +2381,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                      key={p.key}
                      hidden={!board && p.key !== active}
                      restored={restoredKeys.current.has(p.key)}
@@ -52,10 +52,10 @@ index 632873a..c5f5592 100644
    }
    ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
 diff --git a/src/terminal/TerminalPane.tsx b/src/terminal/TerminalPane.tsx
-index 9a619f1..70a3b99 100644
+index cb81758..819671d 100644
 --- a/src/terminal/TerminalPane.tsx
 +++ b/src/terminal/TerminalPane.tsx
-@@ -19,7 +19,6 @@ import { HeldKeys, screenLines, shouldRefocus, watchScale } from "./recover";
+@@ -20,7 +20,6 @@ import { HeldKeys, screenLines, shouldRefocus, watchScale } from "./recover";
  import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } from "./codec";
  import { encodeHistory, replay, restoreTail, viewTop } from "./history";
  import { batchAcks, memoryProfile } from "./flow";
@@ -63,25 +63,25 @@ index 9a619f1..70a3b99 100644
  import { explain as explainError, exitAdvice } from "./errors";
  import { DIVIDER_DONE, dragging } from "./dividers";
  import { currentDark, currentTerminal, TERMINAL_EVENT, termFont } from "../theme";
-@@ -96,6 +95,8 @@ type Props = {
-   notice?: PaneNotice | null;
-   /** TERM-106: the pane came back from the saved layout; what it printed before is shown first. */
+@@ -115,6 +114,8 @@ type Props = {
    restored?: boolean;
+   /** TERM-075: the setting "Programs can copy to the clipboard" (OSC 52); on unless turned off. */
+   clipboardFromPrograms?: boolean;
 +  /** TERM-107 (T-066-c): false when the restored agent's start line carries no resume form. */
 +  resumed?: boolean;
    /** The session failed to start (SESS-024: the window drops the pane rather than leaving it blank). */
    onFailed?: (error: string) => void;
    /** A job title from the seat (SESS-024) wins over the workspace name. */
-@@ -161,7 +162,7 @@ const stagger = () =>
+@@ -187,7 +188,7 @@ const stagger = () =>
      }, 150 + 60 * waiting++),
    );
  
--export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false }: Props) {
-+export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false, resumed }: Props) {
+-export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile }: Props) {
++export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
    const host = useRef<HTMLDivElement>(null);
-   // TERM-096: the link provider is set up once, so it reads the newest opener through a ref.
-   const handleRef = useRef(findHandle);
-@@ -517,7 +518,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
+   const keySettingsRef = useRef(keySettings);
+   keySettingsRef.current = keySettings;
+@@ -692,7 +693,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
          // onData: the terminal's own answers to the shell's start-up questions go through onData.
          let keepInView = false;
          if (restored) {

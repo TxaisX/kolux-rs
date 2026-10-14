@@ -46,6 +46,8 @@ pub static LIMIT_RESETS_AT: AtomicI64 = AtomicI64::new(0);
 pub enum Agent {
     Claude,
     Codex,
+    /// T-120-b: Gemini CLI, Antigravity or Amp, its event already normalized; hook semantics unverified.
+    Vendor,
 }
 
 /// A sub-agent or teammate under a lead session.
@@ -137,6 +139,8 @@ pub struct Session {
     pub history: VecDeque<Entry>,
     /// The quiet alert already went out for this silent spell (STAT-045).
     quiet_fired: bool,
+    /// Where the agent's hooks say its transcript is (CHAT-006 reads it before any folder search).
+    pub transcript: Option<String>,
     /// When the last hook (or in-band) signal came (ms), 0 before the first (STAT-032).
     seen: u64,
     /// The working reading has had no signal for the unverified window; the next one clears it.
@@ -250,6 +254,7 @@ impl Session {
                 let change = match agent {
                     Agent::Claude => claude_change(&strip_agent(event)),
                     Agent::Codex => codex_change(&strip_agent(event)),
+                    Agent::Vendor => None,
                 }?;
                 match name {
                     "PermissionRequest" => {
@@ -313,6 +318,7 @@ impl Session {
         let mut change = match agent {
             Agent::Claude => claude_change(event),
             Agent::Codex => codex_change(event),
+            Agent::Vendor => crate::hooks::agent_hooks::vendors::change(event),
         }?;
         let before = self.resolved();
         if change.boundary {
@@ -330,7 +336,8 @@ impl Session {
                 self.own = Some("working");
             }
             "Stop" => {
-                self.interrupted = std::mem::take(&mut self.cancelled);
+                // T-120-b: Amp says itself when a turn was cancelled.
+                self.interrupted = std::mem::take(&mut self.cancelled) || event.get("kolux_interrupted").and_then(Value::as_bool) == Some(true);
                 self.pending = None;
                 self.reply = str_of(event, "last_assistant_message").map(clean_reply);
                 // STAT-024: Claude Code's own lists of background tasks and session crons decide.
@@ -421,7 +428,7 @@ impl Session {
             // inside it, that report is the cancelled tool's own hook finishing, not the turn going on.
             _ if event.get("is_interrupt").and_then(Value::as_bool) == Some(true) => false,
             Agent::Claude => name == "Stop" || (matches!(name, "PreToolUse" | "PostToolUse" | "PostToolUseFailure") && str_of(event, "tool_use_id").is_some_and(|id| name == "PreToolUse" || self.past_grace() || !self.killed.iter().any(|k| k == id))),
-            Agent::Codex => self.fresh_tool(name, event),
+            Agent::Codex | Agent::Vendor => self.fresh_tool(name, event),
         }
     }
 
@@ -503,8 +510,8 @@ pub fn answer_keys(agent: Agent, approve: bool) -> &'static str {
     match (agent, approve) {
         (Agent::Claude, true) => "\r",
         (Agent::Claude, false) => "\x1b",
-        (Agent::Codex, true) => "y",
-        (Agent::Codex, false) => "n",
+        (Agent::Codex | Agent::Vendor, true) => "y",
+        (Agent::Codex | Agent::Vendor, false) => "n",
     }
 }
 
@@ -601,7 +608,13 @@ pub fn report(pane_key: u32, terminal: Option<u32>, agent: Agent, event: &Value)
     with_sessions(|s| {
         let session = s.entry(pane_key).or_default();
         session.terminal = terminal.or(session.terminal);
-        let (change, child) = session.apply(agent, event)?;
+        let path = str_of(event, "transcript_path").map(str::to_string);
+        let applied = session.apply(agent, event);
+        // CHAT-006: kept after `apply`, since a fresh session start clears the rest of the record.
+        if path.is_some() {
+            session.transcript = path;
+        }
+        let (change, child) = applied?;
         crate::activity::note(pane_key, change.state);
         Some(fit_plan(status_of(pane_key, terminal, session, change, child)))
     })
@@ -624,6 +637,16 @@ pub fn settle_cancels() -> Vec<Status> {
             })
             .collect()
     })
+}
+
+/// The transcript `pane_key`'s hooks last reported (CHAT-006).
+pub fn transcript_of(pane_key: u32) -> Option<String> {
+    with_sessions(|s| s.get(&pane_key).and_then(|x| x.transcript.clone()))
+}
+
+/// The pane's agent is mid-turn as its hooks tell it (CHAT-006 keeps loading rather than erroring).
+pub fn working(pane_key: u32) -> bool {
+    with_sessions(|s| s.get(&pane_key).is_some_and(|x| x.own.is_some() && x.resolved() == "working"))
 }
 
 /// The panes whose hooks last reported for `terminal`.

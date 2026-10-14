@@ -132,6 +132,30 @@ Saved keys and sign-ins are sealed by the system keyring (Windows' secret store)
 
 **Agent status hooks** are small scripts Kolux puts in an agent's settings so the agent can tell Kolux what it is doing. Until the switch is on, the Board and Agents pages cannot show live status. The hooks badge in the status bar shows whether this switch is On or Off. The switch also shows the path of Claude Code's settings file and any problem found.
 
+### Hooks for Gemini CLI, Antigravity and Amp
+
+Besides Claude Code and Codex, Kolux can install status hooks for Gemini CLI, Antigravity and Amp. A status hook is a small script the agent program runs at each event (a turn starting, a tool running, a turn ending); it tells Kolux whether the agent is working, waiting or done, and that drives the status dot. All five agents follow the same rules:
+
+- **One master switch.** "Agent status hooks" is off until you turn it on. While it is off, Kolux removes its entries from every agent and installs none.
+- **One switch per agent.** Each agent in the "Installed agents" list has its own on/off switch. An agent switched off there has Kolux's entries taken out, even while the master switch is on.
+- **Only agents Kolux finds.** Hooks go to an agent that is installed on this computer (or that you pointed the Agents page at). An agent Kolux cannot find is left exactly as it is.
+- **The command line does the same.** `kolux agent hooks on`, `off` and `status` cover all five agents and work with Kolux closed. See [Command line](command-line.md).
+
+| Agent | What Kolux changes (inside your user folder) | Kolux's entry |
+|---|---|---|
+| Gemini CLI | `.gemini\settings.json` | A Kolux hook added under four events: `BeforeAgent`, `AfterAgent`, `BeforeTool` and `AfterTool`. Your own hooks stay |
+| Antigravity | `.gemini\config\hooks.json` | A bundle (a named set of hooks) called `kolux-rs`, with entries for `PreInvocation`, `PreToolUse`, `PostToolUse`, `PostInvocation` and `Stop` |
+| Amp | `.config\amp\plugins\kolux-rs.js` | A plugin file (a small add-on Amp loads), written whole by Kolux. Its first line says it was written by Kolux RS |
+
+Details that matter when you look at these files:
+
+- **Gemini CLI** runs its hook command through PowerShell on Windows, and Kolux writes the command for that. This is proven on Windows PowerShell 5.1. It is not yet tried on PowerShell 7 or against a real Gemini CLI run; that check is still to come.
+- **Antigravity** does not put the event name in what it sends, so Kolux passes the name on the command line. The command is written for the Windows command prompt; which shell Antigravity really uses has not yet been checked against a live run. If you set `"enabled": false` on the `kolux-rs` bundle yourself, Kolux keeps your choice, and `kolux agent hooks status` reports Antigravity as "disabled".
+- **Amp** gets a plugin instead of a settings entry. If a file named `kolux-rs.js` is already there and Kolux did not write it, Kolux leaves it alone and reports an error. Edits you make to Kolux's own plugin file are overwritten at the next install.
+- **Antigravity's reply text** (the card showing its last answer) is not built yet.
+
+`kolux agent hooks status` lists each of the three with a state: installed, partial, not installed, error, or (Antigravity only) disabled. What the hooks show on the dot is under [Status words](board-agents-inbox.md#status-words); what they send, and how Kolux protects your settings files, is under [Agent status hooks](safety.md#agent-status-hooks) in Safety.
+
 ## Terminal & sessions
 
 The first table covers panes and closing. The cards after it cover the terminal's text, scrolling, clipboard and shell.
@@ -174,7 +198,7 @@ A number you type is corrected to the nearest allowed value when you press Enter
 | Copy on select | Off | `terminalCopyOnSelect` |
 | Right-click pastes (or copies the selection) | Off | `terminalRightClickPaste` |
 
-For now a right-click paste skips the checks a Ctrl+V paste gets, such as the size limit and the safe way of pasting several lines, so leave it off unless you need it.
+A right-click paste gets the same checks as a Ctrl+V paste: the size limit, the safe way of pasting several lines and the "Paste N lines?" question (see [Terminals](terminals.md#paste-and-copy)).
 
 ### Default shell
 
@@ -236,4 +260,4 @@ The "Shortcuts in terminals" card decides who gets a key while you type in a ter
 
 Each project has two settings: "New workspaces start from" (blank means the default branch) and "Workspaces folder" (blank means the global folder). The page notes that setup scripts, the display name and the icon come later.
 
-<!-- verified against: src/settings/pages.ts, src/settings/GeneralPage.tsx, src/settings/AppearancePage.tsx, src/settings/AgentsPage.tsx, src-tauri/src/agents.rs, src/settings/GitPage.tsx, src/settings/NotificationsPage.tsx, src/settings/privacy.ts, src/settings/RepoPage.tsx, src/keys/actions.ts, src/terminal/pin.ts, src/terminal/remove.ts, src/terminal/closing.ts, src/terminal/text.ts, src/settings/SettingsPage.tsx, src/settings/TerminalPage.tsx, src/settings/ShortcutsPage.tsx, src/settings/search.ts, src/settings/zoom.ts, src/keys/terminalPolicy.ts, src/chrome/chromeItems.ts, src-tauri/src/keybindings.rs, src-tauri/src/pty.rs at aaafe20 -->
+<!-- verified against: src/settings/pages.ts, src/settings/GeneralPage.tsx, src/settings/AppearancePage.tsx, src/settings/AgentsPage.tsx, src-tauri/src/agents.rs, src/settings/GitPage.tsx, src/settings/NotificationsPage.tsx, src/settings/privacy.ts, src/settings/RepoPage.tsx, src/keys/actions.ts, src/terminal/pin.ts, src/terminal/remove.ts, src/terminal/closing.ts, src/terminal/text.ts, src/settings/SettingsPage.tsx, src/settings/TerminalPage.tsx, src/settings/ShortcutsPage.tsx, src/settings/search.ts, src/settings/zoom.ts, src/keys/terminalPolicy.ts, src/chrome/chromeItems.ts, src-tauri/src/keybindings.rs, src-tauri/src/pty.rs, src/terminal/TerminalPane.tsx, src/terminal/paste.ts, src-tauri/src/agent_hooks/mod.rs, src-tauri/src/agent_hooks/vendors.rs at fb0a9d4 -->

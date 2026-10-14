@@ -48,7 +48,7 @@ The running app listens on a random port of your own computer (address `127.0.0.
 
 With `--json` the word is in `result.state`, and the command counts as worked in every case. The exit code still says whether Kolux is ready.
 
-Kolux answers the command line one request at a time. If it is busy with another one (a workspace being created with its setup, for example), `kolux status` waits about 2.5 seconds and then says `running: Kolux is up, busy with another request` (exit 0; with `--json`, `result.detail` reads "busy with another request"). It never waits the 5 minutes other commands allow. If it stays busy for many minutes with nothing long running, Kolux may be stuck.
+Kolux answers the command line one request at a time. If it is busy with another one (a workspace being created with its setup, for example), `kolux status` still answers at once and says what Kolux is busy with and for how long, for example `running: Kolux is up, busy with another request for 3 min 12 s (worktree.create) (pid 4545)` (exit 0). With `--json`, `result.detail` reads "busy with another request", `result.busyMs` is the time in milliseconds and `result.busyCommand` is the request's name. A busy time of many minutes may mean Kolux is stuck, so use it to tell a long request from a hung one. An older Kolux app cannot say how long: `kolux status` then waits about 2.5 seconds and says only `running: Kolux is up, busy with another request`. It never waits the 5 minutes other commands allow.
 
 `kolux diagnostics memory` prints the Resource Manager's memory figures: Kolux itself, then each terminal session together with every program running inside it, then the total, then free memory. Each row has two numbers:
 
@@ -57,7 +57,7 @@ Kolux answers the command line one request at a time. If it is busy with another
 | resident | Memory the process is using right now |
 | committed | Memory Windows has set aside for it. When the computer runs low, this is the figure that runs out |
 
-A dash means Kolux could not read that figure. The Resource Manager in the app shows the same two figures, Resident and Committed, with a dash where Kolux could not read one. If Kolux is closed, the command says so in one line and exits with 1.
+A dash means Kolux could not read that figure. When some of a row's programs could not be read, its committed figure is a dash rather than a partial sum, and the row adds a note such as "(2 of 5 could not be read)". The Total does the same, so it never passes a partial sum off as the whole. The Resource Manager in the app shows the same two figures, Resident and Committed, with a dash where Kolux could not read one. If Kolux is closed, the command says so in one line and exits with 1.
 
 Every command takes `--json` to print one machine-readable result instead of text. Without it, errors go to the error stream. Exit code 0 means it worked; 1 means any error.
 
@@ -114,7 +114,7 @@ A pane is one terminal. Each has a handle (its name for scripts) that looks like
 | `kolux terminal switch --terminal <handle>` | Focuses it (also `focus`) |
 | `kolux terminal close --terminal <handle>` | Closes it. `--tab` closes the whole tab; `--worktree <selector> --all` closes every pane of a workspace |
 | `kolux terminal read` | Prints what the pane showed. `--cursor` and `--limit` page through output; `--screen` gives the frame visible now. `--screen` and `--cursor` cannot be combined (a screen has no history). When older lines are no longer kept, a warning says which cursor to read on from. In the output form, PowerShell may show a typed command twice because it redraws the line as you type; `--screen` shows it once |
-| `kolux terminal send` | Types into a pane: `--text`, `--enter`, `--interrupt`. With none of them it refuses. When it sends a prompt to an agent, it watches 3 seconds (`--wait-submit <seconds>` changes this) and reports whether the agent began its turn, or warns that Enter may have been lost. With `--retry-request <id>`, sending the same id to the same pane again answers with the first receipt and types nothing (until Kolux restarts) |
+| `kolux terminal send` | Types into a pane: `--text`, `--enter`, `--interrupt`. With none of them it refuses. When it sends a prompt to an agent, it watches 3 seconds and reports whether the agent began its turn, or warns that Enter may have been lost. If the agent is already working, it says "queued" at once, exit 0: the prompt waits behind the agent's turn. A plain send always exits 0, so a script does not read a warning as a failure and send the prompt twice. `--wait-submit <seconds>` (1 or more; 0 is refused) changes the watch time and asks for a firm answer: if the agent has not taken the prompt in that time, the command fails (exit 1) and says why, for example "term-2 did not submit the prompt within 5 s (it is working; the prompt waits behind its turn)". With `--retry-request <id>`, sending the same id to the same pane again answers with the first receipt and types nothing (until Kolux restarts) |
 | `kolux terminal wait --for exit\|tui-idle` | Waits until the program ends, or a full-screen program stops moving. `--timeout-ms` sets the limit; if it passes first, the command fails (exit 1) and names the state the pane is in ("term-3 did not reach exit within 60000 ms (it is running)"). With no status hooks reporting, `tui-idle` means 3 seconds without output, and a warning says so |
 
 Examples:
@@ -167,7 +167,7 @@ One Windows quirk: the `kolux.cmd` helper refuses `kolux orchestration send` and
 |---|---|
 | `kolux agent-context` | Lists every command with its flags and usage, for an agent to read |
 | `kolux skills list`, `skills get <topic>`, `skills coverage` | Lists Kolux's skill documents, prints one, and shows which installed agents have the orchestration skill |
-| `kolux agent hooks status` | Shows, for each agent, whether its status hooks are installed, partial, not installed or in error |
+| `kolux agent hooks status` | Shows, for each agent, whether its status hooks are installed, partial, not installed or in error. Antigravity can also show "disabled" when its Kolux bundle is switched off in its own file (`"enabled": false`) |
 | `kolux agent hooks on`, `agent hooks off` | Switches the status hooks and brings every agent in line |
 | `kolux agent hooks prepare-codex` | Installs and trusts Kolux's Codex hooks before Codex is first started |
 
@@ -190,4 +190,4 @@ A mistyped command is caught before Kolux is contacted, with a suggestion: "no c
 
 These do not exist, so do not look for them: opening or comparing files from the command line, a `tab` command, and registering `kolux` on the PATH for the whole computer.
 
-<!-- verified against: src-tauri/src/cli.rs, src-tauri/src/bin/kolux.rs, src-tauri/src/bin/kolux-dev.rs, src-tauri/Cargo.toml, src-tauri/cli/kolux.cmd, src-tauri/src/terminal.rs, src-tauri/src/resources.rs, src/status/ResourceManager.tsx, PLAN.md (T-250-a, T-250-b) at 1db1bf0 -->
+<!-- verified against: src-tauri/src/cli.rs, src-tauri/src/bin/kolux.rs, src-tauri/src/bin/kolux-dev.rs, src-tauri/Cargo.toml, src-tauri/cli/kolux.cmd, src-tauri/src/terminal.rs, src-tauri/src/resources.rs, src/status/ResourceManager.tsx, PLAN.md (T-250-a, T-250-b, T-076-c, T-287-c, MERGE-49) at e19b35b -->
