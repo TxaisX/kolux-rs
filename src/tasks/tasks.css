@@ -17,3 +17,29 @@
 .mention-list li[aria-selected="true"], .mention-list li:hover { background: var(--row-selected); }
 .task-avatar { width: 18px; height: 18px; flex: none; border-radius: 50%; object-fit: cover; }
 .task-avatar.initials { display: inline-grid; place-items: center; font-size: 9px; font-weight: 600; color: var(--fg-label); background: var(--line-subtle); }
+/* T-314-c: the Projects tab (GIT-056). */
+.tasks-tabs { display: inline-flex; gap: 2px; }
+.tasks-tabs .btn { font-size: 12px; }
+.tasks-tabs .btn[aria-selected="true"] { border-color: var(--line-focus); }
+.projects { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.projects-pick, .projects-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--line-subtle); font-size: 12px; }
+.projects-pick .autos-search { flex: 1 1 280px; min-width: 0; }
+.projects-browse { display: inline-flex; gap: 4px; }
+.projects-browse .field { width: 120px; }
+.projects-chip { font-size: 12px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.projects-chip[aria-current="true"] { border-color: var(--line-focus); }
+.projects-browsed { list-style: none; margin: 0; padding: 4px 12px; display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line-subtle); }
+.projects-table { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
+.projects-table table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.projects-table th, .projects-table td { padding: 4px 8px; border-bottom: 1px solid var(--line-subtle); text-align: left; white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.projects-table thead th { position: sticky; top: 0; background: var(--pane-bg); z-index: 1; }
+.projects-sort { all: unset; cursor: pointer; color: var(--fg-label); font-weight: 600; }
+.projects-table td.editable { cursor: text; }
+.projects-table td.editable:hover, .projects-table td.editable:focus { background: var(--row-selected); outline: none; }
+.projects-table td .field { height: 22px; font-size: 12px; min-width: 120px; }
+.projects-table tr.restricted td { color: var(--fg-label); }
+.projects-group th { background: var(--line-subtle); color: var(--fg-label); font-weight: 600; }
+.projects-title .dot { margin-right: 6px; }
+.projects-title a { color: inherit; text-decoration: none; }
+.projects-title a:hover { text-decoration: underline; }
+.projects-away { margin-left: 6px; padding: 0 5px; border: 1px solid var(--line); border-radius: 999px; font-size: 10px; color: var(--fg-label); }

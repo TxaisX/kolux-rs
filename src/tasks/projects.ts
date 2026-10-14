@@ -1,0 +1,148 @@
+// T-314-c: GitHub Projects in Tasks (GIT-056 editable table, GIT-057 roadmap views): what the page
+// knows about a project, as github.rs reads it, and the pure rules the table is drawn by.
+
+export type FieldOption = { id: string; name: string; start: string; days: number };
+export type ProjectField = { id: string; name: string; kind: string; options: FieldOption[] };
+export type ProjectView = { number: number; name: string; layout: string };
+export type Cell = { text: string; id: string; start: string; days: number };
+export type ProjectItem = { id: string; kind: string; title: string; number: number | null; url: string; repo: string; state: string; labels: string[]; assignees: string[]; values: Record<string, Cell> };
+export type Project = { id: string; owner: string; number: number; title: string; url: string; closed: boolean; views: ProjectView[]; fields: ProjectField[]; items: ProjectItem[]; more: boolean };
+/** A remembered project (pinned or recent). */
+export type ProjectRef = { host: string; owner: string; number: number; title: string };
+
+const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9_]|-(?=[A-Za-z0-9_]))*$/;
+
+/** GIT-056: a pasted project URL (`https://<host>/orgs|users/<owner>/projects/<n>[/views/<v>]`) or an
+ * owner and number (`acme 3`, `acme/3`, `acme#3`); null when it is neither. */
+export function parseProjectRef(text: string, host: string): { host: string; owner: string; number: number; view: number | null } | null {
+  const t = text.trim();
+  const url = /^https:\/\/([A-Za-z0-9.:-]+)\/(?:orgs|users)\/([^/\s]+)\/projects\/(\d+)(?:\/views\/(\d+))?\/?(?:[?#].*)?$/.exec(t);
+  const short = /^@?([^/\s#]+)\s*[\s/#]\s*(\d+)$/.exec(t);
+  const [h, owner, n, v] = url ? [url[1], url[2], url[3], url[4]] : short ? [host, short[1], short[2], undefined] : [];
+  if (!owner || !n || !LOGIN.test(owner) || owner.length > 79) return null;
+  const number = Number(n);
+  if (!Number.isSafeInteger(number) || number < 1) return null;
+  return { host: h!.toLowerCase(), owner, number, view: v ? Number(v) : null };
+}
+
+export const projectKey = (r: { host: string; owner: string; number: number }) => `${r.host}/${r.owner.toLowerCase()}/${r.number}`;
+
+/** GIT-056 / GIT-057: how Kolux shows a view layout. The picker and the view both read this one
+ * answer, so they always agree about board and roadmap views. */
+export function viewSupport(layout: string): "table" | "unsupported" {
+  return layout === "table" ? "table" : "unsupported";
+}
+
+export function viewLabel(v: ProjectView): string {
+  return viewSupport(v.layout) === "table" ? v.name : `${v.name} (${v.layout}, not supported)`;
+}
+
+/** The view a project opens on: the remembered one, else the first table view, else the first. */
+export function openingView(p: Pick<Project, "views">, remembered: number | null | undefined): number | null {
+  if (remembered != null && p.views.some((v) => v.number === remembered)) return remembered;
+  return (p.views.find((v) => viewSupport(v.layout) === "table") ?? p.views[0])?.number ?? null;
+}
+
+/** Recent projects: the newest first, each once, at most 8. */
+export function pushRecent(list: ProjectRef[], r: ProjectRef, max = 8): ProjectRef[] {
+  return [r, ...list.filter((x) => projectKey(x) !== projectKey(r))].slice(0, max);
+}
+
+export function togglePin(list: ProjectRef[], r: ProjectRef): ProjectRef[] {
+  return list.some((x) => projectKey(x) === projectKey(r)) ? list.filter((x) => projectKey(x) !== projectKey(r)) : [...list, r];
+}
+
+/** Settings hold lists the page wrote; anything malformed is dropped rather than trusted. */
+export function refsFrom(v: unknown): ProjectRef[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((r): r is ProjectRef => !!r && typeof r.host === "string" && typeof r.owner === "string" && LOGIN.test(r.owner) && Number.isSafeInteger(r.number) && r.number > 0).map((r) => ({ host: r.host, owner: r.owner, number: r.number, title: typeof r.title === "string" ? r.title : "" }));
+}
+
+/** Kinds whose cell is edited through the project's own field (github_project_set). */
+export const EDITABLE = new Set(["text", "number", "date", "single_select", "iteration"]);
+/** Labels are the issue's own and are edited on the issue (scm_task_labels). */
+export const cellEditable = (item: ProjectItem, f: ProjectField) => item.kind !== "restricted" && (EDITABLE.has(f.kind) || (f.kind === "labels" && item.kind !== "draft" && !!item.repo && item.number !== null));
+
+/** What a cell shows. */
+export function cellText(item: ProjectItem, f: ProjectField): string {
+  if (item.kind === "restricted") return "";
+  switch (f.kind) {
+    case "title":
+      return item.title;
+    case "assignees":
+      return item.assignees.map((a) => `@${a}`).join(", ");
+    case "labels":
+      return item.labels.join(", ");
+    case "repository":
+      return item.repo;
+    default:
+      return item.values[f.id]?.text ?? "";
+  }
+}
+
+/** GIT-056: sort by a column; numbers by value, single-select and iterations in the project's own
+ * option order, dates and text as text; empty cells and restricted items always last. */
+export function sortItems(items: ProjectItem[], f: ProjectField, dir: 1 | -1): ProjectItem[] {
+  const rank = (it: ProjectItem): number | string | null => {
+    const t = cellText(it, f);
+    if (it.kind === "restricted" || t === "") return null;
+    if (f.kind === "number") return Number(t);
+    if (f.kind === "single_select" || f.kind === "iteration") {
+      const id = it.values[f.id]?.id;
+      if (f.kind === "iteration") return it.values[f.id]?.start || t;
+      const i = f.options.findIndex((o) => o.id === id);
+      return i < 0 ? t : i;
+    }
+    return t.toLowerCase();
+  };
+  return items
+    .map((it, i) => ({ it, i, r: rank(it) }))
+    .sort((a, b) => {
+      if (a.r === null || b.r === null) return a.r === b.r ? a.i - b.i : a.r === null ? 1 : -1;
+      const c = a.r < b.r ? -1 : a.r > b.r ? 1 : 0;
+      return c * dir || a.i - b.i;
+    })
+    .map((x) => x.it);
+}
+
+/** Fields a table can group by. */
+export const GROUPABLE = new Set(["single_select", "iteration", "repository"]);
+
+/** GIT-056: rows grouped by a column, groups in the field's option order (repositories by name),
+ * with the rows that have no value last as "No <field>". */
+export function groupItems(items: ProjectItem[], f: ProjectField): { key: string; label: string; items: ProjectItem[] }[] {
+  const groups = new Map<string, { key: string; label: string; items: ProjectItem[] }>();
+  for (const it of items) {
+    const label = cellText(it, f);
+    const key = f.kind === "repository" ? label : (it.values[f.id]?.id ?? "");
+    const g = groups.get(key) ?? { key, label: label || `No ${f.name.toLowerCase()}`, items: [] };
+    g.items.push(it);
+    groups.set(key, g);
+  }
+  const order = (k: string) => (k === "" ? Number.MAX_SAFE_INTEGER : f.kind === "repository" ? 0 : f.options.findIndex((o) => o.id === k));
+  return [...groups.values()].sort((a, b) => order(a.key) - order(b.key) || a.label.localeCompare(b.label));
+}
+
+/** GIT-056: limit rows to repositories open in Kolux, or to the chosen ones. Drafts and restricted
+ * items name no repository, so a limit leaves them out. */
+export type Scope = { mode: "all" } | { mode: "kolux" } | { mode: "chosen"; repos: string[] };
+export function scopeItems(items: ProjectItem[], scope: Scope, inKolux: string[]): ProjectItem[] {
+  if (scope.mode === "all") return items;
+  const allowed = new Set((scope.mode === "kolux" ? inKolux : scope.repos).map((r) => r.toLowerCase()));
+  return items.filter((it) => it.repo && allowed.has(it.repo.toLowerCase()));
+}
+
+/** A label edit as GitHub's add / remove lists, from the typed comma list. */
+export function labelChange(before: string[], typed: string): { add: string[]; remove: string[] } {
+  const after = [...new Set(typed.split(",").map((s) => s.trim()).filter(Boolean))];
+  const low = (l: string[]) => new Set(l.map((x) => x.toLowerCase()));
+  const was = low(before);
+  const now = low(after);
+  return { add: after.filter((l) => !was.has(l.toLowerCase())), remove: before.filter((l) => !now.has(l.toLowerCase())) };
+}
+
+/** The view's address on GitHub, only for a project GitHub gave an https address. */
+export function viewUrl(p: Pick<Project, "url">, view: number | null): string | null {
+  if (!/^https:\/\/[^\s"'<>]+$/.test(p.url)) return null;
+  return view === null ? p.url : `${p.url.replace(/\/$/, "")}/views/${view}`;
+}

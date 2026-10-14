@@ -1,7 +1,7 @@
 // VIEW-010 / GIT-043: the Tasks page, opened from the sidebar's Tasks row or the view.tasks
 // shortcut: a preset or a typed GitHub search over the workspace's repository, 25 to a page.
 // T-314: the default preset is a setting (GIT-044), PR filter pickers rewrite the query (GIT-054),
-// and a fork may take its issues from its parent (GIT-055).
+// and a fork may take its issues from its parent (GIT-055); T-314-c adds the Projects tab (GIT-056).
 // ponytail: one repository (the workspace's); the multi-repository picker, the remembered choice,
 // new issue, close / reopen / comment and start-from-item are T-231-c. Clicking an item opens its
 // preview (GIT-050, TaskDialog).
@@ -11,12 +11,13 @@ import { Refresh, Search } from "../chrome/icons";
 import { useSettings } from "../settings/useSettings";
 import { beyondWindow, defaultPreset, FILTERS, type FilterKey, filterValue, issueSource, pageButtons, pageCount, PER_PAGE, PRESETS, setFilter, type Task, type TaskLabel, type TaskPage, taskKind, taskQueries } from "./model";
 import { type GhRepo, loadRepoFacts, type ParentRead, type Person, resetFacts } from "./repoFacts";
+import ProjectsView from "./ProjectsView";
 import TaskDialog from "./TaskDialog";
 import "./tasks.css";
 
 /** GIT-043: preset, query, page and scroll survive leaving the page and coming back (app session);
  * GIT-044: the first visit of the session opens on the saved default preset. */
-const kept: { preset: string | null; query: string; page: number; scroll: number } = { preset: null, query: "", page: 1, scroll: 0 };
+const kept: { preset: string | null; query: string; page: number; scroll: number; tab: "items" | "projects" } = { preset: null, query: "", page: 1, scroll: 0, tab: "items" };
 
 /** GIT-054: one filter picker; typing or picking a suggestion sets its part of the query on Enter or
  * on leaving the field, and the cross clears only that part. */
@@ -68,9 +69,11 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
   const [result, setResult] = useState<TaskPage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<Task | null>(null);
+  // T-314-c: Issues and pull requests, or GitHub Projects (GIT-056).
+  const [tab, setTab] = useState(kept.tab);
   const list = useRef<HTMLUListElement>(null);
   const restore = useRef(kept.scroll);
-  Object.assign(kept, { preset, query, page });
+  Object.assign(kept, { preset, query, page, tab });
 
   useEffect(() => {
     if (preset === null && settings) setPreset(defaultPreset(settings));
@@ -93,13 +96,13 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
   const savedSources = (settings?.tasksIssueSource ?? {}) as Record<string, unknown>;
   const chosenSource = savedSources[sourceKey] === "upstream" ? "upstream" : "fork";
   const load = () => {
-    if (!gh || preset === null || !settings) return;
+    if (!gh || preset === null || !settings || tab !== "items") return;
     setError(null);
     invoke<TaskPage>("scm_tasks_search", { host: gh.host, queries: taskQueries(preset, query, [own], [source.repo]), page })
       .then(setResult)
       .catch((e) => setError(String(e)));
   };
-  useEffect(load, [gh, preset, query, page, source.repo, settings === null]);
+  useEffect(load, [gh, preset, query, page, source.repo, settings === null, tab]);
   useLayoutEffect(() => {
     if (result && list.current && restore.current) {
       list.current.scrollTop = restore.current;
@@ -120,10 +123,31 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
   };
   const isDefault = preset === defaultPreset(settings);
   const whoOptions = ["@me", ...people.map((p) => p.login)];
+  const tabs = (
+    <div className="tasks-tabs" role="tablist">
+      {([["items", "Issues & pull requests"], ["projects", "Projects"]] as const).map(([id, label]) => (
+        <button key={id} role="tab" className="btn" aria-selected={tab === id} data-tab={id} onClick={() => setTab(id)}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+  if (tab === "projects") {
+    return (
+      <div className="autos tasks" data-tasks>
+        <div className="autos-bar">
+          <h2>Tasks</h2>
+          {tabs}
+        </div>
+        <ProjectsView host={gh?.host ?? "github.com"} owner={gh?.owner ?? "@me"} settings={settings} save={save} />
+      </div>
+    );
+  }
   return (
     <div className="autos tasks" data-tasks>
       <div className="autos-bar">
         <h2>Tasks</h2>
+        {tabs}
         <select
           className="field"
           aria-label="Preset"
