@@ -547,9 +547,88 @@ pub fn follow(app: &tauri::AppHandle, f: impl FnOnce(&Store) -> Result<Option<St
         Err(e) => Err(e.to_string()),
     };
     match moved {
-        Ok(Some(id)) => drop(app.emit(EVENT, json!({ "runId": id }))),
+        Ok(Some(id)) => {
+            keep_screen(app, &state, &id);
+            drop(app.emit(EVENT, json!({ "runId": id })))
+        }
         Ok(None) => {}
         Err(e) => eprintln!("automation run tracking: {e}"),
+    }
+}
+
+/// AUTO-014: a finished run keeps the end of what its pane showed, this many characters at most.
+const RUN_OUTPUT_CHARS: usize = 16_000;
+/// The pane lines read for it; the character cap trims what is left over.
+pub const RUN_OUTPUT_LINES: usize = 600;
+
+/// AUTO-014: a pane's text the way a run keeps it: escape codes gone (the log strips them; this
+/// catches anything it let through), carriage-return redraws such as progress bars already down to
+/// their last version, blank stretches squeezed to one line, and past the size limit only the most
+/// recent text, from a whole line. Returns the text and whether anything older was left out.
+pub fn screen_text(read: &crate::terminal::Read) -> (String, bool) {
+    let mut lines: Vec<String> = read.lines.iter().map(|l| crate::terminal::strip_ansi(&l.text).trim_end().to_string()).collect();
+    if !read.pending.trim().is_empty() {
+        lines.push(crate::terminal::strip_ansi(&read.pending).trim_end().to_string());
+    }
+    let mut kept: Vec<String> = Vec::with_capacity(lines.len());
+    for l in lines {
+        if l.is_empty() && kept.last().is_none_or(String::is_empty) {
+            continue;
+        }
+        kept.push(l);
+    }
+    while kept.last().is_some_and(String::is_empty) {
+        kept.pop();
+    }
+    let text = kept.join("\n");
+    let n = text.chars().count();
+    if n <= RUN_OUTPUT_CHARS {
+        return (text, read.dropped || read.more);
+    }
+    let tail: String = text.chars().skip(n - RUN_OUTPUT_CHARS).collect();
+    let tail = match tail.find('\n') {
+        Some(i) => tail[i + 1..].to_string(),
+        None => tail,
+    };
+    (tail, true)
+}
+
+/// AUTO-014: run `run_id`, now over, keeps `text` as its saved output, once: a run that already
+/// has output (a precheck's, or an earlier save) or is still going keeps what it has.
+pub fn keep_output(store: &Store, run_id: &str, text: &str, cut: bool) -> Result<Option<String>, String> {
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+    let mut runs = load(store, RUNS_KEY)?;
+    let Some(r) = runs.iter_mut().find(|r| r["id"] == run_id && !in_progress(r) && r.get("output").is_none_or(Value::is_null)) else { return Ok(None) };
+    if let Some(row) = r.as_object_mut() {
+        row.insert("output".into(), json!(text));
+        row.insert("outputFrom".into(), json!("screen"));
+        row.insert("outputCut".into(), json!(cut));
+    }
+    save(store, RUNS_KEY, &runs)?;
+    Ok(Some(run_id.to_string()))
+}
+
+/// The run that just moved, if it is over and has a pane still open, saves that pane's text. A pane
+/// that already closed has nothing left to read (T-140-b keeps its text through the exit).
+fn keep_screen(app: &tauri::AppHandle, state: &Mutex<Store>, run_id: &str) {
+    use tauri::Manager;
+    let pane = state
+        .lock()
+        .ok()
+        .and_then(|s| load(&s, RUNS_KEY).ok())
+        .and_then(|runs| runs.into_iter().find(|r| r["id"] == run_id))
+        .filter(|r| !in_progress(r) && r.get("output").is_none_or(Value::is_null))
+        .and_then(|r| r["terminal"].as_u64())
+        .and_then(|t| u32::try_from(t).ok());
+    let Some(pane) = pane else { return };
+    let Some(read) = app.try_state::<crate::terminal::Terminals>().and_then(|ts| ts.read(pane, None, Some(RUN_OUTPUT_LINES))) else { return };
+    let (text, cut) = screen_text(&read);
+    if let Ok(s) = state.lock() {
+        if let Err(e) = keep_output(&s, run_id, &text, cut) {
+            eprintln!("automation run output: {e}");
+        }
     }
 }
 
@@ -1522,6 +1601,46 @@ mod tests {
     fn status_of(store: &Store, id: &str) -> (String, String) {
         let r = load(store, RUNS_KEY).unwrap().into_iter().find(|r| r["id"] == id).unwrap();
         (r["status"].as_str().unwrap().to_string(), r["detail"].as_str().unwrap_or_default().to_string())
+    }
+
+    #[test]
+    fn auto014_a_finished_run_keeps_its_pane_text_clean_once_and_only_the_latest_past_the_limit() {
+        // A Codex-style progress bar redrawn with carriage returns, colours, a title change and blank lines.
+        let mut log = crate::terminal::OutputLog::default();
+        log.push(b"\x1b[1mWorking\x1b[0m\r\n\x1b[32m[##   ] 10%\r\x1b[32m[#### ] 80%\r[#####] 100%\x1b[0m\r\n\r\n\r\n\x1b]0;codex\x07Done: 3 files changed\r\n\r\n");
+        let (text, cut) = screen_text(&log.read(None, Some(RUN_OUTPUT_LINES)));
+        assert_eq!(text, "Working\n[#####] 100%\n\nDone: 3 files changed");
+        assert!(!cut);
+        assert!(!text.contains('\x1b') && !text.contains('\r'), "{text:?}");
+        // Past the size limit the most recent text stays, starting at a whole line.
+        let mut big = crate::terminal::OutputLog::default();
+        for i in 0..2000 {
+            big.push(format!("line {i:04} {}\n", "x".repeat(40)).as_bytes());
+        }
+        let (text, cut) = screen_text(&big.read(None, Some(RUN_OUTPUT_LINES)));
+        assert!(cut);
+        assert!(text.chars().count() <= RUN_OUTPUT_CHARS);
+        assert!(text.starts_with("line ") && text.ends_with(&format!("line 1999 {}", "x".repeat(40))), "{}", &text[..40]);
+
+        let dir = temp("output");
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let store = Store::open(&dir.join("db")).unwrap();
+        seed(&store, &ws);
+        dispatched(&store, &ws, 1, "codex");
+        // Still going: nothing is saved yet.
+        assert_eq!(keep_output(&store, "run-1", "partial", false).unwrap(), None);
+        claim(&store, 6, Some(60), &ws.to_string_lossy(), Some("codex")).unwrap();
+        on_status(&store, Some(6), 60, "working", false, false, 10).unwrap();
+        on_status(&store, Some(6), 60, "done", false, false, 11).unwrap();
+        // Nothing on screen saves nothing; then the text is kept, once.
+        assert_eq!(keep_output(&store, "run-1", "  \n", false).unwrap(), None);
+        assert_eq!(keep_output(&store, "run-1", "Done: 3 files changed", false).unwrap().as_deref(), Some("run-1"));
+        assert_eq!(keep_output(&store, "run-1", "later text", true).unwrap(), None);
+        let r = load(&store, RUNS_KEY).unwrap().remove(0);
+        assert_eq!((r["output"].as_str(), r["outputFrom"].as_str(), r["outputCut"].as_bool()), (Some("Done: 3 files changed"), Some("screen"), Some(false)));
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

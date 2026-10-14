@@ -86,10 +86,12 @@ export function headerOf(agent: string, kind: Kind, code: number | null | undefi
  *  finished mean done; permission, approve, allow, waiting and "needs you" mean needs you; working,
  *  thinking, running and a trailing ellipsis mean working. A title that looks like a file path, or
  *  says nothing recognisable, gives null, so the last known reading holds (a non-agent title
- *  appearing mid-turn never ends the working state). */
+ *  appearing mid-turn never ends the working state). A title that starts with the done mark
+ *  (U+2733) reads done first, whatever words follow it (T-124-c). */
 export function titleState(title: string): AgentState | null {
   const t = title.trim();
   if (t === "" || /^(~|[a-zA-Z]:[\\/]|\\\\|\.{0,2}\/)/.test(t) || (/[\\/]/.test(t) && !/\s/.test(t))) return null;
+  if (t.startsWith("✳")) return "done";
   if (/[⠀-⣿]/.test(t) || /[◐◓◑◒]/.test(t)) return "working";
   if (/\b(permission|approve|allow|waiting|needs? (you|input))\b/i.test(t)) return "permission";
   if (/\b(ready|idle|done|finished|complete)\b/i.test(t)) return "done";

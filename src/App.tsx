@@ -54,14 +54,18 @@ import { copiers } from "./editor/EditorPane";
 import { notesMarkdown, reviewOn, selections, sendTargets, type Note, type Picked } from "./editor/notes";
 import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
 import ArtifactsPage from "./artifacts/ArtifactsPage";
+import SkillsPage from "./skills/SkillsPage";
+import { closeSkills, toggleSkills } from "./skills/nav";
 import { KitGallery, KitSetup } from "./kits/Kits";
 import Wizard from "./onboarding/Wizard";
+import Guides from "./onboarding/Guides";
 import { ADD_PROJECT } from "./onboarding/firstRun";
 import { KITS, RECALL_KEY, remember, type Kit, type Vendor } from "./kits/catalog";
 import KitStrip from "./kits/KitStrip";
 import { datedName, roleDone, rolePrompt, seatTitle, type RunCheck } from "./kits/run";
 import DiffPane, { diffNav } from "./editor/DiffPane";
 import AllChangesPane from "./editor/AllChangesPane";
+import { DIFF_SPLIT_KEY, diffSplitOf, targetCell } from "./scm/split";
 import Explorer from "./editor/Explorer";
 import RightSidebar, { clampLeft, clampWidth, Grip, LEFT_KEY, readLeft, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
 import { isMarkdown } from "./editor/markdown";
@@ -97,6 +101,7 @@ import Tip from "./chrome/Tip";
 import InboxView from "./inbox/InboxView";
 import { inboxItems, type Source } from "./inbox/inbox";
 import TowerView from "./tower/TowerView";
+import FloorView from "./floor/FloorView";
 import { towerRows, usageByAccount } from "./tower/tower";
 import { LANES, chipOf } from "./board/chip";
 import Ring from "./usage/Ring";
@@ -110,6 +115,7 @@ import { LAYOUT_FIELD, layoutOf, type SavedLayout } from "./terminal/layout";
 import { Kbd, KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
+import { heldByTerminal } from "./keys/terminalPolicy";
 import { useAgentEvents, useAgentStatusState } from "./status/useAgentStatus";
 import { useAppSettings } from "./settings/useAppSettings";
 import { useWorkspaceActions, useWorkspaces } from "./projects/useWorkspaces";
@@ -293,7 +299,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         })
         .catch(() => setSettings({}));
     readSettings();
-    const off = listen("settings-saved", readSettings);
+    const off = listen("settings-saved", () => (readSettings(), invoke<ShellInfo[]>("shell_list").then(setShells, () => {}))); // SET-026: the chosen default shell leads the list
     return () => {
       void off.then((u) => u()).catch(() => {});
       void offAgents.then((u) => u()).catch(() => {});
@@ -453,8 +459,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     };
   }, []);
 
-  // Global-scope shortcuts are pressed here, wherever focus is (the terminal policy comes with
-  // SET-014). Only actions that exist today do something; the rest are matched and left alone.
+  // Global-scope shortcuts are pressed here, wherever focus is; with Terminal first (SET-014) a
+  // focused terminal keeps every chord that is not marked safe for terminals. Only actions that exist today do something; the rest are matched and left alone.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // SET-009: while Settings > Shortcuts records a chord, the press is the recorder's alone.
@@ -468,7 +474,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         matchEvent(keymap, e, inTree ? ["global"] : kind === "editor" || kind === "diff" ? ["editor", "global", "tabs"] : kind === "preview" ? ["global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]) ||
         // GIT-042: a preview tab takes the one editor shortcut that applies to it.
         (kind === "preview" && [matchEvent(keymap, e, ["editor"])].find((h) => h?.id === "editor.addReviewNote"));
-      if (!hit) return;
+      if (!hit || heldByTerminal(hit.id, settings)) return;
       const inFront = panesIn(panes, activeDir).some((p) => p.key === focused);
       switch (hit.id) {
         case "browser.focusAddressBar":
@@ -563,6 +569,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           break;
         case "view.tower":
           setScreen((s) => (s === "tower" ? "terminals" : "tower"));
+          break;
+        case "view.floor":
+          setScreen((s) => (s === "floor" ? "terminals" : "floor"));
           break;
         case "view.code":
           leavePage();
@@ -830,18 +839,20 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const openDiff = (path: string, staged: boolean, preview = false, line?: number) => {
     const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
     const jump = line === undefined ? undefined : { line, at: Date.now() };
-    const same = here && panes.find((p) => p.kind === "diff" && !!p.staged === staged && groupOf(p) === groupOf(here) && keyOf(p.path ?? "") === keyOf(path));
+    // GIT-037 (T-033-c): the cell the diff opens in follows the "Open diffs in" choice of Source Control.
+    const cell = here ? targetCell(cellsOf(panesIn(panes, activeDir)).map((c) => c.group), groupOf(here), diffSplitOf(settings[DIFF_SPLIT_KEY])) : undefined;
+    const same = cell !== undefined && panes.find((p) => p.kind === "diff" && !!p.staged === staged && groupOf(p) === cell && keyOf(p.path ?? "") === keyOf(path));
     if (same) {
       if (jump) setPanes((ps) => ps.map((p) => (p.key === same.key ? { ...p, jump } : p)));
       return setFocused(same.key);
     }
-    const old = preview && here && panes.find((p) => p.kind === "diff" && p.preview && groupOf(p) === groupOf(here) && !dirty[p.key]);
+    const old = preview && cell !== undefined && panes.find((p) => p.kind === "diff" && p.preview && groupOf(p) === cell && !dirty[p.key]);
     if (old) {
       setPanes((ps) => ps.map((p) => (p.key === old.key ? { ...p, path, staged, jump } : p)));
       return setFocused(old.key);
     }
     const key = nextKey.current++;
-    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "diff", path, staged, preview: preview || undefined, jump }]);
+    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: cell, agent: "shell", program: null, args: [], kind: "diff", path, staged, preview: preview || undefined, jump }]);
     setFocused(key);
   };
 
@@ -1495,12 +1506,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const board = screen === "board";
   const inbox = screen === "inbox";
   const tower = screen === "tower";
+  const floor = screen === "floor";
   const agentsScreen = screen === "agents";
   // STAT-050: the Inbox and the Board read the panes the window already tracks; the clock ticks while one is open.
   const [now, setNow] = useState(Date.now());
   const timed = inbox || board || tower;
   // VIEW-009: a full page fills the workspace area; Show Code (view.code) and an Escape nothing else used leave it.
-  const fullPage = settingsOpen || (terminals && page !== null) || inbox || tower || screen === "artifacts";
+  const fullPage = settingsOpen || (terminals && page !== null) || inbox || tower || floor || screen === "artifacts";
   const leavePage = () => {
     setSettingsOpen(false);
     setPage(null);
@@ -1946,7 +1958,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           </>
         )}
         {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} target={settingsAt.target} n={settingsAt.n} />}
-        {(terminals || screen === "artifacts") && sidebarOpen && (
+        {(terminals || screen === "artifacts" || screen === "skills") && sidebarOpen && (
           <ProjectsPanel
             reveal={reveal}
             openDirs={openDirs}
@@ -1987,6 +1999,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             onAdded={projectAdded}
             artifactsOn={screen === "artifacts"}
             onArtifacts={() => setScreen("artifacts")}
+            skillsOn={screen === "skills"}
+            onSkills={() => toggleSkills(screen, setScreen)}
             onPending={setStandIns}
             onSetup={startSetup}
             onIndex={(list, dirs, typed) => {
@@ -1996,7 +2010,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             }}
           />
         )}
-        {(terminals || screen === "artifacts") && sidebarOpen && (
+        {(terminals || screen === "artifacts" || screen === "skills") && sidebarOpen && (
           <Grip side="left" width={leftWidth} label="Resize the sidebar" className="lside-grip" onWidth={(w, done) => {
             setDragLeft(done ? null : clampLeft(w));
             if (done) saveSetting(LEFT_KEY, clampLeft(w));
@@ -2155,8 +2169,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               )}
             </>
           )}
+          {screen === "skills" && <SkillsPage workspace={activeDir} onClose={() => closeSkills(setScreen)} />}
           {inbox && <InboxView items={inboxItems(sources, now)} now={now} onOpen={openPane} />}
           {tower && <TowerView rows={towerRows(towerSeats())} usage={usageByAccount(towerSeats(), plan)} now={now} onOpen={openPane} />}
+          {floor && <FloorView />}
           {agentsScreen && selected === null && (
             <div className="empty">
               <h2>Agents</h2>
@@ -2313,7 +2329,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     jump={p.jump}
                   />
                 ) : p.kind === "changes" && p.cwd ? (
-                  <AllChangesPane key={p.key} id={p.key} root={p.cwd} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
+                  <AllChangesPane key={p.key} id={p.key} root={p.cwd} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} onOpenDiff={(path, staged) => openDiff(path, staged, true)} pinnedBase={projects.find((pr) => pr.id === projectOf(p.cwd))?.base ?? null} />
                 ) : p.kind === "preview" && p.path ? (
                   <PreviewPane key={p.key} id={p.key} path={p.path} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
                 ) : p.seats ? (
@@ -2410,7 +2426,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           <SourceControlPanel dir={activeDir} writer={writerOf(settings)} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text, dir) => (dir ?? activeDir) !== null && setDrafts((d) => ({ ...d, [dir ?? activeDir!]: text }))} onClose={() => saveRight({ open: false })} onFix={fixWithAI} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} onChangeBase={(base) => {
             const p = projects.find((x) => x.id === projectOf(activeDir));
             if (p) void invoke<Project>("project_set", { projectId: p.id, workspacesDir: p.workspacesDir ?? "", base }).then((u) => setProjects((ps) => ps.map((x) => (x.id === u.id ? u : x))));
-          }} againstUpstream={settings[SUMMARY_UPSTREAM_KEY] === true} groupOrder={settings[SCM_GROUP_ORDER_KEY]} view={settings[SCM_VIEW_KEY] === "tree" ? "tree" : "list"} onView={(v) => saveSetting(SCM_VIEW_KEY, v)} onOpenDiff={(path, staged) => activeDir !== null && openDiff(`${activeDir.replace(/[\\/]+$/, "")}/${path}`, staged, true)} onAllChanges={() => void newTab("changes")} notesSection={activeDir !== null && <LineNotes dir={activeDir} notes={notesFor(activeDir)} onOpen={(n) => openDiff(n.path, n.staged, true, n.end ?? n.line)} onDrop={(ids) => dropNotes(activeDir, ids)} onClearSent={() => saveNotes(activeDir, clearDelivered(notesFor(activeDir)))} onSend={() => sendNotes(activeDir)} />} onAgainstUpstream={(on) => saveSetting(SUMMARY_UPSTREAM_KEY, on)} fixAgent={settings[SCM_AGENT_KEY]} onFixAgent={(id) => saveSetting(SCM_AGENT_KEY, id)} linkedPr={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} onLinkPr={(url) => activeDir !== null && saveSetting(SCM_LINKED_PR_KEY, withLink(linkedPrs(settings[SCM_LINKED_PR_KEY]), activeDir, url))} onAgentAction={async (a, prompt) => {
+          }} againstUpstream={settings[SUMMARY_UPSTREAM_KEY] === true} groupOrder={settings[SCM_GROUP_ORDER_KEY]} view={settings[SCM_VIEW_KEY] === "tree" ? "tree" : "list"} onView={(v) => saveSetting(SCM_VIEW_KEY, v)} onOpenDiff={(path, staged) => activeDir !== null && openDiff(`${activeDir.replace(/[\\/]+$/, "")}/${path}`, staged, true)} onAllChanges={() => void newTab("changes")} diffSplit={diffSplitOf(settings[DIFF_SPLIT_KEY])} onDiffSplit={(v) => saveSetting(DIFF_SPLIT_KEY, v)} notesSection={activeDir !== null && <LineNotes dir={activeDir} notes={notesFor(activeDir)} onOpen={(n) => openDiff(n.path, n.staged, true, n.end ?? n.line)} onDrop={(ids) => dropNotes(activeDir, ids)} onClearSent={() => saveNotes(activeDir, clearDelivered(notesFor(activeDir)))} onSend={() => sendNotes(activeDir)} />} onAgainstUpstream={(on) => saveSetting(SUMMARY_UPSTREAM_KEY, on)} fixAgent={settings[SCM_AGENT_KEY]} onFixAgent={(id) => saveSetting(SCM_AGENT_KEY, id)} linkedPr={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} onLinkPr={(url) => activeDir !== null && saveSetting(SCM_LINKED_PR_KEY, withLink(linkedPrs(settings[SCM_LINKED_PR_KEY]), activeDir, url))} onAgentAction={async (a, prompt) => {
             if (activeDir === null) return "Open a workspace first.";
             try {
               await openIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, prompt, true);
@@ -2480,6 +2496,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           />
         );
       })()}
+      <Guides />
       {wizard !== null && (
         <Wizard
           start={wizard}
