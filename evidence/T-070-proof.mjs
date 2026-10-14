@@ -6,7 +6,8 @@
 //          never a real provider): a forced failure keeps the last figures and raises one steady error
 //          mark through background retries; a focus after six minutes reads once, a second focus two
 //          seconds later does not; the Tower's Refresh reads every provider at once.
-// Usage: node evidence/T-070-proof.mjs <app pid> <step: tour|cards|usage|all>
+//   pill (T-550): the top-bar usage pill is one button; a click opens Settings at Accounts & keys.
+// Usage: node evidence/T-070-proof.mjs <app pid> <step: tour|cards|pill|usage|all>
 import { execFile } from "node:child_process";
 
 const ROOT = "G:/Dev/kolux-rs-lanes/look";
@@ -82,6 +83,23 @@ if (is("cards")) {
   log("rows:", JSON.stringify(await ev(`[...document.querySelectorAll(".tower .row")].map(r => r.querySelector(".name")?.textContent.trim() + " / " + (r.querySelector(".agent")?.textContent.trim() ?? ""))`)));
   log("Terminals view:", await view("Terminals"));
   await sleep(400);
+}
+
+// T-550: the top-bar usage pill is one button with the pill's look; a click opens Settings at Accounts & keys.
+if (is("pill")) {
+  log("stub:", await stub("ok"), "manual kick:", await kick("manual"));
+  await waitFor("the Claude pill with the stubbed figures", async () => (await pill())?.text === "Claude 37% left", 8000);
+  const shape = () => ev(`(() => { const u = document.querySelector(".tb .usage, header .usage, .usage"); if (!u) return null; const s = getComputedStyle(u); const r = u.getBoundingClientRect(); return { tag: u.tagName, type: u.getAttribute("type"), title: u.title, hidden: u.hidden, buttonsInside: u.querySelectorAll("button").length, parts: [...u.querySelectorAll(".usage-part")].map(p => p.textContent.trim()), height: Math.round(r.height), radius: s.borderRadius, border: s.borderTopWidth + " " + s.borderTopStyle, padding: s.paddingLeft + " " + s.paddingRight, background: s.backgroundColor, fontSize: s.fontSize, cursor: s.cursor }; })()`);
+  log("pill element:", JSON.stringify(await shape()));
+  log("settings open before click:", await ev(`!!document.querySelector(".settings[role=dialog]")`));
+  const t = Date.now();
+  log("click pill:", await ev(`(() => { const u = document.querySelector(".usage"); if (!u) return "missing"; u.click(); return "clicked"; })()`));
+  await waitFor("Settings to open", () => ev(`!!document.querySelector(".settings[role=dialog]")`), 5000, 50);
+  await sleep(300);
+  log(`settings after click (${Date.now() - t} ms):`, JSON.stringify(await ev(`(() => { const d = document.querySelector(".settings[role=dialog]"); return { open: !!d, current: d?.querySelector(".settings-link[aria-current=page]")?.textContent.trim() ?? null, heading: d?.querySelector("h1")?.textContent.trim() ?? null }; })()`)));
+  log("Escape:", await cdp("key", "Escape"));
+  await sleep(500);
+  log("settings open after Escape:", await ev(`!!document.querySelector(".settings[role=dialog]")`));
 }
 
 if (is("usage")) {
