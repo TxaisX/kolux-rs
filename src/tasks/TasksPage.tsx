@@ -280,6 +280,7 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
           host={gh.host}
           onClose={() => setOpen(null)}
           onLabels={(labels: TaskLabel[]) => setResult((r) => r && { ...r, items: r.items.map((x) => (x.url === open.url ? { ...x, labels } : x)) })}
+          onState={(state: string) => setResult((r) => r && { ...r, items: r.items.map((x) => (x.url === open.url ? { ...x, state } : x)) })}
         />
       )}
     </div>

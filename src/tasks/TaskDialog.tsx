@@ -3,18 +3,19 @@
 // again every 15 seconds while the dialog is open) unless it is being edited, and an edit keeps its
 // unsaved draft until it is saved or cancelled.
 // GIT-053 (T-314-b): typing @ in the description editor offers this repository's people.
-// ponytail: the description shows as plain text, not rendered markdown; assignee edits, close /
-// reopen / comment and opening a workspace come with T-231-c, the full pull request page with T-232-c.
+// GIT-047 (T-231-c): an issue can be closed (completed, not planned, duplicate), reopened and commented on.
+// ponytail: the description shows as plain text, not rendered markdown; assignee edits and opening a
+// workspace come later, the full pull request page with T-232-c.
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { Close } from "../chrome/icons";
 import MentionField from "./MentionField";
-import { eventLine, type Task, type TaskDetail, type TaskLabel, taskKind } from "./model";
+import { duplicateQuery, eventLine, issueNumber, type Task, type TaskDetail, type TaskLabel, type TaskPage, taskKind } from "./model";
 import type { Person } from "./repoFacts";
 
 const FRESH_MS = 15_000;
 
-export default function TaskDialog({ task, host, onClose, onLabels }: { task: Task; host: string; onClose: () => void; onLabels: (labels: TaskLabel[]) => void }) {
+export default function TaskDialog({ task, host, onClose, onLabels, onState }: { task: Task; host: string; onClose: () => void; onLabels: (labels: TaskLabel[]) => void; onState: (state: string) => void }) {
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
   const [offer, setOffer] = useState<TaskLabel[]>([]);
@@ -75,6 +76,14 @@ export default function TaskDialog({ task, host, onClose, onLabels }: { task: Ta
       .catch((e) => setError(String(e)))
       .finally(() => setBusy(false));
   };
+
+  const refresh = () =>
+    invoke<TaskDetail>("scm_task_detail", args)
+      .then((d) => {
+        setDetail(d);
+        onState(d.state);
+      })
+      .catch((e) => setError(String(e)));
 
   const have = detail?.labels ?? task.labels;
   const more = offer.filter((o) => !have.some((h) => h.name === o.name));
@@ -137,6 +146,7 @@ export default function TaskDialog({ task, host, onClose, onLabels }: { task: Ta
               ))}
               {detail && detail.events.length === 0 && <li className="muted">Nothing has happened yet.</li>}
             </ul>
+            {task.kind === "issue" && <IssueActions host={host} task={task} state={state} title={detail?.title || task.title} onDone={refresh} />}
           </div>
           <div className="auto-dialog-side">
             <span className="task-cap">Labels</span>
@@ -166,6 +176,86 @@ export default function TaskDialog({ task, host, onClose, onLabels }: { task: Ta
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** GIT-047: close an issue (completed, not planned, or a duplicate of another number), reopen it, and
+ * comment on it. A duplicate target is checked by github.rs before anything is sent; issues sharing
+ * words of the title are offered as targets. */
+function IssueActions({ host, task, state, title, onDone }: { host: string; task: Task; state: string; title: string; onDone: () => void }) {
+  const [reason, setReason] = useState("completed");
+  const [dup, setDup] = useState("");
+  const [like, setLike] = useState<Task[]>([]);
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const args = { host, repo: task.repo, number: task.number };
+  useEffect(() => {
+    const q = reason === "duplicate" ? duplicateQuery(task.repo, title) : null;
+    if (!q) return setLike([]);
+    let live = true;
+    invoke<TaskPage>("scm_tasks_search", { host, queries: [q], page: 1 })
+      .then((p) => live && setLike(p.items.filter((t) => t.kind === "issue" && t.number !== task.number).slice(0, 5)))
+      .catch(() => live && setLike([]));
+    return () => {
+      live = false;
+    };
+  }, [reason, host, task.repo, task.number, title]);
+  const run = (p: Promise<unknown>, after?: () => void) => {
+    setBusy(true);
+    setError(null);
+    p.then(() => {
+      after?.();
+      onDone();
+    })
+      .catch((e) => setError(String(e)))
+      .finally(() => setBusy(false));
+  };
+  const dupNumber = issueNumber(dup);
+  const close = () => {
+    if (reason === "duplicate" && dupNumber === null) return setError("Give the number of the issue this one duplicates, such as 12 or #12.");
+    run(invoke("github_issue_state", { ...args, open: false, reason, duplicateOf: reason === "duplicate" ? dupNumber : null }));
+  };
+  return (
+    <div className="task-issue" data-issue-actions>
+      {error && (
+        <div className="note warn" role="status">
+          {error}
+        </div>
+      )}
+      <div className="task-sect">
+        {state === "open" ? (
+          <>
+            <select className="field" aria-label="Close as" value={reason} disabled={busy} onChange={(e) => setReason(e.target.value)}>
+              <option value="completed">Close as completed</option>
+              <option value="not_planned">Close as not planned</option>
+              <option value="duplicate">Close as duplicate</option>
+            </select>
+            {reason === "duplicate" && <input className="field" aria-label="Duplicate of" placeholder="Duplicate of #" value={dup} disabled={busy} onChange={(e) => setDup(e.target.value)} />}
+            <button className="btn" disabled={busy} onClick={close}>
+              Close issue
+            </button>
+          </>
+        ) : (
+          <button className="btn" disabled={busy} onClick={() => run(invoke("github_issue_state", { ...args, open: true, reason: "", duplicateOf: null }))}>
+            Reopen issue
+          </button>
+        )}
+      </div>
+      {state === "open" && reason === "duplicate" && like.length > 0 && (
+        <div className="task-labels" aria-label="Possible duplicates">
+          {like.map((t) => (
+            <button key={t.number} className="btn" title={t.title} onClick={() => setDup(`#${t.number}`)}>
+              #{t.number} {t.title.length > 40 ? `${t.title.slice(0, 40)}…` : t.title}
+            </button>
+          ))}
+        </div>
+      )}
+      <textarea className="field task-comment" aria-label="Comment" placeholder="Leave a comment" value={comment} disabled={busy} onChange={(e) => setComment(e.target.value)} />
+      <button className="btn primary" disabled={busy || !comment.trim()} onClick={() => run(invoke("github_issue_comment", { ...args, body: comment }), () => setComment(""))}>
+        Comment
+      </button>
     </div>
   );
 }

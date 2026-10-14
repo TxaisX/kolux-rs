@@ -439,6 +439,81 @@ pub async fn github_project_set(host: String, project: String, item: String, fie
     tauri::async_runtime::spawn_blocking(move || set_project_field(&gh_program()?, &host, &project, &item, &field, &kind, &value)).await.map_err(|e| e.to_string())?
 }
 
+// GIT-047: close an issue (as completed, not planned, or a duplicate of another number), reopen it,
+// comment on it. Everything goes through GraphQL with the request on standard input, so neither a
+// comment nor a number can reach a command line. A duplicate target is checked before anything is
+// sent: it must exist in the same repository, be an issue and not the issue itself.
+
+const ISSUE_ID: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issueOrPullRequest(number:$number){__typename ... on Issue{id state}}}}";
+const CLOSE_ISSUE: &str = "mutation($id:ID!,$reason:IssueClosedStateReason!,$dup:ID){closeIssue(input:{issueId:$id,stateReason:$reason,duplicateIssueId:$dup}){issue{state}}}";
+const REOPEN_ISSUE: &str = "mutation($id:ID!){reopenIssue(input:{issueId:$id}){issue{state}}}";
+const ADD_COMMENT: &str = "mutation($id:ID!,$body:String!){addComment(input:{subjectId:$id,body:$body}){clientMutationId}}";
+
+/// GitHub's own limit on a comment's length.
+pub const COMMENT_MAX: usize = 65_536;
+
+/// The node id of issue `number` in `repo`, or a plain message when there is no such issue.
+fn issue_id(gh: &Path, host: &str, repo: &str, number: u64) -> Result<String, String> {
+    repo_path(host, repo)?;
+    let (owner, name) = repo.split_once('/').unwrap_or_default();
+    let missing = || format!("There is no issue #{number} in {repo}.");
+    let data = graphql(gh, host, ISSUE_ID, serde_json::json!({ "owner": owner, "name": name, "number": number })).map_err(|e| if e.contains("NOT_FOUND") || e.contains("Could not resolve") { missing() } else { e })?;
+    let node = &data["repository"]["issueOrPullRequest"];
+    match node["__typename"].as_str() {
+        Some("Issue") => Some(s(&node["id"])).filter(|id| node_id_ok(id)).ok_or_else(missing),
+        Some("PullRequest") => Err(format!("#{number} in {repo} is a pull request, not an issue.")),
+        _ => Err(missing()),
+    }
+}
+
+/// GIT-047: close (`open` false, with `reason` completed / not_planned / duplicate) or reopen an
+/// issue; answers its new state as the list shows it ("open" or "closed").
+pub fn set_issue_state(gh: &Path, host: &str, repo: &str, number: u64, open: bool, reason: &str, duplicate_of: Option<u64>) -> Result<String, String> {
+    let reason = match (open, reason) {
+        (true, _) => "",
+        (false, "completed") => "COMPLETED",
+        (false, "not_planned") => "NOT_PLANNED",
+        (false, "duplicate") => "DUPLICATE",
+        _ => return Err("Choose why the issue is closed: completed, not planned or duplicate.".into()),
+    };
+    let dup = match (reason, duplicate_of) {
+        ("DUPLICATE", None | Some(0)) => return Err("Give the number of the issue this one duplicates.".into()),
+        ("DUPLICATE", Some(d)) if d == number => return Err("An issue cannot be a duplicate of itself.".into()),
+        ("DUPLICATE", Some(d)) => Some(issue_id(gh, host, repo, d)?),
+        _ => None,
+    };
+    let id = issue_id(gh, host, repo, number)?;
+    let data = if open {
+        graphql(gh, host, REOPEN_ISSUE, serde_json::json!({ "id": id }))?["reopenIssue"].clone()
+    } else {
+        graphql(gh, host, CLOSE_ISSUE, serde_json::json!({ "id": id, "reason": reason, "dup": dup }))?["closeIssue"].clone()
+    };
+    let st = s(&data["issue"]["state"]).to_lowercase();
+    Ok(if !st.is_empty() { st } else if open { "open".into() } else { "closed".into() })
+}
+
+/// GIT-047: post a comment on an issue.
+pub fn comment_issue(gh: &Path, host: &str, repo: &str, number: u64, body: &str) -> Result<(), String> {
+    if body.trim().is_empty() {
+        return Err("Write a comment first.".into());
+    }
+    if body.chars().count() > COMMENT_MAX {
+        return Err(format!("A comment can be at most {COMMENT_MAX} characters."));
+    }
+    let id = issue_id(gh, host, repo, number)?;
+    graphql(gh, host, ADD_COMMENT, serde_json::json!({ "id": id, "body": body })).map(|_| ())
+}
+
+#[tauri::command]
+pub async fn github_issue_state(host: String, repo: String, number: u64, open: bool, reason: String, duplicate_of: Option<u64>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || set_issue_state(&gh_program()?, &host, &repo, number, open, &reason, duplicate_of)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn github_issue_comment(host: String, repo: String, number: u64, body: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || comment_issue(&gh_program()?, &host, &repo, number, &body)).await.map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -657,5 +732,37 @@ mod tests {
         let (gh, _keep) = graphql_stand_in("github-projects-none", &json!({ "data": { "repositoryOwner": null } }));
         let err = list_projects(&gh, "github.com", "ghost").unwrap_err();
         assert!(err.contains("no account or organization called ghost"), "{err}");
+    }
+    #[test]
+    fn an_issue_closes_as_a_duplicate_only_after_the_target_is_checked_and_reopens_and_takes_comments() {
+        let issue = json!({ "data": { "repository": { "issueOrPullRequest": { "__typename": "Issue", "id": "I_kw1", "state": "OPEN" } }, "closeIssue": { "issue": { "state": "CLOSED" } }, "reopenIssue": { "issue": { "state": "OPEN" } } } });
+        let (gh, dir) = graphql_stand_in("github-issue-dup", &issue);
+        assert_eq!(set_issue_state(&gh, "github.com", "acme/app", 7, false, "duplicate", Some(3)).unwrap(), "closed");
+        let calls = fs::read_to_string(dir.join("calls.txt")).unwrap();
+        assert_eq!(calls.lines().count(), 3, "the target, the issue, then the close: {calls}");
+        let body = fs::read_to_string(dir.join("body.txt")).unwrap();
+        assert!(body.contains("\"number\":3") && body.contains("\"reason\":\"DUPLICATE\"") && body.contains("\"dup\":\"I_kw1\""), "{body}");
+        assert_eq!(set_issue_state(&gh, "github.com", "acme/app", 7, true, "", None).unwrap(), "open");
+        assert_eq!(set_issue_state(&gh, "github.com", "acme/app", 7, false, "not_planned", None).unwrap(), "closed");
+        comment_issue(&gh, "github.com", "acme/app", 7, "Fixed in \"main\"; see `x`").unwrap();
+        let body = fs::read_to_string(dir.join("body.txt")).unwrap();
+        assert!(body.contains("reopenIssue") && body.contains("\"reason\":\"NOT_PLANNED\"") && body.contains("addComment") && body.contains("Fixed in \\\"main\\\""), "{body}");
+    }
+
+    #[test]
+    fn a_bad_duplicate_target_or_comment_reads_as_a_plain_message_and_nothing_is_sent() {
+        let (gh, dir) = graphql_stand_in("github-issue-missing", &json!({ "data": { "repository": { "issueOrPullRequest": null } } }));
+        assert_eq!(set_issue_state(&gh, "github.com", "acme/app", 7, false, "duplicate", Some(999)).unwrap_err(), "There is no issue #999 in acme/app.");
+        assert_eq!(fs::read_to_string(dir.join("calls.txt")).unwrap().lines().count(), 1, "only the check went out");
+        let (gh, _keep) = graphql_stand_in("github-issue-pr", &json!({ "data": { "repository": { "issueOrPullRequest": { "__typename": "PullRequest" } } } }));
+        assert_eq!(set_issue_state(&gh, "github.com", "acme/app", 7, false, "duplicate", Some(4)).unwrap_err(), "#4 in acme/app is a pull request, not an issue.");
+        let (gh, dir) = graphql_stand_in("github-issue-refused", &json!({}));
+        assert!(set_issue_state(&gh, "github.com", "acme/app", 7, false, "duplicate", Some(7)).unwrap_err().contains("itself"));
+        assert!(set_issue_state(&gh, "github.com", "acme/app", 7, false, "duplicate", None).unwrap_err().contains("number"));
+        assert!(set_issue_state(&gh, "github.com", "acme/app", 7, false, "wontfix", None).is_err());
+        assert!(comment_issue(&gh, "github.com", "acme/app", 7, "  \n").is_err());
+        assert!(comment_issue(&gh, "github.com", "acme/app", 7, &"x".repeat(COMMENT_MAX + 1)).is_err());
+        assert!(set_issue_state(&gh, "github.com", "acme/../app", 7, true, "", None).is_err());
+        assert!(!dir.join("calls.txt").exists(), "nothing was sent for a refused request");
     }
 }

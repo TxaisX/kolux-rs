@@ -150,3 +150,21 @@ export function eventLine(e: TaskEvent): string {
   const verb = verbs[e.kind] ?? e.kind.replace(/[_-]/g, " ");
   return e.actor ? `@${e.actor} ${verb}` : verb;
 }
+
+/** GIT-047: the issue number typed for "duplicate of" (`12` or `#12`); null for anything else. */
+export function issueNumber(text: string): number | null {
+  const m = /^#?(\d{1,9})$/.exec(text.trim());
+  const n = m ? Number(m[1]) : 0;
+  return n > 0 ? n : null;
+}
+
+/** GIT-047: the search that suggests what an issue may duplicate: other issues in the same
+ * repository sharing words of its title (quotes, brackets and search words like is: left out). */
+export function duplicateQuery(repo: string, title: string): string | null {
+  const words = title
+    .replace(/["\\()[\]]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !w.includes(":"))
+    .slice(0, 6);
+  return words.length ? `repo:${repo} is:issue ${words.join(" ")}` : null;
+}

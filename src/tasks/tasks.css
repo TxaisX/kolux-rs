@@ -60,3 +60,8 @@
 .timeline-bar:hover { opacity: 1; }
 .timeline-undated { margin-top: 8px; font-size: 12px; color: var(--fg-label); }
 .timeline-undated ul { margin: 4px 0 0; padding-left: 18px; }
+/* T-231-c: close, reopen and comment on an issue (GIT-047). */
+.task-issue { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line-subtle); }
+.task-issue .task-sect { flex-wrap: wrap; gap: 6px; }
+.task-comment { min-height: 64px; resize: vertical; font: inherit; }
+.task-issue > .btn.primary { align-self: flex-end; }
