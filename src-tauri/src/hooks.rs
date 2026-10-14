@@ -91,6 +91,46 @@ pub struct Change {
     /// SESS-030: the agent's own session id (`session_id`), what its resume command takes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    /// STAT-027: the question asked (every question, one per line), while the agent waits on it;
+    /// the Board card's line shows it whole. The plan to review rides on `plan` alone (T-123-d).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ask: Option<String>,
+}
+
+/// STAT-027: Claude Code's tools that wait on the user's answer rather than run.
+const QUESTION_TOOLS: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
+/// STAT-025: task-list bookkeeping tools; their input is never shown as what the agent is doing.
+const LIST_TOOLS: [&str; 5] = ["TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"];
+/// STAT-027: the longest question carried; a longer one is cut and says so.
+const ASK_MAX: usize = 8000;
+
+/// STAT-027: the text the agent waits on: the plan (ExitPlanMode's `plan`) or the questions
+/// (AskUserQuestion's `questions`). The card's first line comes from it; only the questions ride on
+/// `ask`, the plan is `plan`'s (status.rs sizes the whole update around it, SAFE-006).
+fn ask_of(tool: Option<&str>, input: Option<&Value>) -> Option<String> {
+    let input = input?;
+    let text = match tool? {
+        "ExitPlanMode" => input.get("plan")?.as_str()?.to_string(),
+        "AskUserQuestion" => input.get("questions")?.as_array()?.iter().filter_map(|q| q.get("question").and_then(Value::as_str)).collect::<Vec<_>>().join("\n"),
+        _ => return None,
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    Some(if text.chars().count() > ASK_MAX { format!("{}\n… (cut)", text.chars().take(ASK_MAX).collect::<String>()) } else { text.to_string() })
+}
+
+/// What the card shows of a tool step: nothing for list bookkeeping, the question's first line,
+/// else the input's one line (STAT-025, STAT-027).
+fn step_detail(tool: Option<&str>, input: Option<&Value>, ask: Option<&str>) -> Option<String> {
+    if tool.is_some_and(|t| LIST_TOOLS.contains(&t)) {
+        return None;
+    }
+    match ask {
+        Some(a) => a.lines().map(str::trim).find(|l| !l.is_empty()).map(|l| trim(l, 160)),
+        None => tool_detail(input),
+    }
 }
 
 /// STAT-022's three causes for Claude Code's failure kinds (the StopFailure `error` values): a
@@ -153,13 +193,28 @@ pub fn claude_change(event: &Value) -> Option<Change> {
             let error = str_of("error")?;
             Some(Change { state: "blocked", cause: Some(stop_cause(error)), detail: str_of("error_details").map(|e| trim(&fold(e), 160)), ..Change::default() })
         }
-        "PreToolUse" => Some(Change {
-            state: if matches!(tool.as_deref(), Some("AskUserQuestion" | "ExitPlanMode")) { "waiting" } else { "working" },
-            detail: tool_detail(event.get("tool_input")),
-            plan: plan_of(tool.as_deref(), event.get("tool_input")),
-            tool,
-            ..Change::default()
-        }),
+        "PreToolUse" | "PermissionRequest" => {
+            // STAT-027: a question, even one asked as a permission, is waiting with its text. The
+            // exit-plan step asked as a permission stays a real permission (SAFE-001, SAFE-007): its
+            // wait ends only when that tool finishes, never on unrelated tool work.
+            let asks = tool.as_deref().is_some_and(|t| QUESTION_TOOLS.contains(&t));
+            let text = ask_of(tool.as_deref(), event.get("tool_input"));
+            let state = match (name, tool.as_deref()) {
+                ("PermissionRequest", Some("AskUserQuestion")) => "waiting",
+                ("PermissionRequest", _) => "permission",
+                _ if asks => "waiting",
+                _ => "working",
+            };
+            Some(Change {
+                state,
+                detail: step_detail(tool.as_deref(), event.get("tool_input"), text.as_deref()),
+                plan: plan_of(tool.as_deref(), event.get("tool_input")),
+                // T-123-d: a question rides whole on `ask`; the plan already rides on `plan`, never twice.
+                ask: text.filter(|_| tool.as_deref() == Some("AskUserQuestion")),
+                tool,
+                ..Change::default()
+            })
+        }
         "PostToolUse" => Some(Change {
             state: "working",
             wrote: matches!(tool.as_deref(), Some("Write" | "Edit" | "MultiEdit" | "NotebookEdit"))
@@ -168,7 +223,6 @@ pub fn claude_change(event: &Value) -> Option<Change> {
             ..Change::default()
         }),
         "PostToolUseFailure" => plain("working"),
-        "PermissionRequest" => Some(Change { state: "permission", detail: tool_detail(event.get("tool_input")), plan: plan_of(tool.as_deref(), event.get("tool_input")), tool, ..Change::default() }),
         "PostCompact" => (str_of("trigger") == Some("manual")).then_some(Change { state: "done", boundary: true, ..Change::default() }),
         // SubagentStart, SubagentStop and TeammateIdle feed the roster (status.rs); PreCompact is refused.
         _ => None,

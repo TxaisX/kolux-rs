@@ -100,11 +100,41 @@ pub fn write_checked(path: &Path, text: &str, loaded_hash: Option<&str>) -> Resu
 // ponytail: one lock for every path; saves are milliseconds, a per-path map if that ever shows.
 static WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// T-073 (EDIT-003): answers with the stamp of the file it just wrote, taken under the same lock,
+/// so the editor remembers its own save and the disk-change check never takes it for an agent's.
 #[tauri::command(async)]
-pub fn file_write(path: String, text: String, loaded_hash: Option<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), WriteError> {
+pub fn file_write(path: String, text: String, loaded_hash: Option<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Option<Stamp>, WriteError> {
     let path = fence.allow(&path, &store, &git, true)?;
     let _one = WRITES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    write_checked(&path, &text, loaded_hash.as_deref())
+    write_checked(&path, &text, loaded_hash.as_deref())?;
+    Ok(stamp_of(&path))
+}
+
+/// T-073 (EDIT-003): what a cheap disk-change check compares: the modified time in milliseconds
+/// and the size in bytes. It is advisory only (the banner); a same-size rewrite inside one check
+/// or a tool that puts the old modified time back slips past it, and the save's hash check
+/// (`write_checked`) is the guard that still refuses then.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Stamp {
+    pub mtime: u64,
+    pub size: u64,
+}
+
+/// The stamp of a file, or None when it is gone or cannot be looked at.
+pub fn stamp_of(path: &Path) -> Option<Stamp> {
+    let meta = fs::metadata(path).ok()?;
+    let mtime = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_millis() as u64;
+    Some(Stamp { mtime, size: meta.len() })
+}
+
+/// T-073 (EDIT-003): the stamps of the files open in editor tabs, in the order asked, None for a
+/// file that is gone, unreadable or outside the projects. The editor asks every two seconds for
+/// the tabs in front and when the window gets focus.
+/// ponytail: polling; a file watcher (the one the git-status lane adds) is the upgrade path, so the
+/// two never both add a dependency.
+#[tauri::command(async)]
+pub fn file_stamps(paths: Vec<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Vec<Option<Stamp>> {
+    paths.iter().map(|p| fence.allow(p, &store, &git, true).ok().and_then(|p| stamp_of(&p))).collect()
 }
 
 /// ACCT-055: Open a file shows the system picker here, so only the file the user chose is
@@ -422,6 +452,47 @@ mod tests {
         // Any other failure reaches the window as the plain message it always was.
         assert_eq!(serde_json::to_value(WriteError::Failed("could not save x".into())).unwrap(), serde_json::json!("could not save x"));
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn t073_the_stamp_follows_a_rewrite_and_is_none_for_a_missing_file() {
+        let dir = temp_dir("stamp");
+        let f = dir.join("a.txt");
+        fs::write(&f, "one
+").unwrap();
+        let first = stamp_of(&f).unwrap();
+        assert_eq!(first.size, 4);
+        fs::write(&f, "one two
+").unwrap();
+        let second = stamp_of(&f).unwrap();
+        assert_ne!(first, second, "a rewrite to another size changes the stamp");
+        assert_eq!(stamp_of(&dir.join("gone.txt")), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn t073_council_the_hash_check_refuses_even_when_the_stamp_says_unchanged() {
+        // The banner's stamp is advisory: a same-size rewrite that puts the old modified time
+        // back looks unchanged to it, and the save must still be refused by the hash check.
+        let dir = temp_dir("stamp-equal");
+        let f = dir.join("a.txt");
+        fs::write(&f, "aaaa
+").unwrap();
+        let loaded = text_hash(b"aaaa
+");
+        let before = stamp_of(&f).unwrap();
+        let mtime = fs::metadata(&f).unwrap().modified().unwrap();
+        fs::write(&f, "bbbb
+").unwrap();
+        fs::OpenOptions::new().write(true).open(&f).unwrap().set_modified(mtime).unwrap();
+        assert_eq!(stamp_of(&f).unwrap(), before, "same size and the old modified time: the stamp cannot tell");
+        let refused = write_checked(&f, "mine
+", Some(&loaded));
+        assert_eq!(refused, Err(WriteError::ChangedOnDisk { path: f.display().to_string(), disk_hash: Some(text_hash(b"bbbb
+")) }));
+        assert_eq!(fs::read_to_string(&f).unwrap(), "bbbb
+", "the agent's text stays on disk");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

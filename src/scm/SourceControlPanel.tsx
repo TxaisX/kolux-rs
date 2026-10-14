@@ -12,8 +12,8 @@
 // the base and the lines changed, split into source, tests and generated).
 // Rows select on click (Ctrl adds, Shift spans), and a bulk bar above the list says how many of
 // the selected rows Stage and Unstage will each cover (T-018-c); Escape clears the selection.
-// ponytail: the list refreshes after each action and every 4 s while the panel is open; the
-// watcher that shows a commit typed in a terminal at once comes with GIT-001 (T-033). GIT-021 / GIT-023: the pull-request step looks the
+// GIT-001 (T-033-b): the list refreshes after each action and whenever git state moves, a commit
+// or checkout typed in a terminal included, through the git status watcher (watch.ts). GIT-021 / GIT-023: the pull-request step looks the
 // branch's pull request up through gh once it is published, and Create pull request opens a composer.
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -22,6 +22,7 @@ import { ChevronDown, Close, FileCode, List, Minus, Plus, Refresh, Spark, Stop, 
 import { dismissGenerate, generate, genState, genSubscribe, genVersion, stopGenerate, type Writer } from "./generate";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
+import { watchStatus } from "./watch";
 import { openInBrowser } from "../browser/BrowserPane";
 import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt } from "./model";
 
@@ -182,9 +183,12 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
     setAnchor(null);
     setDiscarding(null);
     void load();
-    const timer = window.setInterval(() => void load(), 4000);
-    return () => window.clearInterval(timer);
-  }, [load]);
+    if (dir === null) return;
+    return watchStatus(dir, (s) => {
+      setStatus(s);
+      setError(null);
+    });
+  }, [load, dir]);
 
   // VIEW-068: the branch summary is measured while the panel is open, when HEAD moves and at
   // least every 30 s; the last one stays on screen while the next is worked out.

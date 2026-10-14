@@ -8,7 +8,7 @@ import { resolve } from "../keys/keymap";
 import PlusMenu, { markFor, programWord, shellWord, type AgentInfo } from "./PlusMenu";
 
 const claude: AgentInfo = { id: "claude", name: "Claude Code", program: "claude", args: ["--permission-mode", "auto"], installed: true, path: "C:\\Users\\me\\.local\\bin\\claude.exe" };
-const codex: AgentInfo = { id: "codex", name: "Codex", program: "codex", args: ["--dangerously-bypass-approvals-and-sandbox"], installed: true, path: "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd" };
+const codex: AgentInfo = { id: "codex", name: "Codex", program: "codex", args: ["--sandbox", "workspace-write", "--ask-for-approval", "never"], installed: true, path: "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd" };
 const gemini: AgentInfo = { id: "gemini", name: "Gemini CLI", program: "gemini", args: [], installed: false, path: null };
 
 function items(html: string): string[] {

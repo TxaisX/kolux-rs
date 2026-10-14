@@ -133,7 +133,7 @@ pub fn replay(text: &str, rows: &mut Vec<Row>, now: u64) -> usize {
         let Ok(event) = serde_json::from_str::<Value>(body.trim()) else { continue };
         let session = sessions.entry(pane_key).or_default();
         let Some((change, child)) = session.apply(agent, &event) else { continue };
-        let status = Status { pane_key, terminal, change, children: Vec::new(), stop: session.stop.clone(), reply: None, child, interrupted: false };
+        let status = Status { pane_key, terminal, change, children: Vec::new(), stop: session.stop.clone(), reply: None, child, interrupted: false, monitoring: session.monitoring() };
         let at = rows.iter().position(|r| r.pane_key == pane_key);
         let row = row_of(name, &status, &event, at.map(|i| &rows[i]), now);
         match at {

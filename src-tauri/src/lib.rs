@@ -88,11 +88,6 @@ fn get_settings(store: tauri::State<'_, Mutex<Store>>) -> Result<serde_json::Val
     Ok(secrets::without_secrets(store.lock().map_err(|e| e.to_string())?.settings()))
 }
 
-#[tauri::command]
-fn save_settings(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, value: serde_json::Value) -> Result<(), String> {
-    write_settings(&app, &store, |_| value)
-}
-
 /// Writes only the settings the window changed (`set`, and `remove` for ones it cleared) over what
 /// is on disk, so a key Kolux itself wrote meanwhile (a printed pull request link) is kept.
 #[tauri::command]
@@ -160,14 +155,15 @@ pub fn run() {
         .setup(|app| {
             // APP-053: everything the app starts from here on ends with it; outside its own job (a job the
             // launcher owns without breakaway, say) the children would outlive a crash, so that is logged.
-            if !procs::app_job_start() {
-                eprintln!("kolux-rs: the app could not be put in its own job object; child processes would survive a crash (APP-053)");
+            let job_ok = procs::app_job_start();
+            let dir = app.path().app_data_dir()?;
+            diag::set_dir(&dir);
+            if !job_ok {
+                diag::write(&dir, "kolux-rs: the app could not be put in its own job object; child processes would survive a crash (APP-053)");
             }
             // The config homes this process resolved (defaults included), so a launch that inherited another
             // app's environment shows up in the log.
-            eprintln!("kolux-rs: config: CLAUDE_CONFIG_DIR={} CODEX_HOME={}", hooks::claude_settings_file().parent().map(|d| d.display().to_string()).unwrap_or_default(), trust::codex_config_file().parent().map(|d| d.display().to_string()).unwrap_or_default());
-            let dir = app.path().app_data_dir()?;
-            diag::set_dir(&dir);
+            diag::write(&dir, &format!("kolux-rs: config: CLAUDE_CONFIG_DIR={} CODEX_HOME={}", hooks::claude_settings_file().parent().map(|d| d.display().to_string()).unwrap_or_default(), trust::codex_config_file().parent().map(|d| d.display().to_string()).unwrap_or_default()));
             #[cfg(debug_assertions)]
             dev_inject()?;
             let store = Store::open(&dir)?;
@@ -252,6 +248,14 @@ pub fn run() {
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_secs(2));
                 foreground::poll(&handle);
+                // STAT-028: a cancelled turn that never sends its Stop reads interrupted.
+                for status in status::settle_cancels() {
+                    let _ = tauri::Emitter::emit(&handle, hooks::EVENT, status);
+                }
+                // STAT-032: a working reading with no signal for 30 minutes is marked unverified.
+                for quiet in status::settle_unverified() {
+                    let _ = tauri::Emitter::emit(&handle, "agent-unverified", quiet);
+                }
             });
             // USAGE-011: changed activity counts are saved in batches.
             let handle = app.handle().clone();
@@ -293,30 +297,39 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
+            get_settings,
+            settings_patch,
+            notify,
             notifications::notification_test,
             notifications::open_notification_settings,
-            get_settings,
-            save_settings,
-            settings_patch,
             hooks::agent_hooks::agent_hooks_sync,
             hooks::agent_hooks::agent_hooks_file,
             hooks::agent_hooks::saved::agent_status_saved,
             hooks::agent_hooks::saved::agent_resumable,
-            notify,
+            hooks::claude_usage,
             sysmem::process_memory,
             fonts::list_fonts,
             resources::resources,
             terminal::terminal_spawn,
             terminal::terminal_write,
             terminal::terminal_screen_reply,
-            status::agent_history,
-            activity::activity_counts,
-            status::agent_answer,
             terminal::terminal_resize,
             terminal::terminal_ack,
             terminal::terminal_memory_profile,
             terminal::terminal_kill,
             terminal::terminal_layout,
+            terminal::terminal_busy,
+            terminal::terminal_diagnostics,
+            terminal::terminal_history,
+            terminal::terminal_forget_history,
+            terminal::terminal_prune_history,
+            terminal::terminal_history_append,
+            status::agent_history,
+            status::agent_answer,
+            status::status_inband,
+            activity::activity_counts,
+            activity::activity_get,
+            activity::activity_touch,
             projects::git_version,
             projects::project_list,
             projects::project_add,
@@ -329,9 +342,6 @@ pub fn run() {
             projects::workspace_from_item,
             projects::workspace_items,
             projects::workspace_item,
-            setup::workspace_setup,
-            setup::setup_imports_list,
-            setup::setup_import,
             projects::workspace_set_parent,
             projects::workspace_branches,
             projects::workspace_open_branch,
@@ -352,16 +362,26 @@ pub fn run() {
             projects::workspace_remove,
             projects::workspace_remove_check,
             projects::project_set,
+            projects::workspaces_place_get,
+            projects::workspaces_place_set,
+            projects::git_first_commit_preview,
+            projects::git_start,
+            setup::workspace_setup,
+            setup::setup_imports_list,
+            setup::setup_import,
             agents::agent_list,
+            agents::agent_start_line,
+            agents::open_install_page,
+            agents::inventory::session_tabs,
             pty::shell_list,
             tools::tools_check,
             tools::tools_dismiss,
             token_usage::token_usage,
             token_usage::token_usage_scan,
             token_usage::token_tracking_set,
-            agents::agent_start_line,
             trust::trust_folders_cmd,
             scm::scm_status,
+            scm::scm_watch, scm::scm_unwatch,
             scm::scm_pushed, scm::scm_head, scm::scm_summary, scm::scm_abort,
             scm::scm_merge_info,
             scm::scm_merge,
@@ -380,16 +400,8 @@ pub fn run() {
             scm::scm_commit, scm::scm_remote,
             scm::scm_pr, scm::scm_pr_checks, scm::scm_pr_create, scm::scm_open_pr,
             scm::scm_history, scm::scm_commit_files, scm::scm_github_repo,
-            terminal::terminal_busy,
-            terminal::terminal_diagnostics,
-            terminal::terminal_history,
-            terminal::terminal_forget_history,
-            terminal::terminal_prune_history,
-            terminal::terminal_history_append,
             keybindings::keybindings_read,
             keybindings::keybindings_write,
-            projects::workspaces_place_get,
-            projects::workspaces_place_set,
             browser::browser_open,
             browser::browser_bounds,
             browser::browser_navigate,
@@ -408,7 +420,6 @@ pub fn run() {
             secrets::secret_set,
             secrets::secret_clear,
             codex_usage::codex_usage,
-            hooks::claude_usage,
             claude_key::claude_key_status,
             claude_key::claude_key_connect,
             claude_key::claude_key_cancel,
@@ -419,7 +430,7 @@ pub fn run() {
             claude_accounts::claude_account_activate,
             claude_accounts::claude_account_check,
             claude_accounts::claude_own_sign_in,
-            agents::open_install_page,
+            claude_accounts::claude_account_remove,
             install::agent_installs,
             install::agent_can_install,
             install::agent_install,
@@ -434,10 +445,7 @@ pub fn run() {
             codex_accounts::codex_account_cancel,
             codex_accounts::codex_account_activate,
             codex_accounts::codex_account_remove,
-            projects::git_first_commit_preview,
-            projects::git_start,
-            activity::activity_get,
-            activity::activity_touch,
+            codex_accounts::codex_account_label,
             groups::groups_get,
             groups::group_create,
             groups::group_rename,
@@ -464,12 +472,9 @@ pub fn run() {
             onboarding::onboarding_milestone,
             files::file_read,
             files::file_write,
+            files::file_stamps,
             files::file_pick,
             files::md_list,
-            artifacts::artifacts_list,
-            artifacts::artifact_add,
-            artifacts::artifact_remove,
-            artifacts::open_external,
             files::file_list,
             files::md_new,
             files::diff_sides,
@@ -478,6 +483,10 @@ pub fn run() {
             files::diff_image,
             files::dir_list,
             files::path_kind,
+            artifacts::artifacts_list,
+            artifacts::artifact_add,
+            artifacts::artifact_remove,
+            artifacts::open_external,
             links::open_path, links::file_grant,
             fsops::fs_create,
             fsops::fs_rename,
@@ -494,8 +503,6 @@ pub fn run() {
             update::update_check,
             update::update_download,
             update::update_restart,
-            claude_accounts::claude_account_remove,
-            codex_accounts::codex_account_label,
             usage_alerts::usage_alerts_fired,
             usage_alerts::usage_alert_send
         ])
