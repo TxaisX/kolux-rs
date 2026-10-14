@@ -80,6 +80,8 @@ describe("AUTO-014 the opened run", () => {
     expect(html).toMatch(/1,500 tokens · \$\d+\.\d\d/);
     const other = page(run({ provider: "gemini" }));
     expect(other).toContain("Not supported: Gemini keeps no local usage record");
-    expect(other).toContain("No output was saved for this run");
+    // T-140-d: only a run its closing pane ended says its terminal had closed.
+    expect(other).not.toContain("its terminal had closed");
+    expect(page(run({ provider: "gemini", paneEnded: true }))).toContain("No output was saved for this run: its terminal had closed before the run ended.");
   });
 });

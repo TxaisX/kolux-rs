@@ -199,7 +199,7 @@ export function RunPage({ run, automation, now, usage = null, agentName, onRuns,
           <pre className="auto-output">{run.output}</pre>
         </div>
       )}
-      {!run.outputFrom && !run.output && (run.status === "completed" || run.status === "failed") && run.dispatchedAt !== undefined && <p className="muted">No output was saved for this run: its terminal had closed before the run ended.</p>}
+      {!run.outputFrom && !run.output && run.paneEnded && <p className="muted">No output was saved for this run: its terminal had closed before the run ended.</p>}
     </section>
   );
 }

@@ -100,7 +100,11 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
     if (initial) return;
     void load();
     search.current?.focus(); // the search box has focus when the page opens
-    const off = listen("automations-changed", () => void load());
+    // T-140-d: a run that moved may have new usage to match, so the saved usage is read again too.
+    const off = listen("automations-changed", () => {
+      void load();
+      invoke<Usage>("token_usage").then(setUsage, () => {});
+    });
     // AUTO-014: the saved usage at once, then a fresh read of each tracked agent's logs.
     invoke<Usage>("token_usage")
       .then((u) => {
