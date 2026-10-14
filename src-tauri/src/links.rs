@@ -24,7 +24,7 @@ const PROGRAMS: &[&str] = &[
     "diagpkg", "chm", "hlp", "jar", "jnlp", "py", "pyw", "pyc", "pyz", "pyzw", "rb", "pl", "pm", "php", "phar", "sh",
     "bash", "zsh", "ksh", "csh", "fish", "command", "tool", "app", "pkg", "mpkg", "dmg", "action", "workflow", "scpt",
     "scptd", "applescript", "terminal", "webloc", "desktop", "run", "bin", "elf", "appimage", "deb", "rpm", "snap",
-    "flatpak", "flatpakref", "apk", "ipa", "ocx", "dll", "sys", "drv", "vxd", "grp", "ins", "isp", "its", "mad",
+    "appref-ms", "iso", "img", "vhd", "vhdx", "flatpak", "flatpakref", "apk", "ipa", "ocx", "dll", "sys", "drv", "vxd", "grp", "ins", "isp", "its", "mad",
     "maf", "mag", "mam", "maq", "mar", "mas", "mat", "mau", "mav", "maw", "mcf", "mda", "mdb", "mde", "mdt", "mdw",
     "mdz", "ade", "adp", "accdb", "accde", "accdr", "accdt", "docm", "dotm", "xlsm", "xltm", "xlam", "xla", "xll",
     "pptm", "potm", "ppam", "ppsm", "sldm", "one", "onepkg", "onetoc2", "iqy", "oqy", "rqy", "dqy", "slk", "sylk",
@@ -45,9 +45,13 @@ pub fn roots(store: &Mutex<crate::state::Store>) -> Vec<String> {
     v
 }
 
-/// Err when `path` points at another machine (SAFE-021); judged as text only.
+/// Err when `path` points at another machine (SAFE-021); judged as text only. A path holding a
+/// NUL or another control character is refused too: Windows stops reading at a NUL, so
+/// "run.bat\0.txt" passes the program check as a .txt and then runs run.bat.
 pub fn refuse_host(path: &str, roots: &[String]) -> Result<(), String> {
-    if host_path(path, roots) {
+    if path.chars().any(|c| c.is_control()) {
+        Err("That path holds a control character; Kolux never opens it".to_string())
+    } else if host_path(path, roots) {
         Err(format!("{path} is on another computer; Kolux never opens or checks paths on other machines"))
     } else {
         Ok(())
@@ -382,6 +386,10 @@ mod tests {
         assert!(t.elapsed() < std::time::Duration::from_millis(500));
         assert!(err.contains("another computer"), "{err}");
         assert_eq!(refuse_host(r"C:\a.txt", &[]), Ok(()));
+        // a NUL (or any control character) is refused before anything reads the name
+        for p in ["G:\\repo\\tools\\run.bat\0.txt", "C:\\a\n.txt", "C:\\a\u{7f}.txt"] {
+            assert!(refuse_host(p, &[]).unwrap_err().contains("control character"), "{p:?}");
+        }
     }
 
     #[test]
@@ -460,6 +468,11 @@ mod tests {
             "a.msix",
             "a.pkg",
             "a.dll",
+            "a.appref-ms",
+            "disk.iso",
+            "disk.img",
+            "disk.vhd",
+            "disk.VHDX",
         ] {
             assert!(program_like(p, true), "{p}");
             assert!(program_like(p, false), "{p}");

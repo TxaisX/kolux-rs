@@ -48,17 +48,29 @@ export function findLinks(text: string): Found[] {
     const target = at ? raw.slice(0, raw.length - at[0].length) : raw;
     const line = at ? Number(at[1] ?? at[3]) : undefined;
     const column = at && (at[2] ?? at[4]) ? Number(at[2] ?? at[4]) : undefined;
-    out.push({ start, end, kind: "file", target: fromFileUrl(target), ...(line !== undefined ? { line } : {}), ...(column !== undefined ? { column } : {}) });
+    // A decoded name with a control character is no link: Windows stops reading at a NUL, so
+    // "run.bat%00.txt" would look like a text file here and run as run.bat when opened.
+    const file = fromFileUrl(target);
+    if (file === null || CONTROL.test(file)) continue;
+    out.push({ start, end, kind: "file", target: file, ...(line !== undefined ? { line } : {}), ...(column !== undefined ? { column } : {}) });
   }
   return out;
 }
 
-/** file:///C:/a/b.txt → C:/a/b.txt; file:///home/x → /home/x; file://server/share/x → \\server\share\x. */
-export function fromFileUrl(s: string): string {
+const CONTROL = /[\x00-\x1f\x7f]/;
+
+/** file:///C:/a/b.txt → C:/a/b.txt; file:///home/x → /home/x; file://server/share/x → \\server\share\x.
+ *  Null for a malformed % escape. */
+export function fromFileUrl(s: string): string | null {
   const m = s.match(/^file:\/\/([^/]*)(\/.*)?$/i);
   if (!m) return s;
   const host = m[1];
-  let path = decodeURIComponent(m[2] ?? "/");
+  let path: string;
+  try {
+    path = decodeURIComponent(m[2] ?? "/");
+  } catch {
+    return null;
+  }
   if (host && host !== "localhost") return `\\\\${host}${path.replace(/\//g, "\\")}`;
   if (/^\/[A-Za-z]:/.test(path)) path = path.slice(1);
   return path;

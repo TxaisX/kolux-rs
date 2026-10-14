@@ -1,6 +1,6 @@
 // TERM-092 / TERM-093: links and file paths found in terminal text; wrapped rows joined; paths resolved.
 import { describe, expect, it } from "vitest";
-import { clickTarget, findLinks, fromFileUrl, hintFor, rangeOf, resolvePath, spanOf, type Row } from "./links";
+import { clickTarget, findLinks, fromFileUrl, hintFor, linkFor, rangeOf, resolvePath, spanOf, type Row } from "./links";
 
 const targets = (s: string) => findLinks(s).map((f) => `${f.kind}:${f.target}${f.line !== undefined ? `@${f.line}` : ""}${f.column !== undefined ? `,${f.column}` : ""}`);
 
@@ -84,5 +84,22 @@ describe("TERM-093 clickable file paths", () => {
     expect(fromFileUrl("file://server/share/x.txt")).toBe("\\\\server\\share\\x.txt");
     expect(hintFor(findLinks("src/a.ts:3")[0], false, "editor")).toBe("Ctrl+click to open src/a.ts at line 3 in the editor");
     expect(clickTarget(findLinks("src/a.ts")[0], { ctrlKey: true, metaKey: false, shiftKey: true }, false, true)).toBe("file");
+  });
+});
+
+describe("TERM-093 a file link never hides a control character", () => {
+  it("drops a file URL that decodes to a NUL or another control character", () => {
+    expect(findLinks("file:///C:/a/run.bat%00.txt")).toEqual([]);
+    expect(findLinks("see file:///G:/repo/tools/run.bat%00.txt now")).toEqual([]);
+    expect(linkFor("file:///C:/x%00.txt")).toBeNull();
+    expect(linkFor("file:///C:/x%0A.txt")).toBeNull();
+    expect(linkFor("file:///C:/x%7F.txt")).toBeNull();
+    expect(linkFor("file:///C:/x%20y.txt")?.target).toBe("C:/x y.txt");
+  });
+
+  it("a malformed % escape is no link and never throws", () => {
+    expect(() => findLinks("file:///%E0%A4%A")).not.toThrow();
+    expect(findLinks("file:///%E0%A4%A")).toEqual([]);
+    expect(fromFileUrl("file:///C:/%ZZ")).toBeNull();
   });
 });
