@@ -111,3 +111,11 @@ export function branchChip(git: { branch: string | null; head: string | null } |
   if (git.branch) return { text: git.branch, tip: git.branch };
   return git.head ? { text: git.head.slice(0, 7), tip: `Detached at ${git.head}` } : null;
 }
+
+/** STAT-034 / hooks FIX-3: an in-band status (OSC 9999) moves the dot only in an agent pane: one
+ *  started as an agent (its own kind or a program in place of the shell), or a shell the user
+ *  started an agent in by hand (ACCT-050). In a plain shell it is printed output like any other
+ *  (a file shown with `cat`, say), so it is still kept off the screen but moves nothing. */
+export function takesInband(agent: string, program: string | null | undefined, found: string | null): boolean {
+  return agent !== "shell" || !!program || found !== null;
+}

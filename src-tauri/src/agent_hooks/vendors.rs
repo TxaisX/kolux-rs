@@ -593,12 +593,17 @@ mod tests {
             fs::create_dir_all(file.parent().unwrap()).unwrap();
             let on = |f: &Path| if agent == "gemini" { install_gemini(&home, f) } else { install_antigravity(&home, f) };
             let off = |f: &Path| if agent == "gemini" { remove_hooks(&home, f) } else { remove_antigravity(&home, f) };
+            // hooks FIX-3: the record names the file with the `created` marker while it is on.
+            let record = target_dir(&home, &file).join(BACKUP_RECORD);
             for round in 0..2 {
                 assert!(!file.exists());
                 assert!(on(&file).unwrap(), "{agent} round {round}");
+                assert_eq!(fs::read_to_string(&record).unwrap(), format!("created  {}\n", file.display()), "{agent} round {round}");
                 assert!(!on(&file).unwrap(), "{agent} round {round}: a second start changes nothing");
+                assert!(super::super::was_created(&record, &file), "{agent} round {round}: still recorded as created");
                 assert!(off(&file).unwrap());
                 assert!(!file.exists(), "{agent} round {round}: off leaves no file, not {:?}", fs::read_to_string(&file).ok());
+                assert!(!record.exists(), "{agent} round {round}: the record goes with the file");
             }
             // The user's own empty file stays.
             fs::write(&file, "{}").unwrap();

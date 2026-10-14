@@ -644,17 +644,25 @@ pub fn status_command(script: &str, prev: &str) -> String {
 /// of only the fields the status rules read, made by Windows PowerShell (every Windows has it):
 /// the event, tool and session names, a few short flags and ids, `cwd`, whether the background
 /// lists were empty, and the time it was held. The tool's input and output, the prompt and the
-/// reply never reach the file. It runs only when Kolux cannot take the event; anything it cannot
-/// read is dropped, not held.
+/// reply never reach the file. It runs only when Kolux cannot take the event.
+///
+/// hooks FIX-3: an event PowerShell 5.1 cannot parse (keys that differ only in case, for one) is
+/// still held as a minimal pick, the event and session names found by a pattern that takes only
+/// name characters, so no input text can come along; one with no event name is dropped. The
+/// append is tried again (up to 20 times, 100 ms apart) while another hook holds the file.
 pub(crate) const SPOOL_LINE: &str = concat!(
     r#"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -Command ""#,
-    r#"$ErrorActionPreference='Stop'; try { $e=[IO.File]::ReadAllText($env:KF,[Text.Encoding]::UTF8) | ConvertFrom-Json; $o=[ordered]@{}; "#,
+    r#"$ErrorActionPreference='Stop'; try { $t=[IO.File]::ReadAllText($env:KF,[Text.Encoding]::UTF8); $o=[ordered]@{}; $ok=$true; "#,
+    r#"try { $e=ConvertFrom-Json -InputObject $t; "#,
     r#"foreach ($k in 'hook_event_name','tool_name','session_id','agent_id','agent_type','model','source','trigger','error','is_interrupt','cwd','conversationId','fullyIdle') "#,
     r#"{ $v=$e.$k; if ($v -is [string]) { $o[$k]=$v.Substring(0,[Math]::Min($v.Length,300)) } elseif ($v -is [bool]) { $o[$k]=$v } }; "#,
     r#"$n=$e.toolCall.name; if ($n -is [string]) { $o['toolCall']=@{name=$n.Substring(0,[Math]::Min($n.Length,300))} }; "#,
-    r#"foreach ($k in 'background_tasks','session_crons') { if ($null -ne $e.$k -and @($e.$k).Count -gt 0) { $o[$k]=@(1) } }; "#,
-    r#"$o['spooled_at']=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); "#,
-    r#"[IO.File]::AppendAllText($env:KS, $env:KR + (ConvertTo-Json -InputObject $o -Compress -Depth 3) + [char]13 + [char]10, (New-Object Text.UTF8Encoding $false)) } catch { }""#,
+    r#"foreach ($k in 'background_tasks','session_crons') { if ($null -ne $e.$k -and @($e.$k).Count -gt 0) { $o[$k]=@(1) } } } "#,
+    r#"catch { $o.Clear(); $q=[char]34; foreach ($k in 'hook_event_name','session_id') "#,
+    r#"{ $m=[regex]::Match($t,$q+$k+$q+'\s*:\s*'+$q+'([\w.:-]{1,200})'+$q); if ($m.Success) { $o[$k]=$m.Groups[1].Value } }; $ok=$o.Contains('hook_event_name') }; "#,
+    r#"if ($ok) { $o['spooled_at']=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); "#,
+    r#"$l=$env:KR + (ConvertTo-Json -InputObject $o -Compress -Depth 3) + [char]13 + [char]10; "#,
+    r#"for ($i=0; $i -lt 20; $i++) { try { [IO.File]::AppendAllText($env:KS, $l, (New-Object Text.UTF8Encoding $false)); break } catch { Start-Sleep -Milliseconds 100 } } } } catch { }""#,
     r#" <NUL >NUL 2>&1"#
 );
 
@@ -1041,9 +1049,7 @@ pub fn apply_trust(doc: &mut toml_edit::DocumentMut, listing: &[Value], hooks_fi
 pub(crate) fn write_codex_groups(file: &Path, text: Option<&str>, hooks: &mut Value, command: &str) -> Result<bool, String> {
     let changed = install_codex_hooks(hooks, command);
     if changed {
-        let mut record = agent_hooks::backup_of(file).into_os_string();
-        record.push(".sha256");
-        agent_hooks::back_up(file, Path::new(&record))?;
+        agent_hooks::back_up(file, &agent_hooks::codex_record(file))?;
         write_json(file, hooks, text)?;
     }
     Ok(changed)
@@ -1077,9 +1083,17 @@ pub fn install_codex(home: &Path, command: &str) -> Result<bool, String> {
     if !changed && CODEX_EVENTS.iter().all(|e| trusted(e).is_some()) {
         return Ok(false);
     }
+    // hooks FIX-3: a file Kolux had just created goes with its `created` record, so no stray
+    // record stays in the Codex home.
     let restore = || match &text {
         Some(t) => std::fs::write(&file, t).map_err(|e| e.to_string()),
-        None => std::fs::remove_file(&file).map_err(|e| e.to_string()),
+        None => {
+            let record = agent_hooks::codex_record(&file);
+            if agent_hooks::was_created(&record, &file) {
+                let _ = std::fs::remove_file(record);
+            }
+            std::fs::remove_file(&file).map_err(|e| e.to_string())
+        }
     };
     let listing = codex_listing(home);
     let n = listing.as_deref().map(|l| apply_trust(&mut doc, l, &real)).unwrap_or(0);
