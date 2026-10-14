@@ -81,11 +81,11 @@ The same words appear in pane headers, tabs, the sidebar, the Board and the Inbo
 |---|---|
 | Working | The agent is working on its turn |
 | Working (background) | The turn is over, but Kolux is watching the agent's background tasks. Shown as "Working" |
-| Needs you | It asked a question, or needs permission for a tool |
+| Needs you | It asked a question, or needs permission for a tool. The first line of the question or plan shows with it |
 | Blocked | It cannot go on: a limit, a sign-in or an error. Open the pane to see why |
-| Interrupted | The turn was stopped before it finished |
+| Interrupted | The turn was stopped before it finished: you pressed Esc or Ctrl+C and no finish arrived within about 3 seconds. It stays until your next prompt |
 | Failed | The program could not start |
-| Done | The agent finished its turn |
+| Done | The agent finished its turn. Clearing a session (/clear) or compacting it by hand also shows Done, without a notification |
 | Idle | Nothing is running here |
 | Queued | Waiting for its turn to start |
 | No recent update | No status has arrived from this agent for a while |
@@ -119,4 +119,4 @@ Settings, Notifications has three switches and a sound choice (System default, C
 
 The pill in the top bar shows how much of your weekly allowance is left for each installed AI program, for example "Claude 80% left". It is read-only. Hover for the weekly limit and when it resets. It tints as the allowance runs down (warning at 70% used, danger above 90%). See [Getting started](getting-started.md) for the full description.
 
-<!-- verified against: src/board/chip.ts, src/App.tsx, src/agents/AgentsRail.tsx, src/agents/rail.ts, src/inbox/inbox.ts, src/inbox/InboxView.tsx, src/terminal/status.ts, src/terminal/notify.ts, src/status/useAgentStatus.ts, src/usage/meter.ts at 106e966 -->
+<!-- verified against: src/board/chip.ts, src/App.tsx, src/agents/AgentsRail.tsx, src/agents/rail.ts, src/inbox/inbox.ts, src/inbox/InboxView.tsx, src/terminal/status.ts, src/terminal/notify.ts, src/status/useAgentStatus.ts, src/usage/meter.ts at 090d50c -->

@@ -28,7 +28,20 @@ Each file opens in its own tab, coloured by language. Ctrl+S saves. The same fil
 
 ### If the file changed under you
 
-Kolux checks when you save, not while you type. If an agent or another program changed the file after you opened it, the save is refused and the tab says "<name> changed on disk since you opened it, so it was not saved."
+While a file is in front of you, Kolux checks every two seconds (and whenever you come back to the window) whether an agent or another program changed it.
+
+- **No unsaved edits in the tab:** the tab quietly takes the new copy from disk.
+- **Unsaved edits in the tab:** a banner says "<name> changed on disk. Your unsaved edits are still here." Nothing is lost until you choose.
+
+| Button | What it does |
+|---|---|
+| Reload | Takes the disk copy. A note "Reloaded <name> from disk." offers **Undo**, and Ctrl+Z also brings your edits back |
+| Keep my edits | Hides the banner until the file changes again. Your next save is still checked (below) |
+| Compare | Shows the disk copy on the left and your text on the right, with Reload, Keep my edits and Close |
+
+A tab in the background is checked when you bring it forward.
+
+The save itself is the real safety check. If the file changed after you opened it, the save is refused and the tab says "<name> changed on disk since you opened it, so it was not saved."
 
 | Button | What it does |
 |---|---|
@@ -105,4 +118,4 @@ A browser tab never opens local files, so a page cannot reach the app's own tool
 
 Find on a page, "grab page element" and hard reload have keys listed on the Shortcuts page, but they do nothing yet in this version. Use Ctrl+R to reload.
 
-<!-- verified against: src/editor/EditorPane.tsx, src/editor/DiffPane.tsx, src/editor/AllChangesPane.tsx, src/editor/Explorer.tsx, src/editor/FilePicker.tsx, src/editor/PreviewPane.tsx, src/editor/markdown.ts, src/browser/BrowserPane.tsx, src/browser/address.ts, src/chrome/LayoutStrip.tsx, src/keys/actions.ts, src/App.tsx at 106e966 -->
+<!-- verified against: src/editor/EditorPane.tsx, src/editor/DiskBanner.tsx, src/editor/diskChange.ts, src/editor/DiffPane.tsx, src/editor/AllChangesPane.tsx, src/editor/Explorer.tsx, src/editor/FilePicker.tsx, src/editor/PreviewPane.tsx, src/editor/markdown.ts, src/browser/BrowserPane.tsx, src/browser/address.ts, src/chrome/LayoutStrip.tsx, src/keys/actions.ts, src/App.tsx at b82b076 -->

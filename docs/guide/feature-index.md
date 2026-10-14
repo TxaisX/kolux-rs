@@ -154,6 +154,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-071 | Task state changes keep tasks and workers in step; a worker can be stopped. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-072-a | Every automation run ends with a truthful status. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-072-b | A dispatched run completes only when its agent really finishes. | [Board, Agents and Inbox](board-agents-inbox.md) |
+| T-073 | A banner tells you when an open file was changed on disk, with Reload (undoable), Keep my edits and Compare. | [Files and browser](files-and-browser.md) |
 | T-073-a | Saving a file never overwrites an agent's edit you have not seen. | [Files and browser](files-and-browser.md) |
 | T-073-c | Diff view saves also check for newer edits and offer Reload or Keep mine. | [Files and browser](files-and-browser.md) |
 
@@ -265,6 +266,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-119 | Name a pane or tab; a Needs you strip appears above the grid. | [Terminals](terminals.md) |
 | T-119-b | Tab and pane titles follow the running program. | [Terminals](terminals.md) |
 | T-120-a | Settings switch and kolux agent hooks commands control agent status hooks. | [Settings](settings.md) |
+| T-123 | Status shows background work being watched, the question an agent is waiting on, and Interrupted for a stopped turn; /clear and compacting are not counted as finished work. | [Board, agents and inbox](board-agents-inbox.md) |
 | T-127 | A Checks panel and pull request comments show in the sidebar. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-128-a | Kolux recognises which agent runs in each pane. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-129-a | kolux worktree ps sums up orchestration across worktrees. | [Command line](command-line.md) |
@@ -442,6 +444,7 @@ Tasks not yet ticked off in the build plan are not listed.
 |---|---|---|
 | T-277 | Resource Manager lists terminals picked up after a reload. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-278 | Fast output never freezes a pane; memory caps scale with the machine. | [Troubleshooting](troubleshooting.md) |
+| T-278-c | Big pastes arrive whole and in order without slowing other panes; Ctrl+C or Esc stops one. | [Terminals](terminals.md) |
 | T-280 | Saved settings come back valid after a restart. | [Settings](settings.md) |
 | T-284 | An interrupted skill delete is undone or finished on restart. | [Troubleshooting](troubleshooting.md) |
 | T-286 | Startup failures and stray background errors never silently kill the app. | [Troubleshooting](troubleshooting.md) |
