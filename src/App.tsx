@@ -2370,6 +2370,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                       }
                     }}
                     hook={hook[p.key] === "working" && turn[p.key]?.monitoring ? "background" : hook[p.key]}
+                    pendingTool={hook[p.key] === "permission" ? turn[p.key]?.tool : undefined}
+                    keySettings={settings}
                     crew={crew[p.key]}
                     onNeedsYou={(on) => setNeeds((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
                     onBell={() => noticed(p, "rang the bell")}
