@@ -13,9 +13,11 @@ import { tone } from "./meter";
 import { publishClaude as publishLaunch } from "./launchWarn";
 import { publishClaude as publishPlan, usePlan, useResetTick } from "./plan";
 import { claudeFetched, runner, useRefresh } from "./refresh";
+import { lineFor, record } from "./forecast";
 
 /** The top bar's read goes to the plan line and the launch screen's warning alike. */
 const publishClaude = (limits: ClaudeLimit[]) => {
+  for (const l of limits) record(`claude:${l.kind}`, l.usedPercent, l.resetsAt, Date.now()); // USAGE-031
   publishPlan(limits);
   publishLaunch(limits);
 };
@@ -38,7 +40,7 @@ export function ClaudePillView({ limits, installed = true, trouble = false }: { 
   useResetTick([w?.resetsAt]); // USAGE-024: the hover countdown keeps itself current
   if (!installed || !w) return null;
   return (
-    <span className={`usage-part ${tone(w.usedPercent)}`.trim()} title={pillDetail(limits)} data-claude-state="ok" data-usage-trouble={trouble ? "1" : undefined}>
+    <span className={`usage-part ${tone(w.usedPercent)}`.trim()} title={[pillDetail(limits), lineFor(`claude:${w.kind}`, w.resetsAt)].filter(Boolean).join("\n")} data-claude-state="ok" data-usage-trouble={trouble ? "1" : undefined}>
       <VendorMark agent="claude" size={13} />
       <span>{pillText(limits)}</span>
       {trouble && <TroubleMark />}
