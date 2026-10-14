@@ -68,3 +68,17 @@ window opens on the second screen, no "could not open" note appears in the main 
   failing on a view that is gone still ends the paste with the piece's error".
 Gates: tsc exit 0; vitest related (paste.ts) 6 files / 44 tests passed; plan-check OK; no dupes.
 Not on screen (an error path only).
+
+## 5. AFTER: Open in fences the real folder again; long paths keep their verbatim form (AFTER 1, 2)
+- open_target puts the canonical folder to the fence a second time before handing it to the
+  launcher, so a junction swapped in after the first look cannot send it outside the projects.
+- plain_disk_path drops \\?\ only while the plain path fits in 259 characters; a longer one keeps
+  the verbatim prefix.
+Red first (old code): both new tests failed on their asserts (fence asked once; the 260-character
+path lost its prefix). Tests: files::open_in_tests::edit043_the_canonical_folder_is_fenced_again_before_it_opens,
+files::open_in_tests::edit043_a_folder_path_over_max_path_keeps_its_verbatim_prefix.
+Gates: cargo test files 37 passed 0 failed; clippy -D warnings exit 0; tsc exit 0.
+Not changed this round (seen, left open): AFTER 3 (a \\?\Volume{GUID} project root is dropped
+without a word), AFTER 5 (hit_at call counter), rg non-UTF-8 lines (rg sends them as bytes, they are
+skipped), review P8/P9/P12, the link-to-share gap (reliability lane), P1 AFTER 3/4 (artifacts.rs
+CoInitializeEx, markdown.ts rich-view cap).
