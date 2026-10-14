@@ -48,22 +48,31 @@ describe("usageByAccount", () => {
     codex: { state: "ok" as const, fiveHour: { usedPercent: 5, resetsAt: null, windowMins: 300 }, weekly: { usedPercent: 60, resetsAt: null, windowMins: null }, resetCredits: null, plan: null, message: null },
   };
 
-  it("gives one entry per account with the provider's figures and the number of panes under it", () => {
+  // T-546-b (2): src/usage holds ONE figure set per provider, so two Claude accounts never get two
+  // cards carrying the same figures under different names; one card per provider lists the accounts.
+  it("gives one card per provider with its figures once and the pane count per account under it", () => {
     const seats = [
       { agent: "claude", account: "work" },
+      { agent: "claude", account: "personal" },
       { agent: "claude", account: "work" },
       { agent: "claude", account: null },
       { agent: "codex", account: null },
       { agent: "shell", account: null },
     ];
     expect(usageByAccount(seats, plan)).toEqual([
-      { agent: "claude", account: "work", figures: { fiveHour: 42, weekly: 17 }, panes: 2 },
-      { agent: "claude", account: null, figures: { fiveHour: 42, weekly: 17 }, panes: 1 },
-      { agent: "codex", account: null, figures: { fiveHour: 5, weekly: 60 }, panes: 1 },
+      { agent: "claude", figures: { fiveHour: 42, weekly: 17 }, panes: 4, accounts: [{ account: "work", panes: 2 }, { account: "personal", panes: 1 }, { account: null, panes: 1 }] },
+      { agent: "codex", figures: { fiveHour: 5, weekly: 60 }, panes: 1, accounts: [{ account: null, panes: 1 }] },
     ]);
   });
 
-  it("keeps an account whose figures have not arrived, with null figures", () => {
-    expect(usageByAccount([{ agent: "codex", account: "b" }], { claude: [], codex: null })).toEqual([{ agent: "codex", account: "b", figures: null, panes: 1 }]);
+  it("never repeats a provider's figures: two Claude accounts share one card", () => {
+    const cards = usageByAccount([{ agent: "claude", account: "work" }, { agent: "claude", account: "personal" }], plan);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].accounts.map((a) => a.account)).toEqual(["work", "personal"]);
+    expect(cards.filter((c) => c.figures?.fiveHour === 42)).toHaveLength(1);
+  });
+
+  it("keeps a provider whose figures have not arrived, with null figures", () => {
+    expect(usageByAccount([{ agent: "codex", account: "b" }], { claude: [], codex: null })).toEqual([{ agent: "codex", figures: null, panes: 1, accounts: [{ account: "b", panes: 1 }] }]);
   });
 });

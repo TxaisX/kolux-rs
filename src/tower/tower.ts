@@ -40,20 +40,27 @@ export function laneCounts(rows: Row[]): Array<{ lane: Lane; count: number }> {
   return ORDER.map((lane) => ({ lane, count: rows.filter((r) => r.lane === lane).length }));
 }
 
-/** One usage figure set per account in use: the provider's plan figures and how many panes run under it. */
-export type AccountUsage = { agent: string; account: string | null; figures: PlanFigures | null; panes: number };
+/** One usage card per provider in use: its plan figures once, how many panes run under it, and the
+ *  accounts those panes are on (in the order their panes appear) with a pane count each. */
+export type AccountUsage = { agent: string; figures: PlanFigures | null; panes: number; accounts: Array<{ account: string | null; panes: number }> };
 
-/** Accounts in the order their panes appear; every provider seat counts, even those with no figures yet.
- *  ponytail: src/usage holds one Claude figure set and one Codex set (the active account's), so every
- *  account of a provider shows the same figures until T-548 reads one set per account. */
+/** Providers in the order their panes appear; every provider seat counts, even before figures arrive.
+ *  T-546-b (2): src/usage holds ONE Claude figure set and ONE Codex set (whichever account reported
+ *  last), so a card per account would show the same figures under different names, a wrong number on
+ *  the screen used to decide where work goes. Until T-548 reads one set per account, the figures sit
+ *  on one card per provider and the accounts are listed under it with their pane counts. The name
+ *  stays `usageByAccount` because the T-546 wiring in App.tsx imports it by that name. */
 export function usageByAccount(seats: Pick<Seat, "agent" | "account">[], plan: Plan): AccountUsage[] {
   const out: AccountUsage[] = [];
   for (const s of seats) {
     if (s.agent !== "claude" && s.agent !== "codex") continue;
     const account = s.account ?? null;
-    const hit = out.find((u) => u.agent === s.agent && u.account === account);
-    if (hit) hit.panes += 1;
-    else out.push({ agent: s.agent, account, figures: planOf(s.agent, plan.claude, plan.codex), panes: 1 });
+    let card = out.find((u) => u.agent === s.agent);
+    if (!card) out.push((card = { agent: s.agent, figures: planOf(s.agent, plan.claude, plan.codex), panes: 0, accounts: [] }));
+    card.panes += 1;
+    const acct = card.accounts.find((a) => a.account === account);
+    if (acct) acct.panes += 1;
+    else card.accounts.push({ account, panes: 1 });
   }
   return out;
 }

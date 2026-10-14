@@ -1,5 +1,6 @@
-// The control tower (OD-09 / DT-C35, T-546): a full-width screen that stays open on a second
-// monitor. Usage per account across the top, then every agent pane as one row, needs-you first.
+// The control tower (OD-09 / DT-C35, T-546): a full-width switcher screen in the main window (a
+// window of its own for a second monitor is T-546-c). Usage per provider across the top, then every
+// agent pane as one row, needs-you first.
 // One click on a row (or Enter on the selected one) jumps to that pane; Up and Down walk the rows.
 // The rows come from `towerRows` in tower.ts; the window computes each pane's chip and meter the
 // same way the Board does, so the two never disagree.
@@ -51,7 +52,6 @@ export default function TowerView({ rows, usage, now, onOpen }: Props) {
           <span className="big">{rows.length}</span>
           <span className="what">{rows.length === 1 ? "agent" : "agents"}</span>
           <span className="counts">
-            {counts.length === 0 && "Nothing is running. Start an agent and it shows up here."}
             {counts.map((c) => (
               <span key={c.lane} className={`count ${c.lane}`}>
                 <b>{c.count}</b> {laneTitle(c.lane).toLowerCase()}
@@ -59,31 +59,45 @@ export default function TowerView({ rows, usage, now, onOpen }: Props) {
             ))}
           </span>
         </div>
-        {usage.map((u) => (
-          <div key={`${u.agent}:${u.account ?? ""}`} className="card usage" aria-label={`${programWord(u.agent as Agent)} usage${u.account ? ` for ${u.account}` : ""}`}>
-            <div className="who">
-              <VendorMark agent={u.agent as Agent} size={14} />
-              <span className="name">{u.account ?? programWord(u.agent as Agent)}</span>
-              <span className="panes">
-                {u.panes} {u.panes === 1 ? "pane" : "panes"}
-              </span>
+        {usage.map((u) => {
+          // T-546-b (2): one card per provider; the accounts its panes run on are listed under it, and
+          // the figures (one set per provider until T-548) are never repeated under a second name.
+          const named = u.accounts.filter((a) => a.account !== null);
+          return (
+            <div key={u.agent} className="card usage" aria-label={`${programWord(u.agent as Agent)} usage`}>
+              <div className="who">
+                <VendorMark agent={u.agent as Agent} size={14} />
+                <span className="name">{programWord(u.agent as Agent)}</span>
+                <span className="panes">
+                  {u.panes} {u.panes === 1 ? "pane" : "panes"}
+                </span>
+              </div>
+              {named.length > 0 && (
+                <div className="accts" aria-label="Accounts in use">
+                  {u.accounts.map((a) => (
+                    <span key={a.account ?? ""} className="acct">
+                      {a.account ?? "default"} <b>{a.panes}</b>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {u.figures ? (
+                <>
+                  <Bar label="5-hour" percent={u.figures.fiveHour} />
+                  <Bar label="Weekly" percent={u.figures.weekly} />
+                </>
+              ) : (
+                <div className="none">No usage figures yet</div>
+              )}
             </div>
-            {u.figures ? (
-              <>
-                <Bar label="5-hour" percent={u.figures.fiveHour} />
-                <Bar label="Weekly" percent={u.figures.weekly} />
-              </>
-            ) : (
-              <div className="none">No usage figures yet</div>
-            )}
-          </div>
-        ))}
+          );
+        })}
       </div>
       <div className="list">
         {rows.length === 0 && (
           <div className="clear" role="status">
             <StatusGlyph glyph="check" size={14} />
-            All clear. Nothing needs you.
+            Nothing is running. Start an agent and it shows up here.
           </div>
         )}
         {LANES.map((l) => {
