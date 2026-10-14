@@ -632,6 +632,10 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
         } else if local_cli::COMMANDS.iter().any(|c| c.1 == command) {
             args = flags.clone();
         } else if TERM.iter().any(|(_, c, _)| *c == command) {
+            // MERGE 49: a zero wait is refused before anything is sent.
+            if command == "terminal.send" && flags.get("wait-submit").and_then(Value::as_str).and_then(|s| s.trim().parse::<u64>().ok()) == Some(0) {
+                return Err(Fail::args(WAIT_SUBMIT_ZERO));
+            }
             // CLI-024 / CLI-025: --text may be anything, even blank; the rest are keys and numbers.
             for (k, v) in &flags {
                 if k != "text" && v.as_str().is_some_and(|s| s.trim().is_empty()) {
@@ -2983,6 +2987,8 @@ fn pane_agent(ctx: &Ctx, h: &str) -> Option<String> {
 
 /// How long `send` watches for the agent to take a prompt unless `--wait-submit` says otherwise.
 const SUBMIT_WATCH: Duration = Duration::from_secs(3);
+/// MERGE 49: a zero wait would report an idle agent not submitted before it could start a turn.
+const WAIT_SUBMIT_ZERO: &str = "--wait-submit takes the seconds to watch, 1 or more; leave it out for the default 3 s";
 /// Receipts by terminal and `--retry-request` id: an exact retry answers without sending again.
 /// ponytail: in memory, bounded; a retry after a Kolux restart sends anew.
 static SENT: Mutex<Vec<(String, Value)>> = Mutex::new(Vec::new());
@@ -3026,6 +3032,11 @@ fn submit_verdict(handle: &str, before: Option<((u64, usize), bool)>, watch: Dur
         };
         return Submit { receipt: "unknown", submitted: None, state: None, waited_ms: start.elapsed().as_millis() as u64, warning: Some(format!("no status hooks report for {handle}; whether the prompt was taken cannot be told{seen}")) };
     };
+    // MERGE 49: a busy agent without an explicit --wait-submit answers queued at once, as before
+    // T-188; only a wait the caller asked for is spent watching it (and can end in exit 1).
+    if busy && !explicit {
+        return Submit { receipt: "queued", submitted: Some(false), state: state(), waited_ms: 0, warning: Some(format!("{handle} is working; the prompt waits behind its turn (--wait-submit <seconds> watches for it to be taken)")) };
+    }
     // An idle pane took the prompt when anything moved. A busy pane's own turn moves too: its end
     // (done, interrupted, blocked), a question (permission, waiting) and the carry-on after one are
     // the old turn; only a new turn after its end, or a new entry while it still works, is the prompt.
@@ -3075,10 +3086,12 @@ fn not_submitted_line(r: &Value) -> String {
     format!("{handle} did not submit the prompt within {secs} s ({why})")
 }
 
-/// TERM-126: a send answer whose prompt did not submit becomes an error, so the exit status says so.
+/// TERM-126: a send answer whose prompt did not submit becomes an error, so the exit status says so;
+/// only when the caller asked for the wait with --wait-submit (MERGE 49). A plain send to a busy or
+/// idle agent keeps exit 0 with a warning, so an agent never reads it as a failure and resends.
 fn submit_step(env: &Value) -> Result<(), Fail> {
     let r = &env["result"];
-    if env["success"] == Value::Bool(true) && r["submitted"] == Value::Bool(false) {
+    if env["success"] == Value::Bool(true) && r["submitted"] == Value::Bool(false) && r["waitAsked"] == Value::Bool(true) {
         let mut f = Fail::new("not_submitted", not_submitted_line(r));
         f.data = r.clone();
         return Err(f);
@@ -3149,6 +3162,9 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 return Err(Fail::args("nothing to send: give --text, --enter or --interrupt"));
             }
             let asked = num("waitSubmit", "--wait-submit")?;
+            if asked == Some(0) {
+                return Err(Fail::args(WAIT_SUBMIT_ZERO));
+            }
             let watch = asked.map(Duration::from_secs).unwrap_or(SUBMIT_WATCH);
             let retry = text("retryRequest").map(|r| format!("{handle}|{r}"));
             if let Some(key) = &retry {
@@ -3196,11 +3212,16 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 out["submitted"] = json!(v.submitted);
                 out["state"] = json!(v.state);
                 out["waitSubmit"] = json!(watch.as_secs());
+                out["waitAsked"] = json!(asked.is_some());
                 out["waitedMs"] = json!(v.waited_ms);
                 if v.receipt != "turn_began" {
                     out["next"] = json!(next);
                 }
-                out["warnings"] = json!(v.warning.into_iter().collect::<Vec<_>>());
+                let mut warnings: Vec<String> = v.warning.into_iter().collect();
+                if asked.is_none() && v.receipt == "not_submitted" {
+                    warnings.push(not_submitted_line(&out));
+                }
+                out["warnings"] = json!(warnings);
             }
             if let Some(key) = retry {
                 if let Ok(mut s) = SENT.lock() {
@@ -4105,7 +4126,7 @@ mod tests {
         assert!(v.warning.as_deref().unwrap().contains("it wrote output after Enter"), "{:?}", v.warning);
         assert!(v.waited_ms < 1000);
         // The client turns submitted=false into exit 1 with a sentence naming the state; the rest passes.
-        let r = |state: &str| json!({ "requestId": "r", "success": true, "result": { "terminal": "term-2", "submitted": false, "state": state, "waitSubmit": 5, "receipt": "queued" } });
+        let r = |state: &str| json!({ "requestId": "r", "success": true, "result": { "terminal": "term-2", "submitted": false, "state": state, "waitSubmit": 5, "waitAsked": true, "receipt": "queued" } });
         let f = submit_step(&r("working")).unwrap_err();
         assert_eq!((f.code, f.message.as_str()), ("not_submitted", "term-2 did not submit the prompt within 5 s (it is working; the prompt waits behind its turn)"));
         assert_eq!(f.data["receipt"], "queued", "the answer travels as the error's data");
@@ -4114,6 +4135,37 @@ mod tests {
         assert!(submit_step(&json!({ "success": true, "result": { "terminal": "term-2", "submitted": true } })).is_ok());
         assert!(submit_step(&json!({ "success": true, "result": { "terminal": "term-2", "submitted": null, "receipt": "unknown" } })).is_ok(), "unknown is not a failure");
         assert!(submit_step(&json!({ "success": true, "result": { "terminal": "term-1", "delivered": ["enter"] } })).is_ok(), "a plain send has no verdict");
+    }
+
+    /// MERGE 49 (council FIX-BEFORE on T-188): a plain send --text --enter to a busy agent answers
+    /// queued at once with exit 0, as it did before T-188; an idle agent that does not start a turn
+    /// within the default watch is a warning, exit 0. Only an explicit --wait-submit makes a prompt
+    /// that did not submit exit 1. --wait-submit 0 is a usage error.
+    #[test]
+    fn merge49_plain_send_to_a_busy_agent_is_queued_at_once_and_exits_0() {
+        let working = |m: u64| Some(((m, 1usize), true));
+        let start = Instant::now();
+        let v = submit_verdict("term-2", working(10), SUBMIT_WATCH, false, || working(10), || Some("working"), || true);
+        assert!(start.elapsed() < Duration::from_millis(500), "a plain send must not wait: {:?}", start.elapsed());
+        assert_eq!((v.receipt, v.submitted, v.state, v.waited_ms), ("queued", Some(false), Some("working"), 0));
+        assert_eq!(v.warning.as_deref(), Some("term-2 is working; the prompt waits behind its turn (--wait-submit <seconds> watches for it to be taken)"));
+        // The client: submitted=false without the asked flag passes (exit 0); with it, exit 1.
+        let plain = json!({ "success": true, "result": { "terminal": "term-2", "submitted": false, "state": "working", "waitSubmit": 3, "waitAsked": false, "receipt": "queued" } });
+        assert!(submit_step(&plain).is_ok(), "a plain send is never a failure");
+        let idle_plain = json!({ "success": true, "result": { "terminal": "term-2", "submitted": false, "state": "done", "waitSubmit": 3, "waitAsked": false, "receipt": "not_submitted" } });
+        assert!(submit_step(&idle_plain).is_ok());
+        let mut asked = plain.clone();
+        asked["result"]["waitAsked"] = json!(true);
+        assert_eq!(submit_step(&asked).unwrap_err().code, "not_submitted");
+        // An explicit wait on the same busy agent still watches the whole wait.
+        let start = Instant::now();
+        let v = submit_verdict("term-2", working(10), Duration::from_millis(300), true, || working(10), || Some("working"), || true);
+        assert!(start.elapsed() >= Duration::from_millis(300) && v.warning.is_none());
+        // --wait-submit 0 is refused before sending; 1 is fine.
+        let refused = |w: &str| parse(&words(w)).1.unwrap_err();
+        let f = refused("terminal send --terminal term-2 --text hi --enter --wait-submit 0");
+        assert_eq!((f.code, f.message.as_str()), ("invalid_arguments", WAIT_SUBMIT_ZERO));
+        assert!(parse(&words("terminal send --terminal term-2 --text hi --enter --wait-submit 1")).1.is_ok());
     }
 
     #[test]

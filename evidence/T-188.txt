@@ -131,3 +131,21 @@ exit code: 0
 error: term-2 did not submit the prompt within 5 s (it is idle, so Enter may have been lost)
 exit code: 1
 [20:36:24.357] back
+
+=== MERGE 49 fix (council FIX-BEFORE on 3aee3c1, 2026-10-13) ===
+Before the fix: a plain `terminal send --text ... --enter` (no --wait-submit) to a busy agent
+waited the default 3 s and exited 1 ("did not submit the prompt within 3 s"), so an agent sending
+to a busy peer could read it as a failure and send again, queueing the prompt twice.
+After the fix (cli.rs submit_verdict / submit_step / terminal.send):
+- no --wait-submit, busy agent: receipt "queued" at once (waitedMs 0), submitted false,
+  waitAsked false, warning "term-N is working; the prompt waits behind its turn (--wait-submit
+  <seconds> watches for it to be taken)", exit 0.
+- no --wait-submit, idle agent that starts no turn within 3 s: receipt "not_submitted", the
+  "did not submit" sentence as a warning, exit 0.
+- explicit --wait-submit N: unchanged from T-188 (the whole wait is watched; not submitted = exit 1).
+- --wait-submit 0: refused before anything is sent, usage error "--wait-submit takes the seconds
+  to watch, 1 or more; leave it out for the default 3 s".
+Unit tests (cargo test --lib cli::, 42 passed, 0 failed):
+  cli::tests::merge49_plain_send_to_a_busy_agent_is_queued_at_once_and_exits_0 ... ok
+  cli::tests::term126_send_wait_submit_honours_the_wait_and_names_the_state ... ok (its client
+  case now carries waitAsked true, the explicit --wait-submit 5 it models)
