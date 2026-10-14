@@ -613,6 +613,7 @@ pub fn agent_hooks_file() -> String {
 
 pub mod saved;
 pub mod switch;
+pub mod transcript;
 
 #[cfg(test)]
 mod tests;
