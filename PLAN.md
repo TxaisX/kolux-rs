@@ -641,7 +641,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-266 · PROJ-017 Project headers have a colour · PROJ-062 Workspace cards: Default and Compact looks
 - [ ] T-267 · TERM-011 Inactive panes dim · TERM-026 Pane header density · TERM-057 Tab strip overflow scrollbar · TERM-102 Minimum contrast and ligatures
 - [ ] T-268 · VIEW-052 [compat] Left sidebar tint
-- [ ] T-269 · BROW-006 Address bar folds up in a narrow pane · BROW-011 Loading pages match the app theme
+- [x] T-269 · BROW-006 Address bar folds up in a narrow pane · BROW-011 Loading pages match the app theme · done 2026-10-13 (lane/browser from 0819c57; evidence/T-269.txt: dark loading surface rgb(13,13,13), light rgb(246,246,246), narrow bar 72 px floats to 283 px with buttons fixed; evidence/T-269.png; smoke 4/5 in evidence/smoke-f2fa8a5.txt, flow 5 shell storm stalled under load, rerun alone also stalled)
 - [ ] T-270 · SET-021 Left sidebar look and worktree card density
 
 ### P2 · theme 5 · Safety and trust (3 cards)
