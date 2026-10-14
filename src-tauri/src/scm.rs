@@ -2014,6 +2014,56 @@ pub async fn scm_status(worktree: String) -> Result<Status, String> {
     status(Path::new(&worktree))
 }
 
+/// GIT-038 (T-033-c): All Changes measured against the branch's base: `against` is the pinned
+/// base when it resolves, else the detected one; `since` is the snapshot (the merge-base with
+/// HEAD, so the base moving on afterwards changes nothing here); `entries` every file that
+/// differs between that snapshot and the working tree.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // wired by the lib.rs hunk in the T-033-c handoff (main lane)
+pub struct BaseChanges {
+    pub against: String,
+    pub since: String,
+    pub entries: Vec<crate::git::Entry>,
+}
+
+#[allow(dead_code)]
+pub fn base_changes(worktree: &Path, pinned: Option<&str>) -> Result<BaseChanges, String> {
+    let pinned = pinned.map(str::trim).filter(|p| !p.is_empty() && run(&["rev-parse", "--verify", "-q", &format!("{p}^{{commit}}")], Some(worktree)).is_ok());
+    let against = match pinned {
+        Some(p) => p.to_string(),
+        None => status(worktree)?.base.ok_or("no base branch to compare with")?,
+    };
+    let since = run(&["merge-base", &against, "HEAD"], Some(worktree)).map(|s| s.trim().to_string()).unwrap_or_else(|_| against.clone());
+    let entries = crate::git::base_entries(worktree, &since)?;
+    Ok(BaseChanges { against, since, entries })
+}
+
+#[tauri::command]
+#[allow(dead_code)]
+pub async fn scm_base_changes(worktree: String, pinned: Option<String>) -> Result<BaseChanges, String> {
+    base_changes(Path::new(&worktree), pinned.as_deref())
+}
+
+#[derive(Debug, serde::Serialize)]
+#[allow(dead_code)]
+pub struct BaseSides {
+    pub original: String,
+    pub modified: String,
+}
+
+/// The two texts of one file against the base snapshot; the file must lie in the worktree.
+#[tauri::command]
+#[allow(dead_code)]
+pub async fn scm_base_sides(worktree: String, path: String, since: String) -> Result<BaseSides, String> {
+    let (root, file) = (Path::new(&worktree), Path::new(&path));
+    if !file.starts_with(root) {
+        return Err(format!("{path} is not inside {worktree}"));
+    }
+    let (original, modified) = crate::git::base_sides(file, &since)?;
+    Ok(BaseSides { original, modified })
+}
+
 /// GIT-001 (T-033-b): starts or joins the watch of the worktree holding `path`; its status arrives
 /// as the `scm-status-<id>` event, the same shape `scm_status` returns.
 #[tauri::command]
@@ -2091,6 +2141,29 @@ mod tests {
         run(&["add", "."], Some(&dir)).unwrap();
         run(&["commit", "-q", "-m", "first"], Some(&dir)).unwrap();
         dir
+    }
+
+    #[test]
+    fn git038_base_changes_measure_against_the_snapshot_not_a_base_that_moved_on() {
+        let dir = temp_repo("base-snapshot");
+        run(&["checkout", "-q", "-b", "feature"], Some(&dir)).unwrap();
+        fs::write(dir.join("f.txt"), "feature\n").unwrap();
+        run(&["add", "."], Some(&dir)).unwrap();
+        run(&["commit", "-q", "-m", "feature"], Some(&dir)).unwrap();
+        let snapshot = run(&["merge-base", "main", "HEAD"], Some(&dir)).unwrap().trim().to_string();
+        // main moves on: that change is not the branch's and must not show up.
+        run(&["checkout", "-q", "main"], Some(&dir)).unwrap();
+        fs::write(dir.join("README.md"), "moved on\n").unwrap();
+        run(&["commit", "-q", "-am", "main moves"], Some(&dir)).unwrap();
+        run(&["checkout", "-q", "feature"], Some(&dir)).unwrap();
+        fs::write(dir.join("f.txt"), "feature\nmore\n").unwrap();
+        let got = base_changes(&dir, Some("main")).unwrap();
+        assert_eq!((got.against.as_str(), got.since.as_str()), ("main", snapshot.as_str()));
+        let rel = |e: &crate::git::Entry| Path::new(&e.path).strip_prefix(&dir).unwrap().to_string_lossy().replace('\\', "/");
+        assert_eq!(got.entries.iter().map(|e| (rel(e), e.code, e.lines)).collect::<Vec<_>>(), vec![("f.txt".to_string(), 'A', Some(2))]);
+        // A pin that does not resolve falls back to the detected base; no base at all is an error.
+        assert_eq!(base_changes(&dir, Some("no-such-branch")).map(|b| b.against).ok(), status(&dir).unwrap().base);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
