@@ -1,18 +1,18 @@
 diff --git a/src/App.tsx b/src/App.tsx
-index fcde3ae..41a4c06 100644
+index 9f26ca2..30532c8 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
-@@ -127,6 +127,9 @@ import { useWizard } from "./onboarding/useWizard";
- import { hooksOn } from "./settings/AgentsPage";
+@@ -130,6 +130,9 @@ import { hooksOn } from "./settings/AgentsPage";
  import ToolNotices from "./launch/ToolNotices";
  import { AgentsChat } from "./chat/ChatView";
-+import { answered, hearStates, hearingNow, holdFor, outcomeNote, pasteToPane, writeTerminal } from "./chat/send";
+ import { useTeamsHost, withTeams } from "./launch/teams";
++import { answered as cardAnswered, hearStates, hearingNow, holdFor, outcomeNote, pasteToPane, writeTerminal } from "./chat/send";
 +import { copyPrompt, hooksAbsent, kitPasted, kitStep, kitWait, pasteUnchecked } from "./chat/kitPrompt";
 +import { KitPromptNotices } from "./chat/KitNotice";
  import PlanSheet from "./terminal/PlanSheet";
- import { draftKey, feedbackMessage, keepDraft, showsReview, stillPending, type PlanDraft } from "./terminal/planReview";
+ import { draftKey, feedbackMessage, keepDraft, showsReview, startFeedback, stillPending, type PendingSend, type PlanDraft } from "./terminal/planReview";
  
-@@ -1391,7 +1394,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1402,7 +1405,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
        }
        const key = await startIn(agent, dir, branch, role.waitsFor ? "" : prompt, i === 0, [], seatTitle(role, agent.id as Vendor));
        keys.push(key);
@@ -21,7 +21,7 @@ index fcde3ae..41a4c06 100644
      }
      const started = keys.filter((k) => k !== null).length;
      if (started === 0) {
-@@ -1416,6 +1419,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1427,6 +1430,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
    // marker and its session is found; once only, and a failed send is tried again next time.
    // ponytail: checks every ten seconds (and on any pane state change) while a role waits, whether
    // or not the strip is unfolded; a file watcher would make it instant.
@@ -32,7 +32,7 @@ index fcde3ae..41a4c06 100644
    const sending = useRef(false);
    const pendingKits = Object.values(kitRuns.current).some((r) => r.waiting.length > 0);
    useEffect(() => {
-@@ -1431,16 +1438,23 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1442,16 +1449,23 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
            for (const w of [...run.waiting]) {
              const id = ptys.current[w.key];
              if (!roleDone(check, w.upstream) || id === undefined) continue;
@@ -63,7 +63,7 @@ index fcde3ae..41a4c06 100644
            }
          }
        } finally {
-@@ -1450,7 +1464,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1461,7 +1475,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
      void tick();
      const t = window.setInterval(() => void tick(), 10_000);
      return () => window.clearInterval(t);
@@ -72,7 +72,7 @@ index fcde3ae..41a4c06 100644
  
    // TERM-014: closing a pane ends its program (the pane's own cleanup kills it); the next tab of
    // its cell takes over, else the neighbouring cells take the space; closing the last pane leaves
-@@ -1698,13 +1712,18 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1709,13 +1723,18 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
    const towerSeats = () => panes.filter((p) => !p.kind && !p.seats && p.agent !== "shell").map((p) => ({ key: p.key, agent: p.agent, title: tabName(p, titles), branch: p.branch, cwd: p.cwd, account: p.account ?? null, chip: chipFor(p), meter: meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)), since: stamp[p.key]?.at ?? 0 }));
    const lanes = board ? LANES.filter((l) => cardPanes(panes).some((p) => laneOf(p) === l.id)) : [];
    const columnOf = (p: Pane) => lanes.findIndex((l) => l.id === laneOf(p)) + 1;
@@ -87,7 +87,7 @@ index fcde3ae..41a4c06 100644
 +    return invoke<AgentState | null>("agent_answer", { paneKey: p.key, agent: p.agent, approve })
 +      .then((now) => {
 +        const state = typeof now === "string" ? now : "working";
-+        if (answered(p.key, state, since)) setHook((h) => ({ ...h, [p.key]: state }));
++        if (cardAnswered(p.key, state, since)) setHook((h) => ({ ...h, [p.key]: state }));
          setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
        })
        .catch(() => {});
@@ -95,33 +95,27 @@ index fcde3ae..41a4c06 100644
    // SAFE-003, SAFE-004: Approve is the agent's own yes; Request changes is its no, then the
    // feedback typed into its prompt as one paste once it has left the question.
    // SAFE-005: the drafts are per pane and exact plan text, in memory only.
-@@ -1724,29 +1743,26 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
-     setReviewing(null);
-     dropDraft(draftKey(p.key, plan));
-     // Claude has no hook for a deny inside its own menu, so the pane leaves "permission" here, as answer() does.
--    const left = await invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).then(() => true, () => false);
--    if (!left) return setToast("Kolux could not answer the agent. Answer it in its terminal; your feedback was not typed.");
--    setHook((h) => ({ ...h, [p.key]: "working" }));
-+    const since = hearingNow();
-+    const left = await invoke<AgentState | null>("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).then((now) => (typeof now === "string" ? now : "working"), () => null);
-+    if (left === null) return setToast("Kolux could not answer the agent. Answer it in its terminal; your feedback was not typed.");
-+    if (answered(p.key, left, since)) setHook((h) => ({ ...h, [p.key]: left }));
-     // SAFE-004: the feedback is typed only once the agent has left its menu; an Enter while the menu
-     // is still open would pick its default, which is Yes (council re-review of chat a969502).
-     const asking = () => hookRef.current[p.key] === "waiting" || hookRef.current[p.key] === "permission";
-     for (let i = 0; i < 30 && asking(); i++) await new Promise((r) => setTimeout(r, 100));
-     if (asking()) return setToast("The agent is still asking. Answer it in its terminal; your feedback was not typed.");
--    const id = ptys.current[p.key];
--    if (id === undefined || !panesRef.current.some((x) => x.key === p.key)) return;
--    await invoke("terminal_write", { id, data: "\x1b[200~" + text + "\x1b[201~" }).catch(() => {});
--    await new Promise((r) => setTimeout(r, 300));
--    if (asking()) return setToast("The agent is still asking. Answer it in its terminal; your feedback was not sent.");
--    await invoke("terminal_write", { id, data: "\r" }).catch(() => {});
-+    if (!panesRef.current.some((x) => x.key === p.key)) return;
-+    const got = await pasteToPane(p.key, text, toPane).catch(() => null);
-+    if (got !== "sent") return setToast(`Your feedback was not sent. ${got === null ? "The terminal refused it." : outcomeNote(got, p.key, toPane)}`);
-     setHook((h) => ({ ...h, [p.key]: "working" }));
-     setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
+@@ -1739,7 +1758,18 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     // SAFE-004 / T-032-b: the send runs as a job (planReview) that the sheet can cancel until Enter.
+     const job = startFeedback(feedbackMessage(d.comments, d.note), {
+       // Claude has no hook for a deny inside its own menu, so the pane leaves "permission" here, as answer() does.
+-      deny: () => invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).then(() => (setHook((h) => ({ ...h, [p.key]: "working" })), true), () => false),
++      // Council FIX-3 (FS2): the pane takes the state Kolux resolved after the deny, unless a newer hook event came in.
++      deny: () => {
++        const since = hearingNow();
++        return invoke<AgentState | null>("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).then(
++          (now) => {
++            const state = typeof now === "string" ? now : "working";
++            if (cardAnswered(p.key, state, since)) setHook((h) => ({ ...h, [p.key]: state }));
++            return true;
++          },
++          () => false,
++        );
++      },
+       asking: () => hookRef.current[p.key] === "waiting" || hookRef.current[p.key] === "permission",
+       type: (text) => write("\x1b[200~" + text + "\x1b[201~"),
+       enter: () => write("\r"),
+@@ -1760,10 +1790,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
    };
    // GIT-041: every note goes to the workspace's agent (the focused one, else the first) as one
    // pasted message; a note edited while the send was in flight is not marked sent.
@@ -135,7 +129,7 @@ index fcde3ae..41a4c06 100644
    };
    const sendNotes = async (dir: string): Promise<string | null> => {
      const notes = notesFor(dir);
-@@ -1754,7 +1770,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1771,7 +1800,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
      const agent = [...panes].sort((a, b) => Number(b.key === focused) - Number(a.key === focused)).find((p) => !p.kind && p.agent !== "shell" && sameDir(p.cwd, dir) && ptys.current[p.key] !== undefined);
      if (!agent) return "No agent is running in this workspace. Start one, or copy the notes instead.";
      try {
@@ -144,7 +138,7 @@ index fcde3ae..41a4c06 100644
      } catch (err) {
        return `The notes were not sent: ${String(err)}`;
      }
-@@ -1769,7 +1785,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1786,7 +1815,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
      const p = panesRef.current.find((x) => x.key === key);
      if (!p || !inWorktree(p)) return "That agent is no longer running, so nothing was sent. The notes are kept.";
      try {
@@ -153,7 +147,7 @@ index fcde3ae..41a4c06 100644
      } catch (err) {
        return `The notes were not sent, so they are kept: ${String(err)}`;
      }
-@@ -2153,6 +2169,25 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -2174,6 +2203,25 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                    }}
                  />
                )}
