@@ -117,7 +117,10 @@ const TERMINAL: &[(&str, &str, &[&str])] = &[
     ("terminal stop", "terminal.close", &["terminal", "tab", "worktree", "all"]),
 ];
 /// CLI-027: what the retired word says.
-const STOP_GONE: &str = "terminal stop was replaced by terminal close: use kolux-dev terminal close --worktree <selector> --all, or --terminal <handle>";
+/// CLI-026 with T-550: what replaced terminal stop, under the name this build answers to.
+fn stop_gone() -> String {
+    format!("terminal stop was replaced by terminal close: use {} terminal close --worktree <selector> --all, or --terminal <handle>", crate::orchestration::CLI)
+}
 /// ORCH-001..006, ORCH-010, ORCH-011, ORCH-013 / CLI-030..032, CLI-034: the mail and task commands
 /// and their flags. `--dispatch-capability` is accepted and unused until the dispatch pass (ORCH-067, T-155).
 const MAIL: &[(&str, &str, &[&str])] = &[
@@ -657,7 +660,7 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
                 args.insert(camel(k), v.clone());
             }
             if joined == "terminal stop" {
-                args.insert("note".into(), json!(STOP_GONE));
+                args.insert("note".into(), json!(stop_gone()));
             }
         } else if command == "worktree.rm" {
             if text("worktree").map(str::trim).unwrap_or_default().is_empty() {
@@ -681,7 +684,7 @@ fn check_terminal(joined: &str, command: &str, flags: &Map<String, Value>) -> Re
         return Err(Fail::args(format!("--{k} cannot be empty")));
     }
     if joined == "terminal stop" && !has("terminal") && !has("all") {
-        return Err(Fail::args(STOP_GONE));
+        return Err(Fail::args(stop_gone()));
     }
     match command {
         "terminal.show" | "terminal.split" | "terminal.rename" | "terminal.switch" if !has("terminal") => {
@@ -1958,7 +1961,7 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
 const PANE_WAIT: Duration = Duration::from_secs(15);
 
 fn no_terminal(h: &str) -> Fail {
-    Fail { code: "not_found", message: format!("no open terminal is {h}"), data: json!({ "hint": "kolux-dev terminal list prints the handles" }) }
+    Fail { code: "not_found", message: format!("no open terminal is {h}"), data: json!({ "hint": format!("{} terminal list prints the handles", crate::orchestration::CLI) }) }
 }
 
 /// CLI-026: one-shot forms of a startup command (exec, print, review, help) stay in the background.
@@ -2022,7 +2025,7 @@ fn await_layout(ctx: &Ctx, what: &str, found: impl Fn(&Value) -> Option<Result<V
             return out;
         }
         if Instant::now() >= until {
-            return Err(Fail { code: "timeout", message: format!("the window did not {what} within 15 seconds"), data: json!({ "hint": "it may still happen; kolux-dev terminal list shows what is open" }) });
+            return Err(Fail { code: "timeout", message: format!("the window did not {what} within 15 seconds"), data: json!({ "hint": format!("it may still happen; {} terminal list shows what is open", crate::orchestration::CLI) }) });
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -2462,7 +2465,7 @@ fn query_text(command: &str, r: &Value) -> Option<String> {
         "repo.list" | "project.list" => {
             let list = rows(if command == "repo.list" { "repos" } else { "projects" });
             if list.is_empty() {
-                "no repos yet; add one with kolux-dev repo add --path <folder>".into()
+                format!("no repos yet; add one with {} repo add --path <folder>", crate::orchestration::CLI)
             } else {
                 list.iter().map(repo).collect::<Vec<_>>().join("\n")
             }
@@ -4035,10 +4038,10 @@ mod tests {
     #[test]
     fn an_app_that_cannot_be_reached_is_met_with_the_open_advice() {
         let down = unreachable_fail("no endpoint file".into());
-        assert!(open_first(&down, "worktree.list").unwrap().contains("kolux-dev open"));
+        assert!(open_first(&down, "worktree.list").unwrap().contains(&format!("{} open", crate::orchestration::CLI)));
         assert!(open_first(&down, "app.open").is_none(), "open itself is not told to run open");
         let mut own = down.clone();
-        own.data["hint"] = json!("kolux-dev orchestration run-use --id run-1 picks it up again");
+        own.data["hint"] = json!(format!("{} orchestration run-use --id run-1 picks it up again", crate::orchestration::CLI));
         assert!(open_first(&own, "orchestration.send").is_none(), "its own recovery wins");
         assert!(open_first(&Fail::new("failed", "x"), "worktree.list").is_none());
     }
@@ -4976,5 +4979,18 @@ mod tests {
         assert!(scoped.starts_with("kolux worktree") && !scoped.contains("kolux-dev"), "{scoped}");
         let typo = named(&help_raw(&words("wrktree")).0, "kolux");
         assert!(typo.contains("did you mean kolux worktree") && !typo.contains("kolux-dev"), "{typo}");
+    }
+
+    /// T-550: the notes and hints a user reads outside help name the program this build answers
+    /// to (`kolux` in a release build), never a written-in kolux-dev.
+    #[test]
+    fn t550_hints_name_the_program_this_build_answers_to() {
+        let cli = crate::orchestration::CLI;
+        assert!(stop_gone().contains(&format!("use {cli} terminal close --worktree")), "{}", stop_gone());
+        assert_eq!(no_terminal("t9").data["hint"], json!(format!("{cli} terminal list prints the handles")));
+        assert_eq!(query_text("repo.list", &json!({ "repos": [] })).unwrap(), format!("no repos yet; add one with {cli} repo add --path <folder>"));
+        assert!(local_cli::text("agent-context", &json!({ "commandCount": 3 })).unwrap().contains(&format!("; {cli} agent-context --json")));
+        let (_, refused) = parse(&words("terminal stop"));
+        assert!(refused.unwrap_err().message.contains(&format!("{cli} terminal close")));
     }
 }
