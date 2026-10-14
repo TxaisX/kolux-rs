@@ -77,6 +77,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-026-a | A desktop notification arrives when an agent finishes, needs you or goes quiet. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-026-b | One status vocabulary is used for every dot, chip and label. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-026-c | The Inbox lists what needs you, what is running and what finished today. | [Board, Agents and Inbox](board-agents-inbox.md) |
+| T-027 | Thought rows in the Agents chat start folded and open or fold from the keyboard; Expand all and Collapse all sit above the chat. | [Board, Agents and Inbox](board-agents-inbox.md#chat-on-the-agents-page) |
 | T-028-a | Board cards show one line of activity, status chips, and approve or deny buttons. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-028-b | The Agents screen uses the same fixed status words. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-029 | Palette rows show each agent's live state and age. | [Board, Agents and Inbox](board-agents-inbox.md) |
@@ -538,4 +539,11 @@ Tasks not yet ticked off in the build plan are not listed.
 |---|---|---|
 | T-313 | Pull offers Merge, Rebase or Fast-forward only when Git has no pull policy; changed submodules show as single rows; filter the changes and right-click a file to copy its path, open it in its app or show it in the file manager (which never leaves the workspace). | [Projects and worktrees](projects-and-worktrees.md) |
 | T-314-a | The Tasks page can open on a default preset, has pickers to filter by state, author, assignee, label and reviewer, and lets a fork list issues from its upstream project. | [Projects and worktrees](projects-and-worktrees.md) |
-<!-- generated from PLAN.md at 2c8b9d8 -->
+| T-238 | Find on a page (Ctrl+F), a separate zoom for each browser tab, and links a page opens in a new window become Kolux browser tabs (middle-click or Ctrl-click opens one behind). | [Files and browser](files-and-browser.md#find-zoom-and-the-site-icon) |
+| T-272 | Pages cannot flood you with tabs: 5 new tabs per 10 seconds, the rest dropped quietly. | [Files and browser](files-and-browser.md#links-that-open-new-tabs) |
+| Browser FIX-1 | One shared tab allowance for link opens and new windows; site-icon fetches are capped and every redirect is checked, so a public page cannot make Kolux fetch from your own machine or network. | [Safety](safety.md#browser-tabs-what-pages-may-do) |
+| T-319 | A browser tab's toolbar shows the site's own icon in place of the globe (the tab strip does not yet). | [Files and browser](files-and-browser.md#find-zoom-and-the-site-icon) |
+| T-325 | The Agents page shows a Claude Code, OpenClaude or Codex session as a live chat with each message once and in order. | [Board, Agents and Inbox](board-agents-inbox.md#chat-on-the-agents-page) |
+| T-326 | Chat folds the agent's work: Thought rows, steps, file edits as diff cards, a subagent row and busy timers. | [Board, Agents and Inbox](board-agents-inbox.md#chat-on-the-agents-page) |
+| T-327 | A chat message box that types into the agent's terminal and follows the newest message; it holds a send while the agent is asking, and Request changes on a plan waits until the agent leaves its menu. | [Board, Agents and Inbox](board-agents-inbox.md#chat-on-the-agents-page) |
+<!-- generated from PLAN.md at 5f3b287 -->
