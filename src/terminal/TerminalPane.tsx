@@ -3,7 +3,7 @@
 // The card and its header follow design/DESIGN.md section 7: status icon, agent mark, title,
 // branch chip, program, status word; then gauge, more, expand, split, close on the right.
 import { useEffect, useRef, useState } from "react";
-import { branchChip, crewLabel, crewLine, foundAgent, headerOf, type Crew } from "./status";
+import { branchChip, crewLabel, crewLine, foundAgent, headerOf, titleState, type Crew } from "./status";
 import PaneMenu from "./PaneMenu";
 import type { Chip } from "../board/chip";
 import type { AgentState } from "../projects/rows";
@@ -166,6 +166,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   const handleRef = useRef(findHandle);
   handleRef.current = findHandle;
   const termRef = useRef<Terminal | null>(null);
+  // STAT-033: the state the program's own terminal title last stood for; only read while no hook reports.
+  const [guess, setGuess] = useState<AgentState | null>(null);
   const box = useRef<HTMLElement>(null);
   // TERM-012: the pane Kolux focuses (a shortcut, a new session) takes the keyboard too, unless
   // the keyboard is already somewhere inside it (a click on its own header field).
@@ -281,6 +283,10 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     term.loadAddon(fit);
     term.open(el);
     termRef.current = term;
+    // STAT-033: the title the program sets stands in for its state while no hook reports.
+    term.onTitleChange((t) => setGuess((g) => titleState(t) ?? g));
+    // STAT-034: a status printed in band (OSC 9999) goes to Rust; xterm never draws the sequence.
+    term.parser.registerOscHandler(9999, (data) => (invoke("status_inband", { paneKey: number, data }).catch(() => {}), true));
     // council D2 MERGE 31 (3): in a dev build the pane's terminal is reachable from its host element, so the
     // evidence probes can read the scrollback cap and the buffer length (the way launchWarn.ts exposes
     // __koluxUsage). A release build has no handle.
@@ -618,7 +624,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   if (prompt.current.hook !== hook) prompt.current = { count: nextPrompt(prompt.current.count, prompt.current.hook, hook), hook };
   // A shell pane running an agent the user started by hand reads as that agent's session.
   const shown: Agent = agent === "shell" && found ? found : agent;
-  const header = headerOf(shown, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now, hook);
+  const header = headerOf(shown, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now, hook ?? guess ?? undefined);
   const { word, tone, glyph, age, needsYou } = header;
   const explain = header.state === "blocked" && stop ? `${stopLine(stop)}.` : header.explain;
   const needs = useRef(onNeedsYou);

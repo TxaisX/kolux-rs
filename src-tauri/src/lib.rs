@@ -252,6 +252,10 @@ pub fn run() {
                 for status in status::settle_cancels() {
                     let _ = tauri::Emitter::emit(&handle, hooks::EVENT, status);
                 }
+                // STAT-032: a working reading with no signal for 30 minutes is marked unverified.
+                for quiet in status::settle_unverified() {
+                    let _ = tauri::Emitter::emit(&handle, "agent-unverified", quiet);
+                }
             });
             // USAGE-011: changed activity counts are saved in batches.
             let handle = app.handle().clone();
@@ -322,6 +326,7 @@ pub fn run() {
             terminal::terminal_history_append,
             status::agent_history,
             status::agent_answer,
+            status::status_inband,
             activity::activity_counts,
             activity::activity_get,
             activity::activity_touch,
