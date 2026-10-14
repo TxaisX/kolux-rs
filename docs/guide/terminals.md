@@ -124,7 +124,7 @@ The Start button reads "Start", or "Start N" for several, and "Starting…" whil
 | Interrupt the program | Ctrl+C with nothing selected |
 | Select all terminal text | Ctrl+Shift+A |
 
-A paste goes only to the focused pane. Large pastes are sent in pieces so the window stays responsive. A paste over 8 MB is refused: the header says "Paste of X MB is over the 8.0 MB limit; nothing was sent". If the opening request is still being delivered, your paste waits and goes in after it.
+A paste goes only to the focused pane. Large pastes are sent in pieces, one after another, so the window and your other panes stay responsive; the program still receives it as one paste. Press Ctrl+C or Esc during a long paste to stop the rest of it. A paste over 8 MB is refused: the header says "Paste of X MB is over the 8.0 MB limit; nothing was sent". If the opening request is still being delivered, your paste waits and goes in after it.
 
 ## Keyboard shortcuts
 
@@ -158,4 +158,4 @@ On Windows, the main key is Ctrl. You can change every shortcut in Settings (see
 | Ctrl+Shift+C | Copy selection |
 | Ctrl+Shift+A | Select all terminal text |
 
-<!-- verified against: src/chrome/LayoutStrip.tsx, src/chrome/TopBar.tsx, src/App.tsx, src/terminal/TerminalPane.tsx, src/terminal/PaneMenu.tsx, src/terminal/paste.ts, src/terminal/status.ts, src/terminal/layout.ts, src/launch/ChooserPane.tsx, src/keys/actions.ts at 106e966 -->
+<!-- verified against: src/chrome/LayoutStrip.tsx, src/chrome/TopBar.tsx, src/App.tsx, src/terminal/TerminalPane.tsx, src/terminal/PaneMenu.tsx, src/terminal/paste.ts, src/terminal/status.ts, src/terminal/layout.ts, src/launch/ChooserPane.tsx, src/keys/actions.ts at b280cad -->
