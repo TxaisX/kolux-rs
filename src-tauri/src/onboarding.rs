@@ -278,18 +278,31 @@ fn same_dir(a: &std::path::Path, b: &std::path::Path) -> bool {
     norm(a) == norm(b)
 }
 
-fn cli_status_in(dir: &std::path::Path, path: &std::ffi::OsStr) -> CliStatus {
+/// How long one PATH folder may take to answer before it is passed over (council: a PATH entry on
+/// a drive that is offline froze the window while it was looked up).
+const PATH_ENTRY_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// `same` is asked about each PATH folder on its own thread; one that does not answer within
+/// `wait` counts as not this folder.
+fn cli_status_in(dir: &std::path::Path, path: &std::ffi::OsStr, wait: std::time::Duration, same: fn(&std::path::Path, &std::path::Path) -> bool) -> CliStatus {
     let names: &[&str] = if cfg!(windows) { &["kolux.exe", "kolux.cmd"] } else { &["kolux"] };
     let installed = names.iter().any(|n| dir.join(n).is_file());
-    let on_path = installed && std::env::split_paths(path).any(|p| same_dir(&p, dir));
+    let on_path = installed
+        && std::env::split_paths(path).any(|p| {
+            let d = dir.to_path_buf();
+            crate::secrets::within(wait, move || same(&p, &d)).unwrap_or(false)
+        });
     CliStatus { installed, on_path }
 }
 
+/// Async so the check never runs on the window's thread.
+// ponytail: each unanswering PATH folder still holds one async worker for PATH_ENTRY_WAIT; share
+// one deadline for the whole list if a PATH ever carries many dead drives.
 #[tauri::command]
-pub fn cli_status() -> Result<CliStatus, String> {
+pub async fn cli_status() -> Result<CliStatus, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = exe.parent().ok_or("the app has no folder")?;
-    Ok(cli_status_in(dir, &std::env::var_os("PATH").unwrap_or_default()))
+    Ok(cli_status_in(dir, &std::env::var_os("PATH").unwrap_or_default(), PATH_ENTRY_WAIT, same_dir))
 }
 
 #[tauri::command]
@@ -350,13 +363,39 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
         let launcher = if cfg!(windows) { "kolux.exe" } else { "kolux" };
         let path = |ps: &[&std::path::Path]| std::env::join_paths(ps).unwrap();
-        assert_eq!(cli_status_in(&dir, &path(&[&dir])), CliStatus { installed: false, on_path: false });
+        let check = |d: &std::path::Path, p: &std::ffi::OsStr| cli_status_in(d, p, PATH_ENTRY_WAIT, same_dir);
+        assert_eq!(check(&dir, &path(&[&dir])), CliStatus { installed: false, on_path: false });
         std::fs::write(other.join(launcher), "").unwrap();
-        assert_eq!(cli_status_in(&dir, &path(&[&other])), CliStatus { installed: false, on_path: false }, "another kolux on PATH is not this build's");
+        assert_eq!(check(&dir, &path(&[&other])), CliStatus { installed: false, on_path: false }, "another kolux on PATH is not this build's");
         std::fs::write(dir.join(launcher), "").unwrap();
-        assert_eq!(cli_status_in(&dir, &path(&[&other])), CliStatus { installed: true, on_path: false }, "installed but missing from PATH");
+        assert_eq!(check(&dir, &path(&[&other])), CliStatus { installed: true, on_path: false }, "installed but missing from PATH");
         let spelled = std::path::PathBuf::from(format!("{}{}", dir.display(), std::path::MAIN_SEPARATOR));
-        assert_eq!(cli_status_in(&dir, &path(&[&other, &spelled])), CliStatus { installed: true, on_path: true });
+        assert_eq!(check(&dir, &path(&[&other, &spelled])), CliStatus { installed: true, on_path: true });
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Council: a PATH folder on a drive that does not answer is passed over after the wait, so
+    /// the check still finishes and still finds the CLI's own folder after it.
+    #[test]
+    fn a_path_folder_that_does_not_answer_is_passed_over() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-onb-dead-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(if cfg!(windows) { "kolux.exe" } else { "kolux" }), "").unwrap();
+        // Stands in for a lookup on an offline drive: the "dead" folder never answers in time.
+        fn slow(p: &std::path::Path, d: &std::path::Path) -> bool {
+            if p.ends_with("dead") {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+            same_dir(p, d)
+        }
+        let dead = std::path::PathBuf::from("Z:/offline/dead");
+        let wait = std::time::Duration::from_millis(200);
+        let start = std::time::Instant::now();
+        let path = std::env::join_paths([dead.as_path(), dir.as_path()]).unwrap();
+        assert_eq!(cli_status_in(&dir, &path, wait, slow), CliStatus { installed: true, on_path: true });
+        let path = std::env::join_paths([dead.as_path()]).unwrap();
+        assert_eq!(cli_status_in(&dir, &path, wait, slow), CliStatus { installed: true, on_path: false });
+        assert!(start.elapsed() < std::time::Duration::from_secs(3), "the dead folder held the check for {:?}", start.elapsed());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
