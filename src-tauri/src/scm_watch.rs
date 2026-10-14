@@ -101,27 +101,9 @@ pub fn ask_git(root: &Path, dirs: &[String]) -> Option<Vec<bool>> {
     if !matches!(out.status.code(), Some(0 | 1)) {
         return None;
     }
-    let mut answers = parse_check_ignore(&String::from_utf8_lossy(&out.stdout), dirs);
-    // T-033-f: an ignored folder that still holds tracked files is not ignored for the watch.
-    let ignored: Vec<String> = dirs.iter().zip(&answers).filter(|(_, a)| **a).map(|(d, _)| format!("{d}/")).collect();
-    if !ignored.is_empty() {
-        let mut args = vec!["ls-files", "-z", "--"];
-        args.extend(ignored.iter().map(String::as_str));
-        let listed = crate::git::command(&args, Some(root)).stderr(Stdio::null()).output().ok()?;
-        let tracked = String::from_utf8_lossy(&listed.stdout).to_string();
-        for (d, a) in dirs.iter().zip(answers.iter_mut()) {
-            if *a && tracked_under(&tracked, d) {
-                *a = false;
-            }
-        }
-    }
-    Some(answers)
-}
-
-/// Whether `ls-files -z` output lists any file under the folder `dir`.
-pub fn tracked_under(ls_files: &str, dir: &str) -> bool {
-    let prefix = format!("{}/", dir.trim_end_matches('/'));
-    ls_files.split('\0').any(|f| f.starts_with(&prefix))
+    // T-033-f: a folder that is ignored but still holds tracked files already comes back as not
+    // ignored from check-ignore itself (pinned by the t033f test), so one git process answers.
+    Some(parse_check_ignore(&String::from_utf8_lossy(&out.stdout), dirs))
 }
 
 /// One answer per asked folder from `check-ignore -z -v -n` output.
@@ -714,13 +696,15 @@ mod tests {
 
     #[test]
     fn t033f_an_ignored_folder_with_tracked_files_is_kept_and_exclude_edits_forget_through_matters() {
-        assert!(tracked_under("gen/a.txt\0src/b.rs\0", "gen") && !tracked_under("generated/a.txt\0", "gen"));
         let dir = repo("t033f");
         std::fs::create_dir_all(dir.join("gen")).unwrap();
         std::fs::write(dir.join("gen/a.txt"), "tracked\n").unwrap();
         crate::git::run(&["add", "gen/a.txt"], Some(&dir)).unwrap();
         std::fs::write(dir.join(".gitignore"), "gen/\n").unwrap();
         assert!(matters(&dir, Spot::Tree, ".gitignore"));
+        // Pins git's own behaviour: check-ignore says "not ignored" for a folder holding a tracked
+        // file (no second git process needed), while the build/ checks below show a plain one ignored.
+        assert_eq!(ask_git(&dir, &["gen".to_string()]), Some(vec![false]));
         assert!(matters(&dir, Spot::Tree, "gen/a.txt"), "gen/ is ignored but tracks a file: a change there counts");
         // The main checkout's exclude file: the answers it gave are forgotten when it changes.
         std::fs::create_dir_all(dir.join(".git/info")).unwrap();

@@ -29,6 +29,7 @@ const PROGRAMS: &[&str] = &[
     "mdz", "ade", "adp", "accdb", "accde", "accdr", "accdt", "docm", "dotm", "xlsm", "xltm", "xlam", "xla", "xll",
     "pptm", "potm", "ppam", "ppsm", "sldm", "one", "onepkg", "onetoc2", "iqy", "oqy", "rqy", "dqy", "slk", "sylk",
     "crt", "cer", "der", "p7b", "p7c", "pfx", "p12", "xnk", "shb", "shs", "prf", "prg", "pcd", "vsmacros", "vsw",
+    "rdp", "appref-ms", "wsb", "msu", "iso", "img", "vhd", "vhdx", "ppkg",
 ];
 
 /// Every registered root: the projects, a project's own workspaces folder, and the shared one.
@@ -305,17 +306,25 @@ pub fn reveal(path: &Path) -> Result<(), String> {
 /// else is opened in its own app; a path on another machine or a relative one is refused.
 /// Answers "revealed" or "opened".
 #[tauri::command]
-pub fn open_path(store: tauri::State<'_, Mutex<crate::state::Store>>, path: String) -> Result<&'static str, String> {
+pub async fn open_path(store: tauri::State<'_, Mutex<crate::state::Store>>, path: String) -> Result<&'static str, String> {
     refuse_host(&path, &roots(&store))?;
-    let p = Path::new(&path);
-    if !p.is_absolute() {
-        return Err(format!("{path} is not a full path"));
-    }
-    if launchable(p) {
-        reveal(p).map(|_| "revealed")
-    } else {
-        crate::artifacts::system_open(&path).map(|_| "opened")
-    }
+    // A slow file association never freezes the window; only an existing file is handed over.
+    tauri::async_runtime::spawn_blocking(move || {
+        let p = Path::new(&path);
+        if !p.is_absolute() {
+            return Err(format!("{path} is not a full path"));
+        }
+        if !p.is_file() {
+            return Err(format!("{path} is not a file"));
+        }
+        if launchable(p) {
+            reveal(p).map(|_| "revealed")
+        } else {
+            crate::artifacts::system_open(&path).map(|_| "opened")
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
