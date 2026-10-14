@@ -26,7 +26,8 @@ const mb = (n: number) => (n / (1024 * 1024)).toFixed(1).replace(/\.0$/, "");
 
 /** The toast for a refused paste. */
 export function refusal(length: number): string {
-  return `Paste refused: ${mb(length)} MB is over the ${mb(PASTE_LIMIT)} MB limit for one paste. Nothing was pasted.`;
+  const size = mb(length) === mb(PASTE_LIMIT) ? "it is just" : `${mb(length)} MB is`;
+  return `Paste refused: ${size} over the ${mb(PASTE_LIMIT)} MB limit for one paste. Nothing was pasted.`;
 }
 
 /** `text` in pieces of at most `size` characters; a piece never ends between the two halves of an

@@ -511,7 +511,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
           <button className="btn" onClick={() => setTries((n) => n + 1)}>
             Retry
           </button>
-          {error.includes("outside your projects") && (
+          {/outside (your projects|them)/.test(error) && (
             <button className="btn" title="Allows this one file for this run; nothing beneath it" onClick={() => void invoke("file_grant", { path }).then(() => setTries((n) => n + 1), (err) => setError(String(err)))}>
               Open this file anyway
             </button>

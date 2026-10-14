@@ -13,6 +13,7 @@ test("EDIT-008: a paste at the chunk size goes in whole, one character more goes
   expect(verdict(PASTE_LIMIT + 1, true)).toBe("ignore");
   expect(verdict(5, true)).toBe("ignore");
   expect(refusal(40 * 1024 * 1024)).toBe("Paste refused: 40 MB is over the 32 MB limit for one paste. Nothing was pasted.");
+  expect(refusal(PASTE_LIMIT + 1)).toBe("Paste refused: it is just over the 32 MB limit for one paste. Nothing was pasted.");
 });
 
 test("EDIT-008: pieces rebuild the text and never split an emoji or a CRLF", () => {

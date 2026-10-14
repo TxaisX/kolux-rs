@@ -1,0 +1,22 @@
+Live check 2026-10-13 (UTC 2026-10-14), lane/look. Dev app from this checkout on vite 1426 / CDP 9249, identifier com.txaisxiong.kolux-rs.look.smoke, scratch profile under G:/Temp/look-w1/live (scratch CLAUDE_CONFIG_DIR with the .kolux-rs-scratch marker, scratch CODEX_HOME, USERPROFILE/HOME, the app's TEMP apart from that home), window on the second screen at X=-1920. No agent started, no sign-in. Launcher evidence/T-282-run.mjs, steps evidence/T-282-proof.mjs (node evidence/T-282-run.mjs code rich forecast).
+
+T-282 EDIT-008. A throwaway repo with notes.txt and note.md, both open as editor panes from the saved layout. The repo is not a project, so each pane shows the fence notice; the proof presses "Open this file anyway" (file_grant), the real path for a file outside the projects.
+Bug found live and fixed in this card: that button never showed, because EditorPane matched "outside your projects" while fence.rs says "... is outside them". It now matches both wordings.
+Second fix found live: a paste of 32 MB + 1 read "32 MB is over the 32 MB limit"; refusal() now says "it is just over the 32 MB limit" when the size rounds to the limit (test line added).
+
+Real paste events (ClipboardEvent with a DataTransfer) sent to the editor surface; the code view's EditorView found the way EditorView.findFromDOM finds it.
+
+code view, notes.txt: 14 chars before
+pasted 3145740 chars (3.00 MB): default prevented true, paste handler returned in 21 ms, all text in after 422 ms
+doc now 3145754 chars; pasted text intact: true; longest gap between painted frames while it went in: 43 ms
+one Ctrl+Z: doc back to 14 chars
+pasted 33554433 chars (32 MB + 1): default prevented true, doc 14 -> 14 chars, toast: Paste refused: it is just over the 32 MB limit for one paste. Nothing was pasted.
+
+rich view, note.md: text before "A noteSome text."
+normal paste (16 chars): default prevented true, text now "A noteSome text. pasted-normally"
+pasted 33554433 chars (32 MB + 1): default prevented true, text unchanged true (32 chars), toast: Paste refused: it is just over the 32 MB limit for one paste. Nothing was pasted.
+
+The window stayed responsive: the longest gap between painted frames during the 3 MB paste is above, against about 16 ms for one frame. One Ctrl+Z removed the whole chunked paste. Over the limit nothing was pasted in either view and the toast said so.
+Closing afterwards stopped at the app's own "Quit with unsaved changes? 1 file has unsaved changes: note.md" dialog (the rich view's normal paste was unsaved), the expected guard; the dev app was then stopped by its own pids.
+
+Tests: src/editor/paste.test.ts (5 EDIT-008 tests). Gates for the card: tsc 0; vitest src/usage src/editor 29 files 160 tests passed.
