@@ -182,7 +182,8 @@ Acceptance:
   - [ ] Give Codex custom default arguments → those are used instead of the built-in ones.
 Compat: the built-in no-prompt switches, spelled exactly as each agent's own command line
   expects them: for Claude Code, `--permission-mode` with the value auto; for Codex,
-  `--sandbox workspace-write --ask-for-approval never` (DT-C46: sandboxed, never asks; the bypass flag is never used); for Gemini CLI, `--yolo`; for Aider,
+  `--sandbox` with the value workspace-write and `--ask-for-approval` with the value never (DT-C46:
+  sandboxed, never asks; the bypass flag is never used); for Gemini CLI, `--yolo`; for Aider,
   `--yes-always`; for Goose, its mode environment variable given the value auto (the variable's
   exact name waits on a firewall allowlist entry).
 Source: D-02-027
