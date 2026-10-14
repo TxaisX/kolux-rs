@@ -8,6 +8,7 @@
 // word on every platform: the readline word moves (ESC b / ESC f) on macOS and Linux, and on Windows the
 // Ctrl+Arrow key encoding, which PSReadLine (no ESC b binding in its Windows mode) and Git Bash both read. A key that is part
 // of an input method's composition (TERM-083) is never routed: the terminal's composition handling owns it.
+import type { Agent } from "../chrome/VendorMark";
 import { matchEvent, type KeyLike, type Keymap } from "../keys/keymap";
 
 export type Route =
@@ -25,7 +26,15 @@ const WORD_MOVES: Record<string, string> = { ArrowLeft: "\x1bb", ArrowRight: "\x
 const WORD_MOVES_WIN: Record<string, string> = { ArrowLeft: "\x1b[1;5D", ArrowRight: "\x1b[1;5C" };
 const LINE_JUMPS: Record<string, string> = { ArrowLeft: "\x01", ArrowRight: "\x05" };
 
-export function routeKey(map: Keymap, e: RoutedKey, hasSelection: boolean): Route {
+/** TERM-080: Shift+Enter (and Ctrl+Enter) in an agent pane is a newline, sent the way that agent reads one: Claude
+ *  Code takes ESC CR (what its own terminal setup binds), Codex takes Ctrl+J (a bare line feed). A shell keeps
+ *  plain Enter: it has no multi-line prompt to feed. Alt and Cmd variants are left to the keymap and the shell. */
+export function newlineFor(agent: Agent, e: RoutedKey): Route | null {
+  if (agent === "shell" || e.key !== "Enter" || e.altKey || e.metaKey || e.shiftKey === e.ctrlKey) return null;
+  return { kind: "send", data: agent === "claude" ? "\x1b\r" : "\n" };
+}
+
+export function routeKey(map: Keymap, e: RoutedKey, hasSelection: boolean, agent: Agent = "shell"): Route {
   if (e.isComposing || e.keyCode === 229) return { kind: "ime" };
   const mac = map.platform === "darwin";
   const only = (mod: "alt" | "meta" | "ctrl") => e.altKey === (mod === "alt") && e.metaKey === (mod === "meta") && e.ctrlKey === (mod === "ctrl") && !e.shiftKey;
@@ -37,7 +46,7 @@ export function routeKey(map: Keymap, e: RoutedKey, hasSelection: boolean): Rout
   }
   if (mac && only("ctrl") && /^Key[A-Z]$/.test(e.code)) return { kind: "shell" };
   const hit = matchEvent(map, e, ["global", "terminal", "tabs"]);
-  if (!hit) return { kind: "shell" };
+  if (!hit) return newlineFor(agent, e) ?? { kind: "shell" };
   if (hit.id === "terminal.copySelection" && !hasSelection && !e.shiftKey && !e.metaKey) return { kind: "shell" };
   return { kind: "kolux", id: hit.id };
 }

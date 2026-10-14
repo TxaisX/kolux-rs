@@ -39,6 +39,7 @@ import { useKeymap } from "../keys/KeymapContext";
 import { labelOf } from "../keys/keymap";
 import { attachPaste } from "./paste";
 import { routeKey } from "./shellKeys";
+import { clickTarget, findLinks, hintFor, linkFor, rangeOf, resolvePath, spanOf, type Found } from "./links";
 import { dropSummary, dropText, overRect, shellKind } from "./drop";
 import { decideOsc52, parseOsc52, sayOnce } from "./osc52";
 import { findIn, nearestFrom, stepIndex, type FindOptions, type Match } from "./find";
@@ -54,7 +55,7 @@ const COPY_IDS = [["session", "Copy Session ID"], ["terminal", "Copy Terminal ID
 type Status = { kind: "starting" } | { kind: "running"; id: number; account: string | null } | { kind: "ended"; code: number | null } | { kind: "failed"; error: string };
 
 /** council D2 MERGE 31 (3): the host element of a dev build carries its terminal for the evidence probes. */
-type DevHost = HTMLDivElement & { __koluxTerm?: Terminal };
+type DevHost = HTMLDivElement & { __koluxTerm?: Terminal; __koluxLinks?: (y: number) => unknown[] };
 
 /** ACCT-064: a centred question over the terminal; Enter takes the first button, Escape the second. */
 export type PaneNotice = { title: string; body: string; primary: string; onPrimary: () => void; secondary?: string; onSecondary?: () => void };
@@ -121,6 +122,13 @@ type Props = {
   onCopyId?: (what: "session" | "terminal" | "pane") => void;
   /** TERM-096: the opener for a printed handle of an open terminal; undefined for anything else. */
   findHandle?: (handle: string) => (() => void) | undefined;
+  /** TERM-092: Ctrl+click on a web link opens it in Kolux's own viewer through `onOpenLink` when this is on (off by
+   *  default); Shift held, or no viewer, always means the system browser. */
+  linksOpenInKolux?: boolean;
+  onOpenLink?: (url: string) => void;
+  /** TERM-093: Ctrl+click on a printed file path (resolved against the pane's folder) hands it here, with the line
+   *  from a path:line suffix; absent, the system opens the file. */
+  onOpenFile?: (path: string, line?: number) => void;
   /** An opening prompt typed in once the agent is ready (SESS-051 typed route). */
   typed?: string;
   /** Names a pane outside any workspace: "Terminal N". */
@@ -168,13 +176,20 @@ const stagger = () =>
     }, 150 + 60 * waiting++),
   );
 
-export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true }: Props) {
+export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const clipboardOk = useRef(clipboardFromPrograms);
   clipboardOk.current = clipboardFromPrograms;
   // TERM-096: the link provider is set up once, so it reads the newest opener through a ref.
   const handleRef = useRef(findHandle);
   handleRef.current = findHandle;
+  // TERM-092/093: the link provider and the key handler are set up once too; the newest openers, folder and agent
+  // are read through refs.
+  const openRef = useRef({ linksOpenInKolux, onOpenLink, onOpenFile, cwd });
+  openRef.current = { linksOpenInKolux, onOpenLink, onOpenFile, cwd };
+  const agentRef = useRef(agent);
+  agentRef.current = agent;
+  const [linkHint, setLinkHint] = useState<string | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const box = useRef<HTMLElement>(null);
   // TERM-012: the pane Kolux focuses (a shortcut, a new session) takes the keyboard too, unless
@@ -327,6 +342,68 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         done(links.length > 0 ? links : undefined);
       },
     });
+    // TERM-092 / TERM-093: web links and file paths are links (Ctrl+click; Cmd+click on macOS); a link wrapped over
+    // rows is read as one; the hint under the pointer says where the click goes. The text work is in links.ts.
+    const openFound = (f: Found, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }) => {
+      const o = openRef.current;
+      const door = clickTarget(f, e, keys.current.platform === "darwin", o.linksOpenInKolux && !!o.onOpenLink);
+      if (door === null) return;
+      const said = (err: unknown) => setFlash(explainError(String(err)));
+      if (door === "kolux") o.onOpenLink?.(f.target);
+      else if (door === "system") invoke("open_external", { url: f.target }).catch(said);
+      else {
+        const path = resolvePath(f.target, o.cwd);
+        if (!path) setFlash(`${f.target} is a relative path and this pane has no folder`);
+        else if (o.onOpenFile) o.onOpenFile(path, f.line);
+        else invoke("open_path", { path }).catch(said);
+      }
+    };
+    const hintOf = (f: Found) => {
+      const o = openRef.current;
+      const where = f.kind === "file" ? (o.onOpenFile ? "editor" : "app") : o.linksOpenInKolux && o.onOpenLink ? "kolux" : "browser";
+      return hintFor(f, keys.current.platform === "darwin", where);
+    };
+    // the hint and the underline clear when the window loses focus (the pointer may never "leave" the link)
+    const blurLinks = () => {
+      setLinkHint(null);
+      term.element?.querySelector(".xterm-screen")?.dispatchEvent(new MouseEvent("mouseleave"));
+    };
+    window.addEventListener("blur", blurLinks);
+    const linksOn = (y: number) => {
+      const cols = term.cols;
+      const row = (i: number) => {
+        const l = term.buffer.active.getLine(i);
+        return l ? { text: l.translateToString(false), isWrapped: l.isWrapped } : undefined;
+      };
+      const span = spanOf(row, y - 1, cols);
+      return findLinks(span.text).map((f) => ({
+        range: rangeOf(f.start, f.end, span.first, cols),
+        text: f.target,
+        activate: (e: MouseEvent) => openFound(f, e),
+        hover: () => setLinkHint(hintOf(f)),
+        leave: () => setLinkHint(null),
+      }));
+    };
+    term.registerLinkProvider({
+      provideLinks(y, done) {
+        const links = linksOn(y);
+        done(links.length > 0 ? links : undefined);
+      },
+    });
+    if (import.meta.env.DEV) (el as DevHost).__koluxLinks = linksOn;
+    // a program's own OSC 8 link (file:// allowed, other schemes are not links)
+    term.options.linkHandler = {
+      allowNonHttpProtocols: true,
+      activate: (e, uri) => {
+        const f = linkFor(uri);
+        if (f) openFound(f, e);
+      },
+      hover: (_e, uri) => {
+        const f = linkFor(uri);
+        if (f) setLinkHint(hintOf(f));
+      },
+      leave: () => setLinkHint(null),
+    };
     const choice = attachRenderer<WebglAddon>(term, () => new WebglAddon(), gpu);
     setRenderer(choice.mode);
     choice.onFallback(() => setRenderer("dom"));
@@ -449,7 +526,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     // Ctrl+Shift+C does nothing and says nothing.
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
-      const route = routeKey(keys.current, e, term.hasSelection());
+      const route = routeKey(keys.current, e, term.hasSelection(), agentRef.current);
       if (route.kind === "ime" || route.kind === "shell") return true;
       if (route.kind === "send") {
         e.preventDefault(); // Alt+Left is the webview's own "back" otherwise
@@ -669,6 +746,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       acks.stop();
       term.dispose();
       delete (el as DevHost).__koluxTerm;
+      delete (el as DevHost).__koluxLinks;
+      window.removeEventListener("blur", blurLinks);
     };
   }, []);
 
@@ -924,6 +1003,11 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         {flash && (
           <span className="status attention" role="status">
             {flash}
+          </span>
+        )}
+        {linkHint && !flash && (
+          <span className="status link-hint" role="status">
+            {linkHint}
           </span>
         )}
         {restoredMark && (

@@ -6,6 +6,21 @@ const key = (code: string, k: string, mods: Partial<RoutedKey> = {}): RoutedKey 
 const win = resolve(null, "win32");
 const mac = resolve(null, "darwin");
 
+describe("TERM-080 Shift+Enter is a newline in an agent pane, plain Enter in a shell", () => {
+  it("sends the encoding the agent reads; a shell and a composing key are untouched; Mod+Shift+Enter stays Kolux", () => {
+    const shiftEnter = key("Enter", "Enter", { shiftKey: true });
+    const ctrlEnter = key("Enter", "Enter", { ctrlKey: true });
+    expect(routeKey(win, shiftEnter, false, "claude")).toEqual({ kind: "send", data: "\x1b\r" });
+    expect(routeKey(win, ctrlEnter, false, "claude")).toEqual({ kind: "send", data: "\x1b\r" });
+    expect(routeKey(win, shiftEnter, false, "codex")).toEqual({ kind: "send", data: "\n" });
+    expect(routeKey(win, shiftEnter, false, "shell")).toEqual({ kind: "shell" });
+    expect(routeKey(win, shiftEnter, false)).toEqual({ kind: "shell" });
+    expect(routeKey(win, key("Enter", "Enter"), false, "claude")).toEqual({ kind: "shell" }); // plain Enter sends
+    expect(routeKey(win, key("Enter", "Enter", { ctrlKey: true, shiftKey: true }), false, "claude")).toEqual({ kind: "kolux", id: "terminal.expandPane" });
+    expect(routeKey(win, key("Enter", "Enter", { shiftKey: true, isComposing: true }), false, "claude")).toEqual({ kind: "ime" }); // TERM-083
+  });
+});
+
 describe("TERM-079 Kolux shortcuts versus shell keys", () => {
   it("Ctrl+R and Ctrl+Arrow reach the shell on Windows; a Kolux chord never does", () => {
     expect(routeKey(win, key("KeyR", "r", { ctrlKey: true }), false)).toEqual({ kind: "shell" });
