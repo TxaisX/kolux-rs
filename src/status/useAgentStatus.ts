@@ -19,7 +19,10 @@ export type TurnInfo = { tool?: string; detail?: string; ask?: string; reply?: s
 
 /** USAGE-001: one status-line report as the hook server sends it. `session` and `at` (the
  * session's running time when the report was made) are optional: a report without them is
- * ordered by arrival, which the hook server's one-at-a-time loop keeps. */
+ * ordered by arrival, which the hook server's one-at-a-time loop keeps. `session` is the report's
+ * clock, the session id with the terminal that ran it (evidence/marks-FIX-1-hooks.patch), so a
+ * resume in a new terminal, which keeps the id but starts the running time over, is a new clock
+ * and only ever compared for equality here. */
 export type UsageEvent = { paneKey: number; contextTokens: number | null; contextWindow: number | null; session?: string | null; at?: number | null };
 /** A pane's context reading with the stamp it came with, when it had one. */
 export type Reading = ContextReading & { session?: string; at?: number };
