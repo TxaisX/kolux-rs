@@ -1,22 +1,68 @@
 // VIEW-010 / GIT-043: the Tasks page, opened from the sidebar's Tasks row or the view.tasks
 // shortcut: a preset or a typed GitHub search over the workspace's repository, 25 to a page.
+// T-314: the default preset is a setting (GIT-044), PR filter pickers rewrite the query (GIT-054),
+// and a fork may take its issues from its parent (GIT-055).
 // ponytail: one repository (the workspace's); the multi-repository picker, the remembered choice,
 // new issue, close / reopen / comment and start-from-item are T-231-c. Clicking an item opens its
 // preview (GIT-050, TaskDialog).
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Refresh, Search } from "../chrome/icons";
-import { beyondWindow, pageButtons, pageCount, PER_PAGE, PRESETS, type Task, type TaskLabel, type TaskPage, taskKind, taskQueries } from "./model";
+import { useSettings } from "../settings/useSettings";
+import { beyondWindow, defaultPreset, FILTERS, type FilterKey, filterValue, issueSource, pageButtons, pageCount, PER_PAGE, PRESETS, setFilter, type Task, type TaskLabel, type TaskPage, taskKind, taskQueries } from "./model";
 import TaskDialog from "./TaskDialog";
+import "./tasks.css";
 
 type GhRepo = { host: string; owner: string; name: string };
-/** GIT-043: preset, query, page and scroll survive leaving the page and coming back (app session). */
-const kept = { preset: "all", query: "", page: 1, scroll: 0 };
+type Person = { login: string; avatar: string };
+/** GIT-043: preset, query, page and scroll survive leaving the page and coming back (app session);
+ * GIT-044: the first visit of the session opens on the saved default preset. */
+const kept: { preset: string | null; query: string; page: number; scroll: number } = { preset: null, query: "", page: 1, scroll: 0 };
+
+/** GIT-054: one filter picker; typing or picking a suggestion sets its part of the query on Enter or
+ * on leaving the field, and the cross clears only that part. */
+function FilterPicker({ k, label, query, options, onSet }: { k: FilterKey; label: string; query: string; options: string[]; onSet: (k: FilterKey, v: string) => void }) {
+  const now = filterValue(query, k);
+  const [text, setText] = useState(now);
+  useEffect(() => setText(now), [now]);
+  const commit = () => text.trim() !== now && onSet(k, text);
+  return (
+    <label className={`tasks-filter${now ? " set" : ""}`} data-filter={k}>
+      <span>{label}</span>
+      {k === "state" ? (
+        <select className="field" value={now} onChange={(e) => onSet(k, e.target.value)} aria-label={label}>
+          <option value="">Any</option>
+          <option value="open">Open</option>
+          <option value="closed">Closed</option>
+          <option value="merged">Merged</option>
+        </select>
+      ) : (
+        <>
+          <input className="field" list={`tasks-${k}-list`} value={text} placeholder="Anyone" aria-label={label} onChange={(e) => setText(e.target.value)} onBlur={commit} onKeyDown={(e) => e.key === "Enter" && commit()} />
+          <datalist id={`tasks-${k}-list`}>
+            {options.map((o) => (
+              <option key={o} value={o} />
+            ))}
+          </datalist>
+        </>
+      )}
+      {now && (
+        <button type="button" className="ib" title={`Clear ${label.toLowerCase()}`} aria-label={`Clear ${label.toLowerCase()}`} onClick={() => onSet(k, "")}>
+          ×
+        </button>
+      )}
+    </label>
+  );
+}
 
 export default function TasksPage({ repo }: { repo: { dir: string; name: string } | null }) {
+  const { settings, save } = useSettings();
   const [gh, setGh] = useState<GhRepo | null | undefined>(undefined);
   const [login, setLogin] = useState<string | null>(null);
-  const [preset, setPreset] = useState(kept.preset);
+  const [preset, setPreset] = useState<string | null>(kept.preset);
+  const [parent, setParent] = useState<string | null | undefined>(undefined);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [labels, setLabels] = useState<string[]>([]);
   const [typed, setTyped] = useState(kept.query);
   const [query, setQuery] = useState(kept.query);
   const [page, setPage] = useState(kept.page);
@@ -28,24 +74,39 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
   Object.assign(kept, { preset, query, page });
 
   useEffect(() => {
+    if (preset === null && settings) setPreset(defaultPreset(settings));
+  }, [settings]);
+
+  useEffect(() => {
     setGh(undefined);
+    setParent(undefined);
     if (!repo) return;
     invoke<GhRepo | null>("scm_github_repo", { worktree: repo.dir })
       .then((g) => {
         setGh(g);
-        if (g) void invoke<string | null>("scm_gh_account", { host: g.host }).then(setLogin);
+        if (!g) return;
+        const repoName = `${g.owner}/${g.name}`;
+        void invoke<string | null>("scm_gh_account", { host: g.host }).then(setLogin);
+        invoke<string | null>("github_repo_parent", { host: g.host, repo: repoName }).then(setParent, () => setParent(undefined));
+        invoke<Person[]>("github_people", { host: g.host, repo: repoName }).then(setPeople, () => setPeople([]));
+        invoke<TaskLabel[]>("scm_repo_labels", { host: g.host, repo: repoName }).then((l) => setLabels(l.map((x) => x.name)), () => setLabels([]));
       })
       .catch(() => setGh(null));
   }, [repo?.dir]);
 
+  const own = gh ? `${gh.owner}/${gh.name}` : "";
+  const sourceKey = gh ? `${gh.host}/${own}` : "";
+  const source = issueSource(settings, sourceKey, own, parent);
+  const savedSources = (settings?.tasksIssueSource ?? {}) as Record<string, unknown>;
+  const chosenSource = savedSources[sourceKey] === "upstream" ? "upstream" : "fork";
   const load = () => {
-    if (!gh) return;
+    if (!gh || preset === null || !settings) return;
     setError(null);
-    invoke<TaskPage>("scm_tasks_search", { host: gh.host, queries: taskQueries(preset, query, [`${gh.owner}/${gh.name}`]), page })
+    invoke<TaskPage>("scm_tasks_search", { host: gh.host, queries: taskQueries(preset, query, [own], [source.repo]), page })
       .then(setResult)
       .catch((e) => setError(String(e)));
   };
-  useEffect(load, [gh, preset, query, page]);
+  useEffect(load, [gh, preset, query, page, source.repo, settings === null]);
   useLayoutEffect(() => {
     if (result && list.current && restore.current) {
       list.current.scrollTop = restore.current;
@@ -58,6 +119,14 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
     kept.scroll = 0;
     setPage(n);
   };
+  const setOne = (k: FilterKey, v: string) => {
+    const next = setFilter(query, k, v);
+    setTyped(next);
+    setQuery(next);
+    go(1);
+  };
+  const isDefault = preset === defaultPreset(settings);
+  const whoOptions = ["@me", ...people.map((p) => p.login)];
   return (
     <div className="autos tasks" data-tasks>
       <div className="autos-bar">
@@ -65,7 +134,7 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
         <select
           className="field"
           aria-label="Preset"
-          value={preset}
+          value={preset ?? ""}
           onChange={(e) => {
             setPreset(e.target.value);
             go(1);
@@ -77,6 +146,9 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
             </option>
           ))}
         </select>
+        <button className="btn tasks-default" aria-pressed={isDefault} disabled={isDefault || preset === null} title="Open Tasks on this preset next time" onClick={() => preset && void save({ tasksDefaultPreset: preset })}>
+          {isDefault ? "Default view" : "Make default"}
+        </button>
         <form
           className="autos-search"
           onSubmit={(e) => {
@@ -89,6 +161,31 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
           <input className="field" placeholder="GitHub search, such as is:pr label:bug" value={typed} onChange={(e) => setTyped(e.target.value)} aria-label="Search issues and pull requests" />
         </form>
         <span className="autos-gap" />
+        {gh && (parent || chosenSource === "upstream") && (
+          <label className="tasks-source" title="Where this fork's issues come from">
+            <span>Issues from</span>
+            <select
+              className="field"
+              aria-label="Issues from"
+              value={chosenSource}
+              onChange={(e) => {
+                const all = { ...savedSources };
+                if (e.target.value === "upstream") all[sourceKey] = "upstream";
+                else delete all[sourceKey];
+                void save({ tasksIssueSource: all });
+                go(1);
+              }}
+            >
+              <option value="fork">this fork ({own})</option>
+              <option value="upstream">{parent ? `upstream (${parent})` : "upstream"}</option>
+            </select>
+          </label>
+        )}
+        {source.split && (
+          <span className="tasks-split" data-split title="Issues and pull requests come from different repositories">
+            issues {source.repo} · pull requests {own}
+          </span>
+        )}
         {gh && (
           <span className="tasks-repo" title="Where the list comes from">
             {gh.host} · {login ? `@${login}` : "not signed in"} · {gh.owner}/{gh.name}
@@ -98,6 +195,18 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
           <Refresh />
         </button>
       </div>
+      {gh && (
+        <div className="tasks-filters" data-filters>
+          {FILTERS.map((f) => (
+            <FilterPicker key={f.key} k={f.key} label={f.label} query={query} options={f.key === "label" ? labels : whoOptions} onSet={setOne} />
+          ))}
+        </div>
+      )}
+      {source.warning && (
+        <div className="note warn" role="status" data-source-warning>
+          {source.warning}
+        </div>
+      )}
       {!repo ? (
         <div className="autos-none tasks-none">Add a project to see its GitHub issues and pull requests.</div>
       ) : gh === null ? (

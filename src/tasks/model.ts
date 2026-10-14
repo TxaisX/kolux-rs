@@ -28,14 +28,82 @@ export const PRESETS: { id: string; label: string; q: string; kinds: Kind[] }[] 
 ];
 
 /** GIT-043: the GitHub searches for a preset, a typed query and the chosen repositories (owner/name):
- * one per kind the preset shows, unless the query names is:issue or is:pr itself. */
-export function taskQueries(preset: string, typed: string, repos: string[]): string[] {
+ * one per kind the preset shows, unless the query names is:issue or is:pr itself. GIT-055: issues may
+ * come from other repositories than pull requests (a fork listing its parent's issues). GIT-054: a
+ * typed state (is:open, is:closed, is:merged) replaces the preset's own. */
+export function taskQueries(preset: string, typed: string, repos: string[], issueRepos: string[] = repos): string[] {
   if (repos.length === 0) return [];
   const p = PRESETS.find((x) => x.id === preset) ?? PRESETS[0];
-  const words = typed.trim().split(/\s+/).filter(Boolean);
-  const named = words.some((w) => /^(is|type):(issue|pr|pull-request)$/i.test(w));
-  const tail = [...words, ...repos.map((r) => `repo:${r}`)].join(" ");
-  return named ? [`${p.q} ${tail}`] : p.kinds.map((k) => `is:${k} ${p.q} ${tail}`);
+  const words = queryWords(typed);
+  const stated = words.some((w) => STATE_WORD.test(w));
+  const base = p.q.split(" ").filter((w) => !(stated && STATE_WORD.test(w)));
+  const kindOf = (w: string) => /^(is|type):(issue|pr|pull-request)$/i.exec(w)?.[2].toLowerCase();
+  const named = words.map(kindOf).find(Boolean);
+  const q = (k: string) => [...base, ...words, ...(k === "issue" ? issueRepos : repos).map((r) => `repo:${r}`)].join(" ");
+  if (named) return [q(named === "issue" ? "issue" : "pr")];
+  return p.kinds.map((k) => `is:${k} ${q(k)}`);
+}
+
+const STATE_WORD = /^(is|state):(open|closed|merged)$/i;
+
+/** A search split into its words, a quoted part (label:"needs review") kept whole. */
+export function queryWords(q: string): string[] {
+  return q.match(/(?:[^\s"]+|"[^"]*")+/g) ?? [];
+}
+
+/** GIT-054: the PR filter pickers, each one part of the GitHub query. */
+export type FilterKey = "state" | "author" | "assignee" | "label" | "review-requested" | "reviewed-by";
+export const FILTERS: { key: FilterKey; label: string; prOnly: boolean }[] = [
+  { key: "state", label: "State", prOnly: false },
+  { key: "author", label: "Author", prOnly: false },
+  { key: "assignee", label: "Assignee", prOnly: false },
+  { key: "label", label: "Label", prOnly: false },
+  { key: "review-requested", label: "Review requested", prOnly: true },
+  { key: "reviewed-by", label: "Reviewed by", prOnly: true },
+];
+const ownWord = (key: FilterKey, w: string) => (key === "state" ? STATE_WORD.test(w) : w.toLowerCase().startsWith(`${key}:`));
+const unquote = (v: string) => v.replace(/^"(.*)"$/, "$1");
+
+/** GIT-054: the value a filter has in the query now, or "". */
+export function filterValue(query: string, key: FilterKey): string {
+  const w = queryWords(query).find((x) => ownWord(key, x));
+  return w ? unquote(w.slice(w.indexOf(":") + 1)) : "";
+}
+
+/** GIT-054: the query with one filter set (or cleared, with an empty value); every other part stays.
+ * A pull-request-only filter (review requested, reviewed by, merged) also narrows the list to
+ * pull requests. */
+export function setFilter(query: string, key: FilterKey, value: string): string {
+  const words = queryWords(query).filter((w) => !ownWord(key, w));
+  const v = value.trim();
+  if (v) {
+    words.push(key === "state" ? `is:${v}` : `${key}:${/\s/.test(v) ? `"${v}"` : v}`);
+    const prOnly = FILTERS.find((f) => f.key === key)?.prOnly || (key === "state" && v === "merged");
+    if (prOnly && !words.some((w) => /^(is|type):(pr|pull-request)$/i.test(w))) {
+      const i = words.findIndex((w) => /^(is|type):issue$/i.test(w));
+      if (i >= 0) words.splice(i, 1);
+      words.unshift("is:pr");
+    }
+  }
+  return words.join(" ");
+}
+
+/** GIT-044: the preset Tasks opens on: the saved default when it names a preset, else All open. */
+export function defaultPreset(settings: Record<string, unknown> | null): string {
+  const v = settings?.tasksDefaultPreset;
+  return typeof v === "string" && PRESETS.some((p) => p.id === v) ? v : PRESETS[0].id;
+}
+
+/** GIT-055: where a repository's issues come from. A fork may choose its parent ("upstream"); the
+ * choice is kept per repository (host/owner/name). A chosen parent that is gone falls back to the
+ * repository itself, with a warning. */
+export type IssueSource = { repo: string; warning: string | null; split: boolean };
+export function issueSource(settings: Record<string, unknown> | null, key: string, own: string, parent: string | null | undefined): IssueSource {
+  const saved = settings?.tasksIssueSource;
+  const choice = saved && typeof saved === "object" ? (saved as Record<string, unknown>)[key] : undefined;
+  if (choice !== "upstream" || parent === undefined) return { repo: own, warning: null, split: false };
+  if (!parent) return { repo: own, warning: `The upstream repository chosen for issues is gone or no longer this fork's parent, so issues come from ${own}.`, split: false };
+  return { repo: parent, warning: null, split: true };
 }
 
 export const PER_PAGE = 25;
