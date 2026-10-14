@@ -121,7 +121,7 @@ fn usable(over: &Option<String>) -> Option<PathBuf> {
     let o = over.as_deref().map(str::trim).filter(|o| !o.is_empty())?;
     let p = PathBuf::from(o);
     let unsafe_path = !p.is_absolute() || p.parent().is_none() || p.components().any(|c| matches!(c, std::path::Component::ParentDir));
-    (!unsafe_path && p.is_dir()).then_some(p)
+    (!unsafe_path && local_dir(&p)).then_some(p)
 }
 
 fn claude_home(env: &Env) -> PathBuf {
@@ -142,7 +142,7 @@ fn hermes_home(env: &Env) -> PathBuf {
     match (&env.local_app_data, env.windows) {
         (Some(local), true) => {
             let app = local.join("hermes");
-            if app.is_dir() || !legacy.is_dir() {
+            if local_dir(&app) || !local_dir(&legacy) {
                 app
             } else {
                 legacy
@@ -198,6 +198,9 @@ fn spots(env: &Env, workspace: Option<&Path>) -> Vec<Spot> {
 }
 
 fn read_json(p: &Path) -> Option<serde_json::Value> {
+    if remote_path(p) {
+        return None;
+    }
     serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()
 }
 
@@ -253,24 +256,57 @@ struct Walk {
     cancel: Arc<AtomicBool>,
 }
 
+/// Links followed at most while judging one path; past that the path counts as remote (a loop).
+const HOPS: u32 = 16;
+
 /// A link or junction whose target, at any hop, is on another computer. Reading through it makes
 /// Windows sign in to that machine with the user's credentials (NTLM), so it is never followed.
-/// ponytail: only the hops are judged, not the folders above a hop target; a local link into a
-/// folder that is itself a link to a share still reaches it (follow every ancestor if that matters).
+/// Each hop target is judged whole: its text first, then every folder above it from the top down.
+/// ponytail: a link swapped for another between this check and the read that follows it is not
+/// caught (TOCTOU); opening with FILE_FLAG_OPEN_REPARSE_POINT would close that if it matters.
 fn remote_link(p: &Path) -> bool {
-    let mut cur = p.to_path_buf();
-    for _ in 0..16 {
-        let Ok(m) = std::fs::symlink_metadata(&cur) else { return false };
-        if !m.file_type().is_symlink() {
-            return false;
-        }
-        let Ok(t) = std::fs::read_link(&cur) else { return true };
-        if crate::links::host_path(&t.to_string_lossy(), &[]) {
+    let mut hops = HOPS;
+    remote_hop(p, &mut hops)
+}
+
+/// A path on another computer: its text names a share, or one of its folders (or itself) is a
+/// link whose target is. The text is judged before any disk call, so a share is never touched.
+fn remote_path(p: &Path) -> bool {
+    let mut hops = HOPS;
+    remote_path_in(p, &mut hops)
+}
+
+fn remote_hop(p: &Path, hops: &mut u32) -> bool {
+    let Ok(m) = std::fs::symlink_metadata(p) else { return false };
+    if !m.file_type().is_symlink() {
+        return false;
+    }
+    if *hops == 0 {
+        return true;
+    }
+    *hops -= 1;
+    let Ok(t) = std::fs::read_link(p) else { return true };
+    let next = if t.is_absolute() { t } else { p.parent().map(|d| d.join(&t)).unwrap_or(t) };
+    remote_path_in(&next, hops)
+}
+
+fn remote_path_in(p: &Path, hops: &mut u32) -> bool {
+    if crate::links::host_path(&p.to_string_lossy(), &[]) {
+        return true;
+    }
+    let mut cur = PathBuf::new();
+    for c in p.components() {
+        cur.push(c);
+        if matches!(c, std::path::Component::Normal(_)) && remote_hop(&cur, hops) {
             return true;
         }
-        cur = if t.is_absolute() { t } else { cur.parent().map(|d| d.join(&t)).unwrap_or(t) };
     }
-    true
+    false
+}
+
+/// A folder that is on this computer and exists; a share is refused by its text, never probed.
+fn local_dir(p: &Path) -> bool {
+    !remote_path(p) && p.is_dir()
 }
 
 fn canon(p: &Path) -> Option<PathBuf> {
@@ -315,7 +351,12 @@ fn walk(dir: &Path, depth: usize, seen: &mut HashSet<PathBuf>, limit: usize, w: 
         if !seen.insert(c) {
             continue;
         }
-        if p.join(SKILL_FILE).is_file() {
+        // SKILL.md itself may be a link to a share (a cloned repo can commit one): judged first.
+        let file = p.join(SKILL_FILE);
+        if remote_link(&file) {
+            continue;
+        }
+        if file.is_file() {
             w.found.push(p);
         } else if depth > 0 {
             walk(&p, depth - 1, seen, limit, w);
@@ -339,7 +380,7 @@ fn scan_spot(spot: &Spot, cancel: &Arc<AtomicBool>) -> (Vec<PathBuf>, &'static s
     if let Some(why) = &spot.skip {
         return (vec![], "not-scanned", Some(why.clone()));
     }
-    if remote_link(&spot.path) {
+    if remote_path(&spot.path) {
         return (vec![], "not-scanned", Some("This folder links to another computer, which Kolux never opens".into()));
     }
     if !spot.path.is_dir() {
@@ -359,7 +400,11 @@ fn scan_spot(spot: &Spot, cancel: &Arc<AtomicBool>) -> (Vec<PathBuf>, &'static s
                 let plugins: Vec<PathBuf> = std::fs::read_dir(&m).map(|r| r.flatten().map(|e| e.path()).filter(|p| !remote_link(p) && p.is_dir()).collect()).unwrap_or_default();
                 for p in plugins {
                     let Some(v) = newest_child(&p) else { continue };
-                    let base = if v.join("skills").is_dir() { v.join("skills") } else { v };
+                    let skills = v.join("skills");
+                    if remote_link(&skills) {
+                        continue;
+                    }
+                    let base = if skills.is_dir() { skills } else { v };
                     walk(&base, 1, &mut seen, CACHE_LIMIT, &mut w);
                     if w.stopped {
                         break 'all;
@@ -470,6 +515,9 @@ pub fn describe(text: &str, folder: &str) -> (String, Option<String>) {
 fn read_skill(dir: &Path) -> (String, Option<String>, Option<u64>) {
     let file = dir.join(SKILL_FILE);
     let folder = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    if remote_link(&file) {
+        return (folder, None, None);
+    }
     let meta = std::fs::metadata(&file).ok();
     let updated = meta.as_ref().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64);
     let text = if meta.is_some_and(|m| m.len() <= FILE_LIMIT) { std::fs::read_to_string(&file).unwrap_or_default() } else { String::new() };
@@ -669,6 +717,8 @@ mod tests {
         // A local junction is still followed; its hop is judged and found local.
         link_dir(&root.join("local"), &root.join("alpha"));
         assert!(!remote_link(&root.join("local")));
+        // The junction is seen as a link (so its hop is judged), not as a plain folder.
+        assert!(fs::symlink_metadata(root.join("local")).unwrap().file_type().is_symlink());
         assert!(!remote_link(&root.join("alpha")));
         if share_link(&root.join("share")).is_none() {
             eprintln!("skipped the share-link half: this account cannot make symbolic links");
@@ -681,7 +731,15 @@ mod tests {
         #[cfg(not(windows))]
         std::os::unix::fs::symlink(root.join("share"), root.join("hop")).unwrap();
         assert!(remote_link(&root.join("hop")));
+        // The long-path form of a share is judged the same way.
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_dir(r"\\?\UNC\kolux-unc-test.invalid\share\skills", root.join("long")).unwrap();
+            assert!(remote_link(&root.join("long")));
+        }
+        let began = Instant::now();
         let s = run(spots(&env(&home), None), &[], ROOT_LIMIT);
+        assert!(began.elapsed() < Duration::from_secs(2), "the walk waited on a share: {:?}", began.elapsed());
         let claude = s.roots.iter().find(|r| r.label == "Claude Code").unwrap();
         assert_eq!((claude.state.as_str(), claude.count), ("scanned", 1), "{:?}", claude.note);
         // A skills folder that is itself a link to a share is not opened at all.
@@ -811,5 +869,96 @@ mod tests {
         assert!(s.roots.iter().filter(|r| r.source == "workspace").all(|r| r.state == "not-scanned"));
         let b = s.skills.iter().find(|k| k.source == "bundled").unwrap();
         assert_eq!(b.description.as_deref(), Some("Drives Kolux"));
+    }
+
+    /// The same local folder reached as a share on this computer (`\\localhost\G$\...`): a target
+    /// that really resolves, so a check that is missing shows up as a listed skill. None when this
+    /// computer has no admin share for the drive.
+    fn as_share(p: &Path, long: bool) -> Option<PathBuf> {
+        let s = p.to_string_lossy().replace('/', "\\");
+        let s = s.strip_prefix("\\\\?\\").unwrap_or(&s).to_string();
+        let (drive, rest) = s.split_once(":\\")?;
+        let share = if long { format!("\\\\?\\UNC\\localhost\\{drive}$\\{rest}") } else { format!("\\\\localhost\\{drive}$\\{rest}") };
+        let share = PathBuf::from(share);
+        share.exists().then_some(share)
+    }
+
+    #[test]
+    fn a_skill_file_that_links_to_a_share_is_never_read() {
+        let home = temp("skills-unc-file");
+        let real = home.join("real");
+        skill(&real, "# leaked\n");
+        let Some(far) = as_share(&real.join(SKILL_FILE), false) else {
+            eprintln!("skipped: no admin share for this drive");
+            return;
+        };
+        let far_long = as_share(&real.join(SKILL_FILE), true).unwrap();
+        let root = home.join(".claude").join("skills");
+        skill(&root.join("plain"), "# plain\n");
+        for (name, target) in [("x", far), ("y", far_long), ("z", PathBuf::from(r"\\x.invalid\s\SKILL.md"))] {
+            fs::create_dir_all(root.join(name)).unwrap();
+            #[cfg(windows)]
+            let made = std::os::windows::fs::symlink_file(&target, root.join(name).join(SKILL_FILE)).is_ok();
+            #[cfg(not(windows))]
+            let made = std::os::unix::fs::symlink(&target, root.join(name).join(SKILL_FILE)).is_ok();
+            if !made {
+                eprintln!("skipped: this account cannot make symbolic links");
+                return;
+            }
+            assert!(remote_link(&root.join(name).join(SKILL_FILE)), "{name}");
+            // Reading the skill straight away gives nothing from the far side.
+            assert_eq!(read_skill(&root.join(name)), (name.to_string(), None, None), "{name}");
+        }
+        let began = Instant::now();
+        let s = run(spots(&env(&home), None), &[], ROOT_LIMIT);
+        assert!(began.elapsed() < Duration::from_secs(2), "the scan waited on a share: {:?}", began.elapsed());
+        let names: Vec<&str> = s.skills.iter().map(|k| k.name.as_str()).collect();
+        assert_eq!(names, vec!["plain"]);
+    }
+
+    #[test]
+    fn share_overrides_plugin_paths_and_linked_parents_are_refused_by_their_text() {
+        let home = temp("skills-unc-spots");
+        let far_dir = home.join("far");
+        skill(&far_dir.join("skills").join("leaked"), "# leaked\n");
+        let Some(far) = as_share(&far_dir, false) else {
+            eprintln!("skipped: no admin share for this drive");
+            return;
+        };
+        // An AI home override on a share is ignored, judged by its text alone.
+        let over = Some(far.to_string_lossy().to_string());
+        assert_eq!(usable(&over), None);
+        assert_eq!(usable(&Some(r"\\x.invalid\c".into())), None);
+        assert_eq!(usable(&Some(as_share(&far_dir, true).unwrap().to_string_lossy().into())), None);
+        // A plugin installed on a share is listed as not scanned.
+        let claude = home.join(".claude");
+        fs::create_dir_all(claude.join("plugins")).unwrap();
+        fs::write(claude.join("settings.json"), r#"{"enabledPlugins":{"far@m":true}}"#).unwrap();
+        let installed = serde_json::json!({"version":2,"plugins":{"far@m":[{"scope":"user","installPath":far}]}});
+        fs::write(claude.join("plugins").join("installed_plugins.json"), installed.to_string()).unwrap();
+        // A Codex plugin version whose skills folder links to a share.
+        let ver = home.join(".codex").join("plugins").join("cache").join("m").join("tools").join("1.0");
+        fs::create_dir_all(&ver).unwrap();
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_dir(far.join("skills"), ver.join("skills")).is_ok();
+        #[cfg(not(windows))]
+        let made = std::os::unix::fs::symlink(far.join("skills"), ver.join("skills")).is_ok();
+        let s = run(spots(&env(&home), None), &[], ROOT_LIMIT);
+        assert!(s.skills.is_empty(), "{:?}", s.skills.iter().map(|k| &k.path).collect::<Vec<_>>());
+        let plugin = s.roots.iter().find(|r| r.label == "Claude plugin: far").unwrap();
+        assert_eq!(plugin.state, "not-scanned");
+        if !made {
+            eprintln!("skipped the link halves: this account cannot make symbolic links");
+            return;
+        }
+        // A home folder whose parent is a link to a share: the skills folder under it is not opened.
+        let home2 = temp("skills-unc-parent");
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&far, home2.join(".claude")).unwrap();
+        #[cfg(not(windows))]
+        std::os::unix::fs::symlink(&far, home2.join(".claude")).unwrap();
+        let s = run(spots(&env(&home2), None), &[], ROOT_LIMIT);
+        assert!(s.skills.is_empty());
+        assert_eq!(s.roots.iter().find(|r| r.label == "Claude Code").unwrap().state, "not-scanned");
     }
 }

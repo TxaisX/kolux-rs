@@ -140,7 +140,7 @@ export function FontField({ label, value, placeholder, onPick }: { label: string
         onBlur={() => commit(text)}
       />
       {open && shown.length > 0 && (
-        <div className="font-list" role="listbox" aria-label={`${label} suggestions`}>
+        <div className="font-list" role="listbox" data-popup aria-label={`${label} suggestions`}>
           {shown.map((f) => (
             <button key={f} type="button" role="option" aria-selected={f === value} tabIndex={-1} style={{ fontFamily: fontStack(f, "var(--ui-font)") }} onMouseDown={(e) => e.preventDefault()} onClick={() => commit(f)}>
               {f}

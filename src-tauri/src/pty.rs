@@ -299,6 +299,14 @@ pub struct PtySession {
     job: Option<crate::procs::Job>,
 }
 
+/// Council FS 2 on ACCT-046: when a shell earlier in the list did not start, the pane opens with
+/// one dim line naming it and the shell that opened instead, so a fallback is never silent.
+fn fallback_note(failed: &[(String, String)], opened: &str) -> Option<String> {
+    let name = |p: &str| Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.to_string());
+    let (first, _) = failed.first()?;
+    Some(format!("\x1b[2m{} did not start; opened {}\x1b[0m\r\n", name(first), name(opened)))
+}
+
 impl PtySession {
     /// Spawns `cmd` in a fresh PTY of `cols` x `rows`. `on_output` receives every chunk the program
     /// prints; `on_exit` runs once with the exit code when the program ends.
@@ -343,6 +351,7 @@ impl PtySession {
             });
         };
         drop(pair.slave);
+        let note = fallback_note(&failed, &program);
         let killer = child.clone_killer();
         let pid = child.process_id();
         let job = crate::procs::pane_job(&*child);
@@ -352,6 +361,9 @@ impl PtySession {
         thread::Builder::new()
             .name("pty-reader".into())
             .spawn(move || {
+                if let Some(n) = note {
+                    on_output(n.as_bytes());
+                }
                 let mut buf = [0u8; 8192];
                 loop {
                     match reader.read(&mut buf) {
@@ -510,7 +522,13 @@ mod tests {
             let _ = tx.send(c.to_vec());
         }, |_| {})
         .expect("a missing default shell falls back to an automatic one");
-        assert!(rx.recv_timeout(Duration::from_secs(30)).is_ok(), "the fallback shell prints");
+        // Council FS 2: the pane says, in one dim line, which shell did not start and which opened.
+        let first = rx.recv_timeout(Duration::from_secs(30)).expect("the fallback shell prints");
+        let note = String::from_utf8_lossy(&first).to_string();
+        assert!(note.starts_with("\x1b[2mkolux-rs-no-such-default-shell-9c1d did not start; opened "), "{note:?}");
+        assert!(note.ends_with("\x1b[0m\r\n") && note.matches('\n').count() == 1, "{note:?}");
+        let opened = Path::new(session.program()).file_name().unwrap().to_string_lossy().to_string();
+        assert!(note.contains(&opened), "{note:?} names {opened}");
         session.kill();
     }
 

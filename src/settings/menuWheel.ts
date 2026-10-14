@@ -16,15 +16,29 @@ export function wheelTarget(start: Box, dy: number): Box | null {
   return null;
 }
 
-/** Menus, pickers and listboxes the rule covers. */
-export const MENU_SELECTOR = '[role="menu"], [role="listbox"], .menu, .picker, .ws-sheet';
+/** The floating surfaces the rule covers: menus, pickers, sheets, and listboxes marked as popups.
+ *  An inline listbox (a run list on a page) is not one: the wheel over it scrolls its page. */
+export const MENU_SELECTOR = '[role="menu"], [role="listbox"][data-popup], .menu, .picker, .ws-sheet';
 
-type El = HTMLElement;
-const box = (el: El, menu: El): Box => {
+/** What the rule reads from an element; a DOM element is one, SVG icons included. */
+export type El = {
+  closest(selector: string): El | null;
+  parentElement: El | null;
+  scrollTop: number;
+  readonly scrollHeight: number;
+  readonly clientHeight: number;
+};
+/** The wheel event fields the rule reads. */
+export type Wheel = { target: unknown; deltaX: number; deltaY: number; deltaMode: number; ctrlKey: boolean; defaultPrevented: boolean; preventDefault(): void };
+type Style = (el: El) => { overflowY: string };
+
+const isEl = (t: unknown): t is El => typeof t === "object" && t !== null && typeof (t as El).closest === "function";
+
+const box = (el: El, menu: El, style: Style): Box => {
   const parent = el === menu || !el.parentElement ? null : el.parentElement;
   return {
     get overflowY() {
-      return getComputedStyle(el).overflowY;
+      return style(el).overflowY;
     },
     get scrollTop() {
       return el.scrollTop;
@@ -36,7 +50,7 @@ const box = (el: El, menu: El): Box => {
       return el.clientHeight;
     },
     get parent() {
-      return parent ? box(parent, menu) : null;
+      return parent ? box(parent, menu, style) : null;
     },
     el,
   } as Box & { el: El };
@@ -45,19 +59,24 @@ const box = (el: El, menu: El): Box => {
 /** Lines and pages in pixels, for wheels that report in those units. */
 export const pixels = (dy: number, mode: number, page = 600) => (mode === 1 ? dy * 16 : mode === 2 ? dy * page : dy);
 
+/** One wheel event: inside a floating surface the rule decides what moves; anywhere else the
+ *  browser's own scrolling is left alone. */
+export function onMenuWheel(e: Wheel, style: Style): void {
+  if (e.defaultPrevented || e.ctrlKey || !isEl(e.target)) return;
+  const start = e.target;
+  const menu = start.closest(MENU_SELECTOR);
+  if (!menu) return;
+  const dy = pixels(e.deltaY, e.deltaMode, menu.clientHeight);
+  if (Math.abs(e.deltaX) > Math.abs(dy)) return;
+  const hit = wheelTarget(box(start, menu, style), dy) as (Box & { el: El }) | null;
+  e.preventDefault();
+  if (hit) hit.el.scrollTop += dy;
+}
+
 /** Installs the rule on a document once; returns the uninstall. */
 export function installMenuWheel(doc: Document): () => void {
-  const on = (e: WheelEvent) => {
-    if (e.defaultPrevented || e.ctrlKey) return;
-    const start = e.target instanceof HTMLElement ? e.target : null;
-    const menu = start?.closest<HTMLElement>(MENU_SELECTOR);
-    if (!start || !menu) return;
-    const dy = pixels(e.deltaY, e.deltaMode, menu.clientHeight);
-    if (Math.abs(e.deltaX) > Math.abs(dy)) return;
-    const hit = wheelTarget(box(start, menu), dy) as (Box & { el: El }) | null;
-    e.preventDefault();
-    if (hit) hit.el.scrollTop += dy;
-  };
+  const style: Style = (el) => getComputedStyle(el as unknown as Element);
+  const on = (e: WheelEvent) => onMenuWheel(e, style);
   doc.addEventListener("wheel", on, { passive: false });
   return () => doc.removeEventListener("wheel", on);
 }
