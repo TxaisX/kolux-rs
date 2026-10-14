@@ -53,6 +53,9 @@ pub struct Track {
     pub pane: u32,
     pub marks: Vec<Mark>,
     pub ended: Option<u64>,
+    /// T-260-c FIX-1: the terminal whose exit ended the lane; only its late states are dropped.
+    #[serde(skip)]
+    pub ended_terminal: Option<u32>,
     /// The terminal the pane runs in and whether that terminal is still open (filled by the command).
     pub terminal: Option<u32>,
     pub live: bool,
@@ -81,8 +84,13 @@ impl Activity {
     /// A pane's resolved state changed. Working opens a turn once (a repeated working state, as
     /// after a reconnect, starts nothing); waiting, permission and blocked close the working stretch
     /// but keep the turn; done and interrupted end it.
-    pub fn note(&mut self, pane: u32, state: &str, now: u64) {
-        self.mark(pane, state, now);
+    /// `terminal` is the terminal the state came from, when known. T-260-c FIX-1: a state from the
+    /// terminal that ended the pane's lane (a hook still in flight), or from an unknown terminal
+    /// after the end, changes nothing at all: no mark, no turn, no working stretch.
+    pub fn note(&mut self, pane: u32, terminal: Option<u32>, state: &str, now: u64) {
+        if !self.mark(pane, terminal, state, now) {
+            return;
+        }
         let o = self.open.entry(pane).or_default();
         if state == "working" {
             if !o.turn {
@@ -105,22 +113,28 @@ impl Activity {
     /// VIEW-013: a state change on the pane's timeline; a repeat of the current state adds nothing.
     /// Marks older than the reach go, except the last of them, which says what the pane was doing
     /// when the reach begins.
-    fn mark(&mut self, pane: u32, state: &str, now: u64) {
+    /// False when the state is dropped: the lane ended and the state comes from the terminal that
+    /// ended it or from an unknown one. A state from another terminal (TERM-111 Restart, or Enter
+    /// after exit, on the same pane key) reopens the lane.
+    fn mark(&mut self, pane: u32, terminal: Option<u32>, state: &str, now: u64) -> bool {
         self.trim(now);
         let t = self.tracks.entry(pane).or_insert_with(|| Track { pane, ..Track::default() });
-        // T-260-c: a state that arrives after its pane closed (a hook still in flight) never
-        // reopens or extends the lane; the turn counts (USAGE-011) still see it.
         if t.ended.is_some() {
-            return;
+            if terminal.is_none() || terminal == t.ended_terminal {
+                return false;
+            }
+            t.ended = None;
+            t.ended_terminal = None;
         }
         if t.marks.last().is_some_and(|m| m.state == state) {
-            return;
+            return true;
         }
         t.marks.push(Mark { at: now, state: state.to_string() });
         let cut = now.saturating_sub(TIMELINE_MS);
         let old = t.marks.iter().take_while(|m| m.at < cut).count();
         let drop = old.saturating_sub(1).max(t.marks.len().saturating_sub(TIMELINE_MARKS));
         t.marks.drain(..drop);
+        true
     }
 
     /// VIEW-013: every pane's lane as of `now`; a pane that closed before the reach is left out.
@@ -142,14 +156,18 @@ impl Activity {
         self.dirty = true;
     }
 
-    /// The pane closed: any turn it had open ends now.
-    pub fn end(&mut self, pane: u32, now: u64) {
-        self.note(pane, "done", now);
+    /// The pane closed with its terminal: any turn it had open ends now. The trim of old closed
+    /// lanes runs in the mark the closing "done" goes through.
+    pub fn end(&mut self, pane: u32, terminal: Option<u32>, now: u64) {
+        self.note(pane, terminal, "done", now);
         self.open.remove(&pane);
         if let Some(t) = self.tracks.get_mut(&pane) {
-            t.ended.get_or_insert(now); // a second close keeps the first time
+            if t.ended.is_none() {
+                // a second close keeps the first time and terminal
+                t.ended = Some(now);
+                t.ended_terminal = terminal;
+            }
         }
-        self.trim(now);
     }
 
     /// The counts as of `now`, open working stretches included.
@@ -167,7 +185,7 @@ impl Activity {
         if at_quit {
             let panes: Vec<u32> = self.open.keys().copied().collect();
             for pane in panes {
-                self.end(pane, now);
+                self.end(pane, None, now); // the app is quitting: no terminal outlives it
             }
             self.closed = true;
         } else if !self.dirty {
@@ -195,14 +213,24 @@ pub fn start(store: &Store) {
     with(|a| *a = Activity::load(saved.as_deref(), now_ms()));
 }
 
+/// A pane state from `terminal` (the terminal the pane's hooks last reported for, when known).
+// Called from status.rs once evidence/automations-FIX-1-status.patch lands (hooks lane owns status.rs).
+pub fn note_from(pane: u32, terminal: Option<u32>, state: &str) {
+    with(|a| a.note(pane, terminal, state, now_ms()));
+}
+
+/// The call shape status.rs uses until that patch lands: the terminal is unknown, so a state that
+/// arrives after the pane's lane ended is dropped and a Restart on the same key does not reopen it
+/// yet. Remove this once no caller is left.
+#[allow(dead_code)]
 pub fn note(pane: u32, state: &str) {
-    with(|a| a.note(pane, state, now_ms()));
+    note_from(pane, None, state);
 }
 
 /// The terminal ended: the panes its hooks reported for end their turns.
 pub fn terminal_ended(terminal: u32) {
     let panes = crate::status::panes_of(terminal);
-    with(|a| panes.into_iter().for_each(|p| a.end(p, now_ms())));
+    with(|a| panes.into_iter().for_each(|p| a.end(p, Some(terminal), now_ms())));
 }
 
 /// Writes the counts when they changed (every few seconds) or at quit.
@@ -278,12 +306,12 @@ mod tests {
     fn view013_each_pane_keeps_its_state_changes_for_the_floor_and_old_ones_go() {
         let mut a = Activity::load(None, 1);
         let h = 3_600_000;
-        a.note(3, "working", 10 * h);
-        a.note(3, "working", 10 * h + 5); // a restated state adds nothing
-        a.note(3, "permission", 11 * h);
-        a.note(3, "working", 11 * h + 300_000); // blocked on approval for 5 minutes
-        a.note(4, "waiting", 12 * h);
-        a.end(4, 13 * h);
+        a.note(3, Some(3), "working", 10 * h);
+        a.note(3, Some(3), "working", 10 * h + 5); // a restated state adds nothing
+        a.note(3, Some(3), "permission", 11 * h);
+        a.note(3, Some(3), "working", 11 * h + 300_000); // blocked on approval for 5 minutes
+        a.note(4, Some(4), "waiting", 12 * h);
+        a.end(4, Some(4), 13 * h);
         let lanes = a.timeline(13 * h);
         let marks: Vec<(u64, &str)> = lanes[0].marks.iter().map(|m| (m.at, m.state.as_str())).collect();
         assert_eq!(marks, vec![(10 * h, "working"), (11 * h, "permission"), (11 * h + 300_000, "working")]);
@@ -291,14 +319,14 @@ mod tests {
         // A day later (the reach starts at 11:00:00.001): pane 3's older changes go but the last one
         // before the reach stays (it says what the pane was
         // doing when the reach begins); pane 4 closed before the reach and leaves the Floor.
-        a.note(3, "done", 37 * h + 1);
+        a.note(3, Some(3), "done", 37 * h + 1);
         let lanes = a.timeline(40 * h);
         assert_eq!(lanes.len(), 1);
         let marks: Vec<(u64, &str)> = lanes[0].marks.iter().map(|m| (m.at, m.state.as_str())).collect();
         assert_eq!(marks, vec![(11 * h, "permission"), (11 * h + 300_000, "working"), (37 * h + 1, "done")]);
         // T-260-c: a state reported after the pane closed never reopens its lane.
-        a.end(3, 40 * h);
-        a.note(3, "working", 40 * h + 1);
+        a.end(3, Some(3), 40 * h);
+        a.note(3, Some(3), "working", 40 * h + 1);
         assert_eq!(a.timeline(40 * h + 2)[0].ended, Some(40 * h));
     }
 
@@ -306,47 +334,115 @@ mod tests {
     fn t260c_ended_lanes_go_as_they_are_written_and_a_late_state_changes_nothing() {
         let mut a = Activity::load(None, 1);
         let h = 3_600_000;
-        a.note(1, "working", h);
-        a.end(1, 2 * h);
+        a.note(1, Some(1), "working", h);
+        a.end(1, Some(1), 2 * h);
         // A hook still in flight after the pane closed: no mark, no reopened lane.
-        a.note(1, "working", 2 * h + 50);
-        a.note(1, "done", 2 * h + 60);
+        a.note(1, Some(1), "working", 2 * h + 50);
+        a.note(1, Some(1), "done", 2 * h + 60);
         assert_eq!(a.tracks[&1].ended, Some(2 * h));
         assert_eq!(a.tracks[&1].marks.last().map(|m| m.state.as_str()), Some("done"));
         // Past the reach, another pane's mark drops the closed lane without the Floor ever reading.
-        a.note(2, "working", 2 * h + TIMELINE_MS + 1);
+        a.note(2, Some(2), "working", 2 * h + TIMELINE_MS + 1);
         assert!(!a.tracks.contains_key(&1));
-        // And so does a pane closing.
-        a.note(3, "working", 30 * h);
-        a.end(2, 60 * h);
-        a.end(3, 60 * h + 1);
+        // Two more lanes close; a mark a day and more later drops both.
+        a.note(3, Some(3), "working", 30 * h);
+        a.end(2, Some(2), 60 * h);
+        a.end(3, Some(3), 60 * h + 1);
         assert_eq!(a.tracks.keys().copied().collect::<Vec<_>>(), vec![2, 3]);
-        a.note(5, "working", 2 * 60 * h);
+        a.note(5, Some(5), "working", 2 * 60 * h);
         assert_eq!(a.tracks.keys().copied().collect::<Vec<_>>(), vec![5]);
+    }
+
+    // T-260-c FIX-1 tests go through these two, so the same scenarios can be run on the old code.
+    fn hook(a: &mut Activity, pane: u32, term: Option<u32>, state: &str, now: u64) {
+        a.note(pane, term, state, now);
+    }
+
+    fn close(a: &mut Activity, pane: u32, term: Option<u32>, now: u64) {
+        a.end(pane, term, now);
+    }
+
+    fn last(a: &Activity, pane: u32) -> Option<(u64, &str)> {
+        a.tracks[&pane].marks.last().map(|m| (m.at, m.state.as_str()))
+    }
+
+    #[test]
+    fn t260c_fix1_a_restart_on_the_same_key_reopens_the_lane_and_the_ended_terminal_changes_nothing() {
+        let mut a = Activity::load(None, 1);
+        let h = 3_600_000;
+        hook(&mut a, 7, Some(3), "working", h);
+        close(&mut a, 7, Some(3), 2 * h);
+        // A hook still in flight from terminal 3, and a state from no known terminal: dropped.
+        hook(&mut a, 7, Some(3), "working", 2 * h + 10);
+        hook(&mut a, 7, None, "working", 2 * h + 20);
+        assert_eq!((a.tracks[&7].ended, last(&a, 7)), (Some(2 * h), Some((2 * h, "done"))));
+        // TERM-111 Restart (or Enter after exit) runs a new terminal 4 on the same pane key.
+        hook(&mut a, 7, Some(4), "working", 3 * h);
+        assert_eq!((a.tracks[&7].ended, last(&a, 7)), (None, Some((3 * h, "working"))));
+        assert_eq!(a.timeline(3 * h + 1)[0].ended, None, "the Floor shows lane 7 open again");
+        close(&mut a, 7, Some(4), 4 * h);
+        assert_eq!(a.tracks[&7].ended, Some(4 * h));
+    }
+
+    #[test]
+    fn t260c_fix1_a_late_state_from_the_ended_terminal_leaves_the_counts_alone() {
+        let mut a = Activity::load(None, 1);
+        hook(&mut a, 1, Some(3), "working", 0);
+        close(&mut a, 1, Some(3), 1_000);
+        let before = a.snapshot(1_000);
+        assert_eq!((before.agents_started, before.working_ms), (1, 1_000));
+        hook(&mut a, 1, Some(3), "working", 1_050);
+        assert_eq!(a.snapshot(500_000), before, "no extra turn and no stretch left running");
+        hook(&mut a, 1, Some(3), "done", 1_100);
+        assert!(!a.open.contains_key(&1), "a late done leaves no open entry behind");
+        assert_eq!(a.take_save(true, 900_000).map(|s| Activity::load(Some(&s), 1).counts), Some(before), "the quit save banks nothing extra");
+    }
+
+    #[test]
+    fn t260c_fix1_a_second_close_keeps_the_first_time_and_adds_no_mark() {
+        let mut a = Activity::load(None, 1);
+        let h = 3_600_000;
+        hook(&mut a, 2, Some(5), "working", h);
+        close(&mut a, 2, Some(5), 2 * h);
+        close(&mut a, 2, Some(5), 3 * h);
+        let marks: Vec<(u64, &str)> = a.tracks[&2].marks.iter().map(|m| (m.at, m.state.as_str())).collect();
+        assert_eq!((a.tracks[&2].ended, marks), (Some(2 * h), vec![(h, "working"), (2 * h, "done")]));
+    }
+
+    #[test]
+    fn t260c_fix1_closing_a_pane_alone_drops_lanes_that_closed_before_the_reach() {
+        let mut a = Activity::load(None, 1);
+        let h = 3_600_000;
+        hook(&mut a, 1, Some(1), "working", h);
+        close(&mut a, 1, Some(1), 2 * h);
+        hook(&mut a, 2, Some(2), "working", 2 * h);
+        // The only write past the reach is pane 2's close; no other mark and no Floor read.
+        close(&mut a, 2, Some(2), 2 * h + TIMELINE_MS + 1);
+        assert_eq!(a.tracks.keys().copied().collect::<Vec<_>>(), vec![2]);
     }
 
     #[test]
     fn usage_011_two_turns_with_a_reconnect_count_two() {
         let mut a = Activity::load(None, 1);
-        a.note(7, "working", 1_000);
-        a.note(7, "working", 2_000); // the same turn restated after a reconnect
-        a.note(7, "done", 4_000);
-        a.note(7, "working", 10_000);
-        a.note(7, "working", 11_000);
-        a.note(7, "done", 13_000);
+        a.note(7, Some(7), "working", 1_000);
+        a.note(7, Some(7), "working", 2_000); // the same turn restated after a reconnect
+        a.note(7, Some(7), "done", 4_000);
+        a.note(7, Some(7), "working", 10_000);
+        a.note(7, Some(7), "working", 11_000);
+        a.note(7, Some(7), "done", 13_000);
         assert_eq!((a.counts.agents_started, a.counts.working_ms), (2, 6_000));
     }
 
     #[test]
     fn usage_011_waiting_closes_a_stretch_without_starting_another_turn() {
         let mut a = Activity::load(None, 1);
-        a.note(1, "working", 0);
-        a.note(1, "permission", 1_000);
-        a.note(1, "waiting", 50_000); // waiting adds no working time
-        a.note(1, "working", 60_000);
-        a.note(1, "blocked", 61_000);
-        a.note(1, "working", 70_000);
-        a.note(1, "interrupted", 72_000);
+        a.note(1, Some(1), "working", 0);
+        a.note(1, Some(1), "permission", 1_000);
+        a.note(1, Some(1), "waiting", 50_000); // waiting adds no working time
+        a.note(1, Some(1), "working", 60_000);
+        a.note(1, Some(1), "blocked", 61_000);
+        a.note(1, Some(1), "working", 70_000);
+        a.note(1, Some(1), "interrupted", 72_000);
         assert_eq!((a.counts.agents_started, a.counts.working_ms), (1, 4_000));
         assert_eq!(a.snapshot(99_000).working_ms, 4_000, "nothing open");
     }
@@ -354,11 +450,11 @@ mod tests {
     #[test]
     fn usage_011_closing_a_pane_ends_its_turn_and_open_time_shows_live() {
         let mut a = Activity::load(None, 1);
-        a.note(1, "working", 0);
-        a.note(2, "working", 0);
+        a.note(1, Some(1), "working", 0);
+        a.note(2, Some(2), "working", 0);
         assert_eq!(a.snapshot(5_000).working_ms, 10_000);
-        a.end(1, 5_000);
-        a.note(1, "working", 6_000); // a new pane on the same key is a new turn
+        a.end(1, Some(1), 5_000);
+        a.note(1, Some(11), "working", 6_000); // a new program on the same key (its own terminal) is a new turn
         assert_eq!(a.counts.agents_started, 3);
     }
 
@@ -377,10 +473,10 @@ mod tests {
         let mut a = Activity::load(None, 42);
         assert!(a.take_save(false, 42).is_some(), "a fresh start is saved with its date");
         assert!(a.take_save(false, 43).is_none(), "nothing changed, nothing written");
-        a.note(1, "working", 100);
+        a.note(1, Some(1), "working", 100);
         a.counts.prs_created = 1;
         let at_quit = a.take_save(true, 400).unwrap();
-        a.note(1, "working", 500);
+        a.note(1, Some(1), "working", 500);
         assert!(a.take_save(false, 600).is_none(), "a save still pending never follows the one at quit");
         let back = Activity::load(Some(&at_quit), 9_999);
         assert_eq!(back.counts, Counts { since: 42, agents_started: 1, working_ms: 300, prs_created: 1 });
