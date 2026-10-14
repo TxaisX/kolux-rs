@@ -68,7 +68,9 @@ export function chipOf(s: Signal, now: number): Chip | null {
   if (s.running === false && s.state !== "done") return chip("stopped", "Stopped", "Exited");
   switch (s.state) {
     case "permission":
-      return { ...chip("needs", "Needs you", step || "Permission"), answer: true };
+      // T-124-c: Approve/Deny only answer a hook PermissionRequest, which names its pending tool; a
+      // permission printed in band (OSC 9999) names nothing to answer, so it needs you without buttons.
+      return { ...chip("needs", "Needs you", step || "Permission"), answer: Boolean(s.tool) };
     case "waiting":
       // STAT-027: every question asked, on the one line the card has (its tooltip carries the same text).
       return chip("needs", "Needs you", askLine(s.ask) || step || "Question");
@@ -84,8 +86,9 @@ export function chipOf(s: Signal, now: number): Chip | null {
     case "queued":
       return chip("working", "Queued", since);
     default:
-      // A stale working signal never shows Working.
-      if (s.stale) return chip("working", "No recent update", since ? `${since} without output` : "");
+      // A stale working signal never shows Working. It says what is missing, the status: a long tool
+      // can stream output all along (T-124-c).
+      if (s.stale) return chip("working", "No recent update", since ? `no status for ${since}` : "");
       if (s.monitoring) return chip("working", "Working", "Watching background tasks");
       return chip("working", "Working", [since, step].filter(Boolean).join(" · "));
   }

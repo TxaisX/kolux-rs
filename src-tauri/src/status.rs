@@ -272,7 +272,15 @@ impl Session {
         if after != before {
             self.remember(after);
         }
-        Some((Change { state: after, ..Change::default() }, announce))
+        // T-124-c: a child's hook permission names its pending tool, which is what lets the card answer it.
+        let tool = (after == "permission").then(|| self.children.iter().find(|c| c.state == "permission").and_then(|c| c.pending.clone())).flatten();
+        Some((Change { state: after, tool, ..Change::default() }, announce))
+    }
+
+    /// T-124-c: a hook PermissionRequest stands, the lead's or a child's, naming the tool it waits on.
+    /// A permission printed in band (OSC 9999) names none, so there is nothing for a card to answer.
+    pub fn answerable(&self) -> bool {
+        (self.own == Some("permission") && self.pending.is_some()) || self.children.iter().any(|c| c.state == "permission" && c.pending.is_some())
     }
 
     fn apply_lead(&mut self, agent: Agent, name: &str, event: &Value) -> Option<(Change, Option<String>)> {
@@ -499,7 +507,12 @@ pub fn agent_answer(terminals: tauri::State<'_, crate::terminal::Terminals>, pan
         "codex" => Agent::Codex,
         _ => return Err("not an agent pane".into()),
     };
-    let terminal = with_sessions(|s| s.get(&pane_key).and_then(|x| x.terminal)).ok_or("no session for this pane")?;
+    let (terminal, answerable) = with_sessions(|s| s.get(&pane_key).map(|x| (x.terminal, x.answerable()))).ok_or("no session for this pane")?;
+    let terminal = terminal.ok_or("no session for this pane")?;
+    // T-124-c: keys are typed only for a hook permission; an in-band one has nothing to answer.
+    if !answerable {
+        return Err("no hook permission to answer".into());
+    }
     terminals.write(terminal, answer_keys(agent, approve))?;
     with_sessions(|s| {
         if let Some(x) = s.get_mut(&pane_key) {
@@ -1121,6 +1134,25 @@ mod tests {
         s.cancel();
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_use_id":"tu9","error":"exit 1"}"#), Some("working"));
         assert!(!s.cancelled && !s.settle_cancel(u64::MAX));
+    }
+
+    #[test]
+    fn t124c_an_in_band_permission_has_nothing_to_answer_and_a_hook_one_names_its_tool() {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"build"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#);
+        assert_eq!(s.inband("permission").state, "permission");
+        assert!(!s.answerable(), "an OSC 9999 permission names no tool to answer");
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"cargo build"}}"#)).unwrap();
+        assert_eq!((c.state, c.tool.as_deref()), ("permission", Some("Bash")));
+        assert!(s.answerable());
+        s.answered();
+        assert!(!s.answerable());
+        // A child's hook permission carries its tool on the lead's change, so the card can answer it.
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"k","agent_type":"w"}"#);
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PermissionRequest","agent_id":"k","tool_name":"Write","tool_input":{"file_path":"a.txt"}}"#)).unwrap();
+        assert_eq!((c.state, c.tool.as_deref()), ("permission", Some("Write")));
+        assert!(s.answerable());
     }
 
     #[test]
