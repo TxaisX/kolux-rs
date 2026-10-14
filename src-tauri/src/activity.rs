@@ -37,6 +37,8 @@ struct Open {
 pub const TIMELINE_MS: u64 = 26 * 3_600_000;
 /// The state changes one pane keeps for the timeline.
 const TIMELINE_MARKS: usize = 500;
+/// The closed terminals one pane remembers; terminal ids are never reused within a run.
+const RETIRED_KEEP: usize = 16;
 
 /// VIEW-013: one change of a pane's state, as the Floor timeline draws it.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -53,9 +55,10 @@ pub struct Track {
     pub pane: u32,
     pub marks: Vec<Mark>,
     pub ended: Option<u64>,
-    /// T-260-c FIX-1: the terminal whose exit ended the lane; only its late states are dropped.
+    /// T-260-c FIX-2: the terminal the lane last took a state from; a close with no terminal (the
+    /// quit) retires this one.
     #[serde(skip)]
-    pub ended_terminal: Option<u32>,
+    pub source: Option<u32>,
     /// The terminal the pane runs in and whether that terminal is still open (filled by the command).
     pub terminal: Option<u32>,
     pub live: bool,
@@ -67,6 +70,11 @@ pub struct Activity {
     open: HashMap<u32, Open>,
     /// VIEW-013: each pane's recent state changes, kept in memory only.
     tracks: BTreeMap<u32, Track>,
+    /// T-260-c FIX-2: per pane, the terminals whose exit closed its lane, newest last. Their late
+    /// states are dropped while the lane is ended, after another terminal reopened it, and after the
+    /// lane itself went past the reach (so a straggler never brings a dropped lane back).
+    // ponytail: one entry per pane key ever closed, each capped at RETIRED_KEEP terminals.
+    retired: HashMap<u32, Vec<u32>>,
     dirty: bool,
     /// The save at quit went out; nothing still pending may follow it.
     closed: bool,
@@ -84,9 +92,10 @@ impl Activity {
     /// A pane's resolved state changed. Working opens a turn once (a repeated working state, as
     /// after a reconnect, starts nothing); waiting, permission and blocked close the working stretch
     /// but keep the turn; done and interrupted end it.
-    /// `terminal` is the terminal the state came from, when known. T-260-c FIX-1: a state from the
-    /// terminal that ended the pane's lane (a hook still in flight), or from an unknown terminal
-    /// after the end, changes nothing at all: no mark, no turn, no working stretch.
+    /// `terminal` is the terminal the state came from, when known. T-260-c FIX-1/FIX-2: a state from
+    /// a terminal that closed the pane's lane (a hook still in flight, even after a Restart reopened
+    /// the lane), or from an unknown terminal after the end, changes nothing at all: no mark, no
+    /// turn, no working stretch.
     pub fn note(&mut self, pane: u32, terminal: Option<u32>, state: &str, now: u64) {
         if !self.mark(pane, terminal, state, now) {
             return;
@@ -113,18 +122,29 @@ impl Activity {
     /// VIEW-013: a state change on the pane's timeline; a repeat of the current state adds nothing.
     /// Marks older than the reach go, except the last of them, which says what the pane was doing
     /// when the reach begins.
-    /// False when the state is dropped: the lane ended and the state comes from the terminal that
-    /// ended it or from an unknown one. A state from another terminal (TERM-111 Restart, or Enter
-    /// after exit, on the same pane key) reopens the lane.
+    /// False when the state is dropped: it comes from a terminal whose exit closed this pane's lane
+    /// (open again or not), or from an unknown terminal while the lane is ended or gone past the
+    /// reach. A state from another terminal (TERM-111 Restart, or Enter after exit, on the same pane
+    /// key) reopens the lane, or starts a new one when the old lane went past the reach.
     fn mark(&mut self, pane: u32, terminal: Option<u32>, state: &str, now: u64) -> bool {
         self.trim(now);
-        let t = self.tracks.entry(pane).or_insert_with(|| Track { pane, ..Track::default() });
+        if self.retired_from(pane, terminal) {
+            return false;
+        }
+        let gone = self.retired.contains_key(&pane);
+        let t = match self.tracks.entry(pane) {
+            std::collections::btree_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::btree_map::Entry::Vacant(_) if gone && terminal.is_none() => return false,
+            std::collections::btree_map::Entry::Vacant(e) => e.insert(Track { pane, ..Track::default() }),
+        };
         if t.ended.is_some() {
-            if terminal.is_none() || terminal == t.ended_terminal {
+            if terminal.is_none() {
                 return false;
             }
             t.ended = None;
-            t.ended_terminal = None;
+        }
+        if terminal.is_some() {
+            t.source = terminal;
         }
         if t.marks.last().is_some_and(|m| m.state == state) {
             return true;
@@ -156,18 +176,35 @@ impl Activity {
         self.dirty = true;
     }
 
-    /// The pane closed with its terminal: any turn it had open ends now. The trim of old closed
+    /// The pane closed with its terminal: any turn it had open ends now, and the terminal (or, with
+    /// none given, the one the lane last heard from) is retired for this pane. A close from a
+    /// terminal already retired changes nothing; a second close of an ended lane from another
+    /// terminal keeps the first time and only retires that terminal too. The trim of old closed
     /// lanes runs in the mark the closing "done" goes through.
     pub fn end(&mut self, pane: u32, terminal: Option<u32>, now: u64) {
-        self.note(pane, terminal, "done", now);
-        self.open.remove(&pane);
-        if let Some(t) = self.tracks.get_mut(&pane) {
-            if t.ended.is_none() {
-                // a second close keeps the first time and terminal
+        if self.retired_from(pane, terminal) {
+            return;
+        }
+        let ended = self.tracks.get(&pane).map_or(self.retired.contains_key(&pane), |t| t.ended.is_some());
+        let retire = terminal.or_else(|| self.tracks.get(&pane).and_then(|t| t.source));
+        if !ended {
+            self.note(pane, terminal, "done", now);
+            self.open.remove(&pane);
+            if let Some(t) = self.tracks.get_mut(&pane) {
                 t.ended = Some(now);
-                t.ended_terminal = terminal;
             }
         }
+        if let Some(term) = retire {
+            let r = self.retired.entry(pane).or_default();
+            r.push(term);
+            let over = r.len().saturating_sub(RETIRED_KEEP);
+            r.drain(..over);
+        }
+    }
+
+    /// The state or close comes from a terminal whose exit already closed this pane's lane.
+    fn retired_from(&self, pane: u32, terminal: Option<u32>) -> bool {
+        terminal.is_some_and(|t| self.retired.get(&pane).is_some_and(|r| r.contains(&t)))
     }
 
     /// The counts as of `now`, open working stretches included.
@@ -410,6 +447,97 @@ mod tests {
         // The only write past the reach is pane 2's close; no other mark and no Floor read.
         close(&mut a, 2, Some(2), 2 * h + TIMELINE_MS + 1);
         assert_eq!(a.tracks.keys().copied().collect::<Vec<_>>(), vec![2]);
+    }
+
+    #[test]
+    fn t260c_fix2_a_straggler_from_the_retired_terminal_after_a_reopen_changes_nothing() {
+        let mut a = Activity::load(None, 1);
+        let h = 3_600_000;
+        hook(&mut a, 7, Some(3), "working", h);
+        close(&mut a, 7, Some(3), 2 * h);
+        hook(&mut a, 7, Some(4), "working", 3 * h); // Restart: terminal 4 reopens lane 7
+        // Terminal 3's Stop hook was still in flight and lands 50 ms after the reopen.
+        hook(&mut a, 7, Some(3), "done", 3 * h + 50);
+        assert_eq!((a.tracks[&7].ended, last(&a, 7)), (None, Some((3 * h, "working"))));
+        assert_eq!(a.snapshot(4 * h).working_ms, 2 * h, "terminal 4's stretch is still running");
+        // A repeated close from terminal 3 leaves terminal 4's open lane and turn alone too.
+        close(&mut a, 7, Some(3), 3 * h + 60);
+        assert_eq!((a.tracks[&7].ended, a.open.get(&7).is_some_and(|o| o.turn)), (None, true));
+        close(&mut a, 7, Some(4), 4 * h);
+        assert_eq!((a.tracks[&7].ended, a.counts.agents_started, a.counts.working_ms), (Some(4 * h), 2, 2 * h));
+    }
+
+    #[test]
+    fn t260c_fix2_a_second_close_from_another_terminal_keeps_the_first_end_and_retires_both() {
+        let mut a = Activity::load(None, 1);
+        let h = 3_600_000;
+        hook(&mut a, 2, Some(5), "working", h);
+        close(&mut a, 2, Some(5), 2 * h);
+        close(&mut a, 2, Some(6), 3 * h);
+        let marks: Vec<(u64, &str)> = a.tracks[&2].marks.iter().map(|m| (m.at, m.state.as_str())).collect();
+        assert_eq!((a.tracks[&2].ended, marks), (Some(2 * h), vec![(h, "working"), (2 * h, "done")]));
+        hook(&mut a, 2, Some(5), "working", 3 * h + 1);
+        hook(&mut a, 2, Some(6), "working", 3 * h + 2);
+        assert_eq!((a.tracks[&2].ended, a.counts.agents_started), (Some(2 * h), 1), "neither closed terminal reopens the lane");
+    }
+
+    #[test]
+    fn t260c_fix2_quit_ends_the_open_lane_and_its_last_terminal_stays_retired() {
+        let mut a = Activity::load(None, 1);
+        hook(&mut a, 1, Some(4), "working", 0);
+        assert!(a.take_save(true, 1_000).is_some());
+        assert_eq!((a.tracks[&1].ended, last(&a, 1)), (Some(1_000), Some((1_000, "done"))));
+        assert_eq!((a.counts.agents_started, a.counts.working_ms), (1, 1_000));
+        // Hooks that arrive while Kolux is shutting down change nothing.
+        hook(&mut a, 1, Some(4), "working", 2_000);
+        hook(&mut a, 1, None, "working", 2_001);
+        assert_eq!((a.tracks[&1].ended, last(&a, 1), a.snapshot(9_000).working_ms), (Some(1_000), Some((1_000, "done")), 1_000));
+    }
+
+    #[test]
+    fn t260c_fix2_d_a_lane_dropped_after_the_reach_never_comes_back_through_a_late_state() {
+        let mut a = Activity::load(None, 1);
+        let h = 3_600_000;
+        hook(&mut a, 1, Some(1), "working", h);
+        close(&mut a, 1, Some(1), 2 * h);
+        let past = 2 * h + TIMELINE_MS + 1;
+        hook(&mut a, 2, Some(2), "working", past); // drops lane 1
+        assert!(!a.tracks.contains_key(&1));
+        hook(&mut a, 1, Some(1), "working", past + 1);
+        hook(&mut a, 1, None, "working", past + 2);
+        assert!(!a.tracks.contains_key(&1), "a straggler from the closed terminal, or from none, adds no lane");
+        assert_eq!(a.counts.agents_started, 2, "and no turn");
+        hook(&mut a, 1, Some(9), "working", past + 3); // a new program on the same key a day later
+        assert_eq!((a.tracks[&1].ended, a.counts.agents_started), (None, 3));
+    }
+
+    /// The path a Restart takes in the app: hooks through status::report, then terminal.rs's exit
+    /// closure (activity first, then status), then the new terminal's hooks, then a late hook from the old one.
+    #[test]
+    fn t260c_fix2_b_restart_reopens_the_lane_through_status_report_and_a_late_hook_changes_nothing() {
+        const PANE: u32 = 926_007;
+        const OLD: u32 = 926_003;
+        const NEW: u32 = 926_004;
+        let ev = |j: &str| serde_json::from_str::<serde_json::Value>(j).unwrap();
+        let go = ev(r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        let stop = ev(r#"{"hook_event_name":"Stop","last_assistant_message":"built"}"#);
+        let lane = || with(|a| a.tracks.get(&PANE).map(|t| (t.ended.is_some(), t.marks.last().map(|m| m.state.clone()))));
+        let claude = crate::status::Agent::Claude;
+        crate::status::report(PANE, Some(OLD), claude, &go);
+        assert_eq!(lane(), Some((false, Some("working".to_string()))));
+        terminal_ended(OLD);
+        crate::status::terminal_ended(OLD);
+        assert_eq!(lane(), Some((true, Some("done".to_string()))), "the agent exited: lane ended");
+        crate::status::report(PANE, Some(NEW), claude, &go);
+        assert_eq!(lane(), Some((false, Some("working".to_string()))), "Restart: the new terminal reopens the lane");
+        crate::status::report(PANE, Some(OLD), claude, &stop);
+        assert_eq!(lane(), Some((false, Some("working".to_string()))), "the old terminal's late Stop changes nothing");
+        crate::status::terminal_ended(OLD);
+        crate::status::terminal_ended(NEW);
+        with(|a| {
+            a.tracks.remove(&PANE);
+            a.open.remove(&PANE);
+        });
     }
 
     #[test]
