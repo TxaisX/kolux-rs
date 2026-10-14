@@ -62,10 +62,15 @@ describe("message box (CHAT-017, T-327)", () => {
 });
 
 describe("sending into the terminal (CHAT-020, T-327)", () => {
-  it("one line: clear the input line, type it, Enter after a pause", () => {
+  it("one line: clear the input line, paste it, Enter after a pause", () => {
     const s = sendSteps("claude", "fix the test");
-    expect(s.map((x) => x.data)).toEqual(["\x15", "fix the test", "\r"]);
+    expect(s.map((x) => x.data)).toEqual(["\x15", "\x1b[200~fix the test\x1b[201~", "\r"]);
     expect(s[1].waitMs).toBeGreaterThanOrEqual(200);
+  });
+
+  it("a one-line body that starts with a menu key is bracketed, so a menu never reads it as a pick (council FIX-1)", () => {
+    for (const t of ["y", "yes please", "1", "2 then stop", "n"]) expect(sendSteps("claude", t)[1].data).toBe(`\x1b[200~${t}\x1b[201~`);
+    expect(sendSteps("codex", "y")[1].data).toBe("\x1b[200~y\x1b[201~");
   });
 
   it("several lines arrive whole as one bracketed paste", () => {
@@ -97,7 +102,7 @@ describe("sending into the terminal (CHAT-020, T-327)", () => {
     const a = enqueue(41, () => typeSteps(sendSteps("claude", "first"), write, fast));
     const b = enqueue(41, () => typeSteps(sendSteps("claude", "second"), write, fast));
     await Promise.all([a, b]);
-    expect(got).toEqual(["\x15", "first", "\r", "\x15", "second", "\r"]);
+    expect(got).toEqual(["\x15", "\x1b[200~first\x1b[201~", "\r", "\x15", "\x1b[200~second\x1b[201~", "\r"]);
   });
 
   it("a permission or question menu holds every send; working and idle do not (CHAT-022)", () => {
@@ -112,11 +117,11 @@ describe("sending into the terminal (CHAT-020, T-327)", () => {
     const write = async (d: string) => {
       got.push(d);
       // The agent opens its permission menu right after the text went in.
-      if (d === "no, do not run that") state = "permission";
+      if (d.includes("no, do not run that")) state = "permission";
     };
     const done = await typeSteps(sendSteps("claude", "no, do not run that"), write, () => Promise.resolve(), () => asksInTerminal(state));
     expect(done).toBe(false);
-    expect(got).toEqual(["\x15", "no, do not run that"]);
+    expect(got).toEqual(["\x15", "\x1b[200~no, do not run that\x1b[201~"]);
     expect(got).not.toContain("\r");
   });
 
@@ -126,7 +131,7 @@ describe("sending into the terminal (CHAT-020, T-327)", () => {
     expect(await typeSteps(sendSteps("codex", "hello"), write, () => Promise.resolve(), () => true)).toBe(false);
     expect(got).toEqual([]);
     expect(await typeSteps(sendSteps("codex", "hello"), write, () => Promise.resolve(), () => false)).toBe(true);
-    expect(got).toEqual(["\x15", "hello", "\r"]);
+    expect(got).toEqual(["\x15", "\x1b[200~hello\x1b[201~", "\r"]);
   });
 
   it("a failed send rejects, and the next send to that terminal still runs", async () => {

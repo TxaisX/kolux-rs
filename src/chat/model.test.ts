@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { applyRead, chatOffer, combine, pickChat, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type OfferInput } from "./model";
+import { applyRead, chatOffer, combine, pickChat, typingInto, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type OfferInput } from "./model";
 
 const base: OfferInput = { credited: "claude", screen: "agents", switchOn: false, showingChat: false, launching: false, readable: true };
 const item = (id: string, role: ChatItem["role"], text: string, at: number): ChatItem => ({ id, role, kind: "text", text, at });
@@ -88,4 +88,11 @@ test("VIEW-019: a picked pane shows only its own chat, Starting while it launche
   // Nothing picked: the first pane that can show chat.
   expect(pickChat(panes, null, { 1: terminal, 2: chat, 3: chat })).toEqual({ key: 2 });
   expect(pickChat(panes, null, {})).toBeNull();
+});
+
+test("with nothing picked the box names the pane it types into (council FIX-1, model.ts fallback)", () => {
+  expect(typingInto(null, { title: "api tests" })).toBe("Typing into api tests");
+  expect(typingInto(null, { title: "  " })).toBe("Typing into the first agent that can chat");
+  expect(typingInto(null, {})).toBe("Typing into the first agent that can chat");
+  expect(typingInto(4, { title: "api tests" })).toBeNull();
 });

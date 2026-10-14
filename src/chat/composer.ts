@@ -91,7 +91,11 @@ export function sendSteps(agent: string | undefined, raw: string): Step[] {
     const keys = [...text.trim()];
     return [clear, ...keys.map((ch, i) => ({ data: ch, waitMs: i === keys.length - 1 ? ENTER_PAUSE_MS : 15 })), enter];
   }
-  const body = text.includes("\n") ? BRACKET_OPEN + text.replace(/\n/g, "\r") + BRACKET_CLOSE : text;
+  // Council FIX-1: a one-line body goes in as a paste too, so a menu that opened before the hook
+  // reported it never reads its first letter ("y", "1") as a pick. A one-line slash command is typed
+  // as text: it never starts with a menu key, and an agent takes a pasted one as plain words.
+  const command = !text.includes("\n") && text.trimStart().startsWith("/");
+  const body = command ? text : BRACKET_OPEN + text.replace(/\n/g, "\r") + BRACKET_CLOSE;
   return [clear, { data: body, waitMs: ENTER_PAUSE_MS }, enter];
 }
 

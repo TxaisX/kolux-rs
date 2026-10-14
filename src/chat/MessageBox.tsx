@@ -12,10 +12,13 @@ type Props = {
   live: boolean;
   /** CHAT-022: why sending is held back for now (the agent is asking in its terminal); the draft can still be written. */
   blocked?: string;
-  onSend: (text: string) => void;
+  /** A note that does not hold the box (the last message was too long). */
+  note?: string;
+  /** False when nothing was sent: the box keeps the text. */
+  onSend: (text: string) => boolean;
 };
 
-export const Composer = forwardRef<ComposerHandle, Props>(function Composer({ paneKey, live, blocked, onSend }, ref) {
+export const Composer = forwardRef<ComposerHandle, Props>(function Composer({ paneKey, live, blocked, note, onSend }, ref) {
   const [text, setText] = useState(() => draftOf(paneKey));
   // The history index shown; history.length means the draft itself.
   const [at, setAt] = useState(() => historyOf(paneKey).length);
@@ -45,8 +48,8 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer({ pa
     if (act === "send") {
       e.preventDefault();
       if (!live || blocked || !text.trim()) return;
+      if (!onSend(text)) return;
       addHistory(paneKey, text);
-      onSend(text);
       setText("");
       draft.current = "";
       keepDraft(paneKey, "");
@@ -66,9 +69,9 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer({ pa
 
   return (
     <div className="chat-composer">
-      {blocked && (
+      {(blocked ?? note) && (
         <div className="chat-asking" role="status">
-          {blocked}
+          {blocked ?? note}
         </div>
       )}
       <textarea

@@ -79,6 +79,10 @@ export function pickChat<P extends { key: number }>(panes: P[], focused: number 
   return !o || o.chooser ? "starting" : null;
 }
 
+/** Council FIX-1: with nothing picked, the box types into the first pane that can chat, so it says
+ * which one; with a pane picked the rail already shows it. */
+export const typingInto = (focused: number | null, pane: { title?: string }) => (focused === null ? `Typing into ${pane.title?.trim() || "the first agent that can chat"}` : null);
+
 /** Folds one read into the conversation: a reset replaces it, otherwise items with a known id
  * replace their old version and new ones join, in transcript order. */
 export function applyRead(prev: ChatItem[], read: ChatRead): ChatItem[] {
