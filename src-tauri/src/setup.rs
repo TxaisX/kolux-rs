@@ -233,12 +233,14 @@ pub fn workspace_setup(path: String, local: Option<String>, policy: Option<Strin
 
 /// STAT-055: runs kolux.yaml's archive script (read from the worktree being removed; OD-14: no
 /// per-repository archive setting) in that worktree with the script variables, before it goes,
-/// and waits up to `limit`. None when there is none; the exit code when it ran.
-pub fn run_archive(root: &Path, worktree: &Path, limit: std::time::Duration) -> Result<Option<i32>, String> {
-    let Some(script) = std::fs::read_to_string(worktree.join(crate::include::CONFIG_FILE)).ok().and_then(|y| scripts_entry(&y, "archive")) else { return Ok(None) };
+/// and waits up to `limit`, then ends it and every process it started. Ok(false) when there is
+/// none, Ok(true) when it ran and exited 0; otherwise the failure, ending with the last of what
+/// the script wrote to its error output, for the UI to show.
+pub fn run_archive(root: &Path, worktree: &Path, limit: std::time::Duration) -> Result<bool, String> {
+    let Some(script) = std::fs::read_to_string(worktree.join(crate::include::CONFIG_FILE)).ok().and_then(|y| scripts_entry(&y, "archive")) else { return Ok(false) };
     let line = setup_line(&script, cfg!(windows), configured_shell().as_deref(), find_posix).map_err(|e| e.replacen("The setup script", "The archive script", 1))?;
     let mut cmd = std::process::Command::new(&line.program);
-    cmd.args(&line.args).current_dir(worktree).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    cmd.args(&line.args).current_dir(worktree).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
     cmd.envs(script_vars(root, worktree));
     if conda_now() {
         for k in CONDA_VARS {
@@ -251,44 +253,93 @@ pub fn run_archive(root: &Path, worktree: &Path, limit: std::time::Duration) -> 
         cmd.creation_flags(0x0800_0000); // no console window
     }
     let mut child = cmd.spawn().map_err(|e| format!("The archive script could not start: {e}"))?;
+    // Everything the script starts joins a kill-on-close job, so ending it ends the whole tree,
+    // even a process started while the kill runs. ponytail: one started in the few ms before the
+    // child is assigned escapes the job; kill_tree below still ends it when the script is stopped.
+    let mut job = crate::procs::Job::new().ok().filter(|j| j.assign_pid(child.id()).is_ok());
+    // The error output is read on its own thread, so a chatty script never stalls on a full pipe.
+    let said = child.stderr.take().map(|mut e| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || tx.send(tail_of(&mut e)));
+        rx
+    });
     let start = std::time::Instant::now();
-    loop {
+    let status = loop {
         if let Some(status) = child.try_wait().map_err(|e| format!("The archive script could not be watched: {e}"))? {
-            return Ok(Some(status.code().unwrap_or(-1)));
+            break Some(status);
         }
         if start.elapsed() >= limit {
+            drop(job.take()); // a server the script started holds the folder too
+            crate::procs::kill_tree(child.id());
             let _ = child.kill();
             let _ = child.wait();
-            return Err(format!("The archive script was stopped after {} seconds", limit.as_secs()));
+            break None;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let why = |msg: String| {
+        let text = said.as_ref().and_then(|rx| rx.recv_timeout(std::time::Duration::from_secs(2)).ok()).unwrap_or_default();
+        match text.trim() {
+            "" => msg,
+            t => format!("{msg}: {t}"),
+        }
+    };
+    match status {
+        Some(s) if s.success() => Ok(true),
+        Some(s) => Err(why(match s.code() {
+            Some(c) => format!("The archive script failed with exit code {c}"),
+            None => "The archive script was ended".into(),
+        })),
+        None => Err(why(format!("The archive script was stopped after {} seconds", limit.as_secs()))),
     }
 }
 
+/// The last 2 KB of what `r` gives until it closes, as text.
+fn tail_of(r: &mut impl std::io::Read) -> String {
+    const KEEP: usize = 2048;
+    let (mut keep, mut buf) = (Vec::new(), [0u8; 4096]);
+    while let Ok(n @ 1..) = r.read(&mut buf) {
+        keep.extend_from_slice(&buf[..n]);
+        if keep.len() > KEEP {
+            keep.drain(..keep.len() - KEEP);
+        }
+    }
+    String::from_utf8_lossy(&keep).into_owned()
+}
+
 /// STAT-055: the archive script for the worktree at `path`, run before it is removed.
-// ponytail: registered in lib.rs and called from the removal by the coordinator (hunks in the T-110-a commit).
+// ponytail: stays unregistered until T-156's trust prompt and a removal that does not wait on the
+// window (council 2026-10-13); only the tests call it.
 #[allow(dead_code)]
 #[tauri::command(async)]
-pub fn workspace_archive(path: String) -> Result<Option<i32>, String> {
+pub fn workspace_archive(path: String) -> Result<bool, String> {
     let wt = Path::new(&path);
     run_archive(&main_folder(wt), wt, std::time::Duration::from_secs(120))
 }
 
-/// PROJ-036 / COMPAT 5.6: the per-user issue command, a file in the repository's .kolux folder
-/// (kept out of git by the user); its whole text is the command. It wins over kolux.yaml's.
+/// PROJ-036 / COMPAT 5.6: the per-user issue command, a file in the main folder's .kolux folder
+/// that git does not track; its whole text is the command. It wins over kolux.yaml's. A tracked
+/// one, or one in a worktree (which only holds what the branch committed), is anyone's text and
+/// never counts as the user's own.
 pub const ISSUE_OVERRIDE: &str = ".kolux/issue-command";
 /// PROJ-036: kolux.yaml's shared issue command key (COMPAT 5.6).
 pub const ISSUE_KEY: &str = "issueCommand";
 
 /// PROJ-036: the issue command for a workspace at `worktree` of the repository at `root`, and
-/// whether it is the shared one: the local override (main folder first, then the worktree's own)
-/// wins; else `issueCommand` from the worktree's kolux.yaml, else the main folder's.
+/// whether it is the shared one: the local override in the main folder, while git does not track
+/// it, wins; else `issueCommand` from the worktree's kolux.yaml, else the main folder's.
 pub fn issue_command(root: &Path, worktree: &Path) -> Option<(String, bool)> {
     let read = |p: PathBuf| std::fs::read_to_string(p).ok().map(|t| t.trim_start_matches('\u{feff}').trim().replace("\r\n", "\n")).filter(|t| !t.is_empty());
-    if let Some(local) = read(root.join(ISSUE_OVERRIDE)).or_else(|| read(worktree.join(ISSUE_OVERRIDE))) {
+    if let Some(local) = read(root.join(ISSUE_OVERRIDE)).filter(|_| untracked(root, ISSUE_OVERRIDE)) {
         return Some((local, false));
     }
     [worktree, root].iter().find_map(|d| std::fs::read_to_string(d.join(crate::include::CONFIG_FILE)).ok().and_then(|y| top_entry(&y, ISSUE_KEY))).map(|c| (c, true))
+}
+
+/// Whether git, asked in `repo`, tracks nothing at `rel`; false when git cannot tell (not a
+/// repository, no git), so an unproven file never counts as the user's own.
+fn untracked(repo: &Path, rel: &str) -> bool {
+    matches!(crate::git::run(&["ls-files", "--", rel], Some(repo)), Ok(out) if out.is_empty())
 }
 
 /// PROJ-036: the issue filled into the command: `{{issue}}` becomes its number and `{{issueUrl}}`
@@ -619,6 +670,7 @@ mod tests {
     #[test]
     fn proj036_a_create_from_issue_12_runs_the_command_and_the_local_one_wins() {
         let root = tree(&[("kolux.yaml", b"issueCommand: echo shared {{issue}}\n")]);
+        crate::git::run(&["init", "-q"], Some(&root)).unwrap();
         let wt = tree(&[("kolux.yaml", b"issueCommand: echo worktree {{issue}}\n")]);
         let run = |r: &PathBuf, w: &PathBuf| workspace_issue_command(r.to_string_lossy().into_owned(), w.to_string_lossy().into_owned(), 12, "https://github.com/o/r/issues/12".into()).unwrap();
         let got = run(&root, &wt).expect("a shared issue command");
@@ -691,21 +743,64 @@ mod tests {
     #[test]
     fn stat055_removing_a_worktree_runs_its_archive_script_inside_it() {
         let wt = tree(&[("kolux.yaml", b"scripts:\n  archive: echo done>archived.txt\n")]);
-        let code = run_archive(Path::new("C:/repos/app"), &wt, std::time::Duration::from_secs(60)).unwrap();
-        assert_eq!(code, Some(0));
+        assert!(run_archive(Path::new("C:/repos/app"), &wt, std::time::Duration::from_secs(60)).unwrap());
         assert_eq!(std::fs::read_to_string(wt.join("archived.txt")).unwrap().trim(), "done");
         std::fs::write(wt.join("kolux.yaml"), "scripts:\n  setup: x\n").unwrap();
-        assert_eq!(run_archive(&wt, &wt, std::time::Duration::from_secs(60)).unwrap(), None, "no archive script, nothing runs");
+        assert!(!run_archive(&wt, &wt, std::time::Duration::from_secs(60)).unwrap(), "no archive script, nothing runs");
         let slow = if cfg!(windows) { "ping -n 6 127.0.0.1>nul" } else { "sleep 5" };
         std::fs::write(wt.join("kolux.yaml"), format!("scripts:\n  archive: {slow}\n")).unwrap();
         assert!(run_archive(&wt, &wt, std::time::Duration::from_millis(300)).unwrap_err().contains("stopped after"));
         // with a POSIX shell the variables reach the script
         if cfg!(not(windows)) || find_posix("sh").is_some() {
             std::fs::write(wt.join("kolux.yaml"), "scripts:\n  archive: |\n    #!/bin/sh\n    printf '%s|%s' \"$KOLUX_WORKSPACE_NAME\" \"$KOLUX_ROOT_PATH\" > vars.txt\n").unwrap();
-            assert_eq!(run_archive(Path::new("C:/repos/app"), &wt, std::time::Duration::from_secs(60)).unwrap(), Some(0));
+            assert!(run_archive(Path::new("C:/repos/app"), &wt, std::time::Duration::from_secs(60)).unwrap());
             let name = wt.file_name().unwrap().to_string_lossy().into_owned();
             assert_eq!(std::fs::read_to_string(wt.join("vars.txt")).unwrap(), format!("{name}|C:/repos/app"));
         }
         let _ = std::fs::remove_dir_all(wt);
+    }
+
+    #[test]
+    fn stat055_a_failed_archive_script_says_why_and_a_stopped_one_takes_everything_it_started() {
+        let wt = tree(&[("kolux.yaml", b"scripts:\n  archive: echo boom 1>&2 && exit 3\n")]);
+        let err = run_archive(&wt, &wt, std::time::Duration::from_secs(60)).unwrap_err();
+        assert!(err.starts_with("The archive script failed with exit code 3"), "{err}");
+        assert!(err.ends_with(": boom"), "what it wrote to its error output comes with the failure: {err}");
+        if cfg!(windows) {
+            // slow.bat starts a second cmd (a grandchild) that would write late.txt after ~5 s
+            std::fs::write(wt.join("inner.bat"), "@ping -n 6 127.0.0.1 >nul\r\n@echo late>late.txt\r\n").unwrap();
+            std::fs::write(wt.join("slow.bat"), "@cmd /d /c .\\inner.bat\r\n").unwrap();
+            std::fs::write(wt.join("kolux.yaml"), "scripts:\n  archive: .\\slow.bat\n").unwrap();
+            let err = run_archive(&wt, &wt, std::time::Duration::from_millis(1500)).unwrap_err();
+            assert!(err.starts_with("The archive script was stopped after 1 seconds"), "{err}");
+            std::thread::sleep(std::time::Duration::from_secs(7));
+            assert!(!wt.join("late.txt").exists(), "the process the script started was ended with it");
+        }
+        let _ = std::fs::remove_dir_all(wt);
+    }
+
+    #[test]
+    fn proj036_a_committed_issue_override_never_counts_as_the_users_own() {
+        let git = |args: &[&str], dir: &Path| crate::git::run(args, Some(dir)).unwrap();
+        let main = tree(&[("kolux.yaml", b"issueCommand: echo shared {{issue}}\n"), (".kolux/issue-command", b"echo committed {{issue}}\n")]);
+        git(&["init", "-q"], &main);
+        git(&["add", "-A"], &main);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"], &main);
+        let wt = main.with_file_name(format!("{}-wt", main.file_name().unwrap().to_string_lossy()));
+        git(&["worktree", "add", "-q", "-b", "issue-12", &wt.to_string_lossy()], &main);
+        assert!(wt.join(ISSUE_OVERRIDE).exists(), "the branch carries the committed override");
+        assert_eq!(issue_command(&main, &wt), Some(("echo shared {{issue}}".into(), true)), "a committed override is ignored in the main folder and the worktree");
+        std::fs::remove_file(wt.join("kolux.yaml")).unwrap();
+        std::fs::remove_file(main.join("kolux.yaml")).unwrap();
+        assert_eq!(issue_command(&main, &wt), None, "with no shared command, a committed override still never runs");
+        git(&["rm", "-q", "--cached", ISSUE_OVERRIDE], &main);
+        assert_eq!(issue_command(&main, &wt), Some(("echo committed {{issue}}".into(), false)), "once git stops tracking it in the main folder, it is the user's own");
+        assert_eq!(issue_command(&wt, &wt), None, "the worktree's copy is never read as the user's own");
+        let _ = git(&["worktree", "remove", "--force", &wt.to_string_lossy()], &main);
+        let bare = tree(&[(".kolux/issue-command", b"echo x\n")]);
+        assert_eq!(issue_command(&bare, &bare), None, "outside a repository git cannot prove it untracked");
+        for d in [main, wt, bare] {
+            let _ = std::fs::remove_dir_all(d);
+        }
     }
 }
