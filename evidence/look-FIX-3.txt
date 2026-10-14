@@ -56,3 +56,15 @@ large folder: only one rg.exe stays running (Task Manager), the old ones end as 
   shares the first click's answer".
 LIVE PROOF PENDING (batched, after the patch): Tower, double-click Own window fast: one Tower
 window opens on the second screen, no "could not open" note appears in the main Tower.
+
+## 4. PLAN wording and the paste release (FB-1, AFTER 4, AFTER 6)
+- T-282's tick already reads "typed keys are dropped until the paste is in and a second paste is
+  refused with a toast" (the coordinator fixed it at MERGE 82); left as it is.
+- T-070's tick now names the 2-minute Codex focus debounce and the hidden-window skip of timer
+  reads (with one read when the window shows again), as built in FIX-2 (refresh.ts, CodexPill.tsx).
+- paste.ts: the release in a failing piece's catch is wrapped, so on a view that is gone the paste
+  still ends (done runs once) and the piece's own error is reported. Red first: the old code threw
+  "view destroyed" instead of "boom". Test: src/editor/paste.test.ts "EDIT-008 (FIX-3): a piece
+  failing on a view that is gone still ends the paste with the piece's error".
+Gates: tsc exit 0; vitest related (paste.ts) 6 files / 44 tests passed; plan-check OK; no dupes.
+Not on screen (an error path only).

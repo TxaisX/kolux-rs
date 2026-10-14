@@ -92,7 +92,13 @@ export function pasteChunked(view: EditorView, text: string, done?: () => void):
       view.dispatch(pieceSpec(parts[i], false, at, at, i === parts.length - 1, t0));
     } catch (e) {
       // FIX-2 (council FS-3): a piece that throws must not leave the editor holding input forever.
-      view.dispatch({ effects: setMark.of(null) });
+      // FIX-3 (council AFTER 6): on a view that is gone the release throws too; the paste still ends
+      // and the piece's own error is the one reported.
+      try {
+        view.dispatch({ effects: setMark.of(null) });
+      } catch {
+        // nothing is left to hold input
+      }
       done?.();
       throw e;
     }
