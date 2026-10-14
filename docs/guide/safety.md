@@ -58,6 +58,18 @@ Kolux decides what counts as a program from a fixed list of file types, not from
 
 **Show in file manager** in Source Control stays inside the workspace. Kolux checks each folder on the way to the file, and if any of them is a link (a symbolic link or junction), it refuses with an error saying the path "goes through a link that leads outside the worktree" and opens nothing, so a link cannot lead the file manager to a folder elsewhere. If the file or its folders have been deleted, it shows the nearest folder that still exists, as before. A workspace path that points at another computer is refused as well.
 
+## Other computers and network shares
+
+When Windows reads a file on another computer, such as `\\server\share`, it signs in to that computer with your Windows account. Kolux avoids this: it never opens or checks a path that points at another computer, so a folder it scans or looks up cannot make your sign-in go there. Three places use this rule:
+
+| Where | What Kolux does |
+|---|---|
+| Files and links | A path on another computer is refused (see [Files: the fence](#files-the-fence)) |
+| The Skills page | A workspace on a network share (`\\server\share`) gets no skills scan; its rows in the Skill folders list say "Not scanned: This folder links to another computer, which Kolux never opens". A workspace on a mapped drive letter, such as `Z:`, is still scanned. Inside a skills folder, a link or junction whose target is on another computer is never followed, whether it is a whole folder or a `SKILL.md` file. A skills folder that is itself such a link shows the same "Not scanned" note |
+| The command-line check in Getting Started | A `PATH` entry on another computer is not looked up. When it checks the other `PATH` folders, any that does not answer within a second is passed over, and is not asked again for five minutes, so a folder on an offline drive no longer freezes the window |
+
+The skills scan also has a time limit of 8 seconds. A folder that runs past it shows "Took longer than 8 seconds", and its scan is told to stop at its next entry instead of carrying on in the background.
+
 ## Secrets
 
 - Saved keys and sign-ins are sealed by the system keyring (Windows' secret store). There is no plain-text fallback.
@@ -121,4 +133,4 @@ Nothing about your use. The list of outside connections is in Settings, General,
 
 Kolux pre-trusts the workspaces it creates, for Claude and Codex, so an agent's first prompt is not swallowed by a "do you trust this folder" question. Only workspaces Kolux made are pre-trusted. Pre-trust for Cursor and Copilot is not built.
 
-<!-- verified against: src-tauri/src/protected.rs, src-tauri/src/hooks.rs, src-tauri/src/fence.rs, src-tauri/src/links.rs, src-tauri/src/files.rs, src-tauri/src/cli.rs, src-tauri/src/trust.rs, src-tauri/src/browser.rs, src/chat/send.ts, src/chat/composer.ts, src/App.tsx, src/settings/AgentsPage.tsx, src-tauri/src/agents.rs, src/settings/privacy.ts, src-tauri/src/scm.rs, src-tauri/src/agent_hooks/mod.rs, src-tauri/src/agent_hooks/vendors.rs at fb0a9d4 -->
+<!-- verified against: src-tauri/src/protected.rs, src-tauri/src/hooks.rs, src-tauri/src/fence.rs, src-tauri/src/links.rs, src-tauri/src/files.rs, src-tauri/src/cli.rs, src-tauri/src/trust.rs, src-tauri/src/browser.rs, src/chat/send.ts, src/chat/composer.ts, src/App.tsx, src/settings/AgentsPage.tsx, src-tauri/src/agents.rs, src/settings/privacy.ts, src-tauri/src/scm.rs, src-tauri/src/agent_hooks/mod.rs, src-tauri/src/agent_hooks/vendors.rs, src-tauri/src/skills.rs, src-tauri/src/onboarding.rs at 73f5e38 -->
