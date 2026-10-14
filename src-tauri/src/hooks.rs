@@ -331,9 +331,14 @@ pub fn answer(req: &Request, token: &str) -> (u16, Option<crate::status::Status>
     }
     let Some((pane_key, terminal)) = req.headers.get(IDENTITY_HEADER).and_then(|h| identity(h)) else { return (400, None) };
     let Ok(event) = serde_json::from_slice::<Value>(&req.body) else { return (400, None) };
-    let agent = match req.path.as_str() {
-        "/claude" => crate::status::Agent::Claude,
-        "/codex" => crate::status::Agent::Codex,
+    let (agent, event) = match req.path.as_str() {
+        "/claude" => (crate::status::Agent::Claude, event),
+        "/codex" => (crate::status::Agent::Codex, event),
+        // T-120-b: Gemini CLI, Antigravity and Amp, each turned into the shape the rules read.
+        p if agent_hooks::vendors::is_route(p) => match agent_hooks::vendors::normalize(p, &event) {
+            Some(e) => (crate::status::Agent::Vendor, e),
+            None => return (200, None),
+        },
         _ => return (404, None),
     };
     (200, crate::status::report(pane_key, terminal, agent, &event))
@@ -344,6 +349,10 @@ pub fn answer(req: &Request, token: &str) -> (u16, Option<crate::status::Status>
 /// event, Codex, a body that cannot be read) gets `{}`, no opinion, so Claude's own permission
 /// flow carries on and Kolux never blocks by itself.
 pub fn reply_body(path: &str, body: &[u8], settings: &Value) -> String {
+    // T-120-b: Antigravity's PreToolUse hook must answer; "allow" hands the call to its own policy.
+    if path == "/antigravity/PreToolUse" {
+        return json!({ "decision": "allow" }).to_string();
+    }
     let ask = || {
         if path != "/claude" {
             return None;
@@ -487,6 +496,9 @@ fn iso_ms(s: &str) -> Option<i64> {
 /// (`claudeUsageLimitResetsAt`) and for the next limit stop.
 fn record_usage(app: &AppHandle, u: &Usage) {
     let mut u = u.clone();
+    // FIX-2 (council FS-4): the windows this report itself carried, named before the merge with the
+    // stored ones, so the pill takes only these as forecast readings stamped now.
+    let carried: Vec<String> = u.limits.iter().map(|l| l.kind.clone()).collect();
     if !u.limits.is_empty() {
         if let Some(store) = app.try_state::<Mutex<crate::state::Store>>() {
             if let Ok(store) = store.lock() {
@@ -504,7 +516,9 @@ fn record_usage(app: &AppHandle, u: &Usage) {
             let _ = app.emit(crate::claude_key::EVENT, ());
         }
     }
-    let _ = app.emit(USAGE_EVENT, &u);
+    let mut payload = json!(u);
+    payload["carried"] = json!(carried);
+    let _ = app.emit(USAGE_EVENT, payload);
 }
 
 /// The config folder the active Claude account runs under; none for the default sign-in.
@@ -728,7 +742,7 @@ fn is_mine(group: &Value) -> bool {
 /// Puts exactly one Kolux RS group under each of the twelve events, leaving every other entry
 /// (another tool's hooks, the user's own) as it is. True when `settings` changed.
 pub fn install_claude_hooks(settings: &mut Value, command: &str) -> bool {
-    install_groups(settings, &CLAUDE_EVENTS, &TOOL_EVENTS, command)
+    install_groups(settings, &CLAUDE_EVENTS, &TOOL_EVENTS, command, 10)
 }
 
 /// STAT-040: Kolux's command takes the `statusLine` slot, keeping padding and whatever else is
@@ -754,12 +768,13 @@ pub fn install_claude_status(settings: &mut Value, command: &str) -> (bool, Opti
 
 /// The same for Codex's `hooks.json` (STAT-008): one Kolux group per event, after the user's own.
 pub fn install_codex_hooks(file: &mut Value, command: &str) -> bool {
-    install_groups(file, &CODEX_EVENTS, &[], command)
+    install_groups(file, &CODEX_EVENTS, &[], command, 10)
 }
 
 /// One Kolux group under each of `events`; a stale one is replaced where it stands, a new one
 /// goes last. `matched` events get the match-everything matcher (COMPAT 3.4).
-fn install_groups(root: &mut Value, events: &[&str], matched: &[&str], command: &str) -> bool {
+/// `timeout` is in the agent's own unit (seconds for Claude Code and Codex, ms for Gemini CLI).
+fn install_groups(root: &mut Value, events: &[&str], matched: &[&str], command: &str, timeout: u64) -> bool {
     let before = root.clone();
     if !root.is_object() {
         *root = json!({});
@@ -774,7 +789,7 @@ fn install_groups(root: &mut Value, events: &[&str], matched: &[&str], command: 
             *groups = json!([]);
         }
         let groups = groups.as_array_mut().unwrap();
-        let hook = json!([{ "type": "command", "command": command, "timeout": 10 }]);
+        let hook = json!([{ "type": "command", "command": command, "timeout": timeout }]);
         let mine = if matched.contains(event) { json!({ "matcher": "*", "hooks": hook }) } else { json!({ "hooks": hook }) };
         match groups.iter().position(is_mine) {
             Some(i) => {

@@ -1,6 +1,6 @@
 import { marked } from "marked";
 import { expect, test, vi } from "vitest";
-import { canRequest, draftKey, feedbackMessage, keepDraft, MAX_DRAFTS, OPENING, planSections, showsReview, stillPending, type PlanDraft } from "./planReview";
+import { canRequest, draftKey, feedbackMessage, keepDraft, MAX_DRAFTS, OPENING, planSections, showsReview, startFeedback, stillPending, type PlanDraft } from "./planReview";
 
 test("SAFE-002: blank lines split the plan into numbered sections; a fenced block with an empty line stays whole", () => {
   const plan = ["", "# Plan", "Read the code.", "", "", "Then fix it:", "```ts", "const a = 1;", "", "const b = 2;", "```", "", "Ship it.", "", ""].join("\n");
@@ -95,4 +95,83 @@ test("SAFE-002, SAFE-004: the sheet shows one block per section with its comment
   expect(one).toMatch(/Line 3.*which files\?.*Remove/s);
   expect(one).toContain("Request changes (1)");
   expect(one).not.toMatch(/disabled=""[^>]*>Request changes/);
+});
+
+// T-032-b: the Request changes send is a job that can be cancelled at any step (SAFE-004).
+type Log = string[];
+const steps = (log: Log, o: { deny?: boolean; askingFor?: number; alive?: boolean; onWait?: () => void } = {}) => {
+  let asks = o.askingFor ?? 0;
+  return {
+    deny: async () => (log.push("no"), o.deny ?? true),
+    asking: () => asks > 0,
+    type: async (t: string) => void log.push(`type:${t}`),
+    enter: async () => void log.push("enter"),
+    alive: () => o.alive ?? true,
+    wait: async (ms: number) => {
+      log.push(`wait:${ms}`);
+      if (asks > 0) asks--;
+      o.onWait?.();
+    },
+  };
+};
+
+test("SAFE-004: a send with nothing in the way answers no, types the message as one paste, then presses Enter", async () => {
+  const log: Log = [];
+  const job = startFeedback("fix it", steps(log));
+  expect(await job.done).toEqual({ outcome: "sent", answered: true, typed: true });
+  expect(log).toEqual(["no", "type:fix it", "wait:300", "enter"]);
+});
+
+test("SAFE-004: the message waits while the pane still asks, and goes once it leaves", async () => {
+  const log: Log = [];
+  expect((await startFeedback("x", steps(log, { askingFor: 2 })).done).outcome).toBe("sent");
+  expect(log).toEqual(["no", "wait:100", "wait:100", "type:x", "wait:300", "enter"]);
+});
+
+test("SAFE-004: cancelling before anything went out sends nothing at all", async () => {
+  const log: Log = [];
+  const job = startFeedback("x", steps(log));
+  job.cancel();
+  expect(await job.done).toEqual({ outcome: "cancelled", answered: false, typed: false });
+  expect(log).toEqual([]);
+});
+
+test("SAFE-004: cancelling while it waits for the pane to leave the ask types nothing", async () => {
+  const log: Log = [];
+  let job: ReturnType<typeof startFeedback> | null = null;
+  job = startFeedback("x", steps(log, { askingFor: 5, onWait: () => job?.cancel() }));
+  expect(await job.done).toEqual({ outcome: "cancelled", answered: true, typed: false });
+  expect(log).toEqual(["no", "wait:100"]);
+});
+
+test("SAFE-004: cancelling between the paste and Enter never presses Enter", async () => {
+  const log: Log = [];
+  let job: ReturnType<typeof startFeedback> | null = null;
+  job = startFeedback("x", { ...steps(log), wait: async (ms: number) => void (log.push(`wait:${ms}`), job?.cancel()) });
+  expect(await job.done).toEqual({ outcome: "cancelled", answered: true, typed: true });
+  expect(log).toEqual(["no", "type:x", "wait:300"]);
+  // Cancelling after it finished changes nothing.
+  job.cancel();
+  expect((await job.done).outcome).toBe("cancelled");
+});
+
+test("SAFE-004: a failed answer, a pane that keeps asking, or a closed pane types nothing", async () => {
+  let log: Log = [];
+  expect((await startFeedback("x", steps(log, { deny: false })).done).outcome).toBe("no-answer");
+  expect(log).toEqual(["no"]);
+  log = [];
+  expect((await startFeedback("x", steps(log, { askingFor: 99 })).done).outcome).toBe("still-asking");
+  expect(log.filter((l) => l === "wait:100")).toHaveLength(30);
+  expect(log.some((l) => l.startsWith("type:"))).toBe(false);
+  log = [];
+  expect((await startFeedback("x", steps(log, { alive: false })).done).outcome).toBe("gone");
+  expect(log).toEqual(["no"]);
+});
+
+test("SAFE-004: the pane left the ask while the paste was in → Enter is held back", async () => {
+  const log: Log = [];
+  let asking = false;
+  const s = { ...steps(log), asking: () => asking, type: async (t: string) => void (log.push(`type:${t}`), (asking = true)) };
+  expect(await startFeedback("x", s).done).toEqual({ outcome: "still-asking", answered: true, typed: true });
+  expect(log).toEqual(["no", "type:x", "wait:300"]);
 });

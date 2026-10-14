@@ -537,7 +537,6 @@ use std::path::PathBuf;
 /// VS Code's when a row has none); none at all opens the file manager. A relative path, a path the
 /// fence refuses, or anything that is not a folder is refused (in that order, so a share is never
 /// touched and a program is never run), and a launch that fails comes back as an error.
-#[allow(dead_code)] // live once lib.rs registers files::open_in (coordinator hunk); drop this line then
 #[tauri::command(async)]
 pub fn open_in(path: String, command: Option<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
     let command = command.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());

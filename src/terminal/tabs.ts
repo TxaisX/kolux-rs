@@ -3,7 +3,8 @@
 
 import type { AgentState } from "../projects/rows";
 
-export type Badge = "working" | "permission" | "unread" | "done" | null;
+/** `background` is the radio mark for an agent whose turn is over while Kolux watches its background work (STAT-024); only the palette rows carry it so far (VIEW-040). */
+export type Badge = "working" | "background" | "permission" | "unread" | "done" | null;
 
 /**
  * The one badge a tab shows: a working agent spins, one waiting on the user shows the question
