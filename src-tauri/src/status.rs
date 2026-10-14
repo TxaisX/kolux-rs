@@ -621,7 +621,7 @@ pub fn report(pane_key: u32, terminal: Option<u32>, agent: Agent, event: &Value)
             session.transcript = path;
         }
         let (change, child) = applied?;
-        crate::activity::note(pane_key, change.state);
+        crate::activity::note_from(pane_key, session.terminal, change.state);
         Some(fit_plan(status_of(pane_key, terminal, session, change, child)))
     })
 }
@@ -637,7 +637,7 @@ pub fn settle_cancels() -> Vec<Status> {
         s.iter_mut()
             .filter_map(|(key, session)| {
                 session.settle_cancel(now).then(|| {
-                    crate::activity::note(*key, "interrupted");
+                    crate::activity::note_from(*key, session.terminal, "interrupted");
                     status_of(*key, session.terminal, session, Change { state: "interrupted", ..Change::default() }, None)
                 })
             })
@@ -709,7 +709,7 @@ pub fn status_inband(app: tauri::AppHandle, pane_key: u32, data: String) -> bool
     let status = with_sessions(|s| {
         let session = s.entry(pane_key).or_default();
         let change = session.inband(state);
-        crate::activity::note(pane_key, change.state);
+        crate::activity::note_from(pane_key, session.terminal, change.state);
         status_of(pane_key, session.terminal, session, change, None)
     });
     tauri::Emitter::emit(&app, crate::hooks::EVENT, status).is_ok()
