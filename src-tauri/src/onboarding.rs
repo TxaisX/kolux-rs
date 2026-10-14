@@ -177,6 +177,42 @@ pub struct Guide {
     /// ONB-032: whether this profile gets tours by itself, decided once (tours_get) and never again.
     #[serde(default)]
     pub tours_auto: Option<bool>,
+    /// ONB-042: each known feature's first use and running use count on this machine. Unknown
+    /// features and damaged entries are dropped on load without notice.
+    #[serde(default, deserialize_with = "features_de")]
+    pub features: std::collections::BTreeMap<String, Use>,
+}
+
+/// ONB-042: one feature's record: when it was first used (ms since 1970) and how often.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Use {
+    pub first: u64,
+    pub count: u64,
+}
+
+/// ONB-042: the fixed list of features whose use the profile keeps.
+pub const FEATURES: &[&str] = &[
+    "board", "palette", "browser", "browser-page", "tasks", "automations", "split", "workspace-create", "workspace-switch", "skill-setup",
+    "kits", "kit-results", "editor", "diff", "notes", "pr", "ship", "commit", "push", "usage",
+    "inbox", "artifacts", "settings", "shortcuts", "search", "file-find", "markdown", "floating", "layout", "zoom",
+    "rename", "orchestration", "cli", "notifications", "default-agent", "setup-script", "second-repo", "explore", "setup-guide", "parallel",
+];
+
+fn features_de<'de, D: serde::Deserializer<'de>>(d: D) -> Result<std::collections::BTreeMap<String, Use>, D::Error> {
+    let raw = <serde_json::Value as Deserialize>::deserialize(d)?;
+    let serde_json::Value::Object(m) = raw else { return Ok(Default::default()) };
+    Ok(m.into_iter().filter(|(k, _)| FEATURES.contains(&k.as_str())).filter_map(|(k, v)| serde_json::from_value::<Use>(v).ok().filter(|u| u.count > 0).map(|u| (k, u))).collect())
+}
+
+/// ONB-042: a use of uid=197610(XiongT) gid=197121 groups=197121: the first time is written once, the count only goes up. The count is
+/// raised here, under the store lock, so a late save from the window can never lower it.
+fn used(mut g: Guide, id: &str, now: u64) -> Result<Guide, String> {
+    if !FEATURES.contains(&id) {
+        return Err(format!("{id} is not a feature Kolux keeps"));
+    }
+    let u = g.features.entry(id.into()).or_insert(Use { first: now, count: 0 });
+    u.count = u.count.saturating_add(1);
+    Ok(g)
 }
 
 /// ONB-033: every contextual tour id, built or planned; a seen entry for any other id (one an older
@@ -223,6 +259,9 @@ pub fn tours_get(store: State<'_, Mutex<Store>>) -> Result<Guide, String> {
 
 /// `id` added once to `list` (tipsSeen, visited or tried).
 fn marked(mut g: Guide, list: &str, id: &str) -> Result<Guide, String> {
+    if list == "used" {
+        return used(g, id, now_ms());
+    }
     if id.is_empty() || id.len() > 40 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err(format!("{id:?} is not a guide id"));
     }
@@ -471,6 +510,29 @@ mod tests {
         assert!(!v.checklist_dismissed && v.milestones.is_empty(), "a damaged record reads as nothing done, not dismissed");
         let wire = serde_json::to_value(GuideView { guide: Guide::default(), first_run: None }).unwrap();
         assert!(wire.get("tried").is_some() && wire.get("firstRun").is_some(), "the view keeps the record's own fields beside firstRun: {wire}");
+    }
+
+    #[test]
+    fn feature_uses_keep_the_first_time_and_only_count_up() {
+        let g = used(Guide::default(), "split", 10).unwrap();
+        let g = used(g, "split", 20).unwrap();
+        assert_eq!(g.features["split"], Use { first: 10, count: 2 }, "the first time stays, the count goes up");
+        assert!(used(g.clone(), "lunch", 30).unwrap_err().contains("lunch"));
+        assert_eq!(marked(g, "used", "board").unwrap().features["board"].count, 1, "guide_mark's used list records a use");
+        assert!(FEATURES.len() >= 35 && FEATURES.len() <= 45, "roughly forty features");
+    }
+
+    #[test]
+    fn unknown_or_damaged_feature_entries_are_dropped_on_load() {
+        let (s, dir) = store("features");
+        s.set(GUIDE, r#"{"tried":["usage"],"features":{"split":{"first":5,"count":3},"teleport":{"first":1,"count":1},"board":{"first":"x"},"palette":7,"tasks":{"first":2,"count":0}}}"#).unwrap();
+        let g = guide_load(&s);
+        assert_eq!(g.tried, ["usage"], "the rest of the record survives a damaged entry");
+        assert_eq!(g.features.keys().collect::<Vec<_>>(), ["split"], "unknown, damaged and zero-count entries go");
+        s.set(GUIDE, r#"{"features":[1,2]}"#).unwrap();
+        assert!(guide_load(&s).features.is_empty());
+        drop(s);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

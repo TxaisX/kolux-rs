@@ -15,3 +15,8 @@
 .onb-checklist .all-done { margin: 0; font-size: 12px; color: var(--done); }
 .onb-checklist .toast { margin: 0; }
 .onb-checklist.compact { padding: 8px; }
+/* ONB-029: the palette tip demo. */
+.onb-demo { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; padding: 8px; border: 1px solid var(--line-subtle); border-radius: 8px; background: var(--pane-bg); }
+.onb-demo-input { display: flex; align-items: center; height: 26px; padding: 0 8px; border: 1px solid var(--line-focus); border-radius: 6px; font-size: 12px; color: var(--fg); }
+.onb-demo-input .caret { width: 1px; height: 14px; margin-left: 1px; background: var(--fg); }
+.onb-demo-row { padding: 4px 8px; border-radius: 6px; background: var(--row-selected); font-size: 12px; color: var(--fg); }

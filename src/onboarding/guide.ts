@@ -6,6 +6,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { locale } from "../language";
 import type { FirstRun } from "./newcomer";
+import { noteUse, type Features } from "./features";
 
 export type StepId = "browser" | "notifications" | "agent" | "cli" | "integrations" | "multitask" | "automate" | "repos";
 type Words = { name: string; about: string };
@@ -161,7 +162,7 @@ export const openExplore = () => window.dispatchEvent(new CustomEvent(OPEN_EXPLO
 
 /** What the guides remember on this profile (onboarding.rs guide_get). */
 /** guide_get also carries the first-run view for the newcomer checklist (ONB-013); guide_mark does not. */
-export type GuideRecord = { tipsSeen: string[]; visited: string[]; tried: string[]; toursSeen: string[]; toursAuto: boolean | null; firstRun?: FirstRun | null };
+export type GuideRecord = { tipsSeen: string[]; visited: string[]; tried: string[]; toursSeen: string[]; toursAuto: boolean | null; firstRun?: FirstRun | null; features?: Features };
 /** Adds the id once to one of the record's lists; the stored record comes back. */
 export const markGuide = (list: "tipsSeen" | "visited" | "tried" | "toursSeen", id: string) => invoke<GuideRecord>("guide_mark", { list, id });
 
@@ -265,5 +266,23 @@ export const workflowDone = (wf: Workflow, seen: ReadonlySet<string>, setup: Set
 /** ONB-015: the browser pane calls this when a page finishes loading; a page other than a blank
  *  one marks the Browser step's fact on the profile, once. */
 export const notePage = (url: string | null | undefined, mark: typeof markGuide = markGuide): void => {
-  if (pageCounts(url)) void mark("tried", PAGE_SHOWN).catch(() => {});
+  if (!pageCounts(url)) return;
+  void mark("tried", PAGE_SHOWN).catch(() => {});
+  noteUse("browser-page"); // ONB-042
 };
+
+// ---- ONB-029: the command palette tip's one-time demo ----
+
+/** The palette's keys as the tip shows them: the user's binding, or the default when unassigned. */
+export const paletteKeys = (user: readonly string[], fallback: readonly string[]): readonly string[] => (user.length ? user : fallback);
+
+/** What the demo types into the palette before the create-workspace row comes up. */
+export const DEMO_TEXT = "new-idea";
+export type DemoFrame = { typed: string; create: boolean };
+/** The demo's frames, one letter at a time, ending on the create-workspace row. With reduced motion
+ *  only the end state, so no timer runs. It plays once: the last frame stays. */
+export function demoFrames(reduced: boolean, text = DEMO_TEXT): DemoFrame[] {
+  const end = { typed: text, create: true };
+  if (reduced) return [end];
+  return [...Array.from({ length: text.length + 1 }, (_, i) => ({ typed: text.slice(0, i), create: false })), end];
+}

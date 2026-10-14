@@ -4,6 +4,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { markGuide, type GuideRecord } from "./guide";
+import { features, hasUsed, noteUse } from "./features";
 import { actionWord, autoStarts, FIRST_TARGET_TRIES, FOCUSED_SPLIT, nextShown, place, prevShown, REPLAY_TOUR, stepLabel, stepWords, TOURS, type Placed, type Rect, type Tour, type TourId } from "./tour";
 
 
@@ -143,11 +144,19 @@ export default function Tours() {
   running.current = run !== null;
 
   useEffect(() => {
-    invoke<GuideRecord>("tours_get").then((r) => (rec.current = r), () => {});
+    invoke<GuideRecord>("tours_get").then(
+      (r) => {
+        rec.current = r;
+        features.loaded(r.features); // ONB-042: uses count from here on
+      },
+      () => {},
+    );
+    const surfaced = new Set<TourId>();
     const replay = (e: Event) => (want.current = { id: (e as CustomEvent<TourId>).detail, forced: true, tries: 0 });
     // Any split counts (ONB-033: the parallel tour is for people who never split), and a split
     // during the parallel tour carries it past its split step.
     const split = () => {
+      noteUse("split");
       if (rec.current && !rec.current.tried.includes("split")) {
         rec.current.tried = [...rec.current.tried, "split"];
         markGuide("tried", "split").catch(() => {});
@@ -178,7 +187,9 @@ export default function Tours() {
         return;
       }
       if (!r) return;
-      const auto = TOURS.find((t) => autoStarts({ id: t.id, auto: r.toursAuto, seen: r.toursSeen, slotUsed: slot.current, blocked: blocked(), tried: r.tried }) && shown(t.trigger));
+      // ONB-042: opening a surface that has a tour counts as using that feature, once per window.
+      for (const t of TOURS) if (!surfaced.has(t.id) && shown(t.trigger) && noteUse(t.id)) surfaced.add(t.id);
+      const auto = TOURS.find((t) => autoStarts({ id: t.id, auto: r.toursAuto, seen: r.toursSeen, slotUsed: slot.current, blocked: blocked(), tried: hasUsed("split") ? [...r.tried, "split"] : r.tried }) && shown(t.trigger));
       if (auto) {
         slot.current = true;
         want.current = { id: auto.id, forced: false, tries: 0 };

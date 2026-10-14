@@ -3,12 +3,14 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Close, EyeOff } from "../chrome/icons";
-import { Kbd } from "../keys/KeymapContext";
+import { useKeymap } from "../keys/KeymapContext";
+import { defaultsOnly, labelOf } from "../keys/keymap";
+import "./onboarding.css";
 import { useSettings } from "../settings/useSettings";
 import Tours from "./Tours";
 import { defaultAgentId } from "../launch/agents";
 import {
-  caps, doneFrom, doneId, firstOpen, forward, latest, markGuide, moveOn, nextTip, OPEN_EXPLORE, OPEN_GUIDE, PAGE_SHOWN, railKey, ring, startTicked, STEPS, stopDone, stopOf, TWO_REPOS, visits, words, workflowDone, WORKFLOWS,
+  caps, demoFrames, doneFrom, paletteKeys, doneId, firstOpen, forward, latest, markGuide, moveOn, nextTip, OPEN_EXPLORE, OPEN_GUIDE, PAGE_SHOWN, railKey, ring, startTicked, STEPS, stopDone, stopOf, TWO_REPOS, visits, words, workflowDone, WORKFLOWS,
   type At, type Cap, type CapId, type CliStatus, type Facts, type GuideRecord, type Place, type Setup, type StepId, type TipId,
 } from "./guide";
 
@@ -283,6 +285,45 @@ function Explore({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** ONB-029: the palette's key chips, following the user's binding; the default when unassigned. */
+function PaletteKeys() {
+  const map = useKeymap();
+  const parts = paletteKeys(labelOf(map, "worktree.palette"), labelOf(defaultsOnly(map.platform), "worktree.palette"));
+  return (
+    <>
+      {parts.map((p, i) => (
+        <span key={i} className="kbd-part">
+          {i > 0 && <span className="kbd-plus">+</span>}
+          <span className="kbd">{p}</span>
+        </span>
+      ))}
+    </>
+  );
+}
+
+/** ONB-029: a short demo of typing into the palette that brings up a create-workspace row. It plays
+ *  once and stops; with reduced motion it shows the end state and runs no timer. */
+function PaletteDemo() {
+  const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const frames = useRef(demoFrames(reduced)).current;
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    if (i >= frames.length - 1) return;
+    const t = window.setTimeout(() => setI(i + 1), i === 0 ? 600 : 110);
+    return () => window.clearTimeout(t);
+  }, [i, frames.length]);
+  const f = frames[i];
+  return (
+    <div className="onb-demo" aria-hidden>
+      <div className="onb-demo-input">
+        {f.typed}
+        <span className="caret" />
+      </div>
+      {f.create && <div className="onb-demo-row">Create workspace “{f.typed}”</div>}
+    </div>
+  );
+}
+
 /** ONB-027: at most one tip per launch, once settings, onboarding and the CLI status are known and
  *  no other dialog is open. A tip counts as seen the moment it appears. */
 function StartupTip() {
@@ -346,8 +387,9 @@ function StartupTip() {
         ) : (
           <>
             <h3>
-              Jump to any workspace with <Kbd id="worktree.palette" />
+              Jump to any workspace with <PaletteKeys />
             </h3>
+            <PaletteDemo />
             <p>Type part of a name to switch, or a new name to create a workspace. Change the keys in Settings › Shortcuts.</p>
             <div className="btn-row">
               <span className="spacer" />
