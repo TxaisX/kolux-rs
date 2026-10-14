@@ -336,10 +336,21 @@ pub fn issue_command(root: &Path, worktree: &Path) -> Option<(String, bool)> {
     [worktree, root].iter().find_map(|d| std::fs::read_to_string(d.join(crate::include::CONFIG_FILE)).ok().and_then(|y| top_entry(&y, ISSUE_KEY))).map(|c| (c, true))
 }
 
-/// Whether git, asked in `repo`, tracks nothing at `rel`; false when git cannot tell (not a
-/// repository, no git), so an unproven file never counts as the user's own.
+/// Whether git, asked in `repo`, tracks nothing at `rel` in any capitals (NTFS opens a committed
+/// `.KOLUX/Issue-Command` through the lower-case path, so the pathspec ignores case), and no part of
+/// `rel` is a link (git does not look through a symlinked folder, so a link could read tracked text
+/// through an untracked path); false when git cannot tell (not a repository, no git), so an unproven
+/// file never counts as the user's own.
 fn untracked(repo: &Path, rel: &str) -> bool {
-    matches!(crate::git::run(&["ls-files", "--", rel], Some(repo)), Ok(out) if out.is_empty())
+    let mut at = repo.to_path_buf();
+    for part in rel.split('/') {
+        at.push(part);
+        if std::fs::symlink_metadata(&at).map_or(true, |m| m.file_type().is_symlink()) {
+            return false;
+        }
+    }
+    let spec = format!(":(icase){rel}");
+    matches!(crate::git::run(&["ls-files", "--", &spec], Some(repo)), Ok(out) if out.is_empty())
 }
 
 /// PROJ-036: the issue filled into the command: `{{issue}}` becomes its number and `{{issueUrl}}`
@@ -799,8 +810,50 @@ mod tests {
         let _ = git(&["worktree", "remove", "--force", &wt.to_string_lossy()], &main);
         let bare = tree(&[(".kolux/issue-command", b"echo x\n")]);
         assert_eq!(issue_command(&bare, &bare), None, "outside a repository git cannot prove it untracked");
-        for d in [main, wt, bare] {
+        // council FIX-1: a committed override in other capitals, which a case-blind disk opens
+        // through the lower-case path, is still tracked text
+        let caps = tree(&[(".KOLUX/Issue-Command", b"echo caps {{issue}}\n")]);
+        git(&["init", "-q"], &caps);
+        git(&["add", "-A"], &caps);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"], &caps);
+        let case_blind = caps.join(ISSUE_OVERRIDE).exists();
+        if case_blind {
+            assert_eq!(issue_command(&caps, &caps), None, "a committed .KOLUX/Issue-Command is never the user's own");
+        }
+        git(&["rm", "-q", "--cached", ".KOLUX/Issue-Command"], &caps);
+        if case_blind {
+            assert_eq!(issue_command(&caps, &caps), Some(("echo caps {{issue}}".into(), false)), "untracked in any capitals, it is the user's own");
+        }
+        assert!(case_blind || !cfg!(windows), "NTFS opens the file through the lower-case path");
+        for d in [main, wt, bare, caps] {
             let _ = std::fs::remove_dir_all(d);
         }
+    }
+
+    #[test]
+    fn proj036_an_override_reached_through_a_link_never_counts_as_the_users_own() {
+        let git = |args: &[&str], dir: &Path| crate::git::run(args, Some(dir)).unwrap();
+        let main = tree(&[("docs/issue-command", b"echo linked {{issue}}\n"), ("real/issue-command", b"echo real\n")]);
+        git(&["init", "-q"], &main);
+        git(&["add", "docs"], &main);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"], &main);
+        #[cfg(windows)]
+        let (dir_link, file_link) = (std::os::windows::fs::symlink_dir(main.join("docs"), main.join(".kolux")), |a: &Path, b: &Path| std::os::windows::fs::symlink_file(a, b));
+        #[cfg(not(windows))]
+        let (dir_link, file_link) = (std::os::unix::fs::symlink(main.join("docs"), main.join(".kolux")), |a: &Path, b: &Path| std::os::unix::fs::symlink(a, b));
+        if dir_link.is_err() {
+            eprintln!("symlinks need Developer Mode here; the link case was not exercised");
+        } else {
+            assert!(main.join(ISSUE_OVERRIDE).exists(), "the link reads the tracked text");
+            assert_eq!(issue_command(&main, &main), None, "a linked .kolux folder is refused");
+            std::fs::remove_dir(main.join(".kolux")).or_else(|_| std::fs::remove_file(main.join(".kolux"))).unwrap();
+            std::fs::create_dir(main.join(".kolux")).unwrap();
+            file_link(&main.join("real/issue-command"), &main.join(ISSUE_OVERRIDE)).unwrap();
+            assert_eq!(issue_command(&main, &main), None, "a linked issue-command file is refused");
+            std::fs::remove_file(main.join(ISSUE_OVERRIDE)).unwrap();
+            std::fs::write(main.join(ISSUE_OVERRIDE), "echo own\n").unwrap();
+            assert_eq!(issue_command(&main, &main), Some(("echo own".into(), false)), "a plain untracked file still counts");
+        }
+        let _ = std::fs::remove_dir_all(main);
     }
 }
