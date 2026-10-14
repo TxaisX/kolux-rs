@@ -638,7 +638,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P2 · theme 9 · Reliability and no lost work (30 cards)
 
-- [ ] T-273 · PROJ-087 Claude finds each workspace's history on Windows
+- [x] T-273 · PROJ-087 Claude finds each workspace's history on Windows · done 2026-10-13 (lane/sessions from 0819c57; evidence/T-273.txt: new sessions.rs folder_key / claude_folder_name / claude_history_dir / claude_sessions and command claude_workspace_sessions, registered by the coordinator's lib.rs hunk in the commit body; live over CDP a workspace given as c:/work/app (lower-case drive) lists the C--work-app sessions newest first, a sub-workspace only its own; cargo tests proj087 x3)
 - [ ] T-274 · TERM-095 Link detection never freezes on huge lines · TERM-137 Shell hooks from different Kolux builds coexist
 - [ ] T-275 · STAT-031 Agents that are gone stop reporting
 - [ ] T-276 · VIEW-090 Scan notices in the session list · VIEW-092 Session scans run in the background and survive restarts · VIEW-115 The shell avoids needless redraws
