@@ -79,12 +79,31 @@ pub fn people_of(v: &serde_json::Value) -> Vec<Person> {
     out
 }
 
+/// GIT-053: an avatar is shown only from the GitHub host's own avatar addresses (avatars.githubusercontent.com
+/// for github.com; the host itself or its avatars. subdomain for GitHub Enterprise); anything else
+/// falls back to initials, so a repository's people list cannot make the page load other sites.
+pub fn avatar_ok(url: &str, host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    let mut allowed = vec![format!("https://{host}/"), format!("https://avatars.{host}/")];
+    if host == "github.com" {
+        allowed.push("https://avatars.githubusercontent.com/".into());
+    }
+    let url = url.to_ascii_lowercase();
+    allowed.iter().any(|a| url.starts_with(a.as_str()))
+}
+
 /// GIT-053: the people who can be assigned in `repo` (GitHub's assignees list, first 100), which
 /// is who the mention, assignee and reviewer pickers offer.
 // ponytail: one page of 100; recent editors of a PR's files join the reviewer list with T-232-c.
 pub fn repo_people(gh: &Path, host: &str, repo: &str) -> Result<Vec<Person>, String> {
     let path = format!("{}/assignees", repo_path(host, repo)?);
-    Ok(people_of(&gh_json(gh, host, &path, &["-X", "GET", "-f", "per_page=100"])?))
+    let mut people = people_of(&gh_json(gh, host, &path, &["-X", "GET", "-f", "per_page=100"])?);
+    for p in &mut people {
+        if !avatar_ok(&p.avatar, host) {
+            p.avatar.clear();
+        }
+    }
+    Ok(people)
 }
 
 #[tauri::command]
@@ -145,6 +164,18 @@ mod tests {
     }
 
     #[test]
+    fn avatars_come_only_from_the_github_host_s_own_avatar_addresses() {
+        assert!(avatar_ok("https://avatars.githubusercontent.com/u/1?v=4", "github.com"));
+        assert!(!avatar_ok("https://evil.example/u/1", "github.com"));
+        assert!(!avatar_ok("https://avatars.githubusercontent.com.evil.example/u/1", "github.com"));
+        assert!(avatar_ok("https://ghe.corp/avatars/u/2", "ghe.corp"));
+        assert!(avatar_ok("https://avatars.ghe.corp/u/2", "GHE.corp"));
+        assert!(!avatar_ok("https://avatars.githubusercontent.com/u/1", "ghe.corp"), "Enterprise people do not borrow github.com avatars");
+        assert!(!avatar_ok("http://ghe.corp/u/2", "ghe.corp"));
+        assert!(!avatar_ok("", "github.com"));
+    }
+
+    #[test]
     fn odd_hosts_and_repository_names_never_reach_gh() {
         assert_eq!(repo_path("github.com", "o/r").unwrap(), "repos/o/r");
         for (h, r) in [("github.com", "o"), ("github.com", "../r"), ("github.com", "o/r/x"), ("github.com", "o/.."), ("git hub", "o/r"), ("", "o/r"), ("github.com", "o/r?x=1")] {
@@ -174,7 +205,7 @@ mod tests {
             f
         };
         assert_eq!(repo_parent(&gh, "github.com", "me/fork").unwrap(), Some("up/stream".into()));
-        assert_eq!(repo_people(&gh, "github.com", "up/stream").unwrap(), vec![Person { login: "ana".into(), avatar: "https://a/1".into() }]);
+        assert_eq!(repo_people(&gh, "github.com", "up/stream").unwrap(), vec![Person { login: "ana".into(), avatar: String::new() }], "an avatar off GitHub's avatar host falls back to initials");
         let calls = fs::read_to_string(dir.join("calls.txt")).unwrap();
         assert!(calls.contains("api repos/me/fork --hostname github.com"), "{calls}");
         // cmd.exe quoting may wrap the field in quotes, so the field is checked on its own.

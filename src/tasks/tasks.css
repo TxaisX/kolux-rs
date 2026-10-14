@@ -10,3 +10,10 @@
 .tasks-source { display: inline-flex; align-items: center; gap: 4px; }
 .tasks-source > span, .tasks-split { color: var(--fg-label); }
 .tasks-split { padding: 1px 6px; border: 1px solid var(--line); border-radius: 999px; font-size: 11px; }
+/* T-314-b: the @ mention picker (GIT-053). */
+.mention-field { position: relative; display: flex; flex-direction: column; min-width: 0; }
+.mention-list { position: absolute; left: 0; top: 100%; z-index: 5; min-width: 200px; max-width: 100%; max-height: 220px; overflow-y: auto; margin: 2px 0 0; padding: 4px; list-style: none; background: var(--pane-bg); border: 1px solid var(--line-focus); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+.mention-list li { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.mention-list li[aria-selected="true"], .mention-list li:hover { background: var(--row-selected); }
+.task-avatar { width: 18px; height: 18px; flex: none; border-radius: 50%; object-fit: cover; }
+.task-avatar.initials { display: inline-grid; place-items: center; font-size: 9px; font-weight: 600; color: var(--fg-label); background: var(--line-subtle); }

@@ -2,12 +2,15 @@
 // description, timeline, labels and assignees. The description shows GitHub's latest version (read
 // again every 15 seconds while the dialog is open) unless it is being edited, and an edit keeps its
 // unsaved draft until it is saved or cancelled.
+// GIT-053 (T-314-b): typing @ in the description editor offers this repository's people.
 // ponytail: the description shows as plain text, not rendered markdown; assignee edits, close /
 // reopen / comment and opening a workspace come with T-231-c, the full pull request page with T-232-c.
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { Close } from "../chrome/icons";
+import MentionField from "./MentionField";
 import { eventLine, type Task, type TaskDetail, type TaskLabel, taskKind } from "./model";
+import type { Person } from "./repoFacts";
 
 const FRESH_MS = 15_000;
 
@@ -15,6 +18,7 @@ export default function TaskDialog({ task, host, onClose, onLabels }: { task: Ta
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
   const [offer, setOffer] = useState<TaskLabel[]>([]);
+  const [people, setPeople] = useState<Person[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -35,9 +39,19 @@ export default function TaskDialog({ task, host, onClose, onLabels }: { task: Ta
     invoke<TaskLabel[]>("scm_repo_labels", { host, repo: task.repo })
       .then(setOffer)
       .catch(() => setOffer([]));
+    // GIT-053: the people @ offers are this item's own repository's, on this item's host.
+    let live = true;
+    setPeople([]);
+    invoke<Person[]>("github_people", { host, repo: task.repo }).then(
+      (p) => live && setPeople(p),
+      () => live && setPeople([]),
+    );
     const timer = setInterval(read, FRESH_MS);
     box.current?.focus();
-    return () => clearInterval(timer);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
   }, [task.url]);
 
   const labels = (add: string[], remove: string[]) => {
@@ -107,7 +121,7 @@ export default function TaskDialog({ task, host, onClose, onLabels }: { task: Ta
               )}
             </div>
             {draft !== null ? (
-              <textarea className="field task-body-edit" aria-label="Description" value={draft} onChange={(e) => setDraft(e.target.value)} />
+              <MentionField className="task-body-edit" label="Description" value={draft} onChange={setDraft} people={people} />
             ) : (
               <div className="task-body" data-task-body>
                 {detail === null ? "Loading…" : detail.body || <span className="muted">No description.</span>}
