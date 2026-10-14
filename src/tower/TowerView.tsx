@@ -1,5 +1,5 @@
-// The control tower (OD-09 / DT-C35, T-546): a full-width switcher screen in the main window (a
-// window of its own for a second monitor is T-546-c). Usage per provider across the top, then every
+// The control tower (OD-09 / DT-C35, T-546): a full-width switcher screen in the main window (T-546-c:
+// Own window also opens it in a window of its own, on the second screen; ownWindow.ts). Usage per provider across the top, then every
 // agent pane as one row, needs-you first.
 // One click on a row (or Enter on the selected one) jumps to that pane; Up and Down walk the rows.
 // The rows come from `towerRows` in tower.ts; the window computes each pane's chip and meter the
@@ -14,10 +14,15 @@ import { programWord } from "../launch/PlusMenu";
 import { folderName } from "../projects/model";
 import { tone } from "../usage/meter";
 import { refreshAll } from "../usage/refresh";
+import { openTowerWindow } from "./ownWindow";
 import Ring from "../usage/Ring";
 import { laneCounts, type AccountUsage, type Row } from "./tower";
 
-type Props = { rows: Row[]; usage: AccountUsage[]; now: number; onOpen: (key: number) => void };
+/** T-546-c: `detached` = drawn in the Tower's own window (no Own window button; Refresh asks the main window). */
+type Props = { rows: Row[]; usage: AccountUsage[]; now: number; onOpen: (key: number) => void; detached?: boolean; onRefresh?: () => void };
+
+/** T-546-c: the words when the Tower's own window could not open; the Tower stays on this screen. */
+export const NO_WINDOW = "The Tower could not open in its own window here, so it stays on this screen.";
 
 /** The glyph for a row: its lane, with the stale and stopped words told apart. */
 function glyphOf(r: Row): GlyphName {
@@ -30,12 +35,14 @@ function glyphOf(r: Row): GlyphName {
 
 const laneTitle = (lane: Lane) => LANES.find((l) => l.id === lane)?.title ?? lane;
 
-export default function TowerView({ rows, usage, now, onOpen }: Props) {
+export default function TowerView({ rows, usage, now, onOpen, detached = false, onRefresh = refreshAll }: Props) {
+  const [noWindow, setNoWindow] = useState(false);
+  const ownWindow = () => void openTowerWindow().then((r) => setNoWindow(r === "failed"));
   const [selected, setSelected] = useState<number | null>(null);
   const keys = rows.map((r) => r.key);
   const current = settle(keys, selected);
-  const root = useRef<HTMLDivElement>(null);
-  useEffect(() => root.current?.focus(), []);
+  const list = useRef<HTMLDivElement>(null);
+  useEffect(() => list.current?.focus(), []);
 
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") setSelected(moveSelection(keys, current, e.key === "ArrowDown" ? 1 : -1));
@@ -47,7 +54,7 @@ export default function TowerView({ rows, usage, now, onOpen }: Props) {
   const counts = laneCounts(rows).filter((c) => c.count > 0);
   const needs = counts.find((c) => c.lane === "needs")?.count ?? 0;
   return (
-    <div className="tower" ref={root} tabIndex={0} role="listbox" aria-label="Control tower" aria-activedescendant={current === null ? undefined : `tower-${current}`} onKeyDown={onKeyDown}>
+    <div className={`tower${detached ? " detached" : ""}`}>
       <div className="top">
         <div className={`card summary${needs ? " needs" : ""}`} role="status" aria-label="Tower summary">
           <span className="big">{rows.length}</span>
@@ -60,9 +67,16 @@ export default function TowerView({ rows, usage, now, onOpen }: Props) {
             ))}
           </span>
           {/* USAGE-023 (T-070): a manual refresh reads every provider at once, past the debounce and any retry-after. */}
-          <button type="button" className="refresh" title="Read the usage figures again now" onClick={() => refreshAll()}>
+          <button type="button" className="refresh" title="Read the usage figures again now" onClick={() => onRefresh()}>
             Refresh
           </button>
+          {/* T-546-c: the Tower in its own window, for a second screen; it stays here when that window cannot open. */}
+          {!detached && (
+            <button type="button" className="refresh own" title="Open the Tower in its own window, on the second screen when there is one" onClick={ownWindow}>
+              Own window
+            </button>
+          )}
+          {noWindow && <span className="nowin" role="status">{NO_WINDOW}</span>}
         </div>
         {usage.map((u) => {
           // T-546-b (2): one card per provider; the accounts its panes run on are listed under it, and
@@ -98,7 +112,8 @@ export default function TowerView({ rows, usage, now, onOpen }: Props) {
           );
         })}
       </div>
-      <div className="list">
+      {/* council AFTER 2 (MERGE 42 review): the listbox is the list of rows only; each lane is a group of options. */}
+      <div className="list" ref={list} tabIndex={0} role="listbox" aria-label="Control tower" aria-activedescendant={current === null ? undefined : `tower-${current}`} onKeyDown={onKeyDown}>
         {rows.length === 0 && (
           <div className="clear" role="status">
             <StatusGlyph glyph="check" size={14} />
@@ -109,7 +124,7 @@ export default function TowerView({ rows, usage, now, onOpen }: Props) {
           const group = rows.filter((r) => r.lane === l.id);
           if (group.length === 0) return null;
           return (
-            <section key={l.id} aria-label={l.title}>
+            <section key={l.id} role="group" aria-label={l.title}>
               <h3>
                 {l.title} <span className="n">{group.length}</span>
               </h3>

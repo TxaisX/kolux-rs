@@ -6,8 +6,9 @@
 //          never a real provider): a forced failure keeps the last figures and raises one steady error
 //          mark through background retries; a focus after six minutes reads once, a second focus two
 //          seconds later does not; the Tower's Refresh reads every provider at once.
+//   own (T-546-c): the Tower in its own window, or the note and the switcher screen when it cannot open.
 //   pill (T-550): the top-bar usage pill is one button; a click opens Settings at Accounts & keys.
-// Usage: node evidence/T-070-proof.mjs <app pid> <step: tour|cards|pill|usage|all>
+// Usage: node evidence/T-070-proof.mjs <app pid> <step: tour|cards|pill|own|usage|all>
 import { execFile } from "node:child_process";
 
 const ROOT = "G:/Dev/kolux-rs-lanes/look";
@@ -49,7 +50,7 @@ const kick = (reason) => ev(`${DEV}.runners.claude.kick(${JSON.stringify(reason)
 const focus = () => ev(`(window.dispatchEvent(new Event("focus")), "focus dispatched")`);
 
 const step = process.argv[3] ?? "all";
-const is = (s) => step === s || step === "all";
+const is = (s) => step === s || (step === "all" && s !== "own");
 
 async function closeTour() {
   log("tour close:", await ev(`(() => { const d = document.querySelector("[role=dialog]"); const x = d && [...d.querySelectorAll("button")].find(b => b.title === "Close" || b.getAttribute("aria-label") === "Close"); if (!x) return "no tour"; x.click(); return "closed"; })()`));
@@ -100,6 +101,60 @@ if (is("pill")) {
   log("Escape:", await cdp("key", "Escape"));
   await sleep(500);
   log("settings open after Escape:", await ev(`!!document.querySelector(".settings[role=dialog]")`));
+}
+
+// T-546-c: the Tower in its own window. Without the window permission the button says so and the Tower stays a
+// switcher screen; with it, a second window opens (second screen when there is one), shows the same rows, a row
+// clicked there opens the pane in the main window, its Refresh reads usage in the main window, and closing it
+// leaves every shell running.
+if (is("own")) {
+  const on = (m, js) => run(process.execPath, [`${ROOT}/scripts/evidence/cdp.mjs`, m, "eval", js], { CDP_PORT: CDP }).then((o) => { const v = JSON.parse(o); return v && typeof v === "object" && v.result && "type" in v.result ? v.result.value ?? null : v; });
+  const M = "1426/ ";
+  const T = "tower-window";
+  const targets = () => run(process.execPath, [`${ROOT}/scripts/evidence/cdp.mjs`, "list"], { CDP_PORT: CDP });
+  const kids = async () => Number(await run("powershell", ["-NoProfile", "-Command", `$all = Get-CimInstance Win32_Process; $ids = @(${process.argv[2]}); $n = 0; do { $next = @($all | Where-Object { $ids -contains $_.ParentProcessId -and $ids -notcontains $_.ProcessId } | ForEach-Object { $_.ProcessId }); $ids += $next } while ($next.Count -gt 0); ($all | Where-Object { $ids -contains $_.ProcessId -and $_.Name -match 'powershell|pwsh|cmd|node' }).Count`]));
+  log("Tower view:", await on(M, `(() => { const b = [...document.querySelectorAll("nav.switcher button")].find(b => b.textContent.trim() === "Tower"); if (!b) return "missing"; b.click(); return "clicked"; })()`));
+  await sleep(800);
+  const panes0 = await on(M, `document.querySelectorAll("section.pane").length`);
+  const shells0 = await kids();
+  log("main: panes", panes0, "· shells/agents under the app", shells0, "· listbox on:", await on(M, `document.querySelector("[role=listbox]")?.className ?? null`), "· groups:", await on(M, `document.querySelectorAll(".tower .list section[role=group]").length`));
+  log("targets before:", JSON.stringify((await targets()).split("\n")));
+  const t = Date.now();
+  log("click Own window:", await on(M, `(() => { const b = document.querySelector(".tower .refresh.own"); if (!b) return "missing"; b.click(); return "clicked"; })()`));
+  let outcome = null;
+  while (!outcome && Date.now() - t < 8000) {
+    if (await on(M, `!!document.querySelector(".tower .nowin")`)) outcome = "note";
+    else if ((await targets()).includes(T)) outcome = "window";
+    else await sleep(150);
+  }
+  log(`outcome after ${Date.now() - t} ms:`, outcome);
+  if (outcome === "note") {
+    log("note:", await on(M, `document.querySelector(".tower .nowin").textContent`), "· the Tower screen still shown:", await on(M, `!!document.querySelector(".tower")`), "· targets:", JSON.stringify((await targets()).split("\n")));
+  } else if (outcome === "window") {
+    await waitFor("rows in the Tower window", async () => (await on(T, `document.querySelectorAll(".tower.detached .row").length`)) >= 2, 8000);
+    log("Tower window:", JSON.stringify(await on(T, `({ title: document.title, at: [screenX, screenY, outerWidth, outerHeight], rows: [...document.querySelectorAll(".tower .row")].map(r => r.querySelector(".name")?.textContent.trim()), usage: [...document.querySelectorAll(".tower .card.usage")].map(c => c.getAttribute("aria-label")), ownButton: !!document.querySelector(".refresh.own") })`)));
+    log("main window at:", JSON.stringify(await on(M, `[screenX, screenY, outerWidth, outerHeight]`)));
+    log("main: leave the Tower screen first:", await on(M, `(() => { const b = [...document.querySelectorAll("nav.switcher button")].find(b => b.textContent.trim() === "Terminals"); b?.click(); return !!b; })()`));
+    await sleep(500);
+    const focusedNow = () => on(M, `(() => { const s = document.querySelector("section.pane.focused"); return s ? s.getAttribute("aria-label") + " [" + (s.dataset.agent ?? "") + "]" : null; })()`);
+    log("main: focus a shell pane first:", await on(M, `(() => { const s = [...document.querySelectorAll("section.pane")].find(s => !/claude/.test(s.dataset.agent ?? "")); s?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); return !!s; })()`));
+    await sleep(400);
+    log("main focused pane before the row click:", await focusedNow());
+    const name = await on(T, `document.querySelector(".tower .row:last-of-type .name")?.textContent.trim()`);
+    log("click row in the Tower window:", name, await on(T, `(() => { const r = [...document.querySelectorAll(".tower .row")].pop(); r.click(); return "clicked"; })()`));
+    await sleep(800);
+    log("main focused pane after the row click:", await focusedNow(), "· screen Terminals pressed:", await on(M, `[...document.querySelectorAll("nav.switcher button")].find(b => b.textContent.trim() === "Terminals")?.getAttribute("aria-pressed")`));
+    log("main after the row click:", JSON.stringify(await on(M, `({ focusedPane: document.activeElement?.closest("section.pane")?.getAttribute("aria-label") ?? null, activePane: document.querySelector("section.pane.active, section.pane[data-active=true]")?.getAttribute("aria-label") ?? null, hasFocus: document.hasFocus() })`)));
+    log("stub the usage read in the main window:", await stub("ok"));
+    const c0 = await calls();
+    log("Tower window Refresh:", await on(T, `(() => { const b = document.querySelector(".tower .refresh:not(.own)"); b.click(); return "clicked"; })()`));
+    await sleep(1000);
+    log("usage reads in the main window: before", JSON.stringify(c0), "after", JSON.stringify(await calls()));
+    log("close the Tower window:", await on(T, `window.__TAURI_INTERNALS__.invoke("plugin:window|close", { label: "tower" }).then(() => "close sent")`).catch((e) => "closed (" + String(e).slice(0, 60) + ")"));
+    await waitFor("the Tower window gone", async () => !(await targets()).includes(T), 8000);
+    await sleep(1500);
+    log("after the close: main panes", await on(M, `document.querySelectorAll("section.pane").length`), "(before", panes0 + ") · shells/agents under the app", await kids(), "(before", shells0 + ") · targets:", JSON.stringify((await targets()).split("\n")));
+  }
 }
 
 if (is("usage")) {
