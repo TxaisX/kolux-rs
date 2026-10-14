@@ -46,6 +46,8 @@ pub static LIMIT_RESETS_AT: AtomicI64 = AtomicI64::new(0);
 pub enum Agent {
     Claude,
     Codex,
+    /// T-120-b: Gemini CLI, Antigravity or Amp, its event already normalized; hook semantics unverified.
+    Vendor,
 }
 
 /// A sub-agent or teammate under a lead session.
@@ -252,6 +254,7 @@ impl Session {
                 let change = match agent {
                     Agent::Claude => claude_change(&strip_agent(event)),
                     Agent::Codex => codex_change(&strip_agent(event)),
+                    Agent::Vendor => None,
                 }?;
                 match name {
                     "PermissionRequest" => {
@@ -315,6 +318,7 @@ impl Session {
         let mut change = match agent {
             Agent::Claude => claude_change(event),
             Agent::Codex => codex_change(event),
+            Agent::Vendor => crate::hooks::agent_hooks::vendors::change(event),
         }?;
         let before = self.resolved();
         if change.boundary {
@@ -332,7 +336,8 @@ impl Session {
                 self.own = Some("working");
             }
             "Stop" => {
-                self.interrupted = std::mem::take(&mut self.cancelled);
+                // T-120-b: Amp says itself when a turn was cancelled.
+                self.interrupted = std::mem::take(&mut self.cancelled) || event.get("kolux_interrupted").and_then(Value::as_bool) == Some(true);
                 self.pending = None;
                 self.reply = str_of(event, "last_assistant_message").map(clean_reply);
                 // STAT-024: Claude Code's own lists of background tasks and session crons decide.
@@ -423,7 +428,7 @@ impl Session {
             // inside it, that report is the cancelled tool's own hook finishing, not the turn going on.
             _ if event.get("is_interrupt").and_then(Value::as_bool) == Some(true) => false,
             Agent::Claude => name == "Stop" || (matches!(name, "PreToolUse" | "PostToolUse" | "PostToolUseFailure") && str_of(event, "tool_use_id").is_some_and(|id| name == "PreToolUse" || self.past_grace() || !self.killed.iter().any(|k| k == id))),
-            Agent::Codex => self.fresh_tool(name, event),
+            Agent::Codex | Agent::Vendor => self.fresh_tool(name, event),
         }
     }
 
@@ -505,8 +510,8 @@ pub fn answer_keys(agent: Agent, approve: bool) -> &'static str {
     match (agent, approve) {
         (Agent::Claude, true) => "\r",
         (Agent::Claude, false) => "\x1b",
-        (Agent::Codex, true) => "y",
-        (Agent::Codex, false) => "n",
+        (Agent::Codex | Agent::Vendor, true) => "y",
+        (Agent::Codex | Agent::Vendor, false) => "n",
     }
 }
 
