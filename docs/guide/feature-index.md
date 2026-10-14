@@ -252,6 +252,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-109-a | The new workspace composer picks the project and names from a branch or item. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-109-b | The composer suggests GitHub issues and pull requests. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-109-c | A failed worktree creation retries by policy; cancelling mid-way cleans up. | [Projects and worktrees](projects-and-worktrees.md) |
+| T-110-a | Setup scripts get the workspace's folders as variables, .bat scripts run under Command Prompt, and a half-active conda environment is cleared. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-111-a | See a branch summary against its base branch. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-111-b | Shortcuts delete a workspace and rename a tab. | [Terminals](terminals.md) |
 | T-111-c | The palette ranks results, filters by repository, creates worktrees and runs quick actions. | [Projects and worktrees](projects-and-worktrees.md) |
@@ -488,6 +489,7 @@ Tasks not yet ticked off in the build plan are not listed.
 
 | Task | Feature | Guide page |
 |---|---|---|
+| T-288 | A workspace made from a linked issue runs the project's issue command with the issue number filled in. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-289 | Copy session, terminal and pane IDs; links point to other terminals and tasks. | [Terminals](terminals.md) |
 | T-290 | Kolux checks whether each agent has the orchestration skill. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-291-a | An Automations row in the sidebar, off by default; hide automation worktrees. | [Projects and worktrees](projects-and-worktrees.md) |
@@ -503,4 +505,4 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-298 | Reopen the wizard from the sidebar help menu; first successes are recorded locally. | [Getting started](getting-started.md) |
 
 | T-546 | The Tower: every agent on one full-width screen, needs-you first, one click to its pane, usage per program across the top. | [Board, Agents and Inbox](board-agents-inbox.md) |
-<!-- generated from PLAN.md at 1db1bf0 -->
+<!-- generated from PLAN.md at 1ca03cc -->

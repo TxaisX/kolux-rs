@@ -43,6 +43,14 @@ Press the plus, or Ctrl+N (also Ctrl+Shift+N). The form asks for:
 
 "Advanced…" adds a branch name, reuse of an existing branch, opening a pull request, a setup script (run it, or skip it, in a tab, a split right or a split below, and optionally wait for it) and the base to start from. Press "Create workspace" or Cancel. Tick "Create more" to keep the form open for another.
 
+## Setup scripts and the issue command
+
+The setup script is `scripts: setup:` in the new workspace's `kolux.yaml` (a settings file in the repository). It runs inside the workspace with three variables set: `KOLUX_ROOT_PATH` (the main folder), `KOLUX_WORKTREE_PATH` (the workspace's folder) and `KOLUX_WORKSPACE_NAME` (that folder's name). A `.bat` or `.cmd` script runs through Command Prompt even when your shell is Git Bash. If Kolux was started from a half-active conda environment, those conda variables are cleared first.
+
+A workspace made from a linked GitHub issue also runs the project's issue command, in its own tab. It is your own `.kolux/issue-command` file in the repository when there is one, otherwise `issueCommand:` in `kolux.yaml`. `{{issue}}` becomes the issue number and `{{issueUrl}}` its address; a command with neither gets the number added at the end. The issue's title is never put in, because anyone can write it. A linked pull request runs nothing, and skipping the setup script skips the issue command too.
+
+Kolux does not yet ask before running a repository's `kolux.yaml` commands, so only create workspaces in repositories you trust.
+
 While Git works, a stand-in row shows "creating…" with a cancel x.
 
 ## Workspace rows
@@ -141,4 +149,4 @@ Claude and Codex tabs with a known session resume it. Other agents return at the
 
 Quitting with unsaved editor text asks "Quit with unsaved changes?" with "Quit without saving" or "Keep working".
 
-<!-- verified against: src/projects/ProjectsPanel.tsx, src/projects/AddProject.tsx, src/glossary.ts, src/scm/SourceControlPanel.tsx, src/scm/split.ts, src/scm/watch.ts, src-tauri/src/scm_watch.rs, src/scm/model.ts, src/chrome/RightSidebar.tsx, src/terminal/layout.ts, src/keys/actions.ts, src/App.tsx at 1db1bf0 -->
+<!-- verified against: src/projects/ProjectsPanel.tsx, src/projects/AddProject.tsx, src/glossary.ts, src/scm/SourceControlPanel.tsx, src/scm/split.ts, src/scm/watch.ts, src-tauri/src/scm_watch.rs, src/scm/model.ts, src/chrome/RightSidebar.tsx, src/terminal/layout.ts, src/keys/actions.ts, src/App.tsx, src-tauri/src/setup.rs, src/setup/IssueCommand.tsx at 1ca03cc -->
