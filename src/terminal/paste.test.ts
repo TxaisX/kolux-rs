@@ -1,7 +1,7 @@
 // TERM-068: a paste lands only in the pane whose text area received it, and a paste made while the
 // opening prompt is still owed waits for it (T-010-fix). Node's EventTarget stands in for the text areas.
 import { expect, test } from "vitest";
-import { attachPaste, BRACKET_CLOSE, BRACKET_OPEN, CHUNK, cutChunks, LIMIT } from "./paste";
+import { attachPaste, BRACKET_CLOSE, BRACKET_OPEN, CHUNK, cutChunks, LIMIT, prepareForTerminal } from "./paste";
 
 const paste = (target: EventTarget, text: string) => {
   const e = Object.assign(new Event("paste", { cancelable: true }), { clipboardData: { getData: () => text } });
@@ -151,4 +151,23 @@ test("cancel mid-paste drops the queued remainder and closes the open bracket; n
   expect(got).toHaveLength(2);
   paste(t, "z"); // the pane takes the next paste normally
   expect(got[2]).toBe(BRACKET_OPEN + "z" + BRACKET_CLOSE);
+});
+
+// Council D2 MERGE 32 AFTER A1 (T-278-d): a clipboard that holds a fake close bracket must not end the
+// bracket early and type what follows straight into the shell. Every ESC byte is dropped from a
+// bracketed paste, so the program sees exactly one bracket pair and plain text inside it.
+test("a bracketed paste holding a fake close bracket and a command arrives inside one bracket pair with no bare ESC", () => {
+  const t = new EventTarget();
+  const got: string[] = [];
+  attachPaste(t, (s) => got.push(s), () => false, () => {}, () => true);
+  paste(t, "echo hi" + BRACKET_CLOSE + "rm -rf x\n" + BRACKET_OPEN + "\x1b[31mred");
+  const all = got.join("");
+  expect(all.startsWith(BRACKET_OPEN)).toBe(true);
+  expect(all.endsWith(BRACKET_CLOSE)).toBe(true);
+  const inside = all.slice(BRACKET_OPEN.length, all.length - BRACKET_CLOSE.length);
+  expect(inside).not.toContain("\x1b");
+  expect(inside).toBe("echo hi[201~rm -rf x\r[200~[31mred");
+  expect(all.split("\x1b")).toHaveLength(3); // the opening and the closing bracket, nothing else
+  expect(prepareForTerminal("a\x1bb\r\nc", true)).toBe("ab\rc");
+  expect(prepareForTerminal("a\x1bb\r\nc")).toBe("a\x1bb\rc"); // an unbracketed paste keeps its bytes
 });
