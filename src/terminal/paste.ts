@@ -40,6 +40,16 @@ export const prepareForTerminal = (text: string, bracketed = false) => (brackete
 
 type Chunk = { data: string; open: boolean };
 
+/** How many lines a paste holds (a trailing line end does not add an empty one). A bare "\r" ends a line
+ *  too (council D2 MERGE 47 F1): a terminal runs on it just as on "\n". */
+export const lineCount = (text: string) => stripEnd(text).split(/\r\n|\r|\n/).length;
+const stripEnd = (text: string) => text.replace(/(\r\n|\r|\n)$/, "");
+
+/** T-151-b (council FIX-SOON, TERM-069): a paste of 2+ lines into a program that has not turned on bracketed
+ *  paste runs each line as it lands (Windows PowerShell 5.1 under ConPTY never sees the brackets), so the
+ *  pane asks first, like Windows Terminal's warning. One line, or a program that brackets, goes straight in. */
+export const needsAsk = (text: string, bracketed: boolean) => !bracketed && lineCount(text) >= 2;
+
 export function attachPaste(
   target: EventTarget | null | undefined,
   send: (data: string) => unknown,
@@ -51,6 +61,9 @@ export function attachPaste(
    *  paste, and the console layer drops the markers for one that does not (measured: Windows
    *  PowerShell 5.1 under ConPTY shows nothing of them). Single-line text keeps the fast path. */
   forceMultiLine: () => boolean = () => false,
+  /** T-151-b: given, a multi-line paste into a program without bracketed paste is handed here with the line
+   *  count and a `go` that sends it; the caller shows "Paste N lines?" and calls `go` on Paste, nothing on Cancel. */
+  ask?: (lines: number, go: () => void) => void,
 ) {
   const queued: string[] = [];
   const chunks: Chunk[] = [];
@@ -85,20 +98,33 @@ export function attachPaste(
     });
     if (timer === null && !inFlight) pump();
   };
-  const onPaste = (e: Event) => {
-    const text = (e as ClipboardEvent).clipboardData?.getData("text") ?? "";
-    e.preventDefault();
-    e.stopImmediatePropagation();
+  // Council D2 MERGE 47 FB2: every paste (the clipboard event and the right-click menu) goes through here.
+  const take = (text: string) => {
+    // Council D2 MERGE 47 F1: one line with a line end at the end ("evil-cmd\n") is typed without it, like
+    // Windows Terminal's trimPaste, so a single-line paste never runs by itself.
+    if (lineCount(text) === 1) text = stripEnd(text);
     if (!text) return;
     if (text.length > LIMIT) {
       refused(`Paste of ${mb(text.length)} is over the ${mb(LIMIT)} limit; nothing was sent`);
       return;
     }
-    if (held()) queued.push(text);
-    else deliver(text);
+    const go = () => {
+      if (held()) queued.push(text);
+      else deliver(text);
+    };
+    if (ask && needsAsk(text, bracketed())) ask(lineCount(text), go);
+    else go();
+  };
+  const onPaste = (e: Event) => {
+    const text = (e as ClipboardEvent).clipboardData?.getData("text") ?? "";
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    take(text);
   };
   target?.addEventListener("paste", onPaste, { capture: true });
   return {
+    /** A paste that did not come from a clipboard event (the right-click menu): the same checks and asks. */
+    paste: take,
     /** Deliver what waited, oldest first. */
     flush: () => {
       for (const text of queued.splice(0)) deliver(text);

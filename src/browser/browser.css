@@ -9,3 +9,11 @@
   .pane.browser .pane-head .address-slot { flex: none; width: 72px; }
   .pane.browser .pane-head .address-slot .address:focus { position: absolute; top: 3px; left: 8px; right: 8px; width: auto; height: calc(100% - 6px); z-index: 3; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); }
 }
+
+/* BROW-012: the zoom level, shown for a moment after it changes. */
+.pane.browser .pane-head .zoom-badge { color: var(--fg-muted); font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--chip-bg); }
+/* BROW-007: the find bar sits between the toolbar and the page, which shrinks to make room. */
+.pane.browser .find-bar { display: flex; align-items: center; gap: 4px; padding: 3px 8px; border-bottom: 1px solid var(--line-subtle); }
+.pane.browser .find-bar .find { flex: 1; min-width: 0; }
+/* BROW-023: the site icon takes the globe's place. */
+.pane.browser .pane-head .site-icon { display: block; object-fit: contain; }
