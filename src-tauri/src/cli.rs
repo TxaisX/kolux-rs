@@ -1108,7 +1108,7 @@ fn text_of(command: &str, r: &Value) -> String {
         "terminal.send" => {
             let what = r["delivered"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join("+");
             let tail = match r["receipt"].as_str() {
-                Some("turn_began") => ": the agent began a turn".to_string(),
+                Some("turn_began") => ": the prompt was taken (the agent began a turn)".to_string(),
                 Some(rc) => format!(": {rc}; {}", r["next"].as_str().map(|n| format!("look with {n}")).unwrap_or_default()),
                 None => String::new(),
             };
@@ -1688,6 +1688,10 @@ pub fn main(words: Vec<String>) -> i32 {
             call(port, &Request { id: id.clone(), token, command: parsed.command.clone(), cwd: cwd.clone(), args: Value::Object(args.clone()), pane: pane.clone(), cli: VERSION.into(), arrived: None })
         };
         let env = if parsed.command == "app.open" { open(&send, &launch_app, OPEN_LIMIT)? } else { send()? };
+        if parsed.command == "terminal.send" {
+            // TERM-126: a prompt that did not submit within the wait is reported with exit status 1.
+            submit_step(&env)?;
+        }
         Ok((parsed.command.clone(), env))
     };
     let out = run().map_err(retry_hint);
@@ -2972,6 +2976,104 @@ const SUBMIT_WATCH: Duration = Duration::from_secs(3);
 static SENT: Mutex<Vec<(String, Value)>> = Mutex::new(Vec::new());
 const BLOCKED: [&str; 3] = ["permission", "waiting", "blocked"];
 
+/// TERM-126: what became of a prompt sent with Enter, watched for `--wait-submit` seconds.
+struct Submit {
+    /// turn_began (taken), queued (the agent was working and still is), not_submitted (it was
+    /// idle or needs an answer and no turn began), unknown (no status hooks report for the pane).
+    receipt: &'static str,
+    /// true = taken, false = did not submit within the wait, None = cannot be told.
+    submitted: Option<bool>,
+    /// The pane's hook state when the watch ended, where one is reported.
+    state: Option<&'static str>,
+    waited_ms: u64,
+    warning: Option<String>,
+}
+
+/// Watches `activity` (the newest hooks history mark and whether the pane works) for up to `watch`.
+/// The prompt is taken when a new history entry appears, or an idle pane turns working. Without a
+/// hooks report (`before` is None) nothing can be told: with an explicit `--wait-submit` the output
+/// stream is watched for the same time and the answer says whether anything was written after Enter.
+fn submit_verdict(handle: &str, before: Option<((u64, usize), bool)>, watch: Duration, explicit: bool, mut activity: impl FnMut() -> Option<((u64, usize), bool)>, state: impl Fn() -> Option<&'static str>, mut output_moved: impl FnMut() -> bool) -> Submit {
+    let start = Instant::now();
+    let until = start + watch;
+    let secs = watch.as_secs();
+    let Some((mark, busy)) = before else {
+        let mut wrote = false;
+        if explicit {
+            while !wrote && Instant::now() < until {
+                wrote = output_moved();
+                if !wrote {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+        let seen = match (explicit, wrote) {
+            (false, _) => String::new(),
+            (true, true) => " (it wrote output after Enter, which a shell or an agent without hooks does either way)".to_string(),
+            (true, false) => format!(" (it wrote nothing within {secs} s)"),
+        };
+        return Submit { receipt: "unknown", submitted: None, state: None, waited_ms: start.elapsed().as_millis() as u64, warning: Some(format!("no status hooks report for {handle}; whether the prompt was taken cannot be told{seen}")) };
+    };
+    // An idle pane took the prompt when anything moved. A busy pane's own turn moves too: its end
+    // (done, interrupted, blocked), a question (permission, waiting) and the carry-on after one are
+    // the old turn; only a new turn after its end, or a new entry while it still works, is the prompt.
+    let (mut mark, mut prev, mut ended, mut took) = (mark, state(), !busy, false);
+    while !took && Instant::now() < until {
+        if let Some((m, working)) = activity() {
+            let now = state();
+            if ended {
+                took = m != mark || working;
+            } else if m != mark {
+                match now {
+                    Some("done" | "interrupted" | "blocked") => ended = true,
+                    Some("working") if !matches!(prev, Some("permission" | "waiting")) => took = true,
+                    _ => {}
+                }
+                mark = m;
+            }
+            prev = now;
+        }
+        if !took {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+    let waited_ms = start.elapsed().as_millis() as u64;
+    let state = state();
+    if took {
+        return Submit { receipt: "turn_began", submitted: Some(true), state, waited_ms, warning: None };
+    }
+    // Still in the turn it was busy with: queued behind it. Idle, or its turn ended and no new one began: lost.
+    Submit { receipt: if ended { "not_submitted" } else { "queued" }, submitted: Some(false), state, waited_ms, warning: None }
+}
+
+/// TERM-126: the sentence for a prompt that did not submit, naming the pane's state.
+fn not_submitted_line(r: &Value) -> String {
+    let handle = r["terminal"].as_str().unwrap_or_default();
+    let secs = r["waitSubmit"].as_u64().unwrap_or(0);
+    let why = match r["state"].as_str() {
+        Some("working") => "it is working; the prompt waits behind its turn".to_string(),
+        Some("done") => "it is idle, so Enter may have been lost".to_string(),
+        Some("permission") => "it is waiting for permission; answer that first".to_string(),
+        Some("waiting") => "it is waiting for an answer; give it first".to_string(),
+        Some("blocked") => "it is blocked".to_string(),
+        Some("interrupted") => "it was interrupted".to_string(),
+        Some(s) => format!("it is {s}"),
+        None => "its state is not reported".to_string(),
+    };
+    format!("{handle} did not submit the prompt within {secs} s ({why})")
+}
+
+/// TERM-126: a send answer whose prompt did not submit becomes an error, so the exit status says so.
+fn submit_step(env: &Value) -> Result<(), Fail> {
+    let r = &env["result"];
+    if env["success"] == Value::Bool(true) && r["submitted"] == Value::Bool(false) {
+        let mut f = Fail::new("not_submitted", not_submitted_line(r));
+        f.data = r.clone();
+        return Err(f);
+    }
+    Ok(())
+}
+
 fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     let a = &req.args;
     let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
@@ -3034,7 +3136,8 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             if body.is_none() && !enter && !interrupt {
                 return Err(Fail::args("nothing to send: give --text, --enter or --interrupt"));
             }
-            let watch = num("waitSubmit", "--wait-submit")?.map(Duration::from_secs).unwrap_or(SUBMIT_WATCH);
+            let asked = num("waitSubmit", "--wait-submit")?;
+            let watch = asked.map(Duration::from_secs).unwrap_or(SUBMIT_WATCH);
             let retry = text("retryRequest").map(|r| format!("{handle}|{r}"));
             if let Some(key) = &retry {
                 if let Some(receipt) = SENT.lock().ok().and_then(|s| s.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())) {
@@ -3048,7 +3151,11 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             }
             let agent = ctx.terminals.program(id).flatten();
             let prompt = agent.is_some() && body.is_some() && enter;
-            let before = if prompt { Some(crate::status::activity(id)) } else { None };
+            // TERM-126: a prompt to an agent is watched; so is any Enter when --wait-submit asks for it.
+            let watching = prompt || (asked.is_some() && enter);
+            let before = if watching { Some(crate::status::activity(id)) } else { None };
+            let output_mark = |r: Option<crate::terminal::Read>| r.map(|r| (r.cursor, r.pending));
+            let output_before = output_mark(ctx.terminals.read(id, None, Some(1)));
             let write = |s: &str| ctx.terminals.write(id, s).map_err(|e| Fail::new("failed", e));
             let mut delivered = Vec::new();
             if interrupt {
@@ -3071,26 +3178,17 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let mut out = json!({ "terminal": handle, "delivered": delivered, "agent": agent, "prompt": prompt });
             if let Some(before) = before {
                 let next = format!("kolux terminal read --terminal {handle} --screen");
-                let (receipt, warning) = match before {
-                    None => ("unknown", Some(format!("no status hooks report for {handle}; whether the agent took the prompt cannot be told"))),
-                    Some((_, true)) => ("queued", Some("the agent was already working; the prompt waits behind its turn".to_string())),
-                    Some((mark, false)) => {
-                        let until = Instant::now() + watch;
-                        let mut took = false;
-                        while !took && Instant::now() < until {
-                            took = crate::status::activity(id).is_some_and(|(m, working)| m != mark || working);
-                            if !took {
-                                std::thread::sleep(Duration::from_millis(100));
-                            }
-                        }
-                        if took { ("turn_began", None) } else { ("queued", Some(format!("the agent did not begin a turn within {} s; Enter may have been lost", watch.as_secs()))) }
-                    }
-                };
-                out["receipt"] = json!(receipt);
-                if receipt != "turn_began" {
+                let moved = || output_mark(ctx.terminals.read(id, None, Some(1))) != output_before;
+                let v = submit_verdict(&handle, before, watch, asked.is_some(), || crate::status::activity(id), || crate::status::state_of(id), moved);
+                out["receipt"] = json!(v.receipt);
+                out["submitted"] = json!(v.submitted);
+                out["state"] = json!(v.state);
+                out["waitSubmit"] = json!(watch.as_secs());
+                out["waitedMs"] = json!(v.waited_ms);
+                if v.receipt != "turn_began" {
                     out["next"] = json!(next);
                 }
-                out["warnings"] = json!(warning.into_iter().collect::<Vec<_>>());
+                out["warnings"] = json!(v.warning.into_iter().collect::<Vec<_>>());
             }
             if let Some(key) = retry {
                 if let Ok(mut s) = SENT.lock() {
@@ -3898,7 +3996,7 @@ mod tests {
         // Text output: a screen is its rows; a read is its lines, the unfinished one, and the cursor.
         assert_eq!(text_of("terminal.read", &json!({ "screen": true, "rows": ["a", "b", ""] })), "a\nb");
         assert_eq!(text_of("terminal.read", &json!({ "screen": false, "lines": [{ "cursor": 4, "text": "x" }], "pending": "> ", "cursor": 4 })), "x\n> \n-- cursor 4");
-        assert_eq!(text_of("terminal.send", &json!({ "terminal": "term-1", "delivered": ["text", "enter"], "receipt": "turn_began" })), "sent text+enter to term-1: the agent began a turn");
+        assert_eq!(text_of("terminal.send", &json!({ "terminal": "term-1", "delivered": ["text", "enter"], "receipt": "turn_began" })), "sent text+enter to term-1: the prompt was taken (the agent began a turn)");
         assert_eq!(text_of("terminal.send", &json!({ "terminal": "term-1", "delivered": ["text", "enter"], "receipt": "queued", "next": "kolux terminal read --terminal term-1 --screen" })), "sent text+enter to term-1: queued; look with kolux terminal read --terminal term-1 --screen");
         assert_eq!(text_of("terminal.wait", &json!({ "terminal": "term-1", "state": "done" })), "term-1 is done");
         drop(ctx);
@@ -3939,6 +4037,71 @@ mod tests {
         assert_eq!(f.data["state"], "running");
         assert!(took >= Duration::from_millis(700) && took < Duration::from_secs(5), "took {took:?}");
         assert!(asked.load(Ordering::SeqCst) >= 2, "asked {} times", asked.load(Ordering::SeqCst));
+    }
+
+    /// TERM-126: a prompt sent with Enter is watched for the whole `--wait-submit`: a busy agent
+    /// that stays busy reports it did not submit, with the state named and exit status 1; a new
+    /// history entry within the wait means the prompt was taken; an idle pane that stays idle is
+    /// not submitted; a pane without hooks is unknown, its output watched only when asked.
+    #[test]
+    fn term126_send_wait_submit_honours_the_wait_and_names_the_state() {
+        use std::cell::Cell;
+        let working = |m: u64| Some(((m, 1usize), true));
+        let idle = |m: u64| Some(((m, 1usize), false));
+        // Busy and still busy after the wait: the whole wait is used, then queued / not submitted / exit 1.
+        let start = Instant::now();
+        let v = submit_verdict("term-2", working(10), Duration::from_millis(400), true, || working(10), || Some("working"), || true);
+        assert_eq!((v.receipt, v.submitted, v.state), ("queued", Some(false), Some("working")));
+        assert!(start.elapsed() >= Duration::from_millis(400) && v.waited_ms >= 400, "waited {} ms", v.waited_ms);
+        // Busy, then its turn ends and the queued prompt starts a new one (a new history mark): taken.
+        let polls = Cell::new(0);
+        let v = submit_verdict("term-2", working(10), Duration::from_secs(5), true, || { polls.set(polls.get() + 1); if polls.get() >= 3 { working(11) } else { working(10) } }, || Some("working"), || false);
+        assert_eq!((v.receipt, v.submitted), ("turn_began", Some(true)));
+        assert!(v.waited_ms < 2000, "answered as soon as the turn began, not after the wait: {} ms", v.waited_ms);
+        // Busy, then its own turn ends (a new mark, done) and no new turn begins: not taken, the state named.
+        let (polls, st) = (Cell::new(0), Cell::new("working"));
+        let act = || { polls.set(polls.get() + 1); if polls.get() >= 2 { st.set("done"); idle(11) } else { working(10) } };
+        let v = submit_verdict("term-2", working(10), Duration::from_millis(500), true, act, || Some(st.get()), || false);
+        assert_eq!((v.receipt, v.submitted, v.state), ("not_submitted", Some(false), Some("done")), "the old turn's end is not the prompt");
+        // Busy, its turn ends, then a new turn begins: taken.
+        let (polls, st) = (Cell::new(0), Cell::new("working"));
+        let act = || { polls.set(polls.get() + 1); match polls.get() { 0..=1 => working(10), 2 => { st.set("done"); idle(11) } _ => { st.set("working"); working(12) } } };
+        let v = submit_verdict("term-2", working(10), Duration::from_secs(5), true, act, || Some(st.get()), || false);
+        assert_eq!((v.receipt, v.submitted), ("turn_began", Some(true)));
+        // Busy, it asks for permission, then carries on with the same turn: still queued.
+        let (polls, st) = (Cell::new(0), Cell::new("working"));
+        let act = || { polls.set(polls.get() + 1); match polls.get() { 0..=1 => working(10), 2 => { st.set("permission"); idle(11) } _ => { st.set("working"); working(12) } } };
+        let v = submit_verdict("term-2", working(10), Duration::from_millis(600), true, act, || Some(st.get()), || false);
+        assert_eq!((v.receipt, v.submitted, v.state), ("queued", Some(false), Some("working")), "the carry-on after a question is the old turn");
+        // Idle, then working: taken. Idle and still idle: not submitted, exit 1, the state named.
+        let v = submit_verdict("term-2", idle(10), Duration::from_secs(5), false, || working(10), || Some("working"), || false);
+        assert_eq!((v.receipt, v.submitted), ("turn_began", Some(true)));
+        let v = submit_verdict("term-2", idle(10), Duration::from_millis(200), true, || idle(10), || Some("done"), || true);
+        assert_eq!((v.receipt, v.submitted, v.state), ("not_submitted", Some(false), Some("done")));
+        let v = submit_verdict("term-2", idle(10), Duration::from_millis(100), true, || idle(10), || Some("permission"), || true);
+        assert_eq!((v.receipt, v.state), ("not_submitted", Some("permission")));
+        // No hooks report: unknown. The default watch answers at once; an explicit one watches the output.
+        let start = Instant::now();
+        let v = submit_verdict("term-3", None, Duration::from_secs(3), false, || None, || None, || false);
+        assert_eq!((v.receipt, v.submitted, v.state), ("unknown", None, None));
+        assert!(start.elapsed() < Duration::from_millis(500));
+        assert_eq!(v.warning.as_deref(), Some("no status hooks report for term-3; whether the prompt was taken cannot be told"));
+        let v = submit_verdict("term-3", None, Duration::from_millis(300), true, || None, || None, || false);
+        assert_eq!(v.warning.as_deref(), Some("no status hooks report for term-3; whether the prompt was taken cannot be told (it wrote nothing within 0 s)"));
+        assert!(v.waited_ms >= 300, "the explicit wait watches the output for its whole time: {} ms", v.waited_ms);
+        let v = submit_verdict("term-3", None, Duration::from_secs(5), true, || None, || None, || true);
+        assert!(v.warning.as_deref().unwrap().contains("it wrote output after Enter"), "{:?}", v.warning);
+        assert!(v.waited_ms < 1000);
+        // The client turns submitted=false into exit 1 with a sentence naming the state; the rest passes.
+        let r = |state: &str| json!({ "requestId": "r", "success": true, "result": { "terminal": "term-2", "submitted": false, "state": state, "waitSubmit": 5, "receipt": "queued" } });
+        let f = submit_step(&r("working")).unwrap_err();
+        assert_eq!((f.code, f.message.as_str()), ("not_submitted", "term-2 did not submit the prompt within 5 s (it is working; the prompt waits behind its turn)"));
+        assert_eq!(f.data["receipt"], "queued", "the answer travels as the error's data");
+        assert_eq!(submit_step(&r("done")).unwrap_err().message, "term-2 did not submit the prompt within 5 s (it is idle, so Enter may have been lost)");
+        assert_eq!(submit_step(&r("permission")).unwrap_err().message, "term-2 did not submit the prompt within 5 s (it is waiting for permission; answer that first)");
+        assert!(submit_step(&json!({ "success": true, "result": { "terminal": "term-2", "submitted": true } })).is_ok());
+        assert!(submit_step(&json!({ "success": true, "result": { "terminal": "term-2", "submitted": null, "receipt": "unknown" } })).is_ok(), "unknown is not a failure");
+        assert!(submit_step(&json!({ "success": true, "result": { "terminal": "term-1", "delivered": ["enter"] } })).is_ok(), "a plain send has no verdict");
     }
 
     #[test]
