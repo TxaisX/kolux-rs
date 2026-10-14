@@ -127,6 +127,7 @@ const SUMMARIES: &[(&str, &str)] = &[
     ("account list", "List the Claude and Codex accounts Kolux holds."),
     ("open", "Start Kolux, or bring its window to the front, and wait until it answers."),
     ("status", "Say whether Kolux is running, not running, stale or still loading its workspaces."),
+    ("diagnostics memory", "Show the Resource Manager's memory figures: resident and committed for Kolux, each terminal session and the total."),
     ("repo list", "List the repos Kolux knows."),
     ("repo add", "Add a folder as a repo."),
     ("repo show", "Show one repo."),
