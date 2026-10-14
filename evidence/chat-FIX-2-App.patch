@@ -1,16 +1,27 @@
 diff --git a/src/App.tsx b/src/App.tsx
-index 41aab81..c34acba 100644
+index fcde3ae..41a4c06 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
-@@ -126,6 +126,7 @@ import { useWizard } from "./onboarding/useWizard";
+@@ -127,6 +127,9 @@ import { useWizard } from "./onboarding/useWizard";
  import { hooksOn } from "./settings/AgentsPage";
  import ToolNotices from "./launch/ToolNotices";
  import { AgentsChat } from "./chat/ChatView";
-+import { answered, hearStates, outcomeNote, pasteToPane, writeTerminal } from "./chat/send";
++import { answered, hearStates, hearingNow, holdFor, outcomeNote, pasteToPane, writeTerminal } from "./chat/send";
++import { copyPrompt, hooksAbsent, kitPasted, kitStep, kitWait, pasteUnchecked } from "./chat/kitPrompt";
++import { KitPromptNotices } from "./chat/KitNotice";
  import PlanSheet from "./terminal/PlanSheet";
  import { draftKey, feedbackMessage, keepDraft, showsReview, stillPending, type PlanDraft } from "./terminal/planReview";
  
-@@ -1415,6 +1416,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1391,7 +1394,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+       }
+       const key = await startIn(agent, dir, branch, role.waitsFor ? "" : prompt, i === 0, [], seatTitle(role, agent.id as Vendor));
+       keys.push(key);
+-      if (key !== null && role.waitsFor) waiting.push({ role: role.id, upstream: role.waitsFor, key, prompt });
++      if (key !== null && role.waitsFor) waiting.push(kitWait({ role: role.id, upstream: role.waitsFor, key, prompt }, role.title, agent.name));
+     }
+     const started = keys.filter((k) => k !== null).length;
+     if (started === 0) {
+@@ -1416,6 +1419,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
    // marker and its session is found; once only, and a failed send is tried again next time.
    // ponytail: checks every ten seconds (and on any pane state change) while a role waits, whether
    // or not the strip is unfolded; a file watcher would make it instant.
@@ -21,32 +32,80 @@ index 41aab81..c34acba 100644
    const sending = useRef(false);
    const pendingKits = Object.values(kitRuns.current).some((r) => r.waiting.length > 0);
    useEffect(() => {
-@@ -1431,9 +1436,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1431,16 +1438,23 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+           for (const w of [...run.waiting]) {
              const id = ptys.current[w.key];
              if (!roleDone(check, w.upstream) || id === undefined) continue;
-             try {
+-            try {
 -              await invoke("terminal_write", { id, data: w.prompt });
 -              await new Promise((r) => setTimeout(r, 300));
 -              await invoke("terminal_write", { id, data: "\r" });
-+              // Held while the agent asks something (its Enter would pick Yes); tried again next tick.
-+              if ((await pasteToPane(w.key, w.prompt, toPane, true)) !== "sent") continue;
++            // Council FIX-3 (chat e5412ff, FIX-BEFORE 1): held while the agent may be asking (its Enter
++            // would pick Yes); the strip says why once Kolux knows it cannot see, or after 60 s. Never
++            // sent by a timer: only on a clear reading, or by the notice's Send prompt.
++            const step = kitStep(w, Date.now(), holdFor(w.key, toPane.stateOf, id), hooksAbsent(panesRef.current.find((x) => x.key === w.key)?.agent, hooksOn(settings)));
++            if (step.toast) setToast(step.toast);
++            if (step.changed) setKitTick((n) => n + 1);
++            if (!step.paste) continue;
++            const got = await pasteToPane(w.key, w.prompt, toPane, true).catch((err) => {
++              console.warn(`kit: ${String(err)}`);
++              return null;
++            });
++            const done = kitPasted(w, got);
++            if (done.sent) {
                run.waiting = run.waiting.filter((x) => x !== w);
                run.sent[w.role] = Date.now();
-               setKitTick((n) => n + 1);
-@@ -1700,6 +1704,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
-   const answer = (p: Pane, approve: boolean) =>
-     invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve })
-       .then(() => {
-+        answered(p.key);
-         setHook((h) => ({ ...h, [p.key]: "working" }));
+-              setKitTick((n) => n + 1);
+-            } catch (err) {
+-              console.warn(`kit: ${String(err)}`);
+             }
++            if (done.sent || done.changed) setKitTick((n) => n + 1);
+           }
+         }
+       } finally {
+@@ -1450,7 +1464,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     void tick();
+     const t = window.setInterval(() => void tick(), 10_000);
+     return () => window.clearInterval(t);
+-  }, [pendingKits, kitTick, running, needs]);
++  }, [pendingKits, kitTick, running, needs, settings]);
+ 
+   // TERM-014: closing a pane ends its program (the pane's own cleanup kills it); the next tab of
+   // its cell takes over, else the neighbouring cells take the space; closing the last pane leaves
+@@ -1698,13 +1712,18 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   const towerSeats = () => panes.filter((p) => !p.kind && !p.seats && p.agent !== "shell").map((p) => ({ key: p.key, agent: p.agent, title: tabName(p, titles), branch: p.branch, cwd: p.cwd, account: p.account ?? null, chip: chipFor(p), meter: meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)), since: stamp[p.key]?.at ?? 0 }));
+   const lanes = board ? LANES.filter((l) => cardPanes(panes).some((p) => laneOf(p) === l.id)) : [];
+   const columnOf = (p: Pane) => lanes.findIndex((l) => l.id === laneOf(p)) + 1;
+-  const answer = (p: Pane, approve: boolean) =>
+-    invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve })
+-      .then(() => {
+-        setHook((h) => ({ ...h, [p.key]: "working" }));
++  // Council FIX-3 (FS2): the pane takes the state Kolux resolved after the answer (still "permission"
++  // while a second sub-agent asks), unless a newer hook event came in meanwhile.
++  const answer = (p: Pane, approve: boolean) => {
++    const since = hearingNow();
++    return invoke<AgentState | null>("agent_answer", { paneKey: p.key, agent: p.agent, approve })
++      .then((now) => {
++        const state = typeof now === "string" ? now : "working";
++        if (answered(p.key, state, since)) setHook((h) => ({ ...h, [p.key]: state }));
          setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
        })
-@@ -1725,27 +1730,24 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+       .catch(() => {});
++  };
+   // SAFE-003, SAFE-004: Approve is the agent's own yes; Request changes is its no, then the
+   // feedback typed into its prompt as one paste once it has left the question.
+   // SAFE-005: the drafts are per pane and exact plan text, in memory only.
+@@ -1724,29 +1743,26 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     setReviewing(null);
+     dropDraft(draftKey(p.key, plan));
      // Claude has no hook for a deny inside its own menu, so the pane leaves "permission" here, as answer() does.
-     const left = await invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).then(() => true, () => false);
-     if (!left) return setToast("Kolux could not answer the agent. Answer it in its terminal; your feedback was not typed.");
-+    answered(p.key);
-     setHook((h) => ({ ...h, [p.key]: "working" }));
+-    const left = await invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).then(() => true, () => false);
+-    if (!left) return setToast("Kolux could not answer the agent. Answer it in its terminal; your feedback was not typed.");
+-    setHook((h) => ({ ...h, [p.key]: "working" }));
++    const since = hearingNow();
++    const left = await invoke<AgentState | null>("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).then((now) => (typeof now === "string" ? now : "working"), () => null);
++    if (left === null) return setToast("Kolux could not answer the agent. Answer it in its terminal; your feedback was not typed.");
++    if (answered(p.key, left, since)) setHook((h) => ({ ...h, [p.key]: left }));
      // SAFE-004: the feedback is typed only once the agent has left its menu; an Enter while the menu
      // is still open would pick its default, which is Yes (council re-review of chat a969502).
      const asking = () => hookRef.current[p.key] === "waiting" || hookRef.current[p.key] === "permission";
@@ -76,7 +135,7 @@ index 41aab81..c34acba 100644
    };
    const sendNotes = async (dir: string): Promise<string | null> => {
      const notes = notesFor(dir);
-@@ -1753,7 +1755,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1754,7 +1770,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
      const agent = [...panes].sort((a, b) => Number(b.key === focused) - Number(a.key === focused)).find((p) => !p.kind && p.agent !== "shell" && sameDir(p.cwd, dir) && ptys.current[p.key] !== undefined);
      if (!agent) return "No agent is running in this workspace. Start one, or copy the notes instead.";
      try {
@@ -85,7 +144,7 @@ index 41aab81..c34acba 100644
      } catch (err) {
        return `The notes were not sent: ${String(err)}`;
      }
-@@ -1768,7 +1770,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1769,7 +1785,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
      const p = panesRef.current.find((x) => x.key === key);
      if (!p || !inWorktree(p)) return "That agent is no longer running, so nothing was sent. The notes are kept.";
      try {
@@ -94,3 +153,29 @@ index 41aab81..c34acba 100644
      } catch (err) {
        return `The notes were not sent, so they are kept: ${String(err)}`;
      }
+@@ -2153,6 +2169,25 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                   }}
+                 />
+               )}
++              {page === null && activeDir && kitRuns.current[activeDir] && (
++                <KitPromptNotices
++                  waiting={kitRuns.current[activeDir].waiting}
++                  onCopy={(w) => void copyPrompt(w, setToast)}
++                  onSend={(w) => {
++                    const run = kitRuns.current[activeDir];
++                    const id = ptys.current[w.key];
++                    if (!run || id === undefined) return setToast("That agent's terminal is not running, so nothing was sent.");
++                    void pasteUnchecked(id, w.prompt, writeTerminal).then(
++                      () => {
++                        run.waiting = run.waiting.filter((x) => x !== w);
++                        run.sent[w.role] = Date.now();
++                        setKitTick((n) => n + 1);
++                      },
++                      () => setToast("The prompt could not be typed into the terminal."),
++                    );
++                  }}
++                />
++              )}
+               {page === null && <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} shells={shells} onNewTab={(a) => void newTab(a)} />}
+               {picking === "file" && activeDir && (
+                 <FilePicker

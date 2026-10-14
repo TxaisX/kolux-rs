@@ -42,12 +42,16 @@ export function holdNote(app: string | undefined, ear: string | undefined, hasAp
   return clear(hasApp ? app : ear) ? undefined : UNSEEN_NOTE;
 }
 
-/** One pane's newest hook event: its state, the terminal it came from, and whether it was a tool
- * starting (PreToolUse: working with the tool named) with nothing after it yet. */
-type Heard = { state: string; terminal?: number; tool: boolean; at: number };
+/** One pane's newest hook event: its state, the terminal it came from, and when it was heard. */
+type Heard = { state: string; terminal?: number; at: number };
 type Payload = { paneKey: number; state?: string; tool?: string; terminal?: number };
 type Listen = (name: string, h: (e: { payload: Payload }) => void) => Promise<unknown>;
 const heard = new Map<number, Heard>();
+/** Council FIX-3 (FS1 of e5412ff): when a tool last started in each pane (any working event that
+ * names one, the lead's or a sub-agent's). A later event with no tool (another agent's tool ending)
+ * never clears it: only a menu, a question or the end of the turn does. */
+const toolAt = new Map<number, { at: number; terminal?: number }>();
+const ENDS_TOOL_HOLD = ["permission", "waiting", "done"];
 let hearing: Promise<unknown> | null = null;
 let clock: () => number = () => Date.now();
 /** For tests: the clock the tool hold is measured with. */
@@ -58,20 +62,30 @@ export function hearStates(listen: Listen): Promise<unknown> {
   if (!hearing)
     hearing = listen("agent-status", (e) => {
       const { paneKey, state, tool, terminal } = e.payload;
-      if (state !== undefined) heard.set(paneKey, { state, terminal, tool: state === "working" && !!tool, at: clock() });
+      if (state === undefined) return;
+      heard.set(paneKey, { state, terminal, at: clock() });
+      if (state === "working" && tool) toolAt.set(paneKey, { at: clock(), terminal });
+      else if (ENDS_TOOL_HOLD.includes(state)) toolAt.delete(paneKey);
     });
   return hearing;
 }
 export const heardOf = (key: number) => heard.get(key)?.state;
-/** Council FIX-2 (FS3): an Approve or Deny on a card answered the pane's menu; the chat's own reading
- * leaves it too, as the window's does (no hook reports a deny made in the menu). */
-export function answered(key: number) {
+/** The time a card answer starts at, on the clock the readings are stamped with (see answered). */
+export const hearingNow = () => clock();
+/** Council FIX-2 (FS3), FIX-3 (FS2 of e5412ff): an Approve or Deny on a card, started at `since`,
+ * answered the pane's menu, and `state` is what Kolux's status says the pane is after it (still
+ * "permission" while a second sub-agent asks). The chat's reading takes it only when nothing was
+ * heard after the answer started. True when the window's own reading may take it as well. */
+export function answered(key: number, state: string, since: number): boolean {
   const h = heard.get(key);
-  if (h) heard.set(key, { state: "working", terminal: h.terminal, tool: false, at: clock() });
+  if (h && h.at > since) return false;
+  if (h) heard.set(key, { state, terminal: h.terminal, at: clock() });
+  return true;
 }
 /** For tests: drops every reading, the listener and the test clock. */
 export function forgetHearing() {
   heard.clear();
+  toolAt.clear();
   hearing = null;
   clock = () => Date.now();
 }
@@ -95,13 +109,15 @@ export function holdReading(key: number, app: string | undefined, hasApp: boolea
 }
 /** Why a send to pane `key` would be held right now, or undefined. When the window gives its
  * readings, its "no reading" holds the send even if an older event said the agent was working
- * (the window drops a pane's reading when its program ends or its hooks are turned off). */
+ * (the window drops a pane's reading when the pane's program stops, which a restart does first,
+ * and when hooks are turned off for it). */
 export const holdFor = (key: number, stateOf?: (key: number) => string | undefined, terminal?: number) => holdReading(key, stateOf?.(key), stateOf !== undefined, terminal);
 
 /** Council FIX-2 (FS1): how long a key into pane `key` must still wait for a tool that just started. */
 export function toolWait(key: number, terminal?: number): number {
-  const { h } = earFor(key, terminal);
-  return h?.tool ? Math.max(0, h.at + TOOL_HOLD_MS - clock()) : 0;
+  const t = toolAt.get(key);
+  if (!t || (t.terminal !== undefined && terminal !== undefined && t.terminal !== terminal)) return 0;
+  return Math.max(0, t.at + TOOL_HOLD_MS - clock());
 }
 
 /** AFTER 1: the paste limit counts the bytes that go to the terminal, not UTF-16 units. */

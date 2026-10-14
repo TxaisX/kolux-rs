@@ -97,6 +97,12 @@ describe("sending into the terminal (CHAT-020, T-327)", () => {
     expect(sendSteps("claude", "plain\tline").map((x) => x.data)).toEqual(["\x15", "\x1b[200~plain\tline\x1b[201~", "\r"]);
   });
 
+  it("council FIX-3 (AFTER 1): a Codex picker command typed key by key sends a Tab as a space too", () => {
+    const keys = sendSteps("codex", "/model\tgpt-5").map((x) => x.data);
+    expect(keys).not.toContain("\t");
+    expect(keys).toEqual(["\x15", ..."/model gpt-5", "\r"]);
+  });
+
   it("two sends within 100 ms reach one terminal whole and in order", async () => {
     const got: string[] = [];
     const write = async (d: string) => {

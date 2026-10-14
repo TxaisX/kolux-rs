@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { LIMIT } from "../terminal/paste";
 import { ASKING_NOTE } from "./composer";
-import { TOOL_HOLD_MS, UNSEEN_NOTE, answered, forgetHearing, hearStates, holdFor, pasteToPane, sendToPane, setClock } from "./send";
+import { TOOL_HOLD_MS, UNSEEN_NOTE, answered, forgetHearing, hearStates, hearingNow, holdFor, pasteToPane, sendToPane, setClock } from "./send";
 
 type Status = { paneKey: number; state?: string; tool?: string; terminal?: number };
 type Handler = (e: { payload: Status }) => void;
@@ -66,14 +66,51 @@ describe("the Enter waits about a second after a tool starts (council FS1: worki
     expect(TOOL_HOLD_MS).toBe(1000);
   });
 
-  it("a tool that already finished (PostToolUse: working with no tool) holds nothing", async () => {
+  it("council FIX-3 (FS1): a sub-agent's tool ending 200 ms after the lead's tool start does not end the hold, so a menu at 600 ms stops the send", async () => {
+    const { listen, emit } = fakeListen();
+    await hearStates(listen);
+    const t = fakeTime();
+    emit({ paneKey: 7, state: "working", tool: "Bash", terminal: 70 });
+    await t.sleep(200);
+    // The child's PostToolUse: working, no tool named.
+    emit({ paneKey: 7, state: "working", terminal: 70 });
+    t.at(600, () => emit({ paneKey: 7, state: "permission", tool: "Bash", terminal: 70 }));
+    const w = writes();
+    const got = await sendToPane(7, "claude", "keep going", { terminalOf: () => 70, write: w.write(t.now), sleep: t.sleep });
+    expect(got).toBe("stopped");
+    expect(w.got.map((x) => x.data)).not.toContain("\r");
+  });
+
+  it("a sub-agent's tool start (working with its tool named) starts the hold too", async () => {
+    const { listen, emit } = fakeListen();
+    await hearStates(listen);
+    const t = fakeTime();
+    emit({ paneKey: 7, state: "working", terminal: 70 });
+    emit({ paneKey: 7, state: "working", tool: "Grep", terminal: 70 });
+    const w = writes();
+    expect(await sendToPane(7, "claude", "next", { terminalOf: () => 70, write: w.write(t.now), sleep: t.sleep })).toBe("sent");
+    expect(w.got.find((x) => x.data === "\r")?.at).toBeGreaterThanOrEqual(TOOL_HOLD_MS);
+  });
+
+  it("the end of the turn (done) ends the hold at once", async () => {
     const { listen, emit } = fakeListen();
     await hearStates(listen);
     const t = fakeTime();
     emit({ paneKey: 7, state: "working", tool: "Read", terminal: 70 });
-    emit({ paneKey: 7, state: "working", terminal: 70 });
+    emit({ paneKey: 7, state: "done", terminal: 70 });
     const w = writes();
     expect(await sendToPane(7, "claude", "next", { terminalOf: () => 70, write: w.write(t.now), sleep: t.sleep })).toBe("sent");
+    expect(w.got.find((x) => x.data === "\r")?.at).toBeLessThan(TOOL_HOLD_MS);
+  });
+
+  it("a tool start heard from the pane's earlier terminal holds nothing in its new one", async () => {
+    const { listen, emit } = fakeListen();
+    await hearStates(listen);
+    const t = fakeTime();
+    emit({ paneKey: 7, state: "working", tool: "Read", terminal: 70 });
+    emit({ paneKey: 7, state: "idle", terminal: 71 });
+    const w = writes();
+    expect(await sendToPane(7, "claude", "next", { terminalOf: () => 71, write: w.write(t.now), sleep: t.sleep })).toBe("sent");
     expect(w.got.find((x) => x.data === "\r")?.at).toBeLessThan(TOOL_HOLD_MS);
   });
 
@@ -122,12 +159,36 @@ describe("a card answer clears the chat's own reading (council FS3)", () => {
     await hearStates(listen);
     emit({ paneKey: 7, state: "permission", tool: "Bash", terminal: 70 });
     expect(holdFor(7, () => "working", 70)).toBe(ASKING_NOTE);
-    answered(7);
+    expect(answered(7, "working", hearingNow())).toBe(true);
     expect(holdFor(7, () => "working", 70)).toBeUndefined();
+  });
+
+  it("council FIX-3 (FS2): the reading becomes the state Kolux resolved after the answer, so a second sub-agent still asking keeps holding", async () => {
+    const { listen, emit } = fakeListen();
+    await hearStates(listen);
+    emit({ paneKey: 7, state: "permission", tool: "Bash", terminal: 70 });
+    answered(7, "permission", hearingNow());
+    expect(holdFor(7, () => "permission", 70)).toBe(ASKING_NOTE);
+    expect(holdFor(7, undefined, 70)).toBe(ASKING_NOTE);
+  });
+
+  it("council FIX-3 (FS2): answered() leaves a newer permission alone", async () => {
+    const { listen, emit } = fakeListen();
+    await hearStates(listen);
+    const t = fakeTime();
+    emit({ paneKey: 7, state: "permission", tool: "Bash", terminal: 70 });
+    await t.sleep(100);
+    const since = hearingNow();
+    await t.sleep(50);
+    // While the card's answer was on its way, another menu opened.
+    emit({ paneKey: 7, state: "permission", tool: "Edit", terminal: 70 });
+    await t.sleep(50);
+    expect(answered(7, "working", since)).toBe(false);
+    expect(holdFor(7, undefined, 70)).toBe(ASKING_NOTE);
   });
 });
 
-describe("the window's own pastes go through the same check (council FS2: Send notes, kit role prompt)", () => {
+describe("pasteToPane (the helper App's pastes use)", () => {
   const deps = (state: string | undefined, w: ReturnType<typeof writes>) => ({ terminalOf: () => 70, stateOf: () => state, write: w.write(() => 0), sleep: async () => {} });
 
   it("notes sent to an agent showing a permission menu type nothing, so its Enter cannot approve it", async () => {

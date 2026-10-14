@@ -88,7 +88,8 @@ export function sendSteps(agent: string | undefined, raw: string): Step[] {
   const enter: Step = { data: "\r", waitMs: 0 };
   const word = text.trim().split(/\s/)[0];
   if (agent === "codex" && !text.includes("\n") && CODEX_PICKERS.includes(word)) {
-    const keys = [...text.trim()];
+    // Council FIX-3 (AFTER 1 of e5412ff): typed key by key, a Tab would be the Tab key itself.
+    const keys = [...text.trim().replace(/\t/g, " ")];
     return [clear, ...keys.map((ch, i) => ({ data: ch, waitMs: i === keys.length - 1 ? ENTER_PAUSE_MS : 15 })), enter];
   }
   // Council FIX-1: a one-line body goes in as a paste too, so a menu that opened before the hook
