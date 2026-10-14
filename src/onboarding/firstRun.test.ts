@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { chordFires, closer, firstFolderAgent, kitLaunch, leaveKey, milestone, oneClick, openAt, SCREENS, type Outcome } from "./firstRun";
+import { chordFires, closer, connectFailed, firstAiConnected, firstConnection, firstFolderAgent, kitLaunch, leaveKey, milestone, oneClick, openAt, SCREENS, STATUSES_FAILED, type Outcome } from "./firstRun";
 import { WizardView } from "./Wizard";
 import { jargon } from "../glossary";
 
@@ -161,4 +161,26 @@ test("ONB-011: a milestone goes to onboarding.rs by name, and a failed write sho
   await milestone("aiConnected", async (cmd, args) => void sent.push([cmd, args]));
   expect(sent).toEqual([["onboarding_milestone", { name: "aiConnected" }]]);
   await expect(milestone("kitLaunched", () => Promise.reject(new Error("disk full")))).resolves.toBeUndefined();
+});
+
+test("ACCT-035: a failed connect names the agent it was for, in plain words", () => {
+  expect(connectFailed("Grok", new Error("the sign-in window was closed"))).toBe("Grok could not connect: the sign-in window was closed");
+  expect(connectFailed("Codex", "Error: timed out")).toBe("Codex could not connect: timed out");
+  expect(connectFailed("Claude", undefined)).toBe("Claude could not connect. Try again in a moment.");
+  expect(connectFailed("Grok", "")).toMatch(/^Grok /);
+  expect(jargon(connectFailed("Grok", "x") + STATUSES_FAILED)).toEqual([]);
+  expect(STATUSES_FAILED.length).toBeGreaterThan(0);
+});
+
+test("ACCT-035: the first connected report sends the first-AI milestone once; not-connected reports send nothing", () => {
+  const sent: string[] = [];
+  const report = firstConnection(async (n) => void sent.push(n));
+  report(false);
+  report(false);
+  expect(sent).toEqual([]);
+  report(true);
+  report(false);
+  report(true);
+  expect(sent).toEqual(["aiConnected"]);
+  expect(typeof firstAiConnected).toBe("function");
 });

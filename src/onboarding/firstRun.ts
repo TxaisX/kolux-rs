@@ -96,3 +96,30 @@ export function closer(store: (outcome: Outcome) => Promise<unknown>, done: () =
  * automatic (no default) and none for a plain terminal, which the new workspace opens anyway. */
 export const firstFolderAgent = <A extends { id: string; installed: boolean }>(offered: A[], defaultId: string): A | null =>
   defaultId === "" || defaultId === "terminal" ? null : (offered.find((a) => a.installed && a.id === defaultId) ?? null);
+
+/** ACCT-035: a failed connect attempt, worded so its toast names the agent it was for. */
+export function connectFailed(agent: string, err: unknown): string {
+  const why = String(err instanceof Error ? err.message : (err ?? ""))
+    .replace(/^Error:\s*/, "")
+    .trim();
+  return why ? `${agent} could not connect: ${why}` : `${agent} could not connect. Try again in a moment.`;
+}
+
+/** ACCT-035: the friendly line shown when the connection statuses fail to load, in place of an empty page. */
+export const STATUSES_FAILED = "Kolux could not read your AI connections just now. It tries again on its own in a few seconds.";
+
+/** ACCT-035: the AI connections page reports each card's connected state here; the first time any
+ * card says connected, the first-AI milestone is sent (onboarding.rs keeps only the first time,
+ * across the wizard and this page). One send per window: later reports change nothing. */
+export function firstConnection(send: (name: Milestone) => Promise<void> = milestone) {
+  let sent = false;
+  return (on: boolean) => {
+    if (!on || sent) return;
+    sent = true;
+    void send("aiConnected");
+  };
+}
+
+/** ACCT-035: the one reporter the settings page's Connect cards share (a stable function, so a
+ * card's effect does not run again on every draw). */
+export const firstAiConnected = firstConnection();
