@@ -16,9 +16,10 @@ describe("T-314-c GitHub Projects", () => {
     for (const t of ["", "acme", "acme 0", "-acme 3", "ac--me 3", "a\"b 3", "https://github.com/acme/app/issues/3", "http://github.com/orgs/acme/projects/3"]) expect(parseProjectRef(t, "github.com")).toBeNull();
   });
 
-  it("the picker label and the view agree that only table views are supported", () => {
-    expect(["table", "board", "roadmap"].map(viewSupport)).toEqual(["table", "unsupported", "unsupported"]);
-    expect(viewLabel({ number: 2, name: "Plan", layout: "roadmap" })).toBe("Plan (roadmap, not supported)");
+  it("the picker label and the view agree: tables, roadmaps as a timeline, boards not supported", () => {
+    expect(["table", "board", "roadmap"].map(viewSupport)).toEqual(["table", "unsupported", "timeline"]);
+    expect(viewLabel({ number: 2, name: "Plan", layout: "roadmap" })).toBe("Plan (timeline)");
+    expect(viewLabel({ number: 3, name: "Kanban", layout: "board" })).toBe("Kanban (board, not supported)");
     expect(viewLabel({ number: 1, name: "All", layout: "table" })).toBe("All");
   });
 

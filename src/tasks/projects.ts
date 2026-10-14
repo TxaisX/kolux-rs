@@ -28,13 +28,15 @@ export function parseProjectRef(text: string, host: string): { host: string; own
 export const projectKey = (r: { host: string; owner: string; number: number }) => `${r.host}/${r.owner.toLowerCase()}/${r.number}`;
 
 /** GIT-056 / GIT-057: how Kolux shows a view layout. The picker and the view both read this one
- * answer, so they always agree about board and roadmap views. */
-export function viewSupport(layout: string): "table" | "unsupported" {
-  return layout === "table" ? "table" : "unsupported";
+ * answer, so they always agree: tables as tables, roadmaps as a timeline (T-549, OD-15 flipped),
+ * boards not supported. */
+export function viewSupport(layout: string): "table" | "timeline" | "unsupported" {
+  return layout === "table" ? "table" : layout === "roadmap" ? "timeline" : "unsupported";
 }
 
 export function viewLabel(v: ProjectView): string {
-  return viewSupport(v.layout) === "table" ? v.name : `${v.name} (${v.layout}, not supported)`;
+  const how = viewSupport(v.layout);
+  return how === "table" ? v.name : how === "timeline" ? `${v.name} (timeline)` : `${v.name} (${v.layout}, not supported)`;
 }
 
 /** The view a project opens on: the remembered one, else the first table view, else the first. */

@@ -1,12 +1,13 @@
 // T-314-c: GitHub Projects inside Tasks (GIT-056): pick a project (pinned, recent, browsing an owner,
 // or a pasted URL / owner and number), open one of its views, and read and edit it as a table whose
-// columns sort and group. Board and roadmap views are marked unsupported in the picker and in the view
-// alike (GIT-057, one rule: viewSupport).
+// columns sort and group. Board views are marked unsupported in the picker and in the view alike;
+// roadmap views are drawn as a timeline (T-549; GIT-057, one rule for both: viewSupport).
 // ponytail: assignee and issue-type cells, and adding a repository that is not in Kolux, are T-314-d.
 import { invoke } from "@tauri-apps/api/core";
 import { Fragment, useEffect, useState } from "react";
 import { Refresh } from "../chrome/icons";
 import type { Project as KoluxProject } from "../projects/model";
+import Timeline from "./RoadmapTimeline";
 import { cellEditable, cellText, GROUPABLE, groupItems, labelChange, openingView, parseProjectRef, type Project, type ProjectField, type ProjectItem, projectKey, type ProjectRef, pushRecent, refsFrom, type Scope, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
 
 type Settings = Record<string, unknown> | null;
@@ -62,6 +63,7 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
   const pinned = refsFrom(settings?.tasksProjectsPinned);
   const recent = refsFrom(settings?.tasksProjectsRecent);
   const lastViews = (settings?.tasksProjectsLastView ?? {}) as Record<string, unknown>;
+  const timelines = (settings?.tasksProjectsTimeline ?? {}) as Record<string, unknown>;
   const [ref, setRef] = useState<ProjectRef | null>(kept.ref);
   const [project, setProject] = useState<Project | null>(null);
   const [view, setView] = useState<number | null>(null);
@@ -276,9 +278,9 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
                 </option>
               ))}
             </select>
-            {current && viewSupport(current.layout) === "table" && (
+            {current && viewSupport(current.layout) !== "unsupported" && (
               <>
-                <select className="field" aria-label="Group by" value={groupField?.id ?? ""} onChange={(e) => setGroup(e.target.value)}>
+                {viewSupport(current.layout) === "table" && <select className="field" aria-label="Group by" value={groupField?.id ?? ""} onChange={(e) => setGroup(e.target.value)}>
                   <option value="">No grouping</option>
                   {columns
                     .filter((f) => GROUPABLE.has(f.kind))
@@ -287,7 +289,7 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
                         Group by {f.name}
                       </option>
                     ))}
-                </select>
+                </select>}
                 <select
                   className="field"
                   aria-label="Repositories"
@@ -327,7 +329,9 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
               ))}
             </div>
           )}
-          {current && viewSupport(current.layout) !== "table" ? (
+          {current && viewSupport(current.layout) === "timeline" ? (
+            <Timeline fields={project.fields} items={rows} saved={ref ? timelines[projectKey(ref)] : undefined} onPick={(pick) => ref && void save({ tasksProjectsTimeline: { ...timelines, [projectKey(ref)]: pick } })} />
+          ) : current && viewSupport(current.layout) !== "table" ? (
             <div className="note" role="status" data-unsupported>
               {current.name} is a {current.layout} view, which Kolux does not show yet. {tableView ? "Switch to a table view to see and edit this project's items." : "This project has no table view; add one on GitHub to see it here."}
               {tableView && (
