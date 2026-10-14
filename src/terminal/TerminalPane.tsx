@@ -42,7 +42,7 @@ import { answersPrompt, newlineAgent, routeKey } from "./shellKeys";
 import { clickTarget, findLinks, hintFor, linkFor, rangeOf, resolvePath, spanOf, type Found } from "./links";
 import { dropSummary, dropText, overRect, shellKind } from "./drop";
 import { decideOsc52, parseOsc52, sayOnce } from "./osc52";
-import { findIn, nearestFrom, stepIndex, type FindOptions, type Match } from "./find";
+import { findIn, linesOf, nearestFrom, placeMatches, searchLater, segments, stepIndex, type BufRow, type FindOptions, type Match, type Runner } from "./find";
 import FindBar from "./FindBar";
 import { stopLine, type StopInfo } from "./notify";
 import NameField from "./NameField";
@@ -208,7 +208,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   const [dropping, setDropping] = useState(false);
   // TERM-077: the find bar; the matches, their marks and the current one live in refs (the terminal draws them).
   const [finding, setFinding] = useState(false);
-  const [hits, setHits] = useState({ count: 0, current: -1 });
+  const [hits, setHits] = useState<{ count: number; current: number; slow?: boolean }>({ count: 0, current: -1 });
+  const cancelFind = useRef<() => void>(() => {});
+  useEffect(() => () => cancelFind.current(), []);
   const matches = useRef<Match[]>([]);
   const marks = useRef<{ dispose(): void }[]>([]);
   const lastFind = useRef<{ query: string; opts: FindOptions }>({ query: "", opts: { caseSensitive: false, regex: false } });
@@ -475,7 +477,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     // read-back query gets an empty answer so the program never sees the clipboard; each way it can be
     // refused is said once per session in the header.
     term.parser.registerOscHandler(52, (data) => {
-      const d = decideOsc52(parseOsc52(data), clipboardOk.current);
+      const d = decideOsc52(parseOsc52(data), clipboardOk.current, !isHidden.current);
       if (d.reply) void write(d.reply);
       if (d.notice) sayOnce(d.notice.key, d.notice.text, setFlash);
       if (d.write !== undefined) navigator.clipboard.writeText(d.write).catch((e) => sayOnce("osc52-unconfirmed", `A program's copy to the clipboard could not be confirmed (${e instanceof Error ? e.message : String(e)})`, setFlash));
@@ -823,27 +825,81 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     const top = term.buffer.active.viewportY;
     if (m.row < top || m.row >= top + term.rows) term.scrollToLine(Math.max(0, m.row - Math.floor(term.rows / 2)));
   };
-  const runFind = (query: string, opts: FindOptions) => {
-    lastFind.current = { query, opts };
-    const term = termRef.current;
-    if (!term) return;
-    dropMarks();
+  // Every row of the buffer as cells: a row of plain ASCII as its string (one cell per character), any
+  // other row cell by cell so wide characters keep their two cells.
+  const bufferLines = (term: Terminal) => {
     const buf = term.buffer.active;
-    const lines: string[] = [];
-    for (let y = 0; y < buf.length; y++) lines.push(buf.getLine(y)?.translateToString(true) ?? "");
-    const found = findIn(lines, query, opts);
-    matches.current = found;
-    const cursorRow = buf.baseY + buf.cursorY;
-    for (const m of found) {
-      const marker = term.registerMarker(m.row - cursorRow);
-      if (!marker) continue;
-      marks.current.push(marker);
-      const mark = term.registerDecoration({ marker, x: m.col, width: m.len, backgroundColor: "#b8860b", layer: "bottom" });
-      if (mark) marks.current.push(mark);
+    const rows: BufRow[] = [];
+    for (let y = 0; y < buf.length; y++) {
+      const l = buf.getLine(y);
+      if (!l) {
+        rows.push({ wrapped: false, cells: "" });
+        continue;
+      }
+      const s = l.translateToString(false);
+      if (s.length === term.cols && /^[ -~]*$/.test(s)) rows.push({ wrapped: l.isWrapped, cells: s });
+      else {
+        const cells = [];
+        for (let x = 0; x < term.cols; x++) {
+          const c = l.getCell(x);
+          cells.push({ chars: c?.getChars() ?? "", width: c?.getWidth() ?? 1 });
+        }
+        rows.push({ wrapped: l.isWrapped, cells });
+      }
     }
+    return linesOf(rows, term.cols);
+  };
+  const spawnFind = (): Runner => {
+    const w = new Worker(new URL("./findWorker.ts", import.meta.url), { type: "module" });
+    return {
+      run: (texts, query, opts, done) => {
+        w.onmessage = (e: MessageEvent<Match[]>) => done(e.data);
+        w.postMessage({ texts, query, opts });
+      },
+      stop: () => w.terminate(),
+    };
+  };
+  const drawFind = (term: Terminal, found: Match[]) => {
+    dropMarks();
+    matches.current = found;
+    const buf = term.buffer.active;
+    const cursorRow = buf.baseY + buf.cursorY;
+    for (const m of found)
+      for (const s of segments(m, term.cols)) {
+        const marker = term.registerMarker(s.row - cursorRow);
+        if (!marker) continue;
+        marks.current.push(marker);
+        const mark = term.registerDecoration({ marker, x: s.col, width: s.len, backgroundColor: "#b8860b", layer: "bottom" });
+        if (mark) marks.current.push(mark);
+      }
     const i = nearestFrom(found, buf.viewportY);
     setHits({ count: found.length, current: i });
     showMatch(term, i);
+  };
+  const runFind = (query: string, opts: FindOptions) => {
+    lastFind.current = { query, opts };
+    cancelFind.current();
+    const term = termRef.current;
+    if (!term) return;
+    if (!opts.regex || query === "") {
+      const lines = bufferLines(term);
+      drawFind(term, placeMatches(lines, findIn(lines.map((l) => l.text), query, opts), term.cols));
+      return;
+    }
+    let lines: ReturnType<typeof bufferLines> = [];
+    cancelFind.current = searchLater(
+      () => (lines = bufferLines(term)).map((l) => l.text),
+      query,
+      opts,
+      (found) => drawFind(term, placeMatches(lines, found, term.cols)),
+      () => {
+        dropMarks();
+        matches.current = [];
+        setHits({ count: 0, current: -1, slow: true });
+        term.clearSelection();
+      },
+      spawnFind,
+    );
   };
   const stepFind = (dir: 1 | -1) => {
     const term = termRef.current;
@@ -853,6 +909,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     showMatch(term, i);
   };
   const closeFind = () => {
+    cancelFind.current();
     dropMarks();
     matches.current = [];
     setHits({ count: 0, current: -1 });
@@ -1245,7 +1302,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         </div>
       )}
       <div ref={host} className="pane-body" />
-      {finding && <FindBar count={hits.count} current={hits.current} onSearch={runFind} onStep={stepFind} onClose={closeFind} />}
+      {finding && <FindBar count={hits.count} current={hits.current} slow={hits.slow} onSearch={runFind} onStep={stepFind} onClose={closeFind} />}
       {notice && (
         <div className="pane-ask" onMouseDown={(e) => e.stopPropagation()}>
           <div

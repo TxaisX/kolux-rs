@@ -9,6 +9,8 @@ import { compile, countLabel, type FindOptions } from "./find";
 type Props = {
   count: number;
   current: number;
+  /** The regex search was stopped for running too long. */
+  slow?: boolean;
   onSearch: (query: string, opts: FindOptions) => void;
   onStep: (dir: 1 | -1) => void;
   onClose: () => void;
@@ -19,7 +21,7 @@ const field: React.CSSProperties = { width: 180, padding: "2px 6px", background:
 const toggle = (on: boolean): React.CSSProperties => ({ padding: "2px 5px", border: `1px solid ${on ? "var(--line-focus)" : "var(--line)"}`, borderRadius: 4, background: on ? "var(--row-selected)" : "transparent", color: "var(--fg)", font: "inherit", cursor: "pointer" });
 const plain: React.CSSProperties = { padding: "2px 5px", border: "1px solid transparent", borderRadius: 4, background: "transparent", color: "var(--fg)", font: "inherit", cursor: "pointer" };
 
-export default function FindBar({ count, current, onSearch, onStep, onClose }: Props) {
+export default function FindBar({ count, current, slow = false, onSearch, onStep, onClose }: Props) {
   const [query, setQuery] = useState("");
   const [opts, setOpts] = useState<FindOptions>({ caseSensitive: false, regex: false });
   const input = useRef<HTMLInputElement>(null);
@@ -30,7 +32,7 @@ export default function FindBar({ count, current, onSearch, onStep, onClose }: P
     onSearch(q, o);
   };
   const invalid = query !== "" && opts.regex && compile(query, opts) === null;
-  const label = invalid ? "Invalid pattern" : countLabel(count, current, query);
+  const label = invalid ? "Invalid pattern" : slow ? "Pattern took too long" : countLabel(count, current, query);
   return (
     <div
       role="search"

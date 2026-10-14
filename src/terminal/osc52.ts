@@ -41,13 +41,18 @@ export type Decision = {
 
 export const BLOCKED_NOTICE = "A program's copy to the clipboard was blocked by the setting Programs can copy to the clipboard";
 
-/** What the pane does with one OSC 52 sequence. `allowed` is the setting. */
-export function decideOsc52(parsed: Osc52, allowed: boolean): Decision {
+/** What the pane does with one OSC 52 sequence. `allowed` is the setting; `shown` is false for a pane
+ *  the user cannot see (a hidden tab), which never touches the clipboard or says anything. */
+export function decideOsc52(parsed: Osc52, allowed: boolean, shown = true): Decision {
+  // A query still gets its empty answer so the program does not hang; nothing else happens off screen.
+  if (!shown && parsed.kind !== "query") return {};
   switch (parsed.kind) {
     case "query":
       // Nothing comes back: an empty payload, never the clipboard. The program does not hang on the answer.
       return { reply: "\x1b]52;c;\x1b\\" };
     case "over":
+      // While the setting is off the write was never going through: say the setting, not the size.
+      if (!allowed) return { notice: { key: "osc52-blocked", text: BLOCKED_NOTICE } };
       return { notice: { key: "osc52-over", text: `A program's clipboard write of ${Math.round(parsed.size / 1024)} KB was over the ${Math.round(PAYLOAD_CAP / 1024)} KB cap and was dropped` } };
     case "clear":
       return allowed ? { write: "" } : {};

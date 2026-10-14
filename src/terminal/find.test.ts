@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { compile, countLabel, findIn, MATCH_CAP, nearestFrom, QUERY_CAP, stepIndex } from "./find";
+import { describe, expect, it, vi } from "vitest";
+import { compile, countLabel, findIn, linesOf, MATCH_CAP, nearestFrom, placeMatches, QUERY_CAP, REGEX_BUDGET, REGEX_DELAY, searchLater, segments, stepIndex, type Cell, type Runner } from "./find";
 
 const plain = { caseSensitive: false, regex: false };
 
@@ -56,5 +56,71 @@ describe("TERM-077 find text in a terminal", () => {
     expect(nearestFrom(m, 30)).toBe(1);
     expect(nearestFrom(m, 100)).toBe(0);
     expect(nearestFrom([], 0)).toBe(-1);
+  });
+});
+
+describe("TERM-077 find: cells, wrapped lines and a capped regex", () => {
+  const cols = 10;
+  const find = (rows: Parameters<typeof linesOf>[0], q: string, opts = plain) => {
+    const lines = linesOf(rows, cols);
+    return placeMatches(lines, findIn(lines.map((l) => l.text), q, opts), cols);
+  };
+  // A wide character is one index and two cells: the second cell has width 0.
+  const wide = (s: string): Cell[] => [...s].flatMap((ch) => (ch.charCodeAt(0) > 0x2e80 ? [{ chars: ch, width: 2 }, { chars: "", width: 0 }] : [{ chars: ch, width: 1 }]));
+
+  it("marks the right cells after wide characters", () => {
+    // "日本 err": 日 cells 0-1, 本 cells 2-3, space 4, err 5-7.
+    expect(find([{ wrapped: false, cells: wide("日本 err") }], "err")).toEqual([{ row: 0, col: 5, len: 3 }]);
+    // A wide character in the match spans both its cells.
+    expect(find([{ wrapped: false, cells: wide("ab日c") }], "b日c")).toEqual([{ row: 0, col: 1, len: 4 }]);
+  });
+
+  it("finds a match a long line wrapped across two rows, and cuts its mark per row", () => {
+    const rows = [
+      { wrapped: false, cells: "xxxxxxxerr" },
+      { wrapped: true, cells: "or here   " },
+      { wrapped: false, cells: "error     " },
+    ];
+    const m = find(rows, "error");
+    expect(m).toEqual([{ row: 0, col: 7, len: 5 }, { row: 2, col: 0, len: 5 }]);
+    expect(segments(m[0], cols)).toEqual([{ row: 0, col: 7, len: 3 }, { row: 1, col: 0, len: 2 }]);
+    expect(segments(m[1], cols)).toEqual([m[1]]);
+    // An unwrapped row never joins the one above it.
+    expect(find([{ wrapped: false, cells: "xxxxxxxerr" }, { wrapped: false, cells: "or        " }], "error")).toEqual([]);
+  });
+
+  it("waits for typing to stop before running a regex, and runs it once", () => {
+    vi.useFakeTimers();
+    try {
+      const runs: string[] = [];
+      const spawn = (): Runner => ({ run: (_t, q, _o, done) => (runs.push(q), done([])), stop: () => {} });
+      let cancel = searchLater(() => ["a"], "a", { ...plain, regex: true }, () => {}, () => {}, spawn);
+      vi.advanceTimersByTime(REGEX_DELAY - 1);
+      cancel();
+      cancel = searchLater(() => ["ab"], "ab", { ...plain, regex: true }, () => {}, () => {}, spawn);
+      vi.advanceTimersByTime(REGEX_DELAY);
+      expect(runs).toEqual(["ab"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops a regex that runs past its budget and says it took too long", () => {
+    vi.useFakeTimers();
+    try {
+      let stopped = 0;
+      let late: ((h: { row: number; col: number; len: number }[]) => void) | undefined;
+      const spawn = (): Runner => ({ run: (_t, _q, _o, done) => void (late = done), stop: () => void stopped++ });
+      const done = vi.fn();
+      const slow = vi.fn();
+      searchLater(() => ["aaaa"], "(a+)+$", { ...plain, regex: true }, done, slow, spawn);
+      vi.advanceTimersByTime(REGEX_DELAY + REGEX_BUDGET);
+      expect(slow).toHaveBeenCalledTimes(1);
+      expect(stopped).toBe(1);
+      late?.([{ row: 0, col: 0, len: 4 }]); // an answer after the stop is ignored
+      expect(done).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

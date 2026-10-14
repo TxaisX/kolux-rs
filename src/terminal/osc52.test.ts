@@ -40,4 +40,19 @@ describe("TERM-075 programs can copy to the clipboard (OSC 52)", () => {
     expect(decideOsc52({ kind: "clear" }, true)).toEqual({ write: "" });
     expect(decideOsc52({ kind: "clear" }, false)).toEqual({});
   });
+
+  it("never shows the over-cap notice while the setting is off", () => {
+    const d = decideOsc52({ kind: "over", size: PAYLOAD_CAP + 1 }, false);
+    expect(d.notice?.key).toBe("osc52-blocked");
+    expect(d.write).toBeUndefined();
+  });
+
+  it("a hidden pane never writes the clipboard or says anything, but still answers a query", () => {
+    for (const allowed of [true, false]) {
+      expect(decideOsc52(parseOsc52(`c;${b64("hi")}`), allowed, false)).toEqual({});
+      expect(decideOsc52({ kind: "clear" }, allowed, false)).toEqual({});
+      expect(decideOsc52({ kind: "over", size: PAYLOAD_CAP + 1 }, allowed, false)).toEqual({});
+      expect(decideOsc52({ kind: "query" }, allowed, false).reply).toBe("]52;c;\\");
+    }
+  });
 });
