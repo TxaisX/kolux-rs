@@ -1047,22 +1047,29 @@ pub fn task_create(tasks: &mut Vec<Value>, a: &Value, run: Option<String>, now: 
 
 /// ORCH-011: the tasks of `run` (or of no Run), filtered, with the worker holding each one while
 /// that worker's terminal is still open.
+/// ORCH-035 (T-279-c): a ready task whose breaker is open lists as `held` (its stored status stays
+/// ready), with its failure count, and `--ready` / `--status ready` leave it out, so a coordinator
+/// choosing work never picks it; `--status held` lists only those. `breaker_reset` hands it back.
 pub fn task_list(tasks: &[Value], dispatches: &[Value], run: Option<&str>, a: &Value, live: &dyn Fn(&str) -> bool) -> Result<Value, Fail> {
     let want = a["status"].as_str();
-    if want.is_some_and(|s| !TASK_STATES.contains(&s)) {
-        return Err(args(format!("--status takes one of {}", TASK_STATES.join(", "))));
+    if want.is_some_and(|s| s != HELD && !TASK_STATES.contains(&s)) {
+        return Err(args(format!("--status takes one of {}, {HELD}", TASK_STATES.join(", "))));
     }
     let (ready, brief) = (a["ready"] == true, a["brief"] == true);
+    let failures = |t: &Value| failed_dispatches(dispatches, t["id"].as_str().unwrap_or_default(), t["runId"].as_str());
+    let shown = |t: &Value| -> String { if status(t) == "ready" && failures(t) >= BREAKER_TRIPS { HELD.into() } else { status(t).into() } };
     let rows: Vec<Value> = tasks
         .iter()
-        .filter(|t| t["runId"].as_str() == run && want.is_none_or(|s| status(t) == s) && (!ready || status(t) == "ready"))
+        .filter(|t| t["runId"].as_str() == run && want.is_none_or(|s| shown(t) == s) && (!ready || shown(t) == "ready"))
         .map(|t| {
+            let n = failures(t);
             let spec = t["spec"].as_str().unwrap_or_default();
             let folded = spec.split_whitespace().collect::<Vec<_>>().join(" ");
             let name = t["displayName"].as_str().or(t["title"].as_str()).map(str::to_string).unwrap_or_else(|| cut(&folded, 60));
             let holder = dispatches.iter().rev().find(|d| d["taskId"] == t["id"] && !finished(d) && terminal_of(d).is_some_and(|h| live(&h)));
             json!({
-                "id": t["id"], "name": name, "title": t["title"], "status": t["status"], "deps": t["deps"], "parent": t["parent"], "runId": t["runId"],
+                "id": t["id"], "name": name, "title": t["title"], "status": shown(t), "deps": t["deps"], "parent": t["parent"], "runId": t["runId"],
+                "failures": n, "held": (shown(t) == HELD).then(|| held_label(n)),
                 "spec": if brief { cut(&folded, BRIEF_CHARS) } else { spec.to_string() },
                 "worker": holder.map(|d| json!({ "dispatchId": d["id"], "terminal": terminal_of(d) })),
             })
@@ -1073,12 +1080,46 @@ pub fn task_list(tasks: &[Value], dispatches: &[Value], run: Option<&str>, a: &V
 
 /// ORCH-035: failed dispatches of one task after which it is no longer handed out.
 pub const BREAKER_TRIPS: usize = 3;
+/// ORCH-035 (T-279-c): how a task list shows a ready task whose breaker is open.
+pub const HELD: &str = "held";
+/// Where the CLI keeps tasks and dispatches in the profile store (the same keys cli.rs reads).
+pub const TASKS_KEY: &str = "orchestration.tasks";
+pub const DISPATCHES_KEY: &str = "orchestration.dispatches";
 
-/// ORCH-035: how many dispatches of `task` in `run` ended failed.
-// ponytail: a success does not reset the count (the card resets nothing), so it lasts as long as
-// the task's dispatch records do, which are kept until the task itself is retired.
+/// "held (3 failures)": the mark a held task carries in a task list.
+pub fn held_label(failures: usize) -> String {
+    format!("{HELD} ({failures} failure{})", if failures == 1 { "" } else { "s" })
+}
+
+/// ORCH-035: how many dispatches of `task` in `run` ended failed since its breaker was last reset.
+// ponytail: a success does not reset the count (the card resets nothing); only a reset does
+// (breaker_reset), and the failed records stay, stamped, so the history is kept.
 pub fn failed_dispatches(dispatches: &[Value], task: &str, run: Option<&str>) -> usize {
-    dispatches.iter().filter(|d| d["taskId"] == task && d["runId"].as_str() == run && d["status"] == "failed").count()
+    dispatches.iter().filter(|d| d["taskId"] == task && d["runId"].as_str() == run && d["status"] == "failed" && d["breakerReset"].is_null()).count()
+}
+
+/// ORCH-035 (T-279-c): closes the breaker of `task` in `run`: its failed dispatches are stamped
+/// with the time of the reset so they no longer count, and a ready task lists as ready again.
+/// Resetting a task with no counted failures changes nothing (a retried reset is harmless).
+pub fn breaker_reset(tasks: &[Value], dispatches: &mut [Value], task: &str, run: Option<&str>, now: u64) -> Result<Value, Fail> {
+    let i = task_in(tasks, task, run)?;
+    let mut cleared = 0;
+    for d in dispatches.iter_mut().filter(|d| d["taskId"] == task && d["runId"].as_str() == run && d["status"] == "failed" && d["breakerReset"].is_null()) {
+        d["breakerReset"] = json!(now);
+        cleared += 1;
+    }
+    Ok(json!({ "id": task, "runId": run, "status": tasks[i]["status"], "failures": 0, "cleared": cleared }))
+}
+
+/// ORCH-035 (T-279-c): the reset action for the window's task view: closes a held task's breaker.
+#[tauri::command]
+pub fn task_reset(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, task: String, run: Option<String>) -> Result<Value, String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    let load = |k: &str| -> Vec<Value> { store.get(k).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default() };
+    let (tasks, mut dispatches) = (load(TASKS_KEY), load(DISPATCHES_KEY));
+    let out = breaker_reset(&tasks, &mut dispatches, &task, run.as_deref(), wall_ms()).map_err(|e| format!("{}: {}", e.code, e.message))?;
+    store.set(DISPATCHES_KEY, &Value::Array(dispatches).to_string()).map_err(|e| e.to_string())?;
+    Ok(out)
 }
 
 /// ORCH-013: may `task` go to the agent in terminal `to`? Gives the task index and the agent.
@@ -1484,6 +1525,45 @@ mod tests {
         assert_eq!(e.message, "task-1 failed 3 times, so Kolux holds it back instead of handing it out again");
         assert_eq!(failed_dispatches(&d, "task-1", None), 3);
         assert_eq!(failed_dispatches(&d, "task-1", Some("run-2")), 1);
+    }
+
+    /// ORCH-035 (T-279-c): a ready task whose breaker is open lists as held with its count, the
+    /// ready lists leave it out, and a reset closes the breaker: it lists and dispatches as ready
+    /// again, the failed records stay (stamped), and a later failure counts from one.
+    #[test]
+    fn orch035_a_held_task_lists_as_held_with_its_count_and_a_reset_frees_it() {
+        let mut tasks = Vec::new();
+        task_create(&mut tasks, &json!({ "spec": "a" }), None, 1).unwrap();
+        task_create(&mut tasks, &json!({ "spec": "b" }), None, 2).unwrap();
+        let failed = |n: u32, t: &str| json!({ "id": format!("dispatch-{n}"), "taskId": t, "status": "failed", "terminal": 5 });
+        let mut d = vec![failed(1, "task-1"), failed(2, "task-1"), failed(3, "task-2"), failed(4, "task-1")];
+        let none = |_: &str| false;
+        let list = |d: &[Value], a: Value| task_list(&tasks, d, None, &a, &none).unwrap()["tasks"].as_array().unwrap().clone();
+        let ids = |rows: Vec<Value>| rows.iter().map(|r| r["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        let all = list(&d, json!({}));
+        assert_eq!((&all[0]["status"], &all[0]["held"], &all[0]["failures"]), (&json!("held"), &json!("held (3 failures)"), &json!(3)));
+        assert_eq!((&all[1]["status"], &all[1]["held"], &all[1]["failures"]), (&json!("ready"), &Value::Null, &json!(1)));
+        assert_eq!(ids(list(&d, json!({ "ready": true }))), ["task-2"]);
+        assert_eq!(ids(list(&d, json!({ "status": "ready" }))), ["task-2"]);
+        assert_eq!(ids(list(&d, json!({ "status": "held" }))), ["task-1"]);
+        assert_eq!(tasks[0]["status"], "ready", "the stored status is untouched");
+        let agent = |h: &str| (h == "term-5").then(|| "claude".to_string());
+        let check = |d: &[Value]| dispatch_check(&tasks, d, "task-1", "term-5", Some("term-1"), None, false, &agent);
+        assert_eq!(check(&d).unwrap_err().code, "breaker_open");
+        assert_eq!(breaker_reset(&tasks, &mut d, "task-7", None, 9).unwrap_err().code, "not_found");
+        assert_eq!(breaker_reset(&tasks, &mut d, "task-1", Some("run-2"), 9).unwrap_err().code, "not_found");
+        let r = breaker_reset(&tasks, &mut d, "task-1", None, 9).unwrap();
+        assert_eq!((&r["status"], &r["failures"], &r["cleared"]), (&json!("ready"), &json!(0), &json!(3)));
+        let all = list(&d, json!({}));
+        assert_eq!((&all[0]["status"], &all[0]["held"], &all[0]["failures"]), (&json!("ready"), &Value::Null, &json!(0)));
+        assert_eq!(ids(list(&d, json!({ "ready": true }))), ["task-1", "task-2"]);
+        assert!(check(&d).is_ok(), "reset: handed out again");
+        assert_eq!(d.iter().filter(|x| x["status"] == "failed" && x["breakerReset"] == 9).count(), 3, "the failed records stay, stamped");
+        assert_eq!(d[2]["breakerReset"], Value::Null, "another task's failure is not touched");
+        assert_eq!(breaker_reset(&tasks, &mut d, "task-1", None, 10).unwrap()["cleared"], 0, "a retried reset changes nothing");
+        d.push(failed(5, "task-1"));
+        assert_eq!(failed_dispatches(&d, "task-1", None), 1);
+        assert_eq!(held_label(1), "held (1 failure)");
     }
 
     /// ORCH-035: a terminal that already holds an unfinished dispatch is turned away; one whose
