@@ -25,6 +25,8 @@ const ALLOWED = {
 };
 // The one loopback call each file may make, as exact text: it is cut out before the scan, so any
 // other fetch in the same file is still caught (an ALLOWED entry would pass the whole file).
+// A whole-file reqwest pass covers one client only: a second builder in the same file fails the audit.
+const ONE_CLIENT = { "src-tauri/src/browser.rs": "reqwest::Client::builder(", "src-tauri/src/artifacts.rs": "reqwest::Client::builder(" };
 const EXACT = {
   "src-tauri/src/agent_hooks/vendors.rs": /\bfetch\(`http:\/\/127\.0\.0\.1:\$\{port\}\/amp`/g, // the Amp status plugin posting to Kolux on 127.0.0.1
 };
@@ -42,6 +44,7 @@ test("app070: no network client in the shipped source beyond the connections the
       expect(text.match(EXACT[rel]) ?? [], rel).toHaveLength(1);
       text = text.replace(EXACT[rel], "");
     }
+    if (ONE_CLIENT[rel]) expect(text.split(ONE_CLIENT[rel]).length - 1, rel).toBe(1);
     for (const re of CLIENTS) {
       if (re.test(text) && !(ALLOWED[rel] ?? []).some((a) => a.source === re.source)) found.push(`${rel}: ${re.source}`);
     }
