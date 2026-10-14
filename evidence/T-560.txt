@@ -1,0 +1,32 @@
+T-560 (coordinator card, lane/sessions from 869eb9e): smoke cleanup and ship test timeouts
+2026-10-13
+
+Cause found: the lane's runner put LOCALAPPDATA (so Corepack's pnpm 12.11.2 binary) inside the folder
+passed to the smoke as --temp. The running pnpm-native.exe held that folder, so the smoke's final
+rmSync of --temp threw EPERM, crashed the script and lost its flow and summary lines. A vite left by a
+--keep run on port 1445 was a second, separate leftover (killed by pid; it was this lane's).
+
+(a) scripts/evidence/smoke.mjs
+- The temp folder is removed last, after every flow line, the summary, and the evidence file.
+- Before removing it, the script waits up to 10 s for the app's pid to exit. rmSync then retries
+  EPERM/EBUSY 5 times (fs backoff 0.5 s .. 2.5 s); the setup's first clean uses the same retries.
+- A folder still held is a WARN line, not a crash, and not a failed smoke.
+Proof, a run with the folder still held (pnpm living inside --temp, port 1445 taken):
+  smoke: 0/5 flows passed
+  evidence: G:\Dev\kolux-rs-lanes\sessions\evidence\smoke-869eb9e.txt
+  WARN cleanup: G:/Temp/sessions-w1 was not removed (EPERM); delete it by hand
+  -> every line printed, and the script exited normally (rc 1 for the flow failures, no stack trace).
+Proof, `pnpm smoke -- --port 1445 --cdp 9262 --identifier com.txaisxiong.kolux-rs.sessions.smoke
+  --temp G:/Temp/sessions-w1/smoke` (no --keep): flows 1-5 PASS, "smoke: 5/5 flows passed", rc 0,
+  G:/Temp/sessions-w1/smoke removed, nothing left on ports 1445 / 9262.
+
+(b) scripts/ship.test.mjs
+- describe("ship (APP-058)", { timeout: 60_000 }, ...): each test spawns a few dozen real git
+  processes; under load one took 12.1 s against the 5 s default. What they check is unchanged.
+Proof: full `pnpm test` 131 files, 784 passed, 0 failed (before: 782 passed, 2 failed, both
+  APP-058 timeouts).
+
+Gates: tsc 0 errors; clippy -D warnings clean; firewall-check 0 new. cargo test 535 passed, 3 failed,
+1 ignored: scm::watch x2 and scm::tests::remote_actions... ("status took 5.89 s"), timing asserts
+under a loaded machine. No Rust changed since the run that had 541 passed, 0 failed (with the lib.rs
+hunk); on a rerun of scm:: alone, 1 of 41 still failed on the same time limit.

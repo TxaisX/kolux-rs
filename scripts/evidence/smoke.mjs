@@ -399,7 +399,7 @@ async function closeApp() {
 
 // ---------- setup: a throwaway repo as a project, its main checkout open with one shell ----------
 async function setup() {
-  rmSync(TEMP, { recursive: true, force: true });
+  rmSync(TEMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
   mkdirSync(repo, { recursive: true });
   mkdirSync(marks, { recursive: true });
   writeFileSync(smokeFile, ORIGINAL);
@@ -729,13 +729,13 @@ for (const n of ONLY) {
   const [, ok, note] = results[results.length - 1];
   log(`flow ${n}: ${ok ? "PASS" : "FAIL"}: ${note}`);
 }
+const lastPid = appPid;
 try {
   await closeApp();
 } catch (e) {
   log(`WARN close: ${e.message}`);
 }
-if (!KEEP) rmSync(TEMP, { recursive: true, force: true });
-else log(`kept ${TEMP}${ATTACH ? "" : ` and the app (pid ${appPid})`}`);
+if (KEEP) log(`kept ${TEMP}${ATTACH ? "" : ` and the app (pid ${appPid})`}`);
 log("");
 const lines = [];
 const tag = (n) => (required(n) ? "" : " [report-only]");
@@ -761,4 +761,15 @@ writeFileSync(
   [`pnpm smoke at ${new Date().toISOString()} on ${sha} (${root})`, `args: ${args.join(" ") || "(none)"}; T-184 ticked: ${T184_ON}; flow 5 ${QUIT_REQUIRED ? "required" : "report-only"}`, ...lines, ""].join("\n"),
 );
 log(`evidence: ${evidence}`);
+// T-560: the temp folder goes last, after every flow, summary and evidence line is out, so a cleanup
+// failure can never swallow them. The app is waited for (up to 10 s), then fs retries EPERM/EBUSY with a
+// growing delay (0.5 s, 1 s, ... 2.5 s); a folder still held is a warning, not a failed smoke.
+if (!KEEP) {
+  for (let i = 0; i < 20 && lastPid && (await alive(lastPid).catch(() => false)); i++) await sleep(500);
+  try {
+    rmSync(TEMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+  } catch (e) {
+    log(`WARN cleanup: ${TEMP} was not removed (${e.code ?? e.message}); delete it by hand`);
+  }
+}
 process.exit(failed ? 1 : 0);
