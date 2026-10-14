@@ -241,10 +241,46 @@ fn marked(mut g: Guide, list: &str, id: &str) -> Result<Guide, String> {
     Ok(g)
 }
 
+/// ONB-013: what the newcomer checklist reads from the first-run record: whether the wizard was
+/// closed (and how), the checklist's dismissed mark and the first-success milestones. None for a
+/// profile with no record (one from before the wizard), which never gets the checklist.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstRun {
+    pub closed: bool,
+    pub outcome: Option<String>,
+    pub checklist_dismissed: bool,
+    pub milestones: serde_json::Map<String, serde_json::Value>,
+}
+
+fn first_run(rec: Option<Onboarding>) -> Option<FirstRun> {
+    let rec = rec?;
+    let milestones = match rec.rest.get("milestones") {
+        Some(serde_json::Value::Object(m)) => m.iter().filter(|(k, v)| MILESTONES.contains(&k.as_str()) && v.is_u64()).map(|(k, v)| (k.clone(), v.clone())).collect(),
+        _ => Default::default(),
+    };
+    Some(FirstRun {
+        closed: rec.closed_at.is_some(),
+        outcome: rec.outcome,
+        checklist_dismissed: rec.rest.get("checklistDismissed").and_then(|v| v.as_bool()).unwrap_or(false),
+        milestones,
+    })
+}
+
+/// The guide record as the window reads it: the stored lists plus the first-run view (ONB-013).
+/// The view is read only; guide_mark never stores it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuideView {
+    #[serde(flatten)]
+    pub guide: Guide,
+    pub first_run: Option<FirstRun>,
+}
+
 #[tauri::command]
-pub fn guide_get(store: State<'_, Mutex<Store>>) -> Result<Guide, String> {
+pub fn guide_get(store: State<'_, Mutex<Store>>) -> Result<GuideView, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
-    Ok(guide_load(&store))
+    Ok(GuideView { guide: guide_load(&store), first_run: first_run(load(&store)) })
 }
 
 #[tauri::command]
@@ -418,6 +454,23 @@ mod tests {
         assert_eq!((back.step, back.closed_at, back.outcome), (-1, None, None));
         assert_eq!(serde_json::Value::Object(back.rest), serde_json::json!({"checklist":[true],"milestones":{"aiConnected":5}}), "only the dismissed mark goes");
         assert_eq!(reopened(None), Onboarding { version: VERSION, step: -1, closed_at: None, outcome: None, rest: Default::default() }, "a profile with no record gets a fresh one");
+    }
+
+    #[test]
+    fn the_checklist_view_comes_from_the_first_run_record() {
+        assert_eq!(first_run(None), None, "a profile from before the wizard gets no checklist");
+        let open = Onboarding { version: VERSION, step: 1, closed_at: None, outcome: None, rest: Default::default() };
+        assert_eq!(first_run(Some(open)), Some(FirstRun { closed: false, outcome: None, checklist_dismissed: false, milestones: Default::default() }));
+        let rest = serde_json::from_str(r#"{"checklistDismissed":true,"milestones":{"aiConnected":5,"kitLaunched":"soon","lunch":7}}"#).unwrap();
+        let done = Onboarding { version: VERSION, step: 3, closed_at: Some(9), outcome: Some("dismissed".into()), rest };
+        let v = first_run(Some(done)).unwrap();
+        assert!(v.closed && v.checklist_dismissed && v.outcome.as_deref() == Some("dismissed"));
+        assert_eq!(serde_json::Value::Object(v.milestones), serde_json::json!({"aiConnected":5}), "unknown names and non-times are dropped");
+        let bad = Onboarding { version: VERSION, step: 3, closed_at: Some(9), outcome: None, rest: serde_json::from_str(r#"{"milestones":[1],"checklistDismissed":"yes"}"#).unwrap() };
+        let v = first_run(Some(bad)).unwrap();
+        assert!(!v.checklist_dismissed && v.milestones.is_empty(), "a damaged record reads as nothing done, not dismissed");
+        let wire = serde_json::to_value(GuideView { guide: Guide::default(), first_run: None }).unwrap();
+        assert!(wire.get("tried").is_some() && wire.get("firstRun").is_some(), "the view keeps the record's own fields beside firstRun: {wire}");
     }
 
     #[test]

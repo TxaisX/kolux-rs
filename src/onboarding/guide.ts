@@ -5,6 +5,7 @@
 // after a visit plus its setup (stopDone). The legacy-profile rule and the step actions are T-321-b.
 import { invoke } from "@tauri-apps/api/core";
 import { locale } from "../language";
+import type { FirstRun } from "./newcomer";
 
 export type StepId = "browser" | "notifications" | "agent" | "cli" | "integrations" | "multitask" | "automate" | "repos";
 type Words = { name: string; about: string };
@@ -159,7 +160,8 @@ export const openGuide = (step?: StepId) => window.dispatchEvent(new CustomEvent
 export const openExplore = () => window.dispatchEvent(new CustomEvent(OPEN_EXPLORE));
 
 /** What the guides remember on this profile (onboarding.rs guide_get). */
-export type GuideRecord = { tipsSeen: string[]; visited: string[]; tried: string[]; toursSeen: string[]; toursAuto: boolean | null };
+/** guide_get also carries the first-run view for the newcomer checklist (ONB-013); guide_mark does not. */
+export type GuideRecord = { tipsSeen: string[]; visited: string[]; tried: string[]; toursSeen: string[]; toursAuto: boolean | null; firstRun?: FirstRun | null };
 /** Adds the id once to one of the record's lists; the stored record comes back. */
 export const markGuide = (list: "tipsSeen" | "visited" | "tried" | "toursSeen", id: string) => invoke<GuideRecord>("guide_mark", { list, id });
 

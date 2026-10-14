@@ -57,9 +57,15 @@ export type Milestone = "aiConnected" | "kitLaunched" | "resultsOpened";
 /** ONB-011: records a milestone (kept only the first time); the user sees nothing, even when the write fails. */
 export const milestone = (name: Milestone, send: (cmd: string, args: { name: Milestone }) => Promise<unknown> = invoke): Promise<void> =>
   send("onboarding_milestone", { name }).then(
-    () => {},
+    () => checklistChanged(),
     () => {},
   );
+
+/** ONB-013: the newcomer checklist reads its record again when this event fires. */
+export const CHECKLIST_CHANGED = "kolux-checklist-changed";
+export const checklistChanged = () => {
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(CHECKLIST_CHANGED));
+};
 
 /** ONB-007: closing is latched while it is being stored; a failed store frees the latch and keeps
  * the close, so the next click on any of the wizard's ways out tries the same close once more. */

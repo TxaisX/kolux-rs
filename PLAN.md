@@ -775,7 +775,8 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### H · theme 6 · Business-user frame (1 cards)
 
-- [ ] T-333 · ONB-013 Newcomer setup checklist with four plain first-success items
+- [x] T-333 · ONB-013 Newcomer setup checklist with four plain first-success items (built: onboarding.rs guide_get returns the first-run view; newcomer.ts checklistOf, allDoneToast, ranOnOwnFile; Checklist.tsx panel with a compact sidebar form; the sidebar mount is T-295, the kits-side marks are T-333-b) done 2026-10-14 (lane/accounts from d1de182, main e19b35b merged; evidence/T-333.txt: cargo onboarding 9/9, clippy 0, tsc 0, vitest 55/55; live proof pending (batched))
+- [ ] T-333-b · ONB 013 rest: the kits flow sends the kit-launch and results-opened first-success milestones and calls the own-file mark when a kit runs on a file the user picked, so the newcomer checklist's last three items tick (kits files; the marks are firstRun.ts milestone and newcomer.ts ranOnOwnFile)
 
 ### H · theme none · No theme (5 cards)
 

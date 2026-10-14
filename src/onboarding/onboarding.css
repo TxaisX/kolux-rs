@@ -1,0 +1,17 @@
+/* ONB-013: the newcomer checklist. Colours come from the theme tokens in styles.css only. */
+.onb-checklist { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--line-subtle); border-radius: 8px; background: var(--pane-bg); min-width: 0; }
+.onb-checklist header { display: flex; align-items: baseline; gap: 8px; }
+.onb-checklist h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.onb-checklist .count { margin-left: auto; font-size: 11px; color: var(--fg-muted); }
+.onb-checklist ol { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.onb-checklist li { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 2px 6px; border-radius: 6px; font-size: 12px; color: var(--fg-muted); }
+.onb-checklist li.next { background: var(--row-selected); color: var(--fg); }
+.onb-checklist li.done .name { color: var(--fg-muted); }
+.onb-checklist .tick { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border: 1px solid var(--line-subtle); border-radius: 50%; font-size: 10px; color: var(--done); }
+.onb-checklist li.done .tick { border-color: var(--done); }
+.onb-checklist .text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.onb-checklist .about { font-size: 11px; color: var(--fg-muted); overflow-wrap: anywhere; }
+.onb-checklist .btn { flex: none; }
+.onb-checklist .all-done { margin: 0; font-size: 12px; color: var(--done); }
+.onb-checklist .toast { margin: 0; }
+.onb-checklist.compact { padding: 8px; }
