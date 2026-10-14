@@ -1280,9 +1280,10 @@ mod tests {
         assert!(!s.believed_working(s.seen));
     }
 
-    /// TERM-122: only a session tied to a live terminal keeps the computer awake. A pane reporting
-    /// with no terminal (an in-band state from a hookless pane) and a straggler hook arriving after
-    /// its terminal ended both read working, but neither holds the computer awake.
+    /// TERM-122: only a session tied to a live terminal keeps the computer awake. A hook report that
+    /// carries no terminal id and a straggler hook arriving after its terminal ended both read
+    /// working, but neither holds the computer awake. (This drives the hook path, report(); the
+    /// in-band path, status_inband, leaves the terminal None unless a hook named one, and is not run here.)
     #[test]
     fn term122_a_session_without_a_live_terminal_never_keeps_the_computer_awake() {
         const NO_TERM: u32 = 922_301;
