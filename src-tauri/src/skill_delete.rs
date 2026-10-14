@@ -29,8 +29,6 @@ const TRIES: u32 = 20;
 const PAUSE: Duration = Duration::from_millis(100);
 /// SKILL-022: the one lock skill deletes, installs and updates share, in the app's folder.
 const LOCK: &str = "skill-op.lock";
-/// A lock file older than this is a leftover, not an operation under way.
-const STALE: Duration = Duration::from_secs(15 * 60);
 /// SKILL-022: one delete request covers between 1 and this many skills.
 pub const MAX_PICKS: usize = 512;
 /// An install receipt sits next to the skill folder it belongs to, named after it.
@@ -40,6 +38,10 @@ const RECEIPT: &str = ".receipt.json";
 struct Journal {
     done: bool,
     moves: Vec<(PathBuf, PathBuf)>,
+    /// Set-aside copies an earlier, finished delete could not remove yet. They are carried into
+    /// the next delete's record so that delete can start, and are only ever removed, never put back.
+    #[serde(default)]
+    left: Vec<PathBuf>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -67,15 +69,16 @@ fn now_ms() -> u128 {
 /// SKILL-022: held while a skill operation runs; dropping it lets the next one in.
 pub struct OpLock {
     dir: PathBuf,
-    /// False when the lock file belongs to someone else and must be left alone.
-    owns_file: bool,
+    /// The open lock file holding the system's exclusive lock; closing it releases the lock.
+    file: Option<std::fs::File>,
 }
 
 impl Drop for OpLock {
     fn drop(&mut self) {
-        // A release that fails leaves the file naming this process; the next `lock` takes it back.
-        if self.owns_file {
-            let _ = std::fs::remove_file(self.dir.join(LOCK));
+        // The file stays on disk: removing it while another process waits to open it could let two
+        // takers lock two different files. An unlocked file is free, whatever it says.
+        if let Some(f) = self.file.take() {
+            let _ = f.unlock();
         }
         if let Ok(mut held) = HELD.lock() {
             held.retain(|d| d != &self.dir);
@@ -92,10 +95,10 @@ pub enum LockError {
 }
 
 /// SKILL-022: the one lock skill deletes, installs and updates share. In this process a second
-/// taker is turned away at once; across processes a lock file in the app's folder says who holds
-/// it. A lock file naming this process while nothing here holds it is a release that failed, and
-/// one older than fifteen minutes is a leftover: both are taken back, so skill operations never
-/// stay stuck.
+/// taker is turned away at once; across processes the lock is the system's exclusive lock on a
+/// file in the app's folder, so exactly one taker wins even when two try at the same moment. The
+/// system drops the lock when its holder exits or crashes, so a lock is never left behind and
+/// skill operations never stay stuck. The file says which process took it last, for a look.
 pub fn lock(app_dir: &Path) -> Result<OpLock, LockError> {
     let dir = app_dir.to_path_buf();
     {
@@ -106,51 +109,35 @@ pub fn lock(app_dir: &Path) -> Result<OpLock, LockError> {
         held.push(dir.clone());
     }
     // From here the guard owns the in-process claim, so every early return releases it.
-    let mut guard = OpLock { dir, owns_file: false };
-    let file = app_dir.join(LOCK);
+    let mut guard = OpLock { dir, file: None };
     let fail = |e: std::io::Error| LockError::Failed(format!("the skill lock could not be written ({e})"));
     std::fs::create_dir_all(app_dir).map_err(fail)?;
-    let now = now_ms();
-    let mine = format!("{} {now}", std::process::id());
-    match std::fs::OpenOptions::new().write(true).create_new(true).open(&file) {
-        Ok(mut f) => {
-            guard.owns_file = true;
-            f.write_all(mine.as_bytes()).map_err(fail)?;
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            let text = std::fs::read_to_string(&file).unwrap_or_default();
-            let mut parts = text.split_whitespace();
-            let pid = parts.next().and_then(|p| p.parse::<u32>().ok());
-            let at = parts.next().and_then(|p| p.parse::<u128>().ok()).unwrap_or(0);
-            if pid != Some(std::process::id()) && now.saturating_sub(at) <= STALE.as_millis() {
-                return Err(LockError::Busy);
-            }
-            guard.owns_file = true;
-            std::fs::write(&file, mine).map_err(fail)?;
-        }
-        Err(e) => return Err(fail(e)),
+    let mut f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(app_dir.join(LOCK)).map_err(fail)?;
+    match f.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => return Err(LockError::Busy),
+        Err(std::fs::TryLockError::Error(e)) => return Err(fail(e)),
     }
+    // Who took it, for a look; the lock itself does not depend on this text.
+    let _ = f.set_len(0).and_then(|()| f.write_all(format!("{} {}", std::process::id(), now_ms()).as_bytes()));
+    guard.file = Some(f);
     Ok(guard)
 }
 
-/// Deletes `items` together. Err means nothing changed (or another skill operation is under way).
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn delete(app_dir: &Path, items: &[PathBuf]) -> Result<Outcome, String> {
-    let _one = lock(app_dir).map_err(|e| match e {
-        LockError::Busy => "Another skill operation is under way; try again in a moment".to_string(),
-        LockError::Failed(why) => format!("Nothing was deleted: {why}"),
-    })?;
-    delete_held(app_dir, items)
-}
-
-/// `delete` for a caller that already holds the lock.
+/// Deletes `items` together for a caller that holds the lock. Err means nothing changed.
 fn delete_held(app_dir: &Path, items: &[PathBuf]) -> Result<Outcome, String> {
-    // A record left by a delete that was only partly removed is finished first; while it cannot
-    // be, no new delete starts, so its set-aside copies are never forgotten.
+    // A record left by an earlier delete is finished first. If it was done and only its set-aside
+    // copies are left (a file another program still holds), they are carried into this delete's
+    // record, so they are never forgotten and never stop this delete. A record that was not done
+    // and could not be put back is never written over.
+    let mut carry = vec![];
     if app_dir.join(JOURNAL).exists() {
         recover(app_dir);
         if app_dir.join(JOURNAL).exists() {
-            return Err("Nothing was deleted: an earlier delete is still being cleared up; restart Kolux and try again".into());
+            match read(app_dir) {
+                Some(old) if old.done => carry = old.moves.into_iter().map(|(_, aside)| aside).chain(old.left).filter(|a| std::fs::symlink_metadata(a).is_ok()).collect(),
+                _ => return Err("Nothing was deleted: an earlier delete is still being cleared up; restart Kolux and try again".into()),
+            }
         }
     }
     let stamp = format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
@@ -164,14 +151,19 @@ fn delete_held(app_dir: &Path, items: &[PathBuf]) -> Result<Outcome, String> {
         }
         moves.push((item.clone(), parent.join(format!("{ASIDE}{stamp}-{}", name.to_string_lossy()))));
     }
-    let mut journal = Journal { done: false, moves };
+    let mut journal = Journal { done: false, moves, left: carry };
     write(app_dir, &journal)?;
     for (i, (from, aside)) in journal.moves.iter().enumerate() {
         if let Err(e) = rename(from, aside) {
             for (back, held) in journal.moves[..i].iter().rev() {
                 let _ = rename(held, back);
             }
-            let _ = std::fs::remove_file(app_dir.join(JOURNAL));
+            // The record goes back to what it was before: nothing, or only the carried copies.
+            if journal.left.is_empty() {
+                let _ = std::fs::remove_file(app_dir.join(JOURNAL));
+            } else {
+                let _ = write(app_dir, &Journal { done: true, moves: vec![], left: journal.left.clone() });
+            }
             return Err(format!("Nothing was deleted: {} could not be moved ({e})", from.display()));
         }
     }
@@ -181,29 +173,45 @@ fn delete_held(app_dir: &Path, items: &[PathBuf]) -> Result<Outcome, String> {
     }
     journal.done = true;
     write(app_dir, &journal)?;
-    Ok(finish(app_dir, &journal))
+    // Only this delete's own copies decide its outcome; carried ones wait for the next try.
+    let mine: Vec<PathBuf> = finish(app_dir, &journal).into_iter().filter(|a| journal.moves.iter().any(|(_, m)| m == a)).collect();
+    Ok(if mine.is_empty() { Outcome::Deleted } else { Outcome::Partly(mine) })
+}
+
+fn read(app_dir: &Path) -> Option<Journal> {
+    serde_json::from_str(&std::fs::read_to_string(app_dir.join(JOURNAL)).ok()?).ok()
 }
 
 /// At startup: an unfinished delete is undone (not yet done) or completed (done).
 pub fn recover(app_dir: &Path) {
-    let Ok(text) = std::fs::read_to_string(app_dir.join(JOURNAL)) else { return };
-    let Ok(journal) = serde_json::from_str::<Journal>(&text) else { return };
+    let Some(journal) = read(app_dir) else { return };
     if journal.done {
         finish(app_dir, &journal);
         return;
     }
-    let mut left = false;
+    let mut stuck = false;
     for (from, aside) in journal.moves.iter().rev() {
         if std::fs::symlink_metadata(aside).is_ok() && std::fs::symlink_metadata(from).is_err() {
-            left |= rename(aside, from).is_err();
+            stuck |= rename(aside, from).is_err();
         }
     }
-    if !left {
+    if stuck {
+        return;
+    }
+    if journal.left.is_empty() {
         let _ = std::fs::remove_file(app_dir.join(JOURNAL));
+    } else {
+        // Copies carried from an earlier finished delete are never put back, only removed.
+        let rest = Journal { done: true, moves: vec![], left: journal.left };
+        if write(app_dir, &rest).is_ok() {
+            finish(app_dir, &rest);
+        }
     }
 }
 
-fn finish(app_dir: &Path, journal: &Journal) -> Outcome {
+/// Removes every set-aside copy the record names; returns the ones still on disk. The record is
+/// removed once none is left.
+fn finish(app_dir: &Path, journal: &Journal) -> Vec<PathBuf> {
     // T-441-c: only a path Kolux set aside itself is ever removed. The journal is read back at every
     // launch, so an entry naming anything else (a damaged or hand-edited file) is refused, logged and
     // left on disk; the journal stays so the refusal can be looked into.
@@ -212,6 +220,7 @@ fn finish(app_dir: &Path, journal: &Journal) -> Outcome {
         .moves
         .iter()
         .map(|(_, aside)| aside)
+        .chain(journal.left.iter())
         .filter(|a| {
             if !ours(a) {
                 crate::diag::write(app_dir, &format!("skill delete: refused to remove {}, its name does not start with {ASIDE}", a.display()));
@@ -223,10 +232,8 @@ fn finish(app_dir: &Path, journal: &Journal) -> Outcome {
         .collect();
     if left.is_empty() {
         let _ = std::fs::remove_file(app_dir.join(JOURNAL));
-        Outcome::Deleted
-    } else {
-        Outcome::Partly(left)
     }
+    left
 }
 
 /// A link goes without what it points at; a folder goes with its contents.
@@ -478,6 +485,12 @@ mod tests {
     use super::*;
     use crate::test_dir::temp;
 
+    /// The journal's own tests take the lock and delete a hand-picked set, as `run` does per skill.
+    fn delete(app_dir: &Path, items: &[PathBuf]) -> Result<Outcome, String> {
+        let _one = lock(app_dir).map_err(|e| format!("{e:?}"))?;
+        delete_held(app_dir, items)
+    }
+
     fn skill(root: &Path, name: &str) -> PathBuf {
         let d = root.join(name);
         std::fs::create_dir_all(&d).unwrap();
@@ -557,7 +570,7 @@ mod tests {
         let t = temp("skill023-d");
         let (app, root) = (t.join("app"), t.join("skills"));
         let aside = skill(&root, ".kolux-deleting-1-2-alpha");
-        write(&app, &Journal { done: true, moves: vec![(root.join("alpha"), aside)] }).unwrap();
+        write(&app, &Journal { done: true, moves: vec![(root.join("alpha"), aside)], left: vec![] }).unwrap();
         recover(&app);
         assert!(names(&root).is_empty());
         assert!(!app.join(JOURNAL).exists());
@@ -569,7 +582,7 @@ mod tests {
         let (app, root) = (t.join("app"), t.join("skills"));
         let plain = skill(&root, "alpha");
         let aside = skill(&root, ".kolux-deleting-1-2-beta");
-        write(&app, &Journal { done: true, moves: vec![(root.join("x"), plain.clone()), (root.join("beta"), aside)] }).unwrap();
+        write(&app, &Journal { done: true, moves: vec![(root.join("x"), plain.clone()), (root.join("beta"), aside)], left: vec![] }).unwrap();
         recover(&app);
         assert_eq!(names(&root), vec!["alpha".to_string()], "the plain folder is kept, the set-aside one goes");
         assert!(plain.join("SKILL.md").exists());
@@ -647,7 +660,8 @@ mod tests {
         assert_eq!(done[1].note.as_deref(), Some("bundled"));
         assert!(names(&home).is_empty(), "the home skill is gone");
         assert!(p.join(SKILL_FILE).is_file(), "the plugin's skill stays");
-        assert!(!app.join(JOURNAL).exists() && !app.join(LOCK).exists(), "no record and no lock left");
+        assert!(!app.join(JOURNAL).exists(), "no record left");
+        drop(lock(&app).expect("the lock is free again"));
     }
 
     #[test]
@@ -745,20 +759,131 @@ mod tests {
         let t = temp("skill022-h");
         let app = t.join("app");
         std::fs::create_dir_all(&app).unwrap();
-        // A release that failed in this process: the file names us, nothing here holds it.
-        std::fs::write(app.join(LOCK), format!("{} {}", std::process::id(), now_ms())).unwrap();
-        drop(lock(&app).expect("our own leftover is taken back"));
-        assert!(!app.join(LOCK).exists());
-        // Another process's lock, fresh: busy, and its file is left alone.
+        // A file left by a holder that is gone, whatever it says (here a fresh time and another
+        // process): nobody holds the system lock, so it is taken at once.
         std::fs::write(app.join(LOCK), format!("4294967000 {}", now_ms())).unwrap();
+        drop(lock(&app).expect("a lock nobody holds is taken back"));
+        // A live holder elsewhere (its own open handle with the system lock): busy, file untouched.
+        let other = std::fs::OpenOptions::new().read(true).write(true).open(app.join(LOCK)).unwrap();
+        other.lock().unwrap();
         assert_eq!(lock(&app).err(), Some(LockError::Busy));
         assert!(app.join(LOCK).exists());
-        // The same, from long ago: a leftover, taken back.
-        std::fs::write(app.join(LOCK), "4294967000 1000").unwrap();
-        let l = lock(&app).expect("a stale lock is taken back");
+        drop(other);
+        let l = lock(&app).expect("free once the other holder lets go");
         assert_eq!(lock(&app).err(), Some(LockError::Busy), "a second taker in this process waits its turn");
         drop(l);
-        assert!(!app.join(LOCK).exists());
+        drop(lock(&app).expect("free again after the drop"));
+    }
+
+    /// The child half of the dead-holder test: takes the lock and dies holding it.
+    #[test]
+    #[ignore]
+    fn fixsoon4_child_dies_holding_the_lock() {
+        let Ok(dir) = std::env::var("KOLUX_FIXSOON4_DIR") else { return };
+        std::mem::forget(lock(Path::new(&dir)).expect("the child takes the lock"));
+        std::process::exit(9);
+    }
+
+    #[test]
+    fn fixsoon4_a_lock_whose_holder_crashed_is_free_at_once() {
+        let t = temp("fixsoon4");
+        let app = t.join("app");
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "skill_delete::tests::fixsoon4_child_dies_holding_the_lock", "--ignored", "--nocapture"])
+            .env("KOLUX_FIXSOON4_DIR", &app)
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(9), "the child must die holding the lock");
+        let text = std::fs::read_to_string(app.join(LOCK)).unwrap();
+        assert!(!text.starts_with(&format!("{} ", std::process::id())), "the file names the dead child: {text}");
+        let began = std::time::Instant::now();
+        drop(lock(&app).expect("a crashed holder's lock is taken back"));
+        assert!(began.elapsed() < Duration::from_secs(1), "no waiting out a timeout: {:?}", began.elapsed());
+    }
+
+    #[test]
+    fn fixsoon4_two_takers_at_once_never_both_win() {
+        let t = temp("fixsoon4-race");
+        let app = t.join("app");
+        std::fs::create_dir_all(&app).unwrap();
+        // Two handles race for the system lock on the one file, as two processes would.
+        let open = || std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(app.join(LOCK)).unwrap();
+        let (a, b) = (open(), open());
+        let wins = [a.try_lock().is_ok(), b.try_lock().is_ok()];
+        assert_eq!(wins.iter().filter(|w| **w).count(), 1, "{wins:?}");
+        assert_eq!(lock(&app).err(), Some(LockError::Busy), "and the app's own taker is the third, turned away");
+    }
+
+    // FIX-SOON 3: a finished delete's leftovers never block later deletes.
+
+    #[cfg(windows)]
+    #[test]
+    fn fixsoon3_a_leftover_that_cannot_be_removed_yet_is_carried_and_later_deletes_go_through() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let t = temp("fixsoon3-a");
+        let (app, root) = (t.join("app"), t.join("skills"));
+        let alpha = skill(&root, "alpha");
+        let beta = skill(&root, "beta");
+        let old = skill(&root, ".kolux-deleting-1-2-old");
+        write(&app, &Journal { done: true, moves: vec![(root.join("old"), old.clone())], left: vec![] }).unwrap();
+        // Another program holds a file in the leftover, so it cannot be removed for now.
+        let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(old.join(SKILL_FILE)).unwrap();
+        let at = places(&[&root], &[]);
+        let done = run(&app, &at, &[pick(&alpha), pick(&beta)]).unwrap();
+        assert_eq!(done.iter().map(|d| (d.outcome, d.note.clone())).collect::<Vec<_>>(), [("deleted", None), ("deleted", None)]);
+        assert_eq!(names(&root), [".kolux-deleting-1-2-old"], "only the held leftover is on disk");
+        let kept = read(&app).expect("the record still names the leftover");
+        assert!(kept.done && kept.left.contains(&old), "carried: {:?}", kept.left);
+        drop(held);
+        recover(&app);
+        assert!(names(&root).is_empty(), "the leftover goes at the next start");
+        assert!(!app.join(JOURNAL).exists());
+    }
+
+    #[test]
+    fn fixsoon3_a_crash_mid_delete_puts_its_own_items_back_and_still_removes_the_carried_copies() {
+        let t = temp("fixsoon3-b");
+        let (app, root) = (t.join("app"), t.join("skills"));
+        let aside = skill(&root, ".kolux-deleting-3-4-alpha");
+        let old = skill(&root, ".kolux-deleting-1-2-old");
+        write(&app, &Journal { done: false, moves: vec![(root.join("alpha"), aside)], left: vec![old] }).unwrap();
+        recover(&app);
+        assert_eq!(names(&root), ["alpha"], "alpha is back, the carried copy is gone");
+        assert!(!app.join(JOURNAL).exists());
+    }
+
+    #[test]
+    fn fixsoon3_a_record_written_before_carried_copies_existed_is_still_finished() {
+        let t = temp("fixsoon3-d");
+        let (app, root) = (t.join("app"), t.join("skills"));
+        let aside = skill(&root, ".kolux-deleting-1-2-alpha");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(app.join(JOURNAL), serde_json::json!({ "done": true, "moves": [[root.join("alpha"), aside]] }).to_string()).unwrap();
+        recover(&app);
+        assert!(names(&root).is_empty());
+        assert!(!app.join(JOURNAL).exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fixsoon3_a_failed_move_puts_the_record_back_to_the_carried_copies() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let t = temp("fixsoon3-c");
+        let (app, root) = (t.join("app"), t.join("skills"));
+        let a = skill(&root, "alpha");
+        let old = skill(&root, ".kolux-deleting-1-2-old");
+        write(&app, &Journal { done: true, moves: vec![], left: vec![old.clone()] }).unwrap();
+        let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(old.join(SKILL_FILE)).unwrap();
+        // The same item twice: the second move finds nothing, so the first is put back.
+        let err = delete(&app, &[a.clone(), a]).unwrap_err();
+        assert!(err.starts_with("Nothing was deleted"), "{err}");
+        assert_eq!(names(&root), [".kolux-deleting-1-2-old", "alpha"]);
+        let kept = read(&app).expect("the carried copy stays on record");
+        assert!(kept.done && kept.moves.is_empty() && kept.left == [old], "{:?} {:?}", kept.moves, kept.left);
+        drop(held);
+        recover(&app);
+        assert_eq!(names(&root), ["alpha"]);
+        assert!(!app.join(JOURNAL).exists());
     }
 
     #[test]

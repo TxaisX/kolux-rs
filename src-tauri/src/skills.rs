@@ -804,6 +804,24 @@ mod tests {
         return std::os::unix::fs::symlink("//kolux-unc-test.invalid/share/skills", link).ok();
     }
 
+    /// `share_link`, but a skip is never silent: only a missing symbolic-link right (Windows
+    /// error 1314, Developer Mode off) skips, and says so on stderr (shown with --nocapture);
+    /// any other failure fails the test.
+    fn share_link_or_say_why(link: &Path, test: &str) -> bool {
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_dir(r"\\kolux-unc-test.invalid\share\skills", link);
+        #[cfg(not(windows))]
+        let made = std::os::unix::fs::symlink("//kolux-unc-test.invalid/share/skills", link);
+        match made {
+            Ok(()) => true,
+            Err(e) if e.raw_os_error() == Some(1314) => {
+                eprintln!("SKIPPED {test}: its share-link half did not run, this account cannot make symbolic links ({e}); turn on Developer Mode to run it");
+                false
+            }
+            Err(e) => panic!("{test}: the share link could not be made: {e}"),
+        }
+    }
+
     #[test]
     fn skill020_reveal_opens_only_a_listed_skill_file_still_on_disk() {
         let home = temp("skills-reveal");
@@ -837,7 +855,7 @@ mod tests {
         let began = Instant::now();
         // A share root is refused by its text: nothing to delete there, and nothing waited on.
         assert_eq!(occurrences(Path::new(r"\\kolux-unc-test.invalid\share\skills")).unwrap(), Vec::<PathBuf>::new());
-        if share_link(&root.join("share")).is_some() {
+        if share_link_or_say_why(&root.join("share"), "skill022_a_delete_never_lists_a_skill_reached_through_a_share") {
             assert_eq!(occurrences(&root).unwrap(), vec![root.join("alpha")]);
         }
         assert!(began.elapsed() < Duration::from_secs(2), "the delete list waited on a share: {:?}", began.elapsed());
@@ -854,8 +872,7 @@ mod tests {
         // The junction is seen as a link (so its hop is judged), not as a plain folder.
         assert!(fs::symlink_metadata(root.join("local")).unwrap().file_type().is_symlink());
         assert!(!remote_link(&root.join("alpha")));
-        if share_link(&root.join("share")).is_none() {
-            eprintln!("skipped the share-link half: this account cannot make symbolic links");
+        if !share_link_or_say_why(&root.join("share"), "links_to_another_computer_are_never_followed") {
             return;
         }
         assert!(remote_link(&root.join("share")));

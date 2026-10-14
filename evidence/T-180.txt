@@ -11,7 +11,7 @@ gets its own outcome (deleted / skipped / busy / partly removed / failed with no
 
 CODE
 - src-tauri/src/skill_delete.rs: one lock shared by skill delete, install and update (skill-op.lock in the
-  app folder; a lock left behind past 15 minutes or by a dead holder is taken back; a live one gives "busy");
+  app folder; corrected by skills FIX-SOON 2026-10-14: the lock is the system lock on that file, so a crashed holder's lock is free at once and two takers never both win; a live one gives "busy");
   plan() (the confirmation's facts, changes nothing) and run() (re-checks every pick, sets each folder or
   link aside, then removes it; an unfinished delete is recovered from its journal first). Blocked reasons:
   bundled, plugin, outside Kolux's skill folders, no longer on disk, changed since the list loaded.

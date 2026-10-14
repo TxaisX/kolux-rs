@@ -106,8 +106,9 @@ test("SKILL-022: bundled and plugin skills cannot be chosen, and select all coun
 });
 
 test("SKILL-022: two skills sharing a name are chosen one by one; after a rescan gone or ineligible choices drop", () => {
-  const a = sk("review", "home", ["claude"], { path: "C:\a\review\SKILL.md" });
-  const b = sk("review", "workspace", ["claude"], { path: "C:\b\review\SKILL.md" });
+  const a = sk("review", "home", ["claude"], { path: String.raw`C:\a\review\SKILL.md` });
+  const b = sk("review", "workspace", ["claude"], { path: String.raw`C:\b\review\SKILL.md` });
+  expect(a.path).toHaveLength(20); // real backslashes, no control characters
   expect(eligible([a, b])).toEqual([a.path, b.path]);
   expect(keepChosen([a.path, b.path], [b])).toEqual([b.path]);
   expect(keepChosen([a.path], [{ ...a, source: "plugin" }])).toEqual([]);
@@ -117,14 +118,14 @@ test("SKILL-022: two skills sharing a name are chosen one by one; after a rescan
 test("SKILL-022: the confirmation counts folders and links, names where linked content stays and lists blocked skills", () => {
   const plan: Planned[] = [
     { path: "h", blocked: null, items: [{ path: "h", kind: "folder" }, { path: "h.r", kind: "receipt" }, { path: "s", kind: "link" }], remains: null },
-    { path: "l", blocked: null, items: [{ path: "l", kind: "link" }], remains: "D:\dev\beta" },
+    { path: "l", blocked: null, items: [{ path: "l", kind: "link" }], remains: String.raw`D:\dev\beta` },
     { path: "kolux:x", blocked: "bundled", items: [], remains: null },
     { path: "c", blocked: "changed", items: [], remains: null },
   ];
   const s = sumUp(plan, (p) => p.toUpperCase());
   expect(s.count).toBe(2);
   expect(s.headline).toBe("2 skills will be deleted: 1 folder and 2 links removed across all skill folders.");
-  expect(s.remains).toEqual(["L: only a link is removed; the content stays in D:\dev\beta"]);
+  expect(s.remains).toEqual([String.raw`L: only a link is removed; the content stays in D:\dev\beta`]);
   expect(s.blocked).toEqual([`KOLUX:X: ${BLOCKED.bundled}`, `C: ${BLOCKED.changed}`]);
   expect(sumUp([plan[2]], (p) => p).headline).toBe("None of the chosen skills can be deleted.");
 });
