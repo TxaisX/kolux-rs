@@ -77,7 +77,11 @@ NOT BUILT (said, not hidden)
   - The final state check in Rust (a chat_send command reading status::state_of right before the Enter)
     needs status.rs + lib.rs registration: coordinator/hooks lane.
   - (c) Slash commands only at rest: decision pending Txais, not built.
-  - AFTER 3 (Tab in a one-line slash command reaches the agent as the Tab key): not changed.
   - The Status payload's `terminal` is the identity header's terminal id; this assumes it is the same id
     as the window's pane-to-terminal map (both come from the terminal the pane spawned). If a hook
     route ever sends none, the earlier-run check is skipped (the window's own drop on exit still holds).
+
+AFTER 3 (follow-up commit): a Tab in a one-line slash command now goes in as a space (typed as text it
+would be the Tab key). composer.test "a Tab in a one-line slash command goes in as a space...": failed on
+the 58e0ead composer.ts (after3-red.log, 1 failed), passes after; vitest src/chat 73/73; tsc clean;
+pnpm test 993/994 (privacy-audit app070, main's own failure).

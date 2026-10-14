@@ -92,6 +92,11 @@ describe("sending into the terminal (CHAT-020, T-327)", () => {
     expect(sendSteps("claude", "/model").map((x) => x.data)).toEqual(["\x15", "/model", "\r"]);
   });
 
+  it("a Tab in a one-line slash command goes in as a space, never as the Tab key (council AFTER 3)", () => {
+    expect(sendSteps("claude", "/compact\tkeep the plan").map((x) => x.data)).toEqual(["\x15", "/compact keep the plan", "\r"]);
+    expect(sendSteps("claude", "plain\tline").map((x) => x.data)).toEqual(["\x15", "\x1b[200~plain\tline\x1b[201~", "\r"]);
+  });
+
   it("two sends within 100 ms reach one terminal whole and in order", async () => {
     const got: string[] = [];
     const write = async (d: string) => {

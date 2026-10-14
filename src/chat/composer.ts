@@ -95,7 +95,9 @@ export function sendSteps(agent: string | undefined, raw: string): Step[] {
   // reported it never reads its first letter ("y", "1") as a pick. A one-line slash command is typed
   // as text: it never starts with a menu key, and an agent takes a pasted one as plain words.
   const command = !text.includes("\n") && text.trimStart().startsWith("/");
-  const body = command ? text : BRACKET_OPEN + text.replace(/\n/g, "\r") + BRACKET_CLOSE;
+  // Council AFTER 3 (re-review of 8151d6f): typed as text, a Tab would reach the agent as the Tab
+  // key (its completion), so a command's tabs go in as spaces.
+  const body = command ? text.replace(/\t/g, " ") : BRACKET_OPEN + text.replace(/\n/g, "\r") + BRACKET_CLOSE;
   return [clear, { data: body, waitMs: ENTER_PAUSE_MS }, enter];
 }
 
