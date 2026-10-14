@@ -15,6 +15,8 @@ Find out what went wrong, get a safe report to share, and get back to work. Star
 | Exit 126 or 128: "usually a permission or a path problem" | The shell found the program but could not run it | Check the file's permissions and path, then Restart |
 | Exit above 128: "The shell was stopped by a signal" | Something ended the program from outside | Restart |
 | An unexplained error ends with a "report it" link | Kolux has no plain words for it | Copy diagnostics (below) and report it |
+| A new terminal opens with a dim line "<shell> did not start; opened <shell>" | The default shell you chose in Settings would not start, so Kolux used the next automatic shell | Check that the shell is still installed, or pick another under Settings, Terminal & sessions, Default shell. See [Settings](settings.md#default-shell) |
+| The Skill folders list says "Not scanned: This folder links to another computer, which Kolux never opens" | The workspace is on a network share, or a skills folder is a link to one. Kolux never reads through those | Use a copy on a local drive, or a mapped drive letter for the workspace. See [Safety](safety.md#other-computers-and-network-shares) |
 | A pane stays blank after it opens | A known case: a shell sometimes stalls as it starts | Close the pane and open a new one |
 | The Board or Agents page shows no live status | Agent status hooks are off | Turn on "Agent status hooks" in Settings, Agents. See [Settings](settings.md) |
 | An agent halted | A usage limit, a lapsed sign-in or a provider error | The Board shows it in the Stopped lane with the reason. See [Board, Agents and Inbox](board-agents-inbox.md) |
@@ -96,4 +98,4 @@ If `kolux` runs a different app than you expect, you may have the older Kolux on
 
 Use "Send feedback" in Settings, General, Privacy. It opens a new issue page on GitHub in your browser, with a version and platform footer. Paste your diagnostics there; the app submits nothing by itself.
 
-<!-- verified against: src-tauri/src/diag.rs, src/terminal/errors.ts, src/terminal/TerminalPane.tsx, src/terminal/history.ts, src/terminal/layout.ts, src-tauri/src/cli.rs, src-tauri/src/projects.rs, src-tauri/src/procs.rs, src/settings/GeneralPage.tsx, src/settings/privacy.ts, STATE.md, src-tauri/src/agent_hooks/mod.rs, src-tauri/src/agent_hooks/vendors.rs at fb0a9d4 -->
+<!-- verified against: src-tauri/src/diag.rs, src/terminal/errors.ts, src/terminal/TerminalPane.tsx, src/terminal/history.ts, src/terminal/layout.ts, src-tauri/src/cli.rs, src-tauri/src/projects.rs, src-tauri/src/procs.rs, src/settings/GeneralPage.tsx, src/settings/privacy.ts, STATE.md, src-tauri/src/agent_hooks/mod.rs, src-tauri/src/agent_hooks/vendors.rs, src-tauri/src/pty.rs, src-tauri/src/skills.rs, src-tauri/src/onboarding.rs at 73f5e38 -->

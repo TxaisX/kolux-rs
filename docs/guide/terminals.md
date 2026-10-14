@@ -97,7 +97,7 @@ The "New tab" button opens beside the focused pane.
 
 | Item | What it opens |
 |---|---|
-| Terminal | A shell. One entry for each shell Kolux found; the first is Ctrl+T |
+| Terminal | A shell. One entry for each shell Kolux found; the first is Ctrl+T. On Windows the first is the default shell you chose in Settings, Terminal & sessions, else the automatic pick. If the first shell will not start, Kolux tries the others in turn and the new pane says so in one dim line: "<shell> did not start; opened <shell>" |
 | Choose agent… | A pane that asks which AI, model or terminal to run. Nothing starts until you press Start |
 | An installed agent | That agent directly |
 | Browser | A web page tab (Ctrl+Shift+B) |
@@ -228,4 +228,4 @@ With "Terminal first", Kolux still keeps Ctrl+V, Ctrl+Tab, Ctrl+PageUp, Ctrl+Pag
 
 Keys that no Kolux shortcut uses always reach the program. Ctrl+R opens the shell's history search, for example, and Ctrl+Arrow moves by word. Alt+Left and Alt+Right move by word too. Ctrl+C with nothing selected is the program's interrupt. Ctrl+K and Ctrl+F belong to Kolux (clear and find); with "Terminal first" they go to the program instead, because they are not marked safe for terminals. A key you press while composing text with an input method is never taken by a Kolux shortcut.
 
-<!-- verified against: src/chrome/LayoutStrip.tsx, src/chrome/TopBar.tsx, src/App.tsx, src/terminal/TerminalPane.tsx, src/terminal/PaneMenu.tsx, src/terminal/paste.ts, src/terminal/permissionAnswer.ts, src/terminal/pin.ts, src/terminal/remove.ts, src/terminal/status.ts, src/terminal/layout.ts, src/launch/ChooserPane.tsx, src/keys/actions.ts, src/keys/terminalPolicy.ts, src/settings/ShortcutsPage.tsx, src/settings/TerminalPage.tsx, src/terminal/text.ts, src/terminal/drop.ts, src/terminal/osc52.ts, src/terminal/find.ts, src/terminal/FindBar.tsx, src/terminal/shellKeys.ts, src/terminal/links.ts, src-tauri/src/terminal.rs, src-tauri/src/automations.rs, PLAN.md (T-221, T-222, T-151-b, T-140-b) at 2c8b9d8 -->
+<!-- verified against: src/chrome/LayoutStrip.tsx, src/chrome/TopBar.tsx, src/App.tsx, src/terminal/TerminalPane.tsx, src/terminal/PaneMenu.tsx, src/terminal/paste.ts, src/terminal/permissionAnswer.ts, src/terminal/pin.ts, src/terminal/remove.ts, src/terminal/status.ts, src/terminal/layout.ts, src/launch/ChooserPane.tsx, src/keys/actions.ts, src/keys/terminalPolicy.ts, src/settings/ShortcutsPage.tsx, src/settings/TerminalPage.tsx, src/terminal/text.ts, src/terminal/drop.ts, src/terminal/osc52.ts, src/terminal/find.ts, src/terminal/FindBar.tsx, src/terminal/shellKeys.ts, src/terminal/links.ts, src-tauri/src/terminal.rs, src-tauri/src/automations.rs, PLAN.md (T-221, T-222, T-151-b, T-140-b), src-tauri/src/pty.rs at 73f5e38 -->
