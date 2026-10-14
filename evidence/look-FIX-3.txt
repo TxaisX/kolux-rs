@@ -1,0 +1,17 @@
+look lane FIX-3 (council stand-in review d2/look-829f533-standin-review.md, "Send to build" 1-5)
+BEFORE 0cf2a9c; STEP 0 merge of main 136bb62 = dd934db (no conflicts; lane/editor ab6c9df was already an ancestor).
+STEP 0 gates on dd934db: cargo test 757 passed 0 failed; clippy -D warnings exit 0; tsc exit 0;
+pnpm test 187 files / 1163 tests passed; plan-check OK; Last 10 passes x1; no duplicate ids;
+firewall-check -Baseline 0 new.
+
+## 1. fence: a path without a drive is refused before it resolves (FIX-SOON 1)
+Rule: every page path is refused from its spelling unless it is C:\... or \?\C:\... ; the NT
+spellings \??\UNC\host\share and \??\GLOBALROOT\Device\Mup\host\share, \??\C:\..., \x, C:x,
+relative and empty paths never reach canonicalize, so no host is contacted. Drops and grants
+apply the same rule; saved grants that fail it are dropped on load.
+Red first: with the helper defined but not wired into check(), the new test failed:
+  "\??\UNC\kolux-none.invalid\share\p.txt: Kolux opens files only from your projects ... is outside
+  them" (the old code resolved it, then said "outside").
+Green: cargo test --lib (all) 755 passed, 0 failed, 1 ignored; clippy -D warnings exit 0; tsc exit 0.
+Test: fence::tests::acct_055_a_path_without_a_drive_is_refused_before_it_resolves.
+Not on screen (backend refusal text only); no live proof needed.
