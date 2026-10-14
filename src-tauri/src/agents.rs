@@ -304,6 +304,9 @@ pub struct StartLine {
     pub program: Option<String>,
     /// SET-027: the user's default environment variables for this agent.
     pub env: Vec<(String, String)>,
+    /// SESS-030 / TERM-107 (T-066-c): the line carries the agent's own resume form, so a restored
+    /// tab comes back on its conversation; false marks it "restored without resume".
+    pub resumed: bool,
 }
 
 /// How an agent takes its opening prompt (SESS-051).
@@ -343,7 +346,63 @@ const HERMES_LIMIT: usize = 24_000;
 /// way to Kolux's, and a Hermes line over the limit is refused.
 #[cfg(test)]
 pub fn start_args(id: &str, extra: &[String], prompt: &str) -> Result<StartLine, String> {
-    line_for(id, None, true, extra, prompt)
+    line_for(id, None, true, extra, &[], prompt)
+}
+
+/// SESS-030: whether a start line opens a fresh conversation or brings a saved one back after a
+/// quit or a crash. Only a restore ever carries a resume form, so a plain new tab never resumes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Start<'a> {
+    Fresh,
+    /// The tab's last known session id, when the agent's own hook events supplied one.
+    Restore(Option<&'a str>),
+}
+
+/// SESS-030 (council FIX-BEFORE on T-066-c): a session id that can safely follow a resume flag:
+/// a letter or digit first, then letters, digits, `.`, `_`, `:` or `-`, 100 characters at
+/// most. A leading dash would be read as an option (one that turns a sandbox off, say), a path
+/// separator would load another transcript, and a space or a shell character such as `&` could
+/// reach cmd.exe through an npm `.cmd` shim.
+pub fn safe_session(sid: &str) -> bool {
+    let mut chars = sid.chars();
+    sid.len() <= 100 && chars.next().is_some_and(|c| c.is_ascii_alphanumeric()) && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'))
+}
+
+/// SESS-030 (T-066, T-066-b): the agent's own resume command, as the arguments that follow its
+/// standing start line. Each form comes from the tool's public command-line reference (the
+/// installed `--help` for Claude Code and Codex, the vendor's documentation for the rest; the
+/// pages are named in PROVENANCE.md and evidence/T-066-b.txt). Rules:
+/// - only a known id resumes the agents whose bare form opens a pick-a-session screen or the
+///   latest session wherever it ran (Claude Code, Codex, Copilot, Cursor, Gemini CLI, Devin, Droid,
+///   Kimi, Pi, Mistral Vibe, Qwen Code, Hermes, Grok, Goose, Amp, Antigravity, OpenClaw); without
+///   an id they start fresh at their prompt;
+/// - Kiro and Aider also have a form that continues the folder's own last conversation and
+///   starts fresh when the folder has none, so a restore uses it even without an id;
+/// - an agent with no documented resume form comes back at its prompt (T-066-c lists them).
+///
+/// The arguments reach the program as a list through the pty layer. A session id comes from a
+/// settings file or a hook event, so it is checked here, the one place every resume passes: only
+/// an id that looks like one ([`safe_session`]) is used; anything else counts as no id.
+pub fn resume_args(id: &str, session: Option<&str>) -> Vec<String> {
+    let s = |v: &[&str]| v.iter().map(|a| a.to_string()).collect::<Vec<String>>();
+    match (id, session.filter(|sid| safe_session(sid))) {
+        ("claude", Some(sid)) => s(&["--resume", sid]),
+        ("codex", Some(sid)) => s(&["resume", sid]),
+        // `--resume` takes its value with `=` in these two: the bare flag means "pick one".
+        ("copilot" | "cursor", Some(sid)) => vec![format!("--resume={sid}")],
+        ("gemini" | "devin" | "droid" | "mistral-vibe" | "qwen-code" | "hermes" | "grok", Some(sid)) => s(&["--resume", sid]),
+        ("antigravity", Some(sid)) => s(&["--conversation", sid]),
+        ("kimi" | "pi", Some(sid)) => s(&["--session", sid]),
+        ("goose", Some(sid)) => s(&["session", "--resume", "--session-id", sid]),
+        ("amp", Some(sid)) => s(&["threads", "continue", sid]),
+        ("openclaw", Some(sid)) => s(&["resume", sid]),
+        ("kiro", Some(sid)) => s(&["--resume-id", sid]),
+        // Folder-scoped continue forms (no id): Kiro's `chat --resume` and Aider's chat-history
+        // restore pick up the folder's own last conversation and start fresh when there is none.
+        ("kiro", None) => s(&["--resume"]),
+        ("aider", _) => s(&["--restore-chat-history"]),
+        _ => Vec::new(),
+    }
 }
 
 /// SET-027: the built-in arguments that skip an agent's permission prompts; Manual leaves them out.
@@ -359,7 +418,8 @@ fn prompt_skips(id: &str) -> &'static [&'static str] {
 
 /// `start_args` with the user's own default arguments (`own`, which replace the built-in ones and
 /// are left alone by the permission mode) and the mode: `yolo` false drops the prompt-skipping ones.
-fn line_for(id: &str, own: Option<&[String]>, yolo: bool, extra: &[String], prompt: &str) -> Result<StartLine, String> {
+/// `resume` (SESS-030) comes after `extra` and before the prompt.
+fn line_for(id: &str, own: Option<&[String]>, yolo: bool, extra: &[String], resume: &[String], prompt: &str) -> Result<StartLine, String> {
     let (_, _, _, fixed) = CATALOGUE.iter().find(|e| e.0 == id).ok_or_else(|| format!("Unknown agent {id}"))?;
     let prompt = prompt.trim();
     let skips = if yolo { &[][..] } else { prompt_skips(id) };
@@ -385,6 +445,7 @@ fn line_for(id: &str, own: Option<&[String]>, yolo: bool, extra: &[String], prom
                 args = vec!["chat".into(), "--query".into(), prompt.into(), "--tui".into()];
             }
             args.extend(keep);
+            args.extend(resume.iter().cloned());
             let len = "hermes".len() + args.iter().map(|a| a.len() + 1).sum::<usize>();
             if len > HERMES_LIMIT {
                 return Err(format!("Hermes's start line with this prompt is {len} characters, past the 24,000 it accepts; shorten the prompt."));
@@ -392,6 +453,7 @@ fn line_for(id: &str, own: Option<&[String]>, yolo: bool, extra: &[String], prom
         }
         r => {
             args.extend(extra.iter().cloned());
+            args.extend(resume.iter().cloned());
             if !prompt.is_empty() {
                 match r {
                     Route::Trailing => args.push(prompt.into()),
@@ -403,7 +465,7 @@ fn line_for(id: &str, own: Option<&[String]>, yolo: bool, extra: &[String], prom
             }
         }
     }
-    Ok(StartLine { args, typed, program: None, env: Vec::new() })
+    Ok(StartLine { args, typed, program: None, env: Vec::new(), resumed: !resume.is_empty() })
 }
 
 /// Settings fields of the Agents page (SET-027).
@@ -454,8 +516,21 @@ fn names_model(args: &[String]) -> bool {
 /// `manual` is Yolo), and this agent's command, default arguments and environment. `picked` says
 /// the user chose the model in the lineup (even "Program default"); otherwise Claude Code gets
 /// its top model at high effort unless its own or the extra arguments already name one.
+/// The command path goes through `start_line_as`; this plain form is the tests's shorthand.
+#[cfg(test)]
 pub fn start_line(settings: &serde_json::Value, id: &str, extra: &[String], prompt: &str, picked: bool) -> Result<StartLine, String> {
+    start_line_as(settings, id, extra, prompt, picked, Start::Fresh)
+}
+
+/// `start_line` for a fresh tab or a restored one (SESS-030): a restore adds the agent's own
+/// resume form after the extra arguments. The restore path passes no resume of its own (T-066-c),
+/// so the form is only ever added here, once.
+pub fn start_line_as(settings: &serde_json::Value, id: &str, extra: &[String], prompt: &str, picked: bool, start: Start<'_>) -> Result<StartLine, String> {
     let yolo = settings.get(PERMISSIONS_FIELD).and_then(|v| v.as_str()) != Some("manual");
+    let resume = match start {
+        Start::Fresh => Vec::new(),
+        Start::Restore(session) => resume_args(id, session),
+    };
     let mine = settings.get(OPTIONS_FIELD).and_then(|o| o.get(id));
     let field = |k: &str| mine.and_then(|m| m.get(k)).and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty());
     let own = field("args").map(split_args);
@@ -463,7 +538,7 @@ pub fn start_line(settings: &serde_json::Value, id: &str, extra: &[String], prom
     if !picked && id == "claude" && !names_model(own.as_deref().unwrap_or(&[])) && !names_model(&extra) {
         extra.splice(0..0, CLAUDE_UNPICKED.iter().map(|a| a.to_string()));
     }
-    let mut line = line_for(id, own.as_deref(), yolo, &extra, prompt)?;
+    let mut line = line_for(id, own.as_deref(), yolo, &extra, &resume, prompt)?;
     line.program = field("command").map(str::to_string);
     line.env = field("env").map(parse_env).unwrap_or_default();
     Ok(line)
@@ -524,10 +599,13 @@ fn credited_name(stem: &str, packages: bool) -> Option<&'static str> {
     })
 }
 
+/// `restore` (SESS-030) marks a tab brought back after a quit or a crash; `session` is its last
+/// known session id. Both are left out for a plain new tab, which never carries a resume form.
 #[tauri::command]
-pub fn agent_start_line(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, id: String, extra: Vec<String>, prompt: String, picked: Option<bool>) -> Result<StartLine, String> {
+pub fn agent_start_line(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, id: String, extra: Vec<String>, prompt: String, picked: Option<bool>, restore: Option<bool>, session: Option<String>) -> Result<StartLine, String> {
     let settings = store.lock().map_err(|e| e.to_string())?.settings();
-    start_line(&settings, &id, &extra, &prompt, picked.unwrap_or(false))
+    let start = if restore.unwrap_or(false) { Start::Restore(session.as_deref().map(str::trim).filter(|s| !s.is_empty())) } else { Start::Fresh };
+    start_line_as(&settings, &id, &extra, &prompt, picked.unwrap_or(false), start)
 }
 
 /// ACCT-013 "Open install page": the agent's own install page in the default browser. Only these
@@ -816,6 +894,171 @@ mod tests {
         assert_eq!(newest_version_dir(&dir), Some(dir.join("v20.10.0")));
         assert_eq!(newest_version_dir(&dir.join("none")), None);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// SESS-030 (T-066-b): every agent with a documented resume form, the arguments a restore with a
+    /// known id adds after its standing start line; the fixed arguments stay in front.
+    const RESUMED: [(&str, &[&str]); 19] = [
+        ("claude", &["--resume", "sid"]),
+        ("codex", &["resume", "sid"]),
+        ("copilot", &["--resume=sid"]),
+        ("cursor", &["--resume=sid"]),
+        ("gemini", &["--resume", "sid"]),
+        ("devin", &["--resume", "sid"]),
+        ("droid", &["--resume", "sid"]),
+        ("mistral-vibe", &["--resume", "sid"]),
+        ("qwen-code", &["--resume", "sid"]),
+        ("hermes", &["--resume", "sid"]),
+        ("grok", &["--resume", "sid"]),
+        ("antigravity", &["--conversation", "sid"]),
+        ("kimi", &["--session", "sid"]),
+        ("pi", &["--session", "sid"]),
+        ("goose", &["session", "--resume", "--session-id", "sid"]),
+        ("amp", &["threads", "continue", "sid"]),
+        ("openclaw", &["resume", "sid"]),
+        ("kiro", &["--resume-id", "sid"]),
+        ("aider", &["--restore-chat-history"]),
+    ];
+
+    #[test]
+    fn sess030_every_wired_agent_resumes_on_its_own_form_after_its_standing_line() {
+        let none = serde_json::json!({});
+        for (id, form) in RESUMED {
+            let plain = start_line(&none, id, &[], "", true).unwrap().args;
+            let restored = start_line_as(&none, id, &[], "", true, Start::Restore(Some("sid"))).unwrap().args;
+            let mut want = plain.clone();
+            want.extend(s(form));
+            assert_eq!(restored, want, "{id}: the resume form follows the standing start line");
+            // The user's own extra arguments (model choice, defaults) stay in front of the resume.
+            let with_extra = start_line_as(&none, id, &s(&["--x"]), "", true, Start::Restore(Some("sid"))).unwrap().args;
+            assert_eq!(with_extra, [plain.clone(), s(&["--x"]), s(form)].concat(), "{id}: extra before resume");
+        }
+        // Kiro keeps its fixed `chat --tui` in front of the resume; Hermes its `--tui`.
+        assert_eq!(start_line_as(&none, "kiro", &[], "", true, Start::Restore(Some("sid"))).unwrap().args, s(&["chat", "--tui", "--resume-id", "sid"]));
+        assert_eq!(start_line_as(&none, "hermes", &[], "", true, Start::Restore(Some("sid"))).unwrap().args, s(&["--tui", "--resume", "sid"]));
+        // Claude Code keeps its permission mode and the unpicked model in front (T-066 shape).
+        assert_eq!(
+            start_line_as(&none, "claude", &[], "", false, Start::Restore(Some("sid"))).unwrap().args,
+            s(&["--permission-mode", "auto", "--model", "opus", "--effort", "high", "--resume", "sid"])
+        );
+    }
+
+    #[test]
+    fn sess030_without_a_session_id_only_the_folder_scoped_forms_resume() {
+        let none = serde_json::json!({});
+        for (id, _) in RESUMED {
+            let plain = start_line(&none, id, &[], "", true).unwrap().args;
+            let restored = start_line_as(&none, id, &[], "", true, Start::Restore(None)).unwrap().args;
+            match id {
+                // Kiro's `chat --resume` and Aider's history restore pick up the folder's own last
+                // conversation and start fresh when there is none.
+                "kiro" => assert_eq!(restored, s(&["chat", "--tui", "--resume"])),
+                "aider" => assert_eq!(restored, s(&["--restore-chat-history"])),
+                // Everyone else would open a picker or someone else's latest session: start fresh.
+                _ => assert_eq!(restored, plain, "{id}: no id, no resume"),
+            }
+        }
+        assert!(resume_args("claude", None).is_empty(), "Claude Code's bare --resume opens its pick-a-session screen");
+        assert!(resume_args("codex", None).is_empty());
+    }
+
+    #[test]
+    fn sess030_a_plain_new_tab_never_carries_a_resume_form() {
+        let none = serde_json::json!({});
+        for (id, form) in RESUMED {
+            let fresh = start_line_as(&none, id, &[], "", true, Start::Fresh).unwrap().args;
+            assert_eq!(fresh, start_line(&none, id, &[], "", true).unwrap().args, "{id}: Fresh is the plain line");
+            let first = form[0].split('=').next().unwrap();
+            assert!(!fresh.iter().any(|a| a == first || a.starts_with(&format!("{first}="))), "{id}: no resume word on a new tab");
+        }
+        // The command's defaults: no `restore` means Fresh even when a session id is passed along.
+        let fresh = start_line_as(&none, "gemini", &[], "", true, Start::Fresh).unwrap().args;
+        assert_eq!(fresh, Vec::<String>::new());
+    }
+
+    #[test]
+    fn sess030_an_id_or_folder_with_a_space_stays_one_argument_for_the_pty() {
+        // The pty layer quotes each argument for the shell (pty.rs program_command), so the id is
+        // one list element here, unquoted, spaces intact; the folder is the pane's cwd, never an argument.
+        let none = serde_json::json!({});
+        // Real ids (UUIDs, dated names) stay one list element, unquoted.
+        let sid = "0b6c7e3a-4f2d-4b8e-9a51-2d3c4e5f6a7b";
+        assert_eq!(resume_args("copilot", Some(sid)), vec![format!("--resume={sid}")]);
+        assert_eq!(resume_args("gemini", Some("run_2026.10.13:a")), s(&["--resume", "run_2026.10.13:a"]));
+        let line = start_line_as(&none, "devin", &[], "", true, Start::Restore(Some(sid))).unwrap().args;
+        assert_eq!(line, s(&["--resume", sid]));
+        assert!(line.iter().all(|a| !a.contains('"')), "no quotes added here");
+        // A blank id counts as none.
+        assert!(resume_args("gemini", Some("")).is_empty());
+    }
+
+    #[test]
+    fn sess030_a_session_id_that_is_not_an_id_never_reaches_the_command_line() {
+        // Council FIX-BEFORE (T-066-c): option injection, a transcript path, cmd.exe shim
+        // characters, a space and an over-long id all count as no id, so the agent starts plain.
+        let none = serde_json::json!({});
+        let long = "a".repeat(101);
+        for bad in ["x&calc", "--foo", "-c", "--dangerously-bypass-approvals-and-sandbox", "C:\\a.jsonl", "a/b", "a b", "a|b", "a^b", "\"a\"", "%PATH%", "", ".hidden", long.as_str()] {
+            assert!(!safe_session(bad), "{bad}");
+            for id in ["claude", "codex", "copilot", "gemini", "goose", "openclaw"] {
+                assert!(resume_args(id, Some(bad)).is_empty(), "{id} {bad}");
+                let line = start_line_as(&none, id, &[], "", true, Start::Restore(Some(bad))).unwrap();
+                assert!(!line.resumed && line.args.iter().all(|a| a != bad && !a.ends_with(&format!("={bad}"))), "{id} {bad}: {:?}", line.args);
+            }
+            // The folder-scoped forms fall back to their no-id form, never the bad text.
+            assert!(start_line_as(&none, "kiro", &[], "", true, Start::Restore(Some(bad))).unwrap().args.iter().all(|a| a != bad || bad.is_empty()));
+        }
+        assert!(safe_session(&"a".repeat(100)));
+        assert!(safe_session("9f:2.x_y-z"));
+    }
+
+    #[test]
+    fn sess030_a_restore_carries_its_resume_once_and_says_so() {
+        // T-066-c: the restore path passes no resume of its own; the line carries it exactly once
+        // and `resumed` drives the pane's "restored" / "restored without resume" mark (TERM-107).
+        let none = serde_json::json!({});
+        let claude = start_line_as(&none, "claude", &[], "", true, Start::Restore(Some("sid"))).unwrap();
+        assert_eq!(claude.args, s(&["--permission-mode", "auto", "--resume", "sid"]));
+        assert!(claude.resumed);
+        let codex = start_line_as(&none, "codex", &[], "", true, Start::Restore(Some("sid"))).unwrap();
+        assert_eq!(codex.args.iter().filter(|a| a.as_str() == "resume").count(), 1);
+        assert!(codex.resumed);
+        let copilot = start_line_as(&none, "copilot", &[], "", true, Start::Restore(Some("sid"))).unwrap();
+        assert_eq!(copilot.args, s(&["--resume=sid"]));
+        assert!(copilot.resumed);
+        // Folder-scoped forms resume with no id; the id-only agents do not, and say so.
+        assert!(start_line_as(&none, "aider", &[], "", true, Start::Restore(None)).unwrap().resumed);
+        assert!(start_line_as(&none, "kiro", &[], "", true, Start::Restore(None)).unwrap().resumed);
+        for id in ["claude", "codex", "gemini", "copilot"] {
+            assert!(!start_line_as(&none, id, &[], "", true, Start::Restore(None)).unwrap().resumed, "{id}");
+        }
+        // An agent with no documented form is restored without resume even with an id.
+        assert!(!start_line_as(&none, "crush", &[], "", true, Start::Restore(Some("sid"))).unwrap().resumed);
+        // A plain new tab never resumes, even with a session id at hand.
+        assert!(!start_line_as(&none, "claude", &[], "", true, Start::Fresh).unwrap().resumed);
+    }
+
+    #[test]
+    fn sess030_the_restore_path_has_no_line_for_a_plain_shell() {
+        // T-066-c: the restore loop asks only for tabs that name a catalogue agent; a plain shell
+        // has no agent id, and an id outside the catalogue is refused, so its saved line stays.
+        let none = serde_json::json!({});
+        for id in ["shell", "", "pwsh", "cmd"] {
+            assert!(start_line_as(&none, id, &[], "", true, Start::Restore(Some("sid"))).is_err(), "{id}");
+        }
+    }
+
+    #[test]
+    fn sess030_agents_without_a_documented_resume_form_come_back_at_their_prompt() {
+        let none = serde_json::json!({});
+        for id in ["crush", "cline", "aug", "trae", "openclaude", "autohand", "ante", "mimo-code", "omp", "prime-agent", "kilo", "codebuff", "command-code", "continue", "rovo"] {
+            assert!(resume_args(id, Some("sid")).is_empty(), "{id}: no resume form wired");
+            let plain = start_line(&none, id, &[], "", true).unwrap().args;
+            assert_eq!(start_line_as(&none, id, &[], "", true, Start::Restore(Some("sid"))).unwrap().args, plain, "{id}: restored at its prompt");
+        }
+        // The resume form never lands inside an opening prompt's place: it comes before the prompt.
+        let grok = start_line_as(&none, "grok", &[], "go", true, Start::Restore(Some("sid"))).unwrap().args;
+        assert_eq!(grok, s(&["--resume", "sid", "--", "go"]));
     }
 
     #[test]
