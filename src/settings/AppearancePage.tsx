@@ -1,7 +1,9 @@
 // Settings > Appearance: the colour theme row (SET-001), its tint / saturation / depth sliders
 // (SET-002) and the terminal colours picker with "Match app theme" (SET-003). Every change shows at
 // once on the whole window; the save follows a moment later so a slider drag is one write.
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { MAX_LEVEL, MIN_LEVEL, onZoom, percentOf, stepZoom, zoomLevel, type ZoomStep } from "./zoom";
+import { SearchFolds } from "./search";
 import { invoke } from "@tauri-apps/api/core";
 import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, uiFont, monoFont, writeAppearance, WEIGHTS, THEMED_SCREENS, type Appearance, type FontWeight, type Mode } from "../theme";
 import { importScheme } from "../terminal/schemes";
@@ -45,21 +47,54 @@ export function ThemePreview({ look }: { look: Appearance }) {
 
 /** SET-016: a foldable section of the Appearance page; folded, its header sums up what it holds. */
 function Fold({ id, title, summary, open, onToggle, children }: { id: string; title: string; summary: string; open: boolean; onToggle: (open: boolean) => void; children: ReactNode }) {
+  // SET-007: while a search runs a fold with a match is held open and one without is left out;
+  // its own open state is untouched, so clearing the search puts it back.
+  const found = useContext(SearchFolds);
+  if (found && !found.has(id)) return null;
+  const shown = !!found || open;
   return (
-    <details className="look-fold" data-fold={id} open={open} onToggle={(e) => onToggle(e.currentTarget.open)}>
-      <summary>
+    <details className="look-fold" data-fold={id} open={shown} onToggle={(e) => !found && onToggle(e.currentTarget.open)}>
+      <summary aria-disabled={found ? true : undefined} onClick={found ? (e) => e.preventDefault() : undefined}>
         <span className="look-fold-title">{title}</span>
-        {!open && <span className="look-fold-sum">{summary}</span>}
+        {!shown && <span className="look-fold-sum">{summary}</span>}
       </summary>
       {children}
     </details>
   );
 }
 
+/** SET-019: the interface zoom, in steps; the zoom keys and the View menu change the same level. */
+function ZoomControl() {
+  const [level, setLevel] = useState(zoomLevel);
+  useEffect(() => onZoom(setLevel), []);
+  const step = (how: ZoomStep) => void stepZoom(how).catch(() => {});
+  return (
+    <section className="conn-card" data-section="zoom">
+      <h2 className="conn-name">Zoom</h2>
+      <div className="look-select">
+        <span>Interface size</span>
+        <div className="zoom-row">
+          <button className="btn" aria-label="Zoom out" disabled={level <= MIN_LEVEL} onClick={() => step("out")}>
+            −
+          </button>
+          <output className="zoom-level">{percentOf(level)} %</output>
+          <button className="btn" aria-label="Zoom in" disabled={level >= MAX_LEVEL} onClick={() => step("in")}>
+            +
+          </button>
+          <button className="btn" disabled={level === 0} onClick={() => step("reset")}>
+            Reset
+          </button>
+        </div>
+      </div>
+      <p className="conn-detail">Text and controls grow or shrink together. The zoom shortcuts do the same from anywhere.</p>
+    </section>
+  );
+}
+
 /** SET-018: a font family field; suggestions come from the installed fonts, the whole list when the
  *  field is entered and the best matches once the user types. Applies on pick, Enter, leaving, and
  *  (SET-036) after a pause in typing, never in the middle of an input-method composition. */
-function FontField({ label, value, placeholder, onPick }: { label: string; value: string; placeholder: string; onPick: (family: string) => void }) {
+export function FontField({ label, value, placeholder, onPick }: { label: string; value: string; placeholder: string; onPick: (family: string) => void }) {
   const [draft, field] = useDraftOf(value, fontSaver(onPick));
   const text = field.value;
   const [fonts, setFonts] = useState<string[] | null>(null);
@@ -148,11 +183,15 @@ export function LanguageView({ value, onPick, os = navigator.languages }: { valu
   );
 }
 
+/** The folds' open state for this run of the app (SET-007, SET-016). */
+let folds = { interface: true, terminal: true, window: true };
+
 export function AppearanceView({ look, onChange, windowPart, windowSummary = "", languagePart }: { look: Appearance; onChange: (a: Appearance) => void; windowPart?: ReactNode; windowSummary?: string; languagePart?: ReactNode }) {
   const classic = look.theme === "classic";
-  // All three sections open at first; a link into a folded one unfolds it (SettingsPage).
-  const [open, setOpen] = useState({ interface: true, terminal: true, window: true });
-  const fold = (k: keyof typeof open) => ({ open: open[k], onToggle: (o: boolean) => setOpen((p) => (p[k] === o ? p : { ...p, [k]: o })) });
+  // All three sections open at first; a link into a folded one unfolds it (SettingsPage). The
+  // state outlives the page, which a search draws afresh, so clearing a search restores it.
+  const [open, setOpen] = useState(() => ({ ...folds }));
+  const fold = (k: keyof typeof open) => ({ open: open[k], onToggle: (o: boolean) => setOpen((p) => (p[k] === o ? p : (folds = { ...p, [k]: o }))) });
   const name = (id: string) => schemeOptions(look, true).find((o) => o.id === id)?.name ?? id;
   return (
     <>
@@ -181,6 +220,7 @@ export function AppearanceView({ look, onChange, windowPart, windowSummary = "",
         ))}
         <p className="conn-detail">Inbox and Artifacts follow the Terminals screen. The classic look uses the Terminals choice everywhere.</p>
       </section>
+      <ZoomControl />
       {languagePart}
       <section className="conn-card" data-section="theme">
         <h2 className="conn-name">Colour theme</h2>

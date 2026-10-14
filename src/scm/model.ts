@@ -24,6 +24,10 @@ export type Status = {
   resolved: string[];
   /** GIT-001: `[added, removed]` by path per section; a binary file has no entry. */
   lines?: { staged: Record<string, [number, number]>; changed: Record<string, [number, number]>; untracked: Record<string, [number, number]> };
+  /** GIT-013: each changed submodule's path with what changed inside it. */
+  submodules?: Record<string, string>;
+  /** GIT-013: changed submodules left out of the list past the back end's limit. */
+  submodulesCut?: number;
 };
 
 /** GIT-065: whether a workspace's commits are on its remote (`scm_pushed`). */
@@ -90,7 +94,7 @@ export const discardAsk = (section: Section, rows: Change[], all: boolean): Disc
   return { title: `Discard all ${rows.length} in ${section}?`, body: `${parts.join("; ")}.${stagedNew}${del + gone > 0 ? lost : ""}`, confirm: "Discard all", paths };
 };
 
-export type RemoteAction = "push" | "pull" | "sync" | "fetch" | "ff" | "force" | "publish" | "rebase" | "pullpush";
+export type RemoteAction = "push" | "pull" | "sync" | "fetch" | "ff" | "force" | "publish" | "rebase" | "pullpush" | "pullmerge" | "pullrebase";
 
 /** What the main button offers; `reason` is why it waits, null when it can go. */
 export type Step = { label: string; action: "stage" | "commit" | "pr" | RemoteAction; reason: string | null };
@@ -269,6 +273,14 @@ export const capped = <T>(rows: T[], cap: number): { shown: T[]; more: number } 
 export const SCM_GROUP_ORDER_KEY = "scmGroupOrder";
 /** GIT-001: the panel shows a flat list ("list", the default) or a folder tree ("tree"). */
 export const SCM_VIEW_KEY = "scmView";
+/** GIT-038 (T-033-c): All Changes' default layout, each off unless set: two columns, wrapped
+ * lines, whitespace-only changes shown, the file tree open. A tab's own toggles start from these. */
+export const AC_SPLIT_KEY = "allChangesSideBySide";
+export const AC_WRAP_KEY = "allChangesWrap";
+export const AC_WHITESPACE_KEY = "allChangesWhitespace";
+export const AC_TREE_KEY = "allChangesTree";
+export type AcLayout = { split: boolean; wrap: boolean; spaces: boolean; tree: boolean };
+export const acLayoutOf = (s: Record<string, unknown> | null): AcLayout => ({ split: s?.[AC_SPLIT_KEY] === true, wrap: s?.[AC_WRAP_KEY] === true, spaces: s?.[AC_WHITESPACE_KEY] === true, tree: s?.[AC_TREE_KEY] === true });
 export type ScmGroup = "conflicts" | "staged" | "changes" | "untracked";
 /** GIT-066: the orders on offer, `[id, label, groups]`; conflicts lead in each, since they block a commit. */
 export const SCM_GROUP_ORDERS: [string, string, ScmGroup[]][] = [
@@ -333,16 +345,37 @@ export const bulk = (s: Status, selected: string[]): { present: string[]; stage:
 /** What a remote action came to (GIT-007). */
 export type ActionOutcome = { ok: boolean; output: string; kind?: FailureKind | null; detail?: string | null };
 /** GIT-009: how the back end sorted a failed remote action. */
-export type FailureKind = "protected" | "sign-in" | "network" | "submodule" | "non-fast-forward" | "hook" | "other";
+export type FailureKind = "protected" | "sign-in" | "network" | "no-policy" | "submodule" | "non-fast-forward" | "hook" | "other";
 
 const FAILURE_WORDS: Record<FailureKind, string> = {
   protected: "refused: the branch is protected on the remote",
   "sign-in": "failed: the remote wants you to sign in",
   network: "failed: the remote could not be reached",
+  "no-policy": "stopped: this branch and its remote have split, and git has no pull policy set",
   submodule: "failed: a submodule has commits that are not on its remote",
   "non-fast-forward": "refused: the remote has commits this copy lacks; pull first",
   hook: "blocked by a hook (a lint or test check failed)",
   other: "failed",
+};
+
+/** GIT-008: the three ways to pull split histories; `action` pulls again with that policy and
+ * `config` is the command that sets it for good (only copied, never run by Kolux). */
+export const PULL_POLICIES: { label: string; action: RemoteAction; config: string; title: string }[] = [
+  { label: "Merge", action: "pullmerge", config: "git config pull.rebase false", title: "Pull and join the two histories with a merge commit" },
+  { label: "Rebase", action: "pullrebase", config: "git config pull.rebase true", title: "Pull and replay this branch's commits on top of the remote's" },
+  { label: "Fast-forward only", action: "ff", config: "git config pull.ff only", title: "Pull only when no merge is needed (fails while the histories are split)" },
+];
+
+/** GIT-014: the rows whose path (or old path) holds the filter text, any case; empty keeps all. */
+export const filterRows = <T extends { path: string; from?: string | null }>(rows: T[], filter: string): T[] => {
+  const q = filter.trim().toLowerCase();
+  return q ? rows.filter((r) => r.path.toLowerCase().includes(q) || !!r.from?.toLowerCase().includes(q)) : rows;
+};
+
+/** GIT-014: a changed file's full path on disk, in the worktree's own slash style. */
+export const fullPath = (worktree: string, path: string): string => {
+  const sep = worktree.includes("\\") ? "\\" : "/";
+  return worktree.replace(/[\\/]+$/, "") + sep + path.split("/").join(sep);
 };
 
 /** GIT-009: the notice's title, naming the kind of failure. */

@@ -204,9 +204,31 @@ fn wsl_has_distro() -> bool {
     false
 }
 
+/// SET-026: the settings field naming the shell new terminals open in ("auto" or a shell id).
+pub const DEFAULT_SHELL_FIELD: &str = "defaultShell";
+
+/// SET-026: the list with the chosen default shell first, so the item Ctrl+T opens names it. A
+/// choice that is not installed (or "auto") leaves the automatic order.
+pub fn chosen_first(mut list: Vec<ShellInfo>, settings: &serde_json::Value) -> Vec<ShellInfo> {
+    let choice = settings.get(DEFAULT_SHELL_FIELD).and_then(serde_json::Value::as_str);
+    if let Some(i) = list.iter().position(|s| Some(s.id) == choice) {
+        let chosen = list.remove(i);
+        list.insert(0, chosen);
+    }
+    list
+}
+
+/// SET-026: the program and arguments a plain new terminal starts with, when a default is chosen.
+pub fn default_shell(settings: &serde_json::Value) -> Option<(String, Vec<String>)> {
+    settings.get(DEFAULT_SHELL_FIELD).and_then(serde_json::Value::as_str).filter(|c| *c != "auto")?;
+    let first = chosen_first(shells(crate::agents::find_program), settings).into_iter().next()?;
+    (Some(first.id) == settings.get(DEFAULT_SHELL_FIELD).and_then(serde_json::Value::as_str)).then_some((first.program, first.args))
+}
+
 #[tauri::command]
-pub fn shell_list() -> Vec<ShellInfo> {
-    shells(crate::agents::find_program)
+pub fn shell_list(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>) -> Vec<ShellInfo> {
+    let settings = store.lock().map(|s| s.settings()).unwrap_or_default();
+    chosen_first(shells(crate::agents::find_program), &settings)
 }
 
 /// TERM-040: where a new terminal starts. A requested folder may be relative to the workspace or
@@ -465,6 +487,17 @@ mod tests {
         assert!(!ids.contains(&"wsl"));
         // Nothing found but the built-in one: still one item.
         assert_eq!(shells(|_| None).first().map(|s| s.id), Some("powershell"));
+    }
+
+    #[test]
+    fn the_chosen_default_shell_comes_first_and_a_missing_one_changes_nothing() {
+        let info = |id: &'static str| ShellInfo { id, name: id, program: format!("{id}.exe"), args: vec![] };
+        let list = || vec![info("pwsh"), info("powershell"), info("cmd")];
+        let ids = |l: Vec<ShellInfo>| l.into_iter().map(|s| s.id).collect::<Vec<_>>();
+        assert_eq!(ids(chosen_first(list(), &serde_json::json!({ "defaultShell": "cmd" }))), ["cmd", "pwsh", "powershell"]);
+        assert_eq!(ids(chosen_first(list(), &serde_json::json!({ "defaultShell": "gitbash" }))), ["pwsh", "powershell", "cmd"]);
+        assert_eq!(ids(chosen_first(list(), &serde_json::json!({}))), ["pwsh", "powershell", "cmd"]);
+        assert_eq!(default_shell(&serde_json::json!({ "defaultShell": "auto" })), None);
     }
 
     /// The round trip every pane depends on: a real shell, a typed command, its output read back.

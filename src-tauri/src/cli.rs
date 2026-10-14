@@ -22,6 +22,11 @@ mod automations_cli;
 #[path = "local_cli.rs"]
 mod local_cli;
 
+/// SKILL-017: Kolux's own skill guides (name, guide text), listed on the Skills page as bundled.
+pub fn bundled_skills() -> Vec<(&'static str, &'static str)> {
+    local_cli::bundled()
+}
+
 /// Where the app says how to reach it, inside its data folder.
 pub const FILE: &str = "cli.json";
 /// The event the front end gets when the CLI made or removed a workspace.
@@ -632,6 +637,10 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
         } else if local_cli::COMMANDS.iter().any(|c| c.1 == command) {
             args = flags.clone();
         } else if TERM.iter().any(|(_, c, _)| *c == command) {
+            // MERGE 49: a zero wait is refused before anything is sent.
+            if command == "terminal.send" && flags.get("wait-submit").and_then(Value::as_str).and_then(|s| s.trim().parse::<u64>().ok()) == Some(0) {
+                return Err(Fail::args(WAIT_SUBMIT_ZERO));
+            }
             // CLI-024 / CLI-025: --text may be anything, even blank; the rest are keys and numbers.
             for (k, v) in &flags {
                 if k != "text" && v.as_str().is_some_and(|s| s.trim().is_empty()) {
@@ -942,10 +951,14 @@ fn memory_figure(v: &Value) -> String {
 
 /// CLI-041: the Resource Manager's breakdown as text: the app, then each terminal session (its
 /// whole process tree), then the total, resident and committed side by side, then free memory.
+/// T-287-c: a row or total with processes that could not be read shows a dash for committed and
+/// says how many, never a partial sum as if it were the whole.
 fn memory_text(r: &Value) -> String {
     let row = |name: &str, u: &Value, tail: &str| {
         let n = u["processes"].as_u64().unwrap_or(0);
-        format!("  {name:<34} {:>10}  {:>10}  {n:>3} process{}{tail}", memory_figure(&u["bytes"]), memory_figure(&u["committed"]), if n == 1 { "" } else { "es" })
+        let lost = u["unreadable"].as_u64().unwrap_or(0);
+        let note = if lost > 0 { format!("  ({lost} of {n} could not be read)") } else { String::new() };
+        format!("  {name:<34} {:>10}  {:>10}  {n:>3} process{}{note}{tail}", memory_figure(&u["bytes"]), memory_figure(&u["committed"]), if n == 1 { "" } else { "es" })
     };
     let mut out = vec![format!("  {:<34} {:>10}  {:>10}", "", "resident", "committed"), row("Kolux", &r["app"], "")];
     let sessions = r["sessions"].as_array().cloned().unwrap_or_default();
@@ -957,10 +970,18 @@ fn memory_text(r: &Value) -> String {
         out.push("  No terminal sessions are running.".into());
     }
     let all: Vec<&Value> = std::iter::once(&r["app"]).chain(sessions.iter()).collect();
-    let committed: Vec<u64> = all.iter().filter_map(|u| u["committed"].as_u64()).collect();
+    // The app's own total and count when it sends them (T-287-c); an older app's rows are summed
+    // here, the total unknown as soon as a row with processes has no figure.
+    let counted = |u: &Value| u["processes"].as_u64().unwrap_or(0) > 0;
+    let (committed, unreadable) = match r.get("committed_total") {
+        Some(t) => (t.clone(), r["unreadable"].clone()),
+        None if all.iter().filter(|u| counted(u)).all(|u| u["committed"].is_u64()) => (json!(all.iter().filter_map(|u| u["committed"].as_u64()).sum::<u64>()), Value::Null),
+        None => (Value::Null, Value::Null),
+    };
     let sum = json!({
         "bytes": all.iter().filter_map(|u| u["bytes"].as_u64()).sum::<u64>(),
-        "committed": if committed.is_empty() { Value::Null } else { json!(committed.iter().sum::<u64>()) },
+        "committed": committed,
+        "unreadable": unreadable,
         "processes": all.iter().filter_map(|u| u["processes"].as_u64()).sum::<u64>(),
     });
     out.push(row("Total", &sum, ""));
@@ -1014,7 +1035,14 @@ pub fn status_of(dir: &Path, ask: &dyn Fn(u16, &str) -> Result<Value, Fail>) -> 
         Ok(env) if env["success"] == Value::Bool(true) => {
             let r = &env["result"];
             let ready = r["graphReady"] != Value::Bool(false);
-            json!({ "state": if ready { "running" } else { "graph-not-ready" }, "startupFile": shown, "pid": r["pid"], "port": port, "version": r["version"], "graphReady": ready })
+            let mut out = json!({ "state": if ready { "running" } else { "graph-not-ready" }, "startupFile": shown, "pid": r["pid"], "port": port, "version": r["version"], "graphReady": ready });
+            // T-076-c: busy with a request that has run this long, so a hang can be told from a long one.
+            if let Some(ms) = r["busy"]["runningMs"].as_u64() {
+                out["detail"] = json!(STATUS_BUSY);
+                out["busyMs"] = json!(ms);
+                out["busyCommand"] = r["busy"]["command"].clone();
+            }
+            out
         }
         // A token from another run: the file outlived the app that wrote it.
         Ok(env) if env["error"]["code"] == "unauthorized" => stale(&env["error"]["message"]),
@@ -1032,11 +1060,24 @@ pub fn status_of(dir: &Path, ask: &dyn Fn(u16, &str) -> Result<Value, Fail>) -> 
 fn status_line(r: &Value) -> String {
     let pid = r["pid"].as_u64().map(|p| format!("pid {p}")).unwrap_or_else(|| "pid unknown".into());
     match r["state"].as_str().unwrap_or_default() {
-        "running" if r["detail"] == STATUS_BUSY => format!("running: Kolux is up, {STATUS_BUSY} ({pid})"),
+        "running" if r["detail"] == STATUS_BUSY => {
+            let how = r["busyMs"].as_u64().map(|ms| format!(" for {}{}", span(ms), r["busyCommand"].as_str().map(|c| format!(" ({c})")).unwrap_or_default())).unwrap_or_default();
+            format!("running: Kolux is up, {STATUS_BUSY}{how} ({pid})")
+        }
         "running" => format!("running: Kolux is up and ready ({pid})"),
         "graph-not-ready" => format!("graph-not-ready: Kolux answers but is still loading its workspaces ({pid})"),
         "stale" => format!("stale: Kolux left its startup file behind but nothing answers ({pid}); run {} open to start it again", crate::orchestration::CLI),
         _ => "not-running: Kolux is not running".into(),
+    }
+}
+
+/// T-076-c: a running time as people read it: "4 s", "3 min 12 s", "1 h 5 min".
+fn span(ms: u64) -> String {
+    let s = ms / 1000;
+    match s {
+        0..=59 => format!("{s} s"),
+        60..=3599 => format!("{} min {} s", s / 60, s % 60),
+        _ => format!("{} h {} min", s / 3600, s % 3600 / 60),
     }
 }
 
@@ -1108,7 +1149,7 @@ fn text_of(command: &str, r: &Value) -> String {
         "terminal.send" => {
             let what = r["delivered"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join("+");
             let tail = match r["receipt"].as_str() {
-                Some("turn_began") => ": the agent began a turn".to_string(),
+                Some("turn_began") => ": the prompt was taken (the agent began a turn)".to_string(),
                 Some(rc) => format!(": {rc}; {}", r["next"].as_str().map(|n| format!("look with {n}")).unwrap_or_default()),
                 None => String::new(),
             };
@@ -1688,6 +1729,10 @@ pub fn main(words: Vec<String>) -> i32 {
             call(port, &Request { id: id.clone(), token, command: parsed.command.clone(), cwd: cwd.clone(), args: Value::Object(args.clone()), pane: pane.clone(), cli: VERSION.into(), arrived: None })
         };
         let env = if parsed.command == "app.open" { open(&send, &launch_app, OPEN_LIMIT)? } else { send()? };
+        if parsed.command == "terminal.send" {
+            // TERM-126: a prompt that did not submit within the wait is reported with exit status 1.
+            submit_step(&env)?;
+        }
         Ok((parsed.command.clone(), env))
     };
     let out = run().map_err(retry_hint);
@@ -2967,10 +3012,117 @@ fn pane_agent(ctx: &Ctx, h: &str) -> Option<String> {
 
 /// How long `send` watches for the agent to take a prompt unless `--wait-submit` says otherwise.
 const SUBMIT_WATCH: Duration = Duration::from_secs(3);
+/// MERGE 49: a zero wait would report an idle agent not submitted before it could start a turn.
+const WAIT_SUBMIT_ZERO: &str = "--wait-submit takes the seconds to watch, 1 or more; leave it out for the default 3 s";
 /// Receipts by terminal and `--retry-request` id: an exact retry answers without sending again.
 /// ponytail: in memory, bounded; a retry after a Kolux restart sends anew.
 static SENT: Mutex<Vec<(String, Value)>> = Mutex::new(Vec::new());
 const BLOCKED: [&str; 3] = ["permission", "waiting", "blocked"];
+
+/// TERM-126: what became of a prompt sent with Enter, watched for `--wait-submit` seconds.
+struct Submit {
+    /// turn_began (taken), queued (the agent was working and still is), not_submitted (it was
+    /// idle or needs an answer and no turn began), unknown (no status hooks report for the pane).
+    receipt: &'static str,
+    /// true = taken, false = did not submit within the wait, None = cannot be told.
+    submitted: Option<bool>,
+    /// The pane's hook state when the watch ended, where one is reported.
+    state: Option<&'static str>,
+    waited_ms: u64,
+    warning: Option<String>,
+}
+
+/// Watches `activity` (the newest hooks history mark and whether the pane works) for up to `watch`.
+/// The prompt is taken when a new history entry appears, or an idle pane turns working. Without a
+/// hooks report (`before` is None) nothing can be told: with an explicit `--wait-submit` the output
+/// stream is watched for the same time and the answer says whether anything was written after Enter.
+fn submit_verdict(handle: &str, before: Option<((u64, usize), bool)>, watch: Duration, explicit: bool, mut activity: impl FnMut() -> Option<((u64, usize), bool)>, state: impl Fn() -> Option<&'static str>, mut output_moved: impl FnMut() -> bool) -> Submit {
+    let start = Instant::now();
+    let until = start + watch;
+    let secs = watch.as_secs();
+    let Some((mark, busy)) = before else {
+        let mut wrote = false;
+        if explicit {
+            while !wrote && Instant::now() < until {
+                wrote = output_moved();
+                if !wrote {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+        let seen = match (explicit, wrote) {
+            (false, _) => String::new(),
+            (true, true) => " (it wrote output after Enter, which a shell or an agent without hooks does either way)".to_string(),
+            (true, false) => format!(" (it wrote nothing within {secs} s)"),
+        };
+        return Submit { receipt: "unknown", submitted: None, state: None, waited_ms: start.elapsed().as_millis() as u64, warning: Some(format!("no status hooks report for {handle}; whether the prompt was taken cannot be told{seen}")) };
+    };
+    // MERGE 49: a busy agent without an explicit --wait-submit answers queued at once, as before
+    // T-188; only a wait the caller asked for is spent watching it (and can end in exit 1).
+    if busy && !explicit {
+        return Submit { receipt: "queued", submitted: Some(false), state: state(), waited_ms: 0, warning: Some(format!("{handle} is working; the prompt waits behind its turn (--wait-submit <seconds> watches for it to be taken)")) };
+    }
+    // An idle pane took the prompt when anything moved. A busy pane's own turn moves too: its end
+    // (done, interrupted, blocked), a question (permission, waiting) and the carry-on after one are
+    // the old turn; only a new turn after its end, or a new entry while it still works, is the prompt.
+    let (mut mark, mut prev, mut ended, mut took) = (mark, state(), !busy, false);
+    while !took && Instant::now() < until {
+        if let Some((m, working)) = activity() {
+            let now = state();
+            if ended {
+                took = m != mark || working;
+            } else if m != mark {
+                match now {
+                    Some("done" | "interrupted" | "blocked") => ended = true,
+                    Some("working") if !matches!(prev, Some("permission" | "waiting")) => took = true,
+                    _ => {}
+                }
+                mark = m;
+            }
+            prev = now;
+        }
+        if !took {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+    let waited_ms = start.elapsed().as_millis() as u64;
+    let state = state();
+    if took {
+        return Submit { receipt: "turn_began", submitted: Some(true), state, waited_ms, warning: None };
+    }
+    // Still in the turn it was busy with: queued behind it. Idle, or its turn ended and no new one began: lost.
+    Submit { receipt: if ended { "not_submitted" } else { "queued" }, submitted: Some(false), state, waited_ms, warning: None }
+}
+
+/// TERM-126: the sentence for a prompt that did not submit, naming the pane's state.
+fn not_submitted_line(r: &Value) -> String {
+    let handle = r["terminal"].as_str().unwrap_or_default();
+    let secs = r["waitSubmit"].as_u64().unwrap_or(0);
+    let why = match r["state"].as_str() {
+        Some("working") => "it is working; the prompt waits behind its turn".to_string(),
+        Some("done") => "it is idle, so Enter may have been lost".to_string(),
+        Some("permission") => "it is waiting for permission; answer that first".to_string(),
+        Some("waiting") => "it is waiting for an answer; give it first".to_string(),
+        Some("blocked") => "it is blocked".to_string(),
+        Some("interrupted") => "it was interrupted".to_string(),
+        Some(s) => format!("it is {s}"),
+        None => "its state is not reported".to_string(),
+    };
+    format!("{handle} did not submit the prompt within {secs} s ({why})")
+}
+
+/// TERM-126: a send answer whose prompt did not submit becomes an error, so the exit status says so;
+/// only when the caller asked for the wait with --wait-submit (MERGE 49). A plain send to a busy or
+/// idle agent keeps exit 0 with a warning, so an agent never reads it as a failure and resends.
+fn submit_step(env: &Value) -> Result<(), Fail> {
+    let r = &env["result"];
+    if env["success"] == Value::Bool(true) && r["submitted"] == Value::Bool(false) && r["waitAsked"] == Value::Bool(true) {
+        let mut f = Fail::new("not_submitted", not_submitted_line(r));
+        f.data = r.clone();
+        return Err(f);
+    }
+    Ok(())
+}
 
 fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     let a = &req.args;
@@ -3034,7 +3186,11 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             if body.is_none() && !enter && !interrupt {
                 return Err(Fail::args("nothing to send: give --text, --enter or --interrupt"));
             }
-            let watch = num("waitSubmit", "--wait-submit")?.map(Duration::from_secs).unwrap_or(SUBMIT_WATCH);
+            let asked = num("waitSubmit", "--wait-submit")?;
+            if asked == Some(0) {
+                return Err(Fail::args(WAIT_SUBMIT_ZERO));
+            }
+            let watch = asked.map(Duration::from_secs).unwrap_or(SUBMIT_WATCH);
             let retry = text("retryRequest").map(|r| format!("{handle}|{r}"));
             if let Some(key) = &retry {
                 if let Some(receipt) = SENT.lock().ok().and_then(|s| s.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())) {
@@ -3048,7 +3204,11 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             }
             let agent = ctx.terminals.program(id).flatten();
             let prompt = agent.is_some() && body.is_some() && enter;
-            let before = if prompt { Some(crate::status::activity(id)) } else { None };
+            // TERM-126: a prompt to an agent is watched; so is any Enter when --wait-submit asks for it.
+            let watching = prompt || (asked.is_some() && enter);
+            let before = if watching { Some(crate::status::activity(id)) } else { None };
+            let output_mark = |r: Option<crate::terminal::Read>| r.map(|r| (r.cursor, r.pending));
+            let output_before = output_mark(ctx.terminals.read(id, None, Some(1)));
             let write = |s: &str| ctx.terminals.write(id, s).map_err(|e| Fail::new("failed", e));
             let mut delivered = Vec::new();
             if interrupt {
@@ -3071,26 +3231,22 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let mut out = json!({ "terminal": handle, "delivered": delivered, "agent": agent, "prompt": prompt });
             if let Some(before) = before {
                 let next = format!("kolux terminal read --terminal {handle} --screen");
-                let (receipt, warning) = match before {
-                    None => ("unknown", Some(format!("no status hooks report for {handle}; whether the agent took the prompt cannot be told"))),
-                    Some((_, true)) => ("queued", Some("the agent was already working; the prompt waits behind its turn".to_string())),
-                    Some((mark, false)) => {
-                        let until = Instant::now() + watch;
-                        let mut took = false;
-                        while !took && Instant::now() < until {
-                            took = crate::status::activity(id).is_some_and(|(m, working)| m != mark || working);
-                            if !took {
-                                std::thread::sleep(Duration::from_millis(100));
-                            }
-                        }
-                        if took { ("turn_began", None) } else { ("queued", Some(format!("the agent did not begin a turn within {} s; Enter may have been lost", watch.as_secs()))) }
-                    }
-                };
-                out["receipt"] = json!(receipt);
-                if receipt != "turn_began" {
+                let moved = || output_mark(ctx.terminals.read(id, None, Some(1))) != output_before;
+                let v = submit_verdict(&handle, before, watch, asked.is_some(), || crate::status::activity(id), || crate::status::state_of(id), moved);
+                out["receipt"] = json!(v.receipt);
+                out["submitted"] = json!(v.submitted);
+                out["state"] = json!(v.state);
+                out["waitSubmit"] = json!(watch.as_secs());
+                out["waitAsked"] = json!(asked.is_some());
+                out["waitedMs"] = json!(v.waited_ms);
+                if v.receipt != "turn_began" {
                     out["next"] = json!(next);
                 }
-                out["warnings"] = json!(warning.into_iter().collect::<Vec<_>>());
+                let mut warnings: Vec<String> = v.warning.into_iter().collect();
+                if asked.is_none() && v.receipt == "not_submitted" {
+                    warnings.push(not_submitted_line(&out));
+                }
+                out["warnings"] = json!(warnings);
             }
             if let Some(key) = retry {
                 if let Ok(mut s) = SENT.lock() {
@@ -3547,35 +3703,63 @@ pub(crate) fn secret() -> String {
     format!("{:016x}{:016x}", h.finish(), std::collections::hash_map::RandomState::new().build_hasher().finish())
 }
 
+/// CLI-012 (T-076-c): the request the app is answering now and when it began, so a status
+/// question that comes in meanwhile can say what runs and for how long.
+type Current = std::sync::Arc<Mutex<Option<(String, Instant)>>>;
+
 /// Answers requests on `listener` one at a time, for as long as the app runs.
 pub fn serve_loop(listener: TcpListener, token: &str, runtime: &str, handle: impl Fn(&Request) -> Result<Value, Fail>) {
+    serve_loop_with(listener, token, runtime, || status_answer(&GRAPH_READY), handle);
+}
+
+/// `serve_loop` with the status answer given, so a test can stand in for the app's.
+fn serve_loop_with(listener: TcpListener, token: &str, runtime: &str, status: impl Fn() -> Value + Send + 'static, handle: impl Fn(&Request) -> Result<Value, Fail>) {
     // ponytail: one request at a time; a parallel accept loop if agents ever queue up on it. A
-    // second thread takes each connection as it comes, so a request knows when it was sent.
-    let (queue, taken) = mpsc::channel();
+    // second thread takes each connection as it comes and reads its line, so a request knows
+    // when it was sent, and a status question is answered at once while a request runs (T-076-c).
+    let current: Current = std::sync::Arc::default();
+    let (queue, taken) = mpsc::channel::<(TcpStream, Instant, String)>();
+    let (busy, tok, rt) = (current.clone(), token.to_string(), runtime.to_string());
     std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            if queue.send((stream, Instant::now())).is_err() {
+        for mut stream in listener.incoming().flatten() {
+            let arrived = Instant::now();
+            stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
+            let mut line = String::new();
+            if BufReader::new(&stream).read_line(&mut line).is_err() {
+                continue;
+            }
+            // BROW-051: a web page can only ever send HTTP here; its request line is dropped unanswered.
+            if line.split_whitespace().nth(2).is_some_and(|w| w.starts_with("HTTP/")) {
+                continue;
+            }
+            if let Some(reply) = busy_status(&line, &tok, &rt, &busy, &status) {
+                let _ = stream.write_all(reply.as_bytes()).and_then(|_| stream.write_all(b"\n"));
+                continue;
+            }
+            if queue.send((stream, arrived, line)).is_err() {
                 break;
             }
         }
     });
-    for (mut stream, arrived) in taken {
-        stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
-        let mut line = String::new();
-        if BufReader::new(&stream).read_line(&mut line).is_err() {
-            continue;
+    let mark = |now: Option<(String, Instant)>| {
+        if let Ok(mut c) = current.lock() {
+            *c = now;
         }
-        // BROW-051: a web page can only ever send HTTP here; its request line is dropped unanswered.
-        if line.split_whitespace().nth(2).is_some_and(|w| w.starts_with("HTTP/")) {
-            continue;
-        }
+    };
+    for (mut stream, arrived, line) in taken {
         let (id, out) = match serde_json::from_str::<Request>(&line) {
             Ok(req) if req.token != token => (req.id, Err(Fail::new("unauthorized", "the token does not match this app; is cli.json stale?"))),
             // CLI-038: an app older than the CLI turns a change away before it runs.
             Ok(req) if CHANGES.contains(&req.command.as_str()) && newer(&req.cli, VERSION) => {
                 (req.id, Err(Fail { code: "version_gap", message: format!("this Kolux ({VERSION}) is older than the command line ({}); update Kolux before sending orchestration changes", req.cli), data: json!({ "appVersion": VERSION, "cliVersion": req.cli }) }))
             }
-            Ok(req) => (req.id.clone(), handle(&Request { arrived: Some(arrived), ..req })),
+            Ok(req) => {
+                mark(Some((req.command.clone(), Instant::now())));
+                let id = req.id.clone();
+                let out = handle(&Request { arrived: Some(arrived), ..req });
+                mark(None);
+                (id, out)
+            }
             Err(e) => (String::new(), Err(Fail::args(format!("malformed request: {e}")))),
         };
         let mut reply = envelope(&id, runtime, out);
@@ -3583,6 +3767,19 @@ pub fn serve_loop(listener: TcpListener, token: &str, runtime: &str, handle: imp
         let reply = reply.to_string();
         let _ = stream.write_all(reply.as_bytes()).and_then(|_| stream.write_all(b"\n"));
     }
+}
+
+/// CLI-012 (T-076-c): while a request runs, a status question with the right token is answered
+/// straight away with the app's answer plus the running request's command and how long it has
+/// run; None hands the line on to the queue.
+fn busy_status(line: &str, token: &str, runtime: &str, current: &Current, status: &dyn Fn() -> Value) -> Option<String> {
+    let req = serde_json::from_str::<Request>(line).ok().filter(|r| r.command == STATUS && r.token == token)?;
+    let (command, since) = current.lock().ok()?.clone()?;
+    let mut answer = status();
+    answer["busy"] = json!({ "command": command, "runningMs": since.elapsed().as_millis() as u64 });
+    let mut reply = envelope(&req.id, runtime, Ok(answer));
+    reply["meta"]["appVersion"] = json!(VERSION);
+    Some(reply.to_string())
 }
 
 /// Starts listening for the command line and writes `cli.json` so it can find the app.
@@ -3970,7 +4167,7 @@ mod tests {
         // Text output: a screen is its rows; a read is its lines, the unfinished one, and the cursor.
         assert_eq!(text_of("terminal.read", &json!({ "screen": true, "rows": ["a", "b", ""] })), "a\nb");
         assert_eq!(text_of("terminal.read", &json!({ "screen": false, "lines": [{ "cursor": 4, "text": "x" }], "pending": "> ", "cursor": 4 })), "x\n> \n-- cursor 4");
-        assert_eq!(text_of("terminal.send", &json!({ "terminal": "term-1", "delivered": ["text", "enter"], "receipt": "turn_began" })), "sent text+enter to term-1: the agent began a turn");
+        assert_eq!(text_of("terminal.send", &json!({ "terminal": "term-1", "delivered": ["text", "enter"], "receipt": "turn_began" })), "sent text+enter to term-1: the prompt was taken (the agent began a turn)");
         assert_eq!(text_of("terminal.send", &json!({ "terminal": "term-1", "delivered": ["text", "enter"], "receipt": "queued", "next": "kolux terminal read --terminal term-1 --screen" })), "sent text+enter to term-1: queued; look with kolux terminal read --terminal term-1 --screen");
         assert_eq!(text_of("terminal.wait", &json!({ "terminal": "term-1", "state": "done" })), "term-1 is done");
         drop(ctx);
@@ -4011,6 +4208,102 @@ mod tests {
         assert_eq!(f.data["state"], "running");
         assert!(took >= Duration::from_millis(700) && took < Duration::from_secs(5), "took {took:?}");
         assert!(asked.load(Ordering::SeqCst) >= 2, "asked {} times", asked.load(Ordering::SeqCst));
+    }
+
+    /// TERM-126: a prompt sent with Enter is watched for the whole `--wait-submit`: a busy agent
+    /// that stays busy reports it did not submit, with the state named and exit status 1; a new
+    /// history entry within the wait means the prompt was taken; an idle pane that stays idle is
+    /// not submitted; a pane without hooks is unknown, its output watched only when asked.
+    #[test]
+    fn term126_send_wait_submit_honours_the_wait_and_names_the_state() {
+        use std::cell::Cell;
+        let working = |m: u64| Some(((m, 1usize), true));
+        let idle = |m: u64| Some(((m, 1usize), false));
+        // Busy and still busy after the wait: the whole wait is used, then queued / not submitted / exit 1.
+        let start = Instant::now();
+        let v = submit_verdict("term-2", working(10), Duration::from_millis(400), true, || working(10), || Some("working"), || true);
+        assert_eq!((v.receipt, v.submitted, v.state), ("queued", Some(false), Some("working")));
+        assert!(start.elapsed() >= Duration::from_millis(400) && v.waited_ms >= 400, "waited {} ms", v.waited_ms);
+        // Busy, then its turn ends and the queued prompt starts a new one (a new history mark): taken.
+        let polls = Cell::new(0);
+        let v = submit_verdict("term-2", working(10), Duration::from_secs(5), true, || { polls.set(polls.get() + 1); if polls.get() >= 3 { working(11) } else { working(10) } }, || Some("working"), || false);
+        assert_eq!((v.receipt, v.submitted), ("turn_began", Some(true)));
+        assert!(v.waited_ms < 2000, "answered as soon as the turn began, not after the wait: {} ms", v.waited_ms);
+        // Busy, then its own turn ends (a new mark, done) and no new turn begins: not taken, the state named.
+        let (polls, st) = (Cell::new(0), Cell::new("working"));
+        let act = || { polls.set(polls.get() + 1); if polls.get() >= 2 { st.set("done"); idle(11) } else { working(10) } };
+        let v = submit_verdict("term-2", working(10), Duration::from_millis(500), true, act, || Some(st.get()), || false);
+        assert_eq!((v.receipt, v.submitted, v.state), ("not_submitted", Some(false), Some("done")), "the old turn's end is not the prompt");
+        // Busy, its turn ends, then a new turn begins: taken.
+        let (polls, st) = (Cell::new(0), Cell::new("working"));
+        let act = || { polls.set(polls.get() + 1); match polls.get() { 0..=1 => working(10), 2 => { st.set("done"); idle(11) } _ => { st.set("working"); working(12) } } };
+        let v = submit_verdict("term-2", working(10), Duration::from_secs(5), true, act, || Some(st.get()), || false);
+        assert_eq!((v.receipt, v.submitted), ("turn_began", Some(true)));
+        // Busy, it asks for permission, then carries on with the same turn: still queued.
+        let (polls, st) = (Cell::new(0), Cell::new("working"));
+        let act = || { polls.set(polls.get() + 1); match polls.get() { 0..=1 => working(10), 2 => { st.set("permission"); idle(11) } _ => { st.set("working"); working(12) } } };
+        let v = submit_verdict("term-2", working(10), Duration::from_millis(600), true, act, || Some(st.get()), || false);
+        assert_eq!((v.receipt, v.submitted, v.state), ("queued", Some(false), Some("working")), "the carry-on after a question is the old turn");
+        // Idle, then working: taken. Idle and still idle: not submitted, exit 1, the state named.
+        let v = submit_verdict("term-2", idle(10), Duration::from_secs(5), false, || working(10), || Some("working"), || false);
+        assert_eq!((v.receipt, v.submitted), ("turn_began", Some(true)));
+        let v = submit_verdict("term-2", idle(10), Duration::from_millis(200), true, || idle(10), || Some("done"), || true);
+        assert_eq!((v.receipt, v.submitted, v.state), ("not_submitted", Some(false), Some("done")));
+        let v = submit_verdict("term-2", idle(10), Duration::from_millis(100), true, || idle(10), || Some("permission"), || true);
+        assert_eq!((v.receipt, v.state), ("not_submitted", Some("permission")));
+        // No hooks report: unknown. The default watch answers at once; an explicit one watches the output.
+        let start = Instant::now();
+        let v = submit_verdict("term-3", None, Duration::from_secs(3), false, || None, || None, || false);
+        assert_eq!((v.receipt, v.submitted, v.state), ("unknown", None, None));
+        assert!(start.elapsed() < Duration::from_millis(500));
+        assert_eq!(v.warning.as_deref(), Some("no status hooks report for term-3; whether the prompt was taken cannot be told"));
+        let v = submit_verdict("term-3", None, Duration::from_millis(300), true, || None, || None, || false);
+        assert_eq!(v.warning.as_deref(), Some("no status hooks report for term-3; whether the prompt was taken cannot be told (it wrote nothing within 0 s)"));
+        assert!(v.waited_ms >= 300, "the explicit wait watches the output for its whole time: {} ms", v.waited_ms);
+        let v = submit_verdict("term-3", None, Duration::from_secs(5), true, || None, || None, || true);
+        assert!(v.warning.as_deref().unwrap().contains("it wrote output after Enter"), "{:?}", v.warning);
+        assert!(v.waited_ms < 1000);
+        // The client turns submitted=false into exit 1 with a sentence naming the state; the rest passes.
+        let r = |state: &str| json!({ "requestId": "r", "success": true, "result": { "terminal": "term-2", "submitted": false, "state": state, "waitSubmit": 5, "waitAsked": true, "receipt": "queued" } });
+        let f = submit_step(&r("working")).unwrap_err();
+        assert_eq!((f.code, f.message.as_str()), ("not_submitted", "term-2 did not submit the prompt within 5 s (it is working; the prompt waits behind its turn)"));
+        assert_eq!(f.data["receipt"], "queued", "the answer travels as the error's data");
+        assert_eq!(submit_step(&r("done")).unwrap_err().message, "term-2 did not submit the prompt within 5 s (it is idle, so Enter may have been lost)");
+        assert_eq!(submit_step(&r("permission")).unwrap_err().message, "term-2 did not submit the prompt within 5 s (it is waiting for permission; answer that first)");
+        assert!(submit_step(&json!({ "success": true, "result": { "terminal": "term-2", "submitted": true } })).is_ok());
+        assert!(submit_step(&json!({ "success": true, "result": { "terminal": "term-2", "submitted": null, "receipt": "unknown" } })).is_ok(), "unknown is not a failure");
+        assert!(submit_step(&json!({ "success": true, "result": { "terminal": "term-1", "delivered": ["enter"] } })).is_ok(), "a plain send has no verdict");
+    }
+
+    /// MERGE 49 (council FIX-BEFORE on T-188): a plain send --text --enter to a busy agent answers
+    /// queued at once with exit 0, as it did before T-188; an idle agent that does not start a turn
+    /// within the default watch is a warning, exit 0. Only an explicit --wait-submit makes a prompt
+    /// that did not submit exit 1. --wait-submit 0 is a usage error.
+    #[test]
+    fn merge49_plain_send_to_a_busy_agent_is_queued_at_once_and_exits_0() {
+        let working = |m: u64| Some(((m, 1usize), true));
+        let start = Instant::now();
+        let v = submit_verdict("term-2", working(10), SUBMIT_WATCH, false, || working(10), || Some("working"), || true);
+        assert!(start.elapsed() < Duration::from_millis(500), "a plain send must not wait: {:?}", start.elapsed());
+        assert_eq!((v.receipt, v.submitted, v.state, v.waited_ms), ("queued", Some(false), Some("working"), 0));
+        assert_eq!(v.warning.as_deref(), Some("term-2 is working; the prompt waits behind its turn (--wait-submit <seconds> watches for it to be taken)"));
+        // The client: submitted=false without the asked flag passes (exit 0); with it, exit 1.
+        let plain = json!({ "success": true, "result": { "terminal": "term-2", "submitted": false, "state": "working", "waitSubmit": 3, "waitAsked": false, "receipt": "queued" } });
+        assert!(submit_step(&plain).is_ok(), "a plain send is never a failure");
+        let idle_plain = json!({ "success": true, "result": { "terminal": "term-2", "submitted": false, "state": "done", "waitSubmit": 3, "waitAsked": false, "receipt": "not_submitted" } });
+        assert!(submit_step(&idle_plain).is_ok());
+        let mut asked = plain.clone();
+        asked["result"]["waitAsked"] = json!(true);
+        assert_eq!(submit_step(&asked).unwrap_err().code, "not_submitted");
+        // An explicit wait on the same busy agent still watches the whole wait.
+        let start = Instant::now();
+        let v = submit_verdict("term-2", working(10), Duration::from_millis(300), true, || working(10), || Some("working"), || true);
+        assert!(start.elapsed() >= Duration::from_millis(300) && v.warning.is_none());
+        // --wait-submit 0 is refused before sending; 1 is fine.
+        let refused = |w: &str| parse(&words(w)).1.unwrap_err();
+        let f = refused("terminal send --terminal term-2 --text hi --enter --wait-submit 0");
+        assert_eq!((f.code, f.message.as_str()), ("invalid_arguments", WAIT_SUBMIT_ZERO));
+        assert!(parse(&words("terminal send --terminal term-2 --text hi --enter --wait-submit 1")).1.is_ok());
     }
 
     #[test]
@@ -5087,6 +5380,55 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// CLI-012 (T-076-c): while a long request runs, the status question is answered at once (not
+    /// after the 2.5 s wait) and says what runs and for how long, in text and JSON; the state stays
+    /// running, exit 0. A status question with a stale token is not answered from the side. Once
+    /// the request ends the reading has no busy part.
+    #[test]
+    fn t076c_status_while_busy_says_what_runs_and_for_how_long() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-t076c-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (go, wait) = mpsc::channel::<()>();
+        let wait = Mutex::new(wait);
+        let answer = || json!({ "pid": 4545, "version": VERSION, "graphReady": true });
+        std::thread::spawn(move || {
+            serve_loop_with(listener, "tok", "rt-1", answer, move |req| {
+                if req.command == "worktree.create" {
+                    let _ = wait.lock().unwrap().recv();
+                }
+                Ok(answer())
+            })
+        });
+        std::fs::write(dir.join(FILE), json!({ "port": port, "token": "tok", "pid": 4545 }).to_string()).unwrap();
+        let long = Request { id: "r1".into(), token: "tok".into(), command: "worktree.create".into(), cwd: String::new(), args: json!({}), pane: None, cli: VERSION.into(), arrived: None };
+        let slow = std::thread::spawn(move || call(port, &long));
+        std::thread::sleep(Duration::from_millis(1300));
+        let ask = |port: u16, token: &str| ask_status(port, token, "s3", "");
+        let started = Instant::now();
+        let r = status_of(&dir, &ask);
+        assert!(started.elapsed() < Duration::from_millis(1500), "answered at once, not after the wait: {:?}", started.elapsed());
+        assert_eq!((r["state"].as_str(), r["detail"].as_str(), r["busyCommand"].as_str()), (Some("running"), Some(STATUS_BUSY), Some("worktree.create")));
+        let ms = r["busyMs"].as_u64().unwrap();
+        assert!((1200..10_000).contains(&ms), "running {ms} ms");
+        assert_eq!(status_exit(&r), 0);
+        assert_eq!(status_line(&r), format!("running: Kolux is up, busy with another request for {} (worktree.create) (pid 4545)", span(ms)));
+        // A stale token is not answered from the side: it waits its turn, so status gives up busy.
+        std::fs::write(dir.join(FILE), json!({ "port": port, "token": "old", "pid": 4545 }).to_string()).unwrap();
+        let r = status_of(&dir, &ask);
+        assert_eq!((r["detail"].as_str(), r["busyMs"].is_null()), (Some(STATUS_BUSY), true));
+        std::fs::write(dir.join(FILE), json!({ "port": port, "token": "tok", "pid": 4545 }).to_string()).unwrap();
+        go.send(()).unwrap();
+        assert_eq!(slow.join().unwrap().unwrap()["success"], true);
+        let r = status_of(&dir, &ask);
+        assert_eq!((r["state"].as_str(), r["detail"].is_null(), r["busyMs"].is_null()), (Some("running"), true, true));
+        assert_eq!(status_line(&r), "running: Kolux is up and ready (pid 4545)");
+        assert_eq!((span(4_000), span(192_500), span(3_900_000)), ("4 s".to_string(), "3 min 12 s".to_string(), "1 h 5 min".to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// CLI-041: `kolux diagnostics memory` against a fake app: the text shows resident and committed
     /// side by side per row and in total, the JSON carries the app's committed figure unchanged, and
     /// with no app it is one line that names `open`, with no second advice line.
@@ -5122,6 +5464,21 @@ mod tests {
         assert!(lines[4].contains("Total") && lines[4].contains("312.0 MB") && lines[4].contains("125.7 MB") && lines[4].contains("8 processes"), "{text}");
         assert_eq!(lines[5].trim(), "2.00 GB free of 4.00 GB");
         assert_eq!(memory_figure(&json!(1024 * MB)), "1.00 GB");
+        // T-287-c: the app says 2 of 7 processes could not be read: that row and the total show a dash and say so.
+        let partial = json!({
+            "app": { "bytes": 300 * MB, "cpu": 0.0, "processes": 5, "committed": null, "unreadable": 2 },
+            "sessions": [{ "id": 1, "pid": 4321, "dir": "C:/w/fox", "bytes": 12 * MB, "cpu": 0.0, "processes": 2, "committed": 8 * MB, "unreadable": 0 }],
+            "free": null, "total": null, "committed_total": null, "unreadable": 2
+        });
+        let text = text_of(MEMORY, &partial);
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines[1].contains("Kolux") && lines[1].contains("– MB") && lines[1].contains("5 processes  (2 of 5 could not be read)"), "{text}");
+        assert!(lines[2].contains("8.0 MB") && !lines[2].contains("could not be read"), "{text}");
+        assert!(lines[3].contains("Total") && lines[3].contains("312.0 MB") && lines[3].contains("– MB") && lines[3].ends_with("7 processes  (2 of 7 could not be read)"), "{text}");
+        // An older app without committed_total: a row with processes and no figure makes the total a dash.
+        let mut old = partial.clone();
+        old.as_object_mut().unwrap().remove("committed_total");
+        assert!(text_of(MEMORY, &old).lines().nth(3).unwrap().contains("– MB"), "{}", text_of(MEMORY, &old));
         // No app: no startup file, so one plain line and a non-zero exit.
         let none = std::env::temp_dir().join(format!("kolux-rs-cli041-{}", std::process::id()));
         let f = read_endpoint(&none).unwrap_err();

@@ -1,5 +1,5 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
-import { expect, test } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import { behindRejection, pushTargetLabel, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, select, discardAsk, type Section, budgetLine, budgetLow, mergeActions, mergeLabel, type MergeInfo, graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, commitUrl, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, discardPlan, fileTree, reviewPrompt } from "./model";
 
 const commit = (hash: string, parents: string[], subject = hash): Commit => ({ hash, short: hash, parents, author: "a", time: 0, subject, message: subject, labels: [], outgoing: false, incoming: false });
@@ -416,4 +416,30 @@ test("GIT-016: the review prompt names the base and stops each file list at 50; 
   expect(p).toContain("- notes.md");
   expect(reviewPrompt("main", files.slice(0, 2), 1200, [])).toContain("and 1198 more");
   expect(reviewPrompt("main", [], 0, [])).toBeNull();
+});
+
+describe("T-313 (GIT-008 / GIT-014)", () => {
+  it("GIT-008: a pull with no policy is named, and each policy reruns the pull or copies its git config command", async () => {
+    const m = await import("./model");
+    expect(m.failureTitle("Pull", { ok: false, output: "", kind: "no-policy" })).toContain("no pull policy");
+    expect(m.PULL_POLICIES.map((p) => [p.action, p.config])).toEqual([
+      ["pullmerge", "git config pull.rebase false"],
+      ["pullrebase", "git config pull.rebase true"],
+      ["ff", "git config pull.ff only"],
+    ]);
+  });
+  it("GIT-014: the filter keeps rows whose path or old path holds the text, any case; empty keeps all", async () => {
+    const { filterRows } = await import("./model");
+    const rows = [{ path: "src/App.tsx", status: "M" }, { path: "docs/readme.md", status: "R", from: "README.md" }, { path: "lib/util.ts", status: "U" }];
+    expect(filterRows(rows, "app").map((r) => r.path)).toEqual(["src/App.tsx"]);
+    expect(filterRows(rows, "README").map((r) => r.path)).toEqual(["docs/readme.md"]);
+    expect(filterRows(rows, "  ")).toHaveLength(3);
+    expect(filterRows(rows, "nothing")).toEqual([]);
+  });
+  it("GIT-014: the full path joins the worktree and the repository-relative path in the worktree's slash style", async () => {
+    const { fullPath } = await import("./model");
+    expect(fullPath("C:\\work\\repo", "src/a.ts")).toBe("C:\\work\\repo\\src\\a.ts");
+    expect(fullPath("C:\\work\\repo\\", "a.ts")).toBe("C:\\work\\repo\\a.ts");
+    expect(fullPath("/home/u/repo", "src/a.ts")).toBe("/home/u/repo/src/a.ts");
+  });
 });

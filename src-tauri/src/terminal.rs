@@ -646,7 +646,8 @@ impl Terminals {
         let exit_app = app;
         let registry = self.inner.clone();
         let out_registry = self.inner.clone();
-        let is_program = program.as_deref().map(str::trim).is_some_and(|p| !p.is_empty());
+        // Council MERGE 51: a shell (a chosen default shell too, SET-026) stays a plain terminal, not a program session.
+        let is_program = program.as_deref().map(str::trim).is_some_and(|p| !p.is_empty() && !is_shell_program(p));
         // GIT-026: a pull-request link printed in any pane, hidden or parked ones too, attaches to its workspace.
         let mut prs = crate::scm::PrScan::default();
         let link_dir = cwd.clone();
@@ -1105,10 +1106,17 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
     // ACCT-004: a Claude pane in key mode is handed the 1-year key; nothing else ever is.
     // ACCT-005: otherwise a Claude pane runs on the active managed account's own folder.
     let env_own = env.unwrap_or_default();
+    let (mut program, mut args) = (program, args);
     let pinned = resumed.is_some();
     let (env, cap, account, hooks_on): (Vec<(String, String)>, bool, Option<String>, bool) = {
         let store = store.lock().map_err(|e| e.to_string())?;
         let settings = store.settings();
+        // SET-026: a plain new terminal opens in the chosen default shell.
+        if program.is_none() {
+            if let Some((p, a)) = crate::pty::default_shell(&settings) {
+                (program, args) = (Some(p), Some(a));
+            }
+        }
         let used = codex.then(|| account.clone().or_else(|| crate::codex_accounts::active_account(&store).map(|a| a.id))).flatten();
         let codex_home = resumed.or_else(|| crate::codex_accounts::active_home(&store));
         let token = crate::secrets::read_setting(&store, crate::claude_key::TOKEN_FIELD).ok().flatten();
