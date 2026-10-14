@@ -13,7 +13,58 @@ On a fresh install Kolux opens a four-step dialog, "Get started with Kolux". Eac
 | 3. Your work | Pick a folder, or use sample data | Try with sample data |
 | 4. Choose a kit | Pick a starter lineup of sessions. A switch, "Tell me whenever an AI finishes", turns on notifications | Start kit (or "Just open a session") |
 
-You can reopen the dialog later: click the "?" button at the bottom of the sidebar, then Help, then Onboarding.
+You can reopen the dialog later: click the "?" (Help) button at the bottom of the sidebar, then Onboarding.
+
+## The Getting Started guide
+
+Click the Help button and choose "Getting Started with Kolux". It is a checklist dialog, separate from the first-run dialog above. The "x" closes it, and so does Escape.
+
+- **Left side:** a progress ring with "N of 6 done", then the steps in two groups. Under "Setup": Turn on notifications, Choose a default agent, Enable Kolux CLI, Use Kolux's browser (optional) and Connect integrations (optional). Under "Parallel work": Multi-task, Automate workspace setup and Start work in multiple repos. The six steps that are not optional fill the ring. Click a step to read what it is for. The small eye-off button removes the checklist from the sidebar.
+- **Right side:** the step's name and a line about why it matters.
+
+Only the Enable Kolux CLI step ticks by itself today. The other steps are explained but stay unticked.
+
+The Enable Kolux CLI step lists three things and marks each "Ready" or "Not set up": "Kolux CLI" (the `kolux` command in terminals outside Kolux), "Kolux CLI skill" and "Orchestration skill". A "Re-check" button reads the state again. The step says Kolux cannot run this setup for you yet; it arrives with the installer in a coming build. See [Command line](command-line.md) for what the command does.
+
+The Help menu has more entries:
+
+| Entry | What it opens |
+|---|---|
+| Explore Kolux | A short walk through five workflows: Workspaces, Tasks, Agents, Workbench and Review. Continue (or Ctrl+Enter) moves on; the last stop says Done. A workflow shows "Completed" once you have seen its required stops |
+| Milestones | The same guide, with its ring. It shows only while a required step is open |
+| Tours | One entry per tour: Tasks, Automations and Agents in parallel. See below |
+
+### Tips
+
+At most one tip appears per launch, as a small dialog marked "Tip". It never appears in a launch that showed the first-run dialog, and each tip appears only once. The first is "Let your agents drive Kolux", with the buttons "Not now" and "Install CLI & Skills" (which opens the Enable Kolux CLI step). It is skipped if the command is already set up. If the command is installed but terminals outside Kolux cannot find it, the tip adds "Needs attention". The second is "Jump to any workspace with" the workspace-switcher key, with a "Got it" button.
+
+### Tours
+
+A tour is a small callout beside a part of the window. It shows a title, a sentence, and these buttons: Skip, Back (from the second callout on), and Next (Done on the last one). Several-step tours show a count such as "2 of 3". Escape also skips.
+
+| Tour | Points at |
+|---|---|
+| Tasks | A row, the Preset picker and the search box on the Tasks page |
+| Automations | The create button and the button for every run's results on the Automations page |
+| Agents in parallel | The Split button on the focused terminal pane, then the New workspace button |
+
+A tour starts by itself once, the first time its screen is showing, and only on a profile where the first-run dialog showed. An older profile never gets automatic tours. Only one tour starts by itself per launch. Skip or Done marks it seen. Under Tours in the Help menu you can replay any tour, seen or not. The replay waits until its screen is showing. The Agents in parallel tour does not start by itself if you have already split a pane. Its first callout has a "Split terminal" button in place of Next.
+
+## The Skills page
+
+A skill is a folder with a `SKILL.md` file that teaches an AI how to do a job. The Skills page lists every skill the AIs on your computer can see. Turn on the sidebar button first: Settings, Appearance, Window & Sidebar, "Show Skills button in the sidebar" (off by default). Click the "Skills" button in the sidebar to open the page. Click it again, press Escape, or use the x to go back to the screen you were on. Right-click the button and choose "Hide Skills button" to remove it.
+
+| Part | What it does |
+|---|---|
+| Heading | "Skills" and a count, such as "12 skills" |
+| Search skills | Every word you type must appear in a skill's name, description or path. Up to 200 characters |
+| Filter by agent | All agents, Claude Code, Codex, Grok, Hermes or Shared skills folder |
+| Source chips | Home, Workspace, Bundled and Plugin, each with a count. Press one to show only that source |
+| Clear filters | Appears when a search, agent or chip is set |
+| Skill folders | Lists each folder Kolux scanned and what it found, such as "3 skills" or "Not found" |
+| Refresh | Scans every folder again |
+
+Each row shows the skill's name, where it came from (a plugin shows "Plugin: name"), its last-changed date, its description and its path. Skills built into Kolux say "Built into Kolux". The "Delete skills" item in the "..." menu is greyed out for now. If a folder cannot be read the page says "Scan failed" with a Retry button, rather than showing a shorter list. Skills inside WSL (Linux on Windows) folders are not scanned yet; the Skill folders list says "Not scanned: WSL folders are not scanned yet".
 
 When you have never picked a view, Kolux opens on Terminals. After that it opens on the view you were on when you quit.
 
@@ -76,4 +127,4 @@ More detail is in [Projects and worktrees](projects-and-worktrees.md).
 
 Other ways in: press Ctrl+T for a plain shell, or use "New tab" and "Choose agent…" to pick the AI, model and number of sessions before anything starts.
 
-<!-- verified against: src/onboarding/Wizard.tsx, src/chrome/TopBar.tsx, src/usage/meter.ts, src/usage/ClaudePill.tsx, src/usage/CodexPill.tsx, src/settings/general.ts, src/projects/AddProject.tsx, src/projects/ProjectsPanel.tsx, src/launch/PlusMenu.tsx, src/keys/actions.ts at 7f64466 -->
+<!-- verified against: src/onboarding/Wizard.tsx, src/chrome/TopBar.tsx, src/usage/meter.ts, src/usage/ClaudePill.tsx, src/usage/CodexPill.tsx, src/settings/general.ts, src/projects/AddProject.tsx, src/projects/ProjectsPanel.tsx, src/launch/PlusMenu.tsx, src/keys/actions.ts, src/onboarding/Guides.tsx, src/onboarding/HelpMenu.tsx, src/onboarding/Tours.tsx, src/onboarding/guide.ts, src/onboarding/tour.ts, src-tauri/src/onboarding.rs, src/skills/SkillsPage.tsx, src/skills/skills.ts, src/skills/nav.ts, src/projects/SkillsRow.tsx, src/projects/HideableRow.tsx, src/chrome/chromeItems.ts, src-tauri/src/skills.rs at aaafe20 -->
