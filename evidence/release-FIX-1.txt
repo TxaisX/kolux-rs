@@ -1,0 +1,43 @@
+release-FIX-1 · council re-review of lane/release dec2513 (FIX-BEFORE 1 + AFTER 1) · 2026-10-14
+Source: council d2 release-dec2513-review (FIX-BEFORE 1: lane based on 0819c57; AFTER 1: a second
+repair overwrites settings.json.bak.pre-repair). Text proof only: nothing on screen changes.
+
+1. Re-merge of main (FIX-BEFORE 1)
+- git merge --no-ff --no-edit fb322d5 on lane/release = 650481c; git merge-base 650481c fb322d5 = fb322d5.
+- Conflicts in the 10 files the review named, all resolved as a union (details in the 650481c body).
+- One close listener on the merged tree: grep -c 'onCloseRequested(' src/App.tsx = 1;
+  pnpm exec vitest run src/startup.test.ts = 6 passed (6).
+
+2. .bak.pre-repair is stamped like .bad (AFTER 1)
+- state.rs: a new move_aside() renames an earlier kept copy to <name>-<ms> (with a -n suffix if
+  that name is taken) before a new one takes its place; repair_settings uses it for both
+  settings.json.bad and settings.json.bak.pre-repair, so no repair overwrites a kept copy.
+- Test state::tests::app048_an_unusable_backup_is_kept_aside_before_the_repair now runs a second
+  repair with another unusable .bak ("[]"): .bak.pre-repair holds "[]" and exactly one
+  settings.json.bak.pre-repair-<ms> holds the first "{}". With the old fs::copy the stamped list
+  is empty and the test fails on the length check. Result in the full run: ok.
+
+3. Dropped-side scan of the earlier merge a08f2bb (handoff item 5)
+Method: lane-added lines (git diff 1e21bdf c6ca241) that a08f2bb removed (git diff c6ca241 a08f2bb),
+then each searched for in today's merged tree.
+- src-tauri/src/cli.rs: 83 dropped, 70 absent now. All are the lane's older kolux status copy
+  (CLI-012: STATUS / STATES / status_of / call_within / STATUS_LIMIT and its test). Main's T-076,
+  T-076-b and T-076-c status work replaced it on purpose (brief: main's T-073 / T-076 win); main's
+  file has its own status_of / busy_status / STATUS_WAIT. Nothing to restore.
+- src/editor/DiffPane.tsx: 2 dropped (Props type and signature line), both superseded by longer
+  lines that still carry the lane's autosave = null and onToast props. Nothing to restore.
+- src/scm/SourceControlPanel.tsx: 4 dropped (import, Failure type, setFailure, Fix button), all
+  superseded by longer lines that keep the lane's pullFirst / behindRejection / pushTargetLabel
+  (VIEW-066) and main's fix text. Nothing to restore.
+- src/terminal/TerminalPane.tsx: 3 dropped (signature, terminal_spawn call, its destructuring),
+  superseded by main's longer lines that keep program: ran and paneKey. Nothing to restore.
+Verdict: 0 lane lines lost.
+
+Gates (merged tree + this change), logs under G:/Temp/release-w1-logs/fix1-*:
+- cargo test full: lib 632 passed / 1 failed / 1 ignored; the failure
+  git::tests::an_unattended_git_fails_fast_on_a_remote_that_wants_a_password is caused by GIT_*
+  variables inherited from the host session (askpass / config injection) and passes 1/1 with them unset.
+- cargo clippy --all-targets -- -D warnings: clean. tsc --noEmit: 0.
+- pnpm test: 939 passed / 2 failed (scripts/ship.test.mjs load timeouts); alone with
+  --testTimeout=60000: 4 passed (4).
+- plan-check --write-state: OK. firewall-check -Baseline: 0 new.

@@ -36,6 +36,23 @@ fn damaged(e: &rusqlite::Error) -> bool {
     matches!(e.sqlite_error_code(), Some(rusqlite::ErrorCode::NotADatabase | rusqlite::ErrorCode::DatabaseCorrupt))
 }
 
+/// APP-048: an earlier kept copy (settings.json.bad, settings.json.bak.pre-repair) is renamed to
+/// its name plus "-<ms since 1970>" before a new one takes its place, so no repair overwrites one.
+fn move_aside(path: &Path) -> std::io::Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut to = path.with_file_name(format!("{name}-{stamp}"));
+    let mut n = 1;
+    while to.exists() {
+        to = path.with_file_name(format!("{name}-{stamp}-{n}"));
+        n += 1;
+    }
+    fs::rename(path, to)
+}
+
 /// Opens a state file and checks it; a failed check is reported as corruption.
 fn connect(db: &Path) -> rusqlite::Result<Connection> {
     let conn = if db.as_os_str().is_empty() { Connection::open_in_memory()? } else { Connection::open(db)? };
@@ -196,7 +213,8 @@ impl Store {
     /// non-empty set, the file is rebuilt from it with the entries that still parse laid over it;
     /// otherwise the entries that still parse are written back (nothing readable at all keeps the
     /// Classic look of an existing install) and any unusable .bak is kept as
-    /// settings.json.bak.pre-repair, since the next save replaces .bak. A file that cannot be read
+    /// settings.json.bak.pre-repair, since the next save replaces .bak (an earlier one is moved aside
+    /// to a timestamped name the same way). A file that cannot be read
     /// (no access) is left alone and saves keep refusing (T-441). Returns whether it was repaired.
     pub fn repair_settings(&self) -> std::io::Result<bool> {
         let bytes = match self.read_file() {
@@ -220,7 +238,9 @@ impl Store {
             }
             None => {
                 if bak.exists() {
-                    fs::copy(&bak, self.settings_path.with_extension("json.bak.pre-repair"))?;
+                    let pre = self.settings_path.with_extension("json.bak.pre-repair");
+                    move_aside(&pre)?;
+                    fs::copy(&bak, &pre)?;
                 }
                 let mut kept = salvaged;
                 if kept.is_empty() {
@@ -230,10 +250,7 @@ impl Store {
             }
         };
         let bad = self.settings_path.with_extension("json.bad");
-        if bad.exists() {
-            let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
-            fs::rename(&bad, self.settings_path.with_extension(format!("json.bad-{stamp}")))?;
-        }
+        move_aside(&bad)?;
         fs::copy(&self.settings_path, &bad)?;
         let tmp = self.settings_path.with_extension("json.tmp");
         let written = (|| {
@@ -670,6 +687,19 @@ mod tests {
         assert!(s.repair_settings().unwrap());
         assert_eq!(s.settings(), serde_json::json!({ "uiLook": "classic" }));
         assert_eq!(fs::read_to_string(dir.join("settings.json.bak.pre-repair")).unwrap(), "{}");
+        // A second repair with another unusable .bak keeps the first copy under a stamped name.
+        fs::write(dir.join("settings.json"), "\u{0}garbage again").unwrap();
+        fs::write(dir.join("settings.json.bak"), "[]").unwrap();
+        assert!(s.repair_settings().unwrap());
+        assert_eq!(fs::read_to_string(dir.join("settings.json.bak.pre-repair")).unwrap(), "[]");
+        let stamped: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("settings.json.bak.pre-repair-"))
+            .collect();
+        assert_eq!(stamped.len(), 1, "{stamped:?}");
+        assert_eq!(fs::read_to_string(dir.join(&stamped[0])).unwrap(), "{}");
         drop(s);
         fs::remove_dir_all(&dir).unwrap();
     }
