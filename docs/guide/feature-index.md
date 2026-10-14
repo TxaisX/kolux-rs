@@ -86,6 +86,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-033 | Source Control lists changes by section and opens a change for review. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-033-b | Source Control, diffs and All Changes update within about a second of a change, instead of polling. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-033-c | Choose which split a diff opens in; All Changes compares the branch with its base, keeps a default layout and has a commit box; files Git ignores no longer refresh the list. | [Files and browser](files-and-browser.md) |
+| T-033-f | Source Control keeps updating for an ignored folder that still holds tracked files, and notices edits to `.git/info/exclude`. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-034 | Leave review notes on diff lines and send them to the agent. | [Files and browser](files-and-browser.md) |
 | T-035 | Open in Code and Answer in Code jump to the agent's pane. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-036 | Settings page for choosing agents, the default agent and how they start. | [Settings](settings.md) |
@@ -162,6 +163,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-073-e | Your own save no longer sets off the changed-on-disk banner, and the banner leaves once the file matches again. | [Files and browser](files-and-browser.md) |
 | T-076 | `kolux status` says whether the app is running, not running, left behind (stale) or still loading. | [Command line](command-line.md) |
 | T-076-b | kolux status answers within about 2.5 seconds and says busy while Kolux handles another request. | [Command line](command-line.md) |
+| T-076-c | `kolux status` says what Kolux is busy with and for how long; a busy time of many minutes may mean it is stuck. Sending a prompt to a busy agent says "queued" and exits 0; `--wait-submit` needs 1 or more. | [Command line](command-line.md) |
 
 ### P0 · theme 11 · Orchestration and automations (31 cards)
 
@@ -468,6 +470,18 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-263 | Share a usage card as a picture; reset times count down live. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-265 | An optional prompt-cache countdown shows once a Claude agent goes idle. | [Board, Agents and Inbox](board-agents-inbox.md) |
 
+### P2 · theme 7 · Redesign and the new look (10 cards)
+
+| Task | Feature | Guide page |
+|---|---|---|
+| T-269 | A browser tab's address box folds up in a narrow pane, and a loading page shows the app's colour instead of a white flash. | [Files and browser](files-and-browser.md) |
+
+### P2 · theme 5 · Safety and trust (3 cards)
+
+| Task | Feature | Guide page |
+|---|---|---|
+| T-287-c | `kolux diagnostics memory` shows a dash, and says how many could not be read, when a committed figure is incomplete. | [Command line](command-line.md) |
+
 ### P2 · theme 9 · Reliability and no lost work (30 cards)
 
 | Task | Feature | Guide page |
@@ -511,4 +525,11 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-298 | Reopen the wizard from the sidebar help menu; first successes are recorded locally. | [Getting started](getting-started.md) |
 
 | T-546 | The Tower: every agent on one full-width screen, needs-you first, one click to its pane, usage per program across the top. | [Board, Agents and Inbox](board-agents-inbox.md) |
-<!-- generated from PLAN.md at d1de182 -->
+
+### P2 · theme none · No theme (110 cards)
+
+| Task | Feature | Guide page |
+|---|---|---|
+| T-313 | Pull offers Merge, Rebase or Fast-forward only when Git has no pull policy; changed submodules show as single rows; filter the changes and right-click a file to copy its path, open it in its app or show it in the file manager. | [Projects and worktrees](projects-and-worktrees.md) |
+| T-314-a | The Tasks page can open on a default preset, has pickers to filter by state, author, assignee, label and reviewer, and lets a fork list issues from its upstream project. | [Projects and worktrees](projects-and-worktrees.md) |
+<!-- generated from PLAN.md at e19b35b -->
