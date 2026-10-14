@@ -117,6 +117,8 @@ type Props = {
 };
 
 // SESS-035: the projects the composer last made workspaces in, newest first (this computer only).
+/** T-543-b: controls not built yet stay in the code but are not shown. */
+const NOT_BUILT = false;
 const RECENT_KEY = "kolux.composer.recentProjects";
 const ADD_ITEM = "+add";
 const readRecent = (): string[] => {
@@ -1552,9 +1554,11 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         <div className="sb-section">
           Projects
           <span className="icons">
-            <button className="ib" title="Notifications (not built yet)">
-              <Bell size={13} />
-            </button>
+            {NOT_BUILT && (
+              <button className="ib" title="Notifications (not built yet)">
+                <Bell size={13} />
+              </button>
+            )}
             <button className={`ib${filterOpen ? " on" : ""}`} title="Group and sort the list" aria-pressed={filterOpen} onClick={() => setFilterOpen((o) => !o)}>
               <Sliders size={13} />
             </button>
@@ -1567,9 +1571,11 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
             <button className="ib" title="New workspace: a branch in its own folder" aria-pressed={creating !== null} onClick={() => (creating === null ? openCreate() : setCreating(null))}>
               <Plus size={13} />
             </button>
-            <button className="ib" title="Launch (not built yet)">
-              <Rocket size={13} />
-            </button>
+            {NOT_BUILT && (
+              <button className="ib" title="Launch (not built yet)">
+                <Rocket size={13} />
+              </button>
+            )}
           </span>
         </div>
 
@@ -1577,9 +1583,11 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
           <button role="tab" aria-pressed="true">
             Workspaces
           </button>
-          <button role="tab" aria-pressed="false" title="Status (not built yet)">
-            Status
-          </button>
+          {NOT_BUILT && (
+            <button role="tab" aria-pressed="false" title="Status (not built yet)">
+              Status
+            </button>
+          )}
         </div>
 
         <div className="sb-list">
@@ -1790,12 +1798,16 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
             <Refresh size={13} />
             Check for updates
           </button>
-          <button className="ib" title="Focus (not built yet)">
-            <Target />
-          </button>
-          <button className="ib" title="Right rail (not built yet)">
-            <Rail />
-          </button>
+          {NOT_BUILT && (
+            <button className="ib" title="Focus (not built yet)">
+              <Target />
+            </button>
+          )}
+          {NOT_BUILT && (
+            <button className="ib" title="Right rail (not built yet)">
+              <Rail />
+            </button>
+          )}
         </div>
       </aside>
       {importing && <ImportSetup {...importing} busy={busy !== ""} onImport={importSetup} onClose={() => setImporting(null)} />}

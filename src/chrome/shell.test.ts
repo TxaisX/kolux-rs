@@ -68,9 +68,12 @@ test("BROW-001: the New tab menu offers a browser tab with its chord", () => {
 });
 
 test("the status bar shows hooks, memory, terminals and agents on the right", () => {
-  const html = renderToString(createElement(StatusBar, { terminals: 3, agents: 1 }));
+  const html = renderToString(createElement(StatusBar, { terminals: 3, agents: 1, hooks: true }));
   expect(html).toContain('class="statusbar"');
   expect(html).toContain("On");
+  // T-543-b: the badge is the real switch, and nothing while the settings are not read yet.
+  expect(renderToString(createElement(StatusBar, { terminals: 3, agents: 1, hooks: false }))).toContain("Agent status hooks are off");
+  expect(renderToString(createElement(StatusBar, { terminals: 3, agents: 1 }))).not.toContain("Agent status hooks");
   expect(html).toContain("MB");
   expect(html).toMatch(/Terminals running[^>]*>.*3/);
   expect(html).toMatch(/Agents running[^>]*>.*1/);

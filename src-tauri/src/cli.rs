@@ -99,7 +99,7 @@ pub struct Parsed {
     pub args: Map<String, Value>,
 }
 
-const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev --version\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>, the name defaulting to its title] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev open [--json]\n      start Kolux, or bring its window to the front, and wait until it answers\n  kolux-dev repo list | repo add --path <folder> | repo show [--repo <selector>] [--json]\n  kolux-dev repo set-base-ref --ref <ref> [--repo <selector>] [--json]\n  kolux-dev repo search-refs [--repo <selector>] [--query <text>] [--limit <n>] [--json]\n  kolux-dev project list [--json]\n  kolux-dev worktree list | worktree ps [--repo <selector>] [--limit <n>] [--json]\n  kolux-dev worktree show [--worktree <selector>] | worktree current [--usage] [--json]\n      --usage adds the tokens the worktree's sessions used (tracked providers only)\n  kolux-dev worktree set [--worktree <selector>] [--display-name <d>] [--issue <number>|null] [--comment <text>]\n      [--parent-worktree <selector>|current] [--no-parent] [--json]\n  kolux-dev worktree changes | worktree overlap [--worktree <selector>] [--json]\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --model <m> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--max-depth <n>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration ask (--question <text> [--options <a,b>] [--to <who>] | --resume <message>) [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration gate-create --task <id> --question <text> [--options <json list>] [--json]\n  kolux-dev orchestration gate-resolve --id <gate> --resolution <text> [--json]\n  kolux-dev orchestration gate-list [--task <id>] [--status pending|resolved|timeout] [--run <run>] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration task-update --id <task> --status pending|ready|dispatched|completed|failed|blocked\n      [--result <text>] [--run <run>] [--retry-request <id>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>]\n      [--max-depth <n>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n  kolux-dev orchestration request-show --request <uuid> [--json]\n      what became of a change whose answer was lost (its --retry-request id)\n  kolux-dev account add [--agent claude|codex] [--json]\n      (runs the agent's own login in this terminal; Codex uses a device code)\n  kolux-dev account list [--json]\n  kolux-dev orchestration worker-abandon --dispatch <id> [--json]\n  kolux-dev orchestration worker-stop --dispatch <id> [--json]\n      (ends the worker's agent terminal; its worktree and other terminals stay)\n  kolux-dev orchestration worker-list [--run <run>] [--terminal-state active|reclaimable|retained|release_pending|release_unknown|released]\n      [--cursor <c>] [--limit 1-100] [--json]\n      (this terminal's Run unless --run names another; every Run when none is tied)\n  kolux-dev orchestration worker-retain --dispatch <id> [--json]\n      (keeps a settled worker's terminal open; the mark lasts across restarts)\n  kolux-dev orchestration reset (--all | --tasks | --messages) [--json]\n  kolux-dev terminal list [--worktree <selector>] [--limit <n>] [--include-visual-layouts] [--json]\n  kolux-dev terminal show --terminal <handle> [--json]\n  kolux-dev terminal create [--worktree active|<selector>] [--command <text>] [--title <t>] [--focus] [--json]\n  kolux-dev terminal split --terminal <handle> [--direction vertical|horizontal] [--command <text>] [--json]\n  kolux-dev terminal rename --terminal <handle> [--title <t>] [--json]\n      without --title the default name comes back\n  kolux-dev terminal switch --terminal <handle> [--json]   (also: focus)\n  kolux-dev terminal close (--terminal <handle> [--tab] | --worktree <selector> --all) [--json] (it replaces stop)\n  kolux-dev terminal read [--terminal <handle>] [--cursor <n>] [--limit <n>] [--screen] [--json]\n      (the output after a cursor, or with --screen the frame visible now; inside a Kolux terminal --terminal defaults to it)\n  kolux-dev terminal send [--terminal <handle>] [--text <text>] [--enter] [--interrupt] [--wait-submit <seconds>] [--retry-request <id>] [--json]\n  kolux-dev terminal wait [--terminal <handle>] --for exit|tui-idle [--timeout-ms <ms>] [--json]\n  kolux-dev automations list [--json]\n  kolux-dev automations show <id> [--json]\n  kolux-dev automations runs <id> [--limit <n>] [--json]\n  kolux-dev automations create --name <n> --trigger hourly|daily|weekdays|weekly|<cron line or RRULE> --prompt <text>\n      [--provider claude|codex|gemini] [--time HH:MM] [--day 0-6, Sunday 0] [--timezone <IANA zone>]\n      [--repo <selector> | --workspace <selector>] [--workspace-mode existing|new-per-run]
+const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev --version\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>, the name defaulting to its title] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev open [--json]\n      start Kolux, or bring its window to the front, and wait until it answers\n  kolux-dev status [--json]\n      running, not-running, stale (its startup file is left but nothing answers) or graph-not-ready (still loading its workspaces); exit 0 only when running\n  kolux-dev diagnostics memory [--json]\n      the Resource Manager's memory figures: resident and committed for Kolux, each terminal session and the total\n  kolux-dev repo list | repo add --path <folder> | repo show [--repo <selector>] [--json]\n  kolux-dev repo set-base-ref --ref <ref> [--repo <selector>] [--json]\n  kolux-dev repo search-refs [--repo <selector>] [--query <text>] [--limit <n>] [--json]\n  kolux-dev project list [--json]\n  kolux-dev worktree list | worktree ps [--repo <selector>] [--limit <n>] [--json]\n  kolux-dev worktree show [--worktree <selector>] | worktree current [--usage] [--json]\n      --usage adds the tokens the worktree's sessions used (tracked providers only)\n  kolux-dev worktree set [--worktree <selector>] [--display-name <d>] [--issue <number>|null] [--comment <text>]\n      [--parent-worktree <selector>|current] [--no-parent] [--json]\n  kolux-dev worktree changes | worktree overlap [--worktree <selector>] [--json]\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --model <m> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--max-depth <n>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration ask (--question <text> [--options <a,b>] [--to <who>] | --resume <message>) [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration gate-create --task <id> --question <text> [--options <json list>] [--json]\n  kolux-dev orchestration gate-resolve --id <gate> --resolution <text> [--json]\n  kolux-dev orchestration gate-list [--task <id>] [--status pending|resolved|timeout] [--run <run>] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration task-update --id <task> --status pending|ready|dispatched|completed|failed|blocked\n      [--result <text>] [--run <run>] [--retry-request <id>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>]\n      [--max-depth <n>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n  kolux-dev orchestration request-show --request <uuid> [--json]\n      what became of a change whose answer was lost (its --retry-request id)\n  kolux-dev account add [--agent claude|codex] [--json]\n      (runs the agent's own login in this terminal; Codex uses a device code)\n  kolux-dev account list [--json]\n  kolux-dev orchestration worker-abandon --dispatch <id> [--json]\n  kolux-dev orchestration worker-stop --dispatch <id> [--json]\n      (ends the worker's agent terminal; its worktree and other terminals stay)\n  kolux-dev orchestration worker-list [--run <run>] [--terminal-state active|reclaimable|retained|release_pending|release_unknown|released]\n      [--cursor <c>] [--limit 1-100] [--json]\n      (this terminal's Run unless --run names another; every Run when none is tied)\n  kolux-dev orchestration worker-retain --dispatch <id> [--json]\n      (keeps a settled worker's terminal open; the mark lasts across restarts)\n  kolux-dev orchestration reset (--all | --tasks | --messages) [--json]\n  kolux-dev terminal list [--worktree <selector>] [--limit <n>] [--include-visual-layouts] [--json]\n  kolux-dev terminal show --terminal <handle> [--json]\n  kolux-dev terminal create [--worktree active|<selector>] [--command <text>] [--title <t>] [--focus] [--json]\n  kolux-dev terminal split --terminal <handle> [--direction vertical|horizontal] [--command <text>] [--json]\n  kolux-dev terminal rename --terminal <handle> [--title <t>] [--json]\n      without --title the default name comes back\n  kolux-dev terminal switch --terminal <handle> [--json]   (also: focus)\n  kolux-dev terminal close (--terminal <handle> [--tab] | --worktree <selector> --all) [--json] (it replaces stop)\n  kolux-dev terminal read [--terminal <handle>] [--cursor <n>] [--limit <n>] [--screen] [--json]\n      (the output after a cursor, or with --screen the frame visible now; inside a Kolux terminal --terminal defaults to it)\n  kolux-dev terminal send [--terminal <handle>] [--text <text>] [--enter] [--interrupt] [--wait-submit <seconds>] [--retry-request <id>] [--json]\n  kolux-dev terminal wait [--terminal <handle>] --for exit|tui-idle [--timeout-ms <ms>] [--json]\n  kolux-dev automations list [--json]\n  kolux-dev automations show <id> [--json]\n  kolux-dev automations runs <id> [--limit <n>] [--json]\n  kolux-dev automations create --name <n> --trigger hourly|daily|weekdays|weekly|<cron line or RRULE> --prompt <text>\n      [--provider claude|codex|gemini] [--time HH:MM] [--day 0-6, Sunday 0] [--timezone <IANA zone>]\n      [--repo <selector> | --workspace <selector>] [--workspace-mode existing|new-per-run]
       [--missed-run-grace-minutes 0|30|60|180|720|1440|2880]\n      [--precheck <command>] [--precheck-timeout 60|120|300|600] [--enabled | --disabled] [--json]\n      (--schedule is another name for --trigger)\n  kolux-dev automations edit <id> [the create flags; --time, --day and --timezone go with --trigger] [--json]\n  kolux-dev automations remove <id> [--json]\n  kolux-dev automations run <id> [--json]\n  kolux-dev agent-context [--json]   (every command, its flags and its usage; works with the app closed)\n  kolux-dev skills list [--json]\n  kolux-dev skills get <topic> [--full | --references | --reference <name>] [--topic <topic>] [--json]\n      (also: show; skills commands work with the app closed)\n  kolux-dev skills coverage [--json]\n      (which installed agents have the orchestration skill for the whole computer)\n  kolux-dev agent hooks status | agent hooks on | agent hooks off [--json]\n      (each agent's status hooks: installed, partial, not installed or error; on and off switch them\n      and bring every agent in line; these work with the app closed)\n  kolux-dev agent hooks prepare-codex\n      (install and trust Kolux's Codex hooks before Codex is first started)\n  kolux-dev claude-teams [claude arguments]   (Claude Code with Agent Teams, in a Kolux terminal; not on Windows)\n\nSelectors: --repo id:|name:|path:   --worktree active|current|id:<repo-id>::<path>|identity:|name:|branch:|issue:|path:\n--json prints one envelope on stdout; without it, errors go to stderr; warnings about flags nothing
 acts on yet go to stderr and into the result's `warnings` list. Exit 0 worked, 1 any error.\n";
 
@@ -117,7 +117,10 @@ const TERMINAL: &[(&str, &str, &[&str])] = &[
     ("terminal stop", "terminal.close", &["terminal", "tab", "worktree", "all"]),
 ];
 /// CLI-027: what the retired word says.
-const STOP_GONE: &str = "terminal stop was replaced by terminal close: use kolux-dev terminal close --worktree <selector> --all, or --terminal <handle>";
+/// CLI-026 with T-550: what replaced terminal stop, under the name this build answers to.
+fn stop_gone() -> String {
+    format!("terminal stop was replaced by terminal close: use {} terminal close --worktree <selector> --all, or --terminal <handle>", crate::orchestration::CLI)
+}
 /// ORCH-001..006, ORCH-010, ORCH-011, ORCH-013 / CLI-030..032, CLI-034: the mail and task commands
 /// and their flags. `--dispatch-capability` is accepted and unused until the dispatch pass (ORCH-067, T-155).
 const MAIL: &[(&str, &str, &[&str])] = &[
@@ -233,6 +236,8 @@ fn commands() -> Vec<Command> {
         ("account add", cli_accounts::ADD, &["agent"] as &[&str]),
         ("account list", cli_accounts::LIST, &[] as &[&str]),
         ("open", "app.open", OPEN_FLAGS),
+        ("status", STATUS, OPEN_FLAGS),
+        ("diagnostics memory", MEMORY, OPEN_FLAGS),
     ];
     all.extend(QUERY.iter().copied());
     all.extend(TERM.iter().copied());
@@ -277,7 +282,7 @@ fn nearest<'a>(typed: &str, from: impl IntoIterator<Item = &'a str>) -> Option<&
 /// The words as one line to run again, quoting any word with a space in it.
 fn line(words: &[String]) -> String {
     let quoted: Vec<String> = words.iter().map(|w| if w.contains(char::is_whitespace) { format!("\"{w}\"") } else { w.clone() }).collect();
-    format!("kolux-dev {}", quoted.join(" "))
+    format!("{} {}", crate::orchestration::CLI, quoted.join(" "))
 }
 
 /// CLI-003: a command path nothing answers to. A wrong group is matched against group names, a
@@ -304,11 +309,11 @@ fn command_typo(words: &[String], path: &[String], at: &[usize], all: &[Command]
         (&path[0], fix)
     } else if path.len() == 1 {
         let mut f = Fail::args(format!("`{joined}` needs a command after it: {}", verbs(&path[0]).join(", ")));
-        f.data = json!({ "unknown": joined, "command": joined, "suggestions": [], "nextSteps": ["kolux-dev --help"] });
+        f.data = json!({ "unknown": joined, "command": joined, "suggestions": [], "nextSteps": [format!("{} --help", crate::orchestration::CLI)] });
         return f;
     } else if verbs(&path[0]).contains(&path[1].as_str()) {
         let mut f = Fail::args(format!("unknown command `{joined}`: `{}` is not part of {} {}", path[2], path[0], path[1]));
-        f.data = json!({ "unknown": path[2], "command": joined, "suggestions": [], "nextSteps": ["kolux-dev --help"] });
+        f.data = json!({ "unknown": path[2], "command": joined, "suggestions": [], "nextSteps": [format!("{} --help", crate::orchestration::CLI)] });
         return f;
     } else {
         (&path[1], nearest(&path[1], verbs(&path[0])).map(|v| vec![path[0].clone(), v.to_string()]))
@@ -324,9 +329,9 @@ fn command_typo(words: &[String], path: &[String], at: &[usize], all: &[Command]
             }
             vec![line(&w)]
         }
-        _ => vec!["kolux-dev --help".to_string()],
+        _ => vec![format!("{} --help", crate::orchestration::CLI)],
     };
-    let tail = said.as_ref().map(|p| format!("; did you mean {p}?")).unwrap_or_else(|| "; run kolux-dev --help".into());
+    let tail = said.as_ref().map(|p| format!("; did you mean {p}?")).unwrap_or_else(|| format!("; run {} --help", crate::orchestration::CLI));
     let mut f = Fail::args(format!("unknown command `{joined}`: `{unknown}` is not a command word here{tail}"));
     f.data = json!({ "unknown": unknown, "command": joined, "suggestions": said.into_iter().collect::<Vec<_>>(), "nextSteps": next });
     f
@@ -655,7 +660,7 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
                 args.insert(camel(k), v.clone());
             }
             if joined == "terminal stop" {
-                args.insert("note".into(), json!(STOP_GONE));
+                args.insert("note".into(), json!(stop_gone()));
             }
         } else if command == "worktree.rm" {
             if text("worktree").map(str::trim).unwrap_or_default().is_empty() {
@@ -679,7 +684,7 @@ fn check_terminal(joined: &str, command: &str, flags: &Map<String, Value>) -> Re
         return Err(Fail::args(format!("--{k} cannot be empty")));
     }
     if joined == "terminal stop" && !has("terminal") && !has("all") {
-        return Err(Fail::args(STOP_GONE));
+        return Err(Fail::args(stop_gone()));
     }
     match command {
         "terminal.show" | "terminal.split" | "terminal.rename" | "terminal.switch" if !has("terminal") => {
@@ -801,7 +806,8 @@ fn data_dir_of(own: Option<std::ffi::OsString>, appdata: Option<std::ffi::OsStri
 /// CLI-004: when the app cannot be reached, text mode suggests starting it, unless the error
 /// already carries its own recovery or the command was `open` itself.
 fn open_first(f: &Fail, command: &str) -> Option<String> {
-    (f.code == "app_unreachable" && command != "app.open" && f.data["hint"].is_null()).then(|| format!("run {} open to start it, then try again", crate::orchestration::CLI))
+    // CLI-041: diagnostics memory says it in its one line, which already names `open`.
+    (f.code == "app_unreachable" && command != "app.open" && command != MEMORY && f.data["hint"].is_null()).then(|| format!("run {} open to start it, then try again", crate::orchestration::CLI))
 }
 
 /// CLI-010: the one failure that means the app is down, with the command that fixes it.
@@ -852,16 +858,30 @@ fn read_endpoint(dir: &Path) -> Result<(u16, String), Fail> {
     }
 }
 
+/// How long a request waits for the app's answer: long, because a request may itself wait
+/// (`terminal wait --timeout-ms`, a worktree create with its setup).
+const CALL_WAIT: Duration = Duration::from_secs(300);
+
+/// CLI-012: how long the status question waits. The app answers one request at a time, so while a
+/// long one runs the question is not read for minutes; a short wait tells "up, busy" apart from
+/// "up, idle" without holding a script for the whole 300 s.
+pub const STATUS_WAIT: Duration = Duration::from_millis(2500);
+
 /// Sends one request and reads the envelope back. A reply with another id is refused (CLI-004).
 pub fn call(port: u16, req: &Request) -> Result<Value, Fail> {
+    call_within(port, req, CALL_WAIT)
+}
+
+/// `call` with its own limit on how long the answer may take.
+pub fn call_within(port: u16, req: &Request, wait: Duration) -> Result<Value, Fail> {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).map_err(|e| unreachable_fail(e.to_string()))?;
-    stream.set_read_timeout(Some(Duration::from_secs(300))).ok();
+    stream.set_read_timeout(Some(wait)).ok();
     let line = serde_json::to_string(req).map_err(|e| Fail::new("failed", e.to_string()))?;
     stream.write_all(line.as_bytes()).and_then(|_| stream.write_all(b"\n")).map_err(|e| lost("lost_result", format!("the connection to Kolux dropped while sending: {e}")))?;
     let mut reply = String::new();
     // CLI-010: a slow answer is not the app being down.
     match BufReader::new(stream).read_line(&mut reply) {
-        Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => return Err(lost("timeout", "Kolux is running but did not answer within 300 s; it may still be working".into())),
+        Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => return Err(lost("timeout", format!("Kolux is running but did not answer within {} s; it may still be working", wait.as_secs_f64()))),
         Err(e) => return Err(lost("lost_result", format!("the connection to Kolux dropped before its answer came: {e}"))),
         Ok(0) => return Err(lost("lost_result", "the connection to Kolux closed before its answer came".into())),
         Ok(_) => {}
@@ -903,6 +923,126 @@ pub fn open(send: &dyn Fn() -> Result<Value, Fail>, launch: &dyn Fn() -> Result<
             Err(_) => std::thread::sleep(Duration::from_millis(250)),
         }
     }
+}
+
+/// CLI-041: the wire name of `kolux diagnostics memory`.
+const MEMORY: &str = "diagnostics.memory";
+
+/// CLI-041: bytes the way the status bar and the Resource Manager show them ("717.9 MB", GB with
+/// two decimals past 1024 MB); a figure the app could not read is a dash.
+fn memory_figure(v: &Value) -> String {
+    let Some(bytes) = v.as_u64() else { return "– MB".into() };
+    let mb = bytes as f64 / (1024.0 * 1024.0);
+    if mb >= 1024.0 {
+        format!("{:.2} GB", mb / 1024.0)
+    } else {
+        format!("{mb:.1} MB")
+    }
+}
+
+/// CLI-041: the Resource Manager's breakdown as text: the app, then each terminal session (its
+/// whole process tree), then the total, resident and committed side by side, then free memory.
+fn memory_text(r: &Value) -> String {
+    let row = |name: &str, u: &Value, tail: &str| {
+        let n = u["processes"].as_u64().unwrap_or(0);
+        format!("  {name:<34} {:>10}  {:>10}  {n:>3} process{}{tail}", memory_figure(&u["bytes"]), memory_figure(&u["committed"]), if n == 1 { "" } else { "es" })
+    };
+    let mut out = vec![format!("  {:<34} {:>10}  {:>10}", "", "resident", "committed"), row("Kolux", &r["app"], "")];
+    let sessions = r["sessions"].as_array().cloned().unwrap_or_default();
+    for s in &sessions {
+        let name = format!("Session {}{}", s["id"], s["pid"].as_u64().map(|p| format!(" · pid {p}")).unwrap_or_default());
+        out.push(row(&name, s, &s["dir"].as_str().map(|d| format!("  {d}")).unwrap_or_default()));
+    }
+    if sessions.is_empty() {
+        out.push("  No terminal sessions are running.".into());
+    }
+    let all: Vec<&Value> = std::iter::once(&r["app"]).chain(sessions.iter()).collect();
+    let committed: Vec<u64> = all.iter().filter_map(|u| u["committed"].as_u64()).collect();
+    let sum = json!({
+        "bytes": all.iter().filter_map(|u| u["bytes"].as_u64()).sum::<u64>(),
+        "committed": if committed.is_empty() { Value::Null } else { json!(committed.iter().sum::<u64>()) },
+        "processes": all.iter().filter_map(|u| u["processes"].as_u64()).sum::<u64>(),
+    });
+    out.push(row("Total", &sum, ""));
+    out.push(match (r["free"].is_null(), r["total"].is_null()) {
+        (true, _) => "  Free memory unknown".into(),
+        (false, true) => format!("  {} free", memory_figure(&r["free"])),
+        (false, false) => format!("  {} free of {}", memory_figure(&r["free"]), memory_figure(&r["total"])),
+    });
+    out.join("\n")
+}
+
+/// CLI-012: the wire name of `kolux status`.
+const STATUS: &str = "app.status";
+/// CLI-012: the four answers of `kolux status`; scripts read these names, so they stay stable.
+pub const STATES: [&str; 4] = ["running", "not-running", "stale", "graph-not-ready"];
+/// CLI-012: set once the app has read every project's worktrees after it started.
+static GRAPH_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// CLI-012: what the app answers to the status question: who it is, and whether its workspace
+/// graph is loaded.
+fn status_answer(graph: &std::sync::atomic::AtomicBool) -> Value {
+    json!({ "pid": std::process::id(), "version": VERSION, "graphReady": graph.load(std::sync::atomic::Ordering::SeqCst) })
+}
+
+/// CLI-012: the detail `status` gives when the app took the question but had no time to answer it.
+const STATUS_BUSY: &str = "busy with another request";
+
+/// CLI-012: sends the status question to the app on `port`, waiting `STATUS_WAIT` for the answer.
+pub fn ask_status(port: u16, token: &str, id: &str, cwd: &str) -> Result<Value, Fail> {
+    call_within(port, &Request { id: id.into(), token: token.into(), command: STATUS.into(), cwd: cwd.into(), args: json!({}), pane: None, cli: VERSION.into(), arrived: None }, STATUS_WAIT)
+}
+
+/// CLI-012: where the app stands, from its startup file in `dir` and whether anything answers on
+/// the port the file names. `ask` sends the status question with the file's token. Never fails:
+/// every outcome is one of the four states.
+pub fn status_of(dir: &Path, ask: &dyn Fn(u16, &str) -> Result<Value, Fail>) -> Value {
+    let file = dir.join(FILE);
+    let shown = file.display().to_string();
+    let text = match std::fs::read_to_string(&file) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return json!({ "state": "not-running", "startupFile": shown }),
+        Err(e) => return json!({ "state": "stale", "startupFile": shown, "detail": e.to_string() }),
+        Ok(t) => t,
+    };
+    let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    let pid = v["pid"].clone();
+    let (Some(port), Some(token)) = (v["port"].as_u64().and_then(|p| u16::try_from(p).ok()), v["token"].as_str()) else {
+        return json!({ "state": "stale", "startupFile": shown, "pid": pid, "detail": "the startup file has no port or token" });
+    };
+    let stale = |detail: &Value| json!({ "state": "stale", "startupFile": shown, "pid": pid, "port": port, "detail": detail });
+    match ask(port, token) {
+        Ok(env) if env["success"] == Value::Bool(true) => {
+            let r = &env["result"];
+            let ready = r["graphReady"] != Value::Bool(false);
+            json!({ "state": if ready { "running" } else { "graph-not-ready" }, "startupFile": shown, "pid": r["pid"], "port": port, "version": r["version"], "graphReady": ready })
+        }
+        // A token from another run: the file outlived the app that wrote it.
+        Ok(env) if env["error"]["code"] == "unauthorized" => stale(&env["error"]["message"]),
+        // An app too old to know the question still answered.
+        Ok(env) => json!({ "state": "running", "startupFile": shown, "pid": pid, "port": port, "version": env["meta"]["appVersion"], "graphReady": true, "detail": env["error"]["message"] }),
+        // Took the connection but had no time to answer within STATUS_WAIT: it is up, answering an
+        // earlier request (the app takes one at a time), so the state stays running.
+        Err(f) if f.code == "timeout" => json!({ "state": "running", "startupFile": shown, "pid": pid, "port": port, "graphReady": true, "detail": STATUS_BUSY }),
+        // Nothing listens on the port, or the connection dropped: the app that wrote the file is gone.
+        Err(f) => stale(&if f.data["detail"].is_null() { json!(f.message) } else { f.data["detail"].clone() }),
+    }
+}
+
+/// CLI-012: the one line `kolux status` prints for a state.
+fn status_line(r: &Value) -> String {
+    let pid = r["pid"].as_u64().map(|p| format!("pid {p}")).unwrap_or_else(|| "pid unknown".into());
+    match r["state"].as_str().unwrap_or_default() {
+        "running" if r["detail"] == STATUS_BUSY => format!("running: Kolux is up, {STATUS_BUSY} ({pid})"),
+        "running" => format!("running: Kolux is up and ready ({pid})"),
+        "graph-not-ready" => format!("graph-not-ready: Kolux answers but is still loading its workspaces ({pid})"),
+        "stale" => format!("stale: Kolux left its startup file behind but nothing answers ({pid}); run {} open to start it again", crate::orchestration::CLI),
+        _ => "not-running: Kolux is not running".into(),
+    }
+}
+
+/// CLI-012 with CLI-005: 0 only when the app is up and ready; 1 for the other three states.
+fn status_exit(r: &Value) -> i32 {
+    i32::from(r["state"] != "running")
 }
 
 /// Starts the app detached from this terminal: KOLUX_APP_EXECUTABLE, else the app program
@@ -951,6 +1091,7 @@ fn text_of(command: &str, r: &Value) -> String {
     }
     let s = |k: &str| r[k].as_str().unwrap_or_default().to_string();
     match command {
+        MEMORY => memory_text(r),
         c if c.starts_with("account.") => cli_accounts::text(c, r),
         "terminal.read" => {
             let strs = |v: &Value| v.as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>();
@@ -1339,7 +1480,7 @@ const GLOBAL: &str = "Global options (every command): --help or -h prints help f
 /// CLI-001: help for a group or a command, cut from the usage list (an entry is a usage line and
 /// the indented lines under it). An alias shows the command it stands for. A path nothing answers
 /// to gets the closest help there is, a suggestion and exit status 1.
-fn help(path: &[String]) -> (String, i32) {
+fn help_raw(path: &[String]) -> (String, i32) {
     let (title, rest) = HELP.split_once("\n\n").unwrap_or((HELP, ""));
     let (body, footer) = rest.rsplit_once("\n\n").unwrap_or((rest, ""));
     let mut entries: Vec<String> = Vec::new();
@@ -1379,9 +1520,20 @@ fn help(path: &[String]) -> (String, i32) {
         (false, Some(verb)) => nearest(verb, in_group.iter().copied()).map(|v| format!("{group} {v}")),
         _ => nearest(group, tops.iter().copied()).map(String::from),
     };
-    let base = guess.as_deref().and_then(|g| page(g.split(' ').next().unwrap_or(g))).or_else(|| page(group)).unwrap_or_else(|| help(&[]).0);
+    let base = guess.as_deref().and_then(|g| page(g.split(' ').next().unwrap_or(g))).or_else(|| page(group)).unwrap_or_else(|| help_raw(&[]).0);
     let tip = guess.map_or(String::new(), |g| format!("; did you mean kolux-dev {g}?"));
     (format!("no command or group is called kolux-dev {typed}{tip}\n\n{base}"), 1)
+}
+
+/// CLI-001 help under the name this build answers to: `kolux` in a release build, `kolux-dev`
+/// in a development one (`orchestration::CLI`). The usage list is written once, as `kolux-dev`.
+fn help(path: &[String]) -> (String, i32) {
+    let (text, code) = help_raw(path);
+    (named(&text, crate::orchestration::CLI), code)
+}
+
+fn named(text: &str, cli: &str) -> String {
+    text.replace("kolux-dev", cli)
 }
 
 /// The `kolux-dev` program: parses, talks to the app, prints, and returns the exit status.
@@ -1430,7 +1582,7 @@ pub fn main(words: Vec<String>) -> i32 {
                     eprintln!("{h}");
                 }
                 if f.code == "invalid_arguments" {
-                    eprintln!("run kolux-dev --help for the usage");
+                    eprintln!("run {} --help for the usage", crate::orchestration::CLI);
                 }
                 1
             }
@@ -1452,6 +1604,20 @@ pub fn main(words: Vec<String>) -> i32 {
     // CLI-042 / CLI-043: these answer from the program itself, so the app may be closed.
     if let Some(out) = local_cli::run(&parsed) {
         return finish(out.map(|v| (parsed.command.clone(), envelope(&id, "", Ok(v)))));
+    }
+    // CLI-012: answers whether or not the app is up, so it never goes through the open advice.
+    if parsed.command == STATUS {
+        let cwd = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default();
+        let ask = |port: u16, token: &str| ask_status(port, token, &id, &cwd);
+        let r = status_of(&data_dir(), &ask);
+        let code = status_exit(&r);
+        if json {
+            let runtime = r["pid"].as_u64().filter(|_| code == 0).map(|p| p.to_string()).unwrap_or_default();
+            println!("{}", serde_json::to_string_pretty(&envelope(&id, &runtime, Ok(r))).unwrap_or_default());
+        } else {
+            println!("{}", status_line(&r));
+        }
+        return code;
     }
     if !json && parsed.command == "terminal.list" {
         parsed.args.insert("includeVisualLayouts".into(), Value::Bool(true));
@@ -1800,6 +1966,8 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             (ctx.front)()?;
             Ok(json!({ "ready": true, "started": false, "pid": std::process::id() }))
         }
+        STATUS => Ok(status_answer(&GRAPH_READY)),
+        MEMORY => serde_json::to_value(crate::resources::memory_now(ctx.terminals)).map_err(|e| Fail::new("failed", e.to_string())),
         WORKER_START => worker_start_once(ctx, req),
         c if QUERY.iter().any(|(_, w, _)| *w == c) => query(ctx, req),
         c if TERM.iter().any(|(_, w, _)| *w == c) => terminal_io(ctx, req),
@@ -1817,7 +1985,7 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
 const PANE_WAIT: Duration = Duration::from_secs(15);
 
 fn no_terminal(h: &str) -> Fail {
-    Fail { code: "not_found", message: format!("no open terminal is {h}"), data: json!({ "hint": "kolux-dev terminal list prints the handles" }) }
+    Fail { code: "not_found", message: format!("no open terminal is {h}"), data: json!({ "hint": format!("{} terminal list prints the handles", crate::orchestration::CLI) }) }
 }
 
 /// CLI-026: one-shot forms of a startup command (exec, print, review, help) stay in the background.
@@ -1881,7 +2049,7 @@ fn await_layout(ctx: &Ctx, what: &str, found: impl Fn(&Value) -> Option<Result<V
             return out;
         }
         if Instant::now() >= until {
-            return Err(Fail { code: "timeout", message: format!("the window did not {what} within 15 seconds"), data: json!({ "hint": "it may still happen; kolux-dev terminal list shows what is open" }) });
+            return Err(Fail { code: "timeout", message: format!("the window did not {what} within 15 seconds"), data: json!({ "hint": format!("it may still happen; {} terminal list shows what is open", crate::orchestration::CLI) }) });
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -2321,7 +2489,7 @@ fn query_text(command: &str, r: &Value) -> Option<String> {
         "repo.list" | "project.list" => {
             let list = rows(if command == "repo.list" { "repos" } else { "projects" });
             if list.is_empty() {
-                "no repos yet; add one with kolux-dev repo add --path <folder>".into()
+                format!("no repos yet; add one with {} repo add --path <folder>", crate::orchestration::CLI)
             } else {
                 list.iter().map(repo).collect::<Vec<_>>().join("\n")
             }
@@ -3425,6 +3593,16 @@ pub fn serve(app: tauri::AppHandle, dir: &Path) -> std::io::Result<()> {
     let token = secret();
     let runtime = std::process::id().to_string();
     std::fs::write(dir.join(FILE), json!({ "port": port, "token": token, "pid": std::process::id() }).to_string())?;
+    // CLI-012: the workspace graph is ready once every project's worktrees have been read once;
+    // until then `kolux status` says graph-not-ready. The reads also warm ps's scan cache.
+    let warm = app.clone();
+    std::thread::spawn(move || {
+        let list = warm.state::<Mutex<Store>>().lock().map(|s| projects::load_projects(&s)).unwrap_or_default();
+        for p in list {
+            let _ = scan(&p.path);
+        }
+        GRAPH_READY.store(true, std::sync::atomic::Ordering::SeqCst);
+    });
     std::thread::spawn(move || {
         serve_loop(listener, &token, &runtime, |req| {
             let store = app.state::<Mutex<Store>>();
@@ -3727,6 +3905,42 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// TERM-125 (rest): the texts of `terminal show`, a plain `send` (with Enter, or an interrupt)
+    /// and `wait`; and `wait`'s time limit: it asks again every half second and, when the
+    /// condition is still not met, fails with the state the terminal is in.
+    #[test]
+    fn term125_show_send_and_wait_texts_and_the_wait_time_limit() {
+        let shown = json!({ "handle": "term-1", "title": "Terminal 1", "worktree": null, "pane": 1, "tab": 1, "host": "local", "shown": true });
+        assert_eq!(terminal_text("terminal.show", &shown).unwrap(), "term-1  Terminal 1\nworktree none · pane 1 tab 1 · host local · in view");
+        let hidden = json!({ "handle": "term-2", "title": "t079b-exit", "worktree": "G:/r", "pane": 1, "tab": 2, "host": "local", "shown": false });
+        assert_eq!(terminal_text("terminal.show", &hidden).unwrap(), "term-2  t079b-exit\nworktree G:/r · pane 1 tab 2 · host local");
+        assert_eq!(text_of("terminal.send", &json!({ "terminal": "term-1", "delivered": ["text", "enter"] })), "sent text+enter to term-1");
+        assert_eq!(text_of("terminal.send", &json!({ "terminal": "term-1", "delivered": ["interrupt"] })), "sent interrupt to term-1");
+        assert_eq!(text_of("terminal.wait", &json!({ "terminal": "term-2", "done": true, "state": "exited" })), "term-2 is exited");
+        assert_eq!(text_of("terminal.wait", &json!({ "terminal": "term-1", "done": true, "state": "quiet" })), "term-1 is quiet");
+
+        // An app whose terminal keeps running: wait polls (at least twice in 700 ms) and then fails.
+        use std::sync::{atomic::{AtomicUsize, Ordering}, Arc};
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let asked = Arc::new(AtomicUsize::new(0));
+        let count = asked.clone();
+        std::thread::spawn(move || {
+            serve_loop(listener, "secret", "rt-1", move |_| {
+                count.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "terminal": "term-1", "done": false, "state": "running", "blocked": false }))
+            })
+        });
+        let req = Request { id: "w1".into(), token: "secret".into(), command: "terminal.wait".into(), cwd: String::new(), args: json!({ "terminal": "term-1", "for": "exit", "timeoutMs": "700" }), pane: None, cli: VERSION.into(), arrived: None };
+        let start = Instant::now();
+        let f = wait_for_terminal(port, req).unwrap_err();
+        let took = start.elapsed();
+        assert_eq!((f.code, f.message.as_str()), ("timeout", "term-1 did not reach exit within 700 ms (it is running)"));
+        assert_eq!(f.data["state"], "running");
+        assert!(took >= Duration::from_millis(700) && took < Duration::from_secs(5), "took {took:?}");
+        assert!(asked.load(Ordering::SeqCst) >= 2, "asked {} times", asked.load(Ordering::SeqCst));
+    }
+
     #[test]
     fn tasks_need_a_known_creator_and_a_dry_run_needs_no_recipient() {
         let dir = std::env::temp_dir().join(format!("kolux-rs-dry-{}", std::process::id()));
@@ -3884,10 +4098,10 @@ mod tests {
     #[test]
     fn an_app_that_cannot_be_reached_is_met_with_the_open_advice() {
         let down = unreachable_fail("no endpoint file".into());
-        assert!(open_first(&down, "worktree.list").unwrap().contains("kolux-dev open"));
+        assert!(open_first(&down, "worktree.list").unwrap().contains(&format!("{} open", crate::orchestration::CLI)));
         assert!(open_first(&down, "app.open").is_none(), "open itself is not told to run open");
         let mut own = down.clone();
-        own.data["hint"] = json!("kolux-dev orchestration run-use --id run-1 picks it up again");
+        own.data["hint"] = json!(format!("{} orchestration run-use --id run-1 picks it up again", crate::orchestration::CLI));
         assert!(open_first(&own, "orchestration.send").is_none(), "its own recovery wins");
         assert!(open_first(&Fail::new("failed", "x"), "worktree.list").is_none());
     }
@@ -4714,5 +4928,163 @@ mod tests {
         drop(ctx);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// CLI-012: the four states of `kolux status`, met at the real edges: no startup file, a file
+    /// whose port nothing listens on any more, an app still reading its workspaces, and one ready.
+    #[test]
+    fn cli012_status_tells_running_not_running_stale_and_graph_not_ready_apart() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let dir = std::env::temp_dir().join(format!("kolux-rs-cli012-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ask = |port: u16, token: &str| ask_status(port, token, "s1", "");
+        // App closed: no startup file.
+        let r = status_of(&dir, &ask);
+        assert_eq!(r["state"], "not-running");
+        assert_eq!(status_exit(&r), 1);
+        assert!(status_line(&r).contains("not running"), "{}", status_line(&r));
+        // Killed hard: the file stays behind and nothing listens on its port.
+        let gone = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let dead = gone.local_addr().unwrap().port();
+        drop(gone);
+        std::fs::write(dir.join(FILE), json!({ "port": dead, "token": "t", "pid": 4242 }).to_string()).unwrap();
+        let r = status_of(&dir, &ask);
+        assert_eq!((r["state"].as_str(), r["pid"].as_u64()), (Some("stale"), Some(4242)));
+        assert_eq!(status_exit(&r), 1);
+        assert!(status_line(&r).contains("4242"), "{}", status_line(&r));
+        // A half-written file is stale too, not a crash.
+        std::fs::write(dir.join(FILE), "{").unwrap();
+        assert_eq!(status_of(&dir, &ask)["state"], "stale");
+        // Up: a real listener answering the status question, first while the graph loads, then ready.
+        let ready = std::sync::Arc::new(AtomicBool::new(false));
+        let flag = ready.clone();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || serve_loop(listener, "tok", "rt-1", move |req| if req.command == STATUS { Ok(status_answer(&flag)) } else { Err(Fail::args("unknown command")) }));
+        std::fs::write(dir.join(FILE), json!({ "port": port, "token": "tok", "pid": 7 }).to_string()).unwrap();
+        let r = status_of(&dir, &ask);
+        assert_eq!((r["state"].as_str(), r["graphReady"].as_bool()), (Some("graph-not-ready"), Some(false)));
+        assert_eq!(status_exit(&r), 1);
+        ready.store(true, Ordering::SeqCst);
+        let r = status_of(&dir, &ask);
+        assert_eq!((r["state"].as_str(), r["pid"].as_u64(), r["version"].as_str()), (Some("running"), Some(u64::from(std::process::id())), Some(VERSION)));
+        assert_eq!(status_exit(&r), 0);
+        // A token from another run: the file outlived the app that wrote it.
+        std::fs::write(dir.join(FILE), json!({ "port": port, "token": "old", "pid": 7 }).to_string()).unwrap();
+        assert_eq!(status_of(&dir, &ask)["state"], "stale");
+        // Each of the four names has its own line, and the word parses with --json.
+        let lines: std::collections::BTreeSet<String> = STATES.iter().map(|s| status_line(&json!({ "state": s, "pid": 1 }))).collect();
+        assert_eq!(lines.len(), 4);
+        let p = parse(&words("status --json"));
+        assert_eq!((p.0, p.1.unwrap().unwrap().command), (true, STATUS.to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// CLI-012 (T-076-b): the app answers one request at a time, so while a long one runs the status
+    /// question is taken but not answered. A listener that accepts and never replies stands in for
+    /// that: `status` comes back within its own short wait, not `call`'s 300 s, and says running,
+    /// busy with another request, with the pid the startup file names.
+    #[test]
+    fn cli012_status_answers_within_its_short_wait_while_the_app_is_busy() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-cli012b-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // Takes every connection and holds it open without ever writing a byte back.
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for stream in listener.incoming().flatten() {
+                held.push(stream);
+            }
+        });
+        std::fs::write(dir.join(FILE), json!({ "port": port, "token": "tok", "pid": 4343 }).to_string()).unwrap();
+        let ask = |port: u16, token: &str| ask_status(port, token, "s2", "");
+        let started = Instant::now();
+        let r = status_of(&dir, &ask);
+        let took = started.elapsed();
+        assert!(took < Duration::from_secs(5), "status took {took:?}, longer than its short wait allows");
+        assert!(took >= STATUS_WAIT, "status gave up before its wait ran out: {took:?}");
+        assert_eq!((r["state"].as_str(), r["detail"].as_str(), r["pid"].as_u64()), (Some("running"), Some(STATUS_BUSY), Some(4343)));
+        assert_eq!(status_exit(&r), 0);
+        let line = status_line(&r);
+        assert!(line.starts_with("running:") && line.contains(STATUS_BUSY) && line.contains("4343"), "{line}");
+        // The general request path keeps its long wait: only the status question is impatient.
+        assert_eq!(CALL_WAIT, Duration::from_secs(300));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// CLI-041: `kolux diagnostics memory` against a fake app: the text shows resident and committed
+    /// side by side per row and in total, the JSON carries the app's committed figure unchanged, and
+    /// with no app it is one line that names `open`, with no second advice line.
+    #[test]
+    fn cli041_diagnostics_memory_shows_committed_beside_resident_and_passes_it_through() {
+        const MB: u64 = 1024 * 1024;
+        let answer = json!({
+            "app": { "bytes": 300 * MB, "cpu": 0.0, "processes": 6, "committed": 123_456_789 },
+            "sessions": [
+                { "id": 1, "pid": 4321, "dir": "C:/w/fox", "bytes": 12 * MB, "cpu": 0.0, "processes": 2, "committed": 8 * MB },
+                { "id": 2, "pid": null, "dir": null, "bytes": 0, "cpu": 0.0, "processes": 0, "committed": null }
+            ],
+            "free": 2048 * MB, "total": 4096 * MB
+        });
+        let canned = answer.clone();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || serve_loop(listener, "tok", "rt-1", move |req| if req.command == MEMORY { Ok(canned.clone()) } else { Err(Fail::args("unknown command")) }));
+        let p = parse(&words("diagnostics memory --json"));
+        let parsed = p.1.unwrap().unwrap();
+        assert_eq!((p.0, parsed.command.as_str()), (true, MEMORY));
+        let env = call(port, &Request { id: "m1".into(), token: "tok".into(), command: MEMORY.into(), cwd: String::new(), args: json!({}), pane: None, cli: VERSION.into(), arrived: None }).unwrap();
+        assert_eq!(env["success"], true);
+        assert_eq!(env["result"]["app"]["committed"].as_u64(), Some(123_456_789), "committed passes through unchanged");
+        assert_eq!(env["result"], answer);
+        let text = text_of(MEMORY, &env["result"]);
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines[0].contains("resident") && lines[0].contains("committed"), "{text}");
+        assert!(lines[1].contains("Kolux") && lines[1].contains("300.0 MB") && lines[1].contains("117.7 MB") && lines[1].contains("6 processes"), "{text}");
+        assert!(lines[2].contains("Session 1 · pid 4321") && lines[2].contains("12.0 MB") && lines[2].contains("8.0 MB") && lines[2].contains("C:/w/fox"), "{text}");
+        assert!(lines[3].contains("Session 2") && lines[3].contains("– MB") && !lines[3].contains("pid"), "an unknown committed figure is a dash: {text}");
+        // 300 + 12 MB resident; 123456789 + 8 MiB committed = 125.7 MB; 8 processes.
+        assert!(lines[4].contains("Total") && lines[4].contains("312.0 MB") && lines[4].contains("125.7 MB") && lines[4].contains("8 processes"), "{text}");
+        assert_eq!(lines[5].trim(), "2.00 GB free of 4.00 GB");
+        assert_eq!(memory_figure(&json!(1024 * MB)), "1.00 GB");
+        // No app: no startup file, so one plain line and a non-zero exit.
+        let none = std::env::temp_dir().join(format!("kolux-rs-cli041-{}", std::process::id()));
+        let f = read_endpoint(&none).unwrap_err();
+        assert_eq!(f.code, "app_unreachable");
+        assert!(f.message.contains("not running") && f.message.contains(&format!("{} open", crate::orchestration::CLI)), "{}", f.message);
+        assert_eq!(open_first(&f, MEMORY), None, "no second advice line");
+        assert!(open_first(&f, "worktree.list").is_some(), "other commands keep their advice");
+    }
+
+    #[test]
+    fn usage_text_names_the_program_this_build_answers_to() {
+        let (all, code) = help(&[]);
+        assert_eq!(code, 0);
+        assert!(all.starts_with(&format!("{}: drive Kolux", crate::orchestration::CLI)), "{all}");
+        assert!(all.contains(&format!("  {} status [--json]", crate::orchestration::CLI)), "{all}");
+        // A release build answers to `kolux`: not one help line may tell the user to type kolux-dev.
+        let release = named(&help_raw(&[]).0, "kolux");
+        assert!(release.contains("  kolux --version") && release.contains("  kolux status [--json]"), "{release}");
+        assert!(!release.contains("kolux-dev"), "{release}");
+        let scoped = named(&help_raw(&words("worktree")).0, "kolux");
+        assert!(scoped.starts_with("kolux worktree") && !scoped.contains("kolux-dev"), "{scoped}");
+        let typo = named(&help_raw(&words("wrktree")).0, "kolux");
+        assert!(typo.contains("did you mean kolux worktree") && !typo.contains("kolux-dev"), "{typo}");
+    }
+
+    /// T-550: the notes and hints a user reads outside help name the program this build answers
+    /// to (`kolux` in a release build), never a written-in kolux-dev.
+    #[test]
+    fn t550_hints_name_the_program_this_build_answers_to() {
+        let cli = crate::orchestration::CLI;
+        assert!(stop_gone().contains(&format!("use {cli} terminal close --worktree")), "{}", stop_gone());
+        assert_eq!(no_terminal("t9").data["hint"], json!(format!("{cli} terminal list prints the handles")));
+        assert_eq!(query_text("repo.list", &json!({ "repos": [] })).unwrap(), format!("no repos yet; add one with {cli} repo add --path <folder>"));
+        assert!(local_cli::text("agent-context", &json!({ "commandCount": 3 })).unwrap().contains(&format!("; {cli} agent-context --json")));
+        let (_, refused) = parse(&words("terminal stop"));
+        assert!(refused.unwrap_err().message.contains(&format!("{cli} terminal close")));
     }
 }

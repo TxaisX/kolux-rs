@@ -18,9 +18,11 @@ type Props = {
   hidden?: string[];
   onToggle?: (id: string) => void;
   onHideBar?: () => void;
+  /** T-543-b: the agent status hooks switch as saved; null until the settings are read, and then nothing is shown. */
+  hooks?: boolean | null;
 };
 
-export default function StatusBar({ terminals, agents = 0, names = () => ({}), workspaces = [], hidden = [], onToggle, onHideBar }: Props) {
+export default function StatusBar({ terminals, agents = 0, names = () => ({}), workspaces = [], hidden = [], onToggle, onHideBar, hooks = null }: Props) {
   const [memory, setMemory] = useState<number | null>(null);
   const [open, setOpen] = useState(false);
   const [menu, setMenu] = useState<{ left: number; bottom: number } | null>(null);
@@ -57,11 +59,11 @@ export default function StatusBar({ terminals, agents = 0, names = () => ({}), w
           {update.text}
         </button>
       )}
-      {shows("hooks") && (
-        <span className="item" title="Agent status hooks (not built yet)">
+      {shows("hooks") && hooks !== null && (
+        <span className="item" title={`Agent status hooks are ${hooks ? "on" : "off"} (Settings > Agents)`}>
           <Cup size={12} />
-          On
-          <span className="on" />
+          {hooks ? "On" : "Off"}
+          {hooks && <span className="on" />}
         </span>
       )}
       {shows("memory") && (

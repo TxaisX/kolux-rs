@@ -45,6 +45,9 @@ import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } 
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+// The launching shell may be a pane of another Kolux build (the old app sets KOLUX_USER_DATA_PATH, hook port/token and pane ids);
+// none of it may reach the app under test, its panes or the CLI it runs.
+for (const k of Object.keys(process.env)) if (k.startsWith("KOLUX_")) delete process.env[k];
 
 const root = fileURLToPath(new URL("../../", import.meta.url)).replace(/[\\/]+$/, "");
 const cdpScript = join(root, "scripts", "evidence", "cdp.mjs");
@@ -138,8 +141,8 @@ const evalJs = async (expr) => {
 const invoke = (cmd, params = {}) => evalJs(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(cmd)}, ${JSON.stringify(params)}).then(v => v === undefined ? null : v)`);
 const count = (sel) => evalJs(`document.querySelectorAll(${JSON.stringify(sel)}).length`);
 const exists = async (sel) => (await count(sel)) > 0;
-// Panes outside the grid (a tab behind another, the workspace-less "Terminal 1" in a zero-width cell) have
-// no offsetParent; only the ones a user sees count.
+// Panes outside the grid (a tab behind another) have no offsetParent; only the ones a user sees count.
+// T-543-b: a fresh profile opens with no pane at all, so there is no workspace-less "Terminal 1" any more.
 const shown = (sel) => evalJs(`[...document.querySelectorAll(${JSON.stringify(sel)})].filter(e => e.offsetParent !== null).length`);
 const click = async (sel) => {
   const r = await evalJs(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return "missing"; e.click(); return "clicked"; })()`);
@@ -405,6 +408,11 @@ async function setup() {
   await git(["-c", "user.name=smoke", "-c", "user.email=smoke@example.invalid", "commit", "-q", "-m", "smoke"]);
   if (!ATTACH) await launch();
   else await pageUp(30000);
+  // T-543-b: with no layout saved the window opens with no pane until a workspace is opened.
+  await waitFor("the sidebar", () => exists('.sb-foot button[title^="Add a project by path"]'), 30000);
+  const before = await count(TERM);
+  log(`zero panes after launch: ${before === 0 ? "PASS" : "FAIL"} (${before} ${TERM})`);
+  if (!ATTACH && before !== 0) throw new Error(`a fresh profile opened with ${before} pane(s); T-543-b wants none until a workspace is opened`);
   if (await exists('.onboarding, [aria-label="Welcome"]')) log("WARN a first-run dialog is open; the flows may not reach the grid");
   await click('.sb-foot button[title^="Add a project by path"]');
   await waitFor("the project folder field", () => exists('input[aria-label="project folder"]'), 5000);
@@ -433,7 +441,7 @@ async function shellWrites(index, line, file, what, tries = 3) {
 async function flow1() {
   const start = await shown(TERM);
   for (const want of [start + 1, start + 2]) {
-    // A shown pane takes the focus first: after setup it may still sit on the workspace-less pane in its zero-width cell.
+    // A shown pane takes the focus first, so the split goes to a pane a user sees.
     await focusPane(TERM, 0, ".xterm-helper-textarea");
     await click('.pane.focused button[title^="Split right"]');
     await waitFor(`${want} shell panes`, async () => (await shown(TERM)) === want, 30000);

@@ -4,11 +4,15 @@
 // router, which calls the focused pane's entry in `editors`. A file that will not load is tried
 // three times, then the body says why and offers Retry; a failed save is a toast and the
 // marker stays. A save is refused when the file changed on disk since it was loaded (EDIT-003,
-// T-073-a): the pane then asks Reload (take the disk copy) or Keep mine (overwrite it). A markdown file opens in a rich view (EDIT-012, markdown.ts) with a Rich |
+// T-073-a): the pane then asks Reload (take the disk copy) or Keep mine (overwrite it). Before any
+// save, a cheap check (diskChange.ts, every 2 s for a tab in front and on window focus) notices
+// that the file moved on (T-073): a tab without edits takes the disk copy quietly, one with edits
+// shows the banner (DiskBanner.tsx: Reload, undoable / Keep my edits / Compare). The check is
+// advisory; the save's hash check stays the guard. A markdown file opens in a rich view (EDIT-012, markdown.ts) with a Rich |
 // Source switch; the source view is the CodeMirror one, which keeps holding the text throughout.
 // EDIT-007: Copy Context copies the selection under its path and line range, with a hint beside a
 // selection it applies to; EDIT-020: review notes take a selection from any file, not just Markdown.
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
 import { EditorView } from "@codemirror/view";
@@ -17,7 +21,10 @@ import { LanguageDescription, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { Close, FileCode } from "../chrome/icons";
-import { attach, baseName, detach, isDirty, isStale, loadText, relay, replaceAll, save, subscribe } from "./buffers";
+import { undo } from "@codemirror/commands";
+import { attach, baseName, detach, isDirty, isStale, loadText, relay, replaceAll, save, subscribe, textOf } from "./buffers";
+import { beginSave, canUndo, checkOnce, endSave, forget, keep, POLL_MS, readFresh, reloadNow, remember, setBanner as markBanner, UNDO_TOAST_MS, type Io, type Stamp, type UndoEntry } from "./diskChange";
+import { CompareView, DiskBanner, UndoToast } from "./DiskBanner";
 import { changeBetween, isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
 import { domPick, noteDraft, selections } from "./notes";
 import { contextText } from "./copyContext";
@@ -32,9 +39,31 @@ export const copiers = new Map<number, () => boolean>();
 /** EDIT-003 (T-073-a, T-073-c): Mod+S for an editor tab or an unstaged diff tab. The write carries
  *  the hash of the disk copy the tab loaded; a refusal because the file moved on calls
  *  `onStale(true)` (the pane shows StaleNotice), any other failure is a toast. */
+/** T-073: the disk stamp of one file, null when it is gone or the check failed. */
+export const stampOne = (path: string): Promise<Stamp | null> =>
+  invoke<(Stamp | null)[]>("file_stamps", { paths: [path] }).then(
+    (r) => r?.[0] ?? null,
+    () => null,
+  );
+
+/** Writes the buffer and remembers the stamp the write answered with, so Kolux's own save never
+ *  looks like someone else's change (EDIT-003). */
+async function writeRemembering(path: string, force: boolean): Promise<void> {
+  let wrote: Stamp | null | undefined;
+  // T-073-e (council A1): while the write is out the disk check treats this file as unchanged, so
+  // a poll landing between the write and remember() cannot flash the banner on the user's own save.
+  beginSave(path);
+  try {
+    await save(path, async (text, loadedHash) => void (wrote = await invoke<Stamp | null>("file_write", force ? { path, text } : { path, text, loadedHash })), force);
+    remember(path, wrote ?? (await stampOne(path)));
+  } finally {
+    endSave(path);
+  }
+}
+
 export async function saveFile(path: string, onStale: (stale: boolean) => void, onToast?: (text: string) => void): Promise<void> {
   try {
-    await save(path, (text, loadedHash) => invoke("file_write", { path, text, loadedHash }));
+    await writeRemembering(path, false);
     onStale(false);
   } catch (err) {
     if (isStale(err)) return onStale(true);
@@ -52,9 +81,15 @@ export function StaleNotice({ path, onDone, onToast }: { path: string; onDone: (
         className="btn"
         title="Show the disk copy; your unsaved edits are dropped"
         onClick={() =>
-          void invoke<string>("file_read", { path }).then(
-            (text) => {
-              replaceAll(path, text);
+          void readFresh(
+            path,
+            () => stampOne(path),
+            () => invoke<string>("file_read", { path }),
+          ).then(
+            (got) => {
+              if (!got) return;
+              replaceAll(path, got.text, true);
+              remember(path, got.stamp);
               onDone();
             },
             (err) => onToast?.(name + " did not reload: " + String(err)),
@@ -67,7 +102,7 @@ export function StaleNotice({ path, onDone, onToast }: { path: string; onDone: (
         className="btn"
         title="Save your text over the disk copy"
         onClick={() =>
-          void save(path, (text) => invoke("file_write", { path, text }), true).then(
+          void writeRemembering(path, true).then(
             () => onDone(),
             (err) => onToast?.(name + " was not saved: " + String(err)),
           )
@@ -105,6 +140,11 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   const [tries, setTries] = useState(0);
   const [dirty, setDirty] = useState(false);
   const [stale, setStale] = useState(false); // the last save was refused: the disk copy moved on
+  // T-073: the disk copy changed under unsaved edits (with the stamp Keep my edits keeps), the
+  // Compare view, and the Undo toast after a Reload.
+  const [moved, setMoved] = useState<{ stamp: Stamp | null } | null>(null);
+  const [comparing, setComparing] = useState(false);
+  const [undoable, setUndoable] = useState<UndoEntry | null>(null);
   const report = useRef({ onDirty, onToast });
   report.current = { onDirty, onToast };
   const wantFocus = useRef(focused);
@@ -140,7 +180,13 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     });
     setError(null);
     setStale(false);
-    loadText(() => invoke<string>("file_read", { path })).then(
+    setMoved(null);
+    setComparing(false);
+    let loaded: Stamp | null = null;
+    // T-073: the stamp is taken before the text, so a write landing in between shows at the next check.
+    stampOne(path)
+      .then((st) => ((loaded = st), loadText(() => invoke<string>("file_read", { path }))))
+      .then(
       (text) => {
         if (!alive) return;
         made = new EditorView({
@@ -151,6 +197,8 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
         });
         view.current = made;
         attach(path, made, text);
+        // A twin pane already holds this file: its stamp stays the one its copy came from.
+        if (textOf(path) === text) remember(path, loaded);
         setReady((n) => n + 1);
         // A newly opened file takes the keyboard at once.
         if (wantFocus.current) made.focus();
@@ -170,9 +218,78 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
         detach(path, made);
         made.destroy();
       }
+      if (textOf(path) === null) forget(path);
       view.current = null;
     };
   }, [id, path, tries]);
+
+  // EDIT-003 (T-073): the disk check, only while this tab is in front: at once when it comes
+  // forward (a background tab whose file changed reloads then, not while hidden), every POLL_MS
+  // and whenever the window gets focus.
+  const io = useRef<Io>(null!);
+  io.current = {
+    stamp: () => stampOne(path),
+    read: () => invoke<string>("file_read", { path }),
+    dirty: () => isDirty(path),
+    current: () => textOf(path),
+    apply: (text, undoable) => replaceAll(path, text, undoable),
+  };
+  useEffect(() => {
+    if (hidden || !ready || readOnly) return;
+    let busy = false;
+    let alive = true;
+    const raised = (stamp: Stamp | null) => alive && setMoved((m) => (m && m.stamp?.mtime === stamp?.mtime && m.stamp?.size === stamp?.size ? m : { stamp }));
+    const check = () => {
+      if (busy) return;
+      busy = true;
+      void checkOnce(path, io.current, raised)
+        .then(
+          (v) => alive && v !== "banner" && setMoved(null),
+          () => undefined,
+        )
+        .finally(() => (busy = false));
+    };
+    check();
+    // ponytail: each poll's file_stamps runs fence.allow, which lists worktrees about every 4 s
+    // (TREES_FRESH 3 s) under the fence mutex while an agent-worktree file is open (council MERGE 33
+    // A3, folded into the MERGE 29 A1 fence fast path by origin record); the upgrade is that fast
+    // path, or a fence decision cached per open tab, not a slower poll.
+    const timer = window.setInterval(check, POLL_MS);
+    window.addEventListener("focus", check);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", check);
+    };
+  }, [path, hidden, ready, readOnly]);
+  useEffect(() => {
+    if (!undoable) return;
+    const t = window.setTimeout(() => setUndoable(null), UNDO_TOAST_MS);
+    return () => window.clearTimeout(t);
+  }, [undoable]);
+  useEffect(() => markBanner(path, !!moved), [path, moved]);
+  const reload = () =>
+    void reloadNow(path, io.current).then(
+      (u) => {
+        if (!u) return;
+        setMoved(null);
+        setComparing(false);
+        setUndoable(u);
+      },
+      (err) => report.current.onToast?.(`${baseName(path)} did not reload: ${String(err)}`),
+    );
+  const keepMine = () => {
+    keep(path, moved?.stamp ?? null);
+    setMoved(null);
+    setComparing(false);
+  };
+  const undoReload = () => {
+    const cm = view.current;
+    if (cm && canUndo(undoable, textOf(path))) undo(cm);
+    else report.current.onToast?.("The reload can no longer be undone from the toast; Ctrl+Z in the tab still steps back through it.");
+    setUndoable(null);
+  };
+  const readDisk = useCallback(() => invoke<string>("file_read", { path }), [path]);
 
   // A new file in this tab starts over: rich again, and Open anyway forgotten.
   useEffect(() => {
@@ -310,6 +427,8 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
         </div>
       )}
       {stale && <StaleNotice path={path} onDone={() => setStale(false)} onToast={report.current.onToast} />}
+      {moved && !stale && !comparing && <DiskBanner path={path} onReload={reload} onKeep={keepMine} onCompare={() => setComparing(true)} />}
+      {undoable && !moved && <UndoToast path={path} onUndo={undoReload} onClose={() => setUndoable(null)} />}
       {banner && (
         <div className="notice md-banner" role="status">
           {banner.text}
@@ -334,7 +453,8 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
           </button>
         </div>
       )}
-      <div ref={host} className="pane-body" hidden={shown !== "source"} />
+      {comparing && <CompareView path={path} text={textOf(path) ?? ""} read={readDisk} onReload={reload} onKeep={keepMine} onClose={() => setComparing(false)} />}
+      <div ref={host} className="pane-body" hidden={shown !== "source" || comparing} />
       {!hidden && shown === "source" && hint && copyKey && copiedSel !== hint.sel && !flash && (
         <div className="copy-hint" style={{ left: hint.x + 8, top: hint.y + 2 }}>
           {copyKey} copies with path and lines
@@ -345,7 +465,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
           Copied with path and lines
         </div>
       )}
-      {md && <div ref={richHost} className="pane-body md-rich" contentEditable suppressContentEditableWarning spellCheck hidden={shown !== "rich"} aria-label={`${name}, rich view`} />}
+      {md && <div ref={richHost} className="pane-body md-rich" contentEditable suppressContentEditableWarning spellCheck hidden={shown !== "rich" || comparing} aria-label={`${name}, rich view`} />}
     </section>
   );
 }

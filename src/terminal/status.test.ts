@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { VOCAB, ageLabel, branchChip, foundAgent, headerOf, nextNeedsYou, crewLabel, crewLine, stoppedLabel, type Crew, type StatusKey } from "./status";
+import { VOCAB, ageLabel, branchChip, foundAgent, headerOf, nextNeedsYou, titleState, crewLabel, crewLine, stoppedLabel, type Crew, type StatusKey } from "./status";
 
 test("a plain shell reads as a terminal with a neutral status; an agent's word is tinted (TERM-020, TERM-021)", () => {
   expect(headerOf("shell", "running", undefined, false, null, 0)).toMatchObject({ word: "Ready", tone: "", needsYou: false });
@@ -100,4 +100,35 @@ test("TERM-022: the chip names the branch, a detached HEAD shows its short commi
   expect(branchChip({ branch: null, head: "0123456789abcdef0123456789abcdef01234567" })).toEqual({ text: "0123456", tip: "Detached at 0123456789abcdef0123456789abcdef01234567" });
   expect(branchChip(null)).toBeNull();
   expect(branchChip({ branch: null, head: null })).toBeNull();
+});
+
+test("a turn that ended with background tasks still running reads as watched, not done (STAT-024)", () => {
+  const h = headerOf("claude", "running", undefined, false, null, 0, "background");
+  expect([h.state, h.word, h.tone, h.needsYou]).toEqual(["background", "Working", "working", false]);
+  expect(h.explain).toMatch(/background tasks/);
+  // A permission still wins over the watch.
+  expect(headerOf("claude", "running", undefined, true, null, 0, "background").state).toBe("permission");
+  // A title change while the tasks run (the agent the title names, its finish time) does not end the watch.
+  expect(headerOf(foundAgent("codex") ?? "shell", "running", undefined, false, 0, 90_000, "background").state).toBe("background");
+  expect(headerOf("claude", "running", undefined, false, 0, 90_000, "background").word).toBe("Working");
+});
+
+test("a terminal title stands in for the state while no hook reports: spinners and busy marks work, ready words rest, paths say nothing (STAT-033)", () => {
+  expect(titleState("\u280b Running the tests")).toBe("working");
+  expect(titleState("\u25d0 claude")).toBe("working");
+  expect(titleState("Thinking\u2026")).toBe("working");
+  expect(titleState("\u2733 Claude Code - ready")).toBe("done");
+  expect(titleState("gemini  idle")).toBe("done");
+  expect(titleState("Waiting for permission")).toBe("permission");
+  expect(titleState("Needs you: allow Bash?")).toBe("permission");
+  // A path, an empty title or words it does not know leave the last reading in place.
+  expect(titleState("C:\\Users\\me\\notes.txt")).toBeNull();
+  expect(titleState("~/src/kolux-rs")).toBeNull();
+  expect(titleState("/usr/bin/zsh")).toBeNull();
+  expect(titleState("")).toBeNull();
+  expect(titleState("vim")).toBeNull();
+  // A hook state still wins: the title only stands in when `hook` is undefined.
+  expect(headerOf("claude", "running", undefined, false, null, 0, "done").state).toBe("done");
+  expect(headerOf("claude", "running", undefined, false, null, 0, titleState("\u2733 ready") ?? undefined).state).toBe("done");
+  expect(headerOf("claude", "running", undefined, false, null, 0, titleState("vim") ?? undefined).state).toBe("working");
 });
