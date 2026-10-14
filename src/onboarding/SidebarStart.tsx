@@ -1,8 +1,9 @@
 // VIEW-114: the sidebar's onboarding slot, mounted once in the sidebar above its footer
-// (ProjectsPanel, coordinator hunk T-295-sidebar.diff). It shows the newcomer checklist while that is
-// up, else the Setup Guide entry while a core step remains; it renders nothing until its reads have
+// (ProjectsPanel, coordinator patch evidence/accounts-FIX-3-sidebar.patch, held until T-333-b and
+// reliability R2 land). It shows the newcomer checklist while that is up, else the Setup Guide entry while a core step remains; it renders nothing until its reads have
 // answered, so it never flashes. It reads the steps again on every Setup Guide close, every added
-// project and (at most every 30 s) window focus, so a step done elsewhere ticks in place (FIX-2).
+// project and window focus once 30 s have passed since its last read, so a step done elsewhere ticks
+// in place (FIX-2, FIX-3).
 import { useEffect, useState } from "react";
 import Checklist, { useChecklistRecord } from "./Checklist";
 import { Ring, useGuideState } from "./Guides";
