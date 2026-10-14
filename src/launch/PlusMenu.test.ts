@@ -102,3 +102,22 @@ test("SESS-003 / SESS-010 / SESS-002: the default row is marked, all-off and err
   expect(first).toContain("Looking for agents");
   expect(first).not.toContain("No agent found");
 });
+
+test("SESS-039: from a pane with a worktree, each installed editor gets an 'Open in' row; without a folder there are none", () => {
+  const editors = [
+    { id: "vscode", name: "VS Code", path: "C:\\Users\\me\\AppData\\Local\\Programs\\Microsoft VS Code\\bin\\code.cmd", console: false },
+    { id: "nvim", name: "NeoVim", path: "C:\\Program Files\\Neovim\\bin\\nvim.exe", console: true },
+  ];
+  const dir = "C:\\work\\app-otter";
+  const rows = items(render({ dir, editors }));
+  const vscode = rows.find((r) => r.includes("Open in VS Code"));
+  const nvim = rows.find((r) => r.includes("Open in NeoVim"));
+  expect(vscode).toBeDefined();
+  expect(vscode).toContain(`Open ${dir} in VS Code (`);
+  expect(nvim).toContain("in a console window");
+  expect(render({ dir, editors })).toContain("This worktree");
+  // no folder (the sidebar's New session menu): no editor rows, even with editors installed
+  expect(render({ editors })).not.toContain("Open in");
+  // a folder but no editor installed: no heading either
+  expect(render({ dir, editors: [] })).not.toContain("This worktree");
+});

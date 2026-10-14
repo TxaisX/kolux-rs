@@ -1,0 +1,63 @@
+# T-304 evidence: SESS-039 open a worktree in an outside editor
+
+Lane: launch, from 0819c57. Date: 2026-10-13.
+
+## What was built
+- tools.rs: editor detection. VS Code (code), Cursor (cursor), Zed (zed), Sublime Text (subl) and
+  NeoVim (nvim) by their command-line name on the search path, then at their usual install place
+  under Program Files / %LOCALAPPDATA%\Programs. JetBrains IDEs (IntelliJ IDEA, PyCharm, WebStorm,
+  Rider, GoLand, CLion, PhpStorm, RustRover) by the Toolbox script name on the search path, then by
+  the launcher in the install's own bin folder (<root>\JetBrains\<install>\bin\idea64.exe or
+  <root>\<install>\bin\...), the newest install winning. Command `editors_list`.
+- links.rs: `editor_open(editor, dir)`: the folder goes through the same file fence as every other
+  path (inside a registered root, no other machine, no `..`, no link out), must be a folder; a
+  windowed editor or its launcher gets the folder as its one argument (a .cmd launcher is run
+  through the shell with the standard library's batch quoting, no console window); NeoVim opens `.`
+  in the folder in a console window of its own (CREATE_NEW_CONSOLE; x-terminal-emulator on Linux,
+  Terminal via osascript on macOS).
+- src/launch/editors.ts + PlusMenu.tsx: given the pane's worktree folder (`dir`), the plus menu adds
+  a "This worktree" group with one "Open in <editor>" row per installed editor; an open that fails
+  shows its reason in the menu. Without a folder (the sidebar's New session menu) nothing changes.
+- The Remote-SSH variant is cut (SESS-047), not built.
+
+## Tests (real output, G:/Temp/launch-w1-logs/t304-mod.log, vitest-launch.log)
+cargo test --lib -- links:: tools::
+  test links::tests::sess039_a_windowed_editor_gets_the_folder_and_a_console_editor_opens_dot_in_a_console ... ok
+  test links::tests::sess039_a_cmd_launcher_is_started_through_the_shell_with_the_folder_intact ... ok
+  test tools::tests::sess039_editors_are_found_on_the_path_and_jetbrains_launchers_beside_their_install ... ok
+  test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 532 filtered out
+  The .cmd test really starts a stand-in code.cmd (forwards %* like real launchers) on a folder
+  named "my repo & co" and reads back exactly one argument, the whole folder, quoted.
+vitest run src/launch (T-304 files): PlusMenu.test.ts "SESS-039: from a pane with a worktree, each
+  installed editor gets an 'Open in' row; without a folder there are none" passes; editors.test.ts passes.
+cargo clippy --all-targets -- -D warnings: clean (clippy2.log "Finished", exit 0).
+pnpm exec tsc --noEmit: exit 0.
+
+## Live proof
+Not run on this lane: the two commands are registered and the pane passes its folder only after the
+coordinator applies the hunks below (lib.rs is coordinator-owned, TerminalPane.tsx is core's).
+Acceptance "Open in VS Code -> VS Code opens on the worktree folder" and "Open in NeoVim -> a
+console window opens" are covered by the stand-in launch test and the plan test; a real VS Code /
+NeoVim window was not opened on Txais's desktop.
+
+## Hunks for the coordinator
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@
+             tools::tools_check,
+             tools::tools_dismiss,
++            tools::editors_list,
+             token_usage::token_usage,
+@@
+-            links::open_path, links::file_grant,
++            links::open_path, links::file_grant, links::editor_open,
+             fsops::fs_create,
+--- a/src/terminal/TerminalPane.tsx   (core lane)
++++ b/src/terminal/TerminalPane.tsx
+@@
+         <PlusMenu
+           agents={agents}
++          dir={cwd ?? undefined}
+           defaultId={defaultId}
+Once registered, the `#[allow(dead_code)]` lines on editor_open, editors_list, editors and
+program_roots can go.
