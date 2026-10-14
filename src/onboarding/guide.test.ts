@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { caps, completed, firstOpen, forward, milestonesShown, moveOn, nextTip, railKey, ring, startTicked, STEPS, stopOf, WORKFLOWS, type StepId } from "./guide";
+import { caps, completed, doneFrom, doneId, firstOpen, forward, latest, milestonesShown, moveOn, nextTip, notePage, PAGE_SHOWN, pageCounts, railKey, ring, startTicked, stopDone, STEPS, stopOf, visits, workflowDone, WORKFLOWS, type Facts, type Place, type Setup, type StepId } from "./guide";
 
 const set = (...ids: StepId[]) => new Set<StepId>(ids);
 
@@ -93,5 +93,94 @@ describe("startup tips (ONB-027)", () => {
   it("shows nothing in a session that showed the first run, and skips a feature already in use", () => {
     expect(nextTip({ ...none, onboarding: true })).toBeNull();
     expect(nextTip({ ...none, seen: ["cli"], tried: ["palette"] })).toBeNull();
+  });
+});
+
+const none: Facts = { workspaces: null, gitProjects: null, pageShown: false, integrations: null, cli: false, notifications: null, agent: null, setupScript: null };
+const main = (path = "C:/p"): Place => ({ path, head: "abc123", isMain: true, kind: "main" });
+
+describe("Setup Guide steps tick from real state (ONB-015)", () => {
+  it("nothing read, or every read failed, ticks nothing", () => {
+    expect([...doneFrom(none)]).toEqual([]);
+  });
+
+  it("Multi-task: only the main folder, twice over or with a placeholder, stays unticked; one real workspace ticks it", () => {
+    expect(doneFrom({ ...none, workspaces: [[main()]] }).has("multitask")).toBe(false);
+    expect(doneFrom({ ...none, workspaces: [[main(), main()]] }).has("multitask")).toBe(false);
+    expect(doneFrom({ ...none, workspaces: [[main(), { path: "C:/w/new", head: "", isMain: false, kind: "managed" }]] }).has("multitask")).toBe(false);
+    expect(doneFrom({ ...none, workspaces: [[main()], [main("C:/q"), { path: "C:/w/a", head: "def456", isMain: false, kind: "managed" }]] }).has("multitask")).toBe(true);
+  });
+
+  it("Browser: a blank page does not count, a loaded page does", () => {
+    expect(pageCounts("about:blank")).toBe(false);
+    expect(pageCounts("")).toBe(false);
+    expect(pageCounts(null)).toBe(false);
+    expect(pageCounts("https://example.com/")).toBe(true);
+    expect(doneFrom({ ...none, pageShown: true }).has("browser")).toBe(true);
+  });
+
+  it("Multiple repos needs two git projects; Integrations waits while its checks are out", () => {
+    expect(doneFrom({ ...none, gitProjects: 1 }).has("repos")).toBe(false);
+    expect(doneFrom({ ...none, gitProjects: 2 }).has("repos")).toBe(true);
+    expect(doneFrom({ ...none, integrations: "checking" }).has("integrations")).toBe(false);
+    expect(doneFrom({ ...none, integrations: "none" }).has("integrations")).toBe(false);
+    expect(doneFrom({ ...none, integrations: "connected" }).has("integrations")).toBe(true);
+  });
+
+  it("the default agent, notifications, CLI and setup-script steps tick from their own state", () => {
+    expect(doneFrom({ ...none, agent: "" }).has("agent")).toBe(false);
+    expect(doneFrom({ ...none, agent: "claude" }).has("agent")).toBe(true);
+    expect(doneFrom({ ...none, notifications: false }).has("notifications")).toBe(false);
+    expect(doneFrom({ ...none, notifications: true }).has("notifications")).toBe(true);
+    expect(doneFrom({ ...none, cli: true }).has("cli")).toBe(true);
+    expect(doneFrom({ ...none, setupScript: false }).has("automate")).toBe(false);
+    expect(doneFrom({ ...none, setupScript: true }).has("automate")).toBe(true);
+  });
+
+  it("setup-script readiness resets on new inputs and an older check's late answer is dropped", () => {
+    const seen: (boolean | null)[] = [];
+    const check = latest<boolean>((v) => seen.push(v));
+    const first = check.begin();
+    const second = check.begin();
+    check.settle(first, true);
+    check.settle(second, false);
+    expect(seen).toEqual([null, null, false]);
+  });
+});
+
+describe("Explore Kolux stops need a visit and real setup (ONB-023)", () => {
+  const off: Setup = { taskSource: false, skills: [] };
+  const kept = new Set<string>();
+  it("a configured stop stays unticked until visited; a visited stop that needs setup waits for it", () => {
+    expect(stopDone("tasks", new Set(), { ...off, taskSource: true }, kept)).toBe(false);
+    expect(stopDone("tasks", new Set(["tasks"]), off, kept)).toBe(false);
+    expect(stopDone("tasks", new Set(["tasks"]), { ...off, taskSource: true }, kept)).toBe(true);
+    expect(stopDone("orchestration", new Set(["orchestration"]), { ...off, skills: ["kolux-cli"] }, kept)).toBe(false);
+    expect(stopDone("orchestration", new Set(["orchestration"]), { ...off, skills: ["orchestration"] }, kept)).toBe(true);
+    expect(stopDone("browser", new Set(["browser"]), { ...off, skills: ["browser-use"] }, kept)).toBe(true);
+    expect(stopDone("editor", new Set(["editor"]), off, kept)).toBe(true);
+  });
+
+  it("once complete a stop stays complete when detection later says unavailable", () => {
+    expect(stopDone("orchestration", new Set(["orchestration"]), off, new Set([doneId("orchestration")]))).toBe(true);
+    const review = WORKFLOWS.find((w) => w.id === "review")!;
+    expect(workflowDone(review, new Set(["review", "notes"]), off, kept)).toBe(true);
+    const tasks = WORKFLOWS.find((w) => w.id === "tasks")!;
+    expect(workflowDone(tasks, new Set(["tasks"]), off, kept)).toBe(false);
+  });
+
+  it("visits come back on reopen with unknown and repeated entries dropped", () => {
+    expect(visits(["tasks", "nope", "tasks", "notes", "split-terminal"])).toEqual(["tasks", "notes"]);
+  });
+});
+
+describe("the browser pane's page note (ONB-015)", () => {
+  it("only a loaded page that is not blank is kept", () => {
+    const kept: string[] = [];
+    const mark = async (list: string, id: string) => (kept.push(`${list}:${id}`), { tipsSeen: [], visited: [], tried: [], toursSeen: [], toursAuto: null });
+    notePage("about:blank", mark);
+    notePage("", mark);
+    notePage("https://example.com/", mark);
+    expect(kept).toEqual([`tried:${PAGE_SHOWN}`]);
   });
 });

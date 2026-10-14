@@ -6,19 +6,49 @@ import { Close, EyeOff } from "../chrome/icons";
 import { Kbd } from "../keys/KeymapContext";
 import { useSettings } from "../settings/useSettings";
 import Tours from "./Tours";
+import { defaultAgentId } from "../launch/agents";
 import {
-  caps, completed, firstOpen, forward, markGuide, moveOn, nextTip, OPEN_EXPLORE, OPEN_GUIDE, railKey, ring, startTicked, STEPS, stopOf, words, WORKFLOWS,
-  type At, type Cap, type CapId, type CliStatus, type GuideRecord, type StepId, type TipId,
+  caps, doneFrom, doneId, firstOpen, forward, latest, markGuide, moveOn, nextTip, OPEN_EXPLORE, OPEN_GUIDE, PAGE_SHOWN, railKey, ring, startTicked, STEPS, stopDone, stopOf, TWO_REPOS, visits, words, workflowDone, WORKFLOWS,
+  type At, type Cap, type CapId, type CliStatus, type Facts, type GuideRecord, type Place, type Setup, type StepId, type TipId,
 } from "./guide";
 
 type Scan = { skills: { name: string; source: string }[] };
 
-/** What the guide can tell is done on this computer: the CLI step once the command is on PATH and
- *  both Kolux skills sit in an agent's skills folder. `refresh` reads it again. */
+type Read = Omit<Facts, "cli">;
+const UNREAD: Read = { workspaces: null, gitProjects: null, pageShown: false, integrations: null, notifications: null, agent: null, setupScript: null };
+
+/** ONB-015: reads what each step stands for. A project counts as git when its workspace list
+ *  reads; the lasting count of git projects is kept on the profile once it reaches two. */
+async function readFacts(check: ReturnType<typeof latest<boolean>>, put: (f: Partial<Read>) => void, alive: () => boolean) {
+  const [settings, g] = await Promise.all([invoke<Record<string, unknown>>("get_settings").catch(() => null), invoke<GuideRecord>("guide_get").catch(() => null)]);
+  if (!alive()) return;
+  put({ notifications: settings ? settings.notifyOnFinish !== false : null, agent: settings ? defaultAgentId(settings) : null, pageShown: !!g?.tried.includes(PAGE_SHOWN) });
+  put({ integrations: "checking" });
+  invoke<string | null>("scm_gh_account", { host: "github.com" }).then(
+    (login) => alive() && put({ integrations: login ? "connected" : "none" }),
+    () => alive() && put({ integrations: null }),
+  );
+  const projects = await invoke<{ path: string; id: string }[]>("project_list").catch(() => null);
+  if (!alive() || !projects) return;
+  const lists = await Promise.all(projects.map((p) => invoke<Place[]>("workspace_list", { projectId: p.id }).catch(() => null)));
+  if (!alive()) return;
+  const git = projects.filter((_, i) => lists[i] !== null);
+  const twoBefore = !!g?.tried.includes(TWO_REPOS);
+  if (git.length >= 2 && !twoBefore) markGuide("tried", TWO_REPOS).catch(() => {});
+  put({ workspaces: lists.filter((l): l is Place[] => l !== null), gitProjects: Math.max(git.length, twoBefore ? 2 : 0) });
+  const ticket = check.begin();
+  const found = await Promise.all(git.map((p) => invoke<unknown>("workspace_setup", { path: p.path }).then((l) => l !== null, () => false)));
+  check.settle(ticket, found.some(Boolean));
+}
+
+/** What the guide can tell is done on this computer (ONB-015), read each time the guide opens and
+ *  on Re-check. `refresh` reads it again. */
 export function useGuideState(on: boolean) {
   const [cli, setCli] = useState<CliStatus | null>(null);
   const [home, setHome] = useState<string[]>([]);
+  const [read, setRead] = useState<Read>(UNREAD);
   const [n, setN] = useState(0);
+  const check = useRef(latest<boolean>((v) => setRead((r) => ({ ...r, setupScript: v })))).current;
   useEffect(() => {
     if (!on) return;
     let live = true;
@@ -27,10 +57,11 @@ export function useGuideState(on: boolean) {
       (s) => live && setHome(s.skills.filter((k) => k.source === "home").map((k) => k.name)),
       () => {},
     );
+    void readFacts(check, (f) => setRead((r) => ({ ...r, ...f })), () => live);
     return () => void (live = false);
-  }, [on, n]);
+  }, [on, n, check]);
   const list = caps(cli, home);
-  const done = new Set<StepId>(list.every((c) => c.ready) ? ["cli"] : []);
+  const done = doneFrom({ ...read, cli: list.every((c) => c.ready) });
   return { cli, caps: list, done, refresh: () => setN((x) => x + 1) };
 }
 
@@ -151,15 +182,28 @@ function SetupGuide({ ask, open, onClose }: { ask: StepId | null; open: boolean;
 function Explore({ onClose }: { onClose: () => void }) {
   const [at, setAt] = useState<At>({ w: 0, s: -1 });
   const [seen, setSeen] = useState<Set<string>>(new Set());
+  const [kept, setKept] = useState<Set<string>>(new Set());
+  const [setup, setSetup] = useState<Setup>({ taskSource: false, skills: [] });
   const rail = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    invoke<GuideRecord>("guide_get").then((g) => setSeen(new Set([...g.visited, ...g.tried])), () => {});
+    invoke<GuideRecord>("guide_get").then((g) => (setSeen(new Set([...visits(g.visited), ...g.tried])), setKept(new Set(g.tried))), () => {});
+    // ONB-023: the setup a stop carries, read when the tour opens.
+    invoke<string | null>("scm_gh_account", { host: "github.com" }).then((l) => setSetup((s) => ({ ...s, taskSource: !!l })), () => {});
+    invoke<Scan>("skills_scan", { workspace: null, refresh: false }).then((r) => setSetup((s) => ({ ...s, skills: r.skills.filter((k) => k.source === "home").map((k) => k.name) })), () => {});
   }, []);
   const stop = stopOf(at);
   useEffect(() => {
     setSeen((s) => new Set(s).add(stop.id));
     markGuide("visited", stop.id).catch(() => {});
   }, [stop.id]);
+  // ONB-023: a stop that is complete is kept complete on the profile, whatever detection says later.
+  const isDone = (id: string) => stopDone(id, seen, setup, kept);
+  const newlyDone = WORKFLOWS.flatMap((w) => [w.id, ...w.stops.map((s) => s.id)]).filter((id) => !kept.has(doneId(id)) && isDone(id));
+  const doneKey = newlyDone.join();
+  useEffect(() => {
+    for (const id of newlyDone) markGuide("tried", doneId(id)).catch(() => {});
+    if (newlyDone.length) setKept((k) => new Set([...k, ...newlyDone.map(doneId)]));
+  }, [doneKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const next = forward(at);
   const go = () => (next ? setAt(next) : onClose());
   const wf = WORKFLOWS[at.w];
@@ -197,7 +241,7 @@ function Explore({ onClose }: { onClose: () => void }) {
               }}
             >
               <span className="name">{w.title}</span>
-              {completed(w, seen) && <span className="mark ok">Completed</span>}
+              {workflowDone(w, seen, setup, kept) && <span className="mark ok">Completed</span>}
             </button>
           ))}
         </div>
@@ -217,7 +261,7 @@ function Explore({ onClose }: { onClose: () => void }) {
                 <button key={s.id} className={`chip${at.s === i ? " on" : ""}`} onClick={() => setAt({ w: at.w, s: i })}>
                   {s.title}
                   {s.optional && <span className="opt">Optional</span>}
-                  {seen.has(s.id) && <span className="mark ok">✓</span>}
+                  {isDone(s.id) && <span className="mark ok">✓</span>}
                 </button>
               ))}
             </div>

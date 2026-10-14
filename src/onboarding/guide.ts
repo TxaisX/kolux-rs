@@ -1,7 +1,8 @@
 // ONB-014 Setup Guide, ONB-017 its CLI step, ONB-022 Explore Kolux and ONB-027 startup tips: the
 // model behind the dialogs in Guides.tsx. The window opens them through the events below, so the
 // help menu, a tip or any other caller can ask for a guide without passing state around.
-// ponytail: only the CLI step ticks from real state here; the other steps tick in T-321 (ONB-015).
+// ONB-015: every step ticks from real state (doneFrom); ONB-023: an Explore stop is complete only
+// after a visit plus its setup (stopDone). The legacy-profile rule and the step actions are T-321-b.
 import { invoke } from "@tauri-apps/api/core";
 import { locale } from "../language";
 
@@ -161,3 +162,106 @@ export const openExplore = () => window.dispatchEvent(new CustomEvent(OPEN_EXPLO
 export type GuideRecord = { tipsSeen: string[]; visited: string[]; tried: string[]; toursSeen: string[]; toursAuto: boolean | null };
 /** Adds the id once to one of the record's lists; the stored record comes back. */
 export const markGuide = (list: "tipsSeen" | "visited" | "tried" | "toursSeen", id: string) => invoke<GuideRecord>("guide_mark", { list, id });
+
+// ---- ONB-015: the steps tick from real state, not from clicks ----
+
+/** A workspace as workspace_list gives it; only what the Multi-task rule reads. */
+export type Place = { path: string; head: string; isMain: boolean; kind?: string | null };
+
+/** What the guide read from this computer. A null fact is one not read yet or whose read failed:
+ *  it never ticks a step (a failed status read is never taken as completion). */
+export type Facts = {
+  /** Each git project's workspaces. */
+  workspaces: Place[][] | null;
+  /** The git projects seen together at the most, kept on the profile (the lasting count). */
+  gitProjects: number | null;
+  /** A page other than a blank one was shown in Kolux's browser (kept on the profile). */
+  pageShown: boolean;
+  /** "checking" while the provider checks are still out. */
+  integrations: "connected" | "checking" | "none" | null;
+  /** The CLI step's capabilities, all in place. */
+  cli: boolean;
+  notifications: boolean | null;
+  /** The saved default agent's id; "" when there is none. */
+  agent: string | null;
+  /** Some git project has a workspace setup script; a check that failed settles as false. */
+  setupScript: boolean | null;
+};
+
+/** ONB-015 Multi-task: a real workspace besides the main folder. The main folder (or two entries
+ *  for it) never counts, nor does a placeholder still being made (no commit yet). */
+export const realWorkspace = (list: readonly Place[]): boolean => list.some((w) => !w.isMain && w.kind !== "main" && w.head.trim() !== "");
+
+/** ONB-015: a blank page never counts as the browser having been used. */
+export const pageCounts = (url: string | null | undefined): boolean => {
+  const u = (url ?? "").trim().toLowerCase();
+  return u !== "" && u !== "about:blank" && !u.startsWith("about:");
+};
+
+/** ONB-015: the steps done, each from the thing it stands for. */
+export function doneFrom(f: Facts): Set<StepId> {
+  const done = new Set<StepId>();
+  if (f.workspaces?.some(realWorkspace)) done.add("multitask");
+  if (f.pageShown) done.add("browser");
+  if ((f.gitProjects ?? 0) >= 2) done.add("repos");
+  if (f.integrations === "connected") done.add("integrations");
+  if (f.cli) done.add("cli");
+  if (f.notifications === true) done.add("notifications");
+  if (f.agent) done.add("agent");
+  if (f.setupScript === true) done.add("automate");
+  return done;
+}
+
+/** The tried-list ids that keep facts on the profile: the browser page and the lasting repo count. */
+export const PAGE_SHOWN = "browser-page";
+export const TWO_REPOS = "repos-two";
+
+/** ONB-015 setup-script step: answers to an older check are dropped. `begin` starts a check for new
+ *  inputs (and resets readiness to unknown); `settle` takes its answer only if it is still the latest,
+ *  and a check that failed settles as having no script. */
+export function latest<T>(set: (v: T | null) => void) {
+  let n = 0;
+  return {
+    begin: () => {
+      n += 1;
+      set(null);
+      return n;
+    },
+    settle: (ticket: number, v: T) => void (ticket === n && set(v)),
+  };
+}
+
+// ---- ONB-023: a stop is complete only after a visit and real setup ----
+
+/** Stops whose setup is part of the stop, and the fact it needs. */
+export type Setup = { taskSource: boolean; skills: readonly string[] };
+const NEEDS: Record<string, (s: Setup) => boolean> = {
+  tasks: (s) => s.taskSource,
+  orchestration: (s) => s.skills.includes("orchestration"),
+  browser: (s) => s.skills.includes("browser-use"),
+};
+
+/** Every id the tour knows: the workflows and their stops. */
+export const TOUR_IDS: ReadonlySet<string> = new Set(WORKFLOWS.flatMap((w) => [w.id, ...w.stops.map((s) => s.id)]));
+
+/** The visits kept on the profile, back on reopen; unknown or repeated entries dropped. */
+export const visits = (ids: readonly string[]): string[] => [...new Set(ids.filter((i) => TOUR_IDS.has(i)))];
+
+/** The tried-list id that keeps a stop complete for good. */
+export const doneId = (id: string) => `explore-${id}`;
+
+/** ONB-023: a stop (or workflow) is complete after a visit, plus its setup where the stop carries one;
+ *  nothing is ticked just because it is already configured. Once complete (`kept`), it stays so even
+ *  if detection later says unavailable. */
+export const stopDone = (id: string, seen: ReadonlySet<string>, setup: Setup, kept: ReadonlySet<string>): boolean =>
+  kept.has(doneId(id)) || (seen.has(id) && (NEEDS[id]?.(setup) ?? true));
+
+/** ONB-023: a workflow is Completed once it and each stop that is not optional are complete. */
+export const workflowDone = (wf: Workflow, seen: ReadonlySet<string>, setup: Setup, kept: ReadonlySet<string>): boolean =>
+  stopDone(wf.id, seen, setup, kept) && wf.stops.every((s) => s.optional || stopDone(s.id, seen, setup, kept));
+
+/** ONB-015: the browser pane calls this when a page finishes loading; a page other than a blank
+ *  one marks the Browser step's fact on the profile, once. */
+export const notePage = (url: string | null | undefined, mark: typeof markGuide = markGuide): void => {
+  if (pageCounts(url)) void mark("tried", PAGE_SHOWN).catch(() => {});
+};
