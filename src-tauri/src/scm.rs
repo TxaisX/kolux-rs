@@ -2768,14 +2768,47 @@ mod tests {
         assert!(remote(&dir, "fetch").unwrap().ok);
         assert_eq!(counts(&dir), (Some("origin/feat".into()), 1, 1, false));
 
-        // Status never goes to the network: with the remote gone it still answers at once, and
-        // only an explicit fetch reports the trouble.
+        // Status never goes to the network: with the remote gone it still answers, and only an
+        // explicit fetch reports the trouble. FIX-1 (council, 2026-10-13): this used to be a 3 s
+        // wall-clock bound on three reads, which failed on a loaded PC even when run alone (one
+        // read is ~7 local git processes; 3.2-10.4 s measured, while git's own times summed to
+        // ~2.3 s: the rest is process start-up on a busy PC). Git's own trace2 log of every
+        // process each read starts showed only status, cherry, --version, symbolic-ref,
+        // rev-parse and diff, no fetch, remote helper, credential helper or fsmonitor. So the
+        // test now asserts on that log (no network-capable process ran, which load cannot
+        // flake), and keeps a 20 s bound only as a backstop: a hung network call would sit on
+        // the OS connect timeout (about 21 s on Windows) and still trip it.
         run(&["remote", "set-url", "origin", &format!("{bare_url}-missing")], Some(&dir)).unwrap();
+        let trace = std::env::temp_dir().join(format!("kolux-rs-scm-trace2-{}.json", std::process::id()));
+        let _ = fs::remove_file(&trace);
+        crate::git::TRACE2.with(|t| *t.borrow_mut() = Some(trace.clone()));
         let t = std::time::Instant::now();
         for _ in 0..3 {
             status(&dir).unwrap();
         }
-        assert!(t.elapsed() < std::time::Duration::from_secs(3), "status took {:?}", t.elapsed());
+        let took = t.elapsed();
+        crate::git::TRACE2.with(|t| *t.borrow_mut() = None);
+        let log = fs::read_to_string(&trace).unwrap_or_default();
+        let _ = fs::remove_file(&trace);
+        let events: Vec<serde_json::Value> = log.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+        // Every process git started (top level and any child it spawned), with its arguments.
+        let argvs: Vec<String> = events
+            .iter()
+            .filter(|e| matches!(e["event"].as_str(), Some("start" | "child_start")))
+            .map(|e| e["argv"].as_array().map(|a| a.iter().skip(1).filter_map(|v| v.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default())
+            .collect();
+        // The time of each top-level git, from its own exit event, for the failure message.
+        let times: Vec<String> = events
+            .iter()
+            .filter(|e| e["event"] == "exit" && !e["sid"].as_str().unwrap_or("/").contains('/'))
+            .map(|e| format!("{:.0} ms", e["t_abs"].as_f64().unwrap_or(0.0) * 1000.0))
+            .collect();
+        let report = format!("3 reads took {took:?}; processes {argvs:?}; times {times:?}");
+        eprintln!("{report}");
+        assert!(argvs.iter().filter(|a| a.starts_with("status ")).count() >= 3, "trace2 log missing: {report}");
+        let network = ["fetch", "ls-remote", "remote-", "upload-pack", "credential", "fsmonitor", "http"];
+        assert!(!argvs.iter().any(|a| network.iter().any(|n| a.contains(n))), "a status read went to the network: {report}");
+        assert!(took < std::time::Duration::from_secs(20), "{report}");
         let fetched = remote(&dir, "fetch").unwrap();
         assert!(!fetched.ok && !fetched.output.is_empty(), "{fetched:?}");
         assert_eq!(remote(&dir, "nope").unwrap_err(), "unknown remote action nope");

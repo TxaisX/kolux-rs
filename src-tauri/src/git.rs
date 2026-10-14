@@ -47,9 +47,22 @@ pub struct Worktree {
 /// prompt no one can see, Git Credential Manager's window included. Saved credentials still work.
 pub const NO_PROMPT: [(&str, &str); 2] = [("GIT_TERMINAL_PROMPT", "0"), ("GCM_INTERACTIVE", "never")];
 
+#[cfg(test)]
+thread_local! {
+    /// Tests only: when set, every git this thread starts writes git's own trace2 event log to
+    /// this file (inherited by anything that git starts in turn), so a test sees each process.
+    pub(crate) static TRACE2: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
 pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
     let mut cmd = Command::new("git");
     cmd.args(args);
+    #[cfg(test)]
+    TRACE2.with(|t| {
+        if let Some(path) = &*t.borrow() {
+            cmd.env("GIT_TRACE2_EVENT", path);
+        }
+    });
     // GIT-001 (T-033-b): a status read never rewrites the index on its own (git's optional lock),
     // so the Source Control watcher is not woken by its own reads. Required locks are unaffected.
     cmd.env("GIT_OPTIONAL_LOCKS", "0");
