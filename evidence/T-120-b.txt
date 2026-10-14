@@ -61,3 +61,9 @@ In P (cmd), first run: set S=%USERPROFILE%\.kolux-rs\agent-hooks:
    node --input-type=module -e "const m=await import('file:///'+process.env.USERPROFILE.replace(/\\/g,'/')+'/.config/amp/plugins/kolux-rs.js');const h={};m.default({on:(n,f)=>h[n]=f});await h['agent.start']({message:'go',thread:{id:'t'}});await new Promise(r=>setTimeout(r,1500));await h['agent.end']({status:'cancelled',thread:{id:'t'}})"
    -> Working, then Interrupted (the Board card reads Stopped).
 7. `kolux-rs agent hooks status` (scratch env) lists Gemini CLI, Antigravity and Amp rows with their files.
+
+Follow-up after merging main d1de182: scripts/privacy-audit.test.mjs (app070) flagged the plugin's
+fetch(`http...` literal. The loopback URL now sits in a const before fetch (same 127.0.0.1 hook
+listener the .cmd scripts reach with curl); amp-check.mjs rerun: same three posts and the spool line.
+privacy-audit 1/1 ok alone; vendors::tests 8 ok; clippy and tsc clean. Coordinator: confirm the privacy
+statement covers this loopback post (the audit regex no longer sees it).

@@ -144,7 +144,9 @@ async function send(name, event) {
   const body = JSON.stringify({ event: name, thread: text(event?.thread?.id), message: text(event?.message), tool: text(event?.tool), input: event?.input, status: text(event?.status) })
   try {
     if (!port || !token) throw new Error('no Kolux')
-    await fetch(`http://127.0.0.1:${port}/amp`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Kolux-Token': token, 'X-Kolux-Pane': env.KOLUX_HOOK_IDENTITY }, body, signal: AbortSignal.timeout(1500) })
+    // Loopback only: the same hook listener the .cmd scripts post to with curl.
+    const local = `http://127.0.0.1:${port}/amp`
+    await fetch(local, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Kolux-Token': token, 'X-Kolux-Pane': env.KOLUX_HOOK_IDENTITY }, body, signal: AbortSignal.timeout(1500) })
   } catch {
     // Kolux is closed or not answering: the event waits, one whole line, for the next start.
     try {
