@@ -1749,8 +1749,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     });
     setReviewing((r) => (r && r.key === p.key ? { ...r, send: job } : r));
     const { outcome, answered, typed } = await job.done;
-    // A cancel before anything went out leaves the sheet open on the draft; any other end closes it.
-    setReviewing((r) => (r?.send === job ? (outcome === "cancelled" && !answered ? { ...r, send: undefined } : null) : r));
+    // Any end closes the sheet; the draft is kept unless the feedback was sent. A cancel can never
+    // land before the agent's no went out (stand-in review of lane/marks ee2bfbc, FIX-BEFORE 1).
+    setReviewing((r) => (r?.send === job ? null : r));
     if (outcome === "sent") {
       dropDraft(key); // SAFE-004: sending wipes the saved draft; a cancelled send keeps it.
       setHook((h) => ({ ...h, [p.key]: "working" }));

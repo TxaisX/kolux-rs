@@ -128,7 +128,9 @@ test("SAFE-004: the message waits while the pane still asks, and goes once it le
   expect(log).toEqual(["no", "wait:100", "wait:100", "type:x", "wait:300", "enter"]);
 });
 
-test("SAFE-004: cancelling before anything went out sends nothing at all", async () => {
+// The job's own guard: the sheet's Cancel can never be this early (its button shows only after a
+// re-render, by which time the agent's no has gone out), so the window has no branch for it.
+test("SAFE-004: a cancel in the same tick as the start sends nothing at all (the job's guard)", async () => {
   const log: Log = [];
   const job = startFeedback("x", steps(log));
   job.cancel();
@@ -168,7 +170,38 @@ test("SAFE-004: a failed answer, a pane that keeps asking, or a closed pane type
   expect(log).toEqual(["no"]);
 });
 
-test("SAFE-004: the pane left the ask while the paste was in → Enter is held back", async () => {
+// What the sheet can really reach: a click lands while the agent's no or the paste is still in
+// flight (each is an IPC call), never before the no went out.
+const later = () => {
+  let go: (v: boolean) => void = () => {};
+  const p = new Promise<boolean>((r) => (go = r));
+  return { p, go };
+};
+
+test("SAFE-004: cancelling while the agent's no is in flight types nothing; the no still went out", async () => {
+  const log: Log = [];
+  const no = later();
+  const job = startFeedback("x", { ...steps(log), deny: () => (log.push("no"), no.p) });
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(log).toEqual(["no"]);
+  job.cancel();
+  no.go(true);
+  expect(await job.done).toEqual({ outcome: "cancelled", answered: true, typed: false });
+  expect(log).toEqual(["no"]);
+});
+
+test("SAFE-004: cancelling while the paste is in flight ends at once: no 300 ms wait, never Enter", async () => {
+  const log: Log = [];
+  const pasted = later();
+  let job: ReturnType<typeof startFeedback> | null = null;
+  job = startFeedback("x", { ...steps(log), type: async (t: string) => void (log.push(`type:${t}`), job?.cancel(), await pasted.p) });
+  pasted.go(true);
+  expect(await job.done).toEqual({ outcome: "cancelled", answered: true, typed: true });
+  expect(log).toEqual(["no", "type:x"]);
+});
+
+test("SAFE-004: the pane re-asks while the paste goes in → Enter is held back", async () => {
   const log: Log = [];
   let asking = false;
   const s = { ...steps(log), asking: () => asking, type: async (t: string) => void (log.push(`type:${t}`), (asking = true)) };

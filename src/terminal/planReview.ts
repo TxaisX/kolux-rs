@@ -91,7 +91,11 @@ export type PendingSend = { cancel: () => void; done: Promise<SendResult> };
  * 100 ms) for the pane to leave the ask, pastes the message, waits 300 ms and presses Enter only if
  * the pane is not asking again. An Enter while the menu is still open would pick its default, Yes,
  * so a pane that keeps asking gets nothing typed (council re-review of chat a969502). `cancel` is
- * safe at any point: nothing more goes out after it, and Enter is never pressed once it is called. */
+ * safe at any point: nothing more goes out after it, and Enter is never pressed once it is called.
+ * In the window the no has always gone out before a click can land (the sheet's Cancel shows only
+ * after a re-render), and the window marks the pane working once the no is sent, so the wait
+ * usually ends at once: a cancel mostly lands while or just after the paste goes in, which leaves
+ * the feedback typed but not sent (stand-in review of lane/marks ee2bfbc, FIX-BEFORE 1, FIX-SOON 4). */
 export function startFeedback(text: string, s: SendSteps): PendingSend {
   let cancelled = false;
   const run = async (): Promise<SendResult> => {
@@ -111,6 +115,7 @@ export function startFeedback(text: string, s: SendSteps): PendingSend {
     if (!s.alive()) return end("gone");
     await s.type(text);
     typed = true;
+    if (cancelled) return end("cancelled");
     await s.wait(300);
     if (cancelled) return end("cancelled");
     if (s.asking()) return end("still-asking");

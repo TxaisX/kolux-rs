@@ -1456,11 +1456,14 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
 }
 
 /** USAGE-001: the header's context ring and percentage. Always there; a greyed 0% until the
- * first reading (a real 0% is a reading), then tinted yellow from 70% and red beyond 90%. */
+ * first reading (a real 0% is a reading), then tinted yellow from 70% and red beyond 90%. Only
+ * Claude's status line reports context, so a Codex pane's hover says so instead of promising a
+ * figure (stand-in review of lane/marks ee2bfbc, FIX-SOON 6). */
 export function ContextGauge({ context, agent }: { context?: number | null; agent: string }) {
   const none = context === null || context === undefined;
   const percent = none ? 0 : Math.round(context);
-  const title = none ? (agent === "shell" ? "Context used (agents only)" : "Context used: nothing received yet. The figure appears with the agent's first status report.") : `Context used: ${percent}% of the agent's context window`;
+  const waiting = agent === "codex" ? "Context used: Codex does not report its context to Kolux, so there is no figure to show." : "Context used: nothing received yet. The figure appears with the agent's first status report.";
+  const title = none ? (agent === "shell" ? "Context used (agents only)" : waiting) : `Context used: ${percent}% of the agent's context window`;
   return (
     <span className={none ? "gauge none" : `gauge ${toneOf(percent)}`.trim()} title={title}>
       <Ring percent={percent} />
