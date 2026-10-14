@@ -380,6 +380,7 @@ pub fn run() {
             agents::agent_start_line,
             agents::open_install_page,
             agents::inventory::session_tabs,
+            orchestration::task_reset,
             pty::shell_list,
             tools::tools_check,
             tools::tools_dismiss,
