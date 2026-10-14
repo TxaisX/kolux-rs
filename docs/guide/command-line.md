@@ -33,6 +33,7 @@ The running app listens on a random port of your own computer (address `127.0.0.
 |---|---|
 | `kolux open` | Starts Kolux, or brings its window to the front, and waits up to 60 seconds until it answers |
 | `kolux status` | Says whether Kolux is up, without starting it. Works with the app closed (see below) |
+| `kolux diagnostics memory` | Shows how much memory Kolux and each terminal session use (see below) |
 | `kolux --version` | Prints the version |
 | `kolux --help` | Lists every command. `--help` also works on a group, such as `kolux terminal --help` |
 
@@ -46,6 +47,15 @@ The running app listens on a random port of your own computer (address `127.0.0.
 | `not-running` | Kolux is closed | 1 |
 
 With `--json` the word is in `result.state`, and the command counts as worked in every case. The exit code still says whether Kolux is ready.
+
+`kolux diagnostics memory` prints the Resource Manager's memory figures: Kolux itself, then each terminal session together with every program running inside it, then the total, then free memory. Each row has two numbers:
+
+| Column | Means |
+|---|---|
+| resident | Memory the process is using right now |
+| committed | Memory Windows has set aside for it. When the computer runs low, this is the figure that runs out |
+
+A dash means Kolux could not read that figure. For now the Resource Manager in the app shows resident only. If Kolux is closed, the command says so in one line and exits with 1.
 
 Every command takes `--json` to print one machine-readable result instead of text. Without it, errors go to the error stream. Exit code 0 means it worked; 1 means any error.
 
@@ -178,4 +188,4 @@ A mistyped command is caught before Kolux is contacted, with a suggestion: "no c
 
 These do not exist, so do not look for them: opening or comparing files from the command line, a `tab` command, and registering `kolux` on the PATH for the whole computer.
 
-<!-- verified against: src-tauri/src/cli.rs, src-tauri/src/bin/kolux.rs, src-tauri/src/bin/kolux-dev.rs, src-tauri/Cargo.toml, src-tauri/cli/kolux.cmd, src-tauri/src/terminal.rs, PLAN.md (T-250-a, T-250-b) at 231fc43 -->
+<!-- verified against: src-tauri/src/cli.rs, src-tauri/src/bin/kolux.rs, src-tauri/src/bin/kolux-dev.rs, src-tauri/Cargo.toml, src-tauri/cli/kolux.cmd, src-tauri/src/terminal.rs, src-tauri/src/resources.rs, PLAN.md (T-250-a, T-250-b) at 3786a3f -->

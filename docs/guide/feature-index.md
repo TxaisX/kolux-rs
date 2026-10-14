@@ -270,6 +270,9 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-119-b | Tab and pane titles follow the running program. | [Terminals](terminals.md) |
 | T-120-a | Settings switch and kolux agent hooks commands control agent status hooks. | [Settings](settings.md) |
 | T-123 | Status shows background work being watched, the question an agent is waiting on, and Interrupted for a stopped turn; /clear and compacting are not counted as finished work. | [Board, agents and inbox](board-agents-inbox.md) |
+| T-123-c | Interrupted goes back to Working when the agent starts a new step after Esc or Ctrl+C. | [Board, agents and inbox](board-agents-inbox.md) |
+| T-124 | No recent update after 30 minutes without status; the terminal title stands in before hooks report; programs can report status in band. | [Board, agents and inbox](board-agents-inbox.md) |
+| T-123-d | A waiting agent's card shows every question it asked, not only the first. | [Board, agents and inbox](board-agents-inbox.md) |
 | T-127 | A Checks panel and pull request comments show in the sidebar. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-128-a | Kolux recognises which agent runs in each pane. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-129-a | kolux worktree ps sums up orchestration across worktrees. | [Command line](command-line.md) |
@@ -323,6 +326,7 @@ Tasks not yet ticked off in the build plan are not listed.
 
 | Task | Feature | Guide page |
 |---|---|---|
+| T-151 | Approve or Deny from the agent pane header; pin tabs; removing a running session asks; multi-line pastes wait for Enter. | [Terminals](terminals.md) |
 | T-152 | Hooks go only to agents that are installed and switched on, without damaging their config. | [Settings](settings.md) |
 | T-152-b | The first real hook install was proven safe against the current settings. | [Safety](safety.md) |
 | T-152-c | Hook installs keep a previous status line and detect later edits. | [Safety](safety.md) |
@@ -448,9 +452,11 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-277 | Resource Manager lists terminals picked up after a reload. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-278 | Fast output never freezes a pane; memory caps scale with the machine. | [Troubleshooting](troubleshooting.md) |
 | T-278-c | Big pastes arrive whole and in order without slowing other panes; Ctrl+C or Esc stops one. | [Terminals](terminals.md) |
+| T-278-d | Control characters inside a paste are removed, so pasted text cannot run on its own. | [Terminals](terminals.md) |
 | T-280 | Saved settings come back valid after a restart. | [Settings](settings.md) |
 | T-284 | An interrupted skill delete is undone or finished on restart. | [Troubleshooting](troubleshooting.md) |
 | T-286 | Startup failures and stray background errors never silently kill the app. | [Troubleshooting](troubleshooting.md) |
+| T-287 | `kolux diagnostics memory` shows resident and committed memory for Kolux, each session and the total. | [Command line](command-line.md) |
 | T-441 | Kolux settings cannot be wiped by a failed read. | [Safety](safety.md) |
 | T-441-b | A settings change never starts from an empty set. | [Safety](safety.md) |
 | T-441-c | Trust file writes keep what the caller read; further data-loss fixes. | [Safety](safety.md) |
@@ -477,4 +483,4 @@ Tasks not yet ticked off in the build plan are not listed.
 |---|---|---|
 | T-298 | Reopen the wizard from the sidebar help menu; first successes are recorded locally. | [Getting started](getting-started.md) |
 
-<!-- generated from PLAN.md at d5034cd -->
+<!-- generated from PLAN.md at 64f50c8 -->
