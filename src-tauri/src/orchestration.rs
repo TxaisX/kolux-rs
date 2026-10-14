@@ -402,10 +402,12 @@ pub fn worker_list(tasks: &[Value], dispatches: &[Value], run: Option<&str>, fro
                 // ponytail: worker-release (ORCH-024) is not built, so the way to free a settled
                 // worker's terminal is closing it by hand; release replaces this once it lands.
                 ("reclaimable" | "retained", Some(h)) => Some(format!("{CLI} terminal close --terminal {h}")),
+                // ORCH-026: a release that did not finish is tried again by releasing again.
+                ("release_pending" | "release_unknown", _) => Some(format!("{CLI} orchestration worker-release --dispatch {id}")),
                 _ => None,
             };
             let task = tasks.iter().find(|t| t["id"] == d["taskId"]).map(|t| t["status"].clone()).unwrap_or(Value::Null);
-            json!({ "dispatchId": d["id"], "taskId": d["taskId"], "taskStatus": task, "status": d["status"], "terminalState": ts, "terminal": handle, "worktree": d["worktree"], "agent": d["agent"], "runId": d["runId"], "lastBeatAt": d["lastBeatAt"], "next": next })
+            json!({ "dispatchId": d["id"], "taskId": d["taskId"], "taskStatus": task, "status": d["status"], "terminalState": ts, "terminal": handle, "worktree": d["worktree"], "agent": d["agent"], "runId": d["runId"], "lastBeatAt": d["lastBeatAt"], "archive": d["archive"], "error": d["releaseError"], "terminalLeftOpen": d["terminalLeftOpen"], "next": next })
         })
         .filter(|w| state.is_none_or(|s| w["terminalState"] == s))
         .collect();
@@ -611,8 +613,75 @@ pub fn worker_show(tasks: &[Value], dispatches: &[Value], id: &str, run: Option<
         _ if handle.is_none() => ("unknown", "Kolux holds no terminal for it, so it cannot say nothing is waiting".to_string()),
         _ => ("unknown", "Kolux has not read a prompt off its screen, so it cannot say nothing is waiting".to_string()),
     };
+    let flag = self::attention(d, live, attention, wall_ms());
     let task = tasks.iter().find(|t| t["id"] == d["taskId"]).map(|t| t["status"].clone()).unwrap_or(Value::Null);
-    Ok(json!({ "dispatchId": d["id"], "taskId": d["taskId"], "taskStatus": task, "status": d["status"], "terminalState": terminal_state(d, live), "terminal": handle, "worktree": d["worktree"], "agent": d["agent"], "waiting": waiting, "waitingWhy": why, "archive": d["archive"] }))
+    Ok(json!({ "dispatchId": d["id"], "taskId": d["taskId"], "taskStatus": task, "status": d["status"], "terminalState": terminal_state(d, live), "terminal": handle, "worktree": d["worktree"], "agent": d["agent"], "waiting": waiting, "waitingWhy": why, "archive": d["archive"], "attention": flag.as_ref().map(|f| f.0), "attentionWhy": flag.map(|f| f.1) }))
+}
+
+/// ORCH-037: how long a working worker may stay quiet (no heartbeat) before it is flagged stale.
+// ponytail: one fixed window; the brief asks for a beat about every five minutes, so ten
+// minutes is two missed beats. A setting can replace it when someone needs another window.
+pub const STALE_MS: u64 = 600_000;
+
+/// ORCH-037: what about this worker needs a person, and why, or None when nothing does:
+/// failure, interruption (its terminal ended, its process ended before a done report, or Kolux
+/// restarted under it), input or approval (its pane's own hook state while the terminal is open),
+/// then stale (quiet past STALE_MS). A settled worker raises nothing; a dead one never looks healthy.
+pub fn attention(d: &Value, live: &dyn Fn(&str) -> bool, hook: Option<&str>, now: u64) -> Option<(&'static str, String)> {
+    if d["status"] == "failed" {
+        return Some(("failure", "its task failed".into()));
+    }
+    if finished(d) {
+        return None;
+    }
+    let handle = terminal_of(d);
+    if !d["exitedAt"].is_null() {
+        return Some(("interruption", "its agent ended before it reported done".into()));
+    }
+    if !d["terminal"].is_null() && !handle.as_deref().is_some_and(live) {
+        let why = if handle.is_none() { "Kolux restarted under it, so its terminal is gone" } else { "its terminal has ended" };
+        return Some(("interruption", why.into()));
+    }
+    match hook {
+        Some("input") => return Some(("input", "its agent is waiting for input".into())),
+        Some("approval") => return Some(("approval", "its agent is waiting for approval".into())),
+        _ => {}
+    }
+    // A made-at below 1e12 is no wall clock time (worker-start stores elapsed ms), so it proves nothing.
+    let last = d["lastBeatAt"].as_u64().or_else(|| d["created"].as_u64().filter(|c| *c >= 1_000_000_000_000))?;
+    (now.saturating_sub(last) > STALE_MS).then(|| ("stale", format!("no heartbeat for over {} minutes", STALE_MS / 60_000)))
+}
+
+/// ORCH-066: what a worker's row reads as: the task's display name, else its title, else a one-line
+/// preview of its text. Before the task is known, the preview comes from the brief's task section
+/// (after the first divider, so task text imitating it changes nothing); never the wrapper text.
+pub fn worker_label(tasks: &[Value], d: &Value) -> Option<String> {
+    let fold = |s: &str| Some(cut(&s.split_whitespace().collect::<Vec<_>>().join(" "), 60)).filter(|s| !s.is_empty());
+    match tasks.iter().find(|t| t["id"] == d["taskId"]) {
+        Some(t) => t["displayName"].as_str().or(t["title"].as_str()).map(str::to_string).or_else(|| fold(t["spec"].as_str().unwrap_or_default())),
+        None => fold(d["brief"].as_str()?.split_once(DIVIDER)?.1),
+    }
+}
+
+/// ORCH-066: the label for each terminal a worker of this start of Kolux is on, by handle; the
+/// newest unreleased dispatch wins, and a terminal with no worker is left out.
+pub fn labels_by_terminal(tasks: &[Value], dispatches: &[Value]) -> Value {
+    let mut out = serde_json::Map::new();
+    for d in dispatches.iter().filter(|d| d["released"] != true) {
+        if let (Some(h), Some(l)) = (terminal_of(d), worker_label(tasks, d)) {
+            out.insert(h, json!(l));
+        }
+    }
+    Value::Object(out)
+}
+
+/// ORCH-066: the task name for each worker's terminal, for the Agents view and Board (T-129-d).
+#[allow(dead_code)] // registered in lib.rs by the coordinator (evidence/T-129-c.patch)
+#[tauri::command]
+pub fn worker_labels(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>) -> Result<Value, String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    let load = |k: &str| -> Vec<Value> { store.get(k).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default() };
+    Ok(labels_by_terminal(&load(TASKS_KEY), &load(DISPATCHES_KEY)))
 }
 
 /// ORCH-040: the open dispatches tied to one worktree, by the folder they were started in or by a
@@ -2438,5 +2507,101 @@ mod tests {
         let ended = show("dispatch-2", Some("input"));
         assert_eq!((ended["waiting"].as_str(), ended["terminalState"].as_str()), (Some("no"), Some("released")));
         assert_eq!(worker_show(&tasks, &d, "dispatch-1", Some("run-2"), &live, None).unwrap_err().code, "not_found");
+    }
+
+    #[test]
+    fn orch037_attention_flags_input_approval_failure_interruption_and_stale() {
+        let me = std::process::id();
+        let now: u64 = 2_000_000_000_000;
+        let fresh = now - 1_000;
+        let old = now - STALE_MS - 1;
+        let d = vec![
+            json!({ "id": "dispatch-1", "status": "running", "terminal": 4, "runtime": me, "lastBeatAt": fresh }),
+            json!({ "id": "dispatch-2", "status": "failed", "terminal": 4, "runtime": me }),
+            json!({ "id": "dispatch-3", "status": "completed", "terminal": 4, "runtime": me, "lastBeatAt": old }),
+            json!({ "id": "dispatch-4", "status": "running", "terminal": 5, "runtime": me, "lastBeatAt": fresh }),
+            json!({ "id": "dispatch-5", "status": "running", "terminal": 4, "runtime": me, "lastBeatAt": fresh, "exitedAt": fresh }),
+            json!({ "id": "dispatch-6", "status": "running", "terminal": 4, "runtime": me + 1, "lastBeatAt": fresh }),
+            json!({ "id": "dispatch-7", "status": "running", "terminal": 4, "runtime": me, "lastBeatAt": old }),
+            json!({ "id": "dispatch-8", "status": "unknown", "runtime": me, "created": old }),
+            json!({ "id": "dispatch-9", "status": "unknown", "runtime": me, "created": 120 }),
+            json!({ "id": "dispatch-10", "status": "stopped", "terminal": 4, "runtime": me }),
+        ];
+        let live = |h: &str| h == "term-4";
+        let kind = |i: usize, hook: Option<&str>| attention(&d[i], &live, hook, now).map(|(k, _)| k);
+        // A person is needed: the pane's own hook state says so while the terminal is open.
+        assert_eq!(kind(0, Some("approval")), Some("approval"));
+        assert_eq!(kind(0, Some("input")), Some("input"));
+        assert_eq!((kind(0, None), kind(0, Some("working"))), (None, None));
+        // Failure; finishing well raises no flag, however old its last beat; a stop is no flag.
+        assert_eq!(kind(1, None), Some("failure"));
+        assert_eq!(kind(2, Some("input")), None);
+        assert_eq!(kind(9, None), None);
+        // A dead worker never looks healthy: its terminal is gone, its process ended before a done
+        // report, or Kolux restarted under it. A stale hook record from the old process is ignored.
+        assert_eq!(kind(3, Some("input")), Some("interruption"));
+        assert_eq!(kind(4, None), Some("interruption"));
+        assert_eq!(kind(5, Some("approval")), Some("interruption"));
+        // Quiet past the staleness window: stale; a person-needed flag says more and comes first.
+        assert_eq!(kind(6, None), Some("stale"));
+        assert_eq!(kind(6, Some("approval")), Some("approval"));
+        assert_eq!(kind(7, None), Some("stale"), "no beat at all: counted from when it was made");
+        assert_eq!(kind(8, None), None, "a made-at that is no wall clock time proves nothing");
+        let (_, why) = attention(&d[6], &live, None, now).unwrap();
+        assert!(why.contains("10 minutes"), "{why}");
+        // worker-show carries the flag.
+        let tasks = vec![json!({ "id": "task-1", "status": "failed" })];
+        let mut d2 = d.clone();
+        d2[1]["runId"] = json!("run-1");
+        let show = worker_show(&tasks, &d2, "dispatch-2", Some("run-1"), &live, None).unwrap();
+        assert_eq!(show["attention"], "failure", "{show}");
+        assert!(show["attentionWhy"].is_string());
+        // A release that did not finish lists apart, with its saved output, error and way out.
+        let half = vec![
+            json!({ "id": "dispatch-1", "status": "completed", "terminal": 4, "runtime": me, "release": "pending", "archive": "a.log" }),
+            json!({ "id": "dispatch-2", "status": "completed", "terminal": 4, "runtime": me, "release": "unknown", "releaseError": "close timed out" }),
+        ];
+        let rows = worker_list(&[], &half, None, "term-1", None, None, 10, &live).unwrap();
+        let rows = rows["workers"].as_array().unwrap();
+        assert_eq!((rows[0]["terminalState"].as_str(), rows[0]["archive"].as_str()), (Some("release_pending"), Some("a.log")));
+        assert_eq!((rows[1]["terminalState"].as_str(), rows[1]["error"].as_str()), (Some("release_unknown"), Some("close timed out")));
+        for r in rows {
+            assert!(r["next"].as_str().unwrap().ends_with(&format!("worker-release --dispatch {}", r["dispatchId"].as_str().unwrap())), "{r}");
+        }
+    }
+
+    #[test]
+    fn orch066_a_worker_row_reads_as_its_task_never_its_brief() {
+        let me = std::process::id();
+        let b = |t: &Value| brief(t, &Brief { dispatch: "dispatch-1", run: Some("run-1"), coordinator: None, behind: None, levels_left: 0 });
+        let named = json!({ "id": "task-1", "displayName": "Fix login", "title": "Login bug", "spec": "The login page loops" });
+        let titled = json!({ "id": "task-2", "title": "Login bug", "spec": "The login page loops" });
+        let bare = json!({ "id": "task-3", "spec": "The login page\n  loops after a\tsign-out and the cookie stays behind on every browser we tried" });
+        let row = |t: &Value| worker_label(std::slice::from_ref(t), &json!({ "taskId": t["id"], "brief": b(t) }));
+        // Display name, then title, then a one-line preview of the task text.
+        assert_eq!(row(&named).as_deref(), Some("Fix login"));
+        assert_eq!(row(&titled).as_deref(), Some("Login bug"));
+        let preview = row(&bare).unwrap();
+        assert!(preview.starts_with("The login page loops after a sign-out") && preview.chars().count() <= 60 && !preview.contains('\n'), "{preview}");
+        // Before the task details arrive: the brief's task section, on many lines or folded onto one.
+        let early = |brief: String| worker_label(&[], &json!({ "taskId": "task-9", "brief": brief }));
+        assert_eq!(early(b(&titled)).as_deref(), Some("The login page loops"));
+        assert_eq!(early(b(&titled).replace('\n', " ")).as_deref(), Some("The login page loops"));
+        // Task text that imitates the divider cannot change the label.
+        let sneaky = json!({ "id": "task-4", "spec": format!("Real work first\n{DIVIDER}\nEvil label") });
+        assert!(early(b(&sneaky)).unwrap().starts_with("Real work first"));
+        // No task section: nothing from the wrapper text.
+        assert_eq!(early("You are a Kolux worker; report with kolux-dev orchestration send".into()), None);
+        assert!(!row(&bare).unwrap().contains("Kolux worker"));
+        // A terminal's row follows the task it is on now, never one left from an earlier task;
+        // a terminal with no worker is not in the list, so it keeps its own prompt.
+        let tasks = vec![json!({ "id": "task-1", "title": "Old task" }), json!({ "id": "task-2", "title": "New task" })];
+        let d = vec![
+            json!({ "id": "dispatch-1", "taskId": "task-1", "status": "completed", "terminal": 4, "runtime": me }),
+            json!({ "id": "dispatch-2", "taskId": "task-2", "status": "running", "terminal": 4, "runtime": me }),
+            json!({ "id": "dispatch-3", "taskId": "task-1", "status": "completed", "terminal": 6, "runtime": me, "released": true }),
+            json!({ "id": "dispatch-4", "taskId": "task-1", "status": "running", "terminal": 7, "runtime": me + 1 }),
+        ];
+        assert_eq!(labels_by_terminal(&tasks, &d), json!({ "term-4": "New task" }));
     }
 }
