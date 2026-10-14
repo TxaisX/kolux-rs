@@ -41,3 +41,20 @@ Left for lane/orchestration (orchestration.rs, not this lane's file)
 - orchestration.rs still has #[allow(dead_code)] on functions the patch now calls.
 
 No on-screen change (command line only), so no live proof is pending.
+
+Follow-up (coordinator direction, 2026-10-14): lane/orchestration e39cee4 merged in (ae8457a)
+- The after-orchestration patch above is now applied in this lane (removed from evidence; the
+  coordinator no longer applies T-089-c.patch, T-172-c.patch or it).
+- orchestration's FIX-1 cli hunk (evidence/orchestration-FIX-1-cli-after-T-172-c.patch at e39cee4,
+  committed blob) applied to cli.rs: wait_ready records only a fresh terminal in the worktree that
+  runs the worker's agent and is the only one; worker-stop uses stop_with with agent_of; new
+  no-report escalation wording. Two hunks redone by hand: a plain worker-start uses
+  orchestration::start_check (--retry-of still goes through claim_task), and the hint quotes
+  "path:...". created = now_ms() was already in worker_row.
+- worker-release now goes through orchestration::release_with with the same agent_of, so a
+  terminal that now runs another agent or a plain shell is left open (FIX-1 S1).
+- S5 (archive marker), S6 (pending saved before the kill), FS3 (worker-show in READS): already in.
+- terminal.rs (core's file) is NOT touched: the patch's deletion of Terminals::program_in is in
+  evidence/cli-FIX-2-terminal-hunk.patch (git apply --check passes); clippy did not demand an allow.
+- cargo test --lib -- cli:: orchestration::  -> test result: ok. 91 passed; 0 failed
+- cargo clippy --all-targets -- -D warnings -> exit 0
