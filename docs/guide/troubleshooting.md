@@ -24,6 +24,8 @@ Find out what went wrong, get a safe report to share, and get back to work. Star
 | A save was refused: "changed on disk since you opened it" | An agent or program changed the file | Choose Reload or Keep mine. See [Files and browser](files-and-browser.md) |
 | "outside your projects" | The fence blocked a file | See [Safety](safety.md) |
 | Removing a workspace is refused | The workspace is locked, holds another workspace, has changes, or changed since you were asked | Read the message. A locked workspace is never force-deleted: unlock it with `git worktree unlock` first |
+| `worker-start` ends with "the worker did not come up within N ms; it may still be starting in the background", though the agent is running | A worker started with a custom agent command (a wrapper or `npx`) may never read as ready: Kolux counts a terminal as the worker's only when it runs the agent's own program, and only when exactly one such new terminal is open in that folder | Check the pane yourself. Stop or release the worker with the commands in the answer (`--json` lists them). See [Command line](command-line.md#worker-commands) |
+| `worker-release` says "its terminal was already gone", yet the terminal is still open | A known wording problem. Release leaves open a terminal that is not the worker's own and the plain-text answer still says "already gone" | Run it with `--json`: `terminalLeftOpen` gives the real reason |
 | A command says "Kolux is not running; start it with `kolux open` first" | The command line cannot find the app | Run `kolux status` to see why (`not-running` or `stale`), then `kolux open`. See [Command line](command-line.md) |
 
 ## Get a safe report
@@ -61,7 +63,7 @@ Kolux saves your tabs and layout as you work and brings them back at the next st
 
 - **Tabs and layout** return, with the active tab and focus. A tab whose folder is gone is dropped on its own; the rest stay.
 - **Terminal output** returns. The last text of each pane is replayed with a grey note: "restored after a restart, the shell below is new". The program is new; it does not carry on from where it was.
-- **Agent sessions** resume. An agent tab restarts on the same start line with Claude's `--resume` or Codex's `resume`, using the session it last reported. This needs the agent status hooks on.
+- **Agent sessions** resume. An agent tab restarts on the same start line with the agent's own resume form, using the session it last reported (Claude Code, Codex and 15 more agents have one built in; Kiro and Aider also resume without a reported session). This needs the agent status hooks on. A pane marked "restored without resume" had no session to go back to and started at its prompt. See [Projects and worktrees](projects-and-worktrees.md#agent-sessions-after-a-restart).
 - **Programs do not survive.** Closing a pane, quitting or a crash ends every program Kolux started, so none is left running in the background. A running build or server is stopped.
 - A tab you close on purpose stays closed, and its saved output is forgotten.
 - A slow start never drops your tabs: if the saved settings were slow to read, Kolux waits.
@@ -98,4 +100,4 @@ If `kolux` runs a different app than you expect, you may have the older Kolux on
 
 Use "Send feedback" in Settings, General, Privacy. It opens a new issue page on GitHub in your browser, with a version and platform footer. Paste your diagnostics there; the app submits nothing by itself.
 
-<!-- verified against: src-tauri/src/diag.rs, src/terminal/errors.ts, src/terminal/TerminalPane.tsx, src/terminal/history.ts, src/terminal/layout.ts, src-tauri/src/cli.rs, src-tauri/src/projects.rs, src-tauri/src/procs.rs, src/settings/GeneralPage.tsx, src/settings/privacy.ts, STATE.md, src-tauri/src/agent_hooks/mod.rs, src-tauri/src/agent_hooks/vendors.rs, src-tauri/src/pty.rs, src-tauri/src/skills.rs, src-tauri/src/onboarding.rs at 73f5e38 -->
+<!-- verified against: src-tauri/src/diag.rs, src/terminal/errors.ts, src/terminal/TerminalPane.tsx, src/terminal/history.ts, src/terminal/layout.ts, src-tauri/src/cli.rs, src-tauri/src/projects.rs, src-tauri/src/procs.rs, src/settings/GeneralPage.tsx, src/settings/privacy.ts, STATE.md, src-tauri/src/agent_hooks/mod.rs, src-tauri/src/agent_hooks/vendors.rs, src-tauri/src/pty.rs, src-tauri/src/skills.rs, src-tauri/src/onboarding.rs at 73f5e38; worker and resume rows (src-tauri/src/cli.rs, src-tauri/src/orchestration.rs, src-tauri/src/agents.rs) at 950ba36 -->
