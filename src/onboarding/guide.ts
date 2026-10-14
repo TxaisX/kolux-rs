@@ -1,9 +1,12 @@
 // ONB-014 Setup Guide, ONB-017 its CLI step, ONB-022 Explore Kolux and ONB-027 startup tips: the
 // model behind the dialogs in Guides.tsx. The window opens them through the events below, so the
 // help menu, a tip or any other caller can ask for a guide without passing state around.
-// ponytail: only the CLI step ticks from real state here; the other steps tick in T-321 (ONB-015).
+// ONB-015: every step ticks from real state (doneFrom); ONB-023: an Explore stop is complete only
+// after a visit plus its setup (stopDone). The legacy-profile rule and the step actions are T-321-b.
 import { invoke } from "@tauri-apps/api/core";
 import { locale } from "../language";
+import type { FirstRun } from "./newcomer";
+import { noteUse, type Features } from "./features";
 
 export type StepId = "browser" | "notifications" | "agent" | "cli" | "integrations" | "multitask" | "automate" | "repos";
 type Words = { name: string; about: string };
@@ -156,8 +159,151 @@ export const OPEN_EXPLORE = "kolux-open-explore";
 /** Opens the Setup Guide, on `step` when given. */
 export const openGuide = (step?: StepId) => window.dispatchEvent(new CustomEvent(OPEN_GUIDE, { detail: step ?? null }));
 export const openExplore = () => window.dispatchEvent(new CustomEvent(OPEN_EXPLORE));
+/** VIEW-114 (FIX-2): sent when the Setup Guide closes, so the sidebar entry reads its steps again. */
+export const GUIDE_CLOSED = "kolux-guide-closed";
+export const guideClosed = () => window.dispatchEvent(new CustomEvent(GUIDE_CLOSED));
 
 /** What the guides remember on this profile (onboarding.rs guide_get). */
-export type GuideRecord = { tipsSeen: string[]; visited: string[]; tried: string[]; toursSeen: string[]; toursAuto: boolean | null };
+/** guide_get also carries the first-run view for the newcomer checklist (ONB-013); guide_mark does not. */
+export type GuideRecord = { tipsSeen: string[]; visited: string[]; tried: string[]; toursSeen: string[]; toursAuto: boolean | null; firstRun?: FirstRun | null; features?: Features };
 /** Adds the id once to one of the record's lists; the stored record comes back. */
 export const markGuide = (list: "tipsSeen" | "visited" | "tried" | "toursSeen", id: string) => invoke<GuideRecord>("guide_mark", { list, id });
+
+// ---- ONB-015: the steps tick from real state, not from clicks ----
+
+/** A workspace as workspace_list gives it; only what the Multi-task rule reads. */
+export type Place = { path: string; head: string; isMain: boolean; kind?: string | null };
+
+/** What the guide read from this computer. A null fact is one not read yet or whose read failed:
+ *  it never ticks a step (a failed status read is never taken as completion). */
+export type Facts = {
+  /** Each git project's workspaces. */
+  workspaces: Place[][] | null;
+  /** The git projects seen together at the most, kept on the profile (the lasting count). */
+  gitProjects: number | null;
+  /** A page other than a blank one was shown in Kolux's browser (kept on the profile). */
+  pageShown: boolean;
+  /** "checking" while the provider checks are still out. */
+  integrations: "connected" | "checking" | "none" | null;
+  /** The CLI step's capabilities, all in place. */
+  cli: boolean;
+  notifications: boolean | null;
+  /** The saved default agent's id; "" when there is none. */
+  agent: string | null;
+  /** Some git project has a workspace setup script; a check that failed settles as false. */
+  setupScript: boolean | null;
+};
+
+/** ONB-015 Multi-task: a real workspace besides the main folder. The main folder (or two entries
+ *  for it) never counts, nor does a placeholder still being made (no commit yet). */
+export const realWorkspace = (list: readonly Place[]): boolean => list.some((w) => !w.isMain && w.kind !== "main" && w.head.trim() !== "");
+
+/** ONB-015: a blank page never counts as the browser having been used. */
+export const pageCounts = (url: string | null | undefined): boolean => {
+  const u = (url ?? "").trim().toLowerCase();
+  return u !== "" && u !== "about:blank" && !u.startsWith("about:");
+};
+
+/** ONB-015: the steps done, each from the thing it stands for. */
+export function doneFrom(f: Facts): Set<StepId> {
+  const done = new Set<StepId>();
+  if (f.workspaces?.some(realWorkspace)) done.add("multitask");
+  if (f.pageShown) done.add("browser");
+  if ((f.gitProjects ?? 0) >= 2) done.add("repos");
+  if (f.integrations === "connected") done.add("integrations");
+  if (f.cli) done.add("cli");
+  if (f.notifications === true) done.add("notifications");
+  if (f.agent) done.add("agent");
+  if (f.setupScript === true) done.add("automate");
+  return done;
+}
+
+/** The tried-list ids that keep facts on the profile: the browser page and the lasting repo count. */
+export const PAGE_SHOWN = "browser-page";
+export const TWO_REPOS = "repos-two";
+
+/** ONB-015 setup-script step: answers to an older check are dropped. `begin` starts a check for new
+ *  inputs (and resets readiness to unknown); `settle` takes its answer only if it is still the latest,
+ *  and a check that failed settles as having no script. */
+export function latest<T>(set: (v: T | null) => void) {
+  let n = 0;
+  return {
+    begin: () => {
+      n += 1;
+      set(null);
+      return n;
+    },
+    settle: (ticket: number, v: T) => void (ticket === n && set(v)),
+  };
+}
+
+// ---- ONB-023: a stop is complete only after a visit and real setup ----
+
+/** Stops whose setup is part of the stop, and the fact it needs. */
+export type Setup = { taskSource: boolean; skills: readonly string[] };
+const NEEDS: Record<string, (s: Setup) => boolean> = {
+  tasks: (s) => s.taskSource,
+  orchestration: (s) => s.skills.includes("orchestration"),
+  browser: (s) => s.skills.includes("browser-use"),
+};
+
+/** Every id the tour knows: the workflows and their stops. */
+export const TOUR_IDS: ReadonlySet<string> = new Set(WORKFLOWS.flatMap((w) => [w.id, ...w.stops.map((s) => s.id)]));
+
+/** The visits kept on the profile, back on reopen; unknown or repeated entries dropped. */
+export const visits = (ids: readonly string[]): string[] => [...new Set(ids.filter((i) => TOUR_IDS.has(i)))];
+
+/** The tried-list id that keeps a stop complete for good. */
+export const doneId = (id: string) => `explore-${id}`;
+
+/** ONB-023: a stop (or workflow) is complete after a visit, plus its setup where the stop carries one;
+ *  nothing is ticked just because it is already configured. Once complete (`kept`), it stays so even
+ *  if detection later says unavailable. */
+export const stopDone = (id: string, seen: ReadonlySet<string>, setup: Setup, kept: ReadonlySet<string>): boolean =>
+  kept.has(doneId(id)) || (seen.has(id) && (NEEDS[id]?.(setup) ?? true));
+
+/** ONB-023: a workflow is Completed once it and each stop that is not optional are complete. */
+export const workflowDone = (wf: Workflow, seen: ReadonlySet<string>, setup: Setup, kept: ReadonlySet<string>): boolean =>
+  stopDone(wf.id, seen, setup, kept) && wf.stops.every((s) => s.optional || stopDone(s.id, seen, setup, kept));
+
+/** ONB-023: the visits and kept stops once the saved record arrives, merged into what this window
+ *  already saw (a stop visited before the record loaded is never lost). */
+export const withRecord = (seen: ReadonlySet<string>, kept: ReadonlySet<string>, g: { visited: readonly string[]; tried: readonly string[] }) => ({
+  seen: new Set([...seen, ...visits(g.visited), ...g.tried]),
+  kept: new Set([...kept, ...g.tried]),
+});
+
+/** ONB-015: the browser pane calls this when a page finishes loading; the first page other than a
+ *  blank one marks the Browser step's fact on the profile and notes the use (ONB-042), once per
+ *  window, so later page loads write nothing. A write that fails frees the note again, so the next
+ *  page load tries once more (FIX-2). */
+export const pageNoter = (mark: typeof markGuide = markGuide, use: (id: string) => unknown = noteUse) => {
+  let done = false;
+  return (url: string | null | undefined): void => {
+    if (done || !pageCounts(url)) return;
+    done = true;
+    void mark("tried", PAGE_SHOWN).catch(() => {
+      done = false;
+    });
+    use("browser-page");
+  };
+};
+
+/** The one page note the window shares (the browser pane calls `notePage(url)`). */
+export const notePage = pageNoter();
+
+// ---- ONB-029: the command palette tip's one-time demo ----
+
+/** The palette's keys as the tip shows them: the user's binding, or the default when unassigned. */
+export const paletteKeys = (user: readonly string[], fallback: readonly string[]): readonly string[] => (user.length ? user : fallback);
+
+/** What the demo types into the palette before the create-workspace row comes up. */
+export const DEMO_TEXT = "new-idea";
+export type DemoFrame = { typed: string; create: boolean };
+/** The demo's frames, one letter at a time, ending on the create-workspace row. With reduced motion
+ *  only the end state, so no timer runs. It plays once: the last frame stays. */
+export function demoFrames(reduced: boolean, text = DEMO_TEXT): DemoFrame[] {
+  const end = { typed: text, create: true };
+  if (reduced) return [end];
+  return [...Array.from({ length: text.length + 1 }, (_, i) => ({ typed: text.slice(0, i), create: false })), end];
+}

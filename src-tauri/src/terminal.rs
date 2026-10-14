@@ -704,6 +704,11 @@ impl Terminals {
                     }
                 }
                 crate::activity::terminal_ended(id);
+                // TERM-122: after activity has closed its spells, the panes' sessions go with the
+                // terminal, so a closed pane, or an agent that was the pane's own program and
+                // exited or crashed, never keeps the computer awake (an agent typed into a shell
+                // pane ends with the shell, not with the agent).
+                crate::status::terminal_ended(id);
                 // AUTO-012: an automation run followed in this pane is over with it.
                 crate::automations::follow(&exit_app, |s| {
                     let run = crate::automations::pane_ended(s, id, code, crate::automations::now_ms())?;

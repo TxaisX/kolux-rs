@@ -95,8 +95,9 @@ type Props = {
   crew?: Crew;
   /** STAT-022: why the agent halted while `hook` is blocked; the header's tooltip says it. */
   stop?: StopInfo;
-  /** STAT-040: how full the agent's context is, 0 to 100, from its last status-line report. */
-  context?: number;
+  /** STAT-040: how full the agent's context is, 0 to 100, from its last status-line report;
+   * null or left out while no reading has come in yet (USAGE-001: a greyed 0%). */
+  context?: number | null;
   /** USAGE-004: the agent's plan figures beside the gauge on the Agents screen. */
   plan?: string;
   /** TERM-118: the program rang the terminal bell. */
@@ -1152,10 +1153,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
               Review plan
             </button>
           )}
-          <span className={`gauge ${toneOf(context ?? 0)}`.trim()} title={context === undefined ? "Context used (agents only)" : `Context used: ${Math.round(context)}%`}>
-            <Ring percent={context ?? 0} />
-            {Math.round(context ?? 0)}%
-          </span>
+          <ContextGauge context={context} agent={agent} />
           <button
             className="ib"
             title="Pane menu"
@@ -1284,6 +1282,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       {plusAt && (
         <PlusMenu
           agents={agents}
+          dir={cwd ?? undefined}
           defaultId={defaultId}
           onSetDefault={onSetDefault}
           busy={launching}
@@ -1453,5 +1452,19 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         </div>
       )}
     </section>
+  );
+}
+
+/** USAGE-001: the header's context ring and percentage. Always there; a greyed 0% until the
+ * first reading (a real 0% is a reading), then tinted yellow from 70% and red beyond 90%. */
+export function ContextGauge({ context, agent }: { context?: number | null; agent: string }) {
+  const none = context === null || context === undefined;
+  const percent = none ? 0 : Math.round(context);
+  const title = none ? (agent === "shell" ? "Context used (agents only)" : "Context used: nothing received yet. The figure appears with the agent's first status report.") : `Context used: ${percent}% of the agent's context window`;
+  return (
+    <span className={none ? "gauge none" : `gauge ${toneOf(percent)}`.trim()} title={title}>
+      <Ring percent={percent} />
+      {percent}%
+    </span>
   );
 }

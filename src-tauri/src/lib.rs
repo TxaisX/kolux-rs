@@ -2,6 +2,7 @@ mod activity;
 mod agents;
 mod artifacts;
 mod automations;
+mod awake;
 mod capture;
 mod chat;
 mod chat_tools;
@@ -15,6 +16,7 @@ mod codex_accounts;
 mod codex_usage;
 mod creatures;
 mod diag;
+mod editor_search;
 mod fence;
 mod files;
 mod fsops;
@@ -183,6 +185,15 @@ pub fn run() {
             // ACCT-010: a key this computer can no longer open is cleared before the window asks.
             secrets::drop_unreadable(&store, &dir);
             app.manage(Mutex::new(store));
+            // TERM-122: the keep-awake watcher reads the saved choice every tick, and counts a
+            // working pane only while its terminal is still running.
+            {
+                let (h, t) = (app.handle().clone(), app.handle().clone());
+                awake::start(
+                    move || h.state::<Mutex<Store>>().lock().map(|s| s.settings()).unwrap_or_default(),
+                    move |id| t.try_state::<Terminals>().is_some_and(|ts| ts.started(id).is_some()),
+                );
+            }
             app.manage(links::Grants::default());
             // APP-041: the app's own start-and-stop record, next to what the terminals report.
             diag::write(&dir, &format!("app start {starts}, Kolux RS {}", app.package_info().version));
@@ -391,6 +402,9 @@ pub fn run() {
             pty::shell_list,
             tools::tools_check,
             tools::tools_dismiss,
+            tools::editors_list,
+            tools::teams_host,
+            awake::keep_awake_state,
             token_usage::token_usage,
             token_usage::token_usage_scan,
             token_usage::token_tracking_set,
@@ -500,7 +514,9 @@ pub fn run() {
             files::file_stamps,
             files::file_pick,
             files::md_list,
+            editor_search::editor_search,
             skills::skills_scan,
+            files::open_in,
             files::file_list,
             files::md_new,
             files::diff_sides,
@@ -513,7 +529,7 @@ pub fn run() {
             artifacts::artifact_add,
             artifacts::artifact_remove,
             artifacts::open_external,
-            links::open_path, links::file_grant,
+            links::open_path, links::file_grant, links::editor_open,
             fsops::fs_create,
             fsops::fs_rename,
             fsops::fs_trash,

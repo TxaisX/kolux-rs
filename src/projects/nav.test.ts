@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { EMPTY_HISTORY, navTarget, queryWords, scoreText, travel, visit, type Place } from "./nav";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
-import { RowMark, chipFilter, dirMark, paletteAge, paletteRows, repoOptions, withRepos, worktreeItems, type PaletteItem } from "./WorktreePalette";
+import { RowMark, chipFilter, dirMark, dirMonitoring, paletteAge, paletteRows, repoOptions, withRepos, worktreeItems, type PaletteItem } from "./WorktreePalette";
 import type { Project, Worktree } from "./model";
 
 test("next and previous wrap, a number picks a row", () => {
@@ -113,6 +113,25 @@ test("palette rows carry the agent's mark, permission over unread over a fresh f
   expect(html).toContain(">50m<");
   expect(renderToStaticMarkup(createElement(RowMark, { mark: "unread", since: 0, now: 0 }))).toContain('aria-label="unread"');
   expect(renderToStaticMarkup(createElement(RowMark, { mark: null, since: 0, now: 0 }))).toBe("");
+});
+
+test("a workspace whose agents only watch background work shows the radio mark, not the spinner (VIEW-040, STAT-024)", () => {
+  // The hook keeps a monitoring pane at working; the flag turns the spinner into the radio mark.
+  expect(dirMark("working", false, true)).toBe("background");
+  expect(dirMark("working", true, true)).toBe("background");
+  // A request for the user still beats it; the flag means nothing once the work has stopped.
+  expect(dirMark("permission", true, true)).toBe("permission");
+  expect(dirMark("done", false, true)).toBe("done");
+  expect(dirMark("done", true, true)).toBe("unread");
+  // One pane still really working in the same folder keeps the spinner.
+  expect(dirMonitoring([{ state: "working", monitoring: true }, { state: "working" }])).toBe(false);
+  expect(dirMonitoring([{ state: "working", monitoring: true }, { state: "done" }])).toBe(true);
+  expect(dirMonitoring([{ state: "done", monitoring: true }])).toBe(false);
+  expect(dirMonitoring([])).toBe(false);
+  const html = renderToStaticMarkup(createElement(RowMark, { mark: "background", since: 1, now: 1 + 3 * 60_000 }));
+  expect(html).toContain('aria-label="monitoring"');
+  expect(html).toContain("badge background");
+  expect(html).toContain(">3m<");
 });
 
 test("ages read in minutes for the first hour, hours until two days, then days (VIEW-040)", () => {
