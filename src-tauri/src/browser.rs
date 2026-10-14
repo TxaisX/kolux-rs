@@ -9,6 +9,9 @@
 // IPC objects stay in the page (it defines them first, non-configurable); its origin check is
 // what refuses them, and this gate is what keeps a tab off every origin that check trusts.
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tauri::webview::{Color, NewWindowResponse, PageLoadEvent, WebviewBuilder};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Url, Webview, WebviewUrl};
 
@@ -84,6 +87,37 @@ pub const CHORD_SCRIPT: &str = r#"(() => {
 pub fn chord_of(url: &str) -> Option<&str> {
     url.strip_prefix(CHORD_SCHEME)
         .filter(|what| matches!(*what, "focusAddressBar" | "back" | "forward" | "reload" | "find" | "zoomIn" | "zoomOut" | "zoomReset"))
+}
+
+/// BROW-016: how many tabs pages may open within `TABS_WINDOW`; the rest are absorbed.
+pub const TABS_ALLOWED: usize = 5;
+pub const TABS_WINDOW: Duration = Duration::from_secs(10);
+
+/// A sliding window of the tabs pages have opened lately. A burst gets `TABS_ALLOWED` through and
+/// a slow, steady stream cannot get more than that into any window either; the allowance fills up
+/// again as old opens fall out of the window.
+#[derive(Default)]
+pub struct Allowance(VecDeque<Instant>);
+
+impl Allowance {
+    pub fn take(&mut self, now: Instant) -> bool {
+        while self.0.front().is_some_and(|t| now.duration_since(*t) >= TABS_WINDOW) {
+            self.0.pop_front();
+        }
+        if self.0.len() >= TABS_ALLOWED {
+            return false;
+        }
+        self.0.push_back(now);
+        true
+    }
+}
+
+// ponytail: one allowance for every browser page, so a page and the tabs it opened share it (the
+// family the spec names) along with unrelated pages; per-family windows if that ever bites.
+static PAGE_TABS: Mutex<Allowance> = Mutex::new(Allowance(VecDeque::new()));
+
+fn page_may_open_tab() -> bool {
+    PAGE_TABS.lock().map(|mut a| a.take(Instant::now())).unwrap_or(false)
 }
 
 /// A link the page's script asked to open as another tab (BROW-014): the address and whether
@@ -199,7 +233,8 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         .initialization_script(CHORD_SCRIPT)
         // BROW-014: a link or script asking for a new window becomes another Kolux tab, in front.
         .on_new_window(move |url, _| {
-            if allowed(&url, window_dev.as_ref()).is_ok() {
+            // BROW-016: a page opening windows in a loop gets a handful of tabs, never a flood.
+            if allowed(&url, window_dev.as_ref()).is_ok() && page_may_open_tab() {
                 let _ = window_app.emit(LINK_EVENT, LinkPayload { id, url: url.to_string(), front: true });
             }
             NewWindowResponse::Deny
@@ -405,5 +440,22 @@ mod tests {
         assert_eq!(zoom_level(9.0), 5.0);
         assert_eq!(zoom_level(0.1), 0.25);
         assert_eq!(zoom_level(f64::NAN), 1.0);
+    }
+
+    #[test]
+    fn brow016_a_window_storm_opens_a_handful_of_tabs_and_the_allowance_comes_back() {
+        let start = Instant::now();
+        let mut a = Allowance::default();
+        // 100 windows from one click: a few open, the rest are absorbed.
+        let opened = (0..100).filter(|_| a.take(start)).count();
+        assert_eq!(opened, TABS_ALLOWED);
+        // A steady stream inside the same window gets nothing more.
+        assert!(!a.take(start + Duration::from_secs(9)));
+        // Once the window has passed (a minute later) links open again.
+        assert!(a.take(start + Duration::from_secs(60)));
+        // A slow, steady stream, one a second for a minute, never beats the window either.
+        let mut b = Allowance::default();
+        let through = (0..60).filter(|i| b.take(start + Duration::from_secs(*i))).count();
+        assert_eq!(through, TABS_ALLOWED * 6);
     }
 }

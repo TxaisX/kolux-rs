@@ -648,7 +648,8 @@ foundations every later card stands on; the cards they touch are finished in the
 ### P2 · theme 5 · Safety and trust (3 cards)
 
 - [ ] T-271 · SAFE-027 The floating workspace opens only in folders the user picked
-- [ ] T-272 · BROW-016 Runaway pages cannot flood the user with tabs · BROW-032 Site permission requests in the pane
+- [x] T-272 · BROW-016 Runaway pages cannot flood the user with tabs (built: the tab allowance; site permissions are T-272-b) · done 2026-10-13 (lane/browser from 462332b; evidence/T-272.txt: cargo test browser 9 passed, 100 opens give 5 tabs and the allowance returns after the window; live proof pending (batched))
+- [ ] T-272-b · BROW-032 Site permission requests in the pane · blocked: Tauri and wry expose no permission-request hook, so granting pointer lock and storage access and naming a refused permission needs the WebView2 PermissionRequested event through webview2-com, which is not a dependency (Cargo.toml, outside the browser lane); the Mac camera and microphone prompt also needs a Mac
 
 ### P2 · theme 9 · Reliability and no lost work (30 cards)
 
