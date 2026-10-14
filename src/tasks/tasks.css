@@ -1,0 +1,12 @@
+/* T-314: the Tasks page's filter row (GIT-054), default-view button (GIT-044) and fork source (GIT-055). */
+.tasks-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--line-subtle); font-size: 12px; }
+.tasks-filter { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.tasks-filter > span { color: var(--fg-label); }
+.tasks-filter .field { width: 128px; min-width: 0; height: 24px; font-size: 12px; }
+.tasks-filter.set .field { border-color: var(--line-focus); }
+.tasks-filter .ib { width: 18px; height: 18px; }
+.tasks-default { font-size: 12px; }
+.tasks-default[aria-pressed="true"] { color: var(--fg-label); }
+.tasks-source { display: inline-flex; align-items: center; gap: 4px; }
+.tasks-source > span, .tasks-split { color: var(--fg-label); }
+.tasks-split { padding: 1px 6px; border: 1px solid var(--line); border-radius: 999px; font-size: 11px; }

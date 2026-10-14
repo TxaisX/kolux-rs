@@ -1688,8 +1688,6 @@ pub async fn scm_pr_create(worktree: String, title: String, body: String, base: 
 
 /// GIT-014: shows a changed file in the file manager (its folder when the file was deleted); the
 /// path is relative to the worktree and must stay inside it.
-/// ponytail: registered by the coordinator's lib.rs line (T-313); until then only the tests call it.
-#[allow(dead_code)]
 #[tauri::command]
 pub async fn scm_reveal(worktree: String, path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
