@@ -942,10 +942,14 @@ fn memory_figure(v: &Value) -> String {
 
 /// CLI-041: the Resource Manager's breakdown as text: the app, then each terminal session (its
 /// whole process tree), then the total, resident and committed side by side, then free memory.
+/// T-287-c: a row or total with processes that could not be read shows a dash for committed and
+/// says how many, never a partial sum as if it were the whole.
 fn memory_text(r: &Value) -> String {
     let row = |name: &str, u: &Value, tail: &str| {
         let n = u["processes"].as_u64().unwrap_or(0);
-        format!("  {name:<34} {:>10}  {:>10}  {n:>3} process{}{tail}", memory_figure(&u["bytes"]), memory_figure(&u["committed"]), if n == 1 { "" } else { "es" })
+        let lost = u["unreadable"].as_u64().unwrap_or(0);
+        let note = if lost > 0 { format!("  ({lost} of {n} could not be read)") } else { String::new() };
+        format!("  {name:<34} {:>10}  {:>10}  {n:>3} process{}{note}{tail}", memory_figure(&u["bytes"]), memory_figure(&u["committed"]), if n == 1 { "" } else { "es" })
     };
     let mut out = vec![format!("  {:<34} {:>10}  {:>10}", "", "resident", "committed"), row("Kolux", &r["app"], "")];
     let sessions = r["sessions"].as_array().cloned().unwrap_or_default();
@@ -957,10 +961,18 @@ fn memory_text(r: &Value) -> String {
         out.push("  No terminal sessions are running.".into());
     }
     let all: Vec<&Value> = std::iter::once(&r["app"]).chain(sessions.iter()).collect();
-    let committed: Vec<u64> = all.iter().filter_map(|u| u["committed"].as_u64()).collect();
+    // The app's own total and count when it sends them (T-287-c); an older app's rows are summed
+    // here, the total unknown as soon as a row with processes has no figure.
+    let counted = |u: &Value| u["processes"].as_u64().unwrap_or(0) > 0;
+    let (committed, unreadable) = match r.get("committed_total") {
+        Some(t) => (t.clone(), r["unreadable"].clone()),
+        None if all.iter().filter(|u| counted(u)).all(|u| u["committed"].is_u64()) => (json!(all.iter().filter_map(|u| u["committed"].as_u64()).sum::<u64>()), Value::Null),
+        None => (Value::Null, Value::Null),
+    };
     let sum = json!({
         "bytes": all.iter().filter_map(|u| u["bytes"].as_u64()).sum::<u64>(),
-        "committed": if committed.is_empty() { Value::Null } else { json!(committed.iter().sum::<u64>()) },
+        "committed": committed,
+        "unreadable": unreadable,
         "processes": all.iter().filter_map(|u| u["processes"].as_u64()).sum::<u64>(),
     });
     out.push(row("Total", &sum, ""));
@@ -5213,6 +5225,21 @@ mod tests {
         assert!(lines[4].contains("Total") && lines[4].contains("312.0 MB") && lines[4].contains("125.7 MB") && lines[4].contains("8 processes"), "{text}");
         assert_eq!(lines[5].trim(), "2.00 GB free of 4.00 GB");
         assert_eq!(memory_figure(&json!(1024 * MB)), "1.00 GB");
+        // T-287-c: the app says 2 of 7 processes could not be read: that row and the total show a dash and say so.
+        let partial = json!({
+            "app": { "bytes": 300 * MB, "cpu": 0.0, "processes": 5, "committed": null, "unreadable": 2 },
+            "sessions": [{ "id": 1, "pid": 4321, "dir": "C:/w/fox", "bytes": 12 * MB, "cpu": 0.0, "processes": 2, "committed": 8 * MB, "unreadable": 0 }],
+            "free": null, "total": null, "committed_total": null, "unreadable": 2
+        });
+        let text = text_of(MEMORY, &partial);
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines[1].contains("Kolux") && lines[1].contains("– MB") && lines[1].contains("5 processes  (2 of 5 could not be read)"), "{text}");
+        assert!(lines[2].contains("8.0 MB") && !lines[2].contains("could not be read"), "{text}");
+        assert!(lines[3].contains("Total") && lines[3].contains("312.0 MB") && lines[3].contains("– MB") && lines[3].ends_with("7 processes  (2 of 7 could not be read)"), "{text}");
+        // An older app without committed_total: a row with processes and no figure makes the total a dash.
+        let mut old = partial.clone();
+        old.as_object_mut().unwrap().remove("committed_total");
+        assert!(text_of(MEMORY, &old).lines().nth(3).unwrap().contains("– MB"), "{}", text_of(MEMORY, &old));
         // No app: no startup file, so one plain line and a non-zero exit.
         let none = std::env::temp_dir().join(format!("kolux-rs-cli041-{}", std::process::id()));
         let f = read_endpoint(&none).unwrap_err();
