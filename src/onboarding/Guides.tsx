@@ -20,20 +20,22 @@ type Read = Omit<Facts, "cli">;
 const UNREAD: Read = { workspaces: null, gitProjects: null, pageShown: false, integrations: null, notifications: null, agent: null, setupScript: null };
 
 /** ONB-015: reads what each step stands for. A project counts as git when its workspace list
- *  reads; the lasting count of git projects is kept on the profile once it reaches two. */
-async function readFacts(check: ReturnType<typeof latest<boolean>>, put: (f: Partial<Read>) => void, alive: () => boolean) {
+ *  reads; the lasting count of git projects is kept on the profile once it reaches two. Resolves
+ *  once every read has answered (VIEW-114: the sidebar entry waits for that, so it never flashes),
+ *  with the setup-script answer (null when it was never asked). */
+async function readFacts(check: ReturnType<typeof latest<boolean>>, put: (f: Partial<Read>) => void, alive: () => boolean): Promise<boolean | null> {
   const [settings, g] = await Promise.all([invoke<Record<string, unknown>>("get_settings").catch(() => null), invoke<GuideRecord>("guide_get").catch(() => null)]);
-  if (!alive()) return;
+  if (!alive()) return null;
   put({ notifications: settings ? settings.notifyOnFinish !== false : null, agent: settings ? defaultAgentId(settings) : null, pageShown: !!g?.tried.includes(PAGE_SHOWN) });
   put({ integrations: "checking" });
-  invoke<string | null>("scm_gh_account", { host: "github.com" }).then(
-    (login) => alive() && put({ integrations: login ? "connected" : "none" }),
-    () => alive() && put({ integrations: null }),
+  const gh = invoke<string | null>("scm_gh_account", { host: "github.com" }).then(
+    (login) => void (alive() && put({ integrations: login ? "connected" : "none" })),
+    () => void (alive() && put({ integrations: null })),
   );
   const projects = await invoke<{ path: string; id: string }[]>("project_list").catch(() => null);
-  if (!alive() || !projects) return;
+  if (!alive() || !projects) return gh.then(() => null);
   const lists = await Promise.all(projects.map((p) => invoke<Place[]>("workspace_list", { projectId: p.id }).catch(() => null)));
-  if (!alive()) return;
+  if (!alive()) return null;
   const git = projects.filter((_, i) => lists[i] !== null);
   const twoBefore = !!g?.tried.includes(TWO_REPOS);
   if (git.length >= 2 && !twoBefore) markGuide("tried", TWO_REPOS).catch(() => {});
@@ -41,30 +43,47 @@ async function readFacts(check: ReturnType<typeof latest<boolean>>, put: (f: Par
   const ticket = check.begin();
   const found = await Promise.all(git.map((p) => invoke<unknown>("workspace_setup", { path: p.path }).then((l) => l !== null, () => false)));
   check.settle(ticket, found.some(Boolean));
+  await gh;
+  return found.some(Boolean);
 }
 
+type Snapshot = { read: Read; cli: CliStatus | null; home: readonly string[] };
+const doneOf = (s: Snapshot) => doneFrom({ ...s.read, cli: caps(s.cli, s.home).every((c) => c.ready) });
+
 /** What the guide can tell is done on this computer (ONB-015), read each time the guide opens and
- *  on Re-check. `refresh` reads it again. */
-export function useGuideState(on: boolean) {
+ *  on Re-check. `refresh` reads it again; so does a change of `again` (VIEW-114: the sidebar passes
+ *  its project count, so adding a project re-reads the steps). `settled` is the done set of the last
+ *  read that fully answered, null until the first one has: it never shows a half-read state. */
+export function useGuideState(on: boolean, again: unknown = null) {
   const [cli, setCli] = useState<CliStatus | null>(null);
   const [home, setHome] = useState<string[]>([]);
   const [read, setRead] = useState<Read>(UNREAD);
+  const [snap, setSnap] = useState<Snapshot | null>(null);
   const [n, setN] = useState(0);
   const check = useRef(latest<boolean>((v) => setRead((r) => ({ ...r, setupScript: v })))).current;
   useEffect(() => {
     if (!on) return;
     let live = true;
-    invoke<CliStatus>("cli_status").then((c) => live && setCli(c), () => live && setCli(null));
-    invoke<Scan>("skills_scan", { workspace: null, refresh: n > 0 }).then(
-      (s) => live && setHome(s.skills.filter((k) => k.source === "home").map((k) => k.name)),
-      () => {},
+    let acc: Read = UNREAD;
+    const c = invoke<CliStatus>("cli_status").then(
+      (x) => (live && setCli(x), x),
+      () => (live && setCli(null), null),
     );
-    void readFacts(check, (f) => setRead((r) => ({ ...r, ...f })), () => live);
+    const h = invoke<Scan>("skills_scan", { workspace: null, refresh: n > 0 }).then(
+      (s) => {
+        const names = s.skills.filter((k) => k.source === "home").map((k) => k.name);
+        if (live) setHome(names);
+        return names;
+      },
+      () => [] as string[],
+    );
+    const f = readFacts(check, (x) => ((acc = { ...acc, ...x }), live && setRead((r) => ({ ...r, ...x }))), () => live);
+    void Promise.all([c, h, f]).then(([cl, hm, script]) => live && setSnap({ read: { ...acc, setupScript: script }, cli: cl, home: hm }));
     return () => void (live = false);
-  }, [on, n, check]);
+  }, [on, n, check, again]);
   const list = caps(cli, home);
   const done = doneFrom({ ...read, cli: list.every((c) => c.ready) });
-  return { cli, caps: list, done, refresh: () => setN((x) => x + 1) };
+  return { cli, caps: list, done, settled: snap ? doneOf(snap) : null, refresh: () => setN((x) => x + 1) };
 }
 
 /** The progress ring: core steps done out of all of them. */

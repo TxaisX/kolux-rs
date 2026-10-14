@@ -45,6 +45,8 @@ type Props = {
   onToast?: (text: string) => void;
   /** Compact for the sidebar (VIEW-114): the next item only, with the count. */
   compact?: boolean;
+  /** The record a parent already read (the sidebar slot), used until this list's own read answers. */
+  record?: GuideRecord | null;
 };
 
 /** An item's name; a ticked one also says "(done)" to screen readers, since the tick itself is
@@ -58,8 +60,9 @@ export function ItemName({ label, ticked }: { label: string; ticked: boolean }) 
   );
 }
 
-export default function Checklist({ onToast, compact = false }: Props) {
-  const rec = useChecklistRecord();
+export default function Checklist({ onToast, compact = false, record }: Props) {
+  const mine = useChecklistRecord();
+  const rec = mine !== undefined ? mine : record;
   const tried = rec?.tried ?? [];
   const c = checklistOf(rec === undefined ? undefined : (rec?.firstRun ?? null), tried);
   const toast = useRef(allDoneToast()).current;
@@ -76,9 +79,9 @@ export default function Checklist({ onToast, compact = false }: Props) {
   const count = `${c.ticked.size} of ${ITEMS.length} done`;
   const items = compact ? ITEMS.filter((i) => i.id === c.next) : ITEMS;
   return (
-    <section className={`onb-checklist${compact ? " compact" : ""}`} aria-label="Getting started checklist">
+    <section className={`onb-checklist${compact ? " compact" : ""}`} aria-label="First steps checklist">
       <header>
-        <h3>Getting started</h3>
+        <h3>First steps</h3>
         <span className="count">{count}</span>
       </header>
       <ol>
