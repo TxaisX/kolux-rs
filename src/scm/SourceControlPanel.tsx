@@ -25,7 +25,7 @@ import HandoffNote from "./HandoffNote";
 import { watchStatus } from "./watch";
 import { DIFF_SPLITS, type DiffSplit } from "./split";
 import { openInBrowser } from "../browser/BrowserPane";
-import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt, PULL_POLICIES, filterRows, fullPath } from "./model";
+import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine, PULL_POLICIES, filterRows, fullPath } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -537,6 +537,8 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
 
   const section = (name: "Conflicts" | Section, all: Change[], on: boolean) => {
     const rows = filterRows(all, filter ?? "");
+    // VIEW-062: a huge section lists the first SECTION_CAP rows; the counts and bulk buttons still cover all.
+    const { shown, more } = capped(rows, SECTION_CAP);
     return rows.length > 0 && (
       <div className="scm-sec-wrap" data-section={name}>
         <div className="scm-sec">
@@ -552,7 +554,7 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
           </button>
         </div>
         {view === "tree"
-          ? fileTree(rows, new Set([...closedDirs].filter((k) => k.startsWith(name + "/")).map((k) => k.slice(name.length + 1)))).map((i) =>
+          ? fileTree(shown, new Set([...closedDirs].filter((k) => k.startsWith(name + "/")).map((k) => k.slice(name.length + 1)))).map((i) =>
               i.kind === "file" ? (
                 fileRow(name, i.change, on, i.depth, i.name)
               ) : (
@@ -575,7 +577,8 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
                 </div>
               ),
             )
-          : rows.map((r) => fileRow(name, r, on, 0, r.from ? `${r.from} → ${r.path}` : r.path))}
+          : shown.map((r) => fileRow(name, r, on, 0, r.from ? `${r.from} → ${r.path}` : r.path))}
+        {more > 0 && <div className="sb-hint" role="note">{tooManyLine(more)}</div>}
       </div>
     );
   };

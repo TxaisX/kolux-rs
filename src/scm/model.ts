@@ -282,11 +282,18 @@ export const AC_TREE_KEY = "allChangesTree";
 export type AcLayout = { split: boolean; wrap: boolean; spaces: boolean; tree: boolean };
 export const acLayoutOf = (s: Record<string, unknown> | null): AcLayout => ({ split: s?.[AC_SPLIT_KEY] === true, wrap: s?.[AC_WRAP_KEY] === true, spaces: s?.[AC_WHITESPACE_KEY] === true, tree: s?.[AC_TREE_KEY] === true });
 export type ScmGroup = "conflicts" | "staged" | "changes" | "untracked";
-/** GIT-066: the orders on offer, `[id, label, groups]`; conflicts lead in each, since they block a commit. */
+/** GIT-066 / VIEW-062: the orders on offer, `[id, label, groups]`, the default first (Changes,
+ *  Staged, Untracked); conflicts are pinned above the rest in each, since they block a commit. */
 export const SCM_GROUP_ORDERS: [string, string, ScmGroup[]][] = [
+  ["changes-first", "Changes first", ["conflicts", "changes", "staged", "untracked"]],
   ["staged-first", "Staged first", ["conflicts", "staged", "changes", "untracked"]],
-  ["changes-first", "Changes first", ["conflicts", "changes", "untracked", "staged"]],
+  ["untracked-first", "Untracked first", ["conflicts", "untracked", "changes", "staged"]],
 ];
+/** VIEW-062: the most rows one section lists; a bigger change set shows a banner instead of freezing the panel. */
+export const SECTION_CAP = 500;
+/** VIEW-062: the banner under a capped section. */
+export const tooManyLine = (more: number): string =>
+  `${grouped(more)} more ${more === 1 ? "file is" : "files are"} not listed here, so the panel stays quick. Type part of a path in the filter, or open All Changes, to see ${more === 1 ? "it" : "them"}.`;
 /** GIT-066: the groups in the saved order; anything else reads as the first one. */
 export const scmGroups = (order: unknown): ScmGroup[] => (SCM_GROUP_ORDERS.find((o) => o[0] === order) ?? SCM_GROUP_ORDERS[0])[2];
 
@@ -538,8 +545,15 @@ export function fileTree(rows: Change[], closed: Set<string>): TreeItem[] {
   const all = (n: Node): string[] => [...n.files.map((f) => f.path), ...[...n.dirs.values()].flatMap(all)].sort(byName);
   const out: TreeItem[] = [];
   const walk = (n: Node, prefix: string, depth: number) => {
-    for (const name of [...n.dirs.keys()].sort(byName)) {
-      const sub = n.dirs.get(name)!;
+    for (const first of [...n.dirs.keys()].sort(byName)) {
+      // VIEW-062: a chain of folders that each hold only one folder folds into one row.
+      let sub = n.dirs.get(first)!;
+      let name = first;
+      while (sub.files.length === 0 && sub.dirs.size === 1) {
+        const [only, next] = [...sub.dirs.entries()][0];
+        name += "/" + only;
+        sub = next;
+      }
       const path = prefix + name;
       out.push({ kind: "dir", path, name, depth, files: all(sub) });
       if (!closed.has(path)) walk(sub, path + "/", depth + 1);
