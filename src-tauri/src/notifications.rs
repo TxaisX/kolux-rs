@@ -84,7 +84,6 @@ pub fn welcome_step(macos: bool, saved: Option<&str>) -> Welcome {
 /// VIEW-111: called once at start. On a Mac that has not answered, shows one welcome notification;
 /// the system asks for permission when it first shows one. The answer is recorded only when the
 /// system shows it in time, so a start where it does not may ask again later.
-#[allow(dead_code)] // until the coordinator's lib.rs hunk calls it at start
 pub fn first_run_welcome(app: &tauri::AppHandle) {
     use tauri::Manager;
     let Some(store) = app.try_state::<std::sync::Mutex<crate::state::Store>>() else { return };

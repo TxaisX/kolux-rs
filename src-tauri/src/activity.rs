@@ -244,7 +244,6 @@ pub fn activity_get(store: StoreState<'_>) -> Result<BTreeMap<String, u64>, Stri
 /// VIEW-013: the Floor timeline's lanes. A lane whose terminal is no longer open is not live: the
 /// page shows its quiet stretches as unverifiable rather than idle.
 #[tauri::command]
-#[allow(dead_code)] // until the coordinator's lib.rs hunk registers it
 pub fn activity_timeline(terminals: tauri::State<'_, crate::terminal::Terminals>) -> Vec<Track> {
     let mut lanes = with(|a| a.timeline(now_ms()));
     for l in &mut lanes {
