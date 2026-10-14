@@ -1284,6 +1284,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       {plusAt && (
         <PlusMenu
           agents={agents}
+          dir={cwd ?? undefined}
           defaultId={defaultId}
           onSetDefault={onSetDefault}
           busy={launching}

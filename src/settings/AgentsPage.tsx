@@ -6,6 +6,9 @@ import type { AgentInfo } from "../launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId, disabledAgents, switchAgent } from "../launch/agents";
 import { Segmented } from "./GeneralPage";
 import { useSettings } from "./useSettings";
+import TeamsModeCard from "../launch/TeamsModeCard";
+import KeepAwakeCard from "../launch/KeepAwakeCard";
+import { useTeamsHost } from "../launch/teams";
 import { CAP_FIELD, capOn } from "../usage/meter";
 import { CACHE_LENGTH, CACHE_ON, cacheMinutes } from "../projects/cache";
 
@@ -80,6 +83,7 @@ export default function AgentsPage() {
   const [written, setWritten] = useState(0);
   const save = (patch: Record<string, unknown>) => write(patch).then(() => setWritten((n) => n + 1));
   const [agents, setAgents] = useState<AgentInfo[] | null>(null);
+  const teamsHost = useTeamsHost();
   const [looking, setLooking] = useState(false);
   const [failed, setFailed] = useState<string | null>(null); // SESS-002: an errored search is not an empty one
   const [lines, setLines] = useState<Record<string, string>>({});
@@ -186,6 +190,8 @@ export default function AgentsPage() {
       </section>
       <HooksSwitch on={hooksOn(settings)} file={hooksFile} problems={problems} onSwitch={(on) => void save({ [HOOKS_FIELD]: on }).then(() => invoke("agent_hooks_sync", { clear: !on })).then(synced, syncFailed)} />
       <AgentsPageView cap={capOn(settings ?? {})} onCap={(on) => void save({ [CAP_FIELD]: on })} />
+      <TeamsModeCard settings={settings} save={save} host={teamsHost} />
+      <KeepAwakeCard settings={settings} save={save} />
       <CachePick minutes={cacheMinutes(settings)} onPick={(m) => void save(m === null ? { [CACHE_ON]: false } : { [CACHE_ON]: true, [CACHE_LENGTH]: m })} />
     </>
   );
