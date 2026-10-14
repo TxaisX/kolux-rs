@@ -1,4 +1,4 @@
-// A browser tab (BROW-001, BROW-002, BROW-003, BROW-005, BROW-007, BROW-012, BROW-014). The page itself is a child web view the back end lays
+// A browser tab (BROW-001, BROW-002, BROW-003, BROW-005, BROW-007, BROW-012, BROW-014, BROW-023). The page itself is a child web view the back end lays
 // over this pane's body; this component only reports where the body is and whether it is on
 // screen, so the page lives on untouched while its tab, workspace or screen is away. The header
 // holds the address bar, which takes the cursor with its text selected as the tab opens, and
@@ -12,6 +12,7 @@ import { backgroundBehind } from "./colour";
 import "./browser.css";
 import { can as canGo, fresh, started, type Pending } from "./history";
 import { nextZoom, zoomPercent } from "./zoom";
+import { iconAt, iconFound, type SiteIcon } from "./site";
 import { zoomFactor } from "../settings/zoom";
 
 /** `url`: the page or file the tab opens on instead of a blank page (SKILL-012 previews a kit result). */
@@ -50,6 +51,9 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const badgeTimer = useRef<number | undefined>(undefined);
   // BROW-007: the find bar; `null` while closed.
   const [find, setFind] = useState<string | null>(null);
+  // BROW-023: the site icon in the toolbar; the globe until the site gives one.
+  const [icon, setIcon] = useState<SiteIcon>(null);
+  const at = useRef("");
   const findBox = useRef<HTMLInputElement>(null);
   const focusMe = useRef(onFocus);
   focusMe.current = onFocus;
@@ -75,6 +79,8 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           setCan(canGo(h));
           setLoading(true);
           setAddress(url === BLANK ? "" : url);
+          at.current = url;
+          setIcon((i) => iconAt(i, url));
         }),
       );
       // BROW-014: a link the page opens as a new window, or Mod / middle click, becomes another tab
@@ -84,6 +90,11 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           if (e.payload.id !== id) return;
           openInBrowser(e.payload.url);
           if (!e.payload.front) setTimeout(() => focusMe.current?.(), 0);
+        }),
+      );
+      unlisteners.push(
+        await listen<{ id: number; page: string; icon: string }>("browser-icon", (e) => {
+          if (e.payload.id === id) setIcon((i) => iconFound(i, at.current, e.payload.page, e.payload.icon));
         }),
       );
       if (!alive) return;
@@ -175,7 +186,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     <section className={`pane browser${focused ? " focused" : ""}`} hidden={hidden} aria-label={`${title ?? "New Tab"} pane`} onMouseDown={onFocus} data-kind="browser" data-key={id}>
       <header className="pane-head">
         <span className="agent-mark" title="Browser">
-          <Globe size={13} />
+          {icon ? <img className="site-icon" src={icon.src} width={13} height={13} alt="" /> : <Globe size={13} />}
         </span>
         <span className="title">{title ?? "New Tab"}</span>
         <button className="ib" data-go="back" disabled={!can.back} onClick={() => act("back")} title="Back (Alt+Left)" aria-label="Back">

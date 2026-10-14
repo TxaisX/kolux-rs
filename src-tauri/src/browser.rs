@@ -19,6 +19,14 @@ pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
 pub const CHORD_EVENT: &str = "browser-chord";
 pub const LINK_EVENT: &str = "browser-link";
+pub const ICON_EVENT: &str = "browser-icon";
+
+/// Asks a finished page where its icon is (BROW-023): the first `<link rel~=icon>`, else the
+/// site's /favicon.ico. Runs as the page's own script; the answer is only ever fetched by the app.
+const ICON_QUERY: &str = r#"(() => { const l = document.querySelector('link[rel~="icon" i][href]'); return l ? l.href : new URL("/favicon.ico", location.href).href; })()"#;
+
+/// Icons larger than this are not shown (a real site icon is a few kilobytes).
+const ICON_MAX: usize = 256 * 1024;
 
 /// The scheme the page's script navigates to for a browser chord (`kolux-chord:back`). The
 /// navigation handler turns it into `CHORD_EVENT` and cancels it, so it never reaches the
@@ -148,6 +156,41 @@ struct TitlePayload {
 }
 
 #[derive(Clone, Serialize)]
+struct IconPayload {
+    id: u32,
+    /// The page the icon belongs to, so the pane can tell a late answer for an old site.
+    page: String,
+    /// The icon as a data: address (the app's own pages may not load images from the web).
+    icon: String,
+}
+
+/// The icon address a page gave (`eval_with_callback` hands back the result as JSON), if it is a
+/// web address a tab could open (T-500: never one of the app's own origins).
+pub fn icon_address(answer: &str, app: Option<&Url>) -> Option<Url> {
+    let href: String = serde_json::from_str(answer).ok()?;
+    let url = parse(&href).ok()?;
+    (url.scheme() != "about" && allowed(&url, app).is_ok()).then_some(url)
+}
+
+/// The icon bytes as a data: address, if the server said it is an image and it is small enough.
+pub fn icon_data(kind: &str, bytes: &[u8]) -> Option<String> {
+    use base64::Engine;
+    let kind = kind.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
+    if !kind.starts_with("image/") || bytes.is_empty() || bytes.len() > ICON_MAX {
+        return None;
+    }
+    Some(format!("data:{kind};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
+async fn fetch_icon(url: Url) -> Option<String> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(8)).build().ok()?;
+    let res = client.get(url).send().await.ok()?.error_for_status().ok()?;
+    let kind = res.headers().get(reqwest::header::CONTENT_TYPE)?.to_str().ok()?.to_string();
+    let bytes = res.bytes().await.ok()?;
+    icon_data(&kind, &bytes)
+}
+
+#[derive(Clone, Serialize)]
 struct LinkPayload {
     id: u32,
     url: String,
@@ -226,6 +269,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     let chord_app = app.clone();
     let window_app = app.clone();
     let window_dev = dev.clone();
+    let icon_dev = dev.clone();
     let builder = WebviewBuilder::new(label(id), WebviewUrl::External(url))
         .focused(false)
         // BROW-012: zoom is the app's, in its own steps, so the engine's own zoom keys are off.
@@ -259,11 +303,25 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
             let _ = chord_app.emit(CHORD_EVENT, ChordPayload { id, what: what.to_string() });
             false
         })
-        .on_page_load(move |_, payload| {
+        .on_page_load(move |page, payload| {
             let event = match payload.event() {
                 PageLoadEvent::Started => "started",
                 PageLoadEvent::Finished => "finished",
             };
+            // BROW-023: every finished load asks for the site's icon again, so an icon that failed
+            // is tried again after a reload; the pane keeps the old one while the site is the same.
+            if event == "finished" {
+                let (icon_app, icon_dev, at) = (load_app.clone(), icon_dev.clone(), payload.url().to_string());
+                let _ = page.eval_with_callback(ICON_QUERY, move |answer| {
+                    let Some(url) = icon_address(&answer, icon_dev.as_ref()) else { return };
+                    let (icon_app, page) = (icon_app.clone(), at.clone());
+                    tauri::async_runtime::spawn(async move {
+                        if let Some(icon) = fetch_icon(url).await {
+                            let _ = icon_app.emit(ICON_EVENT, IconPayload { id, page, icon });
+                        }
+                    });
+                });
+            }
             let _ = load_app.emit(LOAD_EVENT, LoadPayload { id, event, url: payload.url().to_string() });
         })
         .on_document_title_changed(move |_, title| {
@@ -457,5 +515,18 @@ mod tests {
         let mut b = Allowance::default();
         let through = (0..60).filter(|i| b.take(start + Duration::from_secs(*i))).count();
         assert_eq!(through, TABS_ALLOWED * 6);
+    }
+
+    #[test]
+    fn brow023_the_site_icon_is_a_small_image_from_a_web_address() {
+        assert_eq!(icon_address(r#""https://example.com/favicon.ico""#, None).map(|u| u.to_string()), Some("https://example.com/favicon.ico".into()));
+        assert_eq!(icon_address(r#""http://tauri.localhost/x.png""#, None), None);
+        assert_eq!(icon_address(r#""data:image/png;base64,AA==""#, None), None);
+        assert_eq!(icon_address("null", None), None);
+        assert_eq!(icon_data("image/png", &[1, 2, 3]), Some("data:image/png;base64,AQID".into()));
+        assert_eq!(icon_data("Image/X-Icon; charset=binary", &[1]), Some("data:image/x-icon;base64,AQ==".into()));
+        assert_eq!(icon_data("text/html", b"<html>"), None);
+        assert_eq!(icon_data("image/png", &[]), None);
+        assert_eq!(icon_data("image/png", &vec![0; ICON_MAX + 1]), None);
     }
 }

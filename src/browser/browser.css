@@ -15,3 +15,5 @@
 /* BROW-007: the find bar sits between the toolbar and the page, which shrinks to make room. */
 .pane.browser .find-bar { display: flex; align-items: center; gap: 4px; padding: 3px 8px; border-bottom: 1px solid var(--line-subtle); }
 .pane.browser .find-bar .find { flex: 1; min-width: 0; }
+/* BROW-023: the site icon takes the globe's place. */
+.pane.browser .pane-head .site-icon { display: block; object-fit: contain; }
