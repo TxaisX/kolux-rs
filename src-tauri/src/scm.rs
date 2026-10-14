@@ -2094,22 +2094,51 @@ pub struct BaseChanges {
     pub against: String,
     pub since: String,
     pub entries: Vec<crate::git::Entry>,
+    /// T-033-g: set when the branch and the base share no history (unrelated histories, or a
+    /// shallow clone cut before the fork): the changes are then measured against the base's tip,
+    /// and the tab says so instead of passing them off as the branch's own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
-pub fn base_changes(worktree: &Path, pinned: Option<&str>) -> Result<BaseChanges, String> {
-    let pinned = pinned.map(str::trim).filter(|p| !p.is_empty() && run(&["rev-parse", "--verify", "-q", &format!("{p}^{{commit}}")], Some(worktree)).is_ok());
-    let against = match pinned {
-        Some(p) => p.to_string(),
-        None => status(worktree)?.base.ok_or("no base branch to compare with")?,
+/// A commit for `rev` (ref-name rules first, so nothing starting with `-` reaches git as an option).
+fn commit_of(worktree: &Path, rev: &str) -> Option<String> {
+    if !Git::ref_ok(rev) {
+        return None;
+    }
+    run(&["rev-parse", "--verify", "-q", "--end-of-options", &format!("{rev}^{{commit}}")], Some(worktree)).ok().map(|s| s.trim().to_string())
+}
+
+/// `known` is the base the tab already has from the last status (T-033-g): with it no second
+/// status runs on every refresh. Without a pin or a known base, status finds it.
+pub fn base_changes(worktree: &Path, pinned: Option<&str>, known: Option<&str>) -> Result<BaseChanges, String> {
+    let pinned = pinned.map(str::trim).filter(|p| !p.is_empty() && commit_of(worktree, p).is_some());
+    let known = known.map(str::trim).filter(|k| Git::ref_ok(k));
+    let against = match (pinned, known) {
+        (Some(p), _) => p.to_string(),
+        (None, Some(k)) => k.to_string(),
+        (None, None) => status(worktree)?.base.ok_or("no base branch to compare with")?,
     };
-    let since = run(&["merge-base", &against, "HEAD"], Some(worktree)).map(|s| s.trim().to_string()).unwrap_or_else(|_| against.clone());
+    let (since, note) = match run(&["merge-base", "--end-of-options", &against, "HEAD"], Some(worktree)) {
+        Ok(s) => (s.trim().to_string(), None),
+        // The rare path: find out why, never compare silently against something else.
+        Err(_) => {
+            if commit_of(worktree, "HEAD").is_none() {
+                return Err("this branch has no commits yet, so there is nothing to compare with its base".into());
+            }
+            let Some(tip) = commit_of(worktree, &against) else {
+                return Err(format!("the base {against} no longer exists"));
+            };
+            (tip, Some(format!("vs {against} tip: no common ancestor found")))
+        }
+    };
     let entries = crate::git::base_entries(worktree, &since)?;
-    Ok(BaseChanges { against, since, entries })
+    Ok(BaseChanges { against, since, entries, note })
 }
 
 #[tauri::command]
-pub async fn scm_base_changes(worktree: String, pinned: Option<String>) -> Result<BaseChanges, String> {
-    base_changes(Path::new(&worktree), pinned.as_deref())
+pub async fn scm_base_changes(worktree: String, pinned: Option<String>, known: Option<String>) -> Result<BaseChanges, String> {
+    tauri::async_runtime::spawn_blocking(move || base_changes(Path::new(&worktree), pinned.as_deref(), known.as_deref())).await.map_err(|e| e.to_string())?
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -2361,12 +2390,71 @@ mod tests {
         run(&["commit", "-q", "-am", "main moves"], Some(&dir)).unwrap();
         run(&["checkout", "-q", "feature"], Some(&dir)).unwrap();
         fs::write(dir.join("f.txt"), "feature\nmore\n").unwrap();
-        let got = base_changes(&dir, Some("main")).unwrap();
-        assert_eq!((got.against.as_str(), got.since.as_str()), ("main", snapshot.as_str()));
+        let got = base_changes(&dir, Some("main"), None).unwrap();
+        assert_eq!((got.against.as_str(), got.since.as_str(), got.note.as_deref()), ("main", snapshot.as_str(), None));
         let rel = |e: &crate::git::Entry| Path::new(&e.path).strip_prefix(&dir).unwrap().to_string_lossy().replace('\\', "/");
         assert_eq!(got.entries.iter().map(|e| (rel(e), e.code, e.lines)).collect::<Vec<_>>(), vec![("f.txt".to_string(), 'A', Some(2))]);
         // A pin that does not resolve falls back to the detected base; no base at all is an error.
-        assert_eq!(base_changes(&dir, Some("no-such-branch")).map(|b| b.against).ok(), status(&dir).unwrap().base);
+        assert_eq!(base_changes(&dir, Some("no-such-branch"), None).map(|b| b.against).ok(), status(&dir).unwrap().base);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Every git process (top level and children) `f` starts on this thread, as its arguments.
+    fn git_argvs(f: impl FnOnce()) -> Vec<String> {
+        let trace = std::env::temp_dir().join(format!("kolux-rs-scm-argvs-{}-{:?}.json", std::process::id(), std::thread::current().id()));
+        let _ = fs::remove_file(&trace);
+        crate::git::TRACE2.with(|t| *t.borrow_mut() = Some(trace.clone()));
+        f();
+        crate::git::TRACE2.with(|t| *t.borrow_mut() = None);
+        let log = fs::read_to_string(&trace).unwrap_or_default();
+        let _ = fs::remove_file(&trace);
+        log.lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|e| matches!(e["event"].as_str(), Some("start" | "child_start")))
+            .map(|e| e["argv"].as_array().map(|a| a.iter().skip(1).filter_map(|v| v.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default())
+            .collect()
+    }
+
+    #[test]
+    fn t033g_a_known_base_skips_the_second_status_and_no_shared_history_is_labelled_never_silent() {
+        let dir = temp_repo("t033g");
+        run(&["checkout", "-q", "-b", "feature"], Some(&dir)).unwrap();
+        fs::write(dir.join("f.txt"), "feature\n").unwrap();
+        run(&["add", "."], Some(&dir)).unwrap();
+        run(&["commit", "-q", "-m", "feature"], Some(&dir)).unwrap();
+        let known = status(&dir).unwrap().base.expect("main is detected as the base");
+        let snapshot = run(&["merge-base", "main", "HEAD"], Some(&dir)).unwrap().trim().to_string();
+        // (b) The base the tab already has: the same answer, and not one `git status` behind it.
+        let mut with = None;
+        let argvs = git_argvs(|| with = Some(base_changes(&dir, None, Some(&known)).unwrap()));
+        let with = with.unwrap();
+        assert_eq!((with.against.as_str(), with.since.as_str(), with.note.as_deref()), (known.as_str(), snapshot.as_str(), None));
+        assert!(!argvs.is_empty(), "trace2 log missing");
+        assert_eq!(argvs.iter().filter(|a| a.starts_with("status")).count(), 0, "{argvs:?}");
+        // Without it (first read before any status arrived) status finds the base, as before.
+        let argvs = git_argvs(|| assert_eq!(base_changes(&dir, None, None).unwrap().since, snapshot));
+        assert!(argvs.iter().any(|a| a.starts_with("status")), "{argvs:?}");
+        // A pin still wins over the known base; option-looking text is never handed to git.
+        assert_eq!(base_changes(&dir, Some("feature"), Some(&known)).unwrap().against, "feature");
+        let argvs = git_argvs(|| assert_eq!(base_changes(&dir, Some("--output=x"), Some("-x")).map(|b| b.against).ok(), status(&dir).unwrap().base));
+        assert!(argvs.iter().all(|a| !a.contains("--output=x") && !a.split(' ').any(|w| w == "-x")), "{argvs:?}");
+        // (c) Unrelated histories: labelled, measured against the base tip.
+        run(&["checkout", "-q", "--orphan", "other"], Some(&dir)).unwrap();
+        run(&["rm", "-q", "-rf", "."], Some(&dir)).unwrap();
+        fs::write(dir.join("o.txt"), "other\n").unwrap();
+        run(&["add", "."], Some(&dir)).unwrap();
+        run(&["commit", "-q", "-m", "other root"], Some(&dir)).unwrap();
+        let other_tip = run(&["rev-parse", "HEAD"], Some(&dir)).unwrap().trim().to_string();
+        run(&["checkout", "-q", "feature"], Some(&dir)).unwrap();
+        let apart = base_changes(&dir, Some("other"), None).unwrap();
+        assert_eq!((apart.since.as_str(), apart.note.as_deref()), (other_tip.as_str(), Some("vs other tip: no common ancestor found")));
+        // A known base that has since been deleted is an error, not a silent compare.
+        run(&["branch", "-q", "gone"], Some(&dir)).unwrap();
+        run(&["branch", "-q", "-D", "gone"], Some(&dir)).unwrap();
+        assert!(base_changes(&dir, None, Some("gone")).unwrap_err().contains("no longer exists"));
+        // Unborn HEAD (a new orphan branch with nothing committed): an error that says so.
+        run(&["checkout", "-q", "--orphan", "fresh"], Some(&dir)).unwrap();
+        assert!(base_changes(&dir, Some("main"), None).unwrap_err().contains("no commits yet"));
         let _ = fs::remove_dir_all(&dir);
     }
 
