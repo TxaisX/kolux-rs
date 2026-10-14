@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { formatMemory } from "./memory";
-import { endNeedsAsk, formatCommitted, formatCpu, groupSessions, RES_COLUMNS, type Resources, type Row } from "./resources";
+import { committedNote, endNeedsAsk, formatCommitted, formatCpu, groupSessions, RES_COLUMNS, type Resources, type Row, type Usage } from "./resources";
 
 const cols = { gridTemplateColumns: RES_COLUMNS };
 
@@ -74,7 +74,7 @@ export default function ResourceManager({ names, workspaces, onClose }: Props) {
           <div className="res-row res-app" data-row="app" style={cols}>
             <span className="res-name">Kolux</span>
             <span className="res-fig">{formatMemory(data.app.bytes)}</span>
-            <span className="res-fig" data-fig="committed">{formatCommitted(data.app.committed)}</span>
+            {committedCell(data.app)}
             <span className="res-fig">{formatCpu(data.app.cpu)}</span>
             <span className="res-end" />
           </div>
@@ -107,7 +107,7 @@ export default function ResourceManager({ names, workspaces, onClose }: Props) {
                     {r.pid !== null && <span className="res-pid"> · pid {r.pid}</span>}
                   </span>
                   <span className="res-fig">{formatMemory(r.bytes)}</span>
-                  <span className="res-fig" data-fig="committed">{formatCommitted(r.committed)}</span>
+                  {committedCell(r)}
                   <span className="res-fig">{formatCpu(r.cpu)}</span>
                   <button className="btn res-end" onClick={() => void ask(r)} title={`End ${r.name}`}>
                     End
@@ -119,5 +119,16 @@ export default function ResourceManager({ names, workspaces, onClose }: Props) {
         ))}
       </div>
     </>
+  );
+}
+
+/** MERGE 52: the committed figure, with "(n of m could not be read)" under it when the sum is partial. */
+export function committedCell(u: Usage) {
+  const note = committedNote(u);
+  return (
+    <span className="res-fig" data-fig="committed" title={note ? `${formatCommitted(u.committed)} ${note}` : undefined}>
+      {formatCommitted(u.committed)}
+      {note && <span className="res-unread" style={{ display: "block", fontSize: "11px", lineHeight: 1.2 }}>{note}</span>}
+    </span>
   );
 }

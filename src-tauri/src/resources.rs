@@ -27,6 +27,9 @@ pub struct Usage {
     pub processes: usize,
     /// CLI-041: committed bytes of every process counted here that reported one; None when none did.
     pub committed: Option<u64>,
+    /// MERGE 52 (T-287-c wording): how many of `processes` gave no committed figure, so a partial sum
+    /// is never shown as the whole: the screen adds "(n of m could not be read)".
+    pub committed_unread: usize,
 }
 
 #[derive(Serialize)]
@@ -86,10 +89,13 @@ pub struct Sampler {
     last: Mutex<Option<(Instant, HashMap<u32, u64>)>>,
 }
 
+/// One owner's running sums: resident bytes, CPU used, processes, committed bytes, processes with no committed figure.
+type Sum = (u64, u64, usize, Option<u64>, usize);
+
 /// Adds the figures up per owner. `before` holds the CPU times of the last sample; a process
 /// seen for the first time counts no CPU yet. `app_ws` stands in when the app's own row is missing.
 pub fn total(procs: &[Proc], owner: &HashMap<u32, Option<u32>>, before: &HashMap<u32, u64>, secs: f64, cores: usize, app_pid: u32, app_ws: Option<u64>) -> (Usage, HashMap<u32, Usage>) {
-    let mut sums: HashMap<Option<u32>, (u64, u64, usize, Option<u64>)> = HashMap::new();
+    let mut sums: HashMap<Option<u32>, Sum> = HashMap::new();
     for p in procs {
         if let Some(who) = owner.get(&p.pid) {
             let used = before.get(&p.pid).map_or(0, |b| p.cpu.saturating_sub(*b));
@@ -98,10 +104,10 @@ pub fn total(procs: &[Proc], owner: &HashMap<u32, Option<u32>>, before: &HashMap
                 (Some(a), Some(b)) => Some(a + b),
                 (a, b) => a.or(b),
             };
-            *s = (s.0 + p.bytes, s.1 + used, s.2 + 1, committed);
+            *s = (s.0 + p.bytes, s.1 + used, s.2 + 1, committed, s.4 + usize::from(p.committed.is_none()));
         }
     }
-    let usage = |(bytes, used, processes, committed): (u64, u64, usize, Option<u64>)| Usage { bytes, cpu: percent(used, secs, cores), processes, committed };
+    let usage = |(bytes, used, processes, committed, committed_unread): Sum| Usage { bytes, cpu: percent(used, secs, cores), processes, committed, committed_unread };
     let mut app = usage(sums.remove(&None).unwrap_or_default());
     if !procs.iter().any(|p| p.pid == app_pid) {
         app.bytes += app_ws.unwrap_or(0);
@@ -288,6 +294,19 @@ mod tests {
         assert_eq!((each[&6].bytes, each[&6].committed), (7, None), "no figure at all is unknown, not 0");
         let json = serde_json::to_value(app).unwrap();
         assert_eq!((json["bytes"].as_u64(), json["committed"].as_u64()), (Some(150), Some(370)));
+    }
+
+    #[test]
+    fn merge52_a_partial_committed_sum_counts_the_processes_that_could_not_be_read() {
+        // session 5: shell 10 reported, its child 11 and grandchild 12 could not be opened.
+        let c = |pid, parent, committed| Proc { committed, ..p(pid, parent, 1, 0) };
+        let procs = [c(1, 0, Some(300)), c(10, 1, Some(4)), c(11, 10, None), c(12, 11, None), c(20, 1, None)];
+        let owner = owners(&procs, &[(5, 10), (6, 20)], 1);
+        let (app, each) = total(&procs, &owner, &HashMap::new(), 0.0, 1, 1, None);
+        assert_eq!((each[&5].committed, each[&5].committed_unread, each[&5].processes), (Some(4), 2, 3), "4 bytes is 1 of 3, not the whole");
+        assert_eq!((each[&6].committed, each[&6].committed_unread, each[&6].processes), (None, 1, 1), "none read stays unknown");
+        assert_eq!((app.committed, app.committed_unread), (Some(300), 0));
+        assert_eq!(serde_json::to_value(each[&5]).unwrap()["committed_unread"].as_u64(), Some(2));
     }
 
     #[test]
