@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test, vi } from "vitest";
+import { STATUSES_FAILED } from "../onboarding/firstRun";
 import { GrokCardView, GrokKeyDialog, grokDisconnect, grokHeadline, grokState, type GrokView } from "./GrokCard";
 import Ask from "../chrome/Ask";
 import { CodexCardView, codexDisconnect, codexState, type CodexView } from "./CodexCard";
@@ -139,4 +140,12 @@ test("the Disconnect question asks with Cancel, or only explains with a single O
   expect(ask("Disconnect")).toContain(">Disconnect<");
   expect(ask(null)).toContain(">OK<");
   expect(ask(null)).not.toContain(">Cancel<");
+});
+
+test("ACCT-035 (FIX-3): when the first read fails the Grok card still shows, named, with the read-failure line; with no error it waits blank", () => {
+  const h = renderToString(createElement(GrokCardView, { view: null, pending: null, error: STATUSES_FAILED, onAction: () => {} }));
+  expect(h).toContain('aria-label="Grok"');
+  expect(h).toContain('role="alert"');
+  expect(h).toContain(STATUSES_FAILED);
+  expect(renderToString(createElement(GrokCardView, { view: null, pending: null, error: null, onAction: () => {} }))).toBe("");
 });

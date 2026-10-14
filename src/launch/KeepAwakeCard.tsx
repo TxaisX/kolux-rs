@@ -3,6 +3,7 @@
 // the same `keepAwake` key; an older plain `true` reads as Agent.
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
+import { hooksOn } from "../settings/AgentsPage";
 
 export const AWAKE_KEY = "keepAwake";
 export const AWAKE_MODES = ["off", "agent", "on"] as const;
@@ -19,8 +20,10 @@ export const AWAKE_HELP: Record<AwakeMode, string> = {
   off: "The computer sleeps on its usual schedule.",
   agent:
     "The computer stays awake while an agent is working, and sleeps normally once every agent is waiting, blocked or done, or its pane closes. An agent started inside a shell pane that stops without saying so counts for at most 30 minutes after its last word.",
-  on: "The computer stays awake while Kolux is open, even with no agent working. On a laptop that uses Modern Standby, this drains the battery even with the lid closed.",
+  on: "The computer stays awake while Kolux is open, even with no agent working. On a laptop that uses Modern Standby this can drain the battery; closing the lid may still put it to sleep, and on battery it may sleep a few minutes after its usual sleep timeout.",
 };
+/** Agent mode counts only panes whose agent reports through the status hooks; with them off it never holds. */
+export const HOOKS_OFF_HELP = "Agent mode follows the agent status hooks, which are off: turn them on above, or pick On.";
 export const LID_HELP =
   "Closing the lid still follows the system: on Windows, the lid setting in Power Options decides; a Mac sleeps on lid close unless it is plugged in with an outside display; on Linux keep-awake also stops lid-close sleep.";
 
@@ -39,6 +42,11 @@ export default function KeepAwakeCard({ settings, save }: Props) {
         ))}
       </select>
       <p className="conn-detail">{AWAKE_HELP[mode]}</p>
+      {mode === "agent" && !hooksOn(settings) ? (
+        <p className="conn-detail" data-warn="hooks-off" role="note" style={{ color: "var(--warn)" }}>
+          {HOOKS_OFF_HELP}
+        </p>
+      ) : null}
       <p className="conn-detail">{LID_HELP}</p>
     </section>
   );

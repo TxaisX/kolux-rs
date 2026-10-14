@@ -156,7 +156,12 @@ fn undo(dest: &Path, existed: bool) {
 
 /// PROJ-003: clones `url` (cleaned first) into `dest`, handing each progress line to `on_line`.
 /// Git never asks for a password; a failure returns Git's complete error text.
-pub fn clone_into(url: &str, dest: &Path, ticket: &str, mut on_line: impl FnMut(&str)) -> Result<(), String> {
+pub fn clone_into(url: &str, dest: &Path, ticket: &str, on_line: impl FnMut(&str)) -> Result<(), String> {
+    clone_with(url, dest, ticket, &[], on_line)
+}
+
+/// clone_into with `extra` arguments for git clone (the tests point it at a stand-in upload-pack).
+fn clone_with(url: &str, dest: &Path, ticket: &str, extra: &[&str], mut on_line: impl FnMut(&str)) -> Result<(), String> {
     let url = clean_url(url)?;
     if !dest.is_absolute() {
         return Err(format!("{} is not a full path; choose the folder the copy goes in", dest.display()));
@@ -167,21 +172,70 @@ pub fn clone_into(url: &str, dest: &Path, ticket: &str, mut on_line: impl FnMut(
         return Err(format!("{} already has files in it; choose an empty or new folder", dest.display()));
     }
     let target = dest.to_string_lossy().into_owned();
-    let mut cmd = crate::git::command(&["-c", "credential.interactive=never", "clone", "--progress", "--", &url, &target], None);
+    let mut args = vec!["-c", "credential.interactive=never", "clone", "--progress"];
+    args.extend_from_slice(extra);
+    args.extend(["--", url.as_str(), target.as_str()]);
+    let mut cmd = crate::git::command(&args, None);
     cmd.envs(NO_PROMPT).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|_| NOT_INSTALLED.to_string())?;
+    // T-562: everything Git starts (git-upload-pack and its helpers) joins a kill-on-close job, so a
+    // cancel ends the whole tree, even a process whose parent is already gone. ponytail: one started
+    // in the few ms before the assignment escapes the job; the error output below never waits on it.
+    let mut job = crate::procs::Job::new().ok().filter(|j| j.assign_pid(child.id()).is_ok());
     let c = clones();
     c.running.lock().unwrap_or_else(PoisonError::into_inner).insert(ticket.to_string(), child.id());
-    if c.cancelled.lock().unwrap_or_else(PoisonError::into_inner).contains(ticket) {
-        kill_tree(child.id());
-    }
+    let is_cancelled = || c.cancelled.lock().unwrap_or_else(PoisonError::into_inner).contains(ticket);
+    // T-562: the error output is read on its own thread, because a leftover process can hold the pipe
+    // open long after Git has gone; this side only waits for it while Git runs, and briefly after.
+    let chunks = child.stderr.take().map(|mut e| {
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n @ 1..) = e.read(&mut buf) {
+                if tx.send(buf[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        rx
+    });
     // Progress overwrites its own line with \r; the error text keeps each line's last state.
     let mut log: Vec<String> = vec![];
     let mut line = String::new();
-    let mut buf = [0u8; 4096];
-    let mut err = child.stderr.take();
-    while let Some(Ok(n @ 1..)) = err.as_mut().map(|e| e.read(&mut buf)) {
-        for ch in String::from_utf8_lossy(&buf[..n]).chars() {
+    let tick = std::time::Duration::from_millis(50);
+    let mut ended: Option<std::time::Instant> = None;
+    let mut stopped = false;
+    loop {
+        if !stopped && is_cancelled() {
+            stopped = true;
+            drop(job.take()); // closing the job ends every process in it
+            kill_tree(child.id());
+            let _ = child.kill();
+        }
+        if ended.is_none() && matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
+            ended = Some(std::time::Instant::now());
+        }
+        // A cancelled clone stops listening at once; a finished one gives the pipe 2 s to drain.
+        if stopped || ended.is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(2)) {
+            break;
+        }
+        let Some(rx) = chunks.as_ref() else {
+            if ended.is_some() {
+                break;
+            }
+            std::thread::sleep(tick);
+            continue;
+        };
+        let chunk = match rx.recv_timeout(tick) {
+            Ok(chunk) => chunk,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) if ended.is_some() => break,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                std::thread::sleep(tick);
+                continue;
+            }
+        };
+        for ch in String::from_utf8_lossy(&chunk).chars() {
             if ch == '\r' || ch == '\n' {
                 if !line.trim().is_empty() {
                     on_line(line.trim());
@@ -198,6 +252,8 @@ pub fn clone_into(url: &str, dest: &Path, ticket: &str, mut on_line: impl FnMut(
     }
     log.push(line);
     let status = child.wait();
+    // Whatever Git left behind ends with it, so it lets go of the folder before any undo.
+    drop(job);
     c.running.lock().unwrap_or_else(PoisonError::into_inner).remove(ticket);
     let cancelled = c.cancelled.lock().unwrap_or_else(PoisonError::into_inner).remove(ticket);
     if cancelled {
@@ -418,6 +474,44 @@ mod tests {
         cancel_clone("c2");
         assert!(clone_into(&url, &kept, "c2", |_| {}).unwrap_err().contains("Cancelled"));
         assert!(kept.is_dir() && fs::read_dir(&kept).unwrap().next().is_none(), "a folder that was there is left as it was");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// T-562: a cancel mid-clone returns within a bound even when a process the clone started has
+    /// lost its parent and still holds Git's error output open (as an orphan git-upload-pack does).
+    #[test]
+    fn proj003_a_cancelled_clone_returns_at_once_though_an_orphan_holds_its_error_output() {
+        let root = temp("orphan");
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        git_in(&src, &["init", "-q"]);
+        git_in(&src, &["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "first"]);
+        // A stand-in upload-pack: it leaves a child whose parent is already gone (holding the error
+        // output it was given), says it has started, then never answers.
+        let marker = root.join("started");
+        let slow = root.join("slow-upload-pack.sh");
+        let fwd = |p: &Path| p.display().to_string().replace('\\', "/");
+        fs::write(&slow, format!("(sleep 40 >/dev/null </dev/null &)\necho up > '{}'\nsleep 40 >/dev/null\n", fwd(&marker))).unwrap();
+        let pack = format!("sh '{}'", fwd(&slow));
+        let (url, dest) = (file_url(&src), root.join("copy"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let clone = std::thread::spawn(move || {
+            let r = clone_with(&url, &dest, "orphan-1", &["--upload-pack", &pack], |_| {});
+            tx.send((r, dest.exists())).unwrap();
+        });
+        let start = std::time::Instant::now();
+        while !marker.exists() {
+            assert!(start.elapsed() < std::time::Duration::from_secs(60), "the stand-in upload-pack never started");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let cancelled = std::time::Instant::now();
+        cancel_clone("orphan-1");
+        let (r, left) = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("a cancelled clone returns within 10 s");
+        eprintln!("T-562 cancel returned in {:?}", cancelled.elapsed());
+        assert!(r.unwrap_err().contains("Cancelled"));
+        assert!(!left, "the folder the clone made is gone");
+        clone.join().unwrap();
         let _ = fs::remove_dir_all(&root);
     }
 

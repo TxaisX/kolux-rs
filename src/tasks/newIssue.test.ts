@@ -1,0 +1,80 @@
+import { describe, expect, it } from "vitest";
+import { closingDraft, createBusy, createOnce, DRAFT_MAX, draftFrom, draftToSave, emptyDraft, issueTargets, openDraft, watchCreate, withRepo } from "./newIssue";
+
+const d = (over = {}) => ({ ...emptyDraft("github.com", "acme/app"), title: "Crash on start", body: "Steps", labels: ["bug"], assignees: ["ana"], ...over });
+
+describe("T-231-d GIT-046 new issue drafts", () => {
+  it("targets the repositories the list shows, the first selected one first, each once", () => {
+    expect(issueTargets("up/stream", "me/fork")).toEqual(["up/stream", "me/fork"]);
+    expect(issueTargets("me/app", "me/app")).toEqual(["me/app"]);
+    expect(issueTargets("", "me/app")).toEqual(["me/app"]);
+  });
+
+  it("starts on the first selected repository, or brings back the unfinished draft", () => {
+    expect(openDraft(null, ["up/stream", "me/fork"], "github.com")).toEqual({ draft: emptyDraft("github.com", "up/stream"), elsewhere: null });
+    const saved = d({ repo: "me/fork" });
+    expect(openDraft(saved, ["up/stream", "me/fork"], "GitHub.com")).toEqual({ draft: saved, elsewhere: null });
+  });
+
+  it("a draft whose repository went away falls back to the first selected one without its labels and assignees", () => {
+    expect(openDraft(d({ repo: "gone/repo" }), ["up/stream", "me/fork"], "github.com").draft).toEqual({ ...d(), repo: "up/stream", labels: [], assignees: [] });
+  });
+
+  it("FIX-2 FS 2: a draft made for another GitHub host never comes back aimed at a same-named repository here", () => {
+    const internal = d({ host: "ghe.corp", title: "Internal bug", body: "secret steps" });
+    const got = openDraft(internal, ["acme/app"], "github.com");
+    expect(got.draft).toEqual(emptyDraft("github.com", "acme/app"));
+    expect(got.elsewhere).toEqual(internal);
+    expect(openDraft(internal, ["acme/app"], "GHE.corp")).toEqual({ draft: internal, elsewhere: null });
+  });
+
+  it("changing repository drops the labels and assignees of the previous one and keeps the host", () => {
+    expect(withRepo(d({ host: "ghe.corp" }), "acme/other")).toEqual({ ...d({ host: "ghe.corp" }), repo: "acme/other", labels: [], assignees: [] });
+    expect(withRepo(d(), "acme/app")).toEqual(d());
+  });
+
+  it("an empty draft clears what was kept; a very long body is not saved but the issue can still be created", () => {
+    expect(draftToSave(emptyDraft("github.com", "acme/app"))).toBeNull();
+    expect(draftToSave(d({ title: "  ", body: "", labels: [], assignees: [] }))).toBeNull();
+    expect(draftToSave(d())).toEqual(d());
+    expect(draftToSave(d({ body: "x".repeat(DRAFT_MAX + 1) }))).toBe("too-long");
+  });
+
+  it("a saved draft is read back only when it has the right shape, host included", () => {
+    expect(draftFrom(d())).toEqual(d());
+    expect(draftFrom(d({ host: "ghe.corp:8443" }))).toEqual(d({ host: "ghe.corp:8443" }));
+    expect(draftFrom({ repo: "acme/app", title: 3 })).toBeNull();
+    expect(draftFrom({ ...d(), labels: ["bug", 4], assignees: ["bad login", "ana"] })).toEqual({ ...d(), labels: ["bug"], assignees: ["ana"] });
+    expect(draftFrom("nope")).toBeNull();
+    expect(draftFrom({ ...d(), repo: "../x" })).toBeNull();
+    const { host: _gone, ...noHost } = d();
+    expect(draftFrom(noHost)).toBeNull();
+    expect(draftFrom(d({ host: "-x.corp" }))).toBeNull();
+    expect(draftFrom(d({ host: "evil host" }))).toBeNull();
+  });
+
+  it("FIX-2 AFTER 2: closing keeps label and assignee text that was typed but never left", () => {
+    expect(closingDraft(d({ labels: [], assignees: [] }), " bug, ui ,bug", "ana, -bad, bo")).toEqual(d({ labels: ["bug", "ui"], assignees: ["ana", "-bad", "bo"] }));
+  });
+});
+
+describe("FIX-2 FS 1: one New issue create at a time across close and reopen", () => {
+  it("a second create while the first is out is refused, and the flag clears when it settles", async () => {
+    const seen: string[] = [];
+    const off = watchCreate((s) => seen.push(s));
+    let finish: (v: number) => void = () => {};
+    const sends: number[] = [];
+    const first = createOnce(() => new Promise<number>((r) => { sends.push(1); finish = r; }));
+    expect(createBusy()).toBe(true);
+    // The dialog was closed and opened again while gh is slow: Create from the new one is refused.
+    expect(await createOnce(async () => { sends.push(2); return 2; })).toBeNull();
+    expect(sends).toEqual([1]);
+    finish(12);
+    expect(await first).toEqual({ ok: true, value: 12 });
+    expect(createBusy()).toBe(false);
+    expect(await createOnce(() => Promise.reject("gh: Validation Failed"))).toEqual({ ok: false, error: "gh: Validation Failed" });
+    expect(createBusy()).toBe(false);
+    off();
+    expect(seen).toEqual(["busy", "created", "busy", "failed"]);
+  });
+});

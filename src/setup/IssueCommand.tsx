@@ -5,6 +5,7 @@
 // opens its branch and runs nothing).
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { SetupLine } from "../projects/model";
+import { askTrust, trusted, type TrustAnswer, type TrustAsk } from "./TrustPrompt";
 
 /** The line that runs the issue command, and whether it came from the shared kolux.yaml (which
  *  needs the repository's trust before it runs, SAFE-025) or from the user's own override. */
@@ -21,9 +22,11 @@ export function issueToRun(linked: LinkedIssue | null | undefined): LinkedIssue 
 }
 
 /** PROJ-036: the issue command's line for the workspace at `path` of the repository at `root`, or
- *  null when nothing is linked or the project has no issue command. */
-export async function issueCommand(root: string, path: string, linked: LinkedIssue | null | undefined, invoke: Invoke = tauriInvoke): Promise<IssueRun | null> {
+ *  null when nothing is linked, the project has no issue command, or the user said Don't run to its
+ *  shared one (SAFE-025: asked first, once per command text unless the repository is trusted). */
+export async function issueCommand(root: string, path: string, linked: LinkedIssue | null | undefined, invoke: Invoke = tauriInvoke, ask: (a: TrustAsk) => Promise<TrustAnswer> = askTrust): Promise<IssueRun | null> {
   const issue = issueToRun(linked);
   if (!issue) return null;
+  if (!(await trusted(path, "issue", { root }, invoke, ask))) return null;
   return invoke<IssueRun | null>("workspace_issue_command", { root, path, number: issue.number, url: issue.url });
 }

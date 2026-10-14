@@ -96,11 +96,12 @@ export function defaultPreset(settings: Record<string, unknown> | null): string 
 
 /** GIT-055: where a repository's issues come from. A fork may choose its parent ("upstream"); the
  * choice is kept per repository (host/owner/name). A chosen parent that is gone falls back to the
- * repository itself, with a warning. */
+ * repository itself, with a warning; so does a parent read that failed (FIX-1), never shown as still checking. */
 export type IssueSource = { repo: string; warning: string | null; split: boolean };
-export function issueSource(settings: Record<string, unknown> | null, key: string, own: string, parent: string | null | undefined): IssueSource {
+export function issueSource(settings: Record<string, unknown> | null, key: string, own: string, parent: string | null | undefined, failed = false): IssueSource {
   const saved = settings?.tasksIssueSource;
   const choice = saved && typeof saved === "object" ? (saved as Record<string, unknown>)[key] : undefined;
+  if (choice === "upstream" && failed) return { repo: own, warning: `Could not check this fork's upstream; issues come from ${own}.`, split: false };
   if (choice !== "upstream" || parent === undefined) return { repo: own, warning: null, split: false };
   if (!parent) return { repo: own, warning: `The upstream repository chosen for issues is gone or no longer this fork's parent, so issues come from ${own}.`, split: false };
   return { repo: parent, warning: null, split: true };
@@ -148,4 +149,22 @@ export function eventLine(e: TaskEvent): string {
   };
   const verb = verbs[e.kind] ?? e.kind.replace(/[_-]/g, " ");
   return e.actor ? `@${e.actor} ${verb}` : verb;
+}
+
+/** GIT-047: the issue number typed for "duplicate of" (`12` or `#12`); null for anything else. */
+export function issueNumber(text: string): number | null {
+  const m = /^#?(\d{1,9})$/.exec(text.trim());
+  const n = m ? Number(m[1]) : 0;
+  return n > 0 ? n : null;
+}
+
+/** GIT-047: the search that suggests what an issue may duplicate: other issues in the same
+ * repository sharing words of its title (quotes, brackets and search words like is: left out). */
+export function duplicateQuery(repo: string, title: string): string | null {
+  const words = title
+    .replace(/["\\()[\]]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !w.includes(":"))
+    .slice(0, 6);
+  return words.length ? `repo:${repo} is:issue ${words.join(" ")}` : null;
 }
