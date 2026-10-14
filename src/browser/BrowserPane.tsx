@@ -8,7 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ArrowLeft, ArrowRight, Close, Globe, Refresh, Stop } from "../chrome/icons";
 import { BLANK, resolveAddress } from "./address";
-import { openerRefocus } from "./chord";
+import { openerRefocus, windowHasFocus } from "./chord";
 import { backgroundBehind } from "./colour";
 import "./browser.css";
 import { can as canGo, fresh, started, type Pending } from "./history";
@@ -92,7 +92,10 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         await listen<{ id: number; url: string; front: boolean }>("browser-link", (e) => {
           if (e.payload.id !== id) return;
           openInBrowser(e.payload.url);
-          if (openerRefocus(e.payload.front, document.hasFocus())) setTimeout(() => focusMe.current?.(), 0);
+          // Council FIX-4: not while the user is in another program (the app's window is not focused).
+          const { front } = e.payload;
+          const appHasFocus = document.hasFocus();
+          void windowHasFocus().then((w) => openerRefocus(front, appHasFocus, w) && setTimeout(() => focusMe.current?.(), 0));
         }),
       );
       unlisteners.push(
