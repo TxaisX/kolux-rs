@@ -505,6 +505,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         case "browser.back":
         case "browser.forward":
         case "browser.reload":
+        case "browser.find":
           browserAction(focused, hit.id.slice("browser.".length));
           break;
         case "app.settings":
@@ -603,6 +604,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         case "zoom.in":
         case "zoom.out":
         case "zoom.reset":
+          // BROW-012: a browser tab zooms its own page in its own steps.
+          if (kind === "browser") {
+            browserAction(focused, hit.id === "zoom.in" ? "zoomIn" : hit.id === "zoom.out" ? "zoomOut" : "zoomReset");
+            break;
+          }
           zoomTerm(focused, hit.id === "zoom.in" ? "in" : hit.id === "zoom.out" ? "out" : "reset"); // TERM-078
           break;
         case "tab.newTerminal":
