@@ -36,5 +36,8 @@ describe("FIX-1 issue actions (council FS 2)", () => {
     expect(actionError("There is no issue #9 in acme/app.", "close")).toBe("There is no issue #9 in acme/app.");
     expect(actionError("gh did not answer within 30 seconds; try again in a moment", "close")).toMatch(/may have been closed/);
     expect(actionError("gh did not answer within 30 seconds; try again in a moment", "reopen")).toMatch(/may have been reopened/);
+    // FIX-2 AFTER 1: there is no issue to refresh yet after a create timeout, so it names the list.
+    expect(actionError("gh did not answer within 30 seconds; try again in a moment", "create")).toBe("gh did not answer in time, so the issue may have been opened; refresh the list before trying again.");
+    expect(actionError("gh did not answer within 30 seconds; try again in a moment", "close")).toMatch(/refresh the issue before/);
   });
 });

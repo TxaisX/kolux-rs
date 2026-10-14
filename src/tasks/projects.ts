@@ -178,3 +178,14 @@ export function viewUrl(p: Pick<Project, "url">, view: number | null): string | 
   if (!/^https:\/\/[^\s"'<>]+$/.test(p.url)) return null;
   return view === null ? p.url : `${p.url.replace(/\/$/, "")}/views/${view}`;
 }
+
+// FIX-2 (council AFTER 3): each cell edit has its own id, so two edits to the same cell keep their
+// own "saving…" mark, and a reply that comes back after a newer edit to that cell was sent is not
+// applied over it.
+export type Saving = { id: number; cell: string };
+export const cellKey = (item: string, field: string) => `${item} ${field}`;
+export const startSave = (s: Saving[], id: number, cell: string): Saving[] => [...s, { id, cell }];
+export const endSave = (s: Saving[], id: number): Saving[] => s.filter((x) => x.id !== id);
+export const isSaving = (s: Saving[], cell: string) => s.some((x) => x.cell === cell);
+/** True when `id` is the last edit sent for `cell` (`newest` maps each cell to its last edit id). */
+export const isNewest = (newest: Map<string, number>, cell: string, id: number) => newest.get(cell) === id;

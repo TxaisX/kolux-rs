@@ -237,7 +237,7 @@ function IssueActions({ host, task, state, title, onDone }: { host: string; task
         )}
       </div>
       {state === "open" && reason === "duplicate" && like.length > 0 && (
-        <div className="task-labels" aria-label="Possible duplicates">
+        <div className="task-labels" role="group" aria-label="Possible duplicates">
           {like.map((t) => (
             <button key={t.number} className="btn" title={t.title} onClick={() => setDup(`#${t.number}`)}>
               #{t.number} {t.title.length > 40 ? `${t.title.slice(0, 40)}…` : t.title}

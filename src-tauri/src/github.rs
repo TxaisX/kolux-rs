@@ -136,8 +136,9 @@ pub(crate) fn host_allowed(gh: &Path, host: &str) -> Result<(), String> {
 }
 
 fn host_allowed_with(gh: &Path, host: &str, gh_host: Option<&str>) -> Result<(), String> {
-    use std::collections::HashSet;
+    use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
     if !host_ok(host) {
         return Err("This repository's GitHub host cannot be read".into());
     }
@@ -145,30 +146,59 @@ fn host_allowed_with(gh: &Path, host: &str, gh_host: Option<&str>) -> Result<(),
     if h == "github.com" || gh_host.is_some_and(|g| g.trim().eq_ignore_ascii_case(&h)) {
         return Ok(());
     }
-    // A host found signed in stays allowed for this run; a refusal is asked again next time, so
-    // signing in with gh takes effect without a restart.
-    static SIGNED_IN: OnceLock<Mutex<HashSet<(std::path::PathBuf, String)>>> = OnceLock::new();
+    // FIX-2 (council AFTER 4): a host found signed in stays allowed for a minute, so a gh auth
+    // logout takes effect soon; a refusal is asked again next time, so signing in needs no restart.
+    static SIGNED_IN: OnceLock<Mutex<HashMap<(std::path::PathBuf, String), Instant>>> = OnceLock::new();
+    const KEEP: Duration = Duration::from_secs(60);
     let known = SIGNED_IN.get_or_init(Default::default);
     let key = (gh.to_path_buf(), h.clone());
-    if known.lock().map(|k| k.contains(&key)).unwrap_or(false) {
+    if known.lock().map(|k| k.get(&key).is_some_and(|t| t.elapsed() < KEEP)).unwrap_or(false) {
         return Ok(());
     }
+    // FIX-2 (council FS 3): gh answers `config get -h <host> user` with the top-level user when
+    // the host has none of its own, so an answer equal to plain `config get user` is no sign-in.
+    // A host whose own user is the same login as the top-level one is refused too (safe side).
+    let signed = match gh_config(gh, &["config", "get", "-h", &h, "user"]) {
+        Some(user) => gh_config(gh, &["config", "get", "user"]).is_none_or(|top| top != user),
+        None => false,
+    };
+    if !signed {
+        return Err(format!("Kolux only talks to GitHub hosts gh is signed in to, and {h} is not one of them (gh auth login --hostname {h} signs in)."));
+    }
+    if let Ok(mut k) = known.lock() {
+        k.insert(key, Instant::now());
+    }
+    Ok(())
+}
+
+/// FIX-2 (council AFTER 4): one `gh config get` answer, trimmed; None when gh has none, fails or
+/// takes more than five seconds (it reads gh's own config files and goes nowhere).
+fn gh_config(gh: &Path, args: &[&str]) -> Option<String> {
+    use std::time::{Duration, Instant};
     let mut cmd = std::process::Command::new(gh);
-    cmd.args(["config", "get", "-h", &h, "user"]).current_dir(std::env::temp_dir()).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
-    cmd.stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    cmd.args(args).current_dir(std::env::temp_dir()).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000);
     }
-    let signed = cmd.output().map(|o| o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty()).unwrap_or(false);
-    if !signed {
-        return Err(format!("Kolux only talks to GitHub hosts gh is signed in to, and {h} is not one of them (gh auth login --hostname {h} signs in)."));
+    let mut child = cmd.spawn().ok()?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(15)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
     }
-    if let Ok(mut k) = known.lock() {
-        k.insert(key);
-    }
-    Ok(())
+    let out = child.wait_with_output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !text.is_empty()).then_some(text)
 }
 
 /// A GraphQL node id as GitHub gives them (letters, digits, `_`, `-`, `=`), so an id from the page
@@ -505,12 +535,25 @@ const ADD_COMMENT: &str = "mutation($id:ID!,$body:String!){addComment(input:{sub
 /// GitHub's own limit on a comment's length.
 pub const COMMENT_MAX: usize = 65_536;
 
+/// FIX-2 (council A3): what a failed issue lookup says. GitHub answers a missing repository with
+/// "Could not resolve to a Repository" and a missing number with "Could not resolve to an issue or
+/// pull request"; both carry NOT_FOUND, so the repository case is told apart first.
+fn lookup_error(e: String, number: u64, repo: &str) -> String {
+    if e.contains("Could not resolve to a Repository") {
+        format!("There is no repository {repo} on this GitHub host, or your gh account cannot see it.")
+    } else if e.contains("NOT_FOUND") || e.contains("Could not resolve") {
+        format!("There is no issue #{number} in {repo}.")
+    } else {
+        e
+    }
+}
+
 /// The node id of issue `number` in `repo`, or a plain message when there is no such issue.
 fn issue_id(gh: &Path, host: &str, repo: &str, number: u64) -> Result<String, String> {
     repo_path(host, repo)?;
     let (owner, name) = repo.split_once('/').unwrap_or_default();
     let missing = || format!("There is no issue #{number} in {repo}.");
-    let data = graphql(gh, host, ISSUE_ID, serde_json::json!({ "owner": owner, "name": name, "number": number })).map_err(|e| if e.contains("NOT_FOUND") || e.contains("Could not resolve") { missing() } else { e })?;
+    let data = graphql(gh, host, ISSUE_ID, serde_json::json!({ "owner": owner, "name": name, "number": number })).map_err(|e| lookup_error(e, number, repo))?;
     let node = &data["repository"]["issueOrPullRequest"];
     match node["__typename"].as_str() {
         Some("Issue") => Some(s(&node["id"])).filter(|id| node_id_ok(id)).ok_or_else(missing),
@@ -858,16 +901,18 @@ mod tests {
     }
 
     /// FIX-1 (council FB 1): a stand-in gh that is signed in to ghe.corp only (gh config get -h
-    /// <host> user answers a login there and fails everywhere else) and keeps every call.
+    /// <host> user answers a login there and fails everywhere else) and keeps every call. FIX-2
+    /// (council FS 3): like real gh, a top-level user (top.txt, what `gh config set user` writes)
+    /// is the answer for every host that has none of its own, with or without -h.
     fn gate_stand_in(name: &str) -> (std::path::PathBuf, crate::test_dir::TempDir) {
         let dir = crate::test_dir::temp(name);
         let gh = if cfg!(windows) {
             let f = dir.join("gh.cmd");
-            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%1\"==\"config\" goto config\r\necho {\"fork\":false,\"data\":{}}\r\nexit /b 0\r\n:config\r\nif /i \"%4\"==\"ghe.corp\" (echo ana& exit /b 0)\r\nexit /b 1\r\n").unwrap();
+            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%1\"==\"config\" goto config\r\necho {\"fork\":false,\"data\":{}}\r\nexit /b 0\r\n:config\r\nif /i \"%3\"==\"-h\" if /i \"%4\"==\"ghe.corp\" (echo ana& exit /b 0)\r\nif exist \"%~dp0top.txt\" (type \"%~dp0top.txt\"& exit /b 0)\r\nexit /b 1\r\n").unwrap();
             f
         } else {
             let f = dir.join("gh");
-            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\nif [ \"$1\" = config ]; then [ \"$4\" = ghe.corp ] && echo ana && exit 0; exit 1; fi\necho '{\"fork\":false,\"data\":{}}'\n").unwrap();
+            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\nif [ \"$1\" = config ]; then if [ \"$3\" = -h ] && [ \"$4\" = ghe.corp ]; then echo ana; exit 0; fi; [ -f \"$(dirname \"$0\")/top.txt\" ] && cat \"$(dirname \"$0\")/top.txt\" && exit 0; exit 1; fi\necho '{\"fork\":false,\"data\":{}}'\n").unwrap();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -902,6 +947,34 @@ mod tests {
         let _ = read_project(&gh, "ghe.corp", "acme", 3);
         let got = api_calls();
         assert!(got.iter().any(|c| c.starts_with("api repos/acme/app --hostname ghe.corp")) && got.iter().any(|c| c.starts_with("api graphql --hostname ghe.corp")), "{got:?}");
+    }
+
+    #[test]
+    fn a_missing_repository_is_not_reported_as_a_missing_issue() {
+        let repo = "gh: Could not resolve to a Repository with the name 'acme/gone'. (NOT_FOUND)".to_string();
+        assert_eq!(lookup_error(repo, 7, "acme/gone"), "There is no repository acme/gone on this GitHub host, or your gh account cannot see it.");
+        let issue = "gh: Could not resolve to an issue or pull request with the number of 999. (NOT_FOUND)".to_string();
+        assert_eq!(lookup_error(issue, 999, "acme/app"), "There is no issue #999 in acme/app.");
+        assert_eq!(lookup_error("github.com: gh did not answer within 30 seconds".into(), 1, "acme/app"), "github.com: gh did not answer within 30 seconds");
+    }
+
+    #[test]
+    fn a_top_level_gh_user_does_not_sign_in_every_host() {
+        let (gh, dir) = gate_stand_in("github-host-gate-top");
+        fs::write(dir.join("top.txt"), "zed
+").unwrap();
+        let api_calls = || fs::read_to_string(dir.join("calls.txt")).unwrap_or_default().lines().filter(|l| l.starts_with("api")).count();
+        // gh config get -h evil.example user falls back to the top-level user, the same answer as
+        // gh config get user: that is no sign-in, so nothing goes to evil.example, create included.
+        assert!(host_allowed_with(&gh, "evil.example", None).unwrap_err().contains("signed in to"));
+        assert!(read_project(&gh, "evil.example", "acme", 3).is_err());
+        assert!(create_issue(&gh, "evil.example", "acme/app", "Leak", "internal text", &[], &[]).unwrap_err().contains("signed in to"));
+        assert!(repo_parent(&gh, "evil.example", "acme/app").is_err());
+        assert_eq!(api_calls(), 0, "nothing reached gh api for a host known only through the top-level user");
+        // A host with its own user in gh's hosts still passes.
+        assert!(host_allowed_with(&gh, "ghe.corp", None).is_ok());
+        assert_eq!(repo_parent(&gh, "ghe.corp", "acme/app").unwrap(), None);
+        assert_eq!(api_calls(), 1);
     }
 
     #[test]

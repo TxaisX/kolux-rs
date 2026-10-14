@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyCellEdit, cellEditable, groupItems, labelChange, openingView, parseProjectRef, type Project, type ProjectField, projectHostRefused, type ProjectItem, pushRecent, refsFrom, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
+import { applyCellEdit, cellEditable, cellKey, endSave, isNewest, isSaving, startSave, groupItems, labelChange, openingView, parseProjectRef, type Project, type ProjectField, projectHostRefused, type ProjectItem, pushRecent, refsFrom, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
 
 const status: ProjectField = { id: "F_s", name: "Status", kind: "single_select", options: [{ id: "o1", name: "Todo", start: "", days: 0 }, { id: "o2", name: "Done", start: "", days: 0 }] };
 const points: ProjectField = { id: "F_p", name: "Points", kind: "number", options: [] };
@@ -104,5 +104,24 @@ describe("FIX-1 (council review of 674122c)", () => {
     expect(Object.keys(cleared.items[0].values).sort()).toEqual(["F_p", "F_s"]);
     expect(cleared.items[1]).toBe(start.items[1]);
     expect(start.items[0].values.F_s).toBeUndefined();
+  });
+});
+
+describe("FIX-2 AFTER 3: one saving mark per edit", () => {
+  it("two edits to one cell keep the mark until both are back, and only the newest reply is applied", () => {
+    const cell = cellKey("a", "F_status");
+    const newest = new Map<string, number>();
+    let s = startSave([], 1, cell);
+    newest.set(cell, 1);
+    s = startSave(s, 2, cell);
+    newest.set(cell, 2);
+    s = startSave(s, 3, cellKey("a", "labels"));
+    s = endSave(s, 1);
+    expect(isSaving(s, cell)).toBe(true);
+    expect(isNewest(newest, cell, 1)).toBe(false);
+    expect(isNewest(newest, cell, 2)).toBe(true);
+    s = endSave(s, 2);
+    expect(isSaving(s, cell)).toBe(false);
+    expect(isSaving(s, cellKey("a", "labels"))).toBe(true);
   });
 });

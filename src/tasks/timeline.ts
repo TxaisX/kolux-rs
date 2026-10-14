@@ -1,7 +1,8 @@
 // T-549 (OD-15, DT-C37): a GitHub Projects roadmap view drawn as a timeline: each item is a bar from
 // its start to its end, read from the project's date or iteration fields. GitHub does not say which
-// fields a roadmap view uses, so Kolux picks them (an iteration first, else date fields named like a
-// start and an end) and the user may change them; the choice is remembered per project.
+// fields a roadmap view uses, so Kolux picks them (date fields named like a start or an end first,
+// else an iteration, else the first date fields; FIX-2 council A1) and the user may change them;
+// the choice is remembered per project.
 import type { ProjectField, ProjectItem } from "./projects";
 
 const DAY = 86_400_000;

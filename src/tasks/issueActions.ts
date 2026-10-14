@@ -9,7 +9,8 @@ const DONE: Record<IssueAction, string> = { close: "the issue may have been clos
 /** What the dialog says when an action failed. A timeout means gh stopped waiting, not that GitHub
  * refused, so the write may have landed: refreshing first avoids sending it twice. */
 export function actionError(error: string, what: IssueAction): string {
-  return /did not answer within/i.test(error) ? `gh did not answer in time, so ${DONE[what]}; refresh the issue before trying again.` : error;
+  // FIX-2 (council AFTER 1): after a create there is no issue to refresh yet, only the list.
+  return /did not answer within/i.test(error) ? `gh did not answer in time, so ${DONE[what]}; refresh the ${what === "create" ? "list" : "issue"} before trying again.` : error;
 }
 
 /** Sends one action, then (on success) runs `after` and waits for `refresh`; busy is set for the
