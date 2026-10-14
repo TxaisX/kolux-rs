@@ -7,6 +7,8 @@
 //   pnpm smoke -- --attach           drive an app that is already running with --remote-debugging-port=<cdp>
 //   options: --port 1431 (vite) · --cdp 9240 · --identifier com.txaisxiong.kolux-rs.smoke · --temp <folder>
 //            --only 1,3 · --keep (leave the app and the temp folder for a look) · --timeout <minutes for the first build>
+//            --offscreen (T-560: the app's window opens far off-screen with no taskbar button; CDP works as usual)
+//            --self-test (T-560: check the temp-folder cleanup and the off-screen config, launching nothing)
 //            --require-quit (count flow 5 in the exit code before T-184 is ticked)
 //
 // Flow 1  a grid grows from 4 to 6 panes and the PTYs already running keep running: each shell gets a marker
@@ -64,6 +66,7 @@ const IDENTIFIER = opt("identifier", "com.txaisxiong.kolux-rs.smoke");
 const TEMP = opt("temp", "G:\\Temp\\kolux-rs-smoke");
 const ATTACH = flag("attach");
 const KEEP = flag("keep");
+const OFFSCREEN = flag("offscreen");
 const ONLY = opt("only", ATTACH ? "1,2,3,4" : "1,2,3,4,5")
   .split(",")
   .map((s) => Number(s.trim()))
@@ -297,7 +300,7 @@ async function pageUp(ms) {
 }
 // Second-screen rule: dev windows go to the screen at X=-1920 when it is there.
 const moveWindow = (pid) =>
-  ps(
+  OFFSCREEN ? Promise.resolve("left off-screen") : ps(
     `Add-Type -AssemblyName System.Windows.Forms; if ([System.Windows.Forms.Screen]::AllScreens.Count -lt 2) { 'one screen'; exit }
      Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr a,int x,int y,int cx,int cy,uint f);' -Name W -Namespace U
      $h = [IntPtr]::Zero; for ($i = 0; $i -lt 20 -and $h -eq [IntPtr]::Zero; $i++) { $h = (Get-Process -Id ${pid}).MainWindowHandle; if ($h -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 500 } }
@@ -316,7 +319,7 @@ async function launch() {
   mkdirSync(codexHome, { recursive: true });
   mkdirSync(local, { recursive: true });
   const cfg = join(TEMP, "tauri.smoke.json");
-  writeFileSync(cfg, JSON.stringify({ identifier: IDENTIFIER, build: { devUrl: `http://localhost:${PORT}`, beforeDevCommand: `pnpm exec vite --port ${PORT} --strictPort` } }));
+  writeFileSync(cfg, JSON.stringify(smokeConfig()));
   const logFile = join(TEMP, "tauri-dev.log");
   const out = openSync(logFile, "w");
   // One command string through the shell: pnpm is a .cmd on Windows, which Node will not spawn directly.
@@ -399,7 +402,8 @@ async function closeApp() {
 
 // ---------- setup: a throwaway repo as a project, its main checkout open with one shell ----------
 async function setup() {
-  rmSync(TEMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+  const held = await removeTemp(TEMP, null);
+  if (held) throw new Error(`the temp folder ${TEMP} could not be cleared (${held})`);
   mkdirSync(repo, { recursive: true });
   mkdirSync(marks, { recursive: true });
   writeFileSync(smokeFile, ORIGINAL);
@@ -707,6 +711,64 @@ async function flow5() {
   return text;
 }
 
+// T-560: the config the app is started with. Tauri merges it into tauri.conf.json, and a list is replaced
+// whole, so --offscreen copies the app's own window entries and only moves them: created far off-screen,
+// not centred, no taskbar button. The app's own show() then shows it where it is, so nothing pops up.
+function smokeConfig() {
+  const cfg = { identifier: IDENTIFIER, build: { devUrl: `http://localhost:${PORT}`, beforeDevCommand: `pnpm exec vite --port ${PORT} --strictPort` } };
+  if (OFFSCREEN) {
+    const own = JSON.parse(readFileSync(join(root, "src-tauri", "tauri.conf.json"), "utf8"));
+    cfg.app = { windows: (own.app?.windows ?? [{}]).map((w) => ({ ...w, center: false, x: -32000, y: -32000, skipTaskbar: true })) };
+  }
+  return cfg;
+}
+
+// T-560: removes the temp folder once the app (pid) has exited, waiting up to 10 s, then retries a folder
+// still held (EPERM / EBUSY / ENOTEMPTY) with a growing wait: 0.5 s, 1 s ... 2.5 s. fs's own maxRetries
+// does not retry EPERM on a held folder (Node 24 fails at once), so the loop is here. Returns null when
+// gone, else the error code: a held folder never throws.
+async function removeTemp(dir, pid, retries = 5) {
+  for (let i = 0; i < 20 && pid && (await alive(pid).catch(() => false)); i++) await sleep(500);
+  for (let i = 0; ; i++) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      return null;
+    } catch (e) {
+      if (i >= retries || !["EPERM", "EBUSY", "ENOTEMPTY"].includes(e.code)) return e.code ?? e.message;
+      await sleep(500 * (i + 1));
+    }
+  }
+}
+
+// T-560: `--self-test` checks the cleanup against a folder another process holds open (its working
+// folder), and the off-screen config, without launching the app.
+if (flag("self-test")) {
+  const checks = [];
+  const held = (ms) => {
+    const d = join(TEMP, "held");
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "f.txt"), "x");
+    spawn(process.execPath, ["-e", `setTimeout(() => {}, ${ms})`], { cwd: d, stdio: "ignore", windowsHide: true });
+    return d;
+  };
+  let d = held(4000);
+  await sleep(300);
+  const code = await removeTemp(d, null, 0);
+  checks.push([code !== null && existsSync(d), `a held folder with no retries is reported, not thrown: ${code}`]);
+  await removeTemp(TEMP, null, 8);
+  d = held(1500);
+  await sleep(300);
+  const late = await removeTemp(d, null);
+  checks.push([late === null && !existsSync(d), `a folder held for 1.5 s is removed by the retries: ${late ?? "gone"}`]);
+  await removeTemp(TEMP, null, 8);
+  const w = (OFFSCREEN ? smokeConfig() : { app: null }).app?.windows ?? [];
+  checks.push([OFFSCREEN ? w.length > 0 && w.every((x) => x.x === -32000 && x.y === -32000 && x.center === false && x.skipTaskbar === true && x.title) : true, OFFSCREEN ? `--offscreen window entries: ${JSON.stringify(w)}` : "--offscreen not given: config left alone"]);
+  for (const [ok, note] of checks) log(`${ok ? "PASS" : "FAIL"} self-test: ${note}`);
+  const bad = checks.filter((c) => !c[0]).length;
+  log(`smoke self-test: ${checks.length - bad}/${checks.length} passed`);
+  process.exit(bad ? 1 : 0);
+}
+
 // ---------- run ----------
 const flows = { 1: flow1, 2: flow2, 3: flow3, 4: flow4, 5: flow5 };
 const results = [];
@@ -765,11 +827,7 @@ log(`evidence: ${evidence}`);
 // failure can never swallow them. The app is waited for (up to 10 s), then fs retries EPERM/EBUSY with a
 // growing delay (0.5 s, 1 s, ... 2.5 s); a folder still held is a warning, not a failed smoke.
 if (!KEEP) {
-  for (let i = 0; i < 20 && lastPid && (await alive(lastPid).catch(() => false)); i++) await sleep(500);
-  try {
-    rmSync(TEMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
-  } catch (e) {
-    log(`WARN cleanup: ${TEMP} was not removed (${e.code ?? e.message}); delete it by hand`);
-  }
+  const code = await removeTemp(TEMP, lastPid);
+  if (code) log(`WARN cleanup: ${TEMP} was not removed (${code}); delete it by hand`);
 }
 process.exit(failed ? 1 : 0);
