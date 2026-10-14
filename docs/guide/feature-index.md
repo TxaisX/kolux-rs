@@ -192,6 +192,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-542-b | The smoke test covers quitting and coming back. | internal |
 | T-540-b | Plan-check fails and names ids missing from the plan. | internal |
 | T-545 | The smoke test waits longer for a pane to take focus. | internal |
+| T-551 | Under Yolo, Codex runs without approval prompts but inside its sandbox, writing only in its workspace. | [Safety](safety.md) |
 
 ### P0 · theme 6 · Business-user frame (4 cards)
 
@@ -475,4 +476,4 @@ Tasks not yet ticked off in the build plan are not listed.
 |---|---|---|
 | T-298 | Reopen the wizard from the sidebar help menu; first successes are recorded locally. | [Getting started](getting-started.md) |
 
-<!-- generated from PLAN.md at 231fc43 -->
+<!-- generated from PLAN.md at 07c5d80 -->
