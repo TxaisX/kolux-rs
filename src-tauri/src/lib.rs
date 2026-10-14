@@ -3,6 +3,8 @@ mod agents;
 mod artifacts;
 mod automations;
 mod capture;
+mod chat;
+mod chat_tools;
 mod crash;
 mod perms;
 mod browser;
@@ -33,6 +35,7 @@ mod keybindings;
 mod kits;
 mod models;
 mod links;
+mod menu;
 mod names;
 mod newproject;
 mod notifications;
@@ -62,6 +65,7 @@ mod terminal;
 mod test_dir;
 mod tools;
 mod token_usage;
+mod tray;
 mod trust;
 mod update;
 mod visibility;
@@ -453,6 +457,9 @@ pub fn run() {
             sessions::claude_workspace_sessions,
             terminal::terminal_spawn,
             terminal::terminal_write,
+            chat::chat_support,
+            chat::chat_read,
+            chat::chat_close,
             terminal::terminal_screen_reply,
             terminal::terminal_resize,
             terminal::terminal_ack,
@@ -552,6 +559,7 @@ pub fn run() {
             scm::scm_pr, scm::scm_pr_checks, scm::scm_pr_create, scm::scm_open_pr,
             scm::scm_history, scm::scm_commit_files, scm::scm_github_repo,
             keybindings::keybindings_read,
+            menu::menu_sync, menu::menu_popup,
             keybindings::keybindings_write,
             keybindings::keybindings_reload,
             keybindings::keybindings_show,

@@ -82,9 +82,9 @@ import AgentsRail from "./agents/AgentsRail";
 import { cardPanes, pickSession, railGroups, rowStatus } from "./agents/rail";
 import UpdateCenter from "./update/UpdateCenter";
 import { FIELDS as STATUS_FIELDS, readStatusBar, toggleItem } from "./chrome/statusItems";
-import { chromeShown } from "./chrome/chromeItems";
+import { chromeShown, menuBarState, menuEdit, menuScreen, menuSettingFlip } from "./chrome/chromeItems";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
-import TerminalPane, { type PaneNotice } from "./terminal/TerminalPane";
+import TerminalPane, { focusedTerminalEdit, type PaneNotice } from "./terminal/TerminalPane";
 import { accountLabel, accountPrompt, type CodexAccount } from "./terminal/accountChange";
 import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
 import { changes, patchSettings } from "./settings/useSettings";
@@ -122,11 +122,13 @@ import { heldByTerminal } from "./keys/terminalPolicy";
 import { useAgentEvents, useAgentStatusState } from "./status/useAgentStatus";
 import { useAppSettings } from "./settings/useAppSettings";
 import { useWorkspaceActions, useWorkspaces } from "./projects/useWorkspaces";
-import { useChrome } from "./chrome/useChrome";
+import { useChrome, useMenuBar } from "./chrome/useChrome";
+import { stepZoom, zoomFactor, type ZoomStep } from "./settings/zoom";
 import { aiOf, useKitRun, useKits, type KitWait } from "./kits/useKits";
 import { useWizard } from "./onboarding/useWizard";
 import { hooksOn } from "./settings/AgentsPage";
 import ToolNotices from "./launch/ToolNotices";
+import { AgentsChat } from "./chat/ChatView";
 import PlanSheet from "./terminal/PlanSheet";
 import { draftKey, feedbackMessage, keepDraft, showsReview, stillPending, type PlanDraft } from "./terminal/planReview";
 
@@ -427,6 +429,29 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     showRight("explorer");
     setExplorerFocus((n) => n + 1);
   };
+  // APP-009 / T-248-a: the menu mirrors the screen, the look, the chrome switches and the shortcuts;
+  // a menu click the page carries out runs the same code as its shortcut.
+  useMenuBar(menuBarState(settings, screen, (id) => keymap.bindings.get(id)?.chords, classic), (id) => {
+    const flip = menuSettingFlip(settings, id);
+    const to = menuScreen(id);
+    const el = document.activeElement;
+    const inField = !!el && !el.closest(".xterm") && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || (el as HTMLElement).isContentEditable);
+    const ed = menuEdit(id, inField);
+    if (flip) saveSetting(flip[0], flip[1]);
+    else if (to) setScreen(classic ? "terminals" : to);
+    else if (ed && "field" in ed) document.execCommand(ed.field);
+    else if (ed) focusedTerminalEdit.current?.(ed.terminal);
+    else if (id === "zoom.in" || id === "zoom.out" || id === "zoom.reset") void stepZoom(id.slice(5) as ZoomStep).catch(() => {});
+    else if (id === "app.settings") {
+      setSettingsAt((a) => ({ target: null, n: a.n }));
+      setSettingsOpen(true);
+    } else if (id === "sidebar.left.toggle") setSidebarOpen((o) => !o);
+    else if (id === "sidebar.right.toggle") {
+      if (screen === "terminals" && right.open) saveRight({ open: false });
+      else showRight(right.tab);
+    }
+    // edit.paste: the core lane's attachPaste paste(). help.*: T-248-b.
+  });
   // SESS-004: the default agent is a settings key; the plus menu lists it first.
   const setDefault = (id: string) => saveSetting(DEFAULT_AGENT_KEY, id);
   useEffect(() => {
@@ -504,6 +529,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         case "browser.back":
         case "browser.forward":
         case "browser.reload":
+        case "browser.find":
           browserAction(focused, hit.id.slice("browser.".length));
           break;
         case "app.forceReload":
@@ -609,6 +635,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         case "zoom.in":
         case "zoom.out":
         case "zoom.reset":
+          // BROW-012: a browser tab zooms its own page in its own steps.
+          if (kind === "browser") {
+            browserAction(focused, hit.id === "zoom.in" ? "zoomIn" : hit.id === "zoom.out" ? "zoomOut" : "zoomReset");
+            break;
+          }
           zoomTerm(focused, hit.id === "zoom.in" ? "in" : hit.id === "zoom.out" ? "out" : "reset"); // TERM-078
           break;
         case "tab.newTerminal":
@@ -1745,12 +1776,20 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     const text = feedbackMessage(d.comments, d.note);
     setReviewing(null);
     dropDraft(draftKey(p.key, plan));
-    await invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).catch(() => {});
-    for (let i = 0; i < 30 && (hookRef.current[p.key] === "waiting" || hookRef.current[p.key] === "permission"); i++) await new Promise((r) => setTimeout(r, 100));
+    // Claude has no hook for a deny inside its own menu, so the pane leaves "permission" here, as answer() does.
+    const left = await invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).then(() => true, () => false);
+    if (!left) return setToast("Kolux could not answer the agent. Answer it in its terminal; your feedback was not typed.");
+    setHook((h) => ({ ...h, [p.key]: "working" }));
+    // SAFE-004: the feedback is typed only once the agent has left its menu; an Enter while the menu
+    // is still open would pick its default, which is Yes (council re-review of chat a969502).
+    const asking = () => hookRef.current[p.key] === "waiting" || hookRef.current[p.key] === "permission";
+    for (let i = 0; i < 30 && asking(); i++) await new Promise((r) => setTimeout(r, 100));
+    if (asking()) return setToast("The agent is still asking. Answer it in its terminal; your feedback was not typed.");
     const id = ptys.current[p.key];
     if (id === undefined || !panesRef.current.some((x) => x.key === p.key)) return;
     await invoke("terminal_write", { id, data: "\x1b[200~" + text + "\x1b[201~" }).catch(() => {});
     await new Promise((r) => setTimeout(r, 300));
+    if (asking()) return setToast("The agent is still asking. Answer it in its terminal; your feedback was not sent.");
     await invoke("terminal_write", { id, data: "\r" }).catch(() => {});
     setHook((h) => ({ ...h, [p.key]: "working" }));
     setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
@@ -1938,6 +1977,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         }
         screen={screen}
         classic={classic}
+        appMenu
+        uiZoom={zoomFactor()}
         onScreen={setScreen} installed={installedIds} codexAccount={codex.accounts.length > 0} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} onZoom={(how) => zoomTerm(focused, how)} fullPage={fullPage} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
       <div className="body" style={{ "--sidebar-w": `${leftWidth}px` } as CSSProperties}>
         {palette && (
@@ -2283,6 +2324,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           )}
           {screen === "skills" && <SkillsPage workspace={activeDir} onClose={() => closeSkills(setScreen)} />}
           {inbox && <InboxView items={inboxItems(sources, now)} now={now} onOpen={openPane} />}
+          {screen === "agents" && <AgentsChat panes={panes.filter((p) => !p.kind && !p.seats).map((p) => ({ key: p.key, cwd: p.cwd, title: p.title }))} focused={selected ?? focused} ptyOf={(k) => ptys.current[k]} hook={hook} stateOf={(k) => hookRef.current[k]} />}
           {tower && <TowerView rows={towerRows(towerSeats())} usage={usageByAccount(towerSeats(), plan)} now={now} onOpen={openPane} />}
           {floor && <FloorView />}
           {agentsScreen && selected === null && (
@@ -2486,6 +2528,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                       }
                     }}
                     hook={hook[p.key] === "working" && turn[p.key]?.monitoring ? "background" : hook[p.key]}
+                    pendingTool={hook[p.key] === "permission" ? turn[p.key]?.tool : undefined}
+                    keySettings={settings}
                     crew={crew[p.key]}
                     onNeedsYou={(on) => setNeeds((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
                     onBell={() => noticed(p, "rang the bell")}

@@ -7,19 +7,31 @@ installed binary, config folder, credential file, network capture, source mirror
 and its credential. Third-party blog posts, community skills and other apps' docs were seen in
 search results and are NOT used as sources (they are not the vendor's word).
 
+CORRECTIONS 2026-10-14 (council D2 MERGE 48 review of this survey; survey corrections only, T-547
+stays open for Txais's DT-C32 answer). Marked inline with [corrected 2026-10-14]:
+- D2: for new Kimi Code members the weekly limit is removed; only the rolling 5-hour window remains.
+- D1: "api.moonshot.cn for China" has no source in the vendor page cited; treat it as unsourced.
+- E1: "the plan's Subscription Key" as the credential for the remains call is this survey's own
+  inference, not the FAQ's words; it decides which key T-263-c would store, so it must be confirmed
+  on MiniMax's page before that card is built.
+- C1: only per-day limits are published (Standard 1500, Enterprise 2000 requests per user per day);
+  "per minute" is dropped.
+- B1-B3: not verified first-hand by the review (its fetches were refused); B3 is second-hand by this
+  survey's own account (quoted via search). Treat all three as unsourced until someone reads them.
+
 Summary table
 provider / service                     | documented | host to allowlist            | credential                       | terms risk
 ---------------------------------------+------------+------------------------------+----------------------------------+-----------
 Claude plan usage (5-hour / weekly)    | NO service | none (local, see A1)         | none for the local route         | HIGH for any direct call
 Claude sign-in renewal                 | NO         | -                            | (claude.ai OAuth: not allowed)   | HIGH: terms forbid it
 Claude Console org usage (API, not plan)| yes       | api.anthropic.com            | Admin API key (org only)         | low, but not plan usage
-Codex / ChatGPT plan usage             | yes, via Codex's own app-server (experimental) | none for Kolux (Codex itself talks to OpenAI) | the user's Codex login, held by Codex | low on that route; direct backend calls undocumented
-Codex / ChatGPT sign-in renewal        | yes, via app-server account/read refreshToken  | none for Kolux               | held by Codex                    | low on that route
+Codex / ChatGPT plan usage             | yes, via Codex's own app-server (experimental; unverified, see B) | none for Kolux (Codex itself talks to OpenAI) | the user's Codex login, held by Codex | low on that route; direct backend calls undocumented
+Codex / ChatGPT sign-in renewal        | yes, via app-server account/read refreshToken (unverified, see B) | none for Kolux               | held by Codex                    | low on that route
 Gemini CLI quota                       | NO         | -                            | -                                | not assessed (terms page not read, see C3)
 Antigravity quota                      | NO         | -                            | -                                | unknown
-Kimi Open Platform balance (pay-as-you-go) | yes    | api.moonshot.ai (api.moonshot.cn for China) | Moonshot API key       | low
-Kimi Code membership quota (5-hour / weekly) | NO   | -                            | -                                | unknown
-MiniMax M Plan remaining usage         | yes        | www.minimax.io               | the user's M Plan Subscription Key | low
+Kimi Open Platform balance (pay-as-you-go) | yes    | api.moonshot.ai (".cn for China" unsourced) | Moonshot API key       | low
+Kimi Code membership quota (5-hour; no weekly for new members) | NO | -                            | -                                | unknown
+MiniMax M Plan remaining usage         | yes        | www.minimax.io               | an M Plan key (which one: unsourced, see E1) | low
 
 A. Claude (Anthropic)
 A1. Plan usage. No public HTTP service returns a Pro/Max user's 5-hour or weekly figures. The one
@@ -57,6 +69,9 @@ A4. Terms. Claude Code legal page, section "Authentication and credential use": 
     (what Kolux does today) is the permitted case.
 
 B. Codex / ChatGPT (OpenAI)
+[corrected 2026-10-14] B1-B3 below were not verified first-hand by the council review (its fetches of
+these pages were refused), and B3 is second-hand by this survey's own account. Treat all three as
+unsourced until the pages are read directly.
 B1. Plan usage and sign-in state are documented through Codex's own app-server (codex app-server,
     JSON-RPC 2.0 over stdio, newline-delimited JSON): account/read "fetch current account info;
     optionally refresh tokens" (refreshToken boolean), account/rateLimits/read "fetch ChatGPT rate
@@ -90,7 +105,8 @@ C1. Gemini CLI quota: not publicly documented as a service. The quota page docum
     /stats model command and a usage summary on exit, and says "Unpaid tier and Google One users:
     Gemini CLI was replaced by Antigravity CLI on June 18th, 2026."
     Doc: https://geminicli.com/docs/resources/quota-and-pricing/
-    Static limits (requests per user per minute / per day by edition) are published at
+    Static limits (requests per user per day by edition; only per-day limits are published, Standard
+    1500 and Enterprise 2000 [corrected 2026-10-14: "per minute" dropped]) are published at
     https://developers.google.com/gemini-code-assist/resources/quotas but there is no documented
     call that returns what a user has left.
 C2. Antigravity quota: not publicly documented as a service. Plans page: "You can view baseline quota
@@ -103,19 +119,21 @@ C3. Terms: NOT ASSESSED in this pass. The fetch of the Gemini CLI terms and priv
 
 D. Kimi (Moonshot)
 D1. Kimi Open Platform balance (pay-as-you-go API credit): documented. GET
-    https://api.moonshot.ai/v1/users/me/balance (China: https://api.moonshot.cn/v1/users/me/balance),
+    https://api.moonshot.ai/v1/users/me/balance (a China host on api.moonshot.cn was named here, but
+    the cited page does not source it [corrected 2026-10-14: unsourced]),
     Authorization: Bearer <Moonshot API key>, returns available_balance, voucher_balance,
     cash_balance. Doc: https://platform.kimi.ai/docs/api/balance
     Risk: low (a documented call with the user's own API key). Host: api.moonshot.ai.
-D2. Kimi Code membership quota (weekly quota plus a rolling 5-hour window): not publicly documented as
-    a service. The membership page says to use the Kimi Code Console or type /usage in the CLI, and
+D2. Kimi Code membership quota (a rolling 5-hour window; [corrected 2026-10-14] for new members the
+    weekly limit is removed, so only the 5-hour window remains): not publicly documented as a service. The membership page says to use the Kimi Code Console or type /usage in the CLI, and
     that "Requests from the CLI, VS Code, Desktop, and third-party tools all count toward that quota".
     Doc: https://www.kimi.com/code/docs/en/kimi-code/membership.html
 
 E. MiniMax
 E1. M Plan remaining usage: documented in the M Plan FAQ ("Method 3"):
     curl 'https://www.minimax.io/v1/token_plan/remains' with Authorization: Bearer <API Key>
-    (the plan's Subscription Key). Usage counts over a 5-hour window and a weekly window; also the
+    [corrected 2026-10-14: that this is the plan's Subscription Key, rather than another key, is this
+    survey's inference, not the FAQ's words; confirm it before T-263-c stores a key]. Usage counts over a 5-hour window and a weekly window; also the
     Plan usage console page and the mmx quota CLI command.
     Docs: https://platform.minimax.io/docs/m-plan/faq.md , https://platform.minimax.io/docs/m-plan/usage-rules.md
     Terms: the FAQ says a Subscription Key works with "any AI tool that supports the OpenAI-compatible
@@ -134,7 +152,7 @@ and sign-in state by starting the user's own codex app-server over stdio and cal
 account/rateLimits/read, account/read and the account/rateLimits/updated notification; Kolux never
 reads or stores a ChatGPT token and needs no new network host; the experimental status is handled by
 a version check and a quiet fallback to what running sessions report. (3) MiniMax: one call to
-https://www.minimax.io/v1/token_plan/remains with the user's Subscription Key, stored by the app in
+https://www.minimax.io/v1/token_plan/remains with the user's M Plan key (which key: see E1), stored by the app in
 the OS credential store and never logged; host www.minimax.io on the capabilities allowlist.
 (4) Kimi: the documented Open Platform balance (api.moonshot.ai) only for users who give a Moonshot
 API key; Kimi Code membership quota stays "not available" until Moonshot documents a service.

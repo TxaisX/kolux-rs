@@ -140,9 +140,43 @@ pub struct Worktree {
 /// prompt no one can see, Git Credential Manager's window included. Saved credentials still work.
 pub const NO_PROMPT: [(&str, &str); 2] = [("GIT_TERMINAL_PROMPT", "0"), ("GCM_INTERACTIVE", "never")];
 
+#[cfg(test)]
+thread_local! {
+    /// Tests only: when set, every git this thread starts writes git's own trace2 event log to
+    /// this file (inherited by anything that git starts in turn), so a test sees each process.
+    pub(crate) static TRACE2: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+    /// Tests only: when set, every git this thread starts reads only the repository's own config:
+    /// an empty global file, no system file, and nothing the parent process injected (config
+    /// pairs or a password helper), so a test's result never depends on this PC's git setup.
+    pub(crate) static ISOLATED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Tests only: an empty file to stand in for the user's global git config.
+#[cfg(test)]
+pub(crate) fn empty_global_config() -> PathBuf {
+    let path = std::env::temp_dir().join("kolux-rs-test-empty-gitconfig");
+    if std::fs::metadata(&path).map(|m| m.len() != 0).unwrap_or(true) {
+        let _ = std::fs::write(&path, "");
+    }
+    path
+}
+
 pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
     let mut cmd = Command::new("git");
     cmd.args(args);
+    #[cfg(test)]
+    TRACE2.with(|t| {
+        if let Some(path) = &*t.borrow() {
+            cmd.env("GIT_TRACE2_EVENT", path);
+        }
+    });
+    #[cfg(test)]
+    if ISOLATED.with(|i| i.get()) {
+        cmd.env("GIT_CONFIG_GLOBAL", empty_global_config()).env("GIT_CONFIG_NOSYSTEM", "1");
+        for v in ["GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_ASKPASS", "SSH_ASKPASS"] {
+            cmd.env_remove(v);
+        }
+    }
     // GIT-001 (T-033-b): a status read never rewrites the index on its own (git's optional lock),
     // so the Source Control watcher is not woken by its own reads. Required locks are unaffected.
     cmd.env("GIT_OPTIONAL_LOCKS", "0");
@@ -284,6 +318,18 @@ pub(crate) fn run(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
 /// `run` keeping leading spaces, which `git status --porcelain` lines carry meaning in.
 fn run_untrimmed(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
     output(args, cwd).map(|o| String::from_utf8_lossy(&o).to_string())
+}
+
+/// GIT-062: the one readable line a failed git's stderr comes down to. The last `fatal:` line
+/// wins, then the last `error:` line, then the last line that is not progress; None when only
+/// progress was said. A `\r`-overwritten line counts as its last state.
+pub fn failure_reason(log: &str) -> Option<String> {
+    const PROGRESS: [&str; 9] = ["Cloning into", "remote: ", "Receiving objects", "Resolving deltas", "Updating files", "Checking out files", "Filtering content", "Enumerating objects", "Counting objects"];
+    let lines: Vec<&str> = log.lines().map(|l| l.rsplit('\r').next().unwrap_or("").trim()).filter(|l| !l.is_empty()).collect();
+    let tagged = |tag: &str| lines.iter().rev().find_map(|l| l.strip_prefix(tag)).map(str::trim);
+    let line = tagged("fatal:").or_else(|| tagged("error:")).or_else(|| lines.iter().rev().copied().find(|l| !PROGRESS.iter().any(|p| l.starts_with(p))))?;
+    let mut chars = line.chars();
+    chars.next().map(|first| first.to_uppercase().chain(chars).collect())
 }
 
 /// One changed file on one side of the index (EDIT-027): `code` is git's status letter.
@@ -782,6 +828,9 @@ mod tests {
                 let _ = conn.write_all(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"private\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
             }
         });
+        // Only NO_PROMPT is under test: a config pair or password helper the parent shell injected
+        // (credential.interactive, GIT_ASKPASS) would change git's words, so they are left out.
+        ISOLATED.with(|i| i.set(true));
         let began = std::time::Instant::now();
         let url = format!("http://127.0.0.1:{port}/private.git");
         let mut cmd = command(&["-c", "credential.helper=", "ls-remote", &url], None);
@@ -892,6 +941,29 @@ mod tests {
         assert_eq!(git.push_states(&repo, &["side"]).len(), 1);
         let _ = fs::remove_dir_all(&remote);
         let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn t315_a_failed_clone_comes_down_to_its_last_fatal_line_without_progress() {
+        // A real clone into a folder that exists and is not empty.
+        ISOLATED.with(|i| i.set(true));
+        let src = temp_repo("t315-src");
+        let dest = std::env::temp_dir().join(format!("kolux-rs-git-t315-dest-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dest);
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("keep.txt"), "mine\n").unwrap();
+        let out = command(&["clone", "--progress", "--", &native(&src.to_string_lossy()), &native(&dest.to_string_lossy())], None).output().unwrap();
+        assert!(!out.status.success());
+        let reason = failure_reason(&String::from_utf8_lossy(&out.stderr)).unwrap();
+        assert!(reason.starts_with("Destination path") && reason.contains("already exists"), "{reason}");
+        // A clone that fails part-way: progress (with \r redraws) and trailing fragments never show.
+        let log = "Cloning into 'x'...\nremote: Enumerating objects: 5, done.\nReceiving objects:  10% (1/9)\rReceiving objects:  40% (4/9)\nerror: RPC failed; curl 56 recv failure\nfatal: early EOF\nfatal: fetch-pack: invalid index-pack output\nremote: \n";
+        assert_eq!(failure_reason(log).as_deref(), Some("Fetch-pack: invalid index-pack output"));
+        assert_eq!(failure_reason("error: cannot lock ref\nReceiving objects: 100%").as_deref(), Some("Cannot lock ref"));
+        assert_eq!(failure_reason("warning: could not find UI helper\n").as_deref(), Some("Warning: could not find UI helper"));
+        assert_eq!(failure_reason("Cloning into 'x'...\nReceiving objects:  3%\r"), None);
+        let _ = fs::remove_dir_all(&src);
+        let _ = fs::remove_dir_all(&dest);
     }
 
     #[test]

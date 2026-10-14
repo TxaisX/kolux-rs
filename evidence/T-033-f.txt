@@ -1,10 +1,12 @@
 T-033-f evidence (lane/reliability from fd7091b, 2026-10-13). Council D2 MERGE 48 review, FIX-SOON 1.
 
 What changed (src-tauri/src/scm_watch.rs)
-- ask_git: after check-ignore, the folders it called ignored are listed once with
-  `git ls-files -z -- <dir>/ ...`; a folder that still holds a tracked file is answered "not ignored",
-  so a change to that tracked file starts a read again (before: it was cached as ignored and the
-  status never moved). tracked_under() reads the ls-files output.
+- ask_git (CORRECTED 2026-10-14, council review of e479df7, FIX-SOON 3): the first version added a
+  `git ls-files` step for folders check-ignore called ignored. That step changed nothing: git's own
+  check-ignore already answers a folder that holds a tracked file as "not ignored" (proved on git
+  2.55.0.windows.3), so the earlier line "before: it was cached as ignored" was wrong. The step and
+  its helper are removed; the t033f test now also asks ask_git directly for that folder and pins the
+  answer (Some([false])), so a future git that changed this would fail the test.
 - matters: the rule-file check runs before counts(). Before, `.git/info/exclude` was dropped by
   counts() (only HEAD, index and refs pass inside .git), so an exclude edit never cleared the cache.
 - New Spot::Info: a linked worktree also watches its repository's shared `info` folder (not

@@ -587,6 +587,26 @@ struct Mark {
     program: String,
     /// The agent the program is credited as (`claude`, `codex`), none for another program.
     agent: Option<&'static str>,
+    /// The window pane the session runs in (CHAT-006 finds a pane's program by it).
+    pane: Option<u32>,
+    /// CLAUDE_CONFIG_DIR / CODEX_HOME as the program was started with them.
+    home_env: Vec<(String, String)>,
+    /// The folder the program started in (None: the app's own folder).
+    cwd: Option<String>,
+}
+
+/// What a pane's program session is, for the chat view (CHAT-002, CHAT-006).
+pub struct PaneRun {
+    pub agent: Option<&'static str>,
+    /// When the program started, on the wall clock.
+    pub started: std::time::SystemTime,
+    /// The program has printed something (it is past launching).
+    pub wrote: bool,
+    pub alive: bool,
+    /// CLAUDE_CONFIG_DIR / CODEX_HOME as the program was started with them (CHAT-007).
+    pub home_env: Vec<(String, String)>,
+    /// The folder the program started in (None: the app's own folder).
+    pub cwd: Option<String>,
 }
 
 /// One chunk of program output, base64 so split multi-byte characters survive the trip.
@@ -630,6 +650,9 @@ impl Terminals {
                 windows_sys::Win32::System::Console::SetConsoleCtrlHandler(None, 0);
             });
         }
+        // CHAT-007: the agent home folders the program really got; Kolux's account variable (applied last) wins.
+        let home_env: Vec<(String, String)> = own_env.iter().chain(env.iter()).filter(|(k, _)| k == crate::claude_accounts::CONFIG_ENV || k == crate::codex_accounts::HOME_ENV).cloned().collect();
+        let chat_cwd = cwd.clone();
         // ACCT-049: checked before the lock, so a drive that does not answer holds up only this pane.
         if let Some(dir) = cwd.as_deref() {
             check_start_dir(dir, program.as_deref().map(str::trim).is_some_and(|p| !p.is_empty() && !is_shell_program(p)))?;
@@ -762,7 +785,10 @@ impl Terminals {
                 // Drop the session so the PTY closes and the reader thread can finish. A session
                 // still listed ended by itself: Kolux's own kills take it off the list first.
                 let mut by_itself = false;
+                let mut tail = None;
                 if let Ok(mut inner) = registry.lock() {
+                    // AUTO-014: keep the end of a followed run's output before the log goes.
+                    tail = inner.logs.get(&id).map(|l| crate::automations::screen_text(&l.read(None, Some(crate::automations::RUN_OUTPUT_LINES))));
                     by_itself = inner.sessions.remove(&id).is_some();
                     inner.dirs.remove(&id);
                     inner.marks.remove(&id);
@@ -777,7 +803,13 @@ impl Terminals {
                 }
                 crate::activity::terminal_ended(id);
                 // AUTO-012: an automation run followed in this pane is over with it.
-                crate::automations::follow(&exit_app, |s| crate::automations::pane_ended(s, id, code, crate::automations::now_ms()));
+                crate::automations::follow(&exit_app, |s| {
+                    let run = crate::automations::pane_ended(s, id, code, crate::automations::now_ms())?;
+                    if let (Some(r), Some((text, cut))) = (&run, &tail) {
+                        crate::automations::keep_output(s, r, text, *cut)?;
+                    }
+                    Ok(run)
+                });
                 // ORCH-027: a worker's agent that died mid-task tells its coordinator.
                 if by_itself && is_program {
                     if let Ok(store) = exit_app.state::<Mutex<crate::state::Store>>().lock() {
@@ -801,12 +833,20 @@ impl Terminals {
         }
         if is_program {
             let agent = program.as_deref().and_then(crate::agents::credited_agent);
-            inner.marks.insert(id, Mark { started: Instant::now(), last_output: None, program: program.unwrap_or_default().trim().to_string(), agent });
+            inner.marks.insert(id, Mark { started: Instant::now(), last_output: None, program: program.unwrap_or_default().trim().to_string(), agent, pane: pane_key, home_env, cwd: chat_cwd });
         }
         if let Some(dir) = cwd {
             inner.dirs.insert(id, dir);
         }
         Ok(id)
+    }
+
+    /// The newest program session started in window pane `pane` (CHAT-002, CHAT-006).
+    pub fn of_pane(&self, pane: u32) -> Option<PaneRun> {
+        let inner = self.inner.lock().ok()?;
+        let (id, m) = inner.marks.iter().filter(|(_, m)| m.pane == Some(pane)).max_by_key(|(id, _)| **id)?;
+        let started = std::time::SystemTime::now().checked_sub(m.started.elapsed()).unwrap_or(std::time::UNIX_EPOCH);
+        Some(PaneRun { agent: m.agent, started, wrote: m.last_output.is_some(), alive: !inner.ended.contains(id), home_env: m.home_env.clone(), cwd: m.cwd.clone() })
     }
 
     /// ACCT-046: the program session `id` actually started.
