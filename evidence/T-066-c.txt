@@ -1,0 +1,48 @@
+T-066-c · SESS 030 (rest): the restore path reaches the Rust resume forms for every catalogue agent
+lane/orchestration from 4edd933 (merge of main 0819c57 = b519cf1), 2026-10-13
+
+1. What changed (lane side, src-tauri/src/agents.rs)
+- The start line answer now carries `resumed`: true when the line holds the agent's own resume
+  form. A restored tab's mark ("restored" vs "restored without resume", TERM-107) is driven by it
+  instead of the TypeScript Claude/Codex-only check.
+- carries_resume is deleted: the restore path no longer passes a resume form in `extra` (hunk
+  below), so the form is only ever added on the Rust side, once. Before the hunk lands the
+  restore path never sets `restore`, so nothing can double either way.
+
+2. Tests (cargo test --lib agents: 32 passed, 0 failed; clippy --all-targets -D warnings clean)
+- agents::tests::sess030_a_restore_carries_its_resume_once_and_says_so (replaces
+  sess030_a_resume_already_in_the_extra_arguments_is_never_added_twice):
+  Claude restore with id -> args [--permission-mode, auto, --resume, sid], resumed true;
+  Codex one `resume`, resumed true; Copilot [--resume=sid], resumed true; Aider and Kiro with
+  no id resumed true (folder forms); Claude, Codex, Gemini, Copilot with no id resumed false;
+  Crush (no documented form) with an id resumed false; a fresh Claude tab resumed false.
+- agents::tests::sess030_the_restore_path_has_no_line_for_a_plain_shell: "shell", "", "pwsh",
+  "cmd" as an agent id are refused (Err), so the restore loop's catch keeps a shell's saved line.
+
+3. Frontend hunks (core lane src/terminal/**, coordinator src/main.tsx + src/App.tsx), the exact
+   unified diff is evidence/T-066-c.patch (git apply from the repo root). Proven by applying it
+   to this checkout, then reverting:
+   - pnpm exec tsc --noEmit: clean (exit 0)
+   - pnpm exec vitest run src/terminal: Test Files 26 passed, Tests 139 passed
+   What it does:
+   - main.tsx: restore loop calls agent_start_line with extra [], restore true, session p.session;
+     guard `p.kind || !p.agentId || (p.agent === "shell" && p.program === null)` (keeps a shell
+     guard: plain shells carry no agentId, and a programless shell is skipped as well); stores
+     line.resumed on the pane (false when the agent is no longer known).
+   - layout.ts: resumeArgs and resumes deleted; the restoreLayout args seeding line deleted
+     (saved agent args are already [] and main.tsx fills them); SavedPane gains resumed?.
+   - layout.test.ts: the resumed args expectation becomes [] per pane (Rust adds the form);
+     the resumes() test is deleted (its rule is the Rust test above); new test
+     "T-066-c: a plain shell never carries an agent id into the saved layout..." (the only
+     shell pane with an agentId is an unstarted chooser, which layoutOf does not write down).
+   - TerminalPane.tsx: `resumed` prop; mark = resumed === false ? "restored without resume" :
+     "restored"; the resumes import removed.
+   - App.tsx: Pane type gains resumed?; TerminalPane gets resumed={p.resumed}.
+   The Rust side and the hunks must land together for the mark; the Rust side alone changes
+   nothing a user sees (the restore path does not set restore until main.tsx is patched), so no
+   live CDP proof was run on the lane.
+
+4. Moved to T-066-d (blocked): a per-agent session-id source for the id-only agents (their
+   hooks do not reach Kolux; the id each prints or lists needs the agent installed and a real
+   session, which this lane may not run), and the last-session-in-this-folder forms
+   (`--continue` / `-c`) once their no-picker, never-twice behaviour is checked on a real install.

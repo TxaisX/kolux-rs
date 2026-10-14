@@ -304,6 +304,9 @@ pub struct StartLine {
     pub program: Option<String>,
     /// SET-027: the user's default environment variables for this agent.
     pub env: Vec<(String, String)>,
+    /// SESS-030 / TERM-107 (T-066-c): the line carries the agent's own resume form, so a restored
+    /// tab comes back on its conversation; false marks it "restored without resume".
+    pub resumed: bool,
 }
 
 /// How an agent takes its opening prompt (SESS-051).
@@ -391,15 +394,6 @@ pub fn resume_args(id: &str, session: Option<&str>) -> Vec<String> {
     }
 }
 
-/// SESS-030 "a resume never runs twice": whether `extra` already carries the first word of the
-/// resume form (`--resume`, `--resume=<id>`, `resume`, ...), as the restore path passed it before
-/// the Rust side knew the forms.
-fn carries_resume(extra: &[String], resume: &[String]) -> bool {
-    let Some(first) = resume.first() else { return false };
-    let flag = first.split('=').next().unwrap_or(first);
-    extra.iter().any(|a| a == flag || a.strip_prefix(flag).is_some_and(|r| r.starts_with('=')))
-}
-
 /// SET-027: the built-in arguments that skip an agent's permission prompts; Manual leaves them out.
 /// ponytail: only the agents whose CLI already starts this way here; the others' switches wait
 /// with the no-prompt task in PLAN.md.
@@ -460,7 +454,7 @@ fn line_for(id: &str, own: Option<&[String]>, yolo: bool, extra: &[String], resu
             }
         }
     }
-    Ok(StartLine { args, typed, program: None, env: Vec::new() })
+    Ok(StartLine { args, typed, program: None, env: Vec::new(), resumed: !resume.is_empty() })
 }
 
 /// Settings fields of the Agents page (SET-027).
@@ -518,14 +512,14 @@ pub fn start_line(settings: &serde_json::Value, id: &str, extra: &[String], prom
 }
 
 /// `start_line` for a fresh tab or a restored one (SESS-030): a restore adds the agent's own
-/// resume form after the extra arguments, unless `extra` already carries it (never twice).
+/// resume form after the extra arguments. The restore path passes no resume of its own (T-066-c),
+/// so the form is only ever added here, once.
 pub fn start_line_as(settings: &serde_json::Value, id: &str, extra: &[String], prompt: &str, picked: bool, start: Start<'_>) -> Result<StartLine, String> {
     let yolo = settings.get(PERMISSIONS_FIELD).and_then(|v| v.as_str()) != Some("manual");
     let resume = match start {
         Start::Fresh => Vec::new(),
         Start::Restore(session) => resume_args(id, session),
     };
-    let resume = if carries_resume(extra, &resume) { Vec::new() } else { resume };
     let mine = settings.get(OPTIONS_FIELD).and_then(|o| o.get(id));
     let field = |k: &str| mine.and_then(|m| m.get(k)).and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty());
     let own = field("args").map(split_args);
@@ -987,17 +981,39 @@ mod tests {
     }
 
     #[test]
-    fn sess030_a_resume_already_in_the_extra_arguments_is_never_added_twice() {
-        // The restore path (main.tsx) still passes Claude Code's and Codex's resume in `extra`.
+    fn sess030_a_restore_carries_its_resume_once_and_says_so() {
+        // T-066-c: the restore path passes no resume of its own; the line carries it exactly once
+        // and `resumed` drives the pane's "restored" / "restored without resume" mark (TERM-107).
         let none = serde_json::json!({});
-        let claude = start_line_as(&none, "claude", &s(&["--resume", "sid"]), "", true, Start::Restore(Some("sid"))).unwrap().args;
-        assert_eq!(claude, s(&["--permission-mode", "auto", "--resume", "sid"]));
-        let codex = start_line_as(&none, "codex", &s(&["resume", "sid"]), "", true, Start::Restore(Some("sid"))).unwrap().args;
-        assert_eq!(codex.iter().filter(|a| a.as_str() == "resume").count(), 1);
-        let copilot = start_line_as(&none, "copilot", &s(&["--resume=sid"]), "", true, Start::Restore(Some("sid"))).unwrap().args;
-        assert_eq!(copilot, s(&["--resume=sid"]));
-        assert!(carries_resume(&s(&["--resume"]), &s(&["--resume=sid"])));
-        assert!(!carries_resume(&s(&["--resumed"]), &s(&["--resume", "sid"])));
+        let claude = start_line_as(&none, "claude", &[], "", true, Start::Restore(Some("sid"))).unwrap();
+        assert_eq!(claude.args, s(&["--permission-mode", "auto", "--resume", "sid"]));
+        assert!(claude.resumed);
+        let codex = start_line_as(&none, "codex", &[], "", true, Start::Restore(Some("sid"))).unwrap();
+        assert_eq!(codex.args.iter().filter(|a| a.as_str() == "resume").count(), 1);
+        assert!(codex.resumed);
+        let copilot = start_line_as(&none, "copilot", &[], "", true, Start::Restore(Some("sid"))).unwrap();
+        assert_eq!(copilot.args, s(&["--resume=sid"]));
+        assert!(copilot.resumed);
+        // Folder-scoped forms resume with no id; the id-only agents do not, and say so.
+        assert!(start_line_as(&none, "aider", &[], "", true, Start::Restore(None)).unwrap().resumed);
+        assert!(start_line_as(&none, "kiro", &[], "", true, Start::Restore(None)).unwrap().resumed);
+        for id in ["claude", "codex", "gemini", "copilot"] {
+            assert!(!start_line_as(&none, id, &[], "", true, Start::Restore(None)).unwrap().resumed, "{id}");
+        }
+        // An agent with no documented form is restored without resume even with an id.
+        assert!(!start_line_as(&none, "crush", &[], "", true, Start::Restore(Some("sid"))).unwrap().resumed);
+        // A plain new tab never resumes, even with a session id at hand.
+        assert!(!start_line_as(&none, "claude", &[], "", true, Start::Fresh).unwrap().resumed);
+    }
+
+    #[test]
+    fn sess030_the_restore_path_has_no_line_for_a_plain_shell() {
+        // T-066-c: the restore loop asks only for tabs that name a catalogue agent; a plain shell
+        // has no agent id, and an id outside the catalogue is refused, so its saved line stays.
+        let none = serde_json::json!({});
+        for id in ["shell", "", "pwsh", "cmd"] {
+            assert!(start_line_as(&none, id, &[], "", true, Start::Restore(Some("sid"))).is_err(), "{id}");
+        }
     }
 
     #[test]
