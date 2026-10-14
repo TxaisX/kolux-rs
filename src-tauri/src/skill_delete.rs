@@ -344,7 +344,9 @@ fn count_ok(n: usize) -> Result<(), String> {
 pub fn plan(places: &Places, picks: &[Pick]) -> Result<Vec<Planned>, String> {
     count_ok(picks.len())?;
     let mut found: Vec<PathBuf> = vec![];
-    for root in &places.deletable {
+    // A root handed in twice (or two roots that are one folder) is read once.
+    let mut roots = HashSet::new();
+    for root in places.deletable.iter().filter(|r| roots.insert(skills::key(r))) {
         found.extend(skills::occurrences(root)?);
     }
     let mut out = vec![];
@@ -368,7 +370,9 @@ pub fn plan(places: &Places, picks: &[Pick]) -> Result<Vec<Planned>, String> {
             out.push(blocked("gone"));
             continue;
         }
-        let Some(me) = found.iter().find(|f| same(f, dir)) else {
+        // The list may show a skill by any path that reaches it; one that resolves to a folder found
+        // in the roots is the same skill.
+        let Some(me) = found.iter().find(|f| same(f, dir)).or_else(|| found.iter().find(|f| skills::key(f) == skills::key(dir))) else {
             out.push(blocked("outside"));
             continue;
         };
@@ -382,10 +386,15 @@ pub fn plan(places: &Places, picks: &[Pick]) -> Result<Vec<Planned>, String> {
         }
         let mut items = vec![];
         let mut remains = None;
+        // One folder per real location: the same folder reached twice moves once.
+        let mut folder = false;
         for occ in found.iter().filter(|f| skills::key(f) == k) {
             if is_link(occ) {
                 items.push(Item { path: skills::plain(occ), kind: "link" });
             } else if places.deletable.iter().any(|r| inside(occ, r)) {
+                if std::mem::replace(&mut folder, true) {
+                    continue;
+                }
                 items.push(Item { path: skills::plain(occ), kind: "folder" });
                 let receipt = occ.with_file_name(format!("{}{RECEIPT}", occ.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()));
                 if receipt.is_file() {
@@ -751,5 +760,67 @@ mod tests {
         let found = skills::occurrences(&home).unwrap();
         assert_eq!(found.len(), 1);
         assert!(found[0].ends_with("alpha"));
+    }
+
+    // Council d2 review of 950ba36, FIX-BEFORE 1 and 2.
+
+    fn env(home: &Path) -> skills::Env {
+        skills::Env { home: home.to_path_buf(), claude: None, codex: None, grok: None, hermes: None, local_app_data: Some(home.join("AppData").join("Local")), windows: true }
+    }
+
+    fn kinds(p: &Planned) -> Vec<&'static str> {
+        p.items.iter().map(|i| i.kind).collect()
+    }
+
+    #[test]
+    fn fixb1_the_home_folder_opened_as_the_workspace_counts_a_skill_once_and_deletes_it() {
+        let t = temp("fixb1-a");
+        let (app, home) = (t.join("app"), t.join("home"));
+        let root = home.join(".claude").join("skills");
+        let alpha = skill(&root, "alpha");
+        std::fs::write(root.join("alpha.receipt.json"), "{}").unwrap();
+        let at = skills::places(&env(&home), Some(&home));
+        let keys: Vec<String> = at.deletable.iter().map(|p| skills::key(p)).collect();
+        assert_eq!(keys.iter().collect::<HashSet<_>>().len(), keys.len(), "each deletable root once: {:?}", at.deletable);
+        let plan_of = plan(&at, &[pick(&alpha)]).unwrap();
+        assert_eq!(kinds(&plan_of[0]), ["folder", "receipt"], "{:?}", plan_of[0].items);
+        // The same root handed in twice still plans one folder.
+        let twice = places(&[&root, &root], &[]);
+        assert_eq!(kinds(&plan(&twice, &[pick(&alpha)]).unwrap()[0]), ["folder", "receipt"]);
+        let done = run(&app, &at, &[pick(&alpha)]).unwrap();
+        assert_eq!((done[0].outcome, done[0].note.as_deref()), ("deleted", None));
+        assert!(names(&root).is_empty());
+    }
+
+    #[test]
+    fn fixb1_a_skills_root_that_is_a_junction_to_another_counts_a_skill_once_and_deletes_it() {
+        let t = temp("fixb1-b");
+        let (app, home) = (t.join("app"), t.join("home"));
+        let claude = home.join(".claude").join("skills");
+        let alpha = skill(&claude, "alpha");
+        std::fs::create_dir_all(home.join(".agents")).unwrap();
+        let shared = home.join(".agents").join("skills");
+        link_dir(&shared, &claude);
+        let at = skills::places(&env(&home), None);
+        let plan_of = plan(&at, &[pick(&alpha)]).unwrap();
+        assert_eq!(kinds(&plan_of[0]), ["folder"], "{:?}", plan_of[0].items);
+        // Picked through the junctioned root: the same one folder.
+        let via = plan(&at, &[pick(&shared.join("alpha"))]).unwrap();
+        assert_eq!((via[0].blocked, kinds(&via[0])), (None, vec!["folder"]), "{:?}", via[0]);
+        assert_eq!(run(&app, &at, &[pick(&alpha)]).unwrap()[0].outcome, "deleted");
+        assert!(names(&claude).is_empty());
+        assert!(is_link(&shared), "the root junction itself stays");
+    }
+
+    #[test]
+    fn fixb1_a_folder_reached_twice_inside_one_root_is_taken_once() {
+        let t = temp("fixb1-c");
+        let (app, root) = (t.join("app"), t.join("skills"));
+        let alpha = skill(&root.join("team"), "alpha");
+        link_dir(&root.join("mirror"), &root.join("team"));
+        let at = places(&[&root], &[]);
+        assert_eq!(kinds(&plan(&at, &[pick(&alpha)]).unwrap()[0]), ["folder"]);
+        assert_eq!(run(&app, &at, &[pick(&alpha)]).unwrap()[0].outcome, "deleted");
+        assert!(names(&root.join("team")).is_empty());
     }
 }

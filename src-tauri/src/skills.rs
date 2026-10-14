@@ -626,7 +626,15 @@ pub struct Places {
 
 pub fn places(env: &Env, workspace: Option<&Path>) -> Places {
     let all = spots(env, workspace);
-    let deletable = all.iter().filter(|s| s.kind == Kind::Skills && s.skip.is_none() && matches!(s.source, "home" | "workspace")).map(|s| s.path.clone()).collect();
+    // One root per real folder: the home folder opened as the workspace, or a skills folder that
+    // is a link to another, would otherwise list every skill in it twice.
+    let mut seen = HashSet::new();
+    let deletable = all
+        .iter()
+        .filter(|s| s.kind == Kind::Skills && s.skip.is_none() && matches!(s.source, "home" | "workspace"))
+        .map(|s| s.path.clone())
+        .filter(|p| seen.insert(key(p)))
+        .collect();
     let plugin = all.iter().filter(|s| s.source == "plugin").map(|s| s.path.clone()).collect();
     Places { deletable, plugin }
 }
