@@ -1071,7 +1071,19 @@ pub fn task_list(tasks: &[Value], dispatches: &[Value], run: Option<&str>, a: &V
     Ok(json!({ "runId": run, "tasks": rows, "brief": brief }))
 }
 
+/// ORCH-035: failed dispatches of one task after which it is no longer handed out.
+pub const BREAKER_TRIPS: usize = 3;
+
+/// ORCH-035: how many dispatches of `task` in `run` ended failed.
+// ponytail: a success does not reset the count (the card resets nothing), so it lasts as long as
+// the task's dispatch records do, which are kept until the task itself is retired.
+pub fn failed_dispatches(dispatches: &[Value], task: &str, run: Option<&str>) -> usize {
+    dispatches.iter().filter(|d| d["taskId"] == task && d["runId"].as_str() == run && d["status"] == "failed").count()
+}
+
 /// ORCH-013: may `task` go to the agent in terminal `to`? Gives the task index and the agent.
+/// ORCH-035: a task whose dispatches failed `BREAKER_TRIPS` times is turned away (breaker_open),
+/// and so is a terminal that already holds an unfinished dispatch (busy).
 /// The codes and messages are fixed so scripts can match on them.
 /// The task is looked up in `run` only (ORCH-033). A context-only dispatch to the caller's own pane
 /// is allowed when `own_ok`: the caller still has nesting budget (ORCH-032).
@@ -1083,6 +1095,10 @@ pub fn dispatch_check(tasks: &[Value], dispatches: &[Value], task: &str, to: &st
         "pending" => return Err(Fail::new("task_waiting", format!("{task} is still waiting on its dependencies"))),
         "dispatched" => return Err(Fail::new("task_taken", format!("{task} already has a worker ({})", tasks[i]["dispatchId"].as_str().unwrap_or("?")))),
         s => return Err(Fail::new("task_not_ready", format!("{task} is {s}, not ready"))),
+    }
+    let failures = failed_dispatches(dispatches, task, run);
+    if failures >= BREAKER_TRIPS {
+        return Err(Fail::new("breaker_open", format!("{task} failed {failures} times, so Kolux holds it back instead of handing it out again")));
     }
     if caller == Some(to) && !own_ok {
         return Err(Fail::new("own_pane", "a coordinator cannot hand a task to its own pane"));
@@ -1445,6 +1461,44 @@ mod tests {
         assert_eq!(dispatch_check(&tasks, &d, "task-1", "term-5", Some("term-1"), None, false, &agent).unwrap(), (0, "claude".to_string()));
         let b = brief(&tasks[0], &Brief { dispatch: "dispatch-2", run: Some("run-1"), coordinator: Some("term-1"), behind: None, levels_left: 0 });
         assert!(b.contains("task-1") && b.contains("dispatch-2") && b.ends_with('a'), "{b}");
+    }
+
+    /// ORCH-035: after three failed dispatches of the same task the next one is turned away, a
+    /// success in between does not reset the count, and another Run's failures do not count.
+    #[test]
+    fn orch035_the_breaker_turns_a_task_away_after_three_failed_dispatches() {
+        let mut tasks = Vec::new();
+        task_create(&mut tasks, &json!({ "spec": "a" }), None, 1).unwrap();
+        let agent = |h: &str| (h == "term-5").then(|| "claude".to_string());
+        let failed = |n: u32| json!({ "id": format!("dispatch-{n}"), "taskId": "task-1", "status": "failed", "terminal": 5 });
+        let check = |d: &[Value]| dispatch_check(&tasks, d, "task-1", "term-5", Some("term-1"), None, false, &agent);
+        let mut d = vec![failed(1), failed(2)];
+        assert!(check(&d).is_ok(), "two failures: still handed out");
+        d.push(json!({ "id": "dispatch-3", "taskId": "task-1", "status": "completed", "terminal": 5 }));
+        d.push(json!({ "id": "dispatch-4", "taskId": "task-1", "runId": "run-2", "status": "failed", "terminal": 5 }));
+        d.push(json!({ "id": "dispatch-5", "taskId": "task-2", "status": "failed", "terminal": 5 }));
+        assert!(check(&d).is_ok(), "a success, another Run's failure and another task's failure leave the count at two");
+        d.push(failed(6));
+        let e = check(&d).unwrap_err();
+        assert_eq!(e.code, "breaker_open");
+        assert_eq!(e.message, "task-1 failed 3 times, so Kolux holds it back instead of handing it out again");
+        assert_eq!(failed_dispatches(&d, "task-1", None), 3);
+        assert_eq!(failed_dispatches(&d, "task-1", Some("run-2")), 1);
+    }
+
+    /// ORCH-035: a terminal that already holds an unfinished dispatch is turned away; one whose
+    /// dispatch has finished is free again.
+    #[test]
+    fn orch035_a_terminal_already_holding_a_dispatch_is_turned_away() {
+        let mut tasks = Vec::new();
+        task_create(&mut tasks, &json!({ "spec": "a" }), None, 1).unwrap();
+        let agent = |h: &str| (h == "term-5").then(|| "claude".to_string());
+        let check = |d: &[Value]| dispatch_check(&tasks, d, "task-1", "term-5", Some("term-1"), None, false, &agent);
+        let held = vec![json!({ "id": "dispatch-1", "taskId": "task-7", "status": "running", "terminal": 5 })];
+        let e = check(&held).unwrap_err();
+        assert_eq!((e.code, e.message.as_str()), ("busy", "term-5 is already working on dispatch-1"));
+        let done = vec![json!({ "id": "dispatch-1", "taskId": "task-7", "status": "completed", "terminal": 5 })];
+        assert!(check(&done).is_ok());
     }
 
     #[test]

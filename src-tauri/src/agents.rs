@@ -13,6 +13,10 @@
 
 use std::path::{Path, PathBuf};
 
+// ORCH-060: the session tab inventory (T-262).
+#[path = "inventory.rs"]
+pub mod inventory;
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentInfo {
