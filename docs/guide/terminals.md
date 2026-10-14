@@ -79,15 +79,15 @@ A cell with more than one pane shows a tab strip. Each tab has an icon, a status
 | Close | Closes this tab (Ctrl+W). Greyed out for a pinned tab |
 | Close others | Closes every other tab except pinned ones |
 | Close to the right / Close to the left | Closes the tabs on that side except pinned ones |
-| Close all | Closes every tab except pinned ones. The Ctrl+Alt+W shortcut closes pinned tabs too |
+| Close all | Closes every tab (Ctrl+Alt+W). Close all, from the menu or the shortcut, leaves pinned tabs open |
 
 Closing the active tab returns you to the tab you used before it. If there is none, the one to its right, else the one to its left.
 
 If a program is still running, Kolux asks first: "Close "<name>"?" with "A program is still running in it. Closing the tab stops it." Press "Close tab" to go on. This question is on by default and can be switched off in Settings. When a shell ends by itself, a dialog says "The shell ended with exit code N" and offers Close pane or Restart.
 
-Pinned tabs sit before the others with a pin icon. Closing one with Ctrl+W, its x or the pane's close button asks first: "Close pinned tab "<name>"? This tab is pinned. Closing it stops anything still running in it." This question is on by default and can be switched off in Settings. Pins last until Kolux closes.
+Pinned tabs sit before the others with a pin icon. Closing one with Ctrl+W, its x or the pane's close button asks first: "Close pinned tab "<name>"? This tab is pinned. Closing it stops anything still running in it." This question is on by default; switch it off in Settings, Terminal & sessions, "Ask before closing a pinned tab". Pins last until Kolux closes.
 
-The "Remove a Session" shortcut (no key by default; set one in Settings) removes a session that has not started, or an idle shell, at once. For a running agent, or a shell with a program running, it asks first: "Stop "<name>"?". Cancel has the focus, so pressing Enter keeps the session running. In Settings you can make it stop the session without asking.
+The "Remove a Session" shortcut (no key by default; set one in Settings) removes a session that has not started, or an idle shell, at once. For a running agent, or a shell with a program running, it asks first: "Stop "<name>"?". Cancel has the focus, so pressing Enter keeps the session running. Press "Stop" to go on. To stop without asking, set Settings, Terminal & sessions, "Removing a started session" to "Stop without asking".
 
 ### The New tab menu
 
