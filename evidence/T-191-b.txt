@@ -1,0 +1,72 @@
+# T-191-b evidence: Claude Agent Teams in the picker, its mode preference, its keybinding command
+
+Lane: launch, from 0819c57. Date: 2026-10-13.
+
+## What was built
+- src/launch/teams.ts: the Agent Teams mode preference (settings key agentTeamsMode: off, the
+  default, in-process or native; anything unknown reads as off), and the picker entry "Claude Agent
+  Teams" (id claude-teams). The entry is offered only with the mode on, Claude Code installed, the
+  Kolux command line found on the system search path, and never on native Windows or WSL; it is
+  placed right after Claude Code and starts `kolux claude-teams` through the found command line.
+  On Windows and WSL a saved "native" acts as in-process.
+- src/launch/TeamsModeCard.tsx: the Settings > Agents card with the three choices and help text,
+  and on Windows / WSL the note that the picker has no entry and teammates always run in-process.
+- src/launch/PlusMenu.tsx: the Agent Teams row draws the Claude mark.
+- src-tauri/src/tools.rs: `teams_host` command (Windows?, WSL? from WSL_DISTRO_NAME or the kernel
+  release, and the Kolux command line path off Windows/WSL) with the pure `teams_host_from`.
+- Keybinding command: tab.newAgent.claude-teams "New Claude Agent Teams tab", no key bound, comes
+  from adding the entry to the keybinding agent list (src/keys/actions.ts is core's: hunk below).
+  App.tsx already resolves tab.newAgent.<id> against the offered agent list, so the command opens
+  the tab only when the entry is offered.
+- Native panes (teammates as real Kolux panes) is split to T-191-c; the choice is stored now.
+
+## Tests (real output, G:/Temp/launch-w1-logs/t191-cargo.log, t191-vitest.log)
+cargo test --lib -- tools::
+  test tools::tests::t191b_agent_teams_is_offered_only_off_windows_and_wsl_with_the_command_line_found ... ok
+  test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 537 filtered out
+vitest run src/launch: Test Files 8 passed (8), Tests 64 passed (64); teams.test.ts cases:
+  "the mode is off by default and anything unknown reads as off"
+  "default build: no Agent Teams entry in any list"
+  "with the mode on, Linux with Claude Code and the command line installed offers it right after Claude Code"
+  "native Windows and WSL never offer it, nor a machine missing Claude Code or the command line"
+  "on Windows and WSL teammates always run in-process"
+  "the Settings card shows the three choices, the saved one picked, and the Windows note"
+  "the Agent Teams row draws the Claude mark"
+cargo clippy --all-targets -- -D warnings: Finished, exit 0. pnpm exec tsc --noEmit: exit 0.
+
+## Live proof
+Not run: on this Windows machine the entry is hidden by design, and the Settings card and the
+picker wiring are mounted only after the hunks below (App.tsx, lib.rs, AgentsPage.tsx and
+src/keys are other owners'). Covered by the render test of the card and the list tests.
+
+## Hunks for the coordinator
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@
+             tools::tools_check,
+             tools::tools_dismiss,
++            tools::teams_host,
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@
++import { useTeamsHost, withTeams } from "./launch/teams";
+@@
+-  const agents = useMemo(() => offeredAgents(allAgents, settings), [allAgents, settings]);
++  const teamsHost = useTeamsHost();
++  const agents = useMemo(() => withTeams(offeredAgents(allAgents, settings), settings, teamsHost), [allAgents, settings, teamsHost]);
+--- a/src/keys/actions.ts   (core lane)
++++ b/src/keys/actions.ts
+@@  the agents list mapped to tab.newAgent.<id>
++  ["claude-teams", "Claude Agent Teams"],
+--- a/src/keys/keymap.test.ts   (core lane)
+@@  the tab.newAgent count: 35 -> 36
+--- a/src/settings/AgentsPage.tsx   (shell lane)
++++ b/src/settings/AgentsPage.tsx
+@@
++import TeamsModeCard from "../launch/TeamsModeCard";
++import { useTeamsHost } from "../launch/teams";
+@@  at the component's top level
++  const teamsHost = useTeamsHost();
+@@  in the page body
++      <TeamsModeCard settings={settings} save={save} host={teamsHost} />
+Once registered, the #[allow(dead_code)] on teams_host can go.

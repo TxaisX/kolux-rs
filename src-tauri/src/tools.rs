@@ -268,9 +268,53 @@ pub async fn editors_list() -> Result<Vec<Editor>, String> {
     tauri::async_runtime::spawn_blocking(editors).await.map_err(|e| e.to_string())
 }
 
+/// The facts the Agent Teams picker entry depends on (T-191-b): native Windows and WSL never offer
+/// it, and it starts through the Kolux command line found on the system search path.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct TeamsHost {
+    pub windows: bool,
+    pub wsl: bool,
+    pub cli: Option<String>,
+}
+
+/// The host facts from the platform, the WSL markers and the found command line.
+pub fn teams_host_from(windows: bool, distro: Option<&str>, osrelease: &str, cli: Option<PathBuf>) -> TeamsHost {
+    let wsl = !windows && (distro.is_some_and(|d| !d.is_empty()) || osrelease.to_lowercase().contains("microsoft"));
+    let cli = if windows || wsl { None } else { cli.map(|p| p.to_string_lossy().into_owned()) };
+    TeamsHost { windows, wsl, cli }
+}
+
+/// T-191-b: whether this machine may offer Claude Agent Teams, for the picker.
+// T-191-b: registered by the coordinator's lib.rs hunk; unused until then.
+#[allow(dead_code)]
+#[tauri::command]
+pub async fn teams_host() -> Result<TeamsHost, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let distro = std::env::var("WSL_DISTRO_NAME").ok();
+        let osrelease = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+        let cli = if cfg!(windows) { None } else { crate::agents::find_program("kolux") };
+        teams_host_from(cfg!(windows), distro.as_deref(), &osrelease, cli)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn t191b_agent_teams_is_offered_only_off_windows_and_wsl_with_the_command_line_found() {
+        let cli = || Some(PathBuf::from("/usr/local/bin/kolux"));
+        let linux = teams_host_from(false, None, "6.8.0-generic", cli());
+        assert_eq!(linux, TeamsHost { windows: false, wsl: false, cli: Some("/usr/local/bin/kolux".into()) });
+        assert!(teams_host_from(false, Some("Ubuntu"), "", cli()).wsl);
+        let wsl = teams_host_from(false, None, "5.15.153.1-microsoft-standard-WSL2", cli());
+        assert!(wsl.wsl && wsl.cli.is_none());
+        let win = teams_host_from(true, None, "", cli());
+        assert!(win.windows && !win.wsl && win.cli.is_none());
+        assert_eq!(teams_host_from(false, Some(""), "6.8.0", None).cli, None);
+    }
 
     #[test]
     fn a_missing_program_reports_missing() {
