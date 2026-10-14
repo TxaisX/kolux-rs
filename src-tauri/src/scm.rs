@@ -1689,7 +1689,9 @@ pub async fn scm_pr_create(worktree: String, title: String, body: String, base: 
 /// GIT-014: shows a changed file in the file manager (its folder when the file was deleted); the
 /// path is relative to the worktree and must stay inside it.
 #[tauri::command]
-pub async fn scm_reveal(worktree: String, path: String) -> Result<(), String> {
+pub async fn scm_reveal(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, worktree: String, path: String) -> Result<(), String> {
+    // A worktree on another machine is never touched (SAFE-021), the way open_path refuses it.
+    crate::links::refuse_host(&worktree, &crate::links::roots(&store))?;
     tauri::async_runtime::spawn_blocking(move || {
         let full = reveal_target(Path::new(&worktree), &path)?;
         crate::links::reveal(&full)
@@ -1701,6 +1703,18 @@ pub async fn scm_reveal(worktree: String, path: String) -> Result<(), String> {
 /// GIT-014: the file a reveal shows: inside the worktree, or its nearest folder that still exists.
 fn reveal_target(worktree: &Path, path: &str) -> Result<std::path::PathBuf, String> {
     check_paths(std::slice::from_ref(&path.to_string()))?;
+    // The text stays inside; a link or junction inside the worktree could still lead out (to a
+    // private folder, or a share whose server would be contacted), so no part below the worktree
+    // may be one. Read without following links; a missing part ends the walk (nothing past it exists).
+    let mut at = worktree.to_path_buf();
+    for part in Path::new(&native(path)).components() {
+        at.push(part);
+        match fs::symlink_metadata(&at) {
+            Ok(m) if m.file_type().is_symlink() => return Err(format!("{path} goes through a link that leads outside the worktree")),
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
     let mut full = worktree.join(native(path));
     while !full.exists() && full != worktree {
         full = full.parent().map(Path::to_path_buf).unwrap_or_else(|| worktree.to_path_buf());
@@ -2198,6 +2212,10 @@ mod tests {
     fn git008_a_pull_with_split_history_and_no_policy_is_named_and_the_picked_policy_finishes_it() {
         assert_eq!(failure_kind("hint: You have divergent branches and need to specify how to reconcile them.\nfatal: Need to specify how to reconcile divergent branches.", false), "no-policy");
         assert_eq!(failure_kind(" ! [rejected] main -> main (non-fast-forward)", false), "non-fast-forward");
+        // Every git below reads only the repositories' own config: a pull.rebase in this PC's
+        // global or system config (Git for Windows writes pull.rebase=false there) would decide
+        // the split pull on its own and the no-policy path would never run.
+        crate::git::ISOLATED.with(|i| i.set(true));
         let origin = std::env::temp_dir().join(format!("kolux-rs-scm-git008-origin-{}", std::process::id()));
         let _ = fs::remove_dir_all(&origin);
         fs::create_dir_all(&origin).unwrap();
@@ -2218,26 +2236,41 @@ mod tests {
         fs::write(a.join("ours.txt"), "ours\n").unwrap();
         run(&["add", "."], Some(&a)).unwrap();
         run(&["commit", "-q", "-m", "ours"], Some(&a)).unwrap();
-        // No pull policy in this repository (the test's HOME has no global one either).
-        let _ = run(&["config", "--unset", "pull.rebase"], Some(&a));
-        let _ = run(&["config", "--unset", "pull.ff"], Some(&a));
+        // No pull policy anywhere: not in this repository, and the isolated global/system are empty.
+        assert!(run(&["config", "--get", "pull.rebase"], Some(&a)).is_err() && run(&["config", "--get", "pull.ff"], Some(&a)).is_err());
         let config_before = fs::read_to_string(a.join(".git").join("config")).unwrap();
-        // Git for Windows writes pull.rebase=false into its system config, so the real git is
-        // asked once with the system config left out to get its own words for the split.
-        let real = command(&["pull"], Some(&a)).env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
+        // The real git's own words for the split are read as no-policy...
+        let real = command(&["pull"], Some(&a)).output().unwrap();
         let said = format!("{}{}", String::from_utf8_lossy(&real.stdout), String::from_utf8_lossy(&real.stderr));
         assert!(!real.status.success(), "a split pull with no policy fails: {said}");
         assert_eq!(failure_kind(&said, false), "no-policy", "{said}");
-        if run(&["config", "--get", "pull.rebase"], Some(&a)).is_err() && run(&["config", "--get", "pull.ff"], Some(&a)).is_err() {
-            let out = remote(&a, "pull").unwrap();
-            assert_eq!((out.ok, out.kind), (false, Some("no-policy")), "{}", out.output);
-        }
+        // ...and so is the app's own Pull.
+        let out = remote(&a, "pull").unwrap();
+        assert_eq!((out.ok, out.kind), (false, Some("no-policy")), "{}", out.output);
         // Picking rebase runs the pull again with it, and the repository's config is untouched.
         let again = remote(&a, "pullrebase").unwrap();
         assert!(again.ok, "{}", again.output);
         assert!(a.join("theirs.txt").is_file() && a.join("ours.txt").is_file());
         assert_eq!(status(&a).unwrap().behind, 0);
         assert_eq!(fs::read_to_string(a.join(".git").join("config")).unwrap(), config_before);
+        // A second split, finished by picking merge: one merge commit joins both sides.
+        fs::write(b.join("theirs2.txt"), "theirs 2\n").unwrap();
+        run(&["add", "."], Some(&b)).unwrap();
+        run(&["commit", "-q", "-m", "theirs 2"], Some(&b)).unwrap();
+        run(&["push", "-q"], Some(&b)).unwrap();
+        fs::write(a.join("ours2.txt"), "ours 2\n").unwrap();
+        run(&["add", "."], Some(&a)).unwrap();
+        run(&["commit", "-q", "-m", "ours 2"], Some(&a)).unwrap();
+        let out = remote(&a, "pull").unwrap();
+        assert_eq!((out.ok, out.kind), (false, Some("no-policy")), "{}", out.output);
+        let merged = remote(&a, "pullmerge").unwrap();
+        assert!(merged.ok, "{}", merged.output);
+        assert!(a.join("theirs2.txt").is_file() && a.join("ours2.txt").is_file());
+        let parents = run(&["rev-list", "--parents", "-n", "1", "HEAD"], Some(&a)).unwrap();
+        assert_eq!(parents.split_whitespace().count(), 3, "HEAD is a merge commit with two parents: {parents}");
+        assert_eq!(status(&a).unwrap().behind, 0);
+        assert_eq!(fs::read_to_string(a.join(".git").join("config")).unwrap(), config_before);
+        crate::git::ISOLATED.with(|i| i.set(false));
         for d in [&a, &b, &origin] {
             let _ = fs::remove_dir_all(d);
         }
@@ -2283,7 +2316,7 @@ mod tests {
     }
 
     #[test]
-    fn git014_reveal_stays_inside_the_worktree_and_falls_back_to_the_nearest_folder() {
+    fn git014_reveal_stays_inside_the_worktree_through_links_too_and_falls_back_to_the_nearest_folder() {
         let dir = temp_repo("git014");
         fs::create_dir_all(dir.join("a")).unwrap();
         assert_eq!(reveal_target(&dir, "README.md").unwrap(), dir.join("README.md"));
@@ -2291,6 +2324,27 @@ mod tests {
         assert_eq!(reveal_target(&dir, "b/c/gone.txt").unwrap(), dir);
         assert!(reveal_target(&dir, "../outside.txt").is_err());
         assert!(reveal_target(&dir, "C:/Windows/notepad.exe").is_err());
+        // A junction (or symlink) inside the worktree that leads out is refused, the file under it
+        // and the link itself alike, even though the path text stays inside.
+        let outside = std::env::temp_dir().join(format!("kolux-rs-scm-git014-outside-{}", std::process::id()));
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("b.txt"), "private\n").unwrap();
+        #[cfg(windows)]
+        let made = std::process::Command::new("cmd").args(["/c", "mklink", "/J"]).arg(dir.join("j")).arg(&outside).output().unwrap().status.success();
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&outside, dir.join("j")).is_ok();
+        assert!(made, "the junction was made");
+        assert!(dir.join("j").join("b.txt").is_file(), "the file is reachable through it");
+        assert!(reveal_target(&dir, "j/b.txt").unwrap_err().contains("link"));
+        assert!(reveal_target(&dir, "j").is_err());
+        assert!(reveal_target(&dir, "j/gone/deeper.txt").is_err());
+        // A plain folder with a missing file still falls back as before.
+        assert_eq!(reveal_target(&dir, "a/b/gone.txt").unwrap(), dir.join("a"));
+        #[cfg(windows)]
+        let _ = fs::remove_dir(dir.join("j"));
+        #[cfg(unix)]
+        let _ = fs::remove_file(dir.join("j"));
+        let _ = fs::remove_dir_all(&outside);
         let _ = fs::remove_dir_all(&dir);
     }
     #[test]

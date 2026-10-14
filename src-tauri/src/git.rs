@@ -52,6 +52,20 @@ thread_local! {
     /// Tests only: when set, every git this thread starts writes git's own trace2 event log to
     /// this file (inherited by anything that git starts in turn), so a test sees each process.
     pub(crate) static TRACE2: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+    /// Tests only: when set, every git this thread starts reads only the repository's own config:
+    /// an empty global file, no system file, and nothing the parent process injected (config
+    /// pairs or a password helper), so a test's result never depends on this PC's git setup.
+    pub(crate) static ISOLATED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Tests only: an empty file to stand in for the user's global git config.
+#[cfg(test)]
+pub(crate) fn empty_global_config() -> PathBuf {
+    let path = std::env::temp_dir().join("kolux-rs-test-empty-gitconfig");
+    if std::fs::metadata(&path).map(|m| m.len() != 0).unwrap_or(true) {
+        let _ = std::fs::write(&path, "");
+    }
+    path
 }
 
 pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
@@ -63,6 +77,13 @@ pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
             cmd.env("GIT_TRACE2_EVENT", path);
         }
     });
+    #[cfg(test)]
+    if ISOLATED.with(|i| i.get()) {
+        cmd.env("GIT_CONFIG_GLOBAL", empty_global_config()).env("GIT_CONFIG_NOSYSTEM", "1");
+        for v in ["GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_ASKPASS", "SSH_ASKPASS"] {
+            cmd.env_remove(v);
+        }
+    }
     // GIT-001 (T-033-b): a status read never rewrites the index on its own (git's optional lock),
     // so the Source Control watcher is not woken by its own reads. Required locks are unaffected.
     cmd.env("GIT_OPTIONAL_LOCKS", "0");
@@ -524,6 +545,9 @@ mod tests {
                 let _ = conn.write_all(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"private\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
             }
         });
+        // Only NO_PROMPT is under test: a config pair or password helper the parent shell injected
+        // (credential.interactive, GIT_ASKPASS) would change git's words, so they are left out.
+        ISOLATED.with(|i| i.set(true));
         let began = std::time::Instant::now();
         let url = format!("http://127.0.0.1:{port}/private.git");
         let mut cmd = command(&["-c", "credential.helper=", "ls-remote", &url], None);
