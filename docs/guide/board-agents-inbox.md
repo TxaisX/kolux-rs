@@ -30,7 +30,7 @@ Lanes run left to right. A lane is drawn only when it holds a card.
 | Done | Done | The first line of the reply and the newest file written |
 | Idle | Idle | Time since it went idle |
 | Queued | Working | "Queued" |
-| Quiet for a while | Working | "No recent update", and how long it has gone without output. Shown when a working agent prints nothing for a while, or sends no status for 30 minutes |
+| Quiet for a while | Working | "No recent update", and how long since its last status (for example "no status for 12m"). Shown when a working agent prints nothing for a while, or sends no status for 30 minutes |
 | Working | Working | Time running and the current tool step |
 
 A meter bar on the card shows how full the AI's memory is (tokens used out of its window) and its plan allowance.
@@ -42,7 +42,7 @@ When an agent asks permission to use a tool, its card shows two buttons.
 - **Approve** lets the agent carry on.
 - **Deny** tells the agent no.
 
-They appear only for a permission request. Questions need an answer typed in the pane. The same two buttons also show in the agent pane's header (see [Terminals](terminals.md)).
+They appear only for a permission request the agent's hooks reported, which names the tool. A permission a program prints into its own output, or one Kolux guesses from the pane title, shows no buttons on the card: answer it in the pane. Questions need an answer typed in the pane. The same two buttons also show in the agent pane's header (see [Terminals](terminals.md)).
 
 ### Expand a card
 
@@ -93,7 +93,7 @@ The same words appear in pane headers, tabs, the sidebar, the Board and the Inbo
 | Working (background) | The turn is over, but Kolux is watching the agent's background tasks. Shown as "Working" |
 | Needs you | It asked a question, or needs permission for a tool. Every question it asked shows with it; for a plan, its first line |
 | Blocked | It cannot go on: a limit, a sign-in or an error. Open the pane to see why |
-| Interrupted | The turn was stopped before it finished: you pressed Esc or Ctrl+C and no finish arrived within about 3 seconds. If the agent then starts a new step, it goes back to Working, so a Ctrl+C that only cleared what you were typing does not leave it Interrupted. Otherwise it stays until your next prompt |
+| Interrupted | The turn was stopped before it finished: you pressed Esc or Ctrl+C and no finish arrived within about 3 seconds. If the agent then starts a new step, it goes back to Working, so a Ctrl+C that only cleared what you were typing does not leave it Interrupted. With Claude Code, a finish that arrives after the key press, even a late one, shows Done instead, because Claude Code sends no finish for a turn it really stopped. Otherwise it stays until your next prompt |
 | Failed | The program could not start |
 | Done | The agent finished its turn. Clearing a session (/clear) or compacting it by hand also shows Done, without a notification |
 | Idle | Nothing is running here |
@@ -133,4 +133,4 @@ Settings, Notifications has three switches and a sound choice (System default, C
 
 The pill in the top bar shows how much of your weekly allowance is left for each installed AI program, for example "Claude 80% left". It is read-only. Hover for the weekly limit and when it resets. It tints as the allowance runs down (warning at 70% used, danger above 90%). See [Getting started](getting-started.md) for the full description.
 
-<!-- verified against: src/board/chip.ts, src/App.tsx, src/agents/AgentsRail.tsx, src/agents/rail.ts, src/inbox/inbox.ts, src/inbox/InboxView.tsx, src/terminal/status.ts, src/terminal/notify.ts, src/status/useAgentStatus.ts, src/usage/meter.ts, src/tower/tower.ts, src/tower/TowerView.tsx, src/chrome/TopBar.tsx, src/keys/actions.ts, src-tauri/src/status.rs at 7f64466 -->
+<!-- verified against: src/board/chip.ts, src/App.tsx, src/agents/AgentsRail.tsx, src/agents/rail.ts, src/inbox/inbox.ts, src/inbox/InboxView.tsx, src/terminal/status.ts, src/terminal/notify.ts, src/status/useAgentStatus.ts, src/usage/meter.ts, src/tower/tower.ts, src/tower/TowerView.tsx, src/chrome/TopBar.tsx, src/keys/actions.ts, src-tauri/src/status.rs at 55c8034 -->
