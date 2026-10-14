@@ -188,6 +188,7 @@ pub fn run() {
                 });
             }
             app.manage(Terminals::default());
+            notifications::first_run_welcome(app.handle()); // VIEW-111: a Mac's one welcome notification
             app.manage(resources::Sampler::default());
             app.manage(resume::Registry::default());
             app.manage(claude_key::KeySetup::default());
@@ -329,6 +330,7 @@ pub fn run() {
             status::status_inband,
             activity::activity_counts,
             activity::activity_get,
+            activity::activity_timeline,
             activity::activity_touch,
             projects::git_version,
             projects::project_list,

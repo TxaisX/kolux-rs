@@ -367,7 +367,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-139-b · ACCT-023 A resumed session keeps the account it began on · ACCT-064 Changing the Codex account offers to restart live Codex panes · done 2026-10-12: a Codex pane remembers the account id it started on (`terminal_spawn` takes and answers `account`), a restart hands it back and waits up to 2 s for that account's home, a stale account refuses with a try-again message; an account change shows the in-pane prompt (keep / restart) on running Codex panes only, by id; a removed account shows the needs-a-new-account prompt; DT-C19
 - [ ] T-139-d · sign-in errors Codex prints in a pane raise the re-auth notice (pane-output scanning; needs a public source for Codex's sign-in error text) · the Codex setup-change version of the restart prompt (needs a settings change event for the Codex command/args) · restored panes asked again after a Kolux restart (needs the tabs/layout restore task to carry each pane's account)
 - [ ] T-139-c · ACCT-027 The Grok section shows the CLI sign-in and credit use (needs a public source for the Grok CLI's session file and credit figures first)
-- [ ] T-140 · AUTO-014 Saved run output with token and cost figures
+- [x] T-140 · done 2026-10-13 (lane/automations from 0819c57; evidence/T-140.txt: cargo auto014 test ok, vitest usage.test.ts 6 ok, clippy and tsc clean; transcript preference and output through a pane exit moved to T-140-b) · AUTO-014 Saved run output with token and cost figures
+- [ ] T-140-b · the rest of T-140's card: the agent's transcript is preferred over the screen text when it is available, and a run whose pane closed before it finished keeps the pane's last text (needs a terminal.rs hunk from core: the exit path drops the pane's log before automations hears of it)
 - [x] T-141 · CLI-014 [compat] kolux account add and account list · ACCT-031 [compat] `kolux account add` and `kolux account list` (the same two commands, moved here from T-139)
 
 ### P1 · theme 7 · Redesign and the new look (18 cards)
@@ -611,7 +612,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-257 · SESS-040 Busy spinners and tab titles credit the agent that was launched
 - [ ] T-258 · TERM-056 Tab title tooltip and generated titles
 - [ ] T-259 · STAT-036 Count of working agents per workspace
-- [ ] T-260 · VIEW-013 [compat] Floor timeline of agent activity · VIEW-111 First-run notification permission
+- [x] T-260 · done 2026-10-13 (lane/automations from 0819c57; evidence/T-260.txt: cargo view013 and view111 tests ok, vitest timeline.test.ts 6 ok, clippy and tsc clean; smoke 5/5 evidence/smoke-130871c.txt; the Floor mount, command registration, start-up call and live proof moved to T-260-b) · VIEW-013 [compat] Floor timeline of agent activity · VIEW-111 First-run notification permission
+- [ ] T-260-b · the rest of T-260: the Floor screen reachable through view.floor, activity_timeline registered and the first-run welcome called at start, child lanes nested under their parent, then a live CDP proof and a fresh-Mac check (needs the coordinator's App.tsx, TopBar.tsx and lib.rs hunks from the automations lane handoff; the Mac check needs a Mac)
 - [ ] T-261 · ACCT-063 Each agent pane has one clear owning session
 - [x] T-262 · ORCH-060 Session tab inventory the command line and agents can read · done 2026-10-13 (lane/orchestration from 07c5d80; evidence/T-262.txt: three PowerShell tabs listed 3 by session_tabs over CDP, one closed listed 2; smoke 5/5 evidence/smoke-7920fa4.txt; the command line switches onto it with the cli-lane hunk in the T-262 handoff)
 - [ ] T-262-b · council AFTER (MERGE 41 review 2026-10-13, cli lane): the terminal, worktree and peer lists in cli.rs read the session tab inventory (session_tabs) instead of their own scans, so every list shows the same tabs

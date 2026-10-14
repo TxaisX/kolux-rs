@@ -98,6 +98,7 @@ import Tip from "./chrome/Tip";
 import InboxView from "./inbox/InboxView";
 import { inboxItems, type Source } from "./inbox/inbox";
 import TowerView from "./tower/TowerView";
+import FloorView from "./floor/FloorView";
 import { towerRows, usageByAccount } from "./tower/tower";
 import { LANES, chipOf } from "./board/chip";
 import Ring from "./usage/Ring";
@@ -564,6 +565,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           break;
         case "view.tower":
           setScreen((s) => (s === "tower" ? "terminals" : "tower"));
+          break;
+        case "view.floor":
+          setScreen((s) => (s === "floor" ? "terminals" : "floor"));
           break;
         case "view.code":
           leavePage();
@@ -1498,6 +1502,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const board = screen === "board";
   const inbox = screen === "inbox";
   const tower = screen === "tower";
+  const floor = screen === "floor";
   const agentsScreen = screen === "agents";
   // STAT-050: the Inbox and the Board read the panes the window already tracks; the clock ticks while one is open.
   const [now, setNow] = useState(Date.now());
@@ -2160,6 +2165,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           )}
           {inbox && <InboxView items={inboxItems(sources, now)} now={now} onOpen={openPane} />}
           {tower && <TowerView rows={towerRows(towerSeats())} usage={usageByAccount(towerSeats(), plan)} now={now} onOpen={openPane} />}
+          {floor && <FloorView />}
           {agentsScreen && selected === null && (
             <div className="empty">
               <h2>Agents</h2>
