@@ -763,6 +763,6 @@ marked skip stay listed in `DECISIONS.md` only.
 Built only after day one (2026-10-15); none of these is on the cutline. Order: T-546 first, then T-547, T-548, T-549.
 
 - [ ] T-546 · OD-09 control tower (flipped to build): one always-on overview of every agent, what each is doing, what needs him, usage, one click to its pane; the Agents screen and the Needs-you strip stay · the FIRST new-scope item after the trial build (Txais 12:50: the Thursday gate holds) · look lane
-- [ ] T-547 · OD-01 sign-in and usage services (flipped to yes): Kolux calls the providers' sign-in renewal and usage services itself; tokens stored by the app, never logged; every host on an allowlist in capabilities/**; a security-auditor review before the merge; unblocks T-263-c · reliability lane
+- [ ] T-547 · OD-01 sign-in and usage services (flipped to yes): Kolux calls the providers' sign-in renewal and usage services itself; tokens stored by the app, never logged; every host on an allowlist in capabilities/**; a security-auditor review before the merge; unblocks T-263-c · reliability lane · survey 2026-10-13 evidence/T-547-survey.txt
 - [ ] T-548 · OD-11 quick account switcher (flipped to build): switch the active account for the next pane from the top bar and the palette; accounts stay added and listed as today · look + reliability lanes
 - [ ] T-549 · OD-15 GitHub Projects roadmap timeline (flipped to build): items drawn on the timeline at their dates instead of the unsupported notice the roadmap card shows today · browser lane
