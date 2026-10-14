@@ -37,4 +37,14 @@ describe("FIX-2: a pasted link only ever names the host it shows", () => {
       expect(githubItem(no), no).toBeNull();
     }
   });
+
+  // FIX-SOON 2: GitHub Enterprise Managed User logins read name_shortcode, so an owner may hold an
+  // underscore after its first character; a leading mark of any kind is still refused.
+  it("FIX-SOON: an Enterprise Managed User owner (name_shortcode) is accepted, a leading mark is not", () => {
+    expect(githubItem("https://github.com/octo_acme/r/pull/1")).toBe("https://github.com/octo_acme/r/pull/1");
+    expect(githubItem("https://github.com/a_b-c/r/issues/2")).toBe("https://github.com/a_b-c/r/issues/2");
+    for (const no of ["https://github.com/_octo/r/pull/1", "https://github.com/-octo/r/pull/1", "https://github.com/.octo/r/pull/1", "https://github.com/@octo/r/pull/1", "https://github.com/" + "a".repeat(40) + "/r/pull/1"]) {
+      expect(githubItem(no), no).toBeNull();
+    }
+  });
 });

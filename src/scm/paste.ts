@@ -1,5 +1,6 @@
-/** GitHub's own rules for an owner (user or organisation) and a repository name. */
-const OWNER = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+/** GitHub's own rules for an owner (user or organisation) and a repository name. An Enterprise
+ *  Managed User login is name_shortcode, so `_` may follow the first character (FIX-SOON). */
+const OWNER = /^[A-Za-z0-9][A-Za-z0-9_-]{0,38}$/;
 const REPO = /^[A-Za-z0-9._-]{1,100}$/;
 
 /**

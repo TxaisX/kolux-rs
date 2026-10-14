@@ -1262,7 +1262,8 @@ fn pr_url_in(link: &str) -> Option<String> {
     // FIX-2: the owner and name follow GitHub's rules (no @, no leading dot, no slash of either
     // kind), so neither can reach gh as a file to read or a path to walk.
     let host_ok = |h: &str| !h.is_empty() && h.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
-    let owner_ok = |o: &str| (1..=39).contains(&o.len()) && o.starts_with(|c: char| c.is_ascii_alphanumeric()) && o.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    // FIX-SOON: an Enterprise Managed User login is name_shortcode, so `_` may follow the first character.
+    let owner_ok = |o: &str| (1..=39).contains(&o.len()) && o.starts_with(|c: char| c.is_ascii_alphanumeric()) && o.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
     let name_ok = |n: &str| (1..=100).contains(&n.len()) && !n.starts_with('.') && n.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
     let ok = parts.len() >= 5 && host_ok(parts[0]) && owner_ok(parts[1]) && name_ok(parts[2]) && parts[3] == "pull" && !number.is_empty() && number.chars().all(|c| c.is_ascii_digit());
     ok.then(|| format!("https://{}/{}/{}/pull/{number}", parts[0], parts[1], parts[2]))
@@ -3732,6 +3733,38 @@ mod tests {
         let view: Vec<String> = calls().lines().map(|c| c.trim().replace('"', "")).filter(|c| c.starts_with("pr view")).collect();
         assert_eq!(view.len(), 1, "{}", calls());
         assert!(view[0].starts_with("pr view https://github.com/o/r/pull/12 --json"), "{}", view[0]);
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    /// FIX-SOON 2: GitHub Enterprise Managed User logins read name_shortcode, so an owner may hold an
+    /// underscore after its first character; a leading mark of any kind is still refused.
+    #[test]
+    fn fixsoon_an_enterprise_managed_user_owner_is_accepted_and_a_leading_mark_is_not() {
+        assert_eq!(pr_url_in("https://github.com/octo_acme/r/pull/1").as_deref(), Some("https://github.com/octo_acme/r/pull/1"));
+        assert_eq!(pr_url_in("https://github.com/a_b-c/r/pull/2#x").as_deref(), Some("https://github.com/a_b-c/r/pull/2"));
+        for bad in ["https://github.com/_octo/r/pull/1", "https://github.com/-octo/r/pull/1", "https://github.com/.octo/r/pull/1", "https://github.com/@octo/r/pull/1"] {
+            assert_eq!(pr_url_in(bad), None, "{bad}");
+        }
+        assert_eq!(pr_url_in(&format!("https://github.com/{}/r/pull/1", "a".repeat(40))), None);
+    }
+
+    /// FIX-SOON 3: the host gate on its own: a well-formed link (valid owner and name) on a host gh is
+    /// not signed in to gets no pull request request from the merge box, its actions, the PR link
+    /// or the Checks panel; gh is asked only for its own config about that host.
+    #[test]
+    fn fixsoon_a_valid_link_on_a_host_gh_is_not_signed_in_to_gets_no_request() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fixsoon-gate-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        let gh = stand_in_gh(&tools);
+        let url = "https://nobody.example/octo/repo.name/pull/3";
+        assert!(pr_url_in(url).is_some(), "the link itself is well formed");
+        assert!(merge_info(&gh, &tools, url).unwrap_err().contains("not signed in"));
+        assert!(merge_act(&gh, &tools, url, "close", None).unwrap_err().contains("not signed in"));
+        assert!(pr_link(&gh, &tools, url).unwrap_err().contains("not signed in"));
+        assert!(pr_checks_linked(&gh, &tools, url).unwrap_err().contains("not signed in"));
+        let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
+        assert_eq!(calls.lines().count(), 4, "{calls}");
+        assert!(calls.lines().all(|c| c.trim().starts_with("config get -h nobody.example user")), "{calls}");
         let _ = fs::remove_dir_all(&tools);
     }
 
