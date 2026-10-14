@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { CHROME, chromeShown, windowSummary } from "./chromeItems";
 import { describe, it } from "vitest";
-import { MENU_SHORTCUT_IDS, menuBarState, menuScreen, menuSettingFlip, toAccelerator } from "./chromeItems";
+import { MENU_SHORTCUT_IDS, menuBarState, menuEdit, menuScreen, menuSettingFlip, toAccelerator } from "./chromeItems";
 
 test("SET-020: Tasks and Automations buttons show and the app name is hidden by default (DT-A6)", () => {
   expect(CHROME.map((c) => c.id)).toEqual(["titleBarAppName", "tasksButton", "automationsButton"]);
@@ -63,5 +63,16 @@ describe("T-248-a menu bar state (APP-009, SET-020, SET-009)", () => {
     expect(menuSettingFlip({}, "app.settings")).toBeNull();
     expect(menuScreen("screen.board")).toBe("board");
     expect(menuScreen("screen.tower")).toBeNull();
+  });
+
+  it("Edit goes to a focused field, else only Copy and Select All reach the terminal, and Paste waits", () => {
+    expect(menuEdit("edit.undo", true)).toEqual({ field: "undo" });
+    expect(menuEdit("edit.selectAll", true)).toEqual({ field: "selectAll" });
+    expect(menuEdit("edit.copy", false)).toEqual({ terminal: "copy" });
+    expect(menuEdit("edit.selectAll", false)).toEqual({ terminal: "selectAll" });
+    for (const id of ["edit.undo", "edit.redo", "edit.cut"]) expect(menuEdit(id, false)).toBeNull();
+    expect(menuEdit("edit.paste", true)).toBeNull();
+    expect(menuEdit("edit.paste", false)).toBeNull();
+    expect(menuEdit("zoom.in", true)).toBeNull();
   });
 });

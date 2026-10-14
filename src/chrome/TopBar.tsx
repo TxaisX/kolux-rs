@@ -69,6 +69,8 @@ export default function TopBar({ screen, classic = false, onScreen, sidebarOpen,
           title={appMenu ? "Kolux menu" : "Kolux RS"}
           aria-haspopup={appMenu ? "menu" : undefined}
           disabled={!appMenu}
+          // The mark never takes focus, so Edit acts on the field or terminal that had it.
+          onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => {
             const r = e.currentTarget.getBoundingClientRect();
             popAppMenu(r.left, r.bottom + 4, uiZoom);

@@ -136,3 +136,24 @@ Tests (wiring applied so the modules compile): cargo --lib menu:: tray:: 15 pass
 5. Edit: in a terminal with an agent running and no selection, Edit > Copy does not interrupt it.
    With text selected it copies the text. Edit > Select All selects the terminal's text, not the
    app UI.
+
+## Council re-review of 4738c9c (FIX-BEFORE 1 and 2), lane/chrome 2026-10-13, no app launch
+- The Kolux mark never takes focus (onMouseDown preventDefault), so Edit acts on what had focus.
+- chromeItems.ts menuEdit(id, inField): a focused text field outside a terminal gets the page's
+  own command. Otherwise only Copy and Select All reach the focused terminal, as calls
+  (copySelection / term.selectAll via TerminalPane's focusedTerminalEdit), never as a faked chord.
+  Undo, Redo and Cut do nothing there. Paste waits for the core lane's attachPaste paste().
+- Zoom hunk: stepZoom(id.slice(5) as ZoomStep), importing from ./settings/zoom.
+Checked: tsc 0 on a scratch copy of main d1de182 plus this lane's chrome changes plus the App.tsx and
+TerminalPane.tsx hunks (the copy was removed afterwards); vitest src/chrome src/terminal on that copy
+179 passed; lane tsc 0; lane vitest src/chrome 31 passed.
+
+## LIVE PROOF PENDING (added)
+6. Terminal copy: select text in a terminal, click the mark, Edit > Copy: the text is on the clipboard.
+   With no selection, Edit > Copy does nothing and the running agent keeps running.
+7. Terminal select-all: click in a terminal, then the mark, Edit > Select All: the terminal's text is
+   highlighted and the app UI is not.
+8. Field edit: type in the Settings search box, then mark > Edit > Select All: only that box's text is
+   selected.
+9. Menu zoom: View > Zoom In: the app grows one step and Settings > Appearance shows the new zoom.
+10. At 120% the popup opens right under the mark.
