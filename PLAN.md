@@ -743,7 +743,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### H · theme 4 · Accounts, sign-in and usage limits (1 cards)
 
-- [ ] T-328 · USAGE-031 Forecast of when a usage window runs out (off screen since 2026-10-05) · OPEN (2026-10-13, lane/look): forecast.ts and the Claude pill hover line are in with 5 vitest tests; blocker: no live CDP proof yet of the hover line on a real reading pair (look budget ran out).
+- [x] T-328 · USAGE-031 Forecast of when a usage window runs out (off screen since 2026-10-05) · done 2026-10-13 (lane/look from 5be12ba; evidence/T-328.txt: live: two claude-usage reads 5 min apart (40% then 41% of the weekly window); the pill hover gained 'At this rate: runs out in 5h 5m, before the reset' after the second)
 
 ### H · theme 5 · Safety and trust (3 cards)
 
