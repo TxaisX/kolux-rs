@@ -26,6 +26,8 @@ export type SavedPane = {
   session?: string;
   /** Never written down: main.tsx fills it from the agent's standing start line at restore. */
   env?: [string, string][];
+  /** Never written down: TERM-107, whether main.tsx's restore line carries the agent's resume form. */
+  resumed?: boolean;
   account?: string | null;
   title?: string;
   group?: number;
@@ -59,14 +61,12 @@ export function layoutOf(panes: LivePane[], activeTab: Record<number, number>, f
   return tidy(kept, activeTab, focused, activeDir, stacked);
 }
 
-/** SESS-030: how the agent is started again on its own session. Only a known id is ever passed:
- *  Claude Code's bare `--resume` opens its pick-a-session screen, and Codex's bare `resume` its
- *  picker, so without an id the agent starts fresh at its prompt. */
-export function resumeArgs(agent: Agent, session: string | undefined): string[] {
-  if (!session) return [];
-  if (agent === "claude") return ["--resume", session];
-  if (agent === "codex") return ["resume", session];
-  return [];
+/** SESS-030 (T-066-c): whether the restore loop asks the Rust side for this tab's start line. Only
+ * an agent tab does: a tab with no agent id, a non-terminal tab, and a plain shell (or an unstarted
+ * chooser) with no program of its own keep the line they were saved with. A catalogue agent saved as
+ * a shell with its own program (Gemini CLI, say) is asked, so its resume form reaches it. */
+export function restoreAsks(p: Pick<SavedPane, "agent" | "agentId" | "program" | "kind">): boolean {
+  return !p.kind && !!p.agentId && !(p.agent === "shell" && p.program === null);
 }
 
 const str = (v: unknown): v is string => typeof v === "string";
@@ -106,7 +106,6 @@ export function restoreLayout(value: unknown): SavedLayout | null {
   for (const v of o.panes) {
     const p = readPane(v);
     if (p && !seen.has(p.key)) {
-      if (p.agent !== "shell") p.args = resumeArgs(p.agent, p.session);
       seen.add(p.key);
       panes.push(p);
     }
@@ -139,10 +138,4 @@ function tidy(panes: SavedPane[], activeTab: Record<number, number>, focused: nu
   let f = keys.has(focused) ? focused : focusIn(panes, activeDir, focused);
   if (!keys.has(f)) f = panesIn(panes, activeDir)[0]?.key ?? panes[0]?.key ?? 1;
   return { panes, activeTab: tabs, focused: f, activeDir, stacked };
-}
-
-/** TERM-107: whether an agent pane's start line resumes a saved conversation (else it is a fresh one). */
-export function resumes(agent: Agent, args: readonly string[]): boolean {
-  const [flag] = resumeArgs(agent, "-");
-  return flag !== undefined && args.includes(flag);
 }
