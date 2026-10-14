@@ -84,6 +84,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-031 | Each automation keeps a numbered run history you can step through. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-032 | Review a plan in sections and comment before Claude approves it. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-033 | Source Control lists changes by section and opens a change for review. | [Projects and worktrees](projects-and-worktrees.md) |
+| T-033-b | Source Control, diffs and All Changes update within about a second of a change, instead of polling. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-034 | Leave review notes on diff lines and send them to the agent. | [Files and browser](files-and-browser.md) |
 | T-035 | Open in Code and Answer in Code jump to the agent's pane. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-036 | Settings page for choosing agents, the default agent and how they start. | [Settings](settings.md) |
@@ -192,6 +193,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-542-b | The smoke test covers quitting and coming back. | internal |
 | T-540-b | Plan-check fails and names ids missing from the plan. | internal |
 | T-545 | The smoke test waits longer for a pane to take focus. | internal |
+| T-551 | Under Yolo, Codex runs without approval prompts but inside its sandbox, writing only in its workspace. | [Safety](safety.md) |
 
 ### P0 · theme 6 · Business-user frame (4 cards)
 
@@ -475,4 +477,4 @@ Tasks not yet ticked off in the build plan are not listed.
 |---|---|---|
 | T-298 | Reopen the wizard from the sidebar help menu; first successes are recorded locally. | [Getting started](getting-started.md) |
 
-<!-- generated from PLAN.md at 231fc43 -->
+<!-- generated from PLAN.md at d5034cd -->
