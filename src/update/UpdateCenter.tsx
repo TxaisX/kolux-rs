@@ -7,7 +7,7 @@ import { listen } from "@tauri-apps/api/event";
 import { savePoint } from "../lifecycle";
 import { Close, Refresh, Spinner, CheckCircle } from "../chrome/icons";
 import { Quietly, TICK_MS, UpdateSchedule, type Outcome, type Quiet } from "./schedule";
-import { barItem, cardReducer, initialCard, mainAction, tipVisible, RELEASES_PAGE, type BarItem, type LastLaunch, type UpdateInfo } from "./card";
+import { actionLabel, barItem, cardReducer, initialCard, mainAction, tipVisible, RELEASES_PAGE, type BarItem, type LastLaunch, type UpdateInfo } from "./card";
 
 interface Status {
   enabled: boolean;
@@ -218,7 +218,7 @@ export default function UpdateCenter() {
                 : "";
   const pct = p.kind === "downloading" && p.total ? Math.min(100, Math.round((p.received / p.total) * 100)) : null;
   const action = mainAction(p);
-  const actionLabel = action === "restart" ? (p.kind === "error" ? "Try again" : "Restart to update") : action === "download" ? "Download" : action === "retryCheck" || action === "retryDownload" ? "Try again" : action === "close" ? "OK" : null;
+  const label = actionLabel(p);
 
   return (
     <>
@@ -294,10 +294,10 @@ export default function UpdateCenter() {
                   </ul>
                 )}
                 {p.kind === "ready" && <div className="upd-next">It also installs by itself the next time you quit.</div>}
-                {actionLabel && (
+                {label && (
                   <div className="upd-actions">
                     <button className={`btn ${action === "restart" || action === "download" ? "primary" : ""}`} onClick={act}>
-                      {actionLabel}
+                      {label}
                     </button>
                     {p.kind === "error" && p.installer && (
                       <button className="btn" onClick={() => void invoke("open_external", { url: RELEASES_PAGE })}>

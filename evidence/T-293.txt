@@ -5,11 +5,14 @@ What it does
 - Before a downloaded update is kept for install, a signed copy of Kolux RS reads its own Windows
   (Authenticode) signature and the download's, with Windows PowerShell's signature check (no window;
   the file path goes in through an environment variable, never the command text).
-- Same publisher, valid signature: allowed. Another publisher, no signature, or a broken / untrusted
-  signature: refused for good. The version goes into update.refusedVersions in the store, the
-  download is dropped, and the card gets a "security-stop: <reason>" error.
-- A download whose signature cannot be read at all: stopped this time only ("security-stop-once:"),
-  not remembered.
+- Same publisher, valid signature: allowed. Another publisher, no signature, or contents that do
+  not match the signature (HashMismatch): refused for good. The download is dropped and the card
+  gets a "security-stop: <reason>" error. (Amended by FIX-2, see evidence/FIX-2.txt: the refusal is
+  remembered by the installer's SHA-256 and update signature in update.refusedInstallers, capped at
+  20, never by its version; NotTrusted, UnknownError, an empty status and the other unclear answers
+  now stop once instead of for good.)
+- A download whose signature cannot be read at all, or reads unclear: stopped this time only
+  ("security-stop-once:"), not remembered.
 - update_check passes over a remembered version and answers with the quiet reason "refused"; a
   check the user asked for shows "The newest version was stopped earlier because it did not come
   from this copy's publisher, so it is not offered again."
@@ -41,12 +44,21 @@ Acceptance boxes
 - [ ] Check again later -> the refused version is not offered again. Unit-proven (refused list +
       quiet "refused"); live proof pending (batched).
 
-LIVE PROOF PENDING (for the coordinator's batched run, signed test build only)
-1. Sign a dev build with test certificate A and install it; publish a test feed whose installer is
-   signed with certificate B (same version bump, valid update key).
+LIVE PROOF PENDING (for the coordinator's batched run, signed test build only; step 1 corrected by
+FIX-2 FS3: with an untrusted certificate A the installed copy reads NotTrusted, the rule stays
+dormant and the B-signed update installs, which would prove nothing)
+1. On a throwaway test PC or VM only: make two test code-signing certificates A and B, each under
+   its own test root, and put BOTH test roots in that machine's trusted roots. Sign a release build
+   with A, built with KOLUX_RS_SIGNED_BUILD=1, and install it. Before going on, read the installed
+   kolux-rs.exe with Get-AuthenticodeSignature and confirm Status is Valid with subject A; if it is
+   not Valid, stop: the proof would be void. Publish a test feed whose installer is signed with B
+   (same version bump, valid update key), and confirm that installer also reads Valid (subject B).
 2. Settings or status bar: Check for updates. Expect the card "Kolux RS <v> was stopped for your
    safety", the reason naming both publishers, the line "It was not installed and will not be
    offered again", no release notes, only Close; the status bar reads "Update stopped".
-3. Close, then Check for updates again. Expect "The newest version was stopped earlier because it
+3. Close, then Check for updates again. Expect "The newest installer was stopped earlier because it
    did not come from this copy's publisher, so it is not offered again." and no download.
-4. The lane profile's state.db holds update.refusedVersions = ["<v>"].
+4. The test profile's state.db holds update.refusedInstallers = [{"sha256":"<installer hash>",
+   "signature":"<feed signature>","version":"<v>"}].
+5. Replace the feed's installer with one signed by A under the same version: it is offered and
+   installs (the stale refusal does not block it).

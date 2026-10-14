@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { barItem, cardReducer, initialCard, mainAction, quietNote, securityStop, tipVisible, type Action, type CardState, type UpdateInfo } from "./card";
+import { actionLabel, barItem, cardReducer, initialCard, mainAction, quietNote, securityStop, tipVisible, type Action, type CardState, type UpdateInfo } from "./card";
 
 const info = (version: string, notes: string[] = ["One", "Two", "Three", "Four", "Five"]): UpdateInfo => ({ version, currentVersion: "0.1.0", notes });
 const run = (s: CardState, ...actions: Action[]) => actions.reduce(cardReducer, s);
@@ -271,6 +271,14 @@ describe("publisher-mismatch stop (APP-030)", () => {
     expect(mainAction(s.phase)).toBe("close");
     expect(s.popup).toBeNull();
     expect(barItem(s.phase)).toMatchObject({ tone: "error", text: "Update stopped" });
+  });
+
+  it("FIX-2 AFTER 5: the stop card closes with a Close button, not OK", () => {
+    const s = run(initialCard(null, true), { type: "downloadFailed", info: info("0.2.0"), message: stop, offline: false });
+    expect(actionLabel(s.phase)).toBe("Close");
+    // The ordinary up-to-date and updated notes keep their OK.
+    expect(actionLabel({ kind: "upToDate", note: quietNote("refused") })).toBe("OK");
+    expect(actionLabel({ kind: "ready", info: info("0.2.0") })).toBe("Restart to update");
   });
 
   it("an ordinary signature failure is still a retryable download error", () => {

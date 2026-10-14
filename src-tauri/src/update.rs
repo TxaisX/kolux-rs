@@ -40,8 +40,11 @@ const KEY_LAST_CHECK: &str = "update.lastCheckAt";
 const KEY_DISMISSED: &str = "update.dismissedVersion";
 const KEY_TIP_DONE: &str = "update.tipDone";
 const KEY_ATTEMPT: &str = "update.attempt";
-/// APP-030: versions stopped for a publisher mismatch; never offered again.
-const KEY_REFUSED: &str = "update.refusedVersions";
+/// APP-030: installers stopped for their publisher (by SHA-256 and update signature); never
+/// offered again. Capped at REFUSED_CAP; update_mark("refusedInstallers", "") forgets them all.
+const KEY_REFUSED: &str = "update.refusedInstallers";
+/// The earlier version-keyed list (T-293); no longer read, and cleared with the new one.
+const KEY_REFUSED_OLD: &str = "update.refusedVersions";
 /// APP-028: an install attempt older than this is not reported at launch.
 pub const ATTEMPT_MAX_AGE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 /// APP-029: the clean-up before the installer runs (ending the shells) gets this long.
@@ -244,57 +247,144 @@ fn signed(s: &Signer) -> Option<&str> {
     s.subject.as_deref().map(str::trim).filter(|v| !v.is_empty())
 }
 
-/// APP-030: the publisher rule. It applies only when this copy itself carries a valid signature;
-/// an unsigned copy (every release today, OD-03) keeps relying on the update key alone.
-pub fn publisher_verdict(installed: Option<&Signer>, incoming: Option<&Signer>) -> Verdict {
-    let Some(mine) = installed.and_then(signed) else { return Verdict::Allow };
-    let Some(theirs) = incoming else {
-        return Verdict::Unverified("Kolux RS could not read the download's Windows signature, so it was not installed.".into());
+/// APP-030 (council FIX-2 FS1): the signing release job builds this in as `1` when it signs the
+/// copy. Such a copy never takes an update while it cannot read its own signature.
+pub const SIGNED_BUILD: bool = match option_env!("KOLUX_RS_SIGNED_BUILD") {
+    Some(v) => v.len() == 1 && v.as_bytes()[0] == b'1',
+    None => false,
+};
+
+/// APP-030: the publisher rule. It applies when this copy is built as signed or carries a valid
+/// signature; an unsigned copy (every release today, OD-03) keeps relying on the update key alone.
+/// Only a definite answer is a refusal (another publisher, no signature, contents that do not
+/// match the signature); anything unclear stops this download only (council FIX-2 FB1).
+pub fn publisher_verdict(signed_build: bool, installed: Option<&Signer>, incoming: Option<&Signer>) -> Verdict {
+    let mine = match installed.and_then(signed) {
+        Some(m) => m,
+        None if signed_build => {
+            return Verdict::Unverified("Kolux RS could not confirm its own Windows signature, so it did not install the update. It will try again next time.".into())
+        }
+        None => return Verdict::Allow,
     };
-    match signed(theirs) {
-        Some(p) if p == mine => Verdict::Allow,
-        Some(p) => Verdict::Refuse(format!("The update is signed by \"{p}\", not by \"{mine}\", the publisher of this copy.")),
-        None if theirs.status == "NotSigned" => Verdict::Refuse(format!("The update has no Windows signature, but this copy is signed by \"{mine}\".")),
-        None => Verdict::Refuse(format!("The update's Windows signature is not valid ({}).", theirs.status)),
+    let Some(theirs) = incoming else {
+        return Verdict::Unverified("Kolux RS could not read the download's Windows signature, so it was not installed. It will try again next time.".into());
+    };
+    match (signed(theirs), theirs.status.as_str()) {
+        (Some(p), _) if p == mine => Verdict::Allow,
+        (Some(p), _) => Verdict::Refuse(format!("The update is signed by \"{p}\", not by \"{mine}\", the publisher of this copy.")),
+        (None, "NotSigned") => Verdict::Refuse(format!("The update has no Windows signature, but this copy is signed by \"{mine}\".")),
+        (None, "HashMismatch") => Verdict::Refuse("The update's contents do not match its Windows signature (HashMismatch).".into()),
+        (None, "") => Verdict::Unverified("Windows could not check the download's signature just now, so it was not installed. It will try again next time.".into()),
+        (None, s) => Verdict::Unverified(format!("Windows could not confirm the download's signature just now ({s}), so it was not installed. It will try again next time.")),
     }
 }
 
-/// APP-030: whether the stored list of refused versions (a JSON array of strings) holds `version`.
-pub fn refused_has(list: Option<&str>, version: &str) -> bool {
-    list.and_then(|l| serde_json::from_str::<Vec<String>>(l).ok()).is_some_and(|v| v.iter().any(|x| x == version))
+/// APP-030: at most this many refused installers are remembered (the oldest go first).
+pub const REFUSED_CAP: usize = 20;
+
+/// APP-030 (council FIX-2 FS2): one installer stopped for its publisher. It is known by its own
+/// bytes (SHA-256) and by the update signature the feed gave with it (which covers those bytes),
+/// never by the version string, so a stale installer served under a new version number cannot
+/// block the real release.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Refused {
+    pub sha256: String,
+    #[serde(default)]
+    pub signature: String,
+    #[serde(default)]
+    pub version: String,
 }
 
-/// APP-030: the stored list with `version` added once.
-pub fn refused_add(list: Option<&str>, version: &str) -> String {
-    let mut v = list.and_then(|l| serde_json::from_str::<Vec<String>>(l).ok()).unwrap_or_default();
-    if !v.iter().any(|x| x == version) {
-        v.push(version.to_string());
-    }
+fn refused_list(list: Option<&str>) -> Vec<Refused> {
+    // A damaged list, or the earlier version-keyed list, is read as empty.
+    list.and_then(|l| serde_json::from_str::<Vec<Refused>>(l).ok()).unwrap_or_default()
+}
+
+/// APP-030: whether this installer (by its bytes' SHA-256, when they are here) or this update
+/// signature (at check time, before any download) was refused before.
+pub fn refused_has(list: Option<&str>, sha256: Option<&str>, signature: &str) -> bool {
+    let signature = signature.trim();
+    refused_list(list)
+        .iter()
+        .any(|r| sha256.is_some_and(|h| h.eq_ignore_ascii_case(&r.sha256)) || (!signature.is_empty() && r.signature.trim() == signature))
+}
+
+/// APP-030: the stored list with this installer added once, keeping the newest `REFUSED_CAP`.
+pub fn refused_add(list: Option<&str>, entry: Refused) -> String {
+    let mut v = refused_list(list);
+    v.retain(|r| !r.sha256.eq_ignore_ascii_case(&entry.sha256));
+    v.push(entry);
+    let over = v.len().saturating_sub(REFUSED_CAP);
+    v.drain(..over);
     serde_json::to_string(&v).unwrap_or_else(|_| "[]".into())
 }
 
+/// The SHA-256 of an installer, as lower-case hex.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// APP-030 (council FIX-2 AFTER 1): a signature read that has not answered by then (a slow
+/// certificate revocation check, say) is given up and the download is stopped this time only.
+pub const SIGNATURE_LIMIT: Duration = Duration::from_secs(20);
+
+/// Runs `cmd` and gives its standard output, or `None` when it fails to start, exits with an
+/// error, or is still running after `limit` (it is then ended).
+pub fn bounded_output(mut cmd: std::process::Command, limit: Duration) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut child = cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().ok()?;
+    // The answer is one short line; reading it on its own thread keeps a full pipe from stalling the wait.
+    let mut out = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = out.read_to_end(&mut buf);
+        buf
+    });
+    let until = Instant::now() + limit;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if Instant::now() < until => std::thread::sleep(Duration::from_millis(25)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    let buf = reader.join().ok()?;
+    status.success().then_some(buf)
+}
+
+/// APP-030 (council FIX-2 AFTER 2): Windows' own System32 folder, asked of Windows rather than
+/// read from an environment variable that the caller could have changed.
+#[cfg(windows)]
+pub fn system_dir() -> Option<std::path::PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    let mut buf = vec![0u16; 520];
+    // SAFETY: the buffer is valid for `buf.len()` UTF-16 units and Windows writes at most that many.
+    let n = unsafe { windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW(buf.as_mut_ptr(), buf.len() as u32) } as usize;
+    (n > 0 && n < buf.len()).then(|| std::ffi::OsString::from_wide(&buf[..n]).into())
+}
+
 /// APP-030: the Windows signature of one file, read by Windows PowerShell's own signature check
-/// (no window; the path goes in through the environment, never into the command text).
-/// `None` when it cannot be read.
+/// (no window; the path goes in through the environment, never into the command text; any error
+/// stops the read instead of printing an empty answer). `None` when it cannot be read in time.
 #[cfg(windows)]
 pub fn read_signer(path: &std::path::Path) -> Option<Signer> {
     use std::os::windows::process::CommandExt;
-    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
-    let ps = std::path::Path::new(&root).join("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe");
-    let script = "$s = Get-AuthenticodeSignature -LiteralPath $env:KOLUX_RS_SIGNED_FILE; \
+    let ps = system_dir()?.join("WindowsPowerShell").join("v1.0").join("powershell.exe");
+    let script = "$ErrorActionPreference = 'Stop'; \
+        $s = Get-AuthenticodeSignature -LiteralPath $env:KOLUX_RS_SIGNED_FILE -ErrorAction Stop; \
         $c = $s.SignerCertificate; \
         [pscustomobject]@{ status = [string]$s.Status; subject = $(if ($c) { $c.Subject } else { $null }) } | ConvertTo-Json -Compress";
-    let out = std::process::Command::new(ps)
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+    let mut cmd = std::process::Command::new(ps);
+    cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
         .env("KOLUX_RS_SIGNED_FILE", path)
-        .stdin(std::process::Stdio::null())
-        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    serde_json::from_str::<Signer>(String::from_utf8_lossy(&out.stdout).trim()).ok()
+        .creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let out = bounded_output(cmd, SIGNATURE_LIMIT)?;
+    serde_json::from_str::<Signer>(String::from_utf8_lossy(&out).trim()).ok()
 }
 
 #[cfg(not(windows))]
@@ -302,17 +392,68 @@ pub fn read_signer(_path: &std::path::Path) -> Option<Signer> {
     None
 }
 
+/// APP-030 (council FIX-2 AFTER 3): writes the download to a new file nobody else can create
+/// first, then holds it open so that no other program can change it while its signature is read;
+/// the held copy is read back and must match the bytes in memory. The file goes with the handle.
+pub struct HeldCopy {
+    file: Option<std::fs::File>,
+    pub path: std::path::PathBuf,
+}
+
+impl HeldCopy {
+    pub fn new(bytes: &[u8]) -> Option<HeldCopy> {
+        use std::io::{Read, Write};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, Ordering::SeqCst);
+        let path = std::env::temp_dir().join(format!("kolux-rs-update-{}-{}-{n}.exe", std::process::id(), now_ms()));
+        let mut w = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).ok()?;
+        let wrote = w.write_all(bytes).and_then(|_| w.sync_all());
+        drop(w);
+        let mut open = std::fs::OpenOptions::new();
+        open.read(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            open.share_mode(1); // FILE_SHARE_READ: others may read it, nobody may write, rename or delete it
+        }
+        let held = wrote.ok().and_then(|_| open.open(&path).ok());
+        let Some(mut file) = held else {
+            let _ = std::fs::remove_file(&path);
+            return None;
+        };
+        let mut back = Vec::with_capacity(bytes.len());
+        if file.read_to_end(&mut back).is_err() || back != bytes {
+            drop(file);
+            let _ = std::fs::remove_file(&path);
+            return None;
+        }
+        Some(HeldCopy { file: Some(file), path })
+    }
+}
+
+impl Drop for HeldCopy {
+    fn drop(&mut self) {
+        // Closing the only handle first lets the delete go through.
+        drop(self.file.take());
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// APP-030: the downloaded installer's signature, read from a held copy.
+pub fn incoming_signer(bytes: &[u8]) -> Option<Signer> {
+    let copy = HeldCopy::new(bytes)?;
+    read_signer(&copy.path)
+}
+
 /// APP-030: checks the downloaded installer against the running copy's publisher.
 fn check_publisher(bytes: &[u8]) -> Verdict {
     let installed = std::env::current_exe().ok().and_then(|p| read_signer(&p));
-    // Nothing to compare against: the rule is dormant and the download is never written out.
+    // Nothing to compare against (an unsigned copy, or a signed build that cannot read its own
+    // signature): the download is never written out.
     if installed.as_ref().and_then(signed).is_none() {
-        return Verdict::Allow;
+        return publisher_verdict(SIGNED_BUILD, installed.as_ref(), None);
     }
-    let file = std::env::temp_dir().join(format!("kolux-rs-update-{}-{}.exe", std::process::id(), now_ms()));
-    let incoming = std::fs::write(&file, bytes).ok().and_then(|_| read_signer(&file));
-    let _ = std::fs::remove_file(&file);
-    publisher_verdict(installed.as_ref(), incoming.as_ref())
+    publisher_verdict(SIGNED_BUILD, installed.as_ref(), incoming_signer(bytes).as_ref())
 }
 
 /// APP-028: one install attempt, kept in the store until the next launch reads it.
@@ -492,15 +633,24 @@ pub fn update_status(app: AppHandle, store: State<'_, Mutex<Store>>, updates: St
     })
 }
 
-/// Remembers the dismissed version or that the reassurance tip is done.
+/// Remembers the dismissed version or that the reassurance tip is done, or (APP-030, council
+/// FIX-2 FS2) forgets every installer stopped for its publisher: key "refusedInstallers" with an
+/// empty value. Nothing can be added to that list this way; a forgotten installer that is still
+/// signed by someone else is stopped again when it downloads.
 #[tauri::command(async)]
 pub fn update_mark(store: State<'_, Mutex<Store>>, key: String, value: String) -> Result<(), String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
     let key = match key.as_str() {
         "dismissedVersion" => KEY_DISMISSED,
         "tipDone" => KEY_TIP_DONE,
+        "refusedInstallers" if value.is_empty() => {
+            store.set(KEY_REFUSED_OLD, "").map_err(|e| e.to_string())?;
+            KEY_REFUSED
+        }
+        "refusedInstallers" => return Err("the stopped-installers list can only be cleared".into()),
         _ => return Err(format!("unknown update mark: {key}")),
     };
-    store.lock().map_err(|e| e.to_string())?.set(key, &value).map_err(|e| e.to_string())
+    store.set(key, &value).map_err(|e| e.to_string())
 }
 
 fn now_ms() -> u64 {
@@ -531,8 +681,9 @@ pub async fn update_check(app: AppHandle) -> Result<Checked, String> {
     // uploaded yet is passed over until it is.
     let (found, quiet) = match found {
         Ok(Some(u)) if installer_missing(u.download_url.as_str()).await => (None, Some(Quiet::HalfPublished)),
-        // APP-030: a version stopped for its publisher is never offered again.
-        Ok(Some(u)) if refused_has(app.state::<Mutex<Store>>().lock().ok().and_then(|s| s.get(KEY_REFUSED).ok().flatten()).as_deref(), &u.version) => {
+        // APP-030: an installer stopped for its publisher is never offered again (known by the
+        // update signature, which covers its bytes; a different installer under the same version is).
+        Ok(Some(u)) if refused_has(app.state::<Mutex<Store>>().lock().ok().and_then(|s| s.get(KEY_REFUSED).ok().flatten()).as_deref(), None, &u.signature) => {
             (None, Some(Quiet::Refused))
         }
         Ok(found) => (found, None),
@@ -581,14 +732,26 @@ pub async fn update_download(app: AppHandle) -> Result<Info, String> {
         )
         .await
         .map_err(|e| e.to_string())?;
-    // APP-030: a signed copy only takes an installer from the same publisher; no bypass.
-    let (verdict, bytes) = tauri::async_runtime::spawn_blocking(move || (check_publisher(&bytes), bytes)).await.map_err(|e| e.to_string())?;
+    // APP-030: a signed copy only takes an installer from the same publisher; no bypass. An
+    // installer refused before is stopped again without asking Windows.
+    let (verdict, bytes, sha) = tauri::async_runtime::spawn_blocking(move || {
+        let sha = sha256_hex(&bytes);
+        (check_publisher(&bytes), bytes, sha)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let earlier = app.state::<Mutex<Store>>().lock().ok().and_then(|s| s.get(KEY_REFUSED).ok().flatten());
+    let verdict = if refused_has(earlier.as_deref(), Some(&sha), "") {
+        Verdict::Refuse("This installer was stopped earlier because it did not come from this copy's publisher.".into())
+    } else {
+        verdict
+    };
     match verdict {
         Verdict::Allow => {}
         Verdict::Refuse(why) => {
             if let Ok(store) = app.state::<Mutex<Store>>().lock() {
-                let list = store.get(KEY_REFUSED).ok().flatten();
-                let _ = store.set(KEY_REFUSED, &refused_add(list.as_deref(), &update.version));
+                let entry = Refused { sha256: sha, signature: update.signature.clone(), version: update.version.clone() };
+                let _ = store.set(KEY_REFUSED, &refused_add(earlier.as_deref(), entry));
             }
             *updates.pending.lock().map_err(|e| e.to_string())? = None;
             return Err(format!("{SECURITY_STOP}{why}"));
@@ -777,41 +940,89 @@ mod tests {
         // Every release today is unsigned (OD-03): the rule stays dormant whatever arrives.
         for installed in [None, Some(sig("NotSigned", None)), Some(sig("HashMismatch", Some(ME))), Some(sig("Valid", Some("  ")))] {
             for incoming in [None, Some(sig("NotSigned", None)), Some(sig("Valid", Some("CN=Someone Else")))] {
-                assert_eq!(publisher_verdict(installed.as_ref(), incoming.as_ref()), Verdict::Allow, "{installed:?} / {incoming:?}");
+                assert_eq!(publisher_verdict(false, installed.as_ref(), incoming.as_ref()), Verdict::Allow, "{installed:?} / {incoming:?}");
             }
         }
     }
 
     #[test]
-    fn app030_a_signed_copy_takes_only_its_own_publisher() {
-        let mine = sig("Valid", Some(ME));
-        assert_eq!(publisher_verdict(Some(&mine), Some(&sig("Valid", Some(ME)))), Verdict::Allow);
-        // A renewed certificate keeps the publisher name: still allowed (surrounding spaces ignored).
-        assert_eq!(publisher_verdict(Some(&mine), Some(&sig("Valid", Some(&format!(" {ME} "))))), Verdict::Allow);
-        let Verdict::Refuse(why) = publisher_verdict(Some(&mine), Some(&sig("Valid", Some("CN=Someone Else")))) else { panic!("not refused") };
-        assert!(why.contains("CN=Someone Else") && why.contains(ME), "{why}");
-        let Verdict::Refuse(why) = publisher_verdict(Some(&mine), Some(&sig("NotSigned", None))) else { panic!("unsigned taken") };
-        assert!(why.contains("no Windows signature"), "{why}");
-        // Same publisher name on a broken or untrusted signature is still stopped.
-        for bad in ["HashMismatch", "NotTrusted", "UnknownError"] {
-            let Verdict::Refuse(why) = publisher_verdict(Some(&mine), Some(&sig(bad, Some(ME)))) else { panic!("{bad} taken") };
-            assert!(why.contains(bad), "{why}");
+    fn app030_a_copy_built_signed_that_cannot_read_its_own_signature_stops_once() {
+        // FIX-2 FS1: the build flag says this copy is signed; a failed or unclear read of its own
+        // signature (PowerShell blocked, antivirus holding the file) never lets an update through.
+        for installed in [None, Some(sig("", None)), Some(sig("UnknownError", Some(ME))), Some(sig("NotTrusted", Some(ME)))] {
+            for incoming in [None, Some(sig("Valid", Some(ME))), Some(sig("NotSigned", None))] {
+                let v = publisher_verdict(true, installed.as_ref(), incoming.as_ref());
+                assert!(matches!(&v, Verdict::Unverified(why) if why.contains("its own")), "{installed:?} / {incoming:?}: {v:?}");
+            }
         }
-        // A download whose signature cannot be read is stopped this time but not remembered.
-        assert!(matches!(publisher_verdict(Some(&mine), None), Verdict::Unverified(_)));
+        // When it can read its own signature, the flag changes nothing.
+        let mine = sig("Valid", Some(ME));
+        assert_eq!(publisher_verdict(true, Some(&mine), Some(&mine)), Verdict::Allow);
+        assert!(matches!(publisher_verdict(true, Some(&mine), Some(&sig("NotSigned", None))), Verdict::Refuse(_)));
+        // The flag is only on in a build the signing job made.
+        assert!(!SIGNED_BUILD || option_env!("KOLUX_RS_SIGNED_BUILD") == Some("1"));
     }
 
     #[test]
-    fn app030_a_refused_version_is_remembered_once() {
-        assert!(!refused_has(None, "0.2.0"));
-        assert!(!refused_has(Some("not json"), "0.2.0"));
-        let one = refused_add(None, "0.2.0");
-        assert!(refused_has(Some(&one), "0.2.0"));
-        assert!(!refused_has(Some(&one), "0.2.1"));
-        let two = refused_add(Some(&refused_add(Some(&one), "0.2.0")), "0.2.1");
-        assert_eq!(two, r#"["0.2.0","0.2.1"]"#);
-        // A damaged list starts over instead of failing the stop.
-        assert_eq!(refused_add(Some("{oops"), "0.3.0"), r#"["0.3.0"]"#);
+    fn app030_a_signed_copy_takes_only_its_own_publisher() {
+        let mine = sig("Valid", Some(ME));
+        for build in [false, true] {
+            assert_eq!(publisher_verdict(build, Some(&mine), Some(&sig("Valid", Some(ME)))), Verdict::Allow);
+            // A renewed certificate keeps the publisher name: still allowed (surrounding spaces ignored).
+            assert_eq!(publisher_verdict(build, Some(&mine), Some(&sig("Valid", Some(&format!(" {ME} "))))), Verdict::Allow);
+        }
+        let Verdict::Refuse(why) = publisher_verdict(false, Some(&mine), Some(&sig("Valid", Some("CN=Someone Else")))) else { panic!("not refused") };
+        assert!(why.contains("CN=Someone Else") && why.contains(ME), "{why}");
+        let Verdict::Refuse(why) = publisher_verdict(false, Some(&mine), Some(&sig("NotSigned", None))) else { panic!("unsigned taken") };
+        assert!(why.contains("no Windows signature"), "{why}");
+        // Same publisher name on a signature whose contents do not match is stopped for good.
+        let Verdict::Refuse(why) = publisher_verdict(false, Some(&mine), Some(&sig("HashMismatch", Some(ME)))) else { panic!("HashMismatch taken") };
+        assert!(why.contains("HashMismatch"), "{why}");
+        // FIX-2 FB1: an unclear or passing result (antivirus holding the file gives an empty status, an
+        // offline PC gives NotTrusted) stops this time only; it is never remembered.
+        for unclear in ["", "UnknownError", "NotTrusted", "Incompatible", "NotSupportedFileFormat", "Valid"] {
+            let subject = if unclear == "Valid" { None } else { Some(ME) };
+            assert!(matches!(publisher_verdict(false, Some(&mine), Some(&sig(unclear, subject))), Verdict::Unverified(_)), "{unclear:?} was remembered");
+        }
+        // A download whose signature cannot be read is stopped this time but not remembered.
+        assert!(matches!(publisher_verdict(false, Some(&mine), None), Verdict::Unverified(_)));
+    }
+
+    fn refused(sha: &str, signature: &str, version: &str) -> Refused {
+        Refused { sha256: sha.into(), signature: signature.into(), version: version.into() }
+    }
+
+    #[test]
+    fn app030_a_refused_installer_is_known_by_its_bytes_not_its_version() {
+        assert!(!refused_has(None, Some("aa"), "sig-a"));
+        assert!(!refused_has(Some("not json"), Some("aa"), "sig-a"));
+        let one = refused_add(None, refused("AA", "sig-a", "0.9.0"));
+        // Download time (the bytes' hash, any case) and check time (the feed's signature for those bytes).
+        assert!(refused_has(Some(&one), Some("aa"), ""));
+        assert!(refused_has(Some(&one), None, "sig-a"));
+        // FIX-2 FS2: the real 0.9.0 (other bytes, other signature) is not blocked by a stale
+        // installer that was served as "0.9.0".
+        assert!(!refused_has(Some(&one), Some("bb"), "sig-b"));
+        assert!(!refused_has(Some(&one), None, ""), "an empty signature matches nothing");
+        // The earlier version-keyed list blocks nothing.
+        assert!(!refused_has(Some(r#"["0.9.0"]"#), None, "0.9.0"));
+        // Added once per installer, newest last, and a damaged list starts over instead of failing the stop.
+        let again = refused_add(Some(&one), refused("aa", "sig-a2", "0.9.0"));
+        assert_eq!(refused_list(Some(&again)).len(), 1);
+        assert_eq!(refused_list(Some(&refused_add(Some("{oops"), refused("cc", "s", "1.0.0")))), vec![refused("cc", "s", "1.0.0")]);
+    }
+
+    #[test]
+    fn app030_the_refused_list_keeps_only_the_newest_twenty() {
+        let mut list: Option<String> = None;
+        for i in 0..(REFUSED_CAP + 5) {
+            list = Some(refused_add(list.as_deref(), refused(&format!("{i:064x}"), &format!("sig-{i}"), "1.0.0")));
+        }
+        let kept = refused_list(list.as_deref());
+        assert_eq!(kept.len(), REFUSED_CAP);
+        assert_eq!(kept.first().map(|r| r.signature.as_str()), Some("sig-5"));
+        assert!(!refused_has(list.as_deref(), None, "sig-4") && refused_has(list.as_deref(), None, &format!("sig-{}", REFUSED_CAP + 4)));
+        assert_eq!(sha256_hex(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     }
 
     #[test]
@@ -825,24 +1036,63 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn app030_reads_real_windows_signatures() {
-        // A Windows program carries a valid signature with a publisher.
+    fn app030_a_signature_read_that_hangs_is_given_up() {
+        // FIX-2 AFTER 1: a program that does not answer in time is ended and gives no answer.
+        let mut cmd = std::process::Command::new(system_dir().unwrap().join("ping.exe"));
+        cmd.args(["-n", "30", "127.0.0.1"]);
+        let at = Instant::now();
+        assert_eq!(bounded_output(cmd, Duration::from_millis(400)), None);
+        assert!(at.elapsed() < Duration::from_secs(10), "{:?}", at.elapsed());
+        let mut cmd = std::process::Command::new(system_dir().unwrap().join("cmd.exe"));
+        cmd.args(["/c", "echo hi"]);
+        assert_eq!(bounded_output(cmd, Duration::from_secs(20)).map(|b| String::from_utf8_lossy(&b).trim().to_string()), Some("hi".into()));
+        let mut cmd = std::process::Command::new(system_dir().unwrap().join("cmd.exe"));
+        cmd.args(["/c", "exit 3"]);
+        assert_eq!(bounded_output(cmd, Duration::from_secs(20)), None, "a failed read is no answer");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn app030_powershell_comes_from_windows_own_folder_and_the_held_copy_cannot_change() {
+        // FIX-2 AFTER 2: System32 is asked of Windows, not read from SystemRoot.
+        let sys = system_dir().expect("system folder");
         let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
-        let ps = std::path::Path::new(&root).join("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe");
+        assert_eq!(sys.to_string_lossy().to_lowercase(), std::path::Path::new(&root).join("System32").to_string_lossy().to_lowercase());
+        // FIX-2 AFTER 3: while the copy is held, nobody can write, replace or delete it; it goes with the handle.
+        let copy = HeldCopy::new(b"MZ held").expect("held copy");
+        assert_eq!(std::fs::read(&copy.path).unwrap(), b"MZ held");
+        assert!(std::fs::OpenOptions::new().write(true).open(&copy.path).is_err(), "written while held");
+        assert!(std::fs::remove_file(&copy.path).is_err(), "deleted while held");
+        let path = copy.path.clone();
+        drop(copy);
+        assert!(!path.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn app030_reads_real_windows_signatures() {
+        // A Windows program carries a valid signature with a publisher, also when read from a held copy.
+        let ps = system_dir().unwrap().join("WindowsPowerShell").join("v1.0").join("powershell.exe");
         let s = read_signer(&ps).expect("powershell.exe signature read");
         assert_eq!(s.status, "Valid", "{s:?}");
         assert!(s.subject.as_deref().is_some_and(|v| v.contains("Microsoft")), "{s:?}");
-        // A file nobody signed (with a bracket in its name, which a wildcard path would trip on).
+        assert_eq!(incoming_signer(&std::fs::read(&ps).unwrap()), Some(s.clone()));
+        // A real program nobody signed (this test program), with a bracket in its name, which a
+        // wildcard path would trip on: Windows says NotSigned, a definite answer.
         let dir = std::env::temp_dir().join(format!("kolux-rs-app030-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("un[signed].exe");
-        std::fs::write(&f, b"MZ not a real program").unwrap();
+        std::fs::copy(std::env::current_exe().unwrap(), &f).unwrap();
         let u = read_signer(&f).expect("unsigned file read");
-        assert_ne!(u.status, "Valid", "{u:?}");
-        assert_eq!(u.subject, None);
-        // Signed copy vs unsigned download: stopped. Signed copy vs itself: allowed.
-        assert!(matches!(publisher_verdict(Some(&s), Some(&u)), Verdict::Refuse(_)));
-        assert_eq!(publisher_verdict(Some(&s), Some(&s)), Verdict::Allow);
+        assert_eq!(u, Signer { status: "NotSigned".into(), subject: None });
+        // A file that is not a program at all gives an unclear answer or none: never allowed.
+        let junk = dir.join("junk.exe");
+        std::fs::write(&junk, b"MZ not a real program").unwrap();
+        let j = read_signer(&junk);
+        assert!(!matches!(publisher_verdict(false, Some(&s), j.as_ref()), Verdict::Allow), "{j:?}");
+        // Signed copy vs unsigned download: stopped for good. Signed copy vs itself: allowed.
+        assert!(matches!(publisher_verdict(false, Some(&s), Some(&u)), Verdict::Refuse(_)));
+        assert_eq!(publisher_verdict(false, Some(&s), Some(&s)), Verdict::Allow);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

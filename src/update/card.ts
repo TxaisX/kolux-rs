@@ -83,7 +83,7 @@ export function nextStep(offline: boolean, stage: "check" | "download", local = 
 /** APP-031: a calm line for a check the user asked for that found nothing to install. */
 export function quietNote(q: Quiet): string {
   if (q === "halfPublished") return "A new version is being published right now. Kolux RS will look again in a few minutes.";
-  if (q === "refused") return "The newest version was stopped earlier because it did not come from this copy's publisher, so it is not offered again.";
+  if (q === "refused") return "The newest installer was stopped earlier because it did not come from this copy's publisher, so it is not offered again.";
   if (q === "noPlatform") return "The newest release has no download for this computer yet. Kolux RS will keep looking.";
   return "The update server has nothing newer to offer right now.";
 }
@@ -253,6 +253,17 @@ export function cardReducer(s: CardState, a: Action): CardState {
 /** The tip shows while an update is offered or downloading, the first time only. */
 export function tipVisible(s: CardState): boolean {
   return s.tipNow && s.shown && !s.collapsed && (s.phase.kind === "available" || s.phase.kind === "downloading");
+}
+
+/** The words on the card's main button. A security stop closes with "Close" (council FIX-2 AFTER 5):
+ *  "OK" there could read as agreeing to the stopped update. */
+export function actionLabel(p: Phase): string | null {
+  const action = mainAction(p);
+  if (action === "restart") return p.kind === "error" ? "Try again" : "Restart to update";
+  if (action === "download") return "Download";
+  if (action === "retryCheck" || action === "retryDownload") return "Try again";
+  if (action === "close") return p.kind === "blocked" ? "Close" : "OK";
+  return null;
 }
 
 /** The card's main action, run by Enter. */
