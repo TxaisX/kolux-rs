@@ -330,33 +330,13 @@ pub fn answer(req: &Request, token: &str) -> (u16, Option<crate::status::Status>
         return (403, None);
     }
     let Some((pane_key, terminal)) = req.headers.get(IDENTITY_HEADER).and_then(|h| identity(h)) else { return (400, None) };
-    let Ok(mut event) = serde_json::from_slice::<Value>(&req.body) else { return (400, None) };
+    let Ok(event) = serde_json::from_slice::<Value>(&req.body) else { return (400, None) };
     let agent = match req.path.as_str() {
         "/claude" => crate::status::Agent::Claude,
-        "/codex" => {
-            fill_codex_reply(&mut event, &codex_home());
-            crate::status::Agent::Codex
-        }
+        "/codex" => crate::status::Agent::Codex,
         _ => return (404, None),
     };
     (200, crate::status::report(pane_key, terminal, agent, &event))
-}
-
-/// STAT-025 (T-123-b): Codex's Stop carries no reply text, so the newest reply in its session
-/// rollout stands in as `last_assistant_message`, the field status.rs reads for every agent. An
-/// event that already carries one, or a session with no rollout found, is left as it is.
-pub fn fill_codex_reply(event: &mut Value, home: &Path) {
-    if event.get("hook_event_name").and_then(Value::as_str) != Some("Stop") || event.get("last_assistant_message").is_some() {
-        return;
-    }
-    if let Some(reply) = agent_hooks::transcript::codex_rollout(event, home).and_then(|p| agent_hooks::transcript::last_reply(&p)) {
-        event["last_assistant_message"] = Value::String(reply);
-    }
-}
-
-/// The Codex home whose rollouts a pane's Codex writes: `CODEX_HOME` when set, else `~/.codex`.
-fn codex_home() -> PathBuf {
-    std::env::var_os("CODEX_HOME").filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or_else(|| home_dir().join(".codex"))
 }
 
 /// SAFE-009: what the hook prints back to Claude. A Bash or PowerShell command that trips a
@@ -1176,35 +1156,6 @@ mod tests {
         // STAT-001 trimming: a long tool name and a long prompt are cut.
         let long = "x".repeat(100);
         assert_eq!(c(&format!(r#"{{"hook_event_name":"PreToolUse","tool_name":"{long}"}}"#)).unwrap().tool.unwrap().chars().count(), 61);
-    }
-
-    #[test]
-    fn stat_025_a_codex_stop_without_reply_text_gets_it_from_its_rollout() {
-        let home = crate::test_dir::temp("codex-reply");
-        let day = home.join("sessions").join("2026").join("10").join("13");
-        std::fs::create_dir_all(&day).unwrap();
-        let rollout = day.join("rollout-2026-10-13T01-00-00-thr_22.jsonl");
-        let prompt = r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"the prompt"}]}}"#;
-        let reply = r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Tests pass."}]}}"#;
-        std::fs::write(&rollout, format!("{prompt}\n{reply}\n")).unwrap();
-        // A Stop with no reply text gets the rollout's newest assistant message, and status.rs reads it.
-        let mut stop = ev(r#"{"hook_event_name":"Stop","session_id":"thr_22"}"#);
-        fill_codex_reply(&mut stop, &home);
-        assert_eq!(stop.get("last_assistant_message").and_then(Value::as_str), Some("Tests pass."));
-        let mut s = crate::status::Session::default();
-        s.apply(crate::status::Agent::Codex, &ev(r#"{"hook_event_name":"SessionStart"}"#));
-        assert_eq!(s.apply(crate::status::Agent::Codex, &stop).map(|(c, _)| c.state), Some("done"));
-        assert_eq!(s.reply.as_deref(), Some("Tests pass."));
-        // One that carries its own text, another event, or a session with no rollout: untouched.
-        let mut own = ev(r#"{"hook_event_name":"Stop","session_id":"thr_22","last_assistant_message":"mine"}"#);
-        fill_codex_reply(&mut own, &home);
-        assert_eq!(own.get("last_assistant_message").and_then(Value::as_str), Some("mine"));
-        let mut post = ev(r#"{"hook_event_name":"PostToolUse","session_id":"thr_22"}"#);
-        fill_codex_reply(&mut post, &home);
-        assert!(post.get("last_assistant_message").is_none());
-        let mut unknown = ev(r#"{"hook_event_name":"Stop","session_id":"thr_99"}"#);
-        fill_codex_reply(&mut unknown, &home);
-        assert!(unknown.get("last_assistant_message").is_none());
     }
 
     #[test]
