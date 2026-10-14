@@ -73,6 +73,7 @@ import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, resizePlan, rows
 import { gpuOn } from "./terminal/renderer";
 import { DIVIDER_DONE, DRAG_ATTR, dragWeights, gapAt, templateOf, tracks, type Gap } from "./terminal/dividers";
 import StatusBar from "./chrome/StatusBar";
+import { windowLoaded } from "./status/manage";
 import { FileCode } from "./chrome/icons";
 import AgentsRail from "./agents/AgentsRail";
 import { cardPanes, pickSession, railGroups, rowStatus } from "./agents/rail";
@@ -2594,6 +2595,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         names={() => Object.fromEntries(panes.flatMap((p) => (ptys.current[p.key] === undefined ? [] : [[ptys.current[p.key], tabName(p, titles)]])))}
         workspaces={Object.keys(owner)}
         hooks={settingsRead ? hooksOn(settings) : null}
+        loaded={() => windowLoaded(settingsRead, restoredKeys.current, ptys.current, panes)}
       />
       )}
     </div>
