@@ -609,7 +609,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-257 · SESS-040 Busy spinners and tab titles credit the agent that was launched
 - [ ] T-258 · TERM-056 Tab title tooltip and generated titles
 - [ ] T-259 · STAT-036 Count of working agents per workspace
-- [ ] T-260 · VIEW-013 [compat] Floor timeline of agent activity · VIEW-111 First-run notification permission
+- [x] T-260 · done 2026-10-13 (lane/automations from 0819c57; evidence/T-260.txt: cargo view013 and view111 tests ok, vitest timeline.test.ts 6 ok, clippy and tsc clean; smoke 5/5 evidence/smoke-130871c.txt; the Floor mount, command registration, start-up call and live proof moved to T-260-b) · VIEW-013 [compat] Floor timeline of agent activity · VIEW-111 First-run notification permission
+- [ ] T-260-b · the rest of T-260: the Floor screen reachable through view.floor, activity_timeline registered and the first-run welcome called at start, child lanes nested under their parent, then a live CDP proof and a fresh-Mac check (needs the coordinator's App.tsx, TopBar.tsx and lib.rs hunks from the automations lane handoff; the Mac check needs a Mac)
 - [ ] T-261 · ACCT-063 Each agent pane has one clear owning session
 - [x] T-262 · ORCH-060 Session tab inventory the command line and agents can read · done 2026-10-13 (lane/orchestration from 07c5d80; evidence/T-262.txt: three PowerShell tabs listed 3 by session_tabs over CDP, one closed listed 2; smoke 5/5 evidence/smoke-7920fa4.txt; the command line switches onto it with the cli-lane hunk in the T-262 handoff)
 - [ ] T-262-b · council AFTER (MERGE 41 review 2026-10-13, cli lane): the terminal, worktree and peer lists in cli.rs read the session tab inventory (session_tabs) instead of their own scans, so every list shows the same tabs
