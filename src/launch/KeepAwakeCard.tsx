@@ -17,8 +17,9 @@ export function awakeMode(settings: Record<string, unknown> | null | undefined):
 
 export const AWAKE_HELP: Record<AwakeMode, string> = {
   off: "The computer sleeps on its usual schedule.",
-  agent: "The computer stays awake while an agent is working, and sleeps normally once every agent is waiting, blocked or done.",
-  on: "The computer stays awake while Kolux is open, even with no agent working.",
+  agent:
+    "The computer stays awake while an agent is working, and sleeps normally once every agent is waiting, blocked or done, or its pane closes. An agent started inside a shell pane that stops without saying so counts for at most 30 minutes after its last word.",
+  on: "The computer stays awake while Kolux is open, even with no agent working. On a laptop that uses Modern Standby, this drains the battery even with the lid closed.",
 };
 export const LID_HELP =
   "Closing the lid still follows the system: on Windows, the lid setting in Power Options decides; a Mac sleeps on lid close unless it is plugged in with an outside display; on Linux keep-awake also stops lid-close sleep.";

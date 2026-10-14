@@ -22,6 +22,11 @@ test("the Settings card offers On, Agent and Off, picks the saved one and explai
   const agent = renderToString(createElement(KeepAwakeCard, { settings: { keepAwake: true }, save: () => {} }));
   expect(agent).toMatch(/<option value="agent" selected="">Agent/);
   expect(agent).toContain("while an agent is working");
+  // an agent typed into a shell pane ends with the shell, not with the agent: say how long it can count
+  expect(agent).toContain("at most 30 minutes after its last word");
+  // Microsoft warns that a continuous hold drains a Modern Standby laptop even with the lid closed
+  const on = renderToString(createElement(KeepAwakeCard, { settings: { keepAwake: "on" }, save: () => {} }));
+  expect(on).toContain("drains the battery even with the lid closed");
 });
 
 test("the status bar item shows only while the computer is kept awake", () => {

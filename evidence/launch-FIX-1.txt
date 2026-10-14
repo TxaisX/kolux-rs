@@ -2,8 +2,9 @@ launch-FIX-1 - council fix for lane/launch a7abc04 (review: council d2 launch-a7
 Lane/launch, 2026-10-14. BEFORE a7abc04; main fb322d5 merged into the lane as 96b7602 first.
 
 WHAT THE USER GETS (once both patches land)
-- Keep-awake in Agent mode lets the computer sleep again when a pane closes or its agent crashes
-  or exits, when an agent was never actually heard from, and when a "working" reading has gone the
+- Keep-awake in Agent mode lets the computer sleep again when a pane closes or the agent that is
+  the pane's own program exits or crashes (an agent typed into a shell pane ends with the shell, so
+  it stops counting only when it reports done or after 30 min silent; reworded in FIX-2), when an agent was never actually heard from, and when a "working" reading has gone the
   whole unverified window (30 min) without a signal. Before, any of these kept the PC awake until quit.
 - While keep-awake is wanted, every 5 s tick asks the system again, so a request dropped by a
   sleep and resume is back within one tick (TERM-122 "re-checked after resume").
@@ -17,7 +18,9 @@ WHAT THE USER GETS (once both patches land)
   new-tab keybinding is the one main already lists (tab.newAgent.claude-agent-teams) and the
   earlier keys / keymap-count hunk is gone. It still runs `kolux claude-teams`.
 
-PATCHES FOR THE COORDINATOR (real git diffs against fb322d5; apply in this order)
+PATCHES FOR THE COORDINATOR (SUPERSEDED by evidence/launch-FIX-2-status.patch and
+evidence/launch-FIX-2-wiring.patch: the two below no longer apply on main 5f3b287; see launch-FIX-2.txt)
+(real git diffs against fb322d5; apply in this order)
 1. evidence/launch-FIX-1-status.patch (hooks lane status.rs, core lane terminal.rs):
    status::working_now(), Session::believed_working(now), status::terminal_ended(terminal); the
    terminal exit closure calls status::terminal_ended(id) right after activity::terminal_ended(id)
