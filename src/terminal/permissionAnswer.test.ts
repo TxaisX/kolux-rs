@@ -1,7 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { answerKeys, canAnswer, nextPrompt } from "./permissionAnswer";
+import { answerKeys, buttonsShown, canAnswer, nextPrompt } from "./permissionAnswer";
 
 describe("TERM-031 answer a permission prompt", () => {
+  it("T-151-b: the buttons go after the first click or the first keystroke and stay gone until the next prompt", () => {
+    let count = nextPrompt(0, undefined, "permission");
+    let answered = 0;
+    expect(buttonsShown("claude", "permission", answered, count)).toBe(true);
+    answered = count; // first click (or a key typed into the pane while the prompt shows)
+    expect(buttonsShown("claude", "permission", answered, count)).toBe(false); // the hook still says permission: hidden anyway
+    expect(buttonsShown("claude", "working", answered, count)).toBe(false);
+    count = nextPrompt(count, "working", "permission"); // the next prompt
+    expect(buttonsShown("claude", "permission", answered, count)).toBe(true);
+    expect(buttonsShown("shell", "permission", 0, count)).toBe(false);
+  });
+
   it("types the answer only while the prompt the user saw is still showing", () => {
     expect(canAnswer("claude", "permission", 1, 1)).toBe(true);
     // the agent moved on: the hook left "permission"

@@ -29,7 +29,7 @@ import { folderName } from "../projects/model";
 import { withoutRules } from "../launch/seats";
 import { modelOf } from "../settings/routing";
 import { openSettings } from "../settings/pages";
-import { answerKeys, canAnswer, nextPrompt } from "./permissionAnswer";
+import { answerKeys, buttonsShown, canAnswer, nextPrompt } from "./permissionAnswer";
 import { Close, Dots, Expand, Plus, SplitRight, StatusGlyph } from "../chrome/icons";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import Ring from "../usage/Ring";
@@ -200,6 +200,13 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
   // TERM-065: a short line in the header when the clipboard refused a copy; the selection stays.
   const [flash, setFlash] = useState<string | null>(null);
+  // TERM-031: the prompt count (bumped below, once the hook state is known) and, T-151-b, the count of the
+  // prompt the user already answered (click or keystroke): the Approve/Deny buttons hide for it and come
+  // back when the next prompt bumps the count.
+  const prompt = useRef<{ count: number; hook: AgentState | undefined }>({ count: 0, hook: undefined });
+  const [answered, setAnswered] = useState(0);
+  // T-151-b (TERM-069): "Paste N lines?" waiting for Paste or Cancel.
+  const [pasteAsk, setPasteAsk] = useState<{ lines: number; go: () => void } | null>(null);
   useEffect(() => {
     if (!flash) return;
     const t = setTimeout(() => setFlash(null), 6000);
@@ -380,7 +387,12 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         })
         .catch((e) => setFlash(`Typing could not reach the program (${explainError(String(e))})`)));
     };
-    term.onData((data) => write(data));
+    term.onData((data) => {
+      // T-151-b: a key typed into the pane while a permission prompt shows answers it as far as the
+      // buttons are concerned (the prompt count is a ref; React skips the update when nothing changed).
+      setAnswered(prompt.current.count);
+      write(data);
+    });
     term.onBell(() => bell.current?.());
     // TERM-075: a program's OSC 52 copy goes to the system clipboard (while the setting allows it); a
     // read-back query gets an empty answer so the program never sees the clipboard; each way it can be
@@ -427,6 +439,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       () => term.modes.bracketedPasteMode && term.options.ignoreBracketedPasteMode !== true,
       // TERM-069: on Windows a multi-line paste always goes bracketed (single-line keeps the fast path).
       () => navigator.userAgent.includes("Windows"),
+      // T-151-b: 2+ lines into a program that has not turned on bracketed paste asks first.
+      (lines, go) => setPasteAsk({ lines, go }),
     );
     // TERM-079: Kolux first. shellKeys.ts decides (tested there): a Kolux chord never reaches the
     // program, a shell key always does, the word and line moves are sent as the shell reads them.
@@ -784,7 +798,6 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   }, [hook]);
   // TERM-031: one count per prompt shown (each entry into "permission"); an Approve/Deny control
   // carries the count it was drawn with, so an answer to a prompt that has gone sends nothing.
-  const prompt = useRef<{ count: number; hook: AgentState | undefined }>({ count: 0, hook: undefined });
   if (prompt.current.hook !== hook) prompt.current = { count: nextPrompt(prompt.current.count, prompt.current.hook, hook), hook };
   // A shell pane running an agent the user started by hand reads as that agent's session.
   const shown: Agent = agent === "shell" && found ? found : agent;
@@ -885,7 +898,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         <span className={`status ${tone}`} data-tip={explain}>
           {word}
         </span>
-        {header.state === "permission" && shown !== "shell" && (
+        {header.state === "permission" && buttonsShown(shown, hook, answered, prompt.current.count) && (
           <span className="answer" role="group" aria-label="Answer the permission prompt">
             {(["approve", "deny"] as const).map((answer) => {
               const drawnAt = prompt.current.count;
@@ -897,6 +910,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
                   title={answer === "approve" ? "Approve: answers Yes in this agent while its prompt is still showing" : "Deny: backs out of the prompt while it is still showing"}
                   onClick={() => {
                     const keys = answerKeys(shown, answer);
+                    setAnswered(drawnAt); // T-151-b: the first click answers; the buttons go until the next prompt
                     if (keys !== null && canAnswer(shown, hook, drawnAt, prompt.current.count)) typeIn.current(keys);
                     else setFlash("The prompt has gone; nothing was sent");
                   }}
@@ -1168,7 +1182,52 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
           </div>
         </div>
       )}
-      {died !== null && !notice && (
+      {pasteAsk && !notice && (
+        <div className="pane-ask" onMouseDown={(e) => e.stopPropagation()}>
+          <div
+            className="ask"
+            role="alertdialog"
+            aria-modal="true"
+            aria-label={`Paste ${pasteAsk.lines} lines?`}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Escape") {
+                setPasteAsk(null);
+                termRef.current?.focus();
+              }
+            }}
+          >
+            <h2 className="ask-title">Paste {pasteAsk.lines} lines?</h2>
+            <p className="ask-body">Each line runs as you paste it: this program takes pasted lines one by one.</p>
+            <div className="btn-row">
+              <button
+                className="btn primary"
+                data-paste="go"
+                onClick={() => {
+                  const { go } = pasteAsk;
+                  setPasteAsk(null);
+                  go();
+                  termRef.current?.focus();
+                }}
+              >
+                Paste
+              </button>
+              <button
+                className="btn"
+                data-paste="cancel"
+                autoFocus
+                onClick={() => {
+                  setPasteAsk(null);
+                  termRef.current?.focus();
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {died !== null && !notice && !pasteAsk && (
         <div className="pane-ask" onMouseDown={(e) => e.stopPropagation()}>
           <div
             className="ask"

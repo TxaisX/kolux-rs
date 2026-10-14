@@ -1,13 +1,35 @@
 // TERM-068: a paste lands only in the pane whose text area received it, and a paste made while the
 // opening prompt is still owed waits for it (T-010-fix). Node's EventTarget stands in for the text areas.
 import { expect, test } from "vitest";
-import { attachPaste, BRACKET_CLOSE, BRACKET_OPEN, CHUNK, cutChunks, LIMIT, prepareForTerminal } from "./paste";
+import { attachPaste, BRACKET_CLOSE, BRACKET_OPEN, CHUNK, cutChunks, LIMIT, needsAsk, prepareForTerminal } from "./paste";
 
 const paste = (target: EventTarget, text: string) => {
   const e = Object.assign(new Event("paste", { cancelable: true }), { clipboardData: { getData: () => text } });
   target.dispatchEvent(e);
   return e;
 };
+
+test("T-151-b: 2+ lines into a program without bracketed paste asks first; bracketed paste on or one line never asks", () => {
+  expect(needsAsk("echo one\necho two", true)).toBe(false); // bracketed paste on → no ask
+  expect(needsAsk("echo one", false)).toBe(false); // one line → no ask
+  expect(needsAsk("echo one\n", false)).toBe(false); // one line with its line end → still one line
+  expect(needsAsk("echo one\necho two", false)).toBe(true); // 2+ lines, no brackets → ask
+  expect(needsAsk("a\r\nb\r\nc", false)).toBe(true);
+  // through attachPaste: the ask gets the count and a go; Cancel (not calling go) sends nothing, Paste sends it
+  const t = new EventTarget();
+  const got: string[] = [];
+  let asked: { lines: number; go: () => void } | null = null;
+  attachPaste(t, (s) => got.push(s), () => false, () => {}, () => false, () => false, (lines, go) => (asked = { lines, go }));
+  paste(t, "echo one\necho two\necho three");
+  expect(asked).toEqual({ lines: 3, go: expect.any(Function) });
+  expect(got).toEqual([]); // Cancel: nothing went
+  asked!.go(); // Paste
+  expect(got).toEqual(["echo one\recho two\recho three"]);
+  asked = null;
+  paste(t, "echo one");
+  expect(asked).toBeNull();
+  expect(got).toEqual(["echo one\recho two\recho three", "echo one"]);
+});
 
 test("TERM-069: on Windows a multi-line paste is bracketed even when the program has not asked; single-line text keeps the fast path", () => {
   const t = new EventTarget();

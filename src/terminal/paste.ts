@@ -40,6 +40,14 @@ export const prepareForTerminal = (text: string, bracketed = false) => (brackete
 
 type Chunk = { data: string; open: boolean };
 
+/** How many lines a paste holds (a trailing line end does not add an empty one). */
+export const lineCount = (text: string) => text.replace(/\r?\n$/, "").split(/\r?\n/).length;
+
+/** T-151-b (council FIX-SOON, TERM-069): a paste of 2+ lines into a program that has not turned on bracketed
+ *  paste runs each line as it lands (Windows PowerShell 5.1 under ConPTY never sees the brackets), so the
+ *  pane asks first, like Windows Terminal's warning. One line, or a program that brackets, goes straight in. */
+export const needsAsk = (text: string, bracketed: boolean) => !bracketed && lineCount(text) >= 2;
+
 export function attachPaste(
   target: EventTarget | null | undefined,
   send: (data: string) => unknown,
@@ -51,6 +59,9 @@ export function attachPaste(
    *  paste, and the console layer drops the markers for one that does not (measured: Windows
    *  PowerShell 5.1 under ConPTY shows nothing of them). Single-line text keeps the fast path. */
   forceMultiLine: () => boolean = () => false,
+  /** T-151-b: given, a multi-line paste into a program without bracketed paste is handed here with the line
+   *  count and a `go` that sends it; the caller shows "Paste N lines?" and calls `go` on Paste, nothing on Cancel. */
+  ask?: (lines: number, go: () => void) => void,
 ) {
   const queued: string[] = [];
   const chunks: Chunk[] = [];
@@ -94,8 +105,12 @@ export function attachPaste(
       refused(`Paste of ${mb(text.length)} is over the ${mb(LIMIT)} limit; nothing was sent`);
       return;
     }
-    if (held()) queued.push(text);
-    else deliver(text);
+    const go = () => {
+      if (held()) queued.push(text);
+      else deliver(text);
+    };
+    if (ask && needsAsk(text, bracketed())) ask(lineCount(text), go);
+    else go();
   };
   target?.addEventListener("paste", onPaste, { capture: true });
   return {

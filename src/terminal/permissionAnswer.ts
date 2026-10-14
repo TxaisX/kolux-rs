@@ -18,5 +18,11 @@ export const answerKeys = (agent: string, answer: Answer): string | null => {
 /** True only for an agent pane whose hook still says "permission" and whose prompt count has not moved since the control was drawn. */
 export const canAnswer = (agent: string, hook: AgentState | undefined, drawnAt: number, now: number): boolean => agent !== "shell" && hook === "permission" && drawnAt === now;
 
+/** T-151-b (council FIX-SOON): the hook keeps saying "permission" after the user has answered (it only moves
+ *  on at the next tool event), so the pane remembers which prompt was answered: the first click, or any
+ *  keystroke typed into the pane while the prompt shows, marks the current count answered and the buttons
+ *  hide until the count bumps for the next prompt. */
+export const buttonsShown = (agent: string, hook: AgentState | undefined, answered: number, count: number): boolean => agent !== "shell" && hook === "permission" && answered !== count;
+
 /** The prompt count after a hook change: a new "permission" state is a new prompt. */
 export const nextPrompt = (count: number, before: AgentState | undefined, after: AgentState | undefined): number => (after === "permission" && before !== "permission" ? count + 1 : count);
