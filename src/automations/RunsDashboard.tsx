@@ -166,7 +166,7 @@ export default function RunsDashboard({ runs, automations, now, onRefresh, onAut
 /** One run as a full page; its breadcrumb goes back to Runs, then to Automations. */
 export function RunPage({ run, automation, now, usage = null, agentName, onRuns, onAutomations }: { run: Run; automation: Automation | undefined; now: number; usage?: Usage | null; agentName?: string; onRuns: () => void; onAutomations: () => void }) {
   // AUTO-014: the run's tokens and spend when they can be tied to it; unknown reads unavailable.
-  const used = runUsage(run, usage, agentName);
+  const used = runUsage(run, usage, agentName, automation?.workspaceMode);
   const name = automation?.name ?? "Deleted automation";
   const facts: Array<[string, string | undefined]> = [
     ["Automation", name],
