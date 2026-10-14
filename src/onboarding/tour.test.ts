@@ -61,7 +61,7 @@ describe("the grid tour when the first run ends (ONB-012)", () => {
 });
 
 describe("tours and the feature memory (ONB-042, FIX-1)", () => {
-  it("opening a tour's surface notes a use for every tour but the grid tour, which is not a kept feature", () => {
+  it("tourFeature names a kept feature for every tour but the grid tour (the predicate only; the Tours.tsx call is not covered here)", () => {
     expect(TOURS.filter((t) => tourFeature(t.id)).map((t) => t.id)).toEqual(["tasks", "automations", "parallel"]);
   });
 });

@@ -10,7 +10,7 @@ import { useSettings } from "../settings/useSettings";
 import Tours from "./Tours";
 import { defaultAgentId } from "../launch/agents";
 import {
-  caps, demoFrames, doneFrom, paletteKeys, doneId, firstOpen, forward, latest, markGuide, moveOn, nextTip, OPEN_EXPLORE, OPEN_GUIDE, PAGE_SHOWN, railKey, ring, startTicked, STEPS, stopDone, stopOf, TWO_REPOS, withRecord, words, workflowDone, WORKFLOWS,
+  caps, demoFrames, doneFrom, paletteKeys, doneId, firstOpen, forward, latest, markGuide, moveOn, nextTip, OPEN_EXPLORE, OPEN_GUIDE, guideClosed, PAGE_SHOWN, railKey, ring, startTicked, STEPS, stopDone, stopOf, TWO_REPOS, withRecord, words, workflowDone, WORKFLOWS,
   type At, type Cap, type CapId, type CliStatus, type Facts, type GuideRecord, type Place, type Setup, type StepId, type TipId,
 } from "./guide";
 
@@ -440,7 +440,14 @@ export default function Guides() {
   }, []);
   return (
     <>
-      <SetupGuide open={guide.open} ask={guide.ask} onClose={() => setGuide((g) => ({ ...g, open: false }))} />
+      <SetupGuide
+        open={guide.open}
+        ask={guide.ask}
+        onClose={() => {
+          setGuide((g) => ({ ...g, open: false }));
+          guideClosed();
+        }}
+      />
       {explore && <Explore onClose={() => setExplore(false)} />}
       <StartupTip />
       <Tours />

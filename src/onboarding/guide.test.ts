@@ -190,6 +190,22 @@ describe("the browser pane's page note (ONB-015)", () => {
     expect(typeof notePage).toBe("function");
   });
 
+  it("a page note whose write failed is tried again on the next page; once one is kept, none more (FIX-2)", async () => {
+    const kept: string[] = [];
+    let fail = true;
+    const mark = (list: string, id: string) => (kept.push(`${list}:${id}`), fail ? Promise.reject(new Error("locked")) : Promise.resolve({ tipsSeen: [], visited: [], tried: [], toursSeen: [], toursAuto: null }));
+    const note = pageNoter(mark, () => {});
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+    note("https://example.com/");
+    await flush();
+    fail = false;
+    note("https://example.com/next");
+    await flush();
+    note("https://example.org/");
+    await flush();
+    expect(kept).toEqual([`tried:${PAGE_SHOWN}`, `tried:${PAGE_SHOWN}`]);
+  });
+
   it("the saved record merges into what this window already saw; an early visit is never lost (FIX-1)", () => {
     // "workspaces" was visited in this window before the record (which only knows "tasks") arrived.
     const r = withRecord(new Set(["workspaces"]), new Set(["explore-usage"]), { visited: ["tasks", "nope"], tried: ["explore-agents"] });

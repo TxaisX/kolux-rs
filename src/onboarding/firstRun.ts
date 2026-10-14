@@ -98,6 +98,30 @@ export function closer(store: (outcome: Outcome) => Promise<unknown>, done: () =
   return { end, retry };
 }
 
+/** ONB-007 / VIEW-114 (FIX-2): the wizard's own closer. A stored close hides the wizard and then
+ *  tells the sidebar's onboarding slot that the record changed, so the checklist or the Setup Guide
+ *  entry shows at once instead of on the next window focus. */
+export const wizardCloser = (store: (outcome: Outcome) => Promise<unknown>, hide: () => void, fail: (err: unknown) => void, changed: () => void = checklistChanged) =>
+  closer(
+    store,
+    () => {
+      hide();
+      changed();
+    },
+    fail,
+  );
+
+/** ONB-009 / VIEW-114 (FIX-2): Help > Onboarding. A stored reopen shows screen one and tells the
+ *  sidebar slot, which then hides its checklist or entry under the reopened wizard. */
+export const reopenWizard = (reopen: () => Promise<unknown>, show: () => void, fail: (err: unknown) => void, changed: () => void = checklistChanged): Promise<void> =>
+  reopen().then(
+    () => {
+      show();
+      changed();
+    },
+    fail,
+  );
+
 /** ONB-010: the agent the first folder after onboarding starts: the saved default only; none on
  * automatic (no default) and none for a plain terminal, which the new workspace opens anyway. */
 export const firstFolderAgent = <A extends { id: string; installed: boolean }>(offered: A[], defaultId: string): A | null =>
@@ -112,9 +136,13 @@ export function connectFailed(agent: string, err: unknown): string {
 }
 
 /** ACCT-035: the friendly line shown when the connection statuses fail to load, in place of an empty
- *  page. The cards have no retry timer: they read again when the window gets focus back, on an
- *  agents event or on Check again, so the line says only that. */
-export const STATUSES_FAILED = "Kolux could not read your AI connections just now. Come back to this window or press Check again to read them again.";
+ *  page. The cards have no retry timer: they read again when the window gets focus back or on an
+ *  agents event, so the line says only that (Check again shows only for some card states, FIX-2 R3). */
+export const STATUSES_FAILED = "Kolux could not read your AI connections just now. Come back to this window to read them again.";
+
+/** ACCT-035 (FIX-2 R3): each card passes this to its error setter on a good read, so the read-failure
+ *  line goes away once a read works again while a connect failure the user has not seen out stays. */
+export const clearReadFailure = (e: string | null): string | null => (e === STATUSES_FAILED ? null : e);
 
 /** ACCT-035: the AI connections page reports each card's connected state here; the first time any
  * card says connected, the first-AI milestone is sent (onboarding.rs keeps only the first time,

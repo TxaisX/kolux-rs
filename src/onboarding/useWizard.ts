@@ -2,7 +2,8 @@
 // where they used to sit.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { closer, firstFolderAgent, kitLaunch, oneClick, openAt, REOPEN_WIZARD, type Outcome } from "./firstRun";
+import { firstFolderAgent, kitLaunch, oneClick, openAt, REOPEN_WIZARD, reopenWizard, wizardCloser, type Outcome } from "./firstRun";
+import { projectAddedNote } from "./sidebar";
 import { KITS, assignRoles, type Kit, type Vendor } from "../kits/catalog";
 import { startValues } from "../kits/Kits";
 import { startGridTour } from "./tour";
@@ -29,9 +30,10 @@ export function useWizard({ setToast, agents, settings, activeDir, kitAIs, start
     invoke<{ step: number } | null>("onboarding_get").then((r) => setWizard(openAt(r)), () => {});
   }, []);
   // ONB-007: the close is stored before the wizard goes; a failed store keeps it open with a toast,
-  // and the next click on any of its ways out tries that same close again.
+  // and the next click on any of its ways out tries that same close again. VIEW-114: a stored close
+  // also tells the sidebar slot (FIX-2).
   const [wizardClose] = useState(() =>
-    closer(
+    wizardCloser(
       (outcome) => invoke("onboarding_close", { outcome }),
       () => {
         setWizard(null);
@@ -46,7 +48,8 @@ export function useWizard({ setToast, agents, settings, activeDir, kitAIs, start
     const counts = oneClick();
     const reopen = () => {
       if (!counts()) return;
-      invoke("onboarding_reopen").then(
+      void reopenWizard(
+        () => invoke("onboarding_reopen"),
         () => setWizard(0),
         (err) => setToast(`Kolux could not reopen onboarding (${String(err)}).`),
       );
@@ -57,7 +60,9 @@ export function useWizard({ setToast, agents, settings, activeDir, kitAIs, start
   // ONB-010: armed by Pick a folder, or by Skip while no project exists; the next project added
   // starts the saved default agent in it, once.
   const firstFolder = useRef(false);
+  // VIEW-114 (FIX-2): every added project tells the sidebar entry to read its steps again.
   const projectAdded = (dir: string, branch: string | null) => {
+    projectAddedNote();
     if (!firstFolder.current) return;
     firstFolder.current = false;
     const agent = firstFolderAgent(offeredAgents(agents, settings), defaultAgentId(settings));

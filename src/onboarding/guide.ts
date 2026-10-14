@@ -159,6 +159,9 @@ export const OPEN_EXPLORE = "kolux-open-explore";
 /** Opens the Setup Guide, on `step` when given. */
 export const openGuide = (step?: StepId) => window.dispatchEvent(new CustomEvent(OPEN_GUIDE, { detail: step ?? null }));
 export const openExplore = () => window.dispatchEvent(new CustomEvent(OPEN_EXPLORE));
+/** VIEW-114 (FIX-2): sent when the Setup Guide closes, so the sidebar entry reads its steps again. */
+export const GUIDE_CLOSED = "kolux-guide-closed";
+export const guideClosed = () => window.dispatchEvent(new CustomEvent(GUIDE_CLOSED));
 
 /** What the guides remember on this profile (onboarding.rs guide_get). */
 /** guide_get also carries the first-run view for the newcomer checklist (ONB-013); guide_mark does not. */
@@ -272,13 +275,16 @@ export const withRecord = (seen: ReadonlySet<string>, kept: ReadonlySet<string>,
 
 /** ONB-015: the browser pane calls this when a page finishes loading; the first page other than a
  *  blank one marks the Browser step's fact on the profile and notes the use (ONB-042), once per
- *  window, so later page loads write nothing. */
+ *  window, so later page loads write nothing. A write that fails frees the note again, so the next
+ *  page load tries once more (FIX-2). */
 export const pageNoter = (mark: typeof markGuide = markGuide, use: (id: string) => unknown = noteUse) => {
   let done = false;
   return (url: string | null | undefined): void => {
     if (done || !pageCounts(url)) return;
     done = true;
-    void mark("tried", PAGE_SHOWN).catch(() => {});
+    void mark("tried", PAGE_SHOWN).catch(() => {
+      done = false;
+    });
     use("browser-page");
   };
 };
