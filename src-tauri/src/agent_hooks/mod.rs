@@ -26,7 +26,7 @@ const LOCK_STALE: Duration = Duration::from_secs(30);
 const LOCK_WAIT: Duration = Duration::from_secs(35);
 
 /// The agents whose hooks Kolux manages, by catalogue id.
-pub const MANAGED: [&str; 2] = ["claude", "codex"];
+pub const MANAGED: [&str; 5] = ["claude", "codex", "gemini", "antigravity", "amp"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Plan {
@@ -528,6 +528,8 @@ fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'static s
             }
             Ok("removed")
         }
+        // T-120-b: Gemini CLI, Antigravity and Amp.
+        (id @ ("gemini" | "antigravity" | "amp"), Plan::Install | Plan::Remove) => vendors::apply(home, profile, id, plan),
         _ => Ok("left as it was"),
     }
 }
@@ -549,7 +551,7 @@ pub fn sync(settings: &Value, profile: &Path) -> Vec<(&'static str, Result<&'sta
             return Vec::new();
         }
     };
-    for refresh in [write_claude_script, write_status_script, write_codex_script] {
+    for refresh in [write_claude_script, write_status_script, write_codex_script, vendors::write_gemini_script, vendors::write_antigravity_script] {
         if let Err(e) = refresh(&home) {
             eprintln!("kolux-rs: agent hook script: {e}");
         }
@@ -613,6 +615,7 @@ pub fn agent_hooks_file() -> String {
 
 pub mod saved;
 pub mod switch;
+pub mod vendors;
 
 #[cfg(test)]
 mod tests;

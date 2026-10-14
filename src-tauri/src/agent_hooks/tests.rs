@@ -20,10 +20,11 @@ fn stat_004_hooks_go_only_to_found_agents_and_leave_switched_off_ones() {
     let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     // The status hooks switch is on (T-152-gate: it reads off until saved on).
     let none = json!({ "agentStatusHooks": true });
-    assert_eq!(plan(&none, &ids(&["claude"]), true), vec![("claude", Plan::Install), ("codex", Plan::Leave)], "only Claude Code installed: only it gains hooks");
+    assert_eq!(plan(&none, &ids(&["claude"]), true)[..2], [("claude", Plan::Install), ("codex", Plan::Leave)], "only Claude Code installed: only it gains hooks");
+    assert_eq!(plan(&none, &ids(&["gemini", "amp"]), true)[2..], [("gemini", Plan::Install), ("antigravity", Plan::Leave), ("amp", Plan::Install)], "T-120-b: the vendors follow the same rule");
     let off = json!({ "agentStatusHooks": true, "disabledAgents": ["codex"] });
-    assert_eq!(plan(&off, &ids(&["claude", "codex"]), true), vec![("claude", Plan::Install), ("codex", Plan::Remove)], "a switched-off agent has its hooks taken out");
-    assert_eq!(plan(&off, &[], false), vec![("claude", Plan::Leave), ("codex", Plan::Remove)], "detection failed: nothing installed, nothing removed for being unfound");
+    assert_eq!(plan(&off, &ids(&["claude", "codex"]), true)[..2], [("claude", Plan::Install), ("codex", Plan::Remove)], "a switched-off agent has its hooks taken out");
+    assert_eq!(plan(&off, &[], false)[..2], [("claude", Plan::Leave), ("codex", Plan::Remove)], "detection failed: nothing installed, nothing removed for being unfound");
     // A program the user set on the Agents page counts as found.
     let exe = std::env::current_exe().unwrap();
     let set = json!({ "agentStatusHooks": true, "agentOptions": { "codex": { "command": format!(" \"{}\" ", exe.display()) } } });
@@ -327,9 +328,10 @@ fn stat_002_the_switch_off_takes_every_agent_out_and_off_is_the_default() {
     assert!(!switch::on(&json!({})) && !switch::on(&json!({ "agentStatusHooks": "garbage" })), "never saved, or unreadable, reads as off (T-152-gate)");
     let off = json!({ "agentStatusHooks": false });
     assert!(!switch::on(&off));
-    assert_eq!(plan(&off, &found, true), vec![("claude", Plan::Remove), ("codex", Plan::Remove)]);
-    assert_eq!(plan(&off, &[], false), vec![("claude", Plan::Remove), ("codex", Plan::Remove)], "off even when no agent could be looked for");
-    assert_eq!(plan(&json!({ "agentStatusHooks": true }), &found, true), vec![("claude", Plan::Install), ("codex", Plan::Install)]);
+    assert_eq!(plan(&off, &found, true)[..2], [("claude", Plan::Remove), ("codex", Plan::Remove)]);
+    assert_eq!(plan(&off, &[], false)[..2], [("claude", Plan::Remove), ("codex", Plan::Remove)], "off even when no agent could be looked for");
+    assert_eq!(plan(&json!({ "agentStatusHooks": true }), &found, true)[..2], [("claude", Plan::Install), ("codex", Plan::Install)]);
+    assert!(plan(&off, &found, true).iter().all(|(_, p)| *p == Plan::Remove), "T-120-b: Gemini CLI, Antigravity and Amp come out too");
 }
 
 #[test]

@@ -39,7 +39,9 @@ const quiet = () => {
   return { log: (l) => lines.push(l), lines };
 };
 
-describe("ship (APP-058)", () => {
+// T-560: each test spawns a few dozen git processes against real repositories; under a loaded machine
+// that takes well past vitest's 5 s default, so the whole block gets a minute per test.
+describe("ship (APP-058)", { timeout: 60_000 }, () => {
   it("commits, lands a worktree branch on main and pushes both", () => {
     const w = world();
     const work = w.clone("work");
