@@ -451,6 +451,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-280 | Saved settings come back valid after a restart. | [Settings](settings.md) |
 | T-284 | An interrupted skill delete is undone or finished on restart. | [Troubleshooting](troubleshooting.md) |
 | T-286 | Startup failures and stray background errors never silently kill the app. | [Troubleshooting](troubleshooting.md) |
+| T-287 | `kolux diagnostics memory` shows resident and committed memory for Kolux, each session and the total. | [Command line](command-line.md) |
 | T-441 | Kolux settings cannot be wiped by a failed read. | [Safety](safety.md) |
 | T-441-b | A settings change never starts from an empty set. | [Safety](safety.md) |
 | T-441-c | Trust file writes keep what the caller read; further data-loss fixes. | [Safety](safety.md) |
@@ -477,4 +478,4 @@ Tasks not yet ticked off in the build plan are not listed.
 |---|---|---|
 | T-298 | Reopen the wizard from the sidebar help menu; first successes are recorded locally. | [Getting started](getting-started.md) |
 
-<!-- generated from PLAN.md at d5034cd -->
+<!-- generated from PLAN.md at 1db0384 -->
