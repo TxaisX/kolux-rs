@@ -387,7 +387,6 @@ fn diff_stats(worktree: &Path, cached: bool) -> Result<std::collections::HashMap
 
 /// GIT-038 (T-033-c): every file that differs between the commit `since` (the base's snapshot)
 /// and the working tree, untracked files included, in the shape All Changes already reads.
-#[allow(dead_code)] // wired by the lib.rs hunk in the T-033-c handoff (main lane)
 pub fn base_entries(worktree: &Path, since: &str) -> Result<Vec<Entry>, String> {
     let stats = diff_stats_with(worktree, &[since, "--"])?;
     let mut rels: Vec<&String> = stats.keys().collect();
@@ -413,7 +412,6 @@ pub fn base_entries(worktree: &Path, since: &str) -> Result<Vec<Entry>, String> 
 
 /// The two texts of a file against the base snapshot `since`: what the base had, and the working
 /// file (empty when the file is new there, or gone here).
-#[allow(dead_code)] // wired by the lib.rs hunk in the T-033-c handoff (main lane)
 pub fn base_sides(file: &Path, since: &str) -> Result<(String, String), String> {
     let dir = file.parent().filter(|d| !d.as_os_str().is_empty()).ok_or_else(|| format!("{} is not a file path", file.display()))?;
     let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();

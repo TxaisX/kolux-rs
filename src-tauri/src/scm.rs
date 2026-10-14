@@ -2078,14 +2078,12 @@ pub async fn scm_status(worktree: String) -> Result<Status, String> {
 /// differs between that snapshot and the working tree.
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // wired by the lib.rs hunk in the T-033-c handoff (main lane)
 pub struct BaseChanges {
     pub against: String,
     pub since: String,
     pub entries: Vec<crate::git::Entry>,
 }
 
-#[allow(dead_code)]
 pub fn base_changes(worktree: &Path, pinned: Option<&str>) -> Result<BaseChanges, String> {
     let pinned = pinned.map(str::trim).filter(|p| !p.is_empty() && run(&["rev-parse", "--verify", "-q", &format!("{p}^{{commit}}")], Some(worktree)).is_ok());
     let against = match pinned {
@@ -2098,13 +2096,11 @@ pub fn base_changes(worktree: &Path, pinned: Option<&str>) -> Result<BaseChanges
 }
 
 #[tauri::command]
-#[allow(dead_code)]
 pub async fn scm_base_changes(worktree: String, pinned: Option<String>) -> Result<BaseChanges, String> {
     base_changes(Path::new(&worktree), pinned.as_deref())
 }
 
 #[derive(Debug, serde::Serialize)]
-#[allow(dead_code)]
 pub struct BaseSides {
     pub original: String,
     pub modified: String,
@@ -2112,7 +2108,6 @@ pub struct BaseSides {
 
 /// The two texts of one file against the base snapshot; the file must lie in the worktree.
 #[tauri::command]
-#[allow(dead_code)]
 pub async fn scm_base_sides(worktree: String, path: String, since: String) -> Result<BaseSides, String> {
     let (root, file) = (Path::new(&worktree), Path::new(&path));
     if !file.starts_with(root) {
