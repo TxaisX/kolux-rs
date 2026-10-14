@@ -18,6 +18,20 @@ const MAX_HISTORY: usize = 20;
 const MAX_TOOLS: usize = 256;
 /// STAT-028: how long after Ctrl+C or Escape a turn with no Stop is taken as interrupted.
 const CANCEL_GRACE_MS: u64 = 3000;
+/// STAT-032: a working reading with no hook event for this long is marked unverified.
+const UNVERIFIED_MS: u64 = 30 * 60 * 1000;
+/// STAT-034: the states a program may print in band; anything else is dropped.
+const INBAND_STATES: [&str; 5] = ["working", "done", "permission", "waiting", "idle"];
+
+/// The unverified window; a debug build takes `KOLUX_UNVERIFIED_MS` so a live proof need not wait
+/// half an hour.
+fn unverified_ms() -> u64 {
+    #[cfg(debug_assertions)]
+    if let Some(ms) = std::env::var("KOLUX_UNVERIFIED_MS").ok().and_then(|v| v.parse().ok()) {
+        return ms;
+    }
+    UNVERIFIED_MS
+}
 /// STAT-029: how Claude Code opens the message it submits itself after a compaction.
 const CONTINUATION: &str = "This session is being continued from a previous conversation";
 
@@ -123,6 +137,10 @@ pub struct Session {
     pub history: VecDeque<Entry>,
     /// The quiet alert already went out for this silent spell (STAT-045).
     quiet_fired: bool,
+    /// When the last hook (or in-band) signal came (ms), 0 before the first (STAT-032).
+    seen: u64,
+    /// The working reading has had no signal for the unverified window; the next one clears it.
+    unverified: bool,
 }
 
 /// What the window is told when a working agent has printed nothing for too long (STAT-045).
@@ -186,6 +204,7 @@ impl Session {
     /// Folds one event in and says what the window should be told, or `None` when nothing changed.
     pub fn apply(&mut self, agent: Agent, event: &Value) -> Option<(Change, Option<String>)> {
         let name = event.get("hook_event_name")?.as_str()?;
+        self.signal();
         let before = self.resolved();
         let mut announce = None;
         match (name, str_of(event, "agent_id")) {
@@ -389,6 +408,43 @@ impl Session {
         matches!(name, "PreToolUse" | "PostToolUse" | "PostToolUseFailure") && str_of(event, "tool_use_id").is_some_and(|id| !self.killed.iter().any(|k| k == id))
     }
 
+    /// STAT-032: a genuine signal from the agent: the unverified mark lifts and the window restarts.
+    fn signal(&mut self) {
+        self.seen = now_ms();
+        self.unverified = false;
+    }
+
+    /// STAT-032: a working reading with no signal for the whole window is marked unverified, once
+    /// per silent spell; a settled turn (done, blocked, ...) never is.
+    fn settle_unverified(&mut self, now: u64) -> bool {
+        if self.unverified || self.seen == 0 || self.resolved() != "working" || now.saturating_sub(self.seen) < unverified_ms() {
+            return false;
+        }
+        self.unverified = true;
+        true
+    }
+
+    /// STAT-034: a state the program printed in band. Only the lead's own state moves: the reply,
+    /// the stop, the roster and background work are hook knowledge and stay (an in-band done keeps
+    /// monitoring going), while an in-band working is a new turn that undoes an interrupt.
+    pub fn inband(&mut self, state: &'static str) -> Change {
+        self.signal();
+        let before = self.resolved();
+        if state == "working" {
+            self.cancelled = false;
+            self.interrupted = false;
+            self.tools.clear();
+            self.killed.clear();
+        }
+        self.pending = None;
+        self.own = Some(state);
+        let after = self.resolved();
+        if before != after {
+            self.remember(after);
+        }
+        Change { state: after, ..Change::default() }
+    }
+
     /// STAT-028: a cancel keystroke a while back and still no Stop: the turn was interrupted.
     fn settle_cancel(&mut self, now: u64) -> bool {
         if !self.cancelled || self.own != Some("working") || now.saturating_sub(self.cancelled_at) < CANCEL_GRACE_MS {
@@ -540,6 +596,46 @@ pub fn settle_cancels() -> Vec<Status> {
 /// The panes whose hooks last reported for `terminal`.
 pub fn panes_of(terminal: u32) -> Vec<u32> {
     with_sessions(|s| s.iter().filter(|(_, x)| x.terminal == Some(terminal)).map(|(k, _)| *k).collect())
+}
+
+/// STAT-032: the panes whose working reading just went the whole window without a signal, each
+/// once per spell; the payload names the window in minutes.
+// Called from the lib.rs 2 s tick (T-124 hunk, RE-APPLY ON MERGE); drop the allow once that lands.
+#[allow(dead_code)]
+pub fn settle_unverified() -> Vec<Quiet> {
+    let now = now_ms();
+    let minutes = unverified_ms() / 60_000;
+    with_sessions(|s| s.iter_mut().filter_map(|(key, session)| session.settle_unverified(now).then_some(Quiet { pane_key: *key, minutes })).collect())
+}
+
+/// STAT-034: the state an OSC 9999 payload carries: the whole sequence (ESC ] 9999 ; json, then
+/// BEL or ESC \) or just the text after "9999;" as a terminal parser hands it over. A malformed
+/// payload or an unknown state gives None.
+pub fn parse_inband(bytes: &[u8]) -> Option<&'static str> {
+    let body = bytes.strip_prefix(b"\x1b]").unwrap_or(bytes);
+    let body = body.strip_prefix(b"9999;").unwrap_or(body);
+    let body = body.strip_suffix(b"\x07").or_else(|| body.strip_suffix(b"\x1b\\")).unwrap_or(body);
+    let v: Value = serde_json::from_slice(body).ok()?;
+    let state = v.get("state").or_else(|| v.get("status"))?.as_str()?;
+    INBAND_STATES.into_iter().find(|s| *s == state)
+}
+
+/// STAT-034: a status a program printed in band; the window's terminal parser hands the payload
+/// over (and never draws the sequence). True when the pane's status moved.
+// Listed in lib.rs's generate_handler (T-124 hunk, RE-APPLY ON MERGE); drop the allow once that lands.
+#[allow(dead_code)]
+#[tauri::command]
+pub fn status_inband(app: tauri::AppHandle, pane_key: u32, data: String) -> bool {
+    let Some(state) = parse_inband(data.as_bytes()) else {
+        return false;
+    };
+    let status = with_sessions(|s| {
+        let session = s.entry(pane_key).or_default();
+        let change = session.inband(state);
+        crate::activity::note(pane_key, change.state);
+        status_of(pane_key, session.terminal, session, change, None)
+    });
+    tauri::Emitter::emit(&app, crate::hooks::EVENT, status).is_ok()
 }
 
 /// The terminal `pane_key`'s hooks last reported for.
@@ -954,6 +1050,62 @@ mod tests {
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"tu3"}"#), Some("working"));
         assert!(s.cancelled);
         assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop"}"#), Some("interrupted"), "a Stop while the cancel stands is still an interruption");
+    }
+
+    #[test]
+    fn stat_032_a_working_reading_with_no_signal_for_the_window_is_unverified_until_the_next_one() {
+        let mut s = Session::default();
+        assert!(!s.settle_unverified(u64::MAX), "nothing reported yet is nothing to doubt");
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#), Some("working"));
+        let seen = s.seen;
+        assert!(!s.settle_unverified(seen + UNVERIFIED_MS - 1), "inside the window the reading holds");
+        assert!(s.settle_unverified(seen + UNVERIFIED_MS), "30 minutes of silence marks it");
+        assert!(!s.settle_unverified(seen + 2 * UNVERIFIED_MS), "once per silent spell");
+        // The next genuine signal brings the row back to life and restarts the window.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"t1"}"#), Some("working"));
+        assert!(!s.unverified);
+        assert!(!s.settle_unverified(s.seen + UNVERIFIED_MS - 1));
+        assert!(s.settle_unverified(s.seen + UNVERIFIED_MS));
+        // A settled turn is never doubted, however long it sits.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","last_assistant_message":"ok"}"#), Some("done"));
+        assert!(!s.settle_unverified(s.seen + 10 * UNVERIFIED_MS));
+        assert_eq!(UNVERIFIED_MS, 30 * 60 * 1000);
+    }
+
+    #[test]
+    fn stat_034_an_in_band_status_moves_the_pane_without_erasing_what_only_hooks_know() {
+        // The byte sequence a script prints: ESC ] 9999 ; payload BEL, or ESC \ as the terminator.
+        assert_eq!(parse_inband(b"\x1b]9999;{\"state\":\"working\"}\x07"), Some("working"));
+        assert_eq!(parse_inband(b"\x1b]9999;{\"status\":\"done\"}\x1b\\"), Some("done"));
+        // What xterm's OSC handler hands over is the text after "9999;".
+        assert_eq!(parse_inband(b"{\"state\":\"permission\"}"), Some("permission"));
+        assert_eq!(parse_inband(b"\x1b]9999;{\"state\":\"working\"\x07"), None, "malformed payload");
+        assert_eq!(parse_inband(b"\x1b]9999;{\"state\":\"exploding\"}\x07"), None, "unknown state");
+        assert_eq!(parse_inband(b"\x1b]9999;plain text\x07"), None);
+
+        let mut s = Session::default();
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#), Some("working"));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","last_assistant_message":"built","background_tasks":[{"id":"b1","type":"shell","status":"running","description":"npm test"}]}"#), Some("working"));
+        assert!(s.monitoring());
+        // An in-band done keeps the monitoring, the reply and the stored roster.
+        assert_eq!(s.inband("done").state, "working");
+        assert!(s.monitoring(), "monitoring is hook knowledge; the in-band done does not end it");
+        assert_eq!(s.reply.as_deref(), Some("built"));
+        // An in-band working is a new turn: it undoes an interrupt and reads working.
+        s.own = Some("working");
+        s.background = false;
+        s.cancel();
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!(s.resolved(), "interrupted");
+        assert_eq!(s.inband("working").state, "working");
+        assert!(!s.interrupted);
+        assert_eq!(s.history.back().map(|e| e.state), Some("working"));
+        // A state change is remembered once; the same state again is not.
+        let len = s.history.len();
+        assert_eq!(s.inband("working").state, "working");
+        assert_eq!(s.history.len(), len);
+        assert_eq!(s.inband("waiting").state, "waiting");
+        assert_eq!(s.history.len(), len + 1);
     }
 
     #[test]
