@@ -5,7 +5,17 @@
 
 export type PaneLike = { key: number; cwd: string | null };
 
-const trim = (p: string) => p.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+// One spelling per folder: backslashes, no trailing slash, any case, "." and ".." worked out
+// (USAGE-017: a path that climbs out of a folder is not inside it).
+const trim = (p: string) => {
+  const out: string[] = [];
+  for (const part of p.replace(/\//g, "\\").toLowerCase().split("\\")) {
+    if (part === "..") {
+      if (out.length > 1) out.pop();
+    } else if (part !== ".") out.push(part);
+  }
+  return out.join("\\").replace(/\\+$/, "");
+};
 
 /** Same folder, whichever slash style or trailing slash either side uses. */
 /** PROJ-021: the name typed for the workspace a pane runs in, exactly as typed; nothing for a folder with no typed name. */

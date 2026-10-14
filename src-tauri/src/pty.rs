@@ -7,8 +7,26 @@
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
+
+/// TERM-098 (Windows): a terminal's reply to a program's colour question (OSC 4/10/11/12 with
+/// `rgb:`) or light/dark question (CSI ? 997 ; 1|2 n) reaches the console layer as plain bytes,
+/// and it drops them, since it parses input only for the sequences it knows. Written as
+/// win32-input-mode key events (one per character, the console's own keyboard encoding, which it
+/// asks for with CSI ? 9001 h) they reach the program untouched.
+pub fn is_reply(data: &[u8]) -> bool {
+    data.starts_with(b"\x1b]") || data.starts_with(b"\x1b[?997;")
+}
+
+/// `data` as win32-input-mode key events: `CSI Vk ; Sc ; Uc ; Kd ; Cs ; Rc _` per character, a
+/// key-down then a key-up with the character and no virtual key. The key-up matters: a run of
+/// identical key-downs is coalesced by the console into one repeated key, and a reader then sees
+/// one character too many (measured: `dddd` read back as `ddddd`).
+pub fn as_key_events(data: &[u8]) -> Vec<u8> {
+    String::from_utf8_lossy(data).chars().map(|c| format!("\x1b[0;0;{0};1;0;1_\x1b[0;0;{0};0;0;1_", c as u32)).collect::<String>().into_bytes()
+}
 
 /// ACCT-046: the shells an automatic pick tries, best first. On Windows: PowerShell 7 (passed over
 /// when the copy found is a Microsoft Store alias), then Windows PowerShell, then the command
@@ -120,10 +138,12 @@ pub fn is_shell_program(program: &str) -> bool {
 
 /// ACCT-048: an inherited variable a pane should not see: Kolux's own runtime and build ones
 /// (Tauri, WebView2, a cargo or npm script run) or a conda activation that came along only in part.
+/// CLI-010: also another copy's data-folder override (KOLUX_USER_DATA_PATH), which a Kolux started
+/// from that copy's terminal inherits and which would send this pane's commands to the other app.
 // ponytail: the folders a dev run puts on PATH stay; strip them if a dev build's panes ever mislead.
 pub fn inherited_noise(name: &str) -> bool {
     const PREFIXES: [&str; 9] = ["TAURI_", "__TAURI", "WEBVIEW2_", "CARGO_PKG_", "CARGO_MANIFEST_", "CARGO_BIN_", "npm_", "PNPM_SCRIPT_", "CONDA_PREFIX"];
-    const NAMES: [&str; 6] = ["CARGO_CRATE_NAME", "CARGO_PRIMARY_PACKAGE", "INIT_CWD", "CONDA_DEFAULT_ENV", "CONDA_SHLVL", "CONDA_PROMPT_MODIFIER"];
+    const NAMES: [&str; 7] = ["CARGO_CRATE_NAME", "CARGO_PRIMARY_PACKAGE", "INIT_CWD", "CONDA_DEFAULT_ENV", "CONDA_SHLVL", "CONDA_PROMPT_MODIFIER", "KOLUX_USER_DATA_PATH"];
     PREFIXES.iter().any(|p| name.starts_with(p)) || NAMES.contains(&name)
 }
 
@@ -233,13 +253,37 @@ pub fn start_line(resolved: &std::path::Path) -> (std::ffi::OsString, Vec<std::f
     }
 }
 
+/// The program's input, behind its own lock (council D2 MERGE 31 item 1): a caller clones it out of
+/// the session registry and writes without holding the registry, so one pane's slow paste (ConPTY
+/// takes input at ~12 KB/s) never stalls another pane's bookkeeping. One lock per session keeps
+/// that session's writes in order.
+pub type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
+
+/// Writes `data` to a session's input: the reply-to-query conversion on Windows, then the write
+/// and flush under the writer's own lock. A poisoned lock (a writer panicked mid-write) is used
+/// anyway: the pipe is still the pipe.
+pub fn write_shared(writer: &SharedWriter, data: &[u8]) -> Result<(), String> {
+    let keyed;
+    let data = if cfg!(windows) && is_reply(data) {
+        keyed = as_key_events(data);
+        &keyed[..]
+    } else {
+        data
+    };
+    let mut w = writer.lock().unwrap_or_else(PoisonError::into_inner);
+    w.write_all(data).and_then(|_| w.flush()).map_err(|e| e.to_string())
+}
+
 pub struct PtySession {
     master: Option<Box<dyn MasterPty + Send>>,
-    writer: Option<Box<dyn Write + Send>>,
+    writer: Option<SharedWriter>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     pid: Option<u32>,
     /// The program that started (ACCT-046: an automatic shell may be a fallback).
     program: String,
+    /// APP-053 / ACCT-051: the job that holds the program and everything it starts; closed last,
+    /// after the PTY, so the pane's whole tree ends with it and no other pane's.
+    job: Option<crate::procs::Job>,
 }
 
 impl PtySession {
@@ -288,6 +332,7 @@ impl PtySession {
         drop(pair.slave);
         let killer = child.clone_killer();
         let pid = child.process_id();
+        let job = crate::procs::pane_job(&*child);
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
         let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
 
@@ -311,13 +356,33 @@ impl PtySession {
             })
             .map_err(|e| e.to_string())?;
 
-        Ok(Self { master: Some(pair.master), writer: Some(writer), killer, pid, program })
+        Ok(Self { master: Some(pair.master), writer: Some(Arc::new(Mutex::new(writer))), killer, pid, program, job })
+    }
+
+    /// A session over a fake writer, for tests of the write path with no PTY behind it.
+    #[cfg(test)]
+    pub(crate) fn fake(writer: Box<dyn Write + Send>) -> Self {
+        #[derive(Debug)]
+        struct NoChild;
+        impl ChildKiller for NoChild {
+            fn kill(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+            fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+                Box::new(NoChild)
+            }
+        }
+        Self { master: None, writer: Some(Arc::new(Mutex::new(writer))), killer: Box::new(NoChild), pid: None, program: "fake".into(), job: None }
     }
 
     /// Sends keystrokes (already encoded as the terminal would) to the program.
-    pub fn write(&mut self, data: &[u8]) -> Result<(), String> {
-        let w = self.writer.as_mut().ok_or("session already closed")?;
-        w.write_all(data).and_then(|_| w.flush()).map_err(|e| e.to_string())
+    pub fn write(&self, data: &[u8]) -> Result<(), String> {
+        write_shared(&self.writer()?, data)
+    }
+
+    /// The program's input, to write to without holding whatever holds the session.
+    pub fn writer(&self) -> Result<SharedWriter, String> {
+        self.writer.clone().ok_or_else(|| "session already closed".to_string())
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
@@ -335,12 +400,25 @@ impl PtySession {
         self.pid
     }
 
+    /// ACCT-050: the terminal's foreground process group (not on Windows, which has none).
+    pub fn foreground_group(&self) -> Option<i32> {
+        #[cfg(unix)]
+        {
+            self.master.as_ref().and_then(|m| m.process_group_leader())
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
+
     /// Ends the program: closes its input, forces it to stop, releases the PTY so the reader
-    /// thread can finish.
+    /// thread can finish, then closes the pane's job so everything the program started goes too.
     pub fn kill(&mut self) {
         self.writer.take();
         let _ = self.killer.kill();
         self.master.take();
+        self.job.take();
     }
 }
 
@@ -489,6 +567,94 @@ mod tests {
         session.kill();
     }
 
+    /// TERM-098: a program's colour and light/dark questions reach the pane through the console
+    /// layer and the pane's answers reach the program. PowerShell asks, the test answers as the
+    /// pane would, and the program prints what it received.
+    #[test]
+    #[cfg(windows)]
+    fn term098_colour_and_mode_queries_pass_through_the_console_layer() {
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let (exit_tx, exit_rx) = mpsc::channel::<Option<u32>>();
+        let script = concat!(
+            "$e=[char]27; $q = \"$e]11;?$e\\\" + \"$e]10;?$e\\\" + \"$e]4;1;?$e\\\" + \"$e[?996n\" + \"$e[?2031h\"; ",
+            "[Console]::Out.Write($q); [Console]::Out.Flush(); $t=(Get-Date).AddMilliseconds(2500); $s=''; ",
+            "while((Get-Date) -lt $t){ if([Console]::KeyAvailable){ $s += [Console]::ReadKey($true).KeyChar } else { Start-Sleep -Milliseconds 20 } }; ",
+            "'GOT:' + (($s.ToCharArray() | % { [int]$_ }) -join ',') + ':END'"
+        );
+        let args = vec!["-NoLogo".to_string(), "-NoProfile".to_string(), "-Command".to_string(), script.to_string()];
+        let mut session = PtySession::spawn(
+            program_command("powershell", &args, None),
+            100,
+            30,
+            move |chunk| {
+                let _ = tx.send(chunk.to_vec());
+            },
+            move |code| {
+                let _ = exit_tx.send(code);
+            },
+        )
+        .expect("spawn powershell in a pty");
+        // What the pane would answer to each question, once per question seen.
+        let answers: [(&str, &[u8]); 5] = [
+            ("\x1b[6n", b"\x1b[1;1R"),
+            ("\x1b]11;?", b"\x1b]11;rgb:1111/2222/3333\x1b\\"),
+            ("\x1b]10;?", b"\x1b]10;rgb:aaaa/bbbb/cccc\x1b\\"),
+            ("\x1b]4;1;?", b"\x1b]4;1;rgb:dddd/eeee/ffff\x1b\\"),
+            ("\x1b[?996n", b"\x1b[?997;1n"),
+        ];
+        let mut answered = [0usize; 5];
+        let mut seen = String::new();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let code = loop {
+            if let Ok(code) = exit_rx.try_recv() {
+                break code;
+            }
+            assert!(Instant::now() < deadline, "the program did not end within 30s; saw:\n{seen:?}");
+            if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(100)) {
+                seen.push_str(&String::from_utf8_lossy(&chunk));
+            }
+            for (i, (ask, reply)) in answers.iter().enumerate() {
+                let asks = seen.matches(ask).count();
+                while answered[i] < asks {
+                    session.write(reply).expect("answer a query");
+                    answered[i] += 1;
+                }
+            }
+        };
+        while let Ok(chunk) = rx.recv_timeout(Duration::from_millis(500)) {
+            seen.push_str(&String::from_utf8_lossy(&chunk));
+        }
+        session.kill();
+        assert_eq!(code, Some(0), "clean exit; output:\n{seen:?}");
+        let got: String = seen
+            .split_once("GOT:")
+            .and_then(|(_, r)| r.split_once(":END"))
+            .map(|(codes, _)| codes.split(',').filter_map(|c| c.trim().parse::<u32>().ok()).filter_map(char::from_u32).collect())
+            .unwrap_or_default();
+        eprintln!("PANE SAW: {seen:?}\nPROGRAM GOT: {got:?}\nANSWERED: {answered:?}");
+        // The console layer keeps OSC 10 and 11 questions to itself (measured on Windows 11 26200,
+        // DT-C20); the palette question and the light/dark question and subscription get through.
+        for ask in ["\x1b]4;1;?", "\x1b[?996n", "\x1b[?2031h"] {
+            assert!(seen.contains(ask), "the pane saw the question {ask:?}; pane saw:\n{seen:?}");
+        }
+        assert!(got.contains("\x1b]4;1;rgb:dddd/eeee/ffff"), "the program got the palette colour; it got {got:?}");
+        assert!(got.contains("\x1b[?997;1n"), "the program got the light/dark answer; it got {got:?}");
+        assert!(!got.contains("\x1b[1;1R"), "the cursor report stays the console's own; it got {got:?}");
+    }
+
+    #[test]
+    fn term098_a_reply_is_sent_as_key_events_and_keys_are_not() {
+        assert!(is_reply(b"\x1b]11;rgb:1111/2222/3333\x1b\\"));
+        assert!(is_reply(b"\x1b[?997;2n"));
+        assert!(!is_reply(b"\x1b[1;1R"));
+        assert!(!is_reply(b"\x1b[?1;2c"));
+        assert!(!is_reply(b"\x1b[200~\x1b]0;x\x07\x1b[201~"));
+        assert!(!is_reply(b"ls\r"));
+        let keyed = as_key_events(b"\x1b[?997;1n");
+        assert!(keyed.starts_with(b"\x1b[0;0;27;1;0;1_\x1b[0;0;27;0;0;1_\x1b[0;0;91;1;0;1_\x1b[0;0;91;0;0;1_"), "{}", String::from_utf8_lossy(&keyed));
+        assert_eq!(keyed.iter().filter(|b| **b == b'_').count(), 18, "a down and an up per character");
+    }
+
     /// A program that is not installed fails at spawn with a message, not a silent empty pane.
     #[test]
     fn term040_a_start_folder_is_relative_or_absolute_and_a_missing_one_falls_back() {
@@ -574,7 +740,7 @@ mod tests {
     /// dropped; the user's own settings stay.
     #[test]
     fn acct048_runtime_build_and_partial_conda_variables_are_not_passed_down() {
-        for n in ["TAURI_ENV_DEBUG", "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "CARGO_PKG_NAME", "CARGO_MANIFEST_DIR", "npm_lifecycle_event", "npm_config_user_agent", "INIT_CWD", "CONDA_PREFIX", "CONDA_PREFIX_1", "CONDA_SHLVL", "CONDA_DEFAULT_ENV"] {
+        for n in ["TAURI_ENV_DEBUG", "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "CARGO_PKG_NAME", "CARGO_MANIFEST_DIR", "npm_lifecycle_event", "npm_config_user_agent", "INIT_CWD", "CONDA_PREFIX", "CONDA_PREFIX_1", "CONDA_SHLVL", "CONDA_DEFAULT_ENV", "KOLUX_USER_DATA_PATH"] {
             assert!(inherited_noise(n), "{n}");
         }
         for n in ["PATH", "CARGO_HOME", "NPM_CONFIG_PREFIX", "CONDA_EXE", "HOME", "KOLUX_TERMINAL_HANDLE"] {

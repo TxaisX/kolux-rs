@@ -17,7 +17,7 @@ const filters: Array<{ value: RunFilter; label: string }> = [
 ];
 
 /** An event-started run's tooltip names the event its automation waits for. */
-const eventTip = (r: Run, a: Automation | undefined) => (r.trigger === "event" ? (a?.trigger?.kind === "event" ? triggerLabel(a) : "Started by an event") : undefined);
+const eventTip = (r: Run, a: Automation | undefined) => (r.trigger === "event" ? (r.eventDetail ?? (a?.trigger?.kind === "event" ? triggerLabel(a) : "Started by an event")) : undefined);
 
 type Crumbs = { onAutomations: () => void; onRuns?: () => void; last: string };
 export function Breadcrumb({ onAutomations, onRuns, last }: Crumbs) {

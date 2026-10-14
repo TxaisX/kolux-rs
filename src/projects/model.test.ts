@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree, createOpens, failureOf, pushLabel, newestOnly } from "./model";
+import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, failureOf, pushLabel, newestOnly } from "./model";
 
 test("PROJ-068: a refresh that comes back after a newer one started is dropped", () => {
   const ticket = newestOnly();
@@ -68,6 +68,40 @@ test("nesting keeps the order it is handed when the list is sorted elsewhere (PR
 test("New workspace with no project yet opens the add-project form instead of a dead name field (T-013-fix-a)", () => {
   expect(createOpens("")).toBe("add");
   expect(createOpens("app-1")).toBe("name");
+});
+
+test("the agent waits for setup only in new-tab mode with wait on (PROJ-033)", () => {
+  expect(waitsForSetup("tab", true, true, true)).toBe(true);
+  expect(waitsForSetup("right", true, true, true)).toBe(false);
+  expect(waitsForSetup("down", true, true, true)).toBe(false);
+  expect(waitsForSetup("tab", false, true, true)).toBe(false);
+  expect(waitsForSetup("tab", true, false, true)).toBe(false);
+  expect(waitsForSetup("tab", true, true, false)).toBe(false);
+});
+
+test("the pull-request picker matches number, title or head branch (PROJ-030)", () => {
+  const prs: PrHead[] = [
+    { number: 12, title: "Fix the login page", url: "u12", headRefName: "feat/login", headRefOid: "a" },
+    { number: 130, title: "Docs", url: "u130", headRefName: "main", headRefOid: "b", isCrossRepository: true, headRepositoryOwner: { login: "someone" } },
+  ];
+  expect(prItems(prs, "").map((i) => i.key)).toEqual(["12", "130"]);
+  expect(prItems(prs, "#1").map((i) => i.key)).toEqual(["12", "130"]);
+  expect(prItems(prs, "13").map((i) => i.key)).toEqual(["130"]);
+  expect(prItems(prs, "LOGIN").map((i) => i.key)).toEqual(["12"]);
+  expect(prItems(prs, "docs")[0]).toEqual({ key: "130", label: "#130 Docs", hint: "someone:main" });
+  expect(prItems(prs, "nothing")).toEqual([]);
+});
+
+test("a newer create overtakes every running one not made with Create more (PROJ-020)", () => {
+  const a: PendingCreate = { ticket: 1, projectId: "app", name: "fix-login", more: false };
+  const b: PendingCreate = { ticket: 2, projectId: "app", name: "batch-1", more: true };
+  const c: PendingCreate = { ticket: 3, projectId: "web", name: "docs", more: false };
+  expect(overtakenBy([], c)).toEqual([]);
+  // Another project's create is overtaken too: only one create can take the front.
+  expect(overtakenBy([a, b], c)).toEqual([1]);
+  // Create more asked for several, so its creates are never overtaken.
+  expect(overtakenBy([b], c)).toEqual([]);
+  expect(overtakenBy([a, b, c], c)).toEqual([1]);
 });
 
 test("the workspaces-folder field saves on Enter, reverts on Escape and ignores keys mid-composition (SET-032)", () => {
@@ -171,4 +205,36 @@ test("PROJ-064: a row says how many commits are not pushed", () => {
   expect(pushLabel({ ahead: 0, upstream: true })?.text).toBe("in sync");
   expect(pushLabel({ ahead: 1, upstream: false })).toEqual({ text: "unpublished · 1", title: "This branch has no upstream yet; 1 commit on no remote" });
   expect(pushLabel({ ahead: 0, upstream: false })?.text).toBe("unpublished");
+});
+
+test("PROJ-037: an issue or pull request address is a work item; a plain name or a repository home page is not", () => {
+  expect(workItem(" https://github.com/Acme/app/pull/12 ")).toEqual({ host: "github.com", owner: "Acme", repo: "app", kind: "pull", number: 12 });
+  expect(workItem("https://github.com/acme/app/pull/12/files#diff")?.number).toBe(12);
+  expect(workItem("https://www.github.com/acme/app/issues/34?x=1")).toEqual({ host: "github.com", owner: "acme", repo: "app", kind: "issue", number: 34 });
+  expect(workItem("https://ghe.corp.example/team/app/issues/3")?.host).toBe("ghe.corp.example");
+  expect(workItem("https://github.com/acme/app")).toBeNull();
+  expect(workItem("https://github.com/acme/app/pulls")).toBeNull();
+  expect(workItem("https://github.com/acme/app/issues/0")).toBeNull();
+  expect(workItem("fix the login page")).toBeNull();
+  expect(workItem("#12")).toBeNull();
+});
+
+test("SESS-036/038: a linked GitHub item reads as its number and title, and a project switch drops it but keeps a tracker link", () => {
+  const issue: Linked = { kind: "issue", number: 34, title: "Crash on save", url: "https://github.com/acme/app/issues/34", repo: "github.com/acme/app" };
+  const pr: Linked = { ...issue, kind: "pull", number: 12, title: "Fix the login page" };
+  expect(itemLabel(issue)).toBe("issue #34 Crash on save");
+  expect(itemLabel(pr)).toBe("pull request #12 Fix the login page");
+  expect(keepOnSwitch(issue)).toBeNull();
+  expect(keepOnSwitch(pr)).toBeNull();
+  const tracker: Linked = { kind: "tracker", number: 7, title: "Plan the launch", url: "https://tracker.example/7", repo: null };
+  expect(keepOnSwitch(tracker)).toBe(tracker);
+  expect(keepOnSwitch(null)).toBeNull();
+  expect(bound({ kind: "issue", number: 34, title: "t", url: "https://github.com/Acme/App/issues/34" }).repo).toBe("github.com/Acme/App");
+});
+
+test("SESS-038: what a create cancelled mid-submit tells the user", () => {
+  expect(stoppedNote("login", "cancelled: a newer workspace creation took its place")).toEqual({ kind: "ok", text: "Stopped creating login; nothing was left behind." });
+  expect(stoppedNote("login", "cancelled: a newer workspace creation took its place, but its folder could not be removed: busy")).toEqual({ kind: "warn", text: "Stopped creating login, but its folder could not be removed: busy" });
+  expect(stoppedNote("login", "fatal: invalid reference: x")).toEqual({ kind: "warn", text: "login: fatal: invalid reference: x" });
+  expect(stoppedNote("login", null)).toEqual({ kind: "warn", text: "login was already made when the cancel arrived, so it stays; delete it if you do not want it." });
 });

@@ -2,7 +2,7 @@ import { expect, test, vi } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { readAppearance } from "../theme";
-import { AppearanceView, fontSaver } from "./AppearancePage";
+import { AppearanceView, fontSaver, LanguageView, UsagePercentPick } from "./AppearancePage";
 import { DRAFT_PAUSE_MS, Draft } from "./useSettings";
 
 test("SET-016: Interface, Terminal and Window & Sidebar, all open at first; fonts sit in Interface", () => {
@@ -48,4 +48,21 @@ test("SET-036: a font field saves after a pause, trimmed, and never in the middl
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("SET-017: the Language choice sits in Interface, names each language in its own words, and says what System means", () => {
+  const lang = renderToString(createElement(LanguageView, { value: "system", onPick: () => {}, os: ["zh-TW"] }));
+  expect(lang).toContain("System (English)");
+  for (const n of ["English", "简体中文", "한국어", "日本語", "Español", "Français"]) expect(lang).toContain(n);
+  expect(renderToString(createElement(LanguageView, { value: "ja", onPick: () => {}, os: ["ja-JP"] }))).toContain("System (日本語)");
+  const html = renderToString(createElement(AppearanceView, { look: readAppearance({}), onChange: () => {}, languagePart: createElement("p", null, "language here") }));
+  expect(html.indexOf("language here")).toBeGreaterThan(html.indexOf("Mode"));
+  expect(html.indexOf("language here")).toBeLessThan(html.indexOf("Terminal colours"));
+});
+
+test("T-263 USAGE-025: the status bar section offers Usage percentages as Used or Remaining", () => {
+  const html = renderToString(createElement(UsagePercentPick, { value: "remaining", onPick: () => {} })).replace(/<!-- -->/g, "");
+  expect(html).toContain("Usage percentages");
+  expect(html).toContain(`<option value="used">Used</option>`);
+  expect(html).toContain(`<option value="remaining" selected="">Remaining</option>`);
 });

@@ -50,7 +50,7 @@ describe("autosave writes after the pause (EDIT-002)", () => {
     await vi.advanceTimersByTimeAsync(600);
     expect(writes).toEqual([]); // typing again starts the pause over
     await vi.advanceTimersByTimeAsync(500);
-    expect(writes).toEqual(["baone\n"]);
+    await vi.waitFor(() => expect(writes).toEqual(["baone\n"])); // the save hashes the loaded copy first (real crypto)
     expect(isDirty(p)).toBe(false);
     off();
     detach(p, v);
@@ -79,7 +79,7 @@ describe("autosave writes after the pause (EDIT-002)", () => {
     resumeAutosave(p);
     v.type("z");
     await vi.advanceTimersByTimeAsync(400);
-    expect(writes.length).toBe(1);
+    await vi.waitFor(() => expect(writes.length).toBe(1));
     off();
     detach(p, v);
   });
@@ -104,7 +104,7 @@ describe("autosave writes after the pause (EDIT-002)", () => {
     readable = true;
     v.type("z");
     await vi.advanceTimersByTimeAsync(400);
-    expect(writes).toEqual(["zyxone\n"]);
+    await vi.waitFor(() => expect(writes).toEqual(["zyxone\n"]));
     off();
     detach(p, v);
   });

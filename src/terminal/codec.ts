@@ -10,7 +10,16 @@ export function decodeOutput(base64: string): Uint8Array {
   return bytes;
 }
 
-export type OutputEvent = { id: number; data: string };
+export type OutputEvent = { id: number; data: string; pane?: number | null };
+
+/**
+ * TERM-098: whether an output chunk belongs to this pane. By terminal id once known; before the
+ * spawn call has answered, by the pane key the chunk was tagged with, so the program's first frame
+ * (and its cursor question, which the console waits on) is drawn instead of dropped.
+ */
+export function forPane(e: { id: number; pane?: number | null }, id: number | null, key: number | undefined): boolean {
+  return id === null ? key !== undefined && e.pane === key : e.id === id;
+}
 export type ExitEvent = { id: number; code: number | null };
 
 // What the pane header says once the program is gone.

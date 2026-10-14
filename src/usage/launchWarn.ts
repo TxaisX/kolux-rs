@@ -1,8 +1,9 @@
 // SESS-022 / USAGE-010: the launch screen warns, without blocking, when a provider the chosen seats
 // draw on has used 80 % or more of its usage window. Each provider's shortest window that has a
-// figure is the one checked (5-hour, else weekly, else monthly). Providers with no figures (Claude
-// until T-041 reads them) and agents with no usage source give no line.
+// figure is the one checked (5-hour, else weekly, else monthly). Providers with no figures yet and
+// agents with no usage source give no line.
 import { useEffect, useState } from "react";
+import type { ClaudeLimit } from "./claude";
 import { resetWords, type CodexUsage, type UsageWindow } from "./codex";
 
 export const WARN_AT = 80;
@@ -29,7 +30,7 @@ export function launchWarnings(agentIds: Array<string | null>, usage: Record<str
   return lines;
 }
 
-/** The figures the top bar last read (Codex today), shared so the launch screen does not read again. */
+/** The figures the top bar last read, shared so the launch screen does not read again. */
 let figures: Record<string, ProviderUsage | undefined> = {};
 const subs = new Set<() => void>();
 function publish(provider: string, u: ProviderUsage | undefined) {
@@ -37,6 +38,16 @@ function publish(provider: string, u: ProviderUsage | undefined) {
   subs.forEach((f) => f());
 }
 export const publishCodex = (u: CodexUsage | null) => publish("codex", u?.state === "ok" ? { name: "Codex", fiveHour: u.fiveHour, weekly: u.weekly } : undefined);
+/** Claude's read limits as its 5-hour and weekly windows; none read gives no figures. */
+export function claudeFigures(limits: ClaudeLimit[]): ProviderUsage | undefined {
+  if (!limits.length) return undefined;
+  const win = (kind: string) => {
+    const l = limits.find((x) => x.kind === kind);
+    return l ? { usedPercent: l.usedPercent, resetsAt: l.resetsAt, windowMins: null } : null;
+  };
+  return { name: "Claude", fiveHour: win("five_hour"), weekly: win("seven_day") };
+}
+export const publishClaude = (limits: ClaudeLimit[]) => publish("claude", claudeFigures(limits));
 // Dev builds only: the live check sets figures a real account cannot be pushed to on demand.
 if (import.meta.env.DEV && typeof window !== "undefined") (window as unknown as Record<string, unknown>).__koluxUsage = publish;
 /** Calls `f` with every new set of figures; returns the unsubscribe. `onFigures.current()` reads them now. */

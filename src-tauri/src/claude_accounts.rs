@@ -13,8 +13,8 @@
 //! left to Claude Code itself, which refreshes its own sign-in in every pane it runs; Kolux sends
 //! nothing to Anthropic's token service and never flags an account as needing re-auth for a
 //! renewal. Kolux's own renewal (opt-out off) is T-043-d.
-//! ponytail: macOS keychain entries per account (ACCT-005's keychain rules) are T-043-d too;
-//! this build keeps the Windows/Linux credentials file.
+//! ponytail: the macOS keychain rules (ACCT-005) are a rule table in keychain.rs (T-043-e), not yet
+//! called from here; wiring them in needs a Mac (T-043-f). This build keeps the credentials file.
 
 use crate::claude_key::{run_hidden, Attention, Ended};
 use crate::{secrets, state::Store};
@@ -54,6 +54,11 @@ pub struct Account {
     pub stale: bool,
 }
 
+/// ACCT-025: each listed account's live sign-in file and its sealed copy in the vault.
+pub fn sign_in_files(store: &Store, profile: &Path) -> Vec<(PathBuf, PathBuf)> {
+    load(store).into_iter().map(|a| (profile.join(FOLDER).join(&a.id).join(CREDENTIALS), profile.join(secrets::VAULT).join(format!("claude-{}.json", a.id)))).collect()
+}
+
 pub fn load(store: &Store) -> Vec<Account> {
     store.get(LIST_KEY).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
@@ -78,6 +83,18 @@ pub fn pane_env(program: Option<&str>, key_mode: bool, active_dir: Option<String
         return None;
     }
     active_dir.map(|d| (CONFIG_ENV, d))
+}
+
+/// ACCT-024: the variables in the user's own per-agent settings that would sign a Claude pane in
+/// past its managed account. An empty value blanks the variable and is fine; so is anything that is
+/// not a sign-in, such as a custom endpoint. Windows compares names without case.
+pub fn sign_in_overrides(own_env: &[(String, String)], windows: bool) -> Vec<String> {
+    const SIGN_INS: [&str; 3] = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", crate::claude_key::ENV];
+    own_env
+        .iter()
+        .filter(|(k, v)| !v.is_empty() && SIGN_INS.iter().any(|s| if windows { s.eq_ignore_ascii_case(k) } else { s == k }))
+        .map(|(k, _)| k.clone())
+        .collect()
 }
 
 fn text<'a>(v: &'a Value, keys: &[&str]) -> Option<&'a str> {
@@ -361,10 +378,28 @@ pub fn claude_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns
     Ok(())
 }
 
+/// Stops the running sign-in, or (ACCT-002, ACCT-014: Check again) with nothing running wipes the
+/// leftover needs-attention note; true when the note went, so the card is told to re-read.
+fn cancel(s: &SignIns) -> bool {
+    let running = s.running.lock().map(|r| r.is_some()).unwrap_or(false);
+    match s.cancel.lock().ok().and_then(|c| c.clone()) {
+        Some(flag) if running => {
+            flag.store(true, Ordering::SeqCst);
+            false
+        }
+        _ => {
+            if let Ok(mut g) = s.attention.lock() {
+                *g = None;
+            }
+            true
+        }
+    }
+}
+
 #[tauri::command]
-pub fn claude_account_cancel(sign_ins: tauri::State<'_, SignIns>) {
-    if let Some(flag) = sign_ins.cancel.lock().ok().and_then(|c| c.clone()) {
-        flag.store(true, Ordering::SeqCst);
+pub fn claude_account_cancel(app: AppHandle, sign_ins: tauri::State<'_, SignIns>) {
+    if cancel(&sign_ins) {
+        let _ = app.emit(EVENT, ());
     }
 }
 
@@ -514,12 +549,27 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    // ACCT-014: Check again routes to Cancel; with nothing running it wipes the stale note.
+    #[test]
+    fn an_idle_cancel_clears_the_note_and_a_running_one_only_flags() {
+        let s = SignIns::default();
+        *s.attention.lock().unwrap() = Some(Attention::new("not-found", "x"));
+        assert!(cancel(&s));
+        assert!(s.attention.lock().unwrap().is_none());
+        let flag = Arc::new(AtomicBool::new(false));
+        *s.running.lock().unwrap() = Some("new".into());
+        *s.cancel.lock().unwrap() = Some(flag.clone());
+        *s.attention.lock().unwrap() = Some(Attention::new("plan", "x"));
+        assert!(!cancel(&s));
+        assert!(flag.load(Ordering::SeqCst) && s.attention.lock().unwrap().is_some());
+    }
+
     const CREDS: &str = r#"{"claudeAiOauth":{"accessToken":"fake-access","refreshToken":"fake-refresh"}}"#;
     const SIGNED_IN: &str = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"sam@example.com","orgName":"Example Org"}"#;
 
-    fn profile(tag: &str) -> (PathBuf, Mutex<Store>) {
-        let dir = std::env::temp_dir().join(format!("kolux-claude-accounts-{tag}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
+    /// The folder goes when the test ends, after the store in it has closed.
+    fn profile(tag: &str) -> (crate::test_dir::TempDir, Mutex<Store>) {
+        let dir = crate::test_dir::temp(&format!("claude-accounts-{tag}"));
         let store = Store::open(&dir).unwrap();
         (dir, Mutex::new(store))
     }
@@ -543,7 +593,6 @@ mod tests {
         let other = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"sam@example.com","orgName":"Second Org"}"#;
         sign_in(&store, &dir, "a3", false, 9, writes(CREDS, Ended::Exited(Some(0))), |_| Some(other.into())).unwrap();
         assert_eq!(load(&store.lock().unwrap()).len(), 2, "one email in two organisations is two accounts");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -566,7 +615,6 @@ mod tests {
         assert_eq!(active(&s), None, "the system default can be picked again");
         assert!(remove(&s, &dir, "a2").is_err());
         drop(s);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -579,7 +627,6 @@ mod tests {
         assert!(!vault.contains("fake-refresh"), "the kept copy is sealed");
         assert_eq!(load(&store.lock().unwrap()), vec![a.clone()]);
         assert_eq!(active(&store.lock().unwrap()), None, "adding does not change the active account");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -597,7 +644,6 @@ mod tests {
         assert!(!serde_json::from_str::<Account>(r#"{"id":"x","email":null,"organization":null,"configDir":"d","lastSignIn":1}"#).unwrap().stale);
         sign_in(&store, &dir, "a1", true, 8, writes(r#"{"claudeAiOauth":{"accessToken":"fake-2"}}"#, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
         assert!(!load(&store.lock().unwrap())[0].stale, "Sign in again clears it");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -610,7 +656,6 @@ mod tests {
         assert_eq!(err.reason, "sign-in-refused", "a refused sign-in offers Try again");
         assert!(load(&store.lock().unwrap()).is_empty());
         assert!(!dir.join(FOLDER).join("a1").exists() && !dir.join(FOLDER).join("a2").exists(), "no partial folder left");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -628,7 +673,6 @@ mod tests {
         // The same credentials as before are never taken as a new sign-in.
         assert!(sign_in(&store, &dir, "a1", true, 9, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
         assert_eq!(load(&store.lock().unwrap())[0].last_sign_in, 7, "the row is unchanged");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -661,5 +705,15 @@ mod tests {
     fn upkeep_is_left_to_claude_code_unless_turned_off() {
         assert!(upkeep_left_to_claude(&json!({})));
         assert!(!upkeep_left_to_claude(&json!({ UPKEEP_FIELD: false })));
+    }
+
+    #[test]
+    fn acct_024_own_settings_that_sign_in_are_named() {
+        let env = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>();
+        let found = sign_in_overrides(&env(&[("ANTHROPIC_API_KEY", "sk-made-up"), ("ANTHROPIC_BASE_URL", "https://proxy.example"), ("ANTHROPIC_AUTH_TOKEN", "")]), false);
+        assert_eq!(found, vec!["ANTHROPIC_API_KEY".to_string()], "an endpoint is fine, a blanked token is fine");
+        assert_eq!(sign_in_overrides(&env(&[("anthropic_auth_token", "t")]), true), vec!["anthropic_auth_token".to_string()], "Windows names ignore case");
+        assert!(sign_in_overrides(&env(&[("anthropic_auth_token", "t")]), false).is_empty(), "elsewhere names are exact");
+        assert_eq!(sign_in_overrides(&env(&[("CLAUDE_CODE_OAUTH_TOKEN", "t")]), false).len(), 1);
     }
 }

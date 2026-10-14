@@ -1,11 +1,15 @@
-//! GIT-002 / GIT-004 / GIT-006 / GIT-007: the Source Control panel's back end: what one worktree
-//! has changed, staging and unstaging by path, committing, and the remote actions (push, pull,
+//! GIT-002 / GIT-003 / GIT-004 / GIT-006 / GIT-007: the Source Control panel's back end: what one
+//! worktree has changed, staging and unstaging by path, discarding work, committing, and the remote actions (push, pull,
 //! sync, fetch, fast-forward, force push with lease, publish, rebase from base). Every call names
 //! the worktree it acts on, so one workspace's index is never touched from another's panel.
 //! Reading status never touches the network: the ahead / behind counts come from the refs git
 //! already has, so an unpublished branch is not checked against the remote over and over.
 
 use crate::git::{command, native, run, Git};
+
+#[path = "scm_watch.rs"]
+pub mod watch;
+use std::fs;
 use std::io::Write;
 use std::path::{Component, Path};
 
@@ -39,6 +43,51 @@ pub struct Status {
     pub changed: Vec<Change>,
     pub untracked: Vec<Change>,
     pub conflicts: Vec<Change>,
+    /// GIT-015: the operation stopped part-way (merge, rebase, cherry-pick or revert); None
+    /// when there is none.
+    pub operation: Option<String>,
+    /// GIT-015: conflicted files whose clash markers are gone, so they only need staging.
+    pub resolved: Vec<String>,
+    /// GIT-001: the lines each file adds and removes, per section; a binary file has no entry.
+    pub lines: LineCounts,
+}
+
+/// GIT-001: `[added, removed]` by path for the staged, changed and untracked sections.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct LineCounts {
+    pub staged: std::collections::BTreeMap<String, [u32; 2]>,
+    pub changed: std::collections::BTreeMap<String, [u32; 2]>,
+    pub untracked: std::collections::BTreeMap<String, [u32; 2]>,
+}
+
+/// `git diff --numstat -M -z` output by path; a rename is keyed by its new path and a binary
+/// file ("-" for both counts) is left out.
+fn numstat(text: &str) -> std::collections::BTreeMap<String, [u32; 2]> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut f = text.split('\0');
+    while let Some(head) = f.next() {
+        let mut p = head.splitn(3, '\t');
+        let (Some(a), Some(r), Some(path)) = (p.next(), p.next(), p.next()) else { continue };
+        // A rename leaves the path empty and gives the old and new paths as the next two fields.
+        let path = if path.is_empty() { f.nth(1).unwrap_or_default() } else { path };
+        if let (Ok(a), Ok(r)) = (a.parse(), r.parse()) {
+            out.insert(path.to_string(), [a, r]);
+        }
+    }
+    out
+}
+
+/// An untracked file's lines, the last one counted without its newline; None for a binary file
+/// (a NUL byte) or one over a megabyte.
+fn file_lines(path: &Path) -> Option<u32> {
+    if std::fs::metadata(path).ok()?.len() > 1_000_000 {
+        return None;
+    }
+    let b = std::fs::read(path).ok()?;
+    if b.contains(&0) {
+        return None;
+    }
+    Some(b.iter().filter(|&&c| c == b'\n').count() as u32 + u32::from(b.last().is_some_and(|&c| c != b'\n')))
 }
 
 /// What a commit attempt came to: `id` is the new commit when it worked; otherwise `output` is
@@ -63,7 +112,94 @@ pub fn status(worktree: &Path) -> Result<Status, String> {
         st.rewritten = run(&["cherry", "HEAD", "@{upstream}"], Some(worktree)).is_ok_and(|t| !t.is_empty() && t.lines().all(|l| l.starts_with('-')));
     }
     st.base = Git::detect().ok().and_then(|g| g.default_branch(worktree));
+    st.operation = operation(worktree);
+    st.lines.staged = run(&["diff", "--cached", "--numstat", "-M", "-z"], Some(worktree)).map(|t| numstat(&t)).unwrap_or_default();
+    st.lines.changed = run(&["diff", "--numstat", "-z"], Some(worktree)).map(|t| numstat(&t)).unwrap_or_default();
+    // ponytail: the first 2 000 untracked files are counted; a folder of thousands shows the rest bare.
+    st.lines.untracked = st.untracked.iter().take(2_000).filter_map(|c| Some((c.path.clone(), [file_lines(&worktree.join(&c.path))?, 0]))).collect();
+    st.resolved = st
+        .conflicts
+        .iter()
+        .filter(|c| matches!(c.status.as_str(), "UU" | "AA"))
+        .filter(|c| std::fs::read_to_string(worktree.join(&c.path)).is_ok_and(|t| !t.lines().any(|l| l.starts_with("<<<<<<<"))))
+        .map(|c| c.path.clone())
+        .collect();
     Ok(st)
+}
+
+/// GIT-015: which operation is stopped part-way, from the markers git leaves in this worktree's
+/// own git folder (a linked worktree has its own).
+fn operation(worktree: &Path) -> Option<String> {
+    const MARKS: [(&str, &str); 5] = [("rebase-merge", "rebase"), ("rebase-apply", "rebase"), ("MERGE_HEAD", "merge"), ("CHERRY_PICK_HEAD", "cherry-pick"), ("REVERT_HEAD", "revert")];
+    let mut args = vec!["rev-parse"];
+    for (mark, _) in MARKS {
+        args.extend(["--git-path", mark]);
+    }
+    let out = run(&args, Some(worktree)).ok()?;
+    out.lines().zip(MARKS).find(|(p, _)| worktree.join(p.trim()).exists()).map(|(_, (_, op))| op.to_string())
+}
+
+/// GIT-015: aborts whichever operation is in progress, putting the worktree back where it was
+/// before it began.
+pub fn abort(worktree: &Path) -> Result<(), String> {
+    let op = operation(worktree).ok_or("Nothing to abort: no merge, rebase, cherry-pick or revert is in progress")?;
+    run(&[op.as_str(), "--abort"], Some(worktree)).map(|_| ())
+}
+
+/// GIT-065: whether a workspace's commits are on its remote, for the sidebar badge. `state` is
+/// synced, ahead (`count` commits not pushed), unpublished (no upstream; `count` commits past the
+/// base) or unknown (the count could not be read, which is never shown as synced).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Pushed {
+    pub path: String,
+    pub state: &'static str,
+    pub count: u32,
+}
+
+/// GIT-065: None while HEAD is detached. Reads only refs git already has, never the network.
+pub fn pushed(worktree: &Path) -> Option<Pushed> {
+    run(&["symbolic-ref", "-q", "HEAD"], Some(worktree)).ok()?;
+    let count = |range: &str| run(&["rev-list", "--count", range], Some(worktree)).ok().and_then(|n| n.parse::<u32>().ok());
+    let (state, n) = if run(&["rev-parse", "--verify", "-q", "@{upstream}"], Some(worktree)).is_ok() {
+        match count("@{upstream}..HEAD") {
+            Some(0) => ("synced", Some(0)),
+            n => ("ahead", n),
+        }
+    } else {
+        ("unpublished", Git::detect().ok().and_then(|g| g.default_branch(worktree)).and_then(|b| count(&format!("{b}..HEAD"))))
+    };
+    let path = worktree.display().to_string();
+    Some(match n {
+        Some(count) => Pushed { path, state, count },
+        None => Pushed { path, state: "unknown", count: 0 },
+    })
+}
+
+/// GIT-065: the badge for each listed workspace, read off the UI thread (the sidebar asks every
+/// few seconds).
+#[tauri::command]
+pub async fn scm_pushed(worktrees: Vec<String>) -> Vec<Pushed> {
+    tauri::async_runtime::spawn_blocking(move || worktrees.iter().filter_map(|w| pushed(Path::new(w))).collect()).await.unwrap_or_default()
+}
+
+/// TERM-022: what the pane header's branch chip reads: the branch, else the commit a detached
+/// HEAD is on (None before the first commit). None for a folder outside git.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Head {
+    pub branch: Option<String>,
+    pub head: Option<String>,
+}
+
+pub fn head_of(dir: &Path) -> Option<Head> {
+    run(&["rev-parse", "--git-dir"], Some(dir)).ok()?;
+    let branch = run(&["symbolic-ref", "-q", "--short", "HEAD"], Some(dir)).ok().filter(|b| !b.is_empty());
+    Some(Head { branch, head: run(&["rev-parse", "-q", "--verify", "HEAD"], Some(dir)).ok().filter(|h| !h.is_empty()) })
+}
+
+/// TERM-022: read off the UI thread; every pane asks when it shows and when it takes focus.
+#[tauri::command]
+pub async fn scm_head(dir: String) -> Option<Head> {
+    tauri::async_runtime::spawn_blocking(move || head_of(Path::new(&dir))).await.ok().flatten()
 }
 
 /// Lines added and removed in one row of the branch summary.
@@ -84,7 +220,14 @@ pub struct Summary {
     pub source: Lines,
     pub tests: Lines,
     pub generated: Lines,
+    /// GIT-011: how many files the branch's own commits touched since it parted from the base.
+    pub files: u32,
+    /// GIT-011: those files, the first `COMMITTED_CAP` of them.
+    pub committed: Vec<Change>,
 }
+
+/// GIT-011: the most committed files sent to the window; the count stays whole.
+const COMMITTED_CAP: usize = 1000;
 
 #[derive(Debug, PartialEq, Eq)]
 enum Kind {
@@ -168,6 +311,11 @@ pub fn summary(worktree: &Path, pinned: Option<&str>, upstream: bool) -> Result<
     let mut n = counts.split_whitespace().map(|x| x.parse::<u32>().unwrap_or(0));
     let (behind, ahead) = (n.next().unwrap_or(0), n.next().unwrap_or(0));
     let mut s = Summary { against, ahead, behind, ..Summary::default() };
+    // ponytail: an enormous branch still counts every line; a time limit on the counting comes
+    // when a real branch stalls the panel.
+    s.committed = name_status(&run(&["diff", "--name-status", "-M", "-z", &range], Some(worktree))?);
+    s.files = s.committed.len() as u32;
+    s.committed.truncate(COMMITTED_CAP);
     for line in run(&["diff", "--numstat", "--no-renames", "-z", &range], Some(worktree))?.split('\0').filter(|l| !l.is_empty()) {
         let mut f = line.splitn(3, '\t');
         let (Some(a), Some(r), Some(path)) = (f.next(), f.next(), f.next()) else { continue };
@@ -189,6 +337,70 @@ pub fn summary(worktree: &Path, pinned: Option<&str>, upstream: bool) -> Result<
 pub struct ActionOutcome {
     pub ok: bool,
     pub output: String,
+    /// GIT-009: what kind of failure it was (see `failure_kind`); None when it worked.
+    pub kind: Option<&'static str>,
+    /// GIT-009: for a hook failure, what an agent is handed: the end of the hook's output with
+    /// colour codes removed and a capped list of the files in the push.
+    pub detail: Option<String>,
+}
+
+/// GIT-009: sorts a failed push, pull or fetch by what git and the remote printed: protected,
+/// sign-in, network, submodule, non-fast-forward, hook (a remote hook, or a local pre-push hook
+/// when `local_hook` says one ran) or other.
+pub fn failure_kind(output: &str, local_hook: bool) -> &'static str {
+    let t = output.to_lowercase();
+    let any = |words: &[&str]| words.iter().any(|w| t.contains(w));
+    if any(&["protected branch", "gh006", "gl-protected"]) {
+        "protected"
+    } else if any(&["authentication failed", "could not read username", "could not read password", "terminal prompts disabled", "permission denied (publickey", "invalid username or password", "returned error: 403", "returned error: 401"]) {
+        "sign-in"
+    } else if any(&["could not resolve host", "connection refused", "connection timed out", "timed out", "network is unreachable", "failed to connect", "connection reset"]) {
+        "network"
+    } else if t.contains("submodule") {
+        "submodule"
+    } else if any(&["non-fast-forward", "(fetch first)", "[rejected]", "stale info"]) {
+        "non-fast-forward"
+    } else if t.contains("hook declined") || local_hook {
+        "hook"
+    } else {
+        "other"
+    }
+}
+
+/// Removes terminal colour and cursor codes (ESC [ ... letter) from hook output.
+fn plain(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for n in chars.by_ref() {
+                    if n.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// GIT-009: the end of the hook output (40 lines at most) and the files the push carries (30 at
+/// most), for the agent asked to fix it.
+fn hook_detail(worktree: &Path, output: &str, against: Option<&str>) -> String {
+    let text = plain(output);
+    let lines: Vec<&str> = text.lines().collect();
+    let tail = lines[lines.len().saturating_sub(40)..].join("\n");
+    let range = format!("{}..HEAD", against.unwrap_or("HEAD~1"));
+    let files: Vec<String> = run(&["diff", "--name-only", &range], Some(worktree)).unwrap_or_default().lines().map(String::from).collect();
+    let mut shown: Vec<String> = files.iter().take(30).map(|f| format!("- {f}")).collect();
+    if files.len() > 30 {
+        shown.push(format!("- and {} more", files.len() - 30));
+    }
+    format!("{tail}\n\nFiles in this push:\n{}", shown.join("\n"))
 }
 
 /// GIT-007: one remote action against the branch's own remote, never a target of its own:
@@ -204,6 +416,9 @@ pub fn remote(worktree: &Path, action: &str) -> Result<ActionOutcome, String> {
         "push" => vec![vec!["push"]],
         "pull" => vec![vec!["pull"]],
         "sync" => vec![vec!["pull"], vec!["push"]],
+        // GIT-005: the last step of commit then pull and push: the new commit is rebased onto
+        // what the remote gained, then pushed.
+        "pullpush" => vec![vec!["pull", "--rebase"], vec!["push"]],
         "fetch" => vec![vec!["fetch"]],
         "ff" => vec![vec!["pull", "--ff-only"]],
         "force" => vec![vec!["push", "--force-with-lease"]],
@@ -218,10 +433,1378 @@ pub fn remote(worktree: &Path, action: &str) -> Result<ActionOutcome, String> {
         output.push_str(String::from_utf8_lossy(&out.stderr).trim());
         output.push('\n');
         if !out.status.success() {
-            return Ok(ActionOutcome { ok: false, output: output.trim().to_string() });
+            let pushing = args[0] == "push";
+            let hooks = run(&["rev-parse", "--git-path", "hooks"], Some(worktree)).map(|d| worktree.join(native(&d))).ok();
+            let local_hook = pushing && hooks.is_some_and(|d| d.join("pre-push").is_file());
+            let kind = failure_kind(&output, local_hook);
+            let detail = (kind == "hook").then(|| hook_detail(worktree, &output, st.upstream.as_deref().or(base.as_deref())));
+            return Ok(ActionOutcome { ok: false, output: plain(output.trim()), kind: Some(kind), detail });
         }
     }
-    Ok(ActionOutcome { ok: true, output: output.trim().to_string() })
+    Ok(ActionOutcome { ok: true, output: output.trim().to_string(), kind: None, detail: None })
+}
+
+/// GIT-021: a branch's pull request as `gh pr view --json number,url,state` gives it; `state`
+/// is OPEN, MERGED or CLOSED.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Pr {
+    pub number: u64,
+    pub url: String,
+    pub state: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    /// GIT-025: the branch the pull request is for, so a hand link to another branch is flagged.
+    #[serde(alias = "headRefName", default)]
+    pub head: Option<String>,
+    #[serde(alias = "isDraft", default)]
+    pub draft: bool,
+}
+
+/// What every lookup asks gh for.
+const PR_FIELDS: &str = "number,url,state,title,headRefName,isDraft";
+
+/// The GitHub CLI, which carries the user's sign-in and works with GitHub Enterprise Server too.
+/// GIT-060: a GitHub (or GitHub Enterprise) repository named by a remote. `api` is the REST
+/// address (api.github.com, or `/api/v3` on an Enterprise host); `key` is one per project, so
+/// checkouts with different remote forms group together.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct GhRepo {
+    pub host: String,
+    pub owner: String,
+    pub name: String,
+    pub api: String,
+    pub key: String,
+}
+
+impl GhRepo {
+    fn new(host: String, owner: &str, name: &str) -> Self {
+        let api = if host.eq_ignore_ascii_case("github.com") { "https://api.github.com".into() } else { format!("https://{host}/api/v3") };
+        let key = format!("{host}/{owner}/{name}").to_lowercase();
+        GhRepo { host, owner: owner.to_string(), name: name.to_string(), api, key }
+    }
+}
+
+/// The real host an SSH alias stands for, from `Host` / `HostName` lines; wildcard blocks and
+/// `Include` are not followed.
+// ponytail: plain Host blocks only; Include and Match come if someone's config needs them.
+fn ssh_host(alias: &str, config: &str) -> Option<String> {
+    let mut hit = false;
+    for line in config.lines().map(str::trim) {
+        let (key, rest) = line.split_once(|c: char| c.is_whitespace() || c == '=').unwrap_or((line, ""));
+        let rest = rest.trim_start_matches(|c: char| c.is_whitespace() || c == '=').trim();
+        if key.eq_ignore_ascii_case("host") {
+            hit = rest.split_whitespace().any(|h| h == alias);
+        } else if hit && key.eq_ignore_ascii_case("hostname") && !rest.is_empty() {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// GIT-060: reads HTTPS, SSH (`ssh://` or `user@host:path`), `git://` and SSH-alias remotes.
+/// `ssh_config` is the text of the user's SSH config, used only for SSH forms.
+pub fn github_repo(url: &str, ssh_config: &str) -> Option<GhRepo> {
+    let url = url.trim();
+    let (host, path, ssh) = if let Some((scheme, rest)) = url.split_once("://") {
+        let ssh = match scheme {
+            "https" | "http" | "git" => false,
+            "ssh" | "git+ssh" => true,
+            _ => return None,
+        };
+        let (auth, path) = rest.split_once('/')?;
+        let host = auth.rsplit('@').next()?.split(':').next()?;
+        (host, path, ssh)
+    } else {
+        // scp form; one letter before the colon is a Windows drive, not a host.
+        let (auth, path) = url.split_once(':')?;
+        let host = auth.rsplit('@').next()?;
+        if host.len() < 2 || host.contains(['/', '\\']) {
+            return None;
+        }
+        (host, path, true)
+    };
+    let path = path.trim_end_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let (owner, name) = path.split_once('/')?;
+    let ok = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+    if host.is_empty() || !ok(owner) || !ok(name) {
+        return None;
+    }
+    let host = if ssh { ssh_host(host, ssh_config).unwrap_or_else(|| host.to_string()) } else { host.to_string() };
+    Some(GhRepo::new(host, owner, name))
+}
+
+/// The user's SSH config text, empty when there is none.
+fn ssh_config() -> String {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    home.and_then(|h| std::fs::read_to_string(Path::new(&h).join(".ssh").join("config")).ok()).unwrap_or_default()
+}
+
+/// GIT-060: `HOST/OWNER/REPO` for gh's `--repo`, from origin, so gh never has to guess the host
+/// from a remote it cannot read (an SSH alias, an Enterprise host).
+fn gh_repo_arg(worktree: &Path, ssh_config: &str) -> Option<String> {
+    let url = run(&["remote", "get-url", "origin"], Some(worktree)).ok()?;
+    github_repo(&url, ssh_config).map(|g| format!("{}/{}/{}", g.host, g.owner, g.name))
+}
+
+/// GIT-060: the worktree's GitHub repository, for grouping checkouts (the Tasks picker, T-231-b).
+#[tauri::command]
+pub async fn scm_github_repo(worktree: String) -> Option<GhRepo> {
+    let url = run(&["remote", "get-url", "origin"], Some(Path::new(&worktree))).ok()?;
+    github_repo(&url, &ssh_config())
+}
+
+/// GIT-066: the signed-in gh login, read from gh's own config (no network); None without gh.
+pub fn gh_login() -> Option<String> {
+    let out = std::process::Command::new(gh_program().ok()?).args(["config", "get", "-h", "github.com", "user"]).output().ok()?;
+    let login = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !login.is_empty()).then_some(login)
+}
+
+pub(crate) fn gh_program() -> Result<std::path::PathBuf, String> {
+    // Development builds only: KOLUX_DEV_GH (or the worktrees lane's KOLUX_RS_GH) names a stand-in
+    // gh for live proofs, since the registry's search path (which finds the real gh) comes before
+    // the process PATH.
+    #[cfg(debug_assertions)]
+    if let Some(p) = std::env::var_os("KOLUX_DEV_GH").or_else(|| std::env::var_os("KOLUX_RS_GH")) {
+        return Ok(p.into());
+    }
+    crate::agents::find_program("gh").ok_or_else(|| "The GitHub CLI (gh) is not installed; install it, then run gh auth login".to_string())
+}
+
+/// GIT-028: how long one gh call may take before Kolux gives up on it.
+const GH_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Runs gh in the worktree with every prompt off; `input` goes to standard input. A failure
+/// carries what gh printed.
+pub(crate) fn gh_run(program: &Path, worktree: &Path, args: &[&str], input: Option<&str>) -> Result<String, String> {
+    gh_run_for(program, worktree, args, input, GH_LIMIT)
+}
+
+/// GIT-028: `gh_run` with a time limit; a gh that has not finished by then is stopped.
+// ponytail: stopping gh.cmd leaves a child it started running until it ends; its output is dropped.
+fn gh_run_for(program: &Path, worktree: &Path, args: &[&str], input: Option<&str>, limit: std::time::Duration) -> Result<String, String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args);
+    // A pull request link names its own repository; everything else is pointed at origin's.
+    if args.first() != Some(&"api") && !args.iter().any(|a| a.starts_with("https://")) {
+        if let Some(repo) = gh_repo_arg(worktree, &ssh_config()) {
+            cmd.args(["--repo", &repo]);
+        }
+    }
+    cmd.current_dir(worktree).envs(crate::git::NO_PROMPT).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
+    cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("could not run gh: {e}"))?;
+    if let (Some(text), Some(mut pipe)) = (input, child.stdin.take()) {
+        pipe.write_all(text.as_bytes()).map_err(|e| format!("could not hand gh the description: {e}"))?;
+    }
+    // The pipes are drained on their own threads so a chatty gh never blocks on a full pipe.
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_string(&mut text);
+            }
+            let _ = tx.send(text);
+        });
+        rx
+    };
+    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let deadline = std::time::Instant::now() + limit;
+    let code = loop {
+        if let Some(code) = child.try_wait().map_err(|e| format!("gh did not finish: {e}"))? {
+            break code;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let secs = limit.as_secs();
+            return Err(format!("gh did not answer within {secs} second{}; try again in a moment", if secs == 1 { "" } else { "s" }));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let out = stdout.recv().unwrap_or_default();
+    let err = stderr.recv().unwrap_or_default();
+    let said = format!("{}\n{}", out.trim(), err.trim()).trim().to_string();
+    if code.success() { Ok(out.trim().to_string()) } else { Err(plain(&said)) }
+}
+
+/// GIT-023: gh's failures in the words the panel shows.
+pub fn gh_words(said: &str) -> String {
+    let low = said.to_lowercase();
+    if low.contains("known github host") || low.contains("not a github") {
+        "This remote's host is not supported; pull requests need a GitHub remote".into()
+    } else if low.contains("gh auth login") || low.contains("not logged in") || low.contains("authentication") {
+        "Sign in to GitHub first: run gh auth login".into()
+    } else {
+        said.trim().to_string()
+    }
+}
+
+/// GIT-021 / GIT-023: the branch's pull request, None when it has none. Err when gh cannot
+/// say (signed out, offline, another host), so creation is refused rather than risking a second.
+pub fn pr_find(gh: &Path, worktree: &Path, branch: &str) -> Result<Option<Pr>, String> {
+    match gh_run(gh, worktree, &["pr", "view", branch, "--json", PR_FIELDS], None) {
+        Ok(text) => serde_json::from_str(&text).map(Some).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}")),
+        Err(e) if e.to_lowercase().contains("no pull requests found") => Ok(None),
+        Err(e) => Err(gh_words(&e)),
+    }
+}
+
+/// GIT-025: a pull request linked by hand, read through its link wherever its branch is.
+pub fn pr_link(gh: &Path, worktree: &Path, url: &str) -> Result<Pr, String> {
+    let url = url.trim();
+    if !safe_pr_url(url) {
+        return Err("Paste a pull request link, such as https://github.com/owner/repo/pull/12".into());
+    }
+    let text = gh_run(gh, worktree, &["pr", "view", url, "--json", PR_FIELDS], None).map_err(|e| gh_words(&e))?;
+    serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))
+}
+
+/// VIEW-073: one check on a pull request, in the Checks panel's words.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Check {
+    pub name: String,
+    pub workflow: Option<String>,
+    /// passed, failed, running, skipped, cancelled or unresolved.
+    pub outcome: String,
+    pub link: Option<String>,
+    pub started: Option<String>,
+    pub finished: Option<String>,
+    pub description: Option<String>,
+}
+
+/// VIEW-073: the Checks panel's answer; `pr` is None when the branch has no pull request.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, Default)]
+pub struct PrChecks {
+    pub pr: Option<Pr>,
+    pub conflict: bool,
+    pub checks: Vec<Check>,
+}
+
+const CHECK_FIELDS: &str = "number,url,state,title,headRefName,isDraft,mergeable,statusCheckRollup";
+
+/// VIEW-073: a check run's status and conclusion, or a commit status's state, as one word. A run
+/// that finished without a conclusion is unresolved, never pending.
+fn check_outcome(v: &serde_json::Value) -> &'static str {
+    let word = |k: &str| v[k].as_str().unwrap_or("").to_ascii_uppercase();
+    if v["__typename"] == "StatusContext" || v.get("status").is_none() {
+        return match word("state").as_str() {
+            "SUCCESS" => "passed",
+            "PENDING" | "EXPECTED" => "running",
+            "FAILURE" | "ERROR" => "failed",
+            _ => "unresolved",
+        };
+    }
+    if word("status") != "COMPLETED" {
+        return "running";
+    }
+    match word("conclusion").as_str() {
+        "SUCCESS" | "NEUTRAL" => "passed",
+        "FAILURE" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => "failed",
+        "SKIPPED" | "STALE" => "skipped",
+        "CANCELLED" => "cancelled",
+        _ => "unresolved",
+    }
+}
+
+/// VIEW-073: gh's pull request answer, read into the review header, the conflict notice and the checks.
+pub fn checks_from(text: &str) -> Result<PrChecks, String> {
+    let bad = |e: serde_json::Error| format!("gh answered in a form Kolux cannot read: {e}");
+    let v: serde_json::Value = serde_json::from_str(text).map_err(bad)?;
+    let pr: Pr = serde_json::from_value(v.clone()).map_err(bad)?;
+    // gh writes a zero time for a run that has not finished yet.
+    let time = |x: &serde_json::Value| x.as_str().filter(|t| !t.is_empty() && !t.starts_with("0001-")).map(String::from);
+    let text_of = |x: &serde_json::Value| x.as_str().filter(|t| !t.is_empty()).map(String::from);
+    let checks = v["statusCheckRollup"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|c| Check {
+                    name: text_of(&c["name"]).or_else(|| text_of(&c["context"])).unwrap_or_else(|| "check".into()),
+                    workflow: text_of(&c["workflowName"]),
+                    outcome: check_outcome(c).into(),
+                    link: text_of(&c["detailsUrl"]).or_else(|| text_of(&c["targetUrl"])),
+                    started: time(&c["startedAt"]),
+                    finished: time(&c["completedAt"]),
+                    description: text_of(&c["description"]),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(PrChecks { pr: Some(pr), conflict: v["mergeable"] == "CONFLICTING", checks })
+}
+
+/// VIEW-073: the checks of the pull request for `target` (a branch or a hand-linked PR link).
+pub fn pr_checks(gh: &Path, worktree: &Path, target: &str) -> Result<PrChecks, String> {
+    match gh_run(gh, worktree, &["pr", "view", target, "--json", CHECK_FIELDS], None) {
+        Ok(text) => checks_from(&text),
+        Err(e) if e.to_lowercase().contains("no pull requests found") => Ok(PrChecks::default()),
+        Err(e) => Err(gh_words(&e)),
+    }
+}
+
+/// GIT-017: the most diff text a commit-message prompt carries.
+pub const MESSAGE_BUDGET: usize = 24_000;
+
+/// GIT-017: `diff` cut to about `budget` bytes, shared fairly across its files (a small file keeps
+/// all of its share's worth, the rest goes to the big ones), each cut at a line end and marked.
+pub fn trim_diff(diff: &str, budget: usize) -> String {
+    if diff.len() <= budget {
+        return diff.to_string();
+    }
+    let mut files: Vec<&str> = Vec::new();
+    let mut rest = diff;
+    while let Some(i) = rest.get(1..).and_then(|r| r.find("\ndiff --git ")).map(|i| i + 2) {
+        files.push(&rest[..i]);
+        rest = &rest[i..];
+    }
+    files.push(rest);
+    let mut order: Vec<usize> = (0..files.len()).collect();
+    order.sort_by_key(|&i| files[i].len());
+    let mut share = vec![0usize; files.len()];
+    let mut left = budget;
+    for (n, &i) in order.iter().enumerate() {
+        let give = files[i].len().min(left / (files.len() - n));
+        share[i] = give;
+        left -= give;
+    }
+    let mut out = String::new();
+    for (i, f) in files.iter().enumerate() {
+        if share[i] >= f.len() {
+            out.push_str(f);
+            continue;
+        }
+        let keep = f.as_bytes()[..share[i]].iter().rposition(|&b| b == b'\n').map_or(0, |e| e + 1);
+        out.push_str(&f[..keep]);
+        out.push_str(&format!("[{} more lines of this file left out]\n", f[keep..].lines().count()));
+    }
+    out
+}
+
+/// GIT-017: an agent's answer as a commit message: code fences, an opening line that announces the
+/// message, and list bullets are stripped.
+pub fn clean_message(text: &str) -> String {
+    let mut lines: Vec<&str> = text.lines().filter(|l| !l.trim_start().starts_with("```")).collect();
+    while lines.first().is_some_and(|l| l.trim().is_empty()) {
+        lines.remove(0);
+    }
+    if let Some(first) = lines.first() {
+        let low = first.trim().to_lowercase();
+        if low.ends_with(':') && (low.starts_with("here") || low.contains("commit message")) {
+            lines.remove(0);
+        }
+    }
+    let bare = |l: &&str| {
+        let t = l.trim_start();
+        ["- ", "* ", "\u{2022} "].iter().find_map(|b| t.strip_prefix(b)).unwrap_or(l).to_string()
+    };
+    lines.iter().map(bare).collect::<Vec<_>>().join("\n").trim().to_string()
+}
+
+/// GIT-018: the most custom instructions a commit-message prompt carries.
+pub const INSTRUCTIONS_MAX: usize = 2_000;
+
+/// GIT-017 / GIT-018: what the agent is asked: the job, the user's own instructions in their own
+/// size-capped part (blank ones add nothing), and the (trimmed) staged diff at the end.
+pub fn message_prompt(diff: &str, instructions: &str) -> String {
+    let own = instructions.trim();
+    let own = match own.char_indices().nth(INSTRUCTIONS_MAX) {
+        Some((i, _)) => &own[..i],
+        None => own,
+    };
+    let part = if own.is_empty() { String::new() } else { format!("\n\nInstructions from the user for this message:\n{own}") };
+    format!("Write a git commit message for the staged changes below. Reply with the commit message only: a summary line under 72 characters, then, when it helps, a blank line and a few plain sentences on what changed and why. No code fences, no bullets, no preamble.{part}\n\n{diff}")
+}
+
+/// GIT-018: a custom command split into words: double quotes keep spaces inside one word, and
+/// backslashes stay exactly as typed (Windows paths).
+pub fn split_command(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let (mut quoted, mut started) = (false, false);
+    for c in line.chars() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                started = true;
+            }
+            c if c.is_whitespace() && !quoted => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            c => {
+                word.push(c);
+                started = true;
+            }
+        }
+    }
+    if started {
+        words.push(word);
+    }
+    words
+}
+
+/// GIT-018: a custom command's arguments with the prompt wherever `{prompt}` appears; with no
+/// placeholder the prompt goes on standard input instead (the second value).
+pub fn writer_args(args: &[String], prompt: &str) -> (Vec<String>, Option<String>) {
+    if args.iter().any(|a| a.contains("{prompt}")) {
+        (args.iter().map(|a| a.replace("{prompt}", prompt)).collect(), None)
+    } else {
+        (args.to_vec(), Some(prompt.to_string()))
+    }
+}
+
+/// GIT-017: runs whose stop was asked for, by key (the worktree).
+static STOPS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// GIT-017: stops the message run for `key`, if one is going.
+pub fn stop_message(key: &str) {
+    STOPS.lock().unwrap_or_else(|e| e.into_inner()).push(key.to_string());
+}
+
+fn stop_asked(key: &str) -> bool {
+    let mut stops = STOPS.lock().unwrap_or_else(|e| e.into_inner());
+    let had = stops.iter().any(|k| k == key);
+    stops.retain(|k| k != key);
+    had
+}
+
+/// GIT-017: the end of an agent's output for an error notice, keys masked.
+fn excerpt(text: &str) -> String {
+    let t = text.trim();
+    let cut = t.char_indices().rev().nth(399).map_or(0, |(i, _)| i);
+    crate::secrets::mask(&t[cut..])
+}
+
+/// GIT-017: runs an agent CLI in `dir` with `prompt` on its standard input and returns its answer
+/// as a commit message. `stop_message(key)` ends the run early with the error "stopped".
+pub fn write_message(program: &Path, args: &[&str], dir: &Path, input: Option<&str>, key: &str, limit: std::time::Duration) -> Result<String, String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    stop_asked(key);
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args).current_dir(dir).env("NO_COLOR", "1").stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("Could not start the agent: {e}"))?;
+    if let (Some(mut pipe), Some(text)) = (child.stdin.take(), input.map(str::to_string)) {
+        std::thread::spawn(move || {
+            let _ = pipe.write_all(text.as_bytes());
+        });
+    }
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_string(&mut text);
+            }
+            let _ = tx.send(text);
+        });
+        rx
+    };
+    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let deadline = std::time::Instant::now() + limit;
+    let end = |child: &mut std::process::Child| {
+        // A .cmd shim runs the agent as its child, so the whole tree goes.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let _ = std::process::Command::new("taskkill").args(["/T", "/F", "/PID", &child.id().to_string()]).creation_flags(0x0800_0000).output();
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    };
+    let code = loop {
+        if let Some(code) = child.try_wait().map_err(|e| format!("The agent did not finish: {e}"))? {
+            break code;
+        }
+        if stop_asked(key) {
+            end(&mut child);
+            return Err("stopped".into());
+        }
+        if std::time::Instant::now() >= deadline {
+            end(&mut child);
+            return Err(format!("The agent did not finish within {} seconds", limit.as_secs()));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let out = stdout.recv().unwrap_or_default();
+    let err = stderr.recv().unwrap_or_default();
+    if !code.success() {
+        return Err(format!("The agent failed: {}", excerpt(if err.trim().is_empty() { &out } else { &err })));
+    }
+    let message = clean_message(&out);
+    if message.is_empty() {
+        let said = excerpt(&err);
+        return Err(if said.is_empty() { "The agent wrote nothing".to_string() } else { format!("The agent wrote nothing: {said}") });
+    }
+    Ok(message)
+}
+
+/// GIT-017 / GIT-018: a commit message for what is staged in `worktree`, written by Claude Code, or
+/// by the user's own `command` when one is set, following their `instructions`.
+// ponytail: Claude Code with its default writing model; choosing another agent, a model or an effort
+// is T-228-d's.
+#[tauri::command]
+pub async fn scm_commit_message(worktree: String, command: Option<String>, instructions: Option<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = Path::new(&worktree);
+        let diff = run(&["diff", "--cached", "--no-color", "--no-ext-diff"], Some(dir))?;
+        if diff.is_empty() {
+            return Err("Nothing is staged to describe".into());
+        }
+        // Development builds only: KOLUX_DEV_WRITER names a stand-in agent for live proofs (as KOLUX_DEV_GH).
+        #[cfg(debug_assertions)]
+        let stand_in = std::env::var_os("KOLUX_DEV_WRITER").map(std::path::PathBuf::from);
+        #[cfg(not(debug_assertions))]
+        let stand_in: Option<std::path::PathBuf> = None;
+        let prompt = message_prompt(&trim_diff(&diff, MESSAGE_BUDGET), instructions.as_deref().unwrap_or(""));
+        let limit = std::time::Duration::from_secs(180);
+        if let Some(line) = command.filter(|c| !c.trim().is_empty()) {
+            let words = split_command(&line);
+            let (args, input) = writer_args(&words[1..], &prompt);
+            let program = crate::agents::find_program(&words[0]).unwrap_or_else(|| std::path::PathBuf::from(&words[0]));
+            return write_message(&program, &args.iter().map(String::as_str).collect::<Vec<_>>(), dir, input.as_deref(), &worktree, limit);
+        }
+        let program = stand_in.or_else(|| crate::agents::find_program("claude")).ok_or("Claude Code was not found on this computer")?;
+        write_message(&program, &["-p", "--model", "sonnet"], dir, Some(&prompt), &worktree, limit)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// GIT-017: stops the commit-message run for `worktree`.
+#[tauri::command]
+pub async fn scm_commit_message_stop(worktree: String) {
+    stop_message(&worktree);
+}
+
+/// GIT-027: one workspace the background poll looks up, with its hand-linked pull request if any.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+pub struct PollItem {
+    pub path: String,
+    #[serde(default)]
+    pub linked: Option<String>,
+}
+
+/// GIT-027: what the poll found for one workspace. `error` means "keep what you had".
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct PolledPr {
+    pub path: String,
+    pub linked: bool,
+    pub pr: Option<Pr>,
+    pub error: Option<String>,
+}
+
+/// GIT-027 / GIT-028: one round of the background poll. `limited_until` (Unix seconds) is set when
+/// GitHub's rate limit stopped the round; nothing more should be asked before then.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrPoll {
+    pub prs: Vec<PolledPr>,
+    pub limited_until: Option<u64>,
+}
+
+/// GIT-027: the most a round looks up; the caller puts the visible workspace first.
+pub const POLL_MAX: usize = 60;
+
+/// GIT-027: looks up the pull requests of many workspaces with one `gh pr list` per GitHub project
+/// (checkouts under different remote forms share it), in the order the items come, a short `gap`
+/// apart. A rate-limit answer stops the round (the circuit breaker) and reads when it resets.
+// ponytail: each project's 100 most recent pull requests; a branch whose PR is older shows none.
+pub fn prs_poll(gh: &Path, items: &[PollItem], gap: std::time::Duration) -> PrPoll {
+    let config = ssh_config();
+    let mut groups: Vec<(String, Vec<&PollItem>)> = Vec::new();
+    let mut out = PrPoll::default();
+    for it in items.iter().take(POLL_MAX) {
+        let url = run(&["remote", "get-url", "origin"], Some(Path::new(&it.path))).ok();
+        match url.and_then(|u| github_repo(&u, &config)) {
+            Some(g) => match groups.iter_mut().find(|(k, _)| *k == g.key) {
+                Some((_, list)) => list.push(it),
+                None => groups.push((g.key, vec![it])),
+            },
+            None => out.prs.push(PolledPr { path: it.path.clone(), linked: it.linked.is_some(), pr: None, error: None }),
+        }
+    }
+    let mut stopped: Option<String> = None;
+    for (n, (_, list)) in groups.iter().enumerate() {
+        if n > 0 && stopped.is_none() {
+            std::thread::sleep(gap);
+        }
+        let answer = match &stopped {
+            Some(why) => Err(why.clone()),
+            None => gh_run(gh, Path::new(&list[0].path), &["pr", "list", "--state", "all", "--limit", "100", "--json", PR_FIELDS], None).map_err(|e| gh_words(&e)).and_then(|t| serde_json::from_str::<Vec<Pr>>(&t).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))),
+        };
+        if let Err(e) = &answer {
+            if stopped.is_none() && e.to_lowercase().contains("rate limit") {
+                stopped = Some(e.clone());
+                out.limited_until = gh_budget(gh).ok().and_then(|b| b.iter().find(|x| x.name == "REST").map(|x| x.reset));
+            }
+        }
+        for it in list {
+            let dir = Path::new(&it.path);
+            let found = answer.as_ref().map_err(String::clone).and_then(|prs| match &it.linked {
+                Some(url) => prs.iter().find(|p| p.url.eq_ignore_ascii_case(url.trim())).cloned().map(Some).ok_or_else(|| "The linked pull request is not among the project's latest".to_string()),
+                None => {
+                    let branch = run(&["rev-parse", "--abbrev-ref", "HEAD"], Some(dir)).unwrap_or_default();
+                    let mine: Vec<&Pr> = prs.iter().filter(|p| p.head.as_deref() == Some(branch.as_str())).collect();
+                    let pick = mine.iter().find(|p| p.state == "OPEN").or(mine.first()).map(|p| (*p).clone());
+                    let base = run(&["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], Some(dir)).ok().map(|b| b.trim_start_matches("origin/").to_string());
+                    let default = base.as_deref().map_or(branch == "main" || branch == "master", |b| b == branch);
+                    // GIT-025: a closed or merged pull request from the default branch stays hidden.
+                    Ok(pick.filter(|p| !(default && p.state != "OPEN")))
+                }
+            });
+            let (pr, error) = match found {
+                Ok(pr) => (pr, None),
+                Err(e) => (None, Some(e)),
+            };
+            out.prs.push(PolledPr { path: it.path.clone(), linked: it.linked.is_some(), pr, error });
+        }
+    }
+    out
+}
+
+#[tauri::command]
+pub async fn scm_prs_poll(app: tauri::AppHandle, items: Vec<PollItem>) -> Result<PrPoll, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let out = prs_poll(&gh_program()?, &items, std::time::Duration::from_millis(400));
+        // AUTO-004: each round is what pull-request-opened automations listen to.
+        crate::automations::on_poll(&app, &out.prs);
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// GIT-021: creates the branch's pull request against `base` on origin, pushing unpushed work
+/// first. An open one the branch already has is returned instead of a second being made. The
+/// head must still be checked out and ahead of the base, with no uncommitted tracked change.
+pub fn pr_create(gh: &Path, worktree: &Path, title: &str, body: &str, base: &str, draft: bool) -> Result<Pr, String> {
+    let st = status(worktree)?;
+    let branch = st.branch.clone().ok_or("No branch is checked out here; check out the head branch first")?;
+    let base = base.trim().trim_start_matches("origin/");
+    if base.is_empty() || base == branch {
+        return Err(format!("{branch} is the base branch; move to a feature branch first"));
+    }
+    if !st.staged.is_empty() || !st.changed.is_empty() || !st.conflicts.is_empty() {
+        return Err("Commit or stash the changes to tracked files first".into());
+    }
+    let remote_base = format!("refs/remotes/origin/{base}");
+    if run(&["rev-parse", "--verify", "-q", &remote_base], Some(worktree)).is_err() {
+        let local = run(&["rev-parse", "--verify", "-q", &format!("refs/heads/{base}")], Some(worktree)).is_ok();
+        return Err(if local { format!("{base} is only on this computer; publish it, then create the pull request") } else { format!("origin has no branch {base}; pick another base") });
+    }
+    // Counted again now, not taken from the panel's last refresh.
+    let ahead = run(&["rev-list", "--count", &format!("{remote_base}..HEAD")], Some(worktree)).ok().and_then(|n| n.parse::<u32>().ok()).unwrap_or(0);
+    if ahead == 0 {
+        return Err(format!("No commits ahead of {base}; there is nothing to review"));
+    }
+    if title.trim().is_empty() {
+        return Err("Write a title first".into());
+    }
+    match pr_find(gh, worktree, &branch)? {
+        Some(pr) if pr.state == "OPEN" => return Ok(pr),
+        Some(pr) if pr.state == "MERGED" => return Err(format!("Pull request #{} for {branch} is already merged", pr.number)),
+        _ => {}
+    }
+    let push: Vec<&str> = if st.upstream.is_none() { vec!["push", "--set-upstream", "origin", &branch] } else { vec!["push"] };
+    if st.upstream.is_none() || st.ahead > 0 {
+        let out = command(&push, Some(worktree)).envs(crate::git::NO_PROMPT).output().map_err(|e| format!("could not run git: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("Push failed, so no pull request was made: {}", plain(String::from_utf8_lossy(&out.stderr).trim())));
+        }
+    }
+    let mut args = vec!["pr", "create", "--title", title.trim(), "--body-file", "-", "--base", base, "--head", &branch];
+    if draft {
+        args.push("--draft");
+    }
+    let said = gh_run(gh, worktree, &args, Some(body)).map_err(|e| gh_words(&e))?;
+    let url = said.lines().rev().map(str::trim).find(|l| l.contains("/pull/")).ok_or_else(|| format!("gh did not say where the pull request is: {said}"))?;
+    let number = url.rsplit('/').next().and_then(|n| n.parse().ok()).ok_or_else(|| format!("gh gave a link without a number: {url}"))?;
+    crate::activity::pr_created(); // USAGE-011
+    Ok(Pr { number, url: url.to_string(), state: "OPEN".into(), title: Some(title.trim().to_string()), head: Some(branch.clone()), draft })
+}
+
+/// GIT-026: finds pull-request links in a terminal's output. The unfinished end of a chunk is
+/// carried into the next, so a link split across chunks is found once it is whole; each link
+/// is reported once per terminal.
+#[derive(Default)]
+pub struct PrScan {
+    carry: String,
+    seen: std::collections::HashSet<String>,
+}
+
+impl PrScan {
+    pub fn feed(&mut self, chunk: &[u8]) -> Vec<String> {
+        let text = std::mem::take(&mut self.carry) + &String::from_utf8_lossy(chunk);
+        let is_url = |c: char| c.is_ascii_alphanumeric() || "-._~/:%?#=&+@".contains(c);
+        let mut found = Vec::new();
+        let mut rest = text.as_str();
+        while let Some(at) = rest.find("https://") {
+            let tail = &rest[at..];
+            let end = tail.find(|c: char| !is_url(c));
+            let Some(end) = end else {
+                // The link runs to the end of the chunk: wait for the rest (a runaway is dropped).
+                if tail.len() < 400 {
+                    self.carry = tail.to_string();
+                }
+                return found;
+            };
+            if let Some(url) = pr_url_in(&tail[..end]) {
+                if self.seen.insert(url.clone()) {
+                    found.push(url);
+                }
+            }
+            rest = &tail[end..];
+        }
+        // A link may start in the last few characters ("htt" before "ps://").
+        let keep = rest.char_indices().rev().nth(6).map_or(0, |(i, _)| i);
+        self.carry = rest[keep..].to_string();
+        found
+    }
+}
+
+/// GIT-026: `https://host/owner/repo/pull/<number>`, with anything after the number dropped.
+fn pr_url_in(link: &str) -> Option<String> {
+    let parts: Vec<&str> = link.strip_prefix("https://")?.split('/').collect();
+    let number = parts.get(4).map(|n| n.split(['#', '?']).next().unwrap_or(""))?;
+    let ok = parts.len() >= 5 && parts[..3].iter().all(|p| !p.is_empty()) && parts[3] == "pull" && !number.is_empty() && number.chars().all(|c| c.is_ascii_digit());
+    ok.then(|| format!("https://{}/{}/{}/pull/{number}", parts[0], parts[1], parts[2]))
+}
+
+/// GIT-026: makes a printed link the workspace's linked pull request (the `scmLinkedPrs`
+/// setting a hand link uses); false when it already was. Only that one setting is written.
+/// ponytail: per top-level key; a hand link or unlink sent in the same moment still writes the
+/// whole `scmLinkedPrs` map, so one of the two would be lost. Patch inside the map if that bites.
+pub fn link_printed(store: &crate::state::Store, dir: &str, url: &str) -> bool {
+    let mut links = store.settings()["scmLinkedPrs"].clone();
+    if links[dir] == url {
+        return false;
+    }
+    if !links.is_object() {
+        links = serde_json::json!({});
+    }
+    links[dir] = url.into();
+    let mut set = serde_json::Map::new();
+    set.insert("scmLinkedPrs".into(), links);
+    store.patch_settings(&set, &[]).is_ok()
+}
+
+/// GIT-028: one of GitHub's API budgets as `gh api rate_limit` gives it; `reset` is in Unix seconds.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Budget {
+    pub name: String,
+    pub limit: u64,
+    pub remaining: u64,
+    pub reset: u64,
+}
+
+/// GIT-028: the REST, search and GraphQL budgets left. Reading them costs no budget.
+// ponytail: github.com's budget only; an Enterprise host would need its own --hostname read.
+pub fn gh_budget(gh: &Path) -> Result<Vec<Budget>, String> {
+    let text = gh_run(gh, &std::env::temp_dir(), &["api", "rate_limit"], None).map_err(|e| gh_words(&e))?;
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
+    let read = |key: &str, name: &str| {
+        let r = &v["resources"][key];
+        Some(Budget { name: name.into(), limit: r["limit"].as_u64()?, remaining: r["remaining"].as_u64()?, reset: r["reset"].as_u64()? })
+    };
+    Ok([("core", "REST"), ("search", "Search"), ("graphql", "GraphQL")].iter().filter_map(|(k, n)| read(k, n)).collect())
+}
+
+#[tauri::command]
+pub async fn scm_gh_budget() -> Result<Vec<Budget>, String> {
+    tauri::async_runtime::spawn_blocking(|| gh_budget(&gh_program()?)).await.map_err(|e| e.to_string())?
+}
+
+/// GIT-043: a label as GitHub draws it; `color` is six hex digits or empty.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TaskLabel {
+    pub name: String,
+    pub color: String,
+}
+
+/// GIT-043: one issue or pull request found by a Tasks search.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Task {
+    /// "issue" or "pr".
+    pub kind: String,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    /// owner/name.
+    pub repo: String,
+    /// open, closed or merged.
+    pub state: String,
+    pub draft: bool,
+    pub labels: Vec<TaskLabel>,
+    pub assignees: Vec<String>,
+    pub updated: String,
+    /// passing, failing, running or unresolved; None for an issue.
+    pub checks: Option<String>,
+}
+
+/// GIT-043: one page of a Tasks search. `total` adds up every search's matches; `deepest` is the
+/// largest single search, which sets how many pages there are.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TaskPage {
+    pub total: u64,
+    pub deepest: u64,
+    pub items: Vec<Task>,
+}
+
+pub const TASKS_PER_PAGE: u32 = 25;
+/// GitHub's search hands out only its first 1000 results.
+const SEARCH_WINDOW: u32 = 1000;
+
+/// GIT-043: the checks pill's word for a commit's rollup state.
+pub fn checks_word(state: Option<&str>) -> &'static str {
+    match state {
+        Some("SUCCESS") => "passing",
+        Some("FAILURE") | Some("ERROR") => "failing",
+        Some("PENDING") | Some("EXPECTED") => "running",
+        _ => "unresolved",
+    }
+}
+
+fn task_from(v: &serde_json::Value) -> Option<(Task, String)> {
+    let pr = v.get("pull_request").filter(|p| !p.is_null());
+    let state = if pr.is_some_and(|p| p["merged_at"].is_string()) { "merged" } else { v["state"].as_str()? };
+    let mut parts = v["repository_url"].as_str()?.rsplit('/');
+    let (name, owner) = (parts.next()?, parts.next()?);
+    let hex = |c: &str| if c.len() == 6 && c.chars().all(|x| x.is_ascii_hexdigit()) { c.to_string() } else { String::new() };
+    let labels = v["labels"].as_array().map(|a| a.iter().filter_map(|l| Some(TaskLabel { name: l["name"].as_str()?.into(), color: hex(l["color"].as_str().unwrap_or("")) })).collect()).unwrap_or_default();
+    let assignees = v["assignees"].as_array().map(|a| a.iter().filter_map(|u| u["login"].as_str().map(String::from)).collect()).unwrap_or_default();
+    let task = Task {
+        kind: if pr.is_some() { "pr" } else { "issue" }.into(),
+        number: v["number"].as_u64()?,
+        title: v["title"].as_str()?.into(),
+        url: v["html_url"].as_str()?.into(),
+        repo: format!("{owner}/{name}"),
+        state: state.to_lowercase(),
+        draft: v["draft"].as_bool().unwrap_or(false),
+        labels,
+        assignees,
+        updated: v["updated_at"].as_str().unwrap_or("").into(),
+        checks: None,
+    };
+    Some((task, v["node_id"].as_str().unwrap_or("").into()))
+}
+
+/// GIT-043: the checks rollup of each pull request, by node id, in one GraphQL call. A failed read
+/// leaves every pill unresolved rather than failing the list.
+fn checks_of(gh: &Path, host: &str, ids: &[String]) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let ok = |i: &String| !i.is_empty() && i.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '=');
+    let ids: Vec<&String> = ids.iter().filter(|i| ok(i)).collect();
+    if ids.is_empty() {
+        return out;
+    }
+    let list = ids.iter().map(|i| format!("\"{i}\"")).collect::<Vec<_>>().join(",");
+    let query = format!("query{{nodes(ids:[{list}]){{... on PullRequest{{id commits(last:1){{nodes{{commit{{statusCheckRollup{{state}}}}}}}}}}}}}}");
+    let Ok(text) = gh_run(gh, &std::env::temp_dir(), &["api", "graphql", "--hostname", host, "-f", &format!("query={query}")], None) else { return out };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return out };
+    for n in v["data"]["nodes"].as_array().into_iter().flatten() {
+        if let Some(id) = n["id"].as_str() {
+            out.insert(id.to_string(), checks_word(n["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"].as_str()).to_string());
+        }
+    }
+    out
+}
+
+/// GIT-043: one page of every search in `queries` on `host`, newest first, each item once.
+pub fn tasks_search(gh: &Path, host: &str, queries: &[String], page: u32) -> Result<TaskPage, String> {
+    host_ok(host)?;
+    if page == 0 || page * TASKS_PER_PAGE > SEARCH_WINDOW {
+        return Err(format!("GitHub search reaches only the first {SEARCH_WINDOW} results; this page cannot be reached"));
+    }
+    let mut out = TaskPage::default();
+    let mut ids = Vec::new();
+    for q in queries {
+        let (q, per, pg) = (format!("q={q}"), format!("per_page={TASKS_PER_PAGE}"), format!("page={page}"));
+        let args = ["api", "search/issues", "--hostname", host, "-X", "GET", "-f", &q, "-f", "sort=updated", "-f", "order=desc", "-f", &per, "-f", &pg];
+        let text = gh_run(gh, &std::env::temp_dir(), &args, None).map_err(|e| format!("{host}: {}", gh_words(&e)))?;
+        let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
+        let total = v["total_count"].as_u64().unwrap_or(0);
+        out.total += total;
+        out.deepest = out.deepest.max(total);
+        for (t, id) in v["items"].as_array().into_iter().flatten().filter_map(task_from) {
+            if out.items.iter().all(|x| x.url != t.url) {
+                if t.kind == "pr" {
+                    ids.push(id);
+                }
+                out.items.push(t);
+            }
+        }
+    }
+    let checks = checks_of(gh, host, &ids);
+    for (at, t) in out.items.iter_mut().filter(|t| t.kind == "pr").enumerate() {
+        t.checks = Some(checks.get(&ids[at]).cloned().unwrap_or_else(|| "unresolved".into()));
+    }
+    out.items.sort_by(|a, b| b.updated.cmp(&a.updated));
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn scm_tasks_search(host: String, queries: Vec<String>, page: u32) -> Result<TaskPage, String> {
+    tauri::async_runtime::spawn_blocking(move || tasks_search(&gh_program()?, &host, &queries, page)).await.map_err(|e| e.to_string())?
+}
+
+/// GIT-043: the account gh is signed in with on `host`, from gh's own config (no network).
+#[tauri::command]
+pub async fn scm_gh_account(host: String) -> Option<String> {
+    let out = std::process::Command::new(gh_program().ok()?).args(["config", "get", "-h", &host, "user"]).output().ok()?;
+    let login = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !login.is_empty()).then_some(login)
+}
+
+fn host_ok(host: &str) -> Result<(), String> {
+    if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == ':') {
+        return Err("This repository's GitHub host cannot be read".into());
+    }
+    Ok(())
+}
+
+/// GIT-050: one entry in an item's timeline. `detail` is the label, the person, the new title or the
+/// start of a comment, as the event has it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TaskEvent {
+    pub kind: String,
+    pub actor: String,
+    pub at: String,
+    pub detail: String,
+}
+
+/// GIT-050: what the preview dialog shows for one issue or pull request.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TaskDetail {
+    pub title: String,
+    pub body: String,
+    pub state: String,
+    pub labels: Vec<TaskLabel>,
+    pub assignees: Vec<String>,
+    pub updated: String,
+    pub events: Vec<TaskEvent>,
+}
+
+/// The API address of item `number` in `repo` (owner/name), refused unless both are plain names.
+fn item_path(host: &str, repo: &str, number: u64) -> Result<String, String> {
+    host_ok(host)?;
+    let plain = |p: &str| !p.is_empty() && p != "." && p != ".." && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.');
+    match repo.split_once('/') {
+        Some((o, n)) if plain(o) && plain(n) => Ok(format!("repos/{o}/{n}/issues/{number}")),
+        _ => Err("This item's repository cannot be read".into()),
+    }
+}
+
+fn label_list(v: &serde_json::Value) -> Vec<TaskLabel> {
+    let hex = |c: &str| if c.len() == 6 && c.chars().all(|x| x.is_ascii_hexdigit()) { c.to_string() } else { String::new() };
+    v.as_array().map(|a| a.iter().filter_map(|l| Some(TaskLabel { name: l["name"].as_str()?.into(), color: hex(l["color"].as_str().unwrap_or("")) })).collect()).unwrap_or_default()
+}
+
+fn gh_value(gh: &Path, host: &str, args: &[&str], input: Option<&str>) -> Result<serde_json::Value, String> {
+    let text = gh_run(gh, &std::env::temp_dir(), args, input).map_err(|e| format!("{host}: {}", gh_words(&e)))?;
+    serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))
+}
+
+fn detail_from(v: &serde_json::Value) -> TaskDetail {
+    let merged = v["pull_request"]["merged_at"].is_string() || v["merged_at"].is_string();
+    TaskDetail {
+        title: v["title"].as_str().unwrap_or("").into(),
+        body: v["body"].as_str().unwrap_or("").into(),
+        state: if merged { "merged".into() } else { v["state"].as_str().unwrap_or("").to_lowercase() },
+        labels: label_list(&v["labels"]),
+        assignees: v["assignees"].as_array().map(|a| a.iter().filter_map(|u| u["login"].as_str().map(String::from)).collect()).unwrap_or_default(),
+        updated: v["updated_at"].as_str().unwrap_or("").into(),
+        events: Vec::new(),
+    }
+}
+
+/// GIT-050: the item's body, labels and assignees, and its timeline (the first 100 events).
+// ponytail: one timeline page of 100; follow the Link header when long threads need more.
+pub fn task_detail(gh: &Path, host: &str, repo: &str, number: u64) -> Result<TaskDetail, String> {
+    let path = item_path(host, repo, number)?;
+    let mut d = detail_from(&gh_value(gh, host, &["api", &path, "--hostname", host], None)?);
+    let line = |v: &serde_json::Value| v.as_str().unwrap_or("").lines().next().unwrap_or("").chars().take(200).collect::<String>();
+    let timeline = gh_value(gh, host, &["api", &format!("{path}/timeline"), "--hostname", host, "-X", "GET", "-f", "per_page=100"], None)?;
+    for e in timeline.as_array().into_iter().flatten() {
+        let kind = e["event"].as_str().unwrap_or("");
+        if kind.is_empty() || matches!(kind, "subscribed" | "unsubscribed") {
+            continue;
+        }
+        let detail = match kind {
+            "labeled" | "unlabeled" => line(&e["label"]["name"]),
+            "assigned" | "unassigned" => line(&e["assignee"]["login"]),
+            "review_requested" | "review_request_removed" => line(&e["requested_reviewer"]["login"]),
+            "renamed" => format!("{} \u{2192} {}", line(&e["rename"]["from"]), line(&e["rename"]["to"])),
+            "commented" | "reviewed" => line(&e["body"]),
+            "committed" => line(&e["message"]),
+            "cross-referenced" => line(&e["source"]["issue"]["title"]),
+            "referenced" => e["commit_id"].as_str().unwrap_or("").chars().take(7).collect(),
+            _ => String::new(),
+        };
+        let actor = [&e["actor"]["login"], &e["user"]["login"], &e["author"]["name"]].into_iter().find_map(|a| a.as_str()).unwrap_or("").to_string();
+        let at = [&e["created_at"], &e["submitted_at"], &e["author"]["date"]].into_iter().find_map(|a| a.as_str()).unwrap_or("").to_string();
+        d.events.push(TaskEvent { kind: kind.into(), actor, at, detail });
+    }
+    Ok(d)
+}
+
+/// GIT-050: the labels `repo` offers (its first 100), for the dialog's label picker.
+pub fn repo_labels(gh: &Path, host: &str, repo: &str) -> Result<Vec<TaskLabel>, String> {
+    let path = item_path(host, repo, 0)?;
+    let base = path.trim_end_matches("/issues/0");
+    Ok(label_list(&gh_value(gh, host, &["api", &format!("{base}/labels"), "--hostname", host, "-X", "GET", "-f", "per_page=100"], None)?))
+}
+
+/// Percent-encodes everything but unreserved characters, for a name inside an API address.
+fn path_part(text: &str) -> String {
+    text.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+/// GIT-050: adds then removes labels on an item; answers with the labels it has afterwards.
+pub fn task_labels(gh: &Path, host: &str, repo: &str, number: u64, add: &[String], remove: &[String]) -> Result<Vec<TaskLabel>, String> {
+    let path = item_path(host, repo, number)?;
+    let mut now = None;
+    if !add.is_empty() {
+        let fields: Vec<String> = add.iter().map(|l| format!("labels[]={l}")).collect();
+        let mut args = vec!["api", "-X", "POST", "", "--hostname", host];
+        let at = format!("{path}/labels");
+        args[3] = &at;
+        for f in &fields {
+            args.extend(["-f", f.as_str()]);
+        }
+        now = Some(label_list(&gh_value(gh, host, &args, None)?));
+    }
+    for l in remove {
+        let at = format!("{path}/labels/{}", path_part(l));
+        now = Some(label_list(&gh_value(gh, host, &["api", "-X", "DELETE", &at, "--hostname", host], None)?));
+    }
+    match now {
+        Some(l) => Ok(l),
+        None => Ok(detail_from(&gh_value(gh, host, &["api", &path, "--hostname", host], None)?).labels),
+    }
+}
+
+/// GIT-050: saves an item's description; answers with the item as GitHub now has it.
+pub fn task_body(gh: &Path, host: &str, repo: &str, number: u64, body: &str) -> Result<TaskDetail, String> {
+    let path = item_path(host, repo, number)?;
+    let input = serde_json::json!({ "body": body }).to_string();
+    Ok(detail_from(&gh_value(gh, host, &["api", "-X", "PATCH", &path, "--hostname", host, "--input", "-"], Some(&input))?))
+}
+
+#[tauri::command]
+pub async fn scm_task_detail(host: String, repo: String, number: u64) -> Result<TaskDetail, String> {
+    tauri::async_runtime::spawn_blocking(move || task_detail(&gh_program()?, &host, &repo, number)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn scm_repo_labels(host: String, repo: String) -> Result<Vec<TaskLabel>, String> {
+    tauri::async_runtime::spawn_blocking(move || repo_labels(&gh_program()?, &host, &repo)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn scm_task_labels(host: String, repo: String, number: u64, add: Vec<String>, remove: Vec<String>) -> Result<Vec<TaskLabel>, String> {
+    tauri::async_runtime::spawn_blocking(move || task_labels(&gh_program()?, &host, &repo, number, &add, &remove)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn scm_task_body(host: String, repo: String, number: u64, body: String) -> Result<TaskDetail, String> {
+    tauri::async_runtime::spawn_blocking(move || task_body(&gh_program()?, &host, &repo, number, &body)).await.map_err(|e| e.to_string())?
+}
+
+/// GIT-033: what the merge box needs, read in one GraphQL call when the box is opened.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeInfo {
+    pub state: String,
+    pub draft: bool,
+    /// MERGEABLE, CONFLICTING or UNKNOWN (GitHub is still working it out).
+    pub mergeable: String,
+    /// GitHub's mergeStateStatus: CLEAN, BLOCKED, BEHIND, DIRTY, DRAFT, UNSTABLE, HAS_HOOKS or UNKNOWN.
+    pub merge_state: String,
+    pub review: Option<String>,
+    /// The last commit's combined check state: SUCCESS, PENDING, EXPECTED, FAILURE or ERROR.
+    pub checks: Option<String>,
+    pub in_queue: bool,
+    pub queue_enabled: bool,
+    /// The method auto-merge will use, when it is on.
+    pub auto_merge: Option<String>,
+    /// The merge methods the repository permits, of merge, squash and rebase.
+    pub methods: Vec<String>,
+    pub auto_allowed: bool,
+}
+
+const MERGE_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed autoMergeAllowed pullRequest(number:$number){state isDraft mergeable mergeStateStatus reviewDecision isInMergeQueue isMergeQueueEnabled autoMergeRequest{mergeMethod} commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}";
+
+/// `host`, `owner`, `repo` and the number of a pull request link.
+fn pr_parts(url: &str) -> Option<(String, String, String, u64)> {
+    let clean = pr_url_in(url.trim())?;
+    let parts: Vec<&str> = clean.strip_prefix("https://")?.split('/').collect();
+    Some((parts[0].into(), parts[1].into(), parts[2].into(), parts[4].parse().ok()?))
+}
+
+pub fn merge_info(gh: &Path, worktree: &Path, url: &str) -> Result<MergeInfo, String> {
+    let (host, owner, name, number) = pr_parts(url).ok_or("That is not a pull request link")?;
+    let (q, o, n, k) = (format!("query={MERGE_QUERY}"), format!("owner={owner}"), format!("name={name}"), format!("number={number}"));
+    let text = gh_run(gh, worktree, &["api", "graphql", "--hostname", &host, "-f", &q, "-F", &o, "-F", &n, "-F", &k], None).map_err(|e| gh_words(&e))?;
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
+    let repo = &v["data"]["repository"];
+    let pr = &repo["pullRequest"];
+    if !pr.is_object() {
+        return Err(format!("GitHub has no pull request #{number} in {owner}/{name}"));
+    }
+    let word = |x: &serde_json::Value| x.as_str().map(str::to_string);
+    let methods = [("mergeCommitAllowed", "merge"), ("squashMergeAllowed", "squash"), ("rebaseMergeAllowed", "rebase")];
+    Ok(MergeInfo {
+        state: word(&pr["state"]).unwrap_or_default(),
+        draft: pr["isDraft"].as_bool().unwrap_or(false),
+        mergeable: word(&pr["mergeable"]).unwrap_or_else(|| "UNKNOWN".into()),
+        merge_state: word(&pr["mergeStateStatus"]).unwrap_or_else(|| "UNKNOWN".into()),
+        review: word(&pr["reviewDecision"]),
+        checks: word(&pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"]),
+        in_queue: pr["isInMergeQueue"].as_bool().unwrap_or(false),
+        queue_enabled: pr["isMergeQueueEnabled"].as_bool().unwrap_or(false),
+        auto_merge: word(&pr["autoMergeRequest"]["mergeMethod"]).map(|m| if m == "MERGE" { "merge".into() } else { m.to_lowercase() }),
+        methods: methods.iter().filter(|(f, _)| repo[*f].as_bool().unwrap_or(false)).map(|(_, m)| m.to_string()).collect(),
+        auto_allowed: repo["autoMergeAllowed"].as_bool().unwrap_or(false),
+    })
+}
+
+/// GIT-033: one merge-box action through gh. `queue` merges with no method, which gh turns
+/// into joining the base branch's merge queue.
+pub fn merge_act(gh: &Path, worktree: &Path, url: &str, action: &str, method: Option<&str>) -> Result<String, String> {
+    pr_parts(url).ok_or("That is not a pull request link")?;
+    let url = url.trim();
+    let flag = match method {
+        None => None,
+        Some(m @ ("merge" | "squash" | "rebase")) => Some(format!("--{m}")),
+        Some(m) => return Err(format!("{m} is not a merge method")),
+    };
+    let need = || flag.as_deref().ok_or("Pick a merge method first");
+    let args: Vec<&str> = match action {
+        "merge" => vec!["pr", "merge", url, need()?],
+        "auto" => vec!["pr", "merge", url, "--auto", need()?],
+        "disable-auto" => vec!["pr", "merge", url, "--disable-auto"],
+        "queue" => vec!["pr", "merge", url],
+        "ready" | "close" | "reopen" => vec!["pr", action, url],
+        other => return Err(format!("{other} is not a pull request action")),
+    };
+    gh_run(gh, worktree, &args, None).map_err(|e| gh_words(&e))
+}
+
+#[tauri::command]
+pub async fn scm_merge_info(worktree: String, url: String) -> Result<MergeInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || merge_info(&gh_program()?, Path::new(&worktree), &url)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn scm_merge(worktree: String, url: String, action: String, method: Option<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || merge_act(&gh_program()?, Path::new(&worktree), &url, &action, method.as_deref())).await.map_err(|e| e.to_string())?
+}
+
+/// Only an https link to a pull request, with nothing a shell could read as an option.
+fn safe_pr_url(url: &str) -> bool {
+    url.starts_with("https://") && url.contains("/pull/") && !url.chars().any(|c| c.is_whitespace() || c == '"')
+}
+
+#[tauri::command]
+pub async fn scm_pr(worktree: String, linked: Option<String>) -> Result<Option<Pr>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = Path::new(&worktree);
+        if let Some(url) = linked {
+            return pr_link(&gh_program()?, dir, &url).map(Some);
+        }
+        let branch = status(dir)?.branch.ok_or("No branch is checked out here")?;
+        pr_find(&gh_program()?, dir, &branch)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// VIEW-073: the Checks panel's lookup, for the worktree's branch or its hand-linked pull request.
+#[tauri::command]
+pub async fn scm_pr_checks(worktree: String, linked: Option<String>) -> Result<PrChecks, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = Path::new(&worktree);
+        let target = match linked {
+            Some(url) if safe_pr_url(url.trim()) => url.trim().to_string(),
+            Some(_) => return Err("The linked pull request is not a pull request link".into()),
+            None => status(dir)?.branch.ok_or("No branch is checked out here")?,
+        };
+        pr_checks(&gh_program()?, dir, &target)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn scm_pr_create(worktree: String, title: String, body: String, base: String, draft: bool) -> Result<Pr, String> {
+    tauri::async_runtime::spawn_blocking(move || pr_create(&gh_program()?, Path::new(&worktree), &title, &body, &base, draft)).await.map_err(|e| e.to_string())?
+}
+
+/// Opens a pull request in the browser.
+#[tauri::command]
+pub async fn scm_open_pr(url: String) -> Result<(), String> {
+    if !safe_pr_url(&url) {
+        return Err("That is not a pull request link".into());
+    }
+    #[cfg(windows)]
+    let opener = "explorer.exe";
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let opener = "xdg-open";
+    std::process::Command::new(opener).arg(url).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// GIT-035: one ref drawn on a commit; `kind` is current, head (detached), branch, upstream,
+/// base, remote or tag.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Label {
+    pub name: String,
+    pub kind: &'static str,
+}
+
+/// GIT-035: one commit of the history; `outgoing` is here and not on the upstream, `incoming`
+/// the other way round.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Commit {
+    pub hash: String,
+    pub short: String,
+    pub parents: Vec<String>,
+    pub author: String,
+    pub time: i64,
+    pub subject: String,
+    pub message: String,
+    pub labels: Vec<Label>,
+    pub outgoing: bool,
+    pub incoming: bool,
+}
+
+/// The refs `git log --decorate=full` printed for one commit, sorted into kinds. A remote label
+/// beside a local branch of the same name is left out, and so is a remote's HEAD.
+fn labels(decor: &str, upstream: Option<&str>, base: Option<&str>) -> Vec<Label> {
+    let mut out = Vec::new();
+    for part in decor.split(", ").map(str::trim).filter(|p| !p.is_empty()) {
+        let (name, kind) = if let Some(b) = part.strip_prefix("HEAD -> refs/heads/") {
+            (b, "current")
+        } else if part == "HEAD" {
+            ("HEAD", "head")
+        } else if let Some(t) = part.strip_prefix("tag: refs/tags/") {
+            (t, "tag")
+        } else if let Some(b) = part.strip_prefix("refs/heads/") {
+            (b, "branch")
+        } else if let Some(r) = part.strip_prefix("refs/remotes/") {
+            if r.ends_with("/HEAD") {
+                continue;
+            }
+            (r, "remote")
+        } else {
+            continue;
+        };
+        let kind = if kind == "remote" && Some(name) == upstream {
+            "upstream"
+        } else if (kind == "remote" && Some(name) == base) || (kind == "branch" && base.and_then(|b| b.split_once('/')).map(|(_, b)| b) == Some(name)) {
+            "base"
+        } else {
+            kind
+        };
+        out.push(Label { name: name.to_string(), kind });
+    }
+    let locals: Vec<String> = out.iter().filter(|l| l.kind == "current" || l.kind == "branch" || (l.kind == "base" && !l.name.contains('/'))).map(|l| l.name.clone()).collect();
+    out.retain(|l| !(matches!(l.kind, "remote" | "upstream" | "base") && l.name.split_once('/').is_some_and(|(_, rest)| locals.iter().any(|n| n == rest))));
+    out
+}
+
+/// GIT-035: the newest `limit` commits of HEAD and its upstream in topological order, so commits
+/// the upstream gained later sit apart at the top instead of inside older history. Empty for a
+/// repository with no commits.
+pub fn history(worktree: &Path, limit: usize) -> Result<Vec<Commit>, String> {
+    if run(&["rev-parse", "--verify", "-q", "HEAD"], Some(worktree)).is_err() {
+        return Ok(Vec::new());
+    }
+    let st = status(worktree)?;
+    let count = format!("-n{limit}");
+    let mut args = vec!["log", "--topo-order", count.as_str(), "--decorate=full", "--format=%H%x1f%h%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1f%B%x1e", "HEAD"];
+    if st.upstream.is_some() {
+        args.push("@{upstream}");
+    }
+    let text = run(&args, Some(worktree))?;
+    let set = |range: &str| run(&["rev-list", range], Some(worktree)).map(|t| t.lines().map(str::to_string).collect::<std::collections::HashSet<_>>()).unwrap_or_default();
+    let (outgoing, incoming) = if st.upstream.is_some() { (set("@{upstream}..HEAD"), set("HEAD..@{upstream}")) } else { Default::default() };
+    Ok(text
+        .split('\x1e')
+        .map(|r| r.trim_start_matches(['\n', '\r']))
+        .filter(|r| !r.is_empty())
+        .filter_map(|r| {
+            let f: Vec<&str> = r.splitn(8, '\x1f').collect();
+            (f.len() == 8).then(|| Commit {
+                hash: f[0].to_string(),
+                short: f[1].to_string(),
+                parents: f[2].split_whitespace().map(str::to_string).collect(),
+                author: f[3].to_string(),
+                time: f[4].parse().unwrap_or(0),
+                labels: labels(f[5], st.upstream.as_deref(), st.base.as_deref()),
+                subject: f[6].to_string(),
+                message: f[7].trim_end().to_string(),
+                outgoing: outgoing.contains(f[0]),
+                incoming: incoming.contains(f[0]),
+            })
+        })
+        .collect())
+}
+
+/// GIT-035: the files one commit changed (against its first parent; a root commit adds all).
+pub fn commit_files(worktree: &Path, hash: &str) -> Result<Vec<Change>, String> {
+    if hash.is_empty() || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("That is not a commit id".into());
+    }
+    Ok(name_status(&run(&["diff-tree", "--no-commit-id", "-r", "--root", "-M", "--name-status", "-z", hash], Some(worktree))?))
+}
+
+/// `--name-status -z` output as changes; a rename or copy carries the name it came from.
+fn name_status(text: &str) -> Vec<Change> {
+    let mut parts = text.split('\0').filter(|p| !p.is_empty());
+    let mut out = Vec::new();
+    while let Some(code) = parts.next() {
+        let letter = code.chars().next().unwrap_or('M').to_string();
+        if letter == "R" || letter == "C" {
+            let from = parts.next().unwrap_or_default().to_string();
+            let path = parts.next().unwrap_or_default().to_string();
+            out.push(Change { path, status: letter, from: Some(from) });
+        } else if let Some(path) = parts.next() {
+            out.push(Change { path: path.to_string(), status: letter, from: None });
+        }
+    }
+    out
+}
+
+#[tauri::command]
+pub async fn scm_history(worktree: String) -> Result<Vec<Commit>, String> {
+    tauri::async_runtime::spawn_blocking(move || history(Path::new(&worktree), 200)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn scm_commit_files(worktree: String, hash: String) -> Result<Vec<Change>, String> {
+    commit_files(Path::new(&worktree), &hash)
 }
 
 /// VIEW-066: where a push goes: the remote git pushes this branch to, and the repository its push
@@ -313,7 +1896,7 @@ pub fn parse_status(text: &str) -> Status {
                 let from = if kind == "2" { items.next() } else { None };
                 let (x, y) = (xy.chars().next().unwrap_or('.'), xy.chars().nth(1).unwrap_or('.'));
                 if kind == "u" {
-                    st.conflicts.push(change(path, 'X', None));
+                    st.conflicts.push(Change { path: path.to_string(), status: xy.to_string(), from: None });
                     continue;
                 }
                 if x != '.' {
@@ -351,6 +1934,11 @@ fn check_paths(paths: &[String]) -> Result<(), String> {
 pub fn stage(worktree: &Path, paths: &[String], on: bool) -> Result<(), String> {
     check_paths(paths)?;
     let args: &[&str] = if on { &["--literal-pathspecs", "add", "--pathspec-from-file=-", "--pathspec-file-nul"] } else { &["--literal-pathspecs", "restore", "--staged", "--pathspec-from-file=-", "--pathspec-file-nul"] };
+    piped(worktree, args, paths)
+}
+
+/// Runs git with the paths on its standard input, NUL separated; git's own words when it fails.
+fn piped(worktree: &Path, args: &[&str], paths: &[String]) -> Result<(), String> {
     let mut child = command(args, Some(worktree)).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().map_err(|e| format!("could not run git: {e}"))?;
     let input = paths.iter().map(|p| format!("{p}\0")).collect::<String>();
     child.stdin.take().ok_or("git has no input")?.write_all(input.as_bytes()).map_err(|e| e.to_string())?;
@@ -359,6 +1947,93 @@ pub fn stage(worktree: &Path, paths: &[String], on: bool) -> Result<(), String> 
         Ok(())
     } else {
         Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+/// GIT-003: throws away the uncommitted work on `paths`. A new file (untracked, or only staged)
+/// is removed for good, a deleted file comes back from the last commit, a modified or renamed
+/// file is put back as the last commit had it; staged work is unstaged first. A link is only ever
+/// removed or rewritten as a link: what it points at is never followed, so nothing outside the
+/// repository is touched. An untracked folder (`box/`) goes with everything in it.
+pub fn discard_paths(worktree: &Path, paths: &[String]) -> Result<(), String> {
+    check_paths(paths)?;
+    let st = status(worktree)?;
+    let (mut staged, mut tracked, mut remove) = (Vec::new(), Vec::new(), Vec::new());
+    for p in paths {
+        let p = p.trim_end_matches('/');
+        let index = st.staged.iter().find(|c| c.path == p);
+        if let Some(c) = index {
+            staged.push(c.path.clone());
+            if let Some(from) = &c.from {
+                staged.push(from.clone());
+                tracked.push(from.clone());
+            }
+        }
+        if st.untracked.iter().any(|c| c.path.trim_end_matches('/') == p) || index.is_some_and(|c| c.status == "A" || c.from.is_some()) {
+            remove.push(p.to_string());
+        } else {
+            tracked.push(p.to_string());
+        }
+    }
+    if !staged.is_empty() {
+        with_paths(worktree, &["reset", "-q"], &staged)?;
+    }
+    for p in &tracked {
+        // A link is removed before git rewrites it, so git never writes through it.
+        let full = worktree.join(native(p));
+        if fs::symlink_metadata(&full).is_ok_and(|m| m.is_symlink()) {
+            fs::remove_file(&full).or_else(|_| fs::remove_dir(&full)).map_err(|e| format!("{p}: {e}"))?;
+        }
+    }
+    if !tracked.is_empty() {
+        with_paths(worktree, &["checkout", "-q", "HEAD"], &tracked)?;
+    }
+    for p in &remove {
+        let full = worktree.join(native(p));
+        let Ok(meta) = fs::symlink_metadata(&full) else { continue };
+        let done = if meta.is_dir() { fs::remove_dir_all(&full) } else { fs::remove_file(&full).or_else(|_| fs::remove_dir(&full)) };
+        done.map_err(|e| format!("{p}: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Runs `git <args>` over `paths` handed on stdin, NUL-separated and literal, so no name is
+/// read as a pattern.
+fn with_paths(worktree: &Path, args: &[&str], paths: &[String]) -> Result<(), String> {
+    let mut all = vec!["--literal-pathspecs"];
+    all.extend_from_slice(args);
+    all.extend_from_slice(&["--pathspec-from-file=-", "--pathspec-file-nul"]);
+    let mut child = command(&all, Some(worktree)).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().map_err(|e| format!("could not run git: {e}"))?;
+    let input = paths.iter().map(|p| format!("{p}\0")).collect::<String>();
+    child.stdin.take().ok_or("git has no input")?.write_all(input.as_bytes()).map_err(|e| e.to_string())?;
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+/// VIEW-067: throws away the changes in one section of the panel. Staged rows go back to the last
+/// commit in the index and on disk (so a staged new file is deleted), changed rows go back to what
+/// is staged, untracked rows are deleted. git clean only ever removes untracked files, so a tracked
+/// name sent as untracked is left alone.
+pub fn discard(worktree: &Path, section: &str, paths: &[String]) -> Result<(), String> {
+    check_paths(paths)?;
+    match section {
+        "staged" => piped(worktree, &["--literal-pathspecs", "restore", "--source=HEAD", "--staged", "--worktree", "--pathspec-from-file=-", "--pathspec-file-nul"], paths),
+        "changed" => piped(worktree, &["--literal-pathspecs", "restore", "--worktree", "--pathspec-from-file=-", "--pathspec-file-nul"], paths),
+        "untracked" => {
+            // ponytail: git clean reads no list from its input, so the names go on the command line
+            // in chunks that stay well under the Windows command-line limit.
+            for chunk in paths.chunks(100) {
+                let mut args = vec!["--literal-pathspecs", "clean", "-f", "-d", "-q", "--"];
+                args.extend(chunk.iter().map(String::as_str));
+                run(&args, Some(worktree))?;
+            }
+            Ok(())
+        }
+        _ => Err(format!("the {section} section cannot be discarded")),
     }
 }
 
@@ -387,39 +2062,78 @@ fn has_commit_hook(worktree: &Path) -> bool {
 }
 
 #[tauri::command]
-pub fn scm_status(worktree: String) -> Result<Status, String> {
+pub async fn scm_status(worktree: String) -> Result<Status, String> {
     status(Path::new(&worktree))
 }
 
+/// GIT-001 (T-033-b): starts or joins the watch of the worktree holding `path`; its status arrives
+/// as the `scm-status-<id>` event, the same shape `scm_status` returns.
 #[tauri::command]
-pub fn scm_summary(worktree: String, pinned: Option<String>, upstream: bool) -> Result<Summary, String> {
+pub async fn scm_watch(app: tauri::AppHandle, path: String) -> Result<watch::WatchStart, String> {
+    use tauri::{Emitter, Manager};
+    let dir = app.path().app_data_dir().ok();
+    let sink = move |id: u64| {
+        let (app, event) = (app.clone(), format!("scm-status-{id}"));
+        std::sync::Arc::new(move |st: &Status| drop(app.emit(&event, st))) as std::sync::Arc<dyn Fn(&Status) + Send + Sync>
+    };
+    let log = std::sync::Arc::new(move |line: &str| {
+        if let Some(d) = &dir {
+            crate::diag::write(d, line);
+        }
+    });
+    watch::watch(Path::new(&path), sink, log)
+}
+
+#[tauri::command]
+pub async fn scm_unwatch(id: u64) {
+    watch::unwatch(id);
+}
+
+#[tauri::command]
+pub async fn scm_summary(worktree: String, pinned: Option<String>, upstream: bool) -> Result<Summary, String> {
     summary(Path::new(&worktree), pinned.as_deref(), upstream)
 }
 
 #[tauri::command]
-pub fn scm_stage(worktree: String, paths: Vec<String>, on: bool) -> Result<(), String> {
-    stage(Path::new(&worktree), &paths, on)
+pub async fn scm_abort(worktree: String) -> Result<(), String> {
+    abort(Path::new(&worktree))
 }
 
 #[tauri::command]
-pub fn scm_commit(worktree: String, message: String) -> Result<CommitOutcome, String> {
+/// ACCT-055: stage and discard only in a project or worktree (fence.rs).
+pub async fn scm_stage(worktree: String, paths: Vec<String>, on: bool, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
+    stage(&fence.allow(&worktree, &store, &git, false)?, &paths, on)
+}
+
+#[tauri::command]
+/// VIEW-067 discards one section; GIT-003 rows picked across sections come without one.
+/// ACCT-055: only inside a project or worktree (fence.rs).
+pub async fn scm_discard(worktree: String, section: Option<String>, paths: Vec<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
+    let root = fence.allow(&worktree, &store, &git, false)?;
+    match section {
+        Some(section) => discard(&root, &section, &paths),
+        None => discard_paths(&root, &paths),
+    }
+}
+
+#[tauri::command]
+pub async fn scm_commit(worktree: String, message: String) -> Result<CommitOutcome, String> {
     commit(Path::new(&worktree), &message)
 }
 
 #[tauri::command]
-pub fn scm_push_target(worktree: String) -> Result<Option<PushTarget>, String> {
+pub async fn scm_push_target(worktree: String) -> Result<Option<PushTarget>, String> {
     push_target(Path::new(&worktree))
 }
 
 #[tauri::command]
-pub fn scm_remote(worktree: String, action: String) -> Result<ActionOutcome, String> {
+pub async fn scm_remote(worktree: String, action: String) -> Result<ActionOutcome, String> {
     remote(Path::new(&worktree), &action)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use std::path::PathBuf;
 
     fn temp_repo(name: &str) -> PathBuf {
@@ -436,6 +2150,26 @@ mod tests {
         dir
     }
 
+    #[test]
+    fn git001_each_change_carries_its_added_and_removed_lines_and_a_binary_file_none() {
+        let dir = temp_repo("lines");
+        commit_file(&dir, "a.txt", "one\ntwo\nthree\n");
+        commit_file(&dir, "old name.txt", "keep\nthis\n");
+        fs::write(dir.join("a.txt"), "one\n2\nthree\nfour\n").unwrap();
+        fs::write(dir.join("b.txt"), "x\n").unwrap();
+        run(&["add", "b.txt"], Some(&dir)).unwrap();
+        run(&["mv", "old name.txt", "new ü.txt"], Some(&dir)).unwrap();
+        fs::write(dir.join("new.txt"), "1\n2\n3").unwrap();
+        fs::write(dir.join("pic.bin"), [0u8, 1, 2, 10, 0]).unwrap();
+        let st = status(&dir).unwrap();
+        assert_eq!(st.lines.changed.get("a.txt"), Some(&[2, 1]));
+        assert_eq!(st.lines.staged.get("b.txt"), Some(&[1, 0]));
+        assert_eq!(st.lines.staged.get("new ü.txt"), Some(&[0, 0]), "a rename counts at its new path");
+        assert_eq!(st.lines.untracked.get("new.txt"), Some(&[3, 0]), "the last line counts without its newline");
+        assert_eq!(st.lines.untracked.get("pic.bin"), None, "a binary file carries no counts");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     fn paths(list: &[Change]) -> Vec<&str> {
         list.iter().map(|c| c.path.as_str()).collect()
     }
@@ -449,6 +2183,370 @@ mod tests {
     fn counts(dir: &Path) -> (Option<String>, u32, u32, bool) {
         let st = status(dir).unwrap();
         (st.upstream, st.ahead, st.behind, st.rewritten)
+    }
+
+    /// A stand-in for gh: `pr view` finds nothing until `pr create` has run, every call is noted
+    /// in calls.txt and the description read from standard input lands in body.txt.
+    #[test]
+    fn a_gh_call_that_hangs_gives_up_after_its_time_limit() {
+        let tools = std::env::temp_dir().join(format!("kolux-gh-hang-{}", std::process::id()));
+        fs::create_dir_all(&tools).unwrap();
+        let gh = if cfg!(windows) {
+            let f = tools.join("gh.cmd");
+            fs::write(&f, "@echo off\r\nping -n 30 127.0.0.1 >nul\r\necho late\r\n").unwrap();
+            f
+        } else {
+            let f = tools.join("gh");
+            fs::write(&f, "#!/bin/sh\nsleep 30\necho late\n").unwrap();
+            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let started = std::time::Instant::now();
+        let err = gh_run_for(&gh, &tools, &["pr", "view"], None, std::time::Duration::from_secs(1)).unwrap_err();
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "took {:?}", started.elapsed());
+        assert!(err.contains("did not answer within 1 second"), "{err}");
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    #[test]
+    fn checks_read_every_kind_and_a_finished_check_without_an_outcome_is_unresolved() {
+        // VIEW-073: gh's statusCheckRollup mixes check runs (status + conclusion) and commit
+        // statuses (state); each reads as one word, and COMPLETED with no conclusion is unresolved.
+        let text = r#"{"number":12,"url":"https://github.com/o/r/pull/12","state":"OPEN","title":"Helper work","headRefName":"helper","isDraft":false,"mergeable":"CONFLICTING","statusCheckRollup":[
+            {"__typename":"CheckRun","name":"build","workflowName":"CI","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://github.com/o/r/runs/1","startedAt":"2026-10-13T10:00:00Z","completedAt":"2026-10-13T10:04:00Z"},
+            {"__typename":"CheckRun","name":"test","workflowName":"CI","status":"IN_PROGRESS","conclusion":"","detailsUrl":"https://github.com/o/r/runs/2","startedAt":"2026-10-13T10:00:00Z","completedAt":"0001-01-01T00:00:00Z"},
+            {"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"","startedAt":"2026-10-13T10:00:00Z","completedAt":"2026-10-13T10:01:00Z"},
+            {"__typename":"CheckRun","name":"docs","status":"COMPLETED","conclusion":"SKIPPED"},
+            {"__typename":"CheckRun","name":"deploy","status":"COMPLETED","conclusion":"CANCELLED"},
+            {"__typename":"StatusContext","context":"ci/legacy","state":"FAILURE","targetUrl":"https://ci.example/9","description":"2 tests failed","startedAt":"2026-10-13T10:02:00Z"}
+        ]}"#;
+        let got = checks_from(text).unwrap();
+        let pr = got.pr.as_ref().unwrap();
+        assert_eq!((pr.number, pr.title.as_deref()), (12, Some("Helper work")));
+        assert!(got.conflict, "CONFLICTING is a merge conflict notice");
+        let words: Vec<(&str, &str)> = got.checks.iter().map(|c| (c.name.as_str(), c.outcome.as_str())).collect();
+        assert_eq!(words, [("build", "passed"), ("test", "running"), ("lint", "unresolved"), ("docs", "skipped"), ("deploy", "cancelled"), ("ci/legacy", "failed")]);
+        assert_eq!(got.checks[0].workflow.as_deref(), Some("CI"));
+        assert_eq!(got.checks[0].link.as_deref(), Some("https://github.com/o/r/runs/1"));
+        assert_eq!(got.checks[1].finished, None, "gh's zero time for a running check is no finish time");
+        assert_eq!(got.checks[5].description.as_deref(), Some("2 tests failed"));
+        assert_eq!(got.checks[5].link.as_deref(), Some("https://ci.example/9"));
+
+        // A PR without checks, or mergeable, reads as none and no conflict.
+        let bare = checks_from(r#"{"number":3,"url":"https://github.com/o/r/pull/3","state":"OPEN","mergeable":"MERGEABLE","statusCheckRollup":[]}"#).unwrap();
+        assert!(!bare.conflict && bare.checks.is_empty());
+    }
+
+    #[test]
+    fn a_branch_without_a_pull_request_has_no_checks_rather_than_an_error() {
+        // VIEW-073: gh's "no pull requests found" is the plain no-review answer.
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-checks-gh-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        let gh = stand_in_gh(&tools);
+        let got = pr_checks(&gh, &tools, "feat").unwrap();
+        assert!(got.pr.is_none() && got.checks.is_empty() && !got.conflict);
+        assert!(fs::read_to_string(tools.join("calls.txt")).unwrap().contains("statusCheckRollup"));
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    fn stand_in_gh(dir: &Path) -> PathBuf {
+        fs::create_dir_all(dir).unwrap();
+        if cfg!(windows) {
+            let file = dir.join("gh.cmd");
+            let script = [
+                "@echo off",
+                "echo %*>>\"%~dp0calls.txt\"",
+                "if \"%2\"==\"create\" goto create",
+                "echo %3| findstr /b \"https\" >nul && goto linked",
+                "if exist \"%~dp0made\" (",
+                "  echo {\"number\":7,\"url\":\"https://github.com/o/r/pull/7\",\"state\":\"OPEN\"}",
+                "  exit /b 0",
+                ")",
+                "echo no pull requests found for branch \"feat\" 1>&2",
+                "exit /b 1",
+                ":linked",
+                "echo {\"number\":12,\"url\":\"https://github.com/o/r/pull/12\",\"state\":\"MERGED\",\"title\":\"Other work\",\"headRefName\":\"other\",\"isDraft\":false}",
+                "exit /b 0",
+                ":create",
+                "more > \"%~dp0body.txt\"",
+                "type nul > \"%~dp0made\"",
+                "echo https://github.com/o/r/pull/7",
+            ];
+            fs::write(&file, script.join("\r\n")).unwrap();
+            file
+        } else {
+            let file = dir.join("gh");
+            let script = "#!/bin/sh\nd=$(dirname \"$0\")\necho \"$*\" >> \"$d/calls.txt\"\ncase \"$3\" in https*) echo '{\"number\":12,\"url\":\"https://github.com/o/r/pull/12\",\"state\":\"MERGED\",\"title\":\"Other work\",\"headRefName\":\"other\",\"isDraft\":false}'; exit 0;; esac\nif [ \"$2\" = create ]; then cat > \"$d/body.txt\"; touch \"$d/made\"; echo https://github.com/o/r/pull/7; exit 0; fi\nif [ -f \"$d/made\" ]; then echo '{\"number\":7,\"url\":\"https://github.com/o/r/pull/7\",\"state\":\"OPEN\"}'; exit 0; fi\necho 'no pull requests found for branch \"feat\"' >&2\nexit 1\n";
+            fs::write(&file, script).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            file
+        }
+    }
+
+    #[test]
+    fn a_pull_request_is_made_once_after_the_branch_is_pushed_and_states_that_cannot_have_one_are_refused() {
+        let bare = std::env::temp_dir().join(format!("kolux-rs-scm-pr-bare-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&bare);
+        fs::create_dir_all(&bare).unwrap();
+        run(&["init", "-q", "--bare", "-b", "main"], Some(&bare)).unwrap();
+        let dir = temp_repo("pr");
+        run(&["remote", "add", "origin", &bare.to_string_lossy().replace('\\', "/")], Some(&dir)).unwrap();
+        run(&["push", "-q", "-u", "origin", "main"], Some(&dir)).unwrap();
+        run(&["remote", "set-head", "origin", "main"], Some(&dir)).unwrap();
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-pr-gh-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        let gh = stand_in_gh(&tools);
+        let calls = || fs::read_to_string(tools.join("calls.txt")).unwrap_or_default();
+
+        // GIT-023: on the default branch there is nothing to compare.
+        let err = pr_create(&gh, &dir, "Title", "", "main", false).unwrap_err();
+        assert!(err.contains("feature branch"), "{err}");
+
+        run(&["checkout", "-q", "-b", "feat"], Some(&dir)).unwrap();
+        let err = pr_create(&gh, &dir, "Title", "", "main", false).unwrap_err();
+        assert!(err.contains("No commits"), "{err}");
+        commit_file(&dir, "feat.txt", "f\n");
+
+        // GIT-021: uncommitted tracked changes block it; a base only on this computer says what to do.
+        fs::write(dir.join("README.md"), "changed\n").unwrap();
+        let err = pr_create(&gh, &dir, "Title", "", "main", false).unwrap_err();
+        assert!(err.contains("Commit or stash"), "{err}");
+        run(&["checkout", "--", "README.md"], Some(&dir)).unwrap();
+        run(&["branch", "only-here", "main"], Some(&dir)).unwrap();
+        let err = pr_create(&gh, &dir, "Title", "", "only-here", false).unwrap_err();
+        assert!(err.contains("only on this computer"), "{err}");
+        assert!(calls().is_empty(), "nothing reached gh while the branch could not have a PR");
+
+        // None yet; creating pushes the unpublished branch first, then hands gh the title, base,
+        // head and draft flag, with the description on standard input.
+        assert_eq!(pr_find(&gh, &dir, "feat").unwrap(), None);
+        let counted = crate::activity::activity_counts().prs_created;
+        let pr = pr_create(&gh, &dir, "Add feat", "Why:\nbecause", "origin/main", true).unwrap();
+        // USAGE-011: a pull request Kolux made counts once on the Stats & Usage page.
+        assert_eq!(crate::activity::activity_counts().prs_created, counted + 1);
+        assert_eq!((pr.number, pr.url.as_str(), pr.state.as_str()), (7, "https://github.com/o/r/pull/7", "OPEN"));
+        assert!(run(&["rev-parse", "--verify", "refs/heads/feat"], Some(&bare)).is_ok(), "the branch was pushed first");
+        let said = calls();
+        assert!(said.contains("pr create") && said.contains("--draft") && said.contains("--base main") && said.contains("--head feat"), "{said}");
+        assert!(fs::read_to_string(tools.join("body.txt")).unwrap().contains("because"));
+
+        // A second create links the PR the branch already has instead of making another.
+        assert_eq!(pr_create(&gh, &dir, "Add feat", "", "main", false).unwrap().number, 7);
+        assert_eq!(calls().matches("pr create").count(), 1);
+        assert_eq!(crate::activity::activity_counts().prs_created, counted + 1, "linking the PR a branch has is not a new one");
+
+        // gh's own failures come back in plain words.
+        assert!(gh_words("none of the git remotes configured for this repository point to a known GitHub host").contains("not supported"));
+        assert!(gh_words("To get started with GitHub CLI, please run:  gh auth login").contains("Sign in"));
+        let _ = fs::remove_dir_all(&tools);
+        let _ = fs::remove_dir_all(&bare);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pull_request_linked_by_hand_is_read_through_its_link_with_its_branch() {
+        let dir = temp_repo("prlink");
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-prlink-gh-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        let gh = stand_in_gh(&tools);
+        let pr = pr_link(&gh, &dir, "https://github.com/o/r/pull/12").unwrap();
+        assert_eq!((pr.number, pr.state.as_str(), pr.title.as_deref(), pr.head.as_deref(), pr.draft), (12, "MERGED", Some("Other work"), Some("other"), false));
+        assert!(fs::read_to_string(tools.join("calls.txt")).unwrap().contains("headRefName"), "the branch is asked for, so a mismatch can be flagged");
+        assert!(pr_link(&gh, &dir, "file:///C:/Windows/notepad.exe").unwrap_err().contains("pull request link"));
+        let _ = fs::remove_dir_all(&tools);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn history_marks_outgoing_and_incoming_commits_and_keeps_its_labels_tidy() {
+        let empty = std::env::temp_dir().join(format!("kolux-rs-scm-hist-empty-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&empty);
+        fs::create_dir_all(&empty).unwrap();
+        run(&["init", "-q", "-b", "main"], Some(&empty)).unwrap();
+        assert!(history(&empty, 50).unwrap().is_empty(), "a repository with no commits has no history");
+
+        let bare = std::env::temp_dir().join(format!("kolux-rs-scm-hist-bare-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&bare);
+        fs::create_dir_all(&bare).unwrap();
+        run(&["init", "-q", "--bare", "-b", "main"], Some(&bare)).unwrap();
+        let dir = temp_repo("hist");
+        run(&["remote", "add", "origin", &bare.to_string_lossy().replace('\\', "/")], Some(&dir)).unwrap();
+        run(&["push", "-q", "-u", "origin", "main"], Some(&dir)).unwrap();
+        run(&["remote", "set-head", "origin", "main"], Some(&dir)).unwrap();
+        run(&["tag", "v1"], Some(&dir)).unwrap();
+        let names = |c: &Commit| {
+            let mut n = c.labels.iter().map(|l| format!("{}:{}", l.kind, l.name)).collect::<Vec<_>>();
+            n.sort();
+            n
+        };
+
+        // main and origin/main on one commit: the remote label says nothing new and is left out.
+        let h = history(&dir, 50).unwrap();
+        assert_eq!(names(&h[0]), vec!["current:main", "tag:v1"]);
+
+        // One commit only on the remote (incoming) and one only here (outgoing).
+        commit_file(&dir, "two.txt", "2\n");
+        run(&["push", "-q"], Some(&dir)).unwrap();
+        run(&["reset", "-q", "--hard", "HEAD~1"], Some(&dir)).unwrap();
+        fs::write(dir.join("three.txt"), "3\n").unwrap();
+        run(&["add", "."], Some(&dir)).unwrap();
+        run(&["commit", "-q", "-m", "feat: three", "-m", "A longer body that explains the change."], Some(&dir)).unwrap();
+        let h = history(&dir, 50).unwrap();
+        let by = |s: &str| h.iter().find(|c| c.subject == s).unwrap_or_else(|| panic!("no {s}"));
+        assert_eq!((by("feat: three").outgoing, by("feat: three").incoming), (true, false));
+        assert_eq!((by("two.txt").outgoing, by("two.txt").incoming), (false, true));
+        assert_eq!((by("first").outgoing, by("first").incoming), (false, false));
+        assert!(by("feat: three").message.contains("A longer body"));
+        assert_eq!(names(by("feat: three")), vec!["current:main"]);
+        assert_eq!(names(by("two.txt")), vec!["upstream:origin/main"]);
+        assert_eq!(names(by("first")), vec!["tag:v1"]);
+        assert_eq!(h.last().unwrap().subject, "first", "the shared root comes last");
+        assert_eq!(h.len(), 3);
+
+        // On a feature branch the local copy of the base reads as the base.
+        run(&["checkout", "-q", "-b", "feat"], Some(&dir)).unwrap();
+        assert_eq!(names(&history(&dir, 50).unwrap()[0]), vec!["base:main", "current:feat"]);
+
+        // The selected commit's files.
+        let files = commit_files(&dir, &by("feat: three").hash).unwrap();
+        assert_eq!(paths(&files), vec!["three.txt"]);
+        assert_eq!(files[0].status, "A");
+        assert!(commit_files(&dir, "HEAD; rm -rf").is_err(), "only a commit id is accepted");
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&bare);
+        let _ = fs::remove_dir_all(&empty);
+    }
+
+    #[test]
+    fn github_repositories_are_read_from_every_remote_form() {
+        let ssh = "# work account\nHost gh-work other-alias\n  HostName github.com\n  User git\n\nHost *\n  ServerAliveInterval 30\n";
+        let r = |url: &str| github_repo(url, ssh).map(|g| (g.host, g.owner, g.name));
+        let want = Some(("github.com".to_string(), "o".to_string(), "r".to_string()));
+        for url in ["https://github.com/o/r", "https://github.com/o/r.git", "https://github.com/o/r/", "https://user@github.com/o/r.git", "http://github.com/o/r", "ssh://git@github.com/o/r.git", "ssh://git@github.com:22/o/r.git", "git@github.com:o/r.git", "github.com:o/r", "git://github.com/o/r.git", "git@gh-work:o/r.git", "ssh://git@other-alias/o/r"] {
+            assert_eq!(r(url), want, "{url}");
+        }
+        // An HTTPS host is never an SSH alias.
+        assert_eq!(r("https://gh-work/o/r").map(|x| x.0), Some("gh-work".to_string()));
+        // GitHub Enterprise keeps its host and uses its own API address.
+        let ghe = github_repo("git@ghe.corp.example:Team/App.git", ssh).unwrap();
+        assert_eq!((ghe.host.as_str(), ghe.owner.as_str(), ghe.name.as_str()), ("ghe.corp.example", "Team", "App"));
+        assert_eq!(ghe.api, "https://ghe.corp.example/api/v3");
+        assert_eq!(github_repo("https://github.com/o/r", "").unwrap().api, "https://api.github.com");
+        // Two checkouts of one project share a key, whatever form or case their remote uses.
+        assert_eq!(github_repo("git@gh-work:O/R.git", ssh).unwrap().key, github_repo("https://github.com/o/r", "").unwrap().key);
+        // Local paths and odd shapes are not GitHub repositories.
+        for url in ["G:/Temp/x/remote.git", "C:\\repo\\r.git", "/srv/git/r.git", "file:///srv/o/r.git", "https://github.com/o", "https://github.com/o/r/pull/3", "", "git@github.com:o/r b.git"] {
+            assert_eq!(r(url), None, "{url}");
+        }
+
+        // gh is pointed at the resolved repository, so an alias remote still finds its pull request.
+        let dir = temp_repo("ghrepo");
+        assert_eq!(gh_repo_arg(&dir, ssh), None, "no origin, no repository");
+        run(&["remote", "add", "origin", "git@gh-work:o/r.git"], Some(&dir)).unwrap();
+        assert_eq!(gh_repo_arg(&dir, ssh).as_deref(), Some("github.com/o/r"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_a_plain_https_pull_request_link_is_opened() {
+        assert!(safe_pr_url("https://github.com/o/r/pull/7"));
+        assert!(safe_pr_url("https://git.example.com/o/r/pull/12"));
+        assert!(!safe_pr_url("file:///C:/Windows/System32/calc.exe"));
+        assert!(!safe_pr_url("https://github.com/o/r/pull/7 --flag"));
+        assert!(!safe_pr_url("https://github.com/o/r/issues/7"));
+    }
+
+    #[test]
+    fn push_failures_are_sorted_by_kind() {
+        let kind = |text: &str| failure_kind(text, false);
+        assert_eq!(kind("remote: error: GH006: Protected branch update failed for refs/heads/main.\n ! [remote rejected] main -> main (protected branch hook declined)"), "protected");
+        assert_eq!(kind("fatal: Authentication failed for 'https://github.com/a/b.git/'"), "sign-in");
+        assert_eq!(kind("fatal: could not read Username for 'https://github.com': terminal prompts disabled"), "sign-in");
+        assert_eq!(kind("git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository."), "sign-in");
+        assert_eq!(kind("fatal: unable to access 'https://github.com/a/b.git/': Could not resolve host: github.com"), "network");
+        assert_eq!(kind(" ! [rejected]        main -> main (fetch first)\nerror: failed to push some refs"), "non-fast-forward");
+        assert_eq!(kind("The following submodule paths contain changes that can\nnot be found on any remote:\n  lib"), "submodule");
+        assert_eq!(kind(" ! [remote rejected] main -> main (pre-receive hook declined)"), "hook");
+        assert_eq!(failure_kind("lint: 2 problems\nerror: failed to push some refs to 'origin'", true), "hook");
+        assert_eq!(kind("error: something odd"), "other");
+    }
+
+    #[test]
+    fn a_failing_pre_push_hook_hands_its_output_and_files_to_an_agent_and_commit_then_pull_and_push_works() {
+        let bare = std::env::temp_dir().join(format!("kolux-rs-scm-hook-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&bare);
+        fs::create_dir_all(&bare).unwrap();
+        run(&["init", "-q", "--bare", "-b", "main"], Some(&bare)).unwrap();
+        let dir = temp_repo("hook");
+        run(&["remote", "add", "origin", &bare.to_string_lossy().replace('\\', "/")], Some(&dir)).unwrap();
+        run(&["push", "-q", "-u", "origin", "main"], Some(&dir)).unwrap();
+        commit_file(&dir, "login.ts", "x\n");
+        let hook = dir.join(".git").join("hooks").join("pre-push");
+        fs::write(&hook, "#!/bin/sh\nprintf '\\033[31mlint: 2 problems in login.ts\\033[0m\\n' >&2\nexit 1\n").unwrap();
+        let out = remote(&dir, "push").unwrap();
+        assert!(!out.ok);
+        assert_eq!(out.kind, Some("hook"), "{}", out.output);
+        let detail = out.detail.unwrap();
+        assert!(detail.contains("lint: 2 problems in login.ts"), "{detail}");
+        assert!(!detail.contains('\u{1b}'), "colour codes are removed: {detail:?}");
+        assert!(!out.output.contains(char::from(27)), "and from the notice");
+        assert!(detail.contains("Files in this push:\n- login.ts"), "{detail}");
+
+        // Commit then pull (rebasing onto the remote) and push: the commit lands on the remote.
+        fs::remove_file(&hook).unwrap();
+        commit_file(&dir, "two.txt", "2\n");
+        let done = remote(&dir, "pullpush").unwrap();
+        assert!(done.ok, "{}", done.output);
+        assert_eq!((done.kind, counts(&dir).1), (None, 0));
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&bare);
+    }
+
+    #[test]
+    fn the_sidebar_badge_counts_unpushed_commits_and_never_calls_an_unreadable_count_synced() {
+        let state = |dir: &Path| pushed(dir).map(|p| (p.state, p.count));
+        let bare = std::env::temp_dir().join(format!("kolux-rs-scm-pushed-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&bare);
+        fs::create_dir_all(&bare).unwrap();
+        run(&["init", "-q", "--bare", "-b", "main"], Some(&bare)).unwrap();
+        let dir = temp_repo("pushed");
+        run(&["remote", "add", "origin", &bare.to_string_lossy().replace('\\', "/")], Some(&dir)).unwrap();
+        run(&["push", "-q", "-u", "origin", "main"], Some(&dir)).unwrap();
+        assert_eq!(state(&dir), Some(("synced", 0)));
+        commit_file(&dir, "one.txt", "1\n");
+        commit_file(&dir, "two.txt", "2\n");
+        assert_eq!(state(&dir), Some(("ahead", 2)), "two commits not pushed");
+        run(&["push", "-q"], Some(&dir)).unwrap();
+        assert_eq!(state(&dir), Some(("synced", 0)), "pushing clears it");
+
+        // A branch never published counts what it holds past the base.
+        run(&["switch", "-q", "-c", "feature"], Some(&dir)).unwrap();
+        commit_file(&dir, "three.txt", "3\n");
+        assert_eq!(state(&dir), Some(("unpublished", 1)));
+        // The base cannot be read: it cannot be checked, never synced.
+        run(&["remote", "set-head", "origin", "main"], Some(&dir)).unwrap();
+        let origin_main = dir.join(".git").join("refs").join("remotes").join("origin").join("main");
+        fs::write(&origin_main, "0123456789012345678901234567890123456789\n").unwrap();
+        assert_eq!(state(&dir), Some(("unknown", 0)));
+
+        run(&["switch", "-q", "--detach"], Some(&dir)).unwrap();
+        assert_eq!(state(&dir), None, "a detached HEAD has no branch to push");
+        // TERM-022: the header chip shows the commit a detached HEAD is on, and a branch by name.
+        let head = head_of(&dir).unwrap();
+        assert_eq!(head.branch, None);
+        assert_eq!(head.head.as_deref().map(str::len), Some(40));
+        run(&["switch", "-q", "feature"], Some(&dir)).unwrap();
+        assert_eq!(head_of(&dir).unwrap().branch.as_deref(), Some("feature"));
+        let plain = std::env::temp_dir().join(format!("kolux-rs-scm-plain-{}", std::process::id()));
+        fs::create_dir_all(&plain).unwrap();
+        assert_eq!(head_of(&plain), None, "a plain folder has no chip");
+        let _ = fs::remove_dir_all(&plain);
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&bare);
     }
 
     #[test]
@@ -574,6 +2672,41 @@ mod tests {
     }
 
     #[test]
+    fn discarding_puts_each_section_back_and_deletes_only_untracked_or_staged_new_files() {
+        let repo = temp_repo("discard");
+        commit_file(&repo, "keep.txt", "one\n");
+        commit_file(&repo, "gone.txt", "two\n");
+        // Changes: an edit and a deletion go back to what is staged.
+        fs::write(repo.join("README.md"), "edited\n").unwrap();
+        fs::remove_file(repo.join("gone.txt")).unwrap();
+        discard(&repo, "changed", &["README.md".into(), "gone.txt".into()]).unwrap();
+        assert_eq!(fs::read_to_string(repo.join("README.md")).unwrap(), "hello\n");
+        assert_eq!(fs::read_to_string(repo.join("gone.txt")).unwrap(), "two\n");
+        // Staged: an edit goes back to the last commit on disk too; a staged new file is deleted.
+        fs::write(repo.join("keep.txt"), "staged edit\n").unwrap();
+        fs::write(repo.join("new.txt"), "new\n").unwrap();
+        stage(&repo, &["keep.txt".into(), "new.txt".into()], true).unwrap();
+        discard(&repo, "staged", &["keep.txt".into(), "new.txt".into()]).unwrap();
+        assert_eq!(fs::read_to_string(repo.join("keep.txt")).unwrap(), "one\n");
+        assert!(!repo.join("new.txt").exists());
+        // Untracked: files and folders go, names are literal, and a tracked name sent as untracked stays.
+        fs::create_dir_all(repo.join("scratch")).unwrap();
+        fs::write(repo.join("scratch/a.txt"), "x").unwrap();
+        fs::write(repo.join("b[1].txt"), "x").unwrap();
+        fs::write(repo.join("b1.txt"), "x").unwrap();
+        discard(&repo, "untracked", &["scratch/".into(), "b[1].txt".into(), "keep.txt".into()]).unwrap();
+        assert!(!repo.join("scratch").exists());
+        assert!(!repo.join("b[1].txt").exists());
+        assert!(repo.join("keep.txt").exists());
+        let st = status(&repo).unwrap();
+        assert!(st.staged.is_empty() && st.changed.is_empty());
+        assert_eq!(paths(&st.untracked), ["b1.txt"]);
+        assert!(discard(&repo, "untracked", &["../x".into()]).unwrap_err().contains("outside"));
+        assert!(discard(&repo, "conflicts", &["keep.txt".into()]).is_err());
+        fs::remove_dir_all(&repo).unwrap();
+    }
+
+    #[test]
     fn two_thousand_files_are_staged_in_one_call() {
         let repo = temp_repo("many");
         fs::create_dir_all(repo.join("many")).unwrap();
@@ -660,6 +2793,522 @@ mod tests {
         assert_eq!((s.against.as_str(), s.ahead, s.behind, s.source), ("origin/feat", 1, 0, Lines { added: 1, removed: 3 }));
         assert_eq!(status(&repo).unwrap().head, Some(run(&["rev-parse", "HEAD"], Some(&repo)).unwrap().trim().to_string()));
         let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn git011_the_branch_row_counts_files_against_the_base_and_lists_the_committed_ones() {
+        let repo = temp_repo("git011");
+        run(&["checkout", "-q", "-b", "feat"], Some(&repo)).unwrap();
+        // Three commits that touch five files read 3 ahead and 5 files changed.
+        fs::write(repo.join("a.txt"), "a\n").unwrap();
+        fs::write(repo.join("b.txt"), "b\n").unwrap();
+        commit_file(&repo, "c.txt", "c\n");
+        commit_file(&repo, "d.txt", "d\n");
+        fs::write(repo.join("a.txt"), "a2\n").unwrap();
+        commit_file(&repo, "README.md", "changed\n");
+        let s = summary(&repo, None, false).unwrap();
+        assert_eq!((s.ahead, s.files), (3, 5));
+        let mut names = paths(&s.committed);
+        names.sort();
+        assert_eq!(names, ["README.md", "a.txt", "b.txt", "c.txt", "d.txt"]);
+        assert_eq!(s.committed.iter().find(|c| c.path == "README.md").unwrap().status, "M");
+        assert_eq!(s.committed.iter().find(|c| c.path == "d.txt").unwrap().status, "A");
+        // Pointing the base at another branch changes the counts and the committed files.
+        run(&["branch", "mid", "HEAD~1"], Some(&repo)).unwrap();
+        let s = summary(&repo, Some("mid"), false).unwrap();
+        assert_eq!((s.against.as_str(), s.ahead, s.files), ("mid", 1, 2));
+        let mut names = paths(&s.committed);
+        names.sort();
+        assert_eq!(names, ["README.md", "a.txt"]);
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn git015_conflicts_name_their_clash_and_abort_puts_the_repository_back() {
+        let repo = temp_repo("git015");
+        run(&["checkout", "-q", "-b", "other"], Some(&repo)).unwrap();
+        commit_file(&repo, "README.md", "theirs\n");
+        commit_file(&repo, "new.txt", "theirs\n");
+        run(&["checkout", "-q", "main"], Some(&repo)).unwrap();
+        commit_file(&repo, "README.md", "ours\n");
+        commit_file(&repo, "new.txt", "ours\n");
+        let before = run(&["rev-parse", "HEAD"], Some(&repo)).unwrap();
+        assert!(abort(&repo).unwrap_err().contains("Nothing"));
+        assert!(run(&["merge", "other"], Some(&repo)).is_err());
+        let st = status(&repo).unwrap();
+        assert_eq!(st.operation.as_deref(), Some("merge"));
+        let mut clashes: Vec<(&str, &str)> = st.conflicts.iter().map(|c| (c.path.as_str(), c.status.as_str())).collect();
+        clashes.sort();
+        assert_eq!(clashes, [("README.md", "UU"), ("new.txt", "AA")]);
+        assert!(st.resolved.is_empty());
+        // A file fixed by hand reads as resolved here before it is staged.
+        fs::write(repo.join("README.md"), "both\n").unwrap();
+        assert_eq!(status(&repo).unwrap().resolved, ["README.md"]);
+        // Abort puts the repository back where it was before the merge.
+        abort(&repo).unwrap();
+        let st = status(&repo).unwrap();
+        assert_eq!((st.operation.clone(), st.conflicts.len(), st.changed.len()), (None, 0, 0));
+        assert_eq!(run(&["rev-parse", "HEAD"], Some(&repo)).unwrap(), before);
+        // A rebase is aborted as a rebase.
+        run(&["checkout", "-q", "other"], Some(&repo)).unwrap();
+        let other = run(&["rev-parse", "HEAD"], Some(&repo)).unwrap();
+        assert!(run(&["rebase", "main"], Some(&repo)).is_err());
+        assert_eq!(status(&repo).unwrap().operation.as_deref(), Some("rebase"));
+        abort(&repo).unwrap();
+        let st = status(&repo).unwrap();
+        assert_eq!((st.operation, st.branch.as_deref()), (None, Some("other")));
+        assert_eq!(run(&["rev-parse", "HEAD"], Some(&repo)).unwrap(), other);
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn git026_a_pull_request_link_printed_in_a_terminal_attaches_once_even_split_across_chunks() {
+        let mut scan = PrScan::default();
+        assert!(scan.feed(b"Creating pull request for feat into main\r\n\r\nhttps://github.com/o/r/pu").is_empty());
+        assert_eq!(scan.feed(b"ll/42\r\n"), ["https://github.com/o/r/pull/42"]);
+        // The same link printed again is handled once.
+        assert!(scan.feed(b"see https://github.com/o/r/pull/42 again\n").is_empty());
+        // Colour codes around a link, an Enterprise host, and a path after the number.
+        assert_eq!(scan.feed(b"\x1b[36mhttps://git.example.com/team/app/pull/7/files\x1b[0m\n"), ["https://git.example.com/team/app/pull/7"]);
+        // Links that are not a pull request's.
+        assert!(scan.feed(b"https://github.com/o/r/issues/3 https://github.com/o/r/pull/ https://github.com/o/pull/9 \n").is_empty());
+        // A link split inside its scheme.
+        assert!(scan.feed(b"htt").is_empty());
+        assert_eq!(scan.feed(b"ps://github.com/o/r/pull/8 "), ["https://github.com/o/r/pull/8"]);
+        // The link becomes the workspace's linked pull request, once, beside other settings.
+        let dir = std::env::temp_dir().join(format!("kolux-rs-scm-git026-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = crate::state::Store::open(&dir).unwrap();
+        store.save_settings(&serde_json::json!({ "uiLook": "classic", "scmLinkedPrs": { "C:/other": "https://github.com/o/r/pull/1" } })).unwrap();
+        assert!(link_printed(&store, "C:/ws", "https://github.com/o/r/pull/42"));
+        assert!(!link_printed(&store, "C:/ws", "https://github.com/o/r/pull/42"));
+        let s = store.settings();
+        assert_eq!(s["scmLinkedPrs"]["C:/ws"], "https://github.com/o/r/pull/42");
+        assert_eq!(s["scmLinkedPrs"]["C:/other"], "https://github.com/o/r/pull/1");
+        assert_eq!(s["uiLook"], "classic");
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git026_a_printed_link_survives_a_window_save_from_an_older_copy_of_the_settings() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-scm-git026-race-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = crate::state::Store::open(&dir).unwrap();
+        store.save_settings(&serde_json::json!({ "uiLook": "classic", "quietMinutes": 5 })).unwrap();
+        // The window read its copy before the link was printed, then changes one setting.
+        assert!(link_printed(&store, "C:/ws", "https://github.com/o/r/pull/42"));
+        let set = serde_json::json!({ "uiLook": "new" });
+        store.patch_settings(set.as_object().unwrap(), &["quietMinutes".to_string()]).unwrap();
+        let s = store.settings();
+        assert_eq!(s["scmLinkedPrs"]["C:/ws"], "https://github.com/o/r/pull/42");
+        assert_eq!(s["uiLook"], "new");
+        assert!(s.get("quietMinutes").is_none(), "{s}");
+        // A link printed after the window's change keeps that change.
+        assert!(link_printed(&store, "C:/ws2", "https://github.com/o/r/pull/43"));
+        assert_eq!(store.settings()["uiLook"], "new");
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git043_tasks_search_pages_through_github_search_with_labels_assignees_and_checks() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-git043-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        let search = r#"{"total_count":1234,"incomplete_results":false,"items":[
+            {"number":3,"title":"Crash on start","html_url":"https://github.com/o/r/issues/3","repository_url":"https://api.github.com/repos/o/r","state":"open","node_id":"I_3","updated_at":"2026-10-10T08:00:00Z","labels":[{"name":"bug","color":"d73a4a"},{"name":"odd","color":"red;x"}],"assignees":[{"login":"txais"}]},
+            {"number":9,"title":"Fix crash","html_url":"https://github.com/o/r/pull/9","repository_url":"https://api.github.com/repos/o/r","state":"open","draft":true,"node_id":"PR_9","updated_at":"2026-10-11T08:00:00Z","labels":[],"assignees":[],"pull_request":{"merged_at":null}},
+            {"number":8,"title":"Old fix","html_url":"https://github.com/o/r/pull/8","repository_url":"https://api.github.com/repos/o/r","state":"closed","node_id":"PR_8","updated_at":"2026-10-01T08:00:00Z","labels":[],"assignees":[],"pull_request":{"merged_at":"2026-10-01T08:00:00Z"}}]}"#;
+        fs::write(tools.join("search.json"), search).unwrap();
+        fs::write(tools.join("checks.json"), r#"{"data":{"nodes":[{"id":"PR_9","commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}},{"id":"PR_8","commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}]}}"#).unwrap();
+        let gh = if cfg!(windows) {
+            let f = tools.join("gh.cmd");
+            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%2\"==\"graphql\" (type \"%~dp0checks.json\") else (type \"%~dp0search.json\")\r\n").unwrap();
+            f
+        } else {
+            let f = tools.join("gh");
+            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\nif [ \"$2\" = graphql ]; then cat \"$(dirname \"$0\")/checks.json\"; else cat \"$(dirname \"$0\")/search.json\"; fi\n").unwrap();
+            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let qs = ["is:issue is:open repo:o/r".to_string(), "is:pr is:open repo:o/r".to_string()];
+        let got = tasks_search(&gh, "github.com", &qs, 3).unwrap();
+        // Two searches of the same answer: summed for the count, the deeper one sets the pages, each item once.
+        assert_eq!((got.total, got.deepest), (2468, 1234));
+        let seen: Vec<(&str, u64, &str, bool, Option<&str>)> = got.items.iter().map(|t| (t.kind.as_str(), t.number, t.state.as_str(), t.draft, t.checks.as_deref())).collect();
+        assert_eq!(seen, vec![("pr", 9, "open", true, Some("failing")), ("issue", 3, "open", false, None), ("pr", 8, "merged", false, Some("unresolved"))]);
+        let issue = &got.items[1];
+        assert_eq!((issue.repo.as_str(), issue.assignees.clone()), ("o/r", vec!["txais".to_string()]));
+        // A colour that is not six hex digits is dropped, never handed to the page's style.
+        assert_eq!(issue.labels, vec![TaskLabel { name: "bug".into(), color: "d73a4a".into() }, TaskLabel { name: "odd".into(), color: String::new() }]);
+        let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
+        assert!(calls.contains("api search/issues --hostname github.com -X GET"), "{calls}");
+        assert!(calls.contains("is:pr is:open repo:o/r") && calls.contains("page=3") && calls.contains("per_page=25"), "{calls}");
+        assert!(calls.contains("api graphql --hostname github.com") && calls.contains("PR_9") && !calls.contains("I_3"), "{calls}");
+        // Past GitHub's 1000-result window nothing is asked.
+        let before = calls.lines().count();
+        assert!(tasks_search(&gh, "github.com", &qs, 41).unwrap_err().contains("first 1000"));
+        assert!(tasks_search(&gh, "bad host", &qs, 1).is_err());
+        assert_eq!(fs::read_to_string(tools.join("calls.txt")).unwrap().lines().count(), before);
+        assert_eq!(checks_word(Some("SUCCESS")), "passing");
+        assert_eq!(checks_word(Some("PENDING")), "running");
+        assert_eq!(checks_word(Some("ERROR")), "failing");
+        assert_eq!(checks_word(None), "unresolved");
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    #[test]
+    fn git050_preview_reads_body_and_timeline_and_edits_labels_and_body_through_gh() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-git050-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        fs::write(tools.join("issue.json"), r#"{"number":3,"title":"Crash","state":"open","body":"It crashes.","updated_at":"2026-10-10T08:00:00Z","labels":[{"name":"bug","color":"d73a4a"}],"assignees":[{"login":"txais"}]}"#).unwrap();
+        fs::write(tools.join("timeline.json"), r#"[
+            {"event":"labeled","actor":{"login":"txais"},"created_at":"2026-10-09T08:00:00Z","label":{"name":"bug"}},
+            {"event":"subscribed","actor":{"login":"txais"},"created_at":"2026-10-09T08:01:00Z"},
+            {"event":"assigned","actor":{"login":"txais"},"created_at":"2026-10-09T08:02:00Z","assignee":{"login":"mo"}},
+            {"event":"commented","user":{"login":"mo"},"created_at":"2026-10-09T09:00:00Z","body":"Same here."},
+            {"event":"renamed","actor":{"login":"mo"},"created_at":"2026-10-09T10:00:00Z","rename":{"from":"Crsh","to":"Crash"}},
+            {"event":"closed","actor":{"login":"mo"},"created_at":"2026-10-09T11:00:00Z"}]"#).unwrap();
+        fs::write(tools.join("labels.json"), r#"[{"name":"bug","color":"d73a4a"},{"name":"needs info","color":"zzzzzz"}]"#).unwrap();
+        let gh = if cfg!(windows) {
+            let f = tools.join("gh.cmd");
+            let script = "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\necho %* | findstr /c:\"/timeline\" >nul && (type \"%~dp0timeline.json\" & exit /b 0)\r\necho %* | findstr /c:\"/labels\" >nul && (type \"%~dp0labels.json\" & exit /b 0)\r\nif \"%3\"==\"PATCH\" (more >>\"%~dp0input.txt\")\r\ntype \"%~dp0issue.json\"\r\n";
+            fs::write(&f, script).unwrap();
+            f
+        } else {
+            let f = tools.join("gh");
+            let script = "#!/bin/sh\nd=\"$(dirname \"$0\")\"\necho \"$*\" >> \"$d/calls.txt\"\ncase \"$*\" in *'/timeline'*) cat \"$d/timeline.json\"; exit 0;; *'/labels'*) cat \"$d/labels.json\"; exit 0;; esac\n[ \"$3\" = PATCH ] && cat >> \"$d/input.txt\"\ncat \"$d/issue.json\"\n";
+            fs::write(&f, script).unwrap();
+            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let d = task_detail(&gh, "github.com", "o/r", 3).unwrap();
+        assert_eq!((d.body.as_str(), d.state.as_str(), d.assignees.clone()), ("It crashes.", "open", vec!["txais".to_string()]));
+        assert_eq!(d.labels, vec![TaskLabel { name: "bug".into(), color: "d73a4a".into() }]);
+        // Subscriptions are noise and are left out; the rest keep who, when and what.
+        let seen: Vec<(&str, &str, &str)> = d.events.iter().map(|e| (e.kind.as_str(), e.actor.as_str(), e.detail.as_str())).collect();
+        assert_eq!(seen, vec![("labeled", "txais", "bug"), ("assigned", "txais", "mo"), ("commented", "mo", "Same here."), ("renamed", "mo", "Crsh \u{2192} Crash"), ("closed", "mo", "")]);
+        assert_eq!(d.events[0].at, "2026-10-09T08:00:00Z");
+        // Labels the repository offers, with a colour that is not hex dropped.
+        assert_eq!(repo_labels(&gh, "github.com", "o/r").unwrap()[1], TaskLabel { name: "needs info".into(), color: String::new() });
+        // Adding and removing a label answer with the labels the item has afterwards.
+        assert_eq!(task_labels(&gh, "github.com", "o/r", 3, &["needs info".into()], &["good first/issue".into()]).unwrap().len(), 2);
+        let body = task_body(&gh, "github.com", "o/r", 3, "New \"body\"").unwrap();
+        assert_eq!(body.body, "It crashes.");
+        // Windows quotes some arguments in the log; the words are what matter.
+        let calls = fs::read_to_string(tools.join("calls.txt")).unwrap().replace('"', "");
+        assert!(calls.contains("api repos/o/r/issues/3 --hostname github.com"), "{calls}");
+        assert!(calls.contains("api repos/o/r/issues/3/timeline --hostname github.com -X GET -f per_page=100"), "{calls}");
+        assert!(calls.contains("api -X POST repos/o/r/issues/3/labels --hostname github.com -f") && calls.contains("labels[]=needs info"), "{calls}");
+        // A label name goes into the address encoded, so a slash cannot reach another path.
+        assert!(calls.contains("api -X DELETE repos/o/r/issues/3/labels/good%20first%2Fissue --hostname github.com"), "{calls}");
+        assert!(calls.contains("api -X PATCH repos/o/r/issues/3 --hostname github.com --input -"), "{calls}");
+        assert!(fs::read_to_string(tools.join("input.txt")).unwrap().contains(r#"{"body":"New \"body\""}"#));
+        // A repository or host that is not plain owner/name is refused before gh runs.
+        let before = fs::read_to_string(tools.join("calls.txt")).unwrap().lines().count();
+        assert!(task_detail(&gh, "github.com", "o/r/../x", 3).is_err());
+        assert!(task_detail(&gh, "github.com", "o", 3).is_err());
+        assert!(task_detail(&gh, "bad host", "o/r", 3).is_err());
+        assert_eq!(fs::read_to_string(tools.join("calls.txt")).unwrap().lines().count(), before);
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    #[test]
+    fn git018_a_custom_writer_command_takes_the_prompt_in_place_or_on_standard_input() {
+        // Quoted arguments stay together and backslashes stay as typed.
+        assert_eq!(split_command(r#"node "C:\My Tools\w.js" --say {prompt}"#), vec!["node", r"C:\My Tools\w.js", "--say", "{prompt}"]);
+        assert_eq!(split_command(r#"  tool  -m "a b"x  "#), vec!["tool", "-m", "a bx"]);
+        // The placeholder takes the prompt; without one the prompt goes on standard input.
+        let (args, input) = writer_args(&["--say".into(), "<{prompt}>".into()], "hi there");
+        assert_eq!((args, input), (vec!["--say".to_string(), "<hi there>".to_string()], None));
+        let (args, input) = writer_args(&["-q".into()], "hi");
+        assert_eq!((args, input), (vec!["-q".to_string()], Some("hi".to_string())));
+        // Custom instructions have their own capped part; blank ones add nothing.
+        assert_eq!(message_prompt("D", "  \n "), message_prompt("D", ""));
+        let p = message_prompt("D", "Use the imperative mood.");
+        assert!(p.contains("Use the imperative mood.") && p.ends_with("\n\nD"), "{p}");
+        let long = message_prompt("D", &"x".repeat(INSTRUCTIONS_MAX * 3));
+        assert!(long.matches('x').count() <= INSTRUCTIONS_MAX, "{}", long.len());
+        // A command run with the prompt in its arguments gets no standard input.
+        let root = std::env::temp_dir().join(format!("kolux-rs-scm-git018-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let f = if cfg!(windows) {
+            let f = root.join("say.cmd");
+            fs::write(&f, "@echo off\r\necho %~1\r\n").unwrap();
+            f
+        } else {
+            let f = root.join("say");
+            fs::write(&f, "#!/bin/sh\necho \"$1\"\n").unwrap();
+            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let (args, input) = writer_args(&["{prompt}".into()], "Fix the poll");
+        assert_eq!(write_message(&f, &args.iter().map(String::as_str).collect::<Vec<_>>(), &root, input.as_deref(), "k18", std::time::Duration::from_secs(20)), Ok("Fix the poll".to_string()));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn git017_commit_message_from_the_staged_diff_is_trimmed_cleaned_and_stoppable() {
+        // A large diff is cut to the budget, shared fairly: the small file stays whole.
+        let small = "diff --git a/s b/s\n+one\n+two\n";
+        let big: String = format!("diff --git a/b b/b\n{}", (0..2000).map(|i| format!("+line {i}\n")).collect::<String>());
+        let cut = trim_diff(&format!("{small}{big}"), 600);
+        assert!(cut.len() <= 600 + 200, "{}", cut.len());
+        assert!(cut.starts_with(small), "{cut}");
+        assert!(cut.contains("+line 0\n") && !cut.contains("+line 1999"), "{cut}");
+        assert!(cut.lines().all(|l| l.starts_with('+') || l.starts_with("diff ") || l.starts_with("[")), "cut mid-line: {cut}");
+        assert_eq!(trim_diff(small, 600), small);
+        // Fences, an announcing first line and bullets are stripped.
+        assert_eq!(clean_message("Here is the commit message:\n```\n- Add the poll\n- Fix the row\n```\n"), "Add the poll\nFix the row");
+        assert_eq!(clean_message("Add the poll\n\n* keeps state\n"), "Add the poll\n\nkeeps state");
+        let root = std::env::temp_dir().join(format!("kolux-rs-scm-git017-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let script = |name: &str, win: &str, sh: &str| {
+            if cfg!(windows) {
+                let f = root.join(format!("{name}.cmd"));
+                fs::write(&f, format!("@echo off\r\n{win}\r\n")).unwrap();
+                f
+            } else {
+                let f = root.join(name);
+                fs::write(&f, format!("#!/bin/sh\n{sh}\n")).unwrap();
+                std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+                f
+            }
+        };
+        let limit = std::time::Duration::from_secs(20);
+        // The prompt arrives on standard input and the answer comes back cleaned.
+        let echo = script("echo", "findstr /c:\"STAGED\" >nul && echo - Wrote the message", "grep -q STAGED && echo '- Wrote the message'");
+        assert_eq!(write_message(&echo, &[], &root, Some("STAGED diff"), "k1", limit), Ok("Wrote the message".to_string()));
+        // A clean exit with nothing printed is an empty result, with the error stream's excerpt.
+        let empty = script("empty", "echo warming up 1>&2", "echo 'warming up' >&2");
+        let e = write_message(&empty, &[], &root, Some("x"), "k2", limit).unwrap_err();
+        assert!(e.contains("wrote nothing") && e.contains("warming up"), "{e}");
+        // A failure favours the error stream and masks keys.
+        let fail = script("fail", "echo partial\r\necho bad key sk-ant-abc123 1>&2\r\nexit /b 3", "echo partial; echo 'bad key sk-ant-abc123' >&2; exit 3");
+        let e = write_message(&fail, &[], &root, Some("x"), "k3", limit).unwrap_err();
+        assert!(e.contains("bad key sk-ant-[masked]") && !e.contains("abc123") && !e.contains("partial"), "{e}");
+        // Stopping a run ends it at once and leaves no message.
+        let slow = script("slow", "ping -n 30 127.0.0.1 >nul\r\necho late", "sleep 30; echo late");
+        let started = std::time::Instant::now();
+        let stopper = std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            stop_message("k4");
+        });
+        let e = write_message(&slow, &[], &root, Some("x"), "k4", limit).unwrap_err();
+        stopper.join().unwrap();
+        assert_eq!(e, "stopped");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        // The prompt names the job and carries the diff.
+        let p = message_prompt("diff --git a/x b/x\n+y\n", "");
+        assert!(p.contains("commit message") && p.ends_with("diff --git a/x b/x\n+y\n"), "{p}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn git027_background_poll_asks_once_per_repository_and_stops_at_the_rate_limit() {
+        let root = std::env::temp_dir().join(format!("kolux-rs-scm-git027-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let tools = root.join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        let checkout = |name: &str, branch: &str, origin: Option<&str>| {
+            let dir = temp_repo(&format!("git027-{name}"));
+            if branch != "main" {
+                run(&["checkout", "-q", "-b", branch], Some(&dir)).unwrap();
+            }
+            if let Some(o) = origin {
+                run(&["remote", "add", "origin", o], Some(&dir)).unwrap();
+            }
+            dir.to_string_lossy().to_string()
+        };
+        // Two checkouts of one project under different remote forms, its main checkout, a second
+        // project that hits the rate limit, a third never reached, and one with no GitHub remote.
+        let a1 = checkout("a1", "feat", Some("https://github.com/o/r.git"));
+        let a2 = checkout("a2", "fix", Some("git@github.com:O/R.git"));
+        let a3 = checkout("a3", "main", Some("https://github.com/o/r"));
+        let b = checkout("b", "work", Some("https://github.com/o/s.git"));
+        let c = checkout("c", "work", Some("https://github.com/o/t.git"));
+        let d = checkout("d", "work", None);
+        fs::write(tools.join("list.json"), r#"[
+            {"number":5,"url":"https://github.com/o/r/pull/5","state":"CLOSED","title":"Old feat","headRefName":"feat","isDraft":false},
+            {"number":9,"url":"https://github.com/o/r/pull/9","state":"OPEN","title":"Feat","headRefName":"feat","isDraft":true},
+            {"number":8,"url":"https://github.com/o/r/pull/8","state":"MERGED","title":"Fix","headRefName":"fix","isDraft":false},
+            {"number":3,"url":"https://github.com/o/r/pull/3","state":"CLOSED","title":"From main","headRefName":"main","isDraft":false},
+            {"number":2,"url":"https://github.com/o/r/pull/2","state":"OPEN","title":"Elsewhere","headRefName":"other","isDraft":false}]"#).unwrap();
+        fs::write(tools.join("budget.json"), r#"{"resources":{"core":{"limit":5000,"remaining":0,"reset":1760000000}}}"#).unwrap();
+        let gh = if cfg!(windows) {
+            let f = tools.join("gh.cmd");
+            let script = "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%2\"==\"rate_limit\" (type \"%~dp0budget.json\" & exit /b 0)\r\necho %* | findstr /c:\"o/s\" >nul && (echo API rate limit exceeded for user ID 1. 1>&2 & exit /b 1)\r\ntype \"%~dp0list.json\"\r\n";
+            fs::write(&f, script).unwrap();
+            f
+        } else {
+            let f = tools.join("gh");
+            let script = "#!/bin/sh\nd=\"$(dirname \"$0\")\"\necho \"$*\" >> \"$d/calls.txt\"\n[ \"$2\" = rate_limit ] && { cat \"$d/budget.json\"; exit 0; }\ncase \"$*\" in *o/s*) echo 'API rate limit exceeded for user ID 1.' >&2; exit 1;; esac\ncat \"$d/list.json\"\n";
+            fs::write(&f, script).unwrap();
+            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let item = |path: &str, linked: Option<&str>| PollItem { path: path.to_string(), linked: linked.map(String::from) };
+        let items = vec![item(&a1, None), item(&d, None), item(&b, None), item(&a2, None), item(&a3, None), item(&c, None), item(&a1, Some("https://github.com/o/r/pull/2"))];
+        let got = prs_poll(&gh, &items, std::time::Duration::from_millis(10));
+        let calls = fs::read_to_string(tools.join("calls.txt")).unwrap().replace('"', "");
+        // One list call per project in the order asked, then the budget read; o/t is never asked.
+        let lists: Vec<&str> = calls.lines().filter(|l| l.starts_with("pr list")).collect();
+        assert_eq!(lists.len(), 2, "{calls}");
+        assert!(lists[0].contains("--repo github.com/o/r") && lists[1].contains("--repo github.com/o/s"), "{calls}");
+        assert!(lists[0].contains("--state all --limit 100 --json number,url,state,title,headRefName,isDraft"), "{calls}");
+        assert!(calls.contains("api rate_limit") && !calls.contains("o/t"), "{calls}");
+        assert_eq!(got.limited_until, Some(1760000000));
+        let of = |p: &str, linked: bool| got.prs.iter().find(|x| x.path == p && x.linked == linked).unwrap();
+        // The branch's open pull request wins over an older closed one.
+        assert_eq!(of(&a1, false).pr.as_ref().map(|p| (p.number, p.draft)), Some((9, true)));
+        assert_eq!(of(&a2, false).pr.as_ref().map(|p| (p.number, p.state.as_str())), Some((8, "MERGED")));
+        // A closed pull request from the default branch stays hidden.
+        assert_eq!(of(&a3, false).pr, None);
+        assert!(of(&a3, false).error.is_none());
+        // A hand link is found in the same answer, wherever its branch is.
+        assert_eq!(of(&a1, true).pr.as_ref().map(|p| p.number), Some(2));
+        // The rate-limited project and the one behind it keep what they had (an error, no answer).
+        assert!(of(&b, false).error.as_deref().unwrap().contains("rate limit"));
+        assert!(of(&c, false).error.is_some() && of(&c, false).pr.is_none());
+        // No GitHub remote: no pull request and nothing to retry.
+        assert!(of(&d, false).pr.is_none() && of(&d, false).error.is_none());
+        for p in [&a1, &a2, &a3, &b, &c, &d] {
+            let _ = fs::remove_dir_all(p);
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn git033_merge_state_and_actions_go_through_gh_for_the_pull_requests_own_repository() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-git033-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        let answer = r#"{"data":{"repository":{"mergeCommitAllowed":false,"squashMergeAllowed":true,"rebaseMergeAllowed":false,"autoMergeAllowed":true,"pullRequest":{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","reviewDecision":null,"isInMergeQueue":false,"isMergeQueueEnabled":false,"autoMergeRequest":{"mergeMethod":"SQUASH"},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"PENDING"}}}]}}}}}"#;
+        fs::write(tools.join("answer.json"), answer).unwrap();
+        let gh = if cfg!(windows) {
+            let f = tools.join("gh.cmd");
+            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%1\"==\"api\" type \"%~dp0answer.json\"\r\n").unwrap();
+            f
+        } else {
+            let f = tools.join("gh");
+            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\n[ \"$1\" = api ] && cat \"$(dirname \"$0\")/answer.json\"\nexit 0\n").unwrap();
+            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let url = "https://git.example.com/o/r/pull/42";
+        let m = merge_info(&gh, &tools, url).unwrap();
+        assert_eq!((m.state.as_str(), m.draft, m.mergeable.as_str(), m.merge_state.as_str()), ("OPEN", false, "MERGEABLE", "BLOCKED"));
+        assert_eq!((m.review.clone(), m.checks.as_deref(), m.in_queue, m.queue_enabled), (None, Some("PENDING"), false, false));
+        assert_eq!((m.auto_merge.as_deref(), m.methods.clone(), m.auto_allowed), (Some("squash"), vec!["squash".to_string()], true));
+        for (action, method) in [("auto", Some("squash")), ("merge", Some("rebase")), ("disable-auto", None), ("queue", None), ("ready", None), ("close", None), ("reopen", None)] {
+            merge_act(&gh, &tools, url, action, method).unwrap();
+        }
+        assert!(merge_act(&gh, &tools, url, "merge", None).unwrap_err().contains("merge method"));
+        assert!(merge_act(&gh, &tools, url, "delete", None).is_err());
+        assert!(merge_act(&gh, &tools, "https://x/o/r/issues/1", "close", None).is_err());
+        let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
+        let calls: Vec<&str> = calls.lines().map(str::trim).collect();
+        assert!(calls[0].starts_with("api graphql --hostname git.example.com "), "{}", calls[0]);
+        assert!(calls[0].contains("owner=o") && calls[0].contains("name=r") && calls[0].contains("number=42") && !calls[0].contains("--repo"), "{}", calls[0]);
+        let rest: Vec<String> = calls[1..].iter().map(|c| c.to_string()).collect();
+        assert_eq!(
+            rest,
+            [
+                format!("pr merge {url} --auto --squash"),
+                format!("pr merge {url} --rebase"),
+                format!("pr merge {url} --disable-auto"),
+                format!("pr merge {url}"),
+                format!("pr ready {url}"),
+                format!("pr close {url}"),
+                format!("pr reopen {url}"),
+            ]
+        );
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    #[test]
+    fn git028_the_github_budget_reads_rest_search_and_graphql_from_gh() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-git028-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        let answer = r#"{"resources":{"core":{"limit":5000,"used":20,"remaining":4980,"reset":1760000000},"search":{"limit":30,"used":30,"remaining":0,"reset":1760000060},"graphql":{"limit":5000,"used":1,"remaining":4999,"reset":1760003600},"code_search":{"limit":10,"remaining":10,"reset":1}},"rate":{"limit":5000}}"#;
+        fs::write(tools.join("answer.json"), answer).unwrap();
+        let gh = if cfg!(windows) {
+            let f = tools.join("gh.cmd");
+            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\ntype \"%~dp0answer.json\"\r\n").unwrap();
+            f
+        } else {
+            let f = tools.join("gh");
+            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\ncat \"$(dirname \"$0\")/answer.json\"\n").unwrap();
+            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let b = gh_budget(&gh).unwrap();
+        let rows: Vec<(&str, u64, u64, u64)> = b.iter().map(|x| (x.name.as_str(), x.limit, x.remaining, x.reset)).collect();
+        assert_eq!(rows, [("REST", 5000, 4980, 1760000000), ("Search", 30, 0, 1760000060), ("GraphQL", 5000, 4999, 1760003600)]);
+        assert_eq!(fs::read_to_string(tools.join("calls.txt")).unwrap().trim(), "api rate_limit");
+        // A budget gh leaves out is left out, not shown as zero.
+        fs::write(tools.join("answer.json"), r#"{"resources":{"core":{"limit":60,"remaining":59,"reset":5}}}"#).unwrap();
+        assert_eq!(gh_budget(&gh).unwrap().len(), 1);
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    #[test]
+    fn git003_discard_deletes_new_files_restores_deleted_ones_and_never_follows_a_link_out() {
+        let dir = temp_repo("discard-paths");
+        run(&["config", "core.symlinks", "true"], Some(&dir)).unwrap();
+        let target = std::env::temp_dir().join(format!("kolux-rs-scm-target-{}", std::process::id()));
+        fs::write(&target, "keep me\n").unwrap();
+        let link = |name: &str, to: &Path| {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(to, dir.join(name)).unwrap();
+            #[cfg(windows)]
+            std::os::windows::fs::symlink_file(to, dir.join(name)).unwrap();
+        };
+        commit_file(&dir, "gone.txt", "g\n");
+        commit_file(&dir, "edit.txt", "e\n");
+        commit_file(&dir, "old.txt", "o\n");
+        link("tracked-link", Path::new("README.md"));
+        run(&["add", "tracked-link"], Some(&dir)).unwrap();
+        run(&["commit", "-q", "-m", "link"], Some(&dir)).unwrap();
+
+        fs::remove_file(dir.join("gone.txt")).unwrap();
+        fs::write(dir.join("edit.txt"), "changed\n").unwrap();
+        fs::write(dir.join("new.txt"), "n\n").unwrap();
+        fs::write(dir.join("added.txt"), "a\n").unwrap();
+        run(&["add", "added.txt"], Some(&dir)).unwrap();
+        run(&["mv", "old.txt", "moved.txt"], Some(&dir)).unwrap();
+        // The committed link re-aimed outside the repository, and an untracked link and an
+        // untracked folder holding a link, all pointing at the outside file.
+        fs::remove_file(dir.join("tracked-link")).unwrap();
+        link("tracked-link", &target);
+        link("loose-link", &target);
+        fs::create_dir(dir.join("box")).unwrap();
+        link("box/inner-link", &target);
+        let st = status(&dir).unwrap();
+        assert_eq!(paths(&st.untracked), ["box/inner-link", "loose-link", "new.txt"]);
+        assert_eq!(paths(&st.staged), ["added.txt", "moved.txt"]);
+        assert_eq!(paths(&st.changed), ["edit.txt", "gone.txt", "tracked-link"]);
+
+        assert!(discard_paths(&dir, &["../outside.txt".to_string()]).unwrap_err().contains("outside"));
+        let all: Vec<String> = ["gone.txt", "edit.txt", "new.txt", "added.txt", "moved.txt", "tracked-link", "loose-link", "box/inner-link"].iter().map(|s| s.to_string()).collect();
+        discard_paths(&dir, &all).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("gone.txt")).unwrap(), "g\n", "a deleted file comes back from the last commit");
+        assert_eq!(fs::read_to_string(dir.join("edit.txt")).unwrap(), "e\n", "a modified file loses its edits");
+        assert_eq!(fs::read_to_string(dir.join("old.txt")).unwrap(), "o\n", "a rename is undone");
+        for new in ["new.txt", "added.txt", "moved.txt", "loose-link", "box/inner-link"] {
+            assert!(fs::symlink_metadata(dir.join(new)).is_err(), "{new} is removed for good");
+        }
+        assert_eq!(fs::read_link(dir.join("tracked-link")).unwrap(), Path::new("README.md"), "the link is rewritten as the commit had it");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "keep me\n", "no link's target is ever touched");
+        let st = status(&dir).unwrap();
+        assert!(st.staged.is_empty() && st.changed.is_empty() && st.untracked.is_empty(), "{st:?}");
+        let _ = fs::remove_file(&target);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

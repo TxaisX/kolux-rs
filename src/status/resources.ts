@@ -3,7 +3,7 @@
 import { underDir } from "../workspaces";
 
 export type Usage = { bytes: number; cpu: number; processes: number };
-export type SessionUsage = Usage & { id: number; dir: string | null };
+export type SessionUsage = Usage & { id: number; pid: number | null; dir: string | null };
 export type Resources = { app: Usage; sessions: SessionUsage[]; free: number | null; total: number | null };
 export type Row = SessionUsage & { name: string; shown: boolean };
 export type Group = { label: string; dir: string | null; rows: Row[] };
@@ -30,3 +30,7 @@ export function groupSessions(sessions: SessionUsage[], names: Record<number, st
 }
 
 export const formatCpu = (cpu: number) => `${cpu < 10 ? cpu.toFixed(1) : Math.round(cpu)}%`;
+
+/** VIEW-099: End skips its question only when a fresh read no longer lists the session (it has
+ * ended); a failed read asks, so nothing is ever ended unasked. */
+export const endNeedsAsk = (fresh: Resources | null, id: number) => fresh === null || fresh.sessions.some((s) => s.id === id);

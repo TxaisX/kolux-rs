@@ -16,32 +16,47 @@
 // ponytail: which rows are folded lasts until the window closes; nothing saves it.
 // T-022: rows carry the strongest live agent state and an unread mark (PROJ-063), the list can be
 // grouped by project, status or pull request and sorted Smart or by name (PROJ-045, PROJ-050).
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import CacheTimer from "./CacheTimer";
 import { blocker, branchOutcomeText, deleteTarget, runningSentence, type BranchOutcome, type KeptBranch, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
-import { SUMMARY_UPSTREAM_KEY } from "../scm/model";
-import { afterScan, prefixSample, type PrefixCheck, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, failureOf, pushLabel, newestOnly, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens } from "./model";
-import { ArrowRight, Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box } from "../chrome/icons";
+import { GROUP_SETTING, HIDE_AUTOMATION_SETTING, PIN_COPIES_SETTING, PIN_SETTING, SHOW_SLEEPING_SETTING, SLEEP_SETTING, asleepAfter, renameTo, showSleepingFrom, SORT_SETTING, jumpUnhides, withoutAutomationMade, groupFromSetting, groupRows, pathKey, pinnedSet, recentOrder, smartOrder, sortFromSetting, type AgentState, type PrState, type RowInfo } from "./rows";
+import { linkedPrs, pushBadge, SCM_LINKED_PR_KEY, type Pushed } from "../scm/model";
+import { mergePoll, nextDelay, pollItems, STALE_MS, type PrPoll } from "../scm/poll";
+import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere, failureOf, pushLabel, newestOnly } from "./model";
+import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
+import AddProject from "./AddProject";
 import Picker, { type PickItem } from "./Picker";
 import StartGit, { type FirstFile } from "./StartGit";
 import Cleanup from "./Cleanup";
 import { openKits } from "../kits/Kits";
+import { ADD_PROJECT, REOPEN_WIZARD } from "../onboarding/firstRun";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { openSettings as openSettingsPage } from "../settings/pages";
+import AutomationsRow from "./AutomationsRow";
 import { chromeShown } from "../chrome/chromeItems";
 import { VOCAB } from "../terminal/status";
 import type { AgentPass } from "../launch/agents";
 import { KeyText } from "../keys/KeymapContext";
 import { requestUpdateCheck } from "../update/UpdateCenter";
+import { GLOSSARY } from "../glossary";
+import VendorMark, { type Agent } from "../chrome/VendorMark";
+import ImportSetup, { refusedLine, type SetupImport } from "./ImportSetup";
+import { NO_GROUPS, groupChoices, groupTree, keepNewer, type Group, type Groups, type Node } from "./groups";
 
 /** The pages that open over the content column from the sidebar footer. */
-export type Page = "automations" | "routing";
+export type Page = "automations" | "routing" | "tasks";
 
 type Props = {
-  /** Folders a pane is open in: those workspace rows show a live dot and a count. */
+  /** EDIT-041: bumped by Open in Code; the selected row is scrolled into sight once it is drawn. */
+  reveal?: number;
+  /** Folders a pane is open in: those workspace rows show a live dot. */
   openDirs: string[];
+  /** VIEW-051: the window's agent and shell panes; a workspace lists its running ones as rows
+   * (own agent mark, own title) and counts them. `onOpenSession` shows that pane. */
+  sessions?: { key: number; agent: string; title: string; cwd: string | null; running: boolean }[];
+  onOpenSession?: (key: number) => void;
   /** PROJ-063: each open folder's strongest agent state and when it last changed. */
   states: Record<string, RowInfo>;
   /** PROJ-063 / TERM-118: workspace paths marked unread, kept by the window; `onUnread` flips one. */
@@ -55,8 +70,12 @@ type Props = {
   /** A click on a row shows that workspace. */
   /** `fresh`: the workspace was just made (TERM-005 seeds its grid). */
   onSelect: (dir: string, branch: string | null, fresh?: boolean) => void;
+  /** A new project was added and its main checkout opened (ONB-010 starts the default agent there once). */
+  onAdded?: (dir: string, branch: string | null) => void;
   /** After a workspace and its folder are gone, so the window drops its panes. */
   onRemoved: (path: string) => void;
+  /** PROJ-053: these workspaces went to sleep; close their panes. */
+  onSleep: (paths: string[]) => void;
   /** The plus menu behind "New session" (T-004): agents found on the PATH, and the launch. */
   agents: AgentInfo[];
   launching: boolean;
@@ -70,7 +89,7 @@ type Props = {
   allOff?: boolean;
   pass?: AgentPass;
   onRefresh?: () => void;
-  /** DT-17: the Automations page is opened from the sidebar (the optional row of AUTO-023 is T-291). */
+  /** DT-17 / AUTO-023: the Automations page is opened from the sidebar's Automations row. */
   /** Which page (Automations, Model routing) is open over the content column, if any. */
   page: Page | null;
   onPage: (page: Page) => void;
@@ -87,16 +106,22 @@ type Props = {
   /** PROJ-072: the names of the terminal tabs open in a folder or one inside it. */
   terminalsIn?: (dir: string) => string[];
   /** PROJ-038: starts an agent with a first prompt in a workspace just made; `show` brings it in front. */
-  onStartIn: (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean) => void;
+  onStartIn: (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean) => Promise<number | null> | void;
   /** PROJ-047: child workspaces nest under their parent unless this is off. */
   nest: boolean;
   onNest: (on: boolean) => void;
   /** SKILL-036: the Artifacts row opens the library and shows as current while it is up. */
   artifactsOn: boolean;
   onArtifacts: () => void;
+  /** PROJ-020: the creates Git is still working on, for the stand-in tabs beside the panes. */
+  onPending?: (pending: PendingCreate[]) => void;
+  /** PROJ-033: open a Setup terminal in a new workspace; `then` runs once it has ended. */
+  onSetup?: (dir: string, branch: string | null, line: SetupLine, where: SetupWhere, show: boolean, then?: () => Promise<number | null> | void) => void;
 };
 
 // SESS-035: the projects the composer last made workspaces in, newest first (this computer only).
+/** T-543-b: controls not built yet stay in the code but are not shown. */
+const NOT_BUILT = false;
 const RECENT_KEY = "kolux.composer.recentProjects";
 const ADD_ITEM = "+add";
 const readRecent = (): string[] => {
@@ -125,16 +150,42 @@ function pushHint(w: Worktree) {
   );
 }
 
-export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, terminalsIn, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
+export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onOpenSession = () => {}, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onAdded = () => {}, onRemoved, onSleep, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, terminalsIn, onStartIn, nest, onNest, artifactsOn, onArtifacts, onPending, onSetup }: Props) {
   const [moving, setMoving] = useState<string | null>(null); // the workspace whose parent picker is open (PROJ-048)
+  // EDIT-041: coming from the Inbox the workspace rows can take seconds to list, so each render
+  // looks for the selected row until it is there, then scrolls to it once.
+  const revealed = useRef(0);
+  useEffect(() => {
+    if (!reveal || revealed.current === reveal) return;
+    const row = document.querySelector(".sidebar :is(button.branch, .sess[role=button]).sel");
+    if (!row) return;
+    revealed.current = reveal;
+    row.scrollIntoView({ block: "nearest" });
+  });
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
   const index = useRef(onIndex);
   index.current = onIndex;
-  const [worktrees, setWorktrees] = useState<Record<string, Worktree[]>>({}); // the ones the sidebar shows
+  const [listed, setWorktrees] = useState<Record<string, Worktree[]>>({}); // the ones not hidden by hand
+  // AUTO-024: the switch that leaves out worktrees made by automation runs; moving to one turns it off.
+  const hideAuto = settings[HIDE_AUTOMATION_SETTING] === true;
+  const worktrees = useMemo(() => withoutAutomationMade(listed, hideAuto), [listed, hideAuto]); // the ones the sidebar shows
+  const wasActive = useRef(activeDir);
+  useEffect(() => {
+    if (jumpUnhides(wasActive.current, activeDir, listed, hideAuto, same)) onSetting(HIDE_AUTOMATION_SETTING, false);
+    wasActive.current = activeDir;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDir, listed]);
   const [hiddenWts, setHiddenWts] = useState<Record<string, Worktree[]>>({}); // PROJ-042: hidden by the user
   const [fresh, setFresh] = useState<Record<string, Worktree[]>>({}); // PROJ-041: made outside Kolux, not yet reviewed
+  const [pushedBy, setPushedBy] = useState<Record<string, Pushed>>({}); // GIT-065: by worktree path
+  const [prBy, setPrBy] = useState<Record<string, PrState>>({}); // GIT-027: the background poll, by worktree path
+  const polled = useRef({ failures: 0, at: 0, next: 0, limited: 0 });
+  const pushTag = (w: Worktree) => {
+    const b = pushBadge(pushedBy[w.path]);
+    return b && <span className={`hint push ${b.tone}`}>{b.text}</span>;
+  };
   const [review, setReview] = useState<string | null>(null); // project id whose new-worktree review is open
   const [hiddenPage, setHiddenPage] = useState(0);
   const [visGlobal, setVisGlobal] = useState<VisSource[]>([]); // SET-032: the global choice per source
@@ -152,48 +203,73 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [promptDraft, setPromptDraft] = useState("");
   const [pathDraft, setPathDraft] = useState("");
   const [showAdd, setShowAdd] = useState(false);
+  // PROJ-002: the Add Project dialog, from the folder button or the composer's Add project item.
+  const [adding, setAdding] = useState(false);
+  const [help, setHelp] = useState<DOMRect | null>(null);
+  // ONB-004: the first-run wizard's 'Pick a folder' opens Add Project here.
+  useEffect(() => {
+    const open = () => setAdding(true);
+    window.addEventListener(ADD_PROJECT, open);
+    return () => window.removeEventListener(ADD_PROJECT, open);
+  }, []);
   const [creating, setCreating] = useState<string | null>(null); // project id whose name field is open; "" with no project yet
-  const [pending, setPending] = useState<{ projectId: string; name: string } | null>(null); // the stand-in row while Git works
+  const [pending, setPendingList] = useState<PendingCreate[]>([]); // the stand-in rows while Git works
+  const pendingNow = useRef<PendingCreate[]>([]);
+  const setPending = (next: PendingCreate[]) => {
+    pendingNow.current = next;
+    setPendingList(next);
+    onPending?.(next);
+  };
+  const tickets = useRef(Date.now()); // PROJ-020: one ticket per create, never reused in a session
+  const overtaken = useRef(new Set<number>());
+  const [stopping, setStopping] = useState<number[]>([]); // SESS-038: creates the user cancelled mid-submit
+  const stopped = useRef(new Set<number>());
+  const stopCreate = (ticket: number) => {
+    stopped.current.add(ticket);
+    setStopping((s) => [...s, ticket]);
+    invoke("workspace_create_cancel", { ticket }).catch(() => {});
+  };
   const shown = useRef(activeDir); // the workspace in front, read when a create finishes
   shown.current = activeDir;
   const [name, setName] = useState("");
   const [existing, setExisting] = useState(false); // PROJ-030: open a branch that already exists instead of making one
   const [branchList, setBranchList] = useState<string[]>([]);
+  const [prList, setPrList] = useState<PrHead[] | null>(null); // PROJ-030: the open pull requests, null when not opening one
+  const [prDraft, setPrDraft] = useState<PrHead | null>(null);
   const [branchDraft, setBranchDraft] = useState(""); // SESS-037: Advanced branch name (the branch to reuse with existing)
   const [parentDraft, setParentDraft] = useState<string | null>(null); // SESS-037: the parent worktree, none by default
   const [advanced, setAdvanced] = useState(false);
   const [more, setMore] = useState(false); // SESS-038: Create more
+  const [linked, setLinked] = useState<Linked | null>(null); // SESS-036: the GitHub item the workspace is named from
+  const [found, setFound] = useState<Linked[]>([]); // SESS-036: issues and pull requests matching the name
+  const [findNote, setFindNote] = useState("");
+  const [setupSkip, setSetupSkip] = useState(false); // PROJ-033: the setup policy; the project's script runs unless skipped
+  const [setupWhere, setSetupWhere] = useState<SetupWhere>("tab");
+  const [setupWait, setSetupWait] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; refusal?: string; running?: boolean; endTerminals?: boolean } | null>(null);
   const [busy, setBusy] = useState("");
   const [startGit, setStartGit] = useState<{ folder: string; files: FirstFile[] } | null>(null);
   const [cleanupOpen, setCleanupOpen] = useState(false);
+  const [importing, setImporting] = useState<{ project: string; path: string; list: SetupImport[] } | null>(null);
   // PROJ-073: a note can carry one action, such as deleting the branch a removal kept.
   const [message, setMessage] = useState<{ kind: "ok" | "warn" | "error"; text: string; detail?: string | null; action?: { label: string; run: () => void } } | null>(null);
   const [gitVersion, setGitVersion] = useState("");
   const indexed = useRef(""); // the last project list and owner map handed to the window
   const [filterOpen, setFilterOpen] = useState(false);
   const [folded, setFolded] = useState<Set<string>>(new Set()); // group titles folded away
+  const [groups, setGroups] = useState<Groups>(NO_GROUPS); // PROJ-014: project groups
+  const [activity, setActivity] = useState<Record<string, number>>({}); // PROJ-051: path key -> last activity
+  const [renaming, setRenaming] = useState<string | null>(null); // PROJ-059: the row being renamed
+  const [renameText, setRenameText] = useState("");
+  const [groupFor, setGroupFor] = useState<string | null>(null); // the group whose settings form is open
+  const [groupName, setGroupName] = useState("");
+  const [groupParent, setGroupParent] = useState("");
+  const [dropGroup, setDropGroup] = useState<{ remove: boolean } | null>(null); // PROJ-015: the delete question
   const seen = useRef<Record<string, AgentState>>({});
   const groupBy = groupFromSetting(settings[GROUP_SETTING]);
   const sortBy = sortFromSetting(settings[SORT_SETTING]);
-  // PROJ-022: how new branches begin; read by the backend at create time. T-116 moves it to the Git page.
-  const prefixMode = typeof settings.branchPrefix === "string" ? settings.branchPrefix : "user";
-  // SET-031: the custom prefix as typed (saved on blur) and what the back end makes of it, for the sample.
-  const [prefixDraft, setPrefixDraft] = useState(String(settings.branchPrefixCustom ?? ""));
-  const [prefixCheck, setPrefixCheck] = useState<PrefixCheck | null>(null);
-  useEffect(() => {
-    if (!showAdd) return;
-    let live = true;
-    invoke<PrefixCheck>("branch_prefix_check", { mode: prefixMode, custom: prefixDraft })
-      .then((c) => live && setPrefixCheck(c))
-      .catch(() => live && setPrefixCheck(null));
-    return () => {
-      live = false;
-    };
-  }, [showAdd, prefixMode, prefixDraft]);
-  const sample = prefixSample(prefixMode, prefixDraft, prefixCheck);
   // PROJ-050: an old "Recent" choice is moved to Smart once and saved that way.
   useEffect(() => {
     if (settings[SORT_SETTING] === "recent") onSetting(SORT_SETTING, "smart");
@@ -206,11 +282,17 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     for (const [dir, i] of Object.entries(states)) {
       now[dir] = i.state;
       if (dir in was && was[dir] !== i.state && !(activeDir !== null && same(dir, activeDir))) fresh.push(dir);
+      if (dir in was && was[dir] !== i.state) stamp(dir); // PROJ-051: an agent's state change is activity
     }
     seen.current = now;
     for (const dir of fresh) onUnread(dir, true);
   }, [states, activeDir, onUnread]);
 
+  // PROJ-051: stamps a workspace as just used, here at once and in the store for the next start.
+  function stamp(path: string) {
+    setActivity((a) => ({ ...a, [pathKey(path)]: Date.now() }));
+    invoke("activity_touch", { path }).catch(() => {});
+  }
   const say = (kind: "ok" | "warn" | "error", text: string) => setMessage({ kind, text });
   // PROJ-031: a failed create carries Git's full output, which the note can open.
   const fail = (err: unknown) => {
@@ -232,7 +314,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
         // ACCT-056: a failed scan removes nothing; the worktrees already known stay listed.
         next[p.id] = afterScan(scanned.current[p.id], null);
         // PROJ-031: the 5 s refresh never covers an error the user has not read yet.
-        const text = `Could not list the worktrees of ${p.name}, so the last known list stays: ${String(err)}`;
+        const text = `Could not list the workspaces of ${p.name}, so the last known list stays: ${String(err)}`;
         setMessage((m) => (m?.kind === "error" || m?.action ? m : { kind: "warn", text }));
       }
     }
@@ -242,6 +324,11 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     setWorktrees(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => !w.hidden)])));
     setHiddenWts(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => w.hidden)])));
     setFresh(unseen);
+    // GIT-065: the same poll keeps each row's unpushed badge current; a failed read keeps the last.
+    const shown = Object.values(next).flat().filter((w) => !w.hidden).map((w) => w.path);
+    invoke<Pushed[]>("scm_pushed", { worktrees: shown })
+      .then((list) => setPushedBy(Object.fromEntries(list.map((p) => [p.path, p]))))
+      .catch(() => {});
     const owner: Record<string, string> = {};
     const names: Record<string, string> = {};
     for (const p of list)
@@ -253,6 +340,52 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     if (key !== indexed.current) index.current(list, owner, names);
     indexed.current = key;
   }, []);
+  // GIT-027 / GIT-028: every shown workspace's pull request, polled in the background: the visible
+  // workspace first, one gh call per GitHub project, a round every few minutes while the window is
+  // shown (backing off after failures, waiting out a rate limit), and again on focus when stale.
+  const pollPaths = Object.values(worktrees).flat().map((w) => w.path);
+  const norm = (d: string) => d.replace(/[\\/]+$/, "").toLowerCase();
+  const pollActive = activeDir === null ? null : (pollPaths.find((p) => norm(p) === norm(activeDir)) ?? null);
+  const pollLinks = linkedPrs(settings[SCM_LINKED_PR_KEY]);
+  const pollKey = JSON.stringify([pollPaths, pollActive, pollLinks]);
+  useEffect(() => {
+    if (pollPaths.length === 0) return;
+    const st = polled.current;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let dead = false;
+    const later = (ms: number) => {
+      clearTimeout(timer);
+      st.next = Date.now() + ms;
+      timer = setTimeout(round, ms);
+    };
+    const round = () => {
+      if (document.hidden) return later(60_000);
+      invoke<PrPoll>("scm_prs_poll", { items: pollItems(pollPaths, pollActive, pollLinks) })
+        .then((answer) => {
+          if (dead) return;
+          setPrBy((prev) => mergePoll(prev, answer));
+          st.failures = answer.prs.some((x) => x.error !== null) ? st.failures + 1 : 0;
+          st.at = Date.now();
+          st.limited = answer.limitedUntil ?? 0;
+          later(nextDelay(st.failures, answer.limitedUntil, Date.now()));
+        })
+        .catch(() => {
+          if (dead) return;
+          st.failures += 1;
+          later(nextDelay(st.failures, null, Date.now()));
+        });
+    };
+    later(Math.max(1500, st.next - Date.now()));
+    const focus = () => {
+      if (Date.now() - st.at > STALE_MS && st.limited * 1000 < Date.now()) later(0);
+    };
+    window.addEventListener("focus", focus);
+    return () => {
+      dead = true;
+      clearTimeout(timer);
+      window.removeEventListener("focus", focus);
+    };
+  }, [pollKey]);
   // PROJ-063: a branch switched inside a workspace folder shows on its row within a few seconds.
   // PROJ-041: the same poll notices worktrees made outside Kolux, in both layouts (DT-O2).
   useEffect(() => {
@@ -263,6 +396,10 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const reload = useCallback(async () => {
     const list = await invoke<Project[]>("project_list");
     setProjects(list);
+    const g = await invoke<Groups>("groups_get");
+    setGroups((o) => keepNewer(o, g));
+    const a = await invoke<Record<string, number>>("activity_get");
+    setActivity((o) => ({ ...a, ...Object.fromEntries(Object.entries(o).filter(([k, t]) => t > (a[k] ?? 0))) }));
     await refreshWorktrees(list);
   }, [refreshWorktrees]);
 
@@ -291,6 +428,31 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
       live = false;
     };
   }, [name, creating, branchDraft, existing]);
+  useEffect(() => {
+    setPrList(null); // PROJ-030: another project's pull requests are not this one's
+    setPrDraft(null);
+    setLinked((l) => (creating === null ? null : keepOnSwitch(l))); // SESS-038
+  }, [creating]);
+  useEffect(() => {
+    // SESS-036: the chosen project's own issues and pull requests matching the name, and a pasted
+    // link resolved to its item (its title seeds the name). Lookups that fail for want of gh stay quiet.
+    setFound([]);
+    setFindNote("");
+    const item = workItem(name);
+    const q = name.trim();
+    if (!creating || linked || existing || prList !== null || (!item && q.length < 2)) return;
+    let live = true;
+    const t = setTimeout(() => {
+      const ask = item
+        ? invoke<Linked>("workspace_item", { projectId: creating, item }).then((l) => live && (setLinked(bound(l)), setName(l.title)))
+        : invoke<Linked[]>("workspace_items", { projectId: creating, query: q }).then((l) => live && setFound(l.map(bound)));
+      ask.catch((err) => live && (item || String(err).startsWith("That lookup")) && setFindNote(String(err)));
+    }, item ? 0 : 350);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [name, creating, linked, existing, prList]);
 
   useEffect(() => {
     // SESS-036: the name field suggests the project's branches too.
@@ -303,13 +465,35 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   }, [creating]);
 
   // PROJ-007: the new project's main checkout becomes the workspace in front, its worktrees listed.
-  const added = async (p: Project) => {
+  // PROJ-003: a project just cloned goes straight to its checkout, with no setup question first.
+  const added = async (p: Project, offerSetup = true) => {
     say("ok", `${p.name} is a project (${p.path})`);
     setPathDraft("");
     setShowAdd(false);
     await reload();
     const open = openedWorktree(await invoke<Worktree[]>("workspace_list", { projectId: p.id }), p.path);
-    if (open) onSelect(open.path, open.branch);
+    if (open) {
+      onSelect(open.path, open.branch);
+      onAdded(open.path, open.branch);
+    }
+    if (!offerSetup) return;
+    // VIEW-112: another tool's setup file in the new project is offered for import.
+    const list = await invoke<SetupImport[]>("setup_imports_list", { path: p.path }).catch(() => [] as SetupImport[]);
+    if (list.some((i) => !i.refused)) setImporting({ project: p.name, path: p.path, list });
+    else if (refusedLine(list)) say("warn", `No setup commands imported. ${refusedLine(list)}`);
+  };
+  const importSetup = async (file: string) => {
+    if (!importing) return;
+    setBusy("importing");
+    try {
+      await invoke("setup_import", { path: importing.path, file });
+      say("ok", `The setup commands from ${file} are in kolux.yaml; commit it so new workspaces run them.`);
+      setImporting(null);
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy("");
+    }
   };
   const addPath = async (path: string) => {
     if (!path.trim()) return;
@@ -388,6 +572,43 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     setDirDraft(p.workspacesDir ?? "");
     setProjectBaseDraft(p.base ?? "");
   };
+  // PROJ-014 / PROJ-015: every group change answers with the whole set; the newer one is kept.
+  const takeGroups = (g: Groups) => {
+    setGroups((o) => keepNewer(o, g));
+    return g;
+  };
+  const openGroup = (g: Group) => {
+    setGroupFor(g.id);
+    setGroupName(g.name);
+    setGroupParent(g.parent ?? "");
+    setDropGroup(null);
+  };
+  const newGroup = () =>
+    invoke<Groups>("group_create", { name: "", parent: null })
+      .then((g) => openGroup(takeGroups(g).groups[g.groups.length - 1]))
+      .catch(fail);
+  const saveGroup = async (g: Group) => {
+    try {
+      if (groupName.trim() !== g.name) takeGroups(await invoke<Groups>("group_rename", { id: g.id, name: groupName }));
+      if (groupParent !== (g.parent ?? "")) takeGroups(await invoke<Groups>("group_nest", { id: g.id, parent: groupParent || null }));
+      setGroupFor(null);
+    } catch (err) {
+      fail(err);
+    }
+  };
+  const deleteGroup = async (g: Group, remove: boolean) => {
+    try {
+      takeGroups(await invoke<Groups>("group_delete", { id: g.id, removeProjects: remove }));
+      setGroupFor(null);
+      setDropGroup(null);
+      say("ok", remove ? `Deleted the group ${g.name} and took its projects out of Kolux; their folders are still on disk` : `Deleted the group ${g.name}; its projects are at the top level now`);
+      if (remove) await reload();
+    } catch (err) {
+      fail(err);
+    }
+  };
+  const putInGroup = (p: Project, group: string) => invoke<Groups>("group_put", { projectId: p.id, group: group || null }).then(takeGroups).catch(fail);
+
   const saveProject = async (p: Project) => {
     try {
       const u = await invoke<Project>("project_set", { projectId: p.id, workspacesDir: dirDraft, base: projectBaseDraft });
@@ -402,8 +623,9 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
 
   // PROJ-020: a stand-in row at once, then the workspace opens with a shell of its own; if the
   // user moved to another workspace meanwhile the create finishes without pulling focus back.
-  // ponytail: one create at a time (the field is disabled while Git works); cancelling an
-  // overtaken create and removing its half-made checkout, and the stand-in tab, are T-013-c.
+  // A newer create overtakes a running one (unless that one was made with Create more): Kolux
+  // cancels it, and Git's half-made checkout is removed; one that finished first stays, in the
+  // background. Each running create shows a stand-in row here and a stand-in tab by the panes.
   // PROJ-038: with a prompt and no agent picked, the default agent runs it, else the first installed.
   const installed = agents.filter((a) => a.installed);
   const fallbackAgent = installed.find((a) => a.id === defaultId) ?? installed[0] ?? null;
@@ -411,42 +633,73 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     const base = baseDraft.trim();
     const branch = branchDraft.trim();
     // SESS-036: a name that is an existing branch opens that branch rather than making a new one.
-    const reuse = existing ? branch : branchList.includes(name.trim()) ? name.trim() : "";
-    if (existing ? !reuse : !name.trim() || preview === null) return;
+    const reuse = existing ? branch : !linked && branchList.includes(name.trim()) ? name.trim() : "";
+    // PROJ-030: open a pull request's branch; SESS-036: a linked pull request opens the same way
+    const pr = prList !== null ? prDraft : linked?.kind === "pull" ? { number: linked.number } : null;
+    const issue = linked?.kind === "issue" ? linked : null;
+    if (prList !== null ? !pr : existing ? !reuse : !name.trim() || preview === null) return;
     const keepOpen = more; // SESS-038: Create more keeps the composer open for the next one
     const typed = name.trim();
     const parent = parentDraft;
     const from = shown.current;
     const prompt = promptDraft.trim();
     const agent = agentDraft ? (installed.find((a) => a.id === agentDraft) ?? null) : prompt ? fallbackAgent : null;
-    setBusy("creating");
-    setPending({ projectId: project.id, name: typed || reuse });
+    const mine: PendingCreate = { ticket: ++tickets.current, projectId: project.id, name: typed || (pr ? `#${pr.number}` : reuse), more: keepOpen };
+    for (const t of overtakenBy(pendingNow.current, mine)) {
+      overtaken.current.add(t);
+      invoke("workspace_create_cancel", { ticket: t }).catch(() => {});
+    }
+    setPending([...pendingNow.current.filter((p) => !overtaken.current.has(p.ticket)), mine]);
     setName("");
     setBranchDraft("");
     setPromptDraft("");
+    setPrDraft(null);
+    setLinked(null); // SESS-038: Create more drops the linked item, ready for the next one
     if (!keepOpen) {
       setCreating(null);
       setBaseDraft("");
       setParentDraft(null);
     }
     try {
-      const wt = reuse
-        ? await invoke<Created>("workspace_open_branch", { projectId: project.id, branch: reuse, folder: existing ? typed || null : null, parent })
-        : await invoke<Created>("workspace_create", { projectId: project.id, name: typed, base: base || null, branch: branch || null, parent });
+      const wt = pr
+        ? await invoke<Created>("workspace_open_pr", { projectId: project.id, number: pr.number, folder: typed || null, name: typed || null, parent, ticket: mine.ticket })
+        : reuse
+        ? await invoke<Created>("workspace_open_branch", { projectId: project.id, branch: reuse, folder: existing ? typed || null : null, parent, ticket: mine.ticket })
+        : await invoke<Created>("workspace_create", { projectId: project.id, name: typed, base: base || null, branch: branch || null, parent, ticket: mine.ticket, issue });
+      const lost = overtaken.current.has(mine.ticket);
       noteRecent(project.id);
+      if (stopped.current.has(mine.ticket)) {
+        const n = stoppedNote(worktreeLabel(wt), null);
+        say(n.kind, n.text);
+        return void (await reload());
+      }
       const extra = [wt.note, ...wt.warnings].filter(Boolean).join(" · ");
       say(extra ? "warn" : "ok", `created ${worktreeLabel(wt)} in ${wt.path} from ${wt.base}${extra ? ` · ${extra}` : ""}`);
       await reload();
       // The agent's tab is the workspace's first; a shell is only opened when no agent runs. With
       // Create more the new workspace does not take the front, so the next name can be typed.
-      const front = !keepOpen && shown.current === from;
-      if (agent) onStartIn(agent, wt.path, wt.branch, prompt, front);
-      else if (front) onSelect(wt.path, wt.branch, true);
+      // A create overtaken after Git had already finished it stays, but never takes the front.
+      const front = !keepOpen && !lost && shown.current === from;
+      // PROJ-033: the project's setup script runs in a Setup terminal; a script that cannot run says why.
+      const setup = setupSkip || !onSetup ? null : await invoke<SetupLine | null>("workspace_setup", { path: wt.path }).catch((err) => (say("warn", String(err)), null));
+      if (agent && setup && onSetup && waitsForSetup(setupWhere, setupWait, true, true)) {
+        onSetup(wt.path, wt.branch, setup, setupWhere, front, () => onStartIn(agent, wt.path, wt.branch, prompt, front));
+      } else {
+        if (agent) onStartIn(agent, wt.path, wt.branch, prompt, front);
+        else if (front) onSelect(wt.path, wt.branch, true);
+        if (setup && onSetup) onSetup(wt.path, wt.branch, setup, setupWhere, false);
+      }
     } catch (err) {
-      fail(err);
+      if (stopped.current.has(mine.ticket)) {
+        const n = stoppedNote(mine.name, String(err));
+        say(n.kind, n.text);
+      } else if (overtaken.current.has(mine.ticket)) say("warn", `${mine.name}: ${String(err)}`);
+      else fail(err);
     } finally {
-      setPending(null);
-      setBusy("");
+      overtaken.current.delete(mine.ticket);
+      stopped.current.delete(mine.ticket);
+      setStopping((s) => s.filter((t) => t !== mine.ticket));
+      setPending(pendingNow.current.filter((p) => p.ticket !== mine.ticket));
       if (keepOpen) nameRef.current?.focus();
     }
   };
@@ -472,7 +725,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
       const w = (worktrees[p.id] ?? []).find((x) => !x.isMain && same(target, x.path));
       if (w) return void ask(p.id, w.path, worktreeLabel(w));
     }
-    say("warn", `The workspace ${hovered === null ? "shown" : "under the pointer"} is not one Kolux can delete (a main checkout, or no workspace).`);
+    say("warn", `The workspace ${hovered === null ? "shown" : "under the pointer"} is not one Kolux can delete (a project's main folder, or no workspace).`);
   }, [deleteRequest]);
   // SESS-035: Recent (projects the composer made workspaces in), then the rest by match, then Add project.
   const projectItems = (q: string): PickItem[] => {
@@ -484,7 +737,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const pickProject = (id: string) => {
     if (id === ADD_ITEM) {
       setCreating(null);
-      setShowAdd(true);
+      setAdding(true);
     } else if (id !== creating) {
       setCreating(id);
       setParentDraft(null); // the parent belongs to the old project
@@ -508,7 +761,15 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     if (e.key === "Enter" && p) create(p);
     else if (e.key === "Escape") setCreating(null);
   };
-  const reusing = !existing && branchList.includes(name.trim());
+  const reusing = !existing && prList === null && !linked && branchList.includes(name.trim());
+  const openPrs = (p: Project) => {
+    setExisting(false);
+    setPrList([]);
+    invoke<PrHead[]>("workspace_prs", { projectId: p.id }).then(setPrList).catch((err) => {
+      setPrList(null);
+      fail(err);
+    });
+  };
   const nameField = (p: Project | null) => (
     <div className="sb-form composer" data-create={p?.id ?? ""}>
       <Picker key={`project-${p?.id ?? ""}`} name="Project" value={p?.name ?? "pick a project"} items={projectItems} onPick={pickProject} startOpen={!p} />
@@ -524,11 +785,29 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
         onKeyDown={submitKeys(p)}
       />
       <div className="preview">
-        {existing ? (branchDraft.trim() ? `checks out ${branchDraft.trim()} as it is, its commits kept` : "Pick the branch to open under Advanced.") : reusing ? `uses the existing branch ${name.trim()} as it is, its commits kept` : previewSentence(name, preview, p)}
+        {linked ? `linked to ${itemLabel(linked)}${linked.kind === "pull" ? ", its branch checked out" : ", on a new branch"}` : prList !== null ? (prDraft ? `checks out pull request #${prDraft.number} (${prDraft.headRefName}) at its latest commit, linked to it` : prList.length ? "Pick the pull request under Advanced." : "No open pull requests.") : existing ? (branchDraft.trim() ? `checks out ${branchDraft.trim()} as it is, its commits kept` : "Pick the branch to open under Advanced.") : reusing ? `uses the existing branch ${name.trim()} as it is, its commits kept` : previewSentence(name, preview, p)}
       </div>
+      {linked && (
+        <div className="btn-row">
+          <button className="link" onClick={() => setLinked(null)}>
+            Unlink {linked.kind === "pull" ? "the pull request" : "the issue"}
+          </button>
+        </div>
+      )}
+      {findNote && <div className="preview warn">{findNote}</div>}
+      {found.length > 0 && (
+        <div className="pick-list" aria-label="issues and pull requests">
+          {found.map((f) => (
+            <button key={f.url} type="button" className="pick-item" title={f.url} onClick={() => (setLinked(f), setName(f.title), nameRef.current?.focus())}>
+              <span className="name">#{f.number} {f.title}</span>
+              <span className="hint">{f.kind === "pull" ? "pull request" : "issue"}</span>
+            </button>
+          ))}
+        </div>
+      )}
       {p && <Picker key={`parent-${p.id}`} name="Parent" value={parentLabel(p)} items={parentItems(p)} onPick={(k) => setParentDraft(k || null)} onEmptyEnter={() => setParentDraft(null)} />}
       <select aria-label="agent" className="field" value={agentDraft} onChange={(e) => setAgentDraft(e.target.value)}>
-        <option value="">{promptDraft.trim() && fallbackAgent ? `${fallbackAgent.name} (default)` : "No agent: a shell"}</option>
+        <option value="">{promptDraft.trim() && fallbackAgent ? `${fallbackAgent.name} (default)` : "No agent: a terminal"}</option>
         {installed.map((a) => (
           <option key={a.id} value={a.id}>
             {a.name}
@@ -536,10 +815,10 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
         ))}
       </select>
       <textarea aria-label="note" className="field multi grow" placeholder="note: the first prompt for the agent (optional)" value={promptDraft} onChange={(e) => setPromptDraft(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setCreating(null)} />
-      <button className="link" aria-expanded={advanced || existing} onClick={() => setAdvanced(!(advanced || existing))}>
-        {advanced || existing ? "Hide advanced" : "Advanced…"}
+      <button className="link" aria-expanded={advanced || existing || prList !== null} onClick={() => setAdvanced(!(advanced || existing || prList !== null))}>
+        {advanced || existing || prList !== null ? "Hide advanced" : "Advanced…"}
       </button>
-      {(advanced || existing) && (
+      {(advanced || existing || prList !== null) && (
         <div className="composer-advanced" data-advanced>
           <label>Branch name</label>
           <input
@@ -552,10 +831,35 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             onKeyDown={submitKeys(p)}
           />
           <label className="check">
-            <input type="checkbox" aria-label="reuse an existing branch" checked={existing} onChange={(e) => setExisting(e.target.checked)} />
+            <input type="checkbox" aria-label="reuse an existing branch" checked={existing} onChange={(e) => (setExisting(e.target.checked), setPrList(null), setPrDraft(null))} />
             Reuse an existing branch (check it out, make none)
           </label>
-          {!existing && (
+          <label className="check">
+            <input type="checkbox" aria-label="open a pull request" checked={prList !== null} onChange={(e) => (e.target.checked && p ? openPrs(p) : (setPrList(null), setPrDraft(null)))} />
+            Open a pull request (its branch, linked to it)
+          </label>
+          {prList !== null && (
+            <Picker key={`pr-${p?.id ?? ""}`} name="Pull request" value={prDraft ? `#${prDraft.number} ${prDraft.title}` : "pick a pull request"} items={(q) => prItems(prList, q)} onPick={(k) => setPrDraft(prList.find((x) => String(x.number) === k) ?? null)} startOpen={!prDraft} />
+          )}
+          <label>Setup</label>
+          <select aria-label="setup policy" className="field" value={setupSkip ? "skip" : "run"} onChange={(e) => setSetupSkip(e.target.value === "skip")}>
+            <option value="run">Run the project's setup script (kolux.yaml)</option>
+            <option value="skip">Skip setup</option>
+          </select>
+          {!setupSkip && (
+            <select aria-label="setup opens in" className="field" value={setupWhere} onChange={(e) => setSetupWhere(e.target.value as SetupWhere)}>
+              <option value="tab">Setup in a new tab</option>
+              <option value="right">Setup in a split to the right</option>
+              <option value="down">Setup in a split below</option>
+            </select>
+          )}
+          {!setupSkip && setupWhere === "tab" && (
+            <label className="check">
+              <input type="checkbox" aria-label="wait for setup" checked={setupWait} onChange={(e) => setSetupWait(e.target.checked)} />
+              Wait for setup to finish before the agent starts
+            </label>
+          )}
+          {!existing && prList === null && (
             <input aria-label="start from" className="field" placeholder={p?.base ? `start from: ${p.base} (saved)` : "start from: the default branch"} value={baseDraft} onChange={(e) => setBaseDraft(e.target.value)} onKeyDown={submitKeys(p)} />
           )}
         </div>
@@ -566,7 +870,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
         ))}
       </datalist>
       <div className="btn-row">
-        <button className="btn" onClick={() => p && create(p)} disabled={busy !== "" || !p || (existing ? !branchDraft.trim() : !name.trim() || preview === null)}>
+        <button className="btn" onClick={() => p && create(p)} disabled={busy !== "" || !p || (prList !== null ? !prDraft : existing ? !branchDraft.trim() : !name.trim() || preview === null)}>
           Create workspace
         </button>
         <button className="btn" onClick={() => setCreating(null)}>
@@ -715,7 +1019,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const showWord = (b: boolean) => (b ? "Shown" : "Hidden");
   const globalVis = () => (
     <div data-visibility-defaults>
-      <label>Worktrees Kolux did not make, by default</label>
+      <label title={GLOSSARY.worktree.hover}>Workspaces Kolux did not make, by default</label>
       {visGlobal.map((s) => (
         <div key={s.key}>
           <div className="preview" title={s.root ?? s.label}>
@@ -737,7 +1041,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
       <input
         aria-label="extra root folder"
         className="field"
-        placeholder="another folder that holds worktrees (starts hidden)"
+        placeholder="another folder that holds workspaces (starts hidden)"
         value={rootPath}
         onChange={(e) => {
           setRootPath(e.target.value);
@@ -755,7 +1059,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   );
   const ownVis = (p: Project) => (
     <>
-      <label>Worktrees Kolux did not make, in {p.name}</label>
+      <label title={GLOSSARY.worktree.hover}>Workspaces Kolux did not make, in {p.name}</label>
       {visOwn.map((s) => (
         <div key={s.key}>
           <div className="preview" title={s.root ?? s.label}>
@@ -794,7 +1098,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     const at = Math.min(hiddenPage, pages - 1);
     return (
       <>
-        <label>Hidden worktrees ({all.length})</label>
+        <label title={GLOSSARY.worktree.hover}>Hidden workspaces ({all.length})</label>
         {all.length === 0 && <div className="preview">None hidden.</div>}
         {all.slice(at * PAGE, at * PAGE + PAGE).map((w) => (
           <div className="vis-row" key={w.path}>
@@ -824,16 +1128,79 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const same = (a: string, b: string) => a.replace(/[\\/]+$/, "").toLowerCase() === b.replace(/[\\/]+$/, "").toLowerCase();
   const openCount = (w: Worktree) => openDirs.filter((d) => same(d, w.path)).length;
   const isActive = (w: Worktree) => openCount(w) > 0;
+  // VIEW-051: only running panes count, so an exited tab drops out; none shows no count.
+  const liveIn = (w: Worktree) => sessions.filter((s) => s.running && s.cwd !== null && same(s.cwd, w.path));
+  const liveCount = (w: Worktree) => {
+    const n = liveIn(w).length;
+    return n > 0 ? <span className="count">{n}</span> : null;
+  };
+  const paneRows = (w: Worktree, depth = 0) =>
+    liveIn(w).map((s) => (
+      <div key={s.key} className="sess pane-row" role="button" tabIndex={0} data-pane={s.key} data-agent={s.agent} style={{ paddingLeft: 44 + depth * 14 }} title={"Show " + s.title} onClick={() => onOpenSession(s.key)} onKeyDown={(e) => e.key === "Enter" && onOpenSession(s.key)}>
+        <VendorMark agent={s.agent as Agent} size={12} />
+        <span className="name">{s.title}</span>
+      </div>
+    ));
   const isSelected = (w: Worktree) => activeDir !== null && same(activeDir, w.path);
-  const infoOf = (w: Worktree): RowInfo => Object.entries(states).find(([d]) => same(d, w.path))?.[1] ?? { state: "idle", changed: 0, pr: null };
+  const infoOf = (w: Worktree): RowInfo => {
+    const info = Object.entries(states).find(([d]) => same(d, w.path))?.[1] ?? { state: "idle", changed: 0, pr: null };
+    return w.path in prBy ? { ...info, pr: prBy[w.path] } : info;
+  };
   const isUnread = (w: Worktree) => [...unread].some((d) => same(d, w.path));
   const setRead = (w: Worktree, read: boolean) => onUnread(w.path, !read);
   const show = (w: Worktree) => {
     setRead(w, true);
+    stamp(w.path);
+    wake(w);
     onSelect(w.path, w.branch);
   };
   type Entry = { p: Project; w: Worktree };
-  const order = (xs: Entry[]) => (sortBy === "smart" ? smartOrder(xs, (x) => infoOf(x.w)) : orderWorktrees(xs.map((x) => x.w)).map((w) => xs.find((x) => x.w === w) as Entry));
+  const seenAt = (path: string) => activity[pathKey(path)] ?? 0;
+  const order = (xs: Entry[]) =>
+    sortBy === "smart" ? smartOrder(xs, (x) => infoOf(x.w)) : sortBy === "activity" ? recentOrder(orderWorktrees(xs.map((x) => x.w)).map((w) => xs.find((x) => x.w === w) as Entry), (x) => seenAt(x.w.path)) : orderWorktrees(xs.map((x) => x.w)).map((w) => xs.find((x) => x.w === w) as Entry);
+  // PROJ-051: under Recent the projects follow their latest workspace too, so a new one is first.
+  const projectOrder = sortBy === "activity" ? recentOrder(projects, (p) => Math.max(seenAt(p.path), ...(worktrees[p.id] ?? []).map((w) => seenAt(w.path)))) : projects;
+  // PROJ-046: pinned rows (and the workspaces made from them) sit in a section at the top, and
+  // leave their usual place unless the copies setting is on.
+  const pins: string[] = Array.isArray(settings[PIN_SETTING]) ? (settings[PIN_SETTING] as unknown[]).filter((x): x is string => typeof x === "string") : [];
+  const copies = settings[PIN_COPIES_SETTING] === true;
+  const everyEntry: Entry[] = projects.flatMap((p) => (worktrees[p.id] ?? []).map((w) => ({ p, w })));
+  const pinned = pinnedSet(pins, everyEntry.map((x) => x.w));
+  const isPinned = (w: Worktree) => pins.some((x) => pathKey(x) === pathKey(w.path));
+  const elsewhere = (w: Worktree) => copies || !pinned.has(pathKey(w.path));
+  // PROJ-053, VIEW-053: who sleeps (never the main checkout), and whether sleeping rows show.
+  const asleep: string[] = Array.isArray(settings[SLEEP_SETTING]) ? (settings[SLEEP_SETTING] as unknown[]).filter((x): x is string => typeof x === "string") : [];
+  const isAsleep = (w: Worktree) => !w.isMain && asleep.includes(pathKey(w.path));
+  const showSleeping = showSleepingFrom(settings[SHOW_SLEEPING_SETTING]);
+  const hidden = (w: Worktree) => !showSleeping && isAsleep(w);
+  const inList = (w: Worktree) => elsewhere(w) && !hidden(w); // the lane's listed(), renamed: main's listed is the worktree state
+  function sleep(w: Worktree) {
+    const next = asleepAfter(asleep, everyEntry.map((x) => x.w).filter((x) => !x.isMain), w.path, true);
+    const paths = everyEntry.map((x) => x.w.path).filter((d) => next.includes(pathKey(d)) && !asleep.includes(pathKey(d)));
+    onSetting(SLEEP_SETTING, next);
+    onSleep(paths);
+    invoke("workspace_sleep", { paths }).catch((err) => say("warn", `Some terminals did not close: ${String(err)}`));
+  }
+  function wake(w: Worktree) {
+    if (isAsleep(w)) onSetting(SLEEP_SETTING, asleepAfter(asleep, [], w.path, false));
+  }
+  // PROJ-059: Enter saves; blank or unchanged cancels, and so does Escape or clicking away.
+  function startRename(w: Worktree) {
+    setRenaming(w.path);
+    setRenameText(worktreeLabel(w));
+  }
+  async function saveRename(w: Worktree) {
+    const n = renameTo(renameText, worktreeLabel(w));
+    setRenaming(null);
+    if (n === null) return;
+    try {
+      await invoke("workspace_rename", { path: w.path, name: n });
+      await reload();
+    } catch (err) {
+      say("error", `${worktreeLabel(w)} was not renamed: ${String(err)}`);
+    }
+  }
+  const togglePin = (w: Worktree) => onSetting(PIN_SETTING, isPinned(w) ? pins.filter((x) => pathKey(x) !== pathKey(w.path)) : [...pins, w.path]);
   const toggleFold = (title: string) => setFolded((f) => new Set(f.has(title) ? [...f].filter((t) => t !== title) : [...f, title]));
 
   // One workspace row: its state dot, name, unread mark, and the Remove and Mark unread buttons;
@@ -846,7 +1213,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     const up = w.parent ? (worktrees[p.id] ?? []).find((x) => !x.isMain && same(x.path, w.parent as string)) : undefined;
     return (
       <div key={w.path} data-worktree={worktreeLabel(w)} data-depth={depth} data-path={w.path}>
-        <div className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onClick={() => show(w)} onKeyDown={(e) => e.key === "Enter" && show(w)} title={`Show ${w.path}`} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
+        <div className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onClick={() => show(w)} onKeyDown={(e) => (e.key === "Enter" ? show(w) : e.key === "F2" && startRename(w))} title={`Show ${w.path}${isAsleep(w) ? " (asleep: showing it wakes it)" : ""}`} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
           {kids && (
             <button
               className={`fold${shut ? " shut" : ""}`}
@@ -861,14 +1228,60 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             </button>
           )}
           <span className={`dot ${info.state}${isActive(w) ? " live" : ""}`} role="img" aria-label={isActive(w) || info.state !== "idle" ? info.state : "idle"} data-tip={VOCAB[info.state].explain} />
-          <span className="name">{worktreeLabel(w)}</span>
-          {pushHint(w)}
+          {renaming === w.path ? (
+            <input
+              className="rename"
+              autoFocus
+              aria-label="Workspace name"
+              value={renameText}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => setRenameText(e.target.value)}
+              onBlur={() => setRenaming(null)}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") void saveRename(w);
+                if (e.key === "Escape") setRenaming(null);
+              }}
+            />
+          ) : (
+            <span
+              className="name"
+              title="Double-click (or F2) to rename"
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                startRename(w);
+              }}
+            >
+              {worktreeLabel(w)}
+            </span>
+          )}
+          {info.cache != null && <CacheTimer due={info.cache} />}
+          {isAsleep(w) && (
+            <span className="hint" title="Asleep: its tabs and terminals were closed; show it to wake it">
+              sleeping
+            </span>
+          )}
           {w.kind === "external" && (
             <span className="hint" title="Made outside Kolux (plain Git or another tool); Kolux has no record of making it">
               external
             </span>
           )}
+          {pushTag(w) || pushHint(w)}
           {groupBy !== "project" && <span className="hint">{p.name}</span>}
+          {liveCount(w)}
+          {!asking && (
+            <button
+              className={`ib${isPinned(w) ? " on" : ""}`}
+              title={isPinned(w) ? "Unpin: back to its usual place only" : "Pin to the top of the list"}
+              aria-pressed={isPinned(w)}
+              onClick={(e) => {
+                e.stopPropagation();
+                togglePin(w);
+              }}
+            >
+              <Pin size={11} />
+            </button>
+          )}
           {!asking && (
             <button
               className="ib"
@@ -892,6 +1305,18 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
               }}
             >
               <ArrowRight size={11} />
+            </button>
+          )}
+          {!asking && !w.isMain && !isAsleep(w) && (
+            <button
+              className="ib"
+              title="Sleep: close its tabs and terminals, and those of the workspaces made from it; show it again to wake it"
+              onClick={(e) => {
+                e.stopPropagation();
+                sleep(w);
+              }}
+            >
+              <Moon size={11} />
             </button>
           )}
           {!asking && !w.isMain && (
@@ -920,6 +1345,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             </button>
           )}
         </div>
+        {paneRows(w, depth)}
         {moving === w.path && !asking && (
           <div className="sb-form" data-moving={worktreeLabel(w)}>
             <Picker key={`move-${w.path}`} name="Move under" value={up ? worktreeLabel(up) : "No parent"} startOpen items={moveItems(p, w)} onPick={(k) => void move(p, w, k)} />
@@ -975,11 +1401,171 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     );
   };
   const standIn = (p: Project) =>
-    pending?.projectId === p.id && (
-      <div className="sess pending" data-pending={pending.name} aria-busy="true">
-        <span className="dot" role="img" aria-label="creating" />
-        <span className="name">{pending.name}</span>
-        <span className="hint">creating…</span>
+    pending
+      .filter((c) => c.projectId === p.id)
+      .map((c) => (
+        <div key={c.ticket} className="sess pending" data-pending={c.name} aria-busy="true">
+          <span className="dot" role="img" aria-label="creating" />
+          <span className="name">{c.name}</span>
+          <span className="hint">{stopping.includes(c.ticket) ? "stopping…" : "creating…"}</span>
+          {!stopping.includes(c.ticket) && (
+            <button className="ib" title={`Cancel creating ${c.name}; what Git made so far is removed`} aria-label={`cancel creating ${c.name}`} onClick={() => stopCreate(c.ticket)}>
+              ×
+            </button>
+          )}
+        </div>
+      ));
+
+  const projectBlock = (p: Project) => {
+      const list = worktrees[p.id] ?? [];
+      const main = list.find((w) => w.isMain);
+      const others = order(list.filter((w) => !w.isMain && inList(w)).map((w) => ({ p, w })));
+      const opening = creating === p.id;
+      return (
+        <div key={p.id}>
+          <div className="proj" title={p.path}>
+            <span className="name">{p.name}</span>
+            <button className={`ib${settingsFor === p.id ? " on" : ""}`} title="Project settings: its workspaces folder and base ref" aria-pressed={settingsFor === p.id} onClick={() => (settingsFor === p.id ? setSettingsFor(null) : openSettings(p))}>
+              <Gear />
+            </button>
+            <button className={`ib${opening ? " on" : ""}`} title="New workspace: a branch in its own folder" aria-pressed={opening} onClick={() => setCreating(opening ? null : p.id)}>
+              <Plus size={13} />
+            </button>
+          </div>
+          {main && (
+            <button className={`branch${isSelected(main) ? " sel" : ""}`} onClick={() => show(main)} title={`Show ${main.path}`}>
+              <span className={`dot ${infoOf(main).state}${isActive(main) ? " live" : ""}`} role="img" aria-label={infoOf(main).state} data-tip={VOCAB[infoOf(main).state].explain} />
+              <span className="name">{worktreeLabel(main)}</span>
+              {pushTag(main) || pushHint(main)}
+              {liveCount(main)}
+              <span className="chev">
+                <ChevronDown size={12} />
+              </span>
+            </button>
+          )}
+          {main && paneRows(main)}
+          {settingsFor === p.id && (
+            <div className="sb-form" data-project-settings={p.id}>
+              <label>Workspaces folder for {p.name}</label>
+              <input aria-label="project workspaces folder" className="field" list="used-dirs" placeholder={`global: ${place.dir}`} value={dirDraft} onChange={(e) => setDirDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
+              {hiddenList(p)}
+              {ownVis(p)}
+              <label>Base ref</label>
+              <input aria-label="project base ref" className="field" placeholder="the default branch Git reports" value={projectBaseDraft} onChange={(e) => setProjectBaseDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
+              <label>Group</label>
+              <select aria-label="project group" className="field" value={groups.groups.some((g) => g.id === groups.members[p.id]) ? groups.members[p.id] : ""} onChange={(e) => putInGroup(p, e.target.value)}>
+                <option value="">None: top level</option>
+                {groups.groups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+              <div className="btn-row">
+                <button className="btn" onClick={() => saveProject(p)}>
+                  Save
+                </button>
+                <button className="btn" onClick={() => setSettingsFor(null)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+          {(fresh[p.id] ?? []).length > 0 && review !== p.id && (
+            <button className="sb-notice" onClick={() => setReview(p.id)} title="Worktrees made with plain Git or another tool since you last looked">
+              {fresh[p.id].length} new workspace{fresh[p.id].length === 1 ? "" : "s"}
+            </button>
+          )}
+          {review === p.id && (
+            <div className="sb-form" data-review={p.id}>
+              <label title={GLOSSARY.worktree.hover}>New workspaces in {p.name}</label>
+              {(fresh[p.id] ?? []).map((w) => (
+                <div className="vis-row" key={w.path}>
+                  <span className="path" title={w.path}>{relPath(p.path, w.path)}</span>
+                  <button className="btn" onClick={() => hide(w, !w.hidden)}>
+                    {w.hidden ? "Show" : "Hide"}
+                  </button>
+                </div>
+              ))}
+              <div className="btn-row">
+                <button className="btn" onClick={() => doneReview(p)}>
+                  Done
+                </button>
+              </div>
+            </div>
+          )}
+          {opening && nameField(p)}
+          {standIn(p)}
+          {nestRows(others.map((x) => x.w), nest, shutKids, (ws) => ws).map((r) => row({ p, w: r.w }, r.depth, r.kids))}
+        </div>
+      );
+  };
+  const groupForm = (g: Group, count: number) => (
+    <div className="sb-form" data-group-settings={g.id}>
+      <label>Group name</label>
+      <input aria-label="group name" className="field" value={groupName} onChange={(e) => setGroupName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveGroup(g)} autoFocus />
+      <label>Inside</label>
+      <select aria-label="group inside" className="field" value={groupParent} onChange={(e) => setGroupParent(e.target.value)}>
+        <option value="">Nothing: top level</option>
+        {groupChoices(groups, g.id).map((x) => (
+          <option key={x.id} value={x.id}>
+            {x.name}
+          </option>
+        ))}
+      </select>
+      {dropGroup ? (
+        <>
+          <div className="sb-hint">
+            Delete {g.name}? {count === 0 ? "It holds no projects." : `It holds ${count} project${count === 1 ? "" : "s"}.`}
+          </div>
+          <label className="check">
+            <input type="checkbox" aria-label="also remove the projects" checked={dropGroup.remove} onChange={(e) => setDropGroup({ remove: e.target.checked })} />
+            Also remove its projects from Kolux (their folders stay on disk)
+          </label>
+          <div className="btn-row">
+            <button className="btn danger" onClick={() => deleteGroup(g, dropGroup.remove)}>
+              Delete group
+            </button>
+            <button className="btn" onClick={() => setDropGroup(null)}>
+              Keep it
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="btn-row">
+          <button className="btn" onClick={() => saveGroup(g)}>
+            Save
+          </button>
+          <button className="btn" onClick={() => setDropGroup({ remove: false })}>
+            Delete…
+          </button>
+          <button className="btn" onClick={() => setGroupFor(null)}>
+            Cancel
+          </button>
+        </div>
+      )}
+    </div>
+  );
+  // PROJ-014: groups fold like the other headers; sub-groups and their projects sit inside.
+  const drawNode = (n: Node): ReactNode =>
+    n.kind === "project" ? (
+      projectBlock(n.project)
+    ) : (
+      <div key={n.group.id} className="proj-group" data-project-group={n.group.id}>
+        <div className="sb-group-row">
+          <button className="sb-group" aria-expanded={!folded.has(n.group.id)} onClick={() => toggleFold(n.group.id)}>
+            {n.group.name}
+            <span className="count">{n.count}</span>
+            <span className="chev">
+              <ChevronDown size={12} />
+            </span>
+          </button>
+          <button className={`ib${groupFor === n.group.id ? " on" : ""}`} title="Group settings: its name, where it sits, delete it" aria-pressed={groupFor === n.group.id} onClick={() => (groupFor === n.group.id ? setGroupFor(null) : openGroup(n.group))}>
+            <Gear />
+          </button>
+        </div>
+        {groupFor === n.group.id && groupForm(n.group, n.count)}
+        {!folded.has(n.group.id) && <div className="proj-group-kids">{n.children.map(drawNode)}</div>}
       </div>
     );
 
@@ -988,7 +1574,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
       <aside className="sidebar" aria-label="Sidebar">
         <nav className="sb-nav">
           {chromeShown(settings, "tasksButton") && (
-            <button className="row" title="Tasks (not built yet)">
+            <button className={`row${page === "tasks" ? " on" : ""}`} aria-current={page === "tasks" ? "page" : undefined} onClick={() => onPage("tasks")}>
               <span className="ic">
                 <List />
               </span>
@@ -1001,32 +1587,40 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             </span>
             Artifacts
           </button>
-          <button className="row" onClick={openKits}>
+          <button className="row" onClick={() => openKits()}>
             <span className="ic">
               <Box />
             </span>
             Starter kits
           </button>
+          {chromeShown(settings, "automationsButton") && <AutomationsRow open={page === "automations"} onOpen={() => onPage("automations")} onHide={() => onSetting("automationsButton", false)} />}
         </nav>
 
         <div className="sb-section">
           Projects
           <span className="icons">
-            <button className="ib" title="Notifications (not built yet)">
-              <Bell size={13} />
-            </button>
+            {NOT_BUILT && (
+              <button className="ib" title="Notifications (not built yet)">
+                <Bell size={13} />
+              </button>
+            )}
             <button className={`ib${filterOpen ? " on" : ""}`} title="Group and sort the list" aria-pressed={filterOpen} onClick={() => setFilterOpen((o) => !o)}>
               <Sliders size={13} />
             </button>
-            <button className="ib" title="Add a project: choose folders, with or without Git" onClick={browse} disabled={busy !== ""}>
+            <button className="ib" title="Add project: clone, open a folder or start a new one" aria-pressed={adding} onClick={() => setAdding(true)} disabled={busy !== ""}>
               <FolderPlus size={13} />
+            </button>
+            <button className="ib" title="New group: sort projects into folders of their own" onClick={newGroup} disabled={groupBy !== "project"}>
+              <Box size={13} />
             </button>
             <button className="ib" title="New workspace: a branch in its own folder" aria-pressed={creating !== null} onClick={() => (creating === null ? openCreate() : setCreating(null))}>
               <Plus size={13} />
             </button>
-            <button className="ib" title="Launch (not built yet)">
-              <Rocket size={13} />
-            </button>
+            {NOT_BUILT && (
+              <button className="ib" title="Launch (not built yet)">
+                <Rocket size={13} />
+              </button>
+            )}
           </span>
         </div>
 
@@ -1034,9 +1628,11 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           <button role="tab" aria-pressed="true">
             Workspaces
           </button>
-          <button role="tab" aria-pressed="false" title="Status (not built yet)">
-            Status
-          </button>
+          {NOT_BUILT && (
+            <button role="tab" aria-pressed="false" title="Status (not built yet)">
+              Status
+            </button>
+          )}
         </div>
 
         <div className="sb-list">
@@ -1070,27 +1666,12 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                   Use default
                 </button>
               </div>
-              <div className="sb-form-head">Git &amp; worktrees</div>
-              <label>Branch prefix</label>
-              <select aria-label="branch prefix" className="field" value={prefixMode} onChange={(e) => onSetting("branchPrefix", e.target.value)}>
-                <option value="user">Git user name, e.g. txais-xiong/</option>
-                <option value="custom">Custom text</option>
-                <option value="none">None: the bare name</option>
-              </select>
-              {prefixMode === "custom" && <input aria-label="custom branch prefix" className="field" placeholder="e.g. tx/" value={prefixDraft} onChange={(e) => setPrefixDraft(e.target.value)} onBlur={() => prefixDraft !== String(settings.branchPrefixCustom ?? "") && onSetting("branchPrefixCustom", prefixDraft)} onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()} />}
-              <div className="note" data-prefix-sample>
-                Next branch: <code>{sample.sample}</code>
-              </div>
-              {sample.note && (
-                <div className="note warn" role="alert">
-                  {sample.note}
-                </div>
-              )}
-              <label>Default compare base</label>
-              <select aria-label="default compare base" className="field" value={settings[SUMMARY_UPSTREAM_KEY] === true ? "upstream" : "default"} onChange={(e) => onSetting(SUMMARY_UPSTREAM_KEY, e.target.value === "upstream")}>
-                <option value="default">Repository default</option>
-                <option value="upstream">Branch upstream</option>
-              </select>
+              <button type="button" className="link" data-git-settings onClick={() => {
+                setShowAdd(false);
+                openSettingsPage("git");
+              }}>
+                Branch prefix and compare base: the Git page in Settings
+              </button>
               <label className="check">
                 <input type="checkbox" checked={nest} onChange={(e) => onNest(e.target.checked)} />
                 Nest child workspaces under their parent
@@ -1117,97 +1698,48 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
               <select aria-label="sort" className="field" value={sortBy} onChange={(e) => onSetting(SORT_SETTING, e.target.value)}>
                 <option value="smart">Smart: what needs you first</option>
                 <option value="name">Name</option>
+                <option value="activity">Recent: latest activity first</option>
               </select>
               <button className="btn" onClick={() => setCleanupOpen(true)}>
                 Clean up workspaces…
               </button>
+              <label className="check">
+                <input type="checkbox" checked={hideAuto} onChange={(e) => onSetting(HIDE_AUTOMATION_SETTING, e.target.checked)} /> Hide workspaces made by automations
+              </label>
+              <label className="check">
+                <input type="checkbox" aria-label="pinned rows also in their group" checked={copies} onChange={(e) => onSetting(PIN_COPIES_SETTING, e.target.checked)} />
+                Pinned rows also show in their usual place
+              </label>
+              <label className="check">
+                <input type="checkbox" aria-label="show sleeping workspaces" checked={showSleeping} onChange={(e) => onSetting(SHOW_SLEEPING_SETTING, e.target.checked)} />
+                Show sleeping workspaces
+              </label>
             </div>
           )}
           {creating === "" && nameField(null)}
-          {projects.length === 0 && !showAdd && <div className="sb-hint">No projects yet. Use the folder button above to add a folder; one without Git can start it here.</div>}
+          {projects.length === 0 && !showAdd && <div className="sb-hint">No projects yet. Use the folder button above to add a project folder; one without Git can start it here.</div>}
 
-          {groupBy === "project" &&
-            projects.map((p) => {
-              const list = worktrees[p.id] ?? [];
-              const main = list.find((w) => w.isMain);
-              const others = order(list.filter((w) => !w.isMain).map((w) => ({ p, w })));
-              const opening = creating === p.id;
-              return (
-                <div key={p.id}>
-                  <div className="proj" title={p.path}>
-                    <span className="name">{p.name}</span>
-                    <button className={`ib${settingsFor === p.id ? " on" : ""}`} title="Project settings: its workspaces folder and base ref" aria-pressed={settingsFor === p.id} onClick={() => (settingsFor === p.id ? setSettingsFor(null) : openSettings(p))}>
-                      <Gear />
-                    </button>
-                    <button className={`ib${opening ? " on" : ""}`} title="New workspace: a branch in its own folder" aria-pressed={opening} onClick={() => setCreating(opening ? null : p.id)}>
-                      <Plus size={13} />
-                    </button>
-                  </div>
-                  {main && (
-                    <button className={`branch${isSelected(main) ? " sel" : ""}`} onClick={() => show(main)} title={`Show ${main.path}`}>
-                      <span className={`dot ${infoOf(main).state}${isActive(main) ? " live" : ""}`} role="img" aria-label={infoOf(main).state} data-tip={VOCAB[infoOf(main).state].explain} />
-                      <span className="name">{worktreeLabel(main)}</span>
-                      {pushHint(main)}
-                      {isActive(main) && <span className="count">{openCount(main)}</span>}
-                      <span className="chev">
-                        <ChevronDown size={12} />
-                      </span>
-                    </button>
-                  )}
-                  {settingsFor === p.id && (
-                    <div className="sb-form" data-project-settings={p.id}>
-                      <label>Workspaces folder for {p.name}</label>
-                      <input aria-label="project workspaces folder" className="field" list="used-dirs" placeholder={`global: ${place.dir}`} value={dirDraft} onChange={(e) => setDirDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
-                      {hiddenList(p)}
-                      {ownVis(p)}
-                      <label>Base ref</label>
-                      <input aria-label="project base ref" className="field" placeholder="the default branch Git reports" value={projectBaseDraft} onChange={(e) => setProjectBaseDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
-                      <div className="btn-row">
-                        <button className="btn" onClick={() => saveProject(p)}>
-                          Save
-                        </button>
-                        <button className="btn" onClick={() => setSettingsFor(null)}>
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                  {(fresh[p.id] ?? []).length > 0 && review !== p.id && (
-                    <button className="sb-notice" onClick={() => setReview(p.id)} title="Worktrees made with plain Git or another tool since you last looked">
-                      {fresh[p.id].length} new worktree{fresh[p.id].length === 1 ? "" : "s"}
-                    </button>
-                  )}
-                  {review === p.id && (
-                    <div className="sb-form" data-review={p.id}>
-                      <label>New worktrees in {p.name}</label>
-                      {(fresh[p.id] ?? []).map((w) => (
-                        <div className="vis-row" key={w.path}>
-                          <span className="path" title={w.path}>{relPath(p.path, w.path)}</span>
-                          <button className="btn" onClick={() => hide(w, !w.hidden)}>
-                            {w.hidden ? "Show" : "Hide"}
-                          </button>
-                        </div>
-                      ))}
-                      <div className="btn-row">
-                        <button className="btn" onClick={() => doneReview(p)}>
-                          Done
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                  {opening && nameField(p)}
-                  {standIn(p)}
-                  {nestRows(others.map((x) => x.w), nest, shutKids, (ws) => ws).map((r) => row({ p, w: r.w }, r.depth, r.kids))}
-                </div>
-              );
-            })}
+          {everyEntry.some((x) => pinned.has(pathKey(x.w.path)) && !hidden(x.w)) && (
+            <div data-group="Pinned" className="pinned">
+              <button className="sb-group" aria-expanded={!folded.has("pinned-section")} onClick={() => toggleFold("pinned-section")}>
+                Pinned
+                <span className="count">{everyEntry.filter((x) => pinned.has(pathKey(x.w.path)) && !hidden(x.w)).length}</span>
+                <span className="chev">
+                  <ChevronDown size={12} />
+                </span>
+              </button>
+              {!folded.has("pinned-section") &&
+                nestRows(order(everyEntry.filter((x) => pinned.has(pathKey(x.w.path)) && !hidden(x.w))).map((x) => x.w), nest, shutKids, (ws) => ws).map((r) => row({ p: everyEntry.find((x) => x.w === r.w)?.p as Project, w: r.w }, r.depth, r.kids))}
+            </div>
+          )}
+          {groupBy === "project" && groupTree(groups, projectOrder).map(drawNode)}
 
           {/* PROJ-045: one list across projects, flat or under Status / Pull request headers that fold. */}
           {groupBy !== "project" && creating && nameField(projects.find((p) => p.id === creating) ?? null)}
           {groupBy !== "project" && projects.map(standIn)}
           {groupBy !== "project" &&
             groupRows(
-              order(projects.flatMap((p) => (worktrees[p.id] ?? []).map((w) => ({ p, w })))),
+              order(everyEntry.filter((x) => inList(x.w))),
               groupBy,
               (x) => infoOf(x.w),
               (x) => x.p.name,
@@ -1285,6 +1817,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             }}
           />
         )}
+        {adding && <AddProject onBrowse={browse} onClose={() => setAdding(false)} onAdded={(p) => { setAdding(false); void added(p, false); }} />}
         <div className="sb-foot">
           <button
             className="ib"
@@ -1297,31 +1830,51 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           >
             <Gear />
           </button>
-          {chromeShown(settings, "automationsButton") && (
-            <button className="ib" title="Automations" aria-pressed={page === "automations"} onClick={() => onPage("automations")}>
-              <Clock />
-            </button>
-          )}
           {/* SET-028: until Settings > Agents exists (T-036, T-054), model routing opens from here. */}
           <button className="ib" title="Model routing: the model and effort for each worker tier" aria-pressed={page === "routing"} onClick={() => onPage("routing")}>
             <Sliders size={14} />
           </button>
-          <button className="ib" title="Help (not built yet)">
+          {/* APP-010: the help menu; only Onboarding (ONB-009) so far, the rest of its items are T-248. */}
+          <button className="ib" title="Help" aria-haspopup="menu" aria-expanded={help !== null} onClick={(e) => setHelp(help ? null : e.currentTarget.getBoundingClientRect())}>
             <Help />
           </button>
+          {help && (
+            <>
+              <div className="menu-backdrop" onClick={() => setHelp(null)} />
+              <div className="menu" role="menu" aria-label="Help" style={{ left: help.left, bottom: window.innerHeight - help.top + 4 }} onKeyDown={(e) => e.key === "Escape" && setHelp(null)}>
+                <div className="menu-title">Help</div>
+                <button
+                  className="menu-item"
+                  role="menuitem"
+                  autoFocus
+                  onClick={() => {
+                    setHelp(null);
+                    window.dispatchEvent(new CustomEvent(REOPEN_WIZARD));
+                  }}
+                >
+                  <span className="name">Onboarding</span>
+                </button>
+              </div>
+            </>
+          )}
           <button className="upd" title="Check for a newer version of Kolux RS" onClick={requestUpdateCheck}>
             <Refresh size={13} />
             Check for updates
           </button>
-          <button className="ib" title="Focus (not built yet)">
-            <Target />
-          </button>
-          <button className="ib" title="Right rail (not built yet)">
-            <Rail />
-          </button>
+          {NOT_BUILT && (
+            <button className="ib" title="Focus (not built yet)">
+              <Target />
+            </button>
+          )}
+          {NOT_BUILT && (
+            <button className="ib" title="Right rail (not built yet)">
+              <Rail />
+            </button>
+          )}
         </div>
       </aside>
       {cleanupOpen && <Cleanup projects={projects} onClose={() => setCleanupOpen(false)} />}
+      {importing && <ImportSetup {...importing} busy={busy !== ""} onImport={importSetup} onClose={() => setImporting(null)} />}
       {startGit && <StartGit {...startGit} busy={busy !== ""} onStart={startGitAndAdd} onCancel={() => setStartGit(null)} />}
     </div>
   );

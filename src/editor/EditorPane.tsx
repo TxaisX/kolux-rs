@@ -3,23 +3,33 @@
 // tab is unsaved while that text differs from the disk copy. Mod+S comes from App's shortcut
 // router, which calls the focused pane's entry in `editors`. A file that will not load is tried
 // three times, then the body says why and offers Retry; a failed save is a toast and the
-// marker stays. A markdown file opens in a rich view (EDIT-012, markdown.ts) with a Rich |
+// marker stays. A save is refused when the file changed on disk since it was loaded (EDIT-003,
+// T-073-a): the pane then asks Reload (take the disk copy) or Keep mine (overwrite it). Before any
+// save, a cheap check (diskChange.ts, every 2 s for a tab in front and on window focus) notices
+// that the file moved on (T-073): a tab without edits takes the disk copy quietly, one with edits
+// shows the banner (DiskBanner.tsx: Reload, undoable / Keep my edits / Compare). The check is
+// advisory; the save's hash check stays the guard. A markdown file opens in a rich view (EDIT-012, markdown.ts) with a Rich |
 // Source switch; the source view is the CodeMirror one, which keeps holding the text throughout.
-// EDIT-003: a tab on show looks at its file every 1.5 s; a new disk copy is taken quietly when
-// there are no unsaved edits, and raises a banner (Reload, Keep my edits, Compare) when there are.
-import { useEffect, useRef, useState } from "react";
+// EDIT-007: Copy Context copies the selection under its path and line range, with a hint beside a
+// selection it applies to; EDIT-020: review notes take a selection from any file, not just Markdown.
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
 import { EditorView } from "@codemirror/view";
 import { Compartment, EditorState } from "@codemirror/state";
-import { undo } from "@codemirror/commands";
-import { MergeView } from "@codemirror/merge";
 import { LanguageDescription, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { Close, FileCode } from "../chrome/icons";
-import { attach, baseName, detach, diskNews, draftOf, isDirty, keyOf, keepMine, loadText, relay, replaceAll, save, subscribe } from "./buffers";
+import { undo } from "@codemirror/commands";
+import { attach, baseName, detach, draftOf, isDirty, isStale, keyOf, loadText, relay, replaceAll, save, subscribe, textOf } from "./buffers";
+import { beginSave, canUndo, checkOnce, endSave, forget, keep, POLL_MS, readFresh, reloadNow, remember, setBanner as markBanner, UNDO_TOAST_MS, type Io, type Stamp, type UndoEntry } from "./diskChange";
+import { CompareView, DiskBanner, UndoToast } from "./DiskBanner";
 import { changeBetween, isMarkdown, mountRich, planRich, rewrite, RICH_LIMIT, splitFront, unsupported } from "./markdown";
+import { domPick, noteDraft, selections } from "./notes";
+import { contextText } from "./copyContext";
+import { shortPath } from "./diffNotes";
+import { useLabel } from "../keys/KeymapContext";
 import { resumeAutosave, stopAutosave, watchAutosave } from "./autosave";
 import { hashText, type Mode, type Start } from "./session";
 
@@ -28,12 +38,93 @@ export const looks = new Map<number, { caret: number; mode: Mode }>();
 
 /** Save for each open editor pane, by pane key; App's Mod+S calls the focused one. */
 export const editors = new Map<number, () => Promise<void>>();
+/** EDIT-007: Copy Context for each open editor pane; false when this tab cannot copy that way. */
+export const copiers = new Map<number, () => boolean>();
+
+/** EDIT-003 (T-073-a, T-073-c): Mod+S for an editor tab or an unstaged diff tab. The write carries
+ *  the hash of the disk copy the tab loaded; a refusal because the file moved on calls
+ *  `onStale(true)` (the pane shows StaleNotice), any other failure is a toast. */
+/** T-073: the disk stamp of one file, null when it is gone or the check failed. */
+export const stampOne = (path: string): Promise<Stamp | null> =>
+  invoke<(Stamp | null)[]>("file_stamps", { paths: [path] }).then(
+    (r) => r?.[0] ?? null,
+    () => null,
+  );
+
+/** Writes the buffer and remembers the stamp the write answered with, so Kolux's own save never
+ *  looks like someone else's change (EDIT-003). */
+async function writeRemembering(path: string, force: boolean): Promise<void> {
+  let wrote: Stamp | null | undefined;
+  // T-073-e (council A1): while the write is out the disk check treats this file as unchanged, so
+  // a poll landing between the write and remember() cannot flash the banner on the user's own save.
+  beginSave(path);
+  try {
+    await save(path, async (text, loadedHash) => void (wrote = await invoke<Stamp | null>("file_write", force ? { path, text } : { path, text, loadedHash })), force);
+    remember(path, wrote ?? (await stampOne(path)));
+  } finally {
+    endSave(path);
+  }
+}
+
+export async function saveFile(path: string, onStale: (stale: boolean) => void, onToast?: (text: string) => void): Promise<void> {
+  try {
+    await writeRemembering(path, false);
+    onStale(false);
+  } catch (err) {
+    if (isStale(err)) return onStale(true);
+    onToast?.(`${baseName(path)} was not saved: ${String(err)}`);
+  }
+}
+
+/** The choice after a stale refusal: Reload takes the disk copy, Keep mine writes over it. */
+export function StaleNotice({ path, onDone, onToast }: { path: string; onDone: () => void; onToast?: (text: string) => void }) {
+  const name = baseName(path);
+  return (
+    <div className="notice save-stale" role="alert">
+      {name} changed on disk since you opened it, so it was not saved.
+      <button
+        className="btn"
+        title="Show the disk copy; your unsaved edits are dropped"
+        onClick={() =>
+          void readFresh(
+            path,
+            () => stampOne(path),
+            () => invoke<string>("file_read", { path }),
+          ).then(
+            (got) => {
+              if (!got) return;
+              replaceAll(path, got.text, true);
+              remember(path, got.stamp);
+              onDone();
+            },
+            (err) => onToast?.(name + " did not reload: " + String(err)),
+          )
+        }
+      >
+        Reload
+      </button>
+      <button
+        className="btn"
+        title="Save your text over the disk copy"
+        onClick={() =>
+          void writeRemembering(path, true).then(
+            () => onDone(),
+            (err) => onToast?.(name + " was not saved: " + String(err)),
+          )
+        }
+      >
+        Keep mine
+      </button>
+    </div>
+  );
+}
 
 const lang = new Compartment();
 export const look = EditorView.theme(
   {
     "&": { height: "100%", background: "var(--pane-bg)", color: "var(--fg)", fontSize: "13px" },
-    ".cm-scroller": { fontFamily: "var(--mono-font)", lineHeight: "1.5" },
+    // TERM-097 / SET-018: the editor font, which is the terminal font unless set on its own.
+    ".cm-scroller": { fontFamily: "var(--editor-font, var(--mono-font))", lineHeight: "1.5" },
     ".cm-gutters": { background: "var(--pane-bg)", color: "var(--fg-faint)", border: "none" },
     // See-through, so the selection drawn under the text still shows on the caret's line.
     ".cm-activeLine, .cm-activeLineGutter": { background: "color-mix(in srgb, var(--row-selected) 45%, transparent)" },
@@ -44,9 +135,10 @@ export const look = EditorView.theme(
   { dark: true },
 );
 
-type Props = { id: number; path: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; autosave?: number | null; start?: Start; movedFrom?: string };
+/** `readOnly`: typing changes nothing (SKILL-012 previews a kit result this way). */
+type Props = { id: number; path: string; root?: string | null; readOnly?: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; autosave?: number | null; start?: Start; movedFrom?: string };
 
-export default function EditorPane({ id, path, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, autosave = null, start, movedFrom }: Props) {
+export default function EditorPane({ id, path, root = null, readOnly = false, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, autosave = null, start, movedFrom }: Props) {
   // EDIT-004: a restored tab's draft, caret and view mode, used by its first load only.
   const first = useRef(start);
   // EDIT-032: what the tab held when its file last closed in it; a rename or move (movedFrom) takes it along.
@@ -57,6 +149,12 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
   const [error, setError] = useState<string | null>(null);
   const [tries, setTries] = useState(0);
   const [dirty, setDirty] = useState(false);
+  const [stale, setStale] = useState(false); // the last save was refused: the disk copy moved on
+  // T-073: the disk copy changed under unsaved edits (with the stamp Keep my edits keeps), the
+  // Compare view, and the Undo toast after a Reload.
+  const [moved, setMoved] = useState<{ stamp: Stamp | null } | null>(null);
+  const [comparing, setComparing] = useState(false);
+  const [undoable, setUndoable] = useState<UndoEntry | null>(null);
   const report = useRef({ onDirty, onToast });
   report.current = { onDirty, onToast };
   const wantFocus = useRef(focused);
@@ -72,13 +170,17 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
   const [bigOk, setBigOk] = useState(false); // Open anyway, for this tab and this file only
   const [richError, setRichError] = useState<string | null>(null);
   const [richTries, setRichTries] = useState(0);
-  // EDIT-003: the disk copy that moved under unsaved edits, the Compare view, the undo offer.
-  const [moved, setMoved] = useState<string | null>(null);
-  const [compare, setCompare] = useState<{ disk: string | null; error?: string } | null>(null);
-  const [undoOffer, setUndoOffer] = useState(false);
-  const stamp = useRef<string | null>(null);
-  const reads = useRef(0);
-  const compareHost = useRef<HTMLDivElement>(null);
+  // EDIT-007: the hint beside a selection Copy Context applies to, gone once that selection is copied.
+  const copyKey = useLabel("editor.copyContext").join("+");
+  const [hint, setHint] = useState<{ x: number; y: number; sel: string } | null>(null);
+  const [copiedSel, setCopiedSel] = useState<string | null>(null);
+  const [flash, setFlash] = useState<{ x: number; y: number } | null>(null);
+  const place = useRef((_v: EditorView) => {});
+  place.current = (v) => {
+    const { from, to } = v.state.selection.main;
+    const c = from !== to && v.hasFocus ? v.coordsAtPos(to) : null;
+    setHint(c && contextText(v.state.doc, from, to, "").header ? { x: c.right, y: c.bottom, sel: `${from}-${to}` } : null);
+  };
 
   useEffect(() => {
     let alive = true;
@@ -89,7 +191,14 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
       report.current.onDirty?.(d);
     });
     setError(null);
-    loadText(() => invoke<string>("file_read", { path })).then(
+    setStale(false);
+    setMoved(null);
+    setComparing(false);
+    let loaded: Stamp | null = null;
+    // T-073: the stamp is taken before the text, so a write landing in between shows at the next check.
+    stampOne(path)
+      .then((st) => ((loaded = st), loadText(() => invoke<string>("file_read", { path }))))
+      .then(
       (text) => {
         if (!alive) return;
         const begin = first.current ?? carried();
@@ -101,21 +210,22 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
           selection: begin?.caret !== undefined ? { anchor: Math.min(begin.caret, doc.length) } : undefined,
           parent: host.current!,
           // A file with Windows line ends is saved with them.
-          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), EditorView.updateListener.of((u) => {
+          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), EditorView.updateListener.of((u) => {
               u.transactions.forEach((tr) => relay(path, u.view, tr));
               looks.set(id, { caret: u.state.selection.main.head, mode: modeNow.current });
-            }),
+            }), EditorView.updateListener.of((u) => (u.selectionSet || u.docChanged || u.focusChanged || u.geometryChanged) && place.current(u.view)), EditorView.domEventHandlers({ scroll: (_e, v) => void place.current(v) }),
           ],
         });
         view.current = made;
-        stamp.current = null;
         attach(path, made, text);
         looks.set(id, { caret: made.state.selection.main.head, mode: modeNow.current });
         // EDIT-003 after a restart: a draft whose file moved on meanwhile gets the banner.
         if (begin?.draft !== undefined && begin.base !== undefined && begin.base !== hashText(text) && isDirty(path)) {
           stopAutosave(path);
-          setMoved(text);
+          setMoved({ stamp: null });
         }
+        // A twin pane already holds this file: its stamp stays the one its copy came from.
+        if (textOf(path) === text) remember(path, loaded);
         setReady((n) => n + 1);
         // A newly opened file takes the keyboard at once.
         if (wantFocus.current) made.focus();
@@ -126,15 +236,7 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
       },
       (err) => alive && setError(String(err)),
     );
-    editors.set(id, async () => {
-      try {
-        await save(path, (text) => invoke("file_write", { path, text }));
-        setMoved(null); // saving over a moved disk copy is keeping the edits
-        resumeAutosave(path);
-      } catch (err) {
-        report.current.onToast?.(`${baseName(path)} was not saved: ${String(err)}`);
-      }
-    });
+    editors.set(id, () => saveFile(path, (s) => (setStale(s), s || resumeAutosave(path)), report.current.onToast));
     return () => {
       alive = false;
       editors.delete(id);
@@ -147,6 +249,7 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
         detach(path, made);
         made.destroy();
       }
+      if (textOf(path) === null) forget(path);
       view.current = null;
     };
   }, [id, path, tries]);
@@ -155,6 +258,74 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
     const l = looks.get(id);
     if (l) l.mode = mode;
   }, [id, mode]);
+
+  // EDIT-003 (T-073): the disk check, only while this tab is in front: at once when it comes
+  // forward (a background tab whose file changed reloads then, not while hidden), every POLL_MS
+  // and whenever the window gets focus.
+  const io = useRef<Io>(null!);
+  io.current = {
+    stamp: () => stampOne(path),
+    read: () => invoke<string>("file_read", { path }),
+    dirty: () => isDirty(path),
+    current: () => textOf(path),
+    apply: (text, undoable) => replaceAll(path, text, undoable),
+  };
+  useEffect(() => {
+    if (hidden || !ready || readOnly) return;
+    let busy = false;
+    let alive = true;
+    const raised = (stamp: Stamp | null) => alive && setMoved((m) => (m && m.stamp?.mtime === stamp?.mtime && m.stamp?.size === stamp?.size ? m : { stamp }));
+    const check = () => {
+      if (busy) return;
+      busy = true;
+      void checkOnce(path, io.current, raised)
+        .then(
+          (v) => alive && v !== "banner" && setMoved(null),
+          () => undefined,
+        )
+        .finally(() => (busy = false));
+    };
+    check();
+    // ponytail: each poll's file_stamps runs fence.allow, which lists worktrees about every 4 s
+    // (TREES_FRESH 3 s) under the fence mutex while an agent-worktree file is open (council MERGE 33
+    // A3, folded into the MERGE 29 A1 fence fast path by origin record); the upgrade is that fast
+    // path, or a fence decision cached per open tab, not a slower poll.
+    const timer = window.setInterval(check, POLL_MS);
+    window.addEventListener("focus", check);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", check);
+    };
+  }, [path, hidden, ready, readOnly]);
+  useEffect(() => {
+    if (!undoable) return;
+    const t = window.setTimeout(() => setUndoable(null), UNDO_TOAST_MS);
+    return () => window.clearTimeout(t);
+  }, [undoable]);
+  useEffect(() => markBanner(path, !!moved), [path, moved]);
+  const reload = () =>
+    void reloadNow(path, io.current).then(
+      (u) => {
+        if (!u) return;
+        setMoved(null);
+        setComparing(false);
+        setUndoable(u);
+      },
+      (err) => report.current.onToast?.(`${baseName(path)} did not reload: ${String(err)}`),
+    );
+  const keepMine = () => {
+    keep(path, moved?.stamp ?? null);
+    setMoved(null);
+    setComparing(false);
+  };
+  const undoReload = () => {
+    const cm = view.current;
+    if (cm && canUndo(undoable, textOf(path))) undo(cm);
+    else report.current.onToast?.("The reload can no longer be undone from the toast; Ctrl+Z in the tab still steps back through it.");
+    setUndoable(null);
+  };
+  const readDisk = useCallback(() => invoke<string>("file_read", { path }), [path]);
 
   // A new file in this tab starts over: rich again, and Open anyway forgotten.
   // Only a change of file: the first file keeps a restored mode.
@@ -166,38 +337,7 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
     setBigOk(false);
     setBanner(null);
     setMoved(null);
-    setCompare(null);
-    setUndoOffer(false);
   }, [path]);
-
-  // EDIT-003: while the tab is on show its file's stamp is looked at every 1.5 s and the file is
-  // read only when the stamp moves; a background tab looks when it is next brought forward.
-  // ponytail: polling, not a file watcher; a watcher (notify crate) if many tabs make it costly.
-  useEffect(() => {
-    if (!ready || hidden) return;
-    let alive = true;
-    const peek = async () => {
-      const s = await invoke<string>("file_stamp", { path }).catch(() => null);
-      if (!alive || s === null || s === stamp.current) return;
-      stamp.current = s;
-      const seq = ++reads.current;
-      const text = await invoke<string>("file_read", { path }).catch(() => null);
-      // A read that finishes after a newer one started is thrown away.
-      if (!alive || text === null || seq !== reads.current) return;
-      const news = diskNews(path, text);
-      if (news === "take") replaceAll(path, text);
-      else if (news === "conflict") {
-        stopAutosave(path); // EDIT-002: autosave never writes over the outside edit
-        setMoved(text);
-      }
-    };
-    void peek();
-    const t = window.setInterval(() => void peek(), 1500);
-    return () => {
-      alive = false;
-      window.clearInterval(t);
-    };
-  }, [ready, hidden, path]);
 
   // EDIT-002: autosave, when it is switched on, while the file is open in this tab.
   useEffect(() => {
@@ -207,25 +347,10 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
       autosave,
       (text) => invoke("file_write", { path, text }),
       () => invoke<string>("file_read", { path }),
-      (disk) => setMoved(disk),
+      () => setMoved({ stamp: null }),
       (err) => report.current.onToast?.(`${baseName(path)} was not saved: ${String(err)}`),
     );
   }, [ready, autosave, path]);
-
-  useEffect(() => {
-    if (!undoOffer) return;
-    const t = window.setTimeout(() => setUndoOffer(false), 8000);
-    return () => window.clearTimeout(t);
-  }, [undoOffer]);
-
-  // EDIT-003 Compare: the disk copy on the left, the buffer on the right.
-  useEffect(() => {
-    const cm = view.current;
-    if (!compare || compare.disk === null || !cm || !compareHost.current) return;
-    const ro = [basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), EditorState.readOnly.of(true), EditorView.editable.of(false)];
-    const m = new MergeView({ a: { doc: compare.disk, extensions: ro }, b: { doc: cm.state.sliceDoc(), extensions: ro }, parent: compareHost.current, gutter: true });
-    return () => m.destroy();
-  }, [compare]);
 
   // EDIT-012: the rich view, started over the source text whenever the tab switches to it.
   useEffect(() => {
@@ -284,36 +409,39 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
     else view.current?.focus();
   }, [focused, hidden]);
 
-  // Reload always reads the file afresh; the swap is one undo step, offered back in a notice.
-  const reload = async () => {
-    const seq = ++reads.current;
-    try {
-      const text = await invoke<string>("file_read", { path });
-      if (seq !== reads.current) return;
-      replaceAll(path, text);
-      setMoved(null);
-      resumeAutosave(path);
-      setCompare(null);
-      setUndoOffer(true);
-    } catch (err) {
-      report.current.onToast?.(`${baseName(path)} could not be read: ${String(err)}`);
-    }
-  };
-  const keep = () => {
-    const disk = compare?.disk ?? moved;
-    if (disk !== null) keepMine(path, disk);
-    setMoved(null);
-    resumeAutosave(path);
-    setCompare(null);
-  };
-  const openCompare = () =>
-    invoke<string>("file_read", { path }).then(
-      (disk) => setCompare({ disk }),
-      (err) => setCompare({ disk: null, error: String(err) }),
-    );
-
   const name = baseName(path);
   const shown = !md || mode === "source" ? "source" : richError ? "error" : "rich";
+  // GIT-042, EDIT-020: the add-note shortcut reads this tab's selection, in any file.
+  useEffect(() => {
+    selections.set(id, () => {
+      const cm = view.current;
+      if (!cm) return null;
+      if (shown === "rich") return domPick(richHost.current, path, cm.state.doc.toString());
+      const { from, to } = cm.state.selection.main;
+      const draft = noteDraft(path, "", cm.state.sliceDoc(from, to), cm.state.doc.lineAt(from).number);
+      const at = cm.coordsAtPos(to);
+      return draft && { draft, x: at?.left ?? 200, y: at?.bottom ?? 200 };
+    });
+    return () => void selections.delete(id);
+  }, [md, id, path, shown]);
+  useEffect(() => {
+    copiers.set(id, () => {
+      const cm = view.current;
+      if (!cm || shown !== "source") return false;
+      const { from, to } = cm.state.selection.main;
+      const c = cm.coordsAtPos(to);
+      navigator.clipboard.writeText(contextText(cm.state.doc, from, to, shortPath(path, root)).text).then(
+        () => {
+          setCopiedSel(`${from}-${to}`);
+          setFlash(c ? { x: c.right, y: c.bottom } : null);
+          setTimeout(() => setFlash(null), 1500);
+        },
+        (err) => report.current.onToast?.(`Nothing was copied: ${String(err)}`),
+      );
+      return true;
+    });
+    return () => void copiers.delete(id);
+  }, [id, path, root, shown]);
   return (
     <section className={`pane editor${focused ? " focused" : ""}`} hidden={hidden} aria-label={`${name} pane`} onMouseDown={onFocus} data-kind="editor" data-key={id}>
       <header className="pane-head">
@@ -354,8 +482,16 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
           <button className="btn" onClick={() => setTries((n) => n + 1)}>
             Retry
           </button>
+          {error.includes("outside your projects") && (
+            <button className="btn" title="Allows this one file for this run; nothing beneath it" onClick={() => void invoke("file_grant", { path }).then(() => setTries((n) => n + 1), (err) => setError(String(err)))}>
+              Open this file anyway
+            </button>
+          )}
         </div>
       )}
+      {stale && <StaleNotice path={path} onDone={() => setStale(false)} onToast={report.current.onToast} />}
+      {moved && !stale && !comparing && <DiskBanner path={path} onReload={reload} onKeep={keepMine} onCompare={() => setComparing(true)} />}
+      {undoable && !moved && <UndoToast path={path} onUndo={undoReload} onClose={() => setUndoable(null)} />}
       {banner && (
         <div className="notice md-banner" role="status">
           {banner.text}
@@ -372,55 +508,6 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
           )}
         </div>
       )}
-      {moved !== null && !compare && (
-        <div className="notice disk-moved" role="alert">
-          {name} changed on disk while you have unsaved edits.
-          <button className="btn" onClick={() => void reload()}>
-            Reload
-          </button>
-          <button className="btn" onClick={keep}>
-            Keep my edits
-          </button>
-          <button className="btn" onClick={() => void openCompare()}>
-            Compare
-          </button>
-        </div>
-      )}
-      {undoOffer && (
-        <div className="notice disk-undo" role="status">
-          Reloaded {name} from disk.
-          <button
-            className="btn"
-            onClick={() => {
-              if (view.current) undo(view.current);
-              setUndoOffer(false);
-            }}
-          >
-            Undo
-          </button>
-        </div>
-      )}
-      {compare && (
-        <div className="disk-compare" role="dialog" aria-label={`Compare ${name}`}>
-          <div className="disk-compare-head">
-            <span>On disk</span>
-            <span>Your edits</span>
-            <button className="btn" onClick={() => void reload()}>
-              Reload
-            </button>
-            <button className="btn" onClick={keep}>
-              Keep my edits
-            </button>
-          </div>
-          {compare.disk === null ? (
-            <div className="notice load-failed" role="alert">
-              The disk copy could not be read: {compare.error}
-            </div>
-          ) : (
-            <div ref={compareHost} className="pane-body diff-body" />
-          )}
-        </div>
-      )}
       {shown === "error" && (
         <div className="notice load-failed" role="alert">
           The rich view did not start: {richError}
@@ -429,8 +516,19 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
           </button>
         </div>
       )}
-      <div ref={host} className="pane-body" hidden={shown !== "source" || !!compare} />
-      {md && <div ref={richHost} className="pane-body md-rich" contentEditable suppressContentEditableWarning spellCheck hidden={shown !== "rich" || !!compare} aria-label={`${name}, rich view`} />}
+      {comparing && <CompareView path={path} text={textOf(path) ?? ""} read={readDisk} onReload={reload} onKeep={keepMine} onClose={() => setComparing(false)} />}
+      <div ref={host} className="pane-body" hidden={shown !== "source" || comparing} />
+      {!hidden && shown === "source" && hint && copyKey && copiedSel !== hint.sel && !flash && (
+        <div className="copy-hint" style={{ left: hint.x + 8, top: hint.y + 2 }}>
+          {copyKey} copies with path and lines
+        </div>
+      )}
+      {!hidden && flash && (
+        <div className="copy-hint done" role="status" style={{ left: flash.x + 8, top: flash.y + 2 }}>
+          Copied with path and lines
+        </div>
+      )}
+      {md && <div ref={richHost} className="pane-body md-rich" contentEditable suppressContentEditableWarning spellCheck hidden={shown !== "rich" || comparing} aria-label={`${name}, rich view`} />}
     </section>
   );
 }

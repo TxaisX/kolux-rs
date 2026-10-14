@@ -1,36 +1,0 @@
-date,heading,line,first_sentence
-"2026-10-06","2026-10-06: Audit fix wave (8 lanes) landed","6","**Scope:** every item in `docs/research/audit-2026-10-04.md` plus automatic updates and an in-app Artifacts library."
-"2026-10-05","2026-10-05: Terminal resource-usage wave","15","**Why:** Txais saw heavy local RAM/CPU with many Claude panes."
-"2026-10-05","2026-10-05: Pane headers always show title + %, stepper and status-bar usage removed","23","**Why:** Txais wants every terminal window to show its session title and usage percentage at all times, and usage shown only at the top right."
-"2026-10-05","2026-10-05: Rounded session windows, weekly usage, auto mode","29","**Why:** Txais wanted each session to read as its own window (BridgeMind-style), less chrome, and auto mode instead of bypass."
-"2026-10-05","2026-10-05: Terminal-grid pane footer removed entirely","41","**Why:** after the message input went, the strip still echoed the agent's last line plus ""Done"" — both already on screen (terminal + pane header)."
-"2026-10-05","2026-10-05: Originality cleanup (upstream fingerprints, cloud features, update nudge)","47","**Why:** before showing Kolux publicly, the repo should read as its own project."
-"2026-10-05","2026-10-05: Terminal-grid message bar removed","79","**Why:** Txais: the per-pane message input added no value on terminal panes (you type in the terminal); a message box belongs to the Agents view, which already has its own composer."
-"2026-10-05","2026-10-05: Redesign landed on main + design-gap pass","85","**Landed:** `rd-polish` (contains rd-board-agents, rd-settings, rd-swarm + 39 files of unsaved follow-up work) merged with main and shipped."
-"2026-10-05","2026-10-05: Trimmed features (Voice, Kolux Account, Input)","96","**Source:** branch `TxaisX/trim-features`, third of the three-branch brief."
-"2026-10-05","2026-10-05: No theme/font flash at startup","119","**Source:** branch `TxaisX/theme-startup-flash`, asked for by Txais after the colour-theme landing."
-"2026-10-05","2026-10-05: App colour themes — opt-in hue picker, terminal ""Match app theme""","139","**Source:** branch `TxaisX/theme-system`."
-"2026-10-05","2026-10-05: Pane header (new look) — branch chip, unseen-done glow, narrow-pane order","168","**Source:** branch `TxaisX/session-chrome` (7e57544c3, the ""cockpit pill"" header)."
-"2026-10-05","2026-10-05: Session usage meter","193","**What:** `src/renderer/src/components/usage/SessionUsageMeter*` — `compact` (Board card, Agents"
-"2026-10-05","2026-10-05: Dashboard pop-out window and Agent Map retired","212","Removed the pop-out window, its IPC/preload/entry (`popout.html`), the ""Open as"" mode option"
-"2026-10-05","2026-10-05: Limit auto-resume — opt-in, Claude continues after its usage limit resets","221","**Setting:** `agentAutoResumeAfterLimit` (absent = off), Settings > Accounts under the Claude"
-"2026-10-05","2026-10-05: 200k context cap — Claude and Codex sessions auto-compact at 200k","245","**Setting:** `agentContextCapEnabled` (absent = on), Settings > Agents; exposed to paired clients."
-"2026-09-29","2026-09-29: Protected actions — Claude pauses before dangerous commands (PROD-7)","262","**Mechanism:** Kolux's managed Claude hook (`src/main/claude/claude-managed-hook-script.ts`)"
-"2026-09-29","2026-09-29: Terminal/workspace restore across quits and a killed daemon (WORK-1)","297","**New gate, not wired into `release.yml`** (slower, the coordinator will decide when):"
-"2026-09-28","2026-09-28: Claude sign-in opt-out (ACCT-7)","367","**Decision:** Kolux keeps self-refreshing Claude OAuth tokens by default."
-"2026-09-24","2026-09-24: release 0.11.0","374","**0.11.0 — x:** plan review before Claude runs, event-triggered automations, per-provider model routing, target-aware launcher refresh, the dashboard Runs view, terminal-grid layout presets and packaged update checks are new; OpenCode support is removed."
-"2026-09-24","2026-09-24: CI on main is green again","379","**Why it was red:** the unit step never finished."
-"2026-09-23","2026-09-23: review the plan before Claude runs it (v1)","389","New flow: when Claude calls `ExitPlanMode`, the pane header shows a ""Review plan"" icon"
-"2026-09-23","2026-09-23: OpenCode support removed entirely","447","**Owner's call:** Kolux focuses on frontier-lab agents, so OpenCode is gone, not hidden: the agent id, launcher/settings/status-bar/stats UI, OpenCode Go usage scraping and its account cookie, session-history scanning, hook plugin, PTY env/overlays, the `@opencode` orchestration address, `~/.opencod"
-"2026-09-22","Current handoff: improvement pass for Claude (2026-09-22)","457","Codex left this pass uncommitted in the primary checkout; on 2026-09-23 Claude verified"
-"","Verification snapshot","507","Updater preflight: 12/12 focused checks passed; renderer updater tests: 33/33."
-"","Next steps for Claude","528","All five steps from the previous handoff are done."
-"2026-09-23","2026-09-23: automations can start on an event","540","An automation's **Trigger** is now Schedule or Event."
-"2026-09-22","2026-09-22: one WebGL hiccup no longer slows every new terminal","558","In `auto` GPU mode (the default), one failed WebGL attach used to set a module-global flag that put every *new* terminal on the DOM renderer until the user changed the GPU setting."
-"2026-09-22","2026-09-22: a quieter left sidebar","568","**Removed on the owner's call:** the sidebar's Search, Floor and Agent grid rows, and the titlebar's Inbox · Floor · Code switch (`ModeSwitch.tsx` deleted)."
-"2026-09-22","2026-09-22: per-provider model routing tiers for orchestration workers","575","`kolux orchestration worker-start --tier major|deep|build|light` resolves to a model + effort from Settings > Agents > Model routing (`GlobalSettings.orchestrationRouting`, one table per provider)."
-"2026-09-22","2026-09-22: one worktree per agent, `pnpm ship` does the git work","585","Agents no longer commit, merge or push."
-"","Current pass: the product is renamed Nightshift → Kolux","591","Every mention was renamed by a case-preserving replace (nightshift→kolux, Nightshift→Kolux, NIGHTSHIFT→KOLUX), including 587 file paths, env vars, IPC/RPC names, the CLI (`kolux`), the protocol (`kolux://`), and the appId (`com.txais.kolux`)."
-"","Previous pass: Codex access, account authorization, and automatic updates","657","Codex is already a supported detected agent and launches into the active workspace panes."
-"","Recent work, and why","666","**One session per pane, the ""+"" out of the strip, and sessions back in the sidebar"
-"","What is verified, and what is not","1007","Verified by driving the running app, not only by tests: the agent picker end to end, the"

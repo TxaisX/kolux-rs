@@ -1,7 +1,12 @@
 // Settings > General: the Classic or New look and the screen that opens first (SET-037).
+import { invoke } from "@tauri-apps/api/core";
+import { useState } from "react";
+import type { AppInfo } from "../app-info";
 import { screens } from "../chrome/TopBar";
 import { numberOrDefault, useDraft, useSettings } from "./useSettings";
-import { FIRST_FIELD, LOOK_FIELD, readLook, savedFirst, type Look } from "./general";
+import { FIRST_FIELD, LAST_SCREEN_FIELD, LOOK_FIELD, NEEDS_STRIP_FIELD, readLook, savedFirst, stripOn, type Look } from "./general";
+import { REVIEW_FIELD, reviewOn } from "../editor/notes";
+import { feedbackUrl, OUTBOUND } from "./privacy";
 import { AUTOSAVE_KEY, AUTOSAVE_PAUSE_KEY, autosaveOf, PAUSE_DEFAULT, PAUSE_MAX, PAUSE_MIN } from "../editor/autosave";
 
 /** EDIT-002: autosave, off until switched on, and the pause after typing before it writes. */
@@ -54,9 +59,79 @@ export function GeneralView({ settings, onSave }: { settings: Record<string, unk
       <p className="conn-detail">New shows the redesigned screens with Agents, Board and Terminals in the top bar; Classic keeps the earlier layout.</p>
       <div className="look-select">
         <span>Opens first</span>
-        <Segmented label="Opens first" options={screens} value={classic ? "terminals" : savedFirst(settings)} off={classic ? ["agents", "board"] : []} onPick={(v) => onSave({ [FIRST_FIELD]: v })} />
+        <Segmented label="Opens first" options={screens} value={classic ? "terminals" : savedFirst(settings)} off={classic ? ["agents", "board"] : []} onPick={(v) => onSave({ [FIRST_FIELD]: v, [LAST_SCREEN_FIELD]: v })} />
       </div>
       {classic && <p className="conn-detail">Switch the look to New to open on Agents or Board.</p>}
+      <label className="conn-switch">
+        <input type="checkbox" aria-label="Review notes" checked={reviewOn(settings)} onChange={(e) => onSave({ [REVIEW_FIELD]: e.target.checked })} />
+        <span>Review notes: select text in a file and press Ctrl+Shift+A to add a note for an agent.</span>
+      </label>
+      <label className="conn-switch">
+        <input type="checkbox" aria-label="Needs you strip" checked={stripOn(settings)} onChange={(e) => onSave({ [NEEDS_STRIP_FIELD]: e.target.checked })} />
+        <span>Needs you strip: a row above the grid lists the sessions waiting on a permission or a question.</span>
+      </label>
+    </section>
+  );
+}
+
+/** APP-041: the app's own log, copied or reviewed by the user; nothing leaves the computer by itself. */
+export function DiagnosticsCard() {
+  const [note, setNote] = useState("");
+  const run = (label: string, job: () => Promise<string>) => void job().then(setNote).catch((e: unknown) => setNote(`${label} failed: ${String(e)}`));
+  const copy = async () => {
+    const text = await invoke<string>("diag_bundle");
+    await invoke("clip_write", { text }).catch(() => navigator.clipboard.writeText(text));
+    return "Copied to the clipboard with keys, passwords and tokens masked.";
+  };
+  return (
+    <section className="conn-card" data-section="diagnostics">
+      <h2 className="conn-name">Diagnostics</h2>
+      <p className="conn-detail">
+        Kolux keeps a short log of its own starts, exits and terminal sessions in your profile folder, readable only by you. Nothing is sent anywhere: copy it yourself when you report a problem. Keys, passwords and tokens are masked before the text leaves the folder.
+      </p>
+      <div className="btn-row">
+        <button className="btn" onClick={() => run("Copy", copy)}>
+          Copy diagnostics
+        </button>
+        <button className="btn" onClick={() => run("Review copy", async () => `Review copy opened: ${await invoke<string>("diag_review")}`)}>
+          Write a review copy and open it
+        </button>
+        <button className="btn" onClick={() => run("Throw away", async () => invoke("diag_review_discard").then(() => "Review copy thrown away."))}>
+          Throw the review copy away
+        </button>
+      </div>
+      {note && <p className="conn-detail">{note}</p>}
+    </section>
+  );
+}
+
+/** APP-070: what leaves this computer (the whole list), and the feedback link that opens in the browser instead. */
+export function PrivacyCard() {
+  const [note, setNote] = useState("");
+  const send = () =>
+    void invoke<AppInfo>("app_info")
+      .then((i) => invoke("open_external", { url: feedbackUrl(i.version, navigator.platform) }))
+      .then(() => setNote("A new-issue page opened in your browser; the app sent nothing. Read it over there, then submit it or close it."))
+      .catch((e: unknown) => setNote(`Could not open the browser: ${String(e)}`));
+  return (
+    <section className="conn-card" data-section="privacy">
+      <h2 className="conn-name">Privacy</h2>
+      <p className="conn-detail">
+        Your work stays on this computer. What you type, the files you open, terminal output, projects, settings and saved keys live only in your profile folder. The app sends no usage data and has no server to send it to. The app itself connects only to:
+      </p>
+      <ul className="conn-detail conn-list">
+        {OUTBOUND.map((o) => (
+          <li key={o.to}>
+            <b>{o.to}</b>: {o.when}.
+          </li>
+        ))}
+      </ul>
+      <div className="btn-row">
+        <button className="btn" onClick={send}>
+          Send feedback
+        </button>
+      </div>
+      {note && <p className="conn-detail">{note}</p>}
     </section>
   );
 }
@@ -68,6 +143,8 @@ export default function GeneralPage() {
       {error && <p className="conn-detail warn">{error}</p>}
       {settings && <GeneralView settings={settings} onSave={save} />}
       {settings && <EditorSettings settings={settings} onSave={save} />}
+      <DiagnosticsCard />
+      <PrivacyCard />
     </>
   );
 }

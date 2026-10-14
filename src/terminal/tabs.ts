@@ -30,3 +30,29 @@ export function marksUnread(key: number, known: Set<number>, marked: Set<number>
   if (!known.has(key) || marked.has(key)) return false;
   return !(inView && windowFocused);
 }
+
+/** TERM-027, TERM-048: what a key does in a pane-title or tab-name field. An Enter that only
+ *  confirms an IME candidate (composing, or the 229 key code some IMEs send) does nothing. */
+export function nameKey(e: { key: string; isComposing: boolean; keyCode: number }): "save" | "cancel" | null {
+  if (e.isComposing || e.keyCode === 229) return null;
+  if (e.key === "Enter" || e.key === "Tab") return "save";
+  return e.key === "Escape" ? "cancel" : null;
+}
+
+/** The name kept from a field: trimmed, and blank gives the automatic title back. */
+export const newName = (text: string): string | undefined => text.trim() || undefined;
+
+/** TERM-029: the sessions in this grid (keys in grid order) waiting on a permission or a question. */
+export const waitingInGrid = (keys: number[], hook: Partial<Record<number, AgentState>>): number[] =>
+  keys.filter((k) => hook[k] === "permission" || hook[k] === "waiting");
+
+/** TERM-096: the terminal handles printed in a line (term-N as a whole word), with where each sits.
+ * ponytail: string offsets, so a line with wide characters before a handle puts the link a little off. */
+export const handlesIn = (text: string): { start: number; end: number; handle: string }[] =>
+  [...text.matchAll(/(?<![\w-])term-\d+(?![\w-])/g)].map((m) => ({ start: m.index, end: m.index + m[0].length, handle: m[0] }));
+
+/** TERM-048: a tab's right-click menu. Only terminal and agent tabs (no kind) take a name. */
+export const tabMenu = (kind: string | undefined): { id: "rename" | "close"; label: string; keys?: string }[] => [
+  ...(kind ? [] : [{ id: "rename" as const, label: "Rename tab", keys: "tab.rename" }]),
+  { id: "close", label: "Close tab" },
+];

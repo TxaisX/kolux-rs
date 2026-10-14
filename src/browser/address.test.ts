@@ -24,16 +24,21 @@ test("BROW-003: queries are escaped for the engine, and each engine has its own 
   expect(url("rust ownership", "kagi")).toBe("https://kagi.com/search?q=rust%20ownership");
 });
 
-test("BROW-003: file paths become file addresses, the empty bar is the blank page", () => {
-  expect(url("G:\\My Docs\\a #1.html")).toBe("file:///G:/My%20Docs/a%20%231.html");
-  expect(url("/srv/www/index.html")).toBe("file:///srv/www/index.html");
-  expect(url("file:///G:/x.html")).toBe("file:///G:/x.html");
+test("BROW-003: the empty bar is the blank page", () => {
   expect(url("")).toBe("about:blank");
   expect(url("  about:blank ")).toBe("about:blank");
 });
 
+test("T-500: file paths and file addresses are refused; a browser tab is for the web only", () => {
+  // evidence/T-500-isolation.txt: a tab's page carries Tauri's IPC script; local files stay out.
+  const refused = { error: "invalid address: a browser tab opens web pages only (http or https)" };
+  expect(resolveAddress("G:\\My Docs\\a #1.html")).toEqual(refused);
+  expect(resolveAddress("/srv/www/index.html")).toEqual(refused);
+  expect(resolveAddress("file:///G:/x.html")).toEqual(refused);
+});
+
 test("BROW-003: any other scheme is refused as an invalid address", () => {
-  expect(resolveAddress("javascript:alert(1)")).toEqual({ error: "invalid address: javascript: is not a web, file or blank address" });
+  expect(resolveAddress("javascript:alert(1)")).toEqual({ error: "invalid address: javascript: is not a web or blank address" });
   expect(resolveAddress("mailto:someone@example.com")).toMatchObject({ error: expect.stringContaining("mailto:") });
   expect(resolveAddress("https://exa mple.com/")).toMatchObject({ error: expect.stringContaining("invalid address") });
 });

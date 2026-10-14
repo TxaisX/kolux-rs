@@ -47,6 +47,12 @@ export function seatReady(s: Seat): boolean {
 
 export const allReady = (seats: Seat[]): boolean => seats.length > 0 && seats.every(seatReady);
 
+/** SESS-019: what the footer says the first unfinished seat still lacks; null when all are ready. */
+export function seatGap(seats: Seat[]): string | null {
+  const i = seats.findIndex((s) => !seatReady(s));
+  return i < 0 ? null : `Seat ${i + 1} still needs ${seats[i].agent === null ? "an AI" : "a model"}`;
+}
+
 /** SESS-015 "Same for all": the first finished seat's AI and model go into every other seat;
  * job titles stay per seat. Unchanged when no seat is finished. */
 export function sameForAll(seats: Seat[]): Seat[] {
@@ -318,4 +324,12 @@ export function watchStart(started: Promise<unknown>, warn: () => void, ms = 5_0
 /** SESS-005 / SESS-024: the toast for a session that did not start, naming its agent. */
 export function startFailure(agent: string | undefined, error: string): string {
   return `${agent ?? "A session"} did not start: ${error}`;
+}
+
+/** SESS-018: the New session page starts from this project's previous launch for the count and
+ *  the files choice, but every seat starts blank (SESS-015). Separate copies need Git. */
+export function sheetStart(last: Lineup | undefined, inGit: boolean): { seats: Seat[]; copies: Copies } {
+  const n = Math.max(1, last?.seats.length ?? 1);
+  const copies = last ? (last.copies === "separate" && !inGit ? "shared" : last.copies) : defaultCopies(n, inGit);
+  return { seats: Array.from({ length: n }, emptySeat), copies };
 }

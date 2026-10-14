@@ -7,6 +7,7 @@ import { DEFAULT_AGENT_KEY, defaultAgentId, disabledAgents, switchAgent } from "
 import { Segmented } from "./GeneralPage";
 import { useDraft, useSettings } from "./useSettings";
 import { CAP_FIELD, capOn } from "../usage/meter";
+import { CACHE_LENGTH, CACHE_ON, cacheMinutes } from "../projects/cache";
 
 const OPTIONS_FIELD = "agentOptions";
 const PERMISSIONS_FIELD = "agentPermissions";
@@ -45,6 +46,33 @@ export function AgentsPageView({ cap, onCap }: { cap: boolean; onCap: (on: boole
   );
 }
 
+// STAT-002: one switch for every agent's status hooks, on unless saved off. Rust takes Kolux's
+// entries out (or puts them back) when `agent_hooks_sync` runs after the save.
+export const HOOKS_FIELD = "agentStatusHooks";
+// T-152-gate: off until the user turns it on; that choice is the recorded approval to write hooks.
+export const hooksOn = (s: Record<string, unknown>) => s[HOOKS_FIELD] === true;
+
+// T-152-c (3): `agent_hooks_sync` answers with one {agent, done, error} per agent; the errors are
+// shown beside the switch so a refused install or a failed removal never stays silent.
+export const hookProblems = (reply: unknown): string[] =>
+  Array.isArray(reply) ? reply.filter((o) => o && typeof o.error === "string").map((o) => `${o.agent}: ${o.error}`) : [];
+
+export function HooksSwitch({ on, onSwitch, file, problems = [] }: { on: boolean; onSwitch: (on: boolean) => void; file?: string; problems?: string[] }) {
+  return (
+    <section className="conn-card" aria-label="Agent status hooks" data-section="hooks">
+      <label className="conn-switch">
+        <input type="checkbox" role="switch" checked={on} onChange={(e) => onSwitch(e.target.checked)} />
+        <span>
+          Agent status hooks
+          {problems.map((p) => <small className="warn" role="alert" data-problem key={p}>{p}</small>)}
+          <small>Agents tell Kolux when they work, wait for you or finish. Off until you turn it on: turning it on adds Kolux's hooks to each agent's settings; turning it off removes them and stops them being put back; your own hooks stay.</small>
+          {file && <small data-file>Claude Code settings: {file}</small>}
+        </span>
+      </label>
+    </section>
+  );
+}
+
 export default function AgentsPage() {
   const { settings, error, save: write } = useSettings();
   const [written, setWritten] = useState(0);
@@ -53,6 +81,13 @@ export default function AgentsPage() {
   const [looking, setLooking] = useState(false);
   const [failed, setFailed] = useState<string | null>(null); // SESS-002: an errored search is not an empty one
   const [lines, setLines] = useState<Record<string, string>>({});
+  const [hooksFile, setHooksFile] = useState<string>();
+  const [problems, setProblems] = useState<string[]>([]);
+  const synced = (reply: unknown) => setProblems(hookProblems(reply));
+  const syncFailed = (e: unknown) => setProblems([String(e)]);
+  useEffect(() => {
+    invoke<string>("agent_hooks_file").then(setHooksFile, () => {});
+  }, []);
   const refresh = () => {
     setLooking(true);
     invoke<AgentInfo[]>("agent_list")
@@ -132,7 +167,7 @@ export default function AgentsPage() {
           return (
             <div key={a.id} className="agent-row" data-agent={a.id}>
               <label className="agent-on">
-                <input type="checkbox" role="switch" checked={on} onChange={(e) => save(switchAgent(settings, a.id, e.target.checked))} />
+                <input type="checkbox" role="switch" checked={on} onChange={(e) => void save(switchAgent(settings, a.id, e.target.checked)).then(() => invoke("agent_hooks_sync")).then(synced, syncFailed)} />
                 <span className="agent-name">{a.name}</span>
                 {a.id === def && on && <span className="conn-chip">default</span>}
               </label>
@@ -147,7 +182,32 @@ export default function AgentsPage() {
           );
         })}
       </section>
+      <HooksSwitch on={hooksOn(settings)} file={hooksFile} problems={problems} onSwitch={(on) => void save({ [HOOKS_FIELD]: on }).then(() => invoke("agent_hooks_sync", { clear: !on })).then(synced, syncFailed)} />
       <AgentsPageView cap={capOn(settings ?? {})} onCap={(on) => void save({ [CAP_FIELD]: on })} />
+      <CachePick minutes={cacheMinutes(settings)} onPick={(m) => void save(m === null ? { [CACHE_ON]: false } : { [CACHE_ON]: true, [CACHE_LENGTH]: m })} />
     </>
+  );
+}
+
+// SET-059: the prompt-cache countdown switch (off by default) and its length, matched to how long
+// the provider keeps the cache; minutes, or null for off.
+export function CachePick({ minutes, onPick }: { minutes: number | null; onPick: (m: number | null) => void }) {
+  return (
+    <section className="conn-card" aria-label="Prompt-cache timer">
+      <label className="conn-switch">
+        <input type="checkbox" role="switch" checked={minutes !== null} onChange={(e) => onPick(e.target.checked ? 5 : null)} />
+        <span>
+          Prompt-cache timer
+          <small>When a Claude agent goes idle, its worktree card counts down how long the conversation stays cached; after that the next message sends it all again without the cache.</small>
+        </span>
+      </label>
+      <div className="look-select">
+        <span>Cache length</span>
+        <select aria-label="Cache length" className="field" disabled={minutes === null} value={String(minutes ?? 5)} onChange={(e) => onPick(Number(e.target.value))}>
+          <option value="5">5 minutes</option>
+          <option value="60">1 hour</option>
+        </select>
+      </div>
+    </section>
   );
 }

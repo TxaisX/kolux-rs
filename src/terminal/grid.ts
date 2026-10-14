@@ -96,3 +96,21 @@ export const seedCount = (saved: unknown, classic: boolean): number => (classic 
 export function freeCell<P extends Tabbed & { seats?: unknown }>(cells: { panes: P[] }[]): P | undefined {
   return cells.find((c) => c.panes.length === 1 && c.panes[0].seats)?.panes[0];
 }
+
+/** TERM-013: the expanded cell of each workspace, with how many cells it had when expanded. */
+export type Zoom = Record<string, { group: number; cells: number }>;
+
+/** TERM-013: the cell that fills the grid, or null. A pane added or closed since restores the layout. */
+export function zoomedGroup(zoom: Zoom, groups: number[]): number | null {
+  const z = Object.values(zoom).find((x) => groups.includes(x.group));
+  return z && z.cells === groups.length ? z.group : null;
+}
+
+/** TERM-013: one expanded cell per workspace; the expanded one again restores the layout. */
+export function toggleZoom(zoom: Zoom, dir: string, group: number, cells: number): Zoom {
+  const { [dir]: was, ...rest } = zoom;
+  return was && was.group === group && was.cells === cells ? rest : { ...rest, [dir]: { group, cells } };
+}
+
+/** TERM-025: a lone pane cannot expand in the classic look; in the clean look it fills the workspace area. */
+export const canExpand = (cells: number, classic: boolean): boolean => cells > 1 || !classic;

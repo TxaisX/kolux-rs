@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test, vi } from "vitest";
 import { GrokCardView, GrokKeyDialog, grokDisconnect, grokHeadline, grokState, type GrokView } from "./GrokCard";
-import CloseAsk from "../terminal/CloseAsk";
+import Ask from "../chrome/Ask";
 import { CodexCardView, codexDisconnect, codexState, type CodexView } from "./CodexCard";
 import { ClaudeCardView, claudeDisconnect } from "./SettingsPage";
 import type { KeyStatus } from "./claudeKey";
@@ -81,7 +81,7 @@ test("the key dialog's Connect is disabled until something is typed, and the fie
 });
 
 test("Codex says needs attention after a failed sign-in, with a Cancel that wipes it", () => {
-  const cx: CodexView = { accounts: [], active: null, systemDefault: "signed-out", signingIn: null, inBrowser: false, deviceLink: null, deviceCode: null, attention: refused, drifted: [], missing: [] };
+  const cx: CodexView = { accounts: [], active: null, systemDefault: "signed-out", signingIn: null, inBrowser: false, deviceLink: null, deviceCode: null, attention: refused, drifted: [], missing: [], settingsWarning: null };
   expect(codexState(cx)).toBe("attention");
   const h = renderToString(createElement(CodexCardView, { view: cx, onAction: () => {} }));
   expect(h).toContain("Needs attention");
@@ -92,7 +92,7 @@ test("Codex says needs attention after a failed sign-in, with a Cancel that wipe
 test("seven ways to connect exist across the three cards (ACCT-002 compat)", () => {
   const claudeOff: KeyStatus = { connected: false, createdAt: null, expiresAt: null, daysLeft: null, renewDue: false, expired: false, settingUp: false, inBrowser: false, attention: null };
   const claude = renderToString(createElement(ClaudeCardView, { status: claudeOff, busy: false, onAction: () => {}, onUseAccount: () => {} }));
-  const codex = renderToString(createElement(CodexCardView, { view: { accounts: [], active: null, systemDefault: "signed-out", signingIn: null, inBrowser: false, deviceLink: null, deviceCode: null, attention: null, drifted: [], missing: [] }, onAction: () => {} }));
+  const codex = renderToString(createElement(CodexCardView, { view: { accounts: [], active: null, systemDefault: "signed-out", signingIn: null, inBrowser: false, deviceLink: null, deviceCode: null, attention: null, drifted: [], missing: [], settingsWarning: null }, onAction: () => {} }));
   const grok = html(off);
   const ways = [
     [claude, ">Connect<"], // Claude by 1-year key (the default)
@@ -109,7 +109,7 @@ test("seven ways to connect exist across the three cards (ACCT-002 compat)", () 
 
 test("a connected Codex or Grok card shows Manage and Disconnect, and Disconnect erases only what Kolux made (ACCT-015)", () => {
   const kim = { id: "c1", email: "kim@example.com", home: "h1", lastSignIn: 1, signInError: false };
-  const cxOff: CodexView = { accounts: [], active: null, systemDefault: "signed-out", signingIn: null, inBrowser: false, deviceLink: null, deviceCode: null, attention: null, drifted: [], missing: [] };
+  const cxOff: CodexView = { accounts: [], active: null, systemDefault: "signed-out", signingIn: null, inBrowser: false, deviceLink: null, deviceCode: null, attention: null, drifted: [], missing: [], settingsWarning: null };
   const codex = (v: CodexView) => renderToString(createElement(CodexCardView, { view: v, onAction: () => {} }));
   const managed = { ...cxOff, accounts: [kim], active: "c1" };
   for (const b of [">Manage<", ">Disconnect<", "Add account", "Sign in with a code"]) expect(codex(managed)).toContain(b);
@@ -134,10 +134,9 @@ test("a connected Codex or Grok card shows Manage and Disconnect, and Disconnect
 });
 
 test("the Disconnect question asks with Cancel, or only explains with a single OK", () => {
-  const ask = (confirm: string | null) => renderToString(createElement(CloseAsk, { title: "t", body: "b", confirm, onConfirm: () => {}, onCancel: () => {} }));
+  const ask = (confirm: string | null) => renderToString(createElement(Ask, { title: "t", body: "b", confirm, onConfirm: () => {}, onCancel: () => {} }));
   expect(ask("Disconnect")).toContain(">Cancel<");
   expect(ask("Disconnect")).toContain(">Disconnect<");
   expect(ask(null)).toContain(">OK<");
   expect(ask(null)).not.toContain(">Cancel<");
-  expect(renderToString(createElement(CloseAsk, { title: "t", body: "b", onConfirm: () => {}, onCancel: () => {} }))).toContain(">Close tab<");
 });

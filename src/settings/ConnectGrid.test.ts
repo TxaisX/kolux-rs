@@ -1,7 +1,8 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
-import { CONNECT, InstallCardView, stageOf, type ConnectId, type InstallView } from "./ConnectGrid";
+import { CHECK_AGAIN } from "./Attention";
+import { CONNECT, InstallCardView, liveCheck, stageOf, type ConnectId, type InstallView } from "./ConnectGrid";
 import type { AgentInfo } from "../launch/PlusMenu";
 
 const mk = (id: string, installed: boolean): AgentInfo => ({ id, name: id, program: id, args: [], installed, path: installed ? `C:\bin\${id}.exe` : null });
@@ -59,4 +60,51 @@ test("without the package manager the card offers the install page instead", () 
   const h = card("grok", onlyClaude, undefined, false);
   expect(h).toContain("Open install page");
   expect(h).not.toContain(">Install<");
+});
+
+// ACCT-014: the page checks again every 5 seconds only while the window is visible, at once when
+// the window gets focus back, and stops both when it closes.
+test("the connection check runs on focus and on a timer only while visible", () => {
+  const handlers: Record<string, () => void> = {};
+  let tick: (() => void) | null = null;
+  let cleared = false;
+  const doc = { visibilityState: "visible" };
+  const win = {
+    addEventListener: (k: string, f: () => void) => void (handlers[k] = f),
+    removeEventListener: (k: string) => void delete handlers[k],
+    setInterval: (f: () => void, ms: number) => ((tick = f), expect(ms).toBe(5000), 7),
+    clearInterval: (id: number) => void (cleared = id === 7),
+  };
+  let n = 0;
+  const stop = liveCheck(() => n++, win, doc);
+  handlers.focus();
+  expect(n).toBe(1);
+  tick!();
+  expect(n).toBe(2);
+  doc.visibilityState = "hidden";
+  tick!();
+  expect(n).toBe(2);
+  handlers[CHECK_AGAIN]();
+  expect(n).toBe(3);
+  stop();
+  expect(cleared && !handlers.focus && !handlers[CHECK_AGAIN]).toBe(true);
+});
+
+// ACCT-014: an account card re-reads on focus and on Check again, with no timer of its own.
+test("an account card's check has no timer", () => {
+  const handlers: Record<string, () => void> = {};
+  let timers = 0;
+  const win = {
+    addEventListener: (k: string, f: () => void) => void (handlers[k] = f),
+    removeEventListener: (k: string) => void delete handlers[k],
+    setInterval: () => (timers++, 1),
+    clearInterval: () => {},
+  };
+  let n = 0;
+  const stop = liveCheck(() => n++, win, { visibilityState: "visible" }, 0);
+  handlers.focus();
+  handlers[CHECK_AGAIN]();
+  expect([n, timers]).toEqual([2, 0]);
+  stop();
+  expect(Object.keys(handlers)).toEqual([]);
 });

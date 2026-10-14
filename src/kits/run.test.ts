@@ -3,7 +3,8 @@ import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
 import { KITS } from "./catalog";
 import KitStrip, { kitRows } from "./KitStrip";
-import { datedName, matchSeats, roleDone, rolePrompt, roleRow, seatTitle, type RunCheck } from "./run";
+import { RecentRuns } from "./Kits";
+import { datedName, MARKER, matchSeats, moveTargets, previewKind, roleDone, rolePrompt, roleRow, seatTitle, type RunCheck } from "./run";
 
 const sheet = KITS.find((k) => k.id === "spreadsheet")!;
 const [analyst, report, checker] = sheet.roles;
@@ -89,4 +90,66 @@ test("the strip counts done roles and folds away its rows", () => {
   expect(open.match(/class="kit-strip-row /g)?.length).toBe(3);
   const folded = renderToString(createElement(KitStrip, { check, seats, sent: {}, now: T0 + 10, folded: true, onFold: noop, onOpen: noop, onFocusSeat: noop }));
   expect(folded).not.toContain("kit-strip-row");
+});
+
+test("a result previews by its type: HTML in the browser, Markdown rendered, the rest read-only", () => {
+  expect(previewKind("report.html")).toBe("browser");
+  expect(previewKind("Report.HTM")).toBe("browser");
+  expect(previewKind("findings.md")).toBe("preview");
+  expect(previewKind("metrics.csv")).toBe("editor");
+  expect(previewKind("notes.txt")).toBe("editor");
+});
+
+test("a stopped role can move only to another connected AI", () => {
+  expect(moveTargets("claude", ["claude", "codex"])).toEqual(["codex"]);
+  expect(moveTargets("claude", ["claude"])).toEqual([]);
+  expect(moveTargets(null, ["codex", "grok"])).toEqual(["codex", "grok"]);
+});
+
+test("done rows offer Preview and Open per file, stopped rows Restart and Move to, the head Collect results", () => {
+  const noop = () => {};
+  const check = run({ analyst: { [MARKER]: T0 + 5, "findings.md": T0 + 4 } });
+  const seats = [{ key: 1, running: true, ai: "claude" }, { key: 2, running: false, ai: "codex" }, null];
+  const html = (connected: ("claude" | "codex" | "grok")[]) =>
+    renderToString(createElement(KitStrip, { check, seats, sent: {}, now: T0 + 10, folded: false, onFold: noop, onOpen: noop, onFocusSeat: noop, connected, onCollect: noop, onPreview: noop, onOpenFile: noop, onRestart: noop }));
+  const two = html(["claude", "codex"]);
+  expect(two).toContain("Collect results");
+  expect(two).toContain(`aria-label="Preview findings.md"`);
+  expect(two).toContain(`aria-label="Open findings.md"`);
+  expect(two).toContain(">Restart</button>");
+  expect(two).toContain(">Move to Claude</button>");
+  expect(two).not.toContain("Move to Codex");
+  expect(html(["codex"])).not.toContain("Move to");
+});
+
+test("T-206-b SKILL-011: a role stopped by a usage limit or a sign-in says so and offers its own way out", () => {
+  const limited = { key: 7, running: true, ai: "claude", stop: "limit" as const };
+  expect(roleRow(sheet, analyst, run(), limited, null, T0 + 10)).toEqual({ state: "limit", text: "Stopped: this AI reached its usage limit", key: 7 });
+  expect(roleRow(sheet, analyst, run(), { ...limited, stop: "signin" as const }, null, T0 + 10)).toEqual({ state: "signin", text: "Stopped: this AI needs signing in again", key: 7 });
+  // A finished role stays done whatever its session later reports.
+  expect(roleRow(sheet, analyst, run({ analyst: { [MARKER]: T0 + 5 } }), limited, null, T0 + 10).state).toBe("done");
+  const noop = () => {};
+  let signIn = 0;
+  const html = (connected: ("claude" | "codex" | "grok")[], stop: "limit" | "signin") =>
+    renderToString(createElement(KitStrip, { check: run(), seats: [{ ...limited, stop }, null, null], sent: {}, now: T0 + 10, folded: false, onFold: noop, onOpen: noop, onFocusSeat: noop, connected, onRestart: noop, onSignIn: () => signIn++ }));
+  const limit = html(["claude", "codex"], "limit");
+  expect(limit).toContain(">Move to Codex</button>");
+  // Restarting on the AI that hit its limit would only stop again.
+  expect(limit).not.toContain(">Restart</button>");
+  expect(html(["claude"], "limit")).not.toContain("Move to");
+  const signin = html(["claude", "codex"], "signin");
+  expect(signin).toContain(">Sign in</button>");
+  expect(signin).not.toContain("Move to");
+  expect(signin).not.toContain(">Restart</button>");
+});
+
+test("recent kit runs are hidden with none and name each kit and folder with its two actions", () => {
+  const noop = () => {};
+  expect(renderToString(createElement(RecentRuns, { runs: [], onResults: noop, onProject: noop }))).toBe("");
+  const html = renderToString(createElement(RecentRuns, { runs: [{ dir: "G:\shop", kit: "spreadsheet", title: sheet.title, started: T0, collected: null }], onResults: noop, onProject: noop }));
+  expect(html).toContain("Recent kit runs");
+  expect(html).toContain("Analyse a spreadsheet");
+  expect(html).toContain("G:\shop");
+  expect(html).toContain(">Open results</button>");
+  expect(html).toContain(">Open project</button>");
 });

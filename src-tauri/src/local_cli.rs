@@ -3,14 +3,114 @@
 //! guides bundled into this build, so they always match its version.
 
 use super::{commands, Fail, Parsed, HELP};
+use crate::hooks::agent_hooks::switch;
 use serde_json::{json, Value};
+
+/// The settings of the Kolux profile this command reaches; none read as empty.
+fn profile_settings() -> Value {
+    std::fs::read(super::data_dir().join("settings.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_else(|| json!({}))
+}
+
+/// CLI-001: every bundled guide and reference by name, so a test can check what they mention.
+#[cfg(test)]
+pub fn guides() -> Vec<(String, &'static str)> {
+    SKILLS.iter().flat_map(|s| std::iter::once((s.name.to_string(), s.guide)).chain(s.refs.iter().map(move |(r, t)| (format!("{}/{r}", s.name), *t)))).collect()
+}
 
 pub const COMMANDS: &[super::Command] = &[
     ("agent-context", "agent-context", &[]),
     ("skills list", "skills.list", &[]),
     ("skills get", "skills.get", &["topic", "full", "references", "reference"]),
     ("skills show", "skills.get", &["topic", "full", "references", "reference"]),
+    ("skills coverage", "skills.coverage", &[]),
+    ("agent hooks status", "agent.hooks.status", &[]),
+    ("agent hooks on", "agent.hooks.on", &[]),
+    ("agent hooks off", "agent.hooks.off", &[]),
+    ("agent hooks prepare-codex", "agent.hooks.prepare-codex", &[]),
 ];
+
+/// ORCH-043: the folders under home where each agent reads skills installed for the whole
+/// computer (the community skills installer's global paths). `.agents/skills` is the shared
+/// cross-agent folder. Agents not listed have no known folder and are never guessed at.
+const SKILL_HOMES: &[(&str, &[&str])] = &[
+    ("claude", &[".claude/skills"]),
+    ("codex", &[".agents/skills", ".codex/skills"]),
+    ("cline", &[".agents/skills"]),
+    ("kimi", &[".agents/skills"]),
+    ("pi", &[".agents/skills"]),
+    ("amp", &[".config/agents/skills"]),
+    ("antigravity", &[".gemini/antigravity/skills"]),
+    ("autohand", &[".autohand/skills"]),
+    ("aug", &[".augment/skills"]),
+    ("openclaw", &[".openclaw/skills"]),
+    ("command-code", &[".commandcode/skills"]),
+    ("continue", &[".continue/skills"]),
+    ("crush", &[".config/crush/skills"]),
+    ("cursor", &[".cursor/skills"]),
+    ("devin", &[".config/devin/skills"]),
+    ("droid", &[".factory/skills"]),
+    ("gemini", &[".gemini/skills"]),
+    ("copilot", &[".copilot/skills"]),
+    ("goose", &[".config/goose/skills"]),
+    ("grok", &[".grok/skills"]),
+    ("hermes", &[".hermes/skills"]),
+    ("kilo", &[".kilo/skills"]),
+    ("kiro", &[".kiro/skills"]),
+    ("mistral-vibe", &[".vibe/skills"]),
+    ("qwen-code", &[".qwen/skills"]),
+    ("rovo", &[".rovodev/skills"]),
+];
+
+/// The folders `depth` levels below `dir` (a plugin cache is marketplace/plugin/version).
+fn below(dir: &std::path::Path, depth: usize) -> Vec<std::path::PathBuf> {
+    let mut level = vec![dir.to_path_buf()];
+    for _ in 0..depth {
+        level = level.iter().flat_map(|d| std::fs::read_dir(d).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir())).collect();
+    }
+    level
+}
+
+/// ORCH-043: for each agent, whether `skill` is installed for the whole computer and where.
+/// Only home folders count, so an install inside a repo never covers anyone. Claude also counts
+/// an enabled plugin's copy, and Codex its plugin cache; Hermes looks in the local app-data
+/// folder before the hidden one in home.
+pub fn coverage(home: &std::path::Path, local_app: Option<&std::path::Path>, agents: &[(String, String)], skill: &str) -> Vec<Value> {
+    let has = |root: &std::path::Path| root.join(skill).join("SKILL.md").is_file();
+    let plugins = |cache: std::path::PathBuf, enabled: &dyn Fn(&std::path::Path) -> bool| below(&cache, 3).into_iter().map(|v| v.join("skills")).find(|s| has(s) && enabled(s));
+    agents
+        .iter()
+        .map(|(id, name)| {
+            let homes = SKILL_HOMES.iter().find(|h| h.0 == id).map(|h| h.1);
+            let mut roots: Vec<std::path::PathBuf> = Vec::new();
+            if id == "hermes" {
+                roots.extend(local_app.map(|l| l.join("hermes").join("skills")));
+            }
+            roots.extend(homes.unwrap_or_default().iter().map(|h| h.split('/').fold(home.to_path_buf(), |p, c| p.join(c))));
+            let mut found = roots.into_iter().find(|r| has(r));
+            if found.is_none() && id == "claude" {
+                let settings: Value = std::fs::read_to_string(home.join(".claude").join("settings.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+                // cache/<marketplace>/<plugin>/<version>/skills, enabled as "plugin@marketplace".
+                let on = |s: &std::path::Path| {
+                    let up = |n: usize| s.ancestors().nth(n).and_then(|p| p.file_name()).map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                    settings["enabledPlugins"][format!("{}@{}", up(2), up(3))] == true
+                };
+                found = plugins(home.join(".claude").join("plugins").join("cache"), &on);
+            }
+            if found.is_none() && id == "codex" {
+                found = plugins(home.join(".codex").join("plugins").join("cache"), &|_| true);
+            }
+            json!({ "id": id, "name": name, "known": homes.is_some(), "covered": found.is_some(), "foundIn": found.map(|f| f.join(skill).display().to_string()) })
+        })
+        .collect()
+}
+
+fn skills_coverage() -> Value {
+    let env = |v: &str| std::env::var_os(v).filter(|x| !x.is_empty()).map(std::path::PathBuf::from);
+    let home = env(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).unwrap_or_default();
+    let local_app = if cfg!(windows) { env("LOCALAPPDATA") } else { None };
+    let agents: Vec<(String, String)> = crate::agents::agent_list().into_iter().filter(|a| a.installed).map(|a| (a.id, a.name)).collect();
+    json!({ "skill": "orchestration", "agents": coverage(&home, local_app.as_deref(), &agents, "orchestration") })
+}
 
 /// The document's shape; agents read its field names, so a change to them bumps this.
 const SCHEMA: u32 = 1;
@@ -19,11 +119,15 @@ const SCHEMA: u32 = 1;
 const SUMMARIES: &[(&str, &str)] = &[
     ("worktree create", "Make a worktree in a repo, optionally starting an agent in it."),
     ("worktree rm", "Remove a worktree and its folder."),
+    ("terminal read", "Read a terminal's output after a cursor, or its visible screen with --screen."),
+    ("terminal send", "Type text, Enter or an interrupt into a terminal; a prompt to an agent gets a receipt."),
+    ("terminal wait", "Wait until a terminal exits or its agent goes idle."),
     ("orchestration worker-start", "Start a worker agent on a task, in a new or chosen worktree."),
     ("account add", "Sign in to a Claude or Codex account with the agent's own login, and add it to Kolux."),
     ("account list", "List the Claude and Codex accounts Kolux holds."),
     ("open", "Start Kolux, or bring its window to the front, and wait until it answers."),
-    ("status", "Say whether Kolux is running, not running, stale or still loading its workspaces (graph not ready)."),
+    ("status", "Say whether Kolux is running, not running, stale or still loading its workspaces."),
+    ("diagnostics memory", "Show the Resource Manager's memory figures: resident and committed for Kolux, each terminal session and the total."),
     ("repo list", "List the repos Kolux knows."),
     ("repo add", "Add a folder as a repo."),
     ("repo show", "Show one repo."),
@@ -34,6 +138,7 @@ const SUMMARIES: &[(&str, &str)] = &[
     ("worktree ps", "List worktrees with what is running in them."),
     ("worktree show", "Show one worktree."),
     ("worktree current", "Show the worktree this terminal is in."),
+    ("worktree set", "Change a worktree's display name, linked issue, comment or parent."),
     ("worktree changes", "List what a worktree changed against its base."),
     ("worktree overlap", "List other worktrees touching the same files, and whether a merge would conflict."),
     ("orchestration run-create", "Open a Run and attach this terminal to it as the coordinator."),
@@ -41,6 +146,7 @@ const SUMMARIES: &[(&str, &str)] = &[
     ("orchestration run-current", "Show the Run this terminal is attached to."),
     ("orchestration run-list", "List the Runs."),
     ("orchestration run-show", "Show one Run."),
+    ("orchestration request-show", "Say whether a change sent with a retry request id completed, is pending, or never arrived."),
     ("orchestration send", "Send a message to a terminal, a Run or a dispatch."),
     ("orchestration check", "Read new mail, or wait for it."),
     ("orchestration reply", "Answer a message in its thread."),
@@ -54,7 +160,6 @@ const SUMMARIES: &[(&str, &str)] = &[
     ("orchestration task-list", "List the Run's tasks."),
     ("orchestration dispatch", "Give a task to a terminal that is already open."),
     ("orchestration dispatch-show", "Show how a task was dispatched."),
-    ("orchestration request-show", "Show what became of a change whose answer was lost, by its retry id."),
     ("terminal list", "List the open terminals: worktree, pane, tab, name and whether each is in view."),
     ("terminal show", "Show one open terminal."),
     ("terminal create", "Open a new terminal in a worktree, optionally running a command."),
@@ -62,7 +167,11 @@ const SUMMARIES: &[(&str, &str)] = &[
     ("terminal rename", "Rename a terminal, or give it back its default name."),
     ("terminal switch", "Bring a terminal into view and focus it."),
     ("terminal close", "Close a terminal, its tab, or every terminal in a worktree."),
+    ("orchestration task-update", "Move a task to another state; its worker is settled with it."),
     ("orchestration worker-abandon", "Give up on a worker; its task goes back to ready."),
+    ("orchestration worker-stop", "End a worker's agent terminal and keep its worktree."),
+    ("orchestration worker-list", "List workers with what is left of their terminals and the next command to run."),
+    ("orchestration worker-retain", "Keep a settled worker's terminal open on purpose, across restarts."),
     ("automations list", "List the automations."),
     ("automations show", "Show one automation."),
     ("automations runs", "List an automation's runs, newest first."),
@@ -73,7 +182,12 @@ const SUMMARIES: &[(&str, &str)] = &[
     ("agent-context", "Describe every command, its flags and its usage."),
     ("skills list", "List the skill guides bundled with this CLI."),
     ("skills get", "Print a bundled skill guide, in short, in full, or one reference."),
+    ("skills coverage", "Show which installed agents have the orchestration skill installed for the whole computer."),
     ("claude-teams", "Run Claude Code with Agent Teams in Kolux panes; arguments go to Claude untouched."),
+    ("agent hooks status", "Show whether each agent's status hooks are installed, partly installed or missing."),
+    ("agent hooks on", "Switch the agent status hooks on and put Kolux's entries back into every agent."),
+    ("agent hooks off", "Switch the agent status hooks off and take Kolux's entries out of every agent."),
+    ("agent hooks prepare-codex", "Install and trust Kolux's Codex hooks before Codex is first started."),
 ];
 
 /// The bare word some commands take after their verb, and the flag it stands for.
@@ -187,7 +301,7 @@ fn skill(topic: &str) -> Result<&'static Skill, Fail> {
     SKILLS.iter().find(|s| s.name == t || s.aliases.contains(&t.as_str())).ok_or_else(|| Fail {
         code: "not_found",
         message: format!("there is no skill called {topic}; the topics are {}", topics()),
-        data: json!({ "topics": SKILLS.iter().map(|s| s.name).collect::<Vec<_>>(), "hint": "kolux-dev skills list shows them with what each is for" }),
+        data: json!({ "topics": SKILLS.iter().map(|s| s.name).collect::<Vec<_>>(), "hint": format!("{} skills list shows them with what each is for", crate::orchestration::CLI) }),
     })
 }
 
@@ -231,15 +345,39 @@ pub fn run(p: &Parsed) -> Option<Result<Value, Fail>> {
         "agent-context" => Ok(agent_context()),
         "skills.list" => Ok(json!({ "skills": SKILLS.iter().map(|s| json!({ "name": s.name, "description": split(s.guide).0, "aliases": s.aliases, "references": s.refs.iter().map(|r| r.0).collect::<Vec<_>>() })).collect::<Vec<_>>() })),
         "skills.get" => skills_get(&p.args),
+        "skills.coverage" => Ok(skills_coverage()),
+        // STAT-003: read from the files themselves, so Kolux may be closed.
+        "agent.hooks.status" => Ok(switch::report(&profile_settings())),
+        "agent.hooks.on" => switch::set(&super::data_dir(), true).map_err(Fail::from),
+        "agent.hooks.off" => switch::set(&super::data_dir(), false).map_err(Fail::from),
+        "agent.hooks.prepare-codex" => switch::prepare_codex(&profile_settings()).map_err(Fail::from),
         _ => return None,
     })
 }
 
 pub fn text(command: &str, r: &Value) -> Option<String> {
     Some(match command {
-        "agent-context" => format!("{} commands; kolux-dev agent-context --json prints the whole document", r["commandCount"]),
+        "agent-context" => format!("{} commands; {} agent-context --json prints the whole document", r["commandCount"], crate::orchestration::CLI),
         "skills.list" => r["skills"].as_array().into_iter().flatten().map(|s| format!("{:<15}{}", s["name"].as_str().unwrap_or_default(), s["description"].as_str().unwrap_or_default())).collect::<Vec<_>>().join("\n"),
         "skills.get" => r["markdown"].as_str().unwrap_or_default().to_string(),
+        "skills.coverage" => {
+            let rows = r["agents"].as_array().into_iter().flatten().map(|a| {
+                let state = if a["covered"] == true { format!("covered      {}", a["foundIn"].as_str().unwrap_or_default()) } else if a["known"] == true { "not covered".into() } else { "not covered  (no known skills folder for it)".into() };
+                format!("{:<16}{state}", a["name"].as_str().unwrap_or_default())
+            });
+            let rows: Vec<String> = rows.collect();
+            let head = format!("The {} skill, installed for the whole computer (an install inside a repo does not count):", r["skill"].as_str().unwrap_or_default());
+            if rows.is_empty() { format!("{head}\nNo agents were found on this computer.") } else { format!("{head}\n{}", rows.join("\n")) }
+        }
+        "agent.hooks.status" | "agent.hooks.on" | "agent.hooks.off" => {
+            let mut out = vec![format!("Agent status hooks: {}", if r["on"] == true { "on" } else { "off" })];
+            for a in r["agents"].as_array().into_iter().flatten() {
+                let why = a["reason"].as_str().map(|w| format!("  ({w})")).unwrap_or_default();
+                out.push(format!("{:<14}{}{why}", a["name"].as_str().unwrap_or_default(), a["state"].as_str().unwrap_or_default()));
+            }
+            out.join("\n")
+        }
+        "agent.hooks.prepare-codex" => format!("Kolux's Codex hooks are installed and trusted in {}", r["home"].as_str().unwrap_or_default()),
         _ => return None,
     })
 }
@@ -280,6 +418,59 @@ mod tests {
         }
         assert_eq!(doc, local("agent-context").unwrap(), "the order is stable");
         assert!(text("agent-context", &doc).unwrap().starts_with(&format!("{} commands", list.len())));
+    }
+
+    #[test]
+    fn an_agent_is_covered_only_by_an_install_for_the_whole_computer() {
+        let home = std::env::temp_dir().join(format!("kolux-coverage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let put = |rel: &str| {
+            let d = home.join(rel).join("orchestration");
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("SKILL.md"), "---\nname: orchestration\n---\n").unwrap();
+        };
+        let agents: Vec<(String, String)> = [("claude", "Claude Code"), ("codex", "Codex"), ("cline", "Cline"), ("gemini", "Gemini CLI"), ("hermes", "Hermes"), ("aider", "Aider")].iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
+        let covered = |local_app: Option<&std::path::Path>| -> Vec<(String, bool)> { coverage(&home, local_app, &agents, "orchestration").iter().map(|r| (r["id"].as_str().unwrap().to_string(), r["covered"] == true)).collect() };
+        let is = |rows: &[(String, bool)], id: &str| rows.iter().find(|r| r.0 == id).unwrap().1;
+
+        // An install inside a repo covers nobody.
+        put("work/app/.claude/skills");
+        put("work/app/.agents/skills");
+        assert!(covered(None).iter().all(|r| !r.1), "repo installs do not count");
+        // Claude's own home skills folder covers Claude alone.
+        put(".claude/skills");
+        let rows = covered(None);
+        assert!(is(&rows, "claude") && !is(&rows, "codex") && !is(&rows, "gemini"));
+        // The shared folder covers the agents that read it, not the others.
+        put(".agents/skills");
+        let rows = covered(None);
+        assert!(is(&rows, "codex") && is(&rows, "cline") && !is(&rows, "gemini"));
+        // An agent with no known skills folder says so instead of guessing.
+        let all = coverage(&home, None, &agents, "orchestration");
+        let aider = all.iter().find(|r| r["id"] == "aider").unwrap();
+        assert_eq!((aider["covered"].as_bool(), aider["known"].as_bool()), (Some(false), Some(false)));
+        let found = all.iter().find(|r| r["id"] == "claude").unwrap()["foundIn"].as_str().unwrap().to_string();
+        assert!(found.contains(".claude") && (!cfg!(windows) || !found.contains('/')), "one kind of separator: {found}");
+        std::fs::remove_dir_all(home.join(".claude/skills")).unwrap();
+        std::fs::remove_dir_all(home.join(".agents/skills")).unwrap();
+
+        // A Claude plugin counts only while it is enabled.
+        put(".claude/plugins/cache/mkt/kolux/1.0.0/skills");
+        std::fs::write(home.join(".claude/settings.json"), r#"{"enabledPlugins":{"kolux@mkt":false}}"#).unwrap();
+        assert!(!is(&covered(None), "claude"), "a disabled plugin");
+        std::fs::write(home.join(".claude/settings.json"), r#"{"enabledPlugins":{"kolux@mkt":true}}"#).unwrap();
+        assert!(is(&covered(None), "claude"), "an enabled plugin");
+        // Codex counts from its own home folder and its plugin cache.
+        put(".codex/plugins/cache/mkt/kolux/2.0.0/skills");
+        assert!(is(&covered(None), "codex"));
+        std::fs::remove_dir_all(home.join(".codex")).unwrap();
+        put(".codex/skills");
+        assert!(is(&covered(None), "codex"));
+        // Hermes reads the local app-data folder on Windows, then the hidden folder in home.
+        assert!(!is(&covered(None), "hermes"));
+        put("AppData/Local/hermes/skills");
+        assert!(is(&covered(Some(&home.join("AppData").join("Local"))), "hermes"));
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

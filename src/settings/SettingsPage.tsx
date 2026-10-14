@@ -9,13 +9,15 @@ import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
 import { actionLabel, keyCard, ownSignInLine, RESUME_FIELD, resumeOn, type KeyAction, type KeyStatus, type OwnSignIn } from "./claudeKey";
 import ClaudeAccounts, { addClaudeAccount } from "./ClaudeAccounts";
+import CodexAccounts from "./CodexAccounts";
 import CodexCard from "./CodexCard";
-import { ConnectGrid, OtherWays, taglineOf } from "./ConnectGrid";
+import { ConnectGrid, liveCheck, OtherWays, taglineOf } from "./ConnectGrid";
 import { settleWithin } from "./pending";
-import CloseAsk from "../terminal/CloseAsk";
+import Ask from "../chrome/Ask";
 import GrokCard from "./GrokCard";
-import { AttentionNote, openInstallPage, type Fix } from "./Attention";
+import { AttentionNote, fixDoes, openInstallPage, type Fix } from "./Attention";
 import type { Project } from "../projects/model";
+import RepoPage from "./RepoPage";
 import { PAGES, pageOf, rememberPage, lastPage, type Page, type SettingsTarget } from "./pages";
 
 // SET-006: a page loads the first time it is opened, so Settings itself opens quickly.
@@ -28,11 +30,13 @@ const ShortcutsPage = lazy(() => import("./ShortcutsPage"));
 const TerminalPage = lazy(() => import("./TerminalPage"));
 const GitPage = lazy(() => import("./GitPage"));
 const AgentsPage = lazy(() => import("./AgentsPage"));
+const TokenAnalytics = lazy(() => import("../usage/TokenAnalytics"));
+const Activity = lazy(() => import("../usage/Activity"));
 
 export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, own = null, resume = false, onResume }: { status: KeyStatus | null; busy: boolean; error?: string | null; onAction: (a: KeyAction) => void; onUseAccount?: () => void; own?: OwnSignIn | null; resume?: boolean; onResume?: (on: boolean) => void }) {
   const card = keyCard(status);
   const ownLine = card.state === "disconnected" || card.state === "attention" ? ownSignInLine(own) : null;
-  const fix = (f: Fix) => (f === "Open install page" ? void openInstallPage("claude").catch(() => {}) : onAction("connect"));
+  const fix = (f: Fix) => (fixDoes(f) === "install-page" ? void openInstallPage("claude").catch(() => {}) : onAction(fixDoes(f) === "check" ? "cancel" : "connect"));
   const chip = card.state === "connected" || card.state === "warning" ? "Connected" : card.state === "expired" ? "Ran out" : card.state === "connecting" ? "Connecting" : card.state === "attention" ? "Needs attention" : card.state === "reading" ? "" : "Not connected";
   return (
     <section className="conn-card" data-state={card.state} aria-label="Claude">
@@ -79,8 +83,11 @@ export const claudeDisconnect = {
   confirm: "Disconnect",
 };
 
-function ClaudeCard() {
+/** `onConnected`: told whether Claude counts as connected each time that changes (ONB-003). */
+export function ClaudeCard({ onConnected = () => {} }: { onConnected?: (on: boolean) => void } = {}) {
   const [status, setStatus] = useState<KeyStatus | null>(null);
+  const on = ["connected", "warning"].includes(keyCard(status).state);
+  useEffect(() => onConnected(on), [onConnected, on]);
   const [own, setOwn] = useState<OwnSignIn | null>(null);
   const [resume, setResume] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -100,7 +107,8 @@ function ClaudeCard() {
       .then((s) => setResume(resumeOn(s)))
       .catch(() => {});
     const offs = [listen("claude-key", read), listen("claude-accounts", read)];
-    return () => offs.forEach((o) => void o.then((u) => u()).catch(() => {}));
+    const stop = liveCheck(read, window, document, 0);
+    return () => (stop(), offs.forEach((o) => void o.then((u) => u()).catch(() => {})));
   }, [read]);
   const saveResume = (on: boolean) => {
     setResume(on);
@@ -136,7 +144,7 @@ function ClaudeCard() {
     <>
       <ClaudeCardView status={status} busy={busy} error={error} onAction={act} onUseAccount={useAccount} own={own} resume={resume} onResume={saveResume} />
       {asking && (
-        <CloseAsk
+        <Ask
           {...claudeDisconnect}
           onCancel={() => setAsking(false)}
           onConfirm={() => {
@@ -149,18 +157,6 @@ function ClaudeCard() {
   );
 }
 
-const later = <p className="conn-detail">Nothing to set here yet.</p>;
-
-function RepoPage({ project }: { project: Project }) {
-  return (
-    <section className="conn-card" data-section="repo">
-      <h2 className="conn-name">{project.name}</h2>
-      <p className="conn-detail">Folder: {project.path}</p>
-      <p className="conn-detail">Workspaces folder: {project.workspacesDir || "the global one (Git & worktrees)"}</p>
-      <p className="conn-detail">New workspaces start from: {project.base || "the default branch"}</p>
-    </section>
-  );
-}
 
 /** Scrolls a section of the open page into view once it is drawn (pages load lazily). */
 function useScrollTo(section: string | undefined, page: Page, n: number) {
@@ -248,6 +244,7 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
               <div className="conn-advanced" data-section="accounts-advanced">
                 <h3 className="conn-advanced-head">Manage accounts (advanced)</h3>
                 <ClaudeAccounts />
+                <CodexAccounts />
               </div>
             </>
           )}
@@ -261,8 +258,22 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
               <Notifications />
             </>
           )}
-          {(page === "safety" || page === "usage") && later}
-          {repo && <RepoPage project={repo} />}
+          {page === "usage" && (
+            <>
+              <Activity />
+              <p className="settings-sub">What your agents used, read from the logs they keep on this computer.</p>
+              <TokenAnalytics />
+            </>
+          )}
+          {page === "safety" && (
+            <p className="conn-detail">
+              Protected commands are advisory and cover Claude only: Claude asks before a command that trips a built-in rule
+              (force-push to main, throwing away uncommitted work, deleting database objects, Stripe changes, infrastructure
+              changes, production deploys). This is not a safety control: a command can be written around it, and Codex is not
+              covered.
+            </p>
+          )}
+          {repo && <RepoPage project={repo} onSaved={(u) => setProjects((ps) => ps.map((x) => (x.id === u.id ? u : x)))} />}
         </Suspense>
       </main>
     </div>

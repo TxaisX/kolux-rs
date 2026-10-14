@@ -2,6 +2,9 @@
 // the rules are tested on their own; App starts the seats and KitStrip draws the rows.
 import { RESULTS_FOLDER, VENDOR_NAME, type Kit, type KitRole, type Vendor } from "./catalog";
 
+/** SKILL-014: one run in the history across projects (newest 50 kept by the app). */
+export type Past = { dir: string; kit: string; title: string; started: number; collected: string | null };
+
 /** COMPAT: each role finishes by writing this marker in its own folder. */
 export const MARKER = "DONE";
 
@@ -42,8 +45,9 @@ export function datedName(title: string, ms: number): string {
 export const roleDone = (check: RunCheck, roleId: string) => (check.files[roleId]?.[MARKER] ?? -1) >= check.record.started;
 
 /** A session as the strip sees it. */
-export type SeatInfo = { key: number; running?: boolean; needs?: boolean };
-export type RowState = "not-ready" | "waiting" | "working" | "done" | "left" | "needs" | "stopped";
+/** `stop`: why the session's hooks say it is stopped, while it is (STAT-022's limit or sign-in). */
+export type SeatInfo = { key: number; running?: boolean; needs?: boolean; ai?: string | null; stop?: "limit" | "signin" | null };
+export type RowState = "not-ready" | "waiting" | "working" | "done" | "left" | "needs" | "stopped" | "limit" | "signin";
 export type RoleRow = { state: RowState; text: string; key: number | null };
 
 /** SKILL-010: one role's plain status. `sentAt` is when a waiting role got its prompt. */
@@ -54,8 +58,10 @@ export function roleRow(kit: Kit, role: KitRole, check: RunCheck, seat: SeatInfo
     const old = role.delivers.some((f) => (check.files[role.id]?.[f] ?? Infinity) < check.record.started);
     return old ? { state: "left", text: "Left from the last run", key } : { state: "not-ready", text: "Not ready yet", key };
   }
-  // ponytail: needs you and stopped come from what the window knows (bell / program ended); the
-  // sign-in, review-hooks and usage-limit labels arrive with the status hooks (T-025) and SKILL-011.
+  // SKILL-011: a usage limit or a lapsed sign-in comes from the status hooks; needs you and stopped
+  // from what the window knows (bell / program ended).
+  if (seat.stop === "limit") return { state: "limit", text: "Stopped: this AI reached its usage limit", key };
+  if (seat.stop === "signin") return { state: "signin", text: "Stopped: this AI needs signing in again", key };
   if (seat.needs) return { state: "needs", text: "Needs you", key };
   if (seat.running === false) return { state: "stopped", text: "Stopped: the AI ended before it finished", key };
   const upstream = role.waitsFor ? kit.roles.find((r) => r.id === role.waitsFor) : undefined;
@@ -77,3 +83,10 @@ export function matchSeats(record: RunRecord, saved: (number | null)[] | null, p
     return p.key;
   });
 }
+
+/** SKILL-012: how a result previews: HTML in the browser pane, Markdown rendered, the rest in a
+ * read-only editor tab. */
+export const previewKind = (file: string): "browser" | "preview" | "editor" => (/\.html?$/i.test(file) ? "browser" : /\.(md|markdown)$/i.test(file) ? "preview" : "editor");
+
+/** SKILL-011: a stopped role can move to every other connected AI. */
+export const moveTargets = (current: string | null, connected: Vendor[]): Vendor[] => connected.filter((v) => v !== current);

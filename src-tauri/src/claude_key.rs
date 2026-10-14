@@ -229,6 +229,12 @@ pub fn pane_env(program: Option<&str>, settings: &Value, token: Option<String>) 
     token.filter(|t| !t.is_empty()).map(|t| (ENV, t))
 }
 
+/// ACCT-024: whether a pane drops a key variable Kolux itself was started with: every Claude pane
+/// that is not handed the key (plain and managed panes use their own login).
+pub fn strip_inherited(program: Option<&str>, env: &[(String, String)]) -> bool {
+    program.and_then(crate::agents::credited_agent) == Some("claude") && !env.iter().any(|(k, _)| k == ENV)
+}
+
 /// Stores a fresh key: sealed, with its creation date and the key-mode marker.
 pub fn keep(store: &Store, token: &str, now: i64) -> Result<(), String> {
     secrets::write_setting(store, TOKEN_FIELD, token)?;
@@ -473,6 +479,10 @@ pub fn claude_key_connect(app: AppHandle, setup: tauri::State<'_, KeySetup>) -> 
             if let Err(e) = kept {
                 attention = Some(format!("The key could not be stored: {e}").into());
             }
+            // ACCT-011: the log notes the connection; the key in it is masked.
+            if let Ok(dir) = app.path().app_data_dir() {
+                crate::secrets::log(&dir, &format!("claude-key: connected with {}", crate::secrets::mask(token)));
+            }
         }
         setup.set_attention(attention);
         setup.in_browser.store(false, Ordering::SeqCst);
@@ -581,8 +591,7 @@ mod tests {
 
     #[test]
     fn keep_and_forget_round_trip_sealed() {
-        let dir = std::env::temp_dir().join(format!("kolux-key-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = crate::test_dir::temp("key"); // removed after the store below has closed
         let store = Store::open(&dir).unwrap();
         keep(&store, KEY, 42).unwrap();
         let raw = std::fs::read_to_string(dir.join("settings.json")).unwrap();
@@ -594,7 +603,6 @@ mod tests {
         forget(&store).unwrap();
         let s = store.settings();
         assert!(s.get(TOKEN_FIELD).is_none() && s.get(MODE_FIELD).is_none() && s.get(CREATED_FIELD).is_none());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(windows)]
@@ -630,5 +638,14 @@ mod tests {
         assert!(asked.elapsed() < Duration::from_secs(3));
         assert_eq!(running.join().unwrap(), Outcome::Cancelled);
         assert!(cancel_all(Duration::from_millis(10)), "nothing left to stop");
+    }
+
+    #[test]
+    fn acct_024_only_a_key_mode_claude_pane_keeps_the_key_variable() {
+        let with = vec![(ENV.to_string(), "k".to_string())];
+        assert!(strip_inherited(Some("claude"), &[]), "a plain Claude pane drops a key Kolux was started with");
+        assert!(strip_inherited(Some("claude"), &[(crate::claude_accounts::CONFIG_ENV.to_string(), "d".to_string())]), "so does a managed one");
+        assert!(!strip_inherited(Some("claude"), &with), "key mode keeps its own key");
+        assert!(!strip_inherited(Some("codex"), &[]) && !strip_inherited(None, &[]), "other programs are left alone");
     }
 }

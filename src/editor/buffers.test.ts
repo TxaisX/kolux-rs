@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { EditorState, type Transaction } from "@codemirror/state";
 import { history, undo } from "@codemirror/commands";
-import { attach, detach, diskNews, isDirty, keepMine, keyOf, loadText, relay, replaceAll, sameText, save, subscribe, type View } from "./buffers";
+import { attach, detach, diskNews, hashOf, isDirty, isStale, keepMine, keyOf, loadText, relay, replaceAll, sameText, save, subscribe, type View } from "./buffers";
 
 /** A stand-in for an editor view: a state that takes transactions and reports them to the buffer. */
 function fakeView(path: string, text: string, eol?: string): View & { type: (at: number, s: string) => void } {
@@ -51,6 +51,44 @@ describe("unsaved marker (EDIT-001)", () => {
     await expect(save(p, async () => Promise.reject(new Error("denied")))).rejects.toThrow("denied");
     expect(isDirty(p)).toBe(true);
     detach(p, v);
+  });
+});
+
+describe("a save never overwrites a change made on disk unseen (EDIT-003, T-073-a)", () => {
+  it("sends the hash of the loaded text, then of what it saved; Keep mine sends none", async () => {
+    expect(await hashOf("abc")).toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    const p = "C:/w/hash.md";
+    const v = fakeView(p, "one");
+    attach(p, v, "one");
+    v.type(3, " two");
+    const sent: (string | undefined)[] = [];
+    await save(p, async (_t, h) => void sent.push(h));
+    v.type(0, "x");
+    await save(p, async (_t, h) => void sent.push(h), true);
+    expect(sent).toEqual([await hashOf("one"), undefined]);
+    detach(p, v);
+  });
+
+  it("a refused save keeps the edits unsaved and the loaded hash", async () => {
+    const p = "C:/w/stale.md";
+    const v = fakeView(p, "disk");
+    attach(p, v, "disk");
+    v.type(4, "!");
+    const refuse = async () => Promise.reject("stale: the file changed on disk since it was opened");
+    const err = await save(p, refuse).catch((e) => e);
+    expect(isStale(err)).toBe(true);
+    expect(isDirty(p)).toBe(true);
+    const sent: (string | undefined)[] = [];
+    await save(p, async (_t, h) => void sent.push(h));
+    expect(sent).toEqual([await hashOf("disk")]);
+    detach(p, v);
+  });
+
+  it("knows the stale refusal from other errors", () => {
+    expect(isStale({ kind: "stale", message: "changed" })).toBe(true);
+    expect(isStale("stale: changed")).toBe(true);
+    expect(isStale("could not save C:/w/a.md: denied")).toBe(false);
+    expect(isStale({ kind: "denied" })).toBe(false);
   });
 });
 
@@ -160,7 +198,7 @@ describe("disk changes under an open file (EDIT-003)", () => {
     };
     attach(path, v, "one\n");
     v.dispatch(v.state.update({ changes: { from: 0, insert: "mine " } }));
-    replaceAll(path, "agent\n");
+    replaceAll(path, "agent\n", true);
     expect(v.state.sliceDoc()).toBe("agent\n");
     expect(isDirty(path)).toBe(false);
     undo({ state: v.state, dispatch: (tr) => v.dispatch(tr) });

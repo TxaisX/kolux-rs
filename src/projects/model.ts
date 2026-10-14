@@ -1,3 +1,4 @@
+import { locale } from "../language";
 // The shapes the Rust side hands over for projects and workspaces, plus the pure helpers the
 // sidebar draws from. No Tauri calls here, so it can be tested on its own.
 
@@ -15,7 +16,7 @@ export function placeFieldAction(key: string, composing: boolean): "save" | "rev
   return key === "Enter" ? "save" : key === "Escape" ? "revert" : null;
 }
 /** `parent` is the workspace it was made from (PROJ-047); gone or main means it sits at the top level. */
-export type Worktree = { path: string; branch: string | null; head: string; isMain: boolean; name?: string | null; parent?: string | null; hidden?: boolean; kind?: "main" | "managed" | "external" | ""; source?: string | null; push?: Push | null };
+export type Worktree = { path: string; branch: string | null; head: string; isMain: boolean; name?: string | null; parent?: string | null; hidden?: boolean; kind?: "main" | "managed" | "external" | ""; source?: string | null; madeBy?: string | null; number?: number | null; comment?: string | null; push?: Push | null };
 
 /** PROJ-064: commits not pushed; without an upstream, the commits on no remote. */
 export type Push = { ahead: number; upstream: boolean };
@@ -71,7 +72,7 @@ export function worktreeLabel(w: Worktree): string {
 export function orderWorktrees(list: Worktree[]): Worktree[] {
   return [...list].sort((a, b) => {
     if (a.isMain !== b.isMain) return a.isMain ? -1 : 1;
-    return worktreeLabel(a).localeCompare(worktreeLabel(b));
+    return worktreeLabel(a).localeCompare(worktreeLabel(b), locale());
   });
 }
 
@@ -136,6 +137,37 @@ export function createOpens(projectId: string): "name" | "add" {
   return projectId ? "name" : "add";
 }
 
+/** PROJ-033: how the Setup terminal starts (Rust's SetupLine). */
+export type SetupLine = { program: string; args: string[]; script: string };
+/** PROJ-033: where the Setup terminal opens: a tab beside the workspace's first pane, or a split. */
+export type SetupWhere = "tab" | "right" | "down";
+
+/** PROJ-033: the agent waits for setup only in new-tab mode with wait on, and only when both run. */
+export function waitsForSetup(where: SetupWhere, wait: boolean, agent: boolean, setup: boolean): boolean {
+  return where === "tab" && wait && agent && setup;
+}
+
+/** PROJ-030: an open pull request the composer can open as a workspace (gh's fields). */
+export type PrHead = { number: number; title: string; url: string; headRefName: string; headRefOid: string; isCrossRepository?: boolean; headRepositoryOwner?: { login: string } | null };
+
+/** PROJ-030: the pull requests matching the typed text by number (with or without #), title or
+ * head branch, in gh's order; the label is "#12 Title" and the hint the head branch. */
+export function prItems(list: PrHead[], query: string): { key: string; label: string; hint: string }[] {
+  const q = query.trim().toLowerCase().replace(/^#/, "");
+  return list
+    .filter((p) => !q || String(p.number).startsWith(q) || p.title.toLowerCase().includes(q) || p.headRefName.toLowerCase().includes(q))
+    .map((p) => ({ key: String(p.number), label: `#${p.number} ${p.title}`, hint: p.isCrossRepository && p.headRepositoryOwner ? `${p.headRepositoryOwner.login}:${p.headRefName}` : p.headRefName }));
+}
+
+/** PROJ-020: a create the window has handed to Git and not yet heard back from. */
+export type PendingCreate = { ticket: number; projectId: string; name: string; more: boolean };
+
+/** PROJ-020: the tickets a newer create overtakes: every one still running except itself and
+ * those made with Create more, which asked for several workspaces at once. */
+export function overtakenBy(running: PendingCreate[], next: PendingCreate): number[] {
+  return running.filter((p) => p.ticket !== next.ticket && !p.more).map((p) => p.ticket);
+}
+
 /** The sentence under the name field: where the branch and folder will go, or why it is refused. */
 export function previewSentence(typed: string, preview: Preview | null, project: Project | null): string {
   if (!project) return "Add a project first.";
@@ -146,9 +178,12 @@ export function previewSentence(typed: string, preview: Preview | null, project:
 
 /** What the command line tells the window after `worktree create` or `worktree rm` (PROJ-077). */
 export type CliWorkspace =
-  | { kind: "created"; projectId: string; worktree: Created; agent: string | null; prompt: string; activate: boolean }
-  | { kind: "start"; path: string; branch: string | null; agent: string; prompt: string; extra: string[]; title: string | null }
+  | { kind: "created"; projectId: string; worktree: Created; agent: string | null; prompt: string; activate: boolean; setup?: "run" | "skip" | "inherit" }
+  | { kind: "start"; path: string; branch: string | null; agent: string; prompt: string; extra: string[]; title: string | null; runId?: string }
   | { kind: "removed"; path: string }
+  // CLI-015 / CLI-019: a repo setting or a worktree's name, link, comment or parent changed; only a redraw.
+  | { kind: "repo"; projectId: string }
+  | { kind: "changed"; projectId: string; path: string }
   // CLI-026, CLI-027: the terminal commands; ask is the request the window answers through its layout.
   | { kind: "terminal-create"; path: string; branch: string | null; command: string | null; title: string | null; focus: boolean; ask: string }
   | { kind: "terminal-split"; handle: string; dir: "right" | "down"; command: string | null; ask: string }
@@ -254,4 +289,40 @@ export function newestOnly(): () => () => boolean {
     const mine = ++last;
     return () => mine === last;
   };
+}
+
+/** PROJ-037: a GitHub issue or pull request named by its address. */
+export type WorkItem = { host: string; owner: string; repo: string; kind: "pull" | "issue"; number: number };
+
+/** The issue or pull request an address names; null for anything else, a plain name or a
+ * repository's home page included. Any host, so an Enterprise address counts too. */
+export function workItem(text: string): WorkItem | null {
+  const m = /^https?:\/\/([^/\s]+)\/([\w.-]+)\/([\w.-]+)\/(pull|issues)\/(\d+)(?:[/?#]\S*)?$/i.exec(text.trim());
+  if (!m || Number(m[5]) === 0) return null;
+  return { host: m[1].toLowerCase().replace(/^www\./, ""), owner: m[2], repo: m[3], kind: m[4].toLowerCase() === "pull" ? "pull" : "issue", number: Number(m[5]) };
+}
+
+/** SESS-036: the issue or pull request (or, later, a tracker item) a new workspace is linked to;
+ * `repo` is the GitHub repository it belongs to, null for a tracker link bound to none. */
+export type Linked = { kind: string; number: number; title: string; url: string; repo: string | null };
+
+/** A GitHub item as the back end found it, bound to the repository its address names. */
+export const bound = (l: Omit<Linked, "repo">): Linked => {
+  const w = workItem(l.url);
+  return { ...l, repo: w ? `${w.host}/${w.owner}/${w.repo}` : l.url };
+};
+
+export const itemLabel = (l: Linked) => `${l.kind === "pull" ? "pull request" : l.kind} #${l.number} ${l.title}`;
+
+/** SESS-038: switching project drops a GitHub item of the old repository, keeps a link bound to none. */
+export const keepOnSwitch = (l: Linked | null): Linked | null => (l && l.repo === null ? l : null);
+
+/** SESS-038: what a create the user cancelled mid-submit says: `err` is the back end's answer, null
+ * when Git had already finished (the workspace then stays). */
+export function stoppedNote(name: string, err: string | null): { kind: "ok" | "warn"; text: string } {
+  if (err === null) return { kind: "warn", text: `${name} was already made when the cancel arrived, so it stays; delete it if you do not want it.` };
+  const lead = "cancelled: a newer workspace creation took its place";
+  if (!err.startsWith(lead)) return { kind: "warn", text: `${name}: ${err}` };
+  const rest = err.slice(lead.length);
+  return rest ? { kind: "warn", text: `Stopped creating ${name}${rest}` } : { kind: "ok", text: `Stopped creating ${name}; nothing was left behind.` };
 }

@@ -7,10 +7,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { AttentionNote, fixFor, type Attention } from "./Attention";
-import { OtherWays, taglineOf } from "./ConnectGrid";
+import { AttentionNote, fixDoes, fixFor, type Attention } from "./Attention";
+import { liveCheck, OtherWays, taglineOf } from "./ConnectGrid";
 import { settleWithin } from "./pending";
-import CloseAsk, { type Ask } from "../terminal/CloseAsk";
+import Ask, { type Question } from "../chrome/Ask";
 
 export type GrokView = {
   connection: "cli" | "key" | "none";
@@ -26,7 +26,7 @@ export type GrokAction = "connect" | "code" | "key" | "cancel" | "disconnect";
 export const KEY_FIELD = "xaiApiKey";
 
 /** ACCT-015: what Disconnect asks. Only the saved xAI key is ever erased. */
-export function grokDisconnect(v: GrokView): Ask {
+export function grokDisconnect(v: GrokView): Question {
   if (v.keySaved)
     return {
       title: "Disconnect the xAI key?",
@@ -75,7 +75,7 @@ export function GrokCardView({ view, pending, error, onAction }: { view: GrokVie
       )}
       {view.signingIn === "browser" && view.inBrowser && <p className="conn-detail">Sign in on the xAI page that opened in your browser.</p>}
       {state === "connected" && view.connection === "key" && <p className="conn-detail">Grok bills this key per use. A Grok sign-in, once you make one, takes its place.</p>}
-      {state !== "connecting" && <AttentionNote attention={view.attention} route="grok" busy={pending !== null} onFix={() => onAction("connect")} />}
+      {state !== "connecting" && <AttentionNote attention={view.attention} route="grok" busy={pending !== null} onFix={(f) => onAction(fixDoes(f) === "check" ? "cancel" : "connect")} />}
       {error && (
         <p className="conn-detail warn" role="alert">
           {error}
@@ -163,12 +163,15 @@ export function GrokKeyDialog({ open, onSubmit, onClose }: { open: boolean; onSu
   );
 }
 
-export default function GrokCard() {
+/** `onConnected`: told whether Grok counts as connected each time that changes (ONB-003). */
+export default function GrokCard({ onConnected = () => {} }: { onConnected?: (on: boolean) => void } = {}) {
   const [view, setView] = useState<GrokView | null>(null);
+  const on = !!view && grokState(view) === "connected";
+  useEffect(() => onConnected(on), [onConnected, on]);
   const [pending, setPending] = useState<GrokAction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dialog, setDialog] = useState(false);
-  const [ask, setAsk] = useState<Ask | null>(null);
+  const [ask, setAsk] = useState<Question | null>(null);
   const read = useCallback(() => {
     invoke<GrokView>("grok_status")
       .then(setView)
@@ -180,7 +183,8 @@ export default function GrokCard() {
     listen("grok", read)
       .then((un) => (stop = un))
       .catch(() => {});
-    return () => stop();
+    const off = liveCheck(read, window, document, 0);
+    return () => (stop(), off());
   }, [read]);
   const run = (a: GrokAction, call: Promise<unknown>) => {
     setError(null);
@@ -208,7 +212,7 @@ export default function GrokCard() {
         }}
       />
       {ask && (
-        <CloseAsk
+        <Ask
           {...ask}
           onCancel={() => setAsk(null)}
           onConfirm={() => {

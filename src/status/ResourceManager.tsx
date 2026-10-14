@@ -1,10 +1,11 @@
 // APP-054: the Resource Manager, opened from the status bar's memory figure. Memory and CPU for the
 // app, for every terminal session grouped under its workspace, and the computer's free memory.
-// Ending a session asks first, in the row, and stops that session only.
+// Ending a session asks first, in the row, and stops that session only; a session a fresh read shows
+// has already ended just leaves the list, with no question (VIEW-099).
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { formatMemory } from "./memory";
-import { formatCpu, groupSessions, type Resources, type Row } from "./resources";
+import { endNeedsAsk, formatCpu, groupSessions, type Resources, type Row } from "./resources";
 
 type Props = { names: () => Record<number, string>; workspaces: string[]; onClose: () => void };
 
@@ -17,8 +18,15 @@ export default function ResourceManager({ names, workspaces, onClose }: Props) {
       .then((r) => {
         setData(r);
         setFailed("");
+        return r;
       })
-      .catch((e) => setFailed(String(e)));
+      .catch((e) => {
+        setFailed(String(e));
+        return null;
+      });
+  const ask = async (row: Row) => {
+    if (endNeedsAsk(await read(), row.id)) setEnding(row);
+  };
   useEffect(() => {
     void read();
     const t = setInterval(read, 2000);
@@ -78,10 +86,11 @@ export default function ResourceManager({ names, workspaces, onClose }: Props) {
                 <div key={r.id} className="res-row" data-session={r.id}>
                   <span className="res-name" title={`${r.processes} process${r.processes === 1 ? "" : "es"}${r.dir ? ` in ${r.dir}` : ""}`}>
                     {r.name}
+                    {r.pid !== null && <span className="res-pid"> · pid {r.pid}</span>}
                   </span>
                   <span className="res-fig">{formatMemory(r.bytes)}</span>
                   <span className="res-fig">{formatCpu(r.cpu)}</span>
-                  <button className="btn res-end" onClick={() => setEnding(r)} title={`End ${r.name}`}>
+                  <button className="btn res-end" onClick={() => void ask(r)} title={`End ${r.name}`}>
                     End
                   </button>
                 </div>

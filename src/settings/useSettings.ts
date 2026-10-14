@@ -3,6 +3,16 @@ import type { ChangeEvent, CompositionEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+/** Runs `fn` one call at a time, in call order; a failed call does not hold up the next. */
+export function inTurn<A, R>(fn: (arg: A) => Promise<R>): (arg: A) => Promise<R> {
+  let last: Promise<unknown> = Promise.resolve();
+  return (arg) => {
+    const run = last.catch(() => undefined).then(() => fn(arg));
+    last = run;
+    return run;
+  };
+}
+
 type Settings = Record<string, unknown>;
 type Field = HTMLInputElement | HTMLTextAreaElement;
 

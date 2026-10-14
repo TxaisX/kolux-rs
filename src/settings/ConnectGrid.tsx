@@ -4,11 +4,11 @@
 // cannot install it, "Open install page"; once it is in, the card moves on to its own sign-in with
 // no restart. Each card's sign-in then walks one state at a time (ACCT-002); OtherWays is the
 // "Other ways to connect" menu every card shares.
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
-import { AttentionNote, openInstallPage, type Attention } from "./Attention";
+import { AttentionNote, CHECK_AGAIN, openInstallPage, type Attention } from "./Attention";
 import type { AgentInfo } from "../launch/PlusMenu";
 
 export type ConnectId = "claude" | "codex" | "grok";
@@ -113,21 +113,52 @@ export function InstallCardView({ id, stage, install, canInstall, onInstall, onC
   );
 }
 
+type Win = { addEventListener: (k: string, f: () => void) => void; removeEventListener: (k: string, f: () => void) => void; setInterval: (f: () => void, ms: number) => number; clearInterval: (id: number) => void };
+
+/** ACCT-014: runs `check` when the window gets focus back, when a card's Check again is pressed,
+ *  and every `every` ms while the window is visible (0: no timer, as for the account cards, whose
+ *  own check would start a program per account); the returned function stops all of them. */
+export function liveCheck(check: () => void, win: Win = window, doc: { visibilityState: string } = document, every = 5000): () => void {
+  win.addEventListener("focus", check);
+  win.addEventListener(CHECK_AGAIN, check);
+  const t = every > 0 ? win.setInterval(() => doc.visibilityState === "visible" && check(), every) : null;
+  return () => {
+    win.removeEventListener("focus", check);
+    win.removeEventListener(CHECK_AGAIN, check);
+    if (t !== null) win.clearInterval(t);
+  };
+}
+
 /** Reads detection and install state for the grid; `cards` holds each agent's own card, shown once it is in. */
 export function ConnectGrid({ cards }: { cards: Record<ConnectId, ReactNode> }) {
   const [agents, setAgents] = useState<AgentInfo[] | null>(null);
   const [installs, setInstalls] = useState<Record<string, InstallView>>({});
   const [can, setCan] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
-  const readAgents = useCallback(() => void invoke<AgentInfo[]>("agent_list").then(setAgents).catch((e) => setError(String(e))), []);
+  // ACCT-014: a changed result goes to every open window, so the whole app sees an agent that
+  // was installed or removed outside Kolux.
+  const last = useRef("");
+  const readAgents = useCallback(
+    () =>
+      void invoke<AgentInfo[]>("agent_list")
+        .then((list) => {
+          setAgents(list);
+          const seen = JSON.stringify(list);
+          if (last.current && seen !== last.current) void emit("agents-changed", list).catch(() => {});
+          last.current = seen;
+        })
+        .catch((e) => setError(String(e))),
+    [],
+  );
   const readInstalls = useCallback(() => void invoke<Record<string, InstallView>>("agent_installs").then(setInstalls).catch(() => {}), []);
   useEffect(() => {
     readAgents();
     readInstalls();
     for (const c of CONNECT) void invoke<boolean>("agent_can_install", { agent: c.id }).then((v) => setCan((m) => ({ ...m, [c.id]: v }))).catch(() => {});
     // SESS-002: the window searches once and sends the list; this takes it rather than searching again.
-    const offs = [listen<AgentInfo[] | null>("agents-changed", (e) => Array.isArray(e.payload) && setAgents(e.payload)), listen("agent-install", readInstalls)];
-    return () => offs.forEach((o) => void o.then((u) => u()).catch(() => {}));
+    const offs = [listen<AgentInfo[] | null>("agents-changed", (e) => Array.isArray(e.payload) && (setAgents(e.payload), (last.current = JSON.stringify(e.payload)))), listen("agent-install", readInstalls)];
+    const stop = liveCheck(() => (readAgents(), readInstalls()));
+    return () => (stop(), offs.forEach((o) => void o.then((u) => u()).catch(() => {})));
   }, [readAgents, readInstalls]);
   const run = (p: Promise<unknown>) => {
     setError(null);

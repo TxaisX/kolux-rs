@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { changes, Draft, DRAFT_PAUSE_MS, inOrder, numberOrDefault } from "./useSettings";
+import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
+import { changes, Draft, DRAFT_PAUSE_MS, inOrder, inTurn, numberOrDefault } from "./useSettings";
 
 const later = <T,>() => {
   let done!: (v: T) => void, fail!: (e: unknown) => void;
@@ -136,4 +136,24 @@ describe("number fields that can be cleared go back to their default (SET-036)",
     expect(numberOrDefault("abc", 10, [0, 120])).toBe(10);
     expect(numberOrDefault("2.6", 10, [0, 120])).toBe(3);
   });
+});
+
+test("settings saves run one at a time, so a quick second save cannot drop the first", async () => {
+  let disk: Record<string, unknown> = {};
+  const tick = () => new Promise((r) => setTimeout(r, 5));
+  // Read, wait, then write: two of these at once would lose a field.
+  const save = inTurn(async (patch: Record<string, unknown>) => {
+    const read = { ...disk };
+    await tick();
+    disk = { ...read, ...patch };
+  });
+  await Promise.all([save({ branchPrefixCustom: "feat" }), save({ refreshBaseFirst: true })]);
+  expect(disk).toEqual({ branchPrefixCustom: "feat", refreshBaseFirst: true });
+  // A failed save does not block the next one.
+  const flaky = inTurn(async (fail: boolean) => {
+    if (fail) throw new Error("no");
+    return "ok";
+  });
+  await expect(flaky(true)).rejects.toThrow("no");
+  await expect(flaky(false)).resolves.toBe("ok");
 });

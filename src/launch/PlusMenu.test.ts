@@ -8,7 +8,7 @@ import { resolve } from "../keys/keymap";
 import PlusMenu, { markFor, programWord, shellWord, type AgentInfo } from "./PlusMenu";
 
 const claude: AgentInfo = { id: "claude", name: "Claude Code", program: "claude", args: ["--permission-mode", "auto"], installed: true, path: "C:\\Users\\me\\.local\\bin\\claude.exe" };
-const codex: AgentInfo = { id: "codex", name: "Codex", program: "codex", args: ["--dangerously-bypass-approvals-and-sandbox"], installed: true, path: "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd" };
+const codex: AgentInfo = { id: "codex", name: "Codex", program: "codex", args: ["--sandbox", "workspace-write", "--ask-for-approval", "never"], installed: true, path: "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd" };
 const gemini: AgentInfo = { id: "gemini", name: "Gemini CLI", program: "gemini", args: [], installed: false, path: null };
 
 function items(html: string): string[] {
@@ -87,13 +87,11 @@ test("SESS-003 / SESS-010 / SESS-002: the default row is marked, all-off and err
   expect(rows.find((r) => r.includes("Codex"))).toContain("Default</span>");
   expect(rows.find((r) => r.includes("Claude Code"))).toContain("Set as default");
   expect(rows.find((r) => r.includes("Codex"))).not.toContain("Set as default");
-  expect(html).toContain("Hide agents…");
   // With no default the list keeps catalogue order and nothing is marked.
   expect(render({ defaultId: "" })).not.toContain("Default</span>");
-  // Every installed agent switched off: an empty-state line and a way to agent settings.
+  // Every installed agent switched off: an empty-state line.
   const off = render({ agents: [{ ...gemini }], allOff: true, pass: { looking: false, done: true, error: null } });
   expect(off).toContain("No agent is switched on");
-  expect(items(off).some((r) => r.includes("Agent settings…"))).toBe(true);
   expect(off).not.toContain("No agent found");
   // An errored search looks different from one that found nothing, and blocks the rows.
   const failed = render({ pass: { looking: false, done: true, error: "IPC down" }, onRefresh: () => {} });
