@@ -12,8 +12,8 @@
 // the base and the lines changed, split into source, tests and generated).
 // Rows select on click (Ctrl adds, Shift spans), and a bulk bar above the list says how many of
 // the selected rows Stage and Unstage will each cover (T-018-c); Escape clears the selection.
-// ponytail: the list refreshes after each action and every 4 s while the panel is open; the
-// watcher that shows a commit typed in a terminal at once comes with GIT-001 (T-033). GIT-021 / GIT-023: the pull-request step looks the
+// GIT-001 (T-033-b): the list refreshes after each action and whenever git state moves, a commit
+// or checkout typed in a terminal included, through the git status watcher (watch.ts). GIT-021 / GIT-023: the pull-request step looks the
 // branch's pull request up through gh once it is published, and Create pull request opens a composer.
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -22,6 +22,8 @@ import { ChevronDown, Close, FileCode, List, Minus, Plus, Refresh, Spark, Stop, 
 import { dismissGenerate, generate, genState, genSubscribe, genVersion, stopGenerate, type Writer } from "./generate";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
+import { watchStatus } from "./watch";
+import { DIFF_SPLITS, type DiffSplit } from "./split";
 import { openInBrowser } from "../browser/BrowserPane";
 import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt } from "./model";
 
@@ -60,6 +62,9 @@ type Props = {
   onView?: (view: "list" | "tree") => void;
   /** GIT-037: a plain click on a changed file opens its diff in the cell's preview tab. */
   onOpenDiff?: (path: string, staged: boolean) => void;
+  /** GIT-037 (T-033-c): which split that diff opens in, remembered as a setting (`DIFF_SPLIT_KEY`). */
+  diffSplit?: DiffSplit;
+  onDiffSplit?: (split: DiffSplit) => void;
   /** GIT-038: every change in one scrolling tab. */
   onAllChanges?: () => void;
   /** GIT-041: the review notes section, drawn above History. */
@@ -90,7 +95,7 @@ type Failure = { title: string; output: string; fix?: string | null };
 type Composer = { title: string; body: string; base: string; draft: boolean; error: string | null; busy: boolean };
 
 // VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
-export default function SourceControlPanel({ dir, writer = { mode: "claude", command: null, instructions: "" }, draft, onDraft, onClose, onFix, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr, view = "list", onView, onOpenDiff, onAllChanges, notesSection }: Props) {
+export default function SourceControlPanel({ dir, writer = { mode: "claude", command: null, instructions: "" }, draft, onDraft, onClose, onFix, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr, view = "list", onView, onOpenDiff, diffSplit = "here", onDiffSplit, onAllChanges, notesSection }: Props) {
   const [asking, setAsking] = useState<Asking | null>(null);
   // GIT-003: the rows waiting for a yes before their work is thrown away.
   const [discardingRows, setDiscardingRows] = useState<Change[] | null>(null);
@@ -182,9 +187,12 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
     setAnchor(null);
     setDiscarding(null);
     void load();
-    const timer = window.setInterval(() => void load(), 4000);
-    return () => window.clearInterval(timer);
-  }, [load]);
+    if (dir === null) return;
+    return watchStatus(dir, (s) => {
+      setStatus(s);
+      setError(null);
+    });
+  }, [load, dir]);
 
   // VIEW-068: the branch summary is measured while the panel is open, when HEAD moves and at
   // least every 30 s; the last one stays on screen while the next is worked out.
@@ -581,6 +589,15 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
               <button className="ib" title="Review changes: an agent checks the branch before it ships" aria-label="Review changes" disabled={busyAgent} onClick={review}>
                 <Spark />
               </button>
+            )}
+            {onDiffSplit && (
+              <select className="scm-split" aria-label="Open diffs in" title="Which split a clicked file's diff opens in" value={diffSplit} onChange={(e) => onDiffSplit(e.target.value as DiffSplit)}>
+                {DIFF_SPLITS.map(([id, label]) => (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                ))}
+              </select>
             )}
             {onAllChanges && (
               <button className="ib" title="All changes: every changed file's diff in one tab" aria-label="All changes" onClick={onAllChanges}>

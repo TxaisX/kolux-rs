@@ -40,6 +40,7 @@ mod protected;
 mod resources;
 mod projects;
 mod scm;
+mod skills;
 mod pr_checkout;
 mod pty;
 mod setup;
@@ -47,6 +48,7 @@ mod routing;
 mod schedule;
 mod resume;
 mod secrets;
+mod sessions;
 mod skill_delete;
 mod state;
 mod status;
@@ -188,6 +190,7 @@ pub fn run() {
                 });
             }
             app.manage(Terminals::default());
+            notifications::first_run_welcome(app.handle()); // VIEW-111: a Mac's one welcome notification
             app.manage(resources::Sampler::default());
             app.manage(resume::Registry::default());
             app.manage(claude_key::KeySetup::default());
@@ -248,6 +251,14 @@ pub fn run() {
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_secs(2));
                 foreground::poll(&handle);
+                // STAT-028: a cancelled turn that never sends its Stop reads interrupted.
+                for status in status::settle_cancels() {
+                    let _ = tauri::Emitter::emit(&handle, hooks::EVENT, status);
+                }
+                // STAT-032: a working reading with no signal for 30 minutes is marked unverified.
+                for quiet in status::settle_unverified() {
+                    let _ = tauri::Emitter::emit(&handle, "agent-unverified", quiet);
+                }
             });
             // USAGE-011: changed activity counts are saved in batches.
             let handle = app.handle().clone();
@@ -302,6 +313,7 @@ pub fn run() {
             sysmem::process_memory,
             fonts::list_fonts,
             resources::resources,
+            sessions::claude_workspace_sessions,
             terminal::terminal_spawn,
             terminal::terminal_write,
             terminal::terminal_screen_reply,
@@ -318,8 +330,10 @@ pub fn run() {
             terminal::terminal_history_append,
             status::agent_history,
             status::agent_answer,
+            status::status_inband,
             activity::activity_counts,
             activity::activity_get,
+            activity::activity_timeline,
             activity::activity_touch,
             projects::git_version,
             projects::project_list,
@@ -358,11 +372,13 @@ pub fn run() {
             projects::git_first_commit_preview,
             projects::git_start,
             setup::workspace_setup,
+            setup::workspace_issue_command,
             setup::setup_imports_list,
             setup::setup_import,
             agents::agent_list,
             agents::agent_start_line,
             agents::open_install_page,
+            agents::inventory::session_tabs,
             pty::shell_list,
             tools::tools_check,
             tools::tools_dismiss,
@@ -371,6 +387,8 @@ pub fn run() {
             token_usage::token_tracking_set,
             trust::trust_folders_cmd,
             scm::scm_status,
+            scm::scm_watch, scm::scm_unwatch,
+            scm::scm_base_changes, scm::scm_base_sides,
             scm::scm_pushed, scm::scm_head, scm::scm_summary, scm::scm_abort,
             scm::scm_merge_info,
             scm::scm_merge,
@@ -391,6 +409,8 @@ pub fn run() {
             scm::scm_history, scm::scm_commit_files, scm::scm_github_repo,
             keybindings::keybindings_read,
             keybindings::keybindings_write,
+            keybindings::keybindings_reload,
+            keybindings::keybindings_show,
             browser::browser_open,
             browser::browser_bounds,
             browser::browser_navigate,
@@ -457,6 +477,10 @@ pub fn run() {
             onboarding::onboarding_get,
             onboarding::onboarding_step,
             onboarding::onboarding_close,
+            onboarding::guide_get,
+            onboarding::guide_mark,
+            onboarding::cli_status,
+            onboarding::tours_get,
             onboarding::onboarding_reopen,
             onboarding::onboarding_milestone,
             files::file_read,
@@ -464,6 +488,7 @@ pub fn run() {
             files::file_stamps,
             files::file_pick,
             files::md_list,
+            skills::skills_scan,
             files::file_list,
             files::md_new,
             files::diff_sides,

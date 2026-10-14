@@ -3,7 +3,7 @@
 // The card and its header follow design/DESIGN.md section 7: status icon, agent mark, title,
 // branch chip, program, status word; then gauge, more, expand, split, close on the right.
 import { useEffect, useRef, useState } from "react";
-import { branchChip, crewLabel, crewLine, foundAgent, headerOf, type Crew } from "./status";
+import { branchChip, crewLabel, crewLine, foundAgent, headerOf, titleState, type Crew } from "./status";
 import PaneMenu from "./PaneMenu";
 import type { Chip } from "../board/chip";
 import type { AgentState } from "../projects/rows";
@@ -24,6 +24,7 @@ import { resumes } from "./layout";
 import { explain as explainError, exitAdvice } from "./errors";
 import { DIVIDER_DONE, dragging } from "./dividers";
 import { currentDark, currentTerminal, TERMINAL_EVENT, termFont } from "../theme";
+import { currentText, optionsOf, TEXT_EVENT } from "./text";
 import { hookColourMode } from "./colourMode";
 import { folderName } from "../projects/model";
 import { withoutRules } from "../launch/seats";
@@ -39,6 +40,7 @@ import { useKeymap } from "../keys/KeymapContext";
 import { labelOf } from "../keys/keymap";
 import { attachPaste } from "./paste";
 import { answersPrompt, newlineAgent, routeKey } from "./shellKeys";
+import { heldByTerminal } from "../keys/terminalPolicy";
 import { clickTarget, findLinks, hintFor, linkFor, rangeOf, resolvePath, spanOf, type Found } from "./links";
 import { dropSummary, dropText, overRect, shellKind } from "./drop";
 import { decideOsc52, parseOsc52, sayOnce } from "./osc52";
@@ -80,10 +82,12 @@ type Props = {
   /** TERM-030: true while this pane waits on the user, so the window can cycle to it. */
   onNeedsYou?: (needs: boolean) => void;
   /** STAT-001: the pane's last hook-fed state; wins over the title guess while the program runs. */
-  hook?: AgentState;
+  hook?: AgentState | "background";
   /** The tool a hook PermissionRequest is waiting on (the hook status's `tool` while `hook` is "permission"): the
    *  Approve/Deny buttons show, and type, only while one is named, never on a title or OSC guess. */
   pendingTool?: string;
+  /** Council D2 MERGE 47 FB1: the settings the key policy reads ("Terminal first" holds chords for the program). */
+  keySettings?: Record<string, unknown> | null;
   /** STAT-026: the sub-agents and teammates under this session, shown beside the status word. */
   crew?: Crew;
   /** STAT-022: why the agent halted while `hook` is blocked; the header's tooltip says it. */
@@ -179,8 +183,10 @@ const stagger = () =>
     }, 150 + 60 * waiting++),
   );
 
-export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, pendingTool, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile }: Props) {
+export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile }: Props) {
   const host = useRef<HTMLDivElement>(null);
+  const keySettingsRef = useRef(keySettings);
+  keySettingsRef.current = keySettings;
   const clipboardOk = useRef(clipboardFromPrograms);
   clipboardOk.current = clipboardFromPrograms;
   // TERM-096: the link provider is set up once, so it reads the newest opener through a ref.
@@ -194,6 +200,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   agentRef.current = agent;
   const [linkHint, setLinkHint] = useState<string | null>(null);
   const termRef = useRef<Terminal | null>(null);
+  // STAT-033: the state the program's own terminal title last stood for; only read while no hook reports.
+  const [guess, setGuess] = useState<AgentState | null>(null);
   const box = useRef<HTMLElement>(null);
   // TERM-012: the pane Kolux focuses (a shortcut, a new session) takes the keyboard too, unless
   // the keyboard is already somewhere inside it (a click on its own header field).
@@ -223,7 +231,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   // TERM-031: the prompt count (bumped below, once the hook state is known) and, T-151-b, the count of the
   // prompt the user already answered (click or keystroke): the Approve/Deny buttons hide for it and come
   // back when the next prompt bumps the count.
-  const prompt = useRef<{ count: number; hook: AgentState | undefined }>({ count: 0, hook: undefined });
+  const prompt = useRef<{ count: number; hook: AgentState | "background" | undefined }>({ count: 0, hook: undefined });
   const [answered, setAnswered] = useState(0);
   // T-151-b (TERM-069): "Paste N lines?" waiting for Paste or Cancel.
   const [pasteAsk, setPasteAsk] = useState<{ lines: number; go: () => void } | null>(null);
@@ -320,8 +328,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     const el = host.current;
     if (!el) return;
     const term = new Terminal({
-      cursorBlink: true,
-      ...termFont(number), // TERM-097 / TERM-078: saved font plus this pane's zoom
+      ...optionsOf(currentText()),
+      ...termFont(number), // TERM-097 / TERM-078: saved font plus this pane's zoom (wins over the SET-022 text font fields)
       theme: currentTerminal(),
       allowProposedApi: true,
       // TERM-013: ConPTY repaints the screen itself after a resize, so a taller pane gets blank rows
@@ -332,6 +340,10 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     term.loadAddon(fit);
     term.open(el);
     termRef.current = term;
+    // STAT-033: the title the program sets stands in for its state while no hook reports.
+    term.onTitleChange((t) => setGuess((g) => titleState(t) ?? g));
+    // STAT-034: a status printed in band (OSC 9999) goes to Rust; xterm never draws the sequence.
+    term.parser.registerOscHandler(9999, (data) => (invoke("status_inband", { paneKey: number, data }).catch(() => {}), true));
     // council D2 MERGE 31 (3): in a dev build the pane's terminal is reachable from its host element, so the
     // evidence probes can read the scrollback cap and the buffer length (the way launchWarn.ts exposes
     // __koluxUsage). A release build has no handle.
@@ -528,7 +540,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     // Ctrl+Shift+C does nothing and says nothing.
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
-      const route = routeKey(keys.current, e, term.hasSelection(), newlineAgent(startedRef.current, agentRef.current));
+      const route = routeKey(keys.current, e, term.hasSelection(), newlineAgent(startedRef.current, agentRef.current), (id) => heldByTerminal(id, keySettingsRef.current));
       // T-151-b (council D2 MERGE 47 S2): a real key that goes to the program answers the permission prompt as
       // far as the buttons are concerned; xterm's own focus / mouse / cursor replies (onData) no longer do.
       if (answersPrompt(route, e.key)) setAnswered(prompt.current.count);
@@ -716,6 +728,25 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       mode.changed();
     };
     window.addEventListener(TERMINAL_EVENT, recolour);
+    // SET-022 / SET-025: open terminals follow the text, cursor and history settings.
+    const retext = () => {
+      Object.assign(term.options, optionsOf(currentText()), termFont(number));
+      resize();
+    };
+    window.addEventListener(TEXT_EVENT, retext);
+    // SET-025: copy on select, and right-click paste (the menu stays away while it is on).
+    const selected = term.onSelectionChange(() => {
+      if (currentText().copyOnSelect && term.hasSelection()) void navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
+    });
+    const rightClick = (e: MouseEvent) => {
+      if (!currentText().rightClickPaste) return;
+      e.preventDefault();
+      if (term.hasSelection()) {
+        void navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
+        term.clearSelection();
+      } else void navigator.clipboard?.readText().then((t) => t && pasting.paste(t), () => {});
+    };
+    el.addEventListener("contextmenu", rightClick);
     // TERM-103 / TERM-114: after the machine slept the GPU's glyph atlas may be stale and the
     // program's size may be behind; a late heartbeat says so. A display scale change does the same.
     const wake = () => {
@@ -736,6 +767,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       alive = false;
       window.removeEventListener(DIVIDER_DONE, resize);
       window.removeEventListener(TERMINAL_EVENT, recolour);
+      window.removeEventListener(TEXT_EVENT, retext);
+      el.removeEventListener("contextmenu", rightClick);
+      selected.dispose();
       mode.dispose();
       clearInterval(beat);
       scale.dispose();
@@ -944,7 +978,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   if (prompt.current.hook !== hook) prompt.current = { count: nextPrompt(prompt.current.count, prompt.current.hook, hook), hook };
   // A shell pane running an agent the user started by hand reads as that agent's session.
   const shown: Agent = agent === "shell" && found ? found : agent;
-  const header = headerOf(shown, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now, hook);
+  const header = headerOf(shown, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now, hook ?? guess ?? undefined);
   const { word, tone, glyph, age, needsYou } = header;
   const explain = header.state === "blocked" && stop ? `${stopLine(stop)}.` : header.explain;
   const needs = useRef(onNeedsYou);

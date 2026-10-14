@@ -14,6 +14,26 @@ use std::time::Duration;
 /// STAT-001: no more than 32 child agents per report.
 const MAX_CHILDREN: usize = 32;
 const MAX_HISTORY: usize = 20;
+/// T-123-c: how many of a turn's tool ids are kept to tell a new step from a killed tool's late report.
+const MAX_TOOLS: usize = 256;
+/// STAT-028: how long after Ctrl+C or Escape a turn with no Stop is taken as interrupted.
+const CANCEL_GRACE_MS: u64 = 3000;
+/// STAT-032: a working reading with no hook event for this long is marked unverified.
+const UNVERIFIED_MS: u64 = 30 * 60 * 1000;
+/// STAT-034: the states a program may print in band; anything else is dropped.
+const INBAND_STATES: [&str; 5] = ["working", "done", "permission", "waiting", "idle"];
+
+/// The unverified window; a debug build takes `KOLUX_UNVERIFIED_MS` so a live proof need not wait
+/// half an hour.
+fn unverified_ms() -> u64 {
+    #[cfg(debug_assertions)]
+    if let Some(ms) = std::env::var("KOLUX_UNVERIFIED_MS").ok().and_then(|v| v.parse().ok()) {
+        return ms;
+    }
+    UNVERIFIED_MS
+}
+/// STAT-029: how Claude Code opens the message it submits itself after a compaction.
+const CONTINUATION: &str = "This session is being continued from a previous conversation";
 
 /// Every pane's stored status, by pane key. ponytail: in memory only; a restart starts clean
 /// (STAT-006's catch-up is its own card).
@@ -84,6 +104,8 @@ pub struct Status {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child: Option<String>,
     pub interrupted: bool,
+    /// STAT-024: the turn is over but Claude Code's background tasks are still going.
+    pub monitoring: bool,
 }
 
 #[derive(Default, Debug)]
@@ -99,10 +121,15 @@ pub struct Session {
     background: bool,
     /// Ctrl+C or Escape was typed while working: the next Stop reads interrupted (STAT-028).
     cancelled: bool,
+    /// When that keystroke came (ms), so a turn that never sends its Stop settles anyway.
+    cancelled_at: u64,
     /// The current turn ended on a cancel; late tool events cannot bring it back to working.
     interrupted: bool,
-    /// The next UserPromptSubmit is the automatic continuation after a compact: ignored.
-    skip_prompt: bool,
+    /// The tool ids the lead has started this turn, newest last (T-123-c).
+    tools: Vec<String>,
+    /// The tool ids already started when the cancel keystroke came: their own late reports say
+    /// nothing about the turn, while a tool id outside this list proves the turn went on (T-123-c).
+    killed: Vec<String>,
     prompt: Option<String>,
     pub reply: Option<String>,
     /// The stop the session is blocked on, kept until a turn reaches done (STAT-022).
@@ -110,6 +137,10 @@ pub struct Session {
     pub history: VecDeque<Entry>,
     /// The quiet alert already went out for this silent spell (STAT-045).
     quiet_fired: bool,
+    /// When the last hook (or in-band) signal came (ms), 0 before the first (STAT-032).
+    seen: u64,
+    /// The working reading has had no signal for the unverified window; the next one clears it.
+    unverified: bool,
 }
 
 /// What the window is told when a working agent has printed nothing for too long (STAT-045).
@@ -150,6 +181,11 @@ impl Session {
         }
     }
 
+    /// STAT-024: the turn has settled while background tasks run on; Kolux is watching them.
+    pub fn monitoring(&self) -> bool {
+        self.background && self.own == Some("done") && !self.children.iter().any(|c| c.state == "working")
+    }
+
     /// One tick of the quiet alert: `silent` says the terminal has been past the threshold. Fires
     /// once per silent spell, only while working; output or any other state re-arms it (STAT-045).
     pub fn quiet(&mut self, silent: bool) -> bool {
@@ -168,6 +204,7 @@ impl Session {
     /// Folds one event in and says what the window should be told, or `None` when nothing changed.
     pub fn apply(&mut self, agent: Agent, event: &Value) -> Option<(Change, Option<String>)> {
         let name = event.get("hook_event_name")?.as_str()?;
+        self.signal();
         let before = self.resolved();
         let mut announce = None;
         match (name, str_of(event, "agent_id")) {
@@ -195,7 +232,7 @@ impl Session {
                 // A child already cleared away never comes back; a known one is finished and announced.
                 let i = self.children.iter().position(|c| c.id == id)?;
                 let gone = self.children.remove(i);
-                self.reply = str_of(event, "last_assistant_message").map(|m| trim(m, 8000));
+                self.reply = str_of(event, "last_assistant_message").map(clean_reply);
                 // Announced by role (what a notification names, STAT-041); the id when there is none.
                 announce = Some(if gone.kind.is_empty() { gone.id } else { gone.kind });
             }
@@ -235,17 +272,39 @@ impl Session {
         if after != before {
             self.remember(after);
         }
-        Some((Change { state: after, ..Change::default() }, announce))
+        // T-124-c: a child's hook permission names its pending tool, which is what lets the card answer it.
+        let tool = (after == "permission").then(|| self.children.iter().find(|c| c.state == "permission").and_then(|c| c.pending.clone())).flatten();
+        Some((Change { state: after, tool, ..Change::default() }, announce))
+    }
+
+    /// T-124-c: a hook PermissionRequest stands, the lead's or a child's, naming the tool it waits on.
+    /// A permission printed in band (OSC 9999) names none, so there is nothing for a card to answer.
+    pub fn answerable(&self) -> bool {
+        (self.own == Some("permission") && self.pending.is_some()) || self.children.iter().any(|c| c.state == "permission" && c.pending.is_some())
     }
 
     fn apply_lead(&mut self, agent: Agent, name: &str, event: &Value) -> Option<(Change, Option<String>)> {
-        // An automatic compact changes nothing, but the prompt Claude re-submits after it is not a turn.
+        // An automatic compact changes nothing; its own Stop closes the turn (STAT-029).
         if (name == "PostCompact" && str_of(event, "trigger") != Some("manual")) || (name == "SessionStart" && str_of(event, "source") == Some("compact")) {
-            self.skip_prompt = true;
             return None;
         }
-        if name == "UserPromptSubmit" && std::mem::take(&mut self.skip_prompt) {
+        // STAT-029: the continuation message Claude Code submits after a compaction is not a turn,
+        // so the card keeps the user's last real prompt; a prompt that only quotes it later counts.
+        if name == "UserPromptSubmit" && agent == Agent::Claude && str_of(event, "prompt").is_some_and(|p| p.trim_start().starts_with(CONTINUATION)) {
             return None;
+        }
+        // T-123-c: Ctrl+C on a draft or Escape on a menu leaves the turn running. A sign of life after
+        // the cancel proves it (goes_on): the cancel is dropped inside the grace, and a settled
+        // interrupt is undone, its misread history line with it.
+        if self.goes_on(agent, name, event) {
+            self.cancelled = false;
+            if self.interrupted {
+                self.interrupted = false;
+                self.own = Some("working");
+                if self.history.back().is_some_and(|e| e.state == "interrupted" && e.interrupted) {
+                    self.history.pop_back();
+                }
+            }
         }
         // Late events after an interrupt cannot revive the turn (STAT-028), nor stop it (STAT-022).
         if self.interrupted && !matches!(name, "UserPromptSubmit" | "SessionStart" | "PostCompact") {
@@ -265,14 +324,18 @@ impl Session {
                 self.pending = None;
                 self.interrupted = false;
                 self.cancelled = false;
+                self.tools.clear();
+                self.killed.clear();
                 self.reply = None;
                 self.own = Some("working");
             }
             "Stop" => {
                 self.interrupted = std::mem::take(&mut self.cancelled);
                 self.pending = None;
-                self.reply = str_of(event, "last_assistant_message").map(|m| trim(m, 8000));
-                self.background = event.get("background_tasks").and_then(Value::as_array).is_some_and(|t| !t.is_empty());
+                self.reply = str_of(event, "last_assistant_message").map(clean_reply);
+                // STAT-024: Claude Code's own lists of background tasks and session crons decide.
+                let busy = |k: &str| event.get(k).and_then(Value::as_array).is_some_and(|t| !t.is_empty());
+                self.background = busy("background_tasks") || busy("session_crons");
                 self.own = Some(if self.interrupted { "interrupted" } else { "done" });
                 self.stop = None;
             }
@@ -293,14 +356,28 @@ impl Session {
                 }
             }
             "PermissionRequest" => {
+                // A question asked as a permission waits instead, and clears on later tool work (STAT-027).
                 self.pending = change.tool.clone();
-                self.own = Some("permission");
+                self.own = Some(change.state);
+            }
+            "PostCompact" => {
+                // STAT-029: the compacted turn is labelled by its summary.
+                self.prompt = str_of(event, "compact_summary").map(|s| trim(&s.split_whitespace().collect::<Vec<_>>().join(" "), 200));
+                self.own = Some(change.state);
             }
             "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
                 // A pending permission clears only when that same tool carries on. The event names the
                 // tool even where the outgoing change does not (PostToolUse), SAFE-007.
                 if self.own == Some("permission") && self.pending != str_of(event, "tool_name").map(|t| trim(t, 60)) {
                     return None;
+                }
+                if name == "PreToolUse" {
+                    if let Some(id) = str_of(event, "tool_use_id") {
+                        if self.tools.len() >= MAX_TOOLS {
+                            self.tools.remove(0);
+                        }
+                        self.tools.push(trim(id, 80));
+                    }
                 }
                 self.pending = None;
                 self.own = Some(change.state);
@@ -328,7 +405,85 @@ impl Session {
     pub fn cancel(&mut self) {
         if self.own == Some("working") && !self.background && !self.children.iter().any(|c| c.state == "working") {
             self.cancelled = true;
+            self.cancelled_at = now_ms();
+            self.killed.clone_from(&self.tools);
         }
+    }
+
+    /// T-123-c-b: what proves a turn went on after a cancel. Claude Code's hook reference says Stop
+    /// does not run when the user interrupts and cancelling a running tool fires no Post* hook, so for
+    /// Claude a Stop, or a tool step carrying any id, means the turn was not interrupted. Agents whose
+    /// hook semantics are unverified (Codex) keep T-123-c's rule: only an id unseen at the cancel.
+    fn goes_on(&self, agent: Agent, name: &str, event: &Value) -> bool {
+        match agent {
+            // T-123-c-c: an event marked as the interrupt itself never counts, and the Post* of a tool
+            // running when the key landed counts only once the grace is over (or the cancel settled):
+            // inside it, that report is the cancelled tool's own hook finishing, not the turn going on.
+            _ if event.get("is_interrupt").and_then(Value::as_bool) == Some(true) => false,
+            Agent::Claude => name == "Stop" || (matches!(name, "PreToolUse" | "PostToolUse" | "PostToolUseFailure") && str_of(event, "tool_use_id").is_some_and(|id| name == "PreToolUse" || self.past_grace() || !self.killed.iter().any(|k| k == id))),
+            Agent::Codex => self.fresh_tool(name, event),
+        }
+    }
+
+    /// T-123-c-c: the cancel has settled, or its grace is over.
+    fn past_grace(&self) -> bool {
+        self.interrupted || now_ms().saturating_sub(self.cancelled_at) >= CANCEL_GRACE_MS
+    }
+
+    /// T-123-c: a tool step carrying an id the lead had not started when the cancel came. The killed
+    /// tool reporting late carries an id on the list; a step with no id at all proves nothing.
+    fn fresh_tool(&self, name: &str, event: &Value) -> bool {
+        matches!(name, "PreToolUse" | "PostToolUse" | "PostToolUseFailure") && str_of(event, "tool_use_id").is_some_and(|id| !self.killed.iter().any(|k| k == id))
+    }
+
+    /// STAT-032: a genuine signal from the agent: the unverified mark lifts and the window restarts.
+    fn signal(&mut self) {
+        self.seen = now_ms();
+        self.unverified = false;
+    }
+
+    /// STAT-032: a working reading with no signal for the whole window is marked unverified, once
+    /// per silent spell; a settled turn (done, blocked, ...) never is.
+    fn settle_unverified(&mut self, now: u64) -> bool {
+        if self.unverified || self.seen == 0 || self.resolved() != "working" || now.saturating_sub(self.seen) < unverified_ms() {
+            return false;
+        }
+        self.unverified = true;
+        true
+    }
+
+    /// STAT-034: a state the program printed in band. Only the lead's own state moves: the reply,
+    /// the stop, the roster and background work are hook knowledge and stay (an in-band done keeps
+    /// monitoring going), while an in-band working is a new turn that undoes an interrupt.
+    pub fn inband(&mut self, state: &'static str) -> Change {
+        self.signal();
+        let before = self.resolved();
+        if state == "working" {
+            self.cancelled = false;
+            self.interrupted = false;
+            self.tools.clear();
+            self.killed.clear();
+        }
+        self.pending = None;
+        self.own = Some(state);
+        let after = self.resolved();
+        if before != after {
+            self.remember(after);
+        }
+        Change { state: after, ..Change::default() }
+    }
+
+    /// STAT-028: a cancel keystroke a while back and still no Stop: the turn was interrupted.
+    fn settle_cancel(&mut self, now: u64) -> bool {
+        if !self.cancelled || self.own != Some("working") || now.saturating_sub(self.cancelled_at) < CANCEL_GRACE_MS {
+            return false;
+        }
+        self.cancelled = false;
+        self.interrupted = true;
+        self.pending = None;
+        self.own = Some("interrupted");
+        self.remember("interrupted");
+        true
     }
 
     /// VIEW-025: the approval was answered from a card; the lead is working until its hooks say otherwise.
@@ -361,7 +516,12 @@ pub fn agent_answer(terminals: tauri::State<'_, crate::terminal::Terminals>, pan
         "codex" => Agent::Codex,
         _ => return Err("not an agent pane".into()),
     };
-    let terminal = with_sessions(|s| s.get(&pane_key).and_then(|x| x.terminal)).ok_or("no session for this pane")?;
+    let (terminal, answerable) = with_sessions(|s| s.get(&pane_key).map(|x| (x.terminal, x.answerable()))).ok_or("no session for this pane")?;
+    let terminal = terminal.ok_or("no session for this pane")?;
+    // T-124-c: keys are typed only for a hook permission; an in-band one has nothing to answer.
+    if !answerable {
+        return Err("no hook permission to answer".into());
+    }
     terminals.write(terminal, answer_keys(agent, approve))?;
     with_sessions(|s| {
         if let Some(x) = s.get_mut(&pane_key) {
@@ -369,6 +529,21 @@ pub fn agent_answer(terminals: tauri::State<'_, crate::terminal::Terminals>, pan
         }
     });
     Ok(())
+}
+
+/// STAT-025: Unicode line and paragraph separators become line breaks, and a run of blank lines
+/// longer than two is cut to two.
+fn clean_reply(s: &str) -> String {
+    let s = s.replace(['\u{2028}', '\u{2029}'], "\n");
+    let mut blank = 0;
+    let lines: Vec<&str> = s
+        .lines()
+        .filter(|l| {
+            blank = if l.trim().is_empty() { blank + 1 } else { 0 };
+            blank <= 2
+        })
+        .collect();
+    trim(lines.join("\n").trim(), 8000)
 }
 
 fn strip_agent(event: &Value) -> Value {
@@ -428,13 +603,70 @@ pub fn report(pane_key: u32, terminal: Option<u32>, agent: Agent, event: &Value)
         session.terminal = terminal.or(session.terminal);
         let (change, child) = session.apply(agent, event)?;
         crate::activity::note(pane_key, change.state);
-        Some(fit_plan(Status { pane_key, terminal, change, children: session.children.clone(), stop: session.stop.clone(), reply: session.reply.clone(), child, interrupted: session.interrupted }))
+        Some(fit_plan(status_of(pane_key, terminal, session, change, child)))
+    })
+}
+
+fn status_of(pane_key: u32, terminal: Option<u32>, session: &Session, change: Change, child: Option<String>) -> Status {
+    Status { pane_key, terminal, change, children: session.children.clone(), stop: session.stop.clone(), reply: session.reply.clone(), child, interrupted: session.interrupted, monitoring: session.monitoring() }
+}
+
+/// STAT-028: the turns cancelled with Ctrl+C or Escape that never sent a Stop, now interrupted.
+pub fn settle_cancels() -> Vec<Status> {
+    let now = now_ms();
+    with_sessions(|s| {
+        s.iter_mut()
+            .filter_map(|(key, session)| {
+                session.settle_cancel(now).then(|| {
+                    crate::activity::note(*key, "interrupted");
+                    status_of(*key, session.terminal, session, Change { state: "interrupted", ..Change::default() }, None)
+                })
+            })
+            .collect()
     })
 }
 
 /// The panes whose hooks last reported for `terminal`.
 pub fn panes_of(terminal: u32) -> Vec<u32> {
     with_sessions(|s| s.iter().filter(|(_, x)| x.terminal == Some(terminal)).map(|(k, _)| *k).collect())
+}
+
+/// STAT-032: the panes whose working reading just went the whole window without a signal, each
+/// once per spell; the payload names the window in minutes.
+// Called from the lib.rs 2 s tick (T-124 hunk, RE-APPLY ON MERGE); drop the allow once that lands.
+pub fn settle_unverified() -> Vec<Quiet> {
+    let now = now_ms();
+    let minutes = unverified_ms() / 60_000;
+    with_sessions(|s| s.iter_mut().filter_map(|(key, session)| session.settle_unverified(now).then_some(Quiet { pane_key: *key, minutes })).collect())
+}
+
+/// STAT-034: the state an OSC 9999 payload carries: the whole sequence (ESC ] 9999 ; json, then
+/// BEL or ESC \) or just the text after "9999;" as a terminal parser hands it over. A malformed
+/// payload or an unknown state gives None.
+pub fn parse_inband(bytes: &[u8]) -> Option<&'static str> {
+    let body = bytes.strip_prefix(b"\x1b]").unwrap_or(bytes);
+    let body = body.strip_prefix(b"9999;").unwrap_or(body);
+    let body = body.strip_suffix(b"\x07").or_else(|| body.strip_suffix(b"\x1b\\")).unwrap_or(body);
+    let v: Value = serde_json::from_slice(body).ok()?;
+    let state = v.get("state").or_else(|| v.get("status"))?.as_str()?;
+    INBAND_STATES.into_iter().find(|s| *s == state)
+}
+
+/// STAT-034: a status a program printed in band; the window's terminal parser hands the payload
+/// over (and never draws the sequence). True when the pane's status moved.
+// Listed in lib.rs's generate_handler (T-124 hunk, RE-APPLY ON MERGE); drop the allow once that lands.
+#[tauri::command]
+pub fn status_inband(app: tauri::AppHandle, pane_key: u32, data: String) -> bool {
+    let Some(state) = parse_inband(data.as_bytes()) else {
+        return false;
+    };
+    let status = with_sessions(|s| {
+        let session = s.entry(pane_key).or_default();
+        let change = session.inband(state);
+        crate::activity::note(pane_key, change.state);
+        status_of(pane_key, session.terminal, session, change, None)
+    });
+    tauri::Emitter::emit(&app, crate::hooks::EVENT, status).is_ok()
 }
 
 /// The terminal `pane_key`'s hooks last reported for.
@@ -525,6 +757,7 @@ mod tests {
             reply: None,
             child: None,
             interrupted: false,
+            monitoring: false,
         };
         let size = |s: &Status| serde_json::to_string(s).unwrap().chars().count();
         let long = "1. Read the é file. ".repeat(2000);
@@ -659,6 +892,9 @@ mod tests {
 
     #[test]
     fn stop_after_a_kolux_cancel_reads_interrupted_and_late_events_cannot_revive_it() {
+        // T-123-c-b: the old rule, kept for agents whose hook semantics are unverified (Codex); for
+        // Claude a Stop after a cancel is done (stat_028_rest_b_*).
+        let state = |s: &mut Session, j: &str| s.apply(Agent::Codex, &ev(j)).map(|(c, _)| c.state);
         let mut s = Session::default();
         state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"long job"}"#);
         state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash"}"#);
@@ -702,7 +938,7 @@ mod tests {
         assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","background_tasks":[]}"#), Some("done"));
         // The prompt Claude re-submits after an automatic compact is not a new turn.
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PostCompact","trigger":"auto"}"#), None);
-        assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"<continuation>"}"#), None);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"This session is being continued from a previous conversation that ran out of context."}"#), None);
         assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"real"}"#), Some("working"));
         assert_eq!(s.history.len(), 5);
         for _ in 0..30 {
@@ -726,5 +962,317 @@ mod tests {
         s.apply(Agent::Codex, &ev(r#"{"hook_event_name":"SubagentStart","agent_id":"y","agent_type":"w"}"#));
         c(&mut s, r#"{"hook_event_name":"SessionStart"}"#);
         assert!(s.children.is_empty());
+    }
+
+    #[test]
+    fn stat_024_background_work_after_the_turn_is_monitoring_until_its_list_empties() {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"run the soak test"}"#);
+        assert!(!s.monitoring(), "a turn still going is working, not monitoring");
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","background_tasks":[{"id":"b1","type":"shell","status":"running","command":"npm run soak"}]}"#), Some("working"));
+        assert!(s.monitoring(), "the turn settled while the shell runs on");
+        // A scheduled session task keeps it watched too.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","background_tasks":[],"session_crons":[{"id":"c1","schedule":"0 9 * * 1-5","recurring":true,"prompt":"check"}]}"#), Some("working"));
+        assert!(s.monitoring());
+        // Work woken by the background task is a turn of its own, not monitoring.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cat soak.log"}}"#), Some("working"));
+        assert!(!s.monitoring());
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","background_tasks":[],"session_crons":[]}"#), Some("done"));
+        assert!(!s.monitoring());
+        // No cancel is concluded while background work runs (STAT-028).
+        state(&mut s, r#"{"hook_event_name":"Stop","background_tasks":[{"id":"b2","type":"shell","status":"running"}]}"#);
+        s.cancel();
+        assert!(!s.settle_cancel(now_ms() + CANCEL_GRACE_MS));
+    }
+
+    #[test]
+    fn stat_025_the_reply_keeps_line_breaks_and_shortens_blank_runs_and_list_tools_show_no_input() {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"fix it"}"#);
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"src/main.rs","old_string":"a","new_string":"b"}}"#)).unwrap();
+        assert_eq!((c.tool.as_deref(), c.detail.as_deref()), (Some("Edit"), Some("src/main.rs")));
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PreToolUse","tool_name":"TodoWrite","tool_input":{"todos":[{"content":"secret plan step"}]}}"#)).unwrap();
+        assert_eq!((c.tool.as_deref(), c.detail), (Some("TodoWrite"), None));
+        let reply = format!("Fixed.\u{2028}Tests pass.\u{2029}Next{}end", "\n".repeat(11));
+        let stop = serde_json::json!({"hook_event_name":"Stop","last_assistant_message":reply});
+        s.apply(Agent::Claude, &stop);
+        assert_eq!(s.reply.as_deref(), Some("Fixed.\nTests pass.\nNext\n\n\nend"));
+    }
+
+    #[test]
+    fn stat_027_waiting_carries_the_plan_or_the_question_and_clears_when_tool_work_resumes() {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"plan the refactor"}"#);
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PreToolUse","tool_name":"ExitPlanMode","tool_input":{"plan":"Refactor auth\n1. Extract the token check"}}"#)).unwrap();
+        // The plan rides on `plan` alone (SAFE-001; fit_plan sizes the whole update): `ask` is the question's field (T-123-d).
+        assert_eq!((c.state, c.ask.as_deref(), c.plan.as_deref(), c.detail.as_deref()), ("waiting", None, Some("Refactor auth\n1. Extract the token check"), Some("Refactor auth")));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"auth.rs"}}"#), Some("working"));
+        // A question asked as a permission waits with every question (one per line; the card's line is the first), and clears on any later tool step.
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which framework?","header":"Framework","options":[]},{"question":"Which database?","header":"Data","options":[]},{"question":"Deploy where?","header":"Deploy","options":[]}]}}"#)).unwrap();
+        assert_eq!((c.state, c.ask.as_deref(), c.detail.as_deref(), c.plan.as_deref()), ("waiting", Some("Which framework?\nWhich database?\nDeploy where?"), Some("Which framework?"), None));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Read"}"#), Some("working"));
+        // A real permission still waits for its own tool.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"rm -rf build"}}"#), Some("permission"));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Read"}"#), None);
+        // A question past the limit is cut and says so; a long plan never rides on `ask` (its cut is fit_plan's, SAFE-006).
+        let long = serde_json::json!({"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"x".repeat(9000)}]}});
+        let ask = crate::hooks::claude_change(&long).unwrap().ask.unwrap();
+        assert!(ask.ends_with("… (cut)") && ask.chars().count() == 8000 + "\n… (cut)".chars().count());
+        let long_plan = serde_json::json!({"hook_event_name":"PreToolUse","tool_name":"ExitPlanMode","tool_input":{"plan":"x".repeat(9000)}});
+        let c = crate::hooks::claude_change(&long_plan).unwrap();
+        assert_eq!((c.ask, c.plan.map(|p| p.chars().count())), (None, Some(9000)));
+    }
+
+    #[test]
+    fn stat_028_a_cancel_with_no_stop_settles_interrupted_and_late_events_cannot_revive_it() {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"long job"}"#);
+        s.cancel();
+        assert!(!s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS - 1), "the Stop gets its moment first");
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!((s.resolved(), s.interrupted), ("interrupted", true));
+        assert!(!s.settle_cancel(u64::MAX), "settled once");
+        // A step with no id proves nothing (a Claude Stop here is T-123-c-b's done, stat_028_rest_b_*).
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash"}"#), None);
+        assert_eq!(s.resolved(), "interrupted");
+        assert_eq!(s.history.back().map(|e| (e.state, e.interrupted)), Some(("interrupted", true)));
+    }
+
+    #[test]
+    fn stat_028_rest_a_tool_step_after_a_draft_clearing_cancel_keeps_the_turn_working() {
+        // T-123-c-b: this is the rule for agents with unverified hook semantics (Codex).
+        let state = |s: &mut Session, j: &str| s.apply(Agent::Codex, &ev(j)).map(|(c, _)| c.state);
+        // T-123-c: Ctrl+C on a non-empty input box only clears the draft (Esc also closes menus), so the
+        // turn goes on. A tool step the lead never reported before the cancel proves it inside the grace.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"long build"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#);
+        s.cancel();
+        // (c) the tool that started before the cancel reporting back says nothing about the turn.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#), Some("working"));
+        assert!(s.cancelled, "the killed tool's own report cannot clear the cancel");
+        // (a) a new tool step inside the grace clears the cancel; nothing settles and the Stop is a plain done.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_use_id":"tu2"}"#), Some("working"));
+        assert!(!s.cancelled);
+        assert!(!s.settle_cancel(u64::MAX), "nothing left to settle");
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop"}"#), Some("done"));
+        assert!(!s.interrupted);
+    }
+
+    #[test]
+    fn stat_028_rest_a_settled_interrupt_is_undone_by_a_tool_step_it_never_saw_before_the_cancel() {
+        // T-123-c-b: this is the rule for agents with unverified hook semantics (Codex).
+        let state = |s: &mut Session, j: &str| s.apply(Agent::Codex, &ev(j)).map(|(c, _)| c.state);
+        // T-123-c: prompt, Ctrl+C on a draft, a Bash step longer than the grace: the settle reads
+        // interrupted, then the PreToolUse at +5 s revives the turn and its Stop reads done.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"long build"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#);
+        s.cancel();
+        assert!(s.settle_cancel(s.cancelled_at + 5_000));
+        assert_eq!(s.resolved(), "interrupted");
+        // (c) the pre-cancel tool reporting late stays ignored, settled or not.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#), None);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_use_id":"tu1","error":"killed"}"#), None);
+        assert_eq!((s.resolved(), s.interrupted), ("interrupted", true));
+        // A step with no id at all is not proof of a new tool (the late-event rule keeps it out).
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash"}"#), None);
+        // (b) a tool id never seen before the cancel revives the turn to working; the misread line is dropped.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_use_id":"tu2"}"#), Some("working"));
+        assert_eq!((s.resolved(), s.interrupted, s.cancelled), ("working", false, false));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Read","tool_use_id":"tu2"}"#), Some("working"));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","last_assistant_message":"built"}"#), Some("done"));
+        assert_eq!(s.reply.as_deref(), Some("built"));
+        let states: Vec<_> = s.history.iter().map(|e| (e.state, e.interrupted)).collect();
+        assert_eq!(states, [("working", false), ("done", false)], "one turn, never interrupted");
+        // A second cancel in the same turn takes every tool seen so far as in flight: a later Post for tu2 proves nothing.
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"again"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu3"}"#);
+        s.cancel();
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"tu3"}"#), Some("working"));
+        assert!(s.cancelled);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop"}"#), Some("interrupted"), "for Codex a Stop while the cancel stands is still an interruption");
+    }
+
+    #[test]
+    fn stat_028_rest_b_for_claude_a_stop_while_the_cancel_stands_is_done() {
+        // T-123-c-b: Claude Code runs no Stop when the user interrupts, so a Stop inside the grace
+        // means the cancel only cleared a draft or closed a menu: the turn is done, with its reply.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"again"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu3"}"#);
+        s.cancel();
+        assert!(s.cancelled);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","last_assistant_message":"all set"}"#), Some("done"), "for Claude a Stop while the cancel stands is done");
+        assert_eq!((s.interrupted, s.cancelled, s.reply.as_deref()), (false, false, Some("all set")));
+        assert!(!s.settle_cancel(u64::MAX), "nothing left to settle");
+        let states: Vec<_> = s.history.iter().map(|e| (e.state, e.interrupted)).collect();
+        assert_eq!(states, [("working", false), ("done", false)]);
+    }
+
+    #[test]
+    fn stat_028_rest_b_for_claude_the_pre_cancel_tools_post_and_a_late_stop_undo_a_settled_interrupt() {
+        // T-123-c-b: Ctrl+C on a draft while the turn's last tool runs past the grace, then a reply with
+        // no new tool. A cancelled tool fires no Post* in Claude Code, so PostToolUse(tu1) proves the
+        // turn went on, and the Stop that follows reads done with the reply.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"long build"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#);
+        s.cancel();
+        assert!(s.settle_cancel(s.cancelled_at + 5_000));
+        assert_eq!(s.resolved(), "interrupted");
+        // A step with no id still proves nothing.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash"}"#), None);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#), Some("working"));
+        assert_eq!((s.resolved(), s.interrupted, s.cancelled), ("working", false, false));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","last_assistant_message":"built"}"#), Some("done"));
+        assert_eq!(s.reply.as_deref(), Some("built"));
+        let states: Vec<_> = s.history.iter().map(|e| (e.state, e.interrupted)).collect();
+        assert_eq!(states, [("working", false), ("done", false)], "one turn, never interrupted");
+        // Settled with no tool event at all: the Stop alone undoes the interrupt.
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"think"}"#);
+        s.cancel();
+        assert!(s.settle_cancel(s.cancelled_at + 5_000));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","last_assistant_message":"thought"}"#), Some("done"));
+        assert_eq!((s.interrupted, s.reply.as_deref()), (false, Some("thought")));
+        // T-123-c-c: inside the grace the pre-cancel tool's Post is that tool's own hook finishing as
+        // the key landed: the cancel stands and settles to interrupted.
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"race"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu9"}"#);
+        s.cancel();
+        state(&mut s, r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_use_id":"tu9","error":"exit 1"}"#);
+        assert!(s.cancelled, "the killed tool's Post inside the grace leaves the cancel standing");
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!(s.resolved(), "interrupted");
+    }
+
+    #[test]
+    fn t123cc_escape_during_a_post_tool_hook_settles_interrupted_and_an_interrupt_event_never_revives() {
+        // The race: Escape lands while the tool's PostToolUse hook runs. Its report arrives inside the
+        // grace and must not keep the card working until the 30-minute unverified mark.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"run tests"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu5"}"#);
+        s.cancel();
+        state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"tu5"}"#);
+        assert!(s.cancelled, "inside the grace the killed tool's Post proves nothing");
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!(s.resolved(), "interrupted");
+        assert_eq!(s.history.back().map(|e| (e.state, e.interrupted)), Some(("interrupted", true)));
+        // An event flagged as the interrupt itself never revives the turn, whatever its id.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_use_id":"tu6","is_interrupt":true,"error":"interrupted"}"#), None);
+        assert_eq!((s.resolved(), s.interrupted), ("interrupted", true));
+        // Once the cancel has settled, the killed tool's Post does count, as T-123-c-b rules.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"tu5"}"#), Some("working"));
+        assert_eq!((s.resolved(), s.interrupted), ("working", false));
+        // A tool unseen at the cancel, inside the grace, still proves the turn went on.
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu7"}"#);
+        s.cancel();
+        state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Read","tool_use_id":"tu8"}"#);
+        assert!(!s.cancelled, "a fresh id clears the cancel");
+        // An interrupt-flagged event inside the grace leaves the cancel standing too.
+        s.cancel();
+        state(&mut s, r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_use_id":"tu99","is_interrupt":true}"#);
+        assert!(s.cancelled);
+    }
+
+    #[test]
+    fn t124c_an_in_band_permission_has_nothing_to_answer_and_a_hook_one_names_its_tool() {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"build"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#);
+        assert_eq!(s.inband("permission").state, "permission");
+        assert!(!s.answerable(), "an OSC 9999 permission names no tool to answer");
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"cargo build"}}"#)).unwrap();
+        assert_eq!((c.state, c.tool.as_deref()), ("permission", Some("Bash")));
+        assert!(s.answerable());
+        s.answered();
+        assert!(!s.answerable());
+        // A child's hook permission carries its tool on the lead's change, so the card can answer it.
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"k","agent_type":"w"}"#);
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PermissionRequest","agent_id":"k","tool_name":"Write","tool_input":{"file_path":"a.txt"}}"#)).unwrap();
+        assert_eq!((c.state, c.tool.as_deref()), ("permission", Some("Write")));
+        assert!(s.answerable());
+    }
+
+    #[test]
+    fn stat_032_a_working_reading_with_no_signal_for_the_window_is_unverified_until_the_next_one() {
+        let mut s = Session::default();
+        assert!(!s.settle_unverified(u64::MAX), "nothing reported yet is nothing to doubt");
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#), Some("working"));
+        let seen = s.seen;
+        assert!(!s.settle_unverified(seen + UNVERIFIED_MS - 1), "inside the window the reading holds");
+        assert!(s.settle_unverified(seen + UNVERIFIED_MS), "30 minutes of silence marks it");
+        assert!(!s.settle_unverified(seen + 2 * UNVERIFIED_MS), "once per silent spell");
+        // The next genuine signal brings the row back to life and restarts the window.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"t1"}"#), Some("working"));
+        assert!(!s.unverified);
+        assert!(!s.settle_unverified(s.seen + UNVERIFIED_MS - 1));
+        assert!(s.settle_unverified(s.seen + UNVERIFIED_MS));
+        // A settled turn is never doubted, however long it sits.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","last_assistant_message":"ok"}"#), Some("done"));
+        assert!(!s.settle_unverified(s.seen + 10 * UNVERIFIED_MS));
+        assert_eq!(UNVERIFIED_MS, 30 * 60 * 1000);
+    }
+
+    #[test]
+    fn stat_034_an_in_band_status_moves_the_pane_without_erasing_what_only_hooks_know() {
+        // The byte sequence a script prints: ESC ] 9999 ; payload BEL, or ESC \ as the terminator.
+        assert_eq!(parse_inband(b"\x1b]9999;{\"state\":\"working\"}\x07"), Some("working"));
+        assert_eq!(parse_inband(b"\x1b]9999;{\"status\":\"done\"}\x1b\\"), Some("done"));
+        // What xterm's OSC handler hands over is the text after "9999;".
+        assert_eq!(parse_inband(b"{\"state\":\"permission\"}"), Some("permission"));
+        assert_eq!(parse_inband(b"\x1b]9999;{\"state\":\"working\"\x07"), None, "malformed payload");
+        assert_eq!(parse_inband(b"\x1b]9999;{\"state\":\"exploding\"}\x07"), None, "unknown state");
+        assert_eq!(parse_inband(b"\x1b]9999;plain text\x07"), None);
+
+        let mut s = Session::default();
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#), Some("working"));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","last_assistant_message":"built","background_tasks":[{"id":"b1","type":"shell","status":"running","description":"npm test"}]}"#), Some("working"));
+        assert!(s.monitoring());
+        // An in-band done keeps the monitoring, the reply and the stored roster.
+        assert_eq!(s.inband("done").state, "working");
+        assert!(s.monitoring(), "monitoring is hook knowledge; the in-band done does not end it");
+        assert_eq!(s.reply.as_deref(), Some("built"));
+        // An in-band working is a new turn: it undoes an interrupt and reads working.
+        s.own = Some("working");
+        s.background = false;
+        s.cancel();
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!(s.resolved(), "interrupted");
+        assert_eq!(s.inband("working").state, "working");
+        assert!(!s.interrupted);
+        assert_eq!(s.history.back().map(|e| e.state), Some("working"));
+        // A state change is remembered once; the same state again is not.
+        let len = s.history.len();
+        assert_eq!(s.inband("working").state, "working");
+        assert_eq!(s.history.len(), len);
+        assert_eq!(s.inband("waiting").state, "waiting");
+        assert_eq!(s.history.len(), len + 1);
+    }
+
+    #[test]
+    fn stat_029_boundaries_settle_quietly_and_the_compact_summary_labels_the_turn() {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"build it"}"#);
+        state(&mut s, r#"{"hook_event_name":"Stop","last_assistant_message":"built"}"#);
+        // /clear is a boundary: done, and the finished turn stays in history.
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"SessionStart","source":"clear"}"#)).unwrap();
+        assert!(c.boundary && c.state == "done");
+        assert!(s.history.iter().any(|e| e.state == "done" && e.prompt.as_deref() == Some("build it")));
+        // A manual compact settles a row stuck on working into a quiet done, labelled by its summary.
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"stuck"}"#);
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PostCompact","trigger":"manual","compact_summary":"Refactored the auth\n module."}"#)).unwrap();
+        assert!(c.boundary && c.state == "done");
+        assert_eq!(s.history.back().and_then(|e| e.prompt.as_deref()), Some("Refactored the auth module."));
+        // The continuation Claude submits after compacting is not a turn; a prompt quoting it later is.
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"real prompt"}"#);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"  This session is being continued from a previous conversation that ran out of context."}"#), None);
+        assert_eq!(s.prompt.as_deref(), Some("real prompt"));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"why does it say This session is being continued from a previous conversation?"}"#), Some("working"));
+        // Codex has no such message: the same words from Codex are a prompt.
+        let mut x = Session::default();
+        let codex = x.apply(Agent::Codex, &ev(r#"{"hook_event_name":"UserPromptSubmit","prompt":"This session is being continued from a previous conversation"}"#));
+        assert_eq!(codex.map(|(c, _)| c.state), Some("working"));
     }
 }

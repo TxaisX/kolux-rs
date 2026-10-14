@@ -15,7 +15,7 @@ import { marksUnread } from "../terminal/tabs";
 import { folderName } from "../projects/model";
 import { sameDir } from "../workspaces";
 
-export type TurnInfo = { tool?: string; detail?: string; reply?: string; wrote?: string; stop?: StopInfo; plan?: string; planCut?: boolean };
+export type TurnInfo = { tool?: string; detail?: string; ask?: string; reply?: string; wrote?: string; stop?: StopInfo; plan?: string; planCut?: boolean; monitoring?: boolean };
 
 export function useAgentStatusState(running: Record<number, boolean>) {
   const [needs, setNeeds] = useState<Record<number, boolean>>({}); // TERM-030: panes waiting on the user
@@ -96,12 +96,12 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
   panesRef.current = panes;
   useEffect(() => {
     // STAT-001: the hooks report each pane's state; a turn ending out of view is noticed like an exit.
-    const off = listen<{ paneKey: number; children: Crew; tool?: string; detail?: string; wrote?: string; plan?: string; planCut?: boolean; session?: string } & Turn>("agent-status", (e) => {
-      const { paneKey, state, children, tool, detail, reply, wrote, boundary, stop, plan, planCut, session } = e.payload;
+    const off = listen<{ paneKey: number; children: Crew; tool?: string; detail?: string; ask?: string; wrote?: string; plan?: string; planCut?: boolean; session?: string } & Turn>("agent-status", (e) => {
+      const { paneKey, state, children, tool, detail, ask, reply, wrote, boundary, stop, plan, planCut, session, monitoring } = e.payload;
       // SESS-030: the newest session id is what a restart resumes (a /clear or a resume brings a new one).
       if (session) setPanes((ps) => (ps.some((p) => p.key === paneKey && p.session !== session) ? ps.map((p) => (p.key === paneKey ? { ...p, session } : p)) : ps));
       setCrew((c) => (children.length === 0 && !(paneKey in c) ? c : { ...c, [paneKey]: children }));
-      setTurn((t) => ({ ...t, [paneKey]: { tool, detail, reply, stop, plan, planCut, wrote: boundary ? undefined : (wrote ?? t[paneKey]?.wrote) } }));
+      setTurn((t) => ({ ...t, [paneKey]: { tool, detail, ask, reply, stop, plan, planCut, monitoring, wrote: boundary ? undefined : (wrote ?? t[paneKey]?.wrote) } }));
       setStale((m) => (m[paneKey] ? { ...m, [paneKey]: false } : m));
       const prev = hookRef.current[paneKey];
       // STAT-041: a finish, a permission request, a block, an interrupt or a sub-agent's turn is a note.
@@ -115,7 +115,7 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
       if (stop?.cause === "signin" && prev !== "blocked") invoke("claude_account_check").catch(() => {});
       if (prev !== state) {
         setHook((h) => ({ ...h, [paneKey]: state }));
-        setStamp((m) => ({ ...m, [paneKey]: { at: Date.now(), interrupted: e.payload.interrupted } }));
+        setStamp((m) => ({ ...m, [paneKey]: { at: Date.now(), interrupted: e.payload.interrupted || boundary } }));
       }
     });
     // STAT-045: the quiet alert comes from the terminal's own silence, judged in Rust.
@@ -128,9 +128,12 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
       if (p) quietRef.current(p, e.payload.minutes);
       setStale((m) => ({ ...m, [e.payload.paneKey]: true }));
     });
+    // STAT-032: a working reading with no hook signal for 30 minutes reads No recent update, quietly.
+    const offUnverified = listen<{ paneKey: number; minutes: number }>("agent-unverified", (e) => setStale((m) => ({ ...m, [e.payload.paneKey]: true })));
     return () => {
       off.then((f) => f());
       offQuiet.then((f) => f());
+      offUnverified.then((f) => f());
       offUsage.then((f) => f());
     };
   }, []);

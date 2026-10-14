@@ -50,6 +50,9 @@ pub const NO_PROMPT: [(&str, &str); 2] = [("GIT_TERMINAL_PROMPT", "0"), ("GCM_IN
 pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
     let mut cmd = Command::new("git");
     cmd.args(args);
+    // GIT-001 (T-033-b): a status read never rewrites the index on its own (git's optional lock),
+    // so the Source Control watcher is not woken by its own reads. Required locks are unaffected.
+    cmd.env("GIT_OPTIONAL_LOCKS", "0");
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
@@ -339,10 +342,7 @@ impl Git {
                 let rel = Path::new(&c.path).strip_prefix(worktree).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default();
                 let disk = std::fs::metadata(&c.path).ok().map(|m| format!("{}-{:?}", m.len(), m.modified().ok())).unwrap_or_default();
                 if c.code == '?' {
-                    // ponytail: an untracked file is read whole for its line count; cap the read if huge untracked files get common
-                    let bytes = std::fs::read(&c.path).unwrap_or_default();
-                    let binary = bytes.iter().take(8000).any(|&b| b == 0);
-                    let lines = (!binary).then(|| bytes.iter().filter(|&&b| b == b'\n').count() as u64 + u64::from(bytes.last().is_some_and(|&b| b != b'\n')));
+                    let (lines, binary) = whole_file(&c.path);
                     return Entry { path: c.path, staged: false, code: c.code, lines, binary, stamp: disk };
                 }
                 let s = (if c.staged { &staged } else { &unstaged }).get(&rel).cloned().unwrap_or_default();
@@ -366,18 +366,80 @@ pub struct Entry {
     pub stamp: String,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct Stat {
     lines: Option<u64>,
     binary: bool,
     ids: String,
+    code: char,
+}
+
+impl Default for Stat {
+    fn default() -> Self {
+        Stat { lines: None, binary: false, ids: String::new(), code: 'M' }
+    }
 }
 
 /// `git diff [--cached] --numstat` and `--raw` by path (relative to the top, with forward slashes).
 fn diff_stats(worktree: &Path, cached: bool) -> Result<std::collections::HashMap<String, Stat>, String> {
+    diff_stats_with(worktree, if cached { &["--cached"] } else { &[] })
+}
+
+/// GIT-038 (T-033-c): every file that differs between the commit `since` (the base's snapshot)
+/// and the working tree, untracked files included, in the shape All Changes already reads.
+pub fn base_entries(worktree: &Path, since: &str) -> Result<Vec<Entry>, String> {
+    let stats = diff_stats_with(worktree, &[since, "--"])?;
+    let mut rels: Vec<&String> = stats.keys().collect();
+    rels.sort();
+    let mut out: Vec<Entry> = rels
+        .into_iter()
+        .map(|rel| {
+            let s = &stats[rel];
+            let path = worktree.join(native(rel)).to_string_lossy().into_owned();
+            let disk = std::fs::metadata(&path).ok().map(|m| format!("{}-{:?}", m.len(), m.modified().ok())).unwrap_or_default();
+            Entry { path, staged: false, code: s.code, lines: s.lines, binary: s.binary, stamp: format!("{since}:{}|{disk}", s.ids) }
+        })
+        .collect();
+    let untracked = output(&["ls-files", "--others", "--exclude-standard", "-z"], Some(worktree))?;
+    for rel in String::from_utf8_lossy(&untracked).split('\0').filter(|r| !r.is_empty()) {
+        let path = worktree.join(native(rel)).to_string_lossy().into_owned();
+        let disk = std::fs::metadata(&path).ok().map(|m| format!("{}-{:?}", m.len(), m.modified().ok())).unwrap_or_default();
+        let (lines, binary) = whole_file(&path);
+        out.push(Entry { path, staged: false, code: '?', lines, binary, stamp: disk });
+    }
+    Ok(out)
+}
+
+/// The two texts of a file against the base snapshot `since`: what the base had, and the working
+/// file (empty when the file is new there, or gone here).
+pub fn base_sides(file: &Path, since: &str) -> Result<(String, String), String> {
+    let dir = file.parent().filter(|d| !d.as_os_str().is_empty()).ok_or_else(|| format!("{} is not a file path", file.display()))?;
+    let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let old = output(&["cat-file", "--filters", &format!("{since}:./{name}")], Some(dir)).unwrap_or_default();
+    let work = match std::fs::read(file) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(format!("{}: {e}", file.display())),
+    };
+    let text = |b: Vec<u8>| String::from_utf8(b).map_err(|_| format!("{} is not UTF-8 text", file.display()));
+    Ok((text(old)?, text(work)?))
+}
+
+/// Line count and binary-ness of a file git has no diff for (untracked).
+fn whole_file(path: &str) -> (Option<u64>, bool) {
+    // ponytail: an untracked file is read whole for its line count; cap the read if huge untracked files get common
+    let bytes = std::fs::read(path).unwrap_or_default();
+    let binary = bytes.iter().take(8000).any(|&b| b == 0);
+    let lines = (!binary).then(|| bytes.iter().filter(|&&b| b == b'\n').count() as u64 + u64::from(bytes.last().is_some_and(|&b| b != b'\n')));
+    (lines, binary)
+}
+
+/// `git diff <extra> --numstat` and `--raw` by path (relative to the top, with forward slashes).
+fn diff_stats_with(worktree: &Path, extra: &[&str]) -> Result<std::collections::HashMap<String, Stat>, String> {
     let mut map: std::collections::HashMap<String, Stat> = std::collections::HashMap::new();
-    let with = |args: &[&'static str]| -> Vec<&'static str> { args.iter().copied().chain(cached.then_some("--cached")).collect() };
-    let numstat = output(&with(&["diff", "--numstat", "-z", "--no-renames"]), Some(worktree))?;
+    let with = |args: &[&str]| -> Vec<String> { args.iter().chain(extra.iter()).map(|s| s.to_string()).collect() };
+    let args = with(&["diff", "--numstat", "-z", "--no-renames"]);
+    let numstat = output(&args.iter().map(String::as_str).collect::<Vec<_>>(), Some(worktree))?;
     for rec in String::from_utf8_lossy(&numstat).split('\0') {
         let mut f = rec.splitn(3, '\t');
         if let (Some(a), Some(r), Some(p)) = (f.next(), f.next(), f.next()) {
@@ -386,13 +448,16 @@ fn diff_stats(worktree: &Path, cached: bool) -> Result<std::collections::HashMap
             s.lines = a.parse::<u64>().ok().zip(r.parse::<u64>().ok()).map(|(a, r)| a + r);
         }
     }
-    let raw = output(&with(&["diff", "--raw", "-z", "--no-abbrev", "--no-renames"]), Some(worktree))?;
+    let args = with(&["diff", "--raw", "-z", "--no-abbrev", "--no-renames"]);
+    let raw = output(&args.iter().map(String::as_str).collect::<Vec<_>>(), Some(worktree))?;
     let text = String::from_utf8_lossy(&raw);
     let mut parts = text.split('\0');
     while let (Some(head), Some(p)) = (parts.next(), parts.next()) {
         let ids: Vec<&str> = head.split(' ').collect();
         if ids.len() >= 4 {
-            map.entry(p.to_string()).or_default().ids = format!("{}-{}", ids[2], ids[3]);
+            let s = map.entry(p.to_string()).or_default();
+            s.ids = format!("{}-{}", ids[2], ids[3]);
+            s.code = ids.get(4).and_then(|c| c.chars().next()).unwrap_or('M');
         }
     }
     Ok(map)
@@ -455,6 +520,33 @@ mod tests {
         assert!(!out.status.success());
         assert!(said.contains("terminal prompts disabled"), "{said}");
         assert!(began.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    #[test]
+    fn git038_base_entries_list_every_difference_from_the_snapshot_and_the_sides_read_against_it() {
+        let dir = temp_repo("base");
+        run(&["config", "core.autocrlf", "false"], Some(&dir)).unwrap();
+        fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+        run(&["add", "."], Some(&dir)).unwrap();
+        run(&["commit", "-q", "-m", "a"], Some(&dir)).unwrap();
+        let since = run(&["rev-parse", "HEAD"], Some(&dir)).unwrap().trim().to_string();
+        // A committed change, a working-tree change, a new untracked file, a deletion.
+        fs::write(dir.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        run(&["commit", "-q", "-am", "a again"], Some(&dir)).unwrap();
+        fs::write(dir.join("README.md"), "hello\nworld\n").unwrap();
+        fs::write(dir.join("new.txt"), "fresh").unwrap();
+        let entries = base_entries(&dir, &since).unwrap();
+        let rel = |e: &Entry| Path::new(&e.path).strip_prefix(&dir).unwrap().to_string_lossy().replace('\\', "/");
+        let got: Vec<(String, char, Option<u64>, bool)> = entries.iter().map(|e| (rel(e), e.code, e.lines, e.staged)).collect();
+        assert_eq!(got, vec![("README.md".to_string(), 'M', Some(1), false), ("a.txt".to_string(), 'M', Some(1), false), ("new.txt".to_string(), '?', Some(1), false)]);
+        assert!(entries[0].stamp.starts_with(&format!("{since}:")), "{}", entries[0].stamp);
+        assert_eq!(base_sides(&dir.join("README.md"), &since).unwrap(), ("hello\n".to_string(), "hello\nworld\n".to_string()));
+        assert_eq!(base_sides(&dir.join("new.txt"), &since).unwrap(), (String::new(), "fresh".to_string()));
+        fs::remove_file(dir.join("a.txt")).unwrap();
+        let entries = base_entries(&dir, &since).unwrap();
+        assert_eq!(entries.iter().map(|e| (rel(e), e.code)).collect::<Vec<_>>(), vec![("README.md".to_string(), 'M'), ("a.txt".to_string(), 'D'), ("new.txt".to_string(), '?')]);
+        assert_eq!(base_sides(&dir.join("a.txt"), &since).unwrap(), ("one\ntwo\n".to_string(), String::new()));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     fn temp_repo(name: &str) -> PathBuf {

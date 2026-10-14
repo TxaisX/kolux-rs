@@ -45,6 +45,9 @@ import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } 
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+// The launching shell may be a pane of another Kolux build (the old app sets KOLUX_USER_DATA_PATH, hook port/token and pane ids);
+// none of it may reach the app under test, its panes or the CLI it runs.
+for (const k of Object.keys(process.env)) if (k.startsWith("KOLUX_")) delete process.env[k];
 
 const root = fileURLToPath(new URL("../../", import.meta.url)).replace(/[\\/]+$/, "");
 const cdpScript = join(root, "scripts", "evidence", "cdp.mjs");

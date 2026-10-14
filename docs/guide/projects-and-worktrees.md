@@ -87,6 +87,8 @@ Each section has a count, Stage all or Unstage all, and Discard all. Each row ha
 
 Header buttons: Review changes (an agent checks the branch), All changes, list or tree view, Refresh, Close.
 
+"Open diffs in" picks where a clicked file's diff opens: **This split**, **Next split** (the split after this one; with only one split, a new one) or **New split**.
+
 ### Commit
 
 Type a message in the box (placeholder "Message (Ctrl+Enter to commit on <branch>)") and press Ctrl+Enter. "Write the message with AI" drafts one. Your draft is kept per workspace.
@@ -106,7 +108,7 @@ The main button proposes the next step on its own:
 
 A "Commit and" menu commits then pushes, syncs or force pushes. A "Remote actions" menu has Push, Pull, Sync, Fetch, Fast-forward, Force push with lease, Publish branch and Rebase from base.
 
-The panel can also create a pull request (Title, Description, base branch), open the current one, link another, merge it, and run "Fix with AI" on failed checks. The list refreshes after each action and every few seconds while the panel is open.
+The panel can also create a pull request (Title, Description, base branch), open the current one, link another, merge it, and run "Fix with AI" on failed checks. The list refreshes after each action, and within about a second of any change to the workspace's files or Git state while the panel is open. Changes to files Git ignores (your .gitignore, which usually covers build and package folders) do not trigger it, and while files keep changing the status is read at most once every 4 seconds. If Kolux cannot watch the folder, it checks every 4 seconds instead. Open diffs and All Changes follow the same rule.
 
 ### Discarding changes
 
@@ -133,4 +135,4 @@ Claude and Codex tabs with a known session resume it. Other agents return at the
 
 Quitting with unsaved editor text asks "Quit with unsaved changes?" with "Quit without saving" or "Keep working".
 
-<!-- verified against: src/projects/ProjectsPanel.tsx, src/projects/AddProject.tsx, src/glossary.ts, src/scm/SourceControlPanel.tsx, src/scm/model.ts, src/chrome/RightSidebar.tsx, src/terminal/layout.ts, src/keys/actions.ts, src/App.tsx at 106e966 -->
+<!-- verified against: src/projects/ProjectsPanel.tsx, src/projects/AddProject.tsx, src/glossary.ts, src/scm/SourceControlPanel.tsx, src/scm/split.ts, src/scm/watch.ts, src-tauri/src/scm_watch.rs, src/scm/model.ts, src/chrome/RightSidebar.tsx, src/terminal/layout.ts, src/keys/actions.ts, src/App.tsx at 14e54da -->

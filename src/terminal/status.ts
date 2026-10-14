@@ -63,7 +63,7 @@ export function ageLabel(finishedAt: number, now: number): string {
  *  header has no mark for, or an unclear answer, leaves the pane a shell. */
 export const foundAgent = (a: string | null): "claude" | "codex" | null => (a === "claude" || a === "codex" ? a : null);
 
-export function headerOf(agent: string, kind: Kind, code: number | null | undefined, needs: boolean, finishedAt: number | null, now: number, hook?: AgentState): Header {
+export function headerOf(agent: string, kind: Kind, code: number | null | undefined, needs: boolean, finishedAt: number | null, now: number, hook?: AgentState | "background"): Header {
   const h = (state: StatusKey, over: Partial<Header> = {}): Header => ({ ...VOCAB[state], state, age: "", needsYou: VOCAB[state].tone === "attention", ...over });
   const done = () => h("done", { age: finishedAt === null ? "" : ageLabel(finishedAt, now) });
   if (kind === "failed") return h("failed");
@@ -73,10 +73,30 @@ export function headerOf(agent: string, kind: Kind, code: number | null | undefi
     if (hook === "blocked" || hook === "interrupted" || hook === "waiting") return h(hook);
     if (needs || hook === "permission") return h("permission");
     if (hook === "done") return done();
+    // STAT-024: the turn is over but its background tasks run on; Kolux keeps watching.
+    if (hook === "background") return h("background");
     return h("working");
   }
   if (agent !== "shell" && !code) return done();
   return h("stopped", { word: `Ended${code ? ` (${code})` : ""}`, explain: stoppedLabel(code ? `exit code ${code}` : "exited") });
+}
+
+/** STAT-033: the state a terminal title stands in for while no hook reports: a braille spinner
+ *  (U+2800..U+28FF) or a quarter-circle busy mark means working; the words ready, idle, done and
+ *  finished mean done; permission, approve, allow, waiting and "needs you" mean needs you; working,
+ *  thinking, running and a trailing ellipsis mean working. A title that looks like a file path, or
+ *  says nothing recognisable, gives null, so the last known reading holds (a non-agent title
+ *  appearing mid-turn never ends the working state). A title that starts with the done mark
+ *  (U+2733) reads done first, whatever words follow it (T-124-c). */
+export function titleState(title: string): AgentState | null {
+  const t = title.trim();
+  if (t === "" || /^(~|[a-zA-Z]:[\\/]|\\\\|\.{0,2}\/)/.test(t) || (/[\\/]/.test(t) && !/\s/.test(t))) return null;
+  if (t.startsWith("✳")) return "done";
+  if (/[⠀-⣿]/.test(t) || /[◐◓◑◒]/.test(t)) return "working";
+  if (/\b(permission|approve|allow|waiting|needs? (you|input))\b/i.test(t)) return "permission";
+  if (/\b(ready|idle|done|finished|complete)\b/i.test(t)) return "done";
+  if (/\b(working|thinking|running|building|generating)\b/i.test(t) || /(…|\.\.\.)$/.test(t)) return "working";
+  return null;
 }
 
 /** The next pane after `focused` (in grid order, wrapping) that needs the user; null with none. */

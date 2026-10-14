@@ -3,6 +3,9 @@
 // and on each row the recorder: click a chord to replace it, Add for another, x to remove one,
 // Disable and Reset (SET-009). Every change is written to the file at once.
 import { useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { inTerminal, POLICIES, POLICY_FIELD, readPolicy } from "../keys/terminalPolicy";
+import { useSettings } from "./useSettings";
 import { useKeymap } from "../keys/KeymapContext";
 import { editChords, recordKey, recording, removeChord } from "../keys/record";
 import { Segmented } from "./GeneralPage";
@@ -16,6 +19,9 @@ export default function ShortcutsPage() {
   const [query, setQuery] = useState("");
   const [rec, setRec] = useState<Rec | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [fileNote, setFileNote] = useState<string | null>(null);
+  const status = useSettings();
+  const policy = readPolicy(status.settings);
   const rows = useMemo(() => shortcutRows(keymap), [keymap]);
   const shown = filterRows(rows, filter, query);
 
@@ -51,6 +57,12 @@ export default function ShortcutsPage() {
     if (rec?.id === r.id) setRec(out.recording && { id: r.id, index: out.recording.index });
     void keymap.save(r.id, out.chords);
   };
+  // SET-012: the file opens in the program the system gives it, or is picked out in its folder;
+  // a missing file is written with its starting contents first.
+  const show = (reveal: boolean) => {
+    setFileNote(null);
+    invoke("keybindings_show", { reveal }).catch((e) => setFileNote(String(e)));
+  };
   const end = (then: () => void) => () => {
     setRec(null);
     then();
@@ -66,11 +78,26 @@ export default function ShortcutsPage() {
             {e}
           </p>
         ))}
+        {fileNote && <p className="conn-detail warn">{fileNote}</p>}
         <div className="btn-row">
-          <button className="btn" onClick={keymap.reload}>
-            Read the file again
+          <button className="btn" onClick={() => show(false)}>
+            Open file
+          </button>
+          <button className="btn" onClick={() => show(true)}>
+            Show in folder
+          </button>
+          <button className="btn" onClick={() => void invoke("keybindings_reload").catch((e) => setFileNote(String(e)))}>
+            Reload from Disk
           </button>
         </div>
+      </section>
+      <section className="conn-card" data-section="terminal-first">
+        <h2 className="conn-name">Shortcuts in terminals</h2>
+        <p className="conn-detail">
+          {policy === "kolux" ? "App shortcuts keep working while you type in a terminal." : "Only the commands marked safe for terminals fire; every other key goes to the program in the terminal."}
+        </p>
+        <Segmented label="Who gets shortcuts first" options={POLICIES} value={policy} onPick={(v) => void status.save({ [POLICY_FIELD]: v })} />
+        {status.error && <p className="conn-detail warn">{status.error}</p>}
       </section>
       <section className="conn-card" data-section="key-bindings">
         <h2 className="conn-name">Commands and keys</h2>
@@ -111,6 +138,8 @@ export default function ShortcutsPage() {
                           {r.labels.length === 0 && at < 0 && <span className="kbd-none">None</span>}
                         </td>
                         <td className="keys-badges">
+                          {/* SET 008: what the command does while a terminal has focus. */}
+                          {inTerminal(r.id, policy) === "held" && <span className="chip keys-badge held">Goes to the terminal</span>}
                           {r.badges.map((b) => (
                             <span key={b} className={`chip keys-badge ${b.toLowerCase()}`}>
                               {b}
