@@ -38,7 +38,7 @@ import PlusMenu, { programWord, shellWord, type AgentInfo } from "../launch/Plus
 import { useKeymap } from "../keys/KeymapContext";
 import { labelOf } from "../keys/keymap";
 import { attachPaste } from "./paste";
-import { routeKey } from "./shellKeys";
+import { answersPrompt, routeKey } from "./shellKeys";
 import { clickTarget, findLinks, hintFor, linkFor, rangeOf, resolvePath, spanOf, type Found } from "./links";
 import { dropSummary, dropText, overRect, shellKind } from "./drop";
 import { decideOsc52, parseOsc52, sayOnce } from "./osc52";
@@ -465,9 +465,6 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         .catch((e) => setFlash(`Typing could not reach the program (${explainError(String(e))})`)));
     };
     term.onData((data) => {
-      // T-151-b: a key typed into the pane while a permission prompt shows answers it as far as the
-      // buttons are concerned (the prompt count is a ref; React skips the update when nothing changed).
-      setAnswered(prompt.current.count);
       write(data);
     });
     term.onBell(() => bell.current?.());
@@ -527,6 +524,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
       const route = routeKey(keys.current, e, term.hasSelection(), agentRef.current);
+      // T-151-b (council D2 MERGE 47 S2): a real key that goes to the program answers the permission prompt as
+      // far as the buttons are concerned; xterm's own focus / mouse / cursor replies (onData) no longer do.
+      if (answersPrompt(route, e.key)) setAnswered(prompt.current.count);
       if (route.kind === "ime" || route.kind === "shell") return true;
       if (route.kind === "send") {
         e.preventDefault(); // Alt+Left is the webview's own "back" otherwise
@@ -782,10 +782,14 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
           setFlash("Nothing is running in this pane to drop into");
           return;
         }
-        const text = dropText(p.paths, shellKind(startedRef.current, agent));
-        if (!text) return;
+        const { text, typed, refused } = dropText(p.paths, shellKind(startedRef.current));
+        const left = refused === 0 ? "" : `${refused === 1 ? "1 path was" : `${refused} paths were`} not typed: its name holds a control character, or $ \` % ! or a curly quote this program could expand`;
+        if (!text) {
+          if (left) setFlash(left);
+          return;
+        }
         typeIn.current(text, id);
-        setFlash(dropSummary(p.paths));
+        setFlash(left ? `${dropSummary(typed)}; ${left}` : dropSummary(typed));
         onFocus?.();
         term.focus();
       })

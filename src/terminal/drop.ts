@@ -4,24 +4,33 @@
 // (Git Bash) takes single quotes with the Windows path written with forward slashes (which Git Bash
 // understands and which never read as escapes), and an agent's prompt takes double quotes. Pure, so the
 // shapes are tested; the webview's drop event and the write chain stay in the pane.
+// Council D2 MERGE 47: PowerShell reads the curly quotes U+2018-U+201B as single quotes too, so they are
+// doubled like "'"; the kind comes from the program that really started, whatever the pane's agent says (an
+// agent pane that fell back to a shell runs that shell), wsl is a POSIX shell; and where double quotes are
+// all there is (Command Prompt, an agent's prompt) a path holding $, a backtick, %, ! or a curly quote is
+// not typed at all (refused below), since something in that chain may expand it.
 
 export type ShellKind = "powershell" | "cmd" | "posix" | "other";
 
 /** Which quoting the program in the pane wants, from the program that really started (ACCT-046). */
-export function shellKind(program: string | null | undefined, agent: string = "shell"): ShellKind {
-  if (agent !== "shell") return "other";
+export function shellKind(program: string | null | undefined): ShellKind {
   const stem = (program ?? "").split(/[\\/]/).pop()?.replace(/\.exe$/i, "").toLowerCase() ?? "";
   if (stem === "powershell" || stem === "pwsh") return "powershell";
   if (stem === "cmd") return "cmd";
-  if (["bash", "sh", "zsh", "fish", "dash", "ksh"].includes(stem)) return "posix";
+  if (["bash", "sh", "zsh", "fish", "dash", "ksh", "wsl"].includes(stem)) return "posix";
   return "other";
 }
+
+/** A path that cannot be typed safely for this kind: control characters anywhere; for double-quote kinds also
+ *  the characters a shell or a program may expand inside double quotes. */
+export const refusedPath = (p: string, kind: ShellKind) =>
+  p.length === 0 || /[\x00-\x1f\x7f]/.test(p) || ((kind === "cmd" || kind === "other") && /[$`%!‘-‛]/.test(p));
 
 /** One path, quoted for the shell. Always quoted: a space, an ampersand or a bracket is common in a Windows path. */
 export function quotePath(path: string, kind: ShellKind): string {
   switch (kind) {
     case "powershell":
-      return `'${path.replace(/'/g, "''")}'`;
+      return `'${path.replace(/['‘’‚‛]/g, "$&$&")}'`;
     case "cmd":
       return `"${path}"`;
     case "posix":
@@ -31,12 +40,10 @@ export function quotePath(path: string, kind: ShellKind): string {
   }
 }
 
-/** What gets typed: the quoted paths, space-separated, no Enter. Control characters never go in. */
-export function dropText(paths: readonly string[], kind: ShellKind): string {
-  return paths
-    .filter((p) => p.length > 0 && !/[\x00-\x1f\x7f]/.test(p))
-    .map((p) => quotePath(p, kind))
-    .join(" ");
+/** What gets typed: the quoted paths, space-separated, no Enter, and how many paths were left out. */
+export function dropText(paths: readonly string[], kind: ShellKind): { text: string; typed: string[]; refused: number } {
+  const typed = paths.filter((p) => !refusedPath(p, kind));
+  return { text: typed.map((p) => quotePath(p, kind)).join(" "), typed, refused: paths.length - typed.length };
 }
 
 const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "tif", "tiff", "ico", "avif", "heic"]);

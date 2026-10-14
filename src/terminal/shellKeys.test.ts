@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolve } from "../keys/keymap";
-import { routeKey, type RoutedKey } from "./shellKeys";
+import { answersPrompt, routeKey, type RoutedKey } from "./shellKeys";
 
 const key = (code: string, k: string, mods: Partial<RoutedKey> = {}): RoutedKey => ({ code, key: k, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...mods });
 const win = resolve(null, "win32");
@@ -69,5 +69,17 @@ describe("TERM-079 Kolux shortcuts versus shell keys", () => {
   it("a composing key (IME) is left to the terminal's composition handling", () => {
     expect(routeKey(win, key("KeyK", "ㅏ", { ctrlKey: true, isComposing: true }), false)).toEqual({ kind: "ime" });
     expect(routeKey(win, key("", "Process", { keyCode: 229 }), false)).toEqual({ kind: "ime" });
+  });
+});
+
+describe("T-151-b a key that reaches the program answers the prompt; a Kolux chord, a scroll or a modifier does not", () => {
+  it("council D2 MERGE 47 S2", () => {
+    expect(answersPrompt({ kind: "shell" }, "y")).toBe(true);
+    expect(answersPrompt({ kind: "send", data: "\x1b\r" }, "Enter")).toBe(true);
+    expect(answersPrompt({ kind: "ime" }, "Process")).toBe(true);
+    expect(answersPrompt({ kind: "shell" }, "Shift")).toBe(false);
+    expect(answersPrompt({ kind: "shell" }, "Control")).toBe(false);
+    expect(answersPrompt({ kind: "kolux", id: "terminal.search" }, "f")).toBe(false);
+    expect(answersPrompt({ kind: "scroll", to: "top" }, "ArrowUp")).toBe(false);
   });
 });

@@ -8,7 +8,7 @@ describe("TERM-074 drop files onto a terminal", () => {
     expect(quotePath(p, "cmd")).toBe('"C:\\Users\\Txais\\My Files\\report (final).txt"');
     expect(quotePath(p, "posix")).toBe("'C:/Users/Txais/My Files/report (final).txt'");
     expect(quotePath(p, "other")).toBe('"C:\\Users\\Txais\\My Files\\report (final).txt"');
-    const text = dropText([p, "D:\\b.png"], "powershell");
+    const { text } = dropText([p, "D:\\b.png"], "powershell");
     expect(text).toBe("'C:\\Users\\Txais\\My Files\\report (final).txt' 'D:\\b.png'");
     expect(text).not.toMatch(/[\r\n]/);
   });
@@ -19,18 +19,38 @@ describe("TERM-074 drop files onto a terminal", () => {
     expect(quotePath('C:\\say "hi".txt', "other")).toBe('"C:\\say \\"hi\\".txt"');
   });
 
-  it("reads the shell kind from the program that started, and an agent pane as other", () => {
+  it("council D2 MERGE 47 B1: PowerShell's curly single quotes are doubled, so a name cannot close the quoting", () => {
+    // PowerShell reads U+2018-U+201B as single quotes: undoubled, a’;calc;’ would end the string and run calc.
+    expect(quotePath("C:\\dl\\a\u2019;calc;\u2019.txt", "powershell")).toBe("'C:\\dl\\a\u2019\u2019;calc;\u2019\u2019.txt'");
+    expect(quotePath("C:\\\u2018\u201A\u201B.txt", "powershell")).toBe("'C:\\\u2018\u2018\u201A\u201A\u201B\u201B.txt'");
+  });
+
+  it("council D2 MERGE 47 B2: the kind comes from the program that started, whatever the agent; wsl is POSIX", () => {
     expect(shellKind("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")).toBe("powershell");
     expect(shellKind("pwsh.exe")).toBe("powershell");
     expect(shellKind("cmd.exe")).toBe("cmd");
     expect(shellKind("C:/Program Files/Git/bin/bash.exe")).toBe("posix");
+    expect(shellKind("C:\\Windows\\System32\\wsl.exe")).toBe("posix");
+    expect(shellKind("C:\\Users\\x\\.local\\bin\\claude.exe")).toBe("other");
     expect(shellKind(null)).toBe("other");
-    expect(shellKind("powershell.exe", "claude")).toBe("other");
+    // an agent pane whose agent exited and fell back to PowerShell: started program is powershell, single quotes
+    expect(dropText(["C:\\x$(calc).txt"], shellKind("powershell.exe")).text).toBe("'C:\\x$(calc).txt'");
+  });
+
+  it("council D2 MERGE 47 B2/S1: with only double quotes (cmd, an agent's prompt) a path that could expand is not typed", () => {
+    for (const kind of ["cmd", "other"] as const) {
+      for (const bad of ["C:\\x$(calc).txt", "C:\\x`calc`.txt", "C:\\%PATH%.txt", "C:\\a!b!.txt", "C:\\a\u2019b.txt"]) {
+        expect(dropText([bad, "C:\\ok.txt"], kind)).toEqual({ text: '"C:\\ok.txt"', typed: ["C:\\ok.txt"], refused: 1 });
+      }
+    }
+    // the shells that single-quote type them as they are
+    expect(dropText(["C:\\a!b%c$d`e.txt"], "posix").text).toBe("'C:/a!b%c$d`e.txt'");
+    expect(dropText(["C:\\a!b%c$d`e.txt"], "powershell").refused).toBe(0);
   });
 
   it("drops a path holding a control character and types nothing for an empty drop", () => {
-    expect(dropText(["C:\\a\x1b[200~b.txt", "C:\\ok.txt"], "cmd")).toBe('"C:\\ok.txt"');
-    expect(dropText([], "cmd")).toBe("");
+    expect(dropText(["C:\\a\x1b[200~b.txt", "C:\\ok.txt"], "cmd")).toEqual({ text: '"C:\\ok.txt"', typed: ["C:\\ok.txt"], refused: 1 });
+    expect(dropText([], "cmd")).toEqual({ text: "", typed: [], refused: 0 });
   });
 
   it("recognises images by extension and summarises without the paths", () => {

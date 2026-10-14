@@ -50,3 +50,9 @@ export function routeKey(map: Keymap, e: RoutedKey, hasSelection: boolean, agent
   if (hit.id === "terminal.copySelection" && !hasSelection && !e.shiftKey && !e.metaKey) return { kind: "shell" };
   return { kind: "kolux", id: hit.id };
 }
+
+/** T-151-b (council D2 MERGE 47 S2): a keydown that reaches the program answers a permission prompt as far as the
+ *  Approve/Deny buttons go; a Kolux chord, a scroll jump or a bare modifier does not. Read from the key handler,
+ *  not onData, which also carries xterm's own focus, mouse and cursor-position replies. */
+export const answersPrompt = (route: Route, key: string) =>
+  (route.kind === "shell" || route.kind === "send" || route.kind === "ime") && !["Shift", "Control", "Alt", "Meta"].includes(key);

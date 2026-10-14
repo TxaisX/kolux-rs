@@ -12,9 +12,11 @@ const paste = (target: EventTarget, text: string) => {
 test("T-151-b: 2+ lines into a program without bracketed paste asks first; bracketed paste on or one line never asks", () => {
   expect(needsAsk("echo one\necho two", true)).toBe(false); // bracketed paste on → no ask
   expect(needsAsk("echo one", false)).toBe(false); // one line → no ask
-  expect(needsAsk("echo one\n", false)).toBe(false); // one line with its line end → still one line
+  expect(needsAsk("echo one\n", false)).toBe(false); // one line with its line end → one line (the end is dropped, below)
   expect(needsAsk("echo one\necho two", false)).toBe(true); // 2+ lines, no brackets → ask
   expect(needsAsk("a\r\nb\r\nc", false)).toBe(true);
+  expect(needsAsk("a\rb\rc", false)).toBe(true); // council D2 MERGE 47 F1: a bare CR ends a line too
+  expect(needsAsk("a\rb", false)).toBe(true);
   // through attachPaste: the ask gets the count and a go; Cancel (not calling go) sends nothing, Paste sends it
   const t = new EventTarget();
   const got: string[] = [];
@@ -29,6 +31,22 @@ test("T-151-b: 2+ lines into a program without bracketed paste asks first; brack
   paste(t, "echo one");
   expect(asked).toBeNull();
   expect(got).toEqual(["echo one\recho two\recho three", "echo one"]);
+});
+
+test("council D2 MERGE 47 F1: a single line ending in a line end is typed without it, so it never runs by itself", () => {
+  const t = new EventTarget();
+  const got: string[] = [];
+  let asked = 0;
+  attachPaste(t, (s) => got.push(s), () => false, () => {}, () => false, () => true, () => asked++);
+  paste(t, "evil-cmd\n");
+  paste(t, "x\r");
+  paste(t, "y\r\n");
+  paste(t, "\n"); // nothing left: nothing sent
+  expect(got).toEqual(["evil-cmd", "x", "y"]);
+  expect(asked).toBe(0);
+  paste(t, "a\rb\rc"); // three lines by CR alone → the ask, nothing sent yet
+  expect(asked).toBe(1);
+  expect(got).toHaveLength(3);
 });
 
 test("TERM-069: on Windows a multi-line paste is bracketed even when the program has not asked; single-line text keeps the fast path", () => {
