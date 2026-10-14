@@ -586,17 +586,26 @@ pub fn gh_login() -> Option<String> {
 }
 
 /// GIT-043 / GIT-066: the account gh is signed in with on `host`, from gh's own config (no network).
+/// None when gh is signed out there, cannot run, or does not answer within GH_ACCOUNT_LIMIT.
 fn gh_account(program: &Path, host: &str) -> Option<String> {
-    let out = quiet(program).args(["config", "get", "-h", host, "user"]).output().ok()?;
-    let login = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (out.status.success() && !login.is_empty()).then_some(login)
+    gh_account_within(program, host, GH_ACCOUNT_LIMIT).ok().flatten()
+}
+
+/// FIX-R2: `gh_account` with a time limit: Ok(None) when gh says it is signed out on `host`, Err
+/// when gh cannot run or has not answered by `limit` (it is stopped then).
+fn gh_account_within(program: &Path, host: &str, limit: std::time::Duration) -> Result<Option<String>, String> {
+    let mut cmd = quiet(program);
+    cmd.args(["config", "get", "-h", host, "user"]).envs(crate::git::NO_PROMPT).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
+    let (ok, out, _) = run_within(cmd, None, limit)?;
+    let login = out.trim().to_string();
+    Ok((ok && !login.is_empty()).then_some(login))
 }
 
 /// FIX-2: a pull request request goes only to a host gh is signed in to, so a link to some other
 /// host never hands it anything. ponytail: scm-local stand-in for github::host_allowed (tasks
 /// FIX-1, not on main yet); switch to that one when it lands.
 fn signed_host(gh: &Path, host: &str) -> Result<(), String> {
-    gh_account(gh, host).map(|_| ()).ok_or_else(|| format!("gh is not signed in to {host}, so Kolux sends nothing there. Run gh auth login --hostname {host} first."))
+    gh_account_within(gh, host, GH_ACCOUNT_LIMIT)?.map(|_| ()).ok_or_else(|| format!("gh is not signed in to {host}, so Kolux sends nothing there. Run gh auth login --hostname {host} first."))
 }
 
 /// FIX-2: every program this module starts comes through here, so none flashes a console window
@@ -625,6 +634,8 @@ pub(crate) fn gh_program() -> Result<std::path::PathBuf, String> {
 
 /// GIT-028: how long one gh call may take before Kolux gives up on it.
 const GH_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
+/// FIX-R2: how long gh may take to say which account it is signed in with (a local config read).
+const GH_ACCOUNT_LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Runs gh in the worktree with every prompt off; `input` goes to standard input. A failure
 /// carries what gh printed.
@@ -635,8 +646,6 @@ pub(crate) fn gh_run(program: &Path, worktree: &Path, args: &[&str], input: Opti
 /// GIT-028: `gh_run` with a time limit; a gh that has not finished by then is stopped.
 // ponytail: stopping gh.cmd leaves a child it started running until it ends; its output is dropped.
 fn gh_run_for(program: &Path, worktree: &Path, args: &[&str], input: Option<&str>, limit: std::time::Duration) -> Result<String, String> {
-    use std::io::Read;
-    use std::process::Stdio;
     let mut cmd = quiet(program);
     cmd.args(args);
     // A pull request link names its own repository; everything else is pointed at origin's.
@@ -646,6 +655,18 @@ fn gh_run_for(program: &Path, worktree: &Path, args: &[&str], input: Option<&str
         }
     }
     cmd.current_dir(worktree).envs(crate::git::NO_PROMPT).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
+    let (ok, out, err) = run_within(cmd, input, limit)?;
+    let said = format!("{}\n{}", out.trim(), err.trim()).trim().to_string();
+    if ok { Ok(out.trim().to_string()) } else { Err(plain(&said)) }
+}
+
+/// GIT-028 / FIX-R2: runs a gh command, `input` on standard input, and waits at most `limit`:
+/// (succeeded, standard output, standard error), or Err when it cannot start or has not finished in
+/// time (it is stopped then). ponytail: stopping gh.cmd leaves a child it started running until it
+/// ends; its output is dropped.
+fn run_within(mut cmd: std::process::Command, input: Option<&str>, limit: std::time::Duration) -> Result<(bool, String, String), String> {
+    use std::io::Read;
+    use std::process::Stdio;
     cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("could not run gh: {e}"))?;
     if let (Some(text), Some(mut pipe)) = (input, child.stdin.take()) {
@@ -678,10 +699,7 @@ fn gh_run_for(program: &Path, worktree: &Path, args: &[&str], input: Option<&str
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     };
-    let out = stdout.recv().unwrap_or_default();
-    let err = stderr.recv().unwrap_or_default();
-    let said = format!("{}\n{}", out.trim(), err.trim()).trim().to_string();
-    if code.success() { Ok(out.trim().to_string()) } else { Err(plain(&said)) }
+    Ok((code.success(), stdout.recv().unwrap_or_default(), stderr.recv().unwrap_or_default()))
 }
 
 /// GIT-023: gh's failures in the words the panel shows.
@@ -1430,7 +1448,8 @@ pub async fn scm_tasks_search(host: String, queries: Vec<String>, page: u32) -> 
 /// GIT-043: the account gh is signed in with on `host`, from gh's own config (no network).
 #[tauri::command]
 pub async fn scm_gh_account(host: String) -> Option<String> {
-    // Off the async thread, so a slow gh never holds up other commands.
+    // Off the async thread, so a slow gh never holds up other commands, and bounded by
+    // GH_ACCOUNT_LIMIT (FIX-R2), so a gh that never answers reads as no account instead of a hang.
     tauri::async_runtime::spawn_blocking(move || gh_account(&gh_program().ok()?, &host)).await.ok()?
 }
 
@@ -2286,12 +2305,12 @@ mod tests {
         dir
     }
 
-    /// FIX-2 (b): no console window flashes up behind the app, so every program this module
-    /// starts outside its tests goes through `quiet`, the one place that hides the console.
+    /// FIX-2 (b) / FIX-R2: no console window flashes up behind the app, so every program this file
+    /// builds a command for, its tests included, goes through `quiet`, the one place that hides the
+    /// console. (git runs go through git::command, which hides it the same way.)
     #[test]
     fn fix2_every_spawn_hides_its_console() {
-        let src = include_str!("scm.rs");
-        let body = &src[..src.find("mod tests {").unwrap()];
+        let body = include_str!("scm.rs");
         let quiet_at = body.find("fn quiet(").expect("a quiet spawn helper");
         let quiet_end = quiet_at + body[quiet_at..].find("\n}").unwrap();
         let needle = ["Command", "::new("].concat();
@@ -2459,7 +2478,7 @@ mod tests {
         fs::create_dir_all(&outside).unwrap();
         fs::write(outside.join("b.txt"), "private\n").unwrap();
         #[cfg(windows)]
-        let made = std::process::Command::new("cmd").args(["/c", "mklink", "/J"]).arg(dir.join("j")).arg(&outside).output().unwrap().status.success();
+        let made = quiet("cmd").args(["/c", "mklink", "/J"]).arg(dir.join("j")).arg(&outside).output().unwrap().status.success();
         #[cfg(unix)]
         let made = std::os::unix::fs::symlink(&outside, dir.join("j")).is_ok();
         assert!(made, "the junction was made");
@@ -2606,13 +2625,52 @@ mod tests {
         } else {
             let f = tools.join("gh");
             fs::write(&f, "#!/bin/sh\nsleep 30\necho late\n").unwrap();
-            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            quiet("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
             f
         };
         let started = std::time::Instant::now();
         let err = gh_run_for(&gh, &tools, &["pr", "view"], None, std::time::Duration::from_secs(1)).unwrap_err();
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "took {:?}", started.elapsed());
         assert!(err.contains("did not answer within 1 second"), "{err}");
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    /// FIX-R2: asking gh which account it is signed in with has a time limit, so a gh that never
+    /// answers cannot hold up the Tasks page or onboarding; the caller gets a timeout error, and the
+    /// host gate passes that error on rather than calling the host signed out.
+    #[test]
+    fn fixr2_a_gh_that_never_answers_the_account_question_times_out_within_the_bound() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fixr2-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        // Never exits: the loop lives in the script's own process, so stopping it ends it.
+        let gh = if cfg!(windows) {
+            let f = tools.join("gh.cmd");
+            fs::write(&f, "@echo off\r\n:again\r\nping -n 2 127.0.0.1 >nul\r\ngoto again\r\n").unwrap();
+            f
+        } else {
+            let f = tools.join("gh");
+            fs::write(&f, "#!/bin/sh\nwhile :; do sleep 1; done\n").unwrap();
+            quiet("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let ask = |limit: std::time::Duration| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let g = gh.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(gh_account_within(&g, "github.com", limit));
+            });
+            rx
+        };
+        let started = std::time::Instant::now();
+        let got = ask(std::time::Duration::from_secs(1)).recv_timeout(std::time::Duration::from_secs(8)).expect("the account question returns within its bound");
+        assert!(started.elapsed() < std::time::Duration::from_secs(8), "took {:?}", started.elapsed());
+        assert!(got.as_ref().unwrap_err().contains("did not answer within 1 second"), "{got:?}");
+        // The host gate and the plain lookup use the real bound and give up too.
+        let gate = signed_host(&gh, "github.com").unwrap_err();
+        assert!(gate.contains("did not answer within") && !gate.contains("not signed in"), "{gate}");
+        assert_eq!(gh_account(&gh, "github.com"), None);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1 + 2 * GH_ACCOUNT_LIMIT.as_secs() + 6), "took {:?}", started.elapsed());
         let _ = fs::remove_dir_all(&tools);
     }
 
@@ -3375,7 +3433,7 @@ mod tests {
         } else {
             let f = tools.join("gh");
             fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\nif [ \"$2\" = graphql ]; then cat \"$(dirname \"$0\")/checks.json\"; else cat \"$(dirname \"$0\")/search.json\"; fi\n").unwrap();
-            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            quiet("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
             f
         };
         let qs = ["is:issue is:open repo:o/r".to_string(), "is:pr is:open repo:o/r".to_string()];
@@ -3427,7 +3485,7 @@ mod tests {
             let f = tools.join("gh");
             let script = "#!/bin/sh\nd=\"$(dirname \"$0\")\"\necho \"$*\" >> \"$d/calls.txt\"\ncase \"$*\" in *'/timeline'*) cat \"$d/timeline.json\"; exit 0;; *'/labels'*) cat \"$d/labels.json\"; exit 0;; esac\n[ \"$3\" = PATCH ] && cat >> \"$d/input.txt\"\ncat \"$d/issue.json\"\n";
             fs::write(&f, script).unwrap();
-            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            quiet("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
             f
         };
         let d = task_detail(&gh, "github.com", "o/r", 3).unwrap();
@@ -3488,7 +3546,7 @@ mod tests {
         } else {
             let f = root.join("say");
             fs::write(&f, "#!/bin/sh\necho \"$1\"\n").unwrap();
-            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            quiet("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
             f
         };
         let (args, input) = writer_args(&["{prompt}".into()], "Fix the poll");
@@ -3521,7 +3579,7 @@ mod tests {
             } else {
                 let f = root.join(name);
                 fs::write(&f, format!("#!/bin/sh\n{sh}\n")).unwrap();
-                std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+                quiet("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
                 f
             }
         };
@@ -3594,7 +3652,7 @@ mod tests {
             let f = tools.join("gh");
             let script = "#!/bin/sh\nd=\"$(dirname \"$0\")\"\necho \"$*\" >> \"$d/calls.txt\"\n[ \"$2\" = rate_limit ] && { cat \"$d/budget.json\"; exit 0; }\ncase \"$*\" in *o/s*) echo 'API rate limit exceeded for user ID 1.' >&2; exit 1;; esac\ncat \"$d/list.json\"\n";
             fs::write(&f, script).unwrap();
-            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            quiet("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
             f
         };
         let item = |path: &str, linked: Option<&str>| PollItem { path: path.to_string(), linked: linked.map(String::from) };
@@ -3691,7 +3749,7 @@ mod tests {
         } else {
             let f = tools.join("gh");
             fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\n[ \"$1\" = config ] && [ \"$4\" != nobody.example ] && echo octo\n[ \"$1\" = api ] && cat \"$(dirname \"$0\")/answer.json\"\nexit 0\n").unwrap();
-            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            quiet("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
             f
         };
         let url = "https://git.example.com/o/r/pull/42";
@@ -3743,7 +3801,7 @@ mod tests {
         } else {
             let f = tools.join("gh");
             fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\ncat \"$(dirname \"$0\")/answer.json\"\n").unwrap();
-            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            quiet("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
             f
         };
         let b = gh_budget(&gh).unwrap();
