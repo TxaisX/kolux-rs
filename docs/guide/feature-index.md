@@ -279,6 +279,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-119 | Name a pane or tab; a Needs you strip appears above the grid. | [Terminals](terminals.md) |
 | T-119-b | Tab and pane titles follow the running program. | [Terminals](terminals.md) |
 | T-120-a | Settings switch and kolux agent hooks commands control agent status hooks. | [Settings](settings.md) |
+| T-120-b | Gemini CLI, Antigravity and Amp report their status through hooks Kolux installs, added to the same switch and to `kolux agent hooks status`. | [Settings](settings.md#hooks-for-gemini-cli-antigravity-and-amp) |
 | T-123 | Status shows background work being watched, the question an agent is waiting on, and Interrupted for a stopped turn; /clear and compacting are not counted as finished work. | [Board, agents and inbox](board-agents-inbox.md) |
 | T-123-c | Interrupted goes back to Working when the agent starts a new step after Esc or Ctrl+C. | [Board, agents and inbox](board-agents-inbox.md) |
 | T-123-b | A Codex agent's reply text reaches its card from its finish report, as Claude Code's does. | [Board, agents and inbox](board-agents-inbox.md) |
@@ -546,4 +547,4 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-325 | The Agents page shows a Claude Code, OpenClaude or Codex session as a live chat with each message once and in order. | [Board, Agents and Inbox](board-agents-inbox.md#chat-on-the-agents-page) |
 | T-326 | Chat folds the agent's work: Thought rows, steps, file edits as diff cards, a subagent row and busy timers. | [Board, Agents and Inbox](board-agents-inbox.md#chat-on-the-agents-page) |
 | T-327 | A chat message box that types into the agent's terminal and follows the newest message; it holds a send while the agent is asking, and Request changes on a plan waits until the agent leaves its menu. | [Board, Agents and Inbox](board-agents-inbox.md#chat-on-the-agents-page) |
-<!-- generated from PLAN.md at 5f3b287 -->
+<!-- generated from PLAN.md at fb0a9d4 -->

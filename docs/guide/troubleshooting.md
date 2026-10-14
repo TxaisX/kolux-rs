@@ -67,6 +67,15 @@ Kolux saves your tabs and layout as you work and brings them back at the next st
 
 Kolux also reopens on the screen you left (Agents, Board or Terminals).
 
+## Hooks messages and leftovers
+
+Two known problems with agent status hooks. Neither loses your own settings. Background is in [Safety](safety.md#agent-status-hooks).
+
+| What you see | Cause | What to do |
+|---|---|---|
+| At every start, a message that Claude Code's `settings.json` "already holds Kolux's hook entries but has no .bak-kolux copy" | Known issue. Kolux created that file itself, so there is no earlier version to back up, and at every start Kolux reports the missing copy. The hooks already installed keep working, but updates to them do not land | Switch "Agent status hooks" Off, then On again (Settings, Agents; or `kolux agent hooks off` then `kolux agent hooks on`). The message goes away. Not yet fixed in the app |
+| After switching hooks off, `~\.gemini\settings.json` or Antigravity's `~\.gemini\config\hooks.json` still exists and holds only `{}` | Known issue. Kolux created that file itself, and switching off takes out Kolux's entries but does not delete the file it made | The `{}` holds no settings. Delete the file yourself if you want it gone, once nothing else of yours is in it. Not yet fixed in the app |
+
 ## Quiet terminals
 
 If a working terminal goes silent for 10 minutes, Kolux alerts you. Change the time in Settings, Notifications ("Quiet alert minutes"); 0 turns it off.
@@ -87,4 +96,4 @@ If `kolux` runs a different app than you expect, you may have the older Kolux on
 
 Use "Send feedback" in Settings, General, Privacy. It opens a new issue page on GitHub in your browser, with a version and platform footer. Paste your diagnostics there; the app submits nothing by itself.
 
-<!-- verified against: src-tauri/src/diag.rs, src/terminal/errors.ts, src/terminal/TerminalPane.tsx, src/terminal/history.ts, src/terminal/layout.ts, src-tauri/src/cli.rs, src-tauri/src/projects.rs, src-tauri/src/procs.rs, src/settings/GeneralPage.tsx, src/settings/privacy.ts, STATE.md at 231fc43 -->
+<!-- verified against: src-tauri/src/diag.rs, src/terminal/errors.ts, src/terminal/TerminalPane.tsx, src/terminal/history.ts, src/terminal/layout.ts, src-tauri/src/cli.rs, src-tauri/src/projects.rs, src-tauri/src/procs.rs, src/settings/GeneralPage.tsx, src/settings/privacy.ts, STATE.md, src-tauri/src/agent_hooks/mod.rs, src-tauri/src/agent_hooks/vendors.rs at fb0a9d4 -->
