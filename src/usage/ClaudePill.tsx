@@ -11,7 +11,7 @@ import { StatusGlyph } from "../chrome/icons";
 import { pillDetail, pillText, weeklyOf, type ClaudeLimit } from "./claude";
 import { tone } from "./meter";
 import { publishClaude as publishLaunch } from "./launchWarn";
-import { publishClaude as publishPlan, usePlan, useResetTick } from "./plan";
+import { publishClaude as publishPlan, readPlan, usePlan, useResetTick } from "./plan";
 import { claudeFetched, runner, useRefresh } from "./refresh";
 import { lineFor, record } from "./forecast";
 
@@ -25,9 +25,16 @@ export const publishStored = (limits: ClaudeLimit[]) => {
 };
 
 /** A report the status line pushed just now: the same, and a forecast reading at the time it
- * arrived (USAGE-031). */
-export const publishLive = (limits: ClaudeLimit[], now: number = Date.now()) => {
-  for (const l of limits) record(`claude:${l.kind}`, l.usedPercent, l.resetsAt, now);
+ * arrived (USAGE-031). FIX-2 (council FS-4): the event carries the windows merged with the last
+ * stored ones, so only the windows this report itself carried are readings; a window kept from an
+ * older report would be stamped now. `carried` names them when the backend says so; without it, a
+ * window that matches what is shown is taken as kept.
+ * ponytail: the fallback also skips an unchanged carried window (a flat reading); the carried list fixes that. */
+export const publishLive = (limits: ClaudeLimit[], now: number = Date.now(), carried?: string[]) => {
+  const shown = readPlan().claude;
+  const fresh = (l: ClaudeLimit) =>
+    carried ? carried.includes(l.kind) : !shown.some((s) => s.kind === l.kind && s.usedPercent === l.usedPercent && s.resetsAt === l.resetsAt);
+  for (const l of limits) if (fresh(l)) record(`claude:${l.kind}`, l.usedPercent, l.resetsAt, now);
   publishStored(limits);
 };
 
@@ -63,8 +70,8 @@ export default function ClaudePill({ installed }: { installed?: boolean }) {
   useEffect(() => {
     const r = runner<ClaudeLimit[]>({ name: "claude", fetch: () => invoke<ClaudeLimit[]>("claude_usage").then(claudeFetched), onOk: publishStored });
     r.start();
-    const off = listen<{ limits: ClaudeLimit[] }>("claude-usage", (e) => {
-      if (e.payload.limits.length) publishLive(e.payload.limits);
+    const off = listen<{ limits: ClaudeLimit[]; carried?: string[] }>("claude-usage", (e) => {
+      if (e.payload.limits.length) publishLive(e.payload.limits, Date.now(), e.payload.carried);
     });
     return () => {
       r.stop();

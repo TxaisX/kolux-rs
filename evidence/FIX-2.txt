@@ -61,3 +61,22 @@ characters sit in a component that dot-dot cancels never reaches the launcher (c
   none of " & | < > or "..", no verbatim prefix, and equals the canonical sub). On the old code it does
   not compile (plain_disk_path is new) and its spelling came back unchanged (council probe).
 - cargo test edit043: 7 passed, 0 failed; clippy -D warnings exit 0; tsc exit 0.
+
+== 4. FS-3 second paste, FS-4 forecast readings (AFTER 1 wording) ==
+FS-3 paste.ts: handlePaste (the editor's paste handler, now exported) refuses a paste made while a
+chunked paste is still going in, with the toast "Paste refused: the last paste is still going in.
+Nothing was pasted." (before, a small one was dropped silently by holdInput and a big one started a
+second run of pieces). A piece whose dispatch throws now clears the paste mark, so the editor takes
+input again. AFTER 1: the header says keys are dropped, not queued.
+- Test: paste.test.ts "EDIT-008 (FIX-2): a second paste mid-paste is refused with a toast, and a failing
+  piece does not hold input forever". On the old code it does not compile (handlePaste/busyRefusal are new).
+FS-4 ClaudePill.tsx publishLive: only the windows the live report itself carried become forecast
+readings; a window kept from an older stored report (the backend merges them) is no longer stamped
+now. The event's optional "carried" list names them; without it, a window equal to what is shown is
+taken as kept. evidence/FIX-2-hooks-carried.patch (hooks lane, not committed) makes record_usage emit
+"carried" (the kinds before merge_limits). Applied in place: cargo test hooks:: 50 passed, clippy 0; reverted.
+- Test: ClaudePill.test.ts "FIX-2 (USAGE-031): only the windows a live report carried become forecast
+  readings" FAILED on the old ClaudePill.tsx (1 failed | 1 passed), passes now.
+- tsc 0; vitest related paste.ts + ClaudePill.tsx: 22 files, 142 tests passed.
+LIVE PROOF PENDING (4): paste a 1 MB text into a code file and paste again at once: a toast says the
+last paste is still going in; the first paste lands whole and one Ctrl+Z takes it out.

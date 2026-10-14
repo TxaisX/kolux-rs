@@ -1,7 +1,8 @@
 // EDIT-008 (T-282): a huge paste never freezes the window. Up to CHUNK characters go in the way
 // CodeMirror pastes on its own; a bigger paste goes in CHUNK at a time, one piece per turn of the
-// event loop, so the window keeps drawing and responding (keystrokes and clicks into this editor wait until
-// the paste is in, holdInput); past PASTE_LIMIT the paste is refused
+// event loop, so the window keeps drawing and responding (keystrokes and clicks into this editor are
+// dropped, not queued, until the paste is in: holdInput; a second paste meanwhile is refused with a
+// toast, busyRefusal); past PASTE_LIMIT the paste is refused
 // with a toast and the buffer is left as it was. Context-menu Paste fires the same paste event as
 // the keyboard, so it takes the same road (whole-line and multi-cursor pastes stay CodeMirror's own
 // below CHUNK). A read-only editor is never pasted into. The rich markdown view applies the same
@@ -87,7 +88,14 @@ export function pasteChunked(view: EditorView, text: string, done?: () => void):
     if (i >= parts.length) return done?.();
     const at = view.state.field(pasteMark, false);
     if (at === null || at === undefined) return done?.();
-    view.dispatch(pieceSpec(parts[i], false, at, at, i === parts.length - 1, t0));
+    try {
+      view.dispatch(pieceSpec(parts[i], false, at, at, i === parts.length - 1, t0));
+    } catch (e) {
+      // FIX-2 (council FS-3): a piece that throws must not leave the editor holding input forever.
+      view.dispatch({ effects: setMark.of(null) });
+      done?.();
+      throw e;
+    }
     i += 1;
     setTimeout(step, 0);
   };
@@ -101,21 +109,28 @@ export const holdInput = EditorState.transactionFilter.of((tr) =>
   tr.startState.field(pasteMark, false) != null && tr.annotation(Transaction.userEvent) !== undefined ? [] : tr,
 );
 
+/** The toast for a paste made while an earlier chunked paste is still going in. */
+export const busyRefusal = "Paste refused: the last paste is still going in. Nothing was pasted.";
+
+/** One paste event. FIX-2 (council FS-3): while a chunked paste is under way a second paste is refused
+ * out loud (holdInput would drop a small one silently, and a big one would start a second run of
+ * pieces that interleaves with the first). True when the event was handled here. */
+export function handlePaste(event: ClipboardEvent, view: EditorView, refuse: (text: string) => void): boolean {
+  if (view.state.field(pasteMark, false) != null && !view.state.readOnly) {
+    event.preventDefault();
+    refuse(busyRefusal);
+    return true;
+  }
+  const text = event.clipboardData?.getData("text/plain") ?? "";
+  const v = verdict(text.length, view.state.readOnly);
+  if (v === "native") return false;
+  event.preventDefault();
+  if (v === "refused") refuse(refusal(text.length));
+  if (v === "chunked") pasteChunked(view, text);
+  return true;
+}
+
 /** The editor extension: `refuse` shows the refusal toast. */
 export function pasteGuard(refuse: (text: string) => void): Extension {
-  return [
-    pasteMark,
-    holdInput,
-    EditorView.domEventHandlers({
-      paste(event, view) {
-        const text = event.clipboardData?.getData("text/plain") ?? "";
-        const v = verdict(text.length, view.state.readOnly);
-        if (v === "native") return false;
-        event.preventDefault();
-        if (v === "refused") refuse(refusal(text.length));
-        if (v === "chunked") pasteChunked(view, text);
-        return true;
-      },
-    }),
-  ];
+  return [pasteMark, holdInput, EditorView.domEventHandlers({ paste: (event, view) => handlePaste(event, view, refuse) })];
 }

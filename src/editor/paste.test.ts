@@ -2,7 +2,7 @@ import { expect, test, vi } from "vitest";
 import { EditorState, Transaction, type TransactionSpec } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { history, undo } from "@codemirror/commands";
-import { CHUNK, chunks, holdInput, PASTE_LIMIT, pasteChunked, pasteMark, pieceSpec, refusal, verdict } from "./paste";
+import { busyRefusal, CHUNK, chunks, handlePaste, holdInput, PASTE_LIMIT, pasteChunked, pasteMark, pieceSpec, refusal, verdict } from "./paste";
 import { refusePaste, RICH_LIMIT, richRefusal } from "./markdown";
 
 test("EDIT-008: a paste at the chunk size goes in whole, one character more goes in pieces, past the limit it is refused, read-only never", () => {
@@ -122,4 +122,35 @@ test("EDIT-008 (FIX-1): the rich view takes a paste only up to its own size limi
   expect(said).toEqual(["prevented", richRefusal(RICH_LIMIT + 1)]);
   expect(richRefusal(10 * 1024 * 1024)).toBe("Paste refused in the rich view: 10 MB is over the 600 KB it takes in one paste. Paste it in source view instead. Nothing was pasted.");
   expect(richRefusal(RICH_LIMIT + 1)).toBe("Paste refused in the rich view: it is just over the 600 KB it takes in one paste. Paste it in source view instead. Nothing was pasted.");
+});
+
+// FIX-2 (council FS-3): a second paste while the first is still going in is refused out loud and
+// leaves the first paste whole; a piece that throws clears the hold so the editor takes input again.
+test("EDIT-008 (FIX-2): a second paste mid-paste is refused with a toast, and a failing piece does not hold input forever", () => {
+  vi.useFakeTimers();
+  try {
+    const v = stubView(EditorState.create({ doc: "ab", selection: { anchor: 1 }, extensions: [history(), pasteMark, holdInput] }));
+    const text = "y".repeat(CHUNK * 2 + 5);
+    pasteChunked(v as unknown as EditorView, text);
+    const said: string[] = [];
+    const ev = (t: string) => ({ clipboardData: { getData: () => t }, preventDefault: () => said.push("prevented") }) as unknown as ClipboardEvent;
+    expect(handlePaste(ev("small"), v as unknown as EditorView, (t) => said.push(t))).toBe(true);
+    expect(handlePaste(ev("z".repeat(CHUNK + 1)), v as unknown as EditorView, (t) => said.push(t))).toBe(true);
+    expect(said).toEqual(["prevented", busyRefusal, "prevented", busyRefusal]);
+    vi.runAllTimers();
+    expect(v.state.doc.toString()).toBe("a" + text + "b");
+    expect(handlePaste(ev("small"), v as unknown as EditorView, (t) => said.push(t))).toBe(false);
+
+    const w = stubView(EditorState.create({ doc: "", extensions: [pasteMark, holdInput] }));
+    pasteChunked(w as unknown as EditorView, text);
+    const real = w.dispatch;
+    w.dispatch = (spec) => {
+      if (!(spec instanceof Transaction) && "changes" in spec) throw new Error("boom");
+      real(spec);
+    };
+    expect(() => vi.runOnlyPendingTimers()).toThrow("boom");
+    expect(w.state.field(pasteMark)).toBe(null);
+  } finally {
+    vi.useRealTimers();
+  }
 });
