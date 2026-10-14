@@ -15,3 +15,23 @@ Red first: with the helper defined but not wired into check(), the new test fail
 Green: cargo test --lib (all) 755 passed, 0 failed, 1 ignored; clippy -D warnings exit 0; tsc exit 0.
 Test: fence::tests::acct_055_a_path_without_a_drive_is_refused_before_it_resolves.
 Not on screen (backend refusal text only); no live proof needed.
+
+## 2. Content search: superseded searches stop, long hits cut, big files skipped (P4/P5)
+Rules: a new search of the same folder kills the running one's ripgrep/git child at once (it ends
+with "A newer search of this folder replaced this one.", which the window's sequence check drops);
+a hit longer than 200 characters is cut to 200 plus an ellipsis in the list while a new `len` field
+keeps its full UTF-16 length, so clicking it still selects the whole match; ripgrep runs with
+--max-filesize 10M (git's fallback has no size option; it stays as it was).
+Tests (written with the code; they do not compile on the old code, not a behaviour red):
+  editor_search::tests::a_newer_search_of_the_same_folder_stops_the_older_one (a 20 s ping child
+    ends within 5 s of the flag; the older entry never drops the newer one's)
+  editor_search::tests::a_long_hit_is_cut_for_the_list_but_keeps_its_length (10000-byte hit:
+    text 201 chars ending in an ellipsis, col 2, len 5000)
+  editor_search::tests::ripgrep_skips_files_over_ten_megabytes (real ripgrep 14.1.1: an 11 MB
+    file with the word is skipped, the small one is found)
+Gates: cargo test editor_search 9 passed 0 failed; clippy -D warnings exit 0; tsc exit 0;
+vitest related (search.ts, ContentSearch.tsx) 6 files / 43 tests passed.
+LIVE PROOF PENDING (batched): in a project, Ctrl+Shift+F, turn on Regular expression, search
+`x{300}` in a folder holding a one-line file of 400 x's: the hit in the list ends in an ellipsis
+after 200 characters; click it: the editor selects all 300 characters. Type quickly in the box on a
+large folder: only one rg.exe stays running (Task Manager), the old ones end as you type.
