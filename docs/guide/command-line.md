@@ -57,7 +57,7 @@ Kolux answers the command line one request at a time. If it is busy with another
 | resident | Memory the process is using right now |
 | committed | Memory Windows has set aside for it. When the computer runs low, this is the figure that runs out |
 
-A dash means Kolux could not read that figure. For now the Resource Manager in the app shows resident only. If Kolux is closed, the command says so in one line and exits with 1.
+A dash means Kolux could not read that figure. The Resource Manager in the app shows the same two figures, Resident and Committed, with a dash where Kolux could not read one. If Kolux is closed, the command says so in one line and exits with 1.
 
 Every command takes `--json` to print one machine-readable result instead of text. Without it, errors go to the error stream. Exit code 0 means it worked; 1 means any error.
 
@@ -190,4 +190,4 @@ A mistyped command is caught before Kolux is contacted, with a suggestion: "no c
 
 These do not exist, so do not look for them: opening or comparing files from the command line, a `tab` command, and registering `kolux` on the PATH for the whole computer.
 
-<!-- verified against: src-tauri/src/cli.rs, src-tauri/src/bin/kolux.rs, src-tauri/src/bin/kolux-dev.rs, src-tauri/Cargo.toml, src-tauri/cli/kolux.cmd, src-tauri/src/terminal.rs, src-tauri/src/resources.rs, PLAN.md (T-250-a, T-250-b) at cf61e3f -->
+<!-- verified against: src-tauri/src/cli.rs, src-tauri/src/bin/kolux.rs, src-tauri/src/bin/kolux-dev.rs, src-tauri/Cargo.toml, src-tauri/cli/kolux.cmd, src-tauri/src/terminal.rs, src-tauri/src/resources.rs, src/status/ResourceManager.tsx, PLAN.md (T-250-a, T-250-b) at 1db1bf0 -->

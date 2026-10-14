@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import RightSidebar, { clampLeft, clampWidth, LEFT_MAX, LEFT_MIN, readLeft, readRight, RIGHT_MIN } from "./RightSidebar";
+import RightSidebar, { clampLeft, clampWidth, LEFT_MAX, LEFT_MIN, MORE_WIDTH, PanelGuard, pickTab, readLeft, readRight, RIGHT_MIN, RIGHT_TABS, splitTabs, STRIP_PAD, tabWidth } from "./RightSidebar";
 
 test("VIEW-056: open by default on Explorer; open, tab and width come back as saved", () => {
   expect(readRight({})).toEqual({ open: true, tab: "explorer", width: 300 });
@@ -44,4 +44,51 @@ test("VIEW-050: the left sidebar width is clamped into range; a width that is no
   expect(readLeft({ leftSidebarWidth: "wide" }, 300)).toBe(300);
   expect(readLeft({ leftSidebarWidth: NaN }, 310)).toBe(310);
   expect(clampLeft(LEFT_MAX + 200)).toBe(LEFT_MAX);
+});
+
+test("T-146-b: when narrow, the extra tabs move into More and the active tab stays on the strip", () => {
+  const all = splitTabs(RIGHT_TABS, "scm", 320);
+  expect([all.shown.map((t) => t.id), all.more]).toEqual([["explorer", "scm", "checks"], []]);
+  // At the minimum width the three tabs no longer fit: the active one keeps its place.
+  const narrow = splitTabs(RIGHT_TABS, "checks", RIGHT_MIN);
+  expect(narrow.shown.map((t) => t.id)).toContain("checks");
+  expect(narrow.more.length).toBeGreaterThan(0);
+  expect([...narrow.shown, ...narrow.more].map((t) => t.id).sort()).toEqual(["checks", "explorer", "scm"]);
+  const used = narrow.shown.reduce((n, t) => n + tabWidth(t.label), 0) + MORE_WIDTH;
+  expect(used).toBeLessThanOrEqual(RIGHT_MIN);
+  // The order on the strip is the tabs' own order, whichever is active.
+  expect(splitTabs(RIGHT_TABS, "explorer", RIGHT_MIN).shown.map((t) => t.id)).toEqual(["explorer", "scm"]);
+  expect(splitTabs(RIGHT_TABS, "checks", RIGHT_MIN).shown.map((t) => t.id)).toEqual(["explorer", "checks"]);
+  // The edge: exactly enough room shows every tab, one pixel less opens More.
+  const exact = RIGHT_TABS.reduce((n, t) => n + tabWidth(t.label), 0) + STRIP_PAD;
+  expect(splitTabs(RIGHT_TABS, "scm", exact).more).toEqual([]);
+  expect(splitTabs(RIGHT_TABS, "scm", exact - 1).more.length).toBeGreaterThan(0);
+  const html = renderToString(createElement(RightSidebar, { tab: "checks", width: RIGHT_MIN, onTab: () => {}, onWidth: () => {}, children: "body" }));
+  expect(html).toMatch(/role="tab" aria-selected="true"[^>]*>Checks/);
+  expect(html).toMatch(/aria-haspopup="menu"[^>]*>More/);
+});
+
+test("T-146-b: a remembered tab not offered here opens the first offered tab", () => {
+  expect(pickTab("scm", ["explorer", "scm", "checks"])).toBe("scm");
+  expect(pickTab("scm", ["explorer", "checks"])).toBe("explorer");
+  expect(pickTab("checks", [])).toBe(null);
+  const html = renderToString(createElement(RightSidebar, { tab: "scm", width: 320, offered: ["explorer", "checks"], onTab: () => {}, onWidth: () => {}, children: "body" }));
+  expect(html).not.toContain("Source Control");
+  expect(html).toMatch(/role="tab" aria-selected="true"[^>]*>Explorer/);
+});
+
+test("VIEW 056 rest: a panel whose code throws shows a notice with Try again, and the sidebar stays", () => {
+  const Broken = () => {
+    throw new Error("chunk failed to load");
+  };
+  const { getDerivedStateFromError, getDerivedStateFromProps } = PanelGuard;
+  expect(getDerivedStateFromError(new Error("chunk failed to load"))).toEqual({ failed: "chunk failed to load" });
+  expect(getDerivedStateFromProps({ tab: "scm" }, { failed: "x", tab: "explorer" })).toEqual({ failed: null, tab: "scm" });
+  expect(getDerivedStateFromProps({ tab: "scm" }, { failed: "x", tab: "scm" })).toBe(null);
+  const guard = new PanelGuard({ tab: "scm", children: createElement(Broken) });
+  guard.state = { failed: "chunk failed to load", tab: "scm" };
+  const html = renderToString(guard.render() as never);
+  expect(html).toContain('role="alert"');
+  expect(html).toContain("This panel stopped working");
+  expect(html).toContain("Try again");
 });

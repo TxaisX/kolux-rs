@@ -25,8 +25,11 @@ pub struct Usage {
     /// Percent of the whole machine (every core), 0 to 100.
     pub cpu: f64,
     pub processes: usize,
-    /// CLI-041: committed bytes of every process counted here that reported one; None when none did.
+    /// CLI-041: committed bytes of the processes counted here; None when any of them could not be
+    /// read (T-287-c: a partial sum would pass for the whole), or when there are none.
     pub committed: Option<u64>,
+    /// T-287-c: how many of `processes` reported no committed figure (not opened, or no such figure).
+    pub unreadable: usize,
 }
 
 #[derive(Serialize)]
@@ -47,6 +50,21 @@ pub struct Resources {
     /// The computer's free memory by its own measure (available memory on Windows and Linux).
     pub free: Option<u64>,
     pub total: Option<u64>,
+    /// T-287-c: committed bytes of the app and every session together; None when any process in
+    /// them could not be read, so the total is never a partial sum shown as the whole.
+    pub committed_total: Option<u64>,
+    /// T-287-c: how many processes, across the app and every session, could not be read.
+    pub unreadable: usize,
+}
+
+impl Resources {
+    /// The rows plus their honest committed total (T-287-c).
+    pub fn new(app: Usage, sessions: Vec<SessionUsage>, free: Option<u64>, total: Option<u64>) -> Resources {
+        let rows = || std::iter::once(&app).chain(sessions.iter().map(|s| &s.usage));
+        let unreadable = rows().map(|u| u.unreadable).sum();
+        let committed_total = (unreadable == 0).then(|| rows().filter_map(|u| u.committed).sum());
+        Resources { app, sessions, free, total, committed_total, unreadable }
+    }
 }
 
 /// Who each process is counted under: the first session whose tree reaches it, else the app (any
@@ -89,19 +107,22 @@ pub struct Sampler {
 /// Adds the figures up per owner. `before` holds the CPU times of the last sample; a process
 /// seen for the first time counts no CPU yet. `app_ws` stands in when the app's own row is missing.
 pub fn total(procs: &[Proc], owner: &HashMap<u32, Option<u32>>, before: &HashMap<u32, u64>, secs: f64, cores: usize, app_pid: u32, app_ws: Option<u64>) -> (Usage, HashMap<u32, Usage>) {
-    let mut sums: HashMap<Option<u32>, (u64, u64, usize, Option<u64>)> = HashMap::new();
+    // bytes, CPU used, processes, committed of those that reported it, processes that did not.
+    let mut sums: HashMap<Option<u32>, (u64, u64, usize, u64, usize)> = HashMap::new();
     for p in procs {
         if let Some(who) = owner.get(&p.pid) {
             let used = before.get(&p.pid).map_or(0, |b| p.cpu.saturating_sub(*b));
             let s = sums.entry(*who).or_default();
-            let committed = match (s.3, p.committed) {
-                (Some(a), Some(b)) => Some(a + b),
-                (a, b) => a.or(b),
-            };
-            *s = (s.0 + p.bytes, s.1 + used, s.2 + 1, committed);
+            *s = (s.0 + p.bytes, s.1 + used, s.2 + 1, s.3 + p.committed.unwrap_or(0), s.4 + usize::from(p.committed.is_none()));
         }
     }
-    let usage = |(bytes, used, processes, committed): (u64, u64, usize, Option<u64>)| Usage { bytes, cpu: percent(used, secs, cores), processes, committed };
+    let usage = |(bytes, used, processes, committed, unreadable): (u64, u64, usize, u64, usize)| Usage {
+        bytes,
+        cpu: percent(used, secs, cores),
+        processes,
+        committed: (processes > 0 && unreadable == 0).then_some(committed),
+        unreadable,
+    };
     let mut app = usage(sums.remove(&None).unwrap_or_default());
     if !procs.iter().any(|p| p.pid == app_pid) {
         app.bytes += app_ws.unwrap_or(0);
@@ -124,7 +145,7 @@ pub async fn resources(terminals: tauri::State<'_, crate::terminal::Terminals>, 
     let (app, each) = total(&procs, &owner, &before, secs, cores, app_pid, crate::sysmem::working_set_bytes());
     *last = Some((now, procs.iter().filter(|p| owner.contains_key(&p.pid)).map(|p| (p.pid, p.cpu)).collect()));
     let (free, total) = imp::memory();
-    Ok(Resources { app, sessions: rows(sessions, each), free, total })
+    Ok(Resources::new(app, rows(sessions, each), free, total))
 }
 
 /// Every process on the computer, the app's and each session's filled in, with who owns each.
@@ -147,7 +168,7 @@ pub fn memory_now(terminals: &crate::terminal::Terminals) -> Resources {
     let (procs, owner) = snapshot(&sessions, app_pid);
     let (app, each) = total(&procs, &owner, &HashMap::new(), 0.0, 1, app_pid, crate::sysmem::working_set_bytes());
     let (free, total) = imp::memory();
-    Resources { app, sessions: rows(sessions, each), free, total }
+    Resources::new(app, rows(sessions, each), free, total)
 }
 
 /// One row per session `Terminals::list` reports, in its order, with its pid and measured usage.
@@ -284,10 +305,29 @@ mod tests {
         let owner = owners(&procs, &[(5, 10), (6, 20)], 1);
         let (app, each) = total(&procs, &owner, &HashMap::new(), 0.0, 1, 1, None);
         assert_eq!((app.bytes, app.committed), (150, Some(370)));
-        assert_eq!((each[&5].bytes, each[&5].committed), (40, Some(4)), "a process without a figure adds nothing");
-        assert_eq!((each[&6].bytes, each[&6].committed), (7, None), "no figure at all is unknown, not 0");
+        assert_eq!((each[&5].bytes, each[&5].committed, each[&5].unreadable), (40, None, 1), "T-287-c: one unreadable process makes its tree's figure unknown, not a partial sum");
+        assert_eq!((each[&6].bytes, each[&6].committed, each[&6].unreadable), (7, None, 1), "no figure at all is unknown, not 0");
         let json = serde_json::to_value(app).unwrap();
-        assert_eq!((json["bytes"].as_u64(), json["committed"].as_u64()), (Some(150), Some(370)));
+        assert_eq!((json["bytes"].as_u64(), json["committed"].as_u64(), json["unreadable"].as_u64()), (Some(150), Some(370), Some(0)));
+    }
+
+    /// T-287-c: the committed total is the sum only when every process was read; one unreadable
+    /// row makes it null and says how many could not be read. A session with no process adds nothing.
+    #[test]
+    fn t287c_committed_total_is_null_when_any_process_could_not_be_read() {
+        let u = |committed, processes, unreadable| Usage { bytes: 1, cpu: 0.0, processes, committed, unreadable };
+        let s = |id, usage| SessionUsage { id, pid: Some(id), dir: None, usage };
+        let read = Resources::new(u(Some(300), 3, 0), vec![s(1, u(Some(20), 2, 0)), s(2, u(None, 0, 0))], None, None);
+        assert_eq!((read.committed_total, read.unreadable), (Some(320), 0));
+        // A stubbed unreadable row: session 2's tree has 2 processes, 1 of them could not be opened.
+        let procs = [Proc { pid: 1, parent: 0, bytes: 100, cpu: 0, committed: Some(300) }, Proc { pid: 20, parent: 1, bytes: 9, cpu: 0, committed: Some(5) }, Proc { pid: 21, parent: 20, bytes: 3, cpu: 0, committed: None }];
+        let owner = owners(&procs, &[(2, 20)], 1);
+        let (app, each) = total(&procs, &owner, &HashMap::new(), 0.0, 1, 1, None);
+        let r = Resources::new(app, rows(vec![(2, Some(20), None)], each), Some(10), Some(20));
+        assert_eq!((r.sessions[0].usage.committed, r.sessions[0].usage.unreadable, r.sessions[0].usage.processes), (None, 1, 2));
+        assert_eq!((r.app.committed, r.committed_total, r.unreadable), (Some(300), None, 1));
+        let json = serde_json::to_value(&r).unwrap();
+        assert!(json["committed_total"].is_null() && json["unreadable"] == 1, "{json}");
     }
 
     #[test]
