@@ -51,3 +51,13 @@ question-mark GLOBALROOT, a Volume GUID, a dot-drive) are refused from the spell
 - Not fixed here (seen): a link inside a project that points at a share is still followed by
   canonicalize before the share check on the result (council FS-1's last sentence); refusing that
   needs reading each link target without following it, which is a reliability-lane fence change.
+
+== 3. FS-2 open_in launches the canonical folder ==
+open_target now returns the folder's canonical path (links and dot-dot resolved, the verbatim prefix
+of a disk path dropped) after the fence and the folder check, so a spelling whose quote and shell
+characters sit in a component that dot-dot cancels never reaches the launcher (code.cmd's %*).
+- Test: files::open_in_tests::edit043_the_folder_opened_is_the_canonical_one_not_the_callers_spelling
+  (a real temp folder spelled base\a"&x|y<z>\..\sub: Windows says it is a folder; what comes back has
+  none of " & | < > or "..", no verbatim prefix, and equals the canonical sub). On the old code it does
+  not compile (plain_disk_path is new) and its spelling came back unchanged (council probe).
+- cargo test edit043: 7 passed, 0 failed; clippy -D warnings exit 0; tsc exit 0.

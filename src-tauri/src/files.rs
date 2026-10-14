@@ -557,6 +557,10 @@ pub fn open_in(path: String, command: Option<String>, fence: tauri::State<'_, cr
 /// EDIT-043: the folder open_in opens. The path must be full before anything else; then the
 /// fence decides (it refuses shares from the spelling alone, before any file system access); only
 /// then is the disk asked, and only a folder passes, so a file such as setup.bat is never run.
+/// FIX-2 (council FS-2): what comes back is the folder's canonical path (links and `..` resolved,
+/// the `\\?\` prefix of a disk path dropped), never the caller's spelling: Windows collapses `..`
+/// before the disk sees a path, so `C:\proj\a"&x|y\..\sub` is a real folder, and its quote and
+/// shell characters must not reach the app's launcher.
 pub fn open_target(path: &str, allow: impl FnOnce(&str) -> Result<PathBuf, String>) -> Result<PathBuf, String> {
     if !Path::new(path).is_absolute() {
         return Err(format!("{path} is not a full path, so it was not opened"));
@@ -568,7 +572,17 @@ pub fn open_target(path: &str, allow: impl FnOnce(&str) -> Result<PathBuf, Strin
     if !dir.is_dir() {
         return Err(format!("{path} is not a folder, so it was not opened"));
     }
-    Ok(dir)
+    let real = dir.canonicalize().map_err(|e| format!("{path}: {e}"))?;
+    Ok(plain_disk_path(real))
+}
+
+/// `\\?\C:\x` as `C:\x`; any other path as it is (the fence refuses shares and namespace paths).
+fn plain_disk_path(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    match (s.strip_prefix(r"\\?\"), p.components().next()) {
+        (Some(rest), Some(std::path::Component::Prefix(x))) if matches!(x.kind(), std::path::Prefix::VerbatimDisk(..)) => PathBuf::from(rest),
+        _ => p,
+    }
 }
 
 /// A launch command split into the program and its arguments; double quotes group words.
@@ -673,7 +687,26 @@ mod open_in_tests {
         std::fs::write(&bat, "@echo off\r\n").unwrap();
         let err = open_target(&bat.to_string_lossy(), |p| Ok(PathBuf::from(p))).unwrap_err();
         assert!(err.contains("is not a folder"), "{err}");
-        assert_eq!(open_target(&base.to_string_lossy(), |p| Ok(PathBuf::from(p))).unwrap(), base);
+        assert_eq!(open_target(&base.to_string_lossy(), |p| Ok(PathBuf::from(p))).unwrap(), plain_disk_path(base.canonicalize().unwrap()));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // FIX-2 (council FS-2): the launcher gets the canonical folder, never the caller's spelling.
+    // Windows collapses `..` before the disk sees the path, so a spelling with a quote and shell
+    // characters in a component that `..` cancels is a real folder; none of it may come back.
+    #[cfg(windows)]
+    #[test]
+    fn edit043_the_folder_opened_is_the_canonical_one_not_the_callers_spelling() {
+        let base = std::env::temp_dir().join(format!("kolux-edit043-canon-{}", std::process::id()));
+        std::fs::create_dir_all(base.join("sub")).unwrap();
+        let canonical = base.join("sub").canonicalize().unwrap();
+        let spelled = format!(r#"{}\a"&x|y<z>\..\sub"#, base.display());
+        assert!(Path::new(&spelled).is_dir(), "Windows resolves the dot-dot first: {spelled}");
+        let got = open_target(&spelled, |p| Ok(PathBuf::from(p))).unwrap();
+        let s = got.to_string_lossy().to_string();
+        assert!(!s.contains(['"', '&', '|', '<', '>']) && !s.contains(".."), "{s}");
+        assert!(!s.starts_with(r"\\?\"), "a plain disk path for the launcher: {s}");
+        assert_eq!(got, plain_disk_path(canonical));
         let _ = std::fs::remove_dir_all(&base);
     }
 
