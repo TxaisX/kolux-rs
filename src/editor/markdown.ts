@@ -79,13 +79,24 @@ export function changeBetween(a: string, b: string): { from: number; to: number;
   return { from: s, to: a.length - e, insert: b.slice(s, b.length - e) };
 }
 
-/** EDIT-008: a paste past the limit is refused in the rich view too (true = refused, toast given). */
+/** EDIT-008: a paste past the limit is refused in the rich view too, and so is one past the rich
+ * view's own size limit (FIX-1) (true = refused, toast given). */
 export function refusePaste(event: ClipboardEvent | KeyboardEvent | InputEvent, refuse: (text: string) => void): boolean {
   const text = "clipboardData" in event ? (event.clipboardData?.getData("text/plain") ?? "") : "";
-  if (text.length <= PASTE_LIMIT) return false;
+  if (text.length <= RICH_LIMIT) return false;
   event.preventDefault();
-  refuse(refusal(text.length));
+  refuse(text.length > PASTE_LIMIT ? refusal(text.length) : richRefusal(text.length));
   return true;
+}
+
+const size = (n: number) => (n >= 1024 * 1024 ? `${(n / (1024 * 1024)).toFixed(1).replace(/\.0$/, "")} MB` : `${Math.round(n / 1024)} KB`);
+
+/** EDIT-008 (FIX-1): the toast for a paste over the rich view's own size limit (the size it opens a
+ * file at), short of the hard limit: Lexical takes a paste in one go, so a bigger one would freeze
+ * the window; the source view takes it in pieces. */
+export function richRefusal(length: number): string {
+  const over = size(length) === size(RICH_LIMIT) ? "it is just" : `${size(length)} is`;
+  return `Paste refused in the rich view: ${over} over the ${size(RICH_LIMIT)} it takes in one paste. Paste it in source view instead. Nothing was pasted.`;
 }
 
 export type Rich = { editor: LexicalEditor; show: (md: string) => void; destroy: () => void };

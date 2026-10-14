@@ -1,8 +1,9 @@
-import { expect, test } from "vitest";
-import { EditorState } from "@codemirror/state";
+import { expect, test, vi } from "vitest";
+import { EditorState, Transaction, type TransactionSpec } from "@codemirror/state";
+import type { EditorView } from "@codemirror/view";
 import { history, undo } from "@codemirror/commands";
-import { CHUNK, chunks, PASTE_LIMIT, pasteMark, pieceSpec, refusal, verdict } from "./paste";
-import { refusePaste } from "./markdown";
+import { CHUNK, chunks, holdInput, PASTE_LIMIT, pasteChunked, pasteMark, pieceSpec, refusal, verdict } from "./paste";
+import { refusePaste, RICH_LIMIT, richRefusal } from "./markdown";
 
 test("EDIT-008: a paste at the chunk size goes in whole, one character more goes in pieces, past the limit it is refused, read-only never", () => {
   expect(verdict(0, false)).toBe("native");
@@ -68,4 +69,57 @@ test("EDIT-008: the rich view refuses a paste past the limit and lets a normal o
   expect(said).toEqual([]);
   expect(refusePaste(ev("x".repeat(PASTE_LIMIT + 1)), (t) => said.push(t))).toBe(true);
   expect(said).toEqual(["prevented", refusal(PASTE_LIMIT + 1)]);
+});
+
+// FIX-1 (council FIX-SOON 1): the pieces go in on timers; with more than the history's 500 ms
+// grouping delay between them, one undo must still take the whole paste back, and the user's own
+// keystrokes and clicks wait the paste out instead of landing inside it or splitting its undo step.
+type Stub = { state: EditorState; dispatch: (spec: TransactionSpec | Transaction) => void };
+const stubView = (state: EditorState): Stub => {
+  const v: Stub = { state, dispatch: (spec) => (v.state = spec instanceof Transaction ? spec.state : v.state.update(spec).state) };
+  return v;
+};
+
+test("EDIT-008: a chunked paste with over 500 ms between pieces is still one undo, and typing waits it out", () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(1_000_000);
+    const v = stubView(EditorState.create({ doc: "ab", selection: { anchor: 1 }, extensions: [history(), pasteMark, holdInput] }));
+    const text = "y".repeat(CHUNK * 2 + 5); // three pieces
+    let finished = false;
+    pasteChunked(v as unknown as EditorView, text, () => (finished = true));
+    expect(v.state.doc.length).toBe(2 + CHUNK);
+    // a keystroke and a click while the paste runs: both are held out
+    v.dispatch({ changes: { from: 1, insert: "Z" }, userEvent: "input.type" });
+    v.dispatch({ selection: { anchor: 0 }, userEvent: "select.pointer" });
+    expect(v.state.doc.toString().includes("Z")).toBe(false);
+    for (let i = 0; i < 5 && !finished; i++) {
+      vi.setSystemTime(Date.now() + 700);
+      vi.runOnlyPendingTimers();
+    }
+    expect(finished).toBe(true);
+    expect(v.state.doc.toString()).toBe("a" + text + "b");
+    expect(v.state.field(pasteMark)).toBe(null);
+    // the paste is over: typing works again, as its own undo step after the paste's
+    vi.setSystemTime(Date.now() + 100);
+    v.dispatch({ changes: { from: 0, insert: "T" }, userEvent: "input.type" });
+    expect(v.state.doc.toString()).toBe("Ta" + text + "b");
+    undo(v as unknown as EditorView);
+    expect(v.state.doc.toString()).toBe("a" + text + "b");
+    undo(v as unknown as EditorView);
+    expect(v.state.doc.toString()).toBe("ab");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("EDIT-008 (FIX-1): the rich view takes a paste only up to its own size limit and says where to paste a bigger one", () => {
+  const said: string[] = [];
+  const ev = (text: string) => ({ clipboardData: { getData: () => text }, preventDefault: () => said.push("prevented") }) as unknown as ClipboardEvent;
+  expect(refusePaste(ev("x".repeat(RICH_LIMIT)), (t) => said.push(t))).toBe(false);
+  expect(said).toEqual([]);
+  expect(refusePaste(ev("x".repeat(RICH_LIMIT + 1)), (t) => said.push(t))).toBe(true);
+  expect(said).toEqual(["prevented", richRefusal(RICH_LIMIT + 1)]);
+  expect(richRefusal(10 * 1024 * 1024)).toBe("Paste refused in the rich view: 10 MB is over the 600 KB it takes in one paste. Paste it in source view instead. Nothing was pasted.");
+  expect(richRefusal(RICH_LIMIT + 1)).toBe("Paste refused in the rich view: it is just over the 600 KB it takes in one paste. Paste it in source view instead. Nothing was pasted.");
 });

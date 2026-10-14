@@ -1,11 +1,14 @@
 // EDIT-008 (T-282): a huge paste never freezes the window. Up to CHUNK characters go in the way
 // CodeMirror pastes on its own; a bigger paste goes in CHUNK at a time, one piece per turn of the
-// event loop, so the window keeps drawing and taking input; past PASTE_LIMIT the paste is refused
+// event loop, so the window keeps drawing and responding (keystrokes and clicks into this editor wait until
+// the paste is in, holdInput); past PASTE_LIMIT the paste is refused
 // with a toast and the buffer is left as it was. Context-menu Paste fires the same paste event as
 // the keyboard, so it takes the same road (whole-line and multi-cursor pastes stay CodeMirror's own
 // below CHUNK). A read-only editor is never pasted into. The rich markdown view applies the same
-// limit (markdown.ts, refusePaste).
-import { StateEffect, StateField, type Extension } from "@codemirror/state";
+// limit, and turns away a paste over its own 600 KB size limit
+// (markdown.ts, refusePaste), since it takes a paste in one go.
+import { isolateHistory } from "@codemirror/commands";
+import { EditorState, StateEffect, StateField, Transaction, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
 /** Pastes up to this many characters go in at once. */
@@ -58,15 +61,17 @@ export const pasteMark = StateField.define<number | null>({
 });
 
 /** The transactions of a chunked paste, as specs: the first replaces the main selection and carries
- * the paste user event; the rest join it in the undo history (no user event, adjacent), so one undo
- * takes the whole paste back. */
-export function pieceSpec(piece: string, first: boolean, from: number, to: number, last: boolean) {
+ * the paste user event; the rest join it in the undo history (no user event, adjacent, all stamped
+ * with the paste's start time `t0` so a slow turn never passes the history's 500 ms grouping
+ * delay), and the last closes the group, so one undo takes the whole paste back. */
+export function pieceSpec(piece: string, first: boolean, from: number, to: number, last: boolean, t0 = Date.now()) {
   const end = from + piece.length;
   return {
     changes: { from, to, insert: piece },
     selection: { anchor: end },
     effects: setMark.of(last ? null : end),
     scrollIntoView: true,
+    annotations: [Transaction.time.of(t0), ...(last ? [isolateHistory.of("after")] : [])],
     ...(first ? { userEvent: "input.paste" } : {}),
   };
 }
@@ -75,23 +80,32 @@ export function pieceSpec(piece: string, first: boolean, from: number, to: numbe
 export function pasteChunked(view: EditorView, text: string, done?: () => void): void {
   const parts = chunks(text);
   const sel = view.state.selection.main;
-  view.dispatch(pieceSpec(parts[0], true, sel.from, sel.to, parts.length === 1));
+  const t0 = Date.now();
+  view.dispatch(pieceSpec(parts[0], true, sel.from, sel.to, parts.length === 1, t0));
   let i = 1;
   const step = () => {
     if (i >= parts.length) return done?.();
     const at = view.state.field(pasteMark, false);
     if (at === null || at === undefined) return done?.();
-    view.dispatch(pieceSpec(parts[i], false, at, at, i === parts.length - 1));
+    view.dispatch(pieceSpec(parts[i], false, at, at, i === parts.length - 1, t0));
     i += 1;
     setTimeout(step, 0);
   };
   setTimeout(step, 0);
 }
 
+/** While a chunked paste is under way, the user's own edits and clicks wait it out (dropped): a
+ * keystroke at the mark would land inside the paste, and a caret move would split its undo step.
+ * The pieces carry no user event and pass. A paste takes well under a second per few MB. */
+export const holdInput = EditorState.transactionFilter.of((tr) =>
+  tr.startState.field(pasteMark, false) != null && tr.annotation(Transaction.userEvent) !== undefined ? [] : tr,
+);
+
 /** The editor extension: `refuse` shows the refusal toast. */
 export function pasteGuard(refuse: (text: string) => void): Extension {
   return [
     pasteMark,
+    holdInput,
     EditorView.domEventHandlers({
       paste(event, view) {
         const text = event.clipboardData?.getData("text/plain") ?? "";
