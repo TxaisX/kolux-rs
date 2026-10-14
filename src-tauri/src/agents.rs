@@ -35,12 +35,16 @@ pub struct AgentInfo {
 /// id, name, program names (the first is the main one, the rest also count), fixed arguments.
 type Entry = (&'static str, &'static str, &'static [&'static str], &'static [&'static str]);
 
+/// DT-C46: what Codex starts with under Yolo: no approval prompts, but its sandbox still keeps writes
+/// inside the project folder. Never the flag that turns the sandbox off.
+const CODEX_YOLO: &[&str] = &["--sandbox", "workspace-write", "--ask-for-approval", "never"];
+
 /// The 34 visible agents in SESS-001 order. Claude Agent Teams (SESS-042) is skipped
 /// (DECISIONS.md), and OpenCode is retired (SESS-043).
 pub const CATALOGUE: [Entry; 34] = [
     ("claude", "Claude Code", &["claude"], &["--permission-mode", "auto"]),
     ("openclaude", "OpenClaude", &["openclaude"], &[]),
-    ("codex", "Codex", &["codex"], &["--dangerously-bypass-approvals-and-sandbox"]),
+    ("codex", "Codex", &["codex"], CODEX_YOLO),
     ("autohand", "Autohand Code", &["autohand"], &[]),
     ("ante", "Ante", &["ante"], &[]),
     // `traecli`, not `trae`: an unrelated tool ships a program with the near-identical name.
@@ -344,7 +348,7 @@ pub fn start_args(id: &str, extra: &[String], prompt: &str) -> Result<StartLine,
 fn prompt_skips(id: &str) -> &'static [&'static str] {
     match id {
         "claude" => &["--permission-mode", "auto"],
-        "codex" => &["--dangerously-bypass-approvals-and-sandbox"],
+        "codex" => CODEX_YOLO,
         _ => &[],
     }
 }
@@ -632,7 +636,7 @@ mod tests {
         // a blank override counts as none
         let blank = serde_json::json!({ "agentOptions": { "codex": { "args": "  ", "command": "" } } });
         let codex = start_line(&blank, "codex", &[], "", false).unwrap();
-        assert_eq!((codex.args, codex.program), (s(&["--dangerously-bypass-approvals-and-sandbox"]), None));
+        assert_eq!((codex.args, codex.program), (s(CODEX_YOLO), None));
         assert_eq!(split_args(r#"a "" b"#), s(&["a", "", "b"]));
     }
 
@@ -656,8 +660,26 @@ mod tests {
         assert_eq!(line.args, s(&["--permission-mode", "auto", "--model", "haiku", "Fix the build"]));
         assert_eq!(line.typed, None);
         let codex = start_args("codex", &[], "Review").unwrap();
-        assert_eq!(codex.args, s(&["--dangerously-bypass-approvals-and-sandbox", "Review"]));
+        assert_eq!(codex.args, s(&["--sandbox", "workspace-write", "--ask-for-approval", "never", "Review"]));
         assert_eq!(start_args("command-code", &[], "go").unwrap().args, s(&["--trust", "go"]));
+    }
+
+    #[test]
+    fn dt_c46_codex_under_yolo_is_sandboxed_and_never_bypassed() {
+        // every saved mode (no value, the two the Agents page writes, and any other one) and with or without a prompt
+        let modes = [serde_json::json!({}), serde_json::json!({ "agentPermissions": "manual" }), serde_json::json!({ "agentPermissions": "auto" }), serde_json::json!({ "agentPermissions": "yolo" })];
+        for set in &modes {
+            for prompt in ["", "Review"] {
+                let line = start_line(set, "codex", &[], prompt, false).unwrap();
+                assert!(!line.args.iter().any(|a| a.contains("dangerously-bypass")), "{set} {prompt:?}: {:?}", line.args);
+            }
+        }
+        assert!(!catalogue().iter().find(|a| a.id == "codex").unwrap().args.iter().any(|a| a.contains("dangerously-bypass")));
+        // Yolo: exactly the sandbox and no-approval flags, then the prompt; Manual: neither
+        let yolo = serde_json::json!({ "agentPermissions": "yolo" });
+        assert_eq!(start_line(&yolo, "codex", &[], "Review", false).unwrap().args, s(&["--sandbox", "workspace-write", "--ask-for-approval", "never", "Review"]));
+        let manual = serde_json::json!({ "agentPermissions": "manual" });
+        assert_eq!(start_line(&manual, "codex", &[], "Review", false).unwrap().args, s(&["Review"]));
     }
 
     #[test]
@@ -802,7 +824,7 @@ mod tests {
         assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), 34, "every id once");
         let by = |id: &str| list.iter().find(|a| a.id == id).unwrap();
         assert_eq!(by("claude").args, vec!["--permission-mode", "auto"]);
-        assert_eq!(by("codex").args, vec!["--dangerously-bypass-approvals-and-sandbox"]);
+        assert_eq!(by("codex").args, vec!["--sandbox", "workspace-write", "--ask-for-approval", "never"]);
         assert_eq!(by("kiro").args, vec!["chat", "--tui"]);
         assert_eq!(by("command-code").args, vec!["--trust"]);
         assert_eq!(by("hermes").args, vec!["--tui"]);
