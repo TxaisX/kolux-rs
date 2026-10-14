@@ -22,3 +22,48 @@ export function windowSummary(s: Record<string, unknown>): string {
   const status = !bar.visible ? "Status bar hidden" : shown < STATUS_ITEMS.length ? `Status bar, ${shown} of ${STATUS_ITEMS.length} items` : "Status bar";
   return [...CHROME.filter((c) => chromeShown(s, c.id)).map((c) => c.short), status].join(" · ");
 }
+
+// APP-009 / T-248-a: the native menu bar is a picture of what the page shows. The page sends this
+// state to the menu on every change (screen, chrome switches, shortcuts), so the menu's ticks agree
+// with each Settings switch (SET-020) and its accelerators follow the Shortcuts page (SET-009).
+/** Menu items that carry the in-app shortcut of the keymap action with the same id. */
+export const MENU_SHORTCUT_IDS = ["app.settings", "app.forceReload", "sidebar.left.toggle", "sidebar.right.toggle", "zoom.in", "zoom.out", "zoom.reset"] as const;
+
+const MENU_KEY = /^([A-Z]|[0-9]|F([1-9]|1[0-9]|2[0-4])|Comma|Equal|Minus|Period|Slash|Backslash|BracketLeft|BracketRight|Semicolon|Quote|Backquote|Tab|Enter|Space|Arrow(Up|Down|Left|Right)|Numpad(Add|Subtract|Multiply|Divide|[0-9]))$/;
+const MENU_MOD: Record<string, string> = { Mod: "CmdOrCtrl", Ctrl: "Ctrl", Cmd: "Super", Meta: "Super", Alt: "Alt", Shift: "Shift" };
+
+/** A keymap chord ("Mod+Comma") in the menu's accelerator spelling ("CmdOrCtrl+Comma"); "" when the
+ *  menu cannot show it (no chord, or a key the menu has no name for), so the item shows none. */
+export function toAccelerator(chord: string | undefined): string {
+  if (!chord) return "";
+  const parts = chord.split("+");
+  const key = parts.pop() ?? "";
+  if (!MENU_KEY.test(key) || parts.some((m) => !MENU_MOD[m])) return "";
+  return [...parts.map((m) => MENU_MOD[m]), key].join("+");
+}
+
+export type MenuBarState = { screen: string; statusBarVisible: boolean; tasksButton: boolean; automationsButton: boolean; titleBarAppName: boolean; accelerators: Record<string, string> };
+
+/** `chords(id)`: the keymap's chords for an action, first one shown (empty when unbound). */
+export function menuBarState(s: Record<string, unknown>, screen: string, chords: (id: string) => readonly string[] | undefined): MenuBarState {
+  return {
+    screen,
+    statusBarVisible: readStatusBar(s).visible,
+    tasksButton: chromeShown(s, "tasksButton"),
+    automationsButton: chromeShown(s, "automationsButton"),
+    titleBarAppName: chromeShown(s, "titleBarAppName"),
+    accelerators: Object.fromEntries(MENU_SHORTCUT_IDS.map((id) => [id, toAccelerator(chords(id)?.[0])])),
+  };
+}
+
+/** A menu tick box was clicked: the settings field it flips and the value to save, or null. */
+export function menuSettingFlip(s: Record<string, unknown>, id: string): [string, boolean] | null {
+  if (id === "set.statusBarVisible") return ["statusBarVisible", !readStatusBar(s).visible];
+  const item = CHROME.find((c) => `set.${c.id}` === id);
+  return item ? [item.id, !chromeShown(s, item.id)] : null;
+}
+
+/** A Workspace View pick: the screen it shows, or null for any other item. */
+export function menuScreen(id: string): "agents" | "board" | "terminals" | null {
+  return id === "screen.agents" ? "agents" : id === "screen.board" ? "board" : id === "screen.terminals" ? "terminals" : null;
+}
