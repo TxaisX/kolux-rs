@@ -940,15 +940,28 @@ impl Terminals {
 
     /// CLI-017: every open session as (handle, the folder it started in, its program; none for a shell).
     pub fn sessions(&self) -> Vec<(String, String, Option<String>)> {
-        self.every().into_iter().filter_map(|(h, dir, program)| Some((h, dir?, program))).collect()
-    }
-
-    /// CLI-023: every open session, a shell started in the home folder (no folder) included.
-    pub fn every(&self) -> Vec<(String, Option<String>, Option<String>)> {
         let Ok(inner) = self.inner.lock() else { return Vec::new() };
         let mut ids: Vec<u32> = inner.sessions.keys().copied().collect();
         ids.sort_unstable();
-        ids.into_iter().map(|id| (handle_of(id), inner.dirs.get(&id).cloned(), inner.marks.get(&id).map(|m| m.program.clone()))).collect()
+        ids.into_iter().filter_map(|id| Some((handle_of(id), inner.dirs.get(&id).cloned()?, inner.marks.get(&id).map(|m| m.program.clone())))).collect()
+    }
+
+    /// CLI-023 (T-262-c): every open session with the folder it started in and the program it
+    /// runs. A plain shell given no folder started in the home folder (as the PTY falls back), and
+    /// its program is the shell that actually started (a fallback when the chosen one did not).
+    pub fn every(&self) -> Vec<(String, Option<String>, Option<String>)> {
+        let home = crate::pty::home_dir().map(|h| h.to_string_lossy().into_owned());
+        let Ok(inner) = self.inner.lock() else { return Vec::new() };
+        let mut ids: Vec<u32> = inner.sessions.keys().copied().collect();
+        ids.sort_unstable();
+        ids.into_iter()
+            .map(|id| {
+                let mark = inner.marks.get(&id);
+                let dir = inner.dirs.get(&id).cloned().or_else(|| mark.is_none().then(|| home.clone()).flatten());
+                let program = mark.map(|m| m.program.clone()).or_else(|| inner.sessions.get(&id).map(|s| s.program().to_string()));
+                (handle_of(id), dir, program)
+            })
+            .collect()
     }
 
     /// CLI-023: the window's latest report of its panes and tabs.
@@ -1414,6 +1427,23 @@ mod tests {
         let stale = t.kill_under(&std::env::temp_dir());
         assert_eq!((stale.ended, stale.stuck.len()), (1, 0), "a stale record is swept without blocking");
         assert!(t.inner.lock().unwrap().dirs.is_empty());
+    }
+
+    /// T-262-c (CLI-023): a plain shell given no folder lists the home folder it started in and
+    /// the shell program that started; the CLI-017 session list keeps leaving it out.
+    #[test]
+    fn t262c_a_plain_shell_lists_its_start_folder_and_program() {
+        let t = Terminals::default();
+        let mut cmd = shell_commands(None, None);
+        let s = PtySession::spawn(cmd.remove(0), 80, 24, |_| {}, |_| {}).expect("spawn a shell");
+        let started = s.program().to_string();
+        t.inner.lock().unwrap().sessions.insert(7, s);
+        let every = t.every();
+        let home = crate::pty::home_dir().map(|h| h.to_string_lossy().into_owned());
+        assert!(home.is_some(), "this account has a home folder");
+        assert_eq!(every, vec![(handle_of(7), home, Some(started))]);
+        assert!(t.sessions().is_empty(), "a shell with no folder is not a worktree session");
+        t.inner.lock().unwrap().sessions.remove(&7).unwrap().kill();
     }
 
     #[test]
