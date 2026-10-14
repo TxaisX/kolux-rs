@@ -123,7 +123,10 @@ pub fn setup_line(script: &str, windows: bool, configured: Option<&Path>, find: 
         };
         return Ok(line(program, flags));
     }
-    if let Some(shell) = configured.filter(|p| is_posix(&p.to_string_lossy())) {
+    // STAT-055: a Windows batch file runs under the classic command prompt even when the shell is Git Bash.
+    let first = script.split_whitespace().next().unwrap_or("").trim_matches('"').to_ascii_lowercase();
+    let batch = windows && (first.ends_with(".bat") || first.ends_with(".cmd"));
+    if let Some(shell) = configured.filter(|p| !batch && is_posix(&p.to_string_lossy())) {
         return Ok(line(shell.to_string_lossy().into_owned(), Vec::new()));
     }
     if !windows {
@@ -143,14 +146,132 @@ fn find_posix(name: &str) -> Option<PathBuf> {
     git.or_else(|| crate::agents::find_program(name).filter(|p| !p.to_string_lossy().to_lowercase().contains("system32")))
 }
 
-/// PROJ-033: the Setup terminal's line for the worktree at `path`; None when its kolux.yaml has
-/// no setup script; an error when the script cannot be run as written.
+/// The shell a new terminal gets, as setup and archive lines are built for it.
+fn configured_shell() -> Option<PathBuf> {
+    crate::pty::auto_shells(crate::agents::find_program, std::env::var_os("ComSpec").map(PathBuf::from)).into_iter().next().map(|(p, _)| p)
+}
+
+/// STAT-055: where a project's setup script comes from. By default the script kept in Kolux's
+/// own settings for the repository wins even when kolux.yaml has one; the older shared-first
+/// policy (`shared`) takes kolux.yaml's only. The bool says whether the script is the shared one.
+pub fn pick_setup(local: Option<&str>, shared: Option<String>, policy: Option<&str>) -> Option<(String, bool)> {
+    let local = local.map(|l| l.replace("\r\n", "\n")).filter(|l| !l.trim().is_empty());
+    match policy {
+        Some("shared") | Some("shared-first") => shared.map(|s| (s, true)),
+        _ => local.map(|l| (l, false)).or_else(|| shared.map(|s| (s, true))),
+    }
+}
+
+/// STAT-055: the main folder of the repository the worktree at `worktree` belongs to, read from
+/// its `.git` file (`gitdir: <main>/.git/worktrees/<name>`); the folder itself otherwise.
+pub fn main_folder(worktree: &Path) -> PathBuf {
+    let gitdir = std::fs::read_to_string(worktree.join(".git")).ok().and_then(|t| t.lines().next().and_then(|l| l.strip_prefix("gitdir:")).map(|d| PathBuf::from(d.trim())));
+    gitdir
+        .as_deref()
+        .and_then(Path::parent)
+        .filter(|p| p.file_name().is_some_and(|n| n == "worktrees"))
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| worktree.to_path_buf())
+}
+
+/// STAT-055 / COMPAT 5.5: the variables a setup or archive script is given.
+pub fn script_vars(root: &Path, worktree: &Path) -> Vec<(&'static str, String)> {
+    let name = worktree.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    vec![("KOLUX_ROOT_PATH", root.to_string_lossy().into_owned()), ("KOLUX_WORKTREE_PATH", worktree.to_string_lossy().into_owned()), ("KOLUX_WORKSPACE_NAME", name)]
+}
+
+/// STAT-055: conda's variables, cleared for a script when the environment is only partly active.
+pub const CONDA_VARS: [&str; 4] = ["CONDA_PREFIX", "CONDA_DEFAULT_ENV", "CONDA_SHLVL", "CONDA_PROMPT_MODIFIER"];
+
+/// STAT-055: a conda environment named in CONDA_PREFIX whose folder is not on the search path is
+/// only partly active, and a script must not inherit it.
+pub fn conda_partial(prefix: Option<&str>, path: &str) -> bool {
+    let norm = |s: &str| s.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let Some(p) = prefix.map(norm).filter(|p| !p.is_empty()) else { return false };
+    !std::env::split_paths(path).any(|d| norm(&d.to_string_lossy()).starts_with(&p))
+}
+
+fn conda_now() -> bool {
+    conda_partial(std::env::var("CONDA_PREFIX").ok().as_deref(), &std::env::var("PATH").unwrap_or_default())
+}
+
+/// STAT-055: `line` with `vars` set and `unset` cleared ahead of its script, so a Setup terminal
+/// started from it sees them: `export` lines for a POSIX shell, `set NAME=value&&` for cmd (a value
+/// cmd would misread is left out there). The script itself (`line.script`) is unchanged.
+pub fn with_env(mut line: SetupLine, vars: &[(&str, String)], unset: &[&str]) -> SetupLine {
+    let cmd = line.program.eq_ignore_ascii_case("cmd.exe");
+    let Some(last) = line.args.last_mut() else { return line };
+    let pre: String = if cmd {
+        let plain = |v: &str| !v.chars().any(|c| "&|<>^%\"\r\n".contains(c));
+        vars.iter().filter(|(_, v)| plain(v)).map(|(k, v)| format!("set {k}={v}&& ")).chain(unset.iter().map(|k| format!("set {k}=&& "))).collect()
+    } else {
+        let quote = |v: &str| format!("'{}'", v.replace('\'', "'\\''"));
+        let mut s: String = vars.iter().map(|(k, v)| format!("export {k}={}\n", quote(v))).collect();
+        if !unset.is_empty() {
+            s.push_str(&format!("unset {}\n", unset.join(" ")));
+        }
+        s
+    };
+    *last = format!("{pre}{last}");
+    line
+}
+
+/// STAT-055: the Setup terminal's line for the worktree at `path`: its setup script from
+/// `local` (Kolux's own setting for the repository) or the worktree's kolux.yaml as `policy`
+/// says, with the setup variables set.
 #[tauri::command(async)]
-pub fn workspace_setup(path: String) -> Result<Option<SetupLine>, String> {
-    let Ok(text) = std::fs::read_to_string(Path::new(&path).join(crate::include::CONFIG_FILE)) else { return Ok(None) };
-    let Some(script) = setup_script(&text) else { return Ok(None) };
-    let configured = crate::pty::auto_shells(crate::agents::find_program, std::env::var_os("ComSpec").map(PathBuf::from)).into_iter().next().map(|(p, _)| p);
-    setup_line(&script, cfg!(windows), configured.as_deref(), find_posix).map(Some)
+pub fn workspace_setup(path: String, local: Option<String>, policy: Option<String>) -> Result<Option<SetupLine>, String> {
+    let wt = Path::new(&path);
+    let shared = std::fs::read_to_string(wt.join(crate::include::CONFIG_FILE)).ok().and_then(|t| setup_script(&t));
+    let Some((script, _)) = pick_setup(local.as_deref(), shared, policy.as_deref()) else { return Ok(None) };
+    let line = setup_line(&script, cfg!(windows), configured_shell().as_deref(), find_posix)?;
+    let unset: &[&str] = if conda_now() { &CONDA_VARS } else { &[] };
+    Ok(Some(with_env(line, &script_vars(&main_folder(wt), wt), unset)))
+}
+
+/// STAT-055: runs kolux.yaml's archive script (read from the worktree being removed; OD-14: no
+/// per-repository archive setting) in that worktree with the script variables, before it goes,
+/// and waits up to `limit`. None when there is none; the exit code when it ran.
+pub fn run_archive(root: &Path, worktree: &Path, limit: std::time::Duration) -> Result<Option<i32>, String> {
+    let Some(script) = std::fs::read_to_string(worktree.join(crate::include::CONFIG_FILE)).ok().and_then(|y| scripts_entry(&y, "archive")) else { return Ok(None) };
+    let line = setup_line(&script, cfg!(windows), configured_shell().as_deref(), find_posix).map_err(|e| e.replacen("The setup script", "The archive script", 1))?;
+    let mut cmd = std::process::Command::new(&line.program);
+    cmd.args(&line.args).current_dir(worktree).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    cmd.envs(script_vars(root, worktree));
+    if conda_now() {
+        for k in CONDA_VARS {
+            cmd.env_remove(k);
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // no console window
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("The archive script could not start: {e}"))?;
+    let start = std::time::Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().map_err(|e| format!("The archive script could not be watched: {e}"))? {
+            return Ok(Some(status.code().unwrap_or(-1)));
+        }
+        if start.elapsed() >= limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("The archive script was stopped after {} seconds", limit.as_secs()));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// STAT-055: the archive script for the worktree at `path`, run before it is removed.
+// ponytail: registered in lib.rs and called from the removal by the coordinator (hunks in the T-110-a commit).
+#[allow(dead_code)]
+#[tauri::command(async)]
+pub fn workspace_archive(path: String) -> Result<Option<i32>, String> {
+    let wt = Path::new(&path);
+    run_archive(&main_folder(wt), wt, std::time::Duration::from_secs(120))
 }
 
 /// PROJ-036 / COMPAT 5.6: the per-user issue command, a file in the repository's .kolux folder
@@ -516,5 +637,75 @@ mod tests {
         for d in [root, wt, bare] {
             let _ = std::fs::remove_dir_all(d);
         }
+    }
+
+    #[test]
+    fn stat055_local_settings_win_unless_the_policy_is_shared_first() {
+        let shared = || Some("pnpm i".to_string());
+        assert_eq!(pick_setup(Some("make\r\nmake test"), shared(), None), Some(("make\nmake test".into(), false)), "local wins by default");
+        assert_eq!(pick_setup(Some("make"), shared(), Some("local")), Some(("make".into(), false)));
+        assert_eq!(pick_setup(Some("make"), shared(), Some("shared-first")), Some(("pnpm i".into(), true)), "shared-first: kolux.yaml only");
+        assert_eq!(pick_setup(Some("make"), None, Some("shared")), None, "shared-first never falls back to local");
+        assert_eq!(pick_setup(Some("  "), shared(), None), Some(("pnpm i".into(), true)), "a blank local script is none");
+        assert_eq!(pick_setup(None, None, None), None);
+        // the setup command reads kolux.yaml inside the worktree being created
+        let wt = tree(&[("kolux.yaml", b"scripts:\n  setup: echo shared\n")]);
+        let p = wt.to_string_lossy().into_owned();
+        assert_eq!(workspace_setup(p.clone(), None, None).unwrap().unwrap().script, "echo shared");
+        assert_eq!(workspace_setup(p.clone(), Some("echo local".into()), None).unwrap().unwrap().script, "echo local");
+        assert_eq!(workspace_setup(p, Some("echo local".into()), Some("shared".into())).unwrap().unwrap().script, "echo shared");
+        let _ = std::fs::remove_dir_all(wt);
+    }
+
+    #[test]
+    fn stat055_a_batch_file_runs_under_cmd_even_when_the_shell_is_git_bash() {
+        let bash = Some(Path::new("C:/Program Files/Git/bin/bash.exe"));
+        let none = |_: &str| None;
+        let l = setup_line("scripts\\setup.bat --fast", true, bash, none).unwrap();
+        assert_eq!((l.program.as_str(), l.args.last().unwrap().as_str()), ("cmd.exe", "scripts\\setup.bat --fast"));
+        assert!(setup_line("\"tools\\Prep.CMD\"", true, bash, none).unwrap_err().contains("quotes"), "still refused what cmd would misread");
+        assert_eq!(setup_line("./setup.sh", true, bash, none).unwrap().program, "C:/Program Files/Git/bin/bash.exe", "other scripts keep the POSIX shell");
+        assert_eq!(setup_line("setup.bat", false, None, none).unwrap().program, "sh", "only on Windows");
+    }
+
+    #[test]
+    fn stat055_scripts_get_the_root_worktree_and_name_and_never_a_half_active_conda() {
+        let root = tree(&[("README.md", b"x")]);
+        let wt = tree(&[(".git", b"gitdir: C:/repos/app/.git/worktrees/brave-otter\n")]);
+        assert_eq!(main_folder(&wt), PathBuf::from("C:/repos/app"));
+        assert_eq!(main_folder(&root), root, "a main folder is its own root");
+        let vars = script_vars(Path::new("C:/repos/app"), Path::new("C:/ws/brave-otter"));
+        assert_eq!(vars.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>(), ["KOLUX_ROOT_PATH=C:/repos/app", "KOLUX_WORKTREE_PATH=C:/ws/brave-otter", "KOLUX_WORKSPACE_NAME=brave-otter"]);
+        let sh = with_env(SetupLine { program: "C:/Git/bin/bash.exe".into(), args: vec!["-e".into(), "-c".into(), "#!/bin/bash -e\nmake".into()], script: "#!/bin/bash -e\nmake".into() }, &[("KOLUX_ROOT_PATH", "C:/it's".into())], &CONDA_VARS);
+        assert_eq!(sh.args, ["-e", "-c", "export KOLUX_ROOT_PATH='C:/it'\\''s'\nunset CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_SHLVL CONDA_PROMPT_MODIFIER\n#!/bin/bash -e\nmake"]);
+        assert_eq!(sh.script, "#!/bin/bash -e\nmake", "the script itself is unchanged");
+        let cmd = with_env(SetupLine { program: "cmd.exe".into(), args: vec!["/d".into(), "/s".into(), "/c".into(), "pnpm i".into()], script: "pnpm i".into() }, &[("KOLUX_ROOT_PATH", "C:/Program Files (x86)/a".into()), ("KOLUX_WORKSPACE_NAME", "a&b".into())], &["CONDA_PREFIX"]);
+        assert_eq!(cmd.args[3], "set KOLUX_ROOT_PATH=C:/Program Files (x86)/a&& set CONDA_PREFIX=&& pnpm i", "a value cmd would misread is left out");
+        assert!(conda_partial(Some("C:\\conda\\envs\\x"), "C:\\Windows;C:\\conda\\condabin"), "named but not on the path");
+        assert!(!conda_partial(Some("C:\\conda\\envs\\x"), "C:\\conda\\envs\\x\\Scripts;C:\\Windows"), "fully active");
+        assert!(!conda_partial(None, "C:\\Windows"));
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(wt);
+    }
+
+    #[test]
+    fn stat055_removing_a_worktree_runs_its_archive_script_inside_it() {
+        let wt = tree(&[("kolux.yaml", b"scripts:\n  archive: echo done>archived.txt\n")]);
+        let code = run_archive(Path::new("C:/repos/app"), &wt, std::time::Duration::from_secs(60)).unwrap();
+        assert_eq!(code, Some(0));
+        assert_eq!(std::fs::read_to_string(wt.join("archived.txt")).unwrap().trim(), "done");
+        std::fs::write(wt.join("kolux.yaml"), "scripts:\n  setup: x\n").unwrap();
+        assert_eq!(run_archive(&wt, &wt, std::time::Duration::from_secs(60)).unwrap(), None, "no archive script, nothing runs");
+        let slow = if cfg!(windows) { "ping -n 6 127.0.0.1>nul" } else { "sleep 5" };
+        std::fs::write(wt.join("kolux.yaml"), format!("scripts:\n  archive: {slow}\n")).unwrap();
+        assert!(run_archive(&wt, &wt, std::time::Duration::from_millis(300)).unwrap_err().contains("stopped after"));
+        // with a POSIX shell the variables reach the script
+        if cfg!(not(windows)) || find_posix("sh").is_some() {
+            std::fs::write(wt.join("kolux.yaml"), "scripts:\n  archive: |\n    #!/bin/sh\n    printf '%s|%s' \"$KOLUX_WORKSPACE_NAME\" \"$KOLUX_ROOT_PATH\" > vars.txt\n").unwrap();
+            assert_eq!(run_archive(Path::new("C:/repos/app"), &wt, std::time::Duration::from_secs(60)).unwrap(), Some(0));
+            let name = wt.file_name().unwrap().to_string_lossy().into_owned();
+            assert_eq!(std::fs::read_to_string(wt.join("vars.txt")).unwrap(), format!("{name}|C:/repos/app"));
+        }
+        let _ = std::fs::remove_dir_all(wt);
     }
 }
