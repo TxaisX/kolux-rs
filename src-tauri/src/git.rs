@@ -123,7 +123,6 @@ fn run_untrimmed(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
 /// GIT-062: the one readable line a failed git's stderr comes down to. The last `fatal:` line
 /// wins, then the last `error:` line, then the last line that is not progress; None when only
 /// progress was said. A `\r`-overwritten line counts as its last state.
-#[allow(dead_code)] // called by clone_into once the newproject.rs hunk (T-315-b) lands
 pub fn failure_reason(log: &str) -> Option<String> {
     const PROGRESS: [&str; 9] = ["Cloning into", "remote: ", "Receiving objects", "Resolving deltas", "Updating files", "Checking out files", "Filtering content", "Enumerating objects", "Counting objects"];
     let lines: Vec<&str> = log.lines().map(|l| l.rsplit('\r').next().unwrap_or("").trim()).filter(|l| !l.is_empty()).collect();

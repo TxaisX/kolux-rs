@@ -62,7 +62,7 @@ export function clampNumber(v: unknown, min: number, max: number, start: number,
 
 const pick = <T extends string>(v: unknown, list: readonly T[], start: T): T => (list.includes(v as T) ? (v as T) : start);
 
-export function readText(s: Record<string, unknown>, _onWindows = windows()): TerminalText {
+export function readText(s: Record<string, unknown>, onWindows = windows()): TerminalText {
   return {
     size: clampNumber(s[FIELDS.size], SIZE.min, SIZE.max, SIZE.start),
     family: typeof s[FIELDS.family] === "string" ? (s[FIELDS.family] as string).trim() : "",
@@ -77,7 +77,7 @@ export function readText(s: Record<string, unknown>, _onWindows = windows()): Te
     scroll: clampNumber(s[FIELDS.scroll], 0.1, 5, 1, 0.1),
     fastScroll: clampNumber(s[FIELDS.fastScroll], 1, 20, 5),
     copyOnSelect: s[FIELDS.copyOnSelect] === true,
-    rightClickPaste: typeof s[FIELDS.rightClickPaste] === "boolean" ? (s[FIELDS.rightClickPaste] as boolean) : false, // council MERGE 51: back to _onWindows once right-click goes through attachPaste (core)
+    rightClickPaste: typeof s[FIELDS.rightClickPaste] === "boolean" ? (s[FIELDS.rightClickPaste] as boolean) : onWindows, // on by default on Windows; right-click goes through attachPaste (council D2 MERGE 47 FB2)
   };
 }
 
