@@ -709,6 +709,26 @@ pub async fn skills_scan(workspace: Option<String>, refresh: bool) -> Result<Sca
     tauri::async_runtime::spawn_blocking(move || scan_cached(workspace, refresh)).await.map_err(|e| e.to_string())
 }
 
+/// SKILL-020: Reveal file opens only a skill file the list shows, on this computer and still there;
+/// a bundled skill (no file) or any other path is refused.
+fn revealable(scan: &Scan, path: &str) -> Result<PathBuf, String> {
+    let s = scan.skills.iter().find(|s| s.path == path).ok_or("That skill is not in the list any more; refresh first")?;
+    if s.source == "bundled" {
+        return Err("Built into Kolux; there is no file on disk".into());
+    }
+    let p = PathBuf::from(&s.path);
+    if remote_path(&p) || remote_link(&p) || !p.is_file() {
+        return Err("That skill file is no longer on disk; refresh first".into());
+    }
+    Ok(p)
+}
+
+#[allow(dead_code)] // registered by the coordinator's lib.rs hunk (evidence/skills-T-320-lib.patch)
+#[tauri::command]
+pub async fn skills_reveal(workspace: Option<String>, path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || revealable(&scan_cached(workspace, false), &path).and_then(|p| crate::links::reveal(&p))).await.map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -774,6 +794,31 @@ mod tests {
         return std::os::windows::fs::symlink_dir(r"\\kolux-unc-test.invalid\share\skills", link).ok();
         #[cfg(not(windows))]
         return std::os::unix::fs::symlink("//kolux-unc-test.invalid/share/skills", link).ok();
+    }
+
+    #[test]
+    fn skill020_reveal_opens_only_a_listed_skill_file_still_on_disk() {
+        let home = temp("skills-reveal");
+        let root = home.join(".claude").join("skills");
+        skill(&root.join("alpha"), "# alpha\n");
+        skill(&root.join("beta"), "# beta\n");
+        let s = run(spots(&env(&home), None), &[("orchestration", "# o\n")], ROOT_LIMIT);
+        let alpha = s.skills.iter().find(|k| k.name == "alpha").unwrap().path.clone();
+        assert!(same_file(&revealable(&s, &alpha).unwrap(), &root.join("alpha").join(SKILL_FILE)));
+        // A bundled skill has no file; a path the list does not show is refused even if it exists.
+        let bundled = s.skills.iter().find(|k| k.source == "bundled").unwrap().path.clone();
+        assert!(revealable(&s, &bundled).unwrap_err().contains("no file on disk"));
+        let elsewhere = home.join("notes.txt");
+        fs::write(&elsewhere, "x").unwrap();
+        assert!(revealable(&s, &elsewhere.to_string_lossy()).unwrap_err().contains("refresh first"));
+        // Gone since the list loaded.
+        let beta = s.skills.iter().find(|k| k.name == "beta").unwrap().path.clone();
+        fs::remove_dir_all(root.join("beta")).unwrap();
+        assert!(revealable(&s, &beta).unwrap_err().contains("no longer on disk"));
+    }
+
+    fn same_file(a: &Path, b: &Path) -> bool {
+        canon(a).is_some() && canon(a) == canon(b)
     }
 
     #[test]

@@ -188,3 +188,30 @@ export function outcomeText(d: Done): string {
   if (d.outcome === "skipped" && d.note && d.note in BLOCKED) return `${OUTCOME.skipped}: ${BLOCKED[d.note as Blocked]}`;
   return d.note && (d.outcome === "failed" || d.outcome === "partly") ? `${OUTCOME[d.outcome]} (${d.note})` : OUTCOME[d.outcome];
 }
+
+// SKILL-020: a row's actions and the details dialog.
+export type RowAction = "details" | "reveal" | "copy" | "delete";
+export const ROW_ACTIONS: Array<{ id: RowAction; label: string }> = [
+  { id: "details", label: "View details" },
+  { id: "reveal", label: "Reveal file" },
+  { id: "copy", label: "Copy path" },
+  { id: "delete", label: "Delete" },
+];
+
+/** Why a row action cannot run for this skill, or null when it can. A bundled skill has no file
+ * on disk to reveal or copy; Delete follows the same rule as choosing for a bulk delete. */
+export function actionBlocked(s: Skill, a: RowAction): string | null {
+  if (a === "details") return null;
+  if (a === "delete") return whyNot(s);
+  return s.source === "bundled" ? "Built into Kolux; there is no file on disk" : null;
+}
+
+/** The AIs that can use the skill, by name; the shared folder is read by each AI listed with it. */
+export function seenBy(s: Skill): string[] {
+  if (s.source === "bundled") return ["Kolux (built in)"];
+  return s.agents.map((a) => AGENT_FILTERS.find((x) => x.id === a)?.label ?? a);
+}
+
+/** The toast Copy path shows, and what it says when the clipboard refuses. */
+export const COPIED = "Path copied";
+export const COPY_FAILED = "Could not copy; the path is shown in View details to select";

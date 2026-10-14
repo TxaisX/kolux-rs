@@ -136,3 +136,27 @@ test("SKILL-022: each skill's outcome reads plainly", () => {
   expect(outcomeText({ path: "a", outcome: "partly", note: "1 hidden staged copy is left over" })).toBe("Partly removed: hidden staged files are left over (1 hidden staged copy is left over)");
   expect(outcomeText({ path: "a", outcome: "failed", note: "Nothing was deleted: locked" })).toBe("Failed; nothing was changed (Nothing was deleted: locked)");
 });
+
+// SKILL-020: row actions and skill details.
+import { COPIED, COPY_FAILED, ROW_ACTIONS, actionBlocked, seenBy } from "./skills";
+test("SKILL-020: a row offers View details, Reveal file, Copy path and Delete; bundled and plugin rows say why one cannot run", () => {
+  expect(ROW_ACTIONS.map((a) => a.label)).toEqual(["View details", "Reveal file", "Copy path", "Delete"]);
+  const home = sk("tidy", "home", ["claude"]);
+  expect(ROW_ACTIONS.map((a) => actionBlocked(home, a.id))).toEqual([null, null, null, null]);
+  const bundled = sk("orchestration", "bundled", [], { path: "kolux:orchestration" });
+  expect(actionBlocked(bundled, "details")).toBeNull();
+  expect(actionBlocked(bundled, "reveal")).toMatch(/no file on disk/);
+  expect(actionBlocked(bundled, "copy")).toMatch(/no file on disk/);
+  expect(actionBlocked(bundled, "delete")).toBe(BLOCKED.bundled);
+  const plugin = sk("pdf", "plugin", ["claude"], { plugin: "docs" });
+  expect([actionBlocked(plugin, "reveal"), actionBlocked(plugin, "copy")]).toEqual([null, null]);
+  expect(actionBlocked(plugin, "delete")).toBe(BLOCKED.plugin);
+});
+
+test("SKILL-020: details list the AIs that can use the skill by name", () => {
+  expect(seenBy(sk("tidy", "home", ["shared", "codex", "claude"]))).toEqual(["Shared skills folder", "Codex", "Claude Code"]);
+  expect(seenBy(sk("one", "workspace", ["hermes"]))).toEqual(["Hermes"]);
+  expect(seenBy(sk("orchestration", "bundled", []))).toEqual(["Kolux (built in)"]);
+  expect(seenBy(sk("lonely", "home", []))).toEqual([]);
+  expect([COPIED, COPY_FAILED].every((t) => t.length > 0)).toBe(true);
+});
