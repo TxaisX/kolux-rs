@@ -81,6 +81,9 @@ type Props = {
   onNeedsYou?: (needs: boolean) => void;
   /** STAT-001: the pane's last hook-fed state; wins over the title guess while the program runs. */
   hook?: AgentState;
+  /** The tool a hook PermissionRequest is waiting on (the hook status's `tool` while `hook` is "permission"): the
+   *  Approve/Deny buttons show, and type, only while one is named, never on a title or OSC guess. */
+  pendingTool?: string;
   /** STAT-026: the sub-agents and teammates under this session, shown beside the status word. */
   crew?: Crew;
   /** STAT-022: why the agent halted while `hook` is blocked; the header's tooltip says it. */
@@ -176,7 +179,7 @@ const stagger = () =>
     }, 150 + 60 * waiting++),
   );
 
-export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile }: Props) {
+export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, pendingTool, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const clipboardOk = useRef(clipboardFromPrograms);
   clipboardOk.current = clipboardFromPrograms;
@@ -981,7 +984,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         <span className={`status ${tone}`} data-tip={explain}>
           {word}
         </span>
-        {header.state === "permission" && buttonsShown(shown, hook, answered, prompt.current.count) && (
+        {header.state === "permission" && buttonsShown(shown, hook, answered, prompt.current.count, pendingTool) && (
           <span className="answer" role="group" aria-label="Answer the permission prompt">
             {(["approve", "deny"] as const).map((answer) => {
               const drawnAt = prompt.current.count;
@@ -994,7 +997,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
                   onClick={() => {
                     const keys = answerKeys(shown, answer);
                     setAnswered(drawnAt); // T-151-b: the first click answers; the buttons go until the next prompt
-                    if (keys !== null && canAnswer(shown, hook, drawnAt, prompt.current.count)) typeIn.current(keys);
+                    if (keys !== null && canAnswer(shown, hook, drawnAt, prompt.current.count, pendingTool)) typeIn.current(keys);
                     else setFlash("The prompt has gone; nothing was sent");
                   }}
                 >
