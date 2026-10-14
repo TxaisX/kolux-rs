@@ -122,7 +122,7 @@ export default function ResourceManager({ names, workspaces, onClose }: Props) {
   );
 }
 
-/** MERGE 52: the committed figure, with "(n of m could not be read)" under it when the sum is partial. */
+/** MERGE 52 / FIX-1: the committed figure, or a dash with "(n of m could not be read)" under it when some process gave none. */
 export function committedCell(u: Usage) {
   const note = committedNote(u);
   return (

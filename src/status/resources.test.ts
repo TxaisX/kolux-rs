@@ -44,19 +44,22 @@ test("T-287-b: committed memory shows beside resident, a dash when Windows gave 
   expect(formatCommitted(groups[0].rows[0].committed)).toBe("4.0 MB");
 });
 
-test("MERGE 52: a committed sum that left processes out says how many could not be read", () => {
-  expect(committedNote({ committed: 4096, committed_unread: 1, processes: 3 })).toBe("(1 of 3 could not be read)");
-  expect(committedNote({ committed: 4096, committed_unread: 0, processes: 3 })).toBe("");
-  expect(committedNote({ committed: 4096, processes: 3 }), "an older payload without the count reads as whole").toBe("");
-  expect(committedNote({ committed: null, committed_unread: 3, processes: 3 }), "none read is the plain dash").toBe("");
+test("FIX-1 (T-287-c): an unknown committed sum says how many processes could not be read", () => {
+  expect(committedNote({ committed: null, unreadable: 1, processes: 3 })).toBe("(1 of 3 could not be read)");
+  expect(committedNote({ committed: null, unreadable: 3, processes: 3 }), "none read still says so").toBe("(3 of 3 could not be read)");
+  expect(committedNote({ committed: null, unreadable: 0, processes: 0 }), "no processes is the plain dash").toBe("");
+  expect(committedNote({ committed: null, processes: 2 }), "an older payload without the count is the plain dash").toBe("");
+  expect(committedNote({ committed: 4096, unreadable: 0, processes: 3 }), "a whole sum needs no note").toBe("");
 });
 
-test("MERGE 52: the committed cell shows the partial note under the figure, nothing extra when whole", () => {
-  const partial = renderToString(committedCell({ bytes: 1, cpu: 0, processes: 3, committed: 4 * 1024 * 1024, committed_unread: 2 }));
-  expect(partial).toContain("4.0 MB");
+test("FIX-1 (T-287-c): the committed cell shows a dash and the note when the sum is unknown, nothing extra when whole", () => {
+  const partial = renderToString(committedCell({ bytes: 1, cpu: 0, processes: 3, committed: null, unreadable: 2 }));
+  expect(partial).toContain("–");
   expect(partial).toContain("(2 of 3 could not be read)");
   expect(partial).toContain("res-unread");
-  const whole = renderToString(committedCell({ bytes: 1, cpu: 0, processes: 3, committed: 4 * 1024 * 1024, committed_unread: 0 }));
+  expect(partial).not.toContain("MB");
+  const whole = renderToString(committedCell({ bytes: 1, cpu: 0, processes: 3, committed: 4 * 1024 * 1024, unreadable: 0 }));
+  expect(whole).toContain("4.0 MB");
   expect(whole).not.toContain("could not be read");
-  expect(renderToString(committedCell({ bytes: 1, cpu: 0, processes: 1, committed: null, committed_unread: 1 }))).toContain("–");
+  expect(renderToString(committedCell({ bytes: 1, cpu: 0, processes: 0, committed: null, unreadable: 0 }))).not.toContain("could not be read");
 });

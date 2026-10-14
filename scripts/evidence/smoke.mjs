@@ -7,8 +7,9 @@
 //   pnpm smoke -- --attach           drive an app that is already running with --remote-debugging-port=<cdp>
 //   options: --port 1431 (vite) · --cdp 9240 · --identifier com.txaisxiong.kolux-rs.smoke · --temp <folder>
 //            --only 1,3 · --keep (leave the app and the temp folder for a look) · --timeout <minutes for the first build>
-//            --offscreen (T-560: the app's window opens far off-screen with no taskbar button; CDP works as usual)
-//            --self-test (T-560: check the temp-folder cleanup and the off-screen config, launching nothing)
+//            --offscreen (T-560: the app's window is moved far off-screen once it shows; CDP works as usual;
+//                         not with --keep)
+//            --self-test (T-560: check the temp-folder cleanup and the off-screen move, launching nothing)
 //            --require-quit (count flow 5 in the exit code before T-184 is ticked)
 //
 // Flow 1  a grid grows from 4 to 6 panes and the PTYs already running keep running: each shell gets a marker
@@ -43,7 +44,7 @@
 // when there is one. Attach mode changes the running app's settings for flow 4 and puts them back afterwards;
 // it cannot run flow 5 (it has no exe path to relaunch).
 import { spawn, execFile } from "node:child_process";
-import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,6 +68,14 @@ const TEMP = opt("temp", "G:\\Temp\\kolux-rs-smoke");
 const ATTACH = flag("attach");
 const KEEP = flag("keep");
 const OFFSCREEN = flag("offscreen");
+// Council FIX-1 (AFTER 3): a kept app moved off-screen could not be reached again, so the two never go together.
+if (OFFSCREEN && KEEP) {
+  console.error("smoke: --offscreen and --keep cannot be used together (the kept app would be unreachable off-screen)");
+  process.exit(2);
+}
+// Council FIX-1 (FIX-SOON 3): the temp folder is removed only when it carries this file, which setup()
+// writes, so a mistyped --temp never deletes a folder this script did not make.
+const TEMP_MARKER = ".kolux-rs-smoke-temp";
 const ONLY = opt("only", ATTACH ? "1,2,3,4" : "1,2,3,4,5")
   .split(",")
   .map((s) => Number(s.trim()))
@@ -298,14 +307,18 @@ async function pageUp(ms) {
   );
   await waitFor("the sidebar", () => exists("aside.sidebar"), 60000, 1000);
 }
-// Second-screen rule: dev windows go to the screen at X=-1920 when it is there.
-const moveWindow = (pid) =>
-  OFFSCREEN ? Promise.resolve("left off-screen") : ps(
-    `Add-Type -AssemblyName System.Windows.Forms; if ([System.Windows.Forms.Screen]::AllScreens.Count -lt 2) { 'one screen'; exit }
+// Second-screen rule: dev windows go to the screen at X=-1920 when it is there. Council FIX-1 (FIX-SOON 2):
+// --offscreen moves the window at run time to -32000,-32000 (0x0015 = keep size, keep z-order, do not
+// activate), on any number of screens, so nothing about the window is compiled into the debug exe.
+const OFFSCREEN_AT = [-32000, -32000];
+const moveScript = (pid, offscreen = OFFSCREEN) => {
+  const [x, y, flags, screens] = offscreen ? [...OFFSCREEN_AT, "0x0015", ""] : [-1920, 0, "0x0005", "if ([System.Windows.Forms.Screen]::AllScreens.Count -lt 2) { 'one screen'; exit }"];
+  return `Add-Type -AssemblyName System.Windows.Forms; ${screens}
      Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr a,int x,int y,int cx,int cy,uint f);' -Name W -Namespace U
      $h = [IntPtr]::Zero; for ($i = 0; $i -lt 20 -and $h -eq [IntPtr]::Zero; $i++) { $h = (Get-Process -Id ${pid}).MainWindowHandle; if ($h -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 500 } }
-     if ($h -eq [IntPtr]::Zero) { 'no window handle' } else { [U.W]::SetWindowPos($h,[IntPtr]::Zero,-1920,0,0,0,0x0005) | Out-Null; 'moved' }`,
-  );
+     if ($h -eq [IntPtr]::Zero) { 'no window handle' } else { [U.W]::SetWindowPos($h,[IntPtr]::Zero,${x},${y},0,0,${flags}) | Out-Null; '${offscreen ? "moved off-screen" : "moved"}' }`;
+};
+const moveWindow = (pid) => ps(moveScript(pid));
 const appEnv = () => ({ ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP}`, CLAUDE_CONFIG_DIR: claudeConfig, CODEX_HOME: codexHome, TEMP: appTemp, TMP: appTemp, USERPROFILE: userHome, HOME: userHome, APPDATA: roaming, LOCALAPPDATA: local, CARGO_HOME: process.env.CARGO_HOME ?? join(realHome, ".cargo"), RUSTUP_HOME: process.env.RUSTUP_HOME ?? join(realHome, ".rustup") });
 
 async function launch() {
@@ -403,7 +416,9 @@ async function closeApp() {
 // ---------- setup: a throwaway repo as a project, its main checkout open with one shell ----------
 async function setup() {
   const held = await removeTemp(TEMP, null);
-  if (held) throw new Error(`the temp folder ${TEMP} could not be cleared (${held})`);
+  if (held) throw new Error(`the temp folder ${TEMP} could not be cleared (${held}${held === "NOMARKER" ? ": it holds files but no marker from a smoke setup; pick another --temp or delete it by hand" : ""})`);
+  mkdirSync(TEMP, { recursive: true });
+  writeFileSync(join(TEMP, TEMP_MARKER), "made by scripts/evidence/smoke.mjs setup(); removed with this folder\n");
   mkdirSync(repo, { recursive: true });
   mkdirSync(marks, { recursive: true });
   writeFileSync(smokeFile, ORIGINAL);
@@ -711,23 +726,20 @@ async function flow5() {
   return text;
 }
 
-// T-560: the config the app is started with. Tauri merges it into tauri.conf.json, and a list is replaced
-// whole, so --offscreen copies the app's own window entries and only moves them: created far off-screen,
-// not centred, no taskbar button. The app's own show() then shows it where it is, so nothing pops up.
+// T-560: the config the app is started with. Council FIX-1 (FIX-SOON 2): it never carries window
+// entries, because tauri dev compiles this config into the debug exe and a window placed off-screen there
+// would stay unreachable for every later start of that exe; --offscreen moves the window at run time.
 function smokeConfig() {
-  const cfg = { identifier: IDENTIFIER, build: { devUrl: `http://localhost:${PORT}`, beforeDevCommand: `pnpm exec vite --port ${PORT} --strictPort` } };
-  if (OFFSCREEN) {
-    const own = JSON.parse(readFileSync(join(root, "src-tauri", "tauri.conf.json"), "utf8"));
-    cfg.app = { windows: (own.app?.windows ?? [{}]).map((w) => ({ ...w, center: false, x: -32000, y: -32000, skipTaskbar: true })) };
-  }
-  return cfg;
+  return { identifier: IDENTIFIER, build: { devUrl: `http://localhost:${PORT}`, beforeDevCommand: `pnpm exec vite --port ${PORT} --strictPort` } };
 }
 
 // T-560: removes the temp folder once the app (pid) has exited, waiting up to 10 s, then retries a folder
 // still held (EPERM / EBUSY / ENOTEMPTY) with a growing wait: 0.5 s, 1 s ... 2.5 s. fs's own maxRetries
 // does not retry EPERM on a held folder (Node 24 fails at once), so the loop is here. Returns null when
-// gone, else the error code: a held folder never throws.
+// gone, else the error code: a held folder never throws. Council FIX-1: a folder that holds files but no
+// marker from setup() is never removed ("NOMARKER"); a missing or empty one is fine.
 async function removeTemp(dir, pid, retries = 5) {
+  if (existsSync(dir) && !existsSync(join(dir, TEMP_MARKER)) && readdirSync(dir).length > 0) return "NOMARKER";
   for (let i = 0; i < 20 && pid && (await alive(pid).catch(() => false)); i++) await sleep(500);
   for (let i = 0; ; i++) {
     try {
@@ -744,25 +756,53 @@ async function removeTemp(dir, pid, retries = 5) {
 // folder), and the off-screen config, without launching the app.
 if (flag("self-test")) {
   const checks = [];
+  // Council FIX-1: everything here lives in TEMP/held (marked like setup() marks TEMP); TEMP itself and
+  // anything else in it are never removed, so a kept --keep folder survives a self-test.
+  const d = join(TEMP, "held");
   const held = (ms) => {
-    const d = join(TEMP, "held");
     mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, TEMP_MARKER), "");
     writeFileSync(join(d, "f.txt"), "x");
     spawn(process.execPath, ["-e", `setTimeout(() => {}, ${ms})`], { cwd: d, stdio: "ignore", windowsHide: true });
-    return d;
   };
-  let d = held(4000);
+  const sibling = join(TEMP, "self-test-sibling.txt");
+  const hadSibling = existsSync(sibling);
+  mkdirSync(TEMP, { recursive: true });
+  if (!hadSibling) writeFileSync(sibling, "kept by the self-test\n");
+  held(4000);
   await sleep(300);
   const code = await removeTemp(d, null, 0);
   checks.push([code !== null && existsSync(d), `a held folder with no retries is reported, not thrown: ${code}`]);
-  await removeTemp(TEMP, null, 8);
-  d = held(1500);
+  await removeTemp(d, null, 8);
+  held(1500);
   await sleep(300);
   const late = await removeTemp(d, null);
   checks.push([late === null && !existsSync(d), `a folder held for 1.5 s is removed by the retries: ${late ?? "gone"}`]);
-  await removeTemp(TEMP, null, 8);
-  const w = (OFFSCREEN ? smokeConfig() : { app: null }).app?.windows ?? [];
-  checks.push([OFFSCREEN ? w.length > 0 && w.every((x) => x.x === -32000 && x.y === -32000 && x.center === false && x.skipTaskbar === true && x.title) : true, OFFSCREEN ? `--offscreen window entries: ${JSON.stringify(w)}` : "--offscreen not given: config left alone"]);
+  const unmarked = join(d, "unmarked");
+  mkdirSync(unmarked, { recursive: true });
+  writeFileSync(join(d, TEMP_MARKER), "");
+  writeFileSync(join(unmarked, "precious.txt"), "x");
+  const refused = await removeTemp(unmarked, null, 0);
+  checks.push([refused === "NOMARKER" && existsSync(join(unmarked, "precious.txt")), `a folder with files but no setup() marker is refused and kept: ${refused}`]);
+  const empty = join(d, "empty");
+  mkdirSync(empty, { recursive: true });
+  const emptyGone = await removeTemp(empty, null, 0);
+  checks.push([emptyGone === null && !existsSync(empty), `an empty unmarked folder may go: ${emptyGone ?? "gone"}`]);
+  const cleaned = await removeTemp(d, null, 8);
+  checks.push([cleaned === null && !existsSync(d) && existsSync(TEMP) && existsSync(sibling), `only TEMP/held was removed; TEMP and its other files stay: ${cleaned ?? "held gone"}, TEMP ${existsSync(TEMP) ? "kept" : "GONE"}, sibling ${existsSync(sibling) ? "kept" : "GONE"}`]);
+  if (!hadSibling) rmSync(sibling, { force: true });
+  const cfg = smokeConfig();
+  const off = moveScript(4242, true);
+  const on = moveScript(4242, false);
+  checks.push([
+    cfg.app === undefined && off.includes("SetWindowPos($h,[IntPtr]::Zero,-32000,-32000,0,0,0x0015)") && !off.includes("AllScreens") && on.includes("-1920,0,0,0,0x0005") && on.includes("AllScreens"),
+    `the start config carries no window entries (${JSON.stringify(Object.keys(cfg))}); --offscreen moves the window at run time to -32000,-32000 on any screen count`,
+  ]);
+  const both = await run(process.execPath, [fileURLToPath(import.meta.url), "--offscreen", "--keep", "--self-test", "--temp", join(TEMP, "never-made")]).then(
+    () => 0,
+    (e) => e.code,
+  );
+  checks.push([both === 2 && !existsSync(join(TEMP, "never-made")), `--offscreen with --keep is refused before anything runs: exit ${both}`]);
   for (const [ok, note] of checks) log(`${ok ? "PASS" : "FAIL"} self-test: ${note}`);
   const bad = checks.filter((c) => !c[0]).length;
   log(`smoke self-test: ${checks.length - bad}/${checks.length} passed`);

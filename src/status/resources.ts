@@ -4,8 +4,9 @@ import { underDir } from "../workspaces";
 import { formatMemory } from "./memory";
 
 /** `committed` (CLI-041, T-287-b): the pagefile-backed bytes Windows charges, summed per process
- * tree on the Rust side; null when no process in the tree reported a figure. */
-export type Usage = { bytes: number; cpu: number; processes: number; committed: number | null; committed_unread?: number };
+ * tree on the Rust side; null when any process in the tree gave no figure (T-287-c: a partial sum
+ * is never shown as the whole) or there are none. `unreadable`: how many of `processes` gave none. */
+export type Usage = { bytes: number; cpu: number; processes: number; committed: number | null; unreadable?: number };
 export type SessionUsage = Usage & { id: number; pid: number | null; dir: string | null };
 export type Resources = { app: Usage; sessions: SessionUsage[]; free: number | null; total: number | null };
 export type Row = SessionUsage & { name: string; shown: boolean };
@@ -36,10 +37,11 @@ export function groupSessions(sessions: SessionUsage[], names: Record<number, st
 export const formatCommitted = (committed: number | null | undefined) =>
   committed === null || committed === undefined || !Number.isFinite(committed) || committed < 0 ? "–" : formatMemory(committed);
 
-/** MERGE 52 (T-287-c wording): a committed sum that left some processes out says so, so it is never
- * read as the whole; "" when every process gave a figure, or none did (the cell is a dash then). */
-export const committedNote = (u: Pick<Usage, "committed" | "committed_unread" | "processes">) =>
-  u.committed !== null && (u.committed_unread ?? 0) > 0 ? `(${u.committed_unread} of ${u.processes} could not be read)` : "";
+/** MERGE 52 / council FIX-1 (T-287-c): the Rust side gives no committed figure when any process
+ * could not be read, so the dash says how many were left out; "" when the dash only means there are
+ * no processes, or a figure is shown. */
+export const committedNote = (u: Pick<Usage, "committed" | "unreadable" | "processes">) =>
+  u.committed === null && (u.unreadable ?? 0) > 0 ? `(${u.unreadable} of ${u.processes} could not be read)` : "";
 
 /** T-287-b: the rows' columns (name, resident, committed, CPU, End), set here so the committed
  * column needs no stylesheet change. */
