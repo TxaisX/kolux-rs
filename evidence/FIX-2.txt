@@ -39,3 +39,15 @@ LIVE PROOF PENDING (1):
   the headings and a click jumps to one.
 - T-236-a: Ctrl+Shift+F in the Explorer, type a word: hits grouped per file with line numbers; a click
   opens the file at the hit. A one-line minified file with "e" stays responsive and shows at most 2000 hits.
+
+== 2. FS-1 fence: namespace spellings of a share ==
+is_share now refuses every path whose first two characters are separators (either slash) unless it
+is a verbatim disk path, so the device-namespace and verbatim spellings (the dot-UNC, the
+question-mark GLOBALROOT, a Volume GUID, a dot-drive) are refused from the spelling, before resolve
+(canonicalize) can contact a host. A resolved project path (verbatim disk) still passes.
+- Test: fence::tests::acct_055_namespace_spellings_of_a_share_are_refused_before_they_resolve.
+  On the old fence.rs it FAILED: the dot-UNC spelling came back "... is outside them" (it had been
+  resolved first). Now: cargo test fence 10 passed, 0 failed; clippy -D warnings exit 0; tsc exit 0.
+- Not fixed here (seen): a link inside a project that points at a share is still followed by
+  canonicalize before the share check on the result (council FS-1's last sentence); refusing that
+  needs reading each link target without following it, which is a reliability-lane fence change.
