@@ -602,7 +602,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-259 · STAT-036 Count of working agents per workspace
 - [ ] T-260 · VIEW-013 [compat] Floor timeline of agent activity · VIEW-111 First-run notification permission
 - [ ] T-261 · ACCT-063 Each agent pane has one clear owning session
-- [ ] T-262 · ORCH-060 Session tab inventory the command line and agents can read
+- [x] T-262 · ORCH-060 Session tab inventory the command line and agents can read · done 2026-10-13 (lane/orchestration from 07c5d80; evidence/T-262.txt: three PowerShell tabs listed 3 by session_tabs over CDP, one closed listed 2; the command line switches onto it with the cli-lane hunk in the T-262 handoff)
 
 ### P2 · theme 4 · Accounts, sign-in and usage limits (9 cards)
 
