@@ -266,6 +266,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-119 | Name a pane or tab; a Needs you strip appears above the grid. | [Terminals](terminals.md) |
 | T-119-b | Tab and pane titles follow the running program. | [Terminals](terminals.md) |
 | T-120-a | Settings switch and kolux agent hooks commands control agent status hooks. | [Settings](settings.md) |
+| T-123 | Status shows background work being watched, the question an agent is waiting on, and Interrupted for a stopped turn; /clear and compacting are not counted as finished work. | [Board, agents and inbox](board-agents-inbox.md) |
 | T-127 | A Checks panel and pull request comments show in the sidebar. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-128-a | Kolux recognises which agent runs in each pane. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-129-a | kolux worktree ps sums up orchestration across worktrees. | [Command line](command-line.md) |
