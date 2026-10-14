@@ -582,9 +582,27 @@ pub async fn scm_github_repo(worktree: String) -> Option<GhRepo> {
 
 /// GIT-066: the signed-in gh login, read from gh's own config (no network); None without gh.
 pub fn gh_login() -> Option<String> {
-    let out = std::process::Command::new(gh_program().ok()?).args(["config", "get", "-h", "github.com", "user"]).output().ok()?;
+    gh_account(&gh_program().ok()?, "github.com")
+}
+
+/// GIT-043 / GIT-066: the account gh is signed in with on `host`, from gh's own config (no network).
+fn gh_account(program: &Path, host: &str) -> Option<String> {
+    let out = quiet(program).args(["config", "get", "-h", host, "user"]).output().ok()?;
     let login = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (out.status.success() && !login.is_empty()).then_some(login)
+}
+
+/// FIX-2: every program this module starts comes through here, so none flashes a console window
+/// up behind the app (CREATE_NO_WINDOW; a window-owning program like the file manager is unaffected).
+fn quiet(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut cmd = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    cmd
 }
 
 pub(crate) fn gh_program() -> Result<std::path::PathBuf, String> {
@@ -612,7 +630,7 @@ pub(crate) fn gh_run(program: &Path, worktree: &Path, args: &[&str], input: Opti
 fn gh_run_for(program: &Path, worktree: &Path, args: &[&str], input: Option<&str>, limit: std::time::Duration) -> Result<String, String> {
     use std::io::Read;
     use std::process::Stdio;
-    let mut cmd = std::process::Command::new(program);
+    let mut cmd = quiet(program);
     cmd.args(args);
     // A pull request link names its own repository; everything else is pointed at origin's.
     if args.first() != Some(&"api") && !args.iter().any(|a| a.starts_with("https://")) {
@@ -622,11 +640,6 @@ fn gh_run_for(program: &Path, worktree: &Path, args: &[&str], input: Option<&str
     }
     cmd.current_dir(worktree).envs(crate::git::NO_PROMPT).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
     cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000);
-    }
     let mut child = cmd.spawn().map_err(|e| format!("could not run gh: {e}"))?;
     if let (Some(text), Some(mut pipe)) = (input, child.stdin.take()) {
         pipe.write_all(text.as_bytes()).map_err(|e| format!("could not hand gh the description: {e}"))?;
@@ -920,13 +933,8 @@ pub fn write_message(program: &Path, args: &[&str], dir: &Path, input: Option<&s
     use std::io::Read;
     use std::process::Stdio;
     stop_asked(key);
-    let mut cmd = std::process::Command::new(program);
+    let mut cmd = quiet(program);
     cmd.args(args).current_dir(dir).env("NO_COLOR", "1").stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000);
-    }
     let mut child = cmd.spawn().map_err(|e| format!("Could not start the agent: {e}"))?;
     if let (Some(mut pipe), Some(text)) = (child.stdin.take(), input.map(str::to_string)) {
         std::thread::spawn(move || {
@@ -950,10 +958,7 @@ pub fn write_message(program: &Path, args: &[&str], dir: &Path, input: Option<&s
     let end = |child: &mut std::process::Child| {
         // A .cmd shim runs the agent as its child, so the whole tree goes.
         #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            let _ = std::process::Command::new("taskkill").args(["/T", "/F", "/PID", &child.id().to_string()]).creation_flags(0x0800_0000).output();
-        }
+        let _ = quiet("taskkill").args(["/T", "/F", "/PID", &child.id().to_string()]).output();
         let _ = child.kill();
         let _ = child.wait();
     };
@@ -1396,9 +1401,8 @@ pub async fn scm_tasks_search(host: String, queries: Vec<String>, page: u32) -> 
 /// GIT-043: the account gh is signed in with on `host`, from gh's own config (no network).
 #[tauri::command]
 pub async fn scm_gh_account(host: String) -> Option<String> {
-    let out = std::process::Command::new(gh_program().ok()?).args(["config", "get", "-h", &host, "user"]).output().ok()?;
-    let login = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (out.status.success() && !login.is_empty()).then_some(login)
+    // Off the async thread, so a slow gh never holds up other commands.
+    tauri::async_runtime::spawn_blocking(move || gh_account(&gh_program().ok()?, &host)).await.ok()?
 }
 
 fn host_ok(host: &str) -> Result<(), String> {
@@ -1647,8 +1651,11 @@ pub async fn scm_merge(worktree: String, url: String, action: String, method: Op
 }
 
 /// Only an https link to a pull request, with nothing a shell could read as an option.
+/// The host part may not name a user, a password or a port, so the link opens the host it shows.
 fn safe_pr_url(url: &str) -> bool {
-    url.starts_with("https://") && url.contains("/pull/") && !url.chars().any(|c| c.is_whitespace() || c == '"')
+    let host = url.strip_prefix("https://").map(|rest| rest.split('/').next().unwrap_or(""));
+    let plain_host = host.is_some_and(|h| !h.is_empty() && h.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-'));
+    plain_host && url.contains("/pull/") && !url.chars().any(|c| c.is_whitespace() || c == '"')
 }
 
 #[tauri::command]
@@ -1690,14 +1697,21 @@ pub async fn scm_pr_create(worktree: String, title: String, body: String, base: 
 /// path is relative to the worktree and must stay inside it.
 #[tauri::command]
 pub async fn scm_reveal(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, worktree: String, path: String) -> Result<(), String> {
-    // A worktree on another machine is never touched (SAFE-021), the way open_path refuses it.
-    crate::links::refuse_host(&worktree, &crate::links::roots(&store))?;
+    let roots = crate::links::roots(&store);
     tauri::async_runtime::spawn_blocking(move || {
-        let full = reveal_target(Path::new(&worktree), &path)?;
+        let full = reveal_place(&roots, &worktree, &path)?;
         crate::links::reveal(&full)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// GIT-014: the place a reveal shows. The worktree must be on this machine (SAFE-021) and inside a
+/// registered project or workspaces folder, its real place included (EDIT-045's fence), so a
+/// forged call cannot show an arbitrary folder.
+fn reveal_place(roots: &[String], worktree: &str, path: &str) -> Result<std::path::PathBuf, String> {
+    crate::links::fence(worktree, roots, &std::collections::HashSet::new(), true)?;
+    reveal_target(Path::new(worktree), path)
 }
 
 /// GIT-014: the file a reveal shows: inside the worktree, or its nearest folder that still exists.
@@ -1705,14 +1719,18 @@ fn reveal_target(worktree: &Path, path: &str) -> Result<std::path::PathBuf, Stri
     check_paths(std::slice::from_ref(&path.to_string()))?;
     // The text stays inside; a link or junction inside the worktree could still lead out (to a
     // private folder, or a share whose server would be contacted), so no part below the worktree
-    // may be one. Read without following links; a missing part ends the walk (nothing past it exists).
+    // may be one. Read without following links; a missing part ends the walk (nothing past it
+    // exists), and any other lookup error refuses rather than guessing. A part swapped for a link
+    // between this walk and the file manager opening is not caught here (a narrow race on the
+    // user's own disk; the file manager then shows that place, nothing is read or written).
     let mut at = worktree.to_path_buf();
     for part in Path::new(&native(path)).components() {
         at.push(part);
         match fs::symlink_metadata(&at) {
             Ok(m) if m.file_type().is_symlink() => return Err(format!("{path} goes through a link that leads outside the worktree")),
             Ok(_) => {}
-            Err(_) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(e) => return Err(format!("{path} cannot be looked up: {e}")),
         }
     }
     let mut full = worktree.join(native(path));
@@ -1734,7 +1752,7 @@ pub async fn scm_open_pr(url: String) -> Result<(), String> {
     let opener = "open";
     #[cfg(all(unix, not(target_os = "macos")))]
     let opener = "xdg-open";
-    std::process::Command::new(opener).arg(url).spawn().map(|_| ()).map_err(|e| e.to_string())
+    quiet(opener).arg(url).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// GIT-035: one ref drawn on a commit; `kind` is current, head (detached), branch, upstream,
@@ -2235,6 +2253,57 @@ mod tests {
         run(&["add", "."], Some(&dir)).unwrap();
         run(&["commit", "-q", "-m", "first"], Some(&dir)).unwrap();
         dir
+    }
+
+    /// FIX-2 (b): no console window flashes up behind the app, so every program this module
+    /// starts outside its tests goes through `quiet`, the one place that hides the console.
+    #[test]
+    fn fix2_every_spawn_hides_its_console() {
+        let src = include_str!("scm.rs");
+        let body = &src[..src.find("mod tests {").unwrap()];
+        let quiet_at = body.find("fn quiet(").expect("a quiet spawn helper");
+        let quiet_end = quiet_at + body[quiet_at..].find("\n}").unwrap();
+        let needle = ["Command", "::new("].concat();
+        let bare: Vec<usize> = body
+            .match_indices(&needle)
+            .map(|(at, _)| at)
+            .filter(|at| !(quiet_at..quiet_end).contains(at))
+            .map(|at| body[..at].lines().count())
+            .collect();
+        assert!(bare.is_empty(), "programs started without hiding their console, at lines {bare:?}");
+    }
+
+    /// FIX-2 AFTER 1: Show in file manager only works on a worktree inside a registered project or
+    /// workspaces folder, so a forged call cannot open any folder on the machine.
+    #[test]
+    fn fix2_reveal_refuses_a_worktree_outside_every_project() {
+        let dir = temp_repo("fix2-fence");
+        let inside = vec![dir.to_string_lossy().into_owned()];
+        assert_eq!(reveal_place(&inside, &dir.to_string_lossy(), "README.md").unwrap(), dir.join("README.md"));
+        let elsewhere = vec![std::env::temp_dir().join("kolux-rs-no-such-project").to_string_lossy().into_owned()];
+        assert!(reveal_place(&elsewhere, &dir.to_string_lossy(), "README.md").unwrap_err().contains("outside"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// FIX-2 AFTER 2: only a part that is not there ends the walk; any other lookup error refuses.
+    #[test]
+    fn fix2_reveal_refuses_when_a_part_cannot_be_read() {
+        let dir = temp_repo("fix2-lookup");
+        let long = "a".repeat(300);
+        assert!(reveal_target(&dir, &format!("{long}/b.txt")).is_err(), "a name the file system cannot look up is refused, not walked past");
+        assert_eq!(reveal_target(&dir, "gone/b.txt").unwrap(), dir);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// FIX-2 FS 1 (server side): a pull request link that names a user, a password or a port is
+    /// never opened, so `https://github.com@evil.example/...` cannot pass for github.com.
+    #[test]
+    fn fix2_a_pull_request_link_with_a_user_or_port_is_not_opened() {
+        assert!(!safe_pr_url("https://github.com@evil.example/o/r/pull/1"));
+        assert!(!safe_pr_url("https://user:tok@github.com/o/r/pull/1"));
+        assert!(!safe_pr_url("https://github.com:8443/o/r/pull/1"));
+        assert!(!safe_pr_url("https:///o/r/pull/1"));
+        assert!(safe_pr_url("https://github.com/o/r/pull/1"));
     }
 
     #[test]

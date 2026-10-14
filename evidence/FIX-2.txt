@@ -1,0 +1,72 @@
+FIX-2 (council review reliability-85f1172, wave 4) on lane/reliability from 85f1172
+Step 0: merged main 5f3b287 (MERGE 66) as c563e74; clean, merged tree identical to main.
+
+What the user gets
+- No console window flashes up when Kolux asks gh which account is signed in, opens a pull
+  request in the browser, or stops a slow commit-message agent (every program scm starts now
+  hides its console the same way).
+- Asking gh for the signed-in account no longer runs on the async thread, so a slow gh never holds
+  up other commands.
+- Show in file manager works only for a worktree inside a registered project or workspaces folder
+  (its real place included), and a path part that cannot be looked up is refused instead of being
+  walked past.
+- A pull request link is opened only when its host part is a plain host name: no user, password
+  or port, so https://github.com@evil.example/... cannot pass for github.com.
+- A failed clone's one-line reason never shows a password or token that was in the link
+  (https://***@host), and a final line git ended with a bare carriage return still counts.
+- All Changes: the status read as the tab opens no longer overwrites a newer watcher status (the
+  Commit count and Commit button state are never up to 30 s stale), and a base read that answers
+  after the tab moved on no longer changes the base line.
+- A pasted GitHub link is parsed strictly: github.com only (or the GitHub Enterprise hosts the
+  caller lists), no user, password or port, owner and repository names by GitHub's rules, no
+  "." or ".." and no backslash or percent-escape tricks.
+- GIT-064: a workspace with neither a branch nor a commit known shows no "detached at" label; the
+  row and every sentence naming it use the folder name.
+
+Review items
+- FB1 (T-315-a ids to T-315-b): already on main (PLAN T-315-a / T-315-b lines), nothing to do.
+- FS1 pasted link parser strict: src/scm/paste.ts githubItem(text, hosts) + scm.rs safe_pr_url.
+- FS2 fresh flag: src/editor/AllChangesPane.tsx statusGate (first used only until watched).
+- (b) CREATE_NO_WINDOW on the gh spawn: scm.rs quiet() used by gh_account (gh_login and
+  scm_gh_account), gh_run_for, write_message, its taskkill, scm_open_pr.
+- (c) model.ts GIT-064: worktreeLabel falls back to the folder name when head is empty.
+- AFTER 1 scm_reveal fences the worktree: scm.rs reveal_place -> links::fence(follow).
+- AFTER 2 reveal_target breaks only on NotFound, refuses other lookup errors; the swap race is
+  noted in a comment.
+- AFTER 3 failure_reason scrubs scheme://user:pass@ (git.rs hide_userinfo) and keeps a line that
+  ends in a bare \r (last non-empty \r segment).
+- AFTER 4 setBase after the alive check: the read returns { base, es } and fetch applies both after
+  the alive check.
+- Not touched: src/terminal/paste.ts (held by the look lane). T-315-b stays open (quick switcher,
+  CLI).
+- Evidence wording correction asked by the review (GIT_CONFIG_COUNT carrying
+  credential.interactive, not GIT_ASKPASS, caused the earlier password-test failure): recorded
+  here; evidence/FIX-1-followup.txt is left as committed.
+
+Tests (each run on the old code first, all failed; then passed)
+- scm::tests::fix2_every_spawn_hides_its_console (source scan: no Command::new outside quiet;
+  old code: no quiet helper, three bare spawns)
+- scm::tests::fix2_reveal_refuses_a_worktree_outside_every_project (old: Ok(README.md))
+- scm::tests::fix2_reveal_refuses_when_a_part_cannot_be_read (300-char name; old: walked past)
+- scm::tests::fix2_a_pull_request_link_with_a_user_or_port_is_not_opened (old: accepted
+  github.com@evil.example)
+- git::tests::fix2_a_clone_reason_hides_the_link_password_and_keeps_a_last_redrawn_line (old:
+  the token in the reason)
+- src/editor/AllChangesPane.test.ts "FIX-2: the status read as the tab opens" (2 tests; old: no
+  statusGate)
+- src/projects/model.test.ts "GIT-064: with neither a branch nor a commit known ..." (old:
+  "detached at ")
+- src/scm/paste.test.ts "FIX-2: a pasted link only ever names the host it shows" and the GHE /
+  upper-case host lines in "cleans a pull request ..." (old: github.com@evil.example accepted)
+Red run: G:/Temp/rel-w1-logs/fix2-red.log (Rust 5 failed), vitest 5 failed / 32 passed.
+Green run: G:/Temp/rel-w1-logs/fix2-green.log (Rust 5/5), vitest 37/37 on the three files.
+
+Gates: see the commit body (full cargo, clippy, tsc, vitest, plan-check, firewall).
+
+LIVE PROOF PENDING (batched)
+1. Open All Changes on a worktree, commit from a terminal right away: the Commit count drops to 0
+   and stays there (no jump back to the old count a moment later).
+2. Source Control > the pull request's Open in browser: the browser opens, no console window
+   flashes.
+3. Paste https://github.com@example.com/o/r/pull/1 into the quick switcher once T-315-b wires it:
+   nothing opens.
