@@ -125,6 +125,7 @@ import { aiOf, useKitRun, useKits, type KitWait } from "./kits/useKits";
 import { useWizard } from "./onboarding/useWizard";
 import { hooksOn } from "./settings/AgentsPage";
 import ToolNotices from "./launch/ToolNotices";
+import { AgentsChat } from "./chat/ChatView";
 import PlanSheet from "./terminal/PlanSheet";
 import { draftKey, feedbackMessage, keepDraft, showsReview, stillPending, type PlanDraft } from "./terminal/planReview";
 
@@ -1721,12 +1722,20 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     const text = feedbackMessage(d.comments, d.note);
     setReviewing(null);
     dropDraft(draftKey(p.key, plan));
-    await invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).catch(() => {});
-    for (let i = 0; i < 30 && (hookRef.current[p.key] === "waiting" || hookRef.current[p.key] === "permission"); i++) await new Promise((r) => setTimeout(r, 100));
+    // Claude has no hook for a deny inside its own menu, so the pane leaves "permission" here, as answer() does.
+    const left = await invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).then(() => true, () => false);
+    if (!left) return setToast("Kolux could not answer the agent. Answer it in its terminal; your feedback was not typed.");
+    setHook((h) => ({ ...h, [p.key]: "working" }));
+    // SAFE-004: the feedback is typed only once the agent has left its menu; an Enter while the menu
+    // is still open would pick its default, which is Yes (council re-review of chat a969502).
+    const asking = () => hookRef.current[p.key] === "waiting" || hookRef.current[p.key] === "permission";
+    for (let i = 0; i < 30 && asking(); i++) await new Promise((r) => setTimeout(r, 100));
+    if (asking()) return setToast("The agent is still asking. Answer it in its terminal; your feedback was not typed.");
     const id = ptys.current[p.key];
     if (id === undefined || !panesRef.current.some((x) => x.key === p.key)) return;
     await invoke("terminal_write", { id, data: "\x1b[200~" + text + "\x1b[201~" }).catch(() => {});
     await new Promise((r) => setTimeout(r, 300));
+    if (asking()) return setToast("The agent is still asking. Answer it in its terminal; your feedback was not sent.");
     await invoke("terminal_write", { id, data: "\r" }).catch(() => {});
     setHook((h) => ({ ...h, [p.key]: "working" }));
     setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
@@ -2203,6 +2212,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           )}
           {screen === "skills" && <SkillsPage workspace={activeDir} onClose={() => closeSkills(setScreen)} />}
           {inbox && <InboxView items={inboxItems(sources, now)} now={now} onOpen={openPane} />}
+          {screen === "agents" && <AgentsChat panes={panes.filter((p) => !p.kind && !p.seats).map((p) => ({ key: p.key, cwd: p.cwd, title: p.title }))} focused={selected ?? focused} ptyOf={(k) => ptys.current[k]} hook={hook} stateOf={(k) => hookRef.current[k]} />}
           {tower && <TowerView rows={towerRows(towerSeats())} usage={usageByAccount(towerSeats(), plan)} now={now} onOpen={openPane} />}
           {floor && <FloorView />}
           {agentsScreen && selected === null && (
