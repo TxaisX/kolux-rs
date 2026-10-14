@@ -76,6 +76,9 @@ if (OFFSCREEN && KEEP) {
 // Council FIX-1 (FIX-SOON 3): the temp folder is removed only when it carries this file, which setup()
 // writes, so a mistyped --temp never deletes a folder this script did not make.
 const TEMP_MARKER = ".kolux-rs-smoke-temp";
+// FIX-2 (council re-review AFTER 2): the marker names the smoke run that made the folder, so a second run
+// never deletes a folder a live run is using.
+const markerText = (pid) => `made by scripts/evidence/smoke.mjs setup(); pid ${pid}; removed with this folder\n`;
 const ONLY = opt("only", ATTACH ? "1,2,3,4" : "1,2,3,4,5")
   .split(",")
   .map((s) => Number(s.trim()))
@@ -416,9 +419,10 @@ async function closeApp() {
 // ---------- setup: a throwaway repo as a project, its main checkout open with one shell ----------
 async function setup() {
   const held = await removeTemp(TEMP, null);
-  if (held) throw new Error(`the temp folder ${TEMP} could not be cleared (${held}${held === "NOMARKER" ? ": it holds files but no marker from a smoke setup; pick another --temp or delete it by hand" : ""})`);
+  const why = { NOMARKER: ": it holds files but no marker from a smoke setup; pick another --temp or delete it by hand", INUSE: ": another smoke run that is still running made it; pass another --temp" };
+  if (held) throw new Error(`the temp folder ${TEMP} could not be cleared (${held}${why[held] ?? ""})`);
   mkdirSync(TEMP, { recursive: true });
-  writeFileSync(join(TEMP, TEMP_MARKER), "made by scripts/evidence/smoke.mjs setup(); removed with this folder\n");
+  writeFileSync(join(TEMP, TEMP_MARKER), markerText(process.pid));
   mkdirSync(repo, { recursive: true });
   mkdirSync(marks, { recursive: true });
   writeFileSync(smokeFile, ORIGINAL);
@@ -737,16 +741,30 @@ function smokeConfig() {
 // still held (EPERM / EBUSY / ENOTEMPTY) with a growing wait: 0.5 s, 1 s ... 2.5 s. fs's own maxRetries
 // does not retry EPERM on a held folder (Node 24 fails at once), so the loop is here. Returns null when
 // gone, else the error code: a held folder never throws. Council FIX-1: a folder that holds files but no
-// marker from setup() is never removed ("NOMARKER"); a missing or empty one is fine.
+// marker from setup() is never removed ("NOMARKER"); a missing or empty one is fine. FIX-2: a folder
+// whose marker names another smoke run that is still alive is never removed ("INUSE"); when the delete
+// stops part way (a file the app still holds), the marker is written again, so the next run can clear it.
 async function removeTemp(dir, pid, retries = 5) {
   if (existsSync(dir) && !existsSync(join(dir, TEMP_MARKER)) && readdirSync(dir).length > 0) return "NOMARKER";
+  const mark = existsSync(join(dir, TEMP_MARKER)) ? readFileSync(join(dir, TEMP_MARKER), "utf8") : null;
+  const owner = Number(/pid (\d+)/.exec(mark ?? "")?.[1] ?? 0);
+  if (owner && owner !== process.pid && (await alive(owner).catch(() => true))) return "INUSE";
   for (let i = 0; i < 20 && pid && (await alive(pid).catch(() => false)); i++) await sleep(500);
   for (let i = 0; ; i++) {
     try {
       rmSync(dir, { recursive: true, force: true });
       return null;
     } catch (e) {
-      if (i >= retries || !["EPERM", "EBUSY", "ENOTEMPTY"].includes(e.code)) return e.code ?? e.message;
+      if (i >= retries || !["EPERM", "EBUSY", "ENOTEMPTY"].includes(e.code)) {
+        if (existsSync(dir) && !existsSync(join(dir, TEMP_MARKER))) {
+          try {
+            writeFileSync(join(dir, TEMP_MARKER), mark ?? markerText(process.pid));
+          } catch {
+            // the folder is going or locked; the next run reports NOMARKER and says to delete it by hand
+          }
+        }
+        return e.code ?? e.message;
+      }
       await sleep(500 * (i + 1));
     }
   }
@@ -759,6 +777,11 @@ if (flag("self-test")) {
   // Council FIX-1: everything here lives in TEMP/held (marked like setup() marks TEMP); TEMP itself and
   // anything else in it are never removed, so a kept --keep folder survives a self-test.
   const d = join(TEMP, "held");
+  // FIX-2 (council re-review AFTER 1): the self-test removes TEMP/held, so one it did not make is refused.
+  if (existsSync(d)) {
+    console.error(`smoke: ${d} already exists and the self-test would remove it; pick another --temp or delete it by hand`);
+    process.exit(2);
+  }
   const held = (ms) => {
     mkdirSync(d, { recursive: true });
     writeFileSync(join(d, TEMP_MARKER), "");
@@ -788,6 +811,39 @@ if (flag("self-test")) {
   mkdirSync(empty, { recursive: true });
   const emptyGone = await removeTemp(empty, null, 0);
   checks.push([emptyGone === null && !existsSync(empty), `an empty unmarked folder may go: ${emptyGone ?? "gone"}`]);
+  // FIX-2 (FIX-SOON 3): a file held with no sharing (as the app holds its log) stops the delete after the marker
+  // is gone; the marker is written again, so the next run is not refused with NOMARKER.
+  const partial = join(d, "partial");
+  mkdirSync(partial, { recursive: true });
+  writeFileSync(join(partial, TEMP_MARKER), "");
+  const heldLog = join(partial, "z-app.log");
+  writeFileSync(heldLog, "x");
+  spawn("powershell", ["-NoProfile", "-Command", `$f=[IO.File]::Open('${heldLog}','Open','ReadWrite','None'); Start-Sleep -Milliseconds 5000; $f.Close()`], { stdio: "ignore", windowsHide: true });
+  for (let i = 0; i < 40; i++) {
+    try {
+      writeFileSync(heldLog, "x");
+      await sleep(250);
+    } catch {
+      break;
+    }
+  }
+  const part = await removeTemp(partial, null, 0);
+  const back = existsSync(join(partial, TEMP_MARKER));
+  checks.push([part !== null && back, `a delete stopped by a held file writes the marker again: ${part ?? "REMOVED"}, marker ${back ? "back" : "MISSING (the next run would get NOMARKER)"}`]);
+  const after = await removeTemp(partial, null, 8);
+  checks.push([after === null && !existsSync(partial), `once the file is let go the folder goes: ${after ?? "gone"}`]);
+  // FIX-2 (AFTER 2): a marker names the smoke run that made it; another run's folder is refused while that run lives.
+  const owned = join(d, "owned");
+  mkdirSync(owned, { recursive: true });
+  const other = spawn(process.execPath, ["-e", "setTimeout(() => {}, 8000)"], { stdio: "ignore", windowsHide: true });
+  writeFileSync(join(owned, TEMP_MARKER), markerText(other.pid));
+  writeFileSync(join(owned, "f.txt"), "x");
+  const inUse = await removeTemp(owned, null, 0);
+  checks.push([inUse === "INUSE" && existsSync(join(owned, "f.txt")), `a folder whose marker names another live smoke run is refused and kept: ${inUse ?? "REMOVED"}`]);
+  other.kill();
+  await sleep(500);
+  const freed = await removeTemp(owned, null, 4);
+  checks.push([freed === null && !existsSync(owned), `once that run has ended its folder may go: ${freed ?? "gone"}`]);
   const cleaned = await removeTemp(d, null, 8);
   checks.push([cleaned === null && !existsSync(d) && existsSync(TEMP) && existsSync(sibling), `only TEMP/held was removed; TEMP and its other files stay: ${cleaned ?? "held gone"}, TEMP ${existsSync(TEMP) ? "kept" : "GONE"}, sibling ${existsSync(sibling) ? "kept" : "GONE"}`]);
   if (!hadSibling) rmSync(sibling, { force: true });
@@ -803,6 +859,15 @@ if (flag("self-test")) {
     (e) => e.code,
   );
   checks.push([both === 2 && !existsSync(join(TEMP, "never-made")), `--offscreen with --keep is refused before anything runs: exit ${both}`]);
+  const pre = join(TEMP, "pre-held");
+  mkdirSync(join(pre, "held"), { recursive: true });
+  writeFileSync(join(pre, "held", "precious.txt"), "x");
+  const again = await run(process.execPath, [fileURLToPath(import.meta.url), "--self-test", "--temp", pre]).then(
+    () => 0,
+    (e) => e.code,
+  );
+  checks.push([again === 2 && existsSync(join(pre, "held", "precious.txt")), `a self-test whose TEMP/held already exists is refused and the folder kept: exit ${again}`]);
+  rmSync(pre, { recursive: true, force: true });
   for (const [ok, note] of checks) log(`${ok ? "PASS" : "FAIL"} self-test: ${note}`);
   const bad = checks.filter((c) => !c[0]).length;
   log(`smoke self-test: ${checks.length - bad}/${checks.length} passed`);
