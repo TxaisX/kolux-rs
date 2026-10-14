@@ -98,10 +98,8 @@ export function attachPaste(
     });
     if (timer === null && !inFlight) pump();
   };
-  const onPaste = (e: Event) => {
-    let text = (e as ClipboardEvent).clipboardData?.getData("text") ?? "";
-    e.preventDefault();
-    e.stopImmediatePropagation();
+  // Council D2 MERGE 47 FB2: every paste (the clipboard event and the right-click menu) goes through here.
+  const take = (text: string) => {
     // Council D2 MERGE 47 F1: one line with a line end at the end ("evil-cmd\n") is typed without it, like
     // Windows Terminal's trimPaste, so a single-line paste never runs by itself.
     if (lineCount(text) === 1) text = stripEnd(text);
@@ -117,8 +115,16 @@ export function attachPaste(
     if (ask && needsAsk(text, bracketed())) ask(lineCount(text), go);
     else go();
   };
+  const onPaste = (e: Event) => {
+    const text = (e as ClipboardEvent).clipboardData?.getData("text") ?? "";
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    take(text);
+  };
   target?.addEventListener("paste", onPaste, { capture: true });
   return {
+    /** A paste that did not come from a clipboard event (the right-click menu): the same checks and asks. */
+    paste: take,
     /** Deliver what waited, oldest first. */
     flush: () => {
       for (const text of queued.splice(0)) deliver(text);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolve } from "../keys/keymap";
-import { answersPrompt, routeKey, type RoutedKey } from "./shellKeys";
+import { answersPrompt, newlineAgent, routeKey, type RoutedKey } from "./shellKeys";
 
 const key = (code: string, k: string, mods: Partial<RoutedKey> = {}): RoutedKey => ({ code, key: k, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...mods });
 const win = resolve(null, "win32");
@@ -81,5 +81,31 @@ describe("T-151-b a key that reaches the program answers the prompt; a Kolux cho
     expect(answersPrompt({ kind: "shell" }, "Control")).toBe(false);
     expect(answersPrompt({ kind: "kolux", id: "terminal.search" }, "f")).toBe(false);
     expect(answersPrompt({ kind: "scroll", to: "top" }, "ArrowUp")).toBe(false);
+  });
+});
+
+describe("council D2 MERGE 47 FB1 and FS1", () => {
+  it("a chord held by the terminal (Terminal first) reaches the program", () => {
+    const p = key("KeyP", "p", { ctrlKey: true });
+    const k = key("KeyK", "k", { ctrlKey: true });
+    expect(routeKey(win, p, false).kind).toBe("kolux");
+    expect(routeKey(win, k, false)).toEqual({ kind: "kolux", id: "terminal.clear" });
+    const pRoute = routeKey(win, p, false);
+    const held = (id: string) => id === "terminal.clear" || (pRoute.kind === "kolux" && id === pRoute.id);
+    expect(routeKey(win, p, false, "shell", held)).toEqual({ kind: "shell" });
+    expect(routeKey(win, k, false, "shell", held)).toEqual({ kind: "shell" });
+    // a chord nobody held stays Kolux's
+    expect(routeKey(win, key("KeyF", "f", { ctrlKey: true }), false, "shell", held)).toEqual({ kind: "kolux", id: "terminal.search" });
+  });
+
+  it("Shift+Enter's newline follows the program that started, not the pane's agent", () => {
+    expect(newlineAgent("codex", "codex")).toBe("codex");
+    expect(newlineAgent("C:/tools/claude.exe", "claude")).toBe("claude");
+    // Codex missing, bash started in its place: a shell, so Shift+Enter never sends a running newline
+    expect(newlineAgent("bash", "codex")).toBe("shell");
+    expect(newlineAgent("pwsh.exe", "codex")).toBe("shell");
+    expect(newlineAgent(null, "codex")).toBe("codex");
+    const shiftEnter = key("Enter", "Enter", { shiftKey: true });
+    expect(routeKey(win, shiftEnter, false, newlineAgent("bash", "codex"))).toEqual(routeKey(win, shiftEnter, false, "shell"));
   });
 });

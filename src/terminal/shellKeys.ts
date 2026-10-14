@@ -10,6 +10,7 @@
 // of an input method's composition (TERM-083) is never routed: the terminal's composition handling owns it.
 import type { Agent } from "../chrome/VendorMark";
 import { matchEvent, type KeyLike, type Keymap } from "../keys/keymap";
+import { shellKind } from "./drop";
 
 export type Route =
   | { kind: "ime" }
@@ -29,12 +30,17 @@ const LINE_JUMPS: Record<string, string> = { ArrowLeft: "\x01", ArrowRight: "\x0
 /** TERM-080: Shift+Enter (and Ctrl+Enter) in an agent pane is a newline, sent the way that agent reads one: Claude
  *  Code takes ESC CR (what its own terminal setup binds), Codex takes Ctrl+J (a bare line feed). A shell keeps
  *  plain Enter: it has no multi-line prompt to feed. Alt and Cmd variants are left to the keymap and the shell. */
+/** Council D2 MERGE 47 FS1: whose newline Shift+Enter sends, from the program that really started. An agent
+ *  pane that fell back to a shell (Codex missing, bash started) is a shell: a newline there would run a
+ *  half-typed command. Before anything started, the pane's agent. */
+export const newlineAgent = (started: string | null | undefined, agent: Agent): Agent => (shellKind(started) === "other" ? agent : "shell");
+
 export function newlineFor(agent: Agent, e: RoutedKey): Route | null {
   if (agent === "shell" || e.key !== "Enter" || e.altKey || e.metaKey || e.shiftKey === e.ctrlKey) return null;
   return { kind: "send", data: agent === "claude" ? "\x1b\r" : "\n" };
 }
 
-export function routeKey(map: Keymap, e: RoutedKey, hasSelection: boolean, agent: Agent = "shell"): Route {
+export function routeKey(map: Keymap, e: RoutedKey, hasSelection: boolean, agent: Agent = "shell", held: (id: string) => boolean = () => false): Route {
   if (e.isComposing || e.keyCode === 229) return { kind: "ime" };
   const mac = map.platform === "darwin";
   const only = (mod: "alt" | "meta" | "ctrl") => e.altKey === (mod === "alt") && e.metaKey === (mod === "meta") && e.ctrlKey === (mod === "ctrl") && !e.shiftKey;
@@ -47,6 +53,8 @@ export function routeKey(map: Keymap, e: RoutedKey, hasSelection: boolean, agent
   if (mac && only("ctrl") && /^Key[A-Z]$/.test(e.code)) return { kind: "shell" };
   const hit = matchEvent(map, e, ["global", "terminal", "tabs"]);
   if (!hit) return newlineFor(agent, e) ?? { kind: "shell" };
+  // Council D2 MERGE 47 FB1: a chord the user gave to the terminal ("Terminal first") reaches the program.
+  if (held(hit.id)) return { kind: "shell" };
   if (hit.id === "terminal.copySelection" && !hasSelection && !e.shiftKey && !e.metaKey) return { kind: "shell" };
   return { kind: "kolux", id: hit.id };
 }

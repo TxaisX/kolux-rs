@@ -38,7 +38,7 @@ import PlusMenu, { programWord, shellWord, type AgentInfo } from "../launch/Plus
 import { useKeymap } from "../keys/KeymapContext";
 import { labelOf } from "../keys/keymap";
 import { attachPaste } from "./paste";
-import { answersPrompt, routeKey } from "./shellKeys";
+import { answersPrompt, newlineAgent, routeKey } from "./shellKeys";
 import { clickTarget, findLinks, hintFor, linkFor, rangeOf, resolvePath, spanOf, type Found } from "./links";
 import { dropSummary, dropText, overRect, shellKind } from "./drop";
 import { decideOsc52, parseOsc52, sayOnce } from "./osc52";
@@ -526,7 +526,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     // Ctrl+Shift+C does nothing and says nothing.
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
-      const route = routeKey(keys.current, e, term.hasSelection(), agentRef.current);
+      const route = routeKey(keys.current, e, term.hasSelection(), newlineAgent(startedRef.current, agentRef.current));
       // T-151-b (council D2 MERGE 47 S2): a real key that goes to the program answers the permission prompt as
       // far as the buttons are concerned; xterm's own focus / mouse / cursor replies (onData) no longer do.
       if (answersPrompt(route, e.key)) setAnswered(prompt.current.count);

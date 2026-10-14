@@ -228,3 +228,16 @@ test("a bracketed paste holding a fake close bracket and a command arrives insid
   expect(prepareForTerminal("a\x1bb\r\nc", true)).toBe("ab\rc");
   expect(prepareForTerminal("a\x1bb\r\nc")).toBe("a\x1bb\rc"); // an unbracketed paste keeps its bytes
 });
+
+test("council D2 MERGE 47 FB2: a right-click paste goes through the same checks and asks", () => {
+  const t = new EventTarget();
+  const got: string[] = [];
+  let asked: { lines: number; go: () => void } | null = null;
+  const p = attachPaste(t, (s) => got.push(s), () => false, () => {}, () => false, () => false, (lines, go) => (asked = { lines, go }));
+  p.paste("a\nb");
+  expect(asked).toEqual({ lines: 2, go: expect.any(Function) });
+  expect(got).toEqual([]);
+  p.paste("x\n");
+  expect(got).toEqual(["x"]);
+  p.detach();
+});
