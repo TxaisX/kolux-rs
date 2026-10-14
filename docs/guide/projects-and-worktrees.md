@@ -19,6 +19,12 @@ The bottom of the sidebar holds "New session" (start an agent in a new pane insi
 
 When someone makes a worktree outside Kolux, a notice says "N new workspace(s)" with Show, Hide and Done.
 
+## The right sidebar
+
+On the Terminals view, the right sidebar holds Explorer, Source Control and Checks. Ctrl+L hides or shows it, dragging its edge resizes it, and it remembers the last tab you used. When it is too narrow for every tab, the ones that do not fit go into a **More** menu; picking one there brings it onto the strip.
+
+If a panel breaks, it is replaced by "This panel stopped working and was closed; the rest of Kolux keeps running." with **Try again**, which draws it afresh. Switching tabs also starts it afresh.
+
 ## What a worktree is
 
 A worktree is an extra working folder for the same Git repository, on its own branch. Kolux calls it a workspace. Each AI can then edit its own files, and nobody collides. The original folder stays as the main checkout.
@@ -36,6 +42,14 @@ Press the plus, or Ctrl+N (also Ctrl+Shift+N). The form asks for:
 | Note | An optional first request for the agent |
 
 "Advanced…" adds a branch name, reuse of an existing branch, opening a pull request, a setup script (run it, or skip it, in a tab, a split right or a split below, and optionally wait for it) and the base to start from. Press "Create workspace" or Cancel. Tick "Create more" to keep the form open for another.
+
+## Setup scripts and the issue command
+
+The setup script is `scripts: setup:` in the new workspace's `kolux.yaml` (a settings file in the repository). It runs inside the workspace with three variables set: `KOLUX_ROOT_PATH` (the main folder), `KOLUX_WORKTREE_PATH` (the workspace's folder) and `KOLUX_WORKSPACE_NAME` (that folder's name). A `.bat` or `.cmd` script runs through Command Prompt even when your shell is Git Bash. If Kolux was started from a half-active conda environment, those conda variables are cleared first.
+
+A workspace made from a linked GitHub issue also runs the project's issue command, in its own tab. It is your own `.kolux/issue-command` file in the repository when there is one, otherwise `issueCommand:` in `kolux.yaml`. `{{issue}}` becomes the issue number and `{{issueUrl}}` its address; a command with neither gets the number added at the end. The issue's title is never put in, because anyone can write it. A linked pull request runs nothing, and skipping the setup script skips the issue command too.
+
+Kolux does not yet ask before running a repository's `kolux.yaml` commands, so only create workspaces in repositories you trust.
 
 While Git works, a stand-in row shows "creating…" with a cancel x.
 
@@ -85,7 +99,13 @@ Open the right panel with Ctrl+Shift+G (Ctrl+L hides or shows the panel). Source
 
 Each section has a count, Stage all or Unstage all, and Discard all. Each row has Stage or Unstage and Discard. Click selects a row, Ctrl adds, Shift selects a range, and a bar then offers the same actions for the selection. Esc clears it.
 
-Header buttons: Review changes (an agent checks the branch), All changes, list or tree view, Refresh, Close.
+Header buttons: Review changes (an agent checks the branch), All changes, Filter the changes, list or tree view, Refresh, Close.
+
+**Filter the changes.** The funnel button opens a "Filter by path" box. Type part of a file's path (any capitals) and each section keeps only the rows that match; a renamed file also matches its old path. If nothing matches, the panel says "No changed file matches ...". Esc empties the box and closes it, and so does the funnel button.
+
+**A file's menu.** Right-click a changed file for four choices: Copy path (the full path on disk), Copy relative path (from the workspace's folder), Open in its app (opens the file in the program your computer uses for that kind of file) and Show in file manager (shows the file in its folder, or the nearest folder that still exists if the file was deleted).
+
+**Submodules.** A submodule is a repository kept inside another one. When one has changed, it is a single row under Changes, with a small note such as "submodule · new commits" or "submodule · changed files, untracked files". The files inside it are not listed one by one. Kolux lists at most 50 changed submodules; if there are more, a note says how many were left out.
 
 "Open diffs in" picks where a clicked file's diff opens: **This split**, **Next split** (the split after this one; with only one split, a new one) or **New split**.
 
@@ -108,7 +128,17 @@ The main button proposes the next step on its own:
 
 A "Commit and" menu commits then pushes, syncs or force pushes. A "Remote actions" menu has Push, Pull, Sync, Fetch, Fast-forward, Force push with lease, Publish branch and Rebase from base.
 
-The panel can also create a pull request (Title, Description, base branch), open the current one, link another, merge it, and run "Fix with AI" on failed checks. The list refreshes after each action, and within about a second of any change to the workspace's files or Git state while the panel is open. Changes to files Git ignores (your .gitignore, which usually covers build and package folders) do not trigger it, and while files keep changing the status is read at most once every 4 seconds. If Kolux cannot watch the folder, it checks every 4 seconds instead. Open diffs and All Changes follow the same rule.
+**When Git has no pull policy.** If your branch and its remote have each gained commits (their histories have split) and Git has not been told how to combine them, a pull stops. Kolux then shows "stopped: this branch and its remote have split, and git has no pull policy set" with a choice of how to bring the remote's commits in. Pressing a button runs the pull again that way:
+
+| Button | What it does |
+|---|---|
+| Merge | Joins the two histories with a merge commit |
+| Rebase | Replays this branch's commits on top of the remote's |
+| Fast-forward only | Pulls only when no merge is needed, so it fails while the histories are split |
+
+Each button has a "Copy setting" button beside it. It copies the Git command that makes that choice permanent, for example `git config pull.rebase true`. Kolux only copies it; nothing changes until you run it yourself.
+
+The panel can also create a pull request (Title, Description, base branch), open the current one, link another, merge it, and run "Fix with AI" on failed checks. The list refreshes after each action, and within about a second of any change to the workspace's files or Git state while the panel is open. Changes to files Git ignores (your .gitignore, which usually covers build and package folders) do not trigger it, unless the ignored folder still holds files Git tracks: a change to one of those counts. Editing `.git/info/exclude` (your private ignore list) is noticed too, in a linked workspace as well. While files keep changing the status is read at most once every 4 seconds. If Kolux cannot watch the folder, it checks every 4 seconds instead. Open diffs and All Changes follow the same rule.
 
 ### Discarding changes
 
@@ -123,6 +153,16 @@ Discard always asks first, and the message tells you the consequence.
 
 Conflicts cannot be discarded. Staged new files are deleted from disk, not only unstaged.
 
+## The Tasks page
+
+The Tasks page lists the GitHub issues and pull requests of the current project. It uses the GitHub command-line tool (`gh`), so you need to be signed in to it. A **Preset** picker chooses the list: All open, Created by me, Assigned to me, Needs my review, Mentions me or Recently closed. The search box takes GitHub search words, such as `is:pr label:bug`. The page remembers your preset, search and place in the list while Kolux is open.
+
+**Default view.** Tasks opens on All open the first time. Pick another preset and press **Make default**, and Tasks opens on it from then on. The button reads "Default view" (and is greyed out) while the preset you are looking at is already the default.
+
+**Filter pickers.** For a GitHub project, a row of six pickers sits under the toolbar: State (Any, Open, Closed, Merged), Author, Assignee, Label, Review requested and Reviewed by. Pick or type a value, then press Enter or click away. Each picker changes only its own word in the search, so your other search words stay. The x beside a picker clears just that one. Author, Assignee and the two review pickers suggest "@me" and the people who can be assigned in the project. Label suggests the project's labels. Review requested, Reviewed by and the Merged state only apply to pull requests, so choosing one narrows the list to pull requests. A State you pick replaces the preset's own open or closed word.
+
+**Forks.** If the project is a fork (a copy of another GitHub project), an **Issues from** picker appears. "this fork" lists issues from the fork itself. "upstream" lists issues from the project it was copied from; pull requests still come from the fork, and a small note says so ("issues ... · pull requests ..."). Your choice is kept for each project. If the upstream project has gone, or is no longer the fork's parent, Kolux says so and lists the fork's own issues instead.
+
 ## Quitting and reopening
 
 Terminals do not keep running while Kolux is closed. When you reopen, Kolux restores:
@@ -135,4 +175,4 @@ Claude and Codex tabs with a known session resume it. Other agents return at the
 
 Quitting with unsaved editor text asks "Quit with unsaved changes?" with "Quit without saving" or "Keep working".
 
-<!-- verified against: src/projects/ProjectsPanel.tsx, src/projects/AddProject.tsx, src/glossary.ts, src/scm/SourceControlPanel.tsx, src/scm/split.ts, src/scm/watch.ts, src-tauri/src/scm_watch.rs, src/scm/model.ts, src/chrome/RightSidebar.tsx, src/terminal/layout.ts, src/keys/actions.ts, src/App.tsx at 14e54da -->
+<!-- verified against: src/projects/ProjectsPanel.tsx, src/projects/AddProject.tsx, src/glossary.ts, src/scm/SourceControlPanel.tsx, src/scm/split.ts, src/scm/watch.ts, src-tauri/src/scm_watch.rs, src/scm/model.ts, src/chrome/RightSidebar.tsx, src/terminal/layout.ts, src/keys/actions.ts, src/App.tsx, src-tauri/src/setup.rs, src/setup/IssueCommand.tsx, src-tauri/src/scm.rs, src/tasks/TasksPage.tsx, src/tasks/model.ts, src-tauri/src/github.rs at e19b35b -->

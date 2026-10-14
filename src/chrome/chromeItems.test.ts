@@ -1,5 +1,7 @@
 import { expect, test } from "vitest";
 import { CHROME, chromeShown, windowSummary } from "./chromeItems";
+import { describe, it } from "vitest";
+import { MENU_SHORTCUT_IDS, menuBarState, menuEdit, menuScreen, menuSettingFlip, toAccelerator } from "./chromeItems";
 
 test("SET-020: Tasks and Automations buttons show and the app name is hidden by default (DT-A6)", () => {
   expect(CHROME.map((c) => c.id)).toEqual(["titleBarAppName", "tasksButton", "automationsButton", "skillsButton"]);
@@ -19,4 +21,62 @@ test("SET-016: the folded Window & Sidebar header sums up what shows", () => {
   expect(windowSummary({ titleBarAppName: true, automationsButton: false, statusBarVisible: false })).toBe("App name · Tasks · Status bar hidden");
   expect(windowSummary({ tasksButton: false, automationsButton: false, statusBarHidden: ["memory"] })).toBe("Status bar, 3 of 4 items");
   expect(windowSummary({ skillsButton: true })).toBe("Tasks · Automations · Skills · Status bar");
+});
+
+describe("T-248-a menu bar state (APP-009, SET-020, SET-009)", () => {
+  it("spells keymap chords the way the menu does and drops keys the menu cannot name", () => {
+    expect(toAccelerator("Mod+Comma")).toBe("CmdOrCtrl+Comma");
+    expect(toAccelerator("Mod+Shift+R")).toBe("CmdOrCtrl+Shift+R");
+    expect(toAccelerator("Mod+Equal")).toBe("CmdOrCtrl+Equal");
+    expect(toAccelerator("Mod+0")).toBe("CmdOrCtrl+0");
+    expect(toAccelerator("Cmd+Alt+F12")).toBe("Super+Alt+F12");
+    expect(toAccelerator("Mod+Shift+Plus")).toBe("");
+    expect(toAccelerator("Hyper+B")).toBe("");
+    expect(toAccelerator(undefined)).toBe("");
+  });
+
+  it("ticks agree with each Settings switch, defaults included", () => {
+    const chords: Record<string, string[]> = { "app.settings": ["Mod+Comma"], "zoom.in": ["Mod+Equal", "Mod+NumpadAdd"] };
+    const st = menuBarState({ statusBarVisible: false, automationsButton: false }, "board", (id) => chords[id]);
+    expect(st).toMatchObject({ screen: "board", statusBarVisible: false, tasksButton: true, automationsButton: false, titleBarAppName: false });
+    expect(st.accelerators["app.settings"]).toBe("CmdOrCtrl+Comma");
+    expect(st.accelerators["zoom.in"]).toBeUndefined();
+    expect(st.classic).toBe(false);
+    expect(st.accelerators["sidebar.left.toggle"]).toBe("");
+    expect(Object.keys(st.accelerators)).toEqual([...MENU_SHORTCUT_IDS]);
+  });
+
+  it("a changed shortcut changes the state the menu is rebuilt from", () => {
+    const a = menuBarState({}, "terminals", (id) => (id === "app.settings" ? ["Mod+Comma"] : undefined));
+    const b = menuBarState({}, "terminals", (id) => (id === "app.settings" ? ["Mod+Shift+P"] : undefined));
+    expect(JSON.stringify(a)).not.toBe(JSON.stringify(b));
+    expect(b.accelerators["app.settings"]).toBe("CmdOrCtrl+Shift+P");
+  });
+
+  it("the Classic look is part of the state, so switching the look rebuilds the menu", () => {
+    const none = () => undefined;
+    expect(menuBarState({}, "terminals", none, true).classic).toBe(true);
+    expect(JSON.stringify(menuBarState({}, "terminals", none, true))).not.toBe(JSON.stringify(menuBarState({}, "terminals", none)));
+  });
+
+  it("a tick box flips its own field from what is shown now, and screens map back", () => {
+    expect(menuSettingFlip({}, "set.statusBarVisible")).toEqual(["statusBarVisible", false]);
+    expect(menuSettingFlip({ statusBarVisible: false }, "set.statusBarVisible")).toEqual(["statusBarVisible", true]);
+    expect(menuSettingFlip({}, "set.titleBarAppName")).toEqual(["titleBarAppName", true]);
+    expect(menuSettingFlip({ automationsButton: false }, "set.automationsButton")).toEqual(["automationsButton", true]);
+    expect(menuSettingFlip({}, "app.settings")).toBeNull();
+    expect(menuScreen("screen.board")).toBe("board");
+    expect(menuScreen("screen.tower")).toBeNull();
+  });
+
+  it("Edit goes to a focused field, else only Copy and Select All reach the terminal, and Paste waits", () => {
+    expect(menuEdit("edit.undo", true)).toEqual({ field: "undo" });
+    expect(menuEdit("edit.selectAll", true)).toEqual({ field: "selectAll" });
+    expect(menuEdit("edit.copy", false)).toEqual({ terminal: "copy" });
+    expect(menuEdit("edit.selectAll", false)).toEqual({ terminal: "selectAll" });
+    for (const id of ["edit.undo", "edit.redo", "edit.cut"]) expect(menuEdit(id, false)).toBeNull();
+    expect(menuEdit("edit.paste", true)).toBeNull();
+    expect(menuEdit("edit.paste", false)).toBeNull();
+    expect(menuEdit("zoom.in", true)).toBeNull();
+  });
 });

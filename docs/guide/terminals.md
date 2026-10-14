@@ -130,6 +130,8 @@ The Start button reads "Start", or "Start N" for several, and "Starting…" whil
 | Interrupt the program | Ctrl+C with nothing selected |
 | Select all terminal text | Ctrl+Shift+A |
 
+Two switches in Settings, Terminal & sessions add mouse shortcuts: "Copy on select" copies text as soon as you select it, and "Right-click pastes (or copies the selection)" does what it says. See [Settings](settings.md).
+
 A paste goes only to the focused pane. Large pastes are sent in pieces, one after another, so the window and your other panes stay responsive; the program still receives it as one paste. Press Ctrl+C or Esc during a long paste to stop the rest of it. A paste over 8 MB is refused: the header says "Paste of X MB is over the 8.0 MB limit; nothing was sent". If the opening request is still being delivered, your paste waits and goes in after it.
 
 Several lines pasted at once arrive as one paste, so they wait for your Enter instead of running line by line. Git Bash, PowerShell 7, Claude and Codex all work this way. Windows PowerShell 5.1, the default shell, cannot: each pasted line still runs as it arrives, so paste one command at a time there. Control characters inside a paste are removed, so pasted text cannot end the paste early and run on its own.
@@ -166,4 +168,15 @@ On Windows, the main key is Ctrl. You can change every shortcut in Settings (see
 | Ctrl+Shift+C | Copy selection |
 | Ctrl+Shift+A | Select all terminal text |
 
-<!-- verified against: src/chrome/LayoutStrip.tsx, src/chrome/TopBar.tsx, src/App.tsx, src/terminal/TerminalPane.tsx, src/terminal/PaneMenu.tsx, src/terminal/paste.ts, src/terminal/permissionAnswer.ts, src/terminal/pin.ts, src/terminal/remove.ts, src/terminal/status.ts, src/terminal/layout.ts, src/launch/ChooserPane.tsx, src/keys/actions.ts at 3e09a0f -->
+### Who gets a key: Kolux or the terminal
+
+A terminal program such as a text editor in the shell may want the same keys Kolux uses. Settings, Shortcuts, "Shortcuts in terminals" decides who wins while a terminal pane has focus.
+
+| Choice | What happens |
+|---|---|
+| Kolux first (default) | Every Kolux shortcut keeps working while you type in a terminal |
+| Terminal first | Only the commands marked safe for terminals fire. Every other key goes to the program in the terminal |
+
+With "Terminal first", Kolux still keeps Ctrl+V, Ctrl+Tab, Ctrl+PageUp, Ctrl+PageDown and Alt+1 to Alt+9. It also keeps Ctrl+, (Settings), Ctrl+Alt+A (the floating terminal), the zoom keys, copying a selection, and the split keys. On the Shortcuts page, a command held back this way carries a "Goes to the terminal" badge. The choice covers every terminal pane, including the floating terminal.
+
+<!-- verified against: src/chrome/LayoutStrip.tsx, src/chrome/TopBar.tsx, src/App.tsx, src/terminal/TerminalPane.tsx, src/terminal/PaneMenu.tsx, src/terminal/paste.ts, src/terminal/permissionAnswer.ts, src/terminal/pin.ts, src/terminal/remove.ts, src/terminal/status.ts, src/terminal/layout.ts, src/launch/ChooserPane.tsx, src/keys/actions.ts, src/keys/terminalPolicy.ts, src/settings/ShortcutsPage.tsx, src/settings/TerminalPage.tsx, src/terminal/text.ts at aaafe20 -->

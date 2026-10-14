@@ -1,0 +1,19 @@
+/* The browser pane's own rules (lane browser); the shared header and address-bar look stay in styles.css. */
+/* BROW-006: the slot is the address bar's place in the toolbar. In a pane under 360 px the bar is compact; while it
+   has focus it floats across the whole toolbar, and the buttons under it keep their place because the slot stays in flow. */
+.pane.browser { container-type: inline-size; }
+.pane.browser .pane-head { position: relative; }
+.pane.browser .pane-head .address-slot { flex: 1; min-width: 0; display: flex; }
+.pane.browser .pane-head .address-slot .address { text-overflow: ellipsis; }
+@container (max-width: 359px) {
+  .pane.browser .pane-head .address-slot { flex: none; width: 72px; }
+  .pane.browser .pane-head .address-slot .address:focus { position: absolute; top: 3px; left: 8px; right: 8px; width: auto; height: calc(100% - 6px); z-index: 3; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); }
+}
+
+/* BROW-012: the zoom level, shown for a moment after it changes. */
+.pane.browser .pane-head .zoom-badge { color: var(--fg-muted); font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--chip-bg); }
+/* BROW-007: the find bar sits between the toolbar and the page, which shrinks to make room. */
+.pane.browser .find-bar { display: flex; align-items: center; gap: 4px; padding: 3px 8px; border-bottom: 1px solid var(--line-subtle); }
+.pane.browser .find-bar .find { flex: 1; min-width: 0; }
+/* BROW-023: the site icon takes the globe's place. */
+.pane.browser .pane-head .site-icon { display: block; object-fit: contain; }

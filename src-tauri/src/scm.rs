@@ -50,6 +50,26 @@ pub struct Status {
     pub resolved: Vec<String>,
     /// GIT-001: the lines each file adds and removes, per section; a binary file has no entry.
     pub lines: LineCounts,
+    /// GIT-013: each changed submodule's path with what changed in it ("new commits", "changed
+    /// files", "untracked files", joined with commas); git already gives one row per submodule.
+    pub submodules: std::collections::BTreeMap<String, String>,
+    /// GIT-013: submodule rows left out past `SUBMODULE_ROWS`, for the panel's note.
+    pub submodules_cut: u32,
+}
+
+/// GIT-013: at most this many changed submodules are listed; the rest are counted in the note.
+pub const SUBMODULE_ROWS: usize = 50;
+
+/// GIT-013: what the `S<c><m><u>` field of a status line says changed inside a submodule; None
+/// for an ordinary file (`N...`).
+pub fn submodule_state(field: &str) -> Option<String> {
+    let f = field.strip_prefix('S')?.as_bytes();
+    let words: Vec<&str> = [(0, b'C', "new commits"), (1, b'M', "changed files"), (2, b'U', "untracked files")]
+        .into_iter()
+        .filter(|(i, c, _)| f.get(*i) == Some(c))
+        .map(|(_, _, w)| w)
+        .collect();
+    Some(if words.is_empty() { "changed".to_string() } else { words.join(", ") })
 }
 
 /// GIT-001: `[added, removed]` by path for the staged, changed and untracked sections.
@@ -356,6 +376,9 @@ pub fn failure_kind(output: &str, local_hook: bool) -> &'static str {
         "sign-in"
     } else if any(&["could not resolve host", "connection refused", "connection timed out", "timed out", "network is unreachable", "failed to connect", "connection reset"]) {
         "network"
+    } else if any(&["divergent branches", "how to reconcile"]) {
+        // GIT-008: git has no pull policy for split histories; the panel offers the three.
+        "no-policy"
     } else if t.contains("submodule") {
         "submodule"
     } else if any(&["non-fast-forward", "(fetch first)", "[rejected]", "stale info"]) {
@@ -421,6 +444,9 @@ pub fn remote(worktree: &Path, action: &str) -> Result<ActionOutcome, String> {
         "pullpush" => vec![vec!["pull", "--rebase"], vec!["push"]],
         "fetch" => vec![vec!["fetch"]],
         "ff" => vec![vec!["pull", "--ff-only"]],
+        // GIT-008: the pull again with the policy the user picked from the notice.
+        "pullmerge" => vec![vec!["pull", "--no-rebase"]],
+        "pullrebase" => vec![vec!["pull", "--rebase"]],
         "force" => vec![vec!["push", "--force-with-lease"]],
         "publish" => vec![vec!["push", "--set-upstream", "origin", &branch]],
         "rebase" => vec![vec!["fetch"], vec!["rebase", base.as_deref().ok_or("no base branch to rebase from")?]],
@@ -1660,6 +1686,42 @@ pub async fn scm_pr_create(worktree: String, title: String, body: String, base: 
     tauri::async_runtime::spawn_blocking(move || pr_create(&gh_program()?, Path::new(&worktree), &title, &body, &base, draft)).await.map_err(|e| e.to_string())?
 }
 
+/// GIT-014: shows a changed file in the file manager (its folder when the file was deleted); the
+/// path is relative to the worktree and must stay inside it.
+#[tauri::command]
+pub async fn scm_reveal(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, worktree: String, path: String) -> Result<(), String> {
+    // A worktree on another machine is never touched (SAFE-021), the way open_path refuses it.
+    crate::links::refuse_host(&worktree, &crate::links::roots(&store))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let full = reveal_target(Path::new(&worktree), &path)?;
+        crate::links::reveal(&full)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// GIT-014: the file a reveal shows: inside the worktree, or its nearest folder that still exists.
+fn reveal_target(worktree: &Path, path: &str) -> Result<std::path::PathBuf, String> {
+    check_paths(std::slice::from_ref(&path.to_string()))?;
+    // The text stays inside; a link or junction inside the worktree could still lead out (to a
+    // private folder, or a share whose server would be contacted), so no part below the worktree
+    // may be one. Read without following links; a missing part ends the walk (nothing past it exists).
+    let mut at = worktree.to_path_buf();
+    for part in Path::new(&native(path)).components() {
+        at.push(part);
+        match fs::symlink_metadata(&at) {
+            Ok(m) if m.file_type().is_symlink() => return Err(format!("{path} goes through a link that leads outside the worktree")),
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    let mut full = worktree.join(native(path));
+    while !full.exists() && full != worktree {
+        full = full.parent().map(Path::to_path_buf).unwrap_or_else(|| worktree.to_path_buf());
+    }
+    Ok(full)
+}
+
 /// Opens a pull request in the browser.
 #[tauri::command]
 pub async fn scm_open_pr(url: String) -> Result<(), String> {
@@ -1840,12 +1902,20 @@ pub fn parse_status(text: &str) -> Status {
                 let fields = if kind == "1" { 9 } else if kind == "2" { 10 } else { 11 };
                 let mut parts = rest.splitn(fields - 1, ' ');
                 let xy = parts.next().unwrap_or("..");
+                let sub = if kind == "u" { None } else { parts.next().and_then(submodule_state) };
                 let path = parts.last().unwrap_or("");
                 let from = if kind == "2" { items.next() } else { None };
                 let (x, y) = (xy.chars().next().unwrap_or('.'), xy.chars().nth(1).unwrap_or('.'));
                 if kind == "u" {
                     st.conflicts.push(Change { path: path.to_string(), status: xy.to_string(), from: None });
                     continue;
+                }
+                if let Some(state) = sub {
+                    if st.submodules.len() >= SUBMODULE_ROWS {
+                        st.submodules_cut += 1;
+                        continue;
+                    }
+                    st.submodules.insert(path.to_string(), state);
                 }
                 if x != '.' {
                     st.staged.push(change(path, x, from));
@@ -2024,22 +2094,51 @@ pub struct BaseChanges {
     pub against: String,
     pub since: String,
     pub entries: Vec<crate::git::Entry>,
+    /// T-033-g: set when the branch and the base share no history (unrelated histories, or a
+    /// shallow clone cut before the fork): the changes are then measured against the base's tip,
+    /// and the tab says so instead of passing them off as the branch's own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
-pub fn base_changes(worktree: &Path, pinned: Option<&str>) -> Result<BaseChanges, String> {
-    let pinned = pinned.map(str::trim).filter(|p| !p.is_empty() && run(&["rev-parse", "--verify", "-q", &format!("{p}^{{commit}}")], Some(worktree)).is_ok());
-    let against = match pinned {
-        Some(p) => p.to_string(),
-        None => status(worktree)?.base.ok_or("no base branch to compare with")?,
+/// A commit for `rev` (ref-name rules first, so nothing starting with `-` reaches git as an option).
+fn commit_of(worktree: &Path, rev: &str) -> Option<String> {
+    if !Git::ref_ok(rev) {
+        return None;
+    }
+    run(&["rev-parse", "--verify", "-q", "--end-of-options", &format!("{rev}^{{commit}}")], Some(worktree)).ok().map(|s| s.trim().to_string())
+}
+
+/// `known` is the base the tab already has from the last status (T-033-g): with it no second
+/// status runs on every refresh. Without a pin or a known base, status finds it.
+pub fn base_changes(worktree: &Path, pinned: Option<&str>, known: Option<&str>) -> Result<BaseChanges, String> {
+    let pinned = pinned.map(str::trim).filter(|p| !p.is_empty() && commit_of(worktree, p).is_some());
+    let known = known.map(str::trim).filter(|k| Git::ref_ok(k));
+    let against = match (pinned, known) {
+        (Some(p), _) => p.to_string(),
+        (None, Some(k)) => k.to_string(),
+        (None, None) => status(worktree)?.base.ok_or("no base branch to compare with")?,
     };
-    let since = run(&["merge-base", &against, "HEAD"], Some(worktree)).map(|s| s.trim().to_string()).unwrap_or_else(|_| against.clone());
+    let (since, note) = match run(&["merge-base", "--end-of-options", &against, "HEAD"], Some(worktree)) {
+        Ok(s) => (s.trim().to_string(), None),
+        // The rare path: find out why, never compare silently against something else.
+        Err(_) => {
+            if commit_of(worktree, "HEAD").is_none() {
+                return Err("this branch has no commits yet, so there is nothing to compare with its base".into());
+            }
+            let Some(tip) = commit_of(worktree, &against) else {
+                return Err(format!("the base {against} no longer exists"));
+            };
+            (tip, Some(format!("vs {against} tip: no common ancestor found")))
+        }
+    };
     let entries = crate::git::base_entries(worktree, &since)?;
-    Ok(BaseChanges { against, since, entries })
+    Ok(BaseChanges { against, since, entries, note })
 }
 
 #[tauri::command]
-pub async fn scm_base_changes(worktree: String, pinned: Option<String>) -> Result<BaseChanges, String> {
-    base_changes(Path::new(&worktree), pinned.as_deref())
+pub async fn scm_base_changes(worktree: String, pinned: Option<String>, known: Option<String>) -> Result<BaseChanges, String> {
+    tauri::async_runtime::spawn_blocking(move || base_changes(Path::new(&worktree), pinned.as_deref(), known.as_deref())).await.map_err(|e| e.to_string())?
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -2139,6 +2238,145 @@ mod tests {
     }
 
     #[test]
+    fn git008_a_pull_with_split_history_and_no_policy_is_named_and_the_picked_policy_finishes_it() {
+        assert_eq!(failure_kind("hint: You have divergent branches and need to specify how to reconcile them.\nfatal: Need to specify how to reconcile divergent branches.", false), "no-policy");
+        assert_eq!(failure_kind(" ! [rejected] main -> main (non-fast-forward)", false), "non-fast-forward");
+        // Every git below reads only the repositories' own config: a pull.rebase in this PC's
+        // global or system config (Git for Windows writes pull.rebase=false there) would decide
+        // the split pull on its own and the no-policy path would never run.
+        crate::git::ISOLATED.with(|i| i.set(true));
+        let origin = std::env::temp_dir().join(format!("kolux-rs-scm-git008-origin-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&origin);
+        fs::create_dir_all(&origin).unwrap();
+        run(&["init", "-q", "--bare", "-b", "main"], Some(&origin)).unwrap();
+        let url = origin.to_string_lossy().replace('\\', "/");
+        let a = temp_repo("git008-a");
+        run(&["remote", "add", "origin", &url], Some(&a)).unwrap();
+        run(&["push", "-q", "-u", "origin", "main"], Some(&a)).unwrap();
+        let b = std::env::temp_dir().join(format!("kolux-rs-scm-git008-b-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&b);
+        run(&["clone", "-q", &url, &b.to_string_lossy()], None).unwrap();
+        run(&["config", "user.email", "test@example.com"], Some(&b)).unwrap();
+        run(&["config", "user.name", "Kolux RS test"], Some(&b)).unwrap();
+        fs::write(b.join("theirs.txt"), "theirs\n").unwrap();
+        run(&["add", "."], Some(&b)).unwrap();
+        run(&["commit", "-q", "-m", "theirs"], Some(&b)).unwrap();
+        run(&["push", "-q"], Some(&b)).unwrap();
+        fs::write(a.join("ours.txt"), "ours\n").unwrap();
+        run(&["add", "."], Some(&a)).unwrap();
+        run(&["commit", "-q", "-m", "ours"], Some(&a)).unwrap();
+        // No pull policy anywhere: not in this repository, and the isolated global/system are empty.
+        assert!(run(&["config", "--get", "pull.rebase"], Some(&a)).is_err() && run(&["config", "--get", "pull.ff"], Some(&a)).is_err());
+        let config_before = fs::read_to_string(a.join(".git").join("config")).unwrap();
+        // The real git's own words for the split are read as no-policy...
+        let real = command(&["pull"], Some(&a)).output().unwrap();
+        let said = format!("{}{}", String::from_utf8_lossy(&real.stdout), String::from_utf8_lossy(&real.stderr));
+        assert!(!real.status.success(), "a split pull with no policy fails: {said}");
+        assert_eq!(failure_kind(&said, false), "no-policy", "{said}");
+        // ...and so is the app's own Pull.
+        let out = remote(&a, "pull").unwrap();
+        assert_eq!((out.ok, out.kind), (false, Some("no-policy")), "{}", out.output);
+        // Picking rebase runs the pull again with it, and the repository's config is untouched.
+        let again = remote(&a, "pullrebase").unwrap();
+        assert!(again.ok, "{}", again.output);
+        assert!(a.join("theirs.txt").is_file() && a.join("ours.txt").is_file());
+        assert_eq!(status(&a).unwrap().behind, 0);
+        assert_eq!(fs::read_to_string(a.join(".git").join("config")).unwrap(), config_before);
+        // A second split, finished by picking merge: one merge commit joins both sides.
+        fs::write(b.join("theirs2.txt"), "theirs 2\n").unwrap();
+        run(&["add", "."], Some(&b)).unwrap();
+        run(&["commit", "-q", "-m", "theirs 2"], Some(&b)).unwrap();
+        run(&["push", "-q"], Some(&b)).unwrap();
+        fs::write(a.join("ours2.txt"), "ours 2\n").unwrap();
+        run(&["add", "."], Some(&a)).unwrap();
+        run(&["commit", "-q", "-m", "ours 2"], Some(&a)).unwrap();
+        let out = remote(&a, "pull").unwrap();
+        assert_eq!((out.ok, out.kind), (false, Some("no-policy")), "{}", out.output);
+        let merged = remote(&a, "pullmerge").unwrap();
+        assert!(merged.ok, "{}", merged.output);
+        assert!(a.join("theirs2.txt").is_file() && a.join("ours2.txt").is_file());
+        let parents = run(&["rev-list", "--parents", "-n", "1", "HEAD"], Some(&a)).unwrap();
+        assert_eq!(parents.split_whitespace().count(), 3, "HEAD is a merge commit with two parents: {parents}");
+        assert_eq!(status(&a).unwrap().behind, 0);
+        assert_eq!(fs::read_to_string(a.join(".git").join("config")).unwrap(), config_before);
+        crate::git::ISOLATED.with(|i| i.set(false));
+        for d in [&a, &b, &origin] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn git013_a_changed_submodule_is_one_row_with_its_state_and_rows_past_the_limit_are_counted() {
+        assert_eq!(submodule_state("N..."), None);
+        assert_eq!(submodule_state("SC.."), Some("new commits".into()));
+        assert_eq!(submodule_state("S.MU"), Some("changed files, untracked files".into()));
+        let line = |i: usize| format!("1 .M SC.. 160000 160000 160000 {h} {h} lib/sub{i}\0", h = "a".repeat(40));
+        let mut text = String::from("# branch.head main\0");
+        text.push_str(&format!("1 .M N... 100644 100644 100644 {h} {h} plain.txt\0", h = "b".repeat(40)));
+        for i in 0..SUBMODULE_ROWS + 3 {
+            text.push_str(&line(i));
+        }
+        let st = parse_status(&text);
+        assert_eq!(st.submodules.len(), SUBMODULE_ROWS);
+        assert_eq!(st.submodules_cut, 3);
+        assert_eq!(st.submodules.get("lib/sub0").map(String::as_str), Some("new commits"));
+        assert!(!st.submodules.contains_key("plain.txt"));
+        assert_eq!(st.changed.len(), SUBMODULE_ROWS + 1, "the plain file and the listed submodules, each once");
+        // A real submodule moved to another commit shows as one row under changes.
+        let lib = temp_repo("git013-lib");
+        let top = temp_repo("git013-top");
+        let lib_url = lib.to_string_lossy().replace('\\', "/");
+        run(&["-c", "protocol.file.allow=always", "submodule", "add", "-q", &lib_url, "vendor/lib"], Some(&top)).unwrap();
+        run(&["commit", "-q", "-m", "add lib"], Some(&top)).unwrap();
+        let inner = top.join("vendor").join("lib");
+        run(&["config", "user.email", "test@example.com"], Some(&inner)).unwrap();
+        run(&["config", "user.name", "Kolux RS test"], Some(&inner)).unwrap();
+        fs::write(inner.join("x.txt"), "x\n").unwrap();
+        run(&["add", "."], Some(&inner)).unwrap();
+        run(&["commit", "-q", "-m", "moved"], Some(&inner)).unwrap();
+        fs::write(inner.join("y.txt"), "y\n").unwrap();
+        let st = status(&top).unwrap();
+        assert_eq!(st.changed.iter().map(|c| c.path.as_str()).collect::<Vec<_>>(), vec!["vendor/lib"]);
+        assert!(st.untracked.is_empty(), "nothing inside the submodule is listed: {:?}", st.untracked);
+        assert_eq!(st.submodules.get("vendor/lib").map(String::as_str), Some("new commits, untracked files"));
+        for d in [&lib, &top] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn git014_reveal_stays_inside_the_worktree_through_links_too_and_falls_back_to_the_nearest_folder() {
+        let dir = temp_repo("git014");
+        fs::create_dir_all(dir.join("a")).unwrap();
+        assert_eq!(reveal_target(&dir, "README.md").unwrap(), dir.join("README.md"));
+        assert_eq!(reveal_target(&dir, "a/gone.txt").unwrap(), dir.join("a"));
+        assert_eq!(reveal_target(&dir, "b/c/gone.txt").unwrap(), dir);
+        assert!(reveal_target(&dir, "../outside.txt").is_err());
+        assert!(reveal_target(&dir, "C:/Windows/notepad.exe").is_err());
+        // A junction (or symlink) inside the worktree that leads out is refused, the file under it
+        // and the link itself alike, even though the path text stays inside.
+        let outside = std::env::temp_dir().join(format!("kolux-rs-scm-git014-outside-{}", std::process::id()));
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("b.txt"), "private\n").unwrap();
+        #[cfg(windows)]
+        let made = std::process::Command::new("cmd").args(["/c", "mklink", "/J"]).arg(dir.join("j")).arg(&outside).output().unwrap().status.success();
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&outside, dir.join("j")).is_ok();
+        assert!(made, "the junction was made");
+        assert!(dir.join("j").join("b.txt").is_file(), "the file is reachable through it");
+        assert!(reveal_target(&dir, "j/b.txt").unwrap_err().contains("link"));
+        assert!(reveal_target(&dir, "j").is_err());
+        assert!(reveal_target(&dir, "j/gone/deeper.txt").is_err());
+        // A plain folder with a missing file still falls back as before.
+        assert_eq!(reveal_target(&dir, "a/b/gone.txt").unwrap(), dir.join("a"));
+        #[cfg(windows)]
+        let _ = fs::remove_dir(dir.join("j"));
+        #[cfg(unix)]
+        let _ = fs::remove_file(dir.join("j"));
+        let _ = fs::remove_dir_all(&outside);
+        let _ = fs::remove_dir_all(&dir);
+    }
+    #[test]
     fn git038_base_changes_measure_against_the_snapshot_not_a_base_that_moved_on() {
         let dir = temp_repo("base-snapshot");
         run(&["checkout", "-q", "-b", "feature"], Some(&dir)).unwrap();
@@ -2152,12 +2390,71 @@ mod tests {
         run(&["commit", "-q", "-am", "main moves"], Some(&dir)).unwrap();
         run(&["checkout", "-q", "feature"], Some(&dir)).unwrap();
         fs::write(dir.join("f.txt"), "feature\nmore\n").unwrap();
-        let got = base_changes(&dir, Some("main")).unwrap();
-        assert_eq!((got.against.as_str(), got.since.as_str()), ("main", snapshot.as_str()));
+        let got = base_changes(&dir, Some("main"), None).unwrap();
+        assert_eq!((got.against.as_str(), got.since.as_str(), got.note.as_deref()), ("main", snapshot.as_str(), None));
         let rel = |e: &crate::git::Entry| Path::new(&e.path).strip_prefix(&dir).unwrap().to_string_lossy().replace('\\', "/");
         assert_eq!(got.entries.iter().map(|e| (rel(e), e.code, e.lines)).collect::<Vec<_>>(), vec![("f.txt".to_string(), 'A', Some(2))]);
         // A pin that does not resolve falls back to the detected base; no base at all is an error.
-        assert_eq!(base_changes(&dir, Some("no-such-branch")).map(|b| b.against).ok(), status(&dir).unwrap().base);
+        assert_eq!(base_changes(&dir, Some("no-such-branch"), None).map(|b| b.against).ok(), status(&dir).unwrap().base);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Every git process (top level and children) `f` starts on this thread, as its arguments.
+    fn git_argvs(f: impl FnOnce()) -> Vec<String> {
+        let trace = std::env::temp_dir().join(format!("kolux-rs-scm-argvs-{}-{:?}.json", std::process::id(), std::thread::current().id()));
+        let _ = fs::remove_file(&trace);
+        crate::git::TRACE2.with(|t| *t.borrow_mut() = Some(trace.clone()));
+        f();
+        crate::git::TRACE2.with(|t| *t.borrow_mut() = None);
+        let log = fs::read_to_string(&trace).unwrap_or_default();
+        let _ = fs::remove_file(&trace);
+        log.lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|e| matches!(e["event"].as_str(), Some("start" | "child_start")))
+            .map(|e| e["argv"].as_array().map(|a| a.iter().skip(1).filter_map(|v| v.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default())
+            .collect()
+    }
+
+    #[test]
+    fn t033g_a_known_base_skips_the_second_status_and_no_shared_history_is_labelled_never_silent() {
+        let dir = temp_repo("t033g");
+        run(&["checkout", "-q", "-b", "feature"], Some(&dir)).unwrap();
+        fs::write(dir.join("f.txt"), "feature\n").unwrap();
+        run(&["add", "."], Some(&dir)).unwrap();
+        run(&["commit", "-q", "-m", "feature"], Some(&dir)).unwrap();
+        let known = status(&dir).unwrap().base.expect("main is detected as the base");
+        let snapshot = run(&["merge-base", "main", "HEAD"], Some(&dir)).unwrap().trim().to_string();
+        // (b) The base the tab already has: the same answer, and not one `git status` behind it.
+        let mut with = None;
+        let argvs = git_argvs(|| with = Some(base_changes(&dir, None, Some(&known)).unwrap()));
+        let with = with.unwrap();
+        assert_eq!((with.against.as_str(), with.since.as_str(), with.note.as_deref()), (known.as_str(), snapshot.as_str(), None));
+        assert!(!argvs.is_empty(), "trace2 log missing");
+        assert_eq!(argvs.iter().filter(|a| a.starts_with("status")).count(), 0, "{argvs:?}");
+        // Without it (first read before any status arrived) status finds the base, as before.
+        let argvs = git_argvs(|| assert_eq!(base_changes(&dir, None, None).unwrap().since, snapshot));
+        assert!(argvs.iter().any(|a| a.starts_with("status")), "{argvs:?}");
+        // A pin still wins over the known base; option-looking text is never handed to git.
+        assert_eq!(base_changes(&dir, Some("feature"), Some(&known)).unwrap().against, "feature");
+        let argvs = git_argvs(|| assert_eq!(base_changes(&dir, Some("--output=x"), Some("-x")).map(|b| b.against).ok(), status(&dir).unwrap().base));
+        assert!(argvs.iter().all(|a| !a.contains("--output=x") && !a.split(' ').any(|w| w == "-x")), "{argvs:?}");
+        // (c) Unrelated histories: labelled, measured against the base tip.
+        run(&["checkout", "-q", "--orphan", "other"], Some(&dir)).unwrap();
+        run(&["rm", "-q", "-rf", "."], Some(&dir)).unwrap();
+        fs::write(dir.join("o.txt"), "other\n").unwrap();
+        run(&["add", "."], Some(&dir)).unwrap();
+        run(&["commit", "-q", "-m", "other root"], Some(&dir)).unwrap();
+        let other_tip = run(&["rev-parse", "HEAD"], Some(&dir)).unwrap().trim().to_string();
+        run(&["checkout", "-q", "feature"], Some(&dir)).unwrap();
+        let apart = base_changes(&dir, Some("other"), None).unwrap();
+        assert_eq!((apart.since.as_str(), apart.note.as_deref()), (other_tip.as_str(), Some("vs other tip: no common ancestor found")));
+        // A known base that has since been deleted is an error, not a silent compare.
+        run(&["branch", "-q", "gone"], Some(&dir)).unwrap();
+        run(&["branch", "-q", "-D", "gone"], Some(&dir)).unwrap();
+        assert!(base_changes(&dir, None, Some("gone")).unwrap_err().contains("no longer exists"));
+        // Unborn HEAD (a new orphan branch with nothing committed): an error that says so.
+        run(&["checkout", "-q", "--orphan", "fresh"], Some(&dir)).unwrap();
+        assert!(base_changes(&dir, Some("main"), None).unwrap_err().contains("no commits yet"));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -2611,14 +2908,47 @@ mod tests {
         assert!(remote(&dir, "fetch").unwrap().ok);
         assert_eq!(counts(&dir), (Some("origin/feat".into()), 1, 1, false));
 
-        // Status never goes to the network: with the remote gone it still answers at once, and
-        // only an explicit fetch reports the trouble.
+        // Status never goes to the network: with the remote gone it still answers, and only an
+        // explicit fetch reports the trouble. FIX-1 (council, 2026-10-13): this used to be a 3 s
+        // wall-clock bound on three reads, which failed on a loaded PC even when run alone (one
+        // read is ~7 local git processes; 3.2-10.4 s measured, while git's own times summed to
+        // ~2.3 s: the rest is process start-up on a busy PC). Git's own trace2 log of every
+        // process each read starts showed only status, cherry, --version, symbolic-ref,
+        // rev-parse and diff, no fetch, remote helper, credential helper or fsmonitor. So the
+        // test now asserts on that log (no network-capable process ran, which load cannot
+        // flake), and keeps a 20 s bound only as a backstop: a hung network call would sit on
+        // the OS connect timeout (about 21 s on Windows) and still trip it.
         run(&["remote", "set-url", "origin", &format!("{bare_url}-missing")], Some(&dir)).unwrap();
+        let trace = std::env::temp_dir().join(format!("kolux-rs-scm-trace2-{}.json", std::process::id()));
+        let _ = fs::remove_file(&trace);
+        crate::git::TRACE2.with(|t| *t.borrow_mut() = Some(trace.clone()));
         let t = std::time::Instant::now();
         for _ in 0..3 {
             status(&dir).unwrap();
         }
-        assert!(t.elapsed() < std::time::Duration::from_secs(3), "status took {:?}", t.elapsed());
+        let took = t.elapsed();
+        crate::git::TRACE2.with(|t| *t.borrow_mut() = None);
+        let log = fs::read_to_string(&trace).unwrap_or_default();
+        let _ = fs::remove_file(&trace);
+        let events: Vec<serde_json::Value> = log.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+        // Every process git started (top level and any child it spawned), with its arguments.
+        let argvs: Vec<String> = events
+            .iter()
+            .filter(|e| matches!(e["event"].as_str(), Some("start" | "child_start")))
+            .map(|e| e["argv"].as_array().map(|a| a.iter().skip(1).filter_map(|v| v.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default())
+            .collect();
+        // The time of each top-level git, from its own exit event, for the failure message.
+        let times: Vec<String> = events
+            .iter()
+            .filter(|e| e["event"] == "exit" && !e["sid"].as_str().unwrap_or("/").contains('/'))
+            .map(|e| format!("{:.0} ms", e["t_abs"].as_f64().unwrap_or(0.0) * 1000.0))
+            .collect();
+        let report = format!("3 reads took {took:?}; processes {argvs:?}; times {times:?}");
+        eprintln!("{report}");
+        assert!(argvs.iter().filter(|a| a.starts_with("status ")).count() >= 3, "trace2 log missing: {report}");
+        let network = ["fetch", "ls-remote", "remote-", "upload-pack", "credential", "fsmonitor", "http"];
+        assert!(!argvs.iter().any(|a| network.iter().any(|n| a.contains(n))), "a status read went to the network: {report}");
+        assert!(took < std::time::Duration::from_secs(20), "{report}");
         let fetched = remote(&dir, "fetch").unwrap();
         assert!(!fetched.ok && !fetched.output.is_empty(), "{fetched:?}");
         assert_eq!(remote(&dir, "nope").unwrap_err(), "unknown remote action nope");

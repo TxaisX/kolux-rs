@@ -1,0 +1,65 @@
+chat FIX-1 (council re-review of lane/chat a969502: FB1, FB2, FIX-SOON 1-4) · lane/chat from a969502, step-0 merge b12c646
+
+WHAT CHANGED FOR THE USER
+- The chat box sends only when Kolux can see the agent is not asking anything in its terminal. With no
+  hook reading for the pane (hooks off, Codex trust not given, an agent with no hook route, or no event
+  yet) the box holds the message and says "Kolux can't see this agent's prompts. Type in its terminal."
+  A permission or question menu holds it with "The agent is asking something in its terminal. Answer there."
+  The typed text stays in the box when a send is held.
+- A send is bound to the pane it started on: before every write (the Enter above all) it reads that
+  pane's own hook reading, from the window (live, by pane key) and from one window-wide hook listener
+  that keeps every pane's newest state. Switching to another pane mid-send no longer lets the first
+  pane's new menu take the Enter.
+- One-line messages go in as a bracketed paste, so a menu that opened before its hook event arrived
+  never reads "y" or "1" as a pick. One-line slash commands are still typed as text.
+- With nothing picked on the Agents screen, a line above the box names the pane it types into.
+- A message over the 8 MB paste limit is not sent; the box says so and keeps it.
+- The pane's program session is asked at send time (a reconnect's new session is used); the chat view
+  is keyed by pane, so a pane switch starts a fresh view.
+
+FAILING FIRST (send.test.ts against a port of the a969502 rules, log G:/Temp/chat-w1-logs/fix1-old.log)
+  Tests  8 failed | 3 passed (11)
+  failed: unknown state holds the box; asking note from either reading; no hook reading types nothing;
+  hook event mid-send drops the Enter; pane switch mid-send still stops pane A; the window's reading alone
+  stops it; a clear pane gets the bracketed message into the terminal it has at send time; over the
+  paste limit is not sent.
+  model.test.ts typingInto: failed (no export) before model.ts changed.
+
+AFTER
+  pnpm exec vitest run src/chat/send.test.ts            Tests 11 passed (11)
+  pnpm exec vitest run src/chat src/agents              Test Files 6 passed (6), Tests 59 passed (59)
+  pnpm exec vitest related --run <changed chat files>   Test Files 3 passed (3), Tests 42 passed (42)
+  pnpm exec tsc --noEmit                                exit 0
+  Rust: no Rust file changed in this card, cargo not rerun for it (step-0 numbers in the merge commit).
+
+COORDINATOR PATCH (src/App.tsx, not committed by the lane)
+  evidence/chat-FIX-1-app-fb322d5.patch  against main fb322d5: the AgentsChat import, the mount line with
+    selected ?? focused, ptyOf, hook and stateOf (hookRef read live), and requestChanges stopping when the
+    agent is still asking after the 3 s wait and again before the Enter (toast says the feedback was not typed / not sent).
+  evidence/chat-FIX-1-app-lane.patch     the same change against lane/chat HEAD (= main after this lane merges;
+    the import and an older mount line are already on the lane).
+  git apply --check (fb322d5 copy)  exit 0
+  git apply --check (lane checkout) exit 0
+  tsc --noEmit with the lane patch applied in the checkout: exit 0; then git checkout -- src/App.tsx (reverted,
+    git status --short src/App.tsx empty).
+  Both patches produce byte-identical App.tsx files (cmp).
+
+LIVE PROOF PENDING (batched, coordinator; needs the patch applied)
+  1. Agents screen, a stand-in Claude pane with hooks on, picked in the rail: type "hello" in the chat box,
+     Enter. Expect the pane's terminal to receive Ctrl+U, a bracketed "hello" and Enter; the bubble shows.
+  2. Turn hooks off for that pane (Settings, Agents): the box shows "Kolux can't see this agent's prompts.
+     Type in its terminal." and Enter keeps the text and types nothing.
+  3. Make the stand-in report a permission request (hook event): the box shows the asking note; Enter types nothing.
+  4. Send a long message to pane A, pick pane B in the rail while it is typing, fire A's permission event:
+     A's terminal gets no Enter after the paste, A's bubble shows "This message did not arrive".
+  5. Pick nothing (no selection): the line above the box reads "Typing into <pane title>".
+  6. Plan review, Request changes while the stand-in keeps reporting "waiting": after about 3 s a toast says
+     the agent is still asking; nothing is typed into the terminal.
+
+OPEN (not built in this card)
+  - Hold the Enter about 1 s after a tool-start event with no tool-end or permission event yet (review FIX-SOON 1, second half).
+  - Rust-side check of each write (one chat send command that asks the status module before each write): needs
+    status.rs and lib.rs, both outside this lane.
+  - chat.rs: rebuild the follower on a newer run; accept the transcript path only as .jsonl under the agent
+    homes; the capped first read drops a whole line when the cut lands on a line start (review AFTER 1).
+  - A permission reading may stick after a deny typed in the terminal (fails closed; review AFTER 2).

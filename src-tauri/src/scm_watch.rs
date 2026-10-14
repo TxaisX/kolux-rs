@@ -38,9 +38,11 @@ pub const SKIP: [&str; 4] = ["target", "node_modules", "dist", ".venv"];
 /// GIT-001 (T-033-c): which working-tree folders git ignores, asked of git once per folder and
 /// remembered per root. A change under an ignored folder never moves the status, so it never
 /// starts a read. Folders are asked shortest first, so `target` is one answer for everything
-/// beneath it; a change to a `.gitignore` or to `.git/info/exclude` forgets the root's answers.
-/// Files are judged by their folder (an ignored file in a kept folder costs one extra read, never
-/// a missed one).
+/// beneath it. A folder git ignores but still tracks files in is kept (T-033-f: a change to a
+/// tracked file moves the status whatever the ignore rules say). A change to a `.gitignore`, to
+/// the main checkout's `.git/info/exclude` or, for a linked worktree, to the shared
+/// `info/exclude` of its repository forgets the root's answers. Files are judged by their folder
+/// (an ignored file in a kept folder costs one extra read, never a missed one).
 #[derive(Debug, Default)]
 pub struct Ignores {
     known: std::collections::HashMap<String, bool>,
@@ -99,6 +101,8 @@ pub fn ask_git(root: &Path, dirs: &[String]) -> Option<Vec<bool>> {
     if !matches!(out.status.code(), Some(0 | 1)) {
         return None;
     }
+    // T-033-f: a folder that is ignored but still holds tracked files already comes back as not
+    // ignored from check-ignore itself (pinned by the t033f test), so one git process answers.
     Some(parse_check_ignore(&String::from_utf8_lossy(&out.stdout), dirs))
 }
 
@@ -124,6 +128,17 @@ fn ignores_of(root: &Path) -> Arc<Mutex<Ignores>> {
 /// Whether a reported change can move the status: git's folder rules, and for the working tree
 /// git's own ignore rules (a changed rule file first forgets the remembered answers).
 pub fn matters(root: &Path, spot: Spot, rel: &str) -> bool {
+    // A rule file first (T-033-f): `.git/info/exclude` is not one of the git-folder paths
+    // `counts` lets through, and its change must still forget the answers and read once.
+    let rule = match spot {
+        Spot::Tree => is_rule_file(rel),
+        Spot::Info => rel.trim_start_matches('/').eq_ignore_ascii_case("exclude"),
+        Spot::GitDir | Spot::Refs => false,
+    };
+    if rule {
+        ignores_of(root).lock().unwrap_or_else(|e| e.into_inner()).forget();
+        return true;
+    }
     if !counts(spot, rel) {
         return false;
     }
@@ -132,10 +147,6 @@ pub fn matters(root: &Path, spot: Spot, rel: &str) -> bool {
     }
     let ig = ignores_of(root);
     let mut ig = ig.lock().unwrap_or_else(|e| e.into_inner());
-    if is_rule_file(rel) {
-        ig.forget();
-        return true;
-    }
     !ig.ignored(rel, &mut |dirs| ask_git(root, dirs))
 }
 
@@ -148,6 +159,8 @@ pub enum Spot {
     GitDir,
     /// The shared `refs` folder of a linked worktree's repository.
     Refs,
+    /// The shared `info` folder of a linked worktree's repository (its `exclude` file).
+    Info,
 }
 
 /// Whether a change at `rel` (relative to its spot, forward slashes) can move the status. Inside
@@ -158,6 +171,7 @@ pub fn counts(spot: Spot, rel: &str) -> bool {
     match spot {
         Spot::Refs => true,
         Spot::GitDir => rel == "HEAD" || rel == "index",
+        Spot::Info => false,
         Spot::Tree => {
             let mut segs = rel.split('/');
             let first = segs.next().unwrap_or_default();
@@ -253,6 +267,10 @@ impl Places {
         }
         if !same(&self.common, &inner) {
             out.push((self.common.join("refs"), true, Spot::Refs));
+            // Only when it exists: a missing folder cannot be watched and would cost the whole watch.
+            if self.common.join("info").is_dir() {
+                out.push((self.common.join("info"), false, Spot::Info));
+            }
         }
         out
     }
@@ -674,6 +692,43 @@ mod tests {
         std::fs::create_dir_all(&nowhere).unwrap();
         assert_eq!(ask_git(&nowhere, &["target".to_string()]), None, "outside a repository git cannot answer");
         let _ = std::fs::remove_dir_all(&nowhere);
+    }
+
+    #[test]
+    fn t033f_an_ignored_folder_with_tracked_files_is_kept_and_exclude_edits_forget_through_matters() {
+        let dir = repo("t033f");
+        std::fs::create_dir_all(dir.join("gen")).unwrap();
+        std::fs::write(dir.join("gen/a.txt"), "tracked\n").unwrap();
+        crate::git::run(&["add", "gen/a.txt"], Some(&dir)).unwrap();
+        std::fs::write(dir.join(".gitignore"), "gen/\n").unwrap();
+        assert!(matters(&dir, Spot::Tree, ".gitignore"));
+        // Pins git's own behaviour: check-ignore says "not ignored" for a folder holding a tracked
+        // file (no second git process needed), while the build/ checks below show a plain one ignored.
+        assert_eq!(ask_git(&dir, &["gen".to_string()]), Some(vec![false]));
+        assert!(matters(&dir, Spot::Tree, "gen/a.txt"), "gen/ is ignored but tracks a file: a change there counts");
+        // The main checkout's exclude file: the answers it gave are forgotten when it changes.
+        std::fs::create_dir_all(dir.join(".git/info")).unwrap();
+        std::fs::write(dir.join(".git/info/exclude"), "build/\n").unwrap();
+        assert!(matters(&dir, Spot::Tree, ".git/info/exclude"), "an exclude edit reads once");
+        assert!(!matters(&dir, Spot::Tree, "build/out.bin"), "build/ is excluded and tracks nothing");
+        std::fs::write(dir.join(".git/info/exclude"), "").unwrap();
+        assert!(matters(&dir, Spot::Tree, ".git/info/exclude"));
+        assert!(matters(&dir, Spot::Tree, "build/out.bin"), "the old answer was forgotten");
+        // A linked worktree watches the shared info folder and its exclude forgets that worktree's answers.
+        std::fs::write(dir.join(".git/info/exclude"), "cache/\n").unwrap();
+        crate::git::run(&["commit", "-q", "-m", "gen"], Some(&dir)).unwrap();
+        let linked = std::env::temp_dir().join(format!("scm-watch-t033f-linked-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&linked);
+        crate::git::run(&["worktree", "add", "-q", &linked.to_string_lossy(), "-b", "t033f-linked"], Some(&dir)).unwrap();
+        let p = places(&linked).unwrap();
+        assert!(p.watches().iter().any(|(d, r, s)| *s == Spot::Info && !r && d.ends_with("info")), "{:?}", p.watches());
+        assert!(!matters(&p.root, Spot::Tree, "cache/x"), "the shared exclude applies to the linked worktree");
+        std::fs::write(dir.join(".git/info/exclude"), "").unwrap();
+        assert!(!matters(&p.root, Spot::Info, "other"), "only the exclude file counts in info/");
+        assert!(matters(&p.root, Spot::Info, "exclude"));
+        assert!(matters(&p.root, Spot::Tree, "cache/x"), "forgotten through the shared info folder");
+        let _ = crate::git::run(&["worktree", "remove", "--force", &linked.to_string_lossy()], Some(&dir));
+        let _ = std::fs::remove_dir_all(&linked);
     }
 
     #[test]
