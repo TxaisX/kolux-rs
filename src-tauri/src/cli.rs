@@ -858,16 +858,30 @@ fn read_endpoint(dir: &Path) -> Result<(u16, String), Fail> {
     }
 }
 
+/// How long a request waits for the app's answer: long, because a request may itself wait
+/// (`terminal wait --timeout-ms`, a worktree create with its setup).
+const CALL_WAIT: Duration = Duration::from_secs(300);
+
+/// CLI-012: how long the status question waits. The app answers one request at a time, so while a
+/// long one runs the question is not read for minutes; a short wait tells "up, busy" apart from
+/// "up, idle" without holding a script for the whole 300 s.
+pub const STATUS_WAIT: Duration = Duration::from_millis(2500);
+
 /// Sends one request and reads the envelope back. A reply with another id is refused (CLI-004).
 pub fn call(port: u16, req: &Request) -> Result<Value, Fail> {
+    call_within(port, req, CALL_WAIT)
+}
+
+/// `call` with its own limit on how long the answer may take.
+pub fn call_within(port: u16, req: &Request, wait: Duration) -> Result<Value, Fail> {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).map_err(|e| unreachable_fail(e.to_string()))?;
-    stream.set_read_timeout(Some(Duration::from_secs(300))).ok();
+    stream.set_read_timeout(Some(wait)).ok();
     let line = serde_json::to_string(req).map_err(|e| Fail::new("failed", e.to_string()))?;
     stream.write_all(line.as_bytes()).and_then(|_| stream.write_all(b"\n")).map_err(|e| lost("lost_result", format!("the connection to Kolux dropped while sending: {e}")))?;
     let mut reply = String::new();
     // CLI-010: a slow answer is not the app being down.
     match BufReader::new(stream).read_line(&mut reply) {
-        Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => return Err(lost("timeout", "Kolux is running but did not answer within 300 s; it may still be working".into())),
+        Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => return Err(lost("timeout", format!("Kolux is running but did not answer within {} s; it may still be working", wait.as_secs_f64()))),
         Err(e) => return Err(lost("lost_result", format!("the connection to Kolux dropped before its answer came: {e}"))),
         Ok(0) => return Err(lost("lost_result", "the connection to Kolux closed before its answer came".into())),
         Ok(_) => {}
@@ -971,6 +985,14 @@ fn status_answer(graph: &std::sync::atomic::AtomicBool) -> Value {
     json!({ "pid": std::process::id(), "version": VERSION, "graphReady": graph.load(std::sync::atomic::Ordering::SeqCst) })
 }
 
+/// CLI-012: the detail `status` gives when the app took the question but had no time to answer it.
+const STATUS_BUSY: &str = "busy with another request";
+
+/// CLI-012: sends the status question to the app on `port`, waiting `STATUS_WAIT` for the answer.
+pub fn ask_status(port: u16, token: &str, id: &str, cwd: &str) -> Result<Value, Fail> {
+    call_within(port, &Request { id: id.into(), token: token.into(), command: STATUS.into(), cwd: cwd.into(), args: json!({}), pane: None, cli: VERSION.into(), arrived: None }, STATUS_WAIT)
+}
+
 /// CLI-012: where the app stands, from its startup file in `dir` and whether anything answers on
 /// the port the file names. `ask` sends the status question with the file's token. Never fails:
 /// every outcome is one of the four states.
@@ -998,8 +1020,9 @@ pub fn status_of(dir: &Path, ask: &dyn Fn(u16, &str) -> Result<Value, Fail>) -> 
         Ok(env) if env["error"]["code"] == "unauthorized" => stale(&env["error"]["message"]),
         // An app too old to know the question still answered.
         Ok(env) => json!({ "state": "running", "startupFile": shown, "pid": pid, "port": port, "version": env["meta"]["appVersion"], "graphReady": true, "detail": env["error"]["message"] }),
-        // Took the connection but is slow to answer: it is up, busy with an earlier request.
-        Err(f) if f.code == "timeout" => json!({ "state": "running", "startupFile": shown, "pid": pid, "port": port, "graphReady": true, "detail": f.message }),
+        // Took the connection but had no time to answer within STATUS_WAIT: it is up, answering an
+        // earlier request (the app takes one at a time), so the state stays running.
+        Err(f) if f.code == "timeout" => json!({ "state": "running", "startupFile": shown, "pid": pid, "port": port, "graphReady": true, "detail": STATUS_BUSY }),
         // Nothing listens on the port, or the connection dropped: the app that wrote the file is gone.
         Err(f) => stale(&if f.data["detail"].is_null() { json!(f.message) } else { f.data["detail"].clone() }),
     }
@@ -1009,6 +1032,7 @@ pub fn status_of(dir: &Path, ask: &dyn Fn(u16, &str) -> Result<Value, Fail>) -> 
 fn status_line(r: &Value) -> String {
     let pid = r["pid"].as_u64().map(|p| format!("pid {p}")).unwrap_or_else(|| "pid unknown".into());
     match r["state"].as_str().unwrap_or_default() {
+        "running" if r["detail"] == STATUS_BUSY => format!("running: Kolux is up, {STATUS_BUSY} ({pid})"),
         "running" => format!("running: Kolux is up and ready ({pid})"),
         "graph-not-ready" => format!("graph-not-ready: Kolux answers but is still loading its workspaces ({pid})"),
         "stale" => format!("stale: Kolux left its startup file behind but nothing answers ({pid}); run {} open to start it again", crate::orchestration::CLI),
@@ -1584,7 +1608,7 @@ pub fn main(words: Vec<String>) -> i32 {
     // CLI-012: answers whether or not the app is up, so it never goes through the open advice.
     if parsed.command == STATUS {
         let cwd = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default();
-        let ask = |port: u16, token: &str| call(port, &Request { id: id.clone(), token: token.into(), command: STATUS.into(), cwd: cwd.clone(), args: json!({}), pane: None, cli: VERSION.into(), arrived: None });
+        let ask = |port: u16, token: &str| ask_status(port, token, &id, &cwd);
         let r = status_of(&data_dir(), &ask);
         let code = status_exit(&r);
         if json {
@@ -3881,6 +3905,42 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// TERM-125 (rest): the texts of `terminal show`, a plain `send` (with Enter, or an interrupt)
+    /// and `wait`; and `wait`'s time limit: it asks again every half second and, when the
+    /// condition is still not met, fails with the state the terminal is in.
+    #[test]
+    fn term125_show_send_and_wait_texts_and_the_wait_time_limit() {
+        let shown = json!({ "handle": "term-1", "title": "Terminal 1", "worktree": null, "pane": 1, "tab": 1, "host": "local", "shown": true });
+        assert_eq!(terminal_text("terminal.show", &shown).unwrap(), "term-1  Terminal 1\nworktree none · pane 1 tab 1 · host local · in view");
+        let hidden = json!({ "handle": "term-2", "title": "t079b-exit", "worktree": "G:/r", "pane": 1, "tab": 2, "host": "local", "shown": false });
+        assert_eq!(terminal_text("terminal.show", &hidden).unwrap(), "term-2  t079b-exit\nworktree G:/r · pane 1 tab 2 · host local");
+        assert_eq!(text_of("terminal.send", &json!({ "terminal": "term-1", "delivered": ["text", "enter"] })), "sent text+enter to term-1");
+        assert_eq!(text_of("terminal.send", &json!({ "terminal": "term-1", "delivered": ["interrupt"] })), "sent interrupt to term-1");
+        assert_eq!(text_of("terminal.wait", &json!({ "terminal": "term-2", "done": true, "state": "exited" })), "term-2 is exited");
+        assert_eq!(text_of("terminal.wait", &json!({ "terminal": "term-1", "done": true, "state": "quiet" })), "term-1 is quiet");
+
+        // An app whose terminal keeps running: wait polls (at least twice in 700 ms) and then fails.
+        use std::sync::{atomic::{AtomicUsize, Ordering}, Arc};
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let asked = Arc::new(AtomicUsize::new(0));
+        let count = asked.clone();
+        std::thread::spawn(move || {
+            serve_loop(listener, "secret", "rt-1", move |_| {
+                count.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "terminal": "term-1", "done": false, "state": "running", "blocked": false }))
+            })
+        });
+        let req = Request { id: "w1".into(), token: "secret".into(), command: "terminal.wait".into(), cwd: String::new(), args: json!({ "terminal": "term-1", "for": "exit", "timeoutMs": "700" }), pane: None, cli: VERSION.into(), arrived: None };
+        let start = Instant::now();
+        let f = wait_for_terminal(port, req).unwrap_err();
+        let took = start.elapsed();
+        assert_eq!((f.code, f.message.as_str()), ("timeout", "term-1 did not reach exit within 700 ms (it is running)"));
+        assert_eq!(f.data["state"], "running");
+        assert!(took >= Duration::from_millis(700) && took < Duration::from_secs(5), "took {took:?}");
+        assert!(asked.load(Ordering::SeqCst) >= 2, "asked {} times", asked.load(Ordering::SeqCst));
+    }
+
     #[test]
     fn tasks_need_a_known_creator_and_a_dry_run_needs_no_recipient() {
         let dir = std::env::temp_dir().join(format!("kolux-rs-dry-{}", std::process::id()));
@@ -4878,7 +4938,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kolux-rs-cli012-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let ask = |port: u16, token: &str| call(port, &Request { id: "s1".into(), token: token.into(), command: STATUS.into(), cwd: String::new(), args: json!({}), pane: None, cli: VERSION.into(), arrived: None });
+        let ask = |port: u16, token: &str| ask_status(port, token, "s1", "");
         // App closed: no startup file.
         let r = status_of(&dir, &ask);
         assert_eq!(r["state"], "not-running");
@@ -4918,6 +4978,40 @@ mod tests {
         assert_eq!(lines.len(), 4);
         let p = parse(&words("status --json"));
         assert_eq!((p.0, p.1.unwrap().unwrap().command), (true, STATUS.to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// CLI-012 (T-076-b): the app answers one request at a time, so while a long one runs the status
+    /// question is taken but not answered. A listener that accepts and never replies stands in for
+    /// that: `status` comes back within its own short wait, not `call`'s 300 s, and says running,
+    /// busy with another request, with the pid the startup file names.
+    #[test]
+    fn cli012_status_answers_within_its_short_wait_while_the_app_is_busy() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-cli012b-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // Takes every connection and holds it open without ever writing a byte back.
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for stream in listener.incoming().flatten() {
+                held.push(stream);
+            }
+        });
+        std::fs::write(dir.join(FILE), json!({ "port": port, "token": "tok", "pid": 4343 }).to_string()).unwrap();
+        let ask = |port: u16, token: &str| ask_status(port, token, "s2", "");
+        let started = Instant::now();
+        let r = status_of(&dir, &ask);
+        let took = started.elapsed();
+        assert!(took < Duration::from_secs(5), "status took {took:?}, longer than its short wait allows");
+        assert!(took >= STATUS_WAIT, "status gave up before its wait ran out: {took:?}");
+        assert_eq!((r["state"].as_str(), r["detail"].as_str(), r["pid"].as_u64()), (Some("running"), Some(STATUS_BUSY), Some(4343)));
+        assert_eq!(status_exit(&r), 0);
+        let line = status_line(&r);
+        assert!(line.starts_with("running:") && line.contains(STATUS_BUSY) && line.contains("4343"), "{line}");
+        // The general request path keeps its long wait: only the status question is impatient.
+        assert_eq!(CALL_WAIT, Duration::from_secs(300));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

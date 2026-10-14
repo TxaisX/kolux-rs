@@ -3,7 +3,7 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-152 · Hooks go only to agents that are installed and switched on, and installing them never damages the user's own settings (STAT-004, STAT-005; first open task on the cutline)
-Done: 353 / 601 tasks  ·  P0 cards passing: 6 / 228 cards  ·  cutline 2 / 18 left  ·  merge gate 46 waiting  (node scripts/plan-check.mjs --write-state)
+Done: 355 / 601 tasks  ·  P0 cards passing: 6 / 228 cards  ·  cutline 2 / 18 left  ·  merge gate 44 waiting  (node scripts/plan-check.mjs --write-state)
 
 How to read this: `PLAN.md` holds the 533 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
