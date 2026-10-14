@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { applyRead, chatOffer, combine, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type OfferInput } from "./model";
+import { applyRead, chatOffer, combine, pickChat, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type OfferInput } from "./model";
 
 const base: OfferInput = { credited: "claude", screen: "agents", switchOn: false, showingChat: false, launching: false, readable: true };
 const item = (id: string, role: ChatItem["role"], text: string, at: number): ChatItem => ({ id, role, kind: "text", text, at });
@@ -69,4 +69,23 @@ test("CHAT-010: timestamps follow the app's language", () => {
   const at = Date.UTC(2026, 2, 1, 15, 4);
   expect(stamp(at, "en-US").full).not.toEqual(stamp(at, "de-DE").full);
   expect(stamp(at, "de-DE").short).toMatch(/\d{1,2}:04/);
+});
+
+test("VIEW-019: a picked pane shows only its own chat, Starting while it launches, never another pane's", () => {
+  const panes = [{ key: 1 }, { key: 2 }, { key: 3 }];
+  const chat = { chat: true, back: false, chooser: false };
+  const launching = { chat: false, back: false, chooser: true };
+  const terminal = { chat: false, back: false, chooser: false };
+  // Pane 3 was just added with + and is launching; pane 1 can show chat: the box must not type into 1.
+  expect(pickChat(panes, 3, { 1: chat, 3: launching })).toBe("starting");
+  // Its support is not known yet (the 3 s check has not run): still Starting, still not pane 1.
+  expect(pickChat(panes, 3, { 1: chat })).toBe("starting");
+  expect(pickChat(panes, 3, { 1: chat, 3: chat })).toEqual({ key: 3 });
+  // A picked pane that cannot show chat shows its terminal (no chat), not pane 1's chat.
+  expect(pickChat(panes, 2, { 1: chat, 2: terminal })).toBeNull();
+  // A pick that is not a chat pane at all (a preset) shows nothing here.
+  expect(pickChat(panes, 9, { 1: chat })).toBeNull();
+  // Nothing picked: the first pane that can show chat.
+  expect(pickChat(panes, null, { 1: terminal, 2: chat, 3: chat })).toEqual({ key: 2 });
+  expect(pickChat(panes, null, {})).toBeNull();
 });

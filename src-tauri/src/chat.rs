@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::Value;
@@ -492,17 +492,28 @@ impl Parser {
 }
 
 /// Follows one file as it grows. Only whole lines come out; a line still being written waits.
+/// The most of a transcript the first read takes in (its newest part), so a very long session
+/// opens quickly; paging back to older turns is T-334's.
+pub const FIRST_READ_CAP: u64 = 8 * 1024 * 1024;
+
 #[derive(Debug)]
 pub struct Tail {
     pub path: PathBuf,
     offset: u64,
     partial: Vec<u8>,
     created: Option<SystemTime>,
+    cap: u64,
+    /// The read started inside a line (past the cap): drop bytes up to the first line end.
+    skip_to_line: bool,
 }
 
 impl Tail {
     pub fn new(path: PathBuf) -> Self {
-        Tail { path, offset: 0, partial: Vec::new(), created: None }
+        Tail::with_cap(path, FIRST_READ_CAP)
+    }
+
+    pub fn with_cap(path: PathBuf, cap: u64) -> Self {
+        Tail { path, offset: 0, partial: Vec::new(), created: None, cap, skip_to_line: false }
     }
 
     /// The complete lines added since the last read, and whether the file was replaced (rotated,
@@ -517,12 +528,27 @@ impl Tail {
             reset = true;
         }
         self.created = created;
+        // A read from the start of a file longer than the cap takes only its newest `cap` bytes,
+        // from the first whole line in them.
+        if self.offset == 0 && meta.len() > self.cap {
+            self.offset = meta.len() - self.cap;
+            self.skip_to_line = true;
+        }
         let mut buf = Vec::new();
         if meta.len() > self.offset {
             let mut f = fs::File::open(&self.path)?;
             f.seek(SeekFrom::Start(self.offset))?;
             f.take(meta.len() - self.offset).read_to_end(&mut buf)?;
             self.offset += buf.len() as u64;
+        }
+        if self.skip_to_line {
+            match buf.iter().position(|b| *b == b'\n') {
+                Some(i) => {
+                    buf.drain(..=i);
+                    self.skip_to_line = false;
+                }
+                None => buf.clear(),
+            }
         }
         self.partial.extend(buf);
         let mut lines = Vec::new();
@@ -740,7 +766,7 @@ impl Follow {
 }
 
 /// Every open chat view's follower, by pane key.
-pub static FOLLOWS: Mutex<Option<HashMap<u32, Follow>>> = Mutex::new(None);
+pub static FOLLOWS: Mutex<Option<HashMap<u32, Arc<Mutex<Follow>>>>> = Mutex::new(None);
 
 /// What the window needs to decide whether a pane can show chat (CHAT-002).
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -755,37 +781,56 @@ pub struct Support {
     pub readable: bool,
 }
 
-#[tauri::command]
-pub fn chat_support(terminals: tauri::State<'_, crate::terminal::Terminals>, pane_key: u32) -> Support {
-    let Some(run) = terminals.of_pane(pane_key) else { return Support { agent: None, launching: true, readable: false } };
+fn support_of(run: Option<crate::terminal::PaneRun>) -> Support {
+    let Some(run) = run else { return Support { agent: None, launching: true, readable: false } };
     let agent = chat_agent(run.agent);
     let readable = agent.is_some_and(|a| homes(a, &run.home_env, |k| std::env::var(k).ok(), home()).iter().any(|h| h.is_dir()));
     Support { agent, launching: !run.wrote, readable }
 }
 
+/// Runs `job` on a blocking worker, never the window's thread (the chat commands touch the disk).
+async fn off_main<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(job).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn chat_support(terminals: tauri::State<'_, crate::terminal::Terminals>, pane_key: u32) -> Result<Support, String> {
+    let run = terminals.of_pane(pane_key);
+    off_main(move || support_of(run)).await
+}
+
 /// CHAT-006: one look at the pane's transcript; the window calls it again after `retryMs`.
 #[tauri::command]
-pub fn chat_read(terminals: tauri::State<'_, crate::terminal::Terminals>, pane_key: u32) -> Result<ChatRead, String> {
+pub async fn chat_read(terminals: tauri::State<'_, crate::terminal::Terminals>, pane_key: u32) -> Result<ChatRead, String> {
     let run = terminals.of_pane(pane_key).ok_or("This pane is not running an agent.")?;
+    off_main(move || read_pane(pane_key, run)).await?
+}
+
+fn read_pane(pane_key: u32, run: crate::terminal::PaneRun) -> Result<ChatRead, String> {
     let agent = chat_agent(run.agent).ok_or("This pane's program cannot be shown as chat.")?;
     let hint = crate::status::transcript_of(pane_key).map(PathBuf::from);
     let working = crate::status::working(pane_key);
-    let mut guard = FOLLOWS.lock().unwrap_or_else(|p| p.into_inner());
-    let follows = guard.get_or_insert_with(HashMap::new);
     let now = Instant::now();
-    let follow = follows.entry(pane_key).or_insert_with(|| {
+    // The map's lock is held only to find or make the pane's follower; the read itself holds just
+    // that follower's lock, so a long first read never stalls another pane's chat.
+    let mut guard = FOLLOWS.lock().unwrap_or_else(|p| p.into_inner());
+    let follow = guard.get_or_insert_with(HashMap::new).entry(pane_key).or_insert_with(|| {
         // A little slack: the agent may have created its file a moment before Kolux noted the start.
         let since = run.started - Duration::from_secs(5);
         // The folder the program really started in (TERM-040 may have moved it below the workspace).
         let cwd = run.cwd.clone().or_else(|| std::env::current_dir().ok().map(|d| d.to_string_lossy().into_owned())).unwrap_or_default();
-        Follow::new(agent, cwd, homes(agent, &run.home_env, |k| std::env::var(k).ok(), home()), since, now)
+        Arc::new(Mutex::new(Follow::new(agent, cwd, homes(agent, &run.home_env, |k| std::env::var(k).ok(), home()), since, now)))
     });
+    let follow = Arc::clone(follow);
+    drop(guard);
+    let mut follow = follow.lock().unwrap_or_else(|p| p.into_inner());
     Ok(follow.poll(now, hint, run.alive, working))
 }
 
 /// The chat view closed: its next open reads the transcript from the start again.
 #[tauri::command]
-pub fn chat_close(pane_key: u32) {
+pub async fn chat_close(pane_key: u32) {
+    // Only the map entry goes; a read still running finishes on its own copy and is dropped.
     let mut guard = FOLLOWS.lock().unwrap_or_else(|p| p.into_inner());
     if let Some(f) = guard.as_mut() {
         f.remove(&pane_key);
@@ -839,6 +884,26 @@ mod tests {
         fs::OpenOptions::new().append(true).open(&f).unwrap().write_all(b"2}\r\n").unwrap();
         assert_eq!(t.read().unwrap(), (vec!["{\"b\":2}".to_string()], false), "only the newly completed line, not the first again");
         assert_eq!(t.read().unwrap(), (vec![], false));
+    }
+
+    #[test]
+    fn a_transcript_past_the_cap_opens_on_its_newest_whole_lines_then_follows() {
+        let d = temp("chat-cap");
+        let f = d.join("t.jsonl");
+        // 40 lines of 10 bytes; a 35-byte cap lands inside line 37, so lines 38..=40 come back.
+        let body: String = (1..=40).map(|i| format!("{{\"n\":{i:03}}}\n")).collect();
+        assert_eq!(body.len(), 400);
+        fs::write(&f, &body).unwrap();
+        let mut t = Tail::with_cap(f.clone(), 35);
+        let (lines, reset) = t.read().unwrap();
+        assert!(!reset);
+        assert_eq!(lines, vec!["{\"n\":038}", "{\"n\":039}", "{\"n\":040}"], "no torn first line, only the newest whole lines");
+        fs::OpenOptions::new().append(true).open(&f).unwrap().write_all(b"{\"n\":041}\n").unwrap();
+        assert_eq!(t.read().unwrap(), (vec!["{\"n\":041}".to_string()], false), "after the first read it follows as before");
+        // The real cap is far above a normal session, which is still read whole.
+        const { assert!(FIRST_READ_CAP >= 8 * 1024 * 1024) };
+        let mut whole = Tail::new(f.clone());
+        assert_eq!(whole.read().unwrap().0.len(), 41);
     }
 
     #[test]

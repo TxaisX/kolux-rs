@@ -66,6 +66,19 @@ export function chatOffer(o: OfferInput): Offer {
   return { chat, back: o.showingChat, chooser: false };
 }
 
+/** VIEW-019: which chat the Agents screen shows. With a pane picked, only that pane: its chat when
+ * it can show one, "starting" while it launches or its support is not known yet, else none (its
+ * terminal shows), so the box never types into a pane the rail did not pick. With nothing picked,
+ * the first pane that can show chat. */
+export function pickChat<P extends { key: number }>(panes: P[], focused: number | null, offers: Record<number, Offer | undefined>): P | "starting" | null {
+  if (focused === null) return panes.find((p) => offers[p.key]?.chat) ?? null;
+  const p = panes.find((x) => x.key === focused);
+  if (!p) return null;
+  const o = offers[p.key];
+  if (o?.chat) return p;
+  return !o || o.chooser ? "starting" : null;
+}
+
 /** Folds one read into the conversation: a reset replaces it, otherwise items with a known id
  * replace their old version and new ones join, in transcript order. */
 export function applyRead(prev: ChatItem[], read: ChatRead): ChatItem[] {

@@ -9,26 +9,36 @@ import { locale } from "../language";
 import "./chat.css";
 import { fold, thoughtIds as idsOf, toggled, type View } from "./steps";
 import { NoticeRow, PlanRow, StepRow, ThoughtRow } from "./StepRows";
-import { applyRead, capPending, chatOffer, combine, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row } from "./model";
+import { applyRead, capPending, chatOffer, combine, pickChat, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row } from "./model";
 import { Composer, type ComposerHandle } from "./MessageBox";
-import { enqueue, forwardsToBox, nearBottom, sendSteps, typeSteps } from "./composer";
+import { ASKING_NOTE, asksInTerminal, enqueue, forwardsToBox, nearBottom, sendSteps, typeSteps } from "./composer";
 
 /** `terminal`: the program session the pane types into (the window's own pane-to-terminal map). */
 export type ChatPane = { key: number; cwd: string | null; title?: string; terminal?: number };
 type Support = { agent?: string; launching: boolean; readable: boolean };
 
-export default function ChatView({ pane, agent, preview = null, pending = [] }: { pane: ChatPane; agent?: string; preview?: Preview | null; pending?: Pending[] }) {
+/** `hookState`: the window's hook reading for the pane (permission, waiting, working, ...), when it has one. */
+export default function ChatView({ pane, agent, preview = null, pending = [], hookState }: { pane: ChatPane; agent?: string; preview?: Preview | null; pending?: Pending[]; hookState?: string }) {
   const [items, setItems] = useState<ChatItem[]>([]);
   const [state, setState] = useState<ChatRead["state"]>("loading");
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [extras, setExtras] = useState<Extra[]>([]);
+  // CHAT-022: while the agent shows a permission or question menu in its terminal, nothing is
+  // typed from the chat: a send's keys would land in the menu and its Enter would pick the default.
+  const heard = useRef<string | undefined>(undefined);
+  const [heardState, setHeard] = useState<string | undefined>(undefined);
+  const asking = asksInTerminal(hookState ?? heardState);
+  const askingNow = useRef(asking);
+  askingNow.current = asking;
 
   useEffect(() => {
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     setItems([]);
     setState("loading");
+    heard.current = undefined;
+    setHeard(undefined);
     const look = () => {
       invoke<ChatRead>("chat_read", { paneKey: pane.key })
         .then((r) => {
@@ -48,8 +58,14 @@ export default function ChatView({ pane, agent, preview = null, pending = [] }: 
     };
     look();
     // CHAT-010: what the hooks say arrives first; the transcript's version replaces it.
-    const off = listen<{ paneKey: number; reply?: string }>("agent-status", (e) => {
-      if (e.payload.paneKey !== pane.key || !e.payload.reply) return;
+    const off = listen<{ paneKey: number; reply?: string; state?: string }>("agent-status", (e) => {
+      if (e.payload.paneKey !== pane.key) return;
+      // CHAT-022: the hooks' own reading, kept at once so a send already under way sees it.
+      if (e.payload.state !== undefined) {
+        heard.current = e.payload.state;
+        setHeard(e.payload.state);
+      }
+      if (!e.payload.reply) return;
       const text = e.payload.reply;
       setExtras((xs) => (xs.some((x) => x.text === text) ? xs : [...xs.slice(-20), { id: `hook-${Date.now()}`, role: "assistant", text, at: Date.now() }]));
     });
@@ -68,13 +84,16 @@ export default function ChatView({ pane, agent, preview = null, pending = [] }: 
   const rows = useMemo(() => combine(items, extras, previewToShow(preview, open, lastReply(items)), allPending), [items, extras, preview, open, allPending]);
   const terminal = pane.terminal;
   const send = (text: string) => {
-    if (terminal === undefined) return;
+    if (terminal === undefined || askingNow.current) return;
     const id = `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     setSent((xs) => capPending([...xs, { id, text, at: Date.now() }]));
     stick.current = true;
-    enqueue(terminal, () => typeSteps(sendSteps(agent, text), (data) => invoke("terminal_write", { id: terminal, data }))).catch(() =>
-      setSent((xs) => xs.map((x) => (x.id === id ? { ...x, failed: true } : x))),
-    );
+    const failed = () => setSent((xs) => xs.map((x) => (x.id === id ? { ...x, failed: true } : x)));
+    // CHAT-022: a menu that opens mid-send drops the rest of the keys, the Enter above all.
+    const stop = () => askingNow.current || asksInTerminal(heard.current);
+    enqueue(terminal, () => typeSteps(sendSteps(agent, text), (data) => invoke("terminal_write", { id: terminal, data }), undefined, stop)).then((done) => {
+      if (!done) failed();
+    }, failed);
   };
   // CHAT-027: within 48 px of the bottom the view follows new output; further up it holds still.
   const list = useRef<HTMLDivElement>(null);
@@ -132,7 +151,7 @@ export default function ChatView({ pane, agent, preview = null, pending = [] }: 
           Jump to latest
         </button>
       )}
-      <Composer ref={box} paneKey={pane.key} live={terminal !== undefined} onSend={send} />
+      <Composer ref={box} paneKey={pane.key} live={terminal !== undefined} blocked={asking ? ASKING_NOTE : undefined} onSend={send} />
       {full && (
         <button type="button" className="chat-full" aria-label="Close image" onClick={() => setFull(null)}>
           <img src={full} alt="Attached" />
@@ -195,10 +214,9 @@ function ChatRow({ row, onImage }: { row: Row; onImage: (src: string) => void })
   );
 }
 
-/** The Agents screen's chat until T-050's rail lands: the focused pane's chat when it can show
- * one, else the first pane that can. A pane still launching keeps the screen's placeholder (the
- * chooser is T-050's). */
-export function AgentsChat({ panes, focused, ptyOf }: { panes: ChatPane[]; focused: number | null; ptyOf?: (key: number) => number | undefined }) {
+/** The Agents screen's chat: the picked pane's chat when it can show one (`pickChat`). `hook`: the
+ * window's hook readings by pane, so the box holds its send while the agent asks in its terminal. */
+export function AgentsChat({ panes, focused, ptyOf, hook }: { panes: ChatPane[]; focused: number | null; ptyOf?: (key: number) => number | undefined; hook?: Record<number, string | undefined> }) {
   const [offers, setOffers] = useState<Record<number, Offer & { agent?: string }>>({});
   const keys = panes.map((p) => p.key).join(",");
   useEffect(() => {
@@ -215,8 +233,14 @@ export function AgentsChat({ panes, focused, ptyOf }: { panes: ChatPane[]; focus
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keys]);
-  const pick = panes.find((p) => p.key === focused && offers[p.key]?.chat) ?? panes.find((p) => offers[p.key]?.chat);
+  const shown = pickChat(panes, focused, offers);
   // Shown before the screen's placeholder, which `.chat + .empty` then hides.
-  if (!pick) return null;
-  return <ChatView pane={{ ...pick, terminal: pick.terminal ?? ptyOf?.(pick.key) }} agent={offers[pick.key]?.agent} />;
+  if (shown === null) return null;
+  if (shown === "starting")
+    return (
+      <div className="chat" aria-label="Chat">
+        <div className="chat-state" role="status">Starting…</div>
+      </div>
+    );
+  return <ChatView pane={{ ...shown, terminal: shown.terminal ?? ptyOf?.(shown.key) }} agent={offers[shown.key]?.agent} hookState={hook?.[shown.key]} />;
 }

@@ -103,12 +103,21 @@ export function enqueue<T>(terminal: number, job: () => Promise<T>): Promise<T> 
   return run;
 }
 
-/** CHAT-020: types `steps` with `write`, waiting between them. */
-export async function typeSteps(steps: Step[], write: (data: string) => Promise<unknown>, sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))) {
+/** CHAT-022: the hook states in which the agent shows a menu in its terminal (a tool permission,
+ * a question): a chat send then would land in that menu, and its Enter would pick the default. */
+export const asksInTerminal = (state: string | undefined) => state === "permission" || state === "waiting";
+/** CHAT-022: what the box says while the agent is asking something in its terminal. */
+export const ASKING_NOTE = "The agent is asking something in its terminal. Answer there.";
+
+/** CHAT-020: types `steps` with `write`, waiting between them. CHAT-022: `stop` is asked before
+ * every write; once it says yes the rest (the Enter above all) is dropped and false comes back. */
+export async function typeSteps(steps: Step[], write: (data: string) => Promise<unknown>, sleep = (ms: number) => new Promise((r) => setTimeout(r, ms)), stop: () => boolean = () => false): Promise<boolean> {
   for (const s of steps) {
+    if (stop()) return false;
     await write(s.data);
     if (s.waitMs) await sleep(s.waitMs);
   }
+  return true;
 }
 
 /** CHAT-027: the view is close enough to the bottom to follow new output. */

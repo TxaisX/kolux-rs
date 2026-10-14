@@ -10,10 +10,12 @@ type Props = {
   paneKey: number;
   /** The session has a live terminal to type into. */
   live: boolean;
+  /** CHAT-022: why sending is held back for now (the agent is asking in its terminal); the draft can still be written. */
+  blocked?: string;
   onSend: (text: string) => void;
 };
 
-export const Composer = forwardRef<ComposerHandle, Props>(function Composer({ paneKey, live, onSend }, ref) {
+export const Composer = forwardRef<ComposerHandle, Props>(function Composer({ paneKey, live, blocked, onSend }, ref) {
   const [text, setText] = useState(() => draftOf(paneKey));
   // The history index shown; history.length means the draft itself.
   const [at, setAt] = useState(() => historyOf(paneKey).length);
@@ -42,7 +44,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer({ pa
     const act = keyAction({ key: e.key, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey, isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode }, !before.includes("\n"), !after.includes("\n"));
     if (act === "send") {
       e.preventDefault();
-      if (!live || !text.trim()) return;
+      if (!live || blocked || !text.trim()) return;
       addHistory(paneKey, text);
       onSend(text);
       setText("");
@@ -64,6 +66,11 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer({ pa
 
   return (
     <div className="chat-composer">
+      {blocked && (
+        <div className="chat-asking" role="status">
+          {blocked}
+        </div>
+      )}
       <textarea
         ref={box}
         className="chat-box"

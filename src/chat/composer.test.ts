@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DRAFT_LIMIT, HISTORY_LIMIT, MAX_LINES, draftOf, enqueue, forwardsToBox, harmless, keepDraft, keyAction, linesFor, nearBottom, remember, sendSteps, stepHistory, typeSteps } from "./composer";
+import { DRAFT_LIMIT, HISTORY_LIMIT, MAX_LINES, asksInTerminal, draftOf, enqueue, forwardsToBox, harmless, keepDraft, keyAction, linesFor, nearBottom, remember, sendSteps, stepHistory, typeSteps } from "./composer";
 import { capPending, combine, sentIn, type ChatItem } from "./model";
 
 describe("message box (CHAT-017, T-327)", () => {
@@ -98,6 +98,35 @@ describe("sending into the terminal (CHAT-020, T-327)", () => {
     const b = enqueue(41, () => typeSteps(sendSteps("claude", "second"), write, fast));
     await Promise.all([a, b]);
     expect(got).toEqual(["\x15", "first", "\r", "\x15", "second", "\r"]);
+  });
+
+  it("a permission or question menu holds every send; working and idle do not (CHAT-022)", () => {
+    expect(asksInTerminal("permission")).toBe(true);
+    expect(asksInTerminal("waiting")).toBe(true);
+    for (const s of ["working", "idle", "done", "blocked", undefined]) expect(asksInTerminal(s)).toBe(false);
+  });
+
+  it("a menu that opens mid-send drops the rest of the keys, the Enter above all (CHAT-022)", async () => {
+    const got: string[] = [];
+    let state = "working";
+    const write = async (d: string) => {
+      got.push(d);
+      // The agent opens its permission menu right after the text went in.
+      if (d === "no, do not run that") state = "permission";
+    };
+    const done = await typeSteps(sendSteps("claude", "no, do not run that"), write, () => Promise.resolve(), () => asksInTerminal(state));
+    expect(done).toBe(false);
+    expect(got).toEqual(["\x15", "no, do not run that"]);
+    expect(got).not.toContain("\r");
+  });
+
+  it("a menu already open sends nothing at all, and a send with no menu completes (CHAT-022)", async () => {
+    const got: string[] = [];
+    const write = async (d: string) => void got.push(d);
+    expect(await typeSteps(sendSteps("codex", "hello"), write, () => Promise.resolve(), () => true)).toBe(false);
+    expect(got).toEqual([]);
+    expect(await typeSteps(sendSteps("codex", "hello"), write, () => Promise.resolve(), () => false)).toBe(true);
+    expect(got).toEqual(["\x15", "hello", "\r"]);
   });
 
   it("a failed send rejects, and the next send to that terminal still runs", async () => {
