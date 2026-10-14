@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { barItem, cardReducer, initialCard, mainAction, tipVisible, type Action, type CardState, type UpdateInfo } from "./card";
+import { barItem, cardReducer, initialCard, mainAction, quietNote, securityStop, tipVisible, type Action, type CardState, type UpdateInfo } from "./card";
 
 const info = (version: string, notes: string[] = ["One", "Two", "Three", "Four", "Five"]): UpdateInfo => ({ version, currentVersion: "0.1.0", notes });
 const run = (s: CardState, ...actions: Action[]) => actions.reduce(cardReducer, s);
@@ -250,5 +250,52 @@ describe("status bar item (VIEW-100)", () => {
     s = run(initialCard(null, true), { type: "ready", info: info("0.2.0") }, { type: "dismiss" }, { type: "show" });
     expect(s.shown).toBe(true);
     expect(run(initialCard(null, true), { type: "show" }).shown).toBe(false);
+  });
+});
+
+describe("publisher-mismatch stop (APP-030)", () => {
+  const stop = "security-stop: The update is signed by \"CN=Someone Else\", not by \"CN=Txais Xiong\", the publisher of this copy.";
+
+  it("a security stop shows a stop card with no way to install anyway", () => {
+    // A quiet check downloads by itself; the stop still brings the card up.
+    let s = run(initialCard(null, true), { type: "checkDone", requested: false, found: info("0.2.0") }, { type: "downloadStart", info: info("0.2.0") });
+    s = run(s, { type: "downloadFailed", info: info("0.2.0"), message: stop, offline: false });
+    expect(s.shown).toBe(true);
+    expect(s.collapsed).toBe(false);
+    expect(s.phase.kind).toBe("blocked");
+    if (s.phase.kind !== "blocked") return;
+    expect(s.phase.message).toContain("CN=Someone Else");
+    expect(s.phase.message.startsWith("security-stop")).toBe(false);
+    expect(s.phase.remembered).toBe(true);
+    // The only action is closing the card: no download, retry or restart.
+    expect(mainAction(s.phase)).toBe("close");
+    expect(s.popup).toBeNull();
+    expect(barItem(s.phase)).toMatchObject({ tone: "error", text: "Update stopped" });
+  });
+
+  it("an ordinary signature failure is still a retryable download error", () => {
+    const s = run(initialCard(null, true), { type: "downloadFailed", info: info("0.2.0"), message: "signature mismatch", offline: false });
+    expect(s.phase.kind).toBe("error");
+    expect(mainAction(s.phase)).toBe("retryDownload");
+    expect(securityStop("signature mismatch")).toBeNull();
+    expect(securityStop("Error: security-stop:  ")).toEqual({ message: "The update was refused.", remembered: true });
+  });
+
+  it("a download whose signature cannot be read is stopped this time only", () => {
+    const once = "security-stop-once: Kolux RS could not read the download's Windows signature, so it was not installed.";
+    expect(securityStop(once)).toEqual({ message: once.slice("security-stop-once: ".length), remembered: false });
+    const s = run(initialCard(null, true), { type: "downloadFailed", info: info("0.2.0"), message: once, offline: false });
+    expect(s.phase).toMatchObject({ kind: "blocked", remembered: false });
+    expect(mainAction(s.phase)).toBe("close");
+  });
+
+  it("checking again later does not offer the refused version", () => {
+    // The back end answers a refused version with the quiet reason "refused".
+    let s = run(initialCard(null, true), { type: "downloadFailed", info: info("0.2.0"), message: stop, offline: false }, { type: "dismiss" });
+    expect(s.phase.kind).toBe("idle");
+    s = run(s, { type: "checkStart", requested: true }, { type: "checkDone", requested: true, found: null, quiet: "refused" });
+    expect(s.phase).toEqual({ kind: "upToDate", note: quietNote("refused") });
+    expect(quietNote("refused")).toMatch(/not offered again/);
+    expect(mainAction(s.phase)).toBe("close");
   });
 });

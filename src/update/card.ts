@@ -1,4 +1,4 @@
-// APP-025 / APP-026 / APP-027 / APP-028 / APP-029 / APP-031: what the update card and the ready pop-up show. A pure
+// APP-025 / APP-026 / APP-027 / APP-028 / APP-029 / APP-030 / APP-031: what the update card and the ready pop-up show. A pure
 // reducer (card.test.ts); UpdateCenter.tsx wires it to the timetable and the back end.
 
 import type { Quiet } from "./schedule";
@@ -18,6 +18,8 @@ export type Phase =
   | { kind: "downloading"; info: UpdateInfo; received: number; total: number | null }
   | { kind: "ready"; info: UpdateInfo }
   | { kind: "updated"; version: string }
+  /** APP-030: a security stop; the update was refused and there is no way to install it anyway. */
+  | { kind: "blocked"; info: UpdateInfo; message: string; remembered: boolean }
   | { kind: "error"; message: string; next: string; info: UpdateInfo | null; retry: "check" | "download" | "restart"; installer?: boolean };
 
 /** APP-028: what the last install attempt means at this launch (update_status). */
@@ -81,8 +83,22 @@ export function nextStep(offline: boolean, stage: "check" | "download", local = 
 /** APP-031: a calm line for a check the user asked for that found nothing to install. */
 export function quietNote(q: Quiet): string {
   if (q === "halfPublished") return "A new version is being published right now. Kolux RS will look again in a few minutes.";
+  if (q === "refused") return "The newest version was stopped earlier because it did not come from this copy's publisher, so it is not offered again.";
   if (q === "noPlatform") return "The newest release has no download for this computer yet. Kolux RS will keep looking.";
   return "The update server has nothing newer to offer right now.";
+}
+
+/** APP-030: the back end's security-stop text, or null for any other failure. A stop for the
+ *  publisher is remembered (that version is never offered again); a download whose signature could
+ *  not be read at all is stopped this time only. */
+export const SECURITY_STOP = "security-stop: ";
+export const SECURITY_STOP_ONCE = "security-stop-once: ";
+export function securityStop(raw: string): { message: string; remembered: boolean } | null {
+  for (const [mark, remembered] of [[SECURITY_STOP, true], [SECURITY_STOP_ONCE, false]] as const) {
+    const at = raw.indexOf(mark);
+    if (at >= 0) return { message: raw.slice(at + mark.length).trim() || "The update was refused.", remembered };
+  }
+  return null;
 }
 
 /** The updater's own words, turned into a sentence a user can act on. */
@@ -161,6 +177,9 @@ export function cardReducer(s: CardState, a: Action): CardState {
       return { ...next, popup: v, popupSeen: [...s.popupSeen, v] };
     }
     case "downloadFailed": {
+      // APP-030: a security stop always shows, with no install option and no retry.
+      const stop = securityStop(a.message);
+      if (stop !== null) return { ...s, popup: null, requested: true, shown: true, collapsed: false, phase: { kind: "blocked", info: a.info, message: stop.message, remembered: stop.remembered } };
       // Download errors bring the card up even after a quiet check.
       return {
         ...s,
@@ -241,6 +260,7 @@ export function mainAction(p: Phase): "close" | "download" | "restart" | "retryC
   switch (p.kind) {
     case "upToDate":
     case "updated":
+    case "blocked":
       return "close";
     case "available":
       return "download";
@@ -273,6 +293,8 @@ export function barItem(p: Phase): BarItem | null {
       return { tone: "ready", text: "Restart to update", title: `Kolux RS ${p.info.version} is ready to install. ${title}` };
     case "error":
       return { tone: "error", text: "Update failed", title: `${p.message} ${title}` };
+    case "blocked":
+      return { tone: "error", text: "Update stopped", title: `Kolux RS ${p.info.version} was refused: ${p.message} ${title}` };
     default:
       return null;
   }

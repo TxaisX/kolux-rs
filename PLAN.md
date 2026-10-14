@@ -730,7 +730,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P2 · theme 8 · Release, update and CI pipeline (1 cards)
 
-- [ ] T-293 · APP-030 An update whose Windows signature does not match is stopped, with no bypass
+- [x] T-293 · APP-030 An update whose Windows signature does not match is stopped, with no bypass · done 2026-10-14 (lane/release from dec2513; evidence/T-293.txt: a signed copy refuses an installer from another publisher, unsigned or badly signed, remembers the version and never offers it again, the card shows a stop with only Close; an unreadable signature stops once; update.rs publisher_verdict / read_signer / check_publisher, card.ts blocked phase; cargo update:: 14 ok, vitest src/update 52 ok; live proof pending (batched))
 
 ### P2 · theme 6 · Business-user frame (6 cards)
 

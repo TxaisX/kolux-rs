@@ -23,7 +23,7 @@ export const CHECK_TIMEOUT_MS = 45_000;
 export const RECHECK_SOON_MS = 5 * 60_000;
 
 /** APP-031: why a check that reached the feed has nothing to offer. */
-export type Quiet = "halfPublished" | "noManifest" | "noPlatform";
+export type Quiet = "halfPublished" | "noManifest" | "noPlatform" | "refused";
 /** What a check returns when the feed answered but has nothing to install. */
 export class Quietly {
   constructor(readonly reason: Quiet) {}

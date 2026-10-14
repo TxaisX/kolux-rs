@@ -1,0 +1,52 @@
+T-293 · APP-030 An update whose Windows signature does not match is stopped, with no bypass · 2026-10-14
+lane/release from 661693a (BEFORE of this wave dec2513). Text proof; the app was not launched (NO APP LAUNCHES).
+
+What it does
+- Before a downloaded update is kept for install, a signed copy of Kolux RS reads its own Windows
+  (Authenticode) signature and the download's, with Windows PowerShell's signature check (no window;
+  the file path goes in through an environment variable, never the command text).
+- Same publisher, valid signature: allowed. Another publisher, no signature, or a broken / untrusted
+  signature: refused for good. The version goes into update.refusedVersions in the store, the
+  download is dropped, and the card gets a "security-stop: <reason>" error.
+- A download whose signature cannot be read at all: stopped this time only ("security-stop-once:"),
+  not remembered.
+- update_check passes over a remembered version and answers with the quiet reason "refused"; a
+  check the user asked for shows "The newest version was stopped earlier because it did not come
+  from this copy's publisher, so it is not offered again."
+- The card shows a "Kolux RS <version> was stopped for your safety" stop with the reason, no
+  release notes, and only a close button (no install, retry or restart). The status bar shows
+  "Update stopped". The rule only applies to a signed copy; every release today is unsigned
+  (OD-03), so the path is dormant there, as the card says.
+
+Tests (real readings)
+- cargo test --lib update:: : 14 passed, 0 failed (G:/Temp/release-w1-logs/t293-cargo.log), including
+  update::tests::app030_an_unsigned_copy_never_stops_an_update
+  update::tests::app030_a_signed_copy_takes_only_its_own_publisher
+  update::tests::app030_a_refused_version_is_remembered_once
+  update::tests::app030_the_security_stop_reaches_the_card_as_its_own_kind
+  update::tests::app030_reads_real_windows_signatures (powershell.exe reads Valid with a Microsoft
+  publisher; an unsigned file with brackets in its name reads not Valid with no publisher; signed vs
+  unsigned is refused, signed vs itself allowed)
+- pnpm exec vitest related src/update/*: 4 files, 52 passed (t293-vitest.log), including
+  card.test.ts "publisher-mismatch stop (APP-030)": a security stop shows a stop card with no way to
+  install anyway; an ordinary signature failure is still a retryable download error; a download
+  whose signature cannot be read is stopped this time only; checking again later does not offer the
+  refused version.
+- cargo clippy --all-targets -- -D warnings: clean. pnpm exec tsc --noEmit: 0.
+
+Acceptance boxes
+- [ ] Serve a signed build an update signed by a different publisher -> security stop card, no
+      install option. Unit-proven (verdict + reducer + card); live proof pending (batched): needs a
+      signed build, which no release has today (OD-03).
+- [ ] Check again later -> the refused version is not offered again. Unit-proven (refused list +
+      quiet "refused"); live proof pending (batched).
+
+LIVE PROOF PENDING (for the coordinator's batched run, signed test build only)
+1. Sign a dev build with test certificate A and install it; publish a test feed whose installer is
+   signed with certificate B (same version bump, valid update key).
+2. Settings or status bar: Check for updates. Expect the card "Kolux RS <v> was stopped for your
+   safety", the reason naming both publishers, the line "It was not installed and will not be
+   offered again", no release notes, only Close; the status bar reads "Update stopped".
+3. Close, then Check for updates again. Expect "The newest version was stopped earlier because it
+   did not come from this copy's publisher, so it is not offered again." and no download.
+4. The lane profile's state.db holds update.refusedVersions = ["<v>"].

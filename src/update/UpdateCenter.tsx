@@ -207,6 +207,8 @@ export default function UpdateCenter() {
               ? `Kolux RS ${version} is ready`
               : p.kind === "updated"
                 ? `Kolux RS was updated to ${p.version}`
+              : p.kind === "blocked"
+                ? `Kolux RS ${version} was stopped for your safety`
               : p.kind === "error"
                 ? p.installer || p.retry === "restart"
                   ? `Kolux RS ${version} did not install`
@@ -267,6 +269,16 @@ export default function UpdateCenter() {
                     <div className="upd-next">{p.next}</div>
                   </>
                 )}
+                {p.kind === "blocked" && (
+                  <>
+                    <div className="upd-err">{p.message}</div>
+                    <div className="upd-next">
+                      {p.remembered
+                        ? "It was not installed and will not be offered again. Kolux RS keeps running the version you have."
+                        : "It was not installed. Kolux RS keeps running the version you have and checks again later."}
+                    </div>
+                  </>
+                )}
                 {p.kind === "downloading" && (
                   <div className="upd-bar" role="progressbar" aria-valuenow={pct ?? undefined} aria-valuemin={0} aria-valuemax={100}>
                     <div style={{ width: `${pct ?? 0}%` }} />
@@ -274,7 +286,7 @@ export default function UpdateCenter() {
                 )}
                 {p.kind === "upToDate" && p.note && <div className="upd-next">{p.note}</div>}
                 {p.kind === "updated" && <div className="upd-next">What is new in this version:</div>}
-                {s.notes.length > 0 && p.kind !== "checking" && p.kind !== "upToDate" && (
+                {s.notes.length > 0 && p.kind !== "checking" && p.kind !== "upToDate" && p.kind !== "blocked" && (
                   <ul className="upd-notes">
                     {s.notes.map((n, i) => (
                       <li key={i}>{n}</li>
