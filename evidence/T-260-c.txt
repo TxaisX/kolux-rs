@@ -1,0 +1,46 @@
+T-260-c · council MERGE 50 FIX-SOON (Floor timeline): ended lanes trimmed as they are written; a late state never reopens a lane (VIEW-013)
+lane/automations from 8446bec (main 5f3b287 merged at fcca21b) · 2026-10-14
+
+The problem: the Floor's per-pane lanes were trimmed only when the Floor read them, so with the
+Floor never opened, every closed pane's lane stayed in memory for the whole run of the app. And a
+state that arrived after its pane closed (a hook still in flight) cleared the lane's end time, so a
+closed pane showed on the Floor as open again.
+
+What is built (src-tauri/src/activity.rs only)
+- trim(now): drops every lane that closed before the 26-hour reach. It now runs on every mark
+  (a state change of any pane), on every pane close, and on the Floor's read, not only the read.
+- mark(): a lane that has an end time takes no more marks: a state reported after its pane closed
+  neither reopens nor extends it. The day's turn counts (USAGE-011) still see that state, so a
+  new pane on the same key still counts a new turn (usage_011_closing_a_pane... unchanged).
+- end(): a second close of the same pane keeps the first close time.
+
+Tests
+- New: activity::tests::t260c_ended_lanes_go_as_they_are_written_and_a_late_state_changes_nothing
+  (a late working then done after the close leave ended = close time and the last mark "done";
+  another pane's mark past the reach drops the closed lane without any Floor read; pane closes
+  past the reach drop older closed lanes; a later mark drops them all).
+- Changed: view013_each_pane_keeps_its_state_changes_for_the_floor_and_old_ones_go now asserts a
+  state after the close keeps the lane ended (it asserted the opposite before).
+
+Readings (logs under G:/Temp/automations-w1-logs/)
+- Old code + new tests (impl part of HEAD activity.rs, test module from this change):
+  test result: FAILED. 6 passed; 2 failed (t260c_... at activity.rs:302, view013_... at :290)
+  (t260c-oldcode-test.log)
+- New code: cargo test --lib activity: test result: ok. 8 passed; 0 failed (t260c-test.log)
+- cargo clippy --all-targets -- -D warnings: Finished, 0 warnings (t260c-clippy.log)
+- Full gates (gates.sh, scratch HOME/CLAUDE_CONFIG_DIR/CODEX_HOME under G:/Temp/automations-w1):
+  cargo test full: lib test result: ok. 644 passed; 0 failed; 1 ignored (other targets ok);
+  clippy -D warnings exit 0; tsc --noEmit exit 0; plan-check: OK; firewall -Baseline: 53 hit(s)
+  in 22 file(s), 0 new.
+  pnpm test: 977 passed, 1 failed (157 files): scripts/privacy-audit.test.mjs app070 flags
+  "src-tauri/src/browser.rs: reqwest::" (the site icon fetch). That file and that test are
+  byte-identical to main 5f3b287 (git diff 5f3b287 -- src-tauri/src/browser.rs scripts/ is empty);
+  it came in with MERGE 65 (browser c76a8f3), not this card. Left for the coordinator / browser lane.
+
+LIVE PROOF PENDING (batched; no app launches in this lane)
+1. Open two shell panes (A and B), run a stand-in agent in A so it reports working, then close A.
+2. Open the Floor (command palette: "Show Floor"). Expect A's lane to show as ended at the close time (no live dot)
+   and B's lane open.
+3. If a late hook from A arrives after the close, A's lane must stay ended: no new segment after
+   the close time, no "working" colour past it.
+4. Close the Floor and reopen it: same picture.

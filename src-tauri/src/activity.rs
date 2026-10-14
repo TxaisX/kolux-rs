@@ -106,8 +106,13 @@ impl Activity {
     /// Marks older than the reach go, except the last of them, which says what the pane was doing
     /// when the reach begins.
     fn mark(&mut self, pane: u32, state: &str, now: u64) {
+        self.trim(now);
         let t = self.tracks.entry(pane).or_insert_with(|| Track { pane, ..Track::default() });
-        t.ended = None;
+        // T-260-c: a state that arrives after its pane closed (a hook still in flight) never
+        // reopens or extends the lane; the turn counts (USAGE-011) still see it.
+        if t.ended.is_some() {
+            return;
+        }
         if t.marks.last().is_some_and(|m| m.state == state) {
             return;
         }
@@ -120,9 +125,15 @@ impl Activity {
 
     /// VIEW-013: every pane's lane as of `now`; a pane that closed before the reach is left out.
     pub fn timeline(&mut self, now: u64) -> Vec<Track> {
+        self.trim(now);
+        self.tracks.values().cloned().collect()
+    }
+
+    /// T-260-c: a lane that closed before the reach goes as marks and ends are written, so lanes
+    /// do not pile up while the Floor is never opened.
+    fn trim(&mut self, now: u64) {
         let cut = now.saturating_sub(TIMELINE_MS);
         self.tracks.retain(|_, t| t.ended.is_none_or(|e| e >= cut));
-        self.tracks.values().cloned().collect()
     }
 
     /// Kolux made a pull request.
@@ -136,8 +147,9 @@ impl Activity {
         self.note(pane, "done", now);
         self.open.remove(&pane);
         if let Some(t) = self.tracks.get_mut(&pane) {
-            t.ended = Some(now);
+            t.ended.get_or_insert(now); // a second close keeps the first time
         }
+        self.trim(now);
     }
 
     /// The counts as of `now`, open working stretches included.
@@ -284,10 +296,33 @@ mod tests {
         assert_eq!(lanes.len(), 1);
         let marks: Vec<(u64, &str)> = lanes[0].marks.iter().map(|m| (m.at, m.state.as_str())).collect();
         assert_eq!(marks, vec![(11 * h, "permission"), (11 * h + 300_000, "working"), (37 * h + 1, "done")]);
-        // A pane that reports again after closing is open again.
+        // T-260-c: a state reported after the pane closed never reopens its lane.
         a.end(3, 40 * h);
         a.note(3, "working", 40 * h + 1);
-        assert_eq!(a.timeline(40 * h + 2)[0].ended, None);
+        assert_eq!(a.timeline(40 * h + 2)[0].ended, Some(40 * h));
+    }
+
+    #[test]
+    fn t260c_ended_lanes_go_as_they_are_written_and_a_late_state_changes_nothing() {
+        let mut a = Activity::load(None, 1);
+        let h = 3_600_000;
+        a.note(1, "working", h);
+        a.end(1, 2 * h);
+        // A hook still in flight after the pane closed: no mark, no reopened lane.
+        a.note(1, "working", 2 * h + 50);
+        a.note(1, "done", 2 * h + 60);
+        assert_eq!(a.tracks[&1].ended, Some(2 * h));
+        assert_eq!(a.tracks[&1].marks.last().map(|m| m.state.as_str()), Some("done"));
+        // Past the reach, another pane's mark drops the closed lane without the Floor ever reading.
+        a.note(2, "working", 2 * h + TIMELINE_MS + 1);
+        assert!(!a.tracks.contains_key(&1));
+        // And so does a pane closing.
+        a.note(3, "working", 30 * h);
+        a.end(2, 60 * h);
+        a.end(3, 60 * h + 1);
+        assert_eq!(a.tracks.keys().copied().collect::<Vec<_>>(), vec![2, 3]);
+        a.note(5, "working", 2 * 60 * h);
+        assert_eq!(a.tracks.keys().copied().collect::<Vec<_>>(), vec![5]);
     }
 
     #[test]
