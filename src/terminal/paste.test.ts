@@ -1,13 +1,53 @@
 // TERM-068: a paste lands only in the pane whose text area received it, and a paste made while the
 // opening prompt is still owed waits for it (T-010-fix). Node's EventTarget stands in for the text areas.
 import { expect, test } from "vitest";
-import { attachPaste, BRACKET_CLOSE, BRACKET_OPEN, CHUNK, cutChunks, LIMIT, prepareForTerminal } from "./paste";
+import { attachPaste, BRACKET_CLOSE, BRACKET_OPEN, CHUNK, cutChunks, LIMIT, needsAsk, prepareForTerminal } from "./paste";
 
 const paste = (target: EventTarget, text: string) => {
   const e = Object.assign(new Event("paste", { cancelable: true }), { clipboardData: { getData: () => text } });
   target.dispatchEvent(e);
   return e;
 };
+
+test("T-151-b: 2+ lines into a program without bracketed paste asks first; bracketed paste on or one line never asks", () => {
+  expect(needsAsk("echo one\necho two", true)).toBe(false); // bracketed paste on → no ask
+  expect(needsAsk("echo one", false)).toBe(false); // one line → no ask
+  expect(needsAsk("echo one\n", false)).toBe(false); // one line with its line end → one line (the end is dropped, below)
+  expect(needsAsk("echo one\necho two", false)).toBe(true); // 2+ lines, no brackets → ask
+  expect(needsAsk("a\r\nb\r\nc", false)).toBe(true);
+  expect(needsAsk("a\rb\rc", false)).toBe(true); // council D2 MERGE 47 F1: a bare CR ends a line too
+  expect(needsAsk("a\rb", false)).toBe(true);
+  // through attachPaste: the ask gets the count and a go; Cancel (not calling go) sends nothing, Paste sends it
+  const t = new EventTarget();
+  const got: string[] = [];
+  let asked: { lines: number; go: () => void } | null = null;
+  attachPaste(t, (s) => got.push(s), () => false, () => {}, () => false, () => false, (lines, go) => (asked = { lines, go }));
+  paste(t, "echo one\necho two\necho three");
+  expect(asked).toEqual({ lines: 3, go: expect.any(Function) });
+  expect(got).toEqual([]); // Cancel: nothing went
+  asked!.go(); // Paste
+  expect(got).toEqual(["echo one\recho two\recho three"]);
+  asked = null;
+  paste(t, "echo one");
+  expect(asked).toBeNull();
+  expect(got).toEqual(["echo one\recho two\recho three", "echo one"]);
+});
+
+test("council D2 MERGE 47 F1: a single line ending in a line end is typed without it, so it never runs by itself", () => {
+  const t = new EventTarget();
+  const got: string[] = [];
+  let asked = 0;
+  attachPaste(t, (s) => got.push(s), () => false, () => {}, () => false, () => true, () => asked++);
+  paste(t, "evil-cmd\n");
+  paste(t, "x\r");
+  paste(t, "y\r\n");
+  paste(t, "\n"); // nothing left: nothing sent
+  expect(got).toEqual(["evil-cmd", "x", "y"]);
+  expect(asked).toBe(0);
+  paste(t, "a\rb\rc"); // three lines by CR alone → the ask, nothing sent yet
+  expect(asked).toBe(1);
+  expect(got).toHaveLength(3);
+});
 
 test("TERM-069: on Windows a multi-line paste is bracketed even when the program has not asked; single-line text keeps the fast path", () => {
   const t = new EventTarget();
@@ -187,4 +227,17 @@ test("a bracketed paste holding a fake close bracket and a command arrives insid
   expect(all.split("\x1b")).toHaveLength(3); // the opening and the closing bracket, nothing else
   expect(prepareForTerminal("a\x1bb\r\nc", true)).toBe("ab\rc");
   expect(prepareForTerminal("a\x1bb\r\nc")).toBe("a\x1bb\rc"); // an unbracketed paste keeps its bytes
+});
+
+test("council D2 MERGE 47 FB2: a right-click paste goes through the same checks and asks", () => {
+  const t = new EventTarget();
+  const got: string[] = [];
+  let asked: { lines: number; go: () => void } | null = null;
+  const p = attachPaste(t, (s) => got.push(s), () => false, () => {}, () => false, () => false, (lines, go) => (asked = { lines, go }));
+  p.paste("a\nb");
+  expect(asked).toEqual({ lines: 2, go: expect.any(Function) });
+  expect(got).toEqual([]);
+  p.paste("x\n");
+  expect(got).toEqual(["x"]);
+  p.detach();
 });

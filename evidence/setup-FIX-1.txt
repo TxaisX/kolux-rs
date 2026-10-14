@@ -1,0 +1,25 @@
+FIX-1 (council d2/setup-ee08aa0-review.md FIX-BEFORE 1, merge blocker) - 2026-10-13, lane/setup from ee08aa0
+
+What changed: the per-user issue command override (.kolux/issue-command in the main folder) counts as the
+user's own only when git tracks nothing at that path in ANY capitals (pathspec ":(icase).kolux/issue-command")
+and neither the .kolux folder nor the file is a link (symlink_metadata; Rust's is_symlink also covers
+Windows junctions). Before, a committed .KOLUX/Issue-Command read through the lower-case path on NTFS while a
+plain ls-files missed it, so it came back shared:false and skipped the SAFE-025 trust step; a committed link
+could read tracked text through an untracked path.
+
+Code: src-tauri/src/setup.rs untracked().
+Tests:
+  setup::tests::proj036_a_committed_issue_override_never_counts_as_the_users_own (capitals case added)
+  setup::tests::proj036_an_override_reached_through_a_link_never_counts_as_the_users_own (new; linked folder,
+    linked file, plain file still counts; skips with a note where symlinks cannot be made)
+
+Red first (old untracked() put back in place, then restored):
+  test setup::tests::proj036_an_override_reached_through_a_link_never_counts_as_the_users_own ... FAILED
+  test setup::tests::proj036_a_committed_issue_override_never_counts_as_the_users_own ... FAILED
+  (panics at the capitals assert, setup.rs:821, and the linked-folder assert, setup.rs:848; symlinks were
+  created on this PC, so the link case ran)
+Green:
+  cargo test --lib setup::  -> test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 533 filtered out
+  cargo clippy --all-targets -- -D warnings -> Finished `dev` profile, 0 warnings
+Logs: G:/Temp/setup-w1-logs/w2-fix1-test3.log, w2-fix1-clippy.log
+Nothing on screen changes; no live proof needed.
