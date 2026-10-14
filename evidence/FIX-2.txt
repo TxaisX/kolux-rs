@@ -70,3 +70,32 @@ LIVE PROOF PENDING (batched)
    flashes.
 3. Paste https://github.com@example.com/o/r/pull/1 into the quick switcher once T-315-b wires it:
    nothing opens.
+
+FIX-2 addendum (council FIX-BEFORE, coordinator 2026-10-14): gh -F reads an @value from a file
+What the user gets
+- A pull request link whose owner part starts with @ (a hand link, or one an untrusted origin
+  hands back through the PR poll) can no longer make gh read a file such as an SSH key and send
+  it to another host: owner and name go to gh as raw strings, and such a link is refused outright.
+- Kolux asks gh about a pull request (merge box state, merge actions, a hand-linked PR) only on a
+  host gh is signed in to; any other host gets no request at all, and the reason says to run
+  gh auth login for it.
+Changes (src-tauri/src/scm.rs only)
+- merge_info: -f owner= / -f name=; -F stays only on the digit-checked number. No other -F on a gh
+  call in scm.rs (the one other -F is git commit -F - reading stdin); github.rs uses -f only.
+- pr_url_in: plain host (no user, password, port), owner 1-39 of [A-Za-z0-9-] starting
+  alphanumeric, name 1-100 of [A-Za-z0-9._-] not starting with a dot, so no @, no dot start, no /
+  or \. pr_parts (merge_info, merge_act) and the printed-link scanner use it; pr_link now also
+  needs it.
+- signed_host(gh, host): scm-local host gate (gh_account on that host, from gh's own config, no
+  network); called by merge_info, merge_act, pr_link. crate::github::host_allowed (tasks FIX-1) is
+  not in this tree, so this stands in for it; switch over when it lands.
+- Not touched: tasks_search, gh_value (tasks lane's patch edits those; no overlap).
+Tests
+- scm::tests::fix2_an_at_path_owner_is_refused_and_a_host_gh_is_not_signed_in_to_gets_no_request
+  (new; the @..\..\.ssh\id_ed25519 link, @id, .ssh owner, .git name, backslash, port and user
+  links refused; nobody.example gets only gh's config lookup, never api or pr)
+- scm::tests::git033_... now asserts -f owner=o, -f name=r, -F number=42, never -F owner=/name=;
+  git.example.com is a signed-in stand-in in its gh stub; stand_in_gh answers config get with a
+  login for every host but nobody.example.
+- Red: G:/Temp/rel-w1-logs/fix2b-red.log (old code, new tests): both FAILED, 40 passed.
+- Green: G:/Temp/rel-w1-logs/fix2b-green.log: scm::tests 42/42.

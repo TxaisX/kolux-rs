@@ -592,6 +592,13 @@ fn gh_account(program: &Path, host: &str) -> Option<String> {
     (out.status.success() && !login.is_empty()).then_some(login)
 }
 
+/// FIX-2: a pull request request goes only to a host gh is signed in to, so a link to some other
+/// host never hands it anything. ponytail: scm-local stand-in for github::host_allowed (tasks
+/// FIX-1, not on main yet); switch to that one when it lands.
+fn signed_host(gh: &Path, host: &str) -> Result<(), String> {
+    gh_account(gh, host).map(|_| ()).ok_or_else(|| format!("gh is not signed in to {host}, so Kolux sends nothing there. Run gh auth login --hostname {host} first."))
+}
+
 /// FIX-2: every program this module starts comes through here, so none flashes a console window
 /// up behind the app (CREATE_NO_WINDOW; a window-owning program like the file manager is unaffected).
 fn quiet(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
@@ -705,6 +712,8 @@ pub fn pr_link(gh: &Path, worktree: &Path, url: &str) -> Result<Pr, String> {
     if !safe_pr_url(url) {
         return Err("Paste a pull request link, such as https://github.com/owner/repo/pull/12".into());
     }
+    let (host, ..) = pr_parts(url).ok_or("Paste a pull request link, such as https://github.com/owner/repo/pull/12")?;
+    signed_host(gh, &host)?;
     let text = gh_run(gh, worktree, &["pr", "view", url, "--json", PR_FIELDS], None).map_err(|e| gh_words(&e))?;
     serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))
 }
@@ -1217,7 +1226,12 @@ impl PrScan {
 fn pr_url_in(link: &str) -> Option<String> {
     let parts: Vec<&str> = link.strip_prefix("https://")?.split('/').collect();
     let number = parts.get(4).map(|n| n.split(['#', '?']).next().unwrap_or(""))?;
-    let ok = parts.len() >= 5 && parts[..3].iter().all(|p| !p.is_empty()) && parts[3] == "pull" && !number.is_empty() && number.chars().all(|c| c.is_ascii_digit());
+    // FIX-2: the owner and name follow GitHub's rules (no @, no leading dot, no slash of either
+    // kind), so neither can reach gh as a file to read or a path to walk.
+    let host_ok = |h: &str| !h.is_empty() && h.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+    let owner_ok = |o: &str| (1..=39).contains(&o.len()) && o.starts_with(|c: char| c.is_ascii_alphanumeric()) && o.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    let name_ok = |n: &str| (1..=100).contains(&n.len()) && !n.starts_with('.') && n.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    let ok = parts.len() >= 5 && host_ok(parts[0]) && owner_ok(parts[1]) && name_ok(parts[2]) && parts[3] == "pull" && !number.is_empty() && number.chars().all(|c| c.is_ascii_digit());
     ok.then(|| format!("https://{}/{}/{}/pull/{number}", parts[0], parts[1], parts[2]))
 }
 
@@ -1593,8 +1607,10 @@ fn pr_parts(url: &str) -> Option<(String, String, String, u64)> {
 
 pub fn merge_info(gh: &Path, worktree: &Path, url: &str) -> Result<MergeInfo, String> {
     let (host, owner, name, number) = pr_parts(url).ok_or("That is not a pull request link")?;
+    signed_host(gh, &host)?;
+    // FIX-2: owner and name go as raw strings (-f); gh reads a -F value that starts with @ from a file.
     let (q, o, n, k) = (format!("query={MERGE_QUERY}"), format!("owner={owner}"), format!("name={name}"), format!("number={number}"));
-    let text = gh_run(gh, worktree, &["api", "graphql", "--hostname", &host, "-f", &q, "-F", &o, "-F", &n, "-F", &k], None).map_err(|e| gh_words(&e))?;
+    let text = gh_run(gh, worktree, &["api", "graphql", "--hostname", &host, "-f", &q, "-f", &o, "-f", &n, "-F", &k], None).map_err(|e| gh_words(&e))?;
     let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
     let repo = &v["data"]["repository"];
     let pr = &repo["pullRequest"];
@@ -1621,7 +1637,8 @@ pub fn merge_info(gh: &Path, worktree: &Path, url: &str) -> Result<MergeInfo, St
 /// GIT-033: one merge-box action through gh. `queue` merges with no method, which gh turns
 /// into joining the base branch's merge queue.
 pub fn merge_act(gh: &Path, worktree: &Path, url: &str, action: &str, method: Option<&str>) -> Result<String, String> {
-    pr_parts(url).ok_or("That is not a pull request link")?;
+    let (host, ..) = pr_parts(url).ok_or("That is not a pull request link")?;
+    signed_host(gh, &host)?;
     let url = url.trim();
     let flag = match method {
         None => None,
@@ -2633,6 +2650,7 @@ mod tests {
             let script = [
                 "@echo off",
                 "echo %*>>\"%~dp0calls.txt\"",
+                "if \"%1\"==\"config\" goto config",
                 "if \"%2\"==\"create\" goto create",
                 "echo %3| findstr /b \"https\" >nul && goto linked",
                 "if exist \"%~dp0made\" (",
@@ -2648,12 +2666,16 @@ mod tests {
                 "more > \"%~dp0body.txt\"",
                 "type nul > \"%~dp0made\"",
                 "echo https://github.com/o/r/pull/7",
+                "exit /b 0",
+                ":config",
+                "if \"%4\"==\"nobody.example\" exit /b 1",
+                "echo octo",
             ];
             fs::write(&file, script.join("\r\n")).unwrap();
             file
         } else {
             let file = dir.join("gh");
-            let script = "#!/bin/sh\nd=$(dirname \"$0\")\necho \"$*\" >> \"$d/calls.txt\"\ncase \"$3\" in https*) echo '{\"number\":12,\"url\":\"https://github.com/o/r/pull/12\",\"state\":\"MERGED\",\"title\":\"Other work\",\"headRefName\":\"other\",\"isDraft\":false}'; exit 0;; esac\nif [ \"$2\" = create ]; then cat > \"$d/body.txt\"; touch \"$d/made\"; echo https://github.com/o/r/pull/7; exit 0; fi\nif [ -f \"$d/made\" ]; then echo '{\"number\":7,\"url\":\"https://github.com/o/r/pull/7\",\"state\":\"OPEN\"}'; exit 0; fi\necho 'no pull requests found for branch \"feat\"' >&2\nexit 1\n";
+            let script = "#!/bin/sh\nd=$(dirname \"$0\")\necho \"$*\" >> \"$d/calls.txt\"\nif [ \"$1\" = config ]; then [ \"$4\" = nobody.example ] && exit 1; echo octo; exit 0; fi\ncase \"$3\" in https*) echo '{\"number\":12,\"url\":\"https://github.com/o/r/pull/12\",\"state\":\"MERGED\",\"title\":\"Other work\",\"headRefName\":\"other\",\"isDraft\":false}'; exit 0;; esac\nif [ \"$2\" = create ]; then cat > \"$d/body.txt\"; touch \"$d/made\"; echo https://github.com/o/r/pull/7; exit 0; fi\nif [ -f \"$d/made\" ]; then echo '{\"number\":7,\"url\":\"https://github.com/o/r/pull/7\",\"state\":\"OPEN\"}'; exit 0; fi\necho 'no pull requests found for branch \"feat\"' >&2\nexit 1\n";
             fs::write(&file, script).unwrap();
             #[cfg(unix)]
             {
@@ -3593,6 +3615,32 @@ mod tests {
     }
 
     #[test]
+    fn fix2_an_at_path_owner_is_refused_and_a_host_gh_is_not_signed_in_to_gets_no_request() {
+        for bad in [
+            "https://evil.example/@..\\..\\.ssh\\id_ed25519/x/pull/1",
+            "https://evil.example/@id/x/pull/1",
+            "https://evil.example/.ssh/x/pull/1",
+            "https://evil.example/o/.git/pull/1",
+            "https://evil.example/o/a\\b/pull/1",
+            "https://evil.example:8443/o/r/pull/1",
+            "https://u@evil.example/o/r/pull/1",
+        ] {
+            assert_eq!(pr_url_in(bad), None, "{bad}");
+        }
+        assert_eq!(pr_url_in("https://github.com/my-org/repo.name_2/pull/9#x").as_deref(), Some("https://github.com/my-org/repo.name_2/pull/9"));
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fix2-host-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        let gh = stand_in_gh(&tools);
+        let url = "https://nobody.example/o/r/pull/3";
+        assert!(merge_info(&gh, &tools, url).unwrap_err().contains("not signed in"));
+        assert!(merge_act(&gh, &tools, url, "close", None).unwrap_err().contains("not signed in"));
+        assert!(pr_link(&gh, &tools, url).unwrap_err().contains("not signed in"));
+        let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
+        assert!(calls.lines().all(|c| c.trim().starts_with("config get -h nobody.example")), "{calls}");
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    #[test]
     fn git033_merge_state_and_actions_go_through_gh_for_the_pull_requests_own_repository() {
         let tools = std::env::temp_dir().join(format!("kolux-rs-scm-git033-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tools);
@@ -3601,11 +3649,11 @@ mod tests {
         fs::write(tools.join("answer.json"), answer).unwrap();
         let gh = if cfg!(windows) {
             let f = tools.join("gh.cmd");
-            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%1\"==\"api\" type \"%~dp0answer.json\"\r\n").unwrap();
+            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%1\"==\"config\" if not \"%4\"==\"nobody.example\" echo octo\r\nif \"%1\"==\"api\" type \"%~dp0answer.json\"\r\n").unwrap();
             f
         } else {
             let f = tools.join("gh");
-            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\n[ \"$1\" = api ] && cat \"$(dirname \"$0\")/answer.json\"\nexit 0\n").unwrap();
+            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\n[ \"$1\" = config ] && [ \"$4\" != nobody.example ] && echo octo\n[ \"$1\" = api ] && cat \"$(dirname \"$0\")/answer.json\"\nexit 0\n").unwrap();
             std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
             f
         };
@@ -3621,9 +3669,13 @@ mod tests {
         assert!(merge_act(&gh, &tools, url, "delete", None).is_err());
         assert!(merge_act(&gh, &tools, "https://x/o/r/issues/1", "close", None).is_err());
         let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
-        let calls: Vec<&str> = calls.lines().map(str::trim).collect();
+        // git.example.com stands in for a host gh is signed in to; each request asks gh first.
+        let calls: Vec<&str> = calls.lines().map(str::trim).filter(|c| !c.starts_with("config get -h git.example.com")).collect();
         assert!(calls[0].starts_with("api graphql --hostname git.example.com "), "{}", calls[0]);
         assert!(calls[0].contains("owner=o") && calls[0].contains("name=r") && calls[0].contains("number=42") && !calls[0].contains("--repo"), "{}", calls[0]);
+        // FIX-2: owner and name go as raw strings, never as -F (which reads an @value from a file).
+        let c0 = calls[0].replace('"', "");
+        assert!(c0.contains("-f owner=o") && c0.contains("-f name=r") && c0.contains("-F number=42") && !c0.contains("-F owner=") && !c0.contains("-F name="), "{c0}");
         let rest: Vec<String> = calls[1..].iter().map(|c| c.to_string()).collect();
         assert_eq!(
             rest,
