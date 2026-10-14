@@ -10,11 +10,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Refresh, Search } from "../chrome/icons";
 import { useSettings } from "../settings/useSettings";
 import { beyondWindow, defaultPreset, FILTERS, type FilterKey, filterValue, issueSource, pageButtons, pageCount, PER_PAGE, PRESETS, setFilter, type Task, type TaskLabel, type TaskPage, taskKind, taskQueries } from "./model";
+import { type GhRepo, loadRepoFacts, type ParentRead, type Person, resetFacts } from "./repoFacts";
 import TaskDialog from "./TaskDialog";
 import "./tasks.css";
 
-type GhRepo = { host: string; owner: string; name: string };
-type Person = { login: string; avatar: string };
 /** GIT-043: preset, query, page and scroll survive leaving the page and coming back (app session);
  * GIT-044: the first visit of the session opens on the saved default preset. */
 const kept: { preset: string | null; query: string; page: number; scroll: number } = { preset: null, query: "", page: 1, scroll: 0 };
@@ -60,7 +59,7 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
   const [gh, setGh] = useState<GhRepo | null | undefined>(undefined);
   const [login, setLogin] = useState<string | null>(null);
   const [preset, setPreset] = useState<string | null>(kept.preset);
-  const [parent, setParent] = useState<string | null | undefined>(undefined);
+  const [{ parent, failed: parentFailed }, setParent] = useState<ParentRead>({ parent: undefined, failed: false });
   const [people, setPeople] = useState<Person[]>([]);
   const [labels, setLabels] = useState<string[]>([]);
   const [typed, setTyped] = useState(kept.query);
@@ -78,25 +77,19 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
   }, [settings]);
 
   useEffect(() => {
-    setGh(undefined);
-    setParent(undefined);
+    const set = { gh: setGh, login: setLogin, parent: setParent, people: setPeople, labels: setLabels };
+    resetFacts(set);
     if (!repo) return;
-    invoke<GhRepo | null>("scm_github_repo", { worktree: repo.dir })
-      .then((g) => {
-        setGh(g);
-        if (!g) return;
-        const repoName = `${g.owner}/${g.name}`;
-        void invoke<string | null>("scm_gh_account", { host: g.host }).then(setLogin);
-        invoke<string | null>("github_repo_parent", { host: g.host, repo: repoName }).then(setParent, () => setParent(undefined));
-        invoke<Person[]>("github_people", { host: g.host, repo: repoName }).then(setPeople, () => setPeople([]));
-        invoke<TaskLabel[]>("scm_repo_labels", { host: g.host, repo: repoName }).then((l) => setLabels(l.map((x) => x.name)), () => setLabels([]));
-      })
-      .catch(() => setGh(null));
+    let live = true;
+    void loadRepoFacts(invoke, repo.dir, () => live, set);
+    return () => {
+      live = false;
+    };
   }, [repo?.dir]);
 
   const own = gh ? `${gh.owner}/${gh.name}` : "";
   const sourceKey = gh ? `${gh.host}/${own}` : "";
-  const source = issueSource(settings, sourceKey, own, parent);
+  const source = issueSource(settings, sourceKey, own, parent, parentFailed);
   const savedSources = (settings?.tasksIssueSource ?? {}) as Record<string, unknown>;
   const chosenSource = savedSources[sourceKey] === "upstream" ? "upstream" : "fork";
   const load = () => {

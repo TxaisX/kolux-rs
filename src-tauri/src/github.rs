@@ -19,11 +19,31 @@ fn repo_path(host: &str, repo: &str) -> Result<String, String> {
     if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == ':') {
         return Err("This repository's GitHub host cannot be read".into());
     }
-    let plain = |p: &str| !p.is_empty() && p != "." && p != ".." && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.');
-    match repo.split_once('/') {
-        Some((o, n)) if plain(o) && plain(n) => Ok(format!("repos/{o}/{n}")),
-        _ => Err("This repository's name cannot be read".into()),
+    if !full_name_ok(repo) {
+        return Err("This repository's name cannot be read".into());
     }
+    Ok(format!("repos/{repo}"))
+}
+
+/// The owner/name rule: exactly two plain GitHub name parts (letters, digits, `-`, `_`, `.`, never
+/// `.` or `..` alone). Used for what Kolux sends to gh and for what GitHub answers (FIX-1), so a
+/// parent name can never break the `repo:owner/name` search it goes into.
+pub fn full_name_ok(repo: &str) -> bool {
+    let plain = |p: &str| !p.is_empty() && p != "." && p != ".." && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.');
+    matches!(repo.split_once('/'), Some((o, n)) if plain(o) && plain(n))
+}
+
+/// FIX-1: a GitHub login: letters and digits joined by single hyphens, no hyphen at either end
+/// (github.com's rule); `_` is also allowed because GitHub Enterprise managed users carry an
+/// `_shortcode` suffix. Nothing that could break the query's quoting (spaces, quotes, colons) passes.
+pub fn login_ok(login: &str) -> bool {
+    let b = login.as_bytes();
+    !b.is_empty()
+        && b.len() <= 39 + 1 + 39
+        && b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_')
+        && b[0] != b'-'
+        && b[b.len() - 1] != b'-'
+        && !login.contains("--")
 }
 
 fn gh_json(gh: &Path, host: &str, path: &str, extra: &[&str]) -> Result<serde_json::Value, String> {
@@ -38,7 +58,7 @@ pub fn parent_of(v: &serde_json::Value) -> Option<String> {
     if v["fork"].as_bool() != Some(true) {
         return None;
     }
-    v["parent"]["full_name"].as_str().filter(|s| s.contains('/')).map(String::from)
+    v["parent"]["full_name"].as_str().filter(|s| full_name_ok(s)).map(String::from)
 }
 
 /// GIT-055: the fork parent of `repo` on `host`.
@@ -50,7 +70,7 @@ pub fn repo_parent(gh: &Path, host: &str, repo: &str) -> Result<Option<String>, 
 pub fn people_of(v: &serde_json::Value) -> Vec<Person> {
     let mut out: Vec<Person> = Vec::new();
     for u in v.as_array().into_iter().flatten() {
-        let Some(login) = u["login"].as_str().filter(|l| !l.is_empty()) else { continue };
+        let Some(login) = u["login"].as_str().filter(|l| login_ok(l)) else { continue };
         if out.iter().all(|p| !p.login.eq_ignore_ascii_case(login)) {
             let avatar = u["avatar_url"].as_str().filter(|a| a.starts_with("https://")).unwrap_or("");
             out.push(Person { login: login.into(), avatar: avatar.into() });
@@ -89,6 +109,23 @@ mod tests {
         assert_eq!(parent_of(&json!({"fork": false, "parent": {"full_name": "up/stream"}})), None);
         assert_eq!(parent_of(&json!({"fork": true})), None, "a fork whose parent is gone has no parent");
         assert_eq!(parent_of(&json!({"fork": true, "parent": {"full_name": ""}})), None);
+    }
+
+    #[test]
+    fn a_parent_name_outside_the_owner_name_rule_is_dropped() {
+        for bad in ["up", "up/stream/x", "up/stream x", "up/stream\"", "../stream", "up/..", "up/stream repo:evil/x", "/stream", "up/"] {
+            assert_eq!(parent_of(&json!({"fork": true, "parent": {"full_name": bad}})), None, "{bad}");
+        }
+        assert_eq!(parent_of(&json!({"fork": true, "parent": {"full_name": "Up-1/stream.rs_2"}})), Some("Up-1/stream.rs_2".into()));
+    }
+
+    #[test]
+    fn logins_outside_github_login_characters_are_dropped() {
+        let got = people_of(&json!([
+            {"login": "ana-b"}, {"login": "x\"y"}, {"login": "a b"}, {"login": "-lead"}, {"login": "trail-"},
+            {"login": "two--dash"}, {"login": "author:evil"}, {"login": "emu_acme"}, {"login": "Z9"}
+        ]));
+        assert_eq!(got.iter().map(|p| p.login.as_str()).collect::<Vec<_>>(), ["ana-b", "emu_acme", "Z9"]);
     }
 
     #[test]

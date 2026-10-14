@@ -96,11 +96,12 @@ export function defaultPreset(settings: Record<string, unknown> | null): string 
 
 /** GIT-055: where a repository's issues come from. A fork may choose its parent ("upstream"); the
  * choice is kept per repository (host/owner/name). A chosen parent that is gone falls back to the
- * repository itself, with a warning. */
+ * repository itself, with a warning; so does a parent read that failed (FIX-1), never shown as still checking. */
 export type IssueSource = { repo: string; warning: string | null; split: boolean };
-export function issueSource(settings: Record<string, unknown> | null, key: string, own: string, parent: string | null | undefined): IssueSource {
+export function issueSource(settings: Record<string, unknown> | null, key: string, own: string, parent: string | null | undefined, failed = false): IssueSource {
   const saved = settings?.tasksIssueSource;
   const choice = saved && typeof saved === "object" ? (saved as Record<string, unknown>)[key] : undefined;
+  if (choice === "upstream" && failed) return { repo: own, warning: `Could not check this fork's upstream; issues come from ${own}.`, split: false };
   if (choice !== "upstream" || parent === undefined) return { repo: own, warning: null, split: false };
   if (!parent) return { repo: own, warning: `The upstream repository chosen for issues is gone or no longer this fork's parent, so issues come from ${own}.`, split: false };
   return { repo: parent, warning: null, split: true };
