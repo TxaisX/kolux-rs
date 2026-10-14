@@ -32,8 +32,20 @@ The running app listens on a random port of your own computer (address `127.0.0.
 | Command | What it does |
 |---|---|
 | `kolux open` | Starts Kolux, or brings its window to the front, and waits up to 60 seconds until it answers |
+| `kolux status` | Says whether Kolux is up, without starting it. Works with the app closed (see below) |
 | `kolux --version` | Prints the version |
 | `kolux --help` | Lists every command. `--help` also works on a group, such as `kolux terminal --help` |
+
+`kolux status` prints one line with one of four words. Scripts can rely on these words; they will not change.
+
+| Word | Means | Exit code |
+|---|---|---|
+| `running` | Kolux is up and ready | 0 |
+| `graph-not-ready` | Kolux answers but is still reading your projects' workspaces, usually for a second or two after it starts | 1 |
+| `stale` | Kolux left `cli.json` behind (it was killed or crashed) and nothing answers. Run `kolux open` to start it again | 1 |
+| `not-running` | Kolux is closed | 1 |
+
+With `--json` the word is in `result.state`, and the command counts as worked in every case. The exit code still says whether Kolux is ready.
 
 Every command takes `--json` to print one machine-readable result instead of text. Without it, errors go to the error stream. Exit code 0 means it worked; 1 means any error.
 
@@ -166,4 +178,4 @@ A mistyped command is caught before Kolux is contacted, with a suggestion: "no c
 
 These do not exist, so do not look for them: opening or comparing files from the command line, a `tab` command, and registering `kolux` on the PATH for the whole computer.
 
-<!-- verified against: src-tauri/src/cli.rs, src-tauri/src/bin/kolux.rs, src-tauri/src/bin/kolux-dev.rs, src-tauri/Cargo.toml, src-tauri/cli/kolux.cmd, src-tauri/src/terminal.rs, PLAN.md (T-250-a, T-250-b) at 106e966 -->
+<!-- verified against: src-tauri/src/cli.rs, src-tauri/src/bin/kolux.rs, src-tauri/src/bin/kolux-dev.rs, src-tauri/Cargo.toml, src-tauri/cli/kolux.cmd, src-tauri/src/terminal.rs, PLAN.md (T-250-a, T-250-b) at 231fc43 -->

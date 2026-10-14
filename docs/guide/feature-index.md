@@ -157,6 +157,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-073 | A banner tells you when an open file was changed on disk, with Reload (undoable), Keep my edits and Compare. | [Files and browser](files-and-browser.md) |
 | T-073-a | Saving a file never overwrites an agent's edit you have not seen. | [Files and browser](files-and-browser.md) |
 | T-073-c | Diff view saves also check for newer edits and offer Reload or Keep mine. | [Files and browser](files-and-browser.md) |
+| T-076 | `kolux status` says whether the app is running, not running, left behind (stale) or still loading. | [Command line](command-line.md) |
 
 ### P0 · theme 11 · Orchestration and automations (31 cards)
 
@@ -474,4 +475,4 @@ Tasks not yet ticked off in the build plan are not listed.
 |---|---|---|
 | T-298 | Reopen the wizard from the sidebar help menu; first successes are recorded locally. | [Getting started](getting-started.md) |
 
-<!-- generated from PLAN.md at 106e966 -->
+<!-- generated from PLAN.md at 231fc43 -->

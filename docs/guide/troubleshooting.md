@@ -22,7 +22,7 @@ Find out what went wrong, get a safe report to share, and get back to work. Star
 | A save was refused: "changed on disk since you opened it" | An agent or program changed the file | Choose Reload or Keep mine. See [Files and browser](files-and-browser.md) |
 | "outside your projects" | The fence blocked a file | See [Safety](safety.md) |
 | Removing a workspace is refused | The workspace is locked, holds another workspace, has changes, or changed since you were asked | Read the message. A locked workspace is never force-deleted: unlock it with `git worktree unlock` first |
-| A command says "Kolux is not running; start it with `kolux open` first" | The command line cannot find the app | Run `kolux open`. See [Command line](command-line.md) |
+| A command says "Kolux is not running; start it with `kolux open` first" | The command line cannot find the app | Run `kolux status` to see why (`not-running` or `stale`), then `kolux open`. See [Command line](command-line.md) |
 
 ## Get a safe report
 
@@ -87,4 +87,4 @@ If `kolux` runs a different app than you expect, you may have the older Kolux on
 
 Use "Send feedback" in Settings, General, Privacy. It opens a new issue page on GitHub in your browser, with a version and platform footer. Paste your diagnostics there; the app submits nothing by itself.
 
-<!-- verified against: src-tauri/src/diag.rs, src/terminal/errors.ts, src/terminal/TerminalPane.tsx, src/terminal/history.ts, src/terminal/layout.ts, src-tauri/src/cli.rs, src-tauri/src/projects.rs, src-tauri/src/procs.rs, src/settings/GeneralPage.tsx, src/settings/privacy.ts, STATE.md at 106e966 -->
+<!-- verified against: src-tauri/src/diag.rs, src/terminal/errors.ts, src/terminal/TerminalPane.tsx, src/terminal/history.ts, src/terminal/layout.ts, src-tauri/src/cli.rs, src-tauri/src/projects.rs, src-tauri/src/procs.rs, src/settings/GeneralPage.tsx, src/settings/privacy.ts, STATE.md at 231fc43 -->
