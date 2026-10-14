@@ -50,6 +50,26 @@ pub struct Status {
     pub resolved: Vec<String>,
     /// GIT-001: the lines each file adds and removes, per section; a binary file has no entry.
     pub lines: LineCounts,
+    /// GIT-013: each changed submodule's path with what changed in it ("new commits", "changed
+    /// files", "untracked files", joined with commas); git already gives one row per submodule.
+    pub submodules: std::collections::BTreeMap<String, String>,
+    /// GIT-013: submodule rows left out past `SUBMODULE_ROWS`, for the panel's note.
+    pub submodules_cut: u32,
+}
+
+/// GIT-013: at most this many changed submodules are listed; the rest are counted in the note.
+pub const SUBMODULE_ROWS: usize = 50;
+
+/// GIT-013: what the `S<c><m><u>` field of a status line says changed inside a submodule; None
+/// for an ordinary file (`N...`).
+pub fn submodule_state(field: &str) -> Option<String> {
+    let f = field.strip_prefix('S')?.as_bytes();
+    let words: Vec<&str> = [(0, b'C', "new commits"), (1, b'M', "changed files"), (2, b'U', "untracked files")]
+        .into_iter()
+        .filter(|(i, c, _)| f.get(*i) == Some(c))
+        .map(|(_, _, w)| w)
+        .collect();
+    Some(if words.is_empty() { "changed".to_string() } else { words.join(", ") })
 }
 
 /// GIT-001: `[added, removed]` by path for the staged, changed and untracked sections.
@@ -356,6 +376,9 @@ pub fn failure_kind(output: &str, local_hook: bool) -> &'static str {
         "sign-in"
     } else if any(&["could not resolve host", "connection refused", "connection timed out", "timed out", "network is unreachable", "failed to connect", "connection reset"]) {
         "network"
+    } else if any(&["divergent branches", "how to reconcile"]) {
+        // GIT-008: git has no pull policy for split histories; the panel offers the three.
+        "no-policy"
     } else if t.contains("submodule") {
         "submodule"
     } else if any(&["non-fast-forward", "(fetch first)", "[rejected]", "stale info"]) {
@@ -421,6 +444,9 @@ pub fn remote(worktree: &Path, action: &str) -> Result<ActionOutcome, String> {
         "pullpush" => vec![vec!["pull", "--rebase"], vec!["push"]],
         "fetch" => vec![vec!["fetch"]],
         "ff" => vec![vec!["pull", "--ff-only"]],
+        // GIT-008: the pull again with the policy the user picked from the notice.
+        "pullmerge" => vec![vec!["pull", "--no-rebase"]],
+        "pullrebase" => vec![vec!["pull", "--rebase"]],
         "force" => vec![vec!["push", "--force-with-lease"]],
         "publish" => vec![vec!["push", "--set-upstream", "origin", &branch]],
         "rebase" => vec![vec!["fetch"], vec!["rebase", base.as_deref().ok_or("no base branch to rebase from")?]],
@@ -1660,6 +1686,28 @@ pub async fn scm_pr_create(worktree: String, title: String, body: String, base: 
     tauri::async_runtime::spawn_blocking(move || pr_create(&gh_program()?, Path::new(&worktree), &title, &body, &base, draft)).await.map_err(|e| e.to_string())?
 }
 
+/// GIT-014: shows a changed file in the file manager (its folder when the file was deleted); the
+/// path is relative to the worktree and must stay inside it.
+#[tauri::command]
+pub async fn scm_reveal(worktree: String, path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let full = reveal_target(Path::new(&worktree), &path)?;
+        crate::links::reveal(&full)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// GIT-014: the file a reveal shows: inside the worktree, or its nearest folder that still exists.
+fn reveal_target(worktree: &Path, path: &str) -> Result<std::path::PathBuf, String> {
+    check_paths(std::slice::from_ref(&path.to_string()))?;
+    let mut full = worktree.join(native(path));
+    while !full.exists() && full != worktree {
+        full = full.parent().map(Path::to_path_buf).unwrap_or_else(|| worktree.to_path_buf());
+    }
+    Ok(full)
+}
+
 /// Opens a pull request in the browser.
 #[tauri::command]
 pub async fn scm_open_pr(url: String) -> Result<(), String> {
@@ -1840,12 +1888,20 @@ pub fn parse_status(text: &str) -> Status {
                 let fields = if kind == "1" { 9 } else if kind == "2" { 10 } else { 11 };
                 let mut parts = rest.splitn(fields - 1, ' ');
                 let xy = parts.next().unwrap_or("..");
+                let sub = if kind == "u" { None } else { parts.next().and_then(submodule_state) };
                 let path = parts.last().unwrap_or("");
                 let from = if kind == "2" { items.next() } else { None };
                 let (x, y) = (xy.chars().next().unwrap_or('.'), xy.chars().nth(1).unwrap_or('.'));
                 if kind == "u" {
                     st.conflicts.push(Change { path: path.to_string(), status: xy.to_string(), from: None });
                     continue;
+                }
+                if let Some(state) = sub {
+                    if st.submodules.len() >= SUBMODULE_ROWS {
+                        st.submodules_cut += 1;
+                        continue;
+                    }
+                    st.submodules.insert(path.to_string(), state);
                 }
                 if x != '.' {
                     st.staged.push(change(path, x, from));
@@ -2138,6 +2194,105 @@ mod tests {
         dir
     }
 
+    #[test]
+    fn git008_a_pull_with_split_history_and_no_policy_is_named_and_the_picked_policy_finishes_it() {
+        assert_eq!(failure_kind("hint: You have divergent branches and need to specify how to reconcile them.\nfatal: Need to specify how to reconcile divergent branches.", false), "no-policy");
+        assert_eq!(failure_kind(" ! [rejected] main -> main (non-fast-forward)", false), "non-fast-forward");
+        let origin = std::env::temp_dir().join(format!("kolux-rs-scm-git008-origin-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&origin);
+        fs::create_dir_all(&origin).unwrap();
+        run(&["init", "-q", "--bare", "-b", "main"], Some(&origin)).unwrap();
+        let url = origin.to_string_lossy().replace('\\', "/");
+        let a = temp_repo("git008-a");
+        run(&["remote", "add", "origin", &url], Some(&a)).unwrap();
+        run(&["push", "-q", "-u", "origin", "main"], Some(&a)).unwrap();
+        let b = std::env::temp_dir().join(format!("kolux-rs-scm-git008-b-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&b);
+        run(&["clone", "-q", &url, &b.to_string_lossy()], None).unwrap();
+        run(&["config", "user.email", "test@example.com"], Some(&b)).unwrap();
+        run(&["config", "user.name", "Kolux RS test"], Some(&b)).unwrap();
+        fs::write(b.join("theirs.txt"), "theirs\n").unwrap();
+        run(&["add", "."], Some(&b)).unwrap();
+        run(&["commit", "-q", "-m", "theirs"], Some(&b)).unwrap();
+        run(&["push", "-q"], Some(&b)).unwrap();
+        fs::write(a.join("ours.txt"), "ours\n").unwrap();
+        run(&["add", "."], Some(&a)).unwrap();
+        run(&["commit", "-q", "-m", "ours"], Some(&a)).unwrap();
+        // No pull policy in this repository (the test's HOME has no global one either).
+        let _ = run(&["config", "--unset", "pull.rebase"], Some(&a));
+        let _ = run(&["config", "--unset", "pull.ff"], Some(&a));
+        let config_before = fs::read_to_string(a.join(".git").join("config")).unwrap();
+        // Git for Windows writes pull.rebase=false into its system config, so the real git is
+        // asked once with the system config left out to get its own words for the split.
+        let real = command(&["pull"], Some(&a)).env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
+        let said = format!("{}{}", String::from_utf8_lossy(&real.stdout), String::from_utf8_lossy(&real.stderr));
+        assert!(!real.status.success(), "a split pull with no policy fails: {said}");
+        assert_eq!(failure_kind(&said, false), "no-policy", "{said}");
+        if run(&["config", "--get", "pull.rebase"], Some(&a)).is_err() && run(&["config", "--get", "pull.ff"], Some(&a)).is_err() {
+            let out = remote(&a, "pull").unwrap();
+            assert_eq!((out.ok, out.kind), (false, Some("no-policy")), "{}", out.output);
+        }
+        // Picking rebase runs the pull again with it, and the repository's config is untouched.
+        let again = remote(&a, "pullrebase").unwrap();
+        assert!(again.ok, "{}", again.output);
+        assert!(a.join("theirs.txt").is_file() && a.join("ours.txt").is_file());
+        assert_eq!(status(&a).unwrap().behind, 0);
+        assert_eq!(fs::read_to_string(a.join(".git").join("config")).unwrap(), config_before);
+        for d in [&a, &b, &origin] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn git013_a_changed_submodule_is_one_row_with_its_state_and_rows_past_the_limit_are_counted() {
+        assert_eq!(submodule_state("N..."), None);
+        assert_eq!(submodule_state("SC.."), Some("new commits".into()));
+        assert_eq!(submodule_state("S.MU"), Some("changed files, untracked files".into()));
+        let line = |i: usize| format!("1 .M SC.. 160000 160000 160000 {h} {h} lib/sub{i}\0", h = "a".repeat(40));
+        let mut text = String::from("# branch.head main\0");
+        text.push_str(&format!("1 .M N... 100644 100644 100644 {h} {h} plain.txt\0", h = "b".repeat(40)));
+        for i in 0..SUBMODULE_ROWS + 3 {
+            text.push_str(&line(i));
+        }
+        let st = parse_status(&text);
+        assert_eq!(st.submodules.len(), SUBMODULE_ROWS);
+        assert_eq!(st.submodules_cut, 3);
+        assert_eq!(st.submodules.get("lib/sub0").map(String::as_str), Some("new commits"));
+        assert!(!st.submodules.contains_key("plain.txt"));
+        assert_eq!(st.changed.len(), SUBMODULE_ROWS + 1, "the plain file and the listed submodules, each once");
+        // A real submodule moved to another commit shows as one row under changes.
+        let lib = temp_repo("git013-lib");
+        let top = temp_repo("git013-top");
+        let lib_url = lib.to_string_lossy().replace('\\', "/");
+        run(&["-c", "protocol.file.allow=always", "submodule", "add", "-q", &lib_url, "vendor/lib"], Some(&top)).unwrap();
+        run(&["commit", "-q", "-m", "add lib"], Some(&top)).unwrap();
+        let inner = top.join("vendor").join("lib");
+        run(&["config", "user.email", "test@example.com"], Some(&inner)).unwrap();
+        run(&["config", "user.name", "Kolux RS test"], Some(&inner)).unwrap();
+        fs::write(inner.join("x.txt"), "x\n").unwrap();
+        run(&["add", "."], Some(&inner)).unwrap();
+        run(&["commit", "-q", "-m", "moved"], Some(&inner)).unwrap();
+        fs::write(inner.join("y.txt"), "y\n").unwrap();
+        let st = status(&top).unwrap();
+        assert_eq!(st.changed.iter().map(|c| c.path.as_str()).collect::<Vec<_>>(), vec!["vendor/lib"]);
+        assert!(st.untracked.is_empty(), "nothing inside the submodule is listed: {:?}", st.untracked);
+        assert_eq!(st.submodules.get("vendor/lib").map(String::as_str), Some("new commits, untracked files"));
+        for d in [&lib, &top] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn git014_reveal_stays_inside_the_worktree_and_falls_back_to_the_nearest_folder() {
+        let dir = temp_repo("git014");
+        fs::create_dir_all(dir.join("a")).unwrap();
+        assert_eq!(reveal_target(&dir, "README.md").unwrap(), dir.join("README.md"));
+        assert_eq!(reveal_target(&dir, "a/gone.txt").unwrap(), dir.join("a"));
+        assert_eq!(reveal_target(&dir, "b/c/gone.txt").unwrap(), dir);
+        assert!(reveal_target(&dir, "../outside.txt").is_err());
+        assert!(reveal_target(&dir, "C:/Windows/notepad.exe").is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
     #[test]
     fn git038_base_changes_measure_against_the_snapshot_not_a_base_that_moved_on() {
         let dir = temp_repo("base-snapshot");
