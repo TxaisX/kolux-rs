@@ -3,6 +3,8 @@ mod agents;
 mod artifacts;
 mod automations;
 mod capture;
+mod chat;
+mod chat_tools;
 mod browser;
 mod cap;
 pub mod cli;
@@ -319,6 +321,9 @@ pub fn run() {
             sessions::claude_workspace_sessions,
             terminal::terminal_spawn,
             terminal::terminal_write,
+            chat::chat_support,
+            chat::chat_read,
+            chat::chat_close,
             terminal::terminal_screen_reply,
             terminal::terminal_resize,
             terminal::terminal_ack,
