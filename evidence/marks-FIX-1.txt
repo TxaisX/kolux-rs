@@ -1,0 +1,60 @@
+marks FIX-1 · council d2 stand-in review of lane/marks 243736d..ee2bfbc, Send-to-build items 1-7 (lane/marks from 136bb62, 2026-10-14)
+
+Source: G:/Dev/claude-config/state/kolux-rs-council/d2/marks-243736d-standin-review.md
+
+== Part A: the Request changes send (items 1-4; T-032-b, SAFE-004) ==
+
+What the user gets:
+- Close and Esc while the feedback is sending now cancel the send, then close the sheet. Before,
+  they only hid the sheet and the send ran on with no way left to stop it.
+- The sending note tells the real story: "Sending your feedback: Claude's plan prompt is dismissed
+  first, then your feedback is typed and sent a moment later. Cancel, Close or Esc stops it before
+  it is sent, though it may already be typed in Claude's prompt." While sending, the Close button's
+  hover reads "Close (Esc) stops the waiting send; your feedback is kept".
+- A cancel that lands while the paste is going in ends at once (no extra 300 ms wait before the
+  sheet closes); Enter is still never pressed after a cancel.
+- Every end of the send closes the sheet; the draft is kept unless the feedback was sent. The
+  window branch that kept the sheet open on a cancel before Claude's no went out is gone: a click
+  can never land that early (the Cancel button shows only after a re-render, by which time the no
+  has gone out).
+
+Code (lane-owned):
+- src/terminal/planReview.ts: startFeedback checks the cancel right after the paste; the doc says
+  where a cancel can really land.
+- src/terminal/PlanSheet.tsx: one close handler for the Close button and Esc that cancels a waiting
+  send first; the sending note and the Close hover reworded.
+Tests:
+- src/terminal/planReview.test.ts: renamed "a cancel in the same tick as the start sends nothing at
+  all (the job's guard)" (was "cancelling before anything went out ...") and "the pane re-asks while
+  the paste goes in → Enter is held back" (was "the pane left the ask ..."); new "cancelling while
+  the agent's no is in flight types nothing; the no still went out" and "cancelling while the paste
+  is in flight ends at once: no 300 ms wait, never Enter".
+- New src/terminal/PlanSheet.close.test.ts (3): React is called directly with its hooks stubbed,
+  so the real Close onClick and the real Esc listener run: "Close while a send waits cancels the
+  send first, then closes", "Esc while a send waits ...", "with nothing pending, Close and Esc only
+  close".
+- src/terminal/PlanSheet.test.ts: the sending test also checks the new note and the Close hover.
+
+Coordinator hunk: evidence/marks-FIX-1-App.patch (App.tsx requestChanges: every end closes the
+sheet; drops the unreachable cancelled-before-the-answer branch). git diff against 136bb62.
+
+Readings (logs under G:/Temp/marks-w1-logs/):
+- Red first (fix1-red.log): vitest run planReview / PlanSheet / PlanSheet.close -> "Tests 4 failed
+  | 17 passed (21)": the paste-in-flight cancel (log had wait:300), Close and Esc (calls were
+  ["close"]), the note wording. The deny-in-flight test passed on the old code too (the behaviour
+  was right; it was only untested).
+- Green (fix1-green.log): vitest related on the five files -> "Test Files 3 passed (3)", "Tests 21
+  passed (21)".
+- tsc --noEmit (fix1-tsc.log) exit 0.
+- Scratch worktree G:/Temp/marks-wt at 136bb62 + the two lane files + marks-FIX-1-App.patch:
+  git apply --check exit 0; tsc --noEmit -p (lane TypeScript) exit 0 (fix1-wt-tsc.log empty).
+
+LIVE PROOF PENDING (batched; builders do not launch the app):
+1. Apply marks-FIX-1-App.patch on main; dev app with a scratch profile; a Claude stand-in pane posts
+   an ExitPlanMode ask; open Review plan, add a comment.
+2. Request changes: the note reads "Sending your feedback: Claude's plan prompt is dismissed first
+   ..."; hover Close: "Close (Esc) stops the waiting send; your feedback is kept".
+3. Keep the stand-in asking and press Esc: the sheet closes, a toast says the prompt was dismissed
+   or the feedback is typed but not sent, and nothing more is written to the pane; reopening the
+   review shows the draft.
+4. Same with the Close button.
