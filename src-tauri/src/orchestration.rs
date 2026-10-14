@@ -342,11 +342,13 @@ pub fn stop(tasks: &mut [Value], dispatches: &mut [Value], id: &str, run: Option
     }
     let mut receipt = receipt;
     receipt["taskStatus"] = tasks.iter().find(|t| t["id"] == task.as_str()).map(|t| t["status"].clone()).unwrap_or(Value::Null);
+    stop_warning(&mut receipt);
     Ok((receipt, kill))
 }
 
 /// ORCH-026: the terminal states worker-list can filter by. Release pending and release unknown
-/// belong to worker-release, which is not built yet, so nothing is in them today.
+/// are worker-release's (T-089-c): saving the output, then closing, and a release that did not
+/// finish.
 pub const TERMINAL_STATES: [&str; 6] = ["active", "reclaimable", "retained", "release_pending", "release_unknown", "released"];
 
 /// ORCH-026: what is left of a worker's terminal, apart from its task status. A kept worker stays
@@ -355,6 +357,10 @@ pub const TERMINAL_STATES: [&str; 6] = ["active", "reclaimable", "retained", "re
 fn terminal_state(d: &Value, live: &dyn Fn(&str) -> bool) -> &'static str {
     if d["released"] == true {
         "released"
+    } else if d["release"] == "pending" {
+        "release_pending"
+    } else if d["release"] == "unknown" {
+        "release_unknown"
     } else if !finished(d) {
         "active"
     } else if d["retained"] == true {
@@ -421,6 +427,133 @@ pub fn retain(dispatches: &mut [Value], live: &dyn Fn(&str) -> bool, id: &str, r
         }
     }
     Ok(json!({ "dispatchId": id, "taskId": d["taskId"], "terminal": terminal_of(d), "terminalState": "retained", "alreadyRetained": already }))
+}
+
+/// ORCH-024 / CLI-036 (T-089-c): start releasing a settled worker. The dispatch is marked release
+/// pending before anything is closed, so a crash between saving and closing leaves a row that says
+/// so; the handle that comes back is the terminal whose output is saved first and then closed
+/// (none when its terminal is already gone, which releases it at once). A worker still working is
+/// turned away to worker-stop; releasing twice answers the same. Releasing a kept worker is the
+/// way to let it go, so a kept mark does not block it.
+#[allow(dead_code)] // T-089-c: the CLI calls it once the cli-lane hunk lands (evidence/T-089-c.txt)
+pub fn release(dispatches: &mut [Value], live: &dyn Fn(&str) -> bool, id: &str, run: Option<&str>, now: u64) -> Result<(Value, Option<String>), Fail> {
+    let d = dispatches.iter_mut().find(|d| d["id"] == id && d["runId"].as_str() == run).ok_or_else(|| Fail::new("not_found", format!("no dispatch {id}")))?;
+    if d["released"] == true {
+        return Ok((release_receipt(d, true), None));
+    }
+    if !finished(d) {
+        return Err(Fail::new("dispatch_active", format!("{id} is still working; stop it first with {CLI} orchestration worker-stop --dispatch {id}")));
+    }
+    let handle = terminal_of(d).filter(|h| live(h));
+    d["releaseAt"] = json!(now);
+    match handle {
+        Some(_) => d["release"] = json!("pending"),
+        None => {
+            d["released"] = json!(true);
+            if let Some(o) = d.as_object_mut() {
+                o.remove("release");
+                o.remove("retained");
+            }
+        }
+    }
+    Ok((release_receipt(d, false), handle))
+}
+
+/// ORCH-024: settle a pending release once the caller has tried to save the terminal's output
+/// (`saved`: where the archive went, or why it could not be written) and, only after a save, to
+/// close the terminal (`closed`). A failed save never closes anything and leaves the release
+/// unknown, with the reason; so does a close that did not happen. Either way the next command is
+/// another worker-release.
+#[allow(dead_code)] // T-089-c: the CLI calls it once the cli-lane hunk lands (evidence/T-089-c.txt)
+pub fn release_done(dispatches: &mut [Value], id: &str, run: Option<&str>, saved: Result<String, String>, closed: bool, now: u64) -> Result<Value, Fail> {
+    let d = dispatches.iter_mut().find(|d| d["id"] == id && d["runId"].as_str() == run).ok_or_else(|| Fail::new("not_found", format!("no dispatch {id}")))?;
+    if d["release"] != "pending" && d["release"] != "unknown" {
+        return Ok(release_receipt(d, d["released"] == true));
+    }
+    match (&saved, closed) {
+        (Ok(path), true) => {
+            d["released"] = json!(true);
+            d["archive"] = json!(path);
+            d["releasedAt"] = json!(now);
+            if let Some(o) = d.as_object_mut() {
+                o.remove("release");
+                o.remove("releaseError");
+                o.remove("retained");
+            }
+        }
+        (Ok(path), false) => {
+            d["release"] = json!("unknown");
+            d["archive"] = json!(path);
+            d["releaseError"] = json!("the output was saved but the terminal could not be closed");
+        }
+        (Err(why), _) => {
+            d["release"] = json!("unknown");
+            d["releaseError"] = json!(format!("the output could not be saved, so the terminal was left open: {why}"));
+        }
+    }
+    Ok(release_receipt(d, false))
+}
+
+#[allow(dead_code)] // T-089-c: the CLI calls it once the cli-lane hunk lands (evidence/T-089-c.txt)
+fn release_receipt(d: &Value, already: bool) -> Value {
+    let id = d["id"].as_str().unwrap_or_default();
+    let state = if d["released"] == true { "released" } else { d["release"].as_str().map_or("released", |r| if r == "pending" { "release_pending" } else { "release_unknown" }) };
+    let next = (state == "release_unknown").then(|| format!("{CLI} orchestration worker-release --dispatch {id}"));
+    json!({ "dispatchId": d["id"], "taskId": d["taskId"], "terminal": terminal_of(d), "terminalState": state, "archive": d["archive"], "error": d["releaseError"], "worktree": d["worktree"], "worktreeKept": true, "alreadyReleased": already, "next": next })
+}
+
+/// ORCH-024: where a released worker's terminal output is kept: one plain text file per dispatch
+/// under the app's data folder, written whole before the terminal is closed.
+#[allow(dead_code)] // T-089-c: the CLI calls it once the cli-lane hunk lands (evidence/T-089-c.txt)
+pub fn write_archive(dir: &std::path::Path, id: &str, lines: &[String]) -> Result<String, String> {
+    let safe: String = id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+    let folder = dir.join("worker-archives");
+    std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+    let path = folder.join(format!("{safe}.txt"));
+    let mut text = lines.join("\n");
+    text.push('\n');
+    std::fs::write(&path, text).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// CLI-036: worker-stop's warning when the worker's process may outlive the stop (Kolux does not
+/// hold its terminal, or ending it failed). Called on every stop receipt, and again by the CLI
+/// after a failed kill turns the process verdict to unverifiable.
+pub fn stop_warning(receipt: &mut Value) {
+    if receipt["process"] == "unverifiable" {
+        let term = receipt["terminal"].as_str().unwrap_or("its terminal").to_string();
+        receipt["warning"] = json!(format!("the worker's process was kept alive: Kolux could not end {term}, so it may still be running; close it by hand if it is"));
+    }
+}
+
+/// CLI-036: a terminal command aimed at a worker that has no terminal is refused by name, with
+/// the way to read it instead. `handle` is what the command was given: a dispatch id or a
+/// terminal handle; a handle that is no worker's passes through unchanged.
+#[allow(dead_code)] // T-089-c: the CLI calls it once the cli-lane hunk lands (evidence/T-089-c.txt)
+pub fn terminal_for(dispatches: &[Value], handle: &str) -> Result<String, Fail> {
+    match dispatches.iter().find(|d| d["id"] == handle) {
+        Some(d) => terminal_of(d).ok_or_else(|| Fail::new("no_terminal", format!("{handle} has no terminal, so terminal commands cannot reach it; read it with {CLI} orchestration worker-read --dispatch {handle} --source transcript"))),
+        None => Ok(handle.to_string()),
+    }
+}
+
+/// CLI-036 worker-show: one worker's row and whether it waits on a person. `attention` is the
+/// pane's own hook state when it has one ("input" or "approval" mean a person is needed). It says
+/// nothing is waiting only when it could tell: the terminal has ended, or the worker has settled
+/// with no terminal left. Otherwise it says unknown: reading prompts off the screen is not built
+/// (T-129-c), so a quiet pane is never reported as waiting on nobody.
+#[allow(dead_code)] // T-089-c: the CLI calls it once the cli-lane hunk lands (evidence/T-089-c.txt)
+pub fn worker_show(tasks: &[Value], dispatches: &[Value], id: &str, run: Option<&str>, live: &dyn Fn(&str) -> bool, attention: Option<&str>) -> Result<Value, Fail> {
+    let d = dispatches.iter().find(|d| d["id"] == id && d["runId"].as_str() == run).ok_or_else(|| Fail::new("not_found", format!("no dispatch {id}")))?;
+    let handle = terminal_of(d);
+    let open = handle.as_deref().is_some_and(live);
+    let (waiting, why) = match attention {
+        Some(a @ ("input" | "approval")) if open => ("yes", format!("its agent is waiting for {a}")),
+        _ if !open => ("no", "its terminal has ended, so nothing in it can wait".to_string()),
+        _ => ("unknown", "Kolux has not read a prompt off its screen, so it cannot say nothing is waiting".to_string()),
+    };
+    let task = tasks.iter().find(|t| t["id"] == d["taskId"]).map(|t| t["status"].clone()).unwrap_or(Value::Null);
+    Ok(json!({ "dispatchId": d["id"], "taskId": d["taskId"], "taskStatus": task, "status": d["status"], "terminalState": terminal_state(d, live), "terminal": handle, "worktree": d["worktree"], "agent": d["agent"], "waiting": waiting, "waitingWhy": why, "archive": d["archive"] }))
 }
 
 /// ORCH-040: the open dispatches tied to one worktree, by the folder they were started in or by a
@@ -2057,5 +2190,114 @@ mod tests {
         // A worker whose terminal is already gone has nothing to keep.
         d.push(json!({ "id": "dispatch-3", "runId": "run-1", "taskId": "task-3", "status": "stopped", "terminal": 9, "runtime": 1 }));
         assert_eq!(retain(&mut d, &live, "dispatch-3", Some("run-1")).unwrap_err().code, "terminal_gone");
+    }
+
+    #[test]
+    fn cli036_release_saves_the_output_before_closing_and_says_pending_or_unknown_on_the_way() {
+        let me = std::process::id();
+        let mut d = vec![
+            json!({ "id": "dispatch-1", "runId": "run-1", "taskId": "task-1", "status": "completed", "terminal": 4, "runtime": me, "retained": true }),
+            json!({ "id": "dispatch-2", "runId": "run-1", "taskId": "task-2", "status": "running", "terminal": 5, "runtime": me }),
+            json!({ "id": "dispatch-3", "runId": "run-1", "taskId": "task-3", "status": "failed", "terminal": 6, "runtime": me }),
+            json!({ "id": "dispatch-4", "runId": "run-1", "taskId": "task-4", "status": "completed", "terminal": 7, "runtime": me + 1 }),
+        ];
+        let live = |h: &str| ["term-4", "term-5", "term-6"].contains(&h);
+        assert_eq!(release(&mut d, &live, "dispatch-1", Some("run-9"), 1).unwrap_err().code, "not_found");
+        let busy = release(&mut d, &live, "dispatch-2", Some("run-1"), 1).unwrap_err();
+        assert_eq!(busy.code, "dispatch_active");
+        assert!(busy.message.contains("worker-stop --dispatch dispatch-2"), "{}", busy.message);
+        // A kept, settled worker with a live terminal: pending first, the handle to save and close.
+        let (r, h) = release(&mut d, &live, "dispatch-1", Some("run-1"), 2).unwrap();
+        assert_eq!((r["terminalState"].as_str(), h.as_deref()), (Some("release_pending"), Some("term-4")));
+        assert_eq!(terminal_state(&d[0], &live), "release_pending");
+        // Saved and closed: released, with its archive; the kept mark is gone.
+        let done = release_done(&mut d, "dispatch-1", Some("run-1"), Ok("C:/a/dispatch-1.txt".into()), true, 3).unwrap();
+        assert_eq!((done["terminalState"].as_str(), done["archive"].as_str()), (Some("released"), Some("C:/a/dispatch-1.txt")));
+        assert_eq!(terminal_state(&d[0], &live), "released");
+        assert!(d[0].get("retained").is_none());
+        // Releasing twice answers the same.
+        let (again, h2) = release(&mut d, &live, "dispatch-1", Some("run-1"), 4).unwrap();
+        assert_eq!((again["alreadyReleased"].as_bool(), h2), (Some(true), None));
+        // A save that failed leaves it open and unknown, with the reason and the retry.
+        let (_, h3) = release(&mut d, &live, "dispatch-3", Some("run-1"), 5).unwrap();
+        assert_eq!(h3.as_deref(), Some("term-6"));
+        let bad = release_done(&mut d, "dispatch-3", Some("run-1"), Err("disk full".into()), false, 6).unwrap();
+        assert_eq!(bad["terminalState"], "release_unknown");
+        assert!(bad["error"].as_str().unwrap().contains("left open: disk full"));
+        assert_eq!(bad["next"], format!("{CLI} orchestration worker-release --dispatch dispatch-3"));
+        assert_eq!(terminal_state(&d[2], &live), "release_unknown");
+        // The retry goes through once the save works; a saved-but-not-closed one stays unknown.
+        let (_, h4) = release(&mut d, &live, "dispatch-3", Some("run-1"), 7).unwrap();
+        assert_eq!(h4.as_deref(), Some("term-6"));
+        assert_eq!(release_done(&mut d, "dispatch-3", Some("run-1"), Ok("p".into()), false, 8).unwrap()["terminalState"], "release_unknown");
+        assert_eq!(release_done(&mut d, "dispatch-3", Some("run-1"), Ok("p".into()), true, 9).unwrap()["terminalState"], "released");
+        // A terminal from an earlier start of Kolux is gone already: released at once, no handle.
+        let (r4, h5) = release(&mut d, &live, "dispatch-4", Some("run-1"), 10).unwrap();
+        assert_eq!((r4["terminalState"].as_str(), h5), (Some("released"), None));
+    }
+
+    #[test]
+    fn cli036_the_archive_is_written_whole_under_the_data_folder() {
+        let dir = std::env::temp_dir().join(format!("orch-t089c-{}", std::process::id()));
+        let path = write_archive(&dir, "dispatch-1/../x", &["one".into(), "two ü".into()]).unwrap();
+        assert!(path.ends_with("dispatch-1____x.txt"), "{path}");
+        assert!(std::path::Path::new(&path).starts_with(dir.join("worker-archives")));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "one\ntwo ü\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cli036_worker_stop_warns_when_the_process_is_kept_alive() {
+        let me = std::process::id();
+        let mut tasks = vec![json!({ "id": "task-1", "status": "dispatched", "dispatchId": "dispatch-1" }), json!({ "id": "task-2", "status": "dispatched", "dispatchId": "dispatch-2" })];
+        let mut d = vec![
+            json!({ "id": "dispatch-1", "runId": null, "taskId": "task-1", "status": "running", "terminal": 4, "runtime": me + 1 }),
+            json!({ "id": "dispatch-2", "runId": null, "taskId": "task-2", "status": "running", "terminal": 5, "runtime": me }),
+        ];
+        let (lost, kill) = stop(&mut tasks, &mut d, "dispatch-1", None, 1).unwrap();
+        assert_eq!((lost["process"].as_str(), kill), (Some("unverifiable"), None));
+        assert!(lost["warning"].as_str().unwrap().contains("kept alive"), "{lost}");
+        let (held, kill) = stop(&mut tasks, &mut d, "dispatch-2", None, 2).unwrap();
+        assert_eq!(kill, Some(5));
+        assert!(held["warning"].is_null());
+        // The CLI's failed kill turns the verdict to unverifiable; the warning follows it.
+        let mut after = held.clone();
+        after["process"] = json!("unverifiable");
+        stop_warning(&mut after);
+        assert!(after["warning"].as_str().unwrap().contains("could not end term-5"));
+    }
+
+    #[test]
+    fn cli036_terminal_commands_refuse_a_worker_with_no_terminal() {
+        let me = std::process::id();
+        let d = vec![
+            json!({ "id": "dispatch-1", "taskId": "task-1", "status": "running", "terminal": 4, "runtime": me }),
+            json!({ "id": "dispatch-2", "taskId": "task-2", "status": "running" }),
+        ];
+        assert_eq!(terminal_for(&d, "dispatch-1").unwrap(), "term-4");
+        let no = terminal_for(&d, "dispatch-2").unwrap_err();
+        assert_eq!(no.code, "no_terminal");
+        assert!(no.message.contains("worker-read --dispatch dispatch-2 --source transcript"), "{}", no.message);
+        assert_eq!(terminal_for(&d, "term-9").unwrap(), "term-9");
+    }
+
+    #[test]
+    fn cli036_worker_show_says_nothing_waits_only_when_it_could_tell() {
+        let me = std::process::id();
+        let tasks = vec![json!({ "id": "task-1", "status": "dispatched" })];
+        let d = vec![
+            json!({ "id": "dispatch-1", "runId": "run-1", "taskId": "task-1", "status": "running", "terminal": 4, "runtime": me }),
+            json!({ "id": "dispatch-2", "runId": "run-1", "taskId": "task-1", "status": "completed", "terminal": 5, "runtime": me }),
+        ];
+        let live = |h: &str| h == "term-4";
+        let show = |id: &str, a: Option<&str>| worker_show(&tasks, &d, id, Some("run-1"), &live, a).unwrap();
+        assert_eq!(show("dispatch-1", Some("input"))["waiting"], "yes");
+        assert_eq!(show("dispatch-1", Some("approval"))["waiting"], "yes");
+        // A quiet live pane is never reported as waiting on nobody.
+        assert_eq!(show("dispatch-1", None)["waiting"], "unknown");
+        assert_eq!(show("dispatch-1", Some("working"))["waiting"], "unknown");
+        let ended = show("dispatch-2", Some("input"));
+        assert_eq!((ended["waiting"].as_str(), ended["terminalState"].as_str()), (Some("no"), Some("released")));
+        assert_eq!(worker_show(&tasks, &d, "dispatch-1", Some("run-2"), &live, None).unwrap_err().code, "not_found");
     }
 }
