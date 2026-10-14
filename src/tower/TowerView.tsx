@@ -14,12 +14,13 @@ import { programWord } from "../launch/PlusMenu";
 import { folderName } from "../projects/model";
 import { tone } from "../usage/meter";
 import { refreshAll } from "../usage/refresh";
-import { openTowerWindow } from "./ownWindow";
+import { OWN_WINDOW_WIRED, openTowerWindow } from "./ownWindow";
 import Ring from "../usage/Ring";
 import { laneCounts, type AccountUsage, type Row } from "./tower";
 
 /** T-546-c: `detached` = drawn in the Tower's own window (no Own window button; Refresh asks the main window). */
-type Props = { rows: Row[]; usage: AccountUsage[]; now: number; onOpen: (key: number) => void; detached?: boolean; onRefresh?: () => void };
+/** `ownWindow` = offer the Own window button (FIX-2: only once T-546-c's window side is wired). */
+type Props = { rows: Row[]; usage: AccountUsage[]; now: number; onOpen: (key: number) => void; detached?: boolean; onRefresh?: () => void; ownWindow?: boolean };
 
 /** T-546-c: the words when the Tower's own window could not open; the Tower stays on this screen. */
 export const NO_WINDOW = "The Tower could not open in its own window here, so it stays on this screen.";
@@ -35,7 +36,7 @@ function glyphOf(r: Row): GlyphName {
 
 const laneTitle = (lane: Lane) => LANES.find((l) => l.id === lane)?.title ?? lane;
 
-export default function TowerView({ rows, usage, now, onOpen, detached = false, onRefresh = refreshAll }: Props) {
+export default function TowerView({ rows, usage, now, onOpen, detached = false, onRefresh = refreshAll, ownWindow: offerOwn = OWN_WINDOW_WIRED }: Props) {
   const [noWindow, setNoWindow] = useState(false);
   const ownWindow = () => void openTowerWindow().then((r) => setNoWindow(r === "failed"));
   const [selected, setSelected] = useState<number | null>(null);
@@ -71,7 +72,7 @@ export default function TowerView({ rows, usage, now, onOpen, detached = false, 
             Refresh
           </button>
           {/* T-546-c: the Tower in its own window, for a second screen; it stays here when that window cannot open. */}
-          {!detached && (
+          {!detached && offerOwn && (
             <button type="button" className="refresh own" title="Open the Tower in its own window, on the second screen when there is one" onClick={ownWindow}>
               Own window
             </button>

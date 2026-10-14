@@ -78,14 +78,21 @@ pub fn split_patterns(s: &str) -> Vec<String> {
     out.into_iter().map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect()
 }
 
-/// A line cut to the hit at bytes `start..end`, with up to SIDE characters either side.
+/// A line cut to the hit at bytes `start..end`, with up to SIDE characters either side. The work
+/// is bounded by SIDE, not by the line: a minified one-line file is never counted end to end per hit.
 pub fn trim_around(line: &str, start: usize, end: usize) -> (String, String, String) {
     let start = floor(line, start.min(line.len()));
     let end = floor(line, end.clamp(start, line.len()));
     let before = &line[..start];
     let after = &line[end..];
-    let cut_before: String = if before.chars().count() > SIDE { format!("…{}", before.chars().rev().take(SIDE).collect::<Vec<_>>().into_iter().rev().collect::<String>()) } else { before.to_string() };
-    let cut_after: String = if after.chars().count() > SIDE { format!("{}…", after.chars().take(SIDE).collect::<String>()) } else { after.to_string() };
+    let cut_before: String = match before.char_indices().rev().nth(SIDE - 1) {
+        Some((i, _)) if i > 0 => format!("…{}", &before[i..]),
+        _ => before.to_string(),
+    };
+    let cut_after: String = match after.char_indices().nth(SIDE) {
+        Some((i, _)) => format!("{}…", &after[..i]),
+        None => after.to_string(),
+    };
     (cut_before.trim_start().to_string(), line[start..end].to_string(), cut_after)
 }
 
@@ -98,8 +105,13 @@ fn floor(s: &str, mut i: usize) -> usize {
 
 fn hit(line_no: u64, line: &str, start: usize, end: usize) -> Hit {
     let line = line.trim_end_matches(['\n', '\r']);
+    let col = line[..floor(line, start.min(line.len()))].encode_utf16().count();
+    hit_at(line_no, line, start, end, col)
+}
+
+fn hit_at(line_no: u64, line: &str, start: usize, end: usize, col: usize) -> Hit {
     let (before, text, after) = trim_around(line, start, end);
-    Hit { line: line_no, col: line[..floor(line, start.min(line.len()))].encode_utf16().count(), before, text, after }
+    Hit { line: line_no, col, before, text, after }
 }
 
 fn rel(p: &str) -> String {
@@ -107,8 +119,11 @@ fn rel(p: &str) -> String {
     p.strip_prefix("./").unwrap_or(&p).to_string()
 }
 
-/// One ripgrep `--json` line turned into its hits (none for the other message kinds).
-pub fn parse_rg(line: &str) -> Option<(String, Vec<Hit>)> {
+/// One ripgrep `--json` line turned into at most `limit` hits (none for the other message kinds).
+/// FIX-2 (council P1): the cap applies before any hit is built, and the column is one forward scan
+/// over the line (submatches come in order), so a line with tens of thousands of matches costs one
+/// pass, not one pass per match. (ripgrep's --max-columns does not apply to its JSON output.)
+pub fn parse_rg(line: &str, limit: usize) -> Option<(String, Vec<Hit>)> {
     let v: serde_json::Value = serde_json::from_str(line).ok()?;
     if v["type"] != "match" {
         return None;
@@ -117,7 +132,19 @@ pub fn parse_rg(line: &str) -> Option<(String, Vec<Hit>)> {
     let path = rel(d["path"]["text"].as_str()?);
     let text = d["lines"]["text"].as_str()?;
     let no = d["line_number"].as_u64()?;
-    let hits = d["submatches"].as_array()?.iter().filter_map(|m| Some(hit(no, text, m["start"].as_u64()? as usize, m["end"].as_u64()? as usize))).collect();
+    let text = text.trim_end_matches(['\n', '\r']);
+    let (mut at, mut col) = (0usize, 0usize);
+    let mut hits = Vec::new();
+    for m in d["submatches"].as_array()?.iter().take(limit) {
+        let (Some(s), Some(e)) = (m["start"].as_u64(), m["end"].as_u64()) else { continue };
+        let s = floor(text, (s as usize).min(text.len()));
+        if s < at {
+            continue;
+        }
+        col += text[at..s].encode_utf16().count();
+        at = s;
+        hits.push(hit_at(no, text, s, e as usize, col));
+    }
     Some((path, hits))
 }
 
@@ -180,7 +207,7 @@ fn git_command(root: &Path, a: &Ask) -> Command {
 }
 
 /// Runs a search command, collecting hits until the cap or the time limit.
-fn run(mut cmd: Command, parse: impl Fn(&str) -> Option<(String, Vec<Hit>)>, source: &'static str) -> Result<Found, std::io::Error> {
+fn run(mut cmd: Command, parse: impl Fn(&str, usize) -> Option<(String, Vec<Hit>)>, source: &'static str) -> Result<Found, std::io::Error> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -209,7 +236,7 @@ fn run(mut cmd: Command, parse: impl Fn(&str) -> Option<(String, Vec<Hit>)>, sou
         let left = deadline.saturating_duration_since(Instant::now());
         match rx.recv_timeout(left) {
             Ok(line) => {
-                let Some((path, hits)) = parse(&line) else { continue };
+                let Some((path, hits)) = parse(&line, MAX_HITS - total + 1) else { continue };
                 for h in hits {
                     if total == MAX_HITS {
                         capped = true;
@@ -261,7 +288,7 @@ pub fn search(root: &Path, a: &Ask) -> Result<Found, String> {
                 return Err("ripgrep is not installed and this folder is not a git repository, so there is nothing to search with.".into());
             }
             let len = (!a.regex).then_some(a.query.len());
-            run(git_command(root, a), |l| parse_git(l, len), "git").map_err(|e| e.to_string())
+            run(git_command(root, a), |l, _| parse_git(l, len), "git").map_err(|e| e.to_string())
         }
         other => other.map_err(|e| e.to_string()),
     }
@@ -302,14 +329,32 @@ mod tests {
     #[test]
     fn reads_ripgrep_and_git_lines() {
         let rg = r#"{"type":"match","data":{"path":{"text":".\\sub\\b.ts"},"lines":{"text":"é Todo todo\r\n"},"line_number":7,"submatches":[{"match":{"text":"Todo"},"start":3,"end":7},{"match":{"text":"todo"},"start":8,"end":12}]}}"#;
-        let (path, hits) = parse_rg(rg).unwrap();
+        let (path, hits) = parse_rg(rg, MAX_HITS).unwrap();
         assert_eq!(path, "sub/b.ts");
         assert_eq!(hits.len(), 2);
         // "é " is two UTF-16 units before the hit, though three bytes.
         assert_eq!(hits[0], Hit { line: 7, col: 2, before: "é ".into(), text: "Todo".into(), after: " todo".into() });
-        assert!(parse_rg(r#"{"type":"begin","data":{}}"#).is_none());
+        assert!(parse_rg(r#"{"type":"begin","data":{}}"#, MAX_HITS).is_none());
         let (path, hits) = parse_git("a dir/x.txt\u{0}12\u{0}5\u{0}one todo here", Some(4)).unwrap();
         assert_eq!((path.as_str(), hits[0].line, hits[0].text.as_str(), hits[0].col), ("a dir/x.txt", 12, "todo", 4));
+    }
+
+    // FIX-2 (council P1): a minified one-line file with a match per character: the cap holds
+    // before any hit is built, the columns still count UTF-16 units, and the sides stay SIDE long.
+    #[test]
+    fn a_line_with_thousands_of_matches_builds_only_the_hits_asked_for() {
+        let line = format!("é{}", "e".repeat(60_000));
+        let subs: Vec<String> = (0..60_000).map(|i| format!(r#"{{"match":{{"text":"e"}},"start":{},"end":{}}}"#, i + 2, i + 3)).collect();
+        let json = format!(r#"{{"type":"match","data":{{"path":{{"text":"min.js"}},"lines":{{"text":{}}},"line_number":1,"submatches":[{}]}}}}"#, serde_json::to_string(&line).unwrap(), subs.join(","));
+        let (_, hits) = parse_rg(&json, 3).unwrap();
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits.iter().map(|h| h.col).collect::<Vec<_>>(), vec![1, 2, 3]);
+        let (_, hits) = parse_rg(&json, MAX_HITS).unwrap();
+        assert_eq!(hits.len(), MAX_HITS);
+        let last = hits.last().unwrap();
+        assert_eq!(last.col, MAX_HITS);
+        assert_eq!(last.before.chars().count(), SIDE + 1);
+        assert_eq!(last.after.chars().count(), SIDE + 1);
     }
 
     #[test]
@@ -339,7 +384,7 @@ mod tests {
             let go = |a: &Ask| -> Result<Found, std::io::Error> {
                 if use_git {
                     let len = (!a.regex).then_some(a.query.len());
-                    run(git_command(&d, a), |l| parse_git(l, len), "git")
+                    run(git_command(&d, a), |l, _| parse_git(l, len), "git")
                 } else {
                     run(rg_command(&d, a), parse_rg, "rg")
                 }

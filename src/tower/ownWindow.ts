@@ -19,6 +19,12 @@ export type Snapshot = { seats: Seat[]; usage: AccountUsage[] };
 /** A monitor in physical pixels plus its scale, as the window API reports it. */
 export type Screen = { x: number; y: number; width: number; height: number; scale: number };
 
+/** FIX-2 (council P3): whether the Tower's own window can open in this build. It needs a coordinator
+ * change first (the window-creating capability, main.tsx drawing the Tower for its hash, a
+ * tower-only capability, and closing the main window closing the Tower: T-546-c); until then
+ * the Own window button is not offered, since every click would only show NO_WINDOW. */
+export const OWN_WINDOW_WIRED = false;
+
 export const isTowerWindow = (hash: string) => hash === TOWER_HASH;
 
 /** The screen the Tower goes to: the first one that is not the main window's; none with a single screen. */
