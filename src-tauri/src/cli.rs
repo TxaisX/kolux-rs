@@ -22,6 +22,11 @@ mod automations_cli;
 #[path = "local_cli.rs"]
 mod local_cli;
 
+/// SKILL-017: Kolux's own skill guides (name, guide text), listed on the Skills page as bundled.
+pub fn bundled_skills() -> Vec<(&'static str, &'static str)> {
+    local_cli::bundled()
+}
+
 /// Where the app says how to reach it, inside its data folder.
 pub const FILE: &str = "cli.json";
 /// The event the front end gets when the CLI made or removed a workspace.

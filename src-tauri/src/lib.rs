@@ -40,6 +40,7 @@ mod protected;
 mod resources;
 mod projects;
 mod scm;
+mod skills;
 mod pr_checkout;
 mod pty;
 mod setup;
@@ -405,6 +406,8 @@ pub fn run() {
             scm::scm_history, scm::scm_commit_files, scm::scm_github_repo,
             keybindings::keybindings_read,
             keybindings::keybindings_write,
+            keybindings::keybindings_reload,
+            keybindings::keybindings_show,
             browser::browser_open,
             browser::browser_bounds,
             browser::browser_navigate,
@@ -471,6 +474,10 @@ pub fn run() {
             onboarding::onboarding_get,
             onboarding::onboarding_step,
             onboarding::onboarding_close,
+            onboarding::guide_get,
+            onboarding::guide_mark,
+            onboarding::cli_status,
+            onboarding::tours_get,
             onboarding::onboarding_reopen,
             onboarding::onboarding_milestone,
             files::file_read,
@@ -478,6 +485,7 @@ pub fn run() {
             files::file_stamps,
             files::file_pick,
             files::md_list,
+            skills::skills_scan,
             files::file_list,
             files::md_new,
             files::diff_sides,

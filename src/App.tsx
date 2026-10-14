@@ -54,8 +54,11 @@ import { copiers } from "./editor/EditorPane";
 import { notesMarkdown, reviewOn, selections, sendTargets, type Note, type Picked } from "./editor/notes";
 import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
 import ArtifactsPage from "./artifacts/ArtifactsPage";
+import SkillsPage from "./skills/SkillsPage";
+import { closeSkills, toggleSkills } from "./skills/nav";
 import { KitGallery, KitSetup } from "./kits/Kits";
 import Wizard from "./onboarding/Wizard";
+import Guides from "./onboarding/Guides";
 import { ADD_PROJECT } from "./onboarding/firstRun";
 import { KITS, RECALL_KEY, remember, type Kit, type Vendor } from "./kits/catalog";
 import KitStrip from "./kits/KitStrip";
@@ -112,6 +115,7 @@ import { LAYOUT_FIELD, layoutOf, type SavedLayout } from "./terminal/layout";
 import { Kbd, KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
+import { heldByTerminal } from "./keys/terminalPolicy";
 import { useAgentEvents, useAgentStatusState } from "./status/useAgentStatus";
 import { useAppSettings } from "./settings/useAppSettings";
 import { useWorkspaceActions, useWorkspaces } from "./projects/useWorkspaces";
@@ -295,7 +299,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         })
         .catch(() => setSettings({}));
     readSettings();
-    const off = listen("settings-saved", readSettings);
+    const off = listen("settings-saved", () => (readSettings(), invoke<ShellInfo[]>("shell_list").then(setShells, () => {}))); // SET-026: the chosen default shell leads the list
     return () => {
       void off.then((u) => u()).catch(() => {});
       void offAgents.then((u) => u()).catch(() => {});
@@ -455,8 +459,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     };
   }, []);
 
-  // Global-scope shortcuts are pressed here, wherever focus is (the terminal policy comes with
-  // SET-014). Only actions that exist today do something; the rest are matched and left alone.
+  // Global-scope shortcuts are pressed here, wherever focus is; with Terminal first (SET-014) a
+  // focused terminal keeps every chord that is not marked safe for terminals. Only actions that exist today do something; the rest are matched and left alone.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // SET-009: while Settings > Shortcuts records a chord, the press is the recorder's alone.
@@ -470,7 +474,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         matchEvent(keymap, e, inTree ? ["global"] : kind === "editor" || kind === "diff" ? ["editor", "global", "tabs"] : kind === "preview" ? ["global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]) ||
         // GIT-042: a preview tab takes the one editor shortcut that applies to it.
         (kind === "preview" && [matchEvent(keymap, e, ["editor"])].find((h) => h?.id === "editor.addReviewNote"));
-      if (!hit) return;
+      if (!hit || heldByTerminal(hit.id, settings)) return;
       const inFront = panesIn(panes, activeDir).some((p) => p.key === focused);
       switch (hit.id) {
         case "browser.focusAddressBar":
@@ -1954,7 +1958,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           </>
         )}
         {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} target={settingsAt.target} n={settingsAt.n} />}
-        {(terminals || screen === "artifacts") && sidebarOpen && (
+        {(terminals || screen === "artifacts" || screen === "skills") && sidebarOpen && (
           <ProjectsPanel
             reveal={reveal}
             openDirs={openDirs}
@@ -1995,6 +1999,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             onAdded={projectAdded}
             artifactsOn={screen === "artifacts"}
             onArtifacts={() => setScreen("artifacts")}
+            skillsOn={screen === "skills"}
+            onSkills={() => toggleSkills(screen, setScreen)}
             onPending={setStandIns}
             onSetup={startSetup}
             onIndex={(list, dirs, typed) => {
@@ -2004,7 +2010,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             }}
           />
         )}
-        {(terminals || screen === "artifacts") && sidebarOpen && (
+        {(terminals || screen === "artifacts" || screen === "skills") && sidebarOpen && (
           <Grip side="left" width={leftWidth} label="Resize the sidebar" className="lside-grip" onWidth={(w, done) => {
             setDragLeft(done ? null : clampLeft(w));
             if (done) saveSetting(LEFT_KEY, clampLeft(w));
@@ -2163,6 +2169,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               )}
             </>
           )}
+          {screen === "skills" && <SkillsPage workspace={activeDir} onClose={() => closeSkills(setScreen)} />}
           {inbox && <InboxView items={inboxItems(sources, now)} now={now} onOpen={openPane} />}
           {tower && <TowerView rows={towerRows(towerSeats())} usage={usageByAccount(towerSeats(), plan)} now={now} onOpen={openPane} />}
           {floor && <FloorView />}
@@ -2489,6 +2496,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           />
         );
       })()}
+      <Guides />
       {wizard !== null && (
         <Wizard
           start={wizard}
