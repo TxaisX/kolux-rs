@@ -75,3 +75,12 @@
 .chat-child.failed .chat-faint, .chat-roster-failed { color: var(--danger); }
 .chat-working { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--working, var(--fg-muted)); }
 .chat-worked { align-self: flex-start; font-size: 11px; color: var(--fg-faint); }
+.chat-msg.pending.failed { opacity: 1; }
+.chat-fail { margin-top: 4px; font-size: 12px; color: var(--danger); }
+.chat-top { margin-left: 8px; background: none; border: 0; padding: 0; font: inherit; font-size: 11px; color: var(--fg-faint); cursor: pointer; }
+.chat-top:hover, .chat-top:focus-visible { color: var(--fg); }
+.chat-jump { position: absolute; right: 16px; bottom: calc(var(--chat-box-h, 56px) + 12px); padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); font: inherit; font-size: 12px; cursor: pointer; }
+.chat-composer { border-top: 1px solid var(--line-subtle); padding: 10px 12px; display: flex; gap: 8px; align-items: flex-end; }
+.chat-box { flex: 1; min-width: 0; resize: none; font: inherit; line-height: 1.4; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--input-bg); color: var(--fg); overflow-y: auto; }
+.chat-box:focus { outline: none; border-color: var(--line-focus); }
+.chat-box:disabled { color: var(--fg-faint); }

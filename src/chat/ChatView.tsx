@@ -2,19 +2,22 @@
 // the transcript is not written yet, then the conversation so far, then each new turn as the
 // agent records it, with the agent's work folded into steps, diff cards and a subagent roster
 // (T-326). Thin on purpose: the Agents screen (T-050) mounts it in its body.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { locale } from "../language";
 import "./chat.css";
 import { fold, thoughtIds as idsOf, toggled, type View } from "./steps";
 import { NoticeRow, PlanRow, StepRow, ThoughtRow } from "./StepRows";
-import { applyRead, chatOffer, combine, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row } from "./model";
+import { applyRead, capPending, chatOffer, combine, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row } from "./model";
+import { Composer, type ComposerHandle } from "./MessageBox";
+import { enqueue, forwardsToBox, nearBottom, sendSteps, typeSteps } from "./composer";
 
-export type ChatPane = { key: number; cwd: string | null; title?: string };
+/** `terminal`: the program session the pane types into (the window's own pane-to-terminal map). */
+export type ChatPane = { key: number; cwd: string | null; title?: string; terminal?: number };
 type Support = { agent?: string; launching: boolean; readable: boolean };
 
-export default function ChatView({ pane, preview = null, pending = [] }: { pane: ChatPane; preview?: Preview | null; pending?: Pending[] }) {
+export default function ChatView({ pane, agent, preview = null, pending = [] }: { pane: ChatPane; agent?: string; preview?: Preview | null; pending?: Pending[] }) {
   const [items, setItems] = useState<ChatItem[]>([]);
   const [state, setState] = useState<ChatRead["state"]>("loading");
   const [error, setError] = useState<string | null>(null);
@@ -58,8 +61,50 @@ export default function ChatView({ pane, preview = null, pending = [] }: { pane:
     };
   }, [pane.key]);
 
-  const rows = useMemo(() => combine(items, extras, previewToShow(preview, open, lastReply(items)), pending), [items, extras, preview, open, pending]);
+  // CHAT-020: what this view sent and the transcript has not confirmed yet (at most 8 per pane).
+  const [sent, setSent] = useState<Pending[]>([]);
+  useEffect(() => setSent([]), [pane.key]);
+  const allPending = useMemo(() => capPending([...pending, ...sent]), [pending, sent]);
+  const rows = useMemo(() => combine(items, extras, previewToShow(preview, open, lastReply(items)), allPending), [items, extras, preview, open, allPending]);
+  const terminal = pane.terminal;
+  const send = (text: string) => {
+    if (terminal === undefined) return;
+    const id = `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    setSent((xs) => capPending([...xs, { id, text, at: Date.now() }]));
+    stick.current = true;
+    enqueue(terminal, () => typeSteps(sendSteps(agent, text), (data) => invoke("terminal_write", { id: terminal, data }))).catch(() =>
+      setSent((xs) => xs.map((x) => (x.id === id ? { ...x, failed: true } : x))),
+    );
+  };
+  // CHAT-027: within 48 px of the bottom the view follows new output; further up it holds still.
+  const list = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
+  const [away, setAway] = useState(false);
+  const onScroll = () => {
+    const el = list.current;
+    if (!el) return;
+    stick.current = nearBottom(el);
+    setAway(!stick.current);
+  };
+  const toBottom = () => {
+    const el = list.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    stick.current = true;
+    setAway(false);
+  };
+  const box = useRef<ComposerHandle>(null);
+  // CHAT-017: typing anywhere in the chat pane goes to the box; Backspace or Delete moves focus there.
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const t = e.target as HTMLElement;
+    if (t.closest("textarea, input, select, [contenteditable]")) return;
+    if (t.closest("button, a") && (e.key === " " || e.key === "Enter")) return;
+    if (forwardsToBox({ key: e.key, ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey, isComposing: e.nativeEvent.isComposing })) box.current?.focus();
+  };
   const views = useMemo(() => fold(rows, open), [rows, open]);
+  useLayoutEffect(() => {
+    if (stick.current && list.current) list.current.scrollTop = list.current.scrollHeight;
+  }, [views]);
   const [full, setFull] = useState<string | null>(null);
   // STAT-053: Thought rows start folded; the toolbar opens or folds them all.
   const [thoughts, setThoughts] = useState<Set<string>>(() => new Set());
@@ -67,7 +112,7 @@ export default function ChatView({ pane, preview = null, pending = [] }: { pane:
   const toggle = (id: string) => setThoughts((t) => toggled(t, id));
 
   return (
-    <div className="chat" aria-label="Chat">
+    <div className="chat" aria-label="Chat" onKeyDown={onKeyDown}>
       {state === "loading" && rows.length === 0 && <div className="chat-state" role="status">Loading the conversation…</div>}
       {state === "error" && <div className="chat-state chat-error" role="alert">{error}</div>}
       {state === "empty" && rows.length === 0 && <div className="chat-state">No messages yet. What you and the agent say shows up here.</div>}
@@ -77,11 +122,17 @@ export default function ChatView({ pane, preview = null, pending = [] }: { pane:
           <button type="button" onClick={() => setThoughts(new Set())}>Collapse all</button>
         </div>
       )}
-      <div className="chat-list">
+      <div className="chat-list" ref={list} onScroll={onScroll}>
         {views.map((v) => (
           <ViewRow key={`${v.row}-${v.id}`} view={v} onImage={setFull} thoughts={thoughts} onToggle={toggle} />
         ))}
       </div>
+      {away && (
+        <button type="button" className="chat-jump" onClick={toBottom}>
+          Jump to latest
+        </button>
+      )}
+      <Composer ref={box} paneKey={pane.key} live={terminal !== undefined} onSend={send} />
       {full && (
         <button type="button" className="chat-full" aria-label="Close image" onClick={() => setFull(null)}>
           <img src={full} alt="Attached" />
@@ -105,7 +156,13 @@ function ChatRow({ row, onImage }: { row: Row; onImage: (src: string) => void })
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
   if (row.row === "preview") return <div className="chat-msg assistant preview"><div className="chat-text">{row.text}</div></div>;
-  if (row.row === "pending") return <div className="chat-msg user pending"><div className="chat-text">{row.text}</div></div>;
+  if (row.row === "pending")
+    return (
+      <div className={`chat-msg user pending${row.failed ? " failed" : ""}`}>
+        <div className="chat-text">{row.text}</div>
+        {row.failed && <div className="chat-fail" role="alert">This message did not arrive. Look at the terminal.</div>}
+      </div>
+    );
   if (row.role === "status") return <div className="chat-status" role="status">{row.text}</div>;
   const when = row.at !== undefined ? stamp(row.at, locale()) : null;
   const copy = () => {
@@ -130,6 +187,9 @@ function ChatRow({ row, onImage }: { row: Row; onImage: (src: string) => void })
       <div className="chat-meta">
         {when && <time title={when.full}>{when.short}</time>}
         <button type="button" className="chat-copy" onClick={copy}>{copied ? "Copied" : "Copy"}</button>
+        <button type="button" className="chat-copy" title="Bring this message to the top" onClick={(e) => e.currentTarget.closest(".chat-msg")?.scrollIntoView({ block: "start" })}>
+          Top
+        </button>
       </div>
     </div>
   );
@@ -138,13 +198,13 @@ function ChatRow({ row, onImage }: { row: Row; onImage: (src: string) => void })
 /** The Agents screen's chat until T-050's rail lands: the focused pane's chat when it can show
  * one, else the first pane that can. A pane still launching keeps the screen's placeholder (the
  * chooser is T-050's). */
-export function AgentsChat({ panes, focused }: { panes: ChatPane[]; focused: number | null }) {
-  const [offers, setOffers] = useState<Record<number, Offer>>({});
+export function AgentsChat({ panes, focused, ptyOf }: { panes: ChatPane[]; focused: number | null; ptyOf?: (key: number) => number | undefined }) {
+  const [offers, setOffers] = useState<Record<number, Offer & { agent?: string }>>({});
   const keys = panes.map((p) => p.key).join(",");
   useEffect(() => {
     let alive = true;
     const check = () =>
-      Promise.all(panes.map((p) => invoke<Support>("chat_support", { paneKey: p.key }).then((s) => [p.key, chatOffer({ credited: s.agent, title: p.title, screen: "agents", switchOn: false, showingChat: false, launching: s.launching, readable: s.readable })] as const).catch(() => [p.key, { chat: false, back: false, chooser: false }] as const))).then((list) => {
+      Promise.all(panes.map((p) => invoke<Support>("chat_support", { paneKey: p.key }).then((s) => [p.key, { agent: s.agent, ...chatOffer({ credited: s.agent, title: p.title, screen: "agents", switchOn: false, showingChat: false, launching: s.launching, readable: s.readable }) }] as const).catch(() => [p.key, { chat: false, back: false, chooser: false }] as const))).then((list) => {
         if (alive) setOffers(Object.fromEntries(list));
       });
     void check();
@@ -158,5 +218,5 @@ export function AgentsChat({ panes, focused }: { panes: ChatPane[]; focused: num
   const pick = panes.find((p) => p.key === focused && offers[p.key]?.chat) ?? panes.find((p) => offers[p.key]?.chat);
   // Shown before the screen's placeholder, which `.chat + .empty` then hides.
   if (!pick) return null;
-  return <ChatView pane={pick} />;
+  return <ChatView pane={{ ...pick, terminal: pick.terminal ?? ptyOf?.(pick.key) }} agent={offers[pick.key]?.agent} />;
 }

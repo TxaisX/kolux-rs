@@ -83,9 +83,9 @@ export function applyRead(prev: ChatItem[], read: ChatRead): ChatItem[] {
 /** A message the hooks reported (the prompt, the last reply) before the transcript had it. */
 export type Extra = { id: string; role: "user" | "assistant"; text: string; at: number };
 /** Something typed from chat that the transcript has not confirmed yet. */
-export type Pending = { id: string; text: string; at: number };
+export type Pending = { id: string; text: string; at: number; failed?: boolean };
 /** A row of the conversation as drawn. */
-export type Row = (ChatItem & { row: "message" }) | { row: "preview"; id: string; text: string } | { row: "pending"; id: string; text: string; at: number };
+export type Row = (ChatItem & { row: "message" }) | { row: "preview"; id: string; text: string } | { row: "pending"; id: string; text: string; at: number; failed?: boolean };
 
 const norm = (s: string) => s.replace(/\s+/g, " ").trim();
 /** How far back a confirmed send may be timestamped from when it was typed. */
@@ -102,11 +102,25 @@ export function combine(transcript: ChatItem[], extras: Extra[], preview: string
   const rows: Row[] = order.map(({ item }) => ({ ...item, row: "message" as const }));
   if (preview) rows.push({ row: "preview", id: "preview", text: preview });
   for (const p of pending) {
-    const confirmed = transcript.some((t) => t.role === "user" && norm(t.text) === norm(p.text) && (t.at ?? Infinity) >= p.at - SEND_SLACK_MS);
-    if (!confirmed) rows.push({ row: "pending", id: p.id, text: p.text, at: p.at });
+    const confirmed = transcript.some((t) => t.role === "user" && sentIn(t.text, p.text) && (t.at ?? Infinity) >= p.at - SEND_SLACK_MS);
+    if (!confirmed) rows.push({ row: "pending", id: p.id, text: p.text, at: p.at, failed: p.failed });
   }
   return rows;
 }
+
+/** CHAT-020: a send shows up in a recorded user turn: the same text, or its lines inside a turn
+ * that merged two quick sends. */
+export function sentIn(turn: string, sent: string): boolean {
+  if (norm(turn) === norm(sent)) return true;
+  const lines = (t: string) => t.split(/\r?\n/).map(norm).filter(Boolean);
+  const a = lines(turn);
+  const b = lines(sent);
+  if (b.length === 0 || b.length >= a.length) return false;
+  return a.some((_, i) => b.every((l, j) => a[i + j] === l));
+}
+
+/** CHAT-020: the unconfirmed sends a pane keeps, newest last, at most `limit`. */
+export const capPending = (list: Pending[], limit = 8) => list.slice(-limit);
 
 /** A live preview of the reply being written, scraped while the turn runs (T-421 feeds it). */
 export type Preview = { text: string; tool?: boolean };
