@@ -358,6 +358,16 @@ pub enum Start<'a> {
     Restore(Option<&'a str>),
 }
 
+/// SESS-030 (council FIX-BEFORE on T-066-c): a session id that can safely follow a resume flag:
+/// a letter or digit first, then letters, digits, `.`, `_`, `:` or `-`, 100 characters at
+/// most. A leading dash would be read as an option (one that turns a sandbox off, say), a path
+/// separator would load another transcript, and a space or a shell character such as `&` could
+/// reach cmd.exe through an npm `.cmd` shim.
+pub fn safe_session(sid: &str) -> bool {
+    let mut chars = sid.chars();
+    sid.len() <= 100 && chars.next().is_some_and(|c| c.is_ascii_alphanumeric()) && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'))
+}
+
 /// SESS-030 (T-066, T-066-b): the agent's own resume command, as the arguments that follow its
 /// standing start line. Each form comes from the tool's public command-line reference (the
 /// installed `--help` for Claude Code and Codex, the vendor's documentation for the rest; the
@@ -370,11 +380,12 @@ pub enum Start<'a> {
 ///   starts fresh when the folder has none, so a restore uses it even without an id;
 /// - an agent with no documented resume form comes back at its prompt (T-066-c lists them).
 ///
-/// The arguments reach the program as a list through the pty layer, which quotes each one for
-/// the shell, so an id or a folder with a space stays one argument and needs no quoting here.
+/// The arguments reach the program as a list through the pty layer. A session id comes from a
+/// settings file or a hook event, so it is checked here, the one place every resume passes: only
+/// an id that looks like one ([`safe_session`]) is used; anything else counts as no id.
 pub fn resume_args(id: &str, session: Option<&str>) -> Vec<String> {
     let s = |v: &[&str]| v.iter().map(|a| a.to_string()).collect::<Vec<String>>();
-    match (id, session) {
+    match (id, session.filter(|sid| safe_session(sid))) {
         ("claude", Some(sid)) => s(&["--resume", sid]),
         ("codex", Some(sid)) => s(&["resume", sid]),
         // `--resume` takes its value with `=` in these two: the bare flag means "pick one".
@@ -970,14 +981,35 @@ mod tests {
         // The pty layer quotes each argument for the shell (pty.rs program_command), so the id is
         // one list element here, unquoted, spaces intact; the folder is the pane's cwd, never an argument.
         let none = serde_json::json!({});
-        let sid = "my session 2026";
-        assert_eq!(resume_args("copilot", Some(sid)), vec!["--resume=my session 2026".to_string()]);
-        assert_eq!(resume_args("gemini", Some(sid)), s(&["--resume", "my session 2026"]));
+        // Real ids (UUIDs, dated names) stay one list element, unquoted.
+        let sid = "0b6c7e3a-4f2d-4b8e-9a51-2d3c4e5f6a7b";
+        assert_eq!(resume_args("copilot", Some(sid)), vec![format!("--resume={sid}")]);
+        assert_eq!(resume_args("gemini", Some("run_2026.10.13:a")), s(&["--resume", "run_2026.10.13:a"]));
         let line = start_line_as(&none, "devin", &[], "", true, Start::Restore(Some(sid))).unwrap().args;
-        assert_eq!(line, s(&["--resume", "my session 2026"]));
+        assert_eq!(line, s(&["--resume", sid]));
         assert!(line.iter().all(|a| !a.contains('"')), "no quotes added here");
-        // A blank or whitespace id counts as none through the command's trimming.
-        assert!(resume_args("gemini", Some("")).is_empty() || resume_args("gemini", Some("")) == s(&["--resume", ""]));
+        // A blank id counts as none.
+        assert!(resume_args("gemini", Some("")).is_empty());
+    }
+
+    #[test]
+    fn sess030_a_session_id_that_is_not_an_id_never_reaches_the_command_line() {
+        // Council FIX-BEFORE (T-066-c): option injection, a transcript path, cmd.exe shim
+        // characters, a space and an over-long id all count as no id, so the agent starts plain.
+        let none = serde_json::json!({});
+        let long = "a".repeat(101);
+        for bad in ["x&calc", "--foo", "-c", "--dangerously-bypass-approvals-and-sandbox", "C:\\a.jsonl", "a/b", "a b", "a|b", "a^b", "\"a\"", "%PATH%", "", ".hidden", long.as_str()] {
+            assert!(!safe_session(bad), "{bad}");
+            for id in ["claude", "codex", "copilot", "gemini", "goose", "openclaw"] {
+                assert!(resume_args(id, Some(bad)).is_empty(), "{id} {bad}");
+                let line = start_line_as(&none, id, &[], "", true, Start::Restore(Some(bad))).unwrap();
+                assert!(!line.resumed && line.args.iter().all(|a| a != bad && !a.ends_with(&format!("={bad}"))), "{id} {bad}: {:?}", line.args);
+            }
+            // The folder-scoped forms fall back to their no-id form, never the bad text.
+            assert!(start_line_as(&none, "kiro", &[], "", true, Start::Restore(Some(bad))).unwrap().args.iter().all(|a| a != bad || bad.is_empty()));
+        }
+        assert!(safe_session(&"a".repeat(100)));
+        assert!(safe_session("9f:2.x_y-z"));
     }
 
     #[test]

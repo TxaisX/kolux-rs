@@ -1,8 +1,8 @@
 diff --git a/src/App.tsx b/src/App.tsx
-index 5d0de8a..a08d959 100644
+index f593fb0..9f3897b 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
-@@ -124,7 +124,7 @@ import { draftKey, feedbackMessage, keepDraft, showsReview, stillPending, type P
+@@ -130,7 +130,7 @@ import { draftKey, feedbackMessage, keepDraft, showsReview, stillPending, type P
  export type ShellTarget = { dir: string | null; branch: string | null };
  
  /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
@@ -11,7 +11,7 @@ index 5d0de8a..a08d959 100644
  
  /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
  function tabName(p: Pane, titles: Record<number, string>): string {
-@@ -2323,6 +2323,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -2339,6 +2339,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                      key={p.key}
                      hidden={!board && p.key !== active}
                      restored={restoredKeys.current.has(p.key)}
@@ -20,32 +20,31 @@ index 5d0de8a..a08d959 100644
                      card={board ? { expanded: expanded === p.key, onToggle: () => setExpanded((x) => toggleCard(x, p.key)), chip: chipFor(p), column: columnOf(p), onAnswer: (ok) => void answer(p, ok), meter: p.seats || p.kind ? null : meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) } : undefined}
                      cwd={p.cwd}
 diff --git a/src/main.tsx b/src/main.tsx
-index 2b7a673..2be7a3c 100644
+index 632873a..c5f5592 100644
 --- a/src/main.tsx
 +++ b/src/main.tsx
-@@ -7,7 +7,7 @@ import App from "./App";
- import { applyAppearance, cachedAppearance, followSystemMode, readAppearance } from "./theme";
- import { stampLook } from "./settings/general";
+@@ -9,7 +9,7 @@ import { stampLook } from "./settings/general";
  import { applyLanguage, LANGUAGE_FIELD } from "./language";
+ import { applyZoom, ZOOM_FIELD } from "./settings/zoom";
+ import { followText } from "./terminal/text";
 -import { LAYOUT_FIELD, restoreLayout, resumeArgs, stillThere } from "./terminal/layout";
-+import { LAYOUT_FIELD, restoreLayout, stillThere } from "./terminal/layout";
++import { LAYOUT_FIELD, restoreAsks, restoreLayout, stillThere } from "./terminal/layout";
  import "./styles.css";
  
  // SET-004: the window starts hidden (tauri.conf.json). The saved look goes on the root first, read
-@@ -37,11 +37,15 @@ async function start() {
+@@ -43,11 +43,14 @@ async function start() {
      // TERM-106: the saved output of tabs no longer in the layout is cleaned up in the background.
      void invoke("terminal_prune_history", { keep: layout.panes.map((p) => p.key) }).catch(() => {});
      // SESS-030: an agent tab starts again on its standing start line (permission mode, the user's own
 -    // arguments and environment) plus its own resume command; an agent no longer known keeps the bare line.
 +    // arguments and environment) plus its own resume command, built on the Rust side from the tab's
 +    // last session id (every catalogue agent, not only Claude Code and Codex); `resumed` drives the
-+    // TERM-107 mark. An agent no longer known keeps the bare line. A plain shell has no agent id; one
-+    // with no program is skipped as well, so a shell never gets an agent line.
++    // TERM-107 mark. An agent no longer known keeps the bare line. restoreAsks skips plain shells.
      for (const p of layout.panes) {
 -      if (p.agent === "shell" || p.kind || !p.agentId) continue;
 -      const line = await invoke<{ args: string[]; program: string | null; env: [string, string][] }>("agent_start_line", { id: p.agentId, extra: resumeArgs(p.agent, p.session), prompt: "" }).catch(() => null);
 -      if (line) Object.assign(p, { args: line.args, program: line.program ?? p.program, env: line.env });
-+      if (p.kind || !p.agentId || (p.agent === "shell" && p.program === null)) continue;
++      if (!restoreAsks(p)) continue;
 +      const line = await invoke<{ args: string[]; program: string | null; env: [string, string][]; resumed: boolean }>("agent_start_line", { id: p.agentId, extra: [], prompt: "", restore: true, session: p.session ?? null }).catch(() => null);
 +      if (line) Object.assign(p, { args: line.args, program: line.program ?? p.program, env: line.env, resumed: line.resumed });
 +      else p.resumed = false;
@@ -53,7 +52,7 @@ index 2b7a673..2be7a3c 100644
    }
    ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
 diff --git a/src/terminal/TerminalPane.tsx b/src/terminal/TerminalPane.tsx
-index 5fc5943..0b555f1 100644
+index 9a619f1..70a3b99 100644
 --- a/src/terminal/TerminalPane.tsx
 +++ b/src/terminal/TerminalPane.tsx
 @@ -19,7 +19,6 @@ import { HeldKeys, screenLines, shouldRefocus, watchScale } from "./recover";
@@ -64,7 +63,7 @@ index 5fc5943..0b555f1 100644
  import { explain as explainError, exitAdvice } from "./errors";
  import { DIVIDER_DONE, dragging } from "./dividers";
  import { currentDark, currentTerminal, TERMINAL_EVENT, termFont } from "../theme";
-@@ -95,6 +94,8 @@ type Props = {
+@@ -96,6 +95,8 @@ type Props = {
    notice?: PaneNotice | null;
    /** TERM-106: the pane came back from the saved layout; what it printed before is shown first. */
    restored?: boolean;
@@ -73,7 +72,7 @@ index 5fc5943..0b555f1 100644
    /** The session failed to start (SESS-024: the window drops the pane rather than leaving it blank). */
    onFailed?: (error: string) => void;
    /** A job title from the seat (SESS-024) wins over the workspace name. */
-@@ -160,7 +161,7 @@ const stagger = () =>
+@@ -161,7 +162,7 @@ const stagger = () =>
      }, 150 + 60 * waiting++),
    );
  
@@ -82,7 +81,7 @@ index 5fc5943..0b555f1 100644
    const host = useRef<HTMLDivElement>(null);
    // TERM-096: the link provider is set up once, so it reads the newest opener through a ref.
    const handleRef = useRef(findHandle);
-@@ -516,7 +517,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
+@@ -517,7 +518,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
          // onData: the terminal's own answers to the shell's start-up questions go through onData.
          let keepInView = false;
          if (restored) {
@@ -92,7 +91,7 @@ index 5fc5943..0b555f1 100644
              setRestoredMark(null);
              key.dispose();
 diff --git a/src/terminal/layout.test.ts b/src/terminal/layout.test.ts
-index 42f18eb..00c6707 100644
+index 42f18eb..d28553a 100644
 --- a/src/terminal/layout.test.ts
 +++ b/src/terminal/layout.test.ts
 @@ -1,7 +1,7 @@
@@ -100,11 +99,11 @@ index 42f18eb..00c6707 100644
  // the active workspace and tab come back while they still exist.
  import { expect, test } from "vitest";
 -import { layoutOf, restoreLayout, resumeArgs, resumes, stillThere } from "./layout";
-+import { layoutOf, restoreLayout, stillThere } from "./layout";
++import { layoutOf, restoreAsks, restoreLayout, stillThere } from "./layout";
  
  const shell = (key: number, cwd: string | null, extra: Record<string, unknown> = {}) => ({ key, cwd, branch: null, agent: "shell" as const, program: null, args: [], ...extra });
  
-@@ -75,20 +75,21 @@ test("sess030: an agent tab with a known session comes back resumed, one without
+@@ -75,20 +75,22 @@ test("sess030: an agent tab with a known session comes back resumed, one without
    // The session id is written down; the one-off opening arguments are not.
    expect(l.panes.map((p) => [p.key, p.args, p.session])).toEqual([[1, [], undefined], [2, [], "11111111-aaaa"], [3, [], "thr_22"], [4, [], undefined]]);
    const back = restoreLayout(JSON.parse(JSON.stringify(l)))!;
@@ -127,17 +126,18 @@ index 42f18eb..00c6707 100644
 -  expect(resumes("claude", [])).toBe(false);
 -  expect(resumes("codex", ["--resume", "abc"])).toBe(false);
 -  expect(resumes("shell", [])).toBe(false);
-+test("T-066-c: a plain shell never carries an agent id into the saved layout, so the restore loop never gives it an agent line", () => {
-+  // The only shell pane with an agent id is an unstarted chooser, and it is not written down.
-+  const chooser = { key: 5, cwd: "C:\\w\\a", branch: "main", agent: "shell" as const, agentId: "gemini", program: null, args: [], seats: [{ agent: "gemini", model: null }] };
-+  const l = layoutOf([shell(1, null), chooser], { 1: 1 }, 1, null, {});
-+  expect(l.panes.map((p) => p.key)).toEqual([1]);
-+  expect(l.panes.every((p) => p.agent !== "shell" || p.agentId === undefined)).toBe(true);
-+  const back = restoreLayout(JSON.parse(JSON.stringify(l)))!;
-+  expect(back.panes.every((p) => p.agentId === undefined && p.resumed === undefined)).toBe(true);
++test("T-066-c: the restore loop asks for an agent line only for an agent tab, never a plain shell", () => {
++  const ask = (agent: "shell" | "claude" | "codex", agentId: string | undefined, program: string | null, kind?: "editor") => restoreAsks({ agent, agentId, program, kind });
++  expect(ask("shell", undefined, null)).toBe(false); // a plain shell
++  expect(ask("shell", undefined, "pwsh")).toBe(false); // a shell with its own program, no agent
++  expect(ask("shell", "gemini", "gemini")).toBe(true); // a catalogue agent marked as a shell
++  expect(ask("claude", "claude", "claude")).toBe(true);
++  expect(ask("codex", "codex", null)).toBe(true);
++  expect(ask("shell", "gemini", null)).toBe(false); // an unstarted chooser
++  expect(ask("claude", "claude", "claude", "editor")).toBe(false); // not a terminal tab
  });
 diff --git a/src/terminal/layout.ts b/src/terminal/layout.ts
-index d355ad1..aca9c58 100644
+index d355ad1..09662e3 100644
 --- a/src/terminal/layout.ts
 +++ b/src/terminal/layout.ts
 @@ -26,6 +26,8 @@ export type SavedPane = {
@@ -149,7 +149,7 @@ index d355ad1..aca9c58 100644
    account?: string | null;
    title?: string;
    group?: number;
-@@ -59,16 +61,6 @@ export function layoutOf(panes: LivePane[], activeTab: Record<number, number>, f
+@@ -59,14 +61,12 @@ export function layoutOf(panes: LivePane[], activeTab: Record<number, number>, f
    return tidy(kept, activeTab, focused, activeDir, stacked);
  }
  
@@ -161,12 +161,16 @@ index d355ad1..aca9c58 100644
 -  if (agent === "claude") return ["--resume", session];
 -  if (agent === "codex") return ["resume", session];
 -  return [];
--}
--
++/** SESS-030 (T-066-c): whether the restore loop asks the Rust side for this tab's start line. Only
++ * an agent tab does: a tab with no agent id, a non-terminal tab, and a plain shell (or an unstarted
++ * chooser) with no program of its own keep the line they were saved with. A catalogue agent saved as
++ * a shell with its own program (Gemini CLI, say) is asked, so its resume form reaches it. */
++export function restoreAsks(p: Pick<SavedPane, "agent" | "agentId" | "program" | "kind">): boolean {
++  return !p.kind && !!p.agentId && !(p.agent === "shell" && p.program === null);
+ }
+ 
  const str = (v: unknown): v is string => typeof v === "string";
- const strOrNull = (v: unknown): v is string | null => v === null || typeof v === "string";
- const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
-@@ -106,7 +98,6 @@ export function restoreLayout(value: unknown): SavedLayout | null {
+@@ -106,7 +106,6 @@ export function restoreLayout(value: unknown): SavedLayout | null {
    for (const v of o.panes) {
      const p = readPane(v);
      if (p && !seen.has(p.key)) {
@@ -174,7 +178,7 @@ index d355ad1..aca9c58 100644
        seen.add(p.key);
        panes.push(p);
      }
-@@ -140,9 +131,3 @@ function tidy(panes: SavedPane[], activeTab: Record<number, number>, focused: nu
+@@ -140,9 +139,3 @@ function tidy(panes: SavedPane[], activeTab: Record<number, number>, focused: nu
    if (!keys.has(f)) f = panesIn(panes, activeDir)[0]?.key ?? panes[0]?.key ?? 1;
    return { panes, activeTab: tabs, focused: f, activeDir, stacked };
  }

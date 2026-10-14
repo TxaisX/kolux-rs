@@ -57,3 +57,26 @@ Needs evidence/T-066-c.patch applied on main first.
    resume mark beyond "restored".
 3. Nothing is resumed twice: the restored agent's start line (terminal read of the first line)
    carries its resume form once.
+
+COUNCIL FIX-BEFORE / FIX-SOON follow-up (2026-10-14, lane/orchestration on 8892d60)
+FB1  The restore loop's skip rule is one named, tested function: restoreAsks (layout.ts, in
+     evidence/T-066-c.patch). It asks for an agent line only for a tab with an agent id that is
+     not an editor/browser tab and not a plain shell with no program (a chooser). The main.tsx
+     hunk calls `if (!restoreAsks(p)) continue;`. The old "plain shell never carries an agent id"
+     test is replaced by one that drives restoreAsks over: plain shell false, shell + pwsh false,
+     catalogue agent marked shell with its own program true, Claude Code true, Codex with no
+     program true, unstarted chooser false, editor tab false.
+     Proof (applied to a copy of the checkout, never to the lane's src/): tsc --noEmit rc=0 on
+     the copy with all five files; vitest src/terminal 27 files / 145 tests passed with the four
+     non-main.tsx files applied; `git apply --cached --check` of the regenerated patch on a
+     scratch index of 8892d60: applies. src/ restored after (`git checkout -- src/`).
+FB2  agents.rs safe_session: a session id is used only if it starts with a letter or digit and
+     holds only letters, digits, . _ : - (100 at most); anything else counts as no id, so the
+     agent starts plain. Test sess030_a_session_id_that_is_not_an_id_never_reaches_the_command_line
+     (x&calc, --foo, -c, the Codex sandbox-off flag, C:\a.jsonl, a/b, a b, |, ^, quotes, %PATH%,
+     blank, .hidden, 101 characters) over Claude, Codex, Copilot, Gemini, Goose, OpenClaw, Kiro.
+FS4  orchestration.rs worker_show: "nothing waits" only when Kolux could tell (the terminal it had
+     has ended, or the worker settled with no terminal); a running worker with no terminal is
+     unknown. Rows dispatch-3/-4 in cli036_worker_show_says_nothing_waits_only_when_it_could_tell.
+Gates: cargo test agents:: 29 ok, orchestration:: 34 ok, inventory:: 4 ok, resume:: 4 ok;
+clippy --all-targets -D warnings clean (log G:/Temp/orch-w1-logs/w3-fb-scoped.log).

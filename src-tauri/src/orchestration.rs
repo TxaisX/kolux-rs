@@ -547,9 +547,13 @@ pub fn worker_show(tasks: &[Value], dispatches: &[Value], id: &str, run: Option<
     let d = dispatches.iter().find(|d| d["id"] == id && d["runId"].as_str() == run).ok_or_else(|| Fail::new("not_found", format!("no dispatch {id}")))?;
     let handle = terminal_of(d);
     let open = handle.as_deref().is_some_and(live);
+    // Council FIX-SOON: "no" only when Kolux could tell: the worker has settled, or it had a
+    // terminal and that terminal has ended. A running worker with no terminal at all is unknown.
     let (waiting, why) = match attention {
         Some(a @ ("input" | "approval")) if open => ("yes", format!("its agent is waiting for {a}")),
-        _ if !open => ("no", "its terminal has ended, so nothing in it can wait".to_string()),
+        _ if handle.is_some() && !open => ("no", "its terminal has ended, so nothing in it can wait".to_string()),
+        _ if handle.is_none() && finished(d) => ("no", "it has settled and has no terminal, so nothing can wait".to_string()),
+        _ if handle.is_none() => ("unknown", "Kolux holds no terminal for it, so it cannot say nothing is waiting".to_string()),
         _ => ("unknown", "Kolux has not read a prompt off its screen, so it cannot say nothing is waiting".to_string()),
     };
     let task = tasks.iter().find(|t| t["id"] == d["taskId"]).map(|t| t["status"].clone()).unwrap_or(Value::Null);
@@ -2288,8 +2292,16 @@ mod tests {
         let d = vec![
             json!({ "id": "dispatch-1", "runId": "run-1", "taskId": "task-1", "status": "running", "terminal": 4, "runtime": me }),
             json!({ "id": "dispatch-2", "runId": "run-1", "taskId": "task-1", "status": "completed", "terminal": 5, "runtime": me }),
+            json!({ "id": "dispatch-3", "runId": "run-1", "taskId": "task-1", "status": "running", "runtime": me }),
+            json!({ "id": "dispatch-4", "runId": "run-1", "taskId": "task-1", "status": "failed", "runtime": me }),
         ];
         let live = |h: &str| h == "term-4";
+        // Council FIX-SOON: a running worker with no terminal at all is unknown, never "no"; a
+        // settled one with no terminal has nothing that can wait.
+        let show3 = worker_show(&tasks, &d, "dispatch-3", Some("run-1"), &live, None).unwrap();
+        assert_eq!(show3["waiting"], "unknown", "{show3}");
+        assert_eq!(worker_show(&tasks, &d, "dispatch-3", Some("run-1"), &live, Some("input")).unwrap()["waiting"], "unknown");
+        assert_eq!(worker_show(&tasks, &d, "dispatch-4", Some("run-1"), &live, None).unwrap()["waiting"], "no");
         let show = |id: &str, a: Option<&str>| worker_show(&tasks, &d, id, Some("run-1"), &live, a).unwrap();
         assert_eq!(show("dispatch-1", Some("input"))["waiting"], "yes");
         assert_eq!(show("dispatch-1", Some("approval"))["waiting"], "yes");
