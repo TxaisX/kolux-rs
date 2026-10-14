@@ -269,6 +269,14 @@ export const capped = <T>(rows: T[], cap: number): { shown: T[]; more: number } 
 export const SCM_GROUP_ORDER_KEY = "scmGroupOrder";
 /** GIT-001: the panel shows a flat list ("list", the default) or a folder tree ("tree"). */
 export const SCM_VIEW_KEY = "scmView";
+/** GIT-038 (T-033-c): All Changes' default layout, each off unless set: two columns, wrapped
+ * lines, whitespace-only changes shown, the file tree open. A tab's own toggles start from these. */
+export const AC_SPLIT_KEY = "allChangesSideBySide";
+export const AC_WRAP_KEY = "allChangesWrap";
+export const AC_WHITESPACE_KEY = "allChangesWhitespace";
+export const AC_TREE_KEY = "allChangesTree";
+export type AcLayout = { split: boolean; wrap: boolean; spaces: boolean; tree: boolean };
+export const acLayoutOf = (s: Record<string, unknown> | null): AcLayout => ({ split: s?.[AC_SPLIT_KEY] === true, wrap: s?.[AC_WRAP_KEY] === true, spaces: s?.[AC_WHITESPACE_KEY] === true, tree: s?.[AC_TREE_KEY] === true });
 export type ScmGroup = "conflicts" | "staged" | "changes" | "untracked";
 /** GIT-066: the orders on offer, `[id, label, groups]`; conflicts lead in each, since they block a commit. */
 export const SCM_GROUP_ORDERS: [string, string, ScmGroup[]][] = [

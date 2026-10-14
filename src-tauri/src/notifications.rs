@@ -55,9 +55,73 @@ pub fn open_notification_settings() -> Result<(), String> {
     run.map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// VIEW-111: the store key that says the first-run welcome notification has been answered.
+pub const WELCOME_KEY: &str = "notifications.welcomeAnswered";
+/// How long the system may take to show the welcome before it counts as unanswered.
+const WELCOME_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// VIEW-111: what the first start does about notification permission.
+#[derive(Debug, PartialEq)]
+pub enum Welcome {
+    /// Not a Mac: nothing is shown and nothing is probed.
+    Unsupported,
+    /// A Mac that has never answered: show the one welcome notification.
+    Ask,
+    /// Answered on an earlier start: never asked again.
+    Answered,
+}
+
+pub fn welcome_step(macos: bool, saved: Option<&str>) -> Welcome {
+    if !macos {
+        Welcome::Unsupported
+    } else if saved.is_some() {
+        Welcome::Answered
+    } else {
+        Welcome::Ask
+    }
+}
+
+/// VIEW-111: called once at start. On a Mac that has not answered, shows one welcome notification;
+/// the system asks for permission when it first shows one. The answer is recorded only when the
+/// system shows it in time, so a start where it does not may ask again later.
+pub fn first_run_welcome(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    let Some(store) = app.try_state::<std::sync::Mutex<crate::state::Store>>() else { return };
+    let saved = store.lock().ok().and_then(|s| s.get(WELCOME_KEY).ok().flatten());
+    if welcome_step(cfg!(target_os = "macos"), saved.as_deref()) != Welcome::Ask {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        use tauri_plugin_notification::NotificationExt;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let shower = app.clone();
+        std::thread::spawn(move || {
+            let shown = shower.notification().builder().title("Kolux").body("Kolux will tell you here when an agent needs you or finishes.").show().is_ok();
+            let _ = tx.send(shown);
+        });
+        if rx.recv_timeout(WELCOME_WAIT) == Ok(true) {
+            if let Some(store) = app.try_state::<std::sync::Mutex<crate::state::Store>>() {
+                if let Ok(s) = store.lock() {
+                    let _ = s.set(WELCOME_KEY, "1");
+                }
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::toasts_off;
+
+    #[test]
+    fn view111_only_a_mac_that_never_answered_is_asked_once() {
+        use super::{welcome_step, Welcome};
+        assert_eq!(welcome_step(true, None), Welcome::Ask);
+        assert_eq!(welcome_step(true, Some("1")), Welcome::Answered);
+        assert_eq!(welcome_step(false, None), Welcome::Unsupported);
+        assert_eq!(welcome_step(false, Some("1")), Welcome::Unsupported);
+    }
 
     #[test]
     fn only_an_explicit_zero_turns_app_notifications_off() {

@@ -5,6 +5,8 @@
 // (RunPage) whose breadcrumb leads back to Runs and then to Automations.
 import { useLayoutEffect, useRef, useState } from "react";
 import { Refresh, Search } from "../chrome/icons";
+import type { Usage } from "../usage/tokens";
+import { runUsage, usageWord } from "./usage";
 import { ago, dashboardRows, onScreen, RUN_BATCH, runTiles, startedBy, statusWord, triggerLabel, type Automation, type Run, type RunFilter } from "./model";
 
 const ROW = 33; // .autos-table td: 32 px and a 1 px rule
@@ -162,7 +164,9 @@ export default function RunsDashboard({ runs, automations, now, onRefresh, onAut
 }
 
 /** One run as a full page; its breadcrumb goes back to Runs, then to Automations. */
-export function RunPage({ run, automation, now, onRuns, onAutomations }: { run: Run; automation: Automation | undefined; now: number; onRuns: () => void; onAutomations: () => void }) {
+export function RunPage({ run, automation, now, usage = null, agentName, onRuns, onAutomations }: { run: Run; automation: Automation | undefined; now: number; usage?: Usage | null; agentName?: string; onRuns: () => void; onAutomations: () => void }) {
+  // AUTO-014: the run's tokens and spend when they can be tied to it; unknown reads unavailable.
+  const used = runUsage(run, usage, agentName);
   const name = automation?.name ?? "Deleted automation";
   const facts: Array<[string, string | undefined]> = [
     ["Automation", name],
@@ -171,6 +175,7 @@ export function RunPage({ run, automation, now, onRuns, onAutomations }: { run: 
     ["Started", `${new Date(run.at).toLocaleString()} (${ago(run.at, now)})`],
     ["Workspace", run.worktreeName ?? run.worktree],
     ["Detail", run.detail],
+    ["Tokens and cost", used ? usageWord(used) : undefined],
   ];
   return (
     <section className="runs" aria-label={`${name} run ${run.number}`}>
@@ -187,6 +192,14 @@ export function RunPage({ run, automation, now, onRuns, onAutomations }: { run: 
             </div>
           ))}
       </dl>
+      {run.outputFrom && (
+        <div className="run-output">
+          <h3>Saved output</h3>
+          <p className="muted">{run.outputCut ? "The most recent text the agent's terminal showed; older lines were left out." : "What the agent's terminal showed when the run ended."}</p>
+          <pre className="auto-output">{run.output}</pre>
+        </div>
+      )}
+      {!run.outputFrom && !run.output && (run.status === "completed" || run.status === "failed") && run.dispatchedAt !== undefined && <p className="muted">No output was saved for this run: its terminal had closed before the run ended.</p>}
     </section>
   );
 }
