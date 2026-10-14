@@ -400,6 +400,8 @@ pub fn run() {
             projects::git_start,
             setup::workspace_setup,
             setup::workspace_issue_command,
+            setup::script_trust_needed,
+            setup::script_trust_grant,
             setup::setup_imports_list,
             setup::setup_import,
             agents::agent_list,
