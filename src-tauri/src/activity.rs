@@ -33,10 +33,37 @@ struct Open {
     since: Option<u64>,
 }
 
+/// VIEW-013: how far back the Floor timeline reaches; "today" never needs more than a day.
+pub const TIMELINE_MS: u64 = 26 * 3_600_000;
+/// The state changes one pane keeps for the timeline.
+const TIMELINE_MARKS: usize = 500;
+
+/// VIEW-013: one change of a pane's state, as the Floor timeline draws it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Mark {
+    pub at: u64,
+    pub state: String,
+}
+
+/// One pane's lane on the Floor: its state changes, oldest first, and when it closed.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Track {
+    pub pane: u32,
+    pub marks: Vec<Mark>,
+    pub ended: Option<u64>,
+    /// The terminal the pane runs in and whether that terminal is still open (filled by the command).
+    pub terminal: Option<u32>,
+    pub live: bool,
+}
+
 #[derive(Default)]
 pub struct Activity {
     counts: Counts,
     open: HashMap<u32, Open>,
+    /// VIEW-013: each pane's recent state changes, kept in memory only.
+    tracks: BTreeMap<u32, Track>,
     dirty: bool,
     /// The save at quit went out; nothing still pending may follow it.
     closed: bool,
@@ -55,6 +82,7 @@ impl Activity {
     /// after a reconnect, starts nothing); waiting, permission and blocked close the working stretch
     /// but keep the turn; done and interrupted end it.
     pub fn note(&mut self, pane: u32, state: &str, now: u64) {
+        self.mark(pane, state, now);
         let o = self.open.entry(pane).or_default();
         if state == "working" {
             if !o.turn {
@@ -74,6 +102,29 @@ impl Activity {
         }
     }
 
+    /// VIEW-013: a state change on the pane's timeline; a repeat of the current state adds nothing.
+    /// Marks older than the reach go, except the last of them, which says what the pane was doing
+    /// when the reach begins.
+    fn mark(&mut self, pane: u32, state: &str, now: u64) {
+        let t = self.tracks.entry(pane).or_insert_with(|| Track { pane, ..Track::default() });
+        t.ended = None;
+        if t.marks.last().is_some_and(|m| m.state == state) {
+            return;
+        }
+        t.marks.push(Mark { at: now, state: state.to_string() });
+        let cut = now.saturating_sub(TIMELINE_MS);
+        let old = t.marks.iter().take_while(|m| m.at < cut).count();
+        let drop = old.saturating_sub(1).max(t.marks.len().saturating_sub(TIMELINE_MARKS));
+        t.marks.drain(..drop);
+    }
+
+    /// VIEW-013: every pane's lane as of `now`; a pane that closed before the reach is left out.
+    pub fn timeline(&mut self, now: u64) -> Vec<Track> {
+        let cut = now.saturating_sub(TIMELINE_MS);
+        self.tracks.retain(|_, t| t.ended.is_none_or(|e| e >= cut));
+        self.tracks.values().cloned().collect()
+    }
+
     /// Kolux made a pull request.
     pub fn pr_created(&mut self) {
         self.counts.prs_created += 1;
@@ -84,6 +135,9 @@ impl Activity {
     pub fn end(&mut self, pane: u32, now: u64) {
         self.note(pane, "done", now);
         self.open.remove(&pane);
+        if let Some(t) = self.tracks.get_mut(&pane) {
+            t.ended = Some(now);
+        }
     }
 
     /// The counts as of `now`, open working stretches included.
@@ -187,6 +241,18 @@ pub fn activity_get(store: StoreState<'_>) -> Result<BTreeMap<String, u64>, Stri
     Ok(workspace_times(&*store.lock().map_err(|e| e.to_string())?))
 }
 
+/// VIEW-013: the Floor timeline's lanes. A lane whose terminal is no longer open is not live: the
+/// page shows its quiet stretches as unverifiable rather than idle.
+#[tauri::command]
+pub fn activity_timeline(terminals: tauri::State<'_, crate::terminal::Terminals>) -> Vec<Track> {
+    let mut lanes = with(|a| a.timeline(now_ms()));
+    for l in &mut lanes {
+        l.terminal = crate::status::terminal_of(l.pane);
+        l.live = l.ended.is_none() && l.terminal.is_some_and(|t| terminals.started(t).is_some());
+    }
+    lanes
+}
+
 #[tauri::command]
 pub fn activity_touch(store: StoreState<'_>, path: String) -> Result<(), String> {
     touch(&*store.lock().map_err(|e| e.to_string())?, &path)
@@ -195,6 +261,34 @@ pub fn activity_touch(store: StoreState<'_>, path: String) -> Result<(), String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn view013_each_pane_keeps_its_state_changes_for_the_floor_and_old_ones_go() {
+        let mut a = Activity::load(None, 1);
+        let h = 3_600_000;
+        a.note(3, "working", 10 * h);
+        a.note(3, "working", 10 * h + 5); // a restated state adds nothing
+        a.note(3, "permission", 11 * h);
+        a.note(3, "working", 11 * h + 300_000); // blocked on approval for 5 minutes
+        a.note(4, "waiting", 12 * h);
+        a.end(4, 13 * h);
+        let lanes = a.timeline(13 * h);
+        let marks: Vec<(u64, &str)> = lanes[0].marks.iter().map(|m| (m.at, m.state.as_str())).collect();
+        assert_eq!(marks, vec![(10 * h, "working"), (11 * h, "permission"), (11 * h + 300_000, "working")]);
+        assert_eq!((lanes[1].pane, lanes[1].ended), (4, Some(13 * h)));
+        // A day later (the reach starts at 11:00:00.001): pane 3's older changes go but the last one
+        // before the reach stays (it says what the pane was
+        // doing when the reach begins); pane 4 closed before the reach and leaves the Floor.
+        a.note(3, "done", 37 * h + 1);
+        let lanes = a.timeline(40 * h);
+        assert_eq!(lanes.len(), 1);
+        let marks: Vec<(u64, &str)> = lanes[0].marks.iter().map(|m| (m.at, m.state.as_str())).collect();
+        assert_eq!(marks, vec![(11 * h, "permission"), (11 * h + 300_000, "working"), (37 * h + 1, "done")]);
+        // A pane that reports again after closing is open again.
+        a.end(3, 40 * h);
+        a.note(3, "working", 40 * h + 1);
+        assert_eq!(a.timeline(40 * h + 2)[0].ended, None);
+    }
 
     #[test]
     fn usage_011_two_turns_with_a_reconnect_count_two() {

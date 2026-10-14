@@ -1,11 +1,15 @@
 // APP-054: the Resource Manager, opened from the status bar's memory figure. Memory and CPU for the
 // app, for every terminal session grouped under its workspace, and the computer's free memory.
 // Ending a session asks first, in the row, and stops that session only; a session a fresh read shows
-// has already ended just leaves the list, with no question (VIEW-099).
+// has already ended just leaves the list, with no question (VIEW-099). Committed memory (CLI-041)
+// sits beside resident in every row, a dash where Windows gave no figure (T-287-b). Committed memory (CLI-041)
+// sits beside resident in every row, a dash where Windows gave no figure (T-287-b).
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { formatMemory } from "./memory";
-import { endNeedsAsk, formatCpu, groupSessions, type Resources, type Row } from "./resources";
+import { endNeedsAsk, formatCommitted, formatCpu, groupSessions, RES_COLUMNS, type Resources, type Row } from "./resources";
+
+const cols = { gridTemplateColumns: RES_COLUMNS };
 
 type Props = { names: () => Record<number, string>; workspaces: string[]; onClose: () => void };
 
@@ -54,9 +58,23 @@ export default function ResourceManager({ names, workspaces, onClose }: Props) {
         </div>
         {failed && <div className="menu-hint warn">{failed}</div>}
         {data && (
-          <div className="res-row res-app" data-row="app">
+          <div className="res-row res-cols" style={cols} aria-hidden="true">
+            <span className="res-label">Name</span>
+            <span className="res-label res-fig" title="Memory in RAM now (working set)">
+              Resident
+            </span>
+            <span className="res-label res-fig" title="Memory Windows has promised the process (pagefile-backed)">
+              Committed
+            </span>
+            <span className="res-label res-fig">CPU</span>
+            <span />
+          </div>
+        )}
+        {data && (
+          <div className="res-row res-app" data-row="app" style={cols}>
             <span className="res-name">Kolux</span>
             <span className="res-fig">{formatMemory(data.app.bytes)}</span>
+            <span className="res-fig" data-fig="committed">{formatCommitted(data.app.committed)}</span>
             <span className="res-fig">{formatCpu(data.app.cpu)}</span>
             <span className="res-end" />
           </div>
@@ -83,12 +101,13 @@ export default function ResourceManager({ names, workspaces, onClose }: Props) {
                   </span>
                 </div>
               ) : (
-                <div key={r.id} className="res-row" data-session={r.id}>
+                <div key={r.id} className="res-row" data-session={r.id} style={cols}>
                   <span className="res-name" title={`${r.processes} process${r.processes === 1 ? "" : "es"}${r.dir ? ` in ${r.dir}` : ""}`}>
                     {r.name}
                     {r.pid !== null && <span className="res-pid"> · pid {r.pid}</span>}
                   </span>
                   <span className="res-fig">{formatMemory(r.bytes)}</span>
+                  <span className="res-fig" data-fig="committed">{formatCommitted(r.committed)}</span>
                   <span className="res-fig">{formatCpu(r.cpu)}</span>
                   <button className="btn res-end" onClick={() => void ask(r)} title={`End ${r.name}`}>
                     End

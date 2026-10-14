@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
-import { endNeedsAsk, groupSessions } from "./resources";
+import { endNeedsAsk, formatCommitted, groupSessions } from "./resources";
 
-const u = { bytes: 1, cpu: 0, processes: 1, pid: null };
+const u = { bytes: 1, cpu: 0, processes: 1, pid: null, committed: null };
 
 test("sessions sit under the deepest workspace they run in, the rest under No worktree", () => {
   const sessions = [
@@ -25,9 +25,19 @@ test("sessions sit under the deepest workspace they run in, the rest under No wo
 });
 
 test("VIEW-099: End asks first unless a fresh read confirms the session has already ended", () => {
-  const usage = { bytes: 1, cpu: 0, processes: 1 };
+  const usage = { bytes: 1, cpu: 0, processes: 1, committed: null };
   const fresh = { app: usage, sessions: [{ id: 4, pid: null, dir: null, ...usage }], free: null, total: null };
   expect(endNeedsAsk(fresh, 4)).toBe(true);
   expect(endNeedsAsk(fresh, 7)).toBe(false);
   expect(endNeedsAsk(null, 7)).toBe(true);
+});
+
+test("T-287-b: committed memory shows beside resident, a dash when Windows gave no figure", () => {
+  expect(formatCommitted(null)).toBe("–");
+  expect(formatCommitted(undefined)).toBe("–");
+  expect(formatCommitted(0)).toBe("0.0 MB");
+  expect(formatCommitted(344338432)).toBe("328.4 MB");
+  expect(formatCommitted(2 * 1024 ** 3)).toBe("2.00 GB");
+  const groups = groupSessions([{ ...u, id: 9, dir: null, committed: 4096 * 1024 }], {}, []);
+  expect(formatCommitted(groups[0].rows[0].committed)).toBe("4.0 MB");
 });
