@@ -158,7 +158,9 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-073 | A banner tells you when an open file was changed on disk, with Reload (undoable), Keep my edits and Compare. | [Files and browser](files-and-browser.md) |
 | T-073-a | Saving a file never overwrites an agent's edit you have not seen. | [Files and browser](files-and-browser.md) |
 | T-073-c | Diff view saves also check for newer edits and offer Reload or Keep mine. | [Files and browser](files-and-browser.md) |
+| T-073-e | Your own save no longer sets off the changed-on-disk banner, and the banner leaves once the file matches again. | [Files and browser](files-and-browser.md) |
 | T-076 | `kolux status` says whether the app is running, not running, left behind (stale) or still loading. | [Command line](command-line.md) |
+| T-076-b | kolux status answers within about 2.5 seconds and says busy while Kolux handles another request. | [Command line](command-line.md) |
 
 ### P0 · theme 11 · Orchestration and automations (31 cards)
 
@@ -167,6 +169,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-077 | Child workspaces nest under their parent. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-078 | Launch shapes Solo, Pair, Workbench and Swarm assign roles to agents. | [Getting started](getting-started.md) |
 | T-079 | Terminal commands in the kolux command line list and control terminals. | [Command line](command-line.md) |
+| T-079-b | Terminal show, read, send and wait in the command line, with time limits, warnings and safe retries. | [Command line](command-line.md) |
 | T-081 | Pick model tiers per provider for worker agents. | [Settings](settings.md) |
 | T-082 | A coordinator opens a Run and its terminal becomes the Run's home. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-083 | Answer a message, browse recent mail, and make tasks wait on each other. | [Board, Agents and Inbox](board-agents-inbox.md) |
@@ -442,6 +445,7 @@ Tasks not yet ticked off in the build plan are not listed.
 
 | Task | Feature | Guide page |
 |---|---|---|
+| T-262 | Agents can ask Kolux for the list of open terminal tabs; the command line's own lists move onto it later. | internal |
 | T-263 | Share a usage card as a picture; reset times count down live. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-265 | An optional prompt-cache countdown shows once a Claude agent goes idle. | [Board, Agents and Inbox](board-agents-inbox.md) |
 
@@ -453,6 +457,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-278 | Fast output never freezes a pane; memory caps scale with the machine. | [Troubleshooting](troubleshooting.md) |
 | T-278-c | Big pastes arrive whole and in order without slowing other panes; Ctrl+C or Esc stops one. | [Terminals](terminals.md) |
 | T-278-d | Control characters inside a paste are removed, so pasted text cannot run on its own. | [Terminals](terminals.md) |
+| T-279 | A task that fails three times running is no longer handed to agents, and a terminal still busy with a task is not given another. | internal |
 | T-280 | Saved settings come back valid after a restart. | [Settings](settings.md) |
 | T-284 | An interrupted skill delete is undone or finished on restart. | [Troubleshooting](troubleshooting.md) |
 | T-286 | Startup failures and stray background errors never silently kill the app. | [Troubleshooting](troubleshooting.md) |
@@ -483,4 +488,5 @@ Tasks not yet ticked off in the build plan are not listed.
 |---|---|---|
 | T-298 | Reopen the wizard from the sidebar help menu; first successes are recorded locally. | [Getting started](getting-started.md) |
 
-<!-- generated from PLAN.md at 64f50c8 -->
+| T-546 | The Tower: every agent on one full-width screen, needs-you first, one click to its pane, usage per program across the top. | [Board, Agents and Inbox](board-agents-inbox.md) |
+<!-- generated from PLAN.md at d3358c3 -->

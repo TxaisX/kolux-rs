@@ -1,6 +1,6 @@
 # Board, Agents and Inbox
 
-Use these three views to see what every session is doing, answer a permission request without hunting for its pane, and find the sessions that need you.
+Use these views (and the Tower) to see what every session is doing, answer a permission request without hunting for its pane, and find the sessions that need you.
 
 ## The Board
 
@@ -73,6 +73,16 @@ When nothing needs you the page says "All clear. Nothing needs you." With no ses
 
 Up and Down walk the rows. Enter or a double-click opens that session's pane. A detail panel shows the Agent, Branch, Workspace, Changes ("N files changed, M staged" or "No files changed") and the last Prompt. Its button reads "Answer in Code" for a session that needs you and "Open in Code" otherwise. The Inbox does not answer for you; it takes you to the pane.
 
+## The Tower
+
+Use it to watch every agent at once, for example on a second screen. Click Tower in the screen switcher, and pick another view to leave. "Show Tower" in the keyboard shortcuts has no key until you give it one. The Tower is a screen in the main window; it does not open a window of its own yet.
+
+Across the top, a summary card counts the agents and how many are in each lane (for example "2 needs you"). Next to it is one usage card per AI program (Claude, Codex) with its 5-hour and weekly bars and how many panes it runs in. When those panes use named accounts, the card lists each account with its pane count. The bars are the program's figures for the account Kolux reads usage from, so they are shown once per program, never under each account's name. Without figures yet a card says "No usage figures yet".
+
+Below, every agent pane is one row, grouped Needs you, Working, Done, Stopped, Idle, with the newest change first in each group. A row shows the pane's name, the program and account, the branch and folder, the status word with its line (the same words as the Board), and the context and plan figures. Shells and editor or browser tabs get no row. With no agent running it says "Nothing is running. Start an agent and it shows up here."
+
+Click a row, or walk the rows with Up and Down and press Enter, to open that pane.
+
 ## Status words
 
 The same words appear in pane headers, tabs, the sidebar, the Board and the Inbox.
@@ -123,4 +133,4 @@ Settings, Notifications has three switches and a sound choice (System default, C
 
 The pill in the top bar shows how much of your weekly allowance is left for each installed AI program, for example "Claude 80% left". It is read-only. Hover for the weekly limit and when it resets. It tints as the allowance runs down (warning at 70% used, danger above 90%). See [Getting started](getting-started.md) for the full description.
 
-<!-- verified against: src/board/chip.ts, src/App.tsx, src/agents/AgentsRail.tsx, src/agents/rail.ts, src/inbox/inbox.ts, src/inbox/InboxView.tsx, src/terminal/status.ts, src/terminal/notify.ts, src/status/useAgentStatus.ts, src/usage/meter.ts, src-tauri/src/status.rs at 64f50c8 -->
+<!-- verified against: src/board/chip.ts, src/App.tsx, src/agents/AgentsRail.tsx, src/agents/rail.ts, src/inbox/inbox.ts, src/inbox/InboxView.tsx, src/terminal/status.ts, src/terminal/notify.ts, src/status/useAgentStatus.ts, src/usage/meter.ts, src/tower/tower.ts, src/tower/TowerView.tsx, src/chrome/TopBar.tsx, src/keys/actions.ts, src-tauri/src/status.rs at d3358c3 -->
