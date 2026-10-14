@@ -81,6 +81,22 @@ export function headerOf(agent: string, kind: Kind, code: number | null | undefi
   return h("stopped", { word: `Ended${code ? ` (${code})` : ""}`, explain: stoppedLabel(code ? `exit code ${code}` : "exited") });
 }
 
+/** STAT-033: the state a terminal title stands in for while no hook reports: a braille spinner
+ *  (U+2800..U+28FF) or a quarter-circle busy mark means working; the words ready, idle, done and
+ *  finished mean done; permission, approve, allow, waiting and "needs you" mean needs you; working,
+ *  thinking, running and a trailing ellipsis mean working. A title that looks like a file path, or
+ *  says nothing recognisable, gives null, so the last known reading holds (a non-agent title
+ *  appearing mid-turn never ends the working state). */
+export function titleState(title: string): AgentState | null {
+  const t = title.trim();
+  if (t === "" || /^(~|[a-zA-Z]:[\\/]|\\\\|\.{0,2}\/)/.test(t) || (/[\\/]/.test(t) && !/\s/.test(t))) return null;
+  if (/[⠀-⣿]/.test(t) || /[◐◓◑◒]/.test(t)) return "working";
+  if (/\b(permission|approve|allow|waiting|needs? (you|input))\b/i.test(t)) return "permission";
+  if (/\b(ready|idle|done|finished|complete)\b/i.test(t)) return "done";
+  if (/\b(working|thinking|running|building|generating)\b/i.test(t) || /(…|\.\.\.)$/.test(t)) return "working";
+  return null;
+}
+
 /** The next pane after `focused` (in grid order, wrapping) that needs the user; null with none. */
 export function nextNeedsYou(keys: number[], needs: Set<number>, focused: number): number | null {
   const i = keys.indexOf(focused);

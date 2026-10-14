@@ -91,7 +91,8 @@ pub struct Change {
     /// SESS-030: the agent's own session id (`session_id`), what its resume command takes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
-    /// STAT-027: the plan to review or the question asked, while the agent waits on it.
+    /// STAT-027: the question asked (every question, one per line), while the agent waits on it;
+    /// the Board card's line shows it whole. The plan to review rides on `plan` alone (T-123-d).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ask: Option<String>,
 }
@@ -100,10 +101,12 @@ pub struct Change {
 const QUESTION_TOOLS: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
 /// STAT-025: task-list bookkeeping tools; their input is never shown as what the agent is doing.
 const LIST_TOOLS: [&str; 5] = ["TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"];
-/// STAT-027: the longest plan or question carried; a longer one is cut and says so.
+/// STAT-027: the longest question carried; a longer one is cut and says so.
 const ASK_MAX: usize = 8000;
 
-/// STAT-027: the plan (ExitPlanMode's `plan`) or the questions (AskUserQuestion's `questions`).
+/// STAT-027: the text the agent waits on: the plan (ExitPlanMode's `plan`) or the questions
+/// (AskUserQuestion's `questions`). The card's first line comes from it; only the questions ride on
+/// `ask`, the plan is `plan`'s (status.rs sizes the whole update around it, SAFE-006).
 fn ask_of(tool: Option<&str>, input: Option<&Value>) -> Option<String> {
     let input = input?;
     let text = match tool? {
@@ -195,7 +198,7 @@ pub fn claude_change(event: &Value) -> Option<Change> {
             // exit-plan step asked as a permission stays a real permission (SAFE-001, SAFE-007): its
             // wait ends only when that tool finishes, never on unrelated tool work.
             let asks = tool.as_deref().is_some_and(|t| QUESTION_TOOLS.contains(&t));
-            let ask = ask_of(tool.as_deref(), event.get("tool_input"));
+            let text = ask_of(tool.as_deref(), event.get("tool_input"));
             let state = match (name, tool.as_deref()) {
                 ("PermissionRequest", Some("AskUserQuestion")) => "waiting",
                 ("PermissionRequest", _) => "permission",
@@ -204,9 +207,10 @@ pub fn claude_change(event: &Value) -> Option<Change> {
             };
             Some(Change {
                 state,
-                detail: step_detail(tool.as_deref(), event.get("tool_input"), ask.as_deref()),
+                detail: step_detail(tool.as_deref(), event.get("tool_input"), text.as_deref()),
                 plan: plan_of(tool.as_deref(), event.get("tool_input")),
-                ask,
+                // T-123-d: a question rides whole on `ask`; the plan already rides on `plan`, never twice.
+                ask: text.filter(|_| tool.as_deref() == Some("AskUserQuestion")),
                 tool,
                 ..Change::default()
             })

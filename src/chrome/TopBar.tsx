@@ -14,11 +14,12 @@ import { usePlan } from "../usage/plan";
 
 /** Artifacts is reached from the sidebar only, so it is not in the top bar's cycle. */
 /** The three switcher screens, and the Inbox behind the bell (STAT-050: its own top-level view). */
-export type Screen = "agents" | "board" | "terminals" | "artifacts" | "inbox";
+export type Screen = "agents" | "board" | "terminals" | "artifacts" | "inbox" | "tower";
 export const screens: Array<{ id: Screen; label: string }> = [
   { id: "agents", label: "Agents" },
   { id: "board", label: "Board" },
   { id: "terminals", label: "Terminals" },
+  { id: "tower", label: "Tower" },
 ];
 
 /** `classic` (SET-037): the Classic look has no screen switcher; the window stays on Terminals. */

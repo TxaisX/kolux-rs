@@ -32,8 +32,11 @@ export function cutChunks(text: string, size = CHUNK): string[] {
   return out;
 }
 
-/** What xterm does to pasted text before the program sees it: every line end becomes a carriage return. */
-export const prepareForTerminal = (text: string) => text.replace(/\r?\n/g, "\r");
+/** What xterm does to pasted text before the program sees it: every line end becomes a carriage return.
+ *  T-278-d (council D2 MERGE 32 A1): inside a bracketed paste every ESC byte is dropped too, so a clipboard
+ *  holding ESC[201~ can never close the bracket early and type what follows straight into the shell (the
+ *  rule is "every ESC", not only the two bracket sequences: simpler, and no control sequence belongs in a paste). */
+export const prepareForTerminal = (text: string, bracketed = false) => (bracketed ? text.replace(/\x1b/g, "") : text).replace(/\r?\n/g, "\r");
 
 type Chunk = { data: string; open: boolean };
 
@@ -43,6 +46,11 @@ export function attachPaste(
   held: () => boolean,
   refused: (message: string) => void = () => {},
   bracketed: () => boolean = () => false,
+  /** TERM-069: true (Windows) forces a multi-line paste onto the bracketed path even when the
+   *  program has not asked for it; a program that honours brackets then takes the lines as one
+   *  paste, and the console layer drops the markers for one that does not (measured: Windows
+   *  PowerShell 5.1 under ConPTY shows nothing of them). Single-line text keeps the fast path. */
+  forceMultiLine: () => boolean = () => false,
 ) {
   const queued: string[] = [];
   const chunks: Chunk[] = [];
@@ -67,8 +75,8 @@ export function attachPaste(
     } else if (chunks.length > 0) timer = setTimeout(pump, 0);
   };
   const deliver = (text: string) => {
-    const pieces = cutChunks(text).map(prepareForTerminal);
-    const wrap = bracketed();
+    const wrap = bracketed() || (/[\r\n]/.test(text) && forceMultiLine());
+    const pieces = cutChunks(text).map((piece) => prepareForTerminal(piece, wrap));
     const last = pieces.length - 1;
     pieces.forEach((data, i) => {
       if (wrap && i === 0) data = BRACKET_OPEN + data;

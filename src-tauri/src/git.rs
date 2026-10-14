@@ -50,6 +50,9 @@ pub const NO_PROMPT: [(&str, &str); 2] = [("GIT_TERMINAL_PROMPT", "0"), ("GCM_IN
 pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
     let mut cmd = Command::new("git");
     cmd.args(args);
+    // GIT-001 (T-033-b): a status read never rewrites the index on its own (git's optional lock),
+    // so the Source Control watcher is not woken by its own reads. Required locks are unaffected.
+    cmd.env("GIT_OPTIONAL_LOCKS", "0");
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
