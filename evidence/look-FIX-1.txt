@@ -1,0 +1,34 @@
+look-FIX-1: council fixes from the review of lane/look e249adf..9743579 (T-282, T-328, T-237-a)
+Lane look, wave 2, 2026-10-14. BEFORE 84d337e; STEP 0 merge of main fb322d5 = fb36235.
+NO APP LAUNCHES (Txais 2026-10-13 23:10): every proof below is a unit test; the on-screen parts
+have LIVE PROOF PENDING steps at the end for the coordinator's batched run.
+
+STEP 0 gates on fb36235 (logs G:/Temp/look-w1-logs/w2-merge):
+- cargo test: 598 passed, 2 failed; both pass when run alone: acct_024_a (load) and
+  git an_unattended_git_fails_fast (env only: the parent session's GIT_ASKPASS / GIT_CONFIG_* were
+  inherited; with them unset it passes, 1/1). clippy -D warnings: exit 0. tsc: exit 0.
+- pnpm test: 156 files, 920 tests passed. plan-check: OK. Last 10 passes header: 1. Duplicate ids: none.
+- firewall-check -Baseline: 53 hits in 22 files, 0 new.
+
+A. Open in (EDIT-043, files.rs): BLOCKER 1, FIX-BEFORE 1, FIX-SOON 4, AFTER 2, AFTER 4
+- Before: a launch command named `code` found VS Code's extensionless `bin\code` shell script first
+  (it sits next to code.cmd), which Windows cannot start, so "Open in > VS Code" failed. Now on
+  Windows a name without a launchable extension is tried only as .com, .exe, .bat, .cmd (the default
+  PATHEXT order), never bare, and relative PATH entries are skipped.
+- Before: with no command, any existing path inside a project was handed to the system to open, so
+  a project's setup.bat would run; and a share path was checked on disk before the fence refused it.
+  Now the order is: full path, then the fence (refuses shares from the spelling alone), then the
+  disk, and only a folder passes.
+- The comment on the saved-command check no longer claims it walls off the window itself.
+Tests (cargo test edit043, 6 passed):
+- edit043_an_extensionless_script_next_to_the_cmd_is_never_picked (new): fakeed + fakeed.cmd in a
+  temp bin with a relative PATH entry in front: picks fakeed.cmd; .exe wins over .cmd; the bare
+  script alone is not found. FAILED on the old lookup (files.rs:688 assertion, the bare `fakeed`
+  was returned), passes now.
+- edit043_the_fence_decides_before_the_disk_and_only_a_folder_opens (new): a share path gets the
+  fence's refusal although it does not exist; a relative path never reaches the fence; setup.bat
+  inside a folder is refused "is not a folder"; the folder itself opens.
+- edit043_relative_or_missing_paths_are_refused (updated to the new open_target).
+Coordinator hunk (unchanged, lib.rs invoke list after `skills::skills_scan,`):
+  +            files::open_in,
+  then drop the `#[allow(dead_code)]` line above open_in in files.rs.

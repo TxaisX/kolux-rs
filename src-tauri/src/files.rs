@@ -534,12 +534,12 @@ mod tests {
 use std::path::PathBuf;
 /// EDIT-043 (T-237-a): opens a project folder in another app or the system file manager. `command`
 /// is the app's launch command (the user's own, from General settings; the window falls back to
-/// VS Code's when a row has none); none at all opens the file manager. A relative or missing path
-/// is refused, and a launch that fails comes back as an error for the window to show.
+/// VS Code's when a row has none); none at all opens the file manager. A relative path, a path the
+/// fence refuses, or anything that is not a folder is refused (in that order, so a share is never
+/// touched and a program is never run), and a launch that fails comes back as an error.
 #[allow(dead_code)] // live once lib.rs registers files::open_in (coordinator hunk); drop this line then
 #[tauri::command(async)]
 pub fn open_in(path: String, command: Option<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
-    checked_folder(&path)?;
     let command = command.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
     if let Some(c) = &command {
         let settings = store.lock().map_err(|e| e.to_string())?.settings();
@@ -547,23 +547,28 @@ pub fn open_in(path: String, command: Option<String>, fence: tauri::State<'_, cr
             return Err(format!("{c} is not one of the apps under General settings, so it was not run"));
         }
     }
-    let dir = fence.allow(&path, &store, &git, false)?;
+    let dir = open_target(&path, |p| fence.allow(p, &store, &git, false))?;
     match command.as_deref() {
         None => crate::artifacts::system_open(&dir.to_string_lossy()),
         Some(c) => launch_in(&dir, c, std::env::var_os("PATH")),
     }
 }
 
-/// EDIT-043: only a full path to something that exists is opened.
-pub fn checked_folder(path: &str) -> Result<PathBuf, String> {
-    let p = Path::new(path);
-    if !p.is_absolute() {
+/// EDIT-043: the folder open_in opens. The path must be full before anything else; then the
+/// fence decides (it refuses shares from the spelling alone, before any file system access); only
+/// then is the disk asked, and only a folder passes, so a file such as setup.bat is never run.
+pub fn open_target(path: &str, allow: impl FnOnce(&str) -> Result<PathBuf, String>) -> Result<PathBuf, String> {
+    if !Path::new(path).is_absolute() {
         return Err(format!("{path} is not a full path, so it was not opened"));
     }
-    if !p.exists() {
+    let dir = allow(path)?;
+    if !dir.exists() {
         return Err(format!("{path} does not exist"));
     }
-    Ok(p.to_path_buf())
+    if !dir.is_dir() {
+        return Err(format!("{path} is not a folder, so it was not opened"));
+    }
+    Ok(dir)
 }
 
 /// A launch command split into the program and its arguments; double quotes group words.
@@ -594,14 +599,18 @@ pub fn split_command(cmd: &str) -> Vec<String> {
 }
 
 /// The program a launch command names: a full path as it is, else the first match on `path_var`
-/// (on Windows trying each of .exe, .cmd, .bat, .com, the way a shell would).
+/// of the absolute folders on `path_var`. On Windows a name without one of the launchable
+/// extensions is tried only with .com, .exe, .bat and .cmd, in that order (the default PATHEXT),
+/// never bare: VS Code's bin folder holds an extensionless `code` shell script next to code.cmd.
 pub fn find_program(program: &str, path_var: Option<std::ffi::OsString>) -> Option<PathBuf> {
-    let exts: &[&str] = if cfg!(windows) { &["", ".exe", ".cmd", ".bat", ".com"] } else { &[""] };
+    const LAUNCHABLE: [&str; 4] = [".com", ".exe", ".bat", ".cmd"];
     let given = Path::new(program);
+    let has_ext = given.extension().and_then(|e| e.to_str()).is_some_and(|e| LAUNCHABLE.iter().any(|l| l[1..].eq_ignore_ascii_case(e)));
+    let exts: &[&str] = if cfg!(windows) && !has_ext { &LAUNCHABLE } else { &[""] };
     if given.components().count() > 1 || given.is_absolute() {
         return exts.iter().map(|e| PathBuf::from(format!("{program}{e}"))).find(|p| p.is_file());
     }
-    let dirs = path_var.map(|v| std::env::split_paths(&v).collect::<Vec<_>>()).unwrap_or_default();
+    let dirs = path_var.map(|v| std::env::split_paths(&v).filter(|d| d.is_absolute()).collect::<Vec<_>>()).unwrap_or_default();
     dirs.iter().flat_map(|d| exts.iter().map(move |e| d.join(format!("{program}{e}")))).find(|p| p.is_file())
 }
 
@@ -622,8 +631,9 @@ pub fn launch_in(dir: &Path, command: &str, path_var: Option<std::ffi::OsString>
     cmd.spawn().map(|_| ()).map_err(|e| format!("{name} did not start: {e}"))
 }
 
-/// EDIT-043: the window may only run VS Code's command or one the user saved under General
-/// settings (openInApps), so a page cannot hand this command a program of its own.
+/// EDIT-043: the window may only run VS Code's command or one saved under General settings
+/// (openInApps). This keeps a stray or mistyped command out; it is not a wall against the window
+/// itself, which can also write openInApps through the settings patch (the window is trusted code).
 pub fn saved_command(settings: &serde_json::Value, cmd: &str) -> bool {
     cmd == "code" || settings["openInApps"].as_array().is_some_and(|a| a.iter().any(|r| r["command"].as_str().map(str::trim) == Some(cmd)))
 }
@@ -634,10 +644,56 @@ mod open_in_tests {
 
     #[test]
     fn edit043_relative_or_missing_paths_are_refused() {
-        assert!(checked_folder("relative\\folder").unwrap_err().contains("not a full path"));
+        let pass = |p: &str| Ok(PathBuf::from(p));
+        assert!(open_target("relative\\folder", pass).unwrap_err().contains("not a full path"));
         let gone = std::env::temp_dir().join("kolux-edit043-not-there-7f3a");
-        assert!(checked_folder(&gone.to_string_lossy()).unwrap_err().contains("does not exist"));
-        assert!(checked_folder(&std::env::temp_dir().to_string_lossy()).is_ok());
+        assert!(open_target(&gone.to_string_lossy(), pass).unwrap_err().contains("does not exist"));
+        assert!(open_target(&std::env::temp_dir().to_string_lossy(), pass).is_ok());
+    }
+
+    #[test]
+    fn edit043_the_fence_decides_before_the_disk_and_only_a_folder_opens() {
+        // the fence runs first: its refusal comes back even for a path that does not exist, so a
+        // share is refused from its spelling and never reached
+        let share = r"\\host\share\proj";
+        let mut asked = None;
+        let err = open_target(share, |p| {
+            asked = Some(p.to_string());
+            Err(format!("Kolux does not open files from other computers' shares: {p}"))
+        })
+        .unwrap_err();
+        assert_eq!(asked.as_deref(), Some(share));
+        assert!(err.contains("shares"), "{err}");
+        let relative = open_target("proj", |_| panic!("the fence is not asked about a relative path"));
+        assert!(relative.unwrap_err().contains("not a full path"));
+        // a file inside the project (setup.bat) is refused, never handed to the system to run
+        let base = std::env::temp_dir().join(format!("kolux-edit043-file-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let bat = base.join("setup.bat");
+        std::fs::write(&bat, "@echo off\r\n").unwrap();
+        let err = open_target(&bat.to_string_lossy(), |p| Ok(PathBuf::from(p))).unwrap_err();
+        assert!(err.contains("is not a folder"), "{err}");
+        assert_eq!(open_target(&base.to_string_lossy(), |p| Ok(PathBuf::from(p))).unwrap(), base);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn edit043_an_extensionless_script_next_to_the_cmd_is_never_picked() {
+        // VS Code's bin folder: an extensionless `code` shell script beside code.cmd
+        let bin = std::env::temp_dir().join(format!("kolux-edit043-pathext-{}", std::process::id()));
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("fakeed"), "#!/usr/bin/env sh\n").unwrap();
+        std::fs::write(bin.join("fakeed.cmd"), "@echo off\r\n").unwrap();
+        let path = Some(std::env::join_paths([PathBuf::from("relative-bin"), bin.clone()]).unwrap());
+        assert_eq!(find_program("fakeed", path.clone()), Some(bin.join("fakeed.cmd")));
+        assert_eq!(find_program("fakeed.cmd", path.clone()), Some(bin.join("fakeed.cmd")));
+        std::fs::write(bin.join("fakeed.exe"), "").unwrap();
+        assert_eq!(find_program("fakeed", path.clone()), Some(bin.join("fakeed.exe")), ".exe comes before .cmd, as in PATHEXT");
+        std::fs::remove_file(bin.join("fakeed.cmd")).unwrap();
+        std::fs::remove_file(bin.join("fakeed.exe")).unwrap();
+        assert_eq!(find_program("fakeed", path), None, "the bare script alone is not launchable");
+        let _ = std::fs::remove_dir_all(&bin);
     }
 
     #[test]
