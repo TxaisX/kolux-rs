@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { LIMIT } from "../terminal/paste";
 import { ASKING_NOTE } from "./composer";
-import { TOOL_HOLD_MS, UNSEEN_NOTE, answered, forgetHearing, hearStates, hearingNow, holdFor, pasteToPane, sendToPane, setClock } from "./send";
+import { TOOL_HOLD_MS, UNSEEN_NOTE, answered, forgetHearing, hearStates, hearingNow, heardOf, holdFor, pasteToPane, sendToPane, setClock, setHooksOn, toolWait } from "./send";
 
 type Status = { paneKey: number; state?: string; tool?: string; terminal?: number };
 type Handler = (e: { payload: Status }) => void;
@@ -219,5 +219,61 @@ describe("pasteToPane (the helper App's pastes use)", () => {
     const w = writes();
     await pasteToPane(7, "/clear", deps("idle", w));
     expect(w.got.map((x) => x.data)).toEqual(["\x1b[200~/clear\x1b[201~", "\r"]);
+  });
+});
+
+// Stand-in review of chat 1e9613e, FIX-SOON 2 and 4: hooks switched off drop every reading; a card
+// answer from a "working" ear really writes the state it is given.
+describe("hooks switched off and back on", () => {
+  afterEach(() => forgetHearing());
+
+  it("while off no reading counts, not even the window's last 'working'; events heard meanwhile are ignored", async () => {
+    const { listen, emit } = fakeListen();
+    await hearStates(listen);
+    emit({ paneKey: 7, state: "working", terminal: 70 });
+    expect(holdFor(7, () => "working", 70)).toBeUndefined();
+    setHooksOn(false);
+    expect(holdFor(7, () => "working", 70)).toBe(UNSEEN_NOTE);
+    expect(holdFor(7, undefined, 70)).toBe(UNSEEN_NOTE);
+    emit({ paneKey: 7, state: "working", terminal: 70 });
+    expect(holdFor(7, () => "working", 70)).toBe(UNSEEN_NOTE);
+    expect(heardOf(7)).toBeUndefined();
+  });
+
+  it("back on, a pane counts as clear only after a new event from it (the window's old reading is not enough)", async () => {
+    const { listen, emit } = fakeListen();
+    await hearStates(listen);
+    emit({ paneKey: 7, state: "working", tool: "Bash", terminal: 70 });
+    setHooksOn(false);
+    setHooksOn(true);
+    expect(holdFor(7, () => "working", 70)).toBe(UNSEEN_NOTE);
+    expect(toolWait(7, 70)).toBe(0);
+    emit({ paneKey: 7, state: "working", terminal: 70 });
+    expect(holdFor(7, () => "working", 70)).toBeUndefined();
+    emit({ paneKey: 8, state: "permission", terminal: 80 });
+    expect(holdFor(8, () => "working", 80)).toBe(ASKING_NOTE);
+  });
+
+  it("switching on when hooks were never off changes nothing", async () => {
+    const { listen, emit } = fakeListen();
+    await hearStates(listen);
+    setHooksOn(true);
+    expect(holdFor(7, () => "working", 70)).toBeUndefined();
+    emit({ paneKey: 7, state: "working", terminal: 70 });
+    expect(holdFor(7, () => "working", 70)).toBeUndefined();
+  });
+});
+
+describe("a card answer from a 'working' ear (FIX-SOON 4)", () => {
+  afterEach(() => forgetHearing());
+
+  it("answered(..., 'permission', since) makes the chat's own reading ask, so a send holds", async () => {
+    const { listen, emit } = fakeListen();
+    await hearStates(listen);
+    emit({ paneKey: 7, state: "working", terminal: 70 });
+    expect(holdFor(7, undefined, 70)).toBeUndefined();
+    expect(answered(7, "permission", hearingNow())).toBe(true);
+    expect(heardOf(7)).toBe("permission");
+    expect(holdFor(7, undefined, 70)).toBe(ASKING_NOTE);
   });
 });

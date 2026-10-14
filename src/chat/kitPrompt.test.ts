@@ -3,9 +3,9 @@
 import { describe, expect, it } from "vitest";
 import type { KitWait } from "../kits/useKits";
 import { ASKING_NOTE } from "./composer";
-import { KIT_NOTICE_MS, askFirstText, askingText, hooksAbsent, kitNotices, kitPasted, kitStep, kitWait, pasteUnchecked, readyText, sendPrompt, stoppedText, tooLongText } from "./kitPrompt";
+import { KIT_NOTICE_MS, askFirstText, askingText, failedText, hooksAbsent, kitInFlight, kitNotices, kitPasted, kitStep, kitTickEntry, kitWait, pasteUnchecked, readyText, sendPrompt, stoppedText, tooLongText, type KitTickDeps } from "./kitPrompt";
 import { LIMIT } from "../terminal/paste";
-import { UNSEEN_NOTE } from "./send";
+import { UNSEEN_NOTE, type SendOutcome } from "./send";
 
 const wait = (): KitWait => kitWait({ role: "review", upstream: "build", key: 7, prompt: "Review the build." }, "Reviewer", "Codex");
 
@@ -153,7 +153,8 @@ describe("Send prompt while Kolux sees the agent asking", () => {
     expect(got).toEqual(["\x15", "\x1b[200~Review the build.\x1b[201~", "\r"]);
     expect(r.waiting).toEqual([]);
     expect(r.sent).toEqual({ review: 5 });
-    expect(changed).toBe(1);
+    // Once as the paste starts (the strip hides Send prompt, FIX-SOON 1), once as the role leaves.
+    expect(changed).toBe(2);
     expect(said).toEqual([]);
   });
 
@@ -179,5 +180,103 @@ describe("Send prompt while Kolux sees the agent asking", () => {
     expect(await sendPrompt(run(long), long, deps(() => undefined, got, said))).toBe(false);
     expect(got).toEqual([]);
     expect(said).toEqual(["That agent's terminal is not running, so nothing was sent.", tooLongText("Reviewer")]);
+  });
+});
+
+// Stand-in review of chat 1e9613e, FIX-SOON 1, 3, 4 and AFTER 3: one paste per role even when the
+// 10 s tick and a Send prompt click race; notices reach the user from every workspace.
+describe("the kit tick for one waiting role", () => {
+  const run = (...w: KitWait[]) => ({ waiting: [...w], sent: {} as Record<string, number> });
+  const later = <T,>() => {
+    let done!: (v: T) => void;
+    const p = new Promise<T>((r) => (done = r));
+    return { p, done };
+  };
+  const tickDeps = (paste: () => Promise<SendOutcome | null>, said: string[], over: Partial<KitTickDeps> = {}): KitTickDeps => ({
+    now: 0,
+    why: () => undefined,
+    absent: false,
+    here: true,
+    paste,
+    say: (t) => void said.push(t),
+    changed: () => {},
+    stamp: () => 9,
+    ...over,
+  });
+
+  it("a Send prompt click while the tick's paste is in flight types nothing, and the buttons hide", async () => {
+    const w = wait();
+    const r = run(w);
+    const gate = later<SendOutcome | null>();
+    let pastes = 0;
+    const ticking = kitTickEntry(r, w, tickDeps(() => (pastes++, gate.p), []));
+    await Promise.resolve();
+    expect(kitInFlight(w)).toBe(true);
+    const got: string[] = [];
+    expect(await sendPrompt(r, w, { terminal: 70, why: () => undefined, write: async (_i, d) => void got.push(d), say: () => {}, changed: () => {} })).toBe(false);
+    expect(got).toEqual([]);
+    gate.done("sent");
+    await ticking;
+    expect(pastes).toBe(1);
+    expect(kitInFlight(w)).toBe(false);
+    expect(r.waiting).toEqual([]);
+    expect(r.sent).toEqual({ review: 9 });
+    // The tick's snapshot still holds the entry: a second pass over it pastes nothing.
+    await kitTickEntry(r, w, tickDeps(() => (pastes++, Promise.resolve("sent")), []));
+    expect(pastes).toBe(1);
+  });
+
+  it("a role the user sent by hand is skipped by a tick still walking its snapshot", async () => {
+    const w = wait();
+    const r = run(w);
+    expect(await sendPrompt(r, w, { terminal: 70, why: () => UNSEEN_NOTE, write: async () => {}, say: () => {}, changed: () => {} })).toBe(true);
+    let pastes = 0;
+    await kitTickEntry(r, w, tickDeps(() => (pastes++, Promise.resolve("sent")), []));
+    expect(pastes).toBe(0);
+  });
+
+  it("while a click's paste is in flight, the tick does not paste the same role", async () => {
+    const w = wait();
+    const r = run(w);
+    const gate = later<void>();
+    const clicking = sendPrompt(r, w, { terminal: 70, why: () => UNSEEN_NOTE, write: () => gate.p, say: () => {}, changed: () => {} });
+    await Promise.resolve();
+    expect(kitInFlight(w)).toBe(true);
+    let pastes = 0;
+    await kitTickEntry(r, w, tickDeps(() => (pastes++, Promise.resolve("sent")), []));
+    expect(pastes).toBe(0);
+    gate.done();
+    expect(await clicking).toBe(true);
+    expect(kitInFlight(w)).toBe(false);
+  });
+
+  it("in another workspace every notice kind toasts once per role (hookless, stopped)", async () => {
+    const said: string[] = [];
+    const a = wait();
+    await kitTickEntry(run(a), a, tickDeps(() => Promise.resolve(null), said, { absent: true, here: false }));
+    await kitTickEntry(run(a), a, tickDeps(() => Promise.resolve(null), said, { absent: true, here: false, now: 120_000 }));
+    expect(said).toEqual([readyText("Reviewer", "Codex")]);
+    const b = wait();
+    await kitTickEntry(run(b), b, tickDeps(() => Promise.resolve("stopped"), said, { here: false }));
+    expect(said).toEqual([readyText("Reviewer", "Codex"), stoppedText("Reviewer", "Codex")]);
+  });
+
+  it("in the active workspace the strip shows a stopped notice with no toast", async () => {
+    const said: string[] = [];
+    const w = wait();
+    await kitTickEntry(run(w), w, tickDeps(() => Promise.resolve("stopped"), said));
+    expect(said).toEqual([]);
+    expect(kitNotices([w])[0].notice.kind).toBe("stopped");
+  });
+
+  it("a gated paste whose write failed shows a notice and is not pasted again by the timer (AFTER 3)", async () => {
+    const w = wait();
+    const r = run(w);
+    let pastes = 0;
+    await kitTickEntry(r, w, tickDeps(() => (pastes++, Promise.resolve(null)), []));
+    expect(kitNotices([w])[0].notice).toEqual({ kind: "failed", text: failedText("Reviewer"), canSend: true });
+    await kitTickEntry(r, w, tickDeps(() => (pastes++, Promise.resolve("sent")), [], { now: 10_000 }));
+    expect(pastes).toBe(1);
+    expect(r.waiting).toEqual([w]);
   });
 });

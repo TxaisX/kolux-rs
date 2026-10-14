@@ -53,6 +53,21 @@ const heard = new Map<number, Heard>();
 const toolAt = new Map<number, { at: number; terminal?: number }>();
 const ENDS_TOOL_HOLD = ["permission", "waiting", "done"];
 let hearing: Promise<unknown> | null = null;
+/** Stand-in review of 1e9613e, FIX-SOON 2: whether hooks are on in Settings, and whether they have
+ * been off since the readings started (then a pane counts as seen only once it is heard again). */
+let hooksOn = true;
+let needEar = false;
+/** Hooks turned off drop every reading the chat holds and stop it taking new ones; while off, and
+ * after they are back on until a pane is heard again, no reading of that pane counts as clear (the
+ * window's own reading may be one from before they went off). */
+export function setHooksOn(on: boolean) {
+  if (!on) {
+    heard.clear();
+    toolAt.clear();
+    needEar = true;
+  }
+  hooksOn = on;
+}
 let clock: () => number = () => Date.now();
 /** For tests: the clock the tool hold is measured with. */
 export const setClock = (f: () => number) => void (clock = f);
@@ -62,7 +77,7 @@ export function hearStates(listen: Listen): Promise<unknown> {
   if (!hearing)
     hearing = listen("agent-status", (e) => {
       const { paneKey, state, tool, terminal } = e.payload;
-      if (state === undefined) return;
+      if (state === undefined || !hooksOn) return;
       heard.set(paneKey, { state, terminal, at: clock() });
       if (state === "working" && tool) toolAt.set(paneKey, { at: clock(), terminal });
       else if (ENDS_TOOL_HOLD.includes(state)) toolAt.delete(paneKey);
@@ -87,6 +102,8 @@ export function forgetHearing() {
   heard.clear();
   toolAt.clear();
   hearing = null;
+  hooksOn = true;
+  needEar = false;
   clock = () => Date.now();
 }
 
@@ -103,14 +120,15 @@ const earFor = (key: number, terminal: number | undefined) => {
  * from the pane's earlier terminal says nothing about the program running now, and with it the
  * window's reading from that run does not count either. */
 export function holdReading(key: number, app: string | undefined, hasApp: boolean, terminal?: number): string | undefined {
+  if (!hooksOn || (needEar && !heard.has(key))) return UNSEEN_NOTE;
   const { h, stale } = earFor(key, terminal);
   const note = holdNote(app, h?.state, hasApp);
   return note === undefined && stale ? UNSEEN_NOTE : note;
 }
 /** Why a send to pane `key` would be held right now, or undefined. When the window gives its
- * readings, its "no reading" holds the send even if an older event said the agent was working
- * (the window drops a pane's reading when the pane's program stops, which a restart does first,
- * and when hooks are turned off for it). */
+ * readings, its "no reading" holds the send even if an older event said the agent was working (the
+ * window drops a pane's reading when the pane's program stops, which a restart does first). The
+ * window keeps its reading when hooks are turned off; setHooksOn covers that case. */
 export const holdFor = (key: number, stateOf?: (key: number) => string | undefined, terminal?: number) => holdReading(key, stateOf?.(key), stateOf !== undefined, terminal);
 
 /** Council FIX-2 (FS1): how long a key into pane `key` must still wait for a tool that just started. */

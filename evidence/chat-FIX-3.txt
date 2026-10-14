@@ -36,7 +36,9 @@ WHAT CHANGED
     answered() leaves a newer permission alone.
 (5) AFTER: Codex picker commands get Tab as a space (composer.ts); the send.ts holdFor comment now
     says what the window really does (App drops hook[key] when the pane's program stops, which a
-    restart does first, and when hooks are turned off; App.tsx onRunning at main f9d888b); a
+    restart does first; App.tsx onRunning at main f9d888b). [Corrected in chat wave 2 FIX-SOON 2:
+    the window does NOT drop readings when hooks are turned off; send.ts setHooksOn covers it, see
+    evidence/chat-W2-FIX-SOON.txt.] A
     stopped kit prompt is never re-pasted every 10 s (kitStep, above).
 (6) HOLD: slash commands only at rest is Txais's decision (c); not built.
 
