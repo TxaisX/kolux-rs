@@ -18,6 +18,7 @@ mod files;
 mod fsops;
 mod fonts;
 mod git;
+mod github;
 mod groups;
 mod hooks;
 mod include;
@@ -400,6 +401,8 @@ pub fn run() {
             scm::scm_commit_message_stop,
             scm::scm_task_detail,
             scm::scm_repo_labels,
+            github::github_repo_parent,
+            github::github_people,
             scm::scm_task_labels,
             scm::scm_task_body,
             scm::scm_stage,
