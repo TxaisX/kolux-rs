@@ -1512,7 +1512,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const [now, setNow] = useState(Date.now());
   const timed = inbox || board || tower;
   // VIEW-009: a full page fills the workspace area; Show Code (view.code) and an Escape nothing else used leave it.
-  const fullPage = settingsOpen || (terminals && page !== null) || inbox || tower || screen === "artifacts";
+  const fullPage = settingsOpen || (terminals && page !== null) || inbox || tower || floor || screen === "artifacts";
   const leavePage = () => {
     setSettingsOpen(false);
     setPage(null);

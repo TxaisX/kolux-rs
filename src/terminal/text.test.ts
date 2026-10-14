@@ -16,8 +16,9 @@ describe("terminal text settings (SET-022 / SET-025)", () => {
   it("converts an older scrollback saved as text to rows", () => {
     expect(readText({ [FIELDS.scrollback]: "5000" }).scrollback).toBe(5000);
   });
-  it("pastes on right-click by default on Windows only, and a saved choice wins", () => {
-    expect(readText({}, true).rightClickPaste).toBe(true);
+  it("never pastes on right-click by default (council MERGE 51: it skips the paste guards), and a saved choice wins", () => {
+    expect(readText({}, true).rightClickPaste).toBe(false);
+    expect(readText({ [FIELDS.rightClickPaste]: true }, true).rightClickPaste).toBe(true);
     expect(readText({}, false).rightClickPaste).toBe(false);
     expect(readText({ [FIELDS.rightClickPaste]: false }, true).rightClickPaste).toBe(false);
   });

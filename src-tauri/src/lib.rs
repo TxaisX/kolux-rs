@@ -372,6 +372,7 @@ pub fn run() {
             projects::git_first_commit_preview,
             projects::git_start,
             setup::workspace_setup,
+            setup::workspace_issue_command,
             setup::setup_imports_list,
             setup::setup_import,
             agents::agent_list,
