@@ -48,6 +48,7 @@ mod routing;
 mod schedule;
 mod resume;
 mod secrets;
+mod sessions;
 mod skill_delete;
 mod state;
 mod status;
@@ -312,6 +313,7 @@ pub fn run() {
             sysmem::process_memory,
             fonts::list_fonts,
             resources::resources,
+            sessions::claude_workspace_sessions,
             terminal::terminal_spawn,
             terminal::terminal_write,
             terminal::terminal_screen_reply,
