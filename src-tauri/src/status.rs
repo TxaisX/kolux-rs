@@ -416,9 +416,18 @@ impl Session {
     /// hook semantics are unverified (Codex) keep T-123-c's rule: only an id unseen at the cancel.
     fn goes_on(&self, agent: Agent, name: &str, event: &Value) -> bool {
         match agent {
-            Agent::Claude => name == "Stop" || (matches!(name, "PreToolUse" | "PostToolUse" | "PostToolUseFailure") && str_of(event, "tool_use_id").is_some()),
+            // T-123-c-c: an event marked as the interrupt itself never counts, and the Post* of a tool
+            // running when the key landed counts only once the grace is over (or the cancel settled):
+            // inside it, that report is the cancelled tool's own hook finishing, not the turn going on.
+            _ if event.get("is_interrupt").and_then(Value::as_bool) == Some(true) => false,
+            Agent::Claude => name == "Stop" || (matches!(name, "PreToolUse" | "PostToolUse" | "PostToolUseFailure") && str_of(event, "tool_use_id").is_some_and(|id| name == "PreToolUse" || self.past_grace() || !self.killed.iter().any(|k| k == id))),
             Agent::Codex => self.fresh_tool(name, event),
         }
+    }
+
+    /// T-123-c-c: the cancel has settled, or its grace is over.
+    fn past_grace(&self) -> bool {
+        self.interrupted || now_ms().saturating_sub(self.cancelled_at) >= CANCEL_GRACE_MS
     }
 
     /// T-123-c: a tool step carrying an id the lead had not started when the cancel came. The killed
@@ -1126,12 +1135,45 @@ mod tests {
         assert!(s.settle_cancel(s.cancelled_at + 5_000));
         assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","last_assistant_message":"thought"}"#), Some("done"));
         assert_eq!((s.interrupted, s.reply.as_deref()), (false, Some("thought")));
-        // Inside the grace the pre-cancel tool's Post clears the cancel (the tool finished as the key landed).
+        // T-123-c-c: inside the grace the pre-cancel tool's Post is that tool's own hook finishing as
+        // the key landed: the cancel stands and settles to interrupted.
         state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"race"}"#);
         state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu9"}"#);
         s.cancel();
-        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_use_id":"tu9","error":"exit 1"}"#), Some("working"));
-        assert!(!s.cancelled && !s.settle_cancel(u64::MAX));
+        state(&mut s, r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_use_id":"tu9","error":"exit 1"}"#);
+        assert!(s.cancelled, "the killed tool's Post inside the grace leaves the cancel standing");
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!(s.resolved(), "interrupted");
+    }
+
+    #[test]
+    fn t123cc_escape_during_a_post_tool_hook_settles_interrupted_and_an_interrupt_event_never_revives() {
+        // The race: Escape lands while the tool's PostToolUse hook runs. Its report arrives inside the
+        // grace and must not keep the card working until the 30-minute unverified mark.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"run tests"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu5"}"#);
+        s.cancel();
+        state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"tu5"}"#);
+        assert!(s.cancelled, "inside the grace the killed tool's Post proves nothing");
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!(s.resolved(), "interrupted");
+        assert_eq!(s.history.back().map(|e| (e.state, e.interrupted)), Some(("interrupted", true)));
+        // An event flagged as the interrupt itself never revives the turn, whatever its id.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_use_id":"tu6","is_interrupt":true,"error":"interrupted"}"#), None);
+        assert_eq!((s.resolved(), s.interrupted), ("interrupted", true));
+        // Once the cancel has settled, the killed tool's Post does count, as T-123-c-b rules.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"tu5"}"#), Some("working"));
+        assert_eq!((s.resolved(), s.interrupted), ("working", false));
+        // A tool unseen at the cancel, inside the grace, still proves the turn went on.
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu7"}"#);
+        s.cancel();
+        state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Read","tool_use_id":"tu8"}"#);
+        assert!(!s.cancelled, "a fresh id clears the cancel");
+        // An interrupt-flagged event inside the grace leaves the cancel standing too.
+        s.cancel();
+        state(&mut s, r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_use_id":"tu99","is_interrupt":true}"#);
+        assert!(s.cancelled);
     }
 
     #[test]
