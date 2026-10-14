@@ -1,5 +1,5 @@
 diff --git a/src/App.tsx b/src/App.tsx
-index 9f26ca2..3da9841 100644
+index 9f26ca2..d6b5df5 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
 @@ -130,6 +130,9 @@ import { hooksOn } from "./settings/AgentsPage";
@@ -78,7 +78,24 @@ index 9f26ca2..3da9841 100644
  
    // TERM-014: closing a pane ends its program (the pane's own cleanup kills it); the next tab of
    // its cell takes over, else the neighbouring cells take the space; closing the last pane leaves
-@@ -1709,13 +1726,18 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1551,6 +1568,16 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   const tower = screen === "tower";
+   const floor = screen === "floor";
+   const agentsScreen = screen === "agents";
++  // T-050-b: an orchestrator-started session with no name or title is named after its worker's task
++  // (orchestration worker_labels, by terminal handle), looked up while the Agents screen is open.
++  const [workerNames, setWorkerNames] = useState<Record<string, string>>({});
++  useEffect(() => {
++    if (!agentsScreen) return;
++    const look = () => void invoke<Record<string, string>>("worker_labels").then(setWorkerNames, () => {});
++    look();
++    const t = window.setInterval(look, 5000);
++    return () => window.clearInterval(t);
++  }, [agentsScreen]);
+   // STAT-050: the Inbox and the Board read the panes the window already tracks; the clock ticks while one is open.
+   const [now, setNow] = useState(Date.now());
+   const timed = inbox || board || tower;
+@@ -1709,13 +1736,18 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
    const towerSeats = () => panes.filter((p) => !p.kind && !p.seats && p.agent !== "shell").map((p) => ({ key: p.key, agent: p.agent, title: tabName(p, titles), branch: p.branch, cwd: p.cwd, account: p.account ?? null, chip: chipFor(p), meter: meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)), since: stamp[p.key]?.at ?? 0 }));
    const lanes = board ? LANES.filter((l) => cardPanes(panes).some((p) => laneOf(p) === l.id)) : [];
    const columnOf = (p: Pane) => lanes.findIndex((l) => l.id === laneOf(p)) + 1;
@@ -101,7 +118,7 @@ index 9f26ca2..3da9841 100644
    // SAFE-003, SAFE-004: Approve is the agent's own yes; Request changes is its no, then the
    // feedback typed into its prompt as one paste once it has left the question.
    // SAFE-005: the drafts are per pane and exact plan text, in memory only.
-@@ -1739,7 +1761,18 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1739,7 +1771,18 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
      // SAFE-004 / T-032-b: the send runs as a job (planReview) that the sheet can cancel until Enter.
      const job = startFeedback(feedbackMessage(d.comments, d.note), {
        // Claude has no hook for a deny inside its own menu, so the pane leaves "permission" here, as answer() does.
@@ -121,7 +138,7 @@ index 9f26ca2..3da9841 100644
        asking: () => hookRef.current[p.key] === "waiting" || hookRef.current[p.key] === "permission",
        type: (text) => write("\x1b[200~" + text + "\x1b[201~"),
        enter: () => write("\r"),
-@@ -1760,10 +1793,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1760,10 +1803,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
    };
    // GIT-041: every note goes to the workspace's agent (the focused one, else the first) as one
    // pasted message; a note edited while the send was in flight is not marked sent.
@@ -135,7 +152,7 @@ index 9f26ca2..3da9841 100644
    };
    const sendNotes = async (dir: string): Promise<string | null> => {
      const notes = notesFor(dir);
-@@ -1771,7 +1803,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1771,7 +1813,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
      const agent = [...panes].sort((a, b) => Number(b.key === focused) - Number(a.key === focused)).find((p) => !p.kind && p.agent !== "shell" && sameDir(p.cwd, dir) && ptys.current[p.key] !== undefined);
      if (!agent) return "No agent is running in this workspace. Start one, or copy the notes instead.";
      try {
@@ -144,7 +161,7 @@ index 9f26ca2..3da9841 100644
      } catch (err) {
        return `The notes were not sent: ${String(err)}`;
      }
-@@ -1786,7 +1818,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1786,7 +1828,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
      const p = panesRef.current.find((x) => x.key === key);
      if (!p || !inWorktree(p)) return "That agent is no longer running, so nothing was sent. The notes are kept.";
      try {
@@ -153,7 +170,15 @@ index 9f26ca2..3da9841 100644
      } catch (err) {
        return `The notes were not sent, so they are kept: ${String(err)}`;
      }
-@@ -2174,6 +2206,19 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -2091,6 +2133,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+             }}
+             onAdd={addPreset}
+             onSettings={() => openSettings("agents")}
++            taskOf={(k) => workerNames[`term-${ptys.current[k]}`]}
+           />
+         )}
+         <div className="content">
+@@ -2174,6 +2217,19 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                    }}
                  />
                )}
@@ -173,3 +198,12 @@ index 9f26ca2..3da9841 100644
                {page === null && <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} shells={shells} onNewTab={(a) => void newTab(a)} />}
                {picking === "file" && activeDir && (
                  <FilePicker
+@@ -2234,7 +2290,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+           )}
+           {screen === "skills" && <SkillsPage workspace={activeDir} onClose={() => closeSkills(setScreen)} />}
+           {inbox && <InboxView items={inboxItems(sources, now)} now={now} onOpen={openPane} />}
+-          {screen === "agents" && <AgentsChat panes={panes.filter((p) => !p.kind && !p.seats).map((p) => ({ key: p.key, cwd: p.cwd, title: p.title }))} focused={selected ?? focused} ptyOf={(k) => ptys.current[k]} hook={hook} stateOf={(k) => hookRef.current[k]} />}
++          {screen === "agents" && <AgentsChat panes={panes.filter((p) => !p.kind && !p.seats).map((p) => ({ key: p.key, cwd: p.cwd, title: p.title, program: p.program }))} focused={selected ?? focused} ptyOf={(k) => ptys.current[k]} hook={hook} stateOf={(k) => hookRef.current[k]} />}
+           {tower && <TowerView rows={towerRows(towerSeats())} usage={usageByAccount(towerSeats(), plan)} now={now} onOpen={openPane} />}
+           {floor && <FloorView />}
+           {agentsScreen && selected === null && (

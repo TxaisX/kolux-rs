@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { applyRead, chatOffer, combine, pickChat, typingInto, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type OfferInput } from "./model";
+import { SHELL_OFFER, agentsView, applyRead, chatCovers, chatOffer, combine, pickChat, typingInto, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type OfferInput } from "./model";
 
 const base: OfferInput = { credited: "claude", screen: "agents", switchOn: false, showingChat: false, launching: false, readable: true };
 const item = (id: string, role: ChatItem["role"], text: string, at: number): ChatItem => ({ id, role, kind: "text", text, at });
@@ -95,4 +95,27 @@ test("with nothing picked the box names the pane it types into (council FIX-1, m
   expect(typingInto(null, { title: "  " })).toBe("Typing into the first agent that can chat");
   expect(typingInto(null, {})).toBe("Typing into the first agent that can chat");
   expect(typingInto(4, { title: "api tests" })).toBeNull();
+});
+
+test("T-050-b (VIEW-019): a plain shell shows its terminal with no switch, never a Starting line", () => {
+  expect(pickChat([{ key: 1 }], 1, { 1: SHELL_OFFER })).toBeNull();
+  expect(agentsView(pickChat([{ key: 1 }], 1, { 1: SHELL_OFFER }), new Set())).toBe("none");
+  // Nothing picked: a shell is never the chat the screen falls back to.
+  expect(pickChat([{ key: 1 }, { key: 2 }], null, { 1: SHELL_OFFER, 2: { chat: true, back: false, chooser: false } })).toEqual({ key: 2 });
+});
+
+test("T-050-b (VIEW-019): Show terminal flips only the session it was flipped for", () => {
+  const forced = new Set([1]);
+  expect(agentsView({ key: 1 }, forced)).toBe("terminal");
+  expect(agentsView({ key: 2 }, forced)).toBe("chat");
+  expect(agentsView({ key: 1 }, new Set())).toBe("chat");
+  expect(agentsView("starting", forced)).toBe("starting");
+});
+
+test("T-050-b: the chat covers the terminal only once the transcript is found", () => {
+  expect(chatCovers("ready")).toBe(true);
+  expect(chatCovers("empty")).toBe(true);
+  // Not found yet (the agent may be showing a launch prompt in its terminal) or unreadable.
+  expect(chatCovers("loading")).toBe(false);
+  expect(chatCovers("error")).toBe(false);
 });

@@ -79,6 +79,24 @@ export function pickChat<P extends { key: number }>(panes: P[], focused: number 
   return !o || o.chooser ? "starting" : null;
 }
 
+/** T-050-b (VIEW-019): a plain shell, a pane Kolux started no program in, offers no chat and never
+ * waits as "starting": its terminal shows, with no Show terminal switch. */
+export const SHELL_OFFER: Offer = { chat: false, back: false, chooser: false };
+
+/** T-050-b (VIEW-019): what the Agents screen's body shows for what pickChat chose. "chat": the
+ * chat with the Show terminal switch off; "terminal": the terminal with the switch on (the user
+ * forced it for this session); "starting": the launch line; "none": the terminal and no switch. */
+export function agentsView<P extends { key: number }>(shown: P | "starting" | null, forced: ReadonlySet<number>): "chat" | "terminal" | "starting" | "none" {
+  if (shown === null) return "none";
+  if (shown === "starting") return "starting";
+  return forced.has(shown.key) ? "terminal" : "chat";
+}
+
+/** T-050-b: the chat covers the terminal only once the transcript is found; before that (and when
+ * it cannot be read) the chat's line and box sit above the terminal, so a prompt the agent shows at
+ * launch, before its first turn is written, stays in sight. */
+export const chatCovers = (state: ChatRead["state"]) => state === "ready" || state === "empty";
+
 /** Council FIX-1: with nothing picked, the box types into the first pane that can chat, so it says
  * which one; with a pane picked the rail already shows it. */
 export const typingInto = (focused: number | null, pane: { title?: string }) => (focused === null ? `Typing into ${pane.title?.trim() || "the first agent that can chat"}` : null);
