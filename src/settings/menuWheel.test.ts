@@ -1,6 +1,6 @@
 // SET-061 (T-323): which part of a menu the wheel scrolls.
 import { describe, expect, it } from "vitest";
-import { MENU_SELECTOR, onMenuWheel, pixels, wheelTarget, type Box, type El } from "./menuWheel";
+import { installMenuWheel, MENU_SELECTOR, onMenuWheel, pixels, wheelTarget, type Box, type El } from "./menuWheel";
 
 const b = (overflowY: string, scrollTop: number, scrollHeight: number, clientHeight: number, parent: Box | null = null): Box => ({ overflowY, scrollTop, scrollHeight, clientHeight, parent });
 
@@ -93,5 +93,64 @@ describe("SET-061 only floating surfaces take the wheel", () => {
     onMenuWheel(e, style);
     expect(e.defaultPrevented).toBe(false);
     expect(MENU_SELECTOR).not.toMatch(/\[role="listbox"\],/);
+  });
+});
+
+// FIX-2 (council AFTER 3): no wheel listener on the whole document; only a popup the pointer or
+// the focus reached carries one, so the page's own scrolling never waits on script.
+type Fn = (e: unknown) => void;
+const target = () => {
+  const ls = new Map<string, { fn: Fn; opts: unknown }[]>();
+  return {
+    ls,
+    addEventListener(t: string, fn: Fn, opts?: unknown) {
+      ls.set(t, [...(ls.get(t) ?? []), { fn, opts }]);
+    },
+    removeEventListener(t: string, fn: Fn) {
+      ls.set(t, (ls.get(t) ?? []).filter((l) => l.fn !== fn));
+    },
+    fire(t: string, e: unknown) {
+      for (const l of ls.get(t) ?? []) l.fn(e);
+    },
+    count: (t: string) => (ls.get(t) ?? []).length,
+  };
+};
+type Live = Fake & ReturnType<typeof target> & { isConnected: boolean };
+const live = (o: Partial<Fake>, parent: Fake | null = null): Live => Object.assign(el(o, parent), target(), { isConnected: true }) as Live;
+
+describe("FIX-2 the wheel rule listens only on popups that were reached", () => {
+  it("the document never gets a wheel listener; a popup gets one, once, when the pointer enters it", () => {
+    const doc = target();
+    const stop = installMenuWheel(doc, style);
+    expect(doc.count("wheel")).toBe(0);
+    expect(doc.count("pointerover")).toBe(1);
+    expect(doc.count("focusin")).toBe(1);
+
+    const page = live({ overflowY: "auto", scrollHeight: 2000, clientHeight: 600 });
+    const runs = live({ role: "listbox" }, page);
+    doc.fire("pointerover", { target: el({ role: "option" }, runs) });
+    expect(page.count("wheel") + runs.count("wheel")).toBe(0);
+
+    const menu = live({ role: "menu" });
+    const list = el({ overflowY: "auto", scrollHeight: 900, clientHeight: 200 }, menu);
+    const row = el({}, list);
+    doc.fire("pointerover", { target: row });
+    doc.fire("pointerover", { target: list });
+    expect(menu.count("wheel")).toBe(1);
+    expect(menu.ls.get("wheel")?.[0].opts).toEqual({ passive: false });
+    const e = wheel(row, 100);
+    menu.fire("wheel", e);
+    expect(e.defaultPrevented).toBe(true);
+    expect(list.scrollTop).toBe(100);
+
+    // a picker reached by the keyboard is armed too; a closed popup's listener is dropped
+    const picker = live({ cls: ["picker"] });
+    menu.isConnected = false;
+    doc.fire("focusin", { target: el({}, picker) });
+    expect(picker.count("wheel")).toBe(1);
+    expect(menu.count("wheel")).toBe(0);
+
+    stop();
+    expect(doc.count("pointerover") + doc.count("focusin") + picker.count("wheel")).toBe(0);
   });
 });

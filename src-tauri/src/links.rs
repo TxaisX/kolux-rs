@@ -62,7 +62,9 @@ pub fn refuse_host(path: &str, roots: &[String]) -> Result<(), String> {
 
 /// A share written with two leading slashes or backslashes, a file URL naming a host, the
 /// long-path or device form of one (`\\?\UNC\`, `\\.\pipe\`), or any such path that climbs with
-/// `..`. WSL roots and long-path local drives are local; a share under a registered root is allowed.
+/// `..`. The NT object form (`\??\UNC\`, `\??\GLOBALROOT\`) is read like the long-path form, since
+/// Windows passes it straight through to the object manager. WSL roots and long-path local drives
+/// are local; a share under a registered root is allowed.
 pub fn host_path(text: &str, roots: &[String]) -> bool {
     let low = text.trim().to_ascii_lowercase();
     let path = match low.strip_prefix("file:") {
@@ -100,9 +102,13 @@ pub fn host_path(text: &str, roots: &[String]) -> bool {
     })
 }
 
-/// Backslashes throughout, and the `/c:/x` a file URL yields turned into `c:\x`.
+/// Backslashes throughout, the NT object prefix `\??\` written as `\\?\` (council FS1, FIX-2), and
+/// the `/c:/x` a file URL yields turned into `c:\x`.
 fn windows_form(path: &str) -> String {
     let mut s = path.replace('/', "\\");
+    if s.starts_with("\\??\\") {
+        s.replace_range(..4, "\\\\?\\");
+    }
     let b = s.as_bytes();
     if b.len() >= 3 && b[0] == b'\\' && b[1].is_ascii_alphabetic() && b[2] == b':' {
         s.remove(0);
@@ -470,6 +476,13 @@ mod tests {
             r"\\?\C:\a\..\b",
             r"\\wsl$\Ubuntu\..\..\server\share",
             r"  \\server\share  ",
+            // FIX-2 (council FS1): the NT object form `\??\` is read like `\\?\`
+            r"\??\UNC\server\share\a",
+            r"\??\unc\x.invalid\s",
+            "/??/UNC/server/share",
+            r"\??\GLOBALROOT\Device\Mup\server\share",
+            r"\??\pipe\kolux",
+            r"\??\C:\..\..\UNC\server\share",
         ] {
             assert!(host(p), "{p}");
         }
@@ -482,6 +495,8 @@ mod tests {
             r"\\?\UNC\wsl$\Ubuntu\home",
             r"\\?\C:\very\long\path",
             r"\\?\c:",
+            r"\??\C:\very\long\path",
+            r"\??\UNC\wsl$\Ubuntu\home",
             "file:///C:/Users/me/a.txt",
             "file://localhost/C:/a.txt",
             "file://wsl$/Ubuntu/home",
@@ -496,6 +511,8 @@ mod tests {
         assert!(!host_path(r"\\NAS\projects\repo\src\a.rs", &roots));
         assert!(!host_path(r"\\nas\projects\repo", &roots));
         assert!(!host_path(r"\\?\UNC\nas\projects\repo\a", &roots));
+        assert!(!host_path(r"\??\UNC\nas\projects\repo\a", &roots));
+        assert!(host_path(r"\??\UNC\nas\projects\other", &roots));
         assert!(!host_path("//nas/projects/repo/a", &roots));
         assert!(host_path(r"\\nas\projects\repo2\a", &roots));
         assert!(host_path(r"\\nas\projects\other", &roots));

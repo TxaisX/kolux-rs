@@ -494,7 +494,8 @@ mod tests {
     static DEAD_ASKED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
     fn spy(p: &std::path::Path, d: &std::path::Path) -> bool {
-        if crate::links::host_path(&p.to_string_lossy(), &[]) {
+        // judged by the test host's name, not by host_path, so a form host_path misses still counts
+        if p.to_string_lossy().contains("x.invalid") {
             HOST_ASKED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         if p.to_string_lossy().contains("w2-dead") {
@@ -511,7 +512,7 @@ mod tests {
         let other = dir.join("other");
         std::fs::create_dir_all(&other).unwrap();
         std::fs::write(dir.join(if cfg!(windows) { "kolux.exe" } else { "kolux" }), "").unwrap();
-        let shares = [r"\\x.invalid\bin", r"\\?\UNC\x.invalid\bin", "//x.invalid/bin"].map(std::path::PathBuf::from);
+        let shares = [r"\\x.invalid\bin", r"\\?\UNC\x.invalid\bin", "//x.invalid/bin", r"\??\UNC\x.invalid\bin", r"\??\unc\x.invalid\s"].map(std::path::PathBuf::from);
         let mut entries: Vec<&std::path::Path> = shares.iter().map(|p| p.as_path()).collect();
         entries.push(&other);
         let path = std::env::join_paths(entries).unwrap();
