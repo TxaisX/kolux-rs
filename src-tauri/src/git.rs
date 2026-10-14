@@ -120,6 +120,19 @@ fn run_untrimmed(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
     output(args, cwd).map(|o| String::from_utf8_lossy(&o).to_string())
 }
 
+/// GIT-062: the one readable line a failed git's stderr comes down to. The last `fatal:` line
+/// wins, then the last `error:` line, then the last line that is not progress; None when only
+/// progress was said. A `\r`-overwritten line counts as its last state.
+#[allow(dead_code)] // called by clone_into once the newproject.rs hunk (T-315-b) lands
+pub fn failure_reason(log: &str) -> Option<String> {
+    const PROGRESS: [&str; 9] = ["Cloning into", "remote: ", "Receiving objects", "Resolving deltas", "Updating files", "Checking out files", "Filtering content", "Enumerating objects", "Counting objects"];
+    let lines: Vec<&str> = log.lines().map(|l| l.rsplit('\r').next().unwrap_or("").trim()).filter(|l| !l.is_empty()).collect();
+    let tagged = |tag: &str| lines.iter().rev().find_map(|l| l.strip_prefix(tag)).map(str::trim);
+    let line = tagged("fatal:").or_else(|| tagged("error:")).or_else(|| lines.iter().rev().copied().find(|l| !PROGRESS.iter().any(|p| l.starts_with(p))))?;
+    let mut chars = line.chars();
+    chars.next().map(|first| first.to_uppercase().chain(chars).collect())
+}
+
 /// One changed file on one side of the index (EDIT-027): `code` is git's status letter.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct Change {
@@ -597,6 +610,29 @@ mod tests {
         run(&["add", "."], Some(&dir)).unwrap();
         run(&["commit", "-q", "-m", "first"], Some(&dir)).unwrap();
         dir
+    }
+
+    #[test]
+    fn t315_a_failed_clone_comes_down_to_its_last_fatal_line_without_progress() {
+        // A real clone into a folder that exists and is not empty.
+        ISOLATED.with(|i| i.set(true));
+        let src = temp_repo("t315-src");
+        let dest = std::env::temp_dir().join(format!("kolux-rs-git-t315-dest-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dest);
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("keep.txt"), "mine\n").unwrap();
+        let out = command(&["clone", "--progress", "--", &native(&src.to_string_lossy()), &native(&dest.to_string_lossy())], None).output().unwrap();
+        assert!(!out.status.success());
+        let reason = failure_reason(&String::from_utf8_lossy(&out.stderr)).unwrap();
+        assert!(reason.starts_with("Destination path") && reason.contains("already exists"), "{reason}");
+        // A clone that fails part-way: progress (with \r redraws) and trailing fragments never show.
+        let log = "Cloning into 'x'...\nremote: Enumerating objects: 5, done.\nReceiving objects:  10% (1/9)\rReceiving objects:  40% (4/9)\nerror: RPC failed; curl 56 recv failure\nfatal: early EOF\nfatal: fetch-pack: invalid index-pack output\nremote: \n";
+        assert_eq!(failure_reason(log).as_deref(), Some("Fetch-pack: invalid index-pack output"));
+        assert_eq!(failure_reason("error: cannot lock ref\nReceiving objects: 100%").as_deref(), Some("Cannot lock ref"));
+        assert_eq!(failure_reason("warning: could not find UI helper\n").as_deref(), Some("Warning: could not find UI helper"));
+        assert_eq!(failure_reason("Cloning into 'x'...\nReceiving objects:  3%\r"), None);
+        let _ = fs::remove_dir_all(&src);
+        let _ = fs::remove_dir_all(&dest);
     }
 
     #[test]
