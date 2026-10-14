@@ -10,7 +10,7 @@ import { useSettings } from "../settings/useSettings";
 import Tours from "./Tours";
 import { defaultAgentId } from "../launch/agents";
 import {
-  caps, demoFrames, doneFrom, paletteKeys, doneId, firstOpen, forward, latest, markGuide, moveOn, nextTip, OPEN_EXPLORE, OPEN_GUIDE, PAGE_SHOWN, railKey, ring, startTicked, STEPS, stopDone, stopOf, TWO_REPOS, visits, words, workflowDone, WORKFLOWS,
+  caps, demoFrames, doneFrom, paletteKeys, doneId, firstOpen, forward, latest, markGuide, moveOn, nextTip, OPEN_EXPLORE, OPEN_GUIDE, PAGE_SHOWN, railKey, ring, startTicked, STEPS, stopDone, stopOf, TWO_REPOS, withRecord, words, workflowDone, WORKFLOWS,
   type At, type Cap, type CapId, type CliStatus, type Facts, type GuideRecord, type Place, type Setup, type StepId, type TipId,
 } from "./guide";
 
@@ -188,7 +188,8 @@ function Explore({ onClose }: { onClose: () => void }) {
   const [setup, setSetup] = useState<Setup>({ taskSource: false, skills: [] });
   const rail = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    invoke<GuideRecord>("guide_get").then((g) => (setSeen(new Set([...visits(g.visited), ...g.tried])), setKept(new Set(g.tried))), () => {});
+    // Merged, not replaced: a stop visited before the record arrived stays seen (FIX-1).
+    invoke<GuideRecord>("guide_get").then((g) => (setSeen((s) => withRecord(s, new Set(), g).seen), setKept((k) => withRecord(new Set(), k, g).kept)), () => {});
     // ONB-023: the setup a stop carries, read when the tour opens.
     invoke<string | null>("scm_gh_account", { host: "github.com" }).then((l) => setSetup((s) => ({ ...s, taskSource: !!l })), () => {});
     invoke<Scan>("skills_scan", { workspace: null, refresh: false }).then((r) => setSetup((s) => ({ ...s, skills: r.skills.filter((k) => k.source === "home").map((k) => k.name) })), () => {});

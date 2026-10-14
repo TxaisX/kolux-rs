@@ -135,5 +135,8 @@ export const START_GRID = "kolux-start-grid-tour";
 export const startGridTour = () => window.dispatchEvent(new CustomEvent(START_GRID));
 /** ONB-012: whether the first run's end starts the grid tour: only a finish by kit or session, only once. */
 export const gridStarts = (how: "kit" | "session" | "skip" | "folder", seen: readonly string[]) => (how === "kit" || how === "session") && !seen.includes("grid");
+/** ONB-042: the tours whose surface is a feature the profile keeps a use of. The grid tour is a
+ *  tour of the whole first screen, not a feature on the fixed list, so opening it notes nothing. */
+export const tourFeature = (id: TourId): boolean => id !== "grid";
 /** A kit start can take a while to open its panes: the grid tour waits this many looks for its first target. */
 export const GRID_TRIES = 4 * FIRST_TARGET_TRIES;

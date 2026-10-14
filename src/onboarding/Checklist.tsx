@@ -47,6 +47,17 @@ type Props = {
   compact?: boolean;
 };
 
+/** An item's name; a ticked one also says "(done)" to screen readers, since the tick itself is
+ *  hidden from them (FIX-1). */
+export function ItemName({ label, ticked }: { label: string; ticked: boolean }) {
+  return (
+    <span className="name">
+      {label}
+      {ticked && <span className="onb-sr"> (done)</span>}
+    </span>
+  );
+}
+
 export default function Checklist({ onToast, compact = false }: Props) {
   const rec = useChecklistRecord();
   const tried = rec?.tried ?? [];
@@ -80,7 +91,7 @@ export default function Checklist({ onToast, compact = false }: Props) {
                 {ticked ? "✓" : ""}
               </span>
               <span className="text">
-                <span className="name">{i.label}</span>
+                <ItemName label={i.label} ticked={ticked} />
                 {next && <span className="about">{i.about}</span>}
               </span>
               {next && (

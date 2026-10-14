@@ -46,12 +46,12 @@ export function checklistOf(first: FirstRun | null | undefined, tried: readonly 
   return { show: !!first && first.closed && !first.checklistDismissed, ready, ticked, next, done: ready && !!first && next === null };
 }
 
-/** ONB-013: the all-done toast fires once per profile: only when the list is done, the profile has
+/** ONB-013: the all-done toast fires once per profile: only when the list is done and still shown (never after it was dismissed), the profile has
  *  not had it (the ALL_DONE tried mark) and this window has not fired it already (a redraw). */
 export function allDoneToast(markWith: (id: string) => Promise<unknown> = (id) => markGuide("tried", id)) {
   let fired = false;
   return (c: Checklist, tried: readonly string[]): boolean => {
-    if (fired || !c.done || tried.includes(ALL_DONE)) return false;
+    if (fired || !c.done || !c.show || tried.includes(ALL_DONE)) return false;
     fired = true;
     void markWith(ALL_DONE).catch(() => {});
     return true;

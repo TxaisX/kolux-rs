@@ -263,13 +263,28 @@ export const stopDone = (id: string, seen: ReadonlySet<string>, setup: Setup, ke
 export const workflowDone = (wf: Workflow, seen: ReadonlySet<string>, setup: Setup, kept: ReadonlySet<string>): boolean =>
   stopDone(wf.id, seen, setup, kept) && wf.stops.every((s) => s.optional || stopDone(s.id, seen, setup, kept));
 
-/** ONB-015: the browser pane calls this when a page finishes loading; a page other than a blank
- *  one marks the Browser step's fact on the profile, once. */
-export const notePage = (url: string | null | undefined, mark: typeof markGuide = markGuide): void => {
-  if (!pageCounts(url)) return;
-  void mark("tried", PAGE_SHOWN).catch(() => {});
-  noteUse("browser-page"); // ONB-042
+/** ONB-023: the visits and kept stops once the saved record arrives, merged into what this window
+ *  already saw (a stop visited before the record loaded is never lost). */
+export const withRecord = (seen: ReadonlySet<string>, kept: ReadonlySet<string>, g: { visited: readonly string[]; tried: readonly string[] }) => ({
+  seen: new Set([...seen, ...visits(g.visited), ...g.tried]),
+  kept: new Set([...kept, ...g.tried]),
+});
+
+/** ONB-015: the browser pane calls this when a page finishes loading; the first page other than a
+ *  blank one marks the Browser step's fact on the profile and notes the use (ONB-042), once per
+ *  window, so later page loads write nothing. */
+export const pageNoter = (mark: typeof markGuide = markGuide, use: (id: string) => unknown = noteUse) => {
+  let done = false;
+  return (url: string | null | undefined): void => {
+    if (done || !pageCounts(url)) return;
+    done = true;
+    void mark("tried", PAGE_SHOWN).catch(() => {});
+    use("browser-page");
+  };
 };
+
+/** The one page note the window shares (the browser pane calls `notePage(url)`). */
+export const notePage = pageNoter();
 
 // ---- ONB-029: the command palette tip's one-time demo ----
 

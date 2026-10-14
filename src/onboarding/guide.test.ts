@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { caps, completed, doneFrom, doneId, firstOpen, forward, latest, milestonesShown, moveOn, nextTip, notePage, PAGE_SHOWN, pageCounts, railKey, ring, startTicked, stopDone, STEPS, stopOf, visits, workflowDone, WORKFLOWS, type Facts, type Place, type Setup, type StepId } from "./guide";
+import { caps, completed, doneFrom, doneId, firstOpen, forward, latest, milestonesShown, moveOn, nextTip, notePage, PAGE_SHOWN, pageNoter, pageCounts, railKey, ring, startTicked, stopDone, STEPS, stopOf, visits, withRecord, workflowDone, WORKFLOWS, type Facts, type Place, type Setup, type StepId } from "./guide";
 
 const set = (...ids: StepId[]) => new Set<StepId>(ids);
 
@@ -175,12 +175,25 @@ describe("Explore Kolux stops need a visit and real setup (ONB-023)", () => {
 });
 
 describe("the browser pane's page note (ONB-015)", () => {
-  it("only a loaded page that is not blank is kept", () => {
+  it("only a loaded page that is not blank is kept, and only the first one per window writes (FIX-1)", () => {
     const kept: string[] = [];
+    const used: string[] = [];
     const mark = async (list: string, id: string) => (kept.push(`${list}:${id}`), { tipsSeen: [], visited: [], tried: [], toursSeen: [], toursAuto: null });
-    notePage("about:blank", mark);
-    notePage("", mark);
-    notePage("https://example.com/", mark);
+    const note = pageNoter(mark, (id) => used.push(id));
+    note("about:blank");
+    note("");
+    note("https://example.com/");
+    note("https://example.com/next");
+    note("https://example.org/");
     expect(kept).toEqual([`tried:${PAGE_SHOWN}`]);
+    expect(used).toEqual(["browser-page"]);
+    expect(typeof notePage).toBe("function");
+  });
+
+  it("the saved record merges into what this window already saw; an early visit is never lost (FIX-1)", () => {
+    // "workspaces" was visited in this window before the record (which only knows "tasks") arrived.
+    const r = withRecord(new Set(["workspaces"]), new Set(["explore-usage"]), { visited: ["tasks", "nope"], tried: ["explore-agents"] });
+    expect([...r.seen].sort()).toEqual(["explore-agents", "tasks", "workspaces"]);
+    expect([...r.kept].sort()).toEqual(["explore-agents", "explore-usage"]);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { autoStarts, GRID_PANE, GRID_RESULTS, GRID_STATUS, gridStarts, nextShown, place, prevShown, stepLabel, TOURS } from "./tour";
+import { autoStarts, GRID_PANE, GRID_RESULTS, GRID_STATUS, gridStarts, nextShown, place, prevShown, stepLabel, tourFeature, TOURS } from "./tour";
 
 const base = { id: "tasks" as const, auto: true, seen: [], slotUsed: false, blocked: false, tried: [] };
 
@@ -47,7 +47,7 @@ describe("when tours start by themselves (ONB-032)", () => {
 });
 
 describe("the grid tour when the first run ends (ONB-012)", () => {
-  it("starts after a finish by kit or plain session, once; never after Skip or the folder picker", () => {
+  it("gridStarts answers yes for a kit or plain-session finish, once, and no for the skip and folder values", () => {
     expect([gridStarts("kit", []), gridStarts("session", [])]).toEqual([true, true]);
     expect([gridStarts("skip", []), gridStarts("folder", [])]).toEqual([false, false]);
     expect(gridStarts("session", ["grid"])).toBe(false);
@@ -57,5 +57,11 @@ describe("the grid tour when the first run ends (ONB-012)", () => {
     const grid = TOURS.find((t) => t.id === "grid")!;
     expect(grid.steps.map((s) => s.target)).toEqual([GRID_PANE, GRID_STATUS, GRID_RESULTS]);
     expect(autoStarts({ ...base, id: "grid" })).toBe(false);
+  });
+});
+
+describe("tours and the feature memory (ONB-042, FIX-1)", () => {
+  it("opening a tour's surface notes a use for every tour but the grid tour, which is not a kept feature", () => {
+    expect(TOURS.filter((t) => tourFeature(t.id)).map((t) => t.id)).toEqual(["tasks", "automations", "parallel"]);
   });
 });

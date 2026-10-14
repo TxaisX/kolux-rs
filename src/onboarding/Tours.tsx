@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { markGuide, type GuideRecord } from "./guide";
 import { features, hasUsed, noteUse } from "./features";
-import { actionWord, autoStarts, FIRST_TARGET_TRIES, FOCUSED_SPLIT, GRID_TRIES, gridStarts, START_GRID, nextShown, place, prevShown, REPLAY_TOUR, stepLabel, stepWords, TOURS, type Placed, type Rect, type Tour, type TourId } from "./tour";
+import { actionWord, autoStarts, FIRST_TARGET_TRIES, FOCUSED_SPLIT, GRID_TRIES, gridStarts, START_GRID, nextShown, place, prevShown, REPLAY_TOUR, stepLabel, stepWords, TOURS, tourFeature, type Placed, type Rect, type Tour, type TourId } from "./tour";
 
 
 /** The first copy of `sel` that is really on screen (hidden copies are passed over). */
@@ -196,7 +196,7 @@ export default function Tours() {
       }
       if (!r) return;
       // ONB-042: opening a surface that has a tour counts as using that feature, once per window.
-      for (const t of TOURS) if (!surfaced.has(t.id) && shown(t.trigger) && noteUse(t.id)) surfaced.add(t.id);
+      for (const t of TOURS) if (!surfaced.has(t.id) && tourFeature(t.id) && shown(t.trigger) && noteUse(t.id)) surfaced.add(t.id);
       const auto = TOURS.find((t) => autoStarts({ id: t.id, auto: r.toursAuto, seen: r.toursSeen, slotUsed: slot.current, blocked: blocked(), tried: hasUsed("split") ? [...r.tried, "split"] : r.tried }) && shown(t.trigger));
       if (auto) {
         slot.current = true;

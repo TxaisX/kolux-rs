@@ -44,6 +44,14 @@ describe("newcomer checklist (ONB-013)", () => {
     expect(allDoneToast(mark)(done, [OWN_FILE, ALL_DONE])).toBe(false);
   });
 
+  it("a dismissed checklist that is all done never toasts and marks nothing (FIX-1)", () => {
+    const mark = vi.fn(() => Promise.resolve());
+    const gone = checklistOf(finished(all, { checklistDismissed: true }), [OWN_FILE]);
+    expect([gone.done, gone.show]).toEqual([true, false]);
+    expect(allDoneToast(mark)(gone, [OWN_FILE])).toBe(false);
+    expect(mark).not.toHaveBeenCalled();
+  });
+
   it("a failed toast mark or own-file mark stays silent", async () => {
     const fail = () => Promise.reject(new Error("disk"));
     expect(allDoneToast(fail)(checklistOf(finished(all), [OWN_FILE]), [OWN_FILE])).toBe(true);

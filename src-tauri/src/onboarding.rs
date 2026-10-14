@@ -207,7 +207,7 @@ fn features_de<'de, D: serde::Deserializer<'de>>(d: D) -> Result<std::collection
     Ok(m.into_iter().filter(|(k, _)| FEATURES.contains(&k.as_str())).filter_map(|(k, v)| serde_json::from_value::<Use>(v).ok().filter(|u| u.count > 0).map(|u| (k, u))).collect())
 }
 
-/// ONB-042: a use of uid=197610(XiongT) gid=197121 groups=197121: the first time is written once, the count only goes up. The count is
+/// ONB-042: a use of `id`: the first time is written once, the count only goes up. The count is
 /// raised here, under the store lock, so a late save from the window can never lower it.
 fn used(mut g: Guide, id: &str, now: u64) -> Result<Guide, String> {
     if !FEATURES.contains(&id) {
@@ -385,6 +385,18 @@ pub fn onboarding_milestone(store: State<'_, Mutex<Store>>, name: String) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn this_source_file_holds_no_shell_expansion_of_an_account_id() {
+        // FIX-1 (council d2 FB1): a backtick in a shell heredoc once ran a command and wrote its
+        // account-id output into a comment here. The needles are built at run time so this test
+        // does not find itself.
+        let src = include_str!("onboarding.rs");
+        for needle in [["uid", "="].concat(), ["gid", "="].concat(), ["groups", "=1"].concat()] {
+            assert!(!src.contains(&needle), "onboarding.rs holds {needle:?}: shell expansion damage");
+        }
+        assert!(src.contains(&["a use of `", "id`:"].concat()), "the ONB-042 comment keeps its original wording");
+    }
 
     #[test]
     fn guide_lists_keep_each_id_once_and_drop_unknown_tips() {

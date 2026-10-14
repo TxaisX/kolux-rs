@@ -111,8 +111,10 @@ export function connectFailed(agent: string, err: unknown): string {
   return why ? `${agent} could not connect: ${why}` : `${agent} could not connect. Try again in a moment.`;
 }
 
-/** ACCT-035: the friendly line shown when the connection statuses fail to load, in place of an empty page. */
-export const STATUSES_FAILED = "Kolux could not read your AI connections just now. It tries again on its own in a few seconds.";
+/** ACCT-035: the friendly line shown when the connection statuses fail to load, in place of an empty
+ *  page. The cards have no retry timer: they read again when the window gets focus back, on an
+ *  agents event or on Check again, so the line says only that. */
+export const STATUSES_FAILED = "Kolux could not read your AI connections just now. Come back to this window or press Check again to read them again.";
 
 /** ACCT-035: the AI connections page reports each card's connected state here; the first time any
  * card says connected, the first-AI milestone is sent (onboarding.rs keeps only the first time,

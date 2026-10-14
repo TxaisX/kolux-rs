@@ -172,6 +172,14 @@ test("ACCT-035: a failed connect names the agent it was for, in plain words", ()
   expect(STATUSES_FAILED.length).toBeGreaterThan(0);
 });
 
+test("ACCT-035 (FIX-1 FB2): the statuses-failed line promises only what the cards do: a re-read on coming back or Check again", () => {
+  // The cards re-read on window focus, an agents event or Check again; there is no retry timer.
+  expect(STATUSES_FAILED).not.toMatch(/on its own|few seconds|automatic/i);
+  expect(STATUSES_FAILED).toMatch(/come back to this window/i);
+  expect(STATUSES_FAILED).toMatch(/Check again/);
+  expect(jargon(STATUSES_FAILED)).toEqual([]);
+});
+
 test("ACCT-035: the first connected report sends the first-AI milestone once; not-connected reports send nothing", () => {
   const sent: string[] = [];
   const report = firstConnection(async (n) => void sent.push(n));

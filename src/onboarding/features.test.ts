@@ -37,7 +37,7 @@ describe("command palette tip (ONB-029)", () => {
     expect(fallback.some((p) => p.includes("⌘") || p === "Cmd")).toBe(false);
   });
 
-  it("the demo types the name, ends on the create-workspace row and plays once", () => {
+  it("the demo frames type the name and end on the create-workspace row, which comes up in one frame only", () => {
     const f = demoFrames(false);
     expect(f[0]).toEqual({ typed: "", create: false });
     expect(f[f.length - 1]).toEqual({ typed: DEMO_TEXT, create: true });
