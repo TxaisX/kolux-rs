@@ -523,7 +523,8 @@ foundations every later card stands on; the cards they touch are finished in the
 ### P1 · theme 10 · Identity and originality (2 cards)
 
 - [ ] T-212 · PROJ-023 New workspaces are offered a unique sea-creature name
-- [ ] T-213 · APP-004 [compat] Settings and data from the app's former name carry over on first launch
+- [x] T-213 · APP-004 [compat] Settings and data from the app's former name carry over on first launch · built in `src-tauri/src/import.rs`: the former-name (Nightshift) folder beside the profile, any letter case, copied in once (a store key records it), files already present never overwritten, locked or unreadable files and links skipped while the rest carries on, dev, test and lane profiles never (hooks::agent_hooks::fenced), settings and interface preferences under the former names renamed once with the current name winning; the start-up call in lib.rs setup is a coordinator hunk (T-213 commit body); the release smoke check moved to T-213-b · done 2026-10-13 (lane/i18n from 0819c57; evidence/T-213.txt: cargo test import:: 7/7, clippy -D warnings clean)
+- [ ] T-213-b · the rest of T-213: the packaged release smoke test checks the former-name carry-over on every release (seed a former-name profile with a project and a setting in the release smoke's scratch application-data folder, launch, both present, launch again, no duplicates), once the coordinator has wired the start-up call
 
 ### P1 · theme none · No theme (171 cards)
 

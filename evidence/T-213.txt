@@ -1,0 +1,21 @@
+T-213 APP-004 former-name (Nightshift) profile carried over on first launch
+lane/i18n from 0819c57, 2026-10-13. Fixture folders only (tempdirs); no real profile or old-app folder opened.
+
+cargo test --manifest-path src-tauri/Cargo.toml import:: (log G:/Temp/i18n-w1-logs/cargo-t213b-test.log):
+test import::tests::t213_app004_former_names_take_the_current_name_in_the_same_letter_case ... ok
+test import::tests::t213_app004_the_former_folder_is_found_in_any_letter_case_and_only_as_a_folder ... ok
+test import::tests::t213_app004_development_and_test_profiles_never_get_it ... ok
+test import::tests::t213_app004_no_former_folder_marks_it_done_and_copies_nothing ... ok
+test import::tests::t213_app004_a_seeded_profile_carries_its_project_and_setting_and_a_second_launch_changes_nothing ... ok
+test import::tests::t213_app004_a_file_already_in_the_new_profile_is_never_overwritten ... ok
+test import::tests::t213_app004_a_file_locked_by_another_program_is_skipped_and_the_rest_carries_on ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 539 filtered out; finished in 0.10s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+cargo clippy --all-targets -- -D warnings (log cargo-t213b-clippy.log):
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 28.57s
+exit codes: test=0 clippy=0
+
+Not user-visible in the UI (start-up copy), so no CDP proof; the start-up call in lib.rs setup is a coordinator hunk; release smoke of the migration is T-213-b.

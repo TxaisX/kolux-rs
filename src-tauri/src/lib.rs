@@ -21,6 +21,7 @@ mod git;
 mod groups;
 mod hooks;
 mod include;
+mod import;
 // T-043-e: the macOS keychain rule table; the Mac wiring that calls it is T-043-f.
 #[cfg_attr(not(test), allow(dead_code))]
 mod keychain;
