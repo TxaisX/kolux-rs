@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ArrowLeft, ArrowRight, Close, Globe, Refresh, Stop } from "../chrome/icons";
 import { BLANK, resolveAddress } from "./address";
+import { openerRefocus } from "./chord";
 import { backgroundBehind } from "./colour";
 import "./browser.css";
 import { can as canGo, fresh, started, type Pending } from "./history";
@@ -91,7 +92,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         await listen<{ id: number; url: string; front: boolean }>("browser-link", (e) => {
           if (e.payload.id !== id) return;
           openInBrowser(e.payload.url);
-          if (!e.payload.front) setTimeout(() => focusMe.current?.(), 0);
+          if (openerRefocus(e.payload.front, document.hasFocus())) setTimeout(() => focusMe.current?.(), 0);
         }),
       );
       unlisteners.push(
@@ -102,7 +103,11 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
       if (!alive) return;
       try {
         const first = url ? resolveAddress(url) : null;
-        await invoke("browser_open", { id, url: first && "url" in first ? first.url : BLANK, spot: spot(host.current!), background: backgroundBehind(host.current) });
+        // A tab opened behind (its section hidden, so no size) starts off screen: its page may not
+        // open tabs or send chords until it is shown (council FIX-2).
+        const body = host.current!;
+        const shown = body.clientWidth > 0 && body.clientHeight > 0;
+        await invoke("browser_open", { id, url: first && "url" in first ? first.url : BLANK, spot: spot(body), background: backgroundBehind(body), shown });
         opened.current = true;
         if (alive) {
           setOpen(true);
