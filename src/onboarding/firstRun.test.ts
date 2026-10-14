@@ -1,7 +1,8 @@
 import { expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { chordFires, closer, firstFolderAgent, kitLaunch, leaveKey, milestone, oneClick, openAt, SCREENS, type Outcome } from "./firstRun";
+import { CHECKLIST_CHANGED, chordFires, clearReadFailure, closer, connectFailed, firstAiConnected, firstConnection, firstFolderAgent, kitLaunch, leaveKey, milestone, oneClick, openAt, reopenWizard, SCREENS, STATUSES_FAILED, wizardCloser, type Outcome } from "./firstRun";
+import wizardSource from "./useWizard.ts?raw";
 import { WizardView } from "./Wizard";
 import { jargon } from "../glossary";
 
@@ -161,4 +162,85 @@ test("ONB-011: a milestone goes to onboarding.rs by name, and a failed write sho
   await milestone("aiConnected", async (cmd, args) => void sent.push([cmd, args]));
   expect(sent).toEqual([["onboarding_milestone", { name: "aiConnected" }]]);
   await expect(milestone("kitLaunched", () => Promise.reject(new Error("disk full")))).resolves.toBeUndefined();
+});
+
+test("ACCT-035: a failed connect names the agent it was for, in plain words", () => {
+  expect(connectFailed("Grok", new Error("the sign-in window was closed"))).toBe("Grok could not connect: the sign-in window was closed");
+  expect(connectFailed("Codex", "Error: timed out")).toBe("Codex could not connect: timed out");
+  expect(connectFailed("Claude", undefined)).toBe("Claude could not connect. Try again in a moment.");
+  expect(connectFailed("Grok", "")).toMatch(/^Grok /);
+  expect(jargon(connectFailed("Grok", "x") + STATUSES_FAILED)).toEqual([]);
+  expect(STATUSES_FAILED.length).toBeGreaterThan(0);
+});
+
+test("ACCT-035 (FIX-2 R3): the statuses-failed text names only the re-read on coming back, never a retry timer or a Check again button the alert lacks", () => {
+  // The cards re-read on window focus and an agents event; Check again shows only for some states.
+  expect(STATUSES_FAILED).not.toMatch(/on its own|few seconds|automatic/i);
+  expect(STATUSES_FAILED).toMatch(/come back to this window/i);
+  expect(STATUSES_FAILED).not.toMatch(/Check again/i);
+  expect(jargon(STATUSES_FAILED)).toEqual([]);
+});
+
+test("ACCT-035 (FIX-2 R3): a good read clears only the read-failure line and keeps a connect failure", () => {
+  expect(clearReadFailure(STATUSES_FAILED)).toBeNull();
+  expect(clearReadFailure(null)).toBeNull();
+  const connect = connectFailed("Codex", "network down");
+  expect(clearReadFailure(connect)).toBe(connect);
+  // The cards pass it to their error setter as an updater: a failed read, then a good one, leaves nothing.
+  let error: string | null = null;
+  const setError = (v: string | null | ((e: string | null) => string | null)) => void (error = typeof v === "function" ? v(error) : v);
+  setError(STATUSES_FAILED);
+  setError(clearReadFailure);
+  expect(error).toBeNull();
+  setError(connect);
+  setError(clearReadFailure);
+  expect(error).toBe(connect);
+});
+
+test("VIEW-114 (FIX-2 FB1): a stored wizard close hides the wizard, then tells the sidebar its record changed; a failed close tells it nothing", async () => {
+  const seen: string[] = [];
+  let ok = false;
+  const store = () => (ok ? Promise.resolve() : Promise.reject(new Error("disk full")));
+  const c = wizardCloser(store, () => seen.push("hidden"), (err) => seen.push(String(err)), () => seen.push(CHECKLIST_CHANGED));
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+  c.end("dismissed");
+  await flush();
+  expect(seen).toEqual(["Error: disk full"]);
+  ok = true;
+  expect(c.retry()).toBe(true);
+  await flush();
+  expect(seen).toEqual(["Error: disk full", "hidden", CHECKLIST_CHANGED]);
+});
+
+test("VIEW-114 (FIX-2 FB1): a stored reopen shows screen one, then tells the sidebar; a failed reopen only reports", async () => {
+  const seen: string[] = [];
+  await reopenWizard(() => Promise.reject(new Error("locked")), () => seen.push("shown"), (err) => seen.push(String(err)), () => seen.push(CHECKLIST_CHANGED));
+  expect(seen).toEqual(["Error: locked"]);
+  await reopenWizard(() => Promise.resolve(), () => seen.push("shown"), (err) => seen.push(String(err)), () => seen.push(CHECKLIST_CHANGED));
+  expect(seen).toEqual(["Error: locked", "shown", CHECKLIST_CHANGED]);
+});
+
+test("VIEW-114 (FIX-2 FB1): useWizard closes and reopens only through the helpers that tell the sidebar, and announces every added project", () => {
+  const src = wizardSource;
+  expect(src).toMatch(/wizardCloser\(/);
+  expect(src).toMatch(/reopenWizard\(/);
+  expect(src).not.toMatch(/[^A-Za-z]closer\(/);
+  expect(src).not.toMatch(/invoke\("onboarding_reopen"\)\.then/);
+  // The project-added note comes before the first-folder check, so every add re-reads the entry.
+  const body = src.slice(src.indexOf("const projectAdded"));
+  expect(body.indexOf("projectAddedNote()")).toBeGreaterThan(-1);
+  expect(body.indexOf("projectAddedNote()")).toBeLessThan(body.indexOf("firstFolder.current"));
+});
+
+test("ACCT-035: the first connected report sends the first-AI milestone once; not-connected reports send nothing", () => {
+  const sent: string[] = [];
+  const report = firstConnection(async (n) => void sent.push(n));
+  report(false);
+  report(false);
+  expect(sent).toEqual([]);
+  report(true);
+  report(false);
+  report(true);
+  expect(sent).toEqual(["aiConnected"]);
+  expect(typeof firstAiConnected).toBe("function");
 });

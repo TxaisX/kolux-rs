@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { autoStarts, nextShown, place, prevShown, stepLabel, TOURS } from "./tour";
+import { autoStarts, GRID_PANE, GRID_RESULTS, GRID_STATUS, gridStarts, nextShown, place, prevShown, stepLabel, tourFeature, TOURS } from "./tour";
 
 const base = { id: "tasks" as const, auto: true, seen: [], slotUsed: false, blocked: false, tried: [] };
 
@@ -41,7 +41,27 @@ describe("when tours start by themselves (ONB-032)", () => {
     expect(autoStarts({ ...base, id: "parallel", tried: ["split"] })).toBe(false);
   });
   it("has the catalogue the store keeps, translated", () => {
-    expect(TOURS.map((t) => t.id)).toEqual(["tasks", "automations", "parallel"]);
+    expect(TOURS.map((t) => t.id)).toEqual(["tasks", "automations", "parallel", "grid"]);
     expect(TOURS.every((t) => t.steps.every((s) => s.ko.title && s.en.title))).toBe(true);
+  });
+});
+
+describe("the grid tour when the first run ends (ONB-012)", () => {
+  it("gridStarts answers yes for a kit or plain-session finish, once, and no for the skip and folder values", () => {
+    expect([gridStarts("kit", []), gridStarts("session", [])]).toEqual([true, true]);
+    expect([gridStarts("skip", []), gridStarts("folder", [])]).toEqual([false, false]);
+    expect(gridStarts("session", ["grid"])).toBe(false);
+  });
+
+  it("points at the terminal, then the sidebar status, then the kit results, and never starts by itself", () => {
+    const grid = TOURS.find((t) => t.id === "grid")!;
+    expect(grid.steps.map((s) => s.target)).toEqual([GRID_PANE, GRID_STATUS, GRID_RESULTS]);
+    expect(autoStarts({ ...base, id: "grid" })).toBe(false);
+  });
+});
+
+describe("tours and the feature memory (ONB-042, FIX-1)", () => {
+  it("tourFeature names a kept feature for every tour but the grid tour (the predicate only; the Tours.tsx call is not covered here)", () => {
+    expect(TOURS.filter((t) => tourFeature(t.id)).map((t) => t.id)).toEqual(["tasks", "automations", "parallel"]);
   });
 });

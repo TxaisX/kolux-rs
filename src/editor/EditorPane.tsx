@@ -12,7 +12,7 @@
 // Source switch; the source view is the CodeMirror one, which keeps holding the text throughout.
 // EDIT-007: Copy Context copies the selection under its path and line range, with a hint beside a
 // selection it applies to; EDIT-020: review notes take a selection from any file, not just Markdown.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
 import { EditorView } from "@codemirror/view";
@@ -20,7 +20,7 @@ import { Compartment, EditorState } from "@codemirror/state";
 import { LanguageDescription, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
-import { Close, FileCode } from "../chrome/icons";
+import { ChevronDown, Close, FileCode, List } from "../chrome/icons";
 import { undo } from "@codemirror/commands";
 import { attach, baseName, detach, isDirty, isStale, loadText, relay, replaceAll, save, subscribe, textOf } from "./buffers";
 import { beginSave, canUndo, checkOnce, endSave, forget, keep, POLL_MS, readFresh, reloadNow, remember, setBanner as markBanner, UNDO_TOAST_MS, type Io, type Stamp, type UndoEntry } from "./diskChange";
@@ -29,7 +29,16 @@ import { changeBetween, isMarkdown, mountRich, RICH_LIMIT, unsupported } from ".
 import { domPick, noteDraft, selections } from "./notes";
 import { contextText } from "./copyContext";
 import { shortPath } from "./diffNotes";
-import { useLabel } from "../keys/KeymapContext";
+import { findSupport, openFind } from "./find";
+import { conflictColours, conflictField, goConflict } from "./conflicts";
+import { useKeymap, useLabel } from "../keys/KeymapContext";
+import { matchEvent } from "../keys/keymap";
+import { Contents, FindBar, selectedIn, type FindOpen } from "./NoteTools";
+import { replaceInRich } from "./notefind";
+import { outline } from "./toc";
+import { hasSpot, onReveal, spotRange, takeSpot } from "./search";
+import "./editor-extras.css";
+import { pasteGuard } from "./paste";
 
 /** Save for each open editor pane, by pane key; App's Mod+S calls the focused one. */
 export const editors = new Map<number, () => Promise<void>>();
@@ -169,6 +178,13 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     const c = from !== to && v.hasFocus ? v.coordsAtPos(to) : null;
     setHint(c && contextText(v.state.doc, from, to, "").header ? { x: c.right, y: c.bottom, sel: `${from}-${to}` } : null);
   };
+  const [conflicts, setConflicts] = useState(0);
+  // EDIT-016 / EDIT-017: the rich view's find bar and contents panel, and the note text they read
+  // (taken from the buffer a moment after typing stops).
+  const [noteFind, setNoteFind] = useState<FindOpen | null>(null);
+  const [toc, setToc] = useState(false);
+  const [noteText, setNoteText] = useState("");
+  const noteTimer = useRef(0);
 
   useEffect(() => {
     let alive = true;
@@ -193,13 +209,24 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
           doc: text,
           parent: host.current!,
           // A file with Windows line ends is saved with them.
-          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), EditorView.updateListener.of((u) => u.transactions.forEach((tr) => relay(path, u.view, tr))), EditorView.updateListener.of((u) => (u.selectionSet || u.docChanged || u.focusChanged || u.geometryChanged) && place.current(u.view)), EditorView.domEventHandlers({ scroll: (_e, v) => void place.current(v) })],
+          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), findSupport, conflictColours, pasteGuard((t) => report.current.onToast?.(t)), EditorView.updateListener.of((u) => {
+            u.transactions.forEach((tr) => relay(path, u.view, tr));
+            if (u.docChanged) setConflicts(u.state.field(conflictField).list.length);
+            if (u.docChanged && isMarkdown(path)) {
+              clearTimeout(noteTimer.current);
+              noteTimer.current = window.setTimeout(() => setNoteText(u.state.doc.toString()), 300);
+            }
+          }), EditorView.updateListener.of((u) => (u.selectionSet || u.docChanged || u.focusChanged || u.geometryChanged) && place.current(u.view)), EditorView.domEventHandlers({ scroll: (_e, v) => void place.current(v) })],
         });
         view.current = made;
         attach(path, made, text);
         // A twin pane already holds this file: its stamp stays the one its copy came from.
         if (textOf(path) === text) remember(path, loaded);
+        setNoteText(text);
         setReady((n) => n + 1);
+        // EDIT-009: a file still holding conflicts opens on the first one.
+        setConflicts(made.state.field(conflictField).list.length);
+        goConflict(made, 0);
         // A newly opened file takes the keyboard at once.
         if (wantFocus.current) made.focus();
         LanguageDescription.matchFilename(languages, baseName(path))
@@ -212,6 +239,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     editors.set(id, () => saveFile(path, setStale, report.current.onToast));
     return () => {
       alive = false;
+      clearTimeout(noteTimer.current);
       editors.delete(id);
       off();
       if (made) {
@@ -298,6 +326,20 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     setBanner(null);
   }, [path]);
 
+  // EDIT-037: a search hit opens here with the hit selected and in view. A note in the rich view
+  // shows its source for that, since the hit's line and column are the file's.
+  const [reveals, setReveals] = useState(0);
+  useEffect(() => onReveal(() => setReveals((n) => n + 1)), []);
+  useEffect(() => {
+    const cm = view.current;
+    if (!cm || !hasSpot(path)) return;
+    if (md && mode !== "source") return setMode("source");
+    const s = takeSpot(path)!;
+    const r = spotRange(cm.state.doc, s);
+    cm.dispatch({ selection: { anchor: r.from, head: r.to }, effects: EditorView.scrollIntoView(r.from, { y: "center" }) });
+    cm.focus();
+  }, [reveals, ready, mode, path, md]);
+
   // EDIT-012: the rich view, started over the source text whenever the tab switches to it.
   useEffect(() => {
     const cm = view.current;
@@ -320,7 +362,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
         const change = changeBetween(now, next);
         pushed = next;
         if (change) cm.dispatch({ changes: change, userEvent: "input" });
-      });
+      }, (t) => report.current.onToast?.(t));
     } catch (err) {
       setRichError(String(err));
       return;
@@ -347,7 +389,41 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   }, [focused, hidden]);
 
   const name = baseName(path);
+  // EDIT-005 / EDIT-009: find and conflict stepping act on the source view (the rich view's
+  // find comes with EDIT-017).
+  const sourceShown = !md || mode === "source";
+  const keymap = useKeymap();
+  const stepConflicts = (dir: 1 | -1) => {
+    const cm = view.current;
+    if (cm && goConflict(cm, dir)) cm.focus();
+  };
+  // The user's own chords for editor.find / editor.replace (a rebinding is the one that works;
+  // CodeMirror's built-in Mod+F is off) and, with conflicts in the file, editor.nextChange /
+  // editor.previousChange. App's router leaves these to the focused editor pane.
+  const onKeys = (e: React.KeyboardEvent) => {
+    const hit = matchEvent(keymap, e.nativeEvent, ["editor"]);
+    const finding = hit?.id === "editor.find" || hit?.id === "editor.replace";
+    if (shown === "rich" && finding) {
+      // EDIT-017: the rich view's own bar, with replace.
+      const replace = hit.id === "editor.replace" && !readOnly;
+      if (!e.repeat) setNoteFind((f) => ({ replace, seed: selectedIn(richHost.current), n: (f?.n ?? 0) + 1 }));
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (!sourceShown || !view.current) return;
+    if (finding) {
+      // Holding the chord down does not keep reopening the bar.
+      if (!e.repeat) openFind(view.current, hit.id === "editor.replace" && !readOnly);
+    } else if ((hit?.id === "editor.nextChange" || hit?.id === "editor.previousChange") && conflicts) stepConflicts(hit.id === "editor.nextChange" ? 1 : -1);
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+  };
   const shown = !md || mode === "source" ? "source" : richError ? "error" : "rich";
+  const richRoot = useCallback(() => richHost.current, []);
+  const hasHeadings = useMemo(() => md && outline(noteText).length > 0, [md, noteText]);
+  const tocShown = toc && hasHeadings && shown === "rich";
   // GIT-042, EDIT-020: the add-note shortcut reads this tab's selection, in any file.
   useEffect(() => {
     selections.set(id, () => {
@@ -380,7 +456,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     return () => void copiers.delete(id);
   }, [id, path, root, shown]);
   return (
-    <section className={`pane editor${focused ? " focused" : ""}`} hidden={hidden} aria-label={`${name} pane`} onMouseDown={onFocus} data-kind="editor" data-key={id}>
+    <section className={`pane editor${focused ? " focused" : ""}${tocShown ? " toc-open" : ""}`} hidden={hidden} aria-label={`${name} pane`} onMouseDown={onFocus} onKeyDownCapture={onKeys} data-kind="editor" data-key={id}>
       <header className="pane-head">
         <span className="agent-mark" title="File">
           <FileCode size={13} />
@@ -407,6 +483,22 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
             </button>
           </span>
         )}
+        {hasHeadings && shown === "rich" && (
+          <button className="ib" aria-pressed={toc} title="Contents" aria-label="Contents" onClick={() => setToc((v) => !v)}>
+            <List size={13} />
+          </button>
+        )}
+        {conflicts > 0 && sourceShown && (
+          <span className="conflict-nav" role="group" aria-label="Merge conflicts">
+            <span className="count">{conflicts === 1 ? "1 conflict" : `${conflicts} conflicts`}</span>
+            <button className="ib up" title="Previous conflict (Shift+F7)" aria-label="Previous conflict" onClick={() => stepConflicts(-1)}>
+              <ChevronDown size={12} />
+            </button>
+            <button className="ib" title="Next conflict (F7)" aria-label="Next conflict" onClick={() => stepConflicts(1)}>
+              <ChevronDown size={12} />
+            </button>
+          </span>
+        )}
         <span className="right">
           <button className="ib" onClick={onClose} title="Close tab (Ctrl+W)">
             <Close size={12} />
@@ -419,7 +511,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
           <button className="btn" onClick={() => setTries((n) => n + 1)}>
             Retry
           </button>
-          {error.includes("outside your projects") && (
+          {/outside (your projects|them)/.test(error) && (
             <button className="btn" title="Allows this one file for this run; nothing beneath it" onClick={() => void invoke("file_grant", { path }).then(() => setTries((n) => n + 1), (err) => setError(String(err)))}>
               Open this file anyway
             </button>
@@ -453,6 +545,10 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
           </button>
         </div>
       )}
+      {noteFind && shown === "rich" && (
+        <FindBar pane={id} root={richRoot} open={noteFind} onClose={() => setNoteFind(null)} replace={readOnly ? undefined : (ranges, text) => rich.current && replaceInRich(rich.current.editor, ranges, text)} />
+      )}
+      {tocShown && <Contents md={noteText} path={path} root={richRoot} onClose={() => setToc(false)} />}
       {comparing && <CompareView path={path} text={textOf(path) ?? ""} read={readDisk} onReload={reload} onKeep={keepMine} onClose={() => setComparing(false)} />}
       <div ref={host} className="pane-body" hidden={shown !== "source" || comparing} />
       {!hidden && shown === "source" && hint && copyKey && copiedSel !== hint.sel && !flash && (

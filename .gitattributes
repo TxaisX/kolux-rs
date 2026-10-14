@@ -2,3 +2,5 @@
 *.cmd text eol=crlf
 # T-152-c: bash misreads a script saved with CRLF line ends (scripts/evidence/proof.sh).
 *.sh text eol=lf
+# Council ruling 2026-10-14: lane patches apply byte-exact; never convert their line ends.
+*.patch -text

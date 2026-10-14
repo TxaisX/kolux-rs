@@ -460,6 +460,8 @@ input { font: inherit; }
 .gauge .ring { color: var(--gauge); }
 .gauge.warn, .gauge.warn .ring, .tab .ring.warn, .meter-fill.warn { color: var(--working-icon); }
 .gauge.danger, .gauge.danger .ring, .tab .ring.danger, .meter-fill.danger { color: var(--meter-danger); }
+/* USAGE-001: no reading yet: a greyed 0%. */
+.gauge.none, .gauge.none .ring { color: var(--fg-muted); opacity: 0.6; }
 .tab .ring { flex: none; color: var(--gauge); }
 /* USAGE-002: the card's compact meter under the chip row. */
 .meter { display: flex; align-items: center; gap: 8px; padding: 0 10px 6px; font-size: 11px; color: var(--fg-muted); white-space: nowrap; }
@@ -1001,7 +1003,7 @@ button.pick-item:hover, button.pick-item:focus-visible { background: var(--input
 /* VIEW-040: a palette row's agent mark and age, coloured as on the tab. */
 .palette-mark { display: inline-flex; align-items: center; gap: 4px; flex: none; }
 .palette-mark .badge { display: inline-flex; }
-.palette-mark .badge.working, .palette-mark .badge.unread, .palette-mark .badge.permission { color: var(--working-icon); }
+.palette-mark .badge.working, .palette-mark .badge.background, .palette-mark .badge.unread, .palette-mark .badge.permission { color: var(--working-icon); }
 .palette-mark .badge.done { color: var(--done-icon); }
 .palette-mark .badge.dot { width: 7px; height: 7px; margin: 0 2px; border-radius: 50%; background: var(--working-icon); }
 .palette-age { font-size: 11px; color: var(--fg-faint); font-variant-numeric: tabular-nums; }

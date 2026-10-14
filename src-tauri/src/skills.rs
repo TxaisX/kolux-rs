@@ -1042,6 +1042,17 @@ mod tests {
         assert_eq!(names, vec!["plain"]);
     }
 
+    /// Council FS1 (FIX-2): the NT object form `\??\UNC\host\share` names a share as much as
+    /// `\\?\UNC\` does, so a plugin installPath or link target written that way is never probed.
+    #[test]
+    fn an_nt_object_path_to_a_share_is_refused_by_its_text() {
+        for p in [r"\??\UNC\x.invalid\s", r"\??\unc\x.invalid\s\SKILL.md", "/??/UNC/x.invalid/s", r"\??\GLOBALROOT\Device\Mup\x.invalid\s"] {
+            assert!(remote_path(Path::new(p)), "{p}");
+        }
+        assert_eq!(usable(&Some(r"\??\UNC\x.invalid\s".into())), None);
+        assert!(!remote_path(Path::new(r"\??\C:\Windows")), "an NT path to a local drive stays local");
+    }
+
     #[test]
     fn share_overrides_plugin_paths_and_linked_parents_are_refused_by_their_text() {
         let home = temp("skills-unc-spots");

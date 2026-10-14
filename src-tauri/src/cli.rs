@@ -502,7 +502,7 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
         } else if command == SET {
             // CLI-019: refused before any lookup.
             if flags.contains_key("workspace-status") {
-                return Err(Fail::args("--workspace-status moves the worktree's card on the Board, which is not built yet; nothing was changed"));
+                return Err(Fail::args("--workspace-status moves the worktree's card on the Board, which has no workspace status yet; nothing was changed"));
             }
             if flags.contains_key("no-parent") && flags.contains_key("parent-worktree") {
                 return Err(Fail::args("--no-parent and --parent-worktree disagree; pass one of them"));
@@ -1320,6 +1320,8 @@ fn text_of(command: &str, r: &Value) -> String {
         RELEASE => match r["terminalState"].as_str() {
             Some("released") if r["alreadyReleased"] == true => format!("{} was already released", s("dispatchId")),
             Some("released") if !s("archive").is_empty() => format!("{} released: its output is saved at {} and its terminal is closed; the worktree {} stays", s("dispatchId"), s("archive"), s("worktree")),
+            // cli FIX-3 (b): a terminal that is not the worker's to close is left open, and why.
+            Some("released") if !s("terminalLeftOpen").is_empty() => format!("{} released: its terminal {} is left open ({}); the worktree {} stays", s("dispatchId"), s("terminal"), s("terminalLeftOpen"), s("worktree")),
             Some("released") => format!("{} released: its terminal was already gone; the worktree {} stays", s("dispatchId"), s("worktree")),
             _ => format!("{} release unknown: {}; next: {}", s("dispatchId"), s("error"), s("next")),
         },
@@ -3444,26 +3446,65 @@ fn model_args(agent: &str, model: Option<&str>, effort: Option<&str>) -> Result<
 
 /// Waits for the worker's terminal in `dir`: ready once it has written and is still there
 /// `SETTLE` later; gives up at `timeout`. Returns the terminal seen (if any) and readiness.
-/// FIX-1 S1: only a terminal that was not open before the start (`before`), sits in `dir` and runs
-/// `agent` counts, and only while exactly one does (orchestration::worker_terminal), so a tab the
-/// user opens there during the wait is never recorded and so never closed by a stop or release.
+/// FIX-1 S1: only a session that was not open before the start (`before`) and sits in `dir` counts,
+/// picked by worker_tab (a marked session running `agent`, or the one uncredited mark: cli FIX-3),
+/// so a tab the user opens there during the wait is never recorded and so never closed by a stop
+/// or release.
 fn wait_ready(terminals: &Terminals, dir: &Path, before: &std::collections::HashSet<u32>, agent: &str, since: Instant, timeout: Duration) -> (Option<u32>, bool) {
     let here = dir.canonicalize().ok();
     let mut seen = None;
     while since.elapsed() < timeout {
-        let fresh: Vec<(u32, Option<String>)> = terminals
+        let fresh: Vec<(u32, bool, Option<String>)> = terminals
             .list()
             .into_iter()
             .filter(|(id, _, d)| !before.contains(id) && d.as_deref().is_some_and(|d| Path::new(d).canonicalize().ok() == here))
-            .map(|(id, _, _)| (id, terminals.program(id).flatten().map(str::to_string)))
+            .map(|(id, _, _)| (id, terminals.silence(id).is_some(), terminals.program(id).flatten().map(str::to_string)))
             .collect();
-        seen = crate::orchestration::worker_terminal(&fresh, agent);
+        seen = worker_tab(&fresh, agent);
         if seen.is_some_and(|id| terminals.quiet_for(id).is_some_and(|q| q >= SETTLE)) {
             return (seen, true);
         }
         std::thread::sleep(Duration::from_millis(100));
     }
     (seen, false)
+}
+
+/// cli FIX-3 (a): which fresh session in the worktree is the worker's. `fresh` lists each with
+/// whether Kolux started a program in it (a mark; a plain shell has none, even one credited by
+/// hand) and the agent it is credited to. Only marked sessions count: the one running `agent`
+/// when exactly one does (orchestration::worker_terminal), else the single marked session when
+/// it is credited to no agent, which is how a worker started through a custom command (a wrapper
+/// or `npx`) shows. Stamping the start's own session is T-172-e.
+fn worker_tab(fresh: &[(u32, bool, Option<String>)], agent: &str) -> Option<u32> {
+    let marked: Vec<(u32, Option<String>)> = fresh.iter().filter(|(_, mark, _)| *mark).map(|(id, _, a)| (*id, a.clone())).collect();
+    crate::orchestration::worker_terminal(&marked, agent).or(match marked.as_slice() {
+        [(id, None)] => Some(*id),
+        _ => None,
+    })
+}
+
+/// cli FIX-3 (c): a failed start's offered commands run as printed. The retry names the agent (and
+/// the model and effort) the start used, since worker-start refuses a line that says nothing of
+/// who runs it; and every orchestration line names the dispatch's Run, so it reaches the dispatch
+/// from a pane tied to another Run or to none (worker-stop and worker-release look a dispatch up
+/// in the caller's Run otherwise).
+fn start_failed_run(receipt: &mut Value, run: Option<&str>) {
+    let lead = format!("{} orchestration worker-", crate::orchestration::CLI);
+    let retry = format!("{lead}start ");
+    let mut who = String::new();
+    for (k, flag) in [("agent", "agent"), ("model", "model"), ("effort", "effort")] {
+        if let Some(v) = receipt[k].as_str().map(str::trim).filter(|v| !v.is_empty()) {
+            who.push_str(&format!(" --{flag} {v}"));
+        }
+    }
+    let run = run.map(|r| format!(" --run {r}")).unwrap_or_default();
+    let Some(next) = receipt["next"].as_array_mut() else { return };
+    for line in next.iter_mut() {
+        if let Some(l) = line.as_str().filter(|l| l.starts_with(&lead)) {
+            let who = if l.starts_with(&retry) { who.as_str() } else { "" };
+            *line = json!(format!("{l}{who}{run}"));
+        }
+    }
 }
 
 /// `kolux orchestration worker-start` (ORCH-016): the task (made or found), the worktree (made or
@@ -3830,6 +3871,7 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         // ORCH-017 (T-172-c): the stage reached, the setup result, what is left over (never closed)
         // and the commands to clean up or try again.
         crate::orchestration::start_failed(&mut receipt, "worker", json!("not_configured"));
+        start_failed_run(&mut receipt, run_id.as_deref());
         Err(Fail { code: "timeout", message: format!("the worker did not come up within {} ms; it may still be starting in the background ({dispatch_id} in {})", timeout.as_millis(), worktree.path), data: receipt })
     }
 }
@@ -5494,8 +5536,22 @@ mod tests {
         std::fs::write(dir.join(FILE), json!({ "port": port, "token": "tok", "pid": 4545 }).to_string()).unwrap();
         let long = Request { id: "r1".into(), token: "tok".into(), command: "worktree.create".into(), cwd: String::new(), args: json!({}), pane: None, cli: VERSION.into(), arrived: None };
         let slow = std::thread::spawn(move || call(port, &long));
-        std::thread::sleep(Duration::from_millis(1300));
         let ask = |port: u16, token: &str| ask_status(port, token, "s3", "");
+        // cli FIX-3 (f): wait on the condition, not a fixed sleep, so a loaded PC cannot flake it:
+        // first until the app has begun the long request, then a little over the 1.2 s it is read at.
+        let until = |what: &str, done: &dyn Fn(&Value) -> bool| {
+            let end = Instant::now() + Duration::from_secs(20);
+            loop {
+                let r = status_of(&dir, &ask);
+                if done(&r) {
+                    return;
+                }
+                assert!(Instant::now() < end, "{what} within 20 s: {r}");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        };
+        until("the long request begun", &|r| r["busyCommand"] == "worktree.create");
+        std::thread::sleep(Duration::from_millis(1300));
         let started = Instant::now();
         let r = status_of(&dir, &ask);
         assert!(started.elapsed() < Duration::from_millis(1500), "answered at once, not after the wait: {:?}", started.elapsed());
@@ -5511,8 +5567,8 @@ mod tests {
         std::fs::write(dir.join(FILE), json!({ "port": port, "token": "tok", "pid": 4545 }).to_string()).unwrap();
         go.send(()).unwrap();
         assert_eq!(slow.join().unwrap().unwrap()["success"], true);
-        // The stale-token question queued behind it is answered next; let it clear the queue.
-        std::thread::sleep(Duration::from_millis(300));
+        // The stale-token question queued behind it is answered next; wait until the queue is clear.
+        until("the queue cleared", &|r| r["detail"].is_null());
         let r = status_of(&dir, &ask);
         assert_eq!((r["state"].as_str(), r["detail"].is_null(), r["busyMs"].is_null()), (Some("running"), true, true));
         assert_eq!(status_line(&r), "running: Kolux is up and ready (pid 4545)");
@@ -5799,5 +5855,77 @@ mod tests {
         assert!(local_cli::text("agent-context", &json!({ "commandCount": 3 })).unwrap().contains(&format!("; {cli} agent-context --json")));
         let (_, refused) = parse(&words("terminal stop"));
         assert!(refused.unwrap_err().message.contains(&format!("{cli} terminal close")));
+    }
+
+    /// cli FIX-3 (a), council FIX-SOON 1 on 4873f7f: a worker started with a custom command (a
+    /// wrapper or `npx`) is not credited to its agent, so its fresh marked session alone must still
+    /// read as the worker's. Only sessions Kolux started a program in count (a plain shell never
+    /// does, even when it is credited by hand), an agent match is preferred, and two candidates
+    /// with nothing to tell them apart record none.
+    #[test]
+    fn fix3_a_custom_command_worker_still_reads_ready() {
+        let c = |a: &str| Some(a.to_string());
+        // The custom-command worker: one fresh marked session, credited to no agent.
+        assert_eq!(worker_tab(&[(7, true, None)], "claude"), Some(7));
+        // A shell the user typed claude into by hand is credited, but Kolux did not start it.
+        assert_eq!(worker_tab(&[(8, false, c("claude"))], "claude"), None);
+        assert_eq!(worker_tab(&[(8, false, c("claude")), (7, true, None)], "claude"), Some(7));
+        // An agent match wins over an uncredited mark; two matches, or two uncredited marks, are ambiguous.
+        assert_eq!(worker_tab(&[(7, true, None), (9, true, c("claude"))], "claude"), Some(9));
+        assert_eq!(worker_tab(&[(7, true, c("claude")), (9, true, c("claude"))], "claude"), None);
+        assert_eq!(worker_tab(&[(7, true, None), (9, true, None)], "claude"), None);
+        // Another agent's marked session is never the worker's, nor is an uncredited mark beside it.
+        assert_eq!(worker_tab(&[(5, true, c("codex"))], "claude"), None);
+        assert_eq!(worker_tab(&[(5, true, c("codex")), (7, true, None)], "claude"), None);
+        assert_eq!(worker_tab(&[], "claude"), None);
+    }
+
+    /// cli FIX-3 (b), council FIX-SOON 2: a release that leaves the worker's terminal open (it runs
+    /// another agent, a shell, or another dispatch still claims it) says so and why, never that the
+    /// terminal was already gone.
+    #[test]
+    fn fix3_b_release_text_says_when_the_terminal_is_left_open() {
+        let why = "term-4 was already open when the worker started, so it is not the worker's to close";
+        let r = json!({ "dispatchId": "dispatch-3", "terminalState": "released", "terminal": "term-4", "terminalLeftOpen": why, "worktree": "C:\\w", "alreadyReleased": false });
+        let t = text_of(RELEASE, &r);
+        assert!(!t.contains("already gone"), "{t}");
+        assert_eq!(t, format!("dispatch-3 released: its terminal term-4 is left open ({why}); the worktree C:\\w stays"));
+        let gone = json!({ "dispatchId": "dispatch-3", "terminalState": "released", "terminalLeftOpen": null, "worktree": "C:\\w", "alreadyReleased": false });
+        assert_eq!(text_of(RELEASE, &gone), "dispatch-3 released: its terminal was already gone; the worktree C:\\w stays");
+    }
+
+    /// cli FIX-3 (c), council FIX-SOON 4: every command a failed worker start offers runs as
+    /// printed: it parses as a known command with its flags, and when the dispatch belongs to a Run
+    /// each orchestration line names it with --run, so a coordinator in another Run (or a pane
+    /// tied to none) reaches the same dispatch.
+    #[test]
+    fn fix3_c_a_failed_start_offers_lines_that_parse_and_name_the_run() {
+        let cli = crate::orchestration::CLI;
+        let offered = |stage: &str, run: Option<&str>| {
+            let mut r = json!({ "dispatchId": "dispatch-4", "taskId": "task-2", "agent": "codex", "model": "gpt-5", "effort": null, "terminals": [{ "id": 7, "role": "worker" }], "worktree": { "path": "C:\\Temp\\a b\\wt-1", "created": true } });
+            crate::orchestration::start_failed(&mut r, stage, json!("not_configured"));
+            start_failed_run(&mut r, run);
+            r["next"].as_array().unwrap().iter().map(|l| l.as_str().unwrap().to_string()).collect::<Vec<_>>()
+        };
+        for stage in ["worker", "setup"] {
+            for run in [Some("run-2"), None] {
+                let lines = offered(stage, run);
+                assert!(lines.len() >= 3, "{stage}: {lines:?}");
+                for l in &lines {
+                    let rest = l.strip_prefix(&format!("{cli} ")).unwrap_or_else(|| panic!("{l} names the program"));
+                    let p = parse(&crate::agents::split_args(rest)).1.unwrap_or_else(|e| panic!("{l}: {}", e.message)).unwrap();
+                    if p.command.starts_with("orchestration.") {
+                        assert_eq!(p.args.get("run").and_then(Value::as_str), run, "{stage}: {l}");
+                    } else {
+                        assert_eq!(p.args.get("worktree").and_then(Value::as_str), Some("path:C:\\Temp\\a b\\wt-1"), "{l}");
+                    }
+                }
+                let stop = if stage == "worker" { "worker-stop" } else { "worker-release" };
+                assert!(lines[0].contains(stop) && lines[1].contains("worker-start --task task-2"), "{stage}: {lines:?}");
+                // The retry starts the same agent and model as the failed start did.
+                let retry = parse(&crate::agents::split_args(lines[1].strip_prefix(&format!("{cli} ")).unwrap())).1.unwrap().unwrap();
+                assert_eq!((retry.args.get("agent").and_then(Value::as_str), retry.args.get("model").and_then(Value::as_str)), (Some("codex"), Some("gpt-5")), "{}", lines[1]);
+            }
+        }
     }
 }

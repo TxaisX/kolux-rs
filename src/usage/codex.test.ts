@@ -43,3 +43,12 @@ test("a refused sign-in drops the figures and warns", () => {
   expect(html).not.toMatch(/% left/);
   expect(pillText({ ...base, state: "signed-out" })).toBe("Codex · not signed in");
 });
+
+test("T-070 USAGE-023: a failed read keeps the figures and adds one steady error mark; a good read has none", () => {
+  const u = { ...base, weekly: { usedPercent: 37, resetsAt: null, windowMins: 10080 } };
+  const html = renderToString(createElement(CodexPillView, { usage: u, trouble: true }));
+  expect(html).toContain("Codex 63% left");
+  expect(html).toContain('data-usage-trouble="1"');
+  expect(html).toContain('aria-label="last read failed"');
+  expect(renderToString(createElement(CodexPillView, { usage: u }))).not.toContain("data-usage-trouble");
+});
