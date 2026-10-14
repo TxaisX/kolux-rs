@@ -14,6 +14,10 @@ use std::time::Duration;
 /// STAT-001: no more than 32 child agents per report.
 const MAX_CHILDREN: usize = 32;
 const MAX_HISTORY: usize = 20;
+/// STAT-028: how long after Ctrl+C or Escape a turn with no Stop is taken as interrupted.
+const CANCEL_GRACE_MS: u64 = 3000;
+/// STAT-029: how Claude Code opens the message it submits itself after a compaction.
+const CONTINUATION: &str = "This session is being continued from a previous conversation";
 
 /// Every pane's stored status, by pane key. ponytail: in memory only; a restart starts clean
 /// (STAT-006's catch-up is its own card).
@@ -84,6 +88,8 @@ pub struct Status {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child: Option<String>,
     pub interrupted: bool,
+    /// STAT-024: the turn is over but Claude Code's background tasks are still going.
+    pub monitoring: bool,
 }
 
 #[derive(Default, Debug)]
@@ -99,10 +105,10 @@ pub struct Session {
     background: bool,
     /// Ctrl+C or Escape was typed while working: the next Stop reads interrupted (STAT-028).
     cancelled: bool,
+    /// When that keystroke came (ms), so a turn that never sends its Stop settles anyway.
+    cancelled_at: u64,
     /// The current turn ended on a cancel; late tool events cannot bring it back to working.
     interrupted: bool,
-    /// The next UserPromptSubmit is the automatic continuation after a compact: ignored.
-    skip_prompt: bool,
     prompt: Option<String>,
     pub reply: Option<String>,
     /// The stop the session is blocked on, kept until a turn reaches done (STAT-022).
@@ -150,6 +156,11 @@ impl Session {
         }
     }
 
+    /// STAT-024: the turn has settled while background tasks run on; Kolux is watching them.
+    pub fn monitoring(&self) -> bool {
+        self.background && self.own == Some("done") && !self.children.iter().any(|c| c.state == "working")
+    }
+
     /// One tick of the quiet alert: `silent` says the terminal has been past the threshold. Fires
     /// once per silent spell, only while working; output or any other state re-arms it (STAT-045).
     pub fn quiet(&mut self, silent: bool) -> bool {
@@ -195,7 +206,7 @@ impl Session {
                 // A child already cleared away never comes back; a known one is finished and announced.
                 let i = self.children.iter().position(|c| c.id == id)?;
                 let gone = self.children.remove(i);
-                self.reply = str_of(event, "last_assistant_message").map(|m| trim(m, 8000));
+                self.reply = str_of(event, "last_assistant_message").map(clean_reply);
                 // Announced by role (what a notification names, STAT-041); the id when there is none.
                 announce = Some(if gone.kind.is_empty() { gone.id } else { gone.kind });
             }
@@ -239,12 +250,13 @@ impl Session {
     }
 
     fn apply_lead(&mut self, agent: Agent, name: &str, event: &Value) -> Option<(Change, Option<String>)> {
-        // An automatic compact changes nothing, but the prompt Claude re-submits after it is not a turn.
+        // An automatic compact changes nothing; its own Stop closes the turn (STAT-029).
         if (name == "PostCompact" && str_of(event, "trigger") != Some("manual")) || (name == "SessionStart" && str_of(event, "source") == Some("compact")) {
-            self.skip_prompt = true;
             return None;
         }
-        if name == "UserPromptSubmit" && std::mem::take(&mut self.skip_prompt) {
+        // STAT-029: the continuation message Claude Code submits after a compaction is not a turn,
+        // so the card keeps the user's last real prompt; a prompt that only quotes it later counts.
+        if name == "UserPromptSubmit" && agent == Agent::Claude && str_of(event, "prompt").is_some_and(|p| p.trim_start().starts_with(CONTINUATION)) {
             return None;
         }
         // Late events after an interrupt cannot revive the turn (STAT-028), nor stop it (STAT-022).
@@ -271,8 +283,10 @@ impl Session {
             "Stop" => {
                 self.interrupted = std::mem::take(&mut self.cancelled);
                 self.pending = None;
-                self.reply = str_of(event, "last_assistant_message").map(|m| trim(m, 8000));
-                self.background = event.get("background_tasks").and_then(Value::as_array).is_some_and(|t| !t.is_empty());
+                self.reply = str_of(event, "last_assistant_message").map(clean_reply);
+                // STAT-024: Claude Code's own lists of background tasks and session crons decide.
+                let busy = |k: &str| event.get(k).and_then(Value::as_array).is_some_and(|t| !t.is_empty());
+                self.background = busy("background_tasks") || busy("session_crons");
                 self.own = Some(if self.interrupted { "interrupted" } else { "done" });
                 self.stop = None;
             }
@@ -293,8 +307,14 @@ impl Session {
                 }
             }
             "PermissionRequest" => {
+                // A question asked as a permission waits instead, and clears on later tool work (STAT-027).
                 self.pending = change.tool.clone();
-                self.own = Some("permission");
+                self.own = Some(change.state);
+            }
+            "PostCompact" => {
+                // STAT-029: the compacted turn is labelled by its summary.
+                self.prompt = str_of(event, "compact_summary").map(|s| trim(&s.split_whitespace().collect::<Vec<_>>().join(" "), 200));
+                self.own = Some(change.state);
             }
             "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
                 // A pending permission clears only when that same tool carries on. The event names the
@@ -328,7 +348,21 @@ impl Session {
     pub fn cancel(&mut self) {
         if self.own == Some("working") && !self.background && !self.children.iter().any(|c| c.state == "working") {
             self.cancelled = true;
+            self.cancelled_at = now_ms();
         }
+    }
+
+    /// STAT-028: a cancel keystroke a while back and still no Stop: the turn was interrupted.
+    fn settle_cancel(&mut self, now: u64) -> bool {
+        if !self.cancelled || self.own != Some("working") || now.saturating_sub(self.cancelled_at) < CANCEL_GRACE_MS {
+            return false;
+        }
+        self.cancelled = false;
+        self.interrupted = true;
+        self.pending = None;
+        self.own = Some("interrupted");
+        self.remember("interrupted");
+        true
     }
 
     /// VIEW-025: the approval was answered from a card; the lead is working until its hooks say otherwise.
@@ -369,6 +403,21 @@ pub fn agent_answer(terminals: tauri::State<'_, crate::terminal::Terminals>, pan
         }
     });
     Ok(())
+}
+
+/// STAT-025: Unicode line and paragraph separators become line breaks, and a run of blank lines
+/// longer than two is cut to two.
+fn clean_reply(s: &str) -> String {
+    let s = s.replace(['\u{2028}', '\u{2029}'], "\n");
+    let mut blank = 0;
+    let lines: Vec<&str> = s
+        .lines()
+        .filter(|l| {
+            blank = if l.trim().is_empty() { blank + 1 } else { 0 };
+            blank <= 2
+        })
+        .collect();
+    trim(lines.join("\n").trim(), 8000)
 }
 
 fn strip_agent(event: &Value) -> Value {
@@ -428,7 +477,26 @@ pub fn report(pane_key: u32, terminal: Option<u32>, agent: Agent, event: &Value)
         session.terminal = terminal.or(session.terminal);
         let (change, child) = session.apply(agent, event)?;
         crate::activity::note(pane_key, change.state);
-        Some(fit_plan(Status { pane_key, terminal, change, children: session.children.clone(), stop: session.stop.clone(), reply: session.reply.clone(), child, interrupted: session.interrupted }))
+        Some(fit_plan(status_of(pane_key, terminal, session, change, child)))
+    })
+}
+
+fn status_of(pane_key: u32, terminal: Option<u32>, session: &Session, change: Change, child: Option<String>) -> Status {
+    Status { pane_key, terminal, change, children: session.children.clone(), stop: session.stop.clone(), reply: session.reply.clone(), child, interrupted: session.interrupted, monitoring: session.monitoring() }
+}
+
+/// STAT-028: the turns cancelled with Ctrl+C or Escape that never sent a Stop, now interrupted.
+pub fn settle_cancels() -> Vec<Status> {
+    let now = now_ms();
+    with_sessions(|s| {
+        s.iter_mut()
+            .filter_map(|(key, session)| {
+                session.settle_cancel(now).then(|| {
+                    crate::activity::note(*key, "interrupted");
+                    status_of(*key, session.terminal, session, Change { state: "interrupted", ..Change::default() }, None)
+                })
+            })
+            .collect()
     })
 }
 
@@ -525,6 +593,7 @@ mod tests {
             reply: None,
             child: None,
             interrupted: false,
+            monitoring: false,
         };
         let size = |s: &Status| serde_json::to_string(s).unwrap().chars().count();
         let long = "1. Read the é file. ".repeat(2000);
@@ -702,7 +771,7 @@ mod tests {
         assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","background_tasks":[]}"#), Some("done"));
         // The prompt Claude re-submits after an automatic compact is not a new turn.
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PostCompact","trigger":"auto"}"#), None);
-        assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"<continuation>"}"#), None);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"This session is being continued from a previous conversation that ran out of context."}"#), None);
         assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"real"}"#), Some("working"));
         assert_eq!(s.history.len(), 5);
         for _ in 0..30 {
@@ -726,5 +795,100 @@ mod tests {
         s.apply(Agent::Codex, &ev(r#"{"hook_event_name":"SubagentStart","agent_id":"y","agent_type":"w"}"#));
         c(&mut s, r#"{"hook_event_name":"SessionStart"}"#);
         assert!(s.children.is_empty());
+    }
+
+    #[test]
+    fn stat_024_background_work_after_the_turn_is_monitoring_until_its_list_empties() {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"run the soak test"}"#);
+        assert!(!s.monitoring(), "a turn still going is working, not monitoring");
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","background_tasks":[{"id":"b1","type":"shell","status":"running","command":"npm run soak"}]}"#), Some("working"));
+        assert!(s.monitoring(), "the turn settled while the shell runs on");
+        // A scheduled session task keeps it watched too.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","background_tasks":[],"session_crons":[{"id":"c1","schedule":"0 9 * * 1-5","recurring":true,"prompt":"check"}]}"#), Some("working"));
+        assert!(s.monitoring());
+        // Work woken by the background task is a turn of its own, not monitoring.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cat soak.log"}}"#), Some("working"));
+        assert!(!s.monitoring());
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","background_tasks":[],"session_crons":[]}"#), Some("done"));
+        assert!(!s.monitoring());
+        // No cancel is concluded while background work runs (STAT-028).
+        state(&mut s, r#"{"hook_event_name":"Stop","background_tasks":[{"id":"b2","type":"shell","status":"running"}]}"#);
+        s.cancel();
+        assert!(!s.settle_cancel(now_ms() + CANCEL_GRACE_MS));
+    }
+
+    #[test]
+    fn stat_025_the_reply_keeps_line_breaks_and_shortens_blank_runs_and_list_tools_show_no_input() {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"fix it"}"#);
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"src/main.rs","old_string":"a","new_string":"b"}}"#)).unwrap();
+        assert_eq!((c.tool.as_deref(), c.detail.as_deref()), (Some("Edit"), Some("src/main.rs")));
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PreToolUse","tool_name":"TodoWrite","tool_input":{"todos":[{"content":"secret plan step"}]}}"#)).unwrap();
+        assert_eq!((c.tool.as_deref(), c.detail), (Some("TodoWrite"), None));
+        let reply = format!("Fixed.\u{2028}Tests pass.\u{2029}Next{}end", "\n".repeat(11));
+        let stop = serde_json::json!({"hook_event_name":"Stop","last_assistant_message":reply});
+        s.apply(Agent::Claude, &stop);
+        assert_eq!(s.reply.as_deref(), Some("Fixed.\nTests pass.\nNext\n\n\nend"));
+    }
+
+    #[test]
+    fn stat_027_waiting_carries_the_plan_or_the_question_and_clears_when_tool_work_resumes() {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"plan the refactor"}"#);
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PreToolUse","tool_name":"ExitPlanMode","tool_input":{"plan":"Refactor auth\n1. Extract the token check"}}"#)).unwrap();
+        assert_eq!((c.state, c.ask.as_deref(), c.detail.as_deref()), ("waiting", Some("Refactor auth\n1. Extract the token check"), Some("Refactor auth")));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"auth.rs"}}"#), Some("working"));
+        // A question asked as a permission waits, and clears on any later tool step.
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which framework?","header":"Framework","options":[]}]}}"#)).unwrap();
+        assert_eq!((c.state, c.ask.as_deref()), ("waiting", Some("Which framework?")));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Read"}"#), Some("working"));
+        // A real permission still waits for its own tool.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"rm -rf build"}}"#), Some("permission"));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Read"}"#), None);
+        // A plan past the limit is cut and says so.
+        let long = serde_json::json!({"hook_event_name":"PreToolUse","tool_name":"ExitPlanMode","tool_input":{"plan":"x".repeat(9000)}});
+        let ask = crate::hooks::claude_change(&long).unwrap().ask.unwrap();
+        assert!(ask.ends_with("… (cut)") && ask.chars().count() == 8000 + "\n… (cut)".chars().count());
+    }
+
+    #[test]
+    fn stat_028_a_cancel_with_no_stop_settles_interrupted_and_late_events_cannot_revive_it() {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"long job"}"#);
+        s.cancel();
+        assert!(!s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS - 1), "the Stop gets its moment first");
+        assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
+        assert_eq!((s.resolved(), s.interrupted), ("interrupted", true));
+        assert!(!s.settle_cancel(u64::MAX), "settled once");
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash"}"#), None);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop"}"#), None);
+        assert_eq!(s.resolved(), "interrupted");
+        assert_eq!(s.history.back().map(|e| (e.state, e.interrupted)), Some(("interrupted", true)));
+    }
+
+    #[test]
+    fn stat_029_boundaries_settle_quietly_and_the_compact_summary_labels_the_turn() {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"build it"}"#);
+        state(&mut s, r#"{"hook_event_name":"Stop","last_assistant_message":"built"}"#);
+        // /clear is a boundary: done, and the finished turn stays in history.
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"SessionStart","source":"clear"}"#)).unwrap();
+        assert!(c.boundary && c.state == "done");
+        assert!(s.history.iter().any(|e| e.state == "done" && e.prompt.as_deref() == Some("build it")));
+        // A manual compact settles a row stuck on working into a quiet done, labelled by its summary.
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"stuck"}"#);
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PostCompact","trigger":"manual","compact_summary":"Refactored the auth\n module."}"#)).unwrap();
+        assert!(c.boundary && c.state == "done");
+        assert_eq!(s.history.back().and_then(|e| e.prompt.as_deref()), Some("Refactored the auth module."));
+        // The continuation Claude submits after compacting is not a turn; a prompt quoting it later is.
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"real prompt"}"#);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"  This session is being continued from a previous conversation that ran out of context."}"#), None);
+        assert_eq!(s.prompt.as_deref(), Some("real prompt"));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"why does it say This session is being continued from a previous conversation?"}"#), Some("working"));
+        // Codex has no such message: the same words from Codex are a prompt.
+        let mut x = Session::default();
+        let codex = x.apply(Agent::Codex, &ev(r#"{"hook_event_name":"UserPromptSubmit","prompt":"This session is being continued from a previous conversation"}"#));
+        assert_eq!(codex.map(|(c, _)| c.state), Some("working"));
     }
 }

@@ -36,3 +36,9 @@ test("spans read 59s, 1m, 1h and 1h 5m; the first line skips blank lines", () =>
   expect(firstLine("\n\n  hi \nthere")).toBe("hi");
   expect(firstLine("")).toBe("");
 });
+
+test("a session watching its background tasks says so in the Working lane (STAT-024)", () => {
+  expect(chipOf(sig({ state: "working", monitoring: true, tool: "Bash", detail: "npm run soak" }), now)).toMatchObject({ lane: "working", word: "Working", line: "Watching background tasks" });
+  // A quiet terminal still reads as no recent update first.
+  expect(chipOf(sig({ state: "working", monitoring: true, stale: true }), now)).toMatchObject({ word: "No recent update" });
+});

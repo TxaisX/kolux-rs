@@ -4,7 +4,7 @@ import type { AgentState } from "../projects/rows";
 
 /** STAT-022: why a session stopped, the agent's own words, and when a limit lifts (ms since the epoch). */
 export type StopInfo = { cause: "limit" | "signin" | "error"; detail?: string; resetsAt?: number };
-export type Turn = { state: AgentState; interrupted: boolean; boundary: boolean; reply?: string; child?: string; stop?: StopInfo };
+export type Turn = { state: AgentState; interrupted: boolean; boundary: boolean; monitoring?: boolean; reply?: string; child?: string; stop?: StopInfo };
 /** `stopped` marks a note the 'Agent Stopped' switch gates (STAT-023) rather than 'Agent Task Complete'. */
 export type Note = { what: string; body: string; stopped?: true };
 
