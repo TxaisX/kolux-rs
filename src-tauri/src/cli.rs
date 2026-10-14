@@ -1030,7 +1030,14 @@ pub fn status_of(dir: &Path, ask: &dyn Fn(u16, &str) -> Result<Value, Fail>) -> 
         Ok(env) if env["success"] == Value::Bool(true) => {
             let r = &env["result"];
             let ready = r["graphReady"] != Value::Bool(false);
-            json!({ "state": if ready { "running" } else { "graph-not-ready" }, "startupFile": shown, "pid": r["pid"], "port": port, "version": r["version"], "graphReady": ready })
+            let mut out = json!({ "state": if ready { "running" } else { "graph-not-ready" }, "startupFile": shown, "pid": r["pid"], "port": port, "version": r["version"], "graphReady": ready });
+            // T-076-c: busy with a request that has run this long, so a hang can be told from a long one.
+            if let Some(ms) = r["busy"]["runningMs"].as_u64() {
+                out["detail"] = json!(STATUS_BUSY);
+                out["busyMs"] = json!(ms);
+                out["busyCommand"] = r["busy"]["command"].clone();
+            }
+            out
         }
         // A token from another run: the file outlived the app that wrote it.
         Ok(env) if env["error"]["code"] == "unauthorized" => stale(&env["error"]["message"]),
@@ -1048,11 +1055,24 @@ pub fn status_of(dir: &Path, ask: &dyn Fn(u16, &str) -> Result<Value, Fail>) -> 
 fn status_line(r: &Value) -> String {
     let pid = r["pid"].as_u64().map(|p| format!("pid {p}")).unwrap_or_else(|| "pid unknown".into());
     match r["state"].as_str().unwrap_or_default() {
-        "running" if r["detail"] == STATUS_BUSY => format!("running: Kolux is up, {STATUS_BUSY} ({pid})"),
+        "running" if r["detail"] == STATUS_BUSY => {
+            let how = r["busyMs"].as_u64().map(|ms| format!(" for {}{}", span(ms), r["busyCommand"].as_str().map(|c| format!(" ({c})")).unwrap_or_default())).unwrap_or_default();
+            format!("running: Kolux is up, {STATUS_BUSY}{how} ({pid})")
+        }
         "running" => format!("running: Kolux is up and ready ({pid})"),
         "graph-not-ready" => format!("graph-not-ready: Kolux answers but is still loading its workspaces ({pid})"),
         "stale" => format!("stale: Kolux left its startup file behind but nothing answers ({pid}); run {} open to start it again", crate::orchestration::CLI),
         _ => "not-running: Kolux is not running".into(),
+    }
+}
+
+/// T-076-c: a running time as people read it: "4 s", "3 min 12 s", "1 h 5 min".
+fn span(ms: u64) -> String {
+    let s = ms / 1000;
+    match s {
+        0..=59 => format!("{s} s"),
+        60..=3599 => format!("{} min {} s", s / 60, s % 60),
+        _ => format!("{} h {} min", s / 3600, s % 3600 / 60),
     }
 }
 
@@ -3678,35 +3698,63 @@ pub(crate) fn secret() -> String {
     format!("{:016x}{:016x}", h.finish(), std::collections::hash_map::RandomState::new().build_hasher().finish())
 }
 
+/// CLI-012 (T-076-c): the request the app is answering now and when it began, so a status
+/// question that comes in meanwhile can say what runs and for how long.
+type Current = std::sync::Arc<Mutex<Option<(String, Instant)>>>;
+
 /// Answers requests on `listener` one at a time, for as long as the app runs.
 pub fn serve_loop(listener: TcpListener, token: &str, runtime: &str, handle: impl Fn(&Request) -> Result<Value, Fail>) {
+    serve_loop_with(listener, token, runtime, || status_answer(&GRAPH_READY), handle);
+}
+
+/// `serve_loop` with the status answer given, so a test can stand in for the app's.
+fn serve_loop_with(listener: TcpListener, token: &str, runtime: &str, status: impl Fn() -> Value + Send + 'static, handle: impl Fn(&Request) -> Result<Value, Fail>) {
     // ponytail: one request at a time; a parallel accept loop if agents ever queue up on it. A
-    // second thread takes each connection as it comes, so a request knows when it was sent.
-    let (queue, taken) = mpsc::channel();
+    // second thread takes each connection as it comes and reads its line, so a request knows
+    // when it was sent, and a status question is answered at once while a request runs (T-076-c).
+    let current: Current = std::sync::Arc::default();
+    let (queue, taken) = mpsc::channel::<(TcpStream, Instant, String)>();
+    let (busy, tok, rt) = (current.clone(), token.to_string(), runtime.to_string());
     std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            if queue.send((stream, Instant::now())).is_err() {
+        for mut stream in listener.incoming().flatten() {
+            let arrived = Instant::now();
+            stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
+            let mut line = String::new();
+            if BufReader::new(&stream).read_line(&mut line).is_err() {
+                continue;
+            }
+            // BROW-051: a web page can only ever send HTTP here; its request line is dropped unanswered.
+            if line.split_whitespace().nth(2).is_some_and(|w| w.starts_with("HTTP/")) {
+                continue;
+            }
+            if let Some(reply) = busy_status(&line, &tok, &rt, &busy, &status) {
+                let _ = stream.write_all(reply.as_bytes()).and_then(|_| stream.write_all(b"\n"));
+                continue;
+            }
+            if queue.send((stream, arrived, line)).is_err() {
                 break;
             }
         }
     });
-    for (mut stream, arrived) in taken {
-        stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
-        let mut line = String::new();
-        if BufReader::new(&stream).read_line(&mut line).is_err() {
-            continue;
+    let mark = |now: Option<(String, Instant)>| {
+        if let Ok(mut c) = current.lock() {
+            *c = now;
         }
-        // BROW-051: a web page can only ever send HTTP here; its request line is dropped unanswered.
-        if line.split_whitespace().nth(2).is_some_and(|w| w.starts_with("HTTP/")) {
-            continue;
-        }
+    };
+    for (mut stream, arrived, line) in taken {
         let (id, out) = match serde_json::from_str::<Request>(&line) {
             Ok(req) if req.token != token => (req.id, Err(Fail::new("unauthorized", "the token does not match this app; is cli.json stale?"))),
             // CLI-038: an app older than the CLI turns a change away before it runs.
             Ok(req) if CHANGES.contains(&req.command.as_str()) && newer(&req.cli, VERSION) => {
                 (req.id, Err(Fail { code: "version_gap", message: format!("this Kolux ({VERSION}) is older than the command line ({}); update Kolux before sending orchestration changes", req.cli), data: json!({ "appVersion": VERSION, "cliVersion": req.cli }) }))
             }
-            Ok(req) => (req.id.clone(), handle(&Request { arrived: Some(arrived), ..req })),
+            Ok(req) => {
+                mark(Some((req.command.clone(), Instant::now())));
+                let id = req.id.clone();
+                let out = handle(&Request { arrived: Some(arrived), ..req });
+                mark(None);
+                (id, out)
+            }
             Err(e) => (String::new(), Err(Fail::args(format!("malformed request: {e}")))),
         };
         let mut reply = envelope(&id, runtime, out);
@@ -3714,6 +3762,19 @@ pub fn serve_loop(listener: TcpListener, token: &str, runtime: &str, handle: imp
         let reply = reply.to_string();
         let _ = stream.write_all(reply.as_bytes()).and_then(|_| stream.write_all(b"\n"));
     }
+}
+
+/// CLI-012 (T-076-c): while a request runs, a status question with the right token is answered
+/// straight away with the app's answer plus the running request's command and how long it has
+/// run; None hands the line on to the queue.
+fn busy_status(line: &str, token: &str, runtime: &str, current: &Current, status: &dyn Fn() -> Value) -> Option<String> {
+    let req = serde_json::from_str::<Request>(line).ok().filter(|r| r.command == STATUS && r.token == token)?;
+    let (command, since) = current.lock().ok()?.clone()?;
+    let mut answer = status();
+    answer["busy"] = json!({ "command": command, "runningMs": since.elapsed().as_millis() as u64 });
+    let mut reply = envelope(&req.id, runtime, Ok(answer));
+    reply["meta"]["appVersion"] = json!(VERSION);
+    Some(reply.to_string())
 }
 
 /// Starts listening for the command line and writes `cli.json` so it can find the app.
@@ -5239,6 +5300,55 @@ mod tests {
         assert!(line.starts_with("running:") && line.contains(STATUS_BUSY) && line.contains("4343"), "{line}");
         // The general request path keeps its long wait: only the status question is impatient.
         assert_eq!(CALL_WAIT, Duration::from_secs(300));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// CLI-012 (T-076-c): while a long request runs, the status question is answered at once (not
+    /// after the 2.5 s wait) and says what runs and for how long, in text and JSON; the state stays
+    /// running, exit 0. A status question with a stale token is not answered from the side. Once
+    /// the request ends the reading has no busy part.
+    #[test]
+    fn t076c_status_while_busy_says_what_runs_and_for_how_long() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-t076c-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (go, wait) = mpsc::channel::<()>();
+        let wait = Mutex::new(wait);
+        let answer = || json!({ "pid": 4545, "version": VERSION, "graphReady": true });
+        std::thread::spawn(move || {
+            serve_loop_with(listener, "tok", "rt-1", answer, move |req| {
+                if req.command == "worktree.create" {
+                    let _ = wait.lock().unwrap().recv();
+                }
+                Ok(answer())
+            })
+        });
+        std::fs::write(dir.join(FILE), json!({ "port": port, "token": "tok", "pid": 4545 }).to_string()).unwrap();
+        let long = Request { id: "r1".into(), token: "tok".into(), command: "worktree.create".into(), cwd: String::new(), args: json!({}), pane: None, cli: VERSION.into(), arrived: None };
+        let slow = std::thread::spawn(move || call(port, &long));
+        std::thread::sleep(Duration::from_millis(1300));
+        let ask = |port: u16, token: &str| ask_status(port, token, "s3", "");
+        let started = Instant::now();
+        let r = status_of(&dir, &ask);
+        assert!(started.elapsed() < Duration::from_millis(1500), "answered at once, not after the wait: {:?}", started.elapsed());
+        assert_eq!((r["state"].as_str(), r["detail"].as_str(), r["busyCommand"].as_str()), (Some("running"), Some(STATUS_BUSY), Some("worktree.create")));
+        let ms = r["busyMs"].as_u64().unwrap();
+        assert!((1200..10_000).contains(&ms), "running {ms} ms");
+        assert_eq!(status_exit(&r), 0);
+        assert_eq!(status_line(&r), format!("running: Kolux is up, busy with another request for {} (worktree.create) (pid 4545)", span(ms)));
+        // A stale token is not answered from the side: it waits its turn, so status gives up busy.
+        std::fs::write(dir.join(FILE), json!({ "port": port, "token": "old", "pid": 4545 }).to_string()).unwrap();
+        let r = status_of(&dir, &ask);
+        assert_eq!((r["detail"].as_str(), r["busyMs"].is_null()), (Some(STATUS_BUSY), true));
+        std::fs::write(dir.join(FILE), json!({ "port": port, "token": "tok", "pid": 4545 }).to_string()).unwrap();
+        go.send(()).unwrap();
+        assert_eq!(slow.join().unwrap().unwrap()["success"], true);
+        let r = status_of(&dir, &ask);
+        assert_eq!((r["state"].as_str(), r["detail"].is_null(), r["busyMs"].is_null()), (Some("running"), true, true));
+        assert_eq!(status_line(&r), "running: Kolux is up and ready (pid 4545)");
+        assert_eq!((span(4_000), span(192_500), span(3_900_000)), ("4 s".to_string(), "3 min 12 s".to_string(), "1 h 5 min".to_string()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
