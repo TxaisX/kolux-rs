@@ -36,6 +36,7 @@ export function useMenuBar(state: MenuBarState, onAction: (id: string) => void) 
 
 /** APP-009: opens the app menu at (x, y) in the window's own pixels (Windows and Linux, where the
  *  frameless window has no native bar to draw it in). */
-export function popAppMenu(x: number, y: number) {
-  invoke("menu_popup", { x, y }).catch(() => {});
+/** (x, y) in CSS pixels; `zoom` is the interface zoom (SET-019), since the menu opens in window pixels. */
+export function popAppMenu(x: number, y: number, zoom = 1) {
+  invoke("menu_popup", { x: x * zoom, y: y * zoom }).catch(() => {});
 }

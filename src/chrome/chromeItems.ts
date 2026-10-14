@@ -27,7 +27,7 @@ export function windowSummary(s: Record<string, unknown>): string {
 // state to the menu on every change (screen, chrome switches, shortcuts), so the menu's ticks agree
 // with each Settings switch (SET-020) and its accelerators follow the Shortcuts page (SET-009).
 /** Menu items that carry the in-app shortcut of the keymap action with the same id. */
-export const MENU_SHORTCUT_IDS = ["app.settings", "app.forceReload", "sidebar.left.toggle", "sidebar.right.toggle", "zoom.in", "zoom.out", "zoom.reset"] as const;
+export const MENU_SHORTCUT_IDS = ["app.settings", "app.forceReload", "sidebar.left.toggle", "sidebar.right.toggle"] as const;
 
 const MENU_KEY = /^([A-Z]|[0-9]|F([1-9]|1[0-9]|2[0-4])|Comma|Equal|Minus|Period|Slash|Backslash|BracketLeft|BracketRight|Semicolon|Quote|Backquote|Tab|Enter|Space|Arrow(Up|Down|Left|Right)|Numpad(Add|Subtract|Multiply|Divide|[0-9]))$/;
 const MENU_MOD: Record<string, string> = { Mod: "CmdOrCtrl", Ctrl: "Ctrl", Cmd: "Super", Meta: "Super", Alt: "Alt", Shift: "Shift" };
@@ -42,16 +42,19 @@ export function toAccelerator(chord: string | undefined): string {
   return [...parts.map((m) => MENU_MOD[m]), key].join("+");
 }
 
-export type MenuBarState = { screen: string; statusBarVisible: boolean; tasksButton: boolean; automationsButton: boolean; titleBarAppName: boolean; accelerators: Record<string, string> };
+export type MenuBarState = { screen: string; statusBarVisible: boolean; tasksButton: boolean; automationsButton: boolean; titleBarAppName: boolean; classic: boolean; accelerators: Record<string, string> };
 
-/** `chords(id)`: the keymap's chords for an action, first one shown (empty when unbound). */
-export function menuBarState(s: Record<string, unknown>, screen: string, chords: (id: string) => readonly string[] | undefined): MenuBarState {
+/** `chords(id)`: the keymap's chords for an action, first one shown (empty when unbound). `classic`:
+ * the Classic look, whose View menu has no Workspace View (T-049-b). Zoom has no hint: Ctrl+= is the
+ * terminal font zoom (TERM-078), while the menu's zoom is the saved interface zoom (SET-019). */
+export function menuBarState(s: Record<string, unknown>, screen: string, chords: (id: string) => readonly string[] | undefined, classic = false): MenuBarState {
   return {
     screen,
     statusBarVisible: readStatusBar(s).visible,
     tasksButton: chromeShown(s, "tasksButton"),
     automationsButton: chromeShown(s, "automationsButton"),
     titleBarAppName: chromeShown(s, "titleBarAppName"),
+    classic,
     accelerators: Object.fromEntries(MENU_SHORTCUT_IDS.map((id) => [id, toAccelerator(chords(id)?.[0])])),
   };
 }

@@ -110,3 +110,29 @@ APP-008 real tray icon (needs the `tray-icon` tauri feature in Cargo.toml + lib.
 holds the tested model), APP-010 sidebar-footer Settings/Help menu (ProjectsPanel, another lane),
 APP-013 shortcuts wherever focus sits (src/keys), APP-015 navigation guard (lib.rs), SET-010 page
 clash, and the help.* actions (Report Crash, Explore, Getting Started, Check for Updates).
+
+## Council D2 fixes (FIX-BEFORE 1 and 2, FIX-SOON 3 to 5), lane/chrome 2026-10-13, no app launch
+- View > Zoom In / Zoom Out / Actual Size now go to the page (Route::Page "zoom.*"), which calls the
+  saved interface zoom (stepZoom, SET-019). The Rust zoom (set_zoom, in-memory 0.1 steps) is gone,
+  and the zoom items show no hint, because Ctrl+= is the terminal font zoom (TERM-078).
+- Edit on Windows and Linux has page items edit.undo/redo/cut/copy/paste/selectAll, so nothing
+  replays Ctrl+key into a terminal. macOS keeps the stock items.
+- Help on Windows and Linux shows only About. Report Crash, Explore Kolux, Getting Started and Check for
+  Updates wait for T-248-b. macOS has no Help menu, and its app menu drops Check for Updates.
+- The popup is placed in window pixels: popAppMenu scales by the interface zoom (TopBar uiZoom prop).
+- Rust fixtures now use the page's spelling "CmdOrCtrl+Comma".
+Tests (wiring applied so the modules compile): cargo --lib menu:: tray:: 15 passed 0 failed; clippy
+--all-targets -D warnings clean; tsc 0; vitest src/chrome 30 passed.
+
+## LIVE PROOF PENDING (batched; the coordinator runs it on main with the wiring applied)
+1. Click the Kolux mark: the popup opens right under the mark, also at 120% interface zoom.
+2. Shortcut change updates the hint: on the Shortcuts page change "Open Settings" to Ctrl+Shift+P,
+   then click the mark: File > Settings... shows "Ctrl+Shift+P".
+3. Settings switch flips the tick: in Settings > Appearance turn off the status bar, then click the
+   mark: View > Appearance > Show Status Bar is unticked. Click it: the status bar comes back and
+   Settings shows the switch on.
+4. Zoom: from a saved 120%, View > Zoom In goes to 130% and Settings > Appearance shows 130%;
+   Actual Size goes to 100%. A restart keeps it.
+5. Edit: in a terminal with an agent running and no selection, Edit > Copy does not interrupt it.
+   With text selected it copies the text. Edit > Select All selects the terminal's text, not the
+   app UI.

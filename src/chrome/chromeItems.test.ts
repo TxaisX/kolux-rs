@@ -36,7 +36,8 @@ describe("T-248-a menu bar state (APP-009, SET-020, SET-009)", () => {
     const st = menuBarState({ statusBarVisible: false, automationsButton: false }, "board", (id) => chords[id]);
     expect(st).toMatchObject({ screen: "board", statusBarVisible: false, tasksButton: true, automationsButton: false, titleBarAppName: false });
     expect(st.accelerators["app.settings"]).toBe("CmdOrCtrl+Comma");
-    expect(st.accelerators["zoom.in"]).toBe("CmdOrCtrl+Equal");
+    expect(st.accelerators["zoom.in"]).toBeUndefined();
+    expect(st.classic).toBe(false);
     expect(st.accelerators["sidebar.left.toggle"]).toBe("");
     expect(Object.keys(st.accelerators)).toEqual([...MENU_SHORTCUT_IDS]);
   });
@@ -46,6 +47,12 @@ describe("T-248-a menu bar state (APP-009, SET-020, SET-009)", () => {
     const b = menuBarState({}, "terminals", (id) => (id === "app.settings" ? ["Mod+Shift+P"] : undefined));
     expect(JSON.stringify(a)).not.toBe(JSON.stringify(b));
     expect(b.accelerators["app.settings"]).toBe("CmdOrCtrl+Shift+P");
+  });
+
+  it("the Classic look is part of the state, so switching the look rebuilds the menu", () => {
+    const none = () => undefined;
+    expect(menuBarState({}, "terminals", none, true).classic).toBe(true);
+    expect(JSON.stringify(menuBarState({}, "terminals", none, true))).not.toBe(JSON.stringify(menuBarState({}, "terminals", none)));
   });
 
   it("a tick box flips its own field from what is shown now, and screens map back", () => {

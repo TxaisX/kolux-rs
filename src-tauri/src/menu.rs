@@ -3,7 +3,7 @@
 //! change, it sends `menu_sync` the state it shows and the menu is rebuilt from it, so the ticks and
 //! the accelerators always agree with Settings (SET-020, SET-009). On Windows and Linux the menu
 //! opens from the Kolux mark (`menu_popup`); on macOS it is the app menu bar. A click on an item either acts
-//! here (reload, developer tools, interface zoom, full screen, minimise, zoom, exit) or comes back
+//! here (reload, developer tools, full screen, minimise, maximise, exit) or comes back
 //! to the page as a `menu-action` event carrying the item id, which is the keymap action id where
 //! one exists (`app.settings`, `sidebar.left.toggle`, ...), so the page runs the same code as the
 //! shortcut. T-248-b: APP-010 sidebar footer, APP-013 focus routing, APP-015 navigation guard.
@@ -43,7 +43,9 @@ pub struct MenuState {
     pub tasks_button: bool,
     pub automations_button: bool,
     pub title_bar_app_name: bool,
-    /// Menu item id -> accelerator text in the menu's own spelling ("CmdOrCtrl+,").
+    /// The Classic look has no screen switcher, so View drops Workspace View (T-049-b).
+    pub classic: bool,
+    /// Menu item id -> accelerator text in the menu's own spelling ("CmdOrCtrl+Comma").
     pub accelerators: HashMap<String, String>,
 }
 
@@ -88,7 +90,6 @@ pub fn spec(os: Os, s: &MenuState) -> Vec<Node> {
             label: "Kolux",
             items: vec![
                 Node::Stock(Stock::About),
-                item("help.checkUpdates", "Check for Updates..."),
                 Node::Sep,
                 item("app.settings", "Settings..."),
                 Node::Sep,
@@ -104,24 +105,19 @@ pub fn spec(os: Os, s: &MenuState) -> Vec<Node> {
     } else {
         bar.push(Node::Sub { label: "File", items: vec![item("app.settings", "Settings..."), Node::Sep, item("file.exit", "Exit")] });
     }
-    bar.push(Node::Sub {
-        label: "Edit",
-        items: vec![
-            Node::Stock(Stock::Undo),
-            Node::Stock(Stock::Redo),
-            Node::Sep,
-            Node::Stock(Stock::Cut),
-            Node::Stock(Stock::Copy),
-            Node::Stock(Stock::Paste),
-            Node::Stock(Stock::SelectAll),
-        ],
-    });
+    // Windows' stock Edit items replay Ctrl+key into whatever has focus, so in a terminal Copy with
+    // no selection would send Ctrl+C to the agent. There the page carries out edit.* with its
+    // terminal-aware copy, paste and select-all; macOS keeps the stock items.
+    let edit = if os == Os::Mac {
+        vec![Node::Stock(Stock::Undo), Node::Stock(Stock::Redo), Node::Sep, Node::Stock(Stock::Cut), Node::Stock(Stock::Copy), Node::Stock(Stock::Paste), Node::Stock(Stock::SelectAll)]
+    } else {
+        vec![item("edit.undo", "Undo"), item("edit.redo", "Redo"), Node::Sep, item("edit.cut", "Cut"), item("edit.copy", "Copy"), item("edit.paste", "Paste"), item("edit.selectAll", "Select All")]
+    };
+    bar.push(Node::Sub { label: "Edit", items: edit });
     let screens = SCREENS.iter().map(|(id, label, screen)| check(id, label, s.screen == *screen)).collect();
     bar.push(Node::Sub {
         label: "View",
-        items: vec![
-            Node::Sub { label: "Workspace View", items: screens },
-            Node::Sub {
+        items: [if s.classic { vec![] } else { vec![Node::Sub { label: "Workspace View", items: screens }] }, vec![Node::Sub {
                 label: "Appearance",
                 items: vec![
                     item("sidebar.left.toggle", "Toggle Left Sidebar"),
@@ -132,8 +128,8 @@ pub fn spec(os: Os, s: &MenuState) -> Vec<Node> {
                     check("set.automationsButton", "Show Automations Button", s.automations_button),
                     check("set.titleBarAppName", "Show Titlebar App Name", s.title_bar_app_name),
                 ],
-            },
-            Node::Sep,
+            }],
+            vec![Node::Sep,
             item("view.reload", "Reload"),
             item("app.forceReload", "Force Reload"),
             item("view.devtools", "Toggle Developer Tools"),
@@ -142,15 +138,15 @@ pub fn spec(os: Os, s: &MenuState) -> Vec<Node> {
             item("zoom.in", "Zoom In"),
             item("zoom.out", "Zoom Out"),
             Node::Sep,
-            item("view.fullscreen", "Toggle Full Screen"),
-        ],
+            item("view.fullscreen", "Toggle Full Screen")],
+        ]
+        .concat(),
     });
     bar.push(Node::Sub { label: "Window", items: vec![Node::Stock(Stock::Minimize), Node::Stock(Stock::Maximize)] });
-    let mut help = vec![item("help.reportCrash", "Report Crash..."), item("help.explore", "Explore Kolux"), item("help.gettingStarted", "Getting Started")];
+    // Report Crash, Explore Kolux, Getting Started and Check for Updates come with T-248-b.
     if os != Os::Mac {
-        help.extend([Node::Sep, item("help.checkUpdates", "Check for Updates..."), Node::Stock(Stock::About)]);
+        bar.push(Node::Sub { label: "Help", items: vec![Node::Stock(Stock::About)] });
     }
-    bar.push(Node::Sub { label: "Help", items: help });
     bar
 }
 
@@ -159,27 +155,16 @@ pub fn spec(os: Os, s: &MenuState) -> Vec<Node> {
 pub enum Route {
     Reload,
     DevTools,
-    Zoom(f64),
     FullScreen,
     Exit,
     Page(String),
 }
 
-/// Interface zoom steps (APP-009 "zoom in enlarges the interface; reset size returns it to normal").
-pub fn zoom_step(now: f64, how: &str) -> f64 {
-    let next = match how {
-        "zoom.in" => now + 0.1,
-        "zoom.out" => now - 0.1,
-        _ => 1.0,
-    };
-    ((next.clamp(0.5, 3.0)) * 10.0).round() / 10.0
-}
-
-pub fn route(id: &str, zoom: f64) -> Route {
+/// zoom.* goes to the page, which keeps the one saved interface zoom (SET-019).
+pub fn route(id: &str) -> Route {
     match id {
         "view.reload" | "app.forceReload" => Route::Reload,
         "view.devtools" => Route::DevTools,
-        "zoom.in" | "zoom.out" | "zoom.reset" => Route::Zoom(zoom_step(zoom, id)),
         "view.fullscreen" => Route::FullScreen,
         "file.exit" => Route::Exit,
         other => Route::Page(other.to_string()),
@@ -203,11 +188,6 @@ pub fn accelerators(nodes: &[Node]) -> Vec<String> {
 fn last() -> &'static Mutex<Option<MenuState>> {
     static LAST: OnceLock<Mutex<Option<MenuState>>> = OnceLock::new();
     LAST.get_or_init(|| Mutex::new(None))
-}
-
-fn zoom() -> &'static Mutex<f64> {
-    static ZOOM: OnceLock<Mutex<f64>> = OnceLock::new();
-    ZOOM.get_or_init(|| Mutex::new(1.0))
 }
 
 /// The window the menu was last opened in; clicks go back to it.
@@ -293,8 +273,7 @@ fn build_menu<R: Runtime, M: Manager<R>>(app: &M, nodes: &[Node]) -> tauri::Resu
 fn on_click<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
     let label = popped().lock().unwrap_or_else(|e| e.into_inner()).clone();
     let Some(view) = app.get_webview_window(&label) else { return };
-    let now = *zoom().lock().unwrap_or_else(|e| e.into_inner());
-    match route(id, now) {
+    match route(id) {
         Route::Reload => drop(view.reload()),
         Route::DevTools => {
             #[cfg(debug_assertions)]
@@ -302,11 +281,6 @@ fn on_click<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
                 view.close_devtools();
             } else {
                 view.open_devtools();
-            }
-        }
-        Route::Zoom(z) => {
-            if view.set_zoom(z).is_ok() {
-                *zoom().lock().unwrap_or_else(|e| e.into_inner()) = z;
             }
         }
         Route::FullScreen => drop(view.set_fullscreen(!view.is_fullscreen().unwrap_or(false))),
@@ -371,17 +345,15 @@ mod tests {
         nodes.iter().filter_map(|n| match n { Node::Check { id, checked: true, .. } => Some(*id), _ => None }).collect()
     }
     fn state(screen: &str) -> MenuState {
-        MenuState { screen: screen.into(), status_bar_visible: true, tasks_button: true, automations_button: false, title_bar_app_name: false, accelerators: HashMap::new() }
+        MenuState { screen: screen.into(), status_bar_visible: true, tasks_button: true, automations_button: false, title_bar_app_name: false, classic: false, accelerators: HashMap::new() }
     }
 
     #[test]
-    fn app_009_windows_has_file_edit_view_window_help_and_help_holds_updates_and_about() {
+    fn app_009_windows_has_file_edit_view_window_help_and_help_holds_about_until_t248b() {
         let bar = spec(Os::Windows, &state("terminals"));
         assert_eq!(labels(&bar), ["File", "Edit", "View", "Window", "Help"]);
         assert_eq!(ids(sub(&bar, "File")), ["app.settings", "file.exit"]);
-        let help = sub(&bar, "Help");
-        assert_eq!(ids(help), ["help.reportCrash", "help.explore", "help.gettingStarted", "help.checkUpdates"]);
-        assert!(help.contains(&Node::Stock(Stock::About)));
+        assert_eq!(sub(&bar, "Help"), [Node::Stock(Stock::About)]);
         assert_eq!(sub(&bar, "Window"), [Node::Stock(Stock::Minimize), Node::Stock(Stock::Maximize)]);
         // Linux gets the same bar as Windows.
         assert_eq!(spec(Os::Linux, &state("terminals")), bar);
@@ -390,20 +362,37 @@ mod tests {
     #[test]
     fn app_009_macos_app_menu_replaces_file_and_runs_hide_hide_others_show_all_in_order() {
         let bar = spec(Os::Mac, &state("terminals"));
-        assert_eq!(labels(&bar), ["Kolux", "Edit", "View", "Window", "Help"]);
+        assert_eq!(labels(&bar), ["Kolux", "Edit", "View", "Window"]);
         let app = sub(&bar, "Kolux");
-        assert_eq!(ids(app), ["help.checkUpdates", "app.settings"]);
+        assert_eq!(ids(app), ["app.settings"]);
         let stock: Vec<Stock> = app.iter().filter_map(|n| if let Node::Stock(s) = n { Some(*s) } else { None }).collect();
         assert_eq!(stock, [Stock::About, Stock::Services, Stock::Hide, Stock::HideOthers, Stock::ShowAll, Stock::Quit]);
-        assert!(!ids(sub(&bar, "Help")).contains(&"help.checkUpdates"), "macOS keeps updates in the app menu");
     }
 
     #[test]
-    fn app_009_every_platform_has_the_full_edit_menu() {
-        for os in [Os::Windows, Os::Mac, Os::Linux] {
-            let edit: Vec<Stock> = sub(&spec(os, &state("agents")), "Edit").iter().filter_map(|n| if let Node::Stock(s) = n { Some(*s) } else { None }).collect();
-            assert_eq!(edit, [Stock::Undo, Stock::Redo, Stock::Cut, Stock::Copy, Stock::Paste, Stock::SelectAll]);
+    fn app_009_macos_edit_is_stock_and_windows_linux_edit_goes_to_the_page_never_as_a_key_press() {
+        let edit: Vec<Stock> = sub(&spec(Os::Mac, &state("agents")), "Edit").iter().filter_map(|n| if let Node::Stock(s) = n { Some(*s) } else { None }).collect();
+        assert_eq!(edit, [Stock::Undo, Stock::Redo, Stock::Cut, Stock::Copy, Stock::Paste, Stock::SelectAll]);
+        for os in [Os::Windows, Os::Linux] {
+            let bar = spec(os, &state("agents"));
+            let edit = sub(&bar, "Edit");
+            assert!(!edit.iter().any(|n| matches!(n, Node::Stock(_))), "{os:?} must not replay Ctrl+key");
+            assert_eq!(ids(edit), ["edit.undo", "edit.redo", "edit.cut", "edit.copy", "edit.paste", "edit.selectAll"]);
+            for id in ids(edit) {
+                assert_eq!(route(id), Route::Page(id.into()));
+            }
         }
+    }
+
+    #[test]
+    fn t049b_classic_drops_workspace_view_and_switching_the_look_rebuilds_the_menu() {
+        let mut s = state("terminals");
+        let new_look = spec(Os::Windows, &s);
+        s.classic = true;
+        let classic = spec(Os::Windows, &s);
+        assert_ne!(classic, new_look);
+        assert_eq!(labels(sub(&classic, "View")), ["Appearance"]);
+        assert_eq!(labels(sub(&new_look, "View")), ["Workspace View", "Appearance"]);
     }
 
     #[test]
@@ -434,10 +423,10 @@ mod tests {
     #[test]
     fn set_009_a_changed_shortcut_shows_as_the_new_accelerator_and_an_empty_one_shows_none() {
         let mut s = state("terminals");
-        s.accelerators.insert("app.settings".into(), "CmdOrCtrl+,".into());
+        s.accelerators.insert("app.settings".into(), "CmdOrCtrl+Comma".into());
         s.accelerators.insert("zoom.in".into(), "CmdOrCtrl+=".into());
         let file = spec(Os::Windows, &s);
-        assert_eq!(sub(&file, "File")[0], Node::Item { id: "app.settings", label: "Settings...", accel: Some("CmdOrCtrl+,".into()) });
+        assert_eq!(sub(&file, "File")[0], Node::Item { id: "app.settings", label: "Settings...", accel: Some("CmdOrCtrl+Comma".into()) });
         s.accelerators.insert("app.settings".into(), "CmdOrCtrl+Shift+P".into());
         s.accelerators.insert("zoom.in".into(), String::new());
         let bar = spec(Os::Windows, &s);
@@ -446,24 +435,21 @@ mod tests {
     }
 
     #[test]
-    fn app_009_zoom_in_twice_then_reset_is_back_at_100_and_steps_are_clamped() {
-        let z = zoom_step(zoom_step(1.0, "zoom.in"), "zoom.in");
-        assert_eq!(z, 1.2);
-        assert_eq!(zoom_step(z, "zoom.reset"), 1.0);
-        assert_eq!(zoom_step(0.5, "zoom.out"), 0.5);
-        assert_eq!(zoom_step(3.0, "zoom.in"), 3.0);
-        assert_eq!(route("zoom.out", 1.0), Route::Zoom(0.9));
+    fn set_019_menu_zoom_goes_to_the_page_so_the_saved_interface_zoom_stays_the_only_one() {
+        for id in ["zoom.in", "zoom.out", "zoom.reset"] {
+            assert_eq!(route(id), Route::Page(id.into()));
+        }
     }
 
     #[test]
     fn app_009_native_items_act_here_and_the_rest_go_to_the_page_by_keymap_id() {
-        assert_eq!(route("view.reload", 1.0), Route::Reload);
-        assert_eq!(route("app.forceReload", 1.0), Route::Reload);
-        assert_eq!(route("view.devtools", 1.0), Route::DevTools);
-        assert_eq!(route("view.fullscreen", 1.0), Route::FullScreen);
-        assert_eq!(route("file.exit", 1.0), Route::Exit);
+        assert_eq!(route("view.reload"), Route::Reload);
+        assert_eq!(route("app.forceReload"), Route::Reload);
+        assert_eq!(route("view.devtools"), Route::DevTools);
+        assert_eq!(route("view.fullscreen"), Route::FullScreen);
+        assert_eq!(route("file.exit"), Route::Exit);
         for id in ["app.settings", "screen.board", "sidebar.left.toggle", "set.tasksButton", "help.checkUpdates", "help.reportCrash"] {
-            assert_eq!(route(id, 1.0), Route::Page(id.into()));
+            assert_eq!(route(id), Route::Page(id.into()));
         }
     }
 
@@ -475,9 +461,9 @@ mod tests {
 
     #[test]
     fn menu_state_reads_the_pages_camel_case_and_tolerates_missing_fields() {
-        let s: MenuState = serde_json::from_value(serde_json::json!({ "screen": "board", "statusBarVisible": true, "accelerators": { "app.settings": "CmdOrCtrl+," } })).unwrap();
+        let s: MenuState = serde_json::from_value(serde_json::json!({ "screen": "board", "statusBarVisible": true, "accelerators": { "app.settings": "CmdOrCtrl+Comma" } })).unwrap();
         assert_eq!(s.screen, "board");
         assert!(s.status_bar_visible && !s.tasks_button);
-        assert_eq!(s.accelerators["app.settings"], "CmdOrCtrl+,");
+        assert_eq!(s.accelerators["app.settings"], "CmdOrCtrl+Comma");
     }
 }
