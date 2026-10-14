@@ -121,7 +121,7 @@ export function toolWait(key: number, terminal?: number): number {
 }
 
 /** AFTER 1: the paste limit counts the bytes that go to the terminal, not UTF-16 units. */
-const tooLong = (text: string) => text.length > LIMIT || new TextEncoder().encode(text).length > LIMIT;
+export const tooLong = (text: string) => text.length > LIMIT || new TextEncoder().encode(text).length > LIMIT;
 
 export type SendDeps = {
   /** The pane's program session now (asked at send time, so a reconnect's new session is used). */

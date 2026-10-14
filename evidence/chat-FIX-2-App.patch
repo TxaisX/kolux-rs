@@ -1,5 +1,5 @@
 diff --git a/src/App.tsx b/src/App.tsx
-index 9f26ca2..30532c8 100644
+index 9f26ca2..a67e506 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
 @@ -130,6 +130,9 @@ import { hooksOn } from "./settings/AgentsPage";
@@ -7,7 +7,7 @@ index 9f26ca2..30532c8 100644
  import { AgentsChat } from "./chat/ChatView";
  import { useTeamsHost, withTeams } from "./launch/teams";
 +import { answered as cardAnswered, hearStates, hearingNow, holdFor, outcomeNote, pasteToPane, writeTerminal } from "./chat/send";
-+import { copyPrompt, hooksAbsent, kitPasted, kitStep, kitWait, pasteUnchecked } from "./chat/kitPrompt";
++import { copyPrompt, hooksAbsent, kitPasted, kitStep, kitWait, sendPrompt } from "./chat/kitPrompt";
 +import { KitPromptNotices } from "./chat/KitNotice";
  import PlanSheet from "./terminal/PlanSheet";
  import { draftKey, feedbackMessage, keepDraft, showsReview, startFeedback, stillPending, type PendingSend, type PlanDraft } from "./terminal/planReview";
@@ -147,7 +147,7 @@ index 9f26ca2..30532c8 100644
      } catch (err) {
        return `The notes were not sent, so they are kept: ${String(err)}`;
      }
-@@ -2174,6 +2203,25 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -2174,6 +2203,19 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                    }}
                  />
                )}
@@ -156,17 +156,11 @@ index 9f26ca2..30532c8 100644
 +                  waiting={kitRuns.current[activeDir].waiting}
 +                  onCopy={(w) => void copyPrompt(w, setToast)}
 +                  onSend={(w) => {
++                    // Stand-in review FIX-BEFORE 3: unchecked only while Kolux cannot see; refused while it sees a menu.
 +                    const run = kitRuns.current[activeDir];
++                    if (!run) return;
 +                    const id = ptys.current[w.key];
-+                    if (!run || id === undefined) return setToast("That agent's terminal is not running, so nothing was sent.");
-+                    void pasteUnchecked(id, w.prompt, writeTerminal).then(
-+                      () => {
-+                        run.waiting = run.waiting.filter((x) => x !== w);
-+                        run.sent[w.role] = Date.now();
-+                        setKitTick((n) => n + 1);
-+                      },
-+                      () => setToast("The prompt could not be typed into the terminal."),
-+                    );
++                    void sendPrompt(run, w, { terminal: id, why: () => holdFor(w.key, toPane.stateOf, id), write: writeTerminal, say: setToast, changed: () => setKitTick((n) => n + 1) });
 +                  }}
 +                />
 +              )}

@@ -2,9 +2,9 @@
 // another role is due, its prompt goes into its agent's terminal only on a clear hook reading. When
 // it cannot, the kit strip says why instead of waiting without a sign, and nothing is ever sent by a
 // timer: only a clear reading or the user's own Send prompt click puts it in.
-import type { KitWait } from "../kits/useKits";
+import type { KitRun, KitWait } from "../kits/useKits";
 import { ASKING_NOTE, enqueue, pasteSteps, typeSteps } from "./composer";
-import type { SendOutcome } from "./send";
+import { tooLong, type SendOutcome } from "./send";
 
 /** How long a due role waits quietly on an agent Kolux cannot read, or one that is asking, before
  * the strip says so. */
@@ -19,6 +19,10 @@ export const readyText = (role: string, agent: string) => `${role} is ready for 
 export const askingText = (role: string, agent: string) => `${role}'s prompt is waiting: ${agent} is asking something in its terminal. Answer it there.`;
 export const stoppedText = (role: string, agent: string) => `${role}'s prompt stopped before its Enter: ${agent} began asking something. Answer it in its terminal, then send the prompt.`;
 export const tooLongText = (role: string) => `${role}'s prompt is too long to paste. Copy it into the agent's terminal.`;
+/** Stand-in review of 1e9613e, FIX-BEFORE 3: Send prompt refused while Kolux sees a menu open. */
+export const askFirstText = (agent: string) => `${agent} is asking something. Answer it in its terminal first.`;
+export const NO_TERMINAL_TEXT = "That agent's terminal is not running, so nothing was sent.";
+export const TYPE_FAILED_TEXT = "The prompt could not be typed into the terminal.";
 
 export type KitNotice = { kind: "no-hooks" | "unseen" | "asking" | "stopped" | "too-long"; text: string; canSend: boolean };
 /** A waiting role as the kit run keeps it, with what this module adds: the role's and the agent's
@@ -75,8 +79,48 @@ export const kitNotices = (waiting: readonly KitWait[]) =>
 
 /** Send prompt: the user saw the notice and chose to send, so the prompt goes in with no state check:
  * the input line cleared, one bracketed paste, then Enter. True when every write went. */
-export const pasteUnchecked = (terminal: number, prompt: string, write: (terminal: number, data: string) => Promise<unknown>, sleep?: (ms: number) => Promise<unknown>) =>
-  enqueue(terminal, () => typeSteps(pasteSteps(prompt, true), (d) => write(terminal, d), sleep));
+export const pasteUnchecked = (terminal: number, prompt: string, write: (terminal: number, data: string) => Promise<unknown>, sleep?: (ms: number) => Promise<unknown>, asking: () => boolean = () => false) =>
+  enqueue(terminal, () => typeSteps(pasteSteps(prompt, true), (d) => write(terminal, d), sleep, asking));
+
+export type SendPromptDeps = {
+  /** The role's terminal now, or undefined when its program is not running. */
+  terminal: number | undefined;
+  /** The send check's hold reason for the role's pane right now (holdFor), asked before every write. */
+  why: () => string | undefined;
+  write: (terminal: number, data: string) => Promise<unknown>;
+  /** Shows the user a toast. */
+  say: (text: string) => void;
+  /** The run's waiting list or a notice changed (the strip redraws). */
+  changed: () => void;
+  sleep?: (ms: number) => Promise<unknown>;
+  now?: () => number;
+};
+/** Send prompt, the user's own click on a notice (stand-in review of 1e9613e, FIX-BEFORE 3, AFTER 2).
+ * The paste is unchecked only while Kolux cannot see: when its reading says the agent is asking (a
+ * menu whose default is Yes), nothing is typed and the toast says to answer it first, also when the
+ * menu is reported between the paste and its Enter. A prompt too long for one paste, or a pane with
+ * no running program, is refused with its reason. True when the prompt went in; the role then leaves
+ * the run's waiting list. */
+export async function sendPrompt(run: Pick<KitRun, "waiting" | "sent">, wait: KitWait, deps: SendPromptDeps): Promise<boolean> {
+  const w = wait as KitPromptWait;
+  const [role, agent] = names(w);
+  const asking = () => deps.why() === ASKING_NOTE;
+  if (deps.terminal === undefined) return void deps.say(NO_TERMINAL_TEXT), false;
+  if (tooLong(w.prompt)) return void deps.say(tooLongText(role)), false;
+  if (asking()) return void deps.say(askFirstText(agent)), false;
+  const ok = await pasteUnchecked(deps.terminal, w.prompt, deps.write, deps.sleep, asking).catch(() => null);
+  if (ok === null) return void deps.say(TYPE_FAILED_TEXT), false;
+  if (!ok) {
+    kitPasted(w, "stopped");
+    deps.say(askFirstText(agent));
+    deps.changed();
+    return false;
+  }
+  run.waiting = run.waiting.filter((x) => x !== wait);
+  run.sent[w.role] = (deps.now ?? Date.now)();
+  deps.changed();
+  return true;
+}
 
 /** Copy prompt: the role's prompt to the clipboard; `say` gets what to tell the user. */
 export const copyPrompt = (wait: KitWait, say: (text: string) => void) =>

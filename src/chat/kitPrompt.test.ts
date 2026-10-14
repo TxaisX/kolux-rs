@@ -3,7 +3,8 @@
 import { describe, expect, it } from "vitest";
 import type { KitWait } from "../kits/useKits";
 import { ASKING_NOTE } from "./composer";
-import { KIT_NOTICE_MS, askingText, hooksAbsent, kitNotices, kitPasted, kitStep, kitWait, pasteUnchecked, readyText, stoppedText } from "./kitPrompt";
+import { KIT_NOTICE_MS, askFirstText, askingText, hooksAbsent, kitNotices, kitPasted, kitStep, kitWait, pasteUnchecked, readyText, sendPrompt, stoppedText, tooLongText } from "./kitPrompt";
+import { LIMIT } from "../terminal/paste";
 import { UNSEEN_NOTE } from "./send";
 
 const wait = (): KitWait => kitWait({ role: "review", upstream: "build", key: 7, prompt: "Review the build." }, "Reviewer", "Codex");
@@ -100,5 +101,83 @@ describe("Send prompt (the user's own click)", () => {
     const got: string[] = [];
     expect(await pasteUnchecked(70, "Review the build.", async (_id, d) => void got.push(d), async () => {})).toBe(true);
     expect(got).toEqual(["\x15", "\x1b[200~Review the build.\x1b[201~", "\r"]);
+  });
+});
+
+// Stand-in review of chat 1e9613e, FIX-BEFORE 3 (and AFTER 2): Send prompt is unchecked only while
+// Kolux cannot see; when it can see a menu open, the click types nothing and says why.
+describe("Send prompt while Kolux sees the agent asking", () => {
+  const run = (w: KitWait) => ({ waiting: [w], sent: {} as Record<string, number> });
+  const deps = (why: () => string | undefined, got: string[], said: string[], terminal: number | undefined = 70) => ({
+    terminal,
+    why,
+    write: async (_id: number, d: string) => void got.push(d),
+    say: (t: string) => void said.push(t),
+    changed: () => {},
+    sleep: async () => {},
+    now: () => 5,
+  });
+
+  it("refuses with a toast and types nothing on a stopped notice while the agent asks", async () => {
+    const w = wait();
+    kitPasted(w, "stopped");
+    const r = run(w);
+    const got: string[] = [];
+    const said: string[] = [];
+    expect(await sendPrompt(r, w, deps(() => ASKING_NOTE, got, said))).toBe(false);
+    expect(got).toEqual([]);
+    expect(said).toEqual([askFirstText("Codex")]);
+    expect(said[0]).toBe("Codex is asking something. Answer it in its terminal first.");
+    expect(r.waiting).toEqual([w]);
+  });
+
+  it("refuses on an unseen notice once a permission reading has arrived", async () => {
+    const w = wait();
+    kitStep(w, 0, UNSEEN_NOTE, false);
+    kitStep(w, KIT_NOTICE_MS, UNSEEN_NOTE, false);
+    const r = run(w);
+    const got: string[] = [];
+    const said: string[] = [];
+    expect(await sendPrompt(r, w, deps(() => ASKING_NOTE, got, said))).toBe(false);
+    expect(got).toEqual([]);
+    expect(r.waiting).toEqual([w]);
+  });
+
+  it("sends unchecked while Kolux cannot see, and the role leaves the waiting list", async () => {
+    const w = wait();
+    const r = run(w);
+    const got: string[] = [];
+    const said: string[] = [];
+    let changed = 0;
+    expect(await sendPrompt(r, w, { ...deps(() => UNSEEN_NOTE, got, said), changed: () => void changed++ })).toBe(true);
+    expect(got).toEqual(["\x15", "\x1b[200~Review the build.\x1b[201~", "\r"]);
+    expect(r.waiting).toEqual([]);
+    expect(r.sent).toEqual({ review: 5 });
+    expect(changed).toBe(1);
+    expect(said).toEqual([]);
+  });
+
+  it("a menu reported mid-paste stops it before the Enter; the role keeps waiting", async () => {
+    const w = wait();
+    const r = run(w);
+    const got: string[] = [];
+    const said: string[] = [];
+    const why = () => (got.length >= 2 ? ASKING_NOTE : undefined);
+    expect(await sendPrompt(r, w, deps(why, got, said))).toBe(false);
+    expect(got).not.toContain("\r");
+    expect(r.waiting).toEqual([w]);
+    expect(said).toEqual([askFirstText("Codex")]);
+    expect(kitNotices([w])[0].notice.kind).toBe("stopped");
+  });
+
+  it("no terminal, or a prompt too long for one paste, types nothing and says why", async () => {
+    const got: string[] = [];
+    const said: string[] = [];
+    const w = wait();
+    expect(await sendPrompt(run(w), w, { ...deps(() => undefined, got, said), terminal: undefined })).toBe(false);
+    const long = kitWait({ role: "review", upstream: "build", key: 7, prompt: "x".repeat(LIMIT + 1) }, "Reviewer", "Codex");
+    expect(await sendPrompt(run(long), long, deps(() => undefined, got, said))).toBe(false);
+    expect(got).toEqual([]);
+    expect(said).toEqual(["That agent's terminal is not running, so nothing was sent.", tooLongText("Reviewer")]);
   });
 });
