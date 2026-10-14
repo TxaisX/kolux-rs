@@ -1,101 +1,94 @@
-FIX-2 (council review reliability-85f1172, wave 4) on lane/reliability from 85f1172
-Step 0: merged main 5f3b287 (MERGE 66) as c563e74; clean, merged tree identical to main.
+FIX-2 (lane/look, 2026-10-14): council re-review d2/look-829f533-rereview.md, "Send to build session"
+BEFORE 829f533 · STEP 0 merge of main 5f3b287 = 11f77b0 · no app launches (standing rule): screen changes carry
+LIVE PROOF PENDING steps below for the coordinator's batched run.
 
-What the user gets
-- No console window flashes up when Kolux asks gh which account is signed in, opens a pull
-  request in the browser, or stops a slow commit-message agent (every program scm starts now
-  hides its console the same way).
-- Asking gh for the signed-in account no longer runs on the async thread, so a slow gh never holds
-  up other commands.
-- Show in file manager works only for a worktree inside a registered project or workspaces folder
-  (its real place included), and a path part that cannot be looked up is refused instead of being
-  walked past.
-- A pull request link is opened only when its host part is a plain host name: no user, password
-  or port, so https://github.com@evil.example/... cannot pass for github.com.
-- A failed clone's one-line reason never shows a password or token that was in the link
-  (https://***@host), and a final line git ended with a bare carriage return still counts.
-- All Changes: the status read as the tab opens no longer overwrites a newer watcher status (the
-  Commit count and Commit button state are never up to 30 s stale), and a base read that answers
-  after the tab moved on no longer changes the base line.
-- A pasted GitHub link is parsed strictly: github.com only (or the GitHub Enterprise hosts the
-  caller lists), no user, password or port, owner and repository names by GitHub's rules, no
-  "." or ".." and no backslash or percent-escape tricks.
-- GIT-064: a workspace with neither a branch nor a commit known shows no "detached at" label; the
-  row and every sentence naming it use the folder name.
+== 1. FB (part 2 P1, P2, P3; part 1 FB-1) ==
+P1 editor search can lock a core: parse_rg now takes the hits still wanted and stops there before
+building any (take(limit)), the column is one forward scan over the line, and the before/after trim
+walks at most SIDE characters instead of counting the whole prefix per hit.
+- Measured: ripgrep 14.1.1 ignores --max-columns / --max-columns-preview in --json output (a 5000-char
+  line with --max-columns 2000 still came back whole with 5000 submatches), so that flag was not added.
+- Test: editor_search::tests::a_line_with_thousands_of_matches_builds_only_the_hits_asked_for
+  (60 000 matches on one line; limit 3 gives 3 hits at UTF-16 columns 1,2,3; limit MAX_HITS gives 2000
+  with SIDE-long sides). On the old code it does not compile (parse_rg took no limit).
+- cargo test editor_search: 6 passed, 0 failed; clippy -D warnings exit 0.
+P2 the T-234-a, T-235-a and T-236-a ticks now end "live proof pending (batched)".
+P3 the Tower's Own window button is not offered (ownWindow.ts OWN_WINDOW_WIRED = false) until T-546-c's
+window side is wired; the Tower's own window code stays, off.
+- Test: TowerView.test.ts "FIX-2 (council P3): until the Tower's own window is wired, the main window's
+  Tower does not offer it" FAILED on the old TowerView.tsx/ownWindow.ts (1 failed | 2 passed), passes now
+  (vitest related: 2 files, 10 tests).
+FB-1 coordinator hunks, regenerated as real git patches (scratch worktree G:/Temp/look-w1-wt, removed):
+- evidence/FIX-2-open_in-lib.patch: lib.rs files::open_in registration, against the lane (11f77b0 and
+  later: the context has editor_search). evidence/FIX-2-open_in-lib-5f3b287.patch: the same against clean
+  5f3b287. With it, drop the #[allow(dead_code)] line above open_in in files.rs.
+- evidence/FIX-2-t550-topbar.patch: TopBar mounts UsagePill (the one button) in place of the span.
+- evidence/FIX-2-t546c-window.patch: capabilities/default.json (+create-webview-window, set-focus,
+  unminimize), new capabilities/tower.json (event default + close only), lib.rs Destroyed: only main
+  kills shells and closes the Tower, main.tsx draws TowerWindow for #tower-window, App.tsx useTowerBridge.
+  With it, set OWN_WINDOW_WIRED = true in src/tower/ownWindow.ts.
+- git apply --check: open_in-5f3b287, t550, t546c each OK on clean 5f3b287; open_in-lib, t546c, t550 OK
+  in sequence on 11f77b0. The lane's own EditorPane / Explorer / ClaudePill hunks are no longer hunks:
+  the lane now contains main, so merging the lane brings them whole.
 
-Review items
-- FB1 (T-315-a ids to T-315-b): already on main (PLAN T-315-a / T-315-b lines), nothing to do.
-- FS1 pasted link parser strict: src/scm/paste.ts githubItem(text, hosts) + scm.rs safe_pr_url.
-- FS2 fresh flag: src/editor/AllChangesPane.tsx statusGate (first used only until watched).
-- (b) CREATE_NO_WINDOW on the gh spawn: scm.rs quiet() used by gh_account (gh_login and
-  scm_gh_account), gh_run_for, write_message, its taskkill, scm_open_pr.
-- (c) model.ts GIT-064: worktreeLabel falls back to the folder name when head is empty.
-- AFTER 1 scm_reveal fences the worktree: scm.rs reveal_place -> links::fence(follow).
-- AFTER 2 reveal_target breaks only on NotFound, refuses other lookup errors; the swap race is
-  noted in a comment.
-- AFTER 3 failure_reason scrubs scheme://user:pass@ (git.rs hide_userinfo) and keeps a line that
-  ends in a bare \r (last non-empty \r segment).
-- AFTER 4 setBase after the alive check: the read returns { base, es } and fetch applies both after
-  the alive check.
-- Not touched: src/terminal/paste.ts (held by the look lane). T-315-b stays open (quick switcher,
-  CLI).
-- Evidence wording correction asked by the review (GIT_CONFIG_COUNT carrying
-  credential.interactive, not GIT_ASKPASS, caused the earlier password-test failure): recorded
-  here; evidence/FIX-1-followup.txt is left as committed.
+LIVE PROOF PENDING (1):
+- Tower (switcher Tower): the header shows Refresh and no "Own window" button.
+- T-234-a: open a code file, Ctrl+F opens find, Ctrl+H replace; a file with <<<<<<< / ======= / >>>>>>>
+  markers shows them coloured with next/previous conflict steps.
+- T-235-a: open a markdown note in preview, Ctrl+F finds in the rendered text; the contents panel lists
+  the headings and a click jumps to one.
+- T-236-a: Ctrl+Shift+F in the Explorer, type a word: hits grouped per file with line numbers; a click
+  opens the file at the hit. A one-line minified file with "e" stays responsive and shows at most 2000 hits.
 
-Tests (each run on the old code first, all failed; then passed)
-- scm::tests::fix2_every_spawn_hides_its_console (source scan: no Command::new outside quiet;
-  old code: no quiet helper, three bare spawns)
-- scm::tests::fix2_reveal_refuses_a_worktree_outside_every_project (old: Ok(README.md))
-- scm::tests::fix2_reveal_refuses_when_a_part_cannot_be_read (300-char name; old: walked past)
-- scm::tests::fix2_a_pull_request_link_with_a_user_or_port_is_not_opened (old: accepted
-  github.com@evil.example)
-- git::tests::fix2_a_clone_reason_hides_the_link_password_and_keeps_a_last_redrawn_line (old:
-  the token in the reason)
-- src/editor/AllChangesPane.test.ts "FIX-2: the status read as the tab opens" (2 tests; old: no
-  statusGate)
-- src/projects/model.test.ts "GIT-064: with neither a branch nor a commit known ..." (old:
-  "detached at ")
-- src/scm/paste.test.ts "FIX-2: a pasted link only ever names the host it shows" and the GHE /
-  upper-case host lines in "cleans a pull request ..." (old: github.com@evil.example accepted)
-Red run: G:/Temp/rel-w1-logs/fix2-red.log (Rust 5 failed), vitest 5 failed / 32 passed.
-Green run: G:/Temp/rel-w1-logs/fix2-green.log (Rust 5/5), vitest 37/37 on the three files.
+== 2. FS-1 fence: namespace spellings of a share ==
+is_share now refuses every path whose first two characters are separators (either slash) unless it
+is a verbatim disk path, so the device-namespace and verbatim spellings (the dot-UNC, the
+question-mark GLOBALROOT, a Volume GUID, a dot-drive) are refused from the spelling, before resolve
+(canonicalize) can contact a host. A resolved project path (verbatim disk) still passes.
+- Test: fence::tests::acct_055_namespace_spellings_of_a_share_are_refused_before_they_resolve.
+  On the old fence.rs it FAILED: the dot-UNC spelling came back "... is outside them" (it had been
+  resolved first). Now: cargo test fence 10 passed, 0 failed; clippy -D warnings exit 0; tsc exit 0.
+- Not fixed here (seen): a link inside a project that points at a share is still followed by
+  canonicalize before the share check on the result (council FS-1's last sentence); refusing that
+  needs reading each link target without following it, which is a reliability-lane fence change.
 
-Gates: see the commit body (full cargo, clippy, tsc, vitest, plan-check, firewall).
+== 3. FS-2 open_in launches the canonical folder ==
+open_target now returns the folder's canonical path (links and dot-dot resolved, the verbatim prefix
+of a disk path dropped) after the fence and the folder check, so a spelling whose quote and shell
+characters sit in a component that dot-dot cancels never reaches the launcher (code.cmd's %*).
+- Test: files::open_in_tests::edit043_the_folder_opened_is_the_canonical_one_not_the_callers_spelling
+  (a real temp folder spelled base\a"&x|y<z>\..\sub: Windows says it is a folder; what comes back has
+  none of " & | < > or "..", no verbatim prefix, and equals the canonical sub). On the old code it does
+  not compile (plain_disk_path is new) and its spelling came back unchanged (council probe).
+- cargo test edit043: 7 passed, 0 failed; clippy -D warnings exit 0; tsc exit 0.
 
-LIVE PROOF PENDING (batched)
-1. Open All Changes on a worktree, commit from a terminal right away: the Commit count drops to 0
-   and stays there (no jump back to the old count a moment later).
-2. Source Control > the pull request's Open in browser: the browser opens, no console window
-   flashes.
-3. Paste https://github.com@example.com/o/r/pull/1 into the quick switcher once T-315-b wires it:
-   nothing opens.
+== 4. FS-3 second paste, FS-4 forecast readings (AFTER 1 wording) ==
+FS-3 paste.ts: handlePaste (the editor's paste handler, now exported) refuses a paste made while a
+chunked paste is still going in, with the toast "Paste refused: the last paste is still going in.
+Nothing was pasted." (before, a small one was dropped silently by holdInput and a big one started a
+second run of pieces). A piece whose dispatch throws now clears the paste mark, so the editor takes
+input again. AFTER 1: the header says keys are dropped, not queued.
+- Test: paste.test.ts "EDIT-008 (FIX-2): a second paste mid-paste is refused with a toast, and a failing
+  piece does not hold input forever". On the old code it does not compile (handlePaste/busyRefusal are new).
+FS-4 ClaudePill.tsx publishLive: only the windows the live report itself carried become forecast
+readings; a window kept from an older stored report (the backend merges them) is no longer stamped
+now. The event's optional "carried" list names them; without it, a window equal to what is shown is
+taken as kept. evidence/FIX-2-hooks-carried.patch (hooks lane, not committed) makes record_usage emit
+"carried" (the kinds before merge_limits). Applied in place: cargo test hooks:: 50 passed, clippy 0; reverted.
+- Test: ClaudePill.test.ts "FIX-2 (USAGE-031): only the windows a live report carried become forecast
+  readings" FAILED on the old ClaudePill.tsx (1 failed | 1 passed), passes now.
+- tsc 0; vitest related paste.ts + ClaudePill.tsx: 22 files, 142 tests passed.
+LIVE PROOF PENDING (4): paste a 1 MB text into a code file and paste again at once: a toast says the
+last paste is still going in; the first paste lands whole and one Ctrl+Z takes it out.
 
-FIX-2 addendum (council FIX-BEFORE, coordinator 2026-10-14): gh -F reads an @value from a file
-What the user gets
-- A pull request link whose owner part starts with @ (a hand link, or one an untrusted origin
-  hands back through the PR poll) can no longer make gh read a file such as an SSH key and send
-  it to another host: owner and name go to gh as raw strings, and such a link is refused outright.
-- Kolux asks gh about a pull request (merge box state, merge actions, a hand-linked PR) only on a
-  host gh is signed in to; any other host gets no request at all, and the reason says to run
-  gh auth login for it.
-Changes (src-tauri/src/scm.rs only)
-- merge_info: -f owner= / -f name=; -F stays only on the digit-checked number. No other -F on a gh
-  call in scm.rs (the one other -F is git commit -F - reading stdin); github.rs uses -f only.
-- pr_url_in: plain host (no user, password, port), owner 1-39 of [A-Za-z0-9-] starting
-  alphanumeric, name 1-100 of [A-Za-z0-9._-] not starting with a dot, so no @, no dot start, no /
-  or \. pr_parts (merge_info, merge_act) and the printed-link scanner use it; pr_link now also
-  needs it.
-- signed_host(gh, host): scm-local host gate (gh_account on that host, from gh's own config, no
-  network); called by merge_info, merge_act, pr_link. crate::github::host_allowed (tasks FIX-1) is
-  not in this tree, so this stands in for it; switch over when it lands.
-- Not touched: tasks_search, gh_value (tasks lane's patch edits those; no overlap).
-Tests
-- scm::tests::fix2_an_at_path_owner_is_refused_and_a_host_gh_is_not_signed_in_to_gets_no_request
-  (new; the @..\..\.ssh\id_ed25519 link, @id, .ssh owner, .git name, backslash, port and user
-  links refused; nobody.example gets only gh's config lookup, never api or pr)
-- scm::tests::git033_... now asserts -f owner=o, -f name=r, -F number=42, never -F owner=/name=;
-  git.example.com is a signed-in stand-in in its gh stub; stand_in_gh answers config get with a
-  login for every host but nobody.example.
-- Red: G:/Temp/rel-w1-logs/fix2b-red.log (old code, new tests): both FAILED, 40 passed.
-- Green: G:/Temp/rel-w1-logs/fix2b-green.log: scm::tests 42/42.
+== 5. P6 usage timers, P7 pill click test (P4, P5 not done this pass) ==
+P6 refresh.ts: the five-minute timer skips its read while the document is hidden (showing the window
+already reads through the visibilitychange focus kick); RunnerOptions.focusDebounceMs sets how soon
+after a read a focus may read again, and CodexPill uses CODEX_FOCUS_MS = 2 min (a Codex read starts
+a helper process), Claude keeps MOMENTS_MS.
+- Test: refresh.test.ts "skips timer reads while hidden, reads when shown, and keeps a longer focus
+  debounce". Not run against the old code this pass (budget); on it the hidden timer reads and the
+  1-minute focus reads, so the call counts 1 and 1 would come back 4 and 2.
+P7 UsagePill.test.ts: the click test now takes the button UsagePill renders and calls its own onClick.
+- tsc 0; vitest related refresh.ts + UsagePill.tsx + CodexPill.tsx: 18 files, 114 tests passed.
+Open: P4 (kill a superseded rg child) and P5 (clamp Hit.text, --max-filesize 10M) for the next pass.

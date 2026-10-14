@@ -86,6 +86,9 @@ fn closed(mut rec: Onboarding, outcome: &str, now: u64) -> Result<Onboarding, St
         rec.outcome = Some(outcome.into());
         if outcome == "completed" {
             rec.step = LAST;
+        } else {
+            // ONB-006: Skip (the only way to close as dismissed) also dismisses the sidebar checklist.
+            rec.rest.insert("checklistDismissed".into(), true.into());
         }
     }
     Ok(rec)
@@ -177,6 +180,42 @@ pub struct Guide {
     /// ONB-032: whether this profile gets tours by itself, decided once (tours_get) and never again.
     #[serde(default)]
     pub tours_auto: Option<bool>,
+    /// ONB-042: each known feature's first use and running use count on this machine. Unknown
+    /// features and damaged entries are dropped on load without notice.
+    #[serde(default, deserialize_with = "features_de")]
+    pub features: std::collections::BTreeMap<String, Use>,
+}
+
+/// ONB-042: one feature's record: when it was first used (ms since 1970) and how often.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Use {
+    pub first: u64,
+    pub count: u64,
+}
+
+/// ONB-042: the fixed list of features whose use the profile keeps.
+pub const FEATURES: &[&str] = &[
+    "board", "palette", "browser", "browser-page", "tasks", "automations", "split", "workspace-create", "workspace-switch", "skill-setup",
+    "kits", "kit-results", "editor", "diff", "notes", "pr", "ship", "commit", "push", "usage",
+    "inbox", "artifacts", "settings", "shortcuts", "search", "file-find", "markdown", "floating", "layout", "zoom",
+    "rename", "orchestration", "cli", "notifications", "default-agent", "setup-script", "second-repo", "explore", "setup-guide", "parallel",
+];
+
+fn features_de<'de, D: serde::Deserializer<'de>>(d: D) -> Result<std::collections::BTreeMap<String, Use>, D::Error> {
+    let raw = <serde_json::Value as Deserialize>::deserialize(d)?;
+    let serde_json::Value::Object(m) = raw else { return Ok(Default::default()) };
+    Ok(m.into_iter().filter(|(k, _)| FEATURES.contains(&k.as_str())).filter_map(|(k, v)| serde_json::from_value::<Use>(v).ok().filter(|u| u.count > 0).map(|u| (k, u))).collect())
+}
+
+/// ONB-042: a use of `id`: the first time is written once, the count only goes up. The count is
+/// raised here, under the store lock, so a late save from the window can never lower it.
+fn used(mut g: Guide, id: &str, now: u64) -> Result<Guide, String> {
+    if !FEATURES.contains(&id) {
+        return Err(format!("{id} is not a feature Kolux keeps"));
+    }
+    let u = g.features.entry(id.into()).or_insert(Use { first: now, count: 0 });
+    u.count = u.count.saturating_add(1);
+    Ok(g)
 }
 
 /// ONB-033: every contextual tour id, built or planned; a seen entry for any other id (one an older
@@ -223,6 +262,9 @@ pub fn tours_get(store: State<'_, Mutex<Store>>) -> Result<Guide, String> {
 
 /// `id` added once to `list` (tipsSeen, visited or tried).
 fn marked(mut g: Guide, list: &str, id: &str) -> Result<Guide, String> {
+    if list == "used" {
+        return used(g, id, now_ms());
+    }
     if id.is_empty() || id.len() > 40 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err(format!("{id:?} is not a guide id"));
     }
@@ -241,10 +283,46 @@ fn marked(mut g: Guide, list: &str, id: &str) -> Result<Guide, String> {
     Ok(g)
 }
 
+/// ONB-013: what the newcomer checklist reads from the first-run record: whether the wizard was
+/// closed (and how), the checklist's dismissed mark and the first-success milestones. None for a
+/// profile with no record (one from before the wizard), which never gets the checklist.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstRun {
+    pub closed: bool,
+    pub outcome: Option<String>,
+    pub checklist_dismissed: bool,
+    pub milestones: serde_json::Map<String, serde_json::Value>,
+}
+
+fn first_run(rec: Option<Onboarding>) -> Option<FirstRun> {
+    let rec = rec?;
+    let milestones = match rec.rest.get("milestones") {
+        Some(serde_json::Value::Object(m)) => m.iter().filter(|(k, v)| MILESTONES.contains(&k.as_str()) && v.is_u64()).map(|(k, v)| (k.clone(), v.clone())).collect(),
+        _ => Default::default(),
+    };
+    Some(FirstRun {
+        closed: rec.closed_at.is_some(),
+        outcome: rec.outcome,
+        checklist_dismissed: rec.rest.get("checklistDismissed").and_then(|v| v.as_bool()).unwrap_or(false),
+        milestones,
+    })
+}
+
+/// The guide record as the window reads it: the stored lists plus the first-run view (ONB-013).
+/// The view is read only; guide_mark never stores it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuideView {
+    #[serde(flatten)]
+    pub guide: Guide,
+    pub first_run: Option<FirstRun>,
+}
+
 #[tauri::command]
-pub fn guide_get(store: State<'_, Mutex<Store>>) -> Result<Guide, String> {
+pub fn guide_get(store: State<'_, Mutex<Store>>) -> Result<GuideView, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
-    Ok(guide_load(&store))
+    Ok(GuideView { guide: guide_load(&store), first_run: first_run(load(&store)) })
 }
 
 #[tauri::command]
@@ -278,18 +356,121 @@ fn same_dir(a: &std::path::Path, b: &std::path::Path) -> bool {
     norm(a) == norm(b)
 }
 
-fn cli_status_in(dir: &std::path::Path, path: &std::ffi::OsStr) -> CliStatus {
+/// How long the whole PATH may take to answer before the folders still looking are passed over
+/// (council: a PATH entry on a drive that is offline froze the window while it was looked up).
+const PATH_ENTRY_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// A PATH folder that did not answer in time is not asked again for this long.
+const DEAD_FOR: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// What is known about one PATH folder's lookup: still running, or late the last time.
+#[derive(Default)]
+struct Probe {
+    busy: bool,
+    dead_at: Option<std::time::Instant>,
+}
+
+/// Shared by every check, so reopening the guide never starts a second lookup of a folder whose
+/// first one has not come back, and a folder that was late is skipped for a while.
+fn probes() -> &'static Mutex<std::collections::HashMap<String, Probe>> {
+    static P: std::sync::OnceLock<Mutex<std::collections::HashMap<String, Probe>>> = std::sync::OnceLock::new();
+    P.get_or_init(Default::default)
+}
+
+/// Takes the folder's one lookup slot; false while a lookup runs or the folder is marked dead.
+fn claim(key: &str) -> bool {
+    let mut m = probes().lock().unwrap_or_else(|e| e.into_inner());
+    let p = m.entry(key.to_string()).or_default();
+    if p.busy || p.dead_at.is_some_and(|t| t.elapsed() < DEAD_FOR) {
+        return false;
+    }
+    p.busy = true;
+    true
+}
+
+fn settle(key: &str, dead: bool) {
+    let mut m = probes().lock().unwrap_or_else(|e| e.into_inner());
+    let p = m.entry(key.to_string()).or_default();
+    if dead {
+        p.dead_at = Some(std::time::Instant::now());
+    } else {
+        p.busy = false;
+    }
+}
+
+/// A folder's spelling compared as text: separators one way, no trailing one, case folded on Windows.
+fn text_key(p: &std::path::Path) -> String {
+    let s = p.to_string_lossy().replace('/', "\\");
+    let s = s.trim_end_matches('\\');
+    if cfg!(windows) {
+        s.to_lowercase()
+    } else {
+        s.to_string()
+    }
+}
+
+/// A PATH folder on another computer is never looked up (doing so signs in to it with the user's
+/// credentials); a folder spelled like the CLI's own counts without a lookup; the rest are asked
+/// through `same` at once, each on its own thread, under one deadline `wait` for the whole list.
+fn cli_status_in(dir: &std::path::Path, path: &std::ffi::OsStr, wait: std::time::Duration, same: fn(&std::path::Path, &std::path::Path) -> bool) -> CliStatus {
     let names: &[&str] = if cfg!(windows) { &["kolux.exe", "kolux.cmd"] } else { &["kolux"] };
     let installed = names.iter().any(|n| dir.join(n).is_file());
-    let on_path = installed && std::env::split_paths(path).any(|p| same_dir(&p, dir));
+    if !installed {
+        return CliStatus { installed, on_path: false };
+    }
+    let own = text_key(dir);
+    let local: Vec<std::path::PathBuf> = std::env::split_paths(path).filter(|p| !p.as_os_str().is_empty() && !crate::links::host_path(&p.to_string_lossy(), &[])).collect();
+    if local.iter().any(|p| text_key(p) == own) {
+        return CliStatus { installed, on_path: true };
+    }
+    let deadline = std::time::Instant::now() + wait;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut asked: Vec<String> = vec![];
+    for p in local {
+        let key = text_key(&p);
+        if asked.contains(&key) || !claim(&key) {
+            continue;
+        }
+        asked.push(key.clone());
+        let (tx, d) = (tx.clone(), dir.to_path_buf());
+        std::thread::spawn(move || {
+            let r = same(&p, &d);
+            settle(&key, false);
+            let _ = tx.send((key, r));
+        });
+    }
+    drop(tx);
+    let mut on_path = false;
+    while !asked.is_empty() {
+        match rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+            Ok((key, r)) => {
+                asked.retain(|k| *k != key);
+                if r {
+                    on_path = true;
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    if !on_path {
+        for key in asked {
+            settle(&key, true);
+        }
+    }
     CliStatus { installed, on_path }
 }
 
+/// Async and off the async workers, so the check never holds the window's thread or a worker.
 #[tauri::command]
-pub fn cli_status() -> Result<CliStatus, String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let dir = exe.parent().ok_or("the app has no folder")?;
-    Ok(cli_status_in(dir, &std::env::var_os("PATH").unwrap_or_default()))
+pub async fn cli_status() -> Result<CliStatus, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let dir = exe.parent().ok_or("the app has no folder")?;
+        Ok(cli_status_in(dir, &std::env::var_os("PATH").unwrap_or_default(), PATH_ENTRY_WAIT, same_dir))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -307,6 +488,18 @@ pub fn onboarding_milestone(store: State<'_, Mutex<Store>>, name: String) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn this_source_file_holds_no_shell_expansion_of_an_account_id() {
+        // FIX-1 (council d2 FB1): a backtick in a shell heredoc once ran a command and wrote its
+        // account-id output into a comment here. The needles are built at run time so this test
+        // does not find itself.
+        let src = include_str!("onboarding.rs");
+        for needle in [["uid", "="].concat(), ["gid", "="].concat(), ["groups", "=1"].concat()] {
+            assert!(!src.contains(&needle), "onboarding.rs holds {needle:?}: shell expansion damage");
+        }
+        assert!(src.contains(&["a use of `", "id`:"].concat()), "the ONB-042 comment keeps its original wording");
+    }
 
     #[test]
     fn guide_lists_keep_each_id_once_and_drop_unknown_tips() {
@@ -350,13 +543,93 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
         let launcher = if cfg!(windows) { "kolux.exe" } else { "kolux" };
         let path = |ps: &[&std::path::Path]| std::env::join_paths(ps).unwrap();
-        assert_eq!(cli_status_in(&dir, &path(&[&dir])), CliStatus { installed: false, on_path: false });
+        let check = |d: &std::path::Path, p: &std::ffi::OsStr| cli_status_in(d, p, PATH_ENTRY_WAIT, same_dir);
+        assert_eq!(check(&dir, &path(&[&dir])), CliStatus { installed: false, on_path: false });
         std::fs::write(other.join(launcher), "").unwrap();
-        assert_eq!(cli_status_in(&dir, &path(&[&other])), CliStatus { installed: false, on_path: false }, "another kolux on PATH is not this build's");
+        assert_eq!(check(&dir, &path(&[&other])), CliStatus { installed: false, on_path: false }, "another kolux on PATH is not this build's");
         std::fs::write(dir.join(launcher), "").unwrap();
-        assert_eq!(cli_status_in(&dir, &path(&[&other])), CliStatus { installed: true, on_path: false }, "installed but missing from PATH");
+        assert_eq!(check(&dir, &path(&[&other])), CliStatus { installed: true, on_path: false }, "installed but missing from PATH");
         let spelled = std::path::PathBuf::from(format!("{}{}", dir.display(), std::path::MAIN_SEPARATOR));
-        assert_eq!(cli_status_in(&dir, &path(&[&other, &spelled])), CliStatus { installed: true, on_path: true });
+        assert_eq!(check(&dir, &path(&[&other, &spelled])), CliStatus { installed: true, on_path: true });
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Council: a PATH folder on a drive that does not answer is passed over after the wait, so
+    /// the check still finishes and still finds the CLI's own folder after it.
+    #[test]
+    fn a_path_folder_that_does_not_answer_is_passed_over() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-onb-dead-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(if cfg!(windows) { "kolux.exe" } else { "kolux" }), "").unwrap();
+        // Stands in for a lookup on an offline drive: the "dead" folder never answers in time.
+        fn slow(p: &std::path::Path, d: &std::path::Path) -> bool {
+            if p.ends_with("dead") {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+            same_dir(p, d)
+        }
+        let dead = std::path::PathBuf::from("Z:/offline/dead");
+        let wait = std::time::Duration::from_millis(200);
+        let start = std::time::Instant::now();
+        let path = std::env::join_paths([dead.as_path(), dir.as_path()]).unwrap();
+        assert_eq!(cli_status_in(&dir, &path, wait, slow), CliStatus { installed: true, on_path: true });
+        let path = std::env::join_paths([dead.as_path()]).unwrap();
+        assert_eq!(cli_status_in(&dir, &path, wait, slow), CliStatus { installed: true, on_path: false });
+        assert!(start.elapsed() < std::time::Duration::from_secs(3), "the dead folder held the check for {:?}", start.elapsed());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Lookups `spy` was asked for a folder on another computer, and for one of the w2 dead folders.
+    static HOST_ASKED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static DEAD_ASKED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    fn spy(p: &std::path::Path, d: &std::path::Path) -> bool {
+        // judged by the test host's name, not by host_path, so a form host_path misses still counts
+        if p.to_string_lossy().contains("x.invalid") {
+            HOST_ASKED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        if p.to_string_lossy().contains("w2-dead") {
+            DEAD_ASKED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_secs(5));
+        }
+        same_dir(p, d)
+    }
+
+    /// Council FB 2: a PATH folder on a share is never looked up (that signs in to the share).
+    #[test]
+    fn a_path_folder_on_another_computer_is_never_looked_up() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-onb-unc-{}", std::process::id()));
+        let other = dir.join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(dir.join(if cfg!(windows) { "kolux.exe" } else { "kolux" }), "").unwrap();
+        let shares = [r"\\x.invalid\bin", r"\\?\UNC\x.invalid\bin", "//x.invalid/bin", r"\??\UNC\x.invalid\bin", r"\??\unc\x.invalid\s"].map(std::path::PathBuf::from);
+        let mut entries: Vec<&std::path::Path> = shares.iter().map(|p| p.as_path()).collect();
+        entries.push(&other);
+        let path = std::env::join_paths(entries).unwrap();
+        assert_eq!(cli_status_in(&dir, &path, PATH_ENTRY_WAIT, spy), CliStatus { installed: true, on_path: false });
+        assert_eq!(HOST_ASKED.load(std::sync::atomic::Ordering::SeqCst), 0, "a share on PATH was looked up");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Council FS 1: dead folders share one deadline, and one still looking is not asked again.
+    #[test]
+    fn dead_path_folders_share_one_deadline_and_are_not_asked_twice() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-onb-dead3-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(if cfg!(windows) { "kolux.exe" } else { "kolux" }), "").unwrap();
+        let dead = ["Z:/offline/w2-dead-1", "Z:/offline/w2-dead-2", "Z:/offline/w2-dead-3"].map(std::path::PathBuf::from);
+        let path = std::env::join_paths(dead.iter()).unwrap();
+        let wait = std::time::Duration::from_millis(300);
+        let start = std::time::Instant::now();
+        assert_eq!(cli_status_in(&dir, &path, wait, spy), CliStatus { installed: true, on_path: false });
+        assert!(start.elapsed() < wait * 2, "three dead folders took {:?}", start.elapsed());
+        let asked = DEAD_ASKED.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(asked, 3);
+        // Opening the guide again: the dead folders are skipped, no new lookup thread starts.
+        let again = std::time::Instant::now();
+        assert_eq!(cli_status_in(&dir, &path, wait, spy), CliStatus { installed: true, on_path: false });
+        assert!(again.elapsed() < wait, "the second check waited {:?}", again.elapsed());
+        assert_eq!(DEAD_ASKED.load(std::sync::atomic::Ordering::SeqCst), asked);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -393,6 +666,9 @@ mod tests {
         assert_eq!(closed(done.clone(), "dismissed", 60).unwrap(), done);
         let skipped = closed(stepped(open.clone(), 1), "dismissed", 70).unwrap();
         assert_eq!((skipped.step, skipped.outcome.as_deref()), (1, Some("dismissed")));
+        assert_eq!(skipped.rest.get("checklistDismissed"), Some(&serde_json::Value::Bool(true)), "Skip dismisses the sidebar checklist");
+        assert_eq!(done.rest.get("checklistDismissed"), None, "a completed close keeps the checklist");
+        assert_eq!(first_run(Some(skipped.clone())).map(|v| v.checklist_dismissed), Some(true));
         assert!(closed(open, "maybe", 1).unwrap_err().contains("maybe"));
     }
 
@@ -418,6 +694,46 @@ mod tests {
         assert_eq!((back.step, back.closed_at, back.outcome), (-1, None, None));
         assert_eq!(serde_json::Value::Object(back.rest), serde_json::json!({"checklist":[true],"milestones":{"aiConnected":5}}), "only the dismissed mark goes");
         assert_eq!(reopened(None), Onboarding { version: VERSION, step: -1, closed_at: None, outcome: None, rest: Default::default() }, "a profile with no record gets a fresh one");
+    }
+
+    #[test]
+    fn the_checklist_view_comes_from_the_first_run_record() {
+        assert_eq!(first_run(None), None, "a profile from before the wizard gets no checklist");
+        let open = Onboarding { version: VERSION, step: 1, closed_at: None, outcome: None, rest: Default::default() };
+        assert_eq!(first_run(Some(open)), Some(FirstRun { closed: false, outcome: None, checklist_dismissed: false, milestones: Default::default() }));
+        let rest = serde_json::from_str(r#"{"checklistDismissed":true,"milestones":{"aiConnected":5,"kitLaunched":"soon","lunch":7}}"#).unwrap();
+        let done = Onboarding { version: VERSION, step: 3, closed_at: Some(9), outcome: Some("dismissed".into()), rest };
+        let v = first_run(Some(done)).unwrap();
+        assert!(v.closed && v.checklist_dismissed && v.outcome.as_deref() == Some("dismissed"));
+        assert_eq!(serde_json::Value::Object(v.milestones), serde_json::json!({"aiConnected":5}), "unknown names and non-times are dropped");
+        let bad = Onboarding { version: VERSION, step: 3, closed_at: Some(9), outcome: None, rest: serde_json::from_str(r#"{"milestones":[1],"checklistDismissed":"yes"}"#).unwrap() };
+        let v = first_run(Some(bad)).unwrap();
+        assert!(!v.checklist_dismissed && v.milestones.is_empty(), "a damaged record reads as nothing done, not dismissed");
+        let wire = serde_json::to_value(GuideView { guide: Guide::default(), first_run: None }).unwrap();
+        assert!(wire.get("tried").is_some() && wire.get("firstRun").is_some(), "the view keeps the record's own fields beside firstRun: {wire}");
+    }
+
+    #[test]
+    fn feature_uses_keep_the_first_time_and_only_count_up() {
+        let g = used(Guide::default(), "split", 10).unwrap();
+        let g = used(g, "split", 20).unwrap();
+        assert_eq!(g.features["split"], Use { first: 10, count: 2 }, "the first time stays, the count goes up");
+        assert!(used(g.clone(), "lunch", 30).unwrap_err().contains("lunch"));
+        assert_eq!(marked(g, "used", "board").unwrap().features["board"].count, 1, "guide_mark's used list records a use");
+        assert!(FEATURES.len() >= 35 && FEATURES.len() <= 45, "roughly forty features");
+    }
+
+    #[test]
+    fn unknown_or_damaged_feature_entries_are_dropped_on_load() {
+        let (s, dir) = store("features");
+        s.set(GUIDE, r#"{"tried":["usage"],"features":{"split":{"first":5,"count":3},"teleport":{"first":1,"count":1},"board":{"first":"x"},"palette":7,"tasks":{"first":2,"count":0}}}"#).unwrap();
+        let g = guide_load(&s);
+        assert_eq!(g.tried, ["usage"], "the rest of the record survives a damaged entry");
+        assert_eq!(g.features.keys().collect::<Vec<_>>(), ["split"], "unknown, damaged and zero-count entries go");
+        s.set(GUIDE, r#"{"features":[1,2]}"#).unwrap();
+        assert!(guide_load(&s).features.is_empty());
+        drop(s);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

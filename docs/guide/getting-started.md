@@ -24,7 +24,7 @@ Click the Help button and choose "Getting Started with Kolux". It is a checklist
 
 Only the Enable Kolux CLI step ticks by itself today. The other steps are explained but stay unticked.
 
-The Enable Kolux CLI step lists three things and marks each "Ready" or "Not set up": "Kolux CLI" (the `kolux` command in terminals outside Kolux), "Kolux CLI skill" and "Orchestration skill". A "Re-check" button reads the state again. The step says Kolux cannot run this setup for you yet; it arrives with the installer in a coming build. See [Command line](command-line.md) for what the command does.
+The Enable Kolux CLI step lists three things and marks each "Ready" or "Not set up": "Kolux CLI" (the `kolux` command in terminals outside Kolux), "Kolux CLI skill" and "Orchestration skill". A "Re-check" button reads the state again. The check for the `kolux` command looks through your `PATH` (the list of folders Windows searches for commands) without holding up the window: a folder that does not answer within a second, such as one on an offline drive, is passed over, and a folder on another computer is never looked up (see [Other computers and network shares](safety.md#other-computers-and-network-shares)). The step says Kolux cannot run this setup for you yet; it arrives with the installer in a coming build. See [Command line](command-line.md) for what the command does.
 
 The Help menu has more entries:
 
@@ -64,7 +64,7 @@ A skill is a folder with a `SKILL.md` file that teaches an AI how to do a job. T
 | Skill folders | Lists each folder Kolux scanned and what it found, such as "3 skills" or "Not found" |
 | Refresh | Scans every folder again |
 
-Each row shows the skill's name, where it came from (a plugin shows "Plugin: name"), its last-changed date, its description and its path. Skills built into Kolux say "Built into Kolux". The "Delete skills" item in the "..." menu is greyed out for now. If a folder cannot be read the page says "Scan failed" with a Retry button, rather than showing a shorter list. Skills inside WSL (Linux on Windows) folders are not scanned yet; the Skill folders list says "Not scanned: WSL folders are not scanned yet".
+Each row shows the skill's name, where it came from (a plugin shows "Plugin: name"), its last-changed date, its description and its path. Skills built into Kolux say "Built into Kolux". The "Delete skills" item in the "..." menu is greyed out for now. If a folder cannot be read the page says "Scan failed" with a Retry button, rather than showing a shorter list. Skills inside WSL (Linux on Windows) folders are not scanned yet; the Skill folders list says "Not scanned: WSL folders are not scanned yet". Kolux also never scans through a network share: a workspace on `\\server\share` gets no workspace skills scan, a mapped drive letter does, and a link inside a skills folder that leads to another computer is not followed. See [Other computers and network shares](safety.md#other-computers-and-network-shares).
 
 When you have never picked a view, Kolux opens on Terminals. After that it opens on the view you were on when you quit.
 
@@ -76,7 +76,7 @@ The bar across the top is 36 pixels tall and replaces the Windows title bar. Dra
 
 | Control | What it does |
 |---|---|
-| Kolux mark | Names the app. Not clickable |
+| Kolux mark | Opens the Kolux menu (File, Edit, View, Window, Help). See the next section |
 | Menu (dots) | Opens a "View" menu with Zoom In, Zoom Out and Reset Size. They act on the focused terminal |
 | Sidebar button | Hides or shows the project sidebar (Ctrl+B) |
 | Back / Forward | Return to the last workspace or page you were on, and go forward again (Ctrl+Alt+Left, Ctrl+Alt+Right) |
@@ -92,6 +92,20 @@ The usage pill turns to a warning tint at 70% used and a danger tint above 90%. 
 In the Classic look (Settings, Appearance) the screen switcher is absent and the window stays on Terminals.
 
 Press Escape to leave a full page such as the Inbox.
+
+### The Kolux menu
+
+Click the Kolux mark at the left end of the top bar (its tooltip says "Kolux menu"). A menu opens under it with the usual menu names. The window has no menu bar across the top, so this is where they live. Where a command has a keyboard shortcut, the menu shows it as a hint, and it follows any shortcut you change on the Shortcuts page.
+
+| Menu | What is in it |
+|---|---|
+| File | **Settings...** opens Settings (Ctrl+, by default). **Exit** closes the window the way its close button does, which stops every terminal |
+| Edit | Undo, Redo, Cut, Copy, Paste, Select All. In a text box they act on the text. In a terminal pane only **Copy** (the selected text; nothing is copied when nothing is selected) and **Select All** work; Undo, Redo and Cut do nothing there. **Paste** does nothing yet from this menu: use Ctrl+V |
+| View | **Workspace View** has Agents, Board and Terminals with the current screen ticked (absent in the Classic look). **Appearance** has Toggle Left Sidebar, Toggle Right Sidebar and four ticks: Show Status Bar, Show Tasks Button, Show Automations Button and Show Titlebar App Name. Each tick matches its switch in [Settings](settings.md) and changes it. Then come Reload, Force Reload (Ctrl+Shift+R), Toggle Developer Tools (does nothing in the released app), Actual Size, Zoom In, Zoom Out and Toggle Full Screen |
+| Window | Minimize, and Zoom (which maximizes the window) |
+| Help | **About Kolux** shows the version. The other Help items (Report Crash, Explore Kolux, Getting Started, Check for Updates) are not in the menu yet |
+
+The menu's Zoom In, Zoom Out and Actual Size change the whole interface size, the same one as "Zoom: Interface size" in Settings, Appearance. The dots menu described above, in contrast, acts on the focused terminal.
 
 ## The views
 
@@ -127,4 +141,4 @@ More detail is in [Projects and worktrees](projects-and-worktrees.md).
 
 Other ways in: press Ctrl+T for a plain shell, or use "New tab" and "Choose agent…" to pick the AI, model and number of sessions before anything starts.
 
-<!-- verified against: src/onboarding/Wizard.tsx, src/chrome/TopBar.tsx, src/usage/meter.ts, src/usage/ClaudePill.tsx, src/usage/CodexPill.tsx, src/settings/general.ts, src/projects/AddProject.tsx, src/projects/ProjectsPanel.tsx, src/launch/PlusMenu.tsx, src/keys/actions.ts, src/onboarding/Guides.tsx, src/onboarding/HelpMenu.tsx, src/onboarding/Tours.tsx, src/onboarding/guide.ts, src/onboarding/tour.ts, src-tauri/src/onboarding.rs, src/skills/SkillsPage.tsx, src/skills/skills.ts, src/skills/nav.ts, src/projects/SkillsRow.tsx, src/projects/HideableRow.tsx, src/chrome/chromeItems.ts, src-tauri/src/skills.rs at aaafe20 -->
+<!-- verified against: src/onboarding/Wizard.tsx, src/chrome/TopBar.tsx, src/usage/meter.ts, src/usage/ClaudePill.tsx, src/usage/CodexPill.tsx, src/settings/general.ts, src/projects/AddProject.tsx, src/projects/ProjectsPanel.tsx, src/launch/PlusMenu.tsx, src/keys/actions.ts, src/onboarding/Guides.tsx, src/onboarding/HelpMenu.tsx, src/onboarding/Tours.tsx, src/onboarding/guide.ts, src/onboarding/tour.ts, src-tauri/src/onboarding.rs, src/skills/SkillsPage.tsx, src/skills/skills.ts, src/skills/nav.ts, src/projects/SkillsRow.tsx, src/projects/HideableRow.tsx, src/chrome/chromeItems.ts, src-tauri/src/skills.rs, src-tauri/src/menu.rs, src/chrome/useChrome.ts at 73f5e38 -->

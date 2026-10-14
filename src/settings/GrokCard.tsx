@@ -6,6 +6,7 @@
 // sign-in is left alone and the card says how to sign out of Grok itself.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { clearReadFailure, connectFailed, STATUSES_FAILED } from "../onboarding/firstRun";
 import { listen } from "@tauri-apps/api/event";
 import { AttentionNote, fixDoes, fixFor, type Attention } from "./Attention";
 import { liveCheck, OtherWays, taglineOf } from "./ConnectGrid";
@@ -174,8 +175,11 @@ export default function GrokCard({ onConnected = () => {} }: { onConnected?: (on
   const [ask, setAsk] = useState<Question | null>(null);
   const read = useCallback(() => {
     invoke<GrokView>("grok_status")
-      .then(setView)
-      .catch((e) => setError(String(e)));
+      .then((v) => {
+        setView(v);
+        setError(clearReadFailure);
+      })
+      .catch(() => setError(STATUSES_FAILED));
   }, []);
   useEffect(() => {
     read();
@@ -189,7 +193,7 @@ export default function GrokCard({ onConnected = () => {} }: { onConnected?: (on
   const run = (a: GrokAction, call: Promise<unknown>) => {
     setError(null);
     if (a !== "cancel") setPending(a);
-    call.catch((e) => setError(String(e)));
+    call.catch((e) => setError(a === "disconnect" || a === "cancel" ? String(e) : connectFailed("Grok", e)));
     void settleWithin(call).then(() => {
       setPending(null);
       read();

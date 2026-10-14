@@ -8,12 +8,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ArrowLeft, ArrowRight, Close, Globe, Refresh, Stop } from "../chrome/icons";
 import { BLANK, resolveAddress } from "./address";
+import { openerRefocus } from "./chord";
 import { backgroundBehind } from "./colour";
 import "./browser.css";
 import { can as canGo, fresh, started, type Pending } from "./history";
 import { nextZoom, zoomPercent } from "./zoom";
 import { iconAt, iconFound, type SiteIcon } from "./site";
 import { zoomFactor } from "../settings/zoom";
+import { notePage } from "../onboarding/guide";
 
 /** `url`: the page or file the tab opens on instead of a blank page (SKILL-012 previews a kit result). */
 type Props = { id: number; url?: string; title?: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void };
@@ -70,6 +72,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
             // BROW-012: the level holds through reloads and other sites; set it again in case the
             // engine reset it with the new document.
             if (zoom.current !== 1) invoke("browser_go", { id, what: "zoom", level: zoom.current }).catch(() => {});
+            if (e.payload.event === "finished") notePage(e.payload.url); // ONB-015
             return setLoading(false);
           }
           const { url } = e.payload;
@@ -89,7 +92,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         await listen<{ id: number; url: string; front: boolean }>("browser-link", (e) => {
           if (e.payload.id !== id) return;
           openInBrowser(e.payload.url);
-          if (!e.payload.front) setTimeout(() => focusMe.current?.(), 0);
+          if (openerRefocus(e.payload.front, document.hasFocus())) setTimeout(() => focusMe.current?.(), 0);
         }),
       );
       unlisteners.push(
@@ -100,7 +103,11 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
       if (!alive) return;
       try {
         const first = url ? resolveAddress(url) : null;
-        await invoke("browser_open", { id, url: first && "url" in first ? first.url : BLANK, spot: spot(host.current!), background: backgroundBehind(host.current) });
+        // A tab opened behind (its section hidden, so no size) starts off screen: its page may not
+        // open tabs or send chords until it is shown (council FIX-2).
+        const body = host.current!;
+        const shown = body.clientWidth > 0 && body.clientHeight > 0;
+        await invoke("browser_open", { id, url: first && "url" in first ? first.url : BLANK, spot: spot(body), background: backgroundBehind(body), shown });
         opened.current = true;
         if (alive) {
           setOpen(true);

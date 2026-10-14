@@ -46,6 +46,8 @@ pub static LIMIT_RESETS_AT: AtomicI64 = AtomicI64::new(0);
 pub enum Agent {
     Claude,
     Codex,
+    /// T-120-b: Gemini CLI, Antigravity or Amp, its event already normalized; hook semantics unverified.
+    Vendor,
 }
 
 /// A sub-agent or teammate under a lead session.
@@ -252,6 +254,7 @@ impl Session {
                 let change = match agent {
                     Agent::Claude => claude_change(&strip_agent(event)),
                     Agent::Codex => codex_change(&strip_agent(event)),
+                    Agent::Vendor => None,
                 }?;
                 match name {
                     "PermissionRequest" => {
@@ -315,6 +318,7 @@ impl Session {
         let mut change = match agent {
             Agent::Claude => claude_change(event),
             Agent::Codex => codex_change(event),
+            Agent::Vendor => crate::hooks::agent_hooks::vendors::change(event),
         }?;
         let before = self.resolved();
         if change.boundary {
@@ -332,7 +336,8 @@ impl Session {
                 self.own = Some("working");
             }
             "Stop" => {
-                self.interrupted = std::mem::take(&mut self.cancelled);
+                // T-120-b: Amp says itself when a turn was cancelled.
+                self.interrupted = std::mem::take(&mut self.cancelled) || event.get("kolux_interrupted").and_then(Value::as_bool) == Some(true);
                 self.pending = None;
                 self.reply = str_of(event, "last_assistant_message").map(clean_reply);
                 // STAT-024: Claude Code's own lists of background tasks and session crons decide.
@@ -423,7 +428,7 @@ impl Session {
             // inside it, that report is the cancelled tool's own hook finishing, not the turn going on.
             _ if event.get("is_interrupt").and_then(Value::as_bool) == Some(true) => false,
             Agent::Claude => name == "Stop" || (matches!(name, "PreToolUse" | "PostToolUse" | "PostToolUseFailure") && str_of(event, "tool_use_id").is_some_and(|id| name == "PreToolUse" || self.past_grace() || !self.killed.iter().any(|k| k == id))),
-            Agent::Codex => self.fresh_tool(name, event),
+            Agent::Codex | Agent::Vendor => self.fresh_tool(name, event),
         }
     }
 
@@ -452,6 +457,12 @@ impl Session {
         }
         self.unverified = true;
         true
+    }
+
+    /// TERM-122: a working reading keep-awake can believe at `now`: the agent was heard from at
+    /// all, the reading is not marked unverified and has not gone the whole window silent.
+    pub fn believed_working(&self, now: u64) -> bool {
+        self.seen > 0 && !self.unverified && now.saturating_sub(self.seen) < unverified_ms() && self.resolved() == "working"
     }
 
     /// STAT-034: a state the program printed in band. Only the lead's own state moves: the reply,
@@ -505,8 +516,8 @@ pub fn answer_keys(agent: Agent, approve: bool) -> &'static str {
     match (agent, approve) {
         (Agent::Claude, true) => "\r",
         (Agent::Claude, false) => "\x1b",
-        (Agent::Codex, true) => "y",
-        (Agent::Codex, false) => "n",
+        (Agent::Codex | Agent::Vendor, true) => "y",
+        (Agent::Codex | Agent::Vendor, false) => "n",
     }
 }
 
@@ -610,7 +621,7 @@ pub fn report(pane_key: u32, terminal: Option<u32>, agent: Agent, event: &Value)
             session.transcript = path;
         }
         let (change, child) = applied?;
-        crate::activity::note(pane_key, change.state);
+        crate::activity::note_from(pane_key, session.terminal, change.state);
         Some(fit_plan(status_of(pane_key, terminal, session, change, child)))
     })
 }
@@ -626,7 +637,7 @@ pub fn settle_cancels() -> Vec<Status> {
         s.iter_mut()
             .filter_map(|(key, session)| {
                 session.settle_cancel(now).then(|| {
-                    crate::activity::note(*key, "interrupted");
+                    crate::activity::note_from(*key, session.terminal, "interrupted");
                     status_of(*key, session.terminal, session, Change { state: "interrupted", ..Change::default() }, None)
                 })
             })
@@ -647,6 +658,23 @@ pub fn working(pane_key: u32) -> bool {
 /// The panes whose hooks last reported for `terminal`.
 pub fn panes_of(terminal: u32) -> Vec<u32> {
     with_sessions(|s| s.iter().filter(|(_, x)| x.terminal == Some(terminal)).map(|(k, _)| *k).collect())
+}
+
+/// TERM-122: how many panes read working now and can be believed (stale and never-heard sessions
+/// do not count) and sit on a terminal `live` says is still running: a session with no terminal
+/// (an in-band state from a hookless pane) or one whose terminal ended (a straggler hook) never
+/// counts. Keep-awake's Agent mode holds while this is above zero. `live` is asked after the
+/// sessions lock is let go, so it may take the terminals' own lock.
+pub fn working_now(live: impl Fn(u32) -> bool) -> usize {
+    let now = now_ms();
+    let terminals: Vec<u32> = with_sessions(|s| s.values().filter(|x| x.believed_working(now)).filter_map(|x| x.terminal).collect());
+    terminals.into_iter().filter(|t| live(*t)).count()
+}
+
+/// A terminal ended (its program exited or crashed, or its pane closed): the panes its hooks
+/// reported for are forgotten, so a dead agent never reads working again (TERM-122).
+pub fn terminal_ended(terminal: u32) {
+    with_sessions(|s| s.retain(|_, x| x.terminal != Some(terminal)));
 }
 
 /// STAT-032: the panes whose working reading just went the whole window without a signal, each
@@ -681,7 +709,7 @@ pub fn status_inband(app: tauri::AppHandle, pane_key: u32, data: String) -> bool
     let status = with_sessions(|s| {
         let session = s.entry(pane_key).or_default();
         let change = session.inband(state);
-        crate::activity::note(pane_key, change.state);
+        crate::activity::note_from(pane_key, session.terminal, change.state);
         status_of(pane_key, session.terminal, session, change, None)
     });
     tauri::Emitter::emit(&app, crate::hooks::EVENT, status).is_ok()
@@ -1231,6 +1259,72 @@ mod tests {
         assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","last_assistant_message":"ok"}"#), Some("done"));
         assert!(!s.settle_unverified(s.seen + 10 * UNVERIFIED_MS));
         assert_eq!(UNVERIFIED_MS, 30 * 60 * 1000);
+    }
+
+    /// TERM-122: keep-awake believes only a working reading the agent stands behind: heard from
+    /// at all, not marked unverified and not silent for the whole unverified window.
+    #[test]
+    fn term122_only_a_believable_working_reading_keeps_the_computer_awake() {
+        let mut s = Session::default();
+        assert_eq!(s.resolved(), "working", "a session nothing reported into still reads working");
+        assert!(!s.believed_working(now_ms()), "but nothing was ever heard, so it does not count");
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#), Some("working"));
+        let seen = s.seen;
+        assert!(s.believed_working(seen) && s.believed_working(seen + UNVERIFIED_MS - 1));
+        assert!(!s.believed_working(seen + UNVERIFIED_MS), "silent for the whole window is stale");
+        assert!(s.settle_unverified(seen + UNVERIFIED_MS));
+        assert!(!s.believed_working(seen), "marked unverified is stale whatever the clock says");
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"t1"}"#), Some("working"));
+        assert!(s.believed_working(s.seen), "the next signal makes it count again");
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","last_assistant_message":"ok"}"#), Some("done"));
+        assert!(!s.believed_working(s.seen));
+    }
+
+    /// TERM-122: only a session tied to a live terminal keeps the computer awake. A pane reporting
+    /// with no terminal (an in-band state from a hookless pane) and a straggler hook arriving after
+    /// its terminal ended both read working, but neither holds the computer awake.
+    #[test]
+    fn term122_a_session_without_a_live_terminal_never_keeps_the_computer_awake() {
+        const NO_TERM: u32 = 922_301;
+        const STRAY: u32 = 922_302;
+        const LIVE: u32 = 922_303;
+        const DEAD_T: u32 = 922_401;
+        const LIVE_T: u32 = 922_402;
+        // Only this test's live terminal is running; other tests' sessions sit on other ids.
+        let live = |t: u32| t == LIVE_T;
+        let go = ev(r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        report(NO_TERM, None, Agent::Claude, &go);
+        terminal_ended(DEAD_T);
+        report(STRAY, Some(DEAD_T), Agent::Claude, &go);
+        assert_eq!(state_of(DEAD_T), Some("working"), "the straggler does read working");
+        assert_eq!(working_now(live), 0, "but no session without a live terminal counts");
+        assert_eq!(working_now(|t| t == DEAD_T), 1, "the same reading on a running terminal would count");
+        report(LIVE, Some(LIVE_T), Agent::Claude, &go);
+        assert_eq!(working_now(live), 1, "a live terminal's working pane counts");
+        for t in [DEAD_T, LIVE_T] {
+            terminal_ended(t);
+        }
+        with_sessions(|s| s.remove(&NO_TERM));
+    }
+
+    /// TERM-122: a terminal that ended (its program exited or crashed, or its pane was closed) takes
+    /// its panes' sessions with it, so a dead agent never reads working again.
+    #[test]
+    fn term122_an_ended_terminal_forgets_its_panes_so_a_dead_agent_stops_counting() {
+        const PANE: u32 = 922_101;
+        const OTHER: u32 = 922_102;
+        const TERM: u32 = 922_201;
+        let go = ev(r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        report(PANE, Some(TERM), Agent::Claude, &go);
+        report(OTHER, Some(TERM + 1), Agent::Claude, &go);
+        assert_eq!(state_of(TERM), Some("working"));
+        assert_eq!(working_now(|t| t == TERM || t == TERM + 1), 2, "both live panes count");
+        terminal_ended(TERM);
+        assert_eq!(state_of(TERM), None, "the ended terminal's pane is gone");
+        assert!(panes_of(TERM).is_empty() && agent_history(PANE).is_empty());
+        assert_eq!(state_of(TERM + 1), Some("working"), "another terminal's pane stays");
+        terminal_ended(TERM + 1);
+        assert_eq!(state_of(TERM + 1), None);
     }
 
     #[test]

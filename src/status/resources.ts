@@ -1,11 +1,13 @@
 // APP-054: the Resource Manager's rows. The Rust side measures every terminal session; here they
 // are grouped under the workspace (worktree) folder they run in, the rest under "No worktree".
 import { underDir } from "../workspaces";
+import { sessionLabel } from "./manage";
 import { formatMemory } from "./memory";
 
 /** `committed` (CLI-041, T-287-b): the pagefile-backed bytes Windows charges, summed per process
- * tree on the Rust side; null when no process in the tree reported a figure. */
-export type Usage = { bytes: number; cpu: number; processes: number; committed: number | null };
+ * tree on the Rust side; null when any process in the tree gave no figure (T-287-c: a partial sum
+ * is never shown as the whole) or there are none. `unreadable`: how many of `processes` gave none. */
+export type Usage = { bytes: number; cpu: number; processes: number; committed: number | null; unreadable?: number };
 export type SessionUsage = Usage & { id: number; pid: number | null; dir: string | null };
 export type Resources = { app: Usage; sessions: SessionUsage[]; free: number | null; total: number | null };
 export type Row = SessionUsage & { name: string; shown: boolean };
@@ -14,12 +16,13 @@ export type Group = { label: string; dir: string | null; rows: Row[] };
 const base = (dir: string) => dir.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || dir;
 
 /** `names`: the tab name of every session shown in a pane, by terminal id. `workspaces`: the
- * workspace folders Kolux knows; a session belongs to the deepest one it runs in. */
-export function groupSessions(sessions: SessionUsage[], names: Record<number, string>, workspaces: string[]): Group[] {
+ * workspace folders Kolux knows; a session belongs to the deepest one it runs in. `loaded`
+ * (T-153-e): false while the window is still loading, so no row claims a pane either way. */
+export function groupSessions(sessions: SessionUsage[], names: Record<number, string>, workspaces: string[], loaded = true): Group[] {
   const groups = new Map<string, Group>();
   const none: Group = { label: "No worktree", dir: null, rows: [] };
   for (const s of [...sessions].sort((a, b) => a.id - b.id)) {
-    const row = { ...s, name: names[s.id] ?? `Session ${s.id} (not in a pane)`, shown: s.id in names };
+    const row = { ...s, ...sessionLabel(s.id, names, loaded) };
     const home = workspaces.filter((w) => underDir(s.dir, w)).sort((a, b) => b.length - a.length)[0];
     if (home === undefined) {
       none.rows.push(row);
@@ -35,6 +38,12 @@ export function groupSessions(sessions: SessionUsage[], names: Record<number, st
 /** T-287-b: committed memory beside resident; unknown is a plain dash, never "0 MB". */
 export const formatCommitted = (committed: number | null | undefined) =>
   committed === null || committed === undefined || !Number.isFinite(committed) || committed < 0 ? "–" : formatMemory(committed);
+
+/** MERGE 52 / council FIX-1 (T-287-c): the Rust side gives no committed figure when any process
+ * could not be read, so the dash says how many were left out; "" when the dash only means there are
+ * no processes, or a figure is shown. */
+export const committedNote = (u: Pick<Usage, "committed" | "unreadable" | "processes">) =>
+  u.committed === null && (u.unreadable ?? 0) > 0 ? `(${u.unreadable} of ${u.processes} could not be read)` : "";
 
 /** T-287-b: the rows' columns (name, resident, committed, CPU, End), set here so the committed
  * column needs no stylesheet change. */
