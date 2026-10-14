@@ -48,3 +48,11 @@ test("GIT-055: a fork that chose upstream lists its parent's issues and its own 
   expect(issueSource({}, key, "me/fork", "up/stream"), "no choice: the fork itself").toEqual({ repo: "me/fork", warning: null, split: false });
   expect(issueSource({ tasksIssueSource: { "github.com/other/x": "upstream" } }, key, "me/fork", "up/stream").repo, "kept per repository").toBe("me/fork");
 });
+
+test("FIX-1: a failed upstream read warns and lists the fork, never looks like still checking", () => {
+  const key = "github.com/me/fork";
+  const chose = { tasksIssueSource: { [key]: "upstream" } };
+  const failed = issueSource(chose, key, "me/fork", undefined, true);
+  expect(failed).toEqual({ repo: "me/fork", warning: "Could not check this fork's upstream; issues come from me/fork.", split: false });
+  expect(issueSource({}, key, "me/fork", undefined, true), "no upstream chosen: nothing to warn about").toEqual({ repo: "me/fork", warning: null, split: false });
+});
