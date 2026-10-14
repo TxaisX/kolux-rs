@@ -801,6 +801,21 @@ pub fn pr_checks(gh: &Path, worktree: &Path, target: &str) -> Result<PrChecks, S
     }
 }
 
+/// VIEW-073 / FIX-BEFORE-1: the checks of a linked pull request (one linked by hand or printed in a
+/// pane). Like every other gh call on a link, it goes only to a host gh is signed in to, and gh gets
+/// the cleaned `https://host/owner/repo/pull/N` form, never the raw text.
+pub fn pr_checks_linked(gh: &Path, worktree: &Path, url: &str) -> Result<PrChecks, String> {
+    const NOT_A_LINK: &str = "The linked pull request is not a pull request link";
+    let url = url.trim();
+    if !safe_pr_url(url) {
+        return Err(NOT_A_LINK.into());
+    }
+    let clean = pr_url_in(url).ok_or(NOT_A_LINK)?;
+    let (host, ..) = pr_parts(&clean).ok_or(NOT_A_LINK)?;
+    signed_host(gh, &host)?;
+    pr_checks(gh, worktree, &clean)
+}
+
 /// GIT-017: the most diff text a commit-message prompt carries.
 pub const MESSAGE_BUDGET: usize = 24_000;
 
@@ -1694,12 +1709,11 @@ pub async fn scm_pr(worktree: String, linked: Option<String>) -> Result<Option<P
 pub async fn scm_pr_checks(worktree: String, linked: Option<String>) -> Result<PrChecks, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = Path::new(&worktree);
-        let target = match linked {
-            Some(url) if safe_pr_url(url.trim()) => url.trim().to_string(),
-            Some(_) => return Err("The linked pull request is not a pull request link".into()),
-            None => status(dir)?.branch.ok_or("No branch is checked out here")?,
-        };
-        pr_checks(&gh_program()?, dir, &target)
+        if let Some(url) = linked {
+            return pr_checks_linked(&gh_program()?, dir, &url);
+        }
+        let branch = status(dir)?.branch.ok_or("No branch is checked out here")?;
+        pr_checks(&gh_program()?, dir, &branch)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -3637,6 +3651,29 @@ mod tests {
         assert!(pr_link(&gh, &tools, url).unwrap_err().contains("not signed in"));
         let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
         assert!(calls.lines().all(|c| c.trim().starts_with("config get -h nobody.example")), "{calls}");
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    /// FIX-BEFORE-1: the Checks panel's linked pull request (by hand or printed in a pane) goes to gh
+    /// only as a well-formed link on a host gh is signed in to, in its cleaned form; a link to any
+    /// other host asks gh nothing beyond its own config, and a malformed one reaches no gh at all.
+    #[test]
+    fn fixb1_the_checks_panel_asks_gh_only_about_a_clean_link_on_a_signed_in_host() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fixb1-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        let gh = stand_in_gh(&tools);
+        let calls = || fs::read_to_string(tools.join("calls.txt")).unwrap_or_default();
+        for bad in ["https://evil.example/@id/x/pull/1", "https://evil.example/o/.git/pull/1", "https://u@github.com/o/r/pull/1", "https://github.com/o/r/pull/x", "github.com/o/r/pull/1"] {
+            assert!(pr_checks_linked(&gh, &tools, bad).unwrap_err().contains("not a pull request link"), "{bad}");
+        }
+        assert_eq!(calls(), "", "a malformed link reaches no gh at all");
+        assert!(pr_checks_linked(&gh, &tools, "https://nobody.example/o/r/pull/3").unwrap_err().contains("not signed in"));
+        assert!(calls().lines().all(|c| c.trim().starts_with("config get -h nobody.example")), "{}", calls());
+        let got = pr_checks_linked(&gh, &tools, " https://github.com/o/r/pull/12/files#diff-1 ").unwrap();
+        assert_eq!(got.pr.map(|p| p.number), Some(12));
+        let view: Vec<String> = calls().lines().map(|c| c.trim().replace('"', "")).filter(|c| c.starts_with("pr view")).collect();
+        assert_eq!(view.len(), 1, "{}", calls());
+        assert!(view[0].starts_with("pr view https://github.com/o/r/pull/12 --json"), "{}", view[0]);
         let _ = fs::remove_dir_all(&tools);
     }
 
