@@ -42,7 +42,7 @@ When an agent asks permission to use a tool, its card shows two buttons.
 - **Approve** lets the agent carry on.
 - **Deny** tells the agent no.
 
-They appear only for a permission request. Questions need an answer typed in the pane.
+They appear only for a permission request. Questions need an answer typed in the pane. The same two buttons also show in the agent pane's header (see [Terminals](terminals.md)).
 
 ### Expand a card
 
@@ -119,4 +119,4 @@ Settings, Notifications has three switches and a sound choice (System default, C
 
 The pill in the top bar shows how much of your weekly allowance is left for each installed AI program, for example "Claude 80% left". It is read-only. Hover for the weekly limit and when it resets. It tints as the allowance runs down (warning at 70% used, danger above 90%). See [Getting started](getting-started.md) for the full description.
 
-<!-- verified against: src/board/chip.ts, src/App.tsx, src/agents/AgentsRail.tsx, src/agents/rail.ts, src/inbox/inbox.ts, src/inbox/InboxView.tsx, src/terminal/status.ts, src/terminal/notify.ts, src/status/useAgentStatus.ts, src/usage/meter.ts at 090d50c -->
+<!-- verified against: src/board/chip.ts, src/App.tsx, src/agents/AgentsRail.tsx, src/agents/rail.ts, src/inbox/inbox.ts, src/inbox/InboxView.tsx, src/terminal/status.ts, src/terminal/notify.ts, src/status/useAgentStatus.ts, src/usage/meter.ts at 944b6cb -->

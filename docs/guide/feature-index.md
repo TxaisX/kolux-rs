@@ -323,6 +323,7 @@ Tasks not yet ticked off in the build plan are not listed.
 
 | Task | Feature | Guide page |
 |---|---|---|
+| T-151 | Approve or Deny from the agent pane header; pin tabs; removing a running session asks; multi-line pastes wait for Enter. | [Terminals](terminals.md) |
 | T-152 | Hooks go only to agents that are installed and switched on, without damaging their config. | [Settings](settings.md) |
 | T-152-b | The first real hook install was proven safe against the current settings. | [Safety](safety.md) |
 | T-152-c | Hook installs keep a previous status line and detect later edits. | [Safety](safety.md) |
@@ -448,6 +449,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-277 | Resource Manager lists terminals picked up after a reload. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-278 | Fast output never freezes a pane; memory caps scale with the machine. | [Troubleshooting](troubleshooting.md) |
 | T-278-c | Big pastes arrive whole and in order without slowing other panes; Ctrl+C or Esc stops one. | [Terminals](terminals.md) |
+| T-278-d | Control characters inside a paste are removed, so pasted text cannot run on its own. | [Terminals](terminals.md) |
 | T-280 | Saved settings come back valid after a restart. | [Settings](settings.md) |
 | T-284 | An interrupted skill delete is undone or finished on restart. | [Troubleshooting](troubleshooting.md) |
 | T-286 | Startup failures and stray background errors never silently kill the app. | [Troubleshooting](troubleshooting.md) |
@@ -478,4 +480,4 @@ Tasks not yet ticked off in the build plan are not listed.
 |---|---|---|
 | T-298 | Reopen the wizard from the sidebar help menu; first successes are recorded locally. | [Getting started](getting-started.md) |
 
-<!-- generated from PLAN.md at 1db0384 -->
+<!-- generated from PLAN.md at 944b6cb -->
