@@ -118,8 +118,12 @@ What the address box understands:
 
 A browser tab never opens local files, so a page cannot reach the app's own tools. Pages stay loaded when you switch to another tab and back. There is no choice of search engine; the setting was removed.
 
+In a narrow browser pane (under about 360 pixels wide) the Address box folds up into a small box so the buttons keep their room. Click it (or press Ctrl+L) and it opens across the whole toolbar while you type; the buttons stay where they were, hidden under it. Click away and it folds up again.
+
+While a page is loading, the tab shows your app's colour (dark in a dark theme, light in a light theme) instead of a white flash. If you change the theme, the next page you load follows the new colour.
+
 ## Not available
 
 Find on a page, "grab page element" and hard reload have keys listed on the Shortcuts page, but they do nothing yet in this version. Use Ctrl+R to reload.
 
-<!-- verified against: src/editor/EditorPane.tsx, src/editor/DiskBanner.tsx, src/editor/diskChange.ts, src/editor/DiffPane.tsx, src/editor/AllChangesPane.tsx, src/scm/split.ts, src/editor/Explorer.tsx, src/editor/FilePicker.tsx, src/editor/PreviewPane.tsx, src/editor/markdown.ts, src/browser/BrowserPane.tsx, src/browser/address.ts, src/chrome/LayoutStrip.tsx, src/keys/actions.ts, src/App.tsx at 14e54da -->
+<!-- verified against: src/editor/EditorPane.tsx, src/editor/DiskBanner.tsx, src/editor/diskChange.ts, src/editor/DiffPane.tsx, src/editor/AllChangesPane.tsx, src/scm/split.ts, src/editor/Explorer.tsx, src/editor/FilePicker.tsx, src/editor/PreviewPane.tsx, src/editor/markdown.ts, src/browser/BrowserPane.tsx, src/browser/address.ts, src/chrome/LayoutStrip.tsx, src/keys/actions.ts, src/App.tsx, src/browser/colour.ts, src/browser/browser.css, src-tauri/src/browser.rs at e19b35b -->

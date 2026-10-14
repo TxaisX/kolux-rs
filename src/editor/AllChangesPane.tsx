@@ -10,7 +10,9 @@
 // so the base moving on changes nothing), with a commit box while it does; inline or side by
 // side, wrapped lines, whitespace-only changes and the tree each start from a setting and toggle
 // per tab; every section folds, and all at once. GIT-037: a section's "open as tab" button opens
-// the file's diff tab in the split chosen in Source Control.
+// the file's diff tab in the split chosen in Source Control. T-033-g: the tab reads the status once
+// when it opens (so Commit is ready at once), passes the base it already knows so a refresh runs no
+// second status, and labels a base with no shared history instead of comparing silently.
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
@@ -30,7 +32,7 @@ import { AC_SPLIT_KEY, AC_TREE_KEY, AC_WHITESPACE_KEY, AC_WRAP_KEY, acLayoutOf, 
 
 export type Entry = { path: string; staged: boolean; code: string; lines: number | null; binary: boolean; stamp: string };
 /** The base a branch is measured against and the snapshot commit the sides are read from. */
-export type Base = { against: string; since: string };
+export type Base = { against: string; since: string; note?: string };
 type BaseChanges = Base & { entries: Entry[] };
 type Sides = { original: string; modified: string };
 type Cache = Map<string, { stamp: string; sides: Sides }>;
@@ -54,6 +56,8 @@ export const estimate = (e: Entry) => {
 /** The word on a section: which side of the index a working-tree change is on, or against the
  * base what became of the file. */
 export const tagOf = (e: Entry, base: boolean) => (base ? (e.code === "A" ? "Added" : e.code === "D" ? "Deleted" : e.code === "?" ? "Untracked" : "Changed") : e.code === "?" ? "Untracked" : e.staged ? "Staged" : "Unstaged");
+/** The call that reads the branch against its base; `known` is the base the last status named. */
+export const baseCall = (root: string, pinned: string | null, status: Status | null): [string, Record<string, unknown>] => ["scm_base_changes", { worktree: root, pinned, known: status?.base ?? null }];
 /** The command and arguments a section reads its two texts with. */
 export const sidesCall = (base: Base | null, root: string, e: Entry): [string, Record<string, unknown>] => (base ? ["scm_base_sides", { worktree: root, path: e.path, since: base.since }] : ["diff_sides", { path: e.path, staged: e.staged }]);
 
@@ -79,6 +83,7 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
   const list = useRef<HTMLDivElement>(null);
   const top = useRef(0);
   const front = useRef(!hidden);
+  const latest = useRef<Status | null>(null); // the last status, read by refreshes without re-running the effect
   front.current = !hidden;
 
   const missed = useRef<(() => void) | null>(null);
@@ -91,7 +96,7 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
   }, [hidden]);
   useEffect(() => {
     let alive = true;
-    const read = mode === "base" ? () => invoke<BaseChanges>("scm_base_changes", { worktree: root, pinned: pinnedBase }).then((b) => (setBase({ against: b.against, since: b.since }), b.entries)) : () => invoke<Entry[]>("change_entries", { root }).then((es) => (setBase(null), es));
+    const read = mode === "base" ? () => invoke<BaseChanges>(...baseCall(root, pinnedBase, latest.current)).then((b) => (setBase({ against: b.against, since: b.since, note: b.note }), b.entries)) : () => invoke<Entry[]>("change_entries", { root }).then((es) => (setBase(null), es));
     const fetch = () =>
       read().then(
         (es) => {
@@ -101,9 +106,17 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
         },
         (err) => alive && setError(String(err)),
       );
-    void fetch();
-    const stop = watchStatus(root, (s) => {
+    const took = (s: Status) => {
+      latest.current = s;
       setStatus(s);
+    };
+    // One status as the tab opens: Commit is ready at once instead of after the watcher's first
+    // tick, and in base mode the first read already knows the base.
+    const first = invoke<Status>("scm_status", { worktree: root }).then((s) => alive && took(s), () => undefined);
+    if (mode === "base") void first.then(fetch);
+    else void fetch();
+    const stop = watchStatus(root, (s) => {
+      took(s);
       if (front.current) void fetch();
       else missed.current = () => void fetch();
     });
@@ -280,6 +293,7 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
         {layout.tree && <div className="ac-handle" onPointerDown={resize} role="separator" aria-orientation="vertical" aria-label="Resize the file tree" />}
         <div className="ac-list" ref={list} onScroll={(e) => (top.current = e.currentTarget.scrollTop)}>
           {entries === null && !error && <div className="menu-hint">Reading the changes…</div>}
+          {base?.note && <div className="menu-hint ac-note">{base.note}</div>}
           {entries && !entries.length && <div className="menu-hint">{base ? `This branch has no changes against ${base.against}.` : "This worktree has no changes."}</div>}
           {(entries ?? []).map((e, i) => (
             <Section key={entryKey(e)} anchor={sectionId(i)} e={e} name={rel(e.path)} root={root} base={base} draw={draw} cache={cache.current} scroller={list} onReady={onReady} viewed={isViewed(e)} canView={ready[entryKey(e)] === e.stamp} onViewed={() => toggleViewed(e)} folded={!!fold[entryKey(e)]} onFold={() => setFold((f) => ({ ...f, [entryKey(e)]: !f[entryKey(e)] }))} onOpen={onOpenDiff && base === null ? () => onOpenDiff(e.path, e.staged) : undefined} />
