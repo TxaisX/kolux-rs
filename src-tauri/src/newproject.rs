@@ -208,8 +208,8 @@ pub fn clone_into(url: &str, dest: &Path, ticket: &str, mut on_line: impl FnMut(
         Ok(s) if s.success() => Ok(()),
         other => {
             undo(dest, existed);
-            let text = log.iter().map(|l| l.trim()).filter(|l| !l.is_empty()).collect::<Vec<_>>().join("\n");
-            Err(if text.is_empty() { format!("git clone failed ({other:?})") } else { text })
+            // GIT-062: one line of reason, never the progress output.
+            Err(crate::git::failure_reason(&log.join("\n")).unwrap_or_else(|| format!("git clone failed ({other:?})")))
         }
     }
 }
@@ -394,9 +394,9 @@ mod tests {
         let err = clone_into(&url, &dest, "t2", |_| {}).unwrap_err();
         assert!(err.contains("already has files"), "{err}");
         assert!(dest.join("a.txt").is_file());
-        // Git's own words come back in full when the clone fails.
+        // GIT-062: a failed clone comes back as git's one fatal reason, with no progress lines.
         let err = clone_into(&format!("{url}-missing"), &root.join("none"), "t3", |_| {}).unwrap_err();
-        assert!(err.to_lowercase().contains("fatal"), "{err}");
+        assert!(!err.contains('\n') && !err.contains("Cloning into") && !err.is_empty(), "{err}");
         assert!(!root.join("none").exists());
         let _ = fs::remove_dir_all(&root);
     }

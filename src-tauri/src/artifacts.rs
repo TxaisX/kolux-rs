@@ -455,6 +455,9 @@ pub fn open_external(url: String) -> Result<(), String> {
 /// Hands `url` (a link or a full file path) to the system's own handler. Callers check it first:
 /// `open_external` lets only web and mail links through, `links::open_path` reveals programs.
 pub(crate) fn system_open(url: &str) -> Result<(), String> {
+    if url.contains('\0') {
+        return Err("That path holds a control character; Kolux never opens it".into());
+    }
     #[cfg(windows)]
     {
         let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
