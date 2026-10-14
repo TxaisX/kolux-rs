@@ -3905,6 +3905,42 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// TERM-125 (rest): the texts of `terminal show`, a plain `send` (with Enter, or an interrupt)
+    /// and `wait`; and `wait`'s time limit: it asks again every half second and, when the
+    /// condition is still not met, fails with the state the terminal is in.
+    #[test]
+    fn term125_show_send_and_wait_texts_and_the_wait_time_limit() {
+        let shown = json!({ "handle": "term-1", "title": "Terminal 1", "worktree": null, "pane": 1, "tab": 1, "host": "local", "shown": true });
+        assert_eq!(terminal_text("terminal.show", &shown).unwrap(), "term-1  Terminal 1\nworktree none · pane 1 tab 1 · host local · in view");
+        let hidden = json!({ "handle": "term-2", "title": "t079b-exit", "worktree": "G:/r", "pane": 1, "tab": 2, "host": "local", "shown": false });
+        assert_eq!(terminal_text("terminal.show", &hidden).unwrap(), "term-2  t079b-exit\nworktree G:/r · pane 1 tab 2 · host local");
+        assert_eq!(text_of("terminal.send", &json!({ "terminal": "term-1", "delivered": ["text", "enter"] })), "sent text+enter to term-1");
+        assert_eq!(text_of("terminal.send", &json!({ "terminal": "term-1", "delivered": ["interrupt"] })), "sent interrupt to term-1");
+        assert_eq!(text_of("terminal.wait", &json!({ "terminal": "term-2", "done": true, "state": "exited" })), "term-2 is exited");
+        assert_eq!(text_of("terminal.wait", &json!({ "terminal": "term-1", "done": true, "state": "quiet" })), "term-1 is quiet");
+
+        // An app whose terminal keeps running: wait polls (at least twice in 700 ms) and then fails.
+        use std::sync::{atomic::{AtomicUsize, Ordering}, Arc};
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let asked = Arc::new(AtomicUsize::new(0));
+        let count = asked.clone();
+        std::thread::spawn(move || {
+            serve_loop(listener, "secret", "rt-1", move |_| {
+                count.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "terminal": "term-1", "done": false, "state": "running", "blocked": false }))
+            })
+        });
+        let req = Request { id: "w1".into(), token: "secret".into(), command: "terminal.wait".into(), cwd: String::new(), args: json!({ "terminal": "term-1", "for": "exit", "timeoutMs": "700" }), pane: None, cli: VERSION.into(), arrived: None };
+        let start = Instant::now();
+        let f = wait_for_terminal(port, req).unwrap_err();
+        let took = start.elapsed();
+        assert_eq!((f.code, f.message.as_str()), ("timeout", "term-1 did not reach exit within 700 ms (it is running)"));
+        assert_eq!(f.data["state"], "running");
+        assert!(took >= Duration::from_millis(700) && took < Duration::from_secs(5), "took {took:?}");
+        assert!(asked.load(Ordering::SeqCst) >= 2, "asked {} times", asked.load(Ordering::SeqCst));
+    }
+
     #[test]
     fn tasks_need_a_known_creator_and_a_dry_run_needs_no_recipient() {
         let dir = std::env::temp_dir().join(format!("kolux-rs-dry-{}", std::process::id()));
