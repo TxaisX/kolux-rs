@@ -1126,22 +1126,6 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     shownScreen.current = screen;
     screenWriter.set(screen);
   }, [screen]);
-  // VIEW-107: closing the window writes what is pending first; unsaved editor text stops the quit
-  // and asks, so nothing is lost without the user saying so.
-  const [quitAsk, setQuitAsk] = useState<string[] | null>(null);
-  const unsaved = useRef<string[]>([]);
-  unsaved.current = panes.filter((p) => dirty[p.key]).map((p) => baseName(p.path ?? p.title ?? "Untitled"));
-  const quitting = useRef(false);
-  useEffect(() => {
-    const off = getCurrentWindow().onCloseRequested((e) => {
-      screenWriter.flush();
-      // The unsaved-text question is APP-006's (the close handler below asks once for both).
-      if (quitting.current || unsaved.current.length === 0 || unsavedTabs().length > 0) return;
-      e.preventDefault();
-      setQuitAsk([...unsaved.current]);
-    });
-    return () => void off.then((f) => f()).catch(() => {});
-  }, []);
   // PROJ-067: the tabs and layout are written down as they change, so they come back after a restart.
   // VIEW-107 (T-069-b): not before a real read of the settings landed (a start that timed out has
   // not seen the saved tabs, so writing its layout would drop them); a failed write is retried once,
@@ -1544,7 +1528,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   held.current = { panes, dirty, titles, settings };
   useEffect(() => {
     watchDrafts(() => held.current.panes.filter((p) => held.current.dirty[p.key]).map((p) => tabName(p, held.current.titles)));
+    // VIEW-107 + APP-006: the only close listener. Tauri destroys the window after every listener
+    // that does not call preventDefault, so a second listener would close it before this question.
     const off = getCurrentWindow().onCloseRequested(async (e) => {
+      screenWriter.flush(); // VIEW-107: the shown screen is written before anything else
       void invoke("close_heard").catch(() => {});
       await settleWithin(flushUnsaved(), 2000);
       const ids = Object.values(ptys.current);
@@ -1983,20 +1970,6 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               if (asking.quit) return void getCurrentWindow().destroy().catch(() => {});
               dropPanes(asking.keys);
               setAsking(null);
-            }}
-          />
-        )}
-        {quitAsk && (
-          <Ask
-            title="Quit with unsaved changes?"
-            body={`${quitAsk.length === 1 ? "1 file has" : `${quitAsk.length} files have`} unsaved changes: ${quitAsk.join(", ")}. Quitting now loses them.`}
-            confirm="Quit without saving"
-            cancel="Keep working"
-            onCancel={() => setQuitAsk(null)}
-            onConfirm={() => {
-              quitting.current = true;
-              setQuitAsk(null);
-              void getCurrentWindow().close();
             }}
           />
         )}

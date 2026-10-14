@@ -174,10 +174,34 @@ pub struct Checked {
     quiet: Option<Quiet>,
 }
 
+/// The hosts a release download is fetched from (GitHub Releases and the storage it redirects to).
+pub fn release_host(url: &str) -> bool {
+    let Ok(u) = reqwest::Url::parse(url) else { return false };
+    if u.scheme() != "https" {
+        return false;
+    }
+    let Some(h) = u.host_str() else { return false };
+    h == "github.com" || h.ends_with(".githubusercontent.com")
+}
+
 /// APP-031: whether the installer the manifest names is missing from the release. Only a clear
-/// "not found" counts; any other trouble is left for the download to report.
+/// "not found" counts; any other trouble is left for the download to report. The question is only
+/// asked of GitHub's release hosts, over https, and redirects stay on those hosts (council review
+/// of a08f2bb, F1: the privacy statement names GitHub Releases only).
 async fn installer_missing(url: &str) -> bool {
-    let Ok(client) = reqwest::Client::builder().timeout(Duration::from_secs(10)).build() else { return false };
+    if !release_host(url) {
+        return false;
+    }
+    let policy = reqwest::redirect::Policy::custom(|a| {
+        if a.previous().len() >= 5 {
+            a.error("too many redirects")
+        } else if release_host(a.url().as_str()) {
+            a.follow()
+        } else {
+            a.stop()
+        }
+    });
+    let Ok(client) = reqwest::Client::builder().timeout(Duration::from_secs(10)).https_only(true).redirect(policy).build() else { return false };
     match client.head(url).send().await {
         Ok(r) => matches!(r.status().as_u16(), 404 | 410),
         Err(_) => false,
@@ -508,6 +532,18 @@ mod tests {
     fn env_with(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
         let pairs: Vec<(String, String)> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         move |k| pairs.iter().find(|(pk, _)| pk == k).map(|(_, v)| v.clone())
+    }
+
+    #[test]
+    fn the_installer_check_only_asks_github_release_hosts_over_https() {
+        assert!(release_host("https://github.com/TxaisX/kolux-rs-releases/releases/download/v0.2.0/setup.exe"));
+        assert!(release_host("https://release-assets.githubusercontent.com/x"));
+        assert!(release_host("https://objects.githubusercontent.com/x"));
+        assert!(!release_host("http://github.com/TxaisX/kolux-rs-releases/releases/download/v0.2.0/setup.exe"));
+        assert!(!release_host("https://github.com.evil.example/x"));
+        assert!(!release_host("https://evilgithubusercontent.com/x"));
+        assert!(!release_host("http://127.0.0.1:9/setup.exe"));
+        assert!(!release_host("not a url"));
     }
 
     #[test]

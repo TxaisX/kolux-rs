@@ -190,22 +190,51 @@ impl Store {
         })
     }
 
-    /// APP-048: a settings file that is not valid JSON is repaired at start: the damaged bytes are
-    /// kept beside it as settings.json.bad first, then the entries that still parse are written
-    /// back (nothing readable at all keeps the Classic look of an existing install). A file that
-    /// cannot be read (no access) is left alone and saves keep refusing (T-441). Returns whether
-    /// it was repaired.
+    /// APP-048: a settings file that is not valid JSON is repaired at start. The damaged bytes are
+    /// kept beside it as settings.json.bad first (an earlier .bad is moved aside to a timestamped
+    /// name, never overwritten). When settings.json.bak (the last good copy, T-441) parses as a
+    /// non-empty set, the file is rebuilt from it with the entries that still parse laid over it;
+    /// otherwise the entries that still parse are written back (nothing readable at all keeps the
+    /// Classic look of an existing install) and any unusable .bak is kept as
+    /// settings.json.bak.pre-repair, since the next save replaces .bak. A file that cannot be read
+    /// (no access) is left alone and saves keep refusing (T-441). Returns whether it was repaired.
     pub fn repair_settings(&self) -> std::io::Result<bool> {
         let bytes = match self.read_file() {
             Ok(_) => return Ok(false),
             Err(e) if e.kind() == std::io::ErrorKind::InvalidData => fs::read(&self.settings_path)?,
             Err(e) => return Err(e),
         };
-        let mut kept = salvage(&String::from_utf8_lossy(&bytes));
-        if kept.is_empty() {
-            kept.insert(LOOK_FIELD.into(), "classic".into());
+        let salvaged = salvage(&String::from_utf8_lossy(&bytes));
+        let bak = self.settings_path.with_extension("json.bak");
+        let last_good = fs::read(&bak)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            .and_then(|v| match v {
+                Value::Object(o) if !o.is_empty() => Some(o),
+                _ => None,
+            });
+        let kept = match last_good {
+            Some(mut base) => {
+                base.extend(salvaged);
+                base
+            }
+            None => {
+                if bak.exists() {
+                    fs::copy(&bak, self.settings_path.with_extension("json.bak.pre-repair"))?;
+                }
+                let mut kept = salvaged;
+                if kept.is_empty() {
+                    kept.insert(LOOK_FIELD.into(), "classic".into());
+                }
+                kept
+            }
+        };
+        let bad = self.settings_path.with_extension("json.bad");
+        if bad.exists() {
+            let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+            fs::rename(&bad, self.settings_path.with_extension(format!("json.bad-{stamp}")))?;
         }
-        fs::copy(&self.settings_path, self.settings_path.with_extension("json.bad"))?;
+        fs::copy(&self.settings_path, &bad)?;
         let tmp = self.settings_path.with_extension("json.tmp");
         let written = (|| {
             let mut f = fs::File::create(&tmp)?;
@@ -593,6 +622,56 @@ mod tests {
         let started = std::time::Instant::now();
         assert!(!within(Duration::from_millis(200), || std::thread::sleep(Duration::from_secs(30))));
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn app048_a_truncated_settings_file_is_rebuilt_from_the_last_good_copy_and_survives_the_next_save() {
+        // Council review of a08f2bb, B2: the repair used to write a stub that the next save then
+        // copied over .bak, so every setting was lost.
+        let dir = temp_dir("repair-bak");
+        let s = Store::open(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let full = serde_json::json!({ "theme": "new", "defaultAgent": "claude", "fontSize": 14, "uiLook": "new" });
+        s.save_settings(&full).unwrap();
+        let mut newer = full.clone();
+        newer["fontSize"] = 15.into();
+        s.save_settings(&newer).unwrap(); // .bak now holds `full`
+        for (n, broken) in ["", r#"{"theme": "dusk", "defaultAg"#].into_iter().enumerate() {
+            fs::write(&path, broken).unwrap();
+            assert!(s.repair_settings().unwrap());
+            let repaired = s.settings();
+            assert_eq!(repaired["defaultAgent"], "claude", "pass {n}: rebuilt from the last good copy: {repaired}");
+            assert_eq!(repaired["uiLook"], "new", "pass {n}: {repaired}");
+            if n == 1 {
+                assert_eq!(repaired["theme"], "dusk", "the entries that still parse win over the backup");
+            }
+            // One ordinary save afterwards (the layout write that follows every start).
+            let mut next = repaired.clone();
+            next["layout"] = format!("after-{n}").into();
+            s.save_settings(&next).unwrap();
+            let bak: Value = serde_json::from_slice(&fs::read(dir.join("settings.json.bak")).unwrap()).unwrap();
+            assert_eq!(bak["defaultAgent"], "claude", "pass {n}: the full copy survives in .bak: {bak}");
+            assert_eq!(s.settings()["defaultAgent"], "claude");
+        }
+        // Each damaged copy is kept: the newest as .bad, the earlier one under a timestamped name.
+        let bads = fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with("settings.json.bad")).count();
+        assert_eq!(bads, 2);
+        assert_eq!(fs::read_to_string(dir.join("settings.json.bad")).unwrap(), r#"{"theme": "dusk", "defaultAg"#);
+        drop(s);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn app048_an_unusable_backup_is_kept_aside_before_the_repair() {
+        let dir = temp_dir("repair-prerepair");
+        let s = Store::open(&dir).unwrap();
+        fs::write(dir.join("settings.json"), "\u{0}garbage").unwrap();
+        fs::write(dir.join("settings.json.bak"), "{}").unwrap();
+        assert!(s.repair_settings().unwrap());
+        assert_eq!(s.settings(), serde_json::json!({ "uiLook": "classic" }));
+        assert_eq!(fs::read_to_string(dir.join("settings.json.bak.pre-repair")).unwrap(), "{}");
+        drop(s);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
