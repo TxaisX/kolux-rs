@@ -292,6 +292,44 @@ mod script_runs {
         assert_eq!(leftovers, 0, "the script's own temporary files are removed");
     }
 
+    /// FIX-2 (S7, COMPAT 3.1): an event held while Kolux is closed keeps only what the status
+    /// needs (event, tool, session, a few flags, the time), never the tool's input or output, the
+    /// prompt or the reply.
+    #[test]
+    fn fix_2_s7_a_held_event_never_carries_tool_input_prompt_or_reply() {
+        const MARK: &str = "S7-MARKER-sekrit";
+        let data = temp("s7 ) & z!");
+        let dir = scripts("s7");
+        let endpoint = data.join(super::super::super::ENDPOINT_FILE);
+        let closed = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        fs::write(&endpoint, format!("{closed} tok\n")).unwrap();
+        let env = [("KOLUX_PANE_KEY", "8".to_string()), ("KOLUX_HOOK_IDENTITY", who(8)), ("KOLUX_HOOK_ENDPOINT", endpoint.display().to_string())];
+        let events = [
+            format!(r#"{{"hook_event_name":"UserPromptSubmit","session_id":"s7","cwd":"C:/w","prompt":"do {MARK}"}}"#),
+            format!(r#"{{"hook_event_name":"PreToolUse","session_id":"s7","tool_name":"Bash","tool_input":{{"command":"echo {MARK}"}}}}"#),
+            format!(r#"{{"hook_event_name":"PostToolUse","session_id":"s7","tool_name":"Bash","tool_input":{{"command":"echo {MARK}"}},"tool_response":{{"stdout":"{MARK}"}}}}"#),
+            format!(r#"{{"hook_event_name":"Stop","session_id":"s7","last_assistant_message":"said {MARK}","background_tasks":[{{"title":"{MARK}"}}]}}"#),
+        ];
+        for e in &events {
+            let out = run(&dir, &env, e);
+            assert!(out.status.success() && out.stdout.is_empty(), "{out:?}");
+        }
+        let held = fs::read_to_string(data.join(saved::SPOOL_FILE)).unwrap();
+        println!("{held}");
+        assert!(!held.contains(MARK), "no input, output, prompt or reply text is held: {held}");
+        let lines: Vec<_> = held.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines.len(), 4, "{held:?}");
+        let body = |l: &str| ev(l.splitn(4, '|').nth(3).unwrap());
+        let tool = body(lines[1]);
+        assert_eq!((tool["hook_event_name"].as_str(), tool["tool_name"].as_str(), tool["session_id"].as_str()), (Some("PreToolUse"), Some("Bash"), Some("s7")));
+        assert!(tool["spooled_at"].as_u64().is_some_and(|t| t > 1_700_000_000_000), "{tool}");
+        assert_eq!(body(lines[0])["cwd"], "C:/w");
+        assert_eq!(body(lines[3])["background_tasks"], json!([1]), "only that the list was not empty");
+        let mut rows = Vec::new();
+        assert_eq!(saved::replay(&held, &mut rows, 1), 4);
+        assert_eq!((rows[0].pane_key, rows[0].state.as_str(), rows[0].session_id.as_deref()), (8, "working", Some("s7")), "a stop with work in the background stays working");
+    }
+
     #[test]
     fn stat_006_a_running_kolux_gets_the_event_from_the_endpoint_file_alone() {
         let data = temp("live ) & y!");
@@ -316,6 +354,32 @@ mod script_runs {
         assert_eq!(req.headers.get("x-kolux-config").map(String::as_str), Some("C:\\cfg!"));
         assert_eq!(ev(String::from_utf8_lossy(&req.body).trim()), ev(STOP));
         assert!(!data.join(saved::SPOOL_FILE).exists(), "nothing is held once delivered");
+    }
+
+    /// FIX-2: with CLAUDE_CONFIG_DIR unset (most PCs) or only quotes, the script still runs to the
+    /// end and posts; it used to stop at once on "The syntax of the command is incorrect".
+    #[test]
+    fn fix_2_an_unset_or_empty_claude_config_dir_still_posts() {
+        for (tag, config) in [("unset", None), ("quotes", Some("\"\""))] {
+            let data = temp(&format!("noconfig-{tag}"));
+            let dir = scripts(&format!("noconfig-{tag}"));
+            let endpoint = data.join(super::super::super::ENDPOINT_FILE);
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            fs::write(&endpoint, format!("{} sekrit\n", listener.local_addr().unwrap().port())).unwrap();
+            let got = std::thread::spawn(move || {
+                let (mut s, _) = listener.accept().unwrap();
+                let req = super::super::super::parse_request(&mut BufReader::new(&s)).unwrap();
+                let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}");
+                req
+            });
+            let mut env = vec![("KOLUX_PANE_KEY", "7".to_string()), ("KOLUX_HOOK_IDENTITY", who(7)), ("KOLUX_HOOK_ENDPOINT", endpoint.display().to_string())];
+            env.extend(config.map(|c| ("CLAUDE_CONFIG_DIR", c.to_string())));
+            let out = run(&dir, &env, STOP);
+            assert!(out.status.success() && out.stdout == b"{}" && out.stderr.is_empty(), "{tag}: {out:?}");
+            let req = got.join().unwrap();
+            assert_eq!(req.path, "/claude", "{tag}");
+            assert_eq!(ev(String::from_utf8_lossy(&req.body).trim()), ev(STOP), "{tag}");
+        }
     }
 }
 
