@@ -1,0 +1,83 @@
+chat FIX-2 (council re-review 3 of lane/chat 8151d6f: FS1-FS5, AFTER 1-2; FB1 already fixed on main by the coordinator) · lane/chat from 8151d6f, step-0 merge 491cfe9 (main 5f3b287)
+
+WHAT CHANGED FOR THE USER
+- After an agent starts a tool, the chat box waits about a second before pressing Enter (and before
+  typing anything), so a permission menu that opens for that tool is heard first and the send stops
+  instead of approving it. While it waits the box says "Waiting a moment: the agent is starting a tool."
+  A tool that already finished (its PostToolUse arrived) holds nothing.
+- A held send now always says why in the box (asking, can't see the prompts, terminal not running, too
+  long). A send that stopped midway says "The send stopped before its Enter." plus the reason, and its
+  bubble is marked failed.
+- Approve or Deny on a card clears the chat's own reading of the old menu (App hunk calls answered()),
+  so the box no longer stays held on a menu that was already answered.
+- A hook reading from a pane's earlier terminal (the agent was started again or reconnected and its new
+  program has not reported yet) no longer counts as clear: the box says "Kolux can't see this agent's
+  prompts." The window already drops a pane's reading when its program ends (main 5f3b287 App.tsx onRunning).
+- With the App patch applied: Send notes (Source Control line notes and review notes), a kit's role
+  prompt, and Request changes' feedback go through the same check as the chat box. Notes sent to an
+  agent showing a menu are not typed; the sheet says "The notes were not sent: <reason>" and keeps them.
+  A kit role prompt waits and is tried again on the next tick. Request changes' feedback now also has
+  escape codes stripped (AFTER 2).
+- The chat's 8 MB send limit counts UTF-8 bytes, not characters (AFTER 1).
+
+CODE (src/chat only; App side is a patch for the coordinator)
+- send.ts: hearStates keeps per pane {state, terminal, tool-started, time}; holdReading/holdFor drop a
+  reading from another terminal; toolWait + TOOL_HOLD_MS 1000 (a send waits out a fresh PreToolUse
+  before each write, at most 20 waits, then stops); answered(key); pasteToPane (always one bracketed
+  paste, optional line clear); boxSend (the chat box's Enter, with notes); outcomeNote; writeTerminal.
+- composer.ts: pasteSteps(raw, clearLine); typeSteps takes a `before` hook.
+- ChatView.tsx: send() is boxSend(...); the box's held note reads holdReading with the pane's terminal.
+- Tests renamed (FS5): send.test.ts header now says it drives sendToPane, not ChatView; "a pane switch
+  mid-send..." is now "a send keyed to pane A stops on A's menu while the window's other pane B stays
+  clear" (the unused onScreen removed); composer.test.ts "...so a menu never reads it as a pick" is now
+  "...goes out as one bracketed paste (the bytes only; council FIX-1)".
+- New: src/chat/hold.test.ts (12 tests), src/chat/box.test.ts (6 tests, Tauri invoke and listen mocked
+  with vi.mock; boxSend is the exact function ChatView.send runs; there is no DOM test runner in this
+  repo, adding jsdom is a package.json change for the coordinator).
+
+FAILING FIRST (hold.test.ts + box.test.ts against a port of the old logic: 8151d6f send.ts plus shims
+with main 5f3b287's unchecked pasteInto/kit write and 8151d6f's ChatView.send; log
+G:/Temp/chat-w1-logs/fix2-red-oldport.log; before the AFTER-1 byte test was added the plain run on the
+old send.ts also failed at import, fix2-red.log)
+  Test Files 2 failed (2) · Tests 14 failed | 4 passed (18)
+  failed: menu in the tool's second stops the send; Enter waits the second; the wait is said; byte limit;
+  earlier-terminal reading; card answer clears the reading; notes to a permission menu type nothing;
+  no hook reading types nothing; clear agent gets one paste without a line clear; role prompt clears the
+  line and strips escape codes; box held says why; box held by the chat's own old reading says why;
+  each refusal says so; mid-send menu says the send stopped.
+  passed on old code too (guards): a finished tool holds nothing; a one-line slash note is pasted; a
+  clear box send reaches invoke; a failed write marks the bubble failed.
+
+AFTER
+  pnpm exec vitest run src/chat                     Test Files 7 passed (7) · Tests 72 passed (72)
+  (full gates below)
+
+APP PATCH (evidence/chat-FIX-2-App.patch, `git diff 5f3b287 -- src/App.tsx`, 17+/15-)
+  git worktree add --detach G:/Temp/chat-w1-wt 5f3b287; git apply --check -> exit 0; applied, with this
+  commit's src/chat/{send.ts,composer.ts,ChatView.tsx} copied in; tsc --noEmit -> exit 0
+  (G:/Temp/chat-w1-logs/fix2-apply.log, fix2-wt-tsc.log); worktree removed.
+  With the patch applied in the lane checkout: tsc exit 0; pnpm test 992/993 (the 1 is privacy-audit
+  app070, which fails on main 5f3b287 itself: browser.rs names reqwest::).
+  Hunks: import from ./chat/send; toPane + hearStates mount beside the kit sender; kit role prompt via
+  pasteToPane(..., true) (held = keep waiting); answer() and requestChanges call answered(p.key);
+  requestChanges types its feedback with pasteToPane (toast with the reason when held); pasteInto(key,
+  text) via pasteToPane, throwing the reason; its two callers pass the pane key.
+
+LIVE PROOF PENDING (batched; NO APP LAUNCHES rule, the coordinator runs these on main)
+  6b. Real Claude plan, Plan sheet, Request changes with a comment: the agent leaves the menu and the
+      feedback arrives in its prompt as one message (no "still asking" toast).
+  7. Chat box, Claude pane mid-task: send while it runs a tool that needs permission; the box shows
+     "Waiting a moment..." then the asking note, the bubble is marked failed, the menu is untouched.
+  8. Source Control, line notes, Send while the agent shows a permission menu: "The notes were not sent:
+     The agent is asking something in its terminal. Answer there." and the notes stay unsent; send again
+     after answering: the notes arrive as one message.
+  9. Restart an agent pane, then type in its chat before it reports: "Kolux can't see this agent's prompts."
+
+NOT BUILT (said, not hidden)
+  - The final state check in Rust (a chat_send command reading status::state_of right before the Enter)
+    needs status.rs + lib.rs registration: coordinator/hooks lane.
+  - (c) Slash commands only at rest: decision pending Txais, not built.
+  - AFTER 3 (Tab in a one-line slash command reaches the agent as the Tab key): not changed.
+  - The Status payload's `terminal` is the identity header's terminal id; this assumes it is the same id
+    as the window's pane-to-terminal map (both come from the terminal the pane spawned). If a hook
+    route ever sends none, the earlier-run check is skipped (the window's own drop on exit still holds).

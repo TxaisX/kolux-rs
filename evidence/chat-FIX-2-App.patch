@@ -1,0 +1,96 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 41aab81..c34acba 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -126,6 +126,7 @@ import { useWizard } from "./onboarding/useWizard";
+ import { hooksOn } from "./settings/AgentsPage";
+ import ToolNotices from "./launch/ToolNotices";
+ import { AgentsChat } from "./chat/ChatView";
++import { answered, hearStates, outcomeNote, pasteToPane, writeTerminal } from "./chat/send";
+ import PlanSheet from "./terminal/PlanSheet";
+ import { draftKey, feedbackMessage, keepDraft, showsReview, stillPending, type PlanDraft } from "./terminal/planReview";
+ 
+@@ -1415,6 +1416,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   // marker and its session is found; once only, and a failed send is tried again next time.
+   // ponytail: checks every ten seconds (and on any pane state change) while a role waits, whether
+   // or not the strip is unfolded; a file watcher would make it instant.
++  // Council FIX-2 (chat 8151d6f re-review, FS2): the window's own pastes (a kit's role prompt, Send
++  // notes, Request changes' feedback) go in only while the pane's hook readings say it is not asking.
++  const toPane = { terminalOf: (k: number) => ptys.current[k], stateOf: (k: number) => hookRef.current[k], write: writeTerminal };
++  useEffect(() => void hearStates(listen).catch(() => {}), []);
+   const sending = useRef(false);
+   const pendingKits = Object.values(kitRuns.current).some((r) => r.waiting.length > 0);
+   useEffect(() => {
+@@ -1431,9 +1436,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+             const id = ptys.current[w.key];
+             if (!roleDone(check, w.upstream) || id === undefined) continue;
+             try {
+-              await invoke("terminal_write", { id, data: w.prompt });
+-              await new Promise((r) => setTimeout(r, 300));
+-              await invoke("terminal_write", { id, data: "\r" });
++              // Held while the agent asks something (its Enter would pick Yes); tried again next tick.
++              if ((await pasteToPane(w.key, w.prompt, toPane, true)) !== "sent") continue;
+               run.waiting = run.waiting.filter((x) => x !== w);
+               run.sent[w.role] = Date.now();
+               setKitTick((n) => n + 1);
+@@ -1700,6 +1704,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   const answer = (p: Pane, approve: boolean) =>
+     invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve })
+       .then(() => {
++        answered(p.key);
+         setHook((h) => ({ ...h, [p.key]: "working" }));
+         setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
+       })
+@@ -1725,27 +1730,24 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     // Claude has no hook for a deny inside its own menu, so the pane leaves "permission" here, as answer() does.
+     const left = await invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).then(() => true, () => false);
+     if (!left) return setToast("Kolux could not answer the agent. Answer it in its terminal; your feedback was not typed.");
++    answered(p.key);
+     setHook((h) => ({ ...h, [p.key]: "working" }));
+     // SAFE-004: the feedback is typed only once the agent has left its menu; an Enter while the menu
+     // is still open would pick its default, which is Yes (council re-review of chat a969502).
+     const asking = () => hookRef.current[p.key] === "waiting" || hookRef.current[p.key] === "permission";
+     for (let i = 0; i < 30 && asking(); i++) await new Promise((r) => setTimeout(r, 100));
+     if (asking()) return setToast("The agent is still asking. Answer it in its terminal; your feedback was not typed.");
+-    const id = ptys.current[p.key];
+-    if (id === undefined || !panesRef.current.some((x) => x.key === p.key)) return;
+-    await invoke("terminal_write", { id, data: "\x1b[200~" + text + "\x1b[201~" }).catch(() => {});
+-    await new Promise((r) => setTimeout(r, 300));
+-    if (asking()) return setToast("The agent is still asking. Answer it in its terminal; your feedback was not sent.");
+-    await invoke("terminal_write", { id, data: "\r" }).catch(() => {});
++    if (!panesRef.current.some((x) => x.key === p.key)) return;
++    const got = await pasteToPane(p.key, text, toPane).catch(() => null);
++    if (got !== "sent") return setToast(`Your feedback was not sent. ${got === null ? "The terminal refused it." : outcomeNote(got, p.key, toPane)}`);
+     setHook((h) => ({ ...h, [p.key]: "working" }));
+     setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
+   };
+   // GIT-041: every note goes to the workspace's agent (the focused one, else the first) as one
+   // pasted message; a note edited while the send was in flight is not marked sent.
+-  const pasteInto = async (id: number, text: string) => {
+-    await invoke("terminal_write", { id, data: "\x1b[200~" + text + "\x1b[201~" });
+-    await new Promise((r) => setTimeout(r, 300));
+-    await invoke("terminal_write", { id, data: "\r" });
++  const pasteInto = async (key: number, text: string) => {
++    const got = await pasteToPane(key, text, toPane);
++    if (got !== "sent") throw outcomeNote(got, key, toPane);
+   };
+   const sendNotes = async (dir: string): Promise<string | null> => {
+     const notes = notesFor(dir);
+@@ -1753,7 +1755,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     const agent = [...panes].sort((a, b) => Number(b.key === focused) - Number(a.key === focused)).find((p) => !p.kind && p.agent !== "shell" && sameDir(p.cwd, dir) && ptys.current[p.key] !== undefined);
+     if (!agent) return "No agent is running in this workspace. Start one, or copy the notes instead.";
+     try {
+-      await pasteInto(ptys.current[agent.key], noteBlocks(notes, dir));
++      await pasteInto(agent.key, noteBlocks(notes, dir));
+     } catch (err) {
+       return `The notes were not sent: ${String(err)}`;
+     }
+@@ -1768,7 +1770,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     const p = panesRef.current.find((x) => x.key === key);
+     if (!p || !inWorktree(p)) return "That agent is no longer running, so nothing was sent. The notes are kept.";
+     try {
+-      await pasteInto(ptys.current[key], notesMarkdown(notes));
++      await pasteInto(key, notesMarkdown(notes));
+     } catch (err) {
+       return `The notes were not sent, so they are kept: ${String(err)}`;
+     }

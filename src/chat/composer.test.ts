@@ -68,7 +68,7 @@ describe("sending into the terminal (CHAT-020, T-327)", () => {
     expect(s[1].waitMs).toBeGreaterThanOrEqual(200);
   });
 
-  it("a one-line body that starts with a menu key is bracketed, so a menu never reads it as a pick (council FIX-1)", () => {
+  it("a one-line body that starts with a menu key goes out as one bracketed paste (the bytes only; council FIX-1)", () => {
     for (const t of ["y", "yes please", "1", "2 then stop", "n"]) expect(sendSteps("claude", t)[1].data).toBe(`\x1b[200~${t}\x1b[201~`);
     expect(sendSteps("codex", "y")[1].data).toBe("\x1b[200~y\x1b[201~");
   });

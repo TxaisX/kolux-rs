@@ -1,5 +1,6 @@
-// Council FIX-1 (re-review of a969502): the chat's send path, driven the way ChatView drives it, with
-// a stand-in for Tauri's invoke (terminal_write) and for listen (the agent-status hook events).
+// Council FIX-1 (re-review of a969502): sendToPane, the send path under the chat box, with a stand-in
+// for Tauri's invoke (terminal_write) and for listen (the agent-status hook events). The box's own
+// Enter (boxSend, which ChatView.send runs) is in box.test.ts.
 import { afterEach, describe, expect, it } from "vitest";
 import { LIMIT } from "../terminal/paste";
 import { ASKING_NOTE } from "./composer";
@@ -79,21 +80,19 @@ describe("a send's stop check reads the send's own pane (council FB2)", () => {
     expect(writes).toHaveLength(2);
   });
 
-  it("a pane switch mid-send still stops pane A when A opens a menu", async () => {
+  it("a send keyed to pane A stops on A's menu while the window's other pane B stays clear", async () => {
     const { listen, emit } = fakeListen();
     await hearStates(listen);
     // The window's hook readings by pane: A (7) working, B (8) idle.
     const app: Record<number, string> = { 7: "working", 8: "idle" };
-    let onScreen = 7;
     const { writes, write } = fakeInvoke((_id, data) => {
       if (!data.includes("approve nothing")) return;
-      // The user picks B while the text is going in, then A opens its permission menu.
-      onScreen = 8;
+      // A opens its permission menu while the text is going in; B (8) is still idle.
       app[7] = "permission";
       emit({ paneKey: 7, state: "permission" });
     });
     const got = await sendToPane(7, "claude", "approve nothing", { terminalOf: () => 70, stateOf: (k) => app[k], write, sleep: fast });
-    expect(onScreen).toBe(8);
+    expect(app[8]).toBe("idle");
     expect(got).toBe("stopped");
     expect(writes.filter((w) => w.id === 70).map((w) => w.data)).not.toContain("\r");
   });

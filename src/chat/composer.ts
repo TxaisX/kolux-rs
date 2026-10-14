@@ -99,6 +99,16 @@ export function sendSteps(agent: string | undefined, raw: string): Step[] {
   return [clear, { data: body, waitMs: ENTER_PAUSE_MS }, enter];
 }
 
+/** Council FIX-2: how the window's own pastes (Send notes, a kit's role prompt) are typed: always one
+ * bracketed paste, even a one-line slash command, then Enter after the pause. `clearLine` empties the
+ * input line first (a role prompt into a fresh agent); notes leave what the user typed there. */
+export function pasteSteps(raw: string, clearLine = false): Step[] {
+  const text = harmless(raw).replace(/^\n+|\n+$/g, "");
+  if (!text.trim()) return [];
+  const body: Step = { data: BRACKET_OPEN + text.replace(/\n/g, "\r") + BRACKET_CLOSE, waitMs: ENTER_PAUSE_MS };
+  return [...(clearLine ? [{ data: "\x15", waitMs: 30 }] : []), body, { data: "\r", waitMs: 0 }];
+}
+
 const queues = new Map<number, Promise<unknown>>();
 /** CHAT-020: sends to one terminal run one after another, in the order they were made. */
 export function enqueue<T>(terminal: number, job: () => Promise<T>): Promise<T> {
@@ -114,9 +124,11 @@ export const asksInTerminal = (state: string | undefined) => state === "permissi
 export const ASKING_NOTE = "The agent is asking something in its terminal. Answer there.";
 
 /** CHAT-020: types `steps` with `write`, waiting between them. CHAT-022: `stop` is asked before
- * every write; once it says yes the rest (the Enter above all) is dropped and false comes back. */
-export async function typeSteps(steps: Step[], write: (data: string) => Promise<unknown>, sleep = (ms: number) => new Promise((r) => setTimeout(r, ms)), stop: () => boolean = () => false): Promise<boolean> {
-  for (const s of steps) {
+ * every write; once it says yes the rest (the Enter above all) is dropped and false comes back.
+ * `before` runs ahead of each step's stop check (council FIX-2: the wait after a tool starts). */
+export async function typeSteps(steps: Step[], write: (data: string) => Promise<unknown>, sleep = (ms: number) => new Promise((r) => setTimeout(r, ms)), stop: () => boolean = () => false, before?: (s: Step, i: number) => Promise<unknown>): Promise<boolean> {
+  for (const [i, s] of steps.entries()) {
+    if (before) await before(s, i);
     if (stop()) return false;
     await write(s.data);
     if (s.waitMs) await sleep(s.waitMs);

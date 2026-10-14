@@ -12,8 +12,7 @@ import { NoticeRow, PlanRow, StepRow, ThoughtRow } from "./StepRows";
 import { applyRead, capPending, chatOffer, combine, pickChat, typingInto, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row } from "./model";
 import { Composer, type ComposerHandle } from "./MessageBox";
 import { forwardsToBox, nearBottom } from "./composer";
-import { LIMIT } from "../terminal/paste";
-import { TOO_LONG_NOTE, hearStates, holdFor, holdNote, sendToPane } from "./send";
+import { boxSend, hearStates, holdReading, writeTerminal } from "./send";
 
 /** `terminal`: the program session the pane types into (the window's own pane-to-terminal map). */
 export type ChatPane = { key: number; cwd: string | null; title?: string; terminal?: number };
@@ -30,8 +29,8 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
   const [extras, setExtras] = useState<Extra[]>([]);
   // CHAT-022 (council FIX-1): the box sends only while Kolux can see the agent is not asking in its
   // terminal; a send's keys would land in a menu and its Enter would pick the default (Yes).
-  const [heardState, setHeard] = useState<string | undefined>(undefined);
-  const held = holdNote(hookState, heardState, stateOf !== undefined);
+  // `setHeard` only redraws the box when the pane's hook event arrives; the reading itself is send.ts's.
+  const [, setHeard] = useState<string | undefined>(undefined);
   const [note, setNote] = useState<string | null>(null);
   useEffect(() => void hearStates(listen).catch(() => {}), []);
 
@@ -84,23 +83,21 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
   const rows = useMemo(() => combine(items, extras, previewToShow(preview, open, lastReply(items)), allPending), [items, extras, preview, open, allPending]);
   const key = pane.key;
   const terminalOf = (k: number) => (k === key && pane.terminal !== undefined ? pane.terminal : ptyOf?.(k));
-  /** False when nothing was sent, so the box keeps the text. */
+  // Council FIX-2: a reading from the pane's earlier terminal does not count (FS4).
+  const held = holdReading(key, hookState, stateOf !== undefined, terminalOf(key));
+  /** False when nothing was sent, so the box keeps the text; the box then says why (council FIX-2, FS3). */
   const send = (text: string): boolean => {
-    if (text.length > LIMIT) {
-      setNote(TOO_LONG_NOTE);
-      return false;
-    }
-    if (terminalOf(key) === undefined || holdFor(key, stateOf) !== undefined) return false;
-    setNote(null);
     const id = `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    setSent((xs) => capPending([...xs, { id, text, at: Date.now() }]));
-    stick.current = true;
     const failed = () => setSent((xs) => xs.map((x) => (x.id === id ? { ...x, failed: true } : x)));
     // CHAT-022: the send is bound to this pane; a menu it opens mid-send drops the rest, the Enter above all.
-    sendToPane(key, agent, text, { terminalOf, stateOf, write: (t, data) => invoke("terminal_write", { id: t, data }) }).then((got) => {
-      if (got !== "sent") failed();
-    }, failed);
-    return true;
+    return boxSend(key, agent, text, { terminalOf, stateOf, write: writeTerminal }, {
+      note: setNote,
+      onQueued: () => {
+        setSent((xs) => capPending([...xs, { id, text, at: Date.now() }]));
+        stick.current = true;
+      },
+      onFailed: failed,
+    });
   };
   // CHAT-027: within 48 px of the bottom the view follows new output; further up it holds still.
   const list = useRef<HTMLDivElement>(null);
