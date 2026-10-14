@@ -146,7 +146,7 @@ export default function PlusMenu({ agents, defaultId = "", onPick, onSetDefault,
         )}
         {dir && outside.length > 0 && (
           <>
-            <div className="menu-title">This worktree</div>
+            <div className="menu-title">This folder</div>
             {outside.map((e) => (
               <button
                 key={`open-${e.id}`}

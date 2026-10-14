@@ -16,7 +16,7 @@ Lane: launch, from 0819c57. Date: 2026-10-13.
   in the folder in a console window of its own (CREATE_NEW_CONSOLE; x-terminal-emulator on Linux,
   Terminal via osascript on macOS).
 - src/launch/editors.ts + PlusMenu.tsx: given the pane's worktree folder (`dir`), the plus menu adds
-  a "This worktree" group with one "Open in <editor>" row per installed editor; an open that fails
+  a "This folder" group (plain word for a newcomer screen, ONB-036) with one "Open in <editor>" row per installed editor; an open that fails
   shows its reason in the menu. Without a folder (the sidebar's New session menu) nothing changes.
 - The Remote-SSH variant is cut (SESS-047), not built.
 

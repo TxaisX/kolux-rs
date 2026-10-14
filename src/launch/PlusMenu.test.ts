@@ -115,9 +115,9 @@ test("SESS-039: from a pane with a worktree, each installed editor gets an 'Open
   expect(vscode).toBeDefined();
   expect(vscode).toContain(`Open ${dir} in VS Code (`);
   expect(nvim).toContain("in a console window");
-  expect(render({ dir, editors })).toContain("This worktree");
+  expect(render({ dir, editors })).toContain("This folder");
   // no folder (the sidebar's New session menu): no editor rows, even with editors installed
   expect(render({ editors })).not.toContain("Open in");
   // a folder but no editor installed: no heading either
-  expect(render({ dir, editors: [] })).not.toContain("This worktree");
+  expect(render({ dir, editors: [] })).not.toContain("This folder");
 });
