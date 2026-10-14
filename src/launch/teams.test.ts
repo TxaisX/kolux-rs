@@ -9,7 +9,7 @@ import TeamsModeCard from "./TeamsModeCard";
 
 const claude: AgentInfo = { id: "claude", name: "Claude Code", program: "claude", args: [], installed: true, path: "/usr/local/bin/claude" };
 const codex: AgentInfo = { id: "codex", name: "Codex", program: "codex", args: [], installed: true, path: "/usr/local/bin/codex" };
-const linux: TeamsHost = { windows: false, wsl: false, cli: "/usr/local/bin/kolux" };
+const linux: TeamsHost = { windows: false, wsl: false, cli: "kolux" };
 
 test("the mode is off by default and anything unknown reads as off", () => {
   expect(teamsMode({})).toBe("off");
@@ -26,7 +26,7 @@ test("default build: no Agent Teams entry in any list", () => {
 test("with the mode on, Linux with Claude Code and the command line installed offers it right after Claude Code", () => {
   const list = withTeams([claude, codex], { agentTeamsMode: "in-process" }, linux);
   expect(list.map((a) => a.id)).toEqual(["claude", "claude-teams", "codex"]);
-  expect(list[1]).toMatchObject({ name: "Claude Agent Teams", program: "/usr/local/bin/kolux", args: ["claude-teams"], installed: true });
+  expect(list[1]).toMatchObject({ name: "Claude Agent Teams", program: "kolux", args: ["claude-teams"], installed: true });
 });
 
 test("native Windows and WSL never offer it, nor a machine missing Claude Code or the command line", () => {

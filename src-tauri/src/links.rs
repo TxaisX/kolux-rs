@@ -358,7 +358,11 @@ pub fn editor_plan(editor: &crate::tools::Editor, dir: &Path) -> EditorPlan {
 pub fn spawn_editor(plan: &EditorPlan) -> Result<std::process::Child, String> {
     use std::process::Stdio;
     let mut c = std::process::Command::new(&plan.program);
-    c.args(&plan.args).current_dir(&plan.cwd).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    c.args(&plan.args).current_dir(&plan.cwd);
+    // A console editor talks to its own new console; only a windowed one gets empty handles.
+    if !plan.console {
+        c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -373,14 +377,19 @@ pub fn spawn_editor(plan: &EditorPlan) -> Result<std::process::Child, String> {
 // T-304: registered by the coordinator's lib.rs hunk; unused until then.
 #[allow(dead_code)]
 #[tauri::command]
-pub fn editor_open(store: tauri::State<'_, Mutex<crate::state::Store>>, grants: tauri::State<'_, Grants>, editor: String, dir: String) -> Result<String, String> {
+pub async fn editor_open(store: tauri::State<'_, Mutex<crate::state::Store>>, grants: tauri::State<'_, Grants>, editor: String, dir: String) -> Result<String, String> {
     let folder = fence(&dir, &roots(&store), &grants.snapshot(), true)?;
     if !folder.is_dir() {
         return Err(format!("{dir} is not a folder"));
     }
-    let found = crate::tools::editors().into_iter().find(|e| e.id == editor).ok_or_else(|| format!("{editor} is not installed"))?;
-    spawn_editor(&editor_plan(&found, &folder))?;
-    Ok(found.name)
+    // The editor search walks the search path and the install folders: off the main thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        let found = crate::tools::editors().into_iter().find(|e| e.id == editor).ok_or_else(|| format!("{editor} is not installed"))?;
+        spawn_editor(&editor_plan(&found, &folder))?;
+        Ok(found.name)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]

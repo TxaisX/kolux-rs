@@ -61,3 +61,17 @@ NeoVim window was not opened on Txais's desktop.
            defaultId={defaultId}
 Once registered, the `#[allow(dead_code)]` lines on editor_open, editors_list, editors and
 program_roots can go.
+
+## Council fixes (review of 3ede14a)
+- FB1: editor_open is async; the editor search and the start run on a blocking worker, like
+  editors_list, so the window never waits on the search path or install folders.
+- FB2: a console editor (NeoVim) is no longer given empty in/out handles; only windowed editors are.
+
+## LIVE PROOF PENDING (batched; no app launches on this lane)
+After the lib.rs and TerminalPane hunks:
+1. Open a pane whose folder is a worktree; click its + button. Expect a "This folder" group with
+   one "Open in <editor>" row per installed editor (hover shows the folder and the editor's path).
+2. Click "Open in VS Code". Expect VS Code to open on that folder; no console window flashes.
+3. Click "Open in NeoVim" (with nvim installed). Expect a new console window running NeoVim in the
+   folder, taking keys normally (proves FB2).
+4. From the sidebar's New session menu (no folder): no "This folder" group.

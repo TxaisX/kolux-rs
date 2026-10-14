@@ -23,7 +23,7 @@ export default function TeamsModeCard({ settings, save, host }: Props) {
         ))}
       </select>
       <p className="conn-detail">
-        When on, the agent picker offers Claude Agent Teams: Claude Code starts as a team lead that can spawn teammates, either inside the same session (In-process) or as panes beside it (Native panes). It needs Claude Code and the Kolux command line installed.
+        When on, the agent picker offers Claude Agent Teams: Claude Code starts as a team lead that can spawn teammates, inside the same session. Native panes, with teammates as panes beside the lead, is not built yet: for now it runs teammates in-process too. It needs Claude Code and the Kolux command line installed.
       </p>
       {blocked && (
         <p className="conn-detail warn">

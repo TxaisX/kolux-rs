@@ -70,3 +70,17 @@ src/keys are other owners'). Covered by the render test of the card and the list
 @@  in the page body
 +      <TeamsModeCard settings={settings} save={save} host={teamsHost} />
 Once registered, the #[allow(dead_code)] on teams_host can go.
+
+## Council fixes (review of 3ede14a)
+- The entry runs the command line by its bare name (CLI-007: kolux, or kolux-dev in a debug build),
+  which a Kolux pane finds first on its own search path; it is still offered only when that name is
+  installed on the system search path.
+- The Settings card no longer promises Native panes: it says that choice is not built yet and runs
+  teammates in-process for now (T-191-c builds it).
+
+## LIVE PROOF PENDING (batched; no app launches on this lane)
+After the App, lib.rs, keys and Settings hunks, on Linux or macOS with Claude Code and kolux installed:
+1. Settings > Agents: "Claude Agent Teams" card, Off picked. The picker has no Agent Teams row.
+2. Pick In-process. The + picker lists "Claude Agent Teams" right after Claude Code, with the Claude mark.
+3. Pick it: a new pane starts `kolux claude-teams`. Keybindings lists "New Claude Agent Teams tab", no key.
+On Windows: the card shows the Windows note and the picker never lists the row.

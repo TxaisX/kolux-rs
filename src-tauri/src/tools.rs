@@ -292,7 +292,8 @@ pub async fn teams_host() -> Result<TeamsHost, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let distro = std::env::var("WSL_DISTRO_NAME").ok();
         let osrelease = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
-        let cli = if cfg!(windows) { None } else { crate::agents::find_program("kolux") };
+        // CLI-007: run by its bare name, which a Kolux pane finds first on its own search path.
+        let cli = if cfg!(windows) { None } else { crate::agents::find_program(crate::orchestration::CLI).map(|_| PathBuf::from(crate::orchestration::CLI)) };
         teams_host_from(cfg!(windows), distro.as_deref(), &osrelease, cli)
     })
     .await

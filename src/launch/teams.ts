@@ -17,8 +17,8 @@ export const TEAMS_MODE_LABEL: Record<TeamsMode, string> = { off: "Off", "in-pro
 /** The picker entry's stable id; also names its keybinding command `tab.newAgent.claude-teams`. */
 export const TEAMS_ID = "claude-teams";
 
-/** What the Rust side knows about this machine. `cli` is the Kolux command line installed on the
- *  system search path (the copy Kolux puts first in its own panes does not count). */
+/** What the Rust side knows about this machine. `cli` is the Kolux command line's bare name
+ *  (CLI-007), set only when it is installed on the system search path; a Kolux pane finds it first. */
 export type TeamsHost = { windows: boolean; wsl: boolean; cli: string | null };
 
 /** The saved mode; anything unknown or missing is off. */
