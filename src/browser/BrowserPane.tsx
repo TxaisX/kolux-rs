@@ -1,4 +1,4 @@
-// A browser tab (BROW-001, BROW-002, BROW-003, BROW-005). The page itself is a child web view the back end lays
+// A browser tab (BROW-001, BROW-002, BROW-003, BROW-005, BROW-007, BROW-012, BROW-014). The page itself is a child web view the back end lays
 // over this pane's body; this component only reports where the body is and whether it is on
 // screen, so the page lives on untouched while its tab, workspace or screen is away. The header
 // holds the address bar, which takes the cursor with its text selected as the tab opens, and
@@ -11,6 +11,7 @@ import { BLANK, resolveAddress } from "./address";
 import { backgroundBehind } from "./colour";
 import "./browser.css";
 import { can as canGo, fresh, started, type Pending } from "./history";
+import { nextZoom, zoomPercent } from "./zoom";
 
 /** `url`: the page or file the tab opens on instead of a blank page (SKILL-012 previews a kit result). */
 type Props = { id: number; url?: string; title?: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void };
@@ -40,6 +41,15 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   // drifts it. Upgrade when wry exposes navigation history.
   const hist = useRef(fresh());
   const pending = useRef<Pending>(null);
+  // BROW-012: this tab's own zoom; the badge shows the level for a moment after each change.
+  const zoom = useRef(1);
+  const [badge, setBadge] = useState<string | null>(null);
+  const badgeTimer = useRef<number | undefined>(undefined);
+  // BROW-007: the find bar; `null` while closed.
+  const [find, setFind] = useState<string | null>(null);
+  const findBox = useRef<HTMLInputElement>(null);
+  const focusMe = useRef(onFocus);
+  focusMe.current = onFocus;
 
   useEffect(() => {
     let alive = true;
@@ -50,6 +60,9 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           if (e.payload.id !== id) return;
           if (e.payload.event !== "started") {
             hist.current.busy = false;
+            // BROW-012: the level holds through reloads and other sites; set it again in case the
+            // engine reset it with the new document.
+            if (zoom.current !== 1) invoke("browser_go", { id, what: "zoom", level: zoom.current }).catch(() => {});
             return setLoading(false);
           }
           const { url } = e.payload;
@@ -59,6 +72,15 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           setCan(canGo(h));
           setLoading(true);
           setAddress(url === BLANK ? "" : url);
+        }),
+      );
+      // BROW-014: a link the page opens as a new window, or Mod / middle click, becomes another tab
+      // in this split; behind this one unless it asked for the front.
+      unlisteners.push(
+        await listen<{ id: number; url: string; front: boolean }>("browser-link", (e) => {
+          if (e.payload.id !== id) return;
+          openInBrowser(e.payload.url);
+          if (!e.payload.front) setTimeout(() => focusMe.current?.(), 0);
         }),
       );
       if (!alive) return;
@@ -122,6 +144,24 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     pending.current = null;
     invoke("browser_navigate", { id, url: r.url }).catch((err) => setNote(String(err)));
   };
+  const zoomBy = (how: "in" | "out" | "reset") => {
+    zoom.current = nextZoom(zoom.current, how);
+    invoke("browser_go", { id, what: "zoom", level: zoom.current }).catch((err) => setNote(String(err)));
+    setBadge(zoomPercent(zoom.current));
+    window.clearTimeout(badgeTimer.current);
+    badgeTimer.current = window.setTimeout(() => setBadge(null), 1200);
+  };
+  const openFind = () => {
+    setFind((f) => f ?? "");
+    setTimeout(() => {
+      findBox.current?.focus();
+      findBox.current?.select();
+    }, 0);
+  };
+  const findNext = (back: boolean) => {
+    const text = findBox.current?.value ?? "";
+    if (text) invoke("browser_go", { id, what: back ? "findBack" : "find", text }).catch((err) => setNote(String(err)));
+  };
   // BROW-005: the toolbar; a reload is the same page, so it leaves the history alone.
   const act = (what: "back" | "forward" | "reload" | "stop") => {
     pending.current = what === "reload" ? "same" : what === "stop" ? null : what;
@@ -167,12 +207,48 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
             }}
           />
         </span>
+        {badge && (
+          <span className="zoom-badge" role="status" aria-label="Zoom">
+            {badge}
+          </span>
+        )}
+        {/* The app runs these for a chord pressed in the app or inside the page (App's browserAction
+            clicks [data-go]): find (BROW-007) and zoom (BROW-012). */}
+        <button hidden data-go="find" onClick={openFind} />
+        <button hidden data-go="zoomIn" onClick={() => zoomBy("in")} />
+        <button hidden data-go="zoomOut" onClick={() => zoomBy("out")} />
+        <button hidden data-go="zoomReset" onClick={() => zoomBy("reset")} />
         <span className="right">
           <button className="ib" onClick={onClose} title="Close tab (Ctrl+W)">
             <Close size={12} />
           </button>
         </span>
       </header>
+      {find !== null && (
+        <div className="find-bar" role="search">
+          <input
+            ref={findBox}
+            className="find"
+            aria-label="Find in page"
+            placeholder="Find in page"
+            value={find}
+            onChange={(e) => setFind(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") findNext(e.shiftKey);
+              else if (e.key === "Escape") setFind(null);
+            }}
+          />
+          <button className="ib" onClick={() => findNext(true)} title="Previous match (Shift+Enter)" aria-label="Previous match">
+            <ArrowLeft size={12} />
+          </button>
+          <button className="ib" onClick={() => findNext(false)} title="Next match (Enter)" aria-label="Next match">
+            <ArrowRight size={12} />
+          </button>
+          <button className="ib" onClick={() => setFind(null)} title="Close find (Escape)" aria-label="Close find">
+            <Close size={12} />
+          </button>
+        </div>
+      )}
       {note && (
         <div className="notice" role="alert">
           {note}
