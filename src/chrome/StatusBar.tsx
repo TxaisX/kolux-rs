@@ -20,9 +20,11 @@ type Props = {
   onHideBar?: () => void;
   /** T-543-b: the agent status hooks switch as saved; null until the settings are read, and then nothing is shown. */
   hooks?: boolean | null;
+  /** T-153-e / FIX-2: whether the window has finished restoring its panes; the Resource Manager offers no session cleanup until then. */
+  loaded?: () => boolean;
 };
 
-export default function StatusBar({ terminals, agents = 0, names = () => ({}), workspaces = [], hidden = [], onToggle, onHideBar, hooks = null }: Props) {
+export default function StatusBar({ terminals, agents = 0, names = () => ({}), workspaces = [], hidden = [], onToggle, onHideBar, hooks = null, loaded }: Props) {
   const [memory, setMemory] = useState<number | null>(null);
   const [open, setOpen] = useState(false);
   const [menu, setMenu] = useState<{ left: number; bottom: number } | null>(null);
@@ -72,7 +74,7 @@ export default function StatusBar({ terminals, agents = 0, names = () => ({}), w
           {formatMemory(memory)}
         </button>
       )}
-      {open && shows("memory") && <ResourceManager names={names} workspaces={workspaces} onClose={() => setOpen(false)} />}
+      {open && shows("memory") && <ResourceManager names={names} workspaces={workspaces} loaded={loaded} onClose={() => setOpen(false)} />}
       {shows("memory") && (shows("terminals") || shows("agents")) && <span className="sep">·</span>}
       {shows("terminals") && (
         <span className="item" title="Terminals running">

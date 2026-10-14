@@ -45,14 +45,15 @@ pub fn claude_history_dir(projects: &Path, workspace: &str) -> Option<PathBuf> {
 }
 
 /// One past session found on disk: its id (the transcript's file name), when it last changed
-/// (ms since 1970) and how big its transcript is.
+/// (ms since 1970) and how big its transcript is. Council FIX-1: no file path goes to the window (it
+/// holds the Windows user name and the config folder); a caller that needs the file resolves it on
+/// this side from the workspace and the id.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PastSession {
     pub id: String,
     pub modified_ms: u64,
     pub bytes: u64,
-    pub path: String,
 }
 
 /// The Claude sessions kept for a workspace, newest first. Only the top-level transcripts count;
@@ -69,7 +70,7 @@ pub fn claude_sessions(projects: &Path, workspace: &str) -> Vec<PastSession> {
             }
             let meta = e.metadata().ok().filter(|m| m.is_file())?;
             let modified_ms = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64);
-            Some(PastSession { id: path.file_stem()?.to_string_lossy().into_owned(), modified_ms, bytes: meta.len(), path: path.to_string_lossy().into_owned() })
+            Some(PastSession { id: path.file_stem()?.to_string_lossy().into_owned(), modified_ms, bytes: meta.len() })
         })
         .collect();
     out.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms).then_with(|| a.id.cmp(&b.id)));
@@ -126,6 +127,25 @@ mod tests {
         assert_eq!(claude_sessions(&root, r"C:\work\app").iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["main"]);
         assert!(claude_sessions(&root, r"C:\work\none").is_empty(), "no history folder is an empty list");
         assert!(claude_sessions(&root.join("missing"), r"C:\work\app").is_empty(), "no projects folder is an empty list");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fix1_a_listed_session_carries_no_file_path() {
+        let root = tmp("nopath");
+        let dir = root.join("C--work-app");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("abc.jsonl"), "{}").unwrap();
+        let got = claude_sessions(&root, r"C:\work\app");
+        assert_eq!(got.len(), 1);
+        let json = serde_json::to_value(&got[0]).unwrap();
+        let mut keys: Vec<&str> = json.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["bytes", "id", "modifiedMs"], "only the id, the time and the size go to the window");
+        let text = json.to_string();
+        let root_json = serde_json::to_string(&root.to_string_lossy()).unwrap();
+        let root_json = root_json.trim_matches('"');
+        assert!(!text.contains(root_json) && !text.contains("C--work-app") && !text.contains(".jsonl"), "no folder name or path leaks: {text}");
         let _ = fs::remove_dir_all(&root);
     }
 

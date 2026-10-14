@@ -1,7 +1,7 @@
 // PROJ-067: tabs and layout are saved and restored; damaged entries are dropped on their own and
 // the active workspace and tab come back while they still exist.
 import { expect, test } from "vitest";
-import { layoutOf, restoreLayout, resumeArgs, resumes, stillThere } from "./layout";
+import { layoutOf, restoreAsks, restoreLayout, stillThere } from "./layout";
 
 const shell = (key: number, cwd: string | null, extra: Record<string, unknown> = {}) => ({ key, cwd, branch: null, agent: "shell" as const, program: null, args: [], ...extra });
 
@@ -75,20 +75,22 @@ test("sess030: an agent tab with a known session comes back resumed, one without
   // The session id is written down; the one-off opening arguments are not.
   expect(l.panes.map((p) => [p.key, p.args, p.session])).toEqual([[1, [], undefined], [2, [], "11111111-aaaa"], [3, [], "thr_22"], [4, [], undefined]]);
   const back = restoreLayout(JSON.parse(JSON.stringify(l)))!;
-  expect(back.panes.map((p) => [p.key, p.args])).toEqual([[1, []], [2, ["--resume", "11111111-aaaa"]], [3, ["resume", "thr_22"]], [4, []]]);
+  // The resume form itself is added by the Rust start line at restore (main.tsx), never here.
+  expect(back.panes.map((p) => [p.key, p.args])).toEqual([[1, []], [2, []], [3, []], [4, []]]);
   expect(back.panes[1].session).toBe("11111111-aaaa");
   // A damaged session id is no session: the tab comes back at its prompt, not in the pick-a-session screen.
   const odd = restoreLayout({ panes: [{ ...l.panes[1], session: 7 }], activeTab: {}, focused: 2, activeDir: null, stacked: {} })!;
   expect(odd.panes[0].args).toEqual([]);
-  expect(resumeArgs("claude", undefined)).toEqual([]);
-  expect(resumeArgs("claude", "")).toEqual([]);
-  expect(resumeArgs("shell", "x")).toEqual([]);
+  expect(odd.panes[0].session).toBeUndefined();
 });
 
-test("TERM-107: a restored agent pane counts as resumed only when its start line carries the resume flag", () => {
-  expect(resumes("claude", ["--resume", "abc"])).toBe(true);
-  expect(resumes("codex", ["resume", "abc"])).toBe(true);
-  expect(resumes("claude", [])).toBe(false);
-  expect(resumes("codex", ["--resume", "abc"])).toBe(false);
-  expect(resumes("shell", [])).toBe(false);
+test("T-066-c: the restore loop asks for an agent line only for an agent tab, never a plain shell", () => {
+  const ask = (agent: "shell" | "claude" | "codex", agentId: string | undefined, program: string | null, kind?: "editor") => restoreAsks({ agent, agentId, program, kind });
+  expect(ask("shell", undefined, null)).toBe(false); // a plain shell
+  expect(ask("shell", undefined, "pwsh")).toBe(false); // a shell with its own program, no agent
+  expect(ask("shell", "gemini", "gemini")).toBe(true); // a catalogue agent marked as a shell
+  expect(ask("claude", "claude", "claude")).toBe(true);
+  expect(ask("codex", "codex", null)).toBe(true);
+  expect(ask("shell", "gemini", null)).toBe(false); // an unstarted chooser
+  expect(ask("claude", "claude", "claude", "editor")).toBe(false); // not a terminal tab
 });
