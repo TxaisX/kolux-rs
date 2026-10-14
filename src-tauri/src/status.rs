@@ -14,6 +14,8 @@ use std::time::Duration;
 /// STAT-001: no more than 32 child agents per report.
 const MAX_CHILDREN: usize = 32;
 const MAX_HISTORY: usize = 20;
+/// T-123-c: how many of a turn's tool ids are kept to tell a new step from a killed tool's late report.
+const MAX_TOOLS: usize = 256;
 /// STAT-028: how long after Ctrl+C or Escape a turn with no Stop is taken as interrupted.
 const CANCEL_GRACE_MS: u64 = 3000;
 /// STAT-029: how Claude Code opens the message it submits itself after a compaction.
@@ -109,6 +111,11 @@ pub struct Session {
     cancelled_at: u64,
     /// The current turn ended on a cancel; late tool events cannot bring it back to working.
     interrupted: bool,
+    /// The tool ids the lead has started this turn, newest last (T-123-c).
+    tools: Vec<String>,
+    /// The tool ids already started when the cancel keystroke came: their own late reports say
+    /// nothing about the turn, while a tool id outside this list proves the turn went on (T-123-c).
+    killed: Vec<String>,
     prompt: Option<String>,
     pub reply: Option<String>,
     /// The stop the session is blocked on, kept until a turn reaches done (STAT-022).
@@ -259,6 +266,19 @@ impl Session {
         if name == "UserPromptSubmit" && agent == Agent::Claude && str_of(event, "prompt").is_some_and(|p| p.trim_start().starts_with(CONTINUATION)) {
             return None;
         }
+        // T-123-c: Ctrl+C on a draft or Escape on a menu leaves the turn running. A tool step whose id
+        // the lead never reported before the cancel proves it: the cancel is dropped inside the grace,
+        // and a settled interrupt is undone, its misread history line with it.
+        if self.fresh_tool(name, event) {
+            self.cancelled = false;
+            if self.interrupted {
+                self.interrupted = false;
+                self.own = Some("working");
+                if self.history.back().is_some_and(|e| e.state == "interrupted" && e.interrupted) {
+                    self.history.pop_back();
+                }
+            }
+        }
         // Late events after an interrupt cannot revive the turn (STAT-028), nor stop it (STAT-022).
         if self.interrupted && !matches!(name, "UserPromptSubmit" | "SessionStart" | "PostCompact") {
             return None;
@@ -277,6 +297,8 @@ impl Session {
                 self.pending = None;
                 self.interrupted = false;
                 self.cancelled = false;
+                self.tools.clear();
+                self.killed.clear();
                 self.reply = None;
                 self.own = Some("working");
             }
@@ -322,6 +344,14 @@ impl Session {
                 if self.own == Some("permission") && self.pending != str_of(event, "tool_name").map(|t| trim(t, 60)) {
                     return None;
                 }
+                if name == "PreToolUse" {
+                    if let Some(id) = str_of(event, "tool_use_id") {
+                        if self.tools.len() >= MAX_TOOLS {
+                            self.tools.remove(0);
+                        }
+                        self.tools.push(trim(id, 80));
+                    }
+                }
                 self.pending = None;
                 self.own = Some(change.state);
             }
@@ -349,7 +379,14 @@ impl Session {
         if self.own == Some("working") && !self.background && !self.children.iter().any(|c| c.state == "working") {
             self.cancelled = true;
             self.cancelled_at = now_ms();
+            self.killed.clone_from(&self.tools);
         }
+    }
+
+    /// T-123-c: a tool step carrying an id the lead had not started when the cancel came. The killed
+    /// tool reporting late carries an id on the list; a step with no id at all proves nothing.
+    fn fresh_tool(&self, name: &str, event: &Value) -> bool {
+        matches!(name, "PreToolUse" | "PostToolUse" | "PostToolUseFailure") && str_of(event, "tool_use_id").is_some_and(|id| !self.killed.iter().any(|k| k == id))
     }
 
     /// STAT-028: a cancel keystroke a while back and still no Stop: the turn was interrupted.
@@ -865,6 +902,58 @@ mod tests {
         assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop"}"#), None);
         assert_eq!(s.resolved(), "interrupted");
         assert_eq!(s.history.back().map(|e| (e.state, e.interrupted)), Some(("interrupted", true)));
+    }
+
+    #[test]
+    fn stat_028_rest_a_tool_step_after_a_draft_clearing_cancel_keeps_the_turn_working() {
+        // T-123-c: Ctrl+C on a non-empty input box only clears the draft (Esc also closes menus), so the
+        // turn goes on. A tool step the lead never reported before the cancel proves it inside the grace.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"long build"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#);
+        s.cancel();
+        // (c) the tool that started before the cancel reporting back says nothing about the turn.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#), Some("working"));
+        assert!(s.cancelled, "the killed tool's own report cannot clear the cancel");
+        // (a) a new tool step inside the grace clears the cancel; nothing settles and the Stop is a plain done.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_use_id":"tu2"}"#), Some("working"));
+        assert!(!s.cancelled);
+        assert!(!s.settle_cancel(u64::MAX), "nothing left to settle");
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop"}"#), Some("done"));
+        assert!(!s.interrupted);
+    }
+
+    #[test]
+    fn stat_028_rest_a_settled_interrupt_is_undone_by_a_tool_step_it_never_saw_before_the_cancel() {
+        // T-123-c: prompt, Ctrl+C on a draft, a Bash step longer than the grace: the settle reads
+        // interrupted, then the PreToolUse at +5 s revives the turn and its Stop reads done.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"long build"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#);
+        s.cancel();
+        assert!(s.settle_cancel(s.cancelled_at + 5_000));
+        assert_eq!(s.resolved(), "interrupted");
+        // (c) the pre-cancel tool reporting late stays ignored, settled or not.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#), None);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_use_id":"tu1","error":"killed"}"#), None);
+        assert_eq!((s.resolved(), s.interrupted), ("interrupted", true));
+        // A step with no id at all is not proof of a new tool (the late-event rule keeps it out).
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash"}"#), None);
+        // (b) a tool id never seen before the cancel revives the turn to working; the misread line is dropped.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_use_id":"tu2"}"#), Some("working"));
+        assert_eq!((s.resolved(), s.interrupted, s.cancelled), ("working", false, false));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Read","tool_use_id":"tu2"}"#), Some("working"));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","last_assistant_message":"built"}"#), Some("done"));
+        assert_eq!(s.reply.as_deref(), Some("built"));
+        let states: Vec<_> = s.history.iter().map(|e| (e.state, e.interrupted)).collect();
+        assert_eq!(states, [("working", false), ("done", false)], "one turn, never interrupted");
+        // A second cancel in the same turn takes every tool seen so far as in flight: a later Post for tu2 proves nothing.
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"again"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu3"}"#);
+        s.cancel();
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"tu3"}"#), Some("working"));
+        assert!(s.cancelled);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop"}"#), Some("interrupted"), "a Stop while the cancel stands is still an interruption");
     }
 
     #[test]
