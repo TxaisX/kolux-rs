@@ -4,7 +4,8 @@
 // lines waits for a click, images load as pictures, other binaries are only named. Fetched sides
 // are reused only while the change's stamp (git's blob ids, plus size and time for the working
 // file) is the same. The side tree starts hidden; it can be resized, filtered and used to jump and
-// to tick files off as viewed. Changes are read again every two seconds while the tab is in front.
+// to tick files off as viewed. Changes are read again whenever git state moves (the git status
+// watcher, scm/watch.ts) while the tab is in front, or when it comes back to the front after one.
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
@@ -18,6 +19,7 @@ import { Close, FileCode, List } from "../chrome/icons";
 import { baseName } from "./buffers";
 import { look } from "./EditorPane";
 import { withoutWhitespace } from "./DiffPane";
+import { watchStatus } from "../scm/watch";
 
 export type Entry = { path: string; staged: boolean; code: string; lines: number | null; binary: boolean; stamp: string };
 type Sides = { original: string; modified: string };
@@ -56,6 +58,14 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
   const front = useRef(!hidden);
   front.current = !hidden;
 
+  const missed = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (!hidden && missed.current) {
+      const f = missed.current;
+      missed.current = null;
+      f();
+    }
+  }, [hidden]);
   useEffect(() => {
     let alive = true;
     const fetch = () =>
@@ -68,11 +78,14 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
         (err) => alive && setError(String(err)),
       );
     void fetch();
-    // ponytail: a 2 s poll stands in for a git status watcher, as in the diff tab
-    const t = window.setInterval(() => front.current && void fetch(), 2000);
+    const stop = watchStatus(root, () => {
+      if (front.current) void fetch();
+      else missed.current = () => void fetch();
+    });
     return () => {
       alive = false;
-      window.clearInterval(t);
+      missed.current = null;
+      stop();
     };
   }, [root]);
 

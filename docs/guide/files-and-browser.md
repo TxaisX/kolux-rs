@@ -39,7 +39,7 @@ While a file is in front of you, Kolux checks every two seconds (and whenever yo
 | Keep my edits | Hides the banner until the file changes again. Your next save is still checked (below) |
 | Compare | Shows the disk copy on the left and your text on the right, with Reload, Keep my edits and Close |
 
-A tab in the background is checked when you bring it forward.
+A tab in the background is checked when you bring it forward. Your own save never sets off the banner, because Kolux does not check a file while it is saving it. Once the file matches your text again, or you reload, the banner goes away by itself.
 
 The save itself is the real safety check. If the file changed after you opened it, the save is refused and the tab says "<name> changed on disk since you opened it, so it was not saved."
 
@@ -118,4 +118,4 @@ A browser tab never opens local files, so a page cannot reach the app's own tool
 
 Find on a page, "grab page element" and hard reload have keys listed on the Shortcuts page, but they do nothing yet in this version. Use Ctrl+R to reload.
 
-<!-- verified against: src/editor/EditorPane.tsx, src/editor/DiskBanner.tsx, src/editor/diskChange.ts, src/editor/DiffPane.tsx, src/editor/AllChangesPane.tsx, src/editor/Explorer.tsx, src/editor/FilePicker.tsx, src/editor/PreviewPane.tsx, src/editor/markdown.ts, src/browser/BrowserPane.tsx, src/browser/address.ts, src/chrome/LayoutStrip.tsx, src/keys/actions.ts, src/App.tsx at b82b076 -->
+<!-- verified against: src/editor/EditorPane.tsx, src/editor/DiskBanner.tsx, src/editor/diskChange.ts, src/editor/DiffPane.tsx, src/editor/AllChangesPane.tsx, src/editor/Explorer.tsx, src/editor/FilePicker.tsx, src/editor/PreviewPane.tsx, src/editor/markdown.ts, src/browser/BrowserPane.tsx, src/browser/address.ts, src/chrome/LayoutStrip.tsx, src/keys/actions.ts, src/App.tsx at 7f64466 -->

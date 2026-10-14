@@ -14,6 +14,9 @@ pub struct Proc {
     pub parent: u32,
     pub bytes: u64,
     pub cpu: u64,
+    /// CLI-041: committed memory in bytes (the pagefile-backed private bytes Windows charges the
+    /// process); None where the OS does not report it or the process could not be opened.
+    pub committed: Option<u64>,
 }
 
 #[derive(Serialize, Clone, Copy, Debug, Default, PartialEq)]
@@ -22,6 +25,8 @@ pub struct Usage {
     /// Percent of the whole machine (every core), 0 to 100.
     pub cpu: f64,
     pub processes: usize,
+    /// CLI-041: committed bytes of every process counted here that reported one; None when none did.
+    pub committed: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -84,15 +89,19 @@ pub struct Sampler {
 /// Adds the figures up per owner. `before` holds the CPU times of the last sample; a process
 /// seen for the first time counts no CPU yet. `app_ws` stands in when the app's own row is missing.
 pub fn total(procs: &[Proc], owner: &HashMap<u32, Option<u32>>, before: &HashMap<u32, u64>, secs: f64, cores: usize, app_pid: u32, app_ws: Option<u64>) -> (Usage, HashMap<u32, Usage>) {
-    let mut sums: HashMap<Option<u32>, (u64, u64, usize)> = HashMap::new();
+    let mut sums: HashMap<Option<u32>, (u64, u64, usize, Option<u64>)> = HashMap::new();
     for p in procs {
         if let Some(who) = owner.get(&p.pid) {
             let used = before.get(&p.pid).map_or(0, |b| p.cpu.saturating_sub(*b));
             let s = sums.entry(*who).or_default();
-            *s = (s.0 + p.bytes, s.1 + used, s.2 + 1);
+            let committed = match (s.3, p.committed) {
+                (Some(a), Some(b)) => Some(a + b),
+                (a, b) => a.or(b),
+            };
+            *s = (s.0 + p.bytes, s.1 + used, s.2 + 1, committed);
         }
     }
-    let usage = |(bytes, used, processes): (u64, u64, usize)| Usage { bytes, cpu: percent(used, secs, cores), processes };
+    let usage = |(bytes, used, processes, committed): (u64, u64, usize, Option<u64>)| Usage { bytes, cpu: percent(used, secs, cores), processes, committed };
     let mut app = usage(sums.remove(&None).unwrap_or_default());
     if !procs.iter().any(|p| p.pid == app_pid) {
         app.bytes += app_ws.unwrap_or(0);
@@ -103,13 +112,8 @@ pub fn total(procs: &[Proc], owner: &HashMap<u32, Option<u32>>, before: &HashMap
 #[tauri::command]
 pub async fn resources(terminals: tauri::State<'_, crate::terminal::Terminals>, sampler: tauri::State<'_, Sampler>) -> Result<Resources, String> {
     let sessions = terminals.list();
-    let roots: Vec<(u32, u32)> = sessions.iter().filter_map(|(id, pid, _)| Some((*id, (*pid)?))).collect();
     let app_pid = std::process::id();
-    let mut procs = imp::processes().unwrap_or_default();
-    let owner = owners(&procs, &roots, app_pid);
-    for p in procs.iter_mut().filter(|p| owner.contains_key(&p.pid)) {
-        imp::fill(p);
-    }
+    let (procs, owner) = snapshot(&sessions, app_pid);
     let now = Instant::now();
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
     let mut last = sampler.last.lock().unwrap_or_else(|e| e.into_inner());
@@ -121,6 +125,29 @@ pub async fn resources(terminals: tauri::State<'_, crate::terminal::Terminals>, 
     *last = Some((now, procs.iter().filter(|p| owner.contains_key(&p.pid)).map(|p| (p.pid, p.cpu)).collect()));
     let (free, total) = imp::memory();
     Ok(Resources { app, sessions: rows(sessions, each), free, total })
+}
+
+/// Every process on the computer, the app's and each session's filled in, with who owns each.
+fn snapshot(sessions: &[(u32, Option<u32>, Option<String>)], app_pid: u32) -> (Vec<Proc>, HashMap<u32, Option<u32>>) {
+    let roots: Vec<(u32, u32)> = sessions.iter().filter_map(|(id, pid, _)| Some((*id, (*pid)?))).collect();
+    let mut procs = imp::processes().unwrap_or_default();
+    let owner = owners(&procs, &roots, app_pid);
+    for p in procs.iter_mut().filter(|p| owner.contains_key(&p.pid)) {
+        imp::fill(p);
+    }
+    (procs, owner)
+}
+
+/// CLI-041: the Resource Manager's memory figures as they stand now, for `kolux diagnostics
+/// memory`: the same measure as the popover's, with committed beside resident. CPU stays 0 and
+/// the popover's sampler is left alone, so asking from the CLI never shortens its next CPU figure.
+pub fn memory_now(terminals: &crate::terminal::Terminals) -> Resources {
+    let sessions = terminals.list();
+    let app_pid = std::process::id();
+    let (procs, owner) = snapshot(&sessions, app_pid);
+    let (app, each) = total(&procs, &owner, &HashMap::new(), 0.0, 1, app_pid, crate::sysmem::working_set_bytes());
+    let (free, total) = imp::memory();
+    Resources { app, sessions: rows(sessions, each), free, total }
 }
 
 /// One row per session `Terminals::list` reports, in its order, with its pid and measured usage.
@@ -178,6 +205,7 @@ mod imp {
             c.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
             if K32GetProcessMemoryInfo(h, &mut c, c.cb) != 0 {
                 p.bytes = c.WorkingSetSize as u64;
+                p.committed = Some(c.PagefileUsage as u64);
             }
             let zero = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
             let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
@@ -214,7 +242,7 @@ mod imp {
             text.lines()
                 .filter_map(|l| {
                     let mut f = l.split_whitespace();
-                    Some(Proc { pid: f.next()?.parse().ok()?, parent: f.next()?.parse().ok()?, bytes: f.next()?.parse::<u64>().ok()? * 1024, cpu: (seconds(f.next()?)? * 1e7) as u64 })
+                    Some(Proc { pid: f.next()?.parse().ok()?, parent: f.next()?.parse().ok()?, bytes: f.next()?.parse::<u64>().ok()? * 1024, cpu: (seconds(f.next()?)? * 1e7) as u64, committed: None })
                 })
                 .collect(),
         )
@@ -245,7 +273,21 @@ mod tests {
     use super::*;
 
     fn p(pid: u32, parent: u32, bytes: u64, cpu: u64) -> Proc {
-        Proc { pid, parent, bytes, cpu }
+        Proc { pid, parent, bytes, cpu, committed: None }
+    }
+
+    #[test]
+    fn cli041_committed_adds_up_per_tree_and_stays_unknown_where_nothing_reported_it() {
+        // app 1 with its WebView 2; session 5's shell 10 runs 11; session 6's shell 20 could not be opened.
+        let c = |pid, parent, bytes, committed| Proc { committed, ..p(pid, parent, bytes, 0) };
+        let procs = [c(1, 0, 100, Some(300)), c(2, 1, 50, Some(70)), c(10, 1, 10, Some(4)), c(11, 10, 30, None), c(20, 1, 7, None)];
+        let owner = owners(&procs, &[(5, 10), (6, 20)], 1);
+        let (app, each) = total(&procs, &owner, &HashMap::new(), 0.0, 1, 1, None);
+        assert_eq!((app.bytes, app.committed), (150, Some(370)));
+        assert_eq!((each[&5].bytes, each[&5].committed), (40, Some(4)), "a process without a figure adds nothing");
+        assert_eq!((each[&6].bytes, each[&6].committed), (7, None), "no figure at all is unknown, not 0");
+        let json = serde_json::to_value(app).unwrap();
+        assert_eq!((json["bytes"].as_u64(), json["committed"].as_u64()), (Some(150), Some(370)));
     }
 
     #[test]

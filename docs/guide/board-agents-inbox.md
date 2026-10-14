@@ -1,6 +1,6 @@
 # Board, Agents and Inbox
 
-Use these three views to see what every session is doing, answer a permission request without hunting for its pane, and find the sessions that need you.
+Use these views (and the Tower) to see what every session is doing, answer a permission request without hunting for its pane, and find the sessions that need you.
 
 ## The Board
 
@@ -23,14 +23,14 @@ Lanes run left to right. A lane is drawn only when it holds a card.
 | State | Lane | Line on the card |
 |---|---|---|
 | Needs permission | Needs you | The tool and detail, with Approve and Deny |
-| Asked a question | Needs you | "Question" |
+| Asked a question | Needs you | Every question it asked, joined by " · " ("Which framework? · Which database?") |
 | Blocked | Stopped | The cause: "Limit reached · resets at …", "Sign in again", or "The AI hit an error" |
 | Interrupted | Stopped | "Interrupted" |
 | Exited | Stopped | "Exited" |
 | Done | Done | The first line of the reply and the newest file written |
 | Idle | Idle | Time since it went idle |
 | Queued | Working | "Queued" |
-| Quiet for a while | Working | "No recent update", and how long it has gone without output |
+| Quiet for a while | Working | "No recent update", and how long it has gone without output. Shown when a working agent prints nothing for a while, or sends no status for 30 minutes |
 | Working | Working | Time running and the current tool step |
 
 A meter bar on the card shows how full the AI's memory is (tokens used out of its window) and its plan allowance.
@@ -42,7 +42,7 @@ When an agent asks permission to use a tool, its card shows two buttons.
 - **Approve** lets the agent carry on.
 - **Deny** tells the agent no.
 
-They appear only for a permission request. Questions need an answer typed in the pane.
+They appear only for a permission request. Questions need an answer typed in the pane. The same two buttons also show in the agent pane's header (see [Terminals](terminals.md)).
 
 ### Expand a card
 
@@ -73,6 +73,16 @@ When nothing needs you the page says "All clear. Nothing needs you." With no ses
 
 Up and Down walk the rows. Enter or a double-click opens that session's pane. A detail panel shows the Agent, Branch, Workspace, Changes ("N files changed, M staged" or "No files changed") and the last Prompt. Its button reads "Answer in Code" for a session that needs you and "Open in Code" otherwise. The Inbox does not answer for you; it takes you to the pane.
 
+## The Tower
+
+Use it to watch every agent at once, for example on a second screen. Click Tower in the screen switcher, and pick another view to leave. "Show Tower" in the keyboard shortcuts has no key until you give it one. The Tower is a screen in the main window; it does not open a window of its own yet.
+
+Across the top, a summary card counts the agents and how many are in each lane (for example "2 needs you"). Next to it is one usage card per AI program (Claude, Codex) with its 5-hour and weekly bars and how many panes it runs in. When those panes use named accounts, the card lists each account with its pane count. The bars are the program's figures for the account Kolux reads usage from, so they are shown once per program, never under each account's name. Without figures yet a card says "No usage figures yet".
+
+Below, every agent pane is one row, grouped Needs you, Working, Done, Stopped, Idle, with the newest change first in each group. A row shows the pane's name, the program and account, the branch and folder, the status word with its line (the same words as the Board), and the context and plan figures. Shells and editor or browser tabs get no row. With no agent running it says "Nothing is running. Start an agent and it shows up here."
+
+Click a row, or walk the rows with Up and Down and press Enter, to open that pane.
+
 ## Status words
 
 The same words appear in pane headers, tabs, the sidebar, the Board and the Inbox.
@@ -81,19 +91,23 @@ The same words appear in pane headers, tabs, the sidebar, the Board and the Inbo
 |---|---|
 | Working | The agent is working on its turn |
 | Working (background) | The turn is over, but Kolux is watching the agent's background tasks. Shown as "Working" |
-| Needs you | It asked a question, or needs permission for a tool. The first line of the question or plan shows with it |
+| Needs you | It asked a question, or needs permission for a tool. Every question it asked shows with it; for a plan, its first line |
 | Blocked | It cannot go on: a limit, a sign-in or an error. Open the pane to see why |
-| Interrupted | The turn was stopped before it finished: you pressed Esc or Ctrl+C and no finish arrived within about 3 seconds. It stays until your next prompt |
+| Interrupted | The turn was stopped before it finished: you pressed Esc or Ctrl+C and no finish arrived within about 3 seconds. If the agent then starts a new step, it goes back to Working, so a Ctrl+C that only cleared what you were typing does not leave it Interrupted. Otherwise it stays until your next prompt |
 | Failed | The program could not start |
 | Done | The agent finished its turn. Clearing a session (/clear) or compacting it by hand also shows Done, without a notification |
 | Idle | Nothing is running here |
 | Queued | Waiting for its turn to start |
-| No recent update | No status has arrived from this agent for a while |
+| No recent update | No status has arrived from this agent for a while: it printed nothing for some minutes, or, while working, sent no status for 30 minutes. It clears with the next status |
 | Starting | The program is starting up |
 | Cannot reach | Kolux cannot talk to this agent |
 | Stopped | The program has stopped |
 
 A plain shell reads "Ready" while it runs and "Ended (code)" after it exits. A session not yet started reads "Not started" on the Agents page.
+
+Until an agent's status hooks report, Kolux guesses its state from the title the program gives its terminal. A spinner or a word such as "thinking" reads Working, "ready" or "idle" reads Done, and "permission" or "waiting" reads Needs you. A title it does not recognise, such as a folder path, changes nothing. The first real status replaces the guess.
+
+A program can also report its own status by printing a hidden code (OSC 9999, with the state working, done, permission, waiting or idle). Kolux reads it and never shows it on screen. Any program running in the pane can print it, so this status is the program's own word, not proof.
 
 ## Notifications
 
@@ -119,4 +133,4 @@ Settings, Notifications has three switches and a sound choice (System default, C
 
 The pill in the top bar shows how much of your weekly allowance is left for each installed AI program, for example "Claude 80% left". It is read-only. Hover for the weekly limit and when it resets. It tints as the allowance runs down (warning at 70% used, danger above 90%). See [Getting started](getting-started.md) for the full description.
 
-<!-- verified against: src/board/chip.ts, src/App.tsx, src/agents/AgentsRail.tsx, src/agents/rail.ts, src/inbox/inbox.ts, src/inbox/InboxView.tsx, src/terminal/status.ts, src/terminal/notify.ts, src/status/useAgentStatus.ts, src/usage/meter.ts at 090d50c -->
+<!-- verified against: src/board/chip.ts, src/App.tsx, src/agents/AgentsRail.tsx, src/agents/rail.ts, src/inbox/inbox.ts, src/inbox/InboxView.tsx, src/terminal/status.ts, src/terminal/notify.ts, src/status/useAgentStatus.ts, src/usage/meter.ts, src/tower/tower.ts, src/tower/TowerView.tsx, src/chrome/TopBar.tsx, src/keys/actions.ts, src-tauri/src/status.rs at 7f64466 -->

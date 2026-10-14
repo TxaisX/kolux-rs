@@ -40,6 +40,7 @@ Every pane has a header. Left to right it shows:
 | Branch chip | The Git branch, or the short commit when HEAD is detached. Plain folders show none |
 | Program word | The program and its model |
 | Status word | Working, Needs you, Done and so on. See [Board, Agents and Inbox](board-agents-inbox.md) |
+| Approve / Deny | Shown in an agent pane while its agent asks permission to use a tool. Approve answers yes in that agent, Deny answers no. If the request has already gone, nothing is sent and the header says "The prompt has gone; nothing was sent". Shell panes never show them |
 | "restored" mark | The pane came back after a restart. A key press or click clears it |
 | Crew label | For example "2 agents, 1 waiting", when an agent has helpers |
 | Age | "just now", then "5m ago", after a turn finishes |
@@ -68,20 +69,25 @@ Press "..." or right-click the header.
 A cell with more than one pane shows a tab strip. Each tab has an icon, a status badge, a context ring (how full the AI's memory is), its name and an x to close it. An editor tab also shows a dot while it has unsaved text.
 
 - Double-click a terminal or agent tab to rename it.
-- Middle-click a tab to close it.
+- Middle-click a tab to close it. A pinned tab stays open.
 - Right-click a tab for the menu below. Items that would close nothing are greyed out.
 
 | Item | What it does |
 |---|---|
 | Rename tab | Terminals and agents only |
-| Close | Closes this tab (Ctrl+W) |
-| Close others | Closes every other tab |
-| Close to the right / Close to the left | Closes the tabs on that side |
-| Close all | Closes every tab (Ctrl+Alt+W) |
+| Pin tab / Unpin tab | Keeps the tab at the front of the strip (see below) |
+| Close | Closes this tab (Ctrl+W). Greyed out for a pinned tab |
+| Close others | Closes every other tab except pinned ones |
+| Close to the right / Close to the left | Closes the tabs on that side except pinned ones |
+| Close all | Closes every tab (Ctrl+Alt+W). Close all, from the menu or the shortcut, leaves pinned tabs open |
 
 Closing the active tab returns you to the tab you used before it. If there is none, the one to its right, else the one to its left.
 
 If a program is still running, Kolux asks first: "Close "<name>"?" with "A program is still running in it. Closing the tab stops it." Press "Close tab" to go on. This question is on by default and can be switched off in Settings. When a shell ends by itself, a dialog says "The shell ended with exit code N" and offers Close pane or Restart.
+
+Pinned tabs sit before the others with a pin icon. Closing one with Ctrl+W, its x or the pane's close button asks first: "Close pinned tab "<name>"? This tab is pinned. Closing it stops anything still running in it." This question is on by default; switch it off in Settings, Terminal & sessions, "Ask before closing a pinned tab". Pins last until Kolux closes.
+
+The "Remove a Session" shortcut (no key by default; set one in Settings) removes a session that has not started, or an idle shell, at once. For a running agent, or a shell with a program running, it asks first: "Stop "<name>"?". Cancel has the focus, so pressing Enter keeps the session running. Press "Stop" to go on. To stop without asking, set Settings, Terminal & sessions, "Removing a started session" to "Stop without asking".
 
 ### The New tab menu
 
@@ -126,6 +132,8 @@ The Start button reads "Start", or "Start N" for several, and "Starting…" whil
 
 A paste goes only to the focused pane. Large pastes are sent in pieces, one after another, so the window and your other panes stay responsive; the program still receives it as one paste. Press Ctrl+C or Esc during a long paste to stop the rest of it. A paste over 8 MB is refused: the header says "Paste of X MB is over the 8.0 MB limit; nothing was sent". If the opening request is still being delivered, your paste waits and goes in after it.
 
+Several lines pasted at once arrive as one paste, so they wait for your Enter instead of running line by line. Git Bash, PowerShell 7, Claude and Codex all work this way. Windows PowerShell 5.1, the default shell, cannot: each pasted line still runs as it arrives, so paste one command at a time there. Control characters inside a paste are removed, so pasted text cannot end the paste early and run on its own.
+
 ## Keyboard shortcuts
 
 On Windows, the main key is Ctrl. You can change every shortcut in Settings (see [Settings](settings.md)).
@@ -158,4 +166,4 @@ On Windows, the main key is Ctrl. You can change every shortcut in Settings (see
 | Ctrl+Shift+C | Copy selection |
 | Ctrl+Shift+A | Select all terminal text |
 
-<!-- verified against: src/chrome/LayoutStrip.tsx, src/chrome/TopBar.tsx, src/App.tsx, src/terminal/TerminalPane.tsx, src/terminal/PaneMenu.tsx, src/terminal/paste.ts, src/terminal/status.ts, src/terminal/layout.ts, src/launch/ChooserPane.tsx, src/keys/actions.ts at b280cad -->
+<!-- verified against: src/chrome/LayoutStrip.tsx, src/chrome/TopBar.tsx, src/App.tsx, src/terminal/TerminalPane.tsx, src/terminal/PaneMenu.tsx, src/terminal/paste.ts, src/terminal/permissionAnswer.ts, src/terminal/pin.ts, src/terminal/remove.ts, src/terminal/status.ts, src/terminal/layout.ts, src/launch/ChooserPane.tsx, src/keys/actions.ts at 3e09a0f -->

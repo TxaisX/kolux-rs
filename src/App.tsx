@@ -28,7 +28,9 @@ import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import SettingsPage from "./settings/SettingsPage";
 import Ask from "./chrome/Ask";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
-import { closeSet, returnTab, type Which } from "./terminal/tabClose";
+import { returnTab, type Which } from "./terminal/tabClose";
+import { bulkCloseSet, closeOne, middleClickCloses, orderPinnedFirst, pinMenu, pinQuestion } from "./terminal/pin";
+import { classify, removePlan, removeQuestion } from "./terminal/remove";
 import { applyAppearance, readAppearance, showScreen, zoomTerm } from "./theme";
 import { useEscapeLeaves } from "./chrome/fullPage";
 import SignInNotice from "./settings/SignInNotice";
@@ -90,10 +92,12 @@ import { VOCAB, nextNeedsYou } from "./terminal/status";
 import type { KindKey } from "./settings/notifications";
 import { tabBadge, tabMenu as tabMenuItems, waitingInGrid, type Badge } from "./terminal/tabs";
 import NameField from "./terminal/NameField";
-import { Bell, Globe, Spinner, StatusGlyph } from "./chrome/icons";
+import { Bell, Globe, Pin, Spinner, StatusGlyph } from "./chrome/icons";
 import Tip from "./chrome/Tip";
 import InboxView from "./inbox/InboxView";
 import { inboxItems, type Source } from "./inbox/inbox";
+import TowerView from "./tower/TowerView";
+import { towerRows, usageByAccount } from "./tower/tower";
 import { LANES, chipOf } from "./board/chip";
 import Ring from "./usage/Ring";
 import { capOn, contextFill, meterOf, meterText, planOf, readsLeft, usageLine } from "./usage/meter";
@@ -222,7 +226,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const rowRef = useRef<Record<string, RowInfo>>({}); // PROJ-063: each folder's last row state, to keep its `changed` time
   const ptys = useRef<Record<number, number>>({}); // TERM-045: each pane's session id
   const cliFailed = useRef<Record<string, string>>({}); // CLI-026: command-line requests the window could not open
-  const [asking, setAsking] = useState<{ keys: number[]; title: string; body: string } | null>(null);
+  const [asking, setAsking] = useState<{ keys: number[]; title: string; body: string; confirm?: string } | null>(null);
+  // TERM-046: pinned tab keys live in window state, like the strip order (terminal/pin.ts).
+  const [pinned, setPinned] = useState<Set<number>>(new Set());
   const [tabMenu, setTabMenu] = useState<{ key: number; top: number; left: number } | null>(null); // TERM-049: the right-clicked tab
   const recentTabs = useRef<number[]>([]); // TERM-044: panes focused, newest first, so a closed tab returns to the one used before it
   useEffect(() => {
@@ -555,6 +561,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         case "view.inbox":
           setScreen((s) => (s === "inbox" ? "terminals" : "inbox"));
           break;
+        case "view.tower":
+          setScreen((s) => (s === "tower" ? "terminals" : "tower"));
+          break;
         case "view.code":
           leavePage();
           break;
@@ -633,7 +642,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         case "tab.closeAll":
           // TERM-044: every tab of the focused pane's strip, through one close question.
           if (!inFront) return;
-          void closeTab(closeSet(orderOf(focused), focused, "all"));
+          void closeTab(bulkCloseSet(orderOf(focused), focused, "all", pinned));
           break;
         case "terminals.focusNextNeedsYou": {
           // TERM-030: cycle through the panes waiting on the user in grid order, across workspaces;
@@ -716,11 +725,25 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // SESS-008: the remove-session shortcut closes the newest chooser pane in front without asking;
   // with none, the focused session, which asks first (once) when a program would stop. A lone
   // chooser stays, so the grid never drops below one pane.
-  const removeSession = () => {
+  const removeSession = async () => {
     const t = removeTarget(panesIn(panes, activeDir), focused);
     if (!t) return;
-    if (t.chooser) dropPane(t.key);
-    else if (!asking) closePane(t.key); // at most one question per press
+    const pane = panes.find((p) => p.key === t.key);
+    if (t.chooser || !pane) return dropPane(t.key);
+    // TERM-003: a started session asks first (Cancel focused) unless the setting says stop; an unstarted pane or an idle shell goes at once (terminal/remove.ts).
+    const id = ptys.current[t.key];
+    const busy = id === undefined ? false : ((await invoke<boolean[]>("terminal_busy", { ids: [id] }).catch(() => [false]))[0] ?? false);
+    const kind = classify(pane, busy);
+    switch (removePlan(settings, kind)) {
+      case "remove":
+        dropPane(t.key);
+        break;
+      case "stop":
+        dropPanes([t.key]);
+        break;
+      case "ask":
+        if (!asking) setAsking({ keys: [t.key], confirm: "Stop", ...removeQuestion(tabName(pane, titles), kind) }); // at most one question per press
+    }
   };
   // TERM-040 / TERM-041: a new tab joins the focused pane's cell (or opens its own cell) and
   // starts in the workspace folder; an agent tab runs the agent's start line there. Outside any
@@ -1458,6 +1481,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // failed check: the tab closes at once.
   const closeTab = async (keys: number[]) => {
     const first = panes.find((p) => p.key === keys[0]);
+    // TERM-046: a pinned tab asks before it closes (setting, on by default).
+    if (first && keys.length === 1 && closeOne(first.key, pinned, settings) === "ask") return setAsking({ keys, ...pinQuestion(tabName(first, titles)) });
     const ids = keys.map((k) => ptys.current[k]).filter((id): id is number => id !== undefined);
     const busy = asksBeforeClose(settings) ? await busyCount(ids, (ids) => invoke<boolean[]>("terminal_busy", { ids })) : 0;
     if (busy === 0 || !first) return dropPanes(keys);
@@ -1469,12 +1494,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const terminals = screen === "terminals";
   const board = screen === "board";
   const inbox = screen === "inbox";
+  const tower = screen === "tower";
   const agentsScreen = screen === "agents";
   // STAT-050: the Inbox and the Board read the panes the window already tracks; the clock ticks while one is open.
   const [now, setNow] = useState(Date.now());
-  const timed = inbox || board;
+  const timed = inbox || board || tower;
   // VIEW-009: a full page fills the workspace area; Show Code (view.code) and an Escape nothing else used leave it.
-  const fullPage = settingsOpen || (terminals && page !== null) || inbox || screen === "artifacts";
+  const fullPage = settingsOpen || (terminals && page !== null) || inbox || tower || screen === "artifacts";
   const leavePage = () => {
     setSettingsOpen(false);
     setPage(null);
@@ -1624,6 +1650,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // VIEW-023: a card's chip and lane; VIEW-025: an answer typed into the agent's own prompt.
   const chipFor = (p: Pane) => chipOf({ agent: p.agent, state: hook[p.key], running: running[p.key], stale: stale[p.key] ?? false, ...turn[p.key], since: stamp[p.key]?.at ?? 0 }, now);
   const laneOf = (p: Pane) => (p.seats || p.kind || p.agent === "shell" ? "idle" : (chipFor(p)?.lane ?? "idle"));
+  // T-546: the control tower reads the same chip and meter per agent pane as the Board.
+  const towerSeats = () => panes.filter((p) => !p.kind && !p.seats && p.agent !== "shell").map((p) => ({ key: p.key, agent: p.agent, title: tabName(p, titles), branch: p.branch, cwd: p.cwd, account: p.account ?? null, chip: chipFor(p), meter: meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)), since: stamp[p.key]?.at ?? 0 }));
   const lanes = board ? LANES.filter((l) => cardPanes(panes).some((p) => laneOf(p) === l.id)) : [];
   const columnOf = (p: Pane) => lanes.findIndex((l) => l.id === laneOf(p)) + 1;
   const answer = (p: Pane, approve: boolean) =>
@@ -1821,7 +1849,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           <Ask
             title={asking.title}
             body={asking.body}
-            confirm="Close tab"
+            confirm={asking.confirm ?? "Close tab"}
             enter
             onCancel={() => setAsking(null)}
             onConfirm={() => {
@@ -1866,6 +1894,27 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     {i.keys && <Kbd id={i.keys} />}
                   </button>
                 ))}
+              {/* TERM-046: Pin/Unpin sits before the close items; Close is greyed for a pinned tab (terminal/pin.ts pinMenu). */}
+              {pinMenu(panes.find((p) => p.key === tabMenu.key)?.kind, pinned.has(tabMenu.key))
+                .filter((i) => i.id === "pin")
+                .map((i) => (
+                  <button
+                    key={i.id}
+                    role="menuitem"
+                    className="menu-item"
+                    onClick={() => {
+                      setTabMenu(null);
+                      setPinned((s) => {
+                        const n = new Set(s);
+                        if (n.has(tabMenu.key)) n.delete(tabMenu.key);
+                        else n.add(tabMenu.key);
+                        return n;
+                      });
+                    }}
+                  >
+                    <span className="name">{i.label}</span>
+                  </button>
+                ))}
               {(
                 [
                   ["Close", "one"],
@@ -1875,13 +1924,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                   ["Close all", "all"],
                 ] as [string, Which][]
               ).map(([label, which]) => {
-                const keys = closeSet(orderOf(tabMenu.key), tabMenu.key, which);
+                const keys = bulkCloseSet(orderOf(tabMenu.key), tabMenu.key, which, pinned);
                 return (
                   <button
                     key={which}
                     role="menuitem"
                     className="menu-item"
-                    disabled={keys.length === 0}
+                    disabled={keys.length === 0 || (which === "one" && pinned.has(tabMenu.key))}
                     onClick={() => {
                       setTabMenu(null);
                       void closeTab(keys);
@@ -2107,6 +2156,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             </>
           )}
           {inbox && <InboxView items={inboxItems(sources, now)} now={now} onOpen={openPane} />}
+          {tower && <TowerView rows={towerRows(towerSeats())} usage={usageByAccount(towerSeats(), plan)} now={now} onOpen={openPane} />}
           {agentsScreen && selected === null && (
             <div className="empty">
               <h2>Agents</h2>
@@ -2183,7 +2233,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                   <div key={c.group} className="cell" hidden={agentsScreen ? !mine : !board && (!sameDir(c.panes[0].cwd, activeDir) || (zoomed !== null && c.group !== zoomed))}>
                     {(c.panes.length > 1 || classic) && (
                       <div className="tabs" role="tablist" aria-label="Tabs">
-                        {c.panes.map((p) => (
+                        {orderPinnedFirst(c.panes.map((p) => p.key), pinned)
+                          .map((k) => c.panes.find((p) => p.key === k) as (typeof c.panes)[number])
+                          .map((p) => (
                           <div
                             key={p.key}
                             role="tab"
@@ -2199,12 +2251,17 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                               setTabMenu({ key: p.key, top: Math.min(e.clientY, window.innerHeight - 220), left: Math.min(e.clientX, window.innerWidth - 240) });
                             }}
                             onAuxClick={(e) => {
-                              // TERM-049: middle-click closes the tab (pinned tabs, once they exist, are exempt).
-                              if (e.button !== 1) return;
+                              // TERM-049 / TERM-046: middle-click closes the tab; a pinned tab is exempt.
+                              if (e.button !== 1 || !middleClickCloses(p.key, pinned)) return;
                               e.preventDefault();
                               closePane(p.key);
                             }}
                           >
+                            {pinned.has(p.key) && (
+                              <span className="tab-pin" title="Pinned" data-pinned="true">
+                                <Pin size={10} />
+                              </span>
+                            )}
                             {p.kind === "editor" || p.kind === "preview" || p.kind === "diff" || p.kind === "changes" ? <FileCode size={12} /> : p.kind === "browser" ? <Globe size={12} /> : <VendorMark agent={p.agent} size={12} />}
                             {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key), hook[p.key])} />}
                             {context[p.key] && <Ring percent={contextFill(context[p.key], capOn(settings))} size={10} title={meterText(meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) ?? {})} />}

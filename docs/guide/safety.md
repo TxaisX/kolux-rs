@@ -4,7 +4,7 @@ Know what Kolux guards, what it only warns about, and what it leaves entirely to
 
 ## Agent Permissions: the biggest switch
 
-In Settings, Agents, "Agent Permissions" is **Yolo** by default. Under Yolo, Claude Code starts in its automatic mode: its own safety check approves routine actions and still stops risky ones. Codex starts with no approvals and no sandbox (the walled-off area it normally works in), so it acts without asking you.
+In Settings, Agents, "Agent Permissions" is **Yolo** by default. Under Yolo, Claude Code starts in its automatic mode: its own safety check approves routine actions and still stops risky ones. Codex starts with no approval prompts but inside its sandbox (the walled-off area it works in): it can change files only in the workspace's own folder. By default the sandbox also keeps its commands off the internet and away from Git's own records, so Codex can edit files but cannot commit, install packages or push. Such a command fails and Codex is told why; it does not ask you. Commit its work yourself from Source Control.
 
 Switch it to **Manual** and each agent asks before it acts. Do this if you want a person in the loop. See [Settings](settings.md).
 
@@ -74,4 +74,4 @@ Nothing about your use. The list of outside connections is in Settings, General,
 
 Kolux pre-trusts the workspaces it creates, for Claude and Codex, so an agent's first prompt is not swallowed by a "do you trust this folder" question. Only workspaces Kolux made are pre-trusted. Pre-trust for Cursor and Copilot is not built.
 
-<!-- verified against: src-tauri/src/protected.rs, src-tauri/src/hooks.rs, src-tauri/src/fence.rs, src-tauri/src/links.rs, src-tauri/src/files.rs, src-tauri/src/cli.rs, src-tauri/src/trust.rs, src/settings/AgentsPage.tsx, src/settings/privacy.ts at 106e966 -->
+<!-- verified against: src-tauri/src/protected.rs, src-tauri/src/hooks.rs, src-tauri/src/fence.rs, src-tauri/src/links.rs, src-tauri/src/files.rs, src-tauri/src/cli.rs, src-tauri/src/trust.rs, src/settings/AgentsPage.tsx, src-tauri/src/agents.rs, src/settings/privacy.ts at 07c5d80 -->

@@ -12,7 +12,7 @@ Changes save as you make them. They live in `settings.json` in Kolux's data fold
 | Appearance | Colours, fonts, terminal text, status bar |
 | Accounts & keys | Signing in to Claude, Codex and Grok |
 | Agents | Which agents are on, how they start, whether they ask permission |
-| Terminal & sessions | How many panes a new workspace has, close warnings |
+| Terminal & sessions | How many panes a new workspace has, close warnings, pinned tabs, removing a running session |
 | Git & worktrees | Branch names, Source Control, commit messages |
 | Safety | A short note on protected commands (see [Safety](safety.md)) |
 | Notifications | What alerts you, and how |
@@ -116,7 +116,7 @@ Saved keys and sign-ins are sealed by the system keyring (Windows' secret store)
 | Hold Claude and Codex to a 200k context window | On | |
 | Prompt-cache timer | Off. When on, "Cache length" is 5 minutes (default) or 1 hour | |
 
-**Agent Permissions matters.** Under Yolo, Claude Code starts in its automatic mode, where its own safety check approves routine actions and still stops risky ones. Codex starts with no approvals and no sandbox (the walled-off area it normally works in), so it acts without asking. Choose Manual if you want each agent to ask before it acts.
+**Agent Permissions matters.** Under Yolo, Claude Code starts in its automatic mode, where its own safety check approves routine actions and still stops risky ones. Codex starts with no approval prompts but inside its sandbox (the walled-off area it works in): it can change files only in the workspace's own folder. By default the sandbox also keeps its commands off the internet and away from Git's own records, so Codex can edit files but cannot commit, install packages or push. Such a command fails and Codex is told why; it does not ask you. Choose Manual if you want each agent to ask before it acts.
 
 **Agent status hooks** are small scripts Kolux puts in an agent's settings so the agent can tell Kolux what it is doing. Until the switch is on, the Board and Agents pages cannot show live status. The hooks badge in the status bar shows whether this switch is On or Off. The switch also shows the path of Claude Code's settings file and any problem found.
 
@@ -126,6 +126,8 @@ Saved keys and sign-ins are sealed by the system keyring (Windows' secret store)
 |---|---|---|
 | New workspaces start with | 1, 2, 4, 6, 9 or 12 panes. Default 1. Classic always uses 1 | `defaultPaneCount` |
 | Ask before closing a tab that is running a program | On. A tab with only an idle shell always closes at once | |
+| Ask before closing a pinned tab | On. Pinned tabs sit first in the strip and stay out of Close others, Close all and middle-click | `pinnedTabsAsk` |
+| Removing a started session | "Ask first" (default) or "Stop without asking". Applies to Remove session on a running agent or a busy shell. A pane that has not started, or an idle shell, is removed straight away | `removeStartedSession` |
 
 ## Git & worktrees
 
@@ -175,4 +177,4 @@ Every command in Kolux has a row here. Your changes are kept in `keybindings.jso
 
 Each project has two settings: "New workspaces start from" (blank means the default branch) and "Workspaces folder" (blank means the global folder). The page notes that setup scripts, the display name and the icon come later.
 
-<!-- verified against: src/settings/pages.ts, src/settings/GeneralPage.tsx, src/settings/AppearancePage.tsx, src/settings/AgentsPage.tsx, src/settings/GitPage.tsx, src/settings/NotificationsPage.tsx, src/settings/privacy.ts, src/settings/RepoPage.tsx, src/keys/actions.ts at 106e966 -->
+<!-- verified against: src/settings/pages.ts, src/settings/GeneralPage.tsx, src/settings/AppearancePage.tsx, src/settings/AgentsPage.tsx, src-tauri/src/agents.rs, src/settings/GitPage.tsx, src/settings/NotificationsPage.tsx, src/settings/privacy.ts, src/settings/RepoPage.tsx, src/keys/actions.ts, src/terminal/pin.ts, src/terminal/remove.ts at 07c5d80 -->
