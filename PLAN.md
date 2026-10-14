@@ -751,7 +751,7 @@ foundations every later card stands on; the cards they touch are finished in the
 ### H · theme 9 · Reliability and no lost work (2 cards)
 
 - [ ] T-330 · CHAT-009 Hidden chats pause reading and keep their last good view
-- [ ] T-331 · HID-036 [compat] Retired settings quietly dropped when an old profile loads
+- [x] T-331 · HID-036 [compat] Retired settings quietly dropped when an old profile loads · built in `src-tauri/src/import.rs`: the twelve retired settings of the card listed by the names an older profile may have saved them under (compared without letter case, separators or a product prefix), `without_retired` the filter for every settings load and save, the former-name carry-over applying it; no message, no failed load, and a later change never brings them back; the two-line state.rs call is a coordinator hunk (T-331 commit body) · done 2026-10-13 (lane/i18n from 0819c57; evidence/T-331.txt: cargo test import:: 10/10, clippy -D warnings clean; batch end full cargo test 546/548 with the two failures in scm watch passing 9/9 alone, tsc clean, vitest 783/785 with the two failures in ship.test.mjs timeouts outside this lane, firewall 0 new; no smoke in the lane under the no-app-launch rule of 2026-10-13, nothing on screen changed, smoke runs on main)
 
 ### H · theme 11 · Orchestration and automations (1 cards)
 

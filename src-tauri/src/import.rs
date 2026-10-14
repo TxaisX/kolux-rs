@@ -8,6 +8,11 @@
 //! value already saved under the current name winning. Development, test and lane profiles never
 //! get it (`hooks::agent_hooks::fenced`). Repeating it changes nothing: the copy only fills gaps, the
 //! rename only touches former-name keys, and the profile records that it ran.
+//!
+//! HID-036 (T-331): settings retired before this rebuild are dropped quietly from an older profile,
+//! with no message and no failed load, and never come back: `without_retired` is the filter the
+//! settings load and save apply (coordinator hunk in state.rs, T-331 commit body), and the
+//! carry-over applies it to what it brings in.
 // ponytail: wired into the app's start by the coordinator (hunk in the T-213 commit body); until
 // then only the tests call it. The release smoke check of this migration is T-213-b.
 #![cfg_attr(not(test), allow(dead_code))]
@@ -147,7 +152,8 @@ pub fn carry_over(store: &Store, profile: &Path) -> Option<Carried> {
             if let Some(map) = settings.as_object_mut() {
                 out.renamed = rename_former(map);
             }
-            if out.renamed > 0 && store.save_settings(&settings).is_err() {
+            let dropped = drop_retired(&mut settings);
+            if out.renamed + dropped > 0 && store.save_settings(&settings).is_err() {
                 out.renamed = 0;
             }
         }
@@ -162,6 +168,53 @@ fn same_folder(a: &Path, b: &Path) -> bool {
         (Ok(a), Ok(b)) => a == b,
         _ => a.as_os_str().eq_ignore_ascii_case(b.as_os_str()),
     }
+}
+
+
+/// HID-036 (T-331): settings retired before this rebuild, each by the names an older profile may
+/// have saved it under (compared without letter case, dots, dashes or underscores). They are
+/// dropped quietly whenever settings are read or saved, so they never fail a load and never come
+/// back with a later change.
+pub const RETIRED: &[(&str, &[&str])] = &[
+    ("scrollback size in bytes", &["scrollbackbytes", "terminalscrollbackbytes", "scrollbacksizebytes", "scrollbackbuffersize"]),
+    ("GitHub attribution", &["githubattribution", "gitattribution", "commitattribution", "addgithubattribution"]),
+    ("agents sidebar", &["agentssidebar", "agentsidebar", "showagentssidebar", "agentssidebaropen"]),
+    ("OpenCode sign-in cookie", &["opencodecookie", "opencodesignincookie", "opencodesessioncookie", "opencodeauthcookie"]),
+    ("OpenCode workspace id", &["opencodeworkspaceid", "opencodeworkspace"]),
+    ("dashboard open mode", &["dashboardopenmode", "dashboardmode", "dashboardwindowmode"]),
+    ("artifact sharing", &["artifactsharing", "artifactssharing", "shareartifacts"]),
+    ("artifacts on or off", &["artifactsenabled", "enableartifacts", "artifactson"]),
+    ("artifacts button", &["artifactsbutton", "artifactbutton", "showartifactsbutton"]),
+    ("skip the artifact delete confirmation", &["skipartifactdeleteconfirm", "skipartifactdeleteconfirmation", "artifactdeleteconfirmskip", "confirmartifactdelete"]),
+    ("skill sharing", &["skillsharing", "skillssharing", "shareskills"]),
+    ("phone-pairing connection mode", &["pairingconnectionmode", "phonepairingmode", "mobilepairingmode", "pairingmode"]),
+];
+
+/// A saved setting's name with letter case and separators taken out (`agents-sidebar` and
+/// `agentsSidebar` read the same), and a leading product prefix (`kolux.`, `nightshift.`) dropped.
+fn bare(key: &str) -> String {
+    let flat: String = key.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase();
+    ["kolux", FORMER_NAME].iter().find_map(|p| flat.strip_prefix(p).filter(|r| !r.is_empty()).map(str::to_owned)).unwrap_or(flat)
+}
+
+/// Whether `key` names a retired setting.
+pub fn is_retired(key: &str) -> bool {
+    let b = bare(key);
+    RETIRED.iter().any(|(_, names)| names.contains(&b.as_str()))
+}
+
+/// `settings` with every retired setting dropped (a value that is not an object is left alone).
+pub fn without_retired(mut settings: Value) -> Value {
+    drop_retired(&mut settings);
+    settings
+}
+
+/// Drops the retired settings in place; returns how many went.
+pub fn drop_retired(settings: &mut Value) -> usize {
+    let Some(map) = settings.as_object_mut() else { return 0 };
+    let before = map.len();
+    map.retain(|k, _| !is_retired(k));
+    before - map.len()
 }
 
 #[cfg(test)]
@@ -283,5 +336,68 @@ mod tests {
         assert_eq!(carry_over(&store, &profile), None);
         assert!(store.get(KEY_CARRIED).unwrap().is_some());
         drop(store);
+    }
+
+
+    /// A profile's settings carrying every retired setting, in the spellings an older profile may use.
+    fn every_retired() -> Value {
+        let mut m = Map::new();
+        for (i, (_, names)) in RETIRED.iter().enumerate() {
+            m.insert(names[0].to_owned(), json!(i));
+        }
+        m.insert("terminal.scrollback-bytes".into(), json!(1_000_000));
+        m.insert("Kolux.AgentsSidebar".into(), json!(true));
+        m.insert("nightshift_github_attribution".into(), json!(false));
+        m.insert("theme".into(), json!("dark"));
+        m.insert("language".into(), json!("ja"));
+        m.insert("artifacts".into(), json!({"kept": "the library is a live feature"}));
+        m.insert("rightSidebarOpen".into(), json!(true));
+        Value::Object(m)
+    }
+
+    #[test]
+    fn t331_hid036_every_retired_setting_is_named_and_none_collides_with_a_live_one() {
+        assert_eq!(RETIRED.len(), 12, "the full list in the card's Compat line");
+        for live in ["theme", "language", "artifacts", "skills", "rightSidebarOpen", "leftSidebarWidth", "sidebar", "scrollback", "agentStatusHooks", "confirmWorkspaceDelete"] {
+            assert!(!is_retired(live), "{live} is a live setting");
+        }
+        assert!(is_retired("scrollbackBytes") && is_retired("SCROLLBACK_BYTES") && is_retired("terminal.scrollback-bytes"));
+        assert!(is_retired("kolux.opencodeWorkspaceId") && is_retired("nightshiftSkillSharing"));
+    }
+
+    #[test]
+    fn t331_hid036_a_profile_with_every_retired_setting_loads_without_them_and_they_never_come_back() {
+        let (_root, profile) = profile("imp-retired");
+        fs::write(profile.join("settings.json"), serde_json::to_vec(&every_retired()).unwrap()).unwrap();
+        let store = Store::open(&profile).unwrap();
+        // Load: the read succeeds (no message, no refusal) and the retired ones are gone.
+        let loaded = without_retired(store.try_settings().expect("loads"));
+        assert_eq!(loaded, json!({"theme": "dark", "language": "ja", "artifacts": {"kept": "the library is a live feature"}, "rightSidebarOpen": true}));
+        // The next save writes them out of the file.
+        store.save_settings(&loaded).unwrap();
+        let on_disk: Value = serde_json::from_slice(&fs::read(profile.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(on_disk, loaded);
+        // A later change made from an old copy that still had them does not bring them back.
+        let mut stale = every_retired();
+        stale["theme"] = json!("light");
+        store.save_settings(&without_retired(stale)).unwrap();
+        let after: Value = serde_json::from_slice(&fs::read(profile.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(after["theme"], json!("light"));
+        assert!(after.as_object().unwrap().keys().all(|k| !is_retired(k)), "{after}");
+        drop(store);
+    }
+
+    #[test]
+    fn t331_hid036_the_former_name_carry_over_drops_them_too_and_a_non_object_is_left_alone() {
+        let (root, profile) = profile("imp-retired-carry");
+        let old = root.join("nightshift");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("settings.json"), br#"{"nightshiftTheme":"dark","agentsSidebar":true,"opencodeCookie":"x"}"#).unwrap();
+        let store = Store::open(&profile).unwrap();
+        carry_over(&store, &profile).expect("carried");
+        assert_eq!(store.settings(), json!({"koluxTheme": "dark"}));
+        drop(store);
+        assert_eq!(drop_retired(&mut json!([1, 2])), 0);
+        assert_eq!(without_retired(json!("text")), json!("text"));
     }
 }
