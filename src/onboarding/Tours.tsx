@@ -4,7 +4,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { markGuide, type GuideRecord } from "./guide";
-import { actionWord, autoStarts, FIRST_TARGET_TRIES, FOCUSED_SPLIT, nextShown, place, prevShown, REPLAY_TOUR, stepLabel, stepWords, TOURS, type Placed, type Rect, type Tour, type TourId } from "./tour";
+import { features, hasUsed, noteUse } from "./features";
+import { actionWord, autoStarts, FIRST_TARGET_TRIES, FOCUSED_SPLIT, GRID_TRIES, gridStarts, START_GRID, nextShown, place, prevShown, REPLAY_TOUR, stepLabel, stepWords, TOURS, tourFeature, type Placed, type Rect, type Tour, type TourId } from "./tour";
 
 
 /** The first copy of `sel` that is really on screen (hidden copies are passed over). */
@@ -137,17 +138,26 @@ function TourPanel({ tour, at, onAt, onEnd }: { tour: Tour; at: number; onAt: (i
 export default function Tours() {
   const rec = useRef<GuideRecord | null>(null);
   const slot = useRef(false);
-  const want = useRef<{ id: TourId; forced: boolean; tries: number } | null>(null);
+  const want = useRef<{ id: TourId; forced: boolean; tries: number; limit?: number } | null>(null);
   const [run, setRun] = useState<{ tour: Tour; at: number } | null>(null);
   const running = useRef(false);
   running.current = run !== null;
 
   useEffect(() => {
-    invoke<GuideRecord>("tours_get").then((r) => (rec.current = r), () => {});
-    const replay = (e: Event) => (want.current = { id: (e as CustomEvent<TourId>).detail, forced: true, tries: 0 });
+    invoke<GuideRecord>("tours_get").then(
+      (r) => {
+        rec.current = r;
+        features.loaded(r.features); // ONB-042: uses count from here on
+      },
+      () => {},
+    );
+    const surfaced = new Set<TourId>();
+    // ONB-012: nothing replays the grid tour.
+    const replay = (e: Event) => void ((e as CustomEvent<TourId>).detail !== "grid" && (want.current = { id: (e as CustomEvent<TourId>).detail, forced: true, tries: 0 }));
     // Any split counts (ONB-033: the parallel tour is for people who never split), and a split
     // during the parallel tour carries it past its split step.
     const split = () => {
+      noteUse("split");
       if (rec.current && !rec.current.tried.includes("split")) {
         rec.current.tried = [...rec.current.tried, "split"];
         markGuide("tried", "split").catch(() => {});
@@ -156,6 +166,13 @@ export default function Tours() {
     };
     const click = (e: MouseEvent) => e.target instanceof Element && e.target.closest(".pane-head button[title^='Split right']") && split();
     const key = (e: KeyboardEvent) => SPLIT_KEY(e) && split();
+    // ONB-012: the first run ended with a kit or a plain session: the grid tour once, if unseen.
+    const grid = () => {
+      if (!gridStarts("session", rec.current?.toursSeen ?? [])) return;
+      slot.current = true;
+      want.current = { id: "grid", forced: false, tries: 0, limit: GRID_TRIES };
+    };
+    window.addEventListener(START_GRID, grid);
     window.addEventListener(REPLAY_TOUR, replay);
     window.addEventListener("click", click, true);
     window.addEventListener("keydown", key, true);
@@ -170,7 +187,7 @@ export default function Tours() {
         if (tour && first !== null && first !== undefined && (w.forced || !blocked())) {
           want.current = null;
           setRun({ tour, at: first });
-        } else if (++w.tries >= (w.forced ? 4 * FIRST_TARGET_TRIES : FIRST_TARGET_TRIES)) {
+        } else if (++w.tries >= (w.limit ?? (w.forced ? 4 * FIRST_TARGET_TRIES : FIRST_TARGET_TRIES))) {
           // Gave up without showing: an automatic tour hands its slot back and is not marked seen.
           want.current = null;
           if (!w.forced) slot.current = false;
@@ -178,13 +195,16 @@ export default function Tours() {
         return;
       }
       if (!r) return;
-      const auto = TOURS.find((t) => autoStarts({ id: t.id, auto: r.toursAuto, seen: r.toursSeen, slotUsed: slot.current, blocked: blocked(), tried: r.tried }) && shown(t.trigger));
+      // ONB-042: opening a surface that has a tour counts as using that feature, once per window.
+      for (const t of TOURS) if (!surfaced.has(t.id) && tourFeature(t.id) && shown(t.trigger) && noteUse(t.id)) surfaced.add(t.id);
+      const auto = TOURS.find((t) => autoStarts({ id: t.id, auto: r.toursAuto, seen: r.toursSeen, slotUsed: slot.current, blocked: blocked(), tried: hasUsed("split") ? [...r.tried, "split"] : r.tried }) && shown(t.trigger));
       if (auto) {
         slot.current = true;
         want.current = { id: auto.id, forced: false, tries: 0 };
       }
     }, 250);
     return () => {
+      window.removeEventListener(START_GRID, grid);
       window.removeEventListener(REPLAY_TOUR, replay);
       window.removeEventListener("click", click, true);
       window.removeEventListener("keydown", key, true);

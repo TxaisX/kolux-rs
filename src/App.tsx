@@ -60,6 +60,7 @@ import { KitGallery, KitSetup } from "./kits/Kits";
 import Wizard from "./onboarding/Wizard";
 import Guides from "./onboarding/Guides";
 import { ADD_PROJECT } from "./onboarding/firstRun";
+import { startGridTour } from "./onboarding/tour";
 import { KITS, RECALL_KEY, remember, type Kit, type Vendor } from "./kits/catalog";
 import KitStrip from "./kits/KitStrip";
 import { datedName, roleDone, rolePrompt, seatTitle, type RunCheck } from "./kits/run";
@@ -2537,7 +2538,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               if (real) saveSetting(RECALL_KEY, remember(settings, activeDir!, kit, values)[RECALL_KEY]);
               if (activeDir)
                 void startKit(kit, values, assigned, activeDir).then((ok) => {
-                  if (ok && fromWizard) endWizard("completed");
+                  if (ok && fromWizard) endWizard("completed", startGridTour); // ONB-012
                   if (ok && chooser !== null) closePane(chooser);
                 });
             }}

@@ -54,7 +54,7 @@ export default function HelpMenu() {
             )}
             {/* ONB-032: replay any tour, seen or not, whatever this launch already showed. */}
             <div className="menu-title">Tours</div>
-            {TOURS.map((t) => (
+            {TOURS.filter((t) => t.id !== "grid").map((t) => (
               <button key={t.id} role="menuitem" className="menu-item" title="Runs once its screen is showing" onClick={() => pick(() => replayTour(t.id))}>
                 {t.name}
               </button>

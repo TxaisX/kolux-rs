@@ -14,6 +14,7 @@ import { can as canGo, fresh, started, type Pending } from "./history";
 import { nextZoom, zoomPercent } from "./zoom";
 import { iconAt, iconFound, type SiteIcon } from "./site";
 import { zoomFactor } from "../settings/zoom";
+import { notePage } from "../onboarding/guide";
 
 /** `url`: the page or file the tab opens on instead of a blank page (SKILL-012 previews a kit result). */
 type Props = { id: number; url?: string; title?: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void };
@@ -70,6 +71,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
             // BROW-012: the level holds through reloads and other sites; set it again in case the
             // engine reset it with the new document.
             if (zoom.current !== 1) invoke("browser_go", { id, what: "zoom", level: zoom.current }).catch(() => {});
+            if (e.payload.event === "finished") notePage(e.payload.url); // ONB-015
             return setLoading(false);
           }
           const { url } = e.payload;
