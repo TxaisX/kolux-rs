@@ -73,10 +73,35 @@ export function onMenuWheel(e: Wheel, style: Style): void {
   if (hit) hit.el.scrollTop += dy;
 }
 
-/** Installs the rule on a document once; returns the uninstall. */
-export function installMenuWheel(doc: Document): () => void {
-  const style: Style = (el) => getComputedStyle(el as unknown as Element);
-  const on = (e: WheelEvent) => onMenuWheel(e, style);
-  doc.addEventListener("wheel", on, { passive: false });
-  return () => doc.removeEventListener("wheel", on);
+/** What installMenuWheel needs from a document or a popup element. */
+type Listens = Pick<EventTarget, "addEventListener" | "removeEventListener">;
+type Popup = El & Listens & { isConnected?: boolean };
+const ARMERS = ["pointerover", "focusin"] as const;
+
+/** Installs the rule on a document once; returns the uninstall. The document itself only gets
+ *  passive listeners (FIX-2, council AFTER 3): a blocking wheel listener is put on a popup when the
+ *  pointer or the focus first reaches it, so scrolling anywhere else never waits on script. A popup
+ *  that opens under a still pointer is armed by the hover update the browser sends after layout;
+ *  until then its list still scrolls natively. */
+export function installMenuWheel(doc: Listens, style: Style = (el) => getComputedStyle(el as unknown as Element)): () => void {
+  const on = ((e: WheelEvent) => onMenuWheel(e, style)) as EventListener;
+  const armed = new Set<Popup>();
+  const arm = (e: Event) => {
+    if (!isEl(e.target)) return;
+    const menu = e.target.closest(MENU_SELECTOR) as Popup | null;
+    if (!menu || armed.has(menu)) return;
+    for (const m of armed)
+      if (m.isConnected === false) {
+        m.removeEventListener("wheel", on);
+        armed.delete(m);
+      }
+    menu.addEventListener("wheel", on, { passive: false });
+    armed.add(menu);
+  };
+  for (const t of ARMERS) doc.addEventListener(t, arm, { passive: true, capture: true });
+  return () => {
+    for (const t of ARMERS) doc.removeEventListener(t, arm, { capture: true });
+    for (const m of armed) m.removeEventListener("wheel", on);
+    armed.clear();
+  };
 }

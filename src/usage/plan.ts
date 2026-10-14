@@ -19,6 +19,8 @@ const subscribe = (f: () => void) => {
   return () => void subs.delete(f);
 };
 const read = () => plan;
+/** The figures as they stand, for code outside React (USAGE-023: a failed read keeps them). */
+export const readPlan = (): Plan => plan;
 
 export const usePlan = (): Plan => useSyncExternalStore(subscribe, read, read);
 

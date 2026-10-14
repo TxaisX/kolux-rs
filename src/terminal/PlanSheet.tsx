@@ -18,9 +18,12 @@ type Props = {
   cut?: boolean;
   /** SAFE-007: the pane no longer waits on this plan. */
   closed?: boolean;
+  /** T-032-b: Request changes is waiting to send; both answers are held and Cancel stops it. */
+  sending?: boolean;
+  onCancel?: () => void;
 };
 
-export default function PlanSheet({ title, plan, draft, onDraft, onApprove, onRequest, onClose, cut = false, closed = false }: Props) {
+export default function PlanSheet({ title, plan, draft, onDraft, onApprove, onRequest, onClose, cut = false, closed = false, sending = false, onCancel }: Props) {
   const sections = useMemo(() => planSections(plan), [plan]);
   const [writing, setWriting] = useState<number | null>(null);
   const [text, setText] = useState("");
@@ -50,6 +53,11 @@ export default function PlanSheet({ title, plan, draft, onDraft, onApprove, onRe
       {closed && (
         <div className="note warn plan-sheet-note" role="status">
           The plan prompt has closed, so this plan can no longer be approved or sent back. Your comments are kept.
+        </div>
+      )}
+      {sending && (
+        <div className="note plan-sheet-note" role="status">
+          Sending your feedback once Claude has left its plan prompt. Cancel stops it before anything more is typed.
         </div>
       )}
       {cut && <div className="note plan-sheet-note">This plan is too long to show whole, so it is cut short here. The whole plan is in the terminal.</div>}
@@ -93,10 +101,15 @@ export default function PlanSheet({ title, plan, draft, onDraft, onApprove, onRe
       <footer className="plan-sheet-foot">
         <textarea aria-label="Overall feedback" placeholder="Overall feedback (optional)" value={draft.note} onChange={(e) => onDraft({ ...draft, note: e.target.value })} />
         <div className="plan-sheet-actions">
-          <button className="btn" disabled={closed || !canRequest(draft.comments, draft.note)} onClick={onRequest}>
-            {count > 0 ? `Request changes (${count})` : "Request changes"}
+          {sending && onCancel && (
+            <button className="btn" onClick={onCancel}>
+              Cancel sending
+            </button>
+          )}
+          <button className="btn" disabled={sending || closed || !canRequest(draft.comments, draft.note)} onClick={onRequest}>
+            {sending ? "Sending…" : count > 0 ? `Request changes (${count})` : "Request changes"}
           </button>
-          <button className="btn primary" disabled={closed} onClick={onApprove}>
+          <button className="btn primary" disabled={sending || closed} onClick={onApprove}>
             Approve
           </button>
         </div>

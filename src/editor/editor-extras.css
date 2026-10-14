@@ -1,0 +1,60 @@
+/* EDIT-009: the conflict count and arrows in an editor tab's header. */
+.pane-head .conflict-nav { flex: none; display: flex; align-items: center; gap: 2px; padding: 0 4px 0 8px; font-size: 11px; font-weight: 600; color: var(--warn); }
+.pane-head .conflict-nav .count { margin-right: 4px; }
+.pane-head .conflict-nav .ib.up svg { transform: rotate(180deg); }
+/* EDIT-005: the find bar over a code editor, in the app's own colours. */
+.pane.editor .cm-panels { background: var(--surface); color: var(--fg); border-color: var(--line-subtle); }
+.pane.editor .cm-search { font: 12px var(--ui-font); padding: 6px 8px; }
+.pane.editor .cm-search .cm-textfield { font-size: 12px; width: 220px; background: var(--input-bg); color: var(--fg); border: 1px solid var(--line); border-radius: 5px; padding: 3px 7px; }
+.pane.editor .cm-search .cm-textfield:focus { border-color: var(--line-focus); outline: none; }
+.pane.editor .cm-search .cm-button { font-size: 11.5px; padding: 2px 8px; background: none; border: 1px solid var(--line-subtle); border-radius: 5px; color: var(--fg-muted); }
+.pane.editor .cm-search .cm-button:hover { color: var(--fg); }
+.pane.editor .cm-search label { font-size: 11.5px; color: var(--fg-muted); }
+.pane.editor .cm-searchMatch { background: color-mix(in srgb, var(--warn) 30%, transparent); }
+.pane.editor .cm-searchMatch-selected { background: color-mix(in srgb, var(--warn) 60%, transparent); }
+/* EDIT-017: the find bar over a rendered note (preview and rich view). */
+.pane.editor .note-find { flex: none; display: flex; flex-direction: column; gap: 5px; padding: 6px 8px; background: var(--surface); border-bottom: 1px solid var(--line-subtle); font: 12px var(--ui-font); }
+.note-find .row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.note-find .textfield { font-size: 12px; width: 220px; max-width: 100%; background: var(--input-bg); color: var(--fg); border: 1px solid var(--line); border-radius: 5px; padding: 3px 7px; }
+.note-find .textfield:focus { border-color: var(--line-focus); outline: none; }
+.note-find .opt { font: 600 11px var(--mono-font); padding: 2px 6px; background: none; border: 1px solid transparent; border-radius: 5px; color: var(--fg-muted); cursor: pointer; }
+.note-find .opt[aria-pressed="true"] { color: var(--fg); border-color: var(--line-focus); background: color-mix(in srgb, var(--line-focus) 25%, transparent); }
+.note-find .count { min-width: 72px; padding: 0 6px; font-size: 11.5px; color: var(--fg-muted); }
+.note-find .ib.up svg { transform: rotate(180deg); }
+.note-find .btn { font-size: 11.5px; padding: 2px 8px; }
+::highlight(kx-find) { background-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+::highlight(kx-find-current) { background-color: color-mix(in srgb, var(--warn) 65%, transparent); }
+/* EDIT-016: the contents panel beside a note. */
+.pane.editor { position: relative; }
+.pane.editor.toc-open .md-rich, .pane.editor.toc-open .md-preview { padding-right: 252px; }
+.pane.editor .note-toc { position: absolute; z-index: 2; right: 0; top: 28px; bottom: 0; width: 230px; display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--line-subtle); font: 12px var(--ui-font); }
+.note-toc .head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 6px 6px 6px 12px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-muted); }
+.note-toc ul { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 0 6px 12px; list-style: none; }
+.note-toc li { display: flex; align-items: center; min-width: 0; }
+.note-toc .fold { flex: none; width: 16px; height: 20px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: none; border: 0; color: var(--fg-faint); cursor: pointer; }
+.note-toc .fold.shut svg { transform: rotate(-90deg); }
+.note-toc .entry { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; padding: 3px 6px; background: none; border: 0; border-radius: 5px; color: var(--fg); font: inherit; cursor: pointer; }
+.note-toc .entry:hover { background: var(--row-selected); }
+.pane.editor.preview { word-break: normal; } /* the sidebar's .preview rule breaks words mid-word otherwise */
+
+/* EDIT-037: the explorer's content search. */
+.content-search { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 5px; padding: 8px; font: 12px var(--ui-font); }
+.content-search input { font: 12px var(--ui-font); min-width: 0; background: var(--input-bg); color: var(--fg); border: 1px solid var(--line); border-radius: 5px; padding: 4px 7px; }
+.content-search input:focus { border-color: var(--line-focus); outline: none; }
+.content-search .cs-row { display: flex; align-items: center; gap: 3px; }
+.content-search .cs-row input { flex: 1; }
+.content-search .cs-row .ib { font: 600 11px var(--mono-font); width: auto; padding: 2px 5px; color: var(--fg-muted); border: 1px solid transparent; border-radius: 5px; }
+.content-search .cs-row .ib.on { color: var(--fg); border-color: var(--line-focus); background: color-mix(in srgb, var(--line-focus) 25%, transparent); }
+.content-search .cs-glob { font-size: 11.5px; }
+.cs-status { color: var(--fg-muted); padding: 2px 1px; }
+.cs-status.bad { color: var(--warn); }
+.cs-results { flex: 1; min-height: 0; overflow: auto; margin: 0 -8px; }
+.cs-file > button { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; padding: 3px 10px; }
+.cs-file > button:hover { background: var(--row-selected); }
+.cs-name .cs-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+.cs-name .cs-count { flex: none; font-size: 10.5px; color: var(--fg-muted); background: var(--input-bg); border-radius: 8px; padding: 0 6px; }
+.cs-hit { padding-left: 26px !important; }
+.cs-hit .cs-line { flex: none; min-width: 2.5em; text-align: right; color: var(--fg-faint); font: 11px var(--mono-font); }
+.cs-hit .cs-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; color: var(--fg-muted); font: 11.5px var(--mono-font); }
+.cs-hit mark { background: color-mix(in srgb, var(--warn) 32%, transparent); color: var(--fg); border-radius: 2px; }
+.explorer-head .ib.on { color: var(--fg); background: var(--row-selected); }

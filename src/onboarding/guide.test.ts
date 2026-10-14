@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { caps, completed, firstOpen, forward, milestonesShown, moveOn, nextTip, railKey, ring, startTicked, STEPS, stopOf, WORKFLOWS, type StepId } from "./guide";
+import { caps, completed, doneFrom, doneId, firstOpen, forward, latest, milestonesShown, moveOn, nextTip, notePage, PAGE_SHOWN, pageNoter, pageCounts, railKey, ring, startTicked, stopDone, STEPS, stopOf, visits, withRecord, workflowDone, WORKFLOWS, type Facts, type Place, type Setup, type StepId } from "./guide";
 
 const set = (...ids: StepId[]) => new Set<StepId>(ids);
 
@@ -93,5 +93,123 @@ describe("startup tips (ONB-027)", () => {
   it("shows nothing in a session that showed the first run, and skips a feature already in use", () => {
     expect(nextTip({ ...none, onboarding: true })).toBeNull();
     expect(nextTip({ ...none, seen: ["cli"], tried: ["palette"] })).toBeNull();
+  });
+});
+
+const none: Facts = { workspaces: null, gitProjects: null, pageShown: false, integrations: null, cli: false, notifications: null, agent: null, setupScript: null };
+const main = (path = "C:/p"): Place => ({ path, head: "abc123", isMain: true, kind: "main" });
+
+describe("Setup Guide steps tick from real state (ONB-015)", () => {
+  it("nothing read, or every read failed, ticks nothing", () => {
+    expect([...doneFrom(none)]).toEqual([]);
+  });
+
+  it("Multi-task: only the main folder, twice over or with a placeholder, stays unticked; one real workspace ticks it", () => {
+    expect(doneFrom({ ...none, workspaces: [[main()]] }).has("multitask")).toBe(false);
+    expect(doneFrom({ ...none, workspaces: [[main(), main()]] }).has("multitask")).toBe(false);
+    expect(doneFrom({ ...none, workspaces: [[main(), { path: "C:/w/new", head: "", isMain: false, kind: "managed" }]] }).has("multitask")).toBe(false);
+    expect(doneFrom({ ...none, workspaces: [[main()], [main("C:/q"), { path: "C:/w/a", head: "def456", isMain: false, kind: "managed" }]] }).has("multitask")).toBe(true);
+  });
+
+  it("Browser: a blank page does not count, a loaded page does", () => {
+    expect(pageCounts("about:blank")).toBe(false);
+    expect(pageCounts("")).toBe(false);
+    expect(pageCounts(null)).toBe(false);
+    expect(pageCounts("https://example.com/")).toBe(true);
+    expect(doneFrom({ ...none, pageShown: true }).has("browser")).toBe(true);
+  });
+
+  it("Multiple repos needs two git projects; Integrations waits while its checks are out", () => {
+    expect(doneFrom({ ...none, gitProjects: 1 }).has("repos")).toBe(false);
+    expect(doneFrom({ ...none, gitProjects: 2 }).has("repos")).toBe(true);
+    expect(doneFrom({ ...none, integrations: "checking" }).has("integrations")).toBe(false);
+    expect(doneFrom({ ...none, integrations: "none" }).has("integrations")).toBe(false);
+    expect(doneFrom({ ...none, integrations: "connected" }).has("integrations")).toBe(true);
+  });
+
+  it("the default agent, notifications, CLI and setup-script steps tick from their own state", () => {
+    expect(doneFrom({ ...none, agent: "" }).has("agent")).toBe(false);
+    expect(doneFrom({ ...none, agent: "claude" }).has("agent")).toBe(true);
+    expect(doneFrom({ ...none, notifications: false }).has("notifications")).toBe(false);
+    expect(doneFrom({ ...none, notifications: true }).has("notifications")).toBe(true);
+    expect(doneFrom({ ...none, cli: true }).has("cli")).toBe(true);
+    expect(doneFrom({ ...none, setupScript: false }).has("automate")).toBe(false);
+    expect(doneFrom({ ...none, setupScript: true }).has("automate")).toBe(true);
+  });
+
+  it("setup-script readiness resets on new inputs and an older check's late answer is dropped", () => {
+    const seen: (boolean | null)[] = [];
+    const check = latest<boolean>((v) => seen.push(v));
+    const first = check.begin();
+    const second = check.begin();
+    check.settle(first, true);
+    check.settle(second, false);
+    expect(seen).toEqual([null, null, false]);
+  });
+});
+
+describe("Explore Kolux stops need a visit and real setup (ONB-023)", () => {
+  const off: Setup = { taskSource: false, skills: [] };
+  const kept = new Set<string>();
+  it("a configured stop stays unticked until visited; a visited stop that needs setup waits for it", () => {
+    expect(stopDone("tasks", new Set(), { ...off, taskSource: true }, kept)).toBe(false);
+    expect(stopDone("tasks", new Set(["tasks"]), off, kept)).toBe(false);
+    expect(stopDone("tasks", new Set(["tasks"]), { ...off, taskSource: true }, kept)).toBe(true);
+    expect(stopDone("orchestration", new Set(["orchestration"]), { ...off, skills: ["kolux-cli"] }, kept)).toBe(false);
+    expect(stopDone("orchestration", new Set(["orchestration"]), { ...off, skills: ["orchestration"] }, kept)).toBe(true);
+    expect(stopDone("browser", new Set(["browser"]), { ...off, skills: ["browser-use"] }, kept)).toBe(true);
+    expect(stopDone("editor", new Set(["editor"]), off, kept)).toBe(true);
+  });
+
+  it("once complete a stop stays complete when detection later says unavailable", () => {
+    expect(stopDone("orchestration", new Set(["orchestration"]), off, new Set([doneId("orchestration")]))).toBe(true);
+    const review = WORKFLOWS.find((w) => w.id === "review")!;
+    expect(workflowDone(review, new Set(["review", "notes"]), off, kept)).toBe(true);
+    const tasks = WORKFLOWS.find((w) => w.id === "tasks")!;
+    expect(workflowDone(tasks, new Set(["tasks"]), off, kept)).toBe(false);
+  });
+
+  it("visits come back on reopen with unknown and repeated entries dropped", () => {
+    expect(visits(["tasks", "nope", "tasks", "notes", "split-terminal"])).toEqual(["tasks", "notes"]);
+  });
+});
+
+describe("the browser pane's page note (ONB-015)", () => {
+  it("only a loaded page that is not blank is kept, and only the first one per window writes (FIX-1)", () => {
+    const kept: string[] = [];
+    const used: string[] = [];
+    const mark = async (list: string, id: string) => (kept.push(`${list}:${id}`), { tipsSeen: [], visited: [], tried: [], toursSeen: [], toursAuto: null });
+    const note = pageNoter(mark, (id) => used.push(id));
+    note("about:blank");
+    note("");
+    note("https://example.com/");
+    note("https://example.com/next");
+    note("https://example.org/");
+    expect(kept).toEqual([`tried:${PAGE_SHOWN}`]);
+    expect(used).toEqual(["browser-page"]);
+    expect(typeof notePage).toBe("function");
+  });
+
+  it("a page note whose write failed is tried again on the next page; once one is kept, none more (FIX-2)", async () => {
+    const kept: string[] = [];
+    let fail = true;
+    const mark = (list: string, id: string) => (kept.push(`${list}:${id}`), fail ? Promise.reject(new Error("locked")) : Promise.resolve({ tipsSeen: [], visited: [], tried: [], toursSeen: [], toursAuto: null }));
+    const note = pageNoter(mark, () => {});
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+    note("https://example.com/");
+    await flush();
+    fail = false;
+    note("https://example.com/next");
+    await flush();
+    note("https://example.org/");
+    await flush();
+    expect(kept).toEqual([`tried:${PAGE_SHOWN}`, `tried:${PAGE_SHOWN}`]);
+  });
+
+  it("the saved record merges into what this window already saw; an early visit is never lost (FIX-1)", () => {
+    // "workspaces" was visited in this window before the record (which only knows "tasks") arrived.
+    const r = withRecord(new Set(["workspaces"]), new Set(["explore-usage"]), { visited: ["tasks", "nope"], tried: ["explore-agents"] });
+    expect([...r.seen].sort()).toEqual(["explore-agents", "tasks", "workspaces"]);
+    expect([...r.kept].sort()).toEqual(["explore-agents", "explore-usage"]);
   });
 });

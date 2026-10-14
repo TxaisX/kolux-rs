@@ -6,6 +6,7 @@
 // "Other ways to connect" menu every card shares.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { clearReadFailure, STATUSES_FAILED } from "../onboarding/firstRun";
 import { emit, listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
 import { AttentionNote, CHECK_AGAIN, openInstallPage, type Attention } from "./Attention";
@@ -143,11 +144,12 @@ export function ConnectGrid({ cards }: { cards: Record<ConnectId, ReactNode> }) 
       void invoke<AgentInfo[]>("agent_list")
         .then((list) => {
           setAgents(list);
+          setError(clearReadFailure);
           const seen = JSON.stringify(list);
           if (last.current && seen !== last.current) void emit("agents-changed", list).catch(() => {});
           last.current = seen;
         })
-        .catch((e) => setError(String(e))),
+        .catch(() => setError(STATUSES_FAILED)),
     [],
   );
   const readInstalls = useCallback(() => void invoke<Record<string, InstallView>>("agent_installs").then(setInstalls).catch(() => {}), []);

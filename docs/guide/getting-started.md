@@ -24,7 +24,7 @@ Click the Help button and choose "Getting Started with Kolux". It is a checklist
 
 Only the Enable Kolux CLI step ticks by itself today. The other steps are explained but stay unticked.
 
-The Enable Kolux CLI step lists three things and marks each "Ready" or "Not set up": "Kolux CLI" (the `kolux` command in terminals outside Kolux), "Kolux CLI skill" and "Orchestration skill". A "Re-check" button reads the state again. The step says Kolux cannot run this setup for you yet; it arrives with the installer in a coming build. See [Command line](command-line.md) for what the command does.
+The Enable Kolux CLI step lists three things and marks each "Ready" or "Not set up": "Kolux CLI" (the `kolux` command in terminals outside Kolux), "Kolux CLI skill" and "Orchestration skill". A "Re-check" button reads the state again. The check for the `kolux` command looks through your `PATH` (the list of folders Windows searches for commands) without holding up the window: a folder that does not answer within a second, such as one on an offline drive, is passed over, and a folder on another computer is never looked up (see [Other computers and network shares](safety.md#other-computers-and-network-shares)). The step says Kolux cannot run this setup for you yet; it arrives with the installer in a coming build. See [Command line](command-line.md) for what the command does.
 
 The Help menu has more entries:
 
@@ -64,7 +64,7 @@ A skill is a folder with a `SKILL.md` file that teaches an AI how to do a job. T
 | Skill folders | Lists each folder Kolux scanned and what it found, such as "3 skills" or "Not found" |
 | Refresh | Scans every folder again |
 
-Each row shows the skill's name, where it came from (a plugin shows "Plugin: name"), its last-changed date, its description and its path. Skills built into Kolux say "Built into Kolux". The "Delete skills" item in the "..." menu is greyed out for now. If a folder cannot be read the page says "Scan failed" with a Retry button, rather than showing a shorter list. Skills inside WSL (Linux on Windows) folders are not scanned yet; the Skill folders list says "Not scanned: WSL folders are not scanned yet".
+Each row shows the skill's name, where it came from (a plugin shows "Plugin: name"), its last-changed date, its description and its path. Skills built into Kolux say "Built into Kolux". The "Delete skills" item in the "..." menu is greyed out for now. If a folder cannot be read the page says "Scan failed" with a Retry button, rather than showing a shorter list. Skills inside WSL (Linux on Windows) folders are not scanned yet; the Skill folders list says "Not scanned: WSL folders are not scanned yet". Kolux also never scans through a network share: a workspace on `\\server\share` gets no workspace skills scan, a mapped drive letter does, and a link inside a skills folder that leads to another computer is not followed. See [Other computers and network shares](safety.md#other-computers-and-network-shares).
 
 When you have never picked a view, Kolux opens on Terminals. After that it opens on the view you were on when you quit.
 
@@ -141,4 +141,4 @@ More detail is in [Projects and worktrees](projects-and-worktrees.md).
 
 Other ways in: press Ctrl+T for a plain shell, or use "New tab" and "Choose agent…" to pick the AI, model and number of sessions before anything starts.
 
-<!-- verified against: src/onboarding/Wizard.tsx, src/chrome/TopBar.tsx, src/usage/meter.ts, src/usage/ClaudePill.tsx, src/usage/CodexPill.tsx, src/settings/general.ts, src/projects/AddProject.tsx, src/projects/ProjectsPanel.tsx, src/launch/PlusMenu.tsx, src/keys/actions.ts, src/onboarding/Guides.tsx, src/onboarding/HelpMenu.tsx, src/onboarding/Tours.tsx, src/onboarding/guide.ts, src/onboarding/tour.ts, src-tauri/src/onboarding.rs, src/skills/SkillsPage.tsx, src/skills/skills.ts, src/skills/nav.ts, src/projects/SkillsRow.tsx, src/projects/HideableRow.tsx, src/chrome/chromeItems.ts, src-tauri/src/skills.rs, src-tauri/src/menu.rs, src/chrome/useChrome.ts at 2c8b9d8 -->
+<!-- verified against: src/onboarding/Wizard.tsx, src/chrome/TopBar.tsx, src/usage/meter.ts, src/usage/ClaudePill.tsx, src/usage/CodexPill.tsx, src/settings/general.ts, src/projects/AddProject.tsx, src/projects/ProjectsPanel.tsx, src/launch/PlusMenu.tsx, src/keys/actions.ts, src/onboarding/Guides.tsx, src/onboarding/HelpMenu.tsx, src/onboarding/Tours.tsx, src/onboarding/guide.ts, src/onboarding/tour.ts, src-tauri/src/onboarding.rs, src/skills/SkillsPage.tsx, src/skills/skills.ts, src/skills/nav.ts, src/projects/SkillsRow.tsx, src/projects/HideableRow.tsx, src/chrome/chromeItems.ts, src-tauri/src/skills.rs, src-tauri/src/menu.rs, src/chrome/useChrome.ts at 73f5e38 -->

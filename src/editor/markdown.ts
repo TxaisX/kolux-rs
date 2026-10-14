@@ -3,7 +3,8 @@
 // twin panes work exactly as in source view. A rich edit is turned back into markdown and only the
 // changed span goes into the buffer. Text the rich view cannot show faithfully stays in source
 // view with the reason, and so does a file over about 600 KB until the user picks Open anyway.
-import { $getRoot, createEditor, type LexicalEditor } from "lexical";
+import { $getRoot, COMMAND_PRIORITY_CRITICAL, createEditor, PASTE_COMMAND, type LexicalEditor } from "lexical";
+import { PASTE_LIMIT, refusal } from "./paste";
 import { HeadingNode, QuoteNode, registerRichText } from "@lexical/rich-text";
 import { createEmptyHistoryState, registerHistory } from "@lexical/history";
 import { ListItemNode, ListNode, registerCheckList, registerList } from "@lexical/list";
@@ -78,10 +79,31 @@ export function changeBetween(a: string, b: string): { from: number; to: number;
   return { from: s, to: a.length - e, insert: b.slice(s, b.length - e) };
 }
 
+/** EDIT-008: a paste past the limit is refused in the rich view too, and so is one past the rich
+ * view's own size limit (FIX-1) (true = refused, toast given). */
+export function refusePaste(event: ClipboardEvent | KeyboardEvent | InputEvent, refuse: (text: string) => void): boolean {
+  const text = "clipboardData" in event ? (event.clipboardData?.getData("text/plain") ?? "") : "";
+  if (text.length <= RICH_LIMIT) return false;
+  event.preventDefault();
+  refuse(text.length > PASTE_LIMIT ? refusal(text.length) : richRefusal(text.length));
+  return true;
+}
+
+const size = (n: number) => (n >= 1024 * 1024 ? `${(n / (1024 * 1024)).toFixed(1).replace(/\.0$/, "")} MB` : `${Math.round(n / 1024)} KB`);
+
+/** EDIT-008 (FIX-1): the toast for a paste over the rich view's own size limit (the size it opens a
+ * file at), short of the hard limit: Lexical takes a paste in one go, so a bigger one would freeze
+ * the window; the source view takes it in pieces. */
+export function richRefusal(length: number): string {
+  const over = size(length) === size(RICH_LIMIT) ? "it is just" : `${size(length)} is`;
+  return `Paste refused in the rich view: ${over} over the ${size(RICH_LIMIT)} it takes in one paste. Paste it in source view instead. Nothing was pasted.`;
+}
+
 export type Rich = { editor: LexicalEditor; show: (md: string) => void; destroy: () => void };
 
-/** Starts the rich view in `el`; `onEdit` gets the whole markdown after each edit by the user. */
-export function mountRich(el: HTMLElement, md: string, onEdit: (md: string) => void): Rich {
+/** Starts the rich view in `el`; `onEdit` gets the whole markdown after each edit by the user;
+ * `onRefuse` shows the toast for a paste past the limit (EDIT-008). */
+export function mountRich(el: HTMLElement, md: string, onEdit: (md: string) => void, onRefuse: (text: string) => void = () => {}): Rich {
   const editor = createEditor({ namespace: "kolux-md", nodes: NODES, onError: fail, theme: THEME });
   editor.setRootElement(el);
   let last = "";
@@ -91,6 +113,7 @@ export function mountRich(el: HTMLElement, md: string, onEdit: (md: string) => v
     registerList(editor),
     registerCheckList(editor),
     registerMarkdownShortcuts(editor, MD),
+    editor.registerCommand(PASTE_COMMAND, (event) => refusePaste(event, onRefuse), COMMAND_PRIORITY_CRITICAL),
     editor.registerUpdateListener(({ editorState, dirtyElements, dirtyLeaves, tags }) => {
       if (dirtyElements.size === 0 && dirtyLeaves.size === 0) return; // the caret moved, nothing more
       const now = editorState.read(() => $convertToMarkdownString(MD));
