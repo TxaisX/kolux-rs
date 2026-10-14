@@ -29,7 +29,7 @@ The bar across the top is 36 pixels tall and replaces the Windows title bar. Dra
 | Menu (dots) | Opens a "View" menu with Zoom In, Zoom Out and Reset Size. They act on the focused terminal |
 | Sidebar button | Hides or shows the project sidebar (Ctrl+B) |
 | Back / Forward | Return to the last workspace or page you were on, and go forward again (Ctrl+Alt+Left, Ctrl+Alt+Right) |
-| Screen switcher | Three buttons: Agents, Board, Terminals. See the next section |
+| Screen switcher | Four buttons: Agents, Board, Terminals, Tower. See the next section |
 | Right-panel button | Shows or hides the right panel, which holds Source Control. Hidden while a full page is open |
 | Search box | Jump to a worktree, tab, project or setting (Ctrl+Shift+J) |
 | Bell | Opens the Inbox. Press it again to return to Terminals |
@@ -42,7 +42,7 @@ In the Classic look (Settings, Appearance) the screen switcher is absent and the
 
 Press Escape to leave a full page such as the Inbox.
 
-## The three views
+## The views
 
 Use the screen switcher in the middle of the top bar.
 
@@ -51,8 +51,9 @@ Use the screen switcher in the middle of the top bar.
 | Agents | See one list of sessions grouped by agent, with the picked session beside it. See [Board, Agents and Inbox](board-agents-inbox.md) |
 | Board | See every session as a card in a lane: Needs you, Working, Done, Stopped, Idle. Approve or deny from the card |
 | Terminals | Work in the pane grid. The project sidebar shows only here (and on the Artifacts page). See [Terminals](terminals.md) |
+| Tower | See every agent at a glance on one full-width screen, the ones that need you first, with usage per AI provider across the top. One click opens a pane. See [Board, Agents and Inbox](board-agents-inbox.md) |
 
-The Board and Agents views list sessions from every workspace at once. The Terminals view shows the panes of one workspace.
+The Board, Agents and Tower views list sessions from every workspace at once. The Terminals view shows the panes of one workspace.
 
 ## Add a project
 
@@ -75,4 +76,4 @@ More detail is in [Projects and worktrees](projects-and-worktrees.md).
 
 Other ways in: press Ctrl+T for a plain shell, or use "New tab" and "Choose agent…" to pick the AI, model and number of sessions before anything starts.
 
-<!-- verified against: src/onboarding/Wizard.tsx, src/chrome/TopBar.tsx, src/usage/meter.ts, src/usage/ClaudePill.tsx, src/usage/CodexPill.tsx, src/settings/general.ts, src/projects/AddProject.tsx, src/projects/ProjectsPanel.tsx, src/launch/PlusMenu.tsx, src/keys/actions.ts at 106e966 -->
+<!-- verified against: src/onboarding/Wizard.tsx, src/chrome/TopBar.tsx, src/usage/meter.ts, src/usage/ClaudePill.tsx, src/usage/CodexPill.tsx, src/settings/general.ts, src/projects/AddProject.tsx, src/projects/ProjectsPanel.tsx, src/launch/PlusMenu.tsx, src/keys/actions.ts at 7f64466 -->

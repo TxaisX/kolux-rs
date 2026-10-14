@@ -6,6 +6,9 @@
 //! already has, so an unpublished branch is not checked against the remote over and over.
 
 use crate::git::{command, native, run, Git};
+
+#[path = "scm_watch.rs"]
+pub mod watch;
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path};
@@ -2009,6 +2012,29 @@ fn has_commit_hook(worktree: &Path) -> bool {
 #[tauri::command]
 pub async fn scm_status(worktree: String) -> Result<Status, String> {
     status(Path::new(&worktree))
+}
+
+/// GIT-001 (T-033-b): starts or joins the watch of the worktree holding `path`; its status arrives
+/// as the `scm-status-<id>` event, the same shape `scm_status` returns.
+#[tauri::command]
+pub async fn scm_watch(app: tauri::AppHandle, path: String) -> Result<watch::WatchStart, String> {
+    use tauri::{Emitter, Manager};
+    let dir = app.path().app_data_dir().ok();
+    let sink = move |id: u64| {
+        let (app, event) = (app.clone(), format!("scm-status-{id}"));
+        std::sync::Arc::new(move |st: &Status| drop(app.emit(&event, st))) as std::sync::Arc<dyn Fn(&Status) + Send + Sync>
+    };
+    let log = std::sync::Arc::new(move |line: &str| {
+        if let Some(d) = &dir {
+            crate::diag::write(d, line);
+        }
+    });
+    watch::watch(Path::new(&path), sink, log)
+}
+
+#[tauri::command]
+pub async fn scm_unwatch(id: u64) {
+    watch::unwatch(id);
 }
 
 #[tauri::command]

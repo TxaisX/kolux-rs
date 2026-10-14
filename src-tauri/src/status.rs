@@ -625,7 +625,6 @@ pub fn panes_of(terminal: u32) -> Vec<u32> {
 /// STAT-032: the panes whose working reading just went the whole window without a signal, each
 /// once per spell; the payload names the window in minutes.
 // Called from the lib.rs 2 s tick (T-124 hunk, RE-APPLY ON MERGE); drop the allow once that lands.
-#[allow(dead_code)]
 pub fn settle_unverified() -> Vec<Quiet> {
     let now = now_ms();
     let minutes = unverified_ms() / 60_000;
@@ -647,7 +646,6 @@ pub fn parse_inband(bytes: &[u8]) -> Option<&'static str> {
 /// STAT-034: a status a program printed in band; the window's terminal parser hands the payload
 /// over (and never draws the sequence). True when the pane's status moved.
 // Listed in lib.rs's generate_handler (T-124 hunk, RE-APPLY ON MERGE); drop the allow once that lands.
-#[allow(dead_code)]
 #[tauri::command]
 pub fn status_inband(app: tauri::AppHandle, pane_key: u32, data: String) -> bool {
     let Some(state) = parse_inband(data.as_bytes()) else {
