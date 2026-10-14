@@ -13,6 +13,7 @@ mod codex_accounts;
 mod codex_usage;
 mod creatures;
 mod diag;
+mod editor_search;
 mod fence;
 mod files;
 mod fsops;
@@ -475,6 +476,7 @@ pub fn run() {
             files::file_stamps,
             files::file_pick,
             files::md_list,
+            editor_search::editor_search,
             files::file_list,
             files::md_new,
             files::diff_sides,
