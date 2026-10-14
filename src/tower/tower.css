@@ -13,6 +13,8 @@
 .tower .card.summary .count.needs b { color: var(--working-icon); }
 .tower .card.summary .count.working b { color: var(--working); }
 .tower .card.summary .count.done b { color: var(--done); }
+.tower .card.summary .refresh { margin-left: auto; align-self: center; padding: 3px 10px; border: 1px solid var(--line-subtle); border-radius: 999px; background: transparent; color: var(--fg-muted); font: inherit; font-size: 11px; cursor: pointer; }
+.tower .card.summary .refresh:hover { color: var(--fg); border-color: var(--fg-muted); }
 .tower .card.usage { flex: 0 1 260px; display: flex; flex-direction: column; gap: 5px; }
 .tower .card.usage .who { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--fg); }
 .tower .card.usage .who .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }

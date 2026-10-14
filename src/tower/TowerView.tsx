@@ -13,6 +13,7 @@ import VendorMark, { type Agent } from "../chrome/VendorMark";
 import { programWord } from "../launch/PlusMenu";
 import { folderName } from "../projects/model";
 import { tone } from "../usage/meter";
+import { refreshAll } from "../usage/refresh";
 import Ring from "../usage/Ring";
 import { laneCounts, type AccountUsage, type Row } from "./tower";
 
@@ -58,6 +59,10 @@ export default function TowerView({ rows, usage, now, onOpen }: Props) {
               </span>
             ))}
           </span>
+          {/* USAGE-023 (T-070): a manual refresh reads every provider at once, past the debounce and any retry-after. */}
+          <button type="button" className="refresh" title="Read the usage figures again now" onClick={() => refreshAll()}>
+            Refresh
+          </button>
         </div>
         {usage.map((u) => {
           // T-546-b (2): one card per provider; the accounts its panes run on are listed under it, and
