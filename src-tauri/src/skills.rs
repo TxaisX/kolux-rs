@@ -342,6 +342,10 @@ fn walk(dir: &Path, depth: usize, seen: &mut HashSet<PathBuf>, limit: usize, w: 
             w.stopped = true;
             return;
         }
+        // SKILL-023: a folder or link set aside by an unfinished delete is not a skill.
+        if p.file_name().and_then(|n| n.to_str()).is_some_and(crate::skill_delete::is_set_aside) {
+            continue;
+        }
         // A broken link is not a skill and not a failure.
         let Ok(meta) = std::fs::metadata(&p) else { continue };
         if !meta.is_dir() {
@@ -525,7 +529,8 @@ fn read_skill(dir: &Path) -> (String, Option<String>, Option<u64>) {
     (name, desc, updated)
 }
 
-fn key(p: &Path) -> String {
+/// The same folder however it was reached: through links, and on Windows without case.
+pub(crate) fn key(p: &Path) -> String {
     let c = canon(p).unwrap_or_else(|| p.to_path_buf());
     let s = c.to_string_lossy().to_string();
     if cfg!(windows) {
@@ -535,7 +540,8 @@ fn key(p: &Path) -> String {
     }
 }
 
-fn plain(p: &Path) -> String {
+/// A path as the list prints it, without the long-path prefix.
+pub(crate) fn plain(p: &Path) -> String {
     let s = p.to_string_lossy().to_string();
     s.strip_prefix("\\\\?\\").map(str::to_string).unwrap_or(s)
 }
@@ -609,6 +615,67 @@ fn run(spots: Vec<Spot>, bundled: &[(&str, &str)], limit: Duration) -> Scan {
 
 pub fn scan(env: &Env, workspace: Option<&Path>) -> Scan {
     run(spots(env, workspace), &crate::cli::bundled_skills(), ROOT_LIMIT)
+}
+
+/// SKILL-022: where a delete may act. `deletable` are the home and workspace skills folders that
+/// were scanned; `plugin` are the folders plugins put skills in (never deleted from here).
+pub struct Places {
+    pub deletable: Vec<PathBuf>,
+    pub plugin: Vec<PathBuf>,
+}
+
+pub fn places(env: &Env, workspace: Option<&Path>) -> Places {
+    let all = spots(env, workspace);
+    let deletable = all.iter().filter(|s| s.kind == Kind::Skills && s.skip.is_none() && matches!(s.source, "home" | "workspace")).map(|s| s.path.clone()).collect();
+    let plugin = all.iter().filter(|s| s.source == "plugin").map(|s| s.path.clone()).collect();
+    Places { deletable, plugin }
+}
+
+/// SKILL-022: every skill folder under `root`, links included, without the scan's merging: a link
+/// and the folder it points at are both listed, so a delete can take both. Links are followed only
+/// `DEPTH` folders down and never back into a folder they came from. A folder that cannot be read
+/// is an error, so a delete never works from a short list.
+pub fn occurrences(root: &Path) -> Result<Vec<PathBuf>, String> {
+    fn every(dir: &Path, depth: usize, chain: &mut Vec<PathBuf>, out: &mut Vec<PathBuf>) -> Result<(), String> {
+        let mut kids: Vec<PathBuf> = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?.map(|e| e.map(|e| e.path()).map_err(|e| format!("{}: {e}", dir.display()))).collect::<Result<_, _>>()?;
+        kids.sort();
+        for p in kids {
+            if remote_link(&p) || p.file_name().and_then(|n| n.to_str()).is_some_and(crate::skill_delete::is_set_aside) || !p.is_dir() {
+                continue;
+            }
+            let Some(c) = canon(&p) else { continue };
+            if chain.contains(&c) {
+                continue;
+            }
+            let file = p.join(SKILL_FILE);
+            if remote_link(&file) {
+                continue;
+            }
+            if file.is_file() {
+                out.push(p);
+            } else if depth > 0 {
+                chain.push(c);
+                every(&p, depth - 1, chain, out)?;
+                chain.pop();
+            }
+        }
+        Ok(())
+    }
+    let mut out = vec![];
+    // A share is never opened, so it holds nothing a delete may take.
+    if !local_dir(root) {
+        return Ok(out);
+    }
+    let mut chain: Vec<PathBuf> = canon(root).into_iter().collect();
+    every(root, DEPTH, &mut chain, &mut out)?;
+    Ok(out)
+}
+
+/// SKILL-022: a finished delete makes the next list a fresh scan.
+pub fn forget_scans() {
+    if let Ok(mut g) = CACHE.lock() {
+        *g = None;
+    }
 }
 
 static CACHE: Mutex<Option<HashMap<String, (Instant, Scan)>>> = Mutex::new(None);
@@ -707,6 +774,20 @@ mod tests {
         return std::os::windows::fs::symlink_dir(r"\\kolux-unc-test.invalid\share\skills", link).ok();
         #[cfg(not(windows))]
         return std::os::unix::fs::symlink("//kolux-unc-test.invalid/share/skills", link).ok();
+    }
+
+    #[test]
+    fn skill022_a_delete_never_lists_a_skill_reached_through_a_share() {
+        let home = temp("skills-unc-delete");
+        let root = home.join(".claude").join("skills");
+        skill(&root.join("alpha"), "# alpha\n");
+        let began = Instant::now();
+        // A share root is refused by its text: nothing to delete there, and nothing waited on.
+        assert_eq!(occurrences(Path::new(r"\\kolux-unc-test.invalid\share\skills")).unwrap(), Vec::<PathBuf>::new());
+        if share_link(&root.join("share")).is_some() {
+            assert_eq!(occurrences(&root).unwrap(), vec![root.join("alpha")]);
+        }
+        assert!(began.elapsed() < Duration::from_secs(2), "the delete list waited on a share: {:?}", began.elapsed());
     }
 
     #[test]

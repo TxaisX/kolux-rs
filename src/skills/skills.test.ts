@@ -92,3 +92,47 @@ test("SKILL-018: no Skills button on a fresh install; the button opens the page 
   expect(html(false)).not.toContain('aria-current="page"');
   expect(html(true)).toContain('aria-current="page"');
 });
+
+// SKILL-022: Delete skills.
+import { BLOCKED, MAX_DELETE, canDelete, eligible, keepChosen, outcomeText, pickOf, sumUp, whyNot, type Planned } from "./skills";
+
+test("SKILL-022: bundled and plugin skills cannot be chosen, and select all counts only rows that can be", () => {
+  expect(skills.filter(canDelete).map((s) => s.name)).toEqual(["release-notes", "tidy", "repo-rules"]);
+  expect(eligible(skills)).toHaveLength(3);
+  expect(whyNot(skills[3])).toBe(BLOCKED.plugin);
+  expect(whyNot(skills[4])).toBe(BLOCKED.bundled);
+  expect(whyNot(skills[0])).toBeNull();
+  expect(MAX_DELETE).toBe(512);
+});
+
+test("SKILL-022: two skills sharing a name are chosen one by one; after a rescan gone or ineligible choices drop", () => {
+  const a = sk("review", "home", ["claude"], { path: "C:\a\review\SKILL.md" });
+  const b = sk("review", "workspace", ["claude"], { path: "C:\b\review\SKILL.md" });
+  expect(eligible([a, b])).toEqual([a.path, b.path]);
+  expect(keepChosen([a.path, b.path], [b])).toEqual([b.path]);
+  expect(keepChosen([a.path], [{ ...a, source: "plugin" }])).toEqual([]);
+  expect(pickOf(a)).toEqual({ path: a.path, updated: a.updated });
+});
+
+test("SKILL-022: the confirmation counts folders and links, names where linked content stays and lists blocked skills", () => {
+  const plan: Planned[] = [
+    { path: "h", blocked: null, items: [{ path: "h", kind: "folder" }, { path: "h.r", kind: "receipt" }, { path: "s", kind: "link" }], remains: null },
+    { path: "l", blocked: null, items: [{ path: "l", kind: "link" }], remains: "D:\dev\beta" },
+    { path: "kolux:x", blocked: "bundled", items: [], remains: null },
+    { path: "c", blocked: "changed", items: [], remains: null },
+  ];
+  const s = sumUp(plan, (p) => p.toUpperCase());
+  expect(s.count).toBe(2);
+  expect(s.headline).toBe("2 skills will be deleted: 1 folder and 2 links removed across all skill folders.");
+  expect(s.remains).toEqual(["L: only a link is removed; the content stays in D:\dev\beta"]);
+  expect(s.blocked).toEqual([`KOLUX:X: ${BLOCKED.bundled}`, `C: ${BLOCKED.changed}`]);
+  expect(sumUp([plan[2]], (p) => p).headline).toBe("None of the chosen skills can be deleted.");
+});
+
+test("SKILL-022: each skill's outcome reads plainly", () => {
+  expect(outcomeText({ path: "a", outcome: "deleted", note: null })).toBe("Deleted");
+  expect(outcomeText({ path: "a", outcome: "skipped", note: "changed" })).toBe(`Skipped: ${BLOCKED.changed}`);
+  expect(outcomeText({ path: "a", outcome: "busy", note: "x" })).toBe("Busy: another skill operation is under way");
+  expect(outcomeText({ path: "a", outcome: "partly", note: "1 hidden staged copy is left over" })).toBe("Partly removed: hidden staged files are left over (1 hidden staged copy is left over)");
+  expect(outcomeText({ path: "a", outcome: "failed", note: "Nothing was deleted: locked" })).toBe("Failed; nothing was changed (Nothing was deleted: locked)");
+});

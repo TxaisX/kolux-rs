@@ -119,3 +119,72 @@ export function escapeCloses(target: EventTarget | null): boolean {
   const tag = (el.tagName ?? "").toUpperCase();
   return !(tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable);
 }
+
+// SKILL-022: Delete skills. The page chooses rows, asks the app for a plan (skill_delete.rs),
+// shows the confirmation from it, then shows each skill's outcome.
+
+/** One delete request covers between 1 and this many skills. */
+export const MAX_DELETE = 512;
+
+/** Bundled and plugin skills cannot be chosen. */
+export const canDelete = (s: Skill) => s.source === "home" || s.source === "workspace";
+
+/** A chosen skill, by the path and change time the list showed (a later change blocks it). */
+export type Pick = { path: string; updated: number | null };
+export const pickOf = (s: Skill): Pick => ({ path: s.path, updated: s.updated });
+
+export type Blocked = "bundled" | "plugin" | "outside" | "gone" | "changed";
+export type Planned = { path: string; blocked: Blocked | null; items: { path: string; kind: "folder" | "link" | "receipt" }[]; remains: string | null };
+export type Outcome = "deleted" | "skipped" | "busy" | "partly" | "failed";
+export type Done = { path: string; outcome: Outcome; note: string | null };
+
+export const BLOCKED: Record<Blocked, string> = {
+  bundled: "Bundled with Kolux, so it would come back",
+  plugin: "Put there by a plugin; remove the plugin instead",
+  outside: "Outside Kolux's skill folders",
+  gone: "No longer on disk",
+  changed: "Changed since the list loaded; refresh first",
+};
+
+/** Why a row cannot be chosen, or null when it can. */
+export const whyNot = (s: Skill): string | null => (canDelete(s) ? null : BLOCKED[s.source === "bundled" ? "bundled" : "plugin"]);
+
+/** Select all eligible: only the shown rows that can be chosen. */
+export const eligible = (shown: Skill[]) => shown.filter(canDelete).map((s) => s.path);
+
+/** After a rescan, choices that disappeared or can no longer be chosen are dropped. */
+export function keepChosen(chosen: string[], skills: Skill[]): string[] {
+  const ok = new Set(skills.filter(canDelete).map((s) => s.path));
+  return chosen.filter((p) => ok.has(p));
+}
+
+const many = (n: number, one: string, more = `${one}s`) => `${n} ${n === 1 ? one : more}`;
+
+/** The confirmation's sum-up: what goes, where content stays, and what is blocked and why. */
+export function sumUp(plan: Planned[], nameOf: (path: string) => string) {
+  const going = plan.filter((p) => !p.blocked);
+  const items = going.flatMap((p) => p.items);
+  const folders = items.filter((i) => i.kind === "folder").length;
+  const links = items.filter((i) => i.kind === "link").length;
+  const parts = [folders ? many(folders, "folder") : "", links ? many(links, "link") : ""].filter(Boolean).join(" and ");
+  return {
+    count: going.length,
+    headline: going.length === 0 ? "None of the chosen skills can be deleted." : `${many(going.length, "skill")} will be deleted: ${parts} removed across all skill folders.`,
+    remains: going.filter((p) => p.remains).map((p) => `${nameOf(p.path)}: only a link is removed; the content stays in ${p.remains}`),
+    blocked: plan.filter((p) => p.blocked).map((p) => `${nameOf(p.path)}: ${BLOCKED[p.blocked!]}`),
+  };
+}
+
+export const OUTCOME: Record<Outcome, string> = {
+  deleted: "Deleted",
+  skipped: "Skipped",
+  busy: "Busy: another skill operation is under way",
+  partly: "Partly removed: hidden staged files are left over",
+  failed: "Failed; nothing was changed",
+};
+
+/** One line of the outcome list. A skipped skill says why; the others add the app's note. */
+export function outcomeText(d: Done): string {
+  if (d.outcome === "skipped" && d.note && d.note in BLOCKED) return `${OUTCOME.skipped}: ${BLOCKED[d.note as Blocked]}`;
+  return d.note && (d.outcome === "failed" || d.outcome === "partly") ? `${OUTCOME[d.outcome]} (${d.note})` : OUTCOME[d.outcome];
+}
