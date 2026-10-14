@@ -23,6 +23,7 @@ import { resumes } from "./layout";
 import { explain as explainError, exitAdvice } from "./errors";
 import { DIVIDER_DONE, dragging } from "./dividers";
 import { currentDark, currentTerminal, TERMINAL_EVENT, termFont } from "../theme";
+import { currentText, optionsOf, TEXT_EVENT } from "./text";
 import { hookColourMode } from "./colourMode";
 import { folderName } from "../projects/model";
 import { withoutRules } from "../launch/seats";
@@ -271,8 +272,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     const el = host.current;
     if (!el) return;
     const term = new Terminal({
-      cursorBlink: true,
-      ...termFont(number), // TERM-097 / TERM-078: saved font plus this pane's zoom
+      ...optionsOf(currentText()),
+      ...termFont(number), // TERM-097 / TERM-078: saved font plus this pane's zoom (wins over the SET-022 text font fields)
       theme: currentTerminal(),
       allowProposedApi: true,
       // TERM-013: ConPTY repaints the screen itself after a resize, so a taller pane gets blank rows
@@ -569,6 +570,25 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       mode.changed();
     };
     window.addEventListener(TERMINAL_EVENT, recolour);
+    // SET-022 / SET-025: open terminals follow the text, cursor and history settings.
+    const retext = () => {
+      Object.assign(term.options, optionsOf(currentText()), termFont(number));
+      resize();
+    };
+    window.addEventListener(TEXT_EVENT, retext);
+    // SET-025: copy on select, and right-click paste (the menu stays away while it is on).
+    const selected = term.onSelectionChange(() => {
+      if (currentText().copyOnSelect && term.hasSelection()) void navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
+    });
+    const rightClick = (e: MouseEvent) => {
+      if (!currentText().rightClickPaste) return;
+      e.preventDefault();
+      if (term.hasSelection()) {
+        void navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
+        term.clearSelection();
+      } else void navigator.clipboard?.readText().then((t) => t && term.paste(t), () => {});
+    };
+    el.addEventListener("contextmenu", rightClick);
     // TERM-103 / TERM-114: after the machine slept the GPU's glyph atlas may be stale and the
     // program's size may be behind; a late heartbeat says so. A display scale change does the same.
     const wake = () => {
@@ -589,6 +609,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       alive = false;
       window.removeEventListener(DIVIDER_DONE, resize);
       window.removeEventListener(TERMINAL_EVENT, recolour);
+      window.removeEventListener(TEXT_EVENT, retext);
+      el.removeEventListener("contextmenu", rightClick);
+      selected.dispose();
       mode.dispose();
       clearInterval(beat);
       scale.dispose();

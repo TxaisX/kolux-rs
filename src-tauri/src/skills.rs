@@ -1,0 +1,710 @@
+//! SKILL-017 / SKILL-021: every skill the AIs on this computer can see, for the Skills page.
+//!
+//! A skill is a folder holding `SKILL.md`, the standard skill file agent CLIs read. Kolux looks in
+//! each AI's own skills folder in the home folder (Claude Code, Codex, Grok, Hermes), the shared
+//! cross-agent folder (`~/.agents/skills`), the same folders inside the current workspace, the
+//! skills of Claude plugins enabled for the project, Codex's plugin cache, and its own built-in
+//! guides. Each folder is scanned on a thread of its own with a time limit, so one that hangs
+//! becomes an error the user can retry, never a shorter list. WSL distributions are T-243-b.
+
+use serde::Serialize;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{mpsc, Mutex};
+use std::time::{Duration, Instant, UNIX_EPOCH};
+
+pub const SKILL_FILE: &str = "SKILL.md";
+/// How many folders deep a skills folder is followed (links included) looking for skill folders.
+const DEPTH: usize = 4;
+/// A folder that has not answered in this long is reported as an error.
+const ROOT_LIMIT: Duration = Duration::from_secs(8);
+/// Repeated scans within this long share one result (Refresh ignores it).
+const CACHE_FOR: Duration = Duration::from_secs(30);
+/// Codex's plugin cache is read up to this many skills; past it the root says partial.
+const CACHE_LIMIT: usize = 500;
+/// Skill files larger than this are not read for a name (the folder name stands in).
+const FILE_LIMIT: u64 = 512 * 1024;
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Skill {
+    pub name: String,
+    pub description: Option<String>,
+    /// Last change of the skill file, in milliseconds since 1970.
+    pub updated: Option<u64>,
+    /// The skill file; `kolux:<name>` for a guide built into Kolux.
+    pub path: String,
+    /// home | workspace | bundled | plugin
+    pub source: String,
+    /// claude | codex | grok | hermes | shared: who reads the folders it was found in.
+    pub agents: Vec<String>,
+    pub plugin: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Root {
+    pub path: String,
+    pub label: String,
+    pub source: String,
+    pub agents: Vec<String>,
+    /// scanned | partial | not-found | not-scanned | error
+    pub state: String,
+    pub count: usize,
+    pub note: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct Scan {
+    pub skills: Vec<Skill>,
+    pub roots: Vec<Root>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Kind {
+    Skills,
+    CodexCache,
+    /// Tests only: a folder that never answers in time.
+    #[cfg(test)]
+    Hang,
+}
+
+/// One place to look.
+#[derive(Clone, Debug)]
+struct Spot {
+    path: PathBuf,
+    label: String,
+    source: &'static str,
+    agents: Vec<&'static str>,
+    plugin: Option<String>,
+    kind: Kind,
+    skip: Option<String>,
+}
+
+impl Spot {
+    fn new(path: PathBuf, label: &str, source: &'static str, agents: &[&'static str]) -> Spot {
+        Spot { path, label: label.into(), source, agents: agents.to_vec(), plugin: None, kind: Kind::Skills, skip: None }
+    }
+}
+
+/// What the scan needs from the environment, so tests can point it anywhere.
+#[derive(Clone, Debug)]
+pub struct Env {
+    pub home: PathBuf,
+    pub claude: Option<String>,
+    pub codex: Option<String>,
+    pub grok: Option<String>,
+    pub hermes: Option<String>,
+    pub local_app_data: Option<PathBuf>,
+    pub windows: bool,
+}
+
+impl Env {
+    pub fn current() -> Env {
+        let var = |k: &str| std::env::var(k).ok();
+        Env {
+            home: var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from).unwrap_or_else(std::env::temp_dir),
+            claude: var("CLAUDE_CONFIG_DIR"),
+            codex: var("CODEX_HOME"),
+            grok: var(crate::grok::HOME_ENV),
+            hermes: var("HERMES_HOME"),
+            local_app_data: var("LOCALAPPDATA").map(PathBuf::from),
+            windows: cfg!(windows),
+        }
+    }
+}
+
+/// An AI home-folder override is used only when it is an existing, absolute folder that is not a
+/// drive root and has no `..` in it; anything else is ignored (SKILL-021).
+fn usable(over: &Option<String>) -> Option<PathBuf> {
+    let o = over.as_deref().map(str::trim).filter(|o| !o.is_empty())?;
+    let p = PathBuf::from(o);
+    let unsafe_path = !p.is_absolute() || p.parent().is_none() || p.components().any(|c| matches!(c, std::path::Component::ParentDir));
+    (!unsafe_path && p.is_dir()).then_some(p)
+}
+
+fn claude_home(env: &Env) -> PathBuf {
+    usable(&env.claude).unwrap_or_else(|| env.home.join(".claude"))
+}
+
+fn codex_home(env: &Env) -> PathBuf {
+    usable(&env.codex).unwrap_or_else(|| env.home.join(".codex"))
+}
+
+/// Hermes: `HERMES_HOME`; on Windows the local app-data folder, or for older installs the hidden
+/// folder in home; when both exist the app-data folder wins.
+fn hermes_home(env: &Env) -> PathBuf {
+    if let Some(h) = usable(&env.hermes) {
+        return h;
+    }
+    let legacy = env.home.join(".hermes");
+    match (&env.local_app_data, env.windows) {
+        (Some(local), true) => {
+            let app = local.join("hermes");
+            if app.is_dir() || !legacy.is_dir() {
+                app
+            } else {
+                legacy
+            }
+        }
+        _ => legacy,
+    }
+}
+
+fn is_wsl(p: &Path) -> bool {
+    let s = p.to_string_lossy().to_lowercase().replace('/', "\\");
+    s.starts_with("\\\\wsl$\\") || s.starts_with("\\\\wsl.localhost\\") || s.starts_with("\\\\?\\unc\\wsl")
+}
+
+/// Every place to look, in the order the folders popover lists them.
+fn spots(env: &Env, workspace: Option<&Path>) -> Vec<Spot> {
+    let claude = claude_home(env);
+    let codex = codex_home(env);
+    let grok = crate::grok::home(usable(&env.grok).as_deref().and_then(Path::to_str), Some(&env.home)).unwrap_or_else(|| env.home.join(".grok"));
+    let mut out = vec![
+        Spot::new(claude.join("skills"), "Claude Code", "home", &["claude"]),
+        Spot::new(codex.join("skills"), "Codex", "home", &["codex"]),
+        Spot::new(env.home.join(".agents").join("skills"), "Shared skills folder", "home", &["shared", "codex"]),
+        Spot::new(grok.join("skills"), "Grok", "home", &["grok"]),
+        Spot::new(hermes_home(env).join("skills"), "Hermes", "home", &["hermes"]),
+    ];
+    match workspace {
+        Some(ws) => {
+            // When the workspace is the home folder it is scanned as a repo too.
+            let mut repo = vec![
+                Spot::new(ws.join(".claude").join("skills"), "Workspace: Claude Code", "workspace", &["claude"]),
+                Spot::new(ws.join(".agents").join("skills"), "Workspace: shared skills folder", "workspace", &["shared", "codex"]),
+                Spot::new(ws.join(".grok").join("skills"), "Workspace: Grok", "workspace", &["grok"]),
+            ];
+            if is_wsl(ws) {
+                for s in &mut repo {
+                    s.skip = Some("WSL folders are not scanned yet".into());
+                }
+            }
+            out.extend(repo);
+        }
+        None => {
+            let mut s = Spot::new(PathBuf::new(), "Current workspace", "workspace", &[]);
+            s.skip = Some("No workspace is open".into());
+            out.push(s);
+        }
+    }
+    out.extend(claude_plugins(&claude, workspace));
+    let mut cache = Spot::new(codex.join("plugins").join("cache"), "Codex plugins", "plugin", &["codex"]);
+    cache.kind = Kind::CodexCache;
+    out.push(cache);
+    out
+}
+
+fn read_json(p: &Path) -> Option<serde_json::Value> {
+    serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()
+}
+
+fn same_dir(a: &str, b: &Path) -> bool {
+    let norm = |s: &str| s.replace('/', "\\").trim_end_matches('\\').to_lowercase();
+    norm(a) == norm(&b.to_string_lossy())
+}
+
+/// SKILL-021: only plugins enabled for the project add skills, from the plugin version in effect
+/// (an install for this project wins over the one for the user).
+fn claude_plugins(claude: &Path, workspace: Option<&Path>) -> Vec<Spot> {
+    let mut enabled: HashMap<String, bool> = HashMap::new();
+    let mut files = vec![claude.join("settings.json")];
+    if let Some(ws) = workspace {
+        files.push(ws.join(".claude").join("settings.json"));
+        files.push(ws.join(".claude").join("settings.local.json"));
+    }
+    for f in files {
+        if let Some(map) = read_json(&f).and_then(|v| v.get("enabledPlugins").and_then(|m| m.as_object().cloned())) {
+            for (id, on) in map {
+                enabled.insert(id, on.as_bool().unwrap_or(false));
+            }
+        }
+    }
+    let Some(installed) = read_json(&claude.join("plugins").join("installed_plugins.json")) else { return vec![] };
+    let Some(plugins) = installed.get("plugins").and_then(|p| p.as_object()) else { return vec![] };
+    let mut ids: Vec<&String> = enabled.iter().filter(|(_, on)| **on).map(|(id, _)| id).collect();
+    ids.sort();
+    let mut out = vec![];
+    for id in ids {
+        let Some(entries) = plugins.get(id).and_then(|e| e.as_array()) else { continue };
+        let for_project = entries.iter().find(|e| {
+            e.get("scope").and_then(|s| s.as_str()).is_some_and(|s| s == "project" || s == "local")
+                && workspace.is_some_and(|ws| e.get("projectPath").and_then(|p| p.as_str()).is_some_and(|p| same_dir(p, ws)))
+        });
+        let for_user = entries.iter().find(|e| e.get("scope").and_then(|s| s.as_str()).is_none_or(|s| s == "user"));
+        let Some(path) = for_project.or(for_user).and_then(|e| e.get("installPath")).and_then(|p| p.as_str()) else { continue };
+        let name = id.split('@').next().unwrap_or(id);
+        let mut s = Spot::new(PathBuf::from(path).join("skills"), &format!("Claude plugin: {name}"), "plugin", &["claude"]);
+        s.plugin = Some(name.to_string());
+        out.push(s);
+    }
+    out
+}
+
+/// What a walk found: skill folders, and whether something went wrong partway.
+#[derive(Default)]
+struct Walk {
+    found: Vec<PathBuf>,
+    errors: Vec<String>,
+    stopped: bool,
+}
+
+fn canon(p: &Path) -> Option<PathBuf> {
+    std::fs::canonicalize(p).ok()
+}
+
+/// Skill folders under `dir`, following links without looping and only `depth` folders down.
+fn walk(dir: &Path, depth: usize, seen: &mut HashSet<PathBuf>, limit: usize, w: &mut Walk) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            w.errors.push(format!("{}: {e}", dir.display()));
+            return;
+        }
+    };
+    let mut kids: Vec<PathBuf> = vec![];
+    for entry in entries {
+        match entry {
+            Ok(e) => kids.push(e.path()),
+            Err(e) => w.errors.push(format!("{}: {e}", dir.display())),
+        }
+    }
+    kids.sort();
+    for p in kids {
+        if w.found.len() >= limit {
+            w.stopped = true;
+            return;
+        }
+        // A broken link is not a skill and not a failure.
+        let Ok(meta) = std::fs::metadata(&p) else { continue };
+        if !meta.is_dir() {
+            continue;
+        }
+        let Some(c) = canon(&p) else { continue };
+        if !seen.insert(c) {
+            continue;
+        }
+        if p.join(SKILL_FILE).is_file() {
+            w.found.push(p);
+        } else if depth > 0 {
+            walk(&p, depth - 1, seen, limit, w);
+        }
+    }
+}
+
+fn newest_child(dir: &Path) -> Option<PathBuf> {
+    let mut kids: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| (e.metadata().and_then(|m| m.modified()).unwrap_or(UNIX_EPOCH), e.path()))
+        .collect();
+    kids.sort();
+    kids.pop().map(|(_, p)| p)
+}
+
+/// One spot's answer: the skill folders, its state and a note.
+fn scan_spot(spot: &Spot) -> (Vec<PathBuf>, &'static str, Option<String>) {
+    if let Some(why) = &spot.skip {
+        return (vec![], "not-scanned", Some(why.clone()));
+    }
+    if !spot.path.is_dir() {
+        return (vec![], "not-found", None);
+    }
+    let mut seen = HashSet::new();
+    if let Some(c) = canon(&spot.path) {
+        seen.insert(c);
+    }
+    let mut w = Walk::default();
+    match spot.kind {
+        Kind::Skills => walk(&spot.path, DEPTH, &mut seen, usize::MAX, &mut w),
+        // <cache>/<marketplace>/<plugin>/<version>/[skills/]<skill>: the newest version of each plugin.
+        Kind::CodexCache => {
+            let markets: Vec<PathBuf> = std::fs::read_dir(&spot.path).map(|r| r.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect()).unwrap_or_default();
+            'all: for m in markets {
+                let plugins: Vec<PathBuf> = std::fs::read_dir(&m).map(|r| r.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect()).unwrap_or_default();
+                for p in plugins {
+                    let Some(v) = newest_child(&p) else { continue };
+                    let base = if v.join("skills").is_dir() { v.join("skills") } else { v };
+                    walk(&base, 1, &mut seen, CACHE_LIMIT, &mut w);
+                    if w.stopped {
+                        break 'all;
+                    }
+                }
+            }
+        }
+        #[cfg(test)]
+        Kind::Hang => std::thread::sleep(Duration::from_secs(3)),
+    }
+    if !w.errors.is_empty() {
+        let n = w.errors.len();
+        return (w.found, "error", Some(if n == 1 { w.errors.remove(0) } else { format!("{} and {} more", w.errors[0], n - 1) }));
+    }
+    if w.stopped {
+        return (w.found, "partial", Some(format!("Stopped after {CACHE_LIMIT} skills; the rest of the cache was not read")));
+    }
+    (w.found, "scanned", None)
+}
+
+fn unquote(v: &str) -> String {
+    let v = v.trim();
+    let q = v.len() >= 2 && ((v.starts_with('"') && v.ends_with('"')) || (v.starts_with('\'') && v.ends_with('\'')));
+    if q {
+        v[1..v.len() - 1].replace("\\\"", "\"").replace("''", "'")
+    } else {
+        v.to_string()
+    }
+}
+
+/// A skill's name and description: the front matter's `name` and `description`, or failing that
+/// the first heading and the first paragraph; the folder name when there is neither.
+pub fn describe(text: &str, folder: &str) -> (String, Option<String>) {
+    let text = text.trim_start_matches('\u{feff}');
+    let lines: Vec<&str> = text.lines().collect();
+    let mut name = None;
+    let mut desc = None;
+    let mut body_from = 0;
+    if lines.first().is_some_and(|l| l.trim_end() == "---") {
+        if let Some(end) = lines.iter().skip(1).position(|l| l.trim_end() == "---") {
+            let head = &lines[1..end + 1];
+            body_from = end + 2;
+            let mut i = 0;
+            while i < head.len() {
+                let line = head[i];
+                if let Some((k, v)) = line.split_once(':').filter(|_| !line.starts_with([' ', '\t'])) {
+                    let v = v.trim();
+                    let value = if matches!(v, "|" | ">" | "|-" | ">-" | "|+" | ">+") {
+                        let mut parts = vec![];
+                        while i + 1 < head.len() && (head[i + 1].starts_with([' ', '\t']) || head[i + 1].trim().is_empty()) {
+                            i += 1;
+                            if !head[i].trim().is_empty() {
+                                parts.push(head[i].trim());
+                            }
+                        }
+                        parts.join(" ")
+                    } else {
+                        unquote(v)
+                    };
+                    match k.trim() {
+                        "name" if !value.is_empty() => name = Some(value),
+                        "description" if !value.is_empty() => desc = Some(value),
+                        _ => {}
+                    }
+                }
+                i += 1;
+            }
+        }
+    }
+    let body = &lines[body_from.min(lines.len())..];
+    if name.is_none() {
+        name = body.iter().find_map(|l| l.trim().strip_prefix("# ").map(|h| h.trim().to_string())).filter(|h| !h.is_empty());
+    }
+    if desc.is_none() {
+        let mut para: Vec<&str> = vec![];
+        for l in body {
+            let t = l.trim();
+            if t.starts_with('#') || t.starts_with("```") {
+                if para.is_empty() {
+                    continue;
+                }
+                break;
+            }
+            if t.is_empty() {
+                if para.is_empty() {
+                    continue;
+                }
+                break;
+            }
+            para.push(t);
+        }
+        let p = para.join(" ");
+        if !p.is_empty() {
+            desc = Some(if p.chars().count() > 300 { format!("{}…", p.chars().take(299).collect::<String>()) } else { p });
+        }
+    }
+    (name.unwrap_or_else(|| folder.to_string()), desc)
+}
+
+fn read_skill(dir: &Path) -> (String, Option<String>, Option<u64>) {
+    let file = dir.join(SKILL_FILE);
+    let folder = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let meta = std::fs::metadata(&file).ok();
+    let updated = meta.as_ref().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64);
+    let text = if meta.is_some_and(|m| m.len() <= FILE_LIMIT) { std::fs::read_to_string(&file).unwrap_or_default() } else { String::new() };
+    let (name, desc) = describe(&text, &folder);
+    (name, desc, updated)
+}
+
+fn key(p: &Path) -> String {
+    let c = canon(p).unwrap_or_else(|| p.to_path_buf());
+    let s = c.to_string_lossy().to_string();
+    if cfg!(windows) {
+        s.to_lowercase()
+    } else {
+        s
+    }
+}
+
+fn plain(p: &Path) -> String {
+    let s = p.to_string_lossy().to_string();
+    s.strip_prefix("\\\\?\\").map(str::to_string).unwrap_or(s)
+}
+
+/// Scan every spot at once, each on its own thread with a time limit.
+fn run(spots: Vec<Spot>, bundled: &[(&str, &str)], limit: Duration) -> Scan {
+    let (tx, rx) = mpsc::channel();
+    for (i, s) in spots.iter().enumerate() {
+        let tx = tx.clone();
+        let s = s.clone();
+        std::thread::spawn(move || {
+            let answer = scan_spot(&s);
+            let read: Vec<(PathBuf, String, Option<String>, Option<u64>)> = answer
+                .0
+                .iter()
+                .map(|d| {
+                    let (n, de, u) = read_skill(d);
+                    (d.clone(), n, de, u)
+                })
+                .collect();
+            let _ = tx.send((i, read, answer.1, answer.2));
+        });
+    }
+    drop(tx);
+    let deadline = Instant::now() + limit;
+    let mut answers: Vec<Option<_>> = vec![None; spots.len()];
+    while answers.iter().any(Option::is_none) {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(left) {
+            Ok((i, read, state, note)) => answers[i] = Some((read, state, note)),
+            Err(_) => break,
+        }
+    }
+    let mut skills: Vec<Skill> = vec![];
+    let mut by_key: HashMap<String, usize> = HashMap::new();
+    let mut roots = vec![];
+    for (s, a) in spots.iter().zip(answers) {
+        let agents: Vec<String> = s.agents.iter().map(|a| a.to_string()).collect();
+        let Some((read, state, note)) = a else {
+            roots.push(Root { path: plain(&s.path), label: s.label.clone(), source: s.source.into(), agents, state: "error".into(), count: 0, note: Some(format!("Took longer than {} seconds", limit.as_secs())) });
+            continue;
+        };
+        roots.push(Root { path: plain(&s.path), label: s.label.clone(), source: s.source.into(), agents: agents.clone(), state: state.into(), count: read.len(), note });
+        for (dir, name, description, updated) in read {
+            // A skill reached from several roots (through a link, say) is listed once.
+            let k = key(&dir);
+            if let Some(&at) = by_key.get(&k) {
+                for a in &agents {
+                    if !skills[at].agents.contains(a) {
+                        skills[at].agents.push(a.clone());
+                    }
+                }
+                continue;
+            }
+            by_key.insert(k, skills.len());
+            skills.push(Skill { name, description, updated, path: plain(&dir.join(SKILL_FILE)), source: s.source.into(), agents: agents.clone(), plugin: s.plugin.clone() });
+        }
+    }
+    for (name, guide) in bundled {
+        let (n, d) = describe(guide, name);
+        skills.push(Skill { name: n, description: d, updated: None, path: format!("kolux:{name}"), source: "bundled".into(), agents: vec![], plugin: None });
+    }
+    roots.push(Root { path: "kolux".into(), label: "Built into Kolux".into(), source: "bundled".into(), agents: vec![], state: "scanned".into(), count: bundled.len(), note: None });
+    skills.sort_by_key(|s| s.name.to_lowercase());
+    Scan { skills, roots }
+}
+
+pub fn scan(env: &Env, workspace: Option<&Path>) -> Scan {
+    run(spots(env, workspace), &crate::cli::bundled_skills(), ROOT_LIMIT)
+}
+
+static CACHE: Mutex<Option<HashMap<String, (Instant, Scan)>>> = Mutex::new(None);
+static SCANNING: Mutex<()> = Mutex::new(());
+
+/// Repeated scans of the same workspace are merged and cached; `refresh` forces a new one.
+pub fn scan_cached(workspace: Option<String>, refresh: bool) -> Scan {
+    let k = workspace.clone().unwrap_or_default();
+    let fresh = |c: &Mutex<Option<HashMap<String, (Instant, Scan)>>>| c.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get(&k)).filter(|(at, _)| at.elapsed() < CACHE_FOR).map(|(_, s)| s.clone()));
+    if !refresh {
+        if let Some(s) = fresh(&CACHE) {
+            return s;
+        }
+    }
+    let _one = SCANNING.lock();
+    // A scan that finished while this one waited answers it, unless this is a Refresh.
+    if !refresh {
+        if let Some(s) = fresh(&CACHE) {
+            return s;
+        }
+    }
+    let s = scan(&Env::current(), workspace.as_deref().map(Path::new));
+    if let Ok(mut g) = CACHE.lock() {
+        g.get_or_insert_with(HashMap::new).insert(k, (Instant::now(), s.clone()));
+    }
+    s
+}
+
+#[tauri::command]
+pub async fn skills_scan(workspace: Option<String>, refresh: bool) -> Result<Scan, String> {
+    tauri::async_runtime::spawn_blocking(move || scan_cached(workspace, refresh)).await.map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_dir::temp;
+    use std::fs;
+
+    fn skill(dir: &Path, text: &str) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join(SKILL_FILE), text).unwrap();
+    }
+
+    fn env(home: &Path) -> Env {
+        Env { home: home.to_path_buf(), claude: None, codex: None, grok: None, hermes: None, local_app_data: Some(home.join("AppData").join("Local")), windows: true }
+    }
+
+    fn link_dir(link: &Path, target: &Path) {
+        #[cfg(windows)]
+        {
+            let ok = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(target).output().unwrap().status.success();
+            assert!(ok, "could not make a junction");
+        }
+        #[cfg(not(windows))]
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
+    #[test]
+    fn front_matter_gives_name_and_description() {
+        let (n, d) = describe("---\nname: \"pdf-tools\"\ndescription: >\n  Reads PDFs\n  and fills forms.\n---\n# Ignored\n", "folder");
+        assert_eq!(n, "pdf-tools");
+        assert_eq!(d.as_deref(), Some("Reads PDFs and fills forms."));
+    }
+
+    #[test]
+    fn no_front_matter_takes_first_heading_and_paragraph() {
+        let (n, d) = describe("\u{feff}\n# Release notes\n\nWrites the release notes\nfrom the git log.\n\nMore.", "rn");
+        assert_eq!(n, "Release notes");
+        assert_eq!(d.as_deref(), Some("Writes the release notes from the git log."));
+        let (n, d) = describe("", "bare");
+        assert_eq!((n.as_str(), d), ("bare", None));
+    }
+
+    #[test]
+    fn link_loop_completes_and_lists_each_skill_once() {
+        let home = temp("skills-loop");
+        let root = home.join(".claude").join("skills");
+        skill(&root.join("alpha"), "---\nname: alpha\n---\n");
+        skill(&root.join("team").join("beta"), "# beta\n");
+        link_dir(&root.join("team").join("back"), &root);
+        link_dir(&root.join("again"), &root.join("alpha"));
+        let s = run(spots(&env(&home), None), &[], ROOT_LIMIT);
+        let names: Vec<&str> = s.skills.iter().map(|k| k.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "beta"]);
+        let claude = s.roots.iter().find(|r| r.label == "Claude Code").unwrap();
+        assert_eq!((claude.state.as_str(), claude.count), ("scanned", 2));
+    }
+
+    #[test]
+    fn skill_reached_from_two_roots_counts_in_both_and_lists_once() {
+        let home = temp("skills-two");
+        let shared = home.join(".agents").join("skills");
+        skill(&shared.join("tidy"), "---\nname: tidy\ndescription: Tidies\n---\n");
+        fs::create_dir_all(home.join(".claude").join("skills")).unwrap();
+        link_dir(&home.join(".claude").join("skills").join("tidy"), &shared.join("tidy"));
+        let s = run(spots(&env(&home), None), &[], ROOT_LIMIT);
+        assert_eq!(s.skills.len(), 1);
+        let mut a = s.skills[0].agents.clone();
+        a.sort();
+        assert_eq!(a, vec!["claude", "codex", "shared"]);
+        assert_eq!(s.roots.iter().find(|r| r.label == "Claude Code").unwrap().count, 1);
+        assert_eq!(s.roots.iter().find(|r| r.label == "Shared skills folder").unwrap().count, 1);
+    }
+
+    #[test]
+    fn home_and_workspace_both_count_when_the_workspace_is_home() {
+        let home = temp("skills-homews");
+        skill(&home.join(".claude").join("skills").join("one"), "# one\n");
+        let s = run(spots(&env(&home), Some(&home)), &[], ROOT_LIMIT);
+        assert_eq!(s.skills.len(), 1);
+        assert_eq!(s.skills[0].source, "home");
+        assert_eq!(s.roots.iter().find(|r| r.label == "Workspace: Claude Code").unwrap().count, 1);
+    }
+
+    #[test]
+    fn only_enabled_claude_plugins_add_skills_from_the_version_in_effect() {
+        let home = temp("skills-plugins");
+        let claude = home.join(".claude");
+        let ws = home.join("repo");
+        fs::create_dir_all(ws.join(".claude")).unwrap();
+        let on_user = home.join("p").join("on").join("1.0");
+        let on_proj = home.join("p").join("on").join("2.0");
+        let off = home.join("p").join("off").join("1.0");
+        skill(&on_user.join("skills").join("old"), "# old\n");
+        skill(&on_proj.join("skills").join("new"), "# new\n");
+        skill(&off.join("skills").join("hidden"), "# hidden\n");
+        fs::create_dir_all(claude.join("plugins")).unwrap();
+        fs::write(claude.join("settings.json"), r#"{"enabledPlugins":{"on@m":true,"off@m":true}}"#).unwrap();
+        fs::write(ws.join(".claude").join("settings.json"), r#"{"enabledPlugins":{"off@m":false}}"#).unwrap();
+        let installed = serde_json::json!({"version":2,"plugins":{
+            "on@m":[{"scope":"user","installPath":on_user},{"scope":"project","projectPath":ws,"installPath":on_proj}],
+            "off@m":[{"scope":"user","installPath":off}]}});
+        fs::write(claude.join("plugins").join("installed_plugins.json"), installed.to_string()).unwrap();
+        let s = run(spots(&env(&home), Some(&ws)), &[], ROOT_LIMIT);
+        let names: Vec<&str> = s.skills.iter().map(|k| k.name.as_str()).collect();
+        assert_eq!(names, vec!["new"]);
+        assert_eq!(s.skills[0].plugin.as_deref(), Some("on"));
+        // Without the project the user install is the one in effect, and off is on again.
+        let s = run(spots(&env(&home), None), &[], ROOT_LIMIT);
+        let names: Vec<&str> = s.skills.iter().map(|k| k.name.as_str()).collect();
+        assert_eq!(names, vec!["hidden", "old"]);
+    }
+
+    #[test]
+    fn hermes_app_data_wins_and_bad_overrides_are_ignored() {
+        let home = temp("skills-hermes");
+        let e = env(&home);
+        skill(&home.join(".hermes").join("skills").join("legacy"), "# legacy\n");
+        assert_eq!(hermes_home(&e), home.join(".hermes"));
+        fs::create_dir_all(home.join("AppData").join("Local").join("hermes")).unwrap();
+        assert_eq!(hermes_home(&e), home.join("AppData").join("Local").join("hermes"));
+        let mut e2 = e.clone();
+        e2.claude = Some(home.join("missing").to_string_lossy().into());
+        assert_eq!(claude_home(&e2), home.join(".claude"));
+        e2.claude = Some("relative\\dir".into());
+        assert_eq!(claude_home(&e2), home.join(".claude"));
+        let real = home.join("cc");
+        fs::create_dir_all(&real).unwrap();
+        e2.claude = Some(real.to_string_lossy().into());
+        assert_eq!(claude_home(&e2), real);
+    }
+
+    #[test]
+    fn unreadable_or_slow_root_is_an_error_not_a_shorter_list() {
+        let home = temp("skills-slow");
+        // A folder that hangs past the time limit is reported as an error the user can retry.
+        let mut slow = Spot::new(home.to_path_buf(), "Slow", "home", &["claude"]);
+        slow.kind = Kind::Hang;
+        let s = run(vec![slow], &[], Duration::from_millis(300));
+        let r = &s.roots[0];
+        assert_eq!(r.state, "error");
+        assert!(r.note.as_deref().unwrap().contains("longer"));
+        // A missing folder is not found, never an error.
+        let s = run(vec![Spot::new(home.join("nope"), "Gone", "home", &["claude"])], &[], ROOT_LIMIT);
+        assert_eq!(s.roots[0].state, "not-found");
+    }
+
+    #[test]
+    fn codex_plugin_cache_reads_the_newest_version_and_wsl_is_not_scanned() {
+        let home = temp("skills-codex");
+        let cache = home.join(".codex").join("plugins").join("cache");
+        skill(&cache.join("m").join("tools").join("1.0").join("skills").join("one"), "# one\n");
+        skill(&cache.join("m").join("bare").join("local").join("two"), "# two\n");
+        let s = run(spots(&env(&home), Some(Path::new("\\\\wsl.localhost\\Ubuntu\\home\\me\\repo"))), &[("kolux-cli", "---\ndescription: Drives Kolux\n---\n")], ROOT_LIMIT);
+        let names: Vec<&str> = s.skills.iter().map(|k| k.name.as_str()).collect();
+        assert_eq!(names, vec!["kolux-cli", "one", "two"]);
+        assert!(s.roots.iter().filter(|r| r.source == "workspace").all(|r| r.state == "not-scanned"));
+        let b = s.skills.iter().find(|k| k.source == "bundled").unwrap();
+        assert_eq!(b.description.as_deref(), Some("Drives Kolux"));
+    }
+}

@@ -78,7 +78,7 @@ export function useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir,
     setPage(null);
     recentDirs.current = [dir, ...recentDirs.current.filter((d) => !sameDir(d, dir))].slice(0, 20);
     setActiveDir(dir);
-    if (screen === "artifacts") setScreen("terminals");
+    if (screen === "artifacts" || screen === "skills") setScreen("terminals");
     if (panesIn(panes, dir).length > 0) setFocused((f) => focusIn(panes, dir, f));
     else {
       addShell(dir, branch);

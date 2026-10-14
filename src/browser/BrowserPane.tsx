@@ -12,6 +12,7 @@ import { backgroundBehind } from "./colour";
 import "./browser.css";
 import { can as canGo, fresh, started, type Pending } from "./history";
 import { nextZoom, zoomPercent } from "./zoom";
+import { zoomFactor } from "../settings/zoom";
 
 /** `url`: the page or file the tab opens on instead of a blank page (SKILL-012 previews a kit result). */
 type Props = { id: number; url?: string; title?: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void };
@@ -22,8 +23,10 @@ export const OPEN_IN_BROWSER = "kolux-open-in-browser";
 export const openInBrowser = (url: string) => window.dispatchEvent(new CustomEvent(OPEN_IN_BROWSER, { detail: url }));
 
 function spot(el: HTMLElement) {
+  // SET-019: the window places the page in unzoomed pixels, so a zoomed rect is scaled back.
   const r = el.getBoundingClientRect();
-  return { x: r.left, y: r.top, w: r.width, h: r.height };
+  const z = zoomFactor();
+  return { x: r.left * z, y: r.top * z, w: r.width * z, h: r.height * z };
 }
 
 export default function BrowserPane({ id, url, title, hidden = false, focused = false, onFocus, onClose }: Props) {
