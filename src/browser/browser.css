@@ -1,0 +1,11 @@
+/* The browser pane's own rules (lane browser); the shared header and address-bar look stay in styles.css. */
+/* BROW-006: the slot is the address bar's place in the toolbar. In a pane under 360 px the bar is compact; while it
+   has focus it floats across the whole toolbar, and the buttons under it keep their place because the slot stays in flow. */
+.pane.browser { container-type: inline-size; }
+.pane.browser .pane-head { position: relative; }
+.pane.browser .pane-head .address-slot { flex: 1; min-width: 0; display: flex; }
+.pane.browser .pane-head .address-slot .address { text-overflow: ellipsis; }
+@container (max-width: 359px) {
+  .pane.browser .pane-head .address-slot { flex: none; width: 72px; }
+  .pane.browser .pane-head .address-slot .address:focus { position: absolute; top: 3px; left: 8px; right: 8px; width: auto; height: calc(100% - 6px); z-index: 3; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); }
+}
