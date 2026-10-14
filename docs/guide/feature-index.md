@@ -322,6 +322,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-145-a | Terminals use Kolux dark colours by default and a light scheme in light mode. | [Settings](settings.md) |
 | T-145-b | Terminal colour answers to programs are measured and match what programs ask. | [Terminals](terminals.md) |
 | T-146-a | The right sidebar opens, closes, resizes and remembers its tab. | [Getting started](getting-started.md) |
+| T-146-b | The right sidebar's Checks tab, a More menu for tabs that do not fit, and Try again when a panel breaks. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-146-c | Settings sets a different theme per screen under Appearance, Mode. | [Settings](settings.md) |
 | T-146-f | Escape inside a text field never leaves a full page. | [Getting started](getting-started.md) |
 | T-147 | The status bar can be shown, hidden and its items chosen. | [Settings](settings.md) |
@@ -464,6 +465,7 @@ Tasks not yet ticked off in the build plan are not listed.
 
 | Task | Feature | Guide page |
 |---|---|---|
+| T-273 | Kolux finds Claude's saved sessions for each workspace on Windows (no screen lists them yet). | internal |
 | T-277 | Resource Manager lists terminals picked up after a reload. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-278 | Fast output never freezes a pane; memory caps scale with the machine. | [Troubleshooting](troubleshooting.md) |
 | T-278-c | Big pastes arrive whole and in order without slowing other panes; Ctrl+C or Esc stops one. | [Terminals](terminals.md) |
@@ -473,6 +475,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-284 | An interrupted skill delete is undone or finished on restart. | [Troubleshooting](troubleshooting.md) |
 | T-286 | Startup failures and stray background errors never silently kill the app. | [Troubleshooting](troubleshooting.md) |
 | T-287 | `kolux diagnostics memory` shows resident and committed memory for Kolux, each session and the total. | [Command line](command-line.md) |
+| T-287-b | The Resource Manager shows committed memory beside resident. | [Command line](command-line.md) |
 | T-441 | Kolux settings cannot be wiped by a failed read. | [Safety](safety.md) |
 | T-441-b | A settings change never starts from an empty set. | [Safety](safety.md) |
 | T-441-c | Trust file writes keep what the caller read; further data-loss fixes. | [Safety](safety.md) |
@@ -500,4 +503,4 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-298 | Reopen the wizard from the sidebar help menu; first successes are recorded locally. | [Getting started](getting-started.md) |
 
 | T-546 | The Tower: every agent on one full-width screen, needs-you first, one click to its pane, usage per program across the top. | [Board, Agents and Inbox](board-agents-inbox.md) |
-<!-- generated from PLAN.md at f424c27 -->
+<!-- generated from PLAN.md at 1db1bf0 -->
