@@ -59,6 +59,10 @@ type Status = { kind: "starting" } | { kind: "running"; id: number; account: str
 /** council D2 MERGE 31 (3): the host element of a dev build carries its terminal for the evidence probes. */
 type DevHost = HTMLDivElement & { __koluxTerm?: Terminal; __koluxLinks?: (y: number) => unknown[] };
 
+/** APP-009 / T-248-a: the menu's Edit > Copy and Select All reach the focused terminal through this.
+ * They are calls, never key presses: an empty selection copies nothing, and a rebound chord can't break it. */
+export const focusedTerminalEdit: { current: ((op: "copy" | "selectAll") => void) | null } = { current: null };
+
 /** ACCT-064: a centred question over the terminal; Enter takes the first button, Escape the second. */
 export type PaneNotice = { title: string; body: string; primary: string; onPrimary: () => void; secondary?: string; onSecondary?: () => void };
 
@@ -228,6 +232,19 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
   // TERM-065: a short line in the header when the clipboard refused a copy; the selection stays.
   const [flash, setFlash] = useState<string | null>(null);
+  useEffect(() => {
+    if (!focused) return;
+    const fn = (op: "copy" | "selectAll") => {
+      const term = termRef.current;
+      if (!term) return;
+      if (op === "selectAll") term.selectAll();
+      else void copySelection(term, (text) => navigator.clipboard.writeText(text), setFlash);
+    };
+    focusedTerminalEdit.current = fn;
+    return () => {
+      if (focusedTerminalEdit.current === fn) focusedTerminalEdit.current = null;
+    };
+  }, [focused]);
   // TERM-031: the prompt count (bumped below, once the hook state is known) and, T-151-b, the count of the
   // prompt the user already answered (click or keystroke): the Approve/Deny buttons hide for it and come
   // back when the next prompt bumps the count.

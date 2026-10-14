@@ -78,9 +78,9 @@ import AgentsRail from "./agents/AgentsRail";
 import { cardPanes, pickSession, railGroups, rowStatus } from "./agents/rail";
 import UpdateCenter from "./update/UpdateCenter";
 import { FIELDS as STATUS_FIELDS, readStatusBar, toggleItem } from "./chrome/statusItems";
-import { chromeShown } from "./chrome/chromeItems";
+import { chromeShown, menuBarState, menuEdit, menuScreen, menuSettingFlip } from "./chrome/chromeItems";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
-import TerminalPane, { type PaneNotice } from "./terminal/TerminalPane";
+import TerminalPane, { focusedTerminalEdit, type PaneNotice } from "./terminal/TerminalPane";
 import { accountLabel, accountPrompt, type CodexAccount } from "./terminal/accountChange";
 import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
 import AutomationsPage from "./automations/AutomationsPage";
@@ -119,7 +119,8 @@ import { heldByTerminal } from "./keys/terminalPolicy";
 import { useAgentEvents, useAgentStatusState } from "./status/useAgentStatus";
 import { useAppSettings } from "./settings/useAppSettings";
 import { useWorkspaceActions, useWorkspaces } from "./projects/useWorkspaces";
-import { useChrome } from "./chrome/useChrome";
+import { useChrome, useMenuBar } from "./chrome/useChrome";
+import { stepZoom, zoomFactor, type ZoomStep } from "./settings/zoom";
 import { aiOf, useKitRun, useKits, type KitWait } from "./kits/useKits";
 import { useWizard } from "./onboarding/useWizard";
 import { hooksOn } from "./settings/AgentsPage";
@@ -404,6 +405,29 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     showRight("explorer");
     setExplorerFocus((n) => n + 1);
   };
+  // APP-009 / T-248-a: the menu mirrors the screen, the look, the chrome switches and the shortcuts;
+  // a menu click the page carries out runs the same code as its shortcut.
+  useMenuBar(menuBarState(settings, screen, (id) => keymap.bindings.get(id)?.chords, classic), (id) => {
+    const flip = menuSettingFlip(settings, id);
+    const to = menuScreen(id);
+    const el = document.activeElement;
+    const inField = !!el && !el.closest(".xterm") && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || (el as HTMLElement).isContentEditable);
+    const ed = menuEdit(id, inField);
+    if (flip) saveSetting(flip[0], flip[1]);
+    else if (to) setScreen(classic ? "terminals" : to);
+    else if (ed && "field" in ed) document.execCommand(ed.field);
+    else if (ed) focusedTerminalEdit.current?.(ed.terminal);
+    else if (id === "zoom.in" || id === "zoom.out" || id === "zoom.reset") void stepZoom(id.slice(5) as ZoomStep).catch(() => {});
+    else if (id === "app.settings") {
+      setSettingsAt((a) => ({ target: null, n: a.n }));
+      setSettingsOpen(true);
+    } else if (id === "sidebar.left.toggle") setSidebarOpen((o) => !o);
+    else if (id === "sidebar.right.toggle") {
+      if (screen === "terminals" && right.open) saveRight({ open: false });
+      else showRight(right.tab);
+    }
+    // edit.paste: the core lane's attachPaste paste(). help.*: T-248-b.
+  });
   // SESS-004: the default agent is a settings key; the plus menu lists it first.
   const setDefault = (id: string) => saveSetting(DEFAULT_AGENT_KEY, id);
   useEffect(() => {
@@ -1825,6 +1849,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         }
         screen={screen}
         classic={classic}
+        appMenu
+        uiZoom={zoomFactor()}
         onScreen={setScreen} installed={installedIds} codexAccount={codex.accounts.length > 0} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} onZoom={(how) => zoomTerm(focused, how)} fullPage={fullPage} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
       <div className="body" style={{ "--sidebar-w": `${leftWidth}px` } as CSSProperties}>
         {palette && (
