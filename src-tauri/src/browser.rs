@@ -9,7 +9,7 @@
 // IPC objects stay in the page (it defines them first, non-configurable); its origin check is
 // what refuses them, and this gate is what keeps a tab off every origin that check trusts.
 use serde::{Deserialize, Serialize};
-use tauri::webview::{PageLoadEvent, WebviewBuilder};
+use tauri::webview::{Color, PageLoadEvent, WebviewBuilder};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Url, Webview, WebviewUrl};
 
 pub const LOAD_EVENT: &str = "browser-load";
@@ -132,7 +132,7 @@ fn err(e: tauri::Error) -> String {
 /// the keyboard off the app's web view (to the page, or with `focused(false)` to the bare window),
 /// so it is handed back for the address bar (BROW-001).
 #[tauri::command]
-pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webview, id: u32, url: String, spot: Spot) -> Result<(), String> {
+pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webview, id: u32, url: String, spot: Spot, background: Option<[u8; 3]>) -> Result<(), String> {
     let url = parse(&url)?;
     let dev = app_origin(&app);
     allowed(&url, dev.as_ref())?;
@@ -165,14 +165,29 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         .on_document_title_changed(move |_, title| {
             let _ = app.emit(TITLE_EVENT, TitlePayload { id, title });
         });
+    // BROW-011: until the page paints, the web view shows the pane's colour, never a white flash.
+    let builder = match surface(background) {
+        Some(c) => builder.background_color(c),
+        None => builder,
+    };
     window.add_child(builder, LogicalPosition::new(spot.x, spot.y), LogicalSize::new(spot.w, spot.h)).map_err(err)?;
     webview.set_focus().map_err(err)
 }
 
+/// The loading surface for a pane colour (BROW-011): opaque, so the engine's white never shows
+/// through before the page's own first paint.
+pub fn surface(rgb: Option<[u8; 3]>) -> Option<Color> {
+    rgb.map(|[r, g, b]| Color(r, g, b, 255))
+}
+
 /// Moves a tab's page to where its pane body is, or hides it while the tab is away (BROW-002).
+/// `background` is the pane colour again when the app theme changed (BROW-011).
 #[tauri::command]
-pub async fn browser_bounds(app: AppHandle, id: u32, spot: Spot, shown: bool) -> Result<(), String> {
+pub async fn browser_bounds(app: AppHandle, id: u32, spot: Spot, shown: bool, background: Option<[u8; 3]>) -> Result<(), String> {
     let v = view(&app, id)?;
+    if let Some(c) = surface(background) {
+        v.set_background_color(Some(c)).map_err(err)?;
+    }
     if !shown {
         return v.hide().map_err(err);
     }
@@ -259,6 +274,13 @@ mod tests {
         // A release build has no dev origin; the *.localhost rule still holds.
         assert_eq!(allowed(&Url::parse("http://localhost:1420/").unwrap(), None), Ok(()));
         assert!(allowed(&Url::parse("http://tauri.localhost/").unwrap(), None).is_err());
+    }
+
+    #[test]
+    fn brow011_the_loading_surface_is_the_pane_colour_and_opaque() {
+        assert_eq!(surface(Some([13, 13, 13])), Some(Color(13, 13, 13, 255)));
+        assert_eq!(surface(Some([250, 250, 249])), Some(Color(250, 250, 249, 255)));
+        assert_eq!(surface(None), None);
     }
 
     #[test]
