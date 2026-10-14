@@ -259,12 +259,45 @@ test("GIT-002: a click selects one row, Ctrl toggles, Shift spans from the ancho
 
 test("GIT-002: the bulk bar counts the selected rows each action covers, in display order, ignoring rows that are gone", () => {
   const s: Status = { ...emptyStatus, staged: [row("s1"), row("s2")], changed: [row("c1")], untracked: [row("u1")], conflicts: [row("x1")] };
-  expect(rowOrder(s)).toEqual(["x1", "s1", "s2", "c1", "u1"]);
-  const b = bulk(s, ["s1", "c1", "u1", "x1", "gone"]);
+  expect(rowOrder(s, "staged-first")).toEqual(["x1", "s1", "s2", "c1", "u1"]);
+  const b = bulk(s, ["s1", "c1", "u1", "x1", "gone"], "staged-first");
   expect(b.present).toEqual(["x1", "s1", "c1", "u1"]);
+  expect(bulk(s, ["s1", "c1", "u1", "x1", "gone"]).present).toEqual(["x1", "c1", "s1", "u1"]);
   expect(b.stage).toEqual(["x1", "c1", "u1"]);
   expect(b.unstage).toEqual(["s1"]);
   expect(bulk(s, []).present).toEqual([]);
+});
+
+// FIX-BEFORE-2: Shift-click spans the rows the panel draws, in the order it draws them: the saved
+// group order (Changes first by default), the filter, the per-section cap and closed tree folders.
+test("FIX-BEFORE-2: a span follows the drawn order across a reordered, capped, filtered or folded section", () => {
+  const s: Status = { ...emptyStatus, staged: [row("s1"), row("s2")], changed: [row("c1"), row("c2")], untracked: [row("u1")], conflicts: [row("x1")] };
+  // Default order: conflicts, Changes, Staged, Untracked; every saved order is followed.
+  expect(rowOrder(s)).toEqual(["x1", "c1", "c2", "s1", "s2", "u1"]);
+  expect(rowOrder(s, "untracked-first")).toEqual(["x1", "u1", "c1", "c2", "s1", "s2"]);
+  expect(rowOrder(s, "no-such-order")).toEqual(rowOrder(s));
+  // Click a Changes row, Shift-click the Staged row below it: just the rows between, as drawn.
+  expect(select(["c2"], rowOrder(s, undefined, {}), "s1", "span", "c2")).toEqual(["c2", "s1"]);
+  // A capped section: rows past the cap are not drawn, so a span never takes them in.
+  const many = Array.from({ length: SECTION_CAP + 2 }, (_, i) => row(`c${String(i).padStart(3, "0")}`));
+  const big: Status = { ...emptyStatus, changed: many, staged: [row("s1")] };
+  const last = many[SECTION_CAP - 1].path;
+  const drawn = rowOrder(big, undefined, {});
+  expect(drawn).toHaveLength(SECTION_CAP + 1);
+  expect(drawn).not.toContain(many[SECTION_CAP].path);
+  expect(select([last], drawn, "s1", "span", last)).toEqual([last, "s1"]);
+  // Without a drawn view (the review prompt) every row still counts.
+  expect(rowOrder(big)).toHaveLength(SECTION_CAP + 3);
+  // A filter hides rows from the span.
+  expect(select(["c1"], rowOrder(s, undefined, { filter: "s2" }), "s2", "span", "c1")).toEqual(["s2"]);
+  expect(rowOrder(s, undefined, { filter: "c" })).toEqual(["x1", "c1", "c2"]);
+  // Tree view: a closed folder's files are not drawn; rows run folders first, then by name.
+  const t: Status = { ...emptyStatus, changed: [row("z.txt"), row("a/x.ts"), row("a/y.ts")], staged: [row("b/q.ts")] };
+  expect(rowOrder(t, undefined, { tree: new Set() })).toEqual(["a/x.ts", "a/y.ts", "z.txt", "b/q.ts"]);
+  expect(rowOrder(t, undefined, { tree: new Set(["Changes/a"]) })).toEqual(["z.txt", "b/q.ts"]);
+  expect(select(["z.txt"], rowOrder(t, undefined, { tree: new Set(["Changes/a"]) }), "b/q.ts", "span", "z.txt")).toEqual(["z.txt", "b/q.ts"]);
+  // A folder closed in one section stays open in another.
+  expect(rowOrder({ ...t, staged: [row("a/w.ts")] }, undefined, { tree: new Set(["Changes/a"]) })).toEqual(["z.txt", "a/w.ts"]);
 });
 
 // VIEW-067: the prompt says what discarding does to each kind of row, in the right number.

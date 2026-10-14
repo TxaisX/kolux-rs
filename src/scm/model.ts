@@ -321,9 +321,36 @@ export const summaryLabel = (branch: string | null, s: Summary): string => {
   return `${branch ?? "Detached HEAD"}, ${s.ahead} ahead and ${s.behind} behind ${s.against}, ${grouped(t.added)} line${t.added === 1 ? "" : "s"} added and ${grouped(t.removed)} removed: ${split}`;
 };
 
-/** GIT-002: every row's path in display order (conflicts, staged, changes, untracked), each once;
- * a file with staged and unstaged parts sits in two sections and is one selection. */
-export const rowOrder = (s: Status): string[] => [...new Set([...s.conflicts, ...s.staged, ...s.changed, ...s.untracked].map((c) => c.path))];
+/** GIT-002 / FIX-BEFORE-2: what the panel draws: the filter text, and in the tree view the closed
+ *  folders as the panel keys them (`<Section>/<folder>`); `tree` is null or missing in the list view. */
+export type Drawn = { filter?: string; tree?: Set<string> | null };
+
+/** GIT-002 / FIX-BEFORE-2: every row's path in the order the panel draws it, each once: the groups in
+ * the saved order (`scmGroups(order)`, so Changes first by default; conflicts always lead). With
+ * `drawn`, only the rows actually on screen count: the filter applies, each section stops at its cap
+ * (conflicts at CONFLICT_CAP), and the tree view runs folders first and skips closed folders' files,
+ * so a Shift-click span never takes in a row the user cannot see. Without `drawn`, every row counts
+ * (the review prompt). A file with staged and unstaged parts sits in two sections and is one selection. */
+export const rowOrder = (s: Status, order?: unknown, drawn?: Drawn): string[] => {
+  const paths: string[] = [];
+  for (const g of scmGroups(order)) {
+    if (g === "conflicts") {
+      paths.push(...(drawn ? capped(s.conflicts, CONFLICT_CAP).shown : s.conflicts).map((c) => c.path));
+      continue;
+    }
+    const [name, all] = g === "staged" ? ["Staged", s.staged] : g === "changes" ? ["Changes", s.changed] : ["Untracked", s.untracked];
+    if (!drawn) {
+      paths.push(...all.map((c) => c.path));
+      continue;
+    }
+    const shown = capped(filterRows(all, drawn.filter ?? ""), SECTION_CAP).shown;
+    if (drawn.tree) {
+      const closed = new Set([...drawn.tree].filter((k) => k.startsWith(name + "/")).map((k) => k.slice(name.length + 1)));
+      paths.push(...fileTree(shown, closed).flatMap((i) => (i.kind === "file" ? [i.change.path] : [])));
+    } else paths.push(...shown.map((c) => c.path));
+  }
+  return [...new Set(paths)];
+};
 
 export type SelectMode = "one" | "toggle" | "span";
 
@@ -342,8 +369,8 @@ export const select = (selected: string[], order: string[], path: string, mode: 
 
 /** GIT-002: what the bulk bar covers: the selected rows still listed, the ones that can be staged
  * (conflicts, changes, untracked) and the ones that can be unstaged (staged), in display order. */
-export const bulk = (s: Status, selected: string[]): { present: string[]; stage: string[]; unstage: string[] } => {
-  const present = rowOrder(s).filter((p) => selected.includes(p));
+export const bulk = (s: Status, selected: string[], order?: unknown): { present: string[]; stage: string[]; unstage: string[] } => {
+  const present = rowOrder(s, order).filter((p) => selected.includes(p));
   const stageable = new Set([...s.conflicts, ...s.changed, ...s.untracked].map((c) => c.path));
   const staged = new Set(s.staged.map((c) => c.path));
   return { present, stage: present.filter((p) => stageable.has(p)), unstage: present.filter((p) => staged.has(p)) };

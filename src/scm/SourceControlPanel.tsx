@@ -470,12 +470,15 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
     if (r) setMenu({ left: Math.max(8, r.right - 250), top: r.bottom + 4 });
   };
 
+  // FIX-BEFORE-2: the rows on screen, in the order drawn (saved group order, filter, cap, closed
+  // folders), so a span and the bulk bar only ever cover rows the user can see.
+  const drawnOrder = status ? rowOrder(status, groupOrder, { filter: filter ?? "", tree: view === "tree" ? closedDirs : null }) : [];
   const pick = (path: string, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => {
     if (!status) return;
-    setSelected((prev) => select(prev, rowOrder(status), path, e.shiftKey ? "span" : e.ctrlKey || e.metaKey ? "toggle" : "one", anchor));
+    setSelected((prev) => select(prev, drawnOrder, path, e.shiftKey ? "span" : e.ctrlKey || e.metaKey ? "toggle" : "one", anchor));
     if (!e.shiftKey) setAnchor(path);
   };
-  const chosen = status ? bulk(status, selected) : { present: [], stage: [], unstage: [] };
+  const chosen = status ? bulk(status, selected.filter((p) => drawnOrder.includes(p)), groupOrder) : { present: [], stage: [], unstage: [] };
   const plan = discardingRows && discardPlan(discardingRows);
   const rowsOf = (paths: string[]): Change[] => {
     const all = status ? [...status.conflicts, ...status.staged, ...status.changed, ...status.untracked] : [];
