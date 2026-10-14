@@ -388,9 +388,19 @@ pub fn plan(places: &Places, picks: &[Pick]) -> Result<Vec<Planned>, String> {
         let mut remains = None;
         // One folder per real location: the same folder reached twice moves once.
         let mut folder = false;
+        let mut links = HashSet::new();
         for occ in found.iter().filter(|f| skills::key(f) == k) {
             if is_link(occ) {
-                items.push(Item { path: skills::plain(occ), kind: "link" });
+                // A link is removed only where it really sits inside a skills root; one reached
+                // through a linked folder that lives elsewhere stays, and so does its content.
+                let Some(parent) = occ.parent().filter(|p| places.deletable.iter().any(|r| inside(p, r))) else {
+                    remains = Some(real(occ));
+                    continue;
+                };
+                // The same link reached twice moves once.
+                if links.insert(format!("{}/{}", skills::key(parent), occ.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())) {
+                    items.push(Item { path: skills::plain(occ), kind: "link" });
+                }
             } else if places.deletable.iter().any(|r| inside(occ, r)) {
                 if std::mem::replace(&mut folder, true) {
                     continue;
@@ -406,7 +416,7 @@ pub fn plan(places: &Places, picks: &[Pick]) -> Result<Vec<Planned>, String> {
             }
         }
         if items.is_empty() {
-            out.push(blocked("outside"));
+            out.push(Planned { remains, ..blocked("outside") });
             continue;
         }
         if !items.iter().any(|i| i.kind == "folder") {
@@ -822,5 +832,44 @@ mod tests {
         assert_eq!(kinds(&plan(&at, &[pick(&alpha)]).unwrap()[0]), ["folder"]);
         assert_eq!(run(&app, &at, &[pick(&alpha)]).unwrap()[0].outcome, "deleted");
         assert!(names(&root.join("team")).is_empty());
+    }
+
+    #[test]
+    fn fixb2_a_link_inside_a_junctioned_folder_outside_every_root_is_never_removed() {
+        let t = temp("fixb2-a");
+        let (app, root, repo, shared) = (t.join("app"), t.join("skills"), t.join("team-repo").join("skills"), t.join("shared"));
+        let target = skill(&shared, "alpha");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        // root/team is a junction to a folder outside every root; inside it, alpha links on again.
+        link_dir(&repo.join("alpha"), &target);
+        link_dir(&root.join("team"), &repo);
+        let at = places(&[&root], &[]);
+        let shown = root.join("team").join("alpha");
+        let plan_of = plan(&at, &[pick(&shown)]).unwrap();
+        assert!(plan_of[0].items.is_empty(), "nothing outside the roots is planned: {:?}", plan_of[0].items);
+        assert_eq!(plan_of[0].blocked, Some("outside"));
+        assert!(plan_of[0].remains.as_deref().is_some_and(|r| same(Path::new(r), &target)), "{:?}", plan_of[0].remains);
+        let done = run(&app, &at, &[pick(&shown)]).unwrap();
+        assert_eq!((done[0].outcome, done[0].note.as_deref()), ("skipped", Some("outside")));
+        assert!(is_link(&repo.join("alpha")), "the link in the outside folder stays");
+        assert_eq!(std::fs::read_to_string(target.join(SKILL_FILE)).unwrap(), "# alpha");
+    }
+
+    #[test]
+    fn fixb2_a_link_whose_folder_really_sits_in_a_root_is_removed_once() {
+        let t = temp("fixb2-b");
+        let (app, root, elsewhere) = (t.join("app"), t.join("skills"), t.join("dev"));
+        let target = skill(&elsewhere, "beta");
+        std::fs::create_dir_all(root.join("team")).unwrap();
+        let link = root.join("team").join("beta");
+        link_dir(&link, &target);
+        link_dir(&root.join("mirror"), &root.join("team"));
+        let at = places(&[&root], &[]);
+        let plan_of = plan(&at, &[pick(&link)]).unwrap();
+        assert_eq!(kinds(&plan_of[0]), ["link"], "the link reached twice is one item: {:?}", plan_of[0].items);
+        assert_eq!(run(&app, &at, &[pick(&link)]).unwrap()[0].outcome, "deleted");
+        assert!(std::fs::symlink_metadata(&link).is_err());
+        assert!(target.join(SKILL_FILE).is_file());
     }
 }
