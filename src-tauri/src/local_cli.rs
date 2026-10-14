@@ -127,6 +127,7 @@ const SUMMARIES: &[(&str, &str)] = &[
     ("account list", "List the Claude and Codex accounts Kolux holds."),
     ("open", "Start Kolux, or bring its window to the front, and wait until it answers."),
     ("status", "Say whether Kolux is running, not running, stale or still loading its workspaces."),
+    ("diagnostics memory", "Show the Resource Manager's memory figures: resident and committed for Kolux, each terminal session and the total."),
     ("repo list", "List the repos Kolux knows."),
     ("repo add", "Add a folder as a repo."),
     ("repo show", "Show one repo."),
@@ -300,7 +301,7 @@ fn skill(topic: &str) -> Result<&'static Skill, Fail> {
     SKILLS.iter().find(|s| s.name == t || s.aliases.contains(&t.as_str())).ok_or_else(|| Fail {
         code: "not_found",
         message: format!("there is no skill called {topic}; the topics are {}", topics()),
-        data: json!({ "topics": SKILLS.iter().map(|s| s.name).collect::<Vec<_>>(), "hint": "kolux-dev skills list shows them with what each is for" }),
+        data: json!({ "topics": SKILLS.iter().map(|s| s.name).collect::<Vec<_>>(), "hint": format!("{} skills list shows them with what each is for", crate::orchestration::CLI) }),
     })
 }
 
@@ -356,7 +357,7 @@ pub fn run(p: &Parsed) -> Option<Result<Value, Fail>> {
 
 pub fn text(command: &str, r: &Value) -> Option<String> {
     Some(match command {
-        "agent-context" => format!("{} commands; kolux-dev agent-context --json prints the whole document", r["commandCount"]),
+        "agent-context" => format!("{} commands; {} agent-context --json prints the whole document", r["commandCount"], crate::orchestration::CLI),
         "skills.list" => r["skills"].as_array().into_iter().flatten().map(|s| format!("{:<15}{}", s["name"].as_str().unwrap_or_default(), s["description"].as_str().unwrap_or_default())).collect::<Vec<_>>().join("\n"),
         "skills.get" => r["markdown"].as_str().unwrap_or_default().to_string(),
         "skills.coverage" => {
