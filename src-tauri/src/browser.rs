@@ -257,16 +257,33 @@ pub fn local_host(url: &Url) -> bool {
 /// Whether an address is on this machine or the local network: loopback, private, link-local,
 /// carrier-grade NAT, `0.0.0.0/8` and broadcast, and the IPv6 forms of those, including an IPv4
 /// address written as IPv6 (mapped `::ffff:a.b.c.d` or compatible `::a.b.c.d`, council FIX-2).
+/// Council FIX-3 adds, whole: `198.18.0.0/15` (benchmarking), `192.0.0.0/24`, `240.0.0.0/4`
+/// (reserved, broadcast inside), NAT64 `64:ff9b::/96` and `64:ff9b:1::/48`, 6to4 `2002::/16` and
+/// site-local `fec0::/10`, each of which can carry or reach a local IPv4 address.
 pub fn local_ip(ip: IpAddr) -> bool {
     let v4 = |ip: Ipv4Addr| {
-        let [a, b, ..] = ip.octets();
-        a == 0 || ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_broadcast() || (a == 100 && (b & 0xc0) == 64)
+        let [a, b, c, _] = ip.octets();
+        a == 0
+            || ip.is_loopback()
+            || ip.is_private()
+            || ip.is_link_local()
+            || (a == 100 && (b & 0xc0) == 64)
+            || (a == 198 && (b & 0xfe) == 18)
+            || (a == 192 && b == 0 && c == 0)
+            || a >= 240
     };
     match ip {
         IpAddr::V4(ip) => v4(ip),
         IpAddr::V6(ip) => {
-            let s = ip.segments()[0];
-            ip.is_loopback() || ip.is_unspecified() || (s & 0xfe00) == 0xfc00 || (s & 0xffc0) == 0xfe80 || ip.to_ipv4().is_some_and(v4)
+            let g = ip.segments();
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || (g[0] & 0xfe00) == 0xfc00
+                || (g[0] & 0xffc0) == 0xfe80
+                || (g[0] & 0xffc0) == 0xfec0
+                || g[0] == 0x2002
+                || (g[0] == 0x64 && g[1] == 0xff9b && (g[2..6] == [0; 4] || g[2] == 1))
+                || ip.to_ipv4().is_some_and(v4)
         }
     }
 }
@@ -323,13 +340,14 @@ impl reqwest::dns::Resolve for Resolver {
     }
 }
 
-/// The two icon clients. `near` fetches from the page's own host only (the page is already
-/// there, so it may be on this machine or network); a redirect off that host stops and is
-/// handed to `far`, which fetches every other host through the public-only lookup. Neither goes
-/// through a proxy (a proxy would resolve the name where the lookup cannot see it).
-/// DNS rebinding: a name rebound to a local address after its page loaded reaches `far` as an
-/// empty lookup and is never asked. `near` may still follow the page's own rebound name, but the
-/// page's own script can already reach that host, so the icon fetch gives a page nothing new.
+/// The two icon clients, both built by the one `icon_client_for` builder line. `near` fetches a
+/// page's own-host icon only when that page is itself open on this machine or the local network
+/// (`icon_near`); a redirect off that host stops and is handed to `far`. `far` fetches every
+/// other icon, a public page's own-host icon included, through the public-only lookup. Neither
+/// goes through a proxy (a proxy would resolve the name where the lookup cannot see it).
+/// DNS rebinding: a public name rebound to a local address after its page loaded reaches `far`
+/// as an empty lookup and is never asked (council FIX-3: reqwest goes through none of the
+/// engine's local-network checks, so `near` never serves a public page).
 pub struct IconClients {
     near: reqwest::Client,
     far: reqwest::Client,
@@ -373,7 +391,8 @@ pub enum IconStep {
 
 /// The icon fetch under way for each tab and the last icon each tab got, so a page that reloads
 /// itself in a loop, even with a new icon address each time, has one fetch at a time (council
-/// FIX-2, AFTER 2); a new site's icon waits for the fetch before it, which ends within 8 s.
+/// FIX-2, AFTER 2). A request while that fetch runs is dropped, not queued: the tab's next
+/// finished load asks again, and a fetch ends within `ICON_TIME`.
 #[derive(Default)]
 pub struct Icons {
     busy: HashMap<u32, String>,
@@ -423,19 +442,43 @@ pub fn icon_data(kind: &str, bytes: &[u8]) -> Option<String> {
     Some(format!("data:{kind};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
 }
 
+/// Whether an icon is fetched by the near client: it is on the page's own host and that page is
+/// itself open on this machine or the local network (council FIX-3). A public page's icon, on its
+/// own name or not, goes through the public-only lookup, so a name rebound to a local address
+/// after the page loaded is never asked.
+pub fn icon_near(url: &Url, page: &Url) -> bool {
+    local_host(page) && url.host_str() == page.host_str()
+}
+
+/// Where a redirect the near client stopped at goes next, if the far client may follow it: the
+/// `Location` joined to the address that answered, under the same rule as every other hop.
+pub fn hand_off(from: &Url, location: Option<&str>, app: Option<&Url>) -> Option<Url> {
+    let next = from.join(location?).ok()?;
+    hop_ok(&next, std::slice::from_ref(from), app).then_some(next)
+}
+
+/// How long one icon fetch may take in all, near and far together.
+const ICON_TIME: Duration = Duration::from_secs(8);
+
+/// `near` is whether the icon is on the page's own host.
 /// Fetches an icon, reading no more of the body than an icon may be: a non-image answer or one
 /// that says it is too large is dropped before its body is read, and a body that turns out too
 /// large is dropped as soon as it passes the limit.
-/// `near` is whether the icon is on the page's own host.
 async fn fetch_icon(clients: &IconClients, near: bool, url: Url, app: Option<&Url>) -> Option<String> {
-    let mut res = if near { &clients.near } else { &clients.far }.get(url).send().await.ok()?;
+    fetch_icon_within(clients, near, url, app, ICON_TIME).await
+}
+
+/// The fetch under one overall time limit: each request's own timeout runs until its body is
+/// read, and the far request after a hand-off gets only what the near one left. The redirect cap
+/// is per client, so a hand-off can take up to twice `ICON_HOPS` hops, all inside the limit.
+async fn fetch_icon_within(clients: &IconClients, near: bool, url: Url, app: Option<&Url>, limit: Duration) -> Option<String> {
+    let start = Instant::now();
+    let mut res = if near { &clients.near } else { &clients.far }.get(url).timeout(limit).send().await.ok()?;
     if near && res.status().is_redirection() {
         // The near client stopped at a redirect off the page's host: the rest is the far client's.
-        let next = res.url().join(res.headers().get(reqwest::header::LOCATION)?.to_str().ok()?).ok()?;
-        if !hop_ok(&next, std::slice::from_ref(res.url()), app) {
-            return None;
-        }
-        res = clients.far.get(next).send().await.ok()?;
+        let next = hand_off(res.url(), res.headers().get(reqwest::header::LOCATION).and_then(|v| v.to_str().ok()), app)?;
+        let left = limit.checked_sub(start.elapsed()).filter(|d| !d.is_zero())?;
+        res = clients.far.get(next).timeout(left).send().await.ok()?;
     }
     let mut res = res.error_for_status().ok()?;
     let kind = res.headers().get(reqwest::header::CONTENT_TYPE)?.to_str().ok()?.to_string();
@@ -580,12 +623,9 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
                 false
             }
             Nav::Chord(what) => {
-                if what == "focusAddressBar" {
-                    // The keyboard is inside the page; the bar lives in the app's own web view.
-                    if let Some(main) = chord_app.get_webview("main") {
-                        let _ = main.set_focus();
-                    }
-                }
+                // Council FIX-3: the keyboard is not moved here. The app tells a chord pressed in
+                // the page (its own window does not hold the keyboard) from one the page's script
+                // sent, and only a pressed focusAddressBar asks `browser_go("focusApp")`.
                 let _ = chord_app.emit(CHORD_EVENT, ChordPayload { id, what: what.to_string() });
                 false
             }
@@ -602,7 +642,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
                 let _ = page.eval_with_callback(ICON_QUERY, move |answer| {
                     let Ok(page) = parse(&at) else { return };
                     let Some(url) = icon_address(&answer, icon_dev.as_ref(), &page) else { return };
-                    let near = url.host_str() == page.host_str();
+                    let near = icon_near(&url, &page);
                     icon_for(icon_app.clone(), icon_dev.clone(), id, at.clone(), url, near);
                 });
             }
@@ -683,6 +723,10 @@ pub fn zoom_level(level: f64) -> f64 {
 /// `text` is the find text for `find` and `findBack`; `level` is the zoom for `zoom`.
 #[tauri::command]
 pub async fn browser_go(app: AppHandle, id: u32, what: String, text: Option<String>, level: Option<f64>) -> Result<(), String> {
+    if what == "focusApp" {
+        // A focusAddressBar chord pressed in the page: the bar lives in the app's own web view.
+        return app.get_webview("main").ok_or("no app view")?.set_focus().map_err(err);
+    }
     let v = view(&app, id)?;
     match what.as_str() {
         "reload" => v.reload().map_err(err),
@@ -1101,10 +1145,12 @@ mod tests {
             assert_eq!(tauri::async_runtime::block_on(fetch_icon(&clients, false, url, None)), None, "{name}");
         }
         assert_eq!(hits.load(Ordering::SeqCst), 0, "an icon fetch reached this machine through a public name");
-        // A page on that very host still gets its own icon: the page itself is already there.
+        // Council FIX-3: a page on that very public name gets no icon from there either (a name
+        // rebound after the page loaded would take the fetch onto this machine).
         let own = Url::parse(&format!("http://localtest.me:{port}/favicon.ico")).unwrap();
-        assert_eq!(tauri::async_runtime::block_on(fetch_icon(&clients, true, own, None)), Some("data:image/png;base64,BwcH".into()));
-        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        let page = Url::parse(&format!("http://localtest.me:{port}/")).unwrap();
+        assert_eq!(tauri::async_runtime::block_on(fetch_icon(&clients, icon_near(&own, &page), own, None)), None);
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -1157,5 +1203,92 @@ mod tests {
         assert_eq!(i.begin(2, "https://example.com/i.png?r=1"), IconStep::Fetch);
         i.end(1, "https://example.com/i.png?r=1", None);
         assert_eq!(i.begin(1, "https://example.com/i.png?r=9"), IconStep::Fetch);
+    }
+
+    // Council FIX-3, FIX-BEFORE 1: DNS rebinding through the page's own name, on any port.
+    #[test]
+    fn fix3_1_a_public_pages_own_name_goes_through_the_public_lookup_on_any_port() {
+        use std::sync::atomic::Ordering;
+        let (port, hits) = icon_server();
+        let clients = icon_clients(None, to_this_machine).unwrap();
+        for (page, icon) in [
+            ("http://rb.example/".to_string(), format!("http://rb.example:{port}/x")),
+            ("https://rb.example/".to_string(), format!("http://rb.example:{port}/x")),
+            (format!("http://rb.example:{port}/"), format!("http://rb.example:{port}/favicon.ico")),
+        ] {
+            let (page, icon) = (Url::parse(&page).unwrap(), Url::parse(&icon).unwrap());
+            assert!(!icon_near(&icon, &page), "{page} {icon}");
+            assert_eq!(tauri::async_runtime::block_on(fetch_icon(&clients, icon_near(&icon, &page), icon, None)), None);
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "a rebound public name reached this machine");
+        // A page that is itself on this machine or the local network still gets its own icon.
+        let page = Url::parse(&format!("http://localhost:{port}/app")).unwrap();
+        let icon = Url::parse(&format!("http://localhost:{port}/favicon.ico")).unwrap();
+        assert!(icon_near(&icon, &page));
+        assert_eq!(tauri::async_runtime::block_on(fetch_icon(&clients, true, icon, None)), Some("data:image/png;base64,BwcH".into()));
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert!(!icon_near(&Url::parse("http://other.lan/x").unwrap(), &Url::parse("http://box.lan/").unwrap()));
+    }
+
+    // Council FIX-3, AFTER 1.
+    #[test]
+    fn fix3_3_translation_and_reserved_ranges_are_local() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        let local = [
+            "64:ff9b::7f00:1", "64:ff9b::808:808", "64:ff9b:1::1", "64:ff9b:1:ffff::1", "2002:c0a8:101::1", "2002:808:808::1", "fec0::1", "feff::1",
+            "198.18.0.1", "198.19.255.255", "192.0.0.8", "240.0.0.1", "255.255.255.254",
+        ];
+        for s in local {
+            assert!(local_ip(ip(s)), "{s}");
+        }
+        let public = ["198.17.255.255", "198.20.0.1", "192.0.1.1", "64:ff9c::1", "64:ff9b:2::1", "2003::1", "fe00::1", "8.8.8.8"];
+        for s in public {
+            assert!(!local_ip(ip(s)), "{s}");
+        }
+        let mut all: Vec<IpAddr> = local.map(ip).to_vec();
+        all.push(ip("8.8.8.8"));
+        assert_eq!(public_addrs(all), vec![ip("8.8.8.8")]);
+    }
+
+    // Council FIX-3, AFTER 2 (review "Tests"): the hand-off from the near client to the far one.
+    #[test]
+    fn fix3_3_a_redirect_off_the_pages_host_is_handed_on_under_the_hop_rule() {
+        let u = |s: &str| Url::parse(s).unwrap();
+        let from = u("https://example.com/favicon.ico");
+        assert_eq!(hand_off(&from, Some("/i.png"), None), Some(u("https://example.com/i.png")));
+        assert_eq!(hand_off(&from, Some("https://cdn.example.net/i.png"), None), Some(u("https://cdn.example.net/i.png")));
+        assert_eq!(hand_off(&from, Some("//cdn.example.net/i.png"), None), Some(u("https://cdn.example.net/i.png")));
+        assert_eq!(hand_off(&from, Some("http://cdn.example.net/i.png"), None), None, "https down to http");
+        assert_eq!(hand_off(&from, Some("https://192.168.1.1/"), None), None);
+        assert_eq!(hand_off(&from, Some("https://[::7f00:1]/"), None), None);
+        assert_eq!(hand_off(&from, Some("https://tauri.localhost/"), None), None);
+        assert_eq!(hand_off(&from, Some("file:///C:/Windows/win.ini"), None), None);
+        assert_eq!(hand_off(&from, None, None), None);
+        let local = u("http://localhost:3000/favicon.ico");
+        assert_eq!(hand_off(&local, Some("/real.ico"), None), Some(u("http://localhost:3000/real.ico")));
+        assert_eq!(hand_off(&local, Some("http://127.0.0.1:8745/"), None), None);
+        assert_eq!(hand_off(&local, Some("http://localhost:1420/x"), Some(&u("http://localhost:1420"))), None);
+    }
+
+    // Council FIX-3, AFTER 2: one overall time limit, however the fetch goes.
+    #[test]
+    fn fix3_3_an_icon_fetch_ends_at_its_time_limit() {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = Url::parse(&format!("http://127.0.0.1:{}/favicon.ico", l.local_addr().unwrap().port())).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let _ = s.read(&mut [0u8; 4096]);
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 3\r\n\r\n");
+            std::thread::sleep(Duration::from_millis(2500));
+            let _ = s.write_all(b"\x07\x07\x07");
+        });
+        let clients = icon_clients(None, system_lookup).unwrap();
+        let start = Instant::now();
+        let got = tauri::async_runtime::block_on(fetch_icon_within(&clients, true, url, None, Duration::from_millis(300)));
+        let took = start.elapsed();
+        assert_eq!(got, None);
+        assert!(took < Duration::from_millis(1500), "took {took:?}");
+        server.join().unwrap();
     }
 }
