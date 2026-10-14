@@ -38,6 +38,7 @@ import { replaceInRich } from "./notefind";
 import { outline } from "./toc";
 import { hasSpot, onReveal, spotRange, takeSpot } from "./search";
 import "./editor-extras.css";
+import { pasteGuard } from "./paste";
 
 /** Save for each open editor pane, by pane key; App's Mod+S calls the focused one. */
 export const editors = new Map<number, () => Promise<void>>();
@@ -208,7 +209,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
           doc: text,
           parent: host.current!,
           // A file with Windows line ends is saved with them.
-          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), findSupport, conflictColours, EditorView.updateListener.of((u) => {
+          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), findSupport, conflictColours, pasteGuard((t) => report.current.onToast?.(t)), EditorView.updateListener.of((u) => {
             u.transactions.forEach((tr) => relay(path, u.view, tr));
             if (u.docChanged) setConflicts(u.state.field(conflictField).list.length);
             if (u.docChanged && isMarkdown(path)) {
@@ -361,7 +362,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
         const change = changeBetween(now, next);
         pushed = next;
         if (change) cm.dispatch({ changes: change, userEvent: "input" });
-      });
+      }, (t) => report.current.onToast?.(t));
     } catch (err) {
       setRichError(String(err));
       return;

@@ -3,7 +3,8 @@
 // twin panes work exactly as in source view. A rich edit is turned back into markdown and only the
 // changed span goes into the buffer. Text the rich view cannot show faithfully stays in source
 // view with the reason, and so does a file over about 600 KB until the user picks Open anyway.
-import { $getRoot, createEditor, type LexicalEditor } from "lexical";
+import { $getRoot, COMMAND_PRIORITY_CRITICAL, createEditor, PASTE_COMMAND, type LexicalEditor } from "lexical";
+import { PASTE_LIMIT, refusal } from "./paste";
 import { HeadingNode, QuoteNode, registerRichText } from "@lexical/rich-text";
 import { createEmptyHistoryState, registerHistory } from "@lexical/history";
 import { ListItemNode, ListNode, registerCheckList, registerList } from "@lexical/list";
@@ -78,10 +79,20 @@ export function changeBetween(a: string, b: string): { from: number; to: number;
   return { from: s, to: a.length - e, insert: b.slice(s, b.length - e) };
 }
 
+/** EDIT-008: a paste past the limit is refused in the rich view too (true = refused, toast given). */
+export function refusePaste(event: ClipboardEvent | KeyboardEvent | InputEvent, refuse: (text: string) => void): boolean {
+  const text = "clipboardData" in event ? (event.clipboardData?.getData("text/plain") ?? "") : "";
+  if (text.length <= PASTE_LIMIT) return false;
+  event.preventDefault();
+  refuse(refusal(text.length));
+  return true;
+}
+
 export type Rich = { editor: LexicalEditor; show: (md: string) => void; destroy: () => void };
 
-/** Starts the rich view in `el`; `onEdit` gets the whole markdown after each edit by the user. */
-export function mountRich(el: HTMLElement, md: string, onEdit: (md: string) => void): Rich {
+/** Starts the rich view in `el`; `onEdit` gets the whole markdown after each edit by the user;
+ * `onRefuse` shows the toast for a paste past the limit (EDIT-008). */
+export function mountRich(el: HTMLElement, md: string, onEdit: (md: string) => void, onRefuse: (text: string) => void = () => {}): Rich {
   const editor = createEditor({ namespace: "kolux-md", nodes: NODES, onError: fail, theme: THEME });
   editor.setRootElement(el);
   let last = "";
@@ -91,6 +102,7 @@ export function mountRich(el: HTMLElement, md: string, onEdit: (md: string) => v
     registerList(editor),
     registerCheckList(editor),
     registerMarkdownShortcuts(editor, MD),
+    editor.registerCommand(PASTE_COMMAND, (event) => refusePaste(event, onRefuse), COMMAND_PRIORITY_CRITICAL),
     editor.registerUpdateListener(({ editorState, dirtyElements, dirtyLeaves, tags }) => {
       if (dirtyElements.size === 0 && dirtyLeaves.size === 0) return; // the caret moved, nothing more
       const now = editorState.read(() => $convertToMarkdownString(MD));
