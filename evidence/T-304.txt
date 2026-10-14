@@ -41,26 +41,7 @@ console window opens" are covered by the stand-in launch test and the plan test;
 NeoVim window was not opened on Txais's desktop.
 
 ## Hunks for the coordinator
---- a/src-tauri/src/lib.rs
-+++ b/src-tauri/src/lib.rs
-@@
-             tools::tools_check,
-             tools::tools_dismiss,
-+            tools::editors_list,
-             token_usage::token_usage,
-@@
--            links::open_path, links::file_grant,
-+            links::open_path, links::file_grant, links::editor_open,
-             fsops::fs_create,
---- a/src/terminal/TerminalPane.tsx   (core lane)
-+++ b/src/terminal/TerminalPane.tsx
-@@
-         <PlusMenu
-           agents={agents}
-+          dir={cwd ?? undefined}
-           defaultId={defaultId}
-Once registered, the `#[allow(dead_code)]` lines on editor_open, editors_list, editors and
-program_roots can go.
+Replaced on 2026-10-14 (council FIX-1) by real patches against main fb322d5, checked with git apply --check on a clean fb322d5 tree (LF and CRLF): evidence/launch-FIX-1-wiring.patch carries every lane/launch hunk (lib.rs, App.tsx, Settings > Agents, status bar, TerminalPane); for keep-awake apply evidence/launch-FIX-1-status.patch first. See evidence/launch-FIX-1.txt.
 
 ## Council fixes (review of 3ede14a)
 - FB1: editor_open is async; the editor search and the start run on a blocking worker, like

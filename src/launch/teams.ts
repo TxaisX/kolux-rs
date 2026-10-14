@@ -14,8 +14,11 @@ export const TEAMS_MODE_KEY = "agentTeamsMode";
 export const TEAMS_MODES = ["off", "in-process", "native"] as const;
 export type TeamsMode = (typeof TEAMS_MODES)[number];
 export const TEAMS_MODE_LABEL: Record<TeamsMode, string> = { off: "Off", "in-process": "In-process", native: "Native panes" };
-/** The picker entry's stable id; also names its keybinding command `tab.newAgent.claude-teams`. */
-export const TEAMS_ID = "claude-teams";
+/** The picker entry's stable agent id (COMPAT agents table); it also names the keybinding command
+ *  `tab.newAgent.claude-agent-teams` already listed in the keys. */
+export const TEAMS_ID = "claude-agent-teams";
+/** The Kolux command line's subcommand the entry runs (`kolux claude-teams`, CLI-013). */
+export const TEAMS_COMMAND = "claude-teams";
 
 /** What the Rust side knows about this machine. `cli` is the Kolux command line's bare name
  *  (CLI-007), set only when it is installed on the system search path; a Kolux pane finds it first. */
@@ -36,7 +39,7 @@ export function effectiveMode(mode: TeamsMode, host: Pick<TeamsHost, "windows" |
 export function teamsEntry(agents: AgentInfo[], mode: TeamsMode, host: TeamsHost | null): AgentInfo | null {
   if (mode === "off" || !host || host.windows || host.wsl || !host.cli) return null;
   if (!agents.some((a) => a.id === "claude" && a.installed)) return null;
-  return { id: TEAMS_ID, name: "Claude Agent Teams", program: host.cli, args: [TEAMS_ID], installed: true, path: host.cli };
+  return { id: TEAMS_ID, name: "Claude Agent Teams", program: host.cli, args: [TEAMS_COMMAND], installed: true, path: host.cli };
 }
 
 /** `agents` with the Agent Teams entry right after Claude Code, when it is offered. */

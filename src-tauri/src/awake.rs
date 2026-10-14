@@ -1,18 +1,22 @@
 //! TERM-122 / APP-018: keep the computer awake while agents run. Off by default; On holds always;
-//! Agent (Auto) holds only while an agent pane reads working. The choice sits on Settings > Agents
-//! under the `keepAwake` key ("off", "agent", "on"); an older plain `true` reads as Agent.
+//! Agent (Auto) holds only while an agent pane is believably working. The choice sits on Settings >
+//! Agents under the `keepAwake` key ("off", "agent", "on"); an older plain `true` reads as Agent.
 //! Windows asks the system through SetThreadExecutionState on the watcher's own thread (the request
 //! belongs to the thread that made it); macOS runs `caffeinate`, Linux `systemd-inhibit` (which also
 //! blocks sleep on lid close). A missing tool quietly does nothing and is logged once.
-// T-223: lib.rs starts the watcher and registers the command (coordinator hunk); until then the
-// module is reached only by its tests.
-#![allow(dead_code)]
+// T-223: lib.rs starts the watcher and registers the command, and status.rs gains working_now and
+// terminal_ended; both are coordinator patches (evidence/launch-FIX-1-status.patch, then
+// evidence/launch-FIX-1-wiring.patch). Until they land this module is not compiled at all.
 
+use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 pub const KEY: &str = "keepAwake";
 static HELD: AtomicBool = AtomicBool::new(false);
+/// How long a started sleep blocker must keep running before it counts as a hold.
+#[cfg_attr(windows, allow(dead_code))]
+const BLOCKER_SETTLE: Duration = Duration::from_millis(200);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -31,23 +35,40 @@ pub fn mode(settings: &serde_json::Value) -> Mode {
     }
 }
 
-/// Whether to hold the computer awake: On always, Agent only with an agent working (waiting,
-/// blocked or done agents do not count).
-pub fn want(mode: Mode, states: impl IntoIterator<Item = &'static str>) -> bool {
+/// Whether to hold the computer awake: On always, Agent only while `working` panes (believably
+/// working ones: waiting, blocked, done, stale, never-heard and ended agents are not counted, see
+/// status::working_now) are above zero.
+pub fn want(mode: Mode, working: usize) -> bool {
     match mode {
         Mode::Off => false,
         Mode::On => true,
-        Mode::Agent => states.into_iter().any(|s| s == "working"),
+        Mode::Agent => working > 0,
     }
 }
 
-/// The states the agent panes read now. Sessions live only in memory, so an agent marked working
-/// before a restart but not seen since does not count.
-// ponytail: a working reading gone quiet past the unverified window (STAT-032) still counts here;
-// status.rs would need to expose that flag to drop it.
-fn states() -> Vec<&'static str> {
-    let guard = crate::status::SESSIONS.lock().unwrap_or_else(|e| e.into_inner());
-    guard.as_ref().map(|m| m.values().map(|s| s.resolved()).collect()).unwrap_or_default()
+/// The Linux and macOS sleep blocker for Kolux's process `pid`: both end on their own when Kolux
+/// does, even if it dies without cleaning up (a panic=abort build never runs Drop).
+#[cfg_attr(windows, allow(dead_code))]
+fn blocker(pid: u32, mac: bool) -> (&'static str, Vec<String>) {
+    let pid = pid.to_string();
+    if mac {
+        return ("caffeinate", vec!["-i".into(), "-w".into(), pid]);
+    }
+    let args = ["--what=sleep:handle-lid-switch", "--who=Kolux", "--why=Agents are working", "--mode=block", "tail", &format!("--pid={pid}"), "-f", "/dev/null"];
+    ("systemd-inhibit", args.iter().map(|a| a.to_string()).collect())
+}
+
+/// A blocker that exits at once (refused, or no system bus) is no hold: the child counts only if it
+/// is still running after `settle`; otherwise it is reaped and None comes back.
+#[cfg_attr(windows, allow(dead_code))]
+fn running_after(mut child: Child, settle: Duration) -> Option<Child> {
+    std::thread::sleep(settle);
+    if let Ok(None) = child.try_wait() {
+        return Some(child);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    None
 }
 
 #[cfg(windows)]
@@ -68,6 +89,13 @@ mod sys {
     pub fn hold() -> Option<Hold> {
         set(true).then_some(Hold)
     }
+    impl Hold {
+        /// Asks again (the call is idempotent), so a request Windows dropped, as after a sleep and
+        /// resume, is back within a tick; false when refused.
+        pub fn renew(&mut self) -> bool {
+            set(true)
+        }
+    }
     impl Drop for Hold {
         fn drop(&mut self) {
             set(false);
@@ -81,17 +109,15 @@ mod sys {
     pub struct Hold(Child);
     /// The system's own sleep blocker, held for as long as the child runs.
     pub fn hold() -> Option<Hold> {
-        let pid = std::process::id().to_string();
-        let mut cmd = if cfg!(target_os = "macos") {
-            let mut c = Command::new("caffeinate");
-            c.args(["-i", "-w", &pid]);
-            c
-        } else {
-            let mut c = Command::new("systemd-inhibit");
-            c.args(["--what=sleep:handle-lid-switch", "--who=Kolux", "--why=Agents are working", "--mode=block", "sleep", "infinity"]);
-            c
-        };
-        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().ok().map(Hold)
+        let (program, args) = super::blocker(std::process::id(), cfg!(target_os = "macos"));
+        let child = Command::new(program).args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().ok()?;
+        super::running_after(child, super::BLOCKER_SETTLE).map(Hold)
+    }
+    impl Hold {
+        /// Still held while the blocker runs; a blocker that died is taken again on this tick.
+        pub fn renew(&mut self) -> bool {
+            matches!(self.0.try_wait(), Ok(None))
+        }
     }
     impl Drop for Hold {
         fn drop(&mut self) {
@@ -101,27 +127,33 @@ mod sys {
     }
 }
 
-/// One tick: take or let go of the hold to match `wanted`; `missing` notes the once-only log.
+/// One tick: take, renew or let go of the hold to match `wanted`; `missing` notes the once-only
+/// log. While wanted the hold is renewed every tick, never trusted from the last one.
 fn step(slot: &mut Option<sys::Hold>, wanted: bool, missing: &mut bool) {
-    if wanted && slot.is_none() {
-        *slot = sys::hold();
-        if slot.is_none() && !*missing {
-            *missing = true;
-            eprintln!("kolux: keep-awake is on but the system refused or its sleep blocker is missing; the computer may sleep");
-        }
-    } else if !wanted {
+    if !wanted {
         *slot = None;
+    } else {
+        if slot.as_mut().is_some_and(|h| !h.renew()) {
+            *slot = None;
+        }
+        if slot.is_none() {
+            *slot = sys::hold();
+            if slot.is_none() && !*missing {
+                *missing = true;
+                eprintln!("kolux: keep-awake is on but the system refused or its sleep blocker is missing; the computer may sleep");
+            }
+        }
     }
     HELD.store(slot.is_some(), Ordering::Relaxed);
 }
 
-/// Starts the watcher: every 5 s it re-reads the choice and the agents' states, so a change, an
-/// agent finishing and a resume from sleep are all picked up within a tick.
+/// Starts the watcher: every 5 s it re-reads the choice and the working panes and renews the hold,
+/// so a change, an agent finishing or ending and a resume from sleep are all picked up within a tick.
 pub fn start(settings: impl Fn() -> serde_json::Value + Send + 'static) {
     std::thread::spawn(move || {
         let (mut slot, mut missing) = (None, false);
         loop {
-            step(&mut slot, want(mode(&settings()), states()), &mut missing);
+            step(&mut slot, want(mode(&settings()), crate::status::working_now()), &mut missing);
             std::thread::sleep(Duration::from_secs(5));
         }
     });
@@ -150,15 +182,71 @@ mod tests {
 
     #[test]
     fn term122_agent_holds_only_while_an_agent_works_and_on_holds_always() {
-        assert!(!want(Mode::Off, ["working"]));
-        assert!(want(Mode::On, []));
-        assert!(want(Mode::Agent, ["done", "working"]));
-        assert!(!want(Mode::Agent, ["waiting", "blocked", "done", "permission", "interrupted"]));
-        assert!(!want(Mode::Agent, []));
+        assert!(!want(Mode::Off, 3));
+        assert!(want(Mode::On, 0));
+        assert!(want(Mode::Agent, 1));
+        assert!(!want(Mode::Agent, 0), "no believable working pane: the computer may sleep");
+    }
+
+    /// TERM-122 FIX-SOON: the Linux blocker waits on Kolux's own pid, so it ends with Kolux even
+    /// when Kolux dies without cleaning up; nothing is left running forever.
+    #[test]
+    fn term122_the_sleep_blocker_ends_when_kolux_does() {
+        let (program, args) = blocker(4242, false);
+        assert_eq!(program, "systemd-inhibit");
+        assert_eq!(args[args.len() - 4..], ["tail", "--pid=4242", "-f", "/dev/null"]);
+        assert!(!args.iter().any(|a| a == "sleep" || a == "infinity"), "no blocker that outlives Kolux: {args:?}");
+        assert!(args.iter().any(|a| a == "--mode=block"));
+        assert_eq!(blocker(4242, true), ("caffeinate", vec!["-i".to_string(), "-w".into(), "4242".into()]));
+    }
+
+    /// TERM-122 FIX-SOON: a blocker that exits at once is no hold; one still running after the
+    /// settle time is kept. Real child processes on both sides.
+    #[test]
+    fn term122_a_blocker_that_exits_at_once_is_not_counted_as_a_hold() {
+        use std::process::{Command, Stdio};
+        let quiet = |program: &str, args: &[&str]| Command::new(program).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+        let (quick, slow) = if cfg!(windows) { (quiet("cmd", &["/C", "exit 0"]), quiet("ping", &["-n", "6", "127.0.0.1"])) } else { (quiet("true", &[]), quiet("sleep", &["5"])) };
+        assert!(running_after(quick, BLOCKER_SETTLE * 3).is_none(), "an exited blocker holds nothing");
+        let mut kept = running_after(slow, BLOCKER_SETTLE).expect("a running blocker is a hold");
+        let _ = kept.kill();
+        let _ = kept.wait();
+    }
+
+    /// HELD is one flag for the whole app; the tests that move it take turns.
+    static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[cfg(windows)]
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetThreadExecutionState(flags: u32) -> u32;
+    }
+
+    /// TERM-122 "re-checked after resume": the system can drop the request (a user-initiated sleep
+    /// ends power requests), and the next tick while still wanted must ask again, not trust the slot.
+    #[cfg(windows)]
+    #[test]
+    fn term122_every_tick_while_wanted_asks_windows_again() {
+        const ES_CONTINUOUS: u32 = 0x8000_0000;
+        const ES_SYSTEM_REQUIRED: u32 = 0x0000_0001;
+        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut slot, mut missing) = (None, false);
+        step(&mut slot, true, &mut missing);
+        assert!(slot.is_some());
+        // The request is gone behind Kolux's back, as after a sleep and resume.
+        // SAFETY: flag bits only, on this test's own thread.
+        unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
+        step(&mut slot, true, &mut missing);
+        // SetThreadExecutionState answers with the state before the call: the tick must have re-taken it.
+        // SAFETY: as above.
+        let before = unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
+        assert_ne!(before & ES_SYSTEM_REQUIRED, 0, "the tick while wanted asked Windows again (state was {before:#x})");
+        step(&mut slot, false, &mut missing);
     }
 
     #[test]
     fn term122_the_hold_is_taken_and_given_back_with_the_wanted_state() {
+        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
         let (mut slot, mut missing) = (None, false);
         step(&mut slot, true, &mut missing);
         #[cfg(windows)]

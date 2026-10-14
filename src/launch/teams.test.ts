@@ -25,7 +25,7 @@ test("default build: no Agent Teams entry in any list", () => {
 
 test("with the mode on, Linux with Claude Code and the command line installed offers it right after Claude Code", () => {
   const list = withTeams([claude, codex], { agentTeamsMode: "in-process" }, linux);
-  expect(list.map((a) => a.id)).toEqual(["claude", "claude-teams", "codex"]);
+  expect(list.map((a) => a.id)).toEqual(["claude", "claude-agent-teams", "codex"]);
   expect(list[1]).toMatchObject({ name: "Claude Agent Teams", program: "kolux", args: ["claude-teams"], installed: true });
 });
 
@@ -62,5 +62,5 @@ test("the Settings card shows the three choices, the saved one picked, and the W
 
 test("the Agent Teams row draws the Claude mark", async () => {
   const { markFor } = await import("./PlusMenu");
-  expect(markFor("claude-teams")).toBe("claude");
+  expect(markFor("claude-agent-teams")).toBe("claude");
 });

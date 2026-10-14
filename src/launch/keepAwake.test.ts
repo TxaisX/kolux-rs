@@ -25,6 +25,9 @@ test("the Settings card offers On, Agent and Off, picks the saved one and explai
 });
 
 test("the status bar item shows only while the computer is kept awake", () => {
-  expect(renderToString(createElement(KeepAwakeItem, { held: true }))).toContain("Awake");
+  const shown = renderToString(createElement(KeepAwakeItem, { held: true }));
+  expect(shown).toContain("Awake");
+  // the bar styles its items by the `item` class; an unstyled class would draw it bare
+  expect(shown).toMatch(/^<span class="item" data-item="keep-awake"/);
   expect(renderToString(createElement(KeepAwakeItem, { held: false }))).toBe("");
 });

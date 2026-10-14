@@ -47,31 +47,4 @@ After the hunks below:
 5. Sleep and wake the computer with Agent and a working agent: "Awake" is back within 5 s.
 
 ## Hunks for the coordinator
---- a/src-tauri/src/lib.rs
-+++ b/src-tauri/src/lib.rs
-@@
- mod tools;
-+mod awake;
-@@  in the invoke list
-             tools::tools_dismiss,
-+            awake::keep_awake_state,
-@@  in .setup, after app.manage(Mutex::new(store));
-+            {
-+                let h = app.handle().clone();
-+                awake::start(move || h.state::<Mutex<Store>>().lock().map(|s| s.settings()).unwrap_or_default());
-+            }
-Then drop the module-level #![allow(dead_code)] in awake.rs.
---- a/src/settings/AgentsPage.tsx   (shell lane)
-+++ b/src/settings/AgentsPage.tsx
-@@
-+import KeepAwakeCard from "../launch/KeepAwakeCard";
-@@  in the page body
-+      <KeepAwakeCard settings={settings} save={save} />
---- a/src/chrome/StatusBar.tsx   (owner of the status bar)
-+++ b/src/chrome/StatusBar.tsx
-@@
-+import { KeepAwakeItem, useKeepAwake } from "../launch/KeepAwakeCard";
-@@  at the component's top level
-+  const awake = useKeepAwake();
-@@  among the bar's items
-+      <KeepAwakeItem held={awake} />
+Replaced on 2026-10-14 (council FIX-1) by real patches against main fb322d5, checked with git apply --check on a clean fb322d5 tree (LF and CRLF): evidence/launch-FIX-1-wiring.patch carries every lane/launch hunk (lib.rs, App.tsx, Settings > Agents, status bar, TerminalPane); for keep-awake apply evidence/launch-FIX-1-status.patch first. See evidence/launch-FIX-1.txt.

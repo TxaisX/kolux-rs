@@ -18,7 +18,7 @@ export type AgentInfo = { id: string; name: string; program: string; args: strin
 
 /** Which vendor mark an agent id draws; anything unknown gets the plain-shell glyph. */
 export function markFor(id: string): Agent {
-  if (id === "claude-teams") return "claude";
+  if (id === "claude-agent-teams") return "claude";
   return id === "claude" || id === "codex" ? id : "shell";
 }
 

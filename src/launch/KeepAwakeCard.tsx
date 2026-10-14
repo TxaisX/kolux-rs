@@ -62,7 +62,7 @@ export function useKeepAwake(): boolean {
 /** The status bar item: shown only while the computer is being kept awake. */
 export function KeepAwakeItem({ held }: { held: boolean }) {
   return held ? (
-    <span className="status-item" data-item="keep-awake" title="Kolux is keeping the computer awake (Settings > Agents)">
+    <span className="item" data-item="keep-awake" title="Kolux is keeping the computer awake (Settings > Agents)">
       Awake
     </span>
   ) : null;

@@ -5,7 +5,7 @@ Lane: launch, from 0819c57. Date: 2026-10-13.
 ## What was built
 - src/launch/teams.ts: the Agent Teams mode preference (settings key agentTeamsMode: off, the
   default, in-process or native; anything unknown reads as off), and the picker entry "Claude Agent
-  Teams" (id claude-teams). The entry is offered only with the mode on, Claude Code installed, the
+  Teams" (id claude-agent-teams, per the COMPAT agents table; it runs the claude-teams subcommand). The entry is offered only with the mode on, Claude Code installed, the
   Kolux command line found on the system search path, and never on native Windows or WSL; it is
   placed right after Claude Code and starts `kolux claude-teams` through the found command line.
   On Windows and WSL a saved "native" acts as in-process.
@@ -14,7 +14,7 @@ Lane: launch, from 0819c57. Date: 2026-10-13.
 - src/launch/PlusMenu.tsx: the Agent Teams row draws the Claude mark.
 - src-tauri/src/tools.rs: `teams_host` command (Windows?, WSL? from WSL_DISTRO_NAME or the kernel
   release, and the Kolux command line path off Windows/WSL) with the pure `teams_host_from`.
-- Keybinding command: tab.newAgent.claude-teams "New Claude Agent Teams tab", no key bound, comes
+- Keybinding command: tab.newAgent.claude-agent-teams (already in the keys list on main) "New Claude Agent Teams tab", no key bound, comes
   from adding the entry to the keybinding agent list (src/keys/actions.ts is core's: hunk below).
   App.tsx already resolves tab.newAgent.<id> against the offered agent list, so the command opens
   the tab only when the entry is offered.
@@ -40,36 +40,7 @@ picker wiring are mounted only after the hunks below (App.tsx, lib.rs, AgentsPag
 src/keys are other owners'). Covered by the render test of the card and the list tests.
 
 ## Hunks for the coordinator
---- a/src-tauri/src/lib.rs
-+++ b/src-tauri/src/lib.rs
-@@
-             tools::tools_check,
-             tools::tools_dismiss,
-+            tools::teams_host,
---- a/src/App.tsx
-+++ b/src/App.tsx
-@@
-+import { useTeamsHost, withTeams } from "./launch/teams";
-@@
--  const agents = useMemo(() => offeredAgents(allAgents, settings), [allAgents, settings]);
-+  const teamsHost = useTeamsHost();
-+  const agents = useMemo(() => withTeams(offeredAgents(allAgents, settings), settings, teamsHost), [allAgents, settings, teamsHost]);
---- a/src/keys/actions.ts   (core lane)
-+++ b/src/keys/actions.ts
-@@  the agents list mapped to tab.newAgent.<id>
-+  ["claude-teams", "Claude Agent Teams"],
---- a/src/keys/keymap.test.ts   (core lane)
-@@  the tab.newAgent count: 35 -> 36
---- a/src/settings/AgentsPage.tsx   (shell lane)
-+++ b/src/settings/AgentsPage.tsx
-@@
-+import TeamsModeCard from "../launch/TeamsModeCard";
-+import { useTeamsHost } from "../launch/teams";
-@@  at the component's top level
-+  const teamsHost = useTeamsHost();
-@@  in the page body
-+      <TeamsModeCard settings={settings} save={save} host={teamsHost} />
-Once registered, the #[allow(dead_code)] on teams_host can go.
+Replaced on 2026-10-14 (council FIX-1) by real patches against main fb322d5, checked with git apply --check on a clean fb322d5 tree (LF and CRLF): evidence/launch-FIX-1-wiring.patch carries every lane/launch hunk (lib.rs, App.tsx, Settings > Agents, status bar, TerminalPane); for keep-awake apply evidence/launch-FIX-1-status.patch first. See evidence/launch-FIX-1.txt.
 
 ## Council fixes (review of 3ede14a)
 - The entry runs the command line by its bare name (CLI-007: kolux, or kolux-dev in a debug build),
