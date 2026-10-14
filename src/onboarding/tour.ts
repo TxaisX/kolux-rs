@@ -14,10 +14,15 @@ export type TourStep = {
   /** The real control is what to click, so there is no Next. */
   noNext?: boolean;
 };
-export type TourId = "tasks" | "automations" | "parallel";
+export type TourId = "tasks" | "automations" | "parallel" | "grid";
 export type Tour = { id: TourId; name: string; trigger: string; steps: TourStep[]; ring?: boolean };
 
 /** The split button of the focused terminal pane (browser panes have no split). */
+/** ONB-012: the grid tour's three targets: the running session, its status dot in the sidebar and
+ *  the results entry (the sidebar marks it data-results, VIEW-114 hunk; a missing target is skipped). */
+export const GRID_PANE = ".pane.focused:not(.browser)";
+export const GRID_STATUS = ".sb-list .dot.live";
+export const GRID_RESULTS = "[data-results]";
 export const FOCUSED_SPLIT = ".pane.focused:not(.browser) .pane-head button[title^='Split right']";
 
 /** ONB-033, the surfaces Kolux RS has today; the board, browser, floating-workspace and
@@ -52,6 +57,17 @@ export const TOURS: Tour[] = [
       { target: "aside button[title^='New workspace']", side: "right", noNext: true, en: { title: "Start another task", body: "A new workspace gives the next agent its own copy of the project, so the two never collide." }, ko: { title: "다른 작업 시작", body: "새 작업 공간은 다음 에이전트에게 프로젝트의 별도 사본을 주므로 서로 부딪히지 않습니다." } },
     ],
   },
+  {
+    // ONB-012: started only by a first run that ends with a kit or a plain session, once; nothing replays it.
+    id: "grid",
+    name: "Your first session",
+    trigger: GRID_PANE,
+    steps: [
+      { target: GRID_PANE, side: "bottom", en: { title: "This is a session", body: "An AI agent works here in its own terminal. Type to it any time." }, ko: { title: "세션입니다", body: "AI 에이전트가 자기 터미널에서 일합니다. 언제든 입력할 수 있습니다." } },
+      { target: GRID_STATUS, side: "right", en: { title: "Its status", body: "The dot spins while it works, turns yellow when it needs you and green when it is done." }, ko: { title: "상태", body: "일하는 동안 점이 돌고, 도움이 필요하면 노란색, 끝나면 초록색이 됩니다." } },
+      { target: GRID_RESULTS, side: "right", en: { title: "Your results", body: "What a kit makes is gathered here, ready to open." }, ko: { title: "결과", body: "키트가 만든 것이 여기에 모여 바로 열 수 있습니다." } },
+    ],
+  },
 ];
 
 export const stepWords = (s: TourStep): Words => (locale() === "ko" ? s.ko : s.en);
@@ -72,6 +88,8 @@ export function prevShown(present: readonly boolean[], i: number): number | null
 
 /** Whether a tour may start by itself this launch (replay buttons skip every one of these). */
 export function autoStarts(o: { id: TourId; auto: boolean | null; seen: readonly string[]; slotUsed: boolean; blocked: boolean; tried: readonly string[] }): boolean {
+  // ONB-012: the grid tour never starts by itself; only the first run's end starts it.
+  if (o.id === "grid") return false;
   if (!o.auto || o.slotUsed || o.blocked || o.seen.includes(o.id)) return false;
   // ONB-033: the parallel tour only for someone who has never split a pane.
   return !(o.id === "parallel" && o.tried.includes("split"));
@@ -111,3 +129,11 @@ export function place(t: Rect, p: { width: number; height: number }, b: Rect, wa
 // ---- asking for a tour from anywhere (the help menu's replay items) ----
 export const REPLAY_TOUR = "kolux-replay-tour";
 export const replayTour = (id: TourId) => window.dispatchEvent(new CustomEvent(REPLAY_TOUR, { detail: id }));
+
+/** ONB-012: the first run ended with a kit or a plain session; the grid tour runs once, if unseen. */
+export const START_GRID = "kolux-start-grid-tour";
+export const startGridTour = () => window.dispatchEvent(new CustomEvent(START_GRID));
+/** ONB-012: whether the first run's end starts the grid tour: only a finish by kit or session, only once. */
+export const gridStarts = (how: "kit" | "session" | "skip" | "folder", seen: readonly string[]) => (how === "kit" || how === "session") && !seen.includes("grid");
+/** A kit start can take a while to open its panes: the grid tour waits this many looks for its first target. */
+export const GRID_TRIES = 4 * FIRST_TARGET_TRIES;

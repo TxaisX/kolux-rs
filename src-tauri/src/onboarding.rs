@@ -86,6 +86,9 @@ fn closed(mut rec: Onboarding, outcome: &str, now: u64) -> Result<Onboarding, St
         rec.outcome = Some(outcome.into());
         if outcome == "completed" {
             rec.step = LAST;
+        } else {
+            // ONB-006: Skip (the only way to close as dismissed) also dismisses the sidebar checklist.
+            rec.rest.insert("checklistDismissed".into(), true.into());
         }
     }
     Ok(rec)
@@ -468,6 +471,9 @@ mod tests {
         assert_eq!(closed(done.clone(), "dismissed", 60).unwrap(), done);
         let skipped = closed(stepped(open.clone(), 1), "dismissed", 70).unwrap();
         assert_eq!((skipped.step, skipped.outcome.as_deref()), (1, Some("dismissed")));
+        assert_eq!(skipped.rest.get("checklistDismissed"), Some(&serde_json::Value::Bool(true)), "Skip dismisses the sidebar checklist");
+        assert_eq!(done.rest.get("checklistDismissed"), None, "a completed close keeps the checklist");
+        assert_eq!(first_run(Some(skipped.clone())).map(|v| v.checklist_dismissed), Some(true));
         assert!(closed(open, "maybe", 1).unwrap_err().contains("maybe"));
     }
 

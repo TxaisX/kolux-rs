@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { closer, firstFolderAgent, kitLaunch, oneClick, openAt, REOPEN_WIZARD, type Outcome } from "./firstRun";
 import { KITS, assignRoles, type Kit, type Vendor } from "../kits/catalog";
 import { startValues } from "../kits/Kits";
+import { startGridTour } from "./tour";
 import type { AgentInfo } from "../launch/PlusMenu";
 import { defaultAgentId, menuAgents, offeredAgents } from "../launch/agents";
 
@@ -70,7 +71,7 @@ export function useWizard({ setToast, agents, settings, activeDir, kitAIs, start
     if (!kit) return;
     const sampleDir = await invoke<string>("kit_samples_dir", { kit: id }).catch(() => null);
     if (activeDir && kitLaunch(activeDir, sampleDir, kitAIs) === "launch") {
-      if (await startKit(kit, startValues(kit, activeDir, sampleDir, settings), assignRoles(kit, kitAIs), activeDir)) return endWizard("completed");
+      if (await startKit(kit, startValues(kit, activeDir, sampleDir, settings), assignRoles(kit, kitAIs), activeDir)) return endWizard("completed", startGridTour);
     } else setKitConflict(null);
     wizardSetup.current = true;
     setKits({ kit: id, sampleDir });
@@ -81,7 +82,7 @@ export function useWizard({ setToast, agents, settings, activeDir, kitAIs, start
     if (wizardClose.retry()) return;
     const agent = menuAgents(offeredAgents(agents, settings), defaultAgentId(settings))[0];
     if (!agent || !activeDir) return;
-    if ((await startIn(agent, activeDir, null, "", true)) !== null) endWizard("completed");
+    if ((await startIn(agent, activeDir, null, "", true)) !== null) endWizard("completed", startGridTour);
   };
   return { wizard, setWizard, wizardSetup, wizardClose, endWizard, firstFolder, projectAdded, wizardKit, wizardSession };
 }
