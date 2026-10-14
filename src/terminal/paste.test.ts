@@ -9,6 +9,23 @@ const paste = (target: EventTarget, text: string) => {
   return e;
 };
 
+test("TERM-069: on Windows a multi-line paste is bracketed even when the program has not asked; single-line text keeps the fast path", () => {
+  const t = new EventTarget();
+  const got: string[] = [];
+  attachPaste(t, (s) => got.push(s), () => false, () => {}, () => false, () => true);
+  paste(t, "echo one\necho two\necho three");
+  expect(got).toEqual([BRACKET_OPEN + "echo one\recho two\recho three" + BRACKET_CLOSE]);
+  got.length = 0;
+  paste(t, "echo one");
+  expect(got).toEqual(["echo one"]);
+  // off (not Windows): the program's own mode decides, as before
+  const u = new EventTarget();
+  const plain: string[] = [];
+  attachPaste(u, (s) => plain.push(s), () => false, () => {}, () => false, () => false);
+  paste(u, "echo one\necho two");
+  expect(plain).toEqual(["echo one\recho two"]);
+});
+
 test("a paste into pane B reaches B only, even with pane A open first; the browser's default is cancelled", () => {
   const a = new EventTarget();
   const b = new EventTarget();

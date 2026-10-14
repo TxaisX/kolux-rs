@@ -46,6 +46,11 @@ export function attachPaste(
   held: () => boolean,
   refused: (message: string) => void = () => {},
   bracketed: () => boolean = () => false,
+  /** TERM-069: true (Windows) forces a multi-line paste onto the bracketed path even when the
+   *  program has not asked for it; a program that honours brackets then takes the lines as one
+   *  paste, and the console layer drops the markers for one that does not (measured: Windows
+   *  PowerShell 5.1 under ConPTY shows nothing of them). Single-line text keeps the fast path. */
+  forceMultiLine: () => boolean = () => false,
 ) {
   const queued: string[] = [];
   const chunks: Chunk[] = [];
@@ -70,7 +75,7 @@ export function attachPaste(
     } else if (chunks.length > 0) timer = setTimeout(pump, 0);
   };
   const deliver = (text: string) => {
-    const wrap = bracketed();
+    const wrap = bracketed() || (/[\r\n]/.test(text) && forceMultiLine());
     const pieces = cutChunks(text).map((piece) => prepareForTerminal(piece, wrap));
     const last = pieces.length - 1;
     pieces.forEach((data, i) => {

@@ -28,6 +28,7 @@ import { folderName } from "../projects/model";
 import { withoutRules } from "../launch/seats";
 import { modelOf } from "../settings/routing";
 import { openSettings } from "../settings/pages";
+import { answerKeys, canAnswer, nextPrompt } from "./permissionAnswer";
 import { Close, Dots, Expand, Plus, SplitRight, StatusGlyph } from "../chrome/icons";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import Ring from "../usage/Ring";
@@ -191,6 +192,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   // pane; restart() re-runs the start line, or opens a plain shell, keeping the buffer.
   const [died, setDied] = useState<number | null>(null);
   const restart = useRef<(shell: boolean) => void>(() => {});
+  /** TERM-031: types into the program through the pane's ordered write chain (set once the terminal is up). */
+  const typeIn = useRef<(data: string) => void>(() => {});
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const [plusAt, setPlusAt] = useState<{ top: number; right: number } | null>(null);
@@ -361,6 +364,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       }, 1500);
     };
     // TERM-068 lives in paste.ts (tested there); the paste chords are left to the browser instead of xterm.
+    typeIn.current = (data) => void write(data);
     const pasting = attachPaste(
       term.textarea,
       (text) => {
@@ -377,6 +381,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       () => pending !== null,
       setFlash, // TERM-071: a paste over the limit says so in the header; nothing is sent
       () => term.modes.bracketedPasteMode && term.options.ignoreBracketedPasteMode !== true,
+      // TERM-069: on Windows a multi-line paste always goes bracketed (single-line keeps the fast path).
+      () => navigator.userAgent.includes("Windows"),
     );
     // TERM-065: the copy chord copies a selection and gives the keyboard back; Ctrl+C with nothing
     // selected is the program's interrupt and goes through untouched. Nothing selected under
@@ -606,6 +612,10 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     if (hook === "done") setFinishedAt((t) => t ?? Date.now());
     else if (hook === "working") setFinishedAt(null);
   }, [hook]);
+  // TERM-031: one count per prompt shown (each entry into "permission"); an Approve/Deny control
+  // carries the count it was drawn with, so an answer to a prompt that has gone sends nothing.
+  const prompt = useRef<{ count: number; hook: AgentState | undefined }>({ count: 0, hook: undefined });
+  if (prompt.current.hook !== hook) prompt.current = { count: nextPrompt(prompt.current.count, prompt.current.hook, hook), hook };
   // A shell pane running an agent the user started by hand reads as that agent's session.
   const shown: Agent = agent === "shell" && found ? found : agent;
   const header = headerOf(shown, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now, hook);
@@ -705,6 +715,28 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         <span className={`status ${tone}`} data-tip={explain}>
           {word}
         </span>
+        {header.state === "permission" && shown !== "shell" && (
+          <span className="answer" role="group" aria-label="Answer the permission prompt">
+            {(["approve", "deny"] as const).map((answer) => {
+              const drawnAt = prompt.current.count;
+              return (
+                <button
+                  key={answer}
+                  className={`btn ${answer === "approve" ? "primary" : ""}`}
+                  data-answer={answer}
+                  title={answer === "approve" ? "Approve: answers Yes in this agent while its prompt is still showing" : "Deny: backs out of the prompt while it is still showing"}
+                  onClick={() => {
+                    const keys = answerKeys(shown, answer);
+                    if (keys !== null && canAnswer(shown, hook, drawnAt, prompt.current.count)) typeIn.current(keys);
+                    else setFlash("The prompt has gone; nothing was sent");
+                  }}
+                >
+                  {answer === "approve" ? "Approve" : "Deny"}
+                </button>
+              );
+            })}
+          </span>
+        )}
         {flash && (
           <span className="status attention" role="status">
             {flash}
