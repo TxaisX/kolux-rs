@@ -83,6 +83,16 @@ Below, every agent pane is one row, grouped Needs you, Working, Done, Stopped, I
 
 Click a row, or walk the rows with Up and Down and press Enter, to open that pane.
 
+## The Floor
+
+Use it to see when each agent worked, waited for you or sat idle. It has no button yet: give "Show Floor" a key in the keyboard shortcuts, then press it. Pick another view to leave.
+
+Each agent pane is one lane, named after its terminal. Coloured stretches show Working, Needs you (a permission, a question or a block), Idle and Unverifiable. Unverifiable means the pane's terminal has closed, so Kolux cannot vouch for its quiet stretches. Hover a stretch for its times. Pick the range at the top: 15 minutes, 60 minutes (the default) or Today (from midnight). The page reads again every 5 seconds. With nothing to show it says "No agent reported any activity in this range."
+
+## Automation runs
+
+A finished run's page keeps **Saved output**: the last text the agent's terminal showed when the run ended (about the last 16,000 characters; when older lines were left out, it says so). It also shows **Tokens and cost** for the run, from the agent's own usage records, and the automation's page adds up its runs. When no usage can be matched, it says "Unavailable" with the reason rather than showing 0. A run's figure counts every session that worked in the same folder while it ran, so a run in a folder where you also work by hand can show your own usage too; a fix is planned. The figure is read when you open the Automations page, so reopen it after a run finishes.
+
 ## Status words
 
 The same words appear in pane headers, tabs, the sidebar, the Board and the Inbox.
@@ -133,4 +143,4 @@ Settings, Notifications has three switches and a sound choice (System default, C
 
 The pill in the top bar shows how much of your weekly allowance is left for each installed AI program, for example "Claude 80% left". It is read-only. Hover for the weekly limit and when it resets. It tints as the allowance runs down (warning at 70% used, danger above 90%). See [Getting started](getting-started.md) for the full description.
 
-<!-- verified against: src/board/chip.ts, src/App.tsx, src/agents/AgentsRail.tsx, src/agents/rail.ts, src/inbox/inbox.ts, src/inbox/InboxView.tsx, src/terminal/status.ts, src/terminal/notify.ts, src/status/useAgentStatus.ts, src/usage/meter.ts, src/tower/tower.ts, src/tower/TowerView.tsx, src/chrome/TopBar.tsx, src/keys/actions.ts, src-tauri/src/status.rs at 55c8034 -->
+<!-- verified against: src/board/chip.ts, src/App.tsx, src/agents/AgentsRail.tsx, src/agents/rail.ts, src/inbox/inbox.ts, src/inbox/InboxView.tsx, src/terminal/status.ts, src/terminal/notify.ts, src/status/useAgentStatus.ts, src/usage/meter.ts, src/tower/tower.ts, src/tower/TowerView.tsx, src/chrome/TopBar.tsx, src/keys/actions.ts, src-tauri/src/status.rs, src/floor/FloorView.tsx, src/floor/timeline.ts, src-tauri/src/activity.rs, src/automations/RunsDashboard.tsx, src/automations/usage.ts at f424c27 -->
