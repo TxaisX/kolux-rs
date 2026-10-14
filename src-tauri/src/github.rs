@@ -557,6 +557,46 @@ pub fn comment_issue(gh: &Path, host: &str, repo: &str, number: u64, body: &str)
     graphql(gh, host, ADD_COMMENT, serde_json::json!({ "id": id, "body": body })).map(|_| ())
 }
 
+/// T-231-d (GIT-046): the issue GitHub opened.
+#[derive(Debug, PartialEq, serde::Serialize)]
+pub struct CreatedIssue {
+    pub number: u64,
+    pub url: String,
+    pub title: String,
+}
+
+/// GIT-046: open an issue in `repo` with its labels and assignees in one REST call; the title and
+/// text go to gh on stdin, never on its command line.
+pub fn create_issue(gh: &Path, host: &str, repo: &str, title: &str, body: &str, labels: &[String], assignees: &[String]) -> Result<CreatedIssue, String> {
+    let path = format!("{}/issues", repo_path(host, repo)?);
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("Give the issue a title first.".into());
+    }
+    if body.chars().count() > COMMENT_MAX {
+        return Err(format!("An issue's description can be at most {COMMENT_MAX} characters."));
+    }
+    if let Some(bad) = assignees.iter().find(|a| !login_ok(a)) {
+        return Err(format!("{bad} is not a GitHub login."));
+    }
+    if labels.iter().any(|l| l.trim().is_empty()) {
+        return Err("A label needs a name.".into());
+    }
+    host_allowed(gh, host)?;
+    let input = serde_json::json!({ "title": title, "body": body, "labels": labels, "assignees": assignees }).to_string();
+    let text = gh_run(gh, &std::env::temp_dir(), &["api", "-X", "POST", &path, "--hostname", host, "--input", "-"], Some(&input)).map_err(|e| format!("{host}: {}", gh_words(&e)))?;
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
+    match v["number"].as_u64() {
+        Some(number) if number > 0 => Ok(CreatedIssue { number, url: s(&v["html_url"]), title: s(&v["title"]) }),
+        _ => Err("GitHub did not say which issue it opened; refresh the list to see whether it is there.".into()),
+    }
+}
+
+#[tauri::command]
+pub async fn github_issue_create(host: String, repo: String, title: String, body: String, labels: Vec<String>, assignees: Vec<String>) -> Result<CreatedIssue, String> {
+    tauri::async_runtime::spawn_blocking(move || create_issue(&gh_program()?, &host, &repo, &title, &body, &labels, &assignees)).await.map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn github_issue_state(host: String, repo: String, number: u64, open: bool, reason: String, duplicate_of: Option<u64>) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || set_issue_state(&gh_program()?, &host, &repo, number, open, &reason, duplicate_of)).await.map_err(|e| e.to_string())?
@@ -879,5 +919,28 @@ mod tests {
         assert!(comment_issue(&gh, "github.com", "acme/app", 7, &"x".repeat(COMMENT_MAX + 1)).is_err());
         assert!(set_issue_state(&gh, "github.com", "acme/../app", 7, true, "", None).is_err());
         assert!(!dir.join("calls.txt").exists(), "nothing was sent for a refused request");
+    }
+
+    #[test]
+    fn a_new_issue_goes_to_the_chosen_repository_with_its_labels_and_assignees_on_stdin() {
+        let (gh, dir) = graphql_stand_in("github-issue-create", &json!({ "number": 12, "html_url": "https://github.com/acme/app/issues/12", "title": "Crash on start" }));
+        let got = create_issue(&gh, "github.com", "acme/app", " Crash on start ", "Steps \"quoted\" & more", &["bug".into()], &["ana".into()]).unwrap();
+        assert_eq!(got, CreatedIssue { number: 12, url: "https://github.com/acme/app/issues/12".into(), title: "Crash on start".into() });
+        let calls = fs::read_to_string(dir.join("calls.txt")).unwrap();
+        assert!(calls.contains("api -X POST repos/acme/app/issues --hostname github.com --input -"), "{calls}");
+        assert!(!calls.contains("quoted"), "the text goes on stdin, never on the command line: {calls}");
+        let body: serde_json::Value = serde_json::from_str(fs::read_to_string(dir.join("body.txt")).unwrap().trim()).unwrap();
+        assert_eq!(body, json!({ "title": "Crash on start", "body": "Steps \"quoted\" & more", "labels": ["bug"], "assignees": ["ana"] }));
+
+        let (gh, dir) = graphql_stand_in("github-issue-create-refused", &json!({}));
+        assert!(create_issue(&gh, "github.com", "acme/app", "  ", "", &[], &[]).unwrap_err().contains("title"));
+        assert!(create_issue(&gh, "github.com", "acme/app", "t", &"x".repeat(COMMENT_MAX + 1), &[], &[]).is_err());
+        assert!(create_issue(&gh, "github.com", "acme/app", "t", "", &[], &["bad login".into()]).is_err());
+        assert!(create_issue(&gh, "github.com", "acme/app", "t", "", &[" ".into()], &[]).is_err());
+        assert!(create_issue(&gh, "github.com", "acme/../app", "t", "", &[], &[]).is_err());
+        assert!(!dir.join("calls.txt").exists(), "nothing was sent for a refused issue");
+
+        let (gh, _keep) = graphql_stand_in("github-issue-create-odd", &json!({ "message": "?" }));
+        assert!(create_issue(&gh, "github.com", "acme/app", "t", "", &[], &[]).unwrap_err().contains("refresh"));
     }
 }

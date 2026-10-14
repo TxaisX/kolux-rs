@@ -2,9 +2,9 @@
 // out of the component so the order is tested: the buttons stay busy until the refreshed issue is
 // back, and a gh timeout on a write says it may have gone through.
 
-export type IssueAction = "close" | "reopen" | "comment";
+export type IssueAction = "close" | "reopen" | "comment" | "create";
 
-const DONE: Record<IssueAction, string> = { close: "the issue may have been closed", reopen: "the issue may have been reopened", comment: "the comment may have been posted" };
+const DONE: Record<IssueAction, string> = { close: "the issue may have been closed", reopen: "the issue may have been reopened", comment: "the comment may have been posted", create: "the issue may have been opened" };
 
 /** What the dialog says when an action failed. A timeout means gh stopped waiting, not that GitHub
  * refused, so the write may have landed: refreshing first avoids sending it twice. */

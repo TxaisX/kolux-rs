@@ -10,6 +10,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Refresh, Search } from "../chrome/icons";
 import { useSettings } from "../settings/useSettings";
 import { beyondWindow, defaultPreset, FILTERS, type FilterKey, filterValue, issueSource, pageButtons, pageCount, PER_PAGE, PRESETS, setFilter, type Task, type TaskLabel, type TaskPage, taskKind, taskQueries } from "./model";
+import NewIssueDialog from "./NewIssueDialog";
+import { issueTargets } from "./newIssue";
 import { type GhRepo, loadRepoFacts, type ParentRead, type Person, resetFacts } from "./repoFacts";
 import ProjectsView from "./ProjectsView";
 import TaskDialog from "./TaskDialog";
@@ -69,6 +71,7 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
   const [result, setResult] = useState<TaskPage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<Task | null>(null);
+  const [newIssue, setNewIssue] = useState(false);
   // T-314-c: Issues and pull requests, or GitHub Projects (GIT-056).
   const [tab, setTab] = useState(kept.tab);
   const list = useRef<HTMLUListElement>(null);
@@ -208,6 +211,9 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
             {gh.host} · {login ? `@${login}` : "not signed in"} · {gh.owner}/{gh.name}
           </span>
         )}
+        <button className="btn" data-new-issue-open disabled={!gh} onClick={() => setNewIssue(true)}>
+          New issue
+        </button>
         <button className="ib" title="Refresh" disabled={!gh} onClick={load}>
           <Refresh />
         </button>
@@ -273,6 +279,23 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
           )}
           {beyondWindow(result.deepest) && <span className="tasks-count tasks-window">Results past {pages * PER_PAGE} are beyond GitHub search and cannot be reached; narrow the search.</span>}
         </div>
+      )}
+      {newIssue && gh && (
+        <NewIssueDialog
+          host={gh.host}
+          targets={issueTargets(source.repo, own)}
+          saved={settings?.tasksIssueDraft}
+          save={save}
+          factsRepo={own}
+          labels={labels}
+          people={people.map((x) => x.login)}
+          onClose={() => setNewIssue(false)}
+          onCreated={(t: Task) => {
+            setNewIssue(false);
+            setResult((r) => r && { ...r, items: [t, ...r.items.filter((x) => x.url !== t.url)] });
+            setOpen(t);
+          }}
+        />
       )}
       {open && gh && (
         <TaskDialog
