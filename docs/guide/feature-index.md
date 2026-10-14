@@ -489,4 +489,4 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-298 | Reopen the wizard from the sidebar help menu; first successes are recorded locally. | [Getting started](getting-started.md) |
 
 | T-546 | The Tower: every agent on one full-width screen, needs-you first, one click to its pane, usage per program across the top. | [Board, Agents and Inbox](board-agents-inbox.md) |
-<!-- generated from PLAN.md at d3358c3 -->
+<!-- generated from PLAN.md at cf61e3f -->

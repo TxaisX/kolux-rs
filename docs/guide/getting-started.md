@@ -76,4 +76,4 @@ More detail is in [Projects and worktrees](projects-and-worktrees.md).
 
 Other ways in: press Ctrl+T for a plain shell, or use "New tab" and "Choose agent…" to pick the AI, model and number of sessions before anything starts.
 
-<!-- verified against: src/onboarding/Wizard.tsx, src/chrome/TopBar.tsx, src/usage/meter.ts, src/usage/ClaudePill.tsx, src/usage/CodexPill.tsx, src/settings/general.ts, src/projects/AddProject.tsx, src/projects/ProjectsPanel.tsx, src/launch/PlusMenu.tsx, src/keys/actions.ts at d3358c3 -->
+<!-- verified against: src/onboarding/Wizard.tsx, src/chrome/TopBar.tsx, src/usage/meter.ts, src/usage/ClaudePill.tsx, src/usage/CodexPill.tsx, src/settings/general.ts, src/projects/AddProject.tsx, src/projects/ProjectsPanel.tsx, src/launch/PlusMenu.tsx, src/keys/actions.ts at 7f64466 -->
