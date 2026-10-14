@@ -55,9 +55,59 @@ Use it to browse sessions by program rather than by state. The left rail, "Sessi
 - Each row shows the agent mark, a name (the title, the folder, or "Session N"), a context ring and a status word.
 - The + beside an agent ("Add a <agent> session") adds a not-started session, shown as "New session" and "Not started".
 - A footer line shows the picked session's 5-hour allowance and when it resets, for example "Claude 80% left".
-- The picked session's terminal (or its chooser) fills the area beside the rail. Kolux remembers your pick; first run it picks the first agent's newest session.
+- The picked session's terminal (or its chooser), or its chat when it can show one (see below), fills the area beside the rail. Kolux remembers your pick; first run it picks the first agent's newest session.
 
 With no agent switched on the page says "No agents yet" with an "Open Settings" button. With an agent but no session it says "No session yet. Add one with + under an agent."
+
+### Chat on the Agents page
+
+Use it to read a Claude Code, OpenClaude or Codex session as a conversation instead of a terminal, and to talk to the agent without clicking into its terminal. When the picked session can show chat, the chat appears in the page body. A session that cannot (another program, or no saved conversation Kolux can find on this computer) keeps its terminal. While the program is still starting, the page says "Starting...". Kolux checks again every 3 seconds, so chat appears once the session is ready.
+
+The chat follows the agent's saved conversation live, even before that file exists: it says "Loading the conversation..." and then fills in. With nothing said yet it reads "No messages yet. What you and the agent say shows up here." Each message appears once, in order, with its time (hover for the full date). A reply still being written shows faintly until the saved version replaces it. Hover a message for **Copy** and **Top**. Click a picture to see it full size.
+
+**The agent's work inside each turn.** The chat folds the busy parts away so you can read the talk.
+
+| You see | What it is |
+|---|---|
+| Thought | The agent's reasoning, folded until you open it |
+| A line such as "3 steps" | The tool calls of one stretch of work. Open it for each call and its output. A single call shows its own name or command. Running and failed calls are marked |
+| A card per file, tagged Added, Edited, Renamed or Deleted | A file edit as a diff (the lines before and after). **Copy diff** copies it. A refused edit shows the agent's error instead |
+| "2 subagents working" or "2 subagents ran" | One row for the helper agents. Open it for each helper's state (Working, Idle, Done, Failed, Stopped) and how long it took |
+| A divider, a plan, a notice | A compaction (the agent shortening its memory), a plan it wrote, and a message from the AI provider. A notice with more text has a **Details** fold |
+| "Responding...", "Working" or "Monitoring background work", with a timer | The agent is busy. "Worked for ..." closes a finished turn |
+
+Only web links in the output are clickable, and they open in your normal browser.
+
+**Fold and unfold from the keyboard.** Thought rows start folded. Tab to one and press Enter or Space to open or fold it. **Expand all** and **Collapse all** sit at the top of the chat whenever it has a Thought row. The step, subagent and Details folds open the same way.
+
+**The message box.** The box at the foot of the chat types into the agent's own terminal, as if you typed there yourself.
+
+| Key | Does |
+|---|---|
+| Enter | Sends |
+| Shift+Enter | Starts a new line (the box grows to about 8 lines) |
+| Up, Down | Step through your earlier messages (the last 50), when the cursor is on the first or last line |
+| Escape | Nothing in the box. It never reaches the agent, where it would stop the turn |
+| Any typing elsewhere in the chat | Goes to the box. Backspace or Delete moves you into it |
+
+Your unsent draft is kept for each session. A message you sent shows faintly until the saved conversation records it. If it never arrives the row says "This message did not arrive. Look at the terminal." A message too long to send at once is refused with a note ("Shorten it or paste it in the terminal") and the box keeps your text. With no live terminal the box says "This session has no live terminal. Switch back to the terminal to reconnect."
+
+**When the box holds your send.** An agent that is asking you something in its terminal shows a menu, and a menu's pre-picked answer is Yes. So Kolux sends only when it can see the agent is not asking.
+
+| The box says | Why |
+|---|---|
+| "The agent is asking something in its terminal. Answer there." | The agent wants permission or an answer. You can still write a draft, but it will not send until the agent is no longer asking |
+| "Kolux can't see this agent's prompts. Type in its terminal." | Kolux has no status report from this agent: its hooks are off, Codex has not been trusted, or no event has come yet |
+
+Before each key it types, Kolux checks again for the session the message was sent to, not the session on screen now. If the agent starts asking half way through a send, the rest is dropped.
+
+**Scrolling.** The chat follows new messages while you are at the bottom (within about 48 pixels). Scroll up and it holds still while replies stream in. A **Jump to latest** button takes you back. After you send, the view goes to the bottom. With no session picked in the rail, the box types into the first agent that can chat, and a line says "Typing into <name>".
+
+Not there yet: a **Show terminal** switch on the chat, answering an agent's question with a card in the chat, and chat for Grok and omp. Use the terminal for those.
+
+### Request changes on a plan
+
+In the plan review sheet (the "Review plan" button on a pane), **Request changes** denies the plan and types your comments into the agent. Kolux first waits up to about 3 seconds for the agent to leave its permission menu, because an Enter typed into an open menu would pick its pre-picked answer, Yes. If the agent is still asking, a notice says "The agent is still asking. Answer it in its terminal; your feedback was not typed." If Kolux cannot answer the agent at all, it says "Kolux could not answer the agent. Answer it in its terminal; your feedback was not typed." In both cases type your feedback in the terminal yourself.
 
 ## The Inbox
 
@@ -91,7 +141,7 @@ Each agent pane is one lane, named after its terminal. Coloured stretches show W
 
 ## Automation runs
 
-A finished run's page keeps **Saved output**: the last text the agent's terminal showed when the run ended (about the last 16,000 characters; when older lines were left out, it says so). It also shows **Tokens and cost** for the run, from the agent's own usage records, and the automation's page adds up its runs. When no usage can be matched, it says "Unavailable" with the reason rather than showing 0. A run's figure counts every session that worked in the same folder while it ran, so a run in a folder where you also work by hand can show your own usage too; a fix is planned. The figure is read when you open the Automations page, so reopen it after a run finishes.
+A finished run's page keeps **Saved output**: the last text the agent's terminal showed when the run ended (about the last 16,000 characters; when older lines were left out, it says so). This also holds when the terminal closes or the program exits before the run is saved: Kolux takes the pane's last text just before its log goes. A run that already has saved output keeps it. It also shows **Tokens and cost** for the run, from the agent's own usage records, and the automation's page adds up its runs. When no usage can be matched, it says "Unavailable" with the reason rather than showing 0. A run's figure counts every session that worked in the same folder while it ran, so a run in a folder where you also work by hand can show your own usage too; a fix is planned. The figure is read when you open the Automations page, so reopen it after a run finishes.
 
 ## Status words
 
@@ -116,6 +166,20 @@ The same words appear in pane headers, tabs, the sidebar, the Board and the Inbo
 A plain shell reads "Ready" while it runs and "Ended (code)" after it exits. A session not yet started reads "Not started" on the Agents page.
 
 Until an agent's status hooks report, Kolux guesses its state from the title the program gives its terminal. A spinner or a word such as "thinking" reads Working, "ready" or "idle" reads Done, and "permission" or "waiting" reads Needs you. A title it does not recognise, such as a folder path, changes nothing. The first real status replaces the guess.
+
+### What Gemini CLI, Antigravity and Amp show
+
+Once their status hooks are on (see [Settings](settings.md#hooks-for-gemini-cli-antigravity-and-amp)), these three move the dot as follows.
+
+| Agent | Working | Done |
+|---|---|---|
+| Gemini CLI | A prompt is sent, and each tool starts or finishes | The turn ends |
+| Antigravity | A prompt is sent, and each tool starts or finishes | The agent stops and reports itself fully idle. A stop while it is not fully idle changes nothing |
+| Amp | A prompt is sent, and each tool starts or finishes | The turn ends normally |
+
+- **Needs you:** Kolux shows it when one of these agents calls a tool named `ask_question` or `ask_permission`. Kolux wrote that rule for Antigravity's question tools.
+- **Interrupted:** Amp tells Kolux itself when a turn ends cancelled or with an error, and the dot reads Interrupted. Gemini CLI and Antigravity send no such report.
+- **No Approve or Deny:** none of the three reports a permission request, so their cards show no Approve and Deny buttons. Answer in the agent's terminal. See [Approve and Deny](#approve-and-deny).
 
 A program can also report its own status by printing a hidden code (OSC 9999, with the state working, done, permission, waiting or idle). Kolux reads it and never shows it on screen. Any program running in the pane can print it, so this status is the program's own word, not proof.
 
@@ -143,4 +207,4 @@ Settings, Notifications has three switches and a sound choice (System default, C
 
 The pill in the top bar shows how much of your weekly allowance is left for each installed AI program, for example "Claude 80% left". It is read-only. Hover for the weekly limit and when it resets. It tints as the allowance runs down (warning at 70% used, danger above 90%). See [Getting started](getting-started.md) for the full description.
 
-<!-- verified against: src/board/chip.ts, src/App.tsx, src/agents/AgentsRail.tsx, src/agents/rail.ts, src/inbox/inbox.ts, src/inbox/InboxView.tsx, src/terminal/status.ts, src/terminal/notify.ts, src/status/useAgentStatus.ts, src/usage/meter.ts, src/tower/tower.ts, src/tower/TowerView.tsx, src/chrome/TopBar.tsx, src/keys/actions.ts, src-tauri/src/status.rs, src/floor/FloorView.tsx, src/floor/timeline.ts, src-tauri/src/activity.rs, src/automations/RunsDashboard.tsx, src/automations/usage.ts at d1de182 -->
+<!-- verified against: src/board/chip.ts, src/App.tsx, src/agents/AgentsRail.tsx, src/agents/rail.ts, src/inbox/inbox.ts, src/inbox/InboxView.tsx, src/terminal/status.ts, src/terminal/notify.ts, src/chat/ChatView.tsx, src/chat/MessageBox.tsx, src/chat/StepRows.tsx, src/chat/send.ts, src/chat/model.ts, src/chat/composer.ts, src/status/useAgentStatus.ts, src/usage/meter.ts, src/tower/tower.ts, src/tower/TowerView.tsx, src/chrome/TopBar.tsx, src/keys/actions.ts, src-tauri/src/status.rs, src/floor/FloorView.tsx, src/floor/timeline.ts, src-tauri/src/activity.rs, src/automations/RunsDashboard.tsx, src/automations/usage.ts, src-tauri/src/terminal.rs, PLAN.md (T-140-b, T-151-b), src-tauri/src/agent_hooks/mod.rs, src-tauri/src/agent_hooks/vendors.rs at fb0a9d4 -->

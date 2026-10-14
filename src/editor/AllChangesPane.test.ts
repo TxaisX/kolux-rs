@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { entryKey, estimate, sidesCall, tagOf, WAIT_OVER, type Entry } from "./AllChangesPane";
-import { AC_SPLIT_KEY, AC_TREE_KEY, AC_WHITESPACE_KEY, AC_WRAP_KEY, acLayoutOf } from "../scm/model";
+import { baseCall, entryKey, estimate, sidesCall, tagOf, WAIT_OVER, type Entry } from "./AllChangesPane";
+import { AC_SPLIT_KEY, AC_TREE_KEY, AC_WHITESPACE_KEY, AC_WRAP_KEY, acLayoutOf, emptyStatus } from "../scm/model";
 
 const e = (over: Partial<Entry>): Entry => ({ path: "C:/r/a.ts", staged: false, code: "M", lines: 10, binary: false, stamp: "x", ...over });
 
@@ -36,5 +36,14 @@ describe("GIT-038: All Changes against the branch's base", () => {
   it("starts inline, unwrapped, whitespace hidden and the tree hidden unless a setting says otherwise", () => {
     expect(acLayoutOf(null)).toEqual({ split: false, wrap: false, spaces: false, tree: false });
     expect(acLayoutOf({ [AC_SPLIT_KEY]: true, [AC_WRAP_KEY]: "yes", [AC_WHITESPACE_KEY]: true, [AC_TREE_KEY]: true })).toEqual({ split: true, wrap: false, spaces: true, tree: true });
+  });
+});
+
+describe("T-033-g: All Changes reads its base without a second status", () => {
+  it("passes the base the last status named, and none before any status arrived", () => {
+    expect(baseCall("C:/r", null, { ...emptyStatus, base: "main" })).toEqual(["scm_base_changes", { worktree: "C:/r", pinned: null, known: "main" }]);
+    expect(baseCall("C:/r", "release", { ...emptyStatus, base: "main" })).toEqual(["scm_base_changes", { worktree: "C:/r", pinned: "release", known: "main" }]);
+    expect(baseCall("C:/r", null, null)).toEqual(["scm_base_changes", { worktree: "C:/r", pinned: null, known: null }]);
+    expect(baseCall("C:/r", null, emptyStatus)).toEqual(["scm_base_changes", { worktree: "C:/r", pinned: null, known: null }]);
   });
 });

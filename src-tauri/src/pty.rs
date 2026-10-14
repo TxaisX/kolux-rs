@@ -81,7 +81,7 @@ pub fn shell_commands(cwd: Option<&str>, chosen: Option<(String, Vec<String>)>) 
         .collect()
 }
 
-fn home_dir() -> Option<PathBuf> {
+pub(crate) fn home_dir() -> Option<PathBuf> {
     if !cfg!(windows) {
         return std::env::var_os("HOME").map(PathBuf::from);
     }
