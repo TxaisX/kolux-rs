@@ -1,0 +1,21 @@
+T-033-f evidence (lane/reliability from fd7091b, 2026-10-13). Council D2 MERGE 48 review, FIX-SOON 1.
+
+What changed (src-tauri/src/scm_watch.rs)
+- ask_git: after check-ignore, the folders it called ignored are listed once with
+  `git ls-files -z -- <dir>/ ...`; a folder that still holds a tracked file is answered "not ignored",
+  so a change to that tracked file starts a read again (before: it was cached as ignored and the
+  status never moved). tracked_under() reads the ls-files output.
+- matters: the rule-file check runs before counts(). Before, `.git/info/exclude` was dropped by
+  counts() (only HEAD, index and refs pass inside .git), so an exclude edit never cleared the cache.
+- New Spot::Info: a linked worktree also watches its repository's shared `info` folder (not
+  recursive, only when it exists so a missing folder cannot break the watch); its `exclude` file
+  forgets that worktree's answers and reads once; nothing else in info/ counts.
+- The Ignores doc comment now names the tracked-file rule and both exclude files.
+
+Test: scm::watch::tests::t033f_an_ignored_folder_with_tracked_files_is_kept_and_exclude_edits_forget_through_matters
+  (real repository; gen/ ignored but tracking gen/a.txt counts; .git/info/exclude "build/" then "" goes
+  through matters() and build/out.bin flips from not counted to counted; a real linked worktree has the
+  Info watch, the shared exclude "cache/" applies to it, and an exclude edit through Spot::Info forgets it)
+
+Gates: cargo test watch:: 14 passed 0 failed (14.8 s); cargo clippy --all-targets -D warnings clean.
+No visible change for the user beyond Source Control updating in these two cases, so no CDP run.

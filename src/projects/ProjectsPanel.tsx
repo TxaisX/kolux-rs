@@ -44,6 +44,7 @@ import { GLOSSARY } from "../glossary";
 import HelpMenu from "../onboarding/HelpMenu";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import ImportSetup, { refusedLine, type SetupImport } from "./ImportSetup";
+import { issueCommand } from "../setup/IssueCommand";
 import { NO_GROUPS, groupChoices, groupTree, keepNewer, type Group, type Groups, type Node } from "./groups";
 
 /** The pages that open over the content column from the sidebar footer. */
@@ -668,6 +669,9 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         else if (front) onSelect(wt.path, wt.branch, true);
         if (setup && onSetup) onSetup(wt.path, wt.branch, setup, setupWhere, false);
       }
+      // PROJ-036: a workspace made from a linked issue runs the project's issue command in a tab.
+      const run = setupSkip || !onSetup ? null : await issueCommand(project.path, wt.path, issue).catch((err) => (say("warn", String(err)), null));
+      if (run && onSetup) onSetup(wt.path, wt.branch, run.line, "tab", false);
     } catch (err) {
       if (stopped.current.has(mine.ticket)) {
         const n = stoppedNote(mine.name, String(err));

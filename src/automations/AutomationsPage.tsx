@@ -16,6 +16,8 @@ import type { Project } from "../projects/model";
 import AutomationDialog, { TemplateCards } from "./AutomationDialog";
 import type { Template } from "./timetable";
 import RunsDashboard, { Breadcrumb, RunPage } from "./RunsDashboard";
+import { totalUsage } from "./usage";
+import { PROVIDERS, type Usage } from "../usage/tokens";
 import { folderName } from "../projects/model";
 import { ago, CONFIRM_DELETE_KEY, confirmDelete, keepSelection, lastRun, runActions, runStep, startedBy, type RunAction, pageKey, matches, noFilters, normalizeQuery, passes, sortRows, statusWord, triggerLabel, upcoming, graceWord, precheckWord, type Automation, type Filters, type Names, type Run, type SortKey } from "./model";
 
@@ -30,7 +32,7 @@ type Props = {
   /** Escape on the list closes the page (AUTO-017). */
   onClose?: () => void;
   /** Seeds the page without asking the back end (tests render it to HTML); `open` opens one automation. */
-  initial?: { data?: Data; error?: string; runs?: boolean; open?: string };
+  initial?: { data?: Data; error?: string; runs?: boolean; open?: string; usage?: Usage };
   /** AUTO-013: whether a run's own terminal is still open, and how View run and Resume workspace get there. */
   liveRun?: (r: Run) => boolean;
   onViewRun?: (r: Run) => void;
@@ -84,6 +86,8 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
   // AUTO-015: the Runs dashboard, and the run opened from it as a full page.
   const [runsView, setRunsView] = useState(initial?.runs ?? false);
   const [openRun, setOpenRun] = useState<string | null>(null);
+  // AUTO-014: the token usage Kolux reads from the agents' logs, matched to finished runs.
+  const [usage, setUsage] = useState<Usage | null>(initial?.usage ?? null);
 
   const load = () =>
     invoke<Data>("automations_list")
@@ -97,6 +101,14 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
     void load();
     search.current?.focus(); // the search box has focus when the page opens
     const off = listen("automations-changed", () => void load());
+    // AUTO-014: the saved usage at once, then a fresh read of each tracked agent's logs.
+    invoke<Usage>("token_usage")
+      .then((u) => {
+        setUsage(u);
+        const scans = PROVIDERS.filter((p) => u.tracking[p]).map((p) => invoke("token_usage_scan", { provider: p }));
+        if (scans.length) void Promise.allSettled(scans).then(() => invoke<Usage>("token_usage").then(setUsage, () => {}));
+      })
+      .catch(() => {});
     const tick = window.setInterval(() => setNow(Date.now()), 30000);
     return () => {
       window.clearInterval(tick);
@@ -224,7 +236,7 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
           </div>
         )}
         <RunsDashboard runs={runs} automations={all} now={now} onRefresh={() => void refreshRuns()} onAutomations={toAutomations} onOpen={(r) => setOpenRun(r.id)} hidden={shown !== undefined} />
-        {shown && <RunPage run={shown} automation={all.find((a) => a.id === shown.automationId)} now={now} onRuns={() => setOpenRun(null)} onAutomations={toAutomations} />}
+        {shown && <RunPage run={shown} automation={all.find((a) => a.id === shown.automationId)} now={now} usage={usage} agentName={names.agent(shown.provider ?? "")} onRuns={() => setOpenRun(null)} onAutomations={toAutomations} />}
       </div>
     );
   }
@@ -237,7 +249,7 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
         <div className="autos-bar">
           <Breadcrumb onAutomations={() => setOpened(null)} last={openedA.name} />
         </div>
-        <Detail key={openedA.id} a={openedA} runs={runs} runsError={data?.runsError} now={now} agent={names.agent(openedA.provider)} tab={tab} onTab={setTab} onRun={() => runNow(openedA)} onToggle={() => toggle(openedA)} live={liveRun} onView={onViewRun} onResume={onResume} onRetry={() => void load()} />
+        <Detail key={openedA.id} a={openedA} runs={runs} runsError={data?.runsError} now={now} usage={usage} agent={names.agent(openedA.provider)} tab={tab} onTab={setTab} onRun={() => runNow(openedA)} onToggle={() => toggle(openedA)} live={liveRun} onView={onViewRun} onResume={onResume} onRetry={() => void load()} />
         {dialog !== undefined && <AutomationDialog projects={projects} agents={agents} editing={dialog} template={template} onClose={() => setDialog(undefined)} onSaved={saved} />}
       </div>
     );
@@ -401,7 +413,7 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
               </tbody>
             </table>
           </div>
-          {current && <Detail key={current.id} a={current} runs={runs} runsError={data?.runsError} now={now} agent={names.agent(current.provider)} tab={tab} onTab={setTab} onRun={() => runNow(current)} onToggle={() => toggle(current)} live={liveRun} onView={onViewRun} onResume={onResume} onRetry={() => void load()} />}
+          {current && <Detail key={current.id} a={current} runs={runs} runsError={data?.runsError} now={now} usage={usage} agent={names.agent(current.provider)} tab={tab} onTab={setTab} onRun={() => runNow(current)} onToggle={() => toggle(current)} live={liveRun} onView={onViewRun} onResume={onResume} onRetry={() => void load()} />}
         </>
       )}
       {dialog !== undefined && <AutomationDialog projects={projects} agents={agents} editing={dialog} template={template} onClose={() => setDialog(undefined)} onSaved={saved} />}
@@ -409,8 +421,8 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
   );
 }
 
-type DetailProps = { a: Automation; runs: Run[]; runsError?: string; now: number; agent: string; tab: "overview" | "runs"; onTab: (t: "overview" | "runs") => void; onRun: () => void; onToggle: () => void; live?: (r: Run) => boolean; onView?: (r: Run) => void; onResume?: (r: Run) => void; onRetry: () => void };
-function Detail({ a, runs, runsError, now, agent, tab, onTab, onRun, onToggle, live, onView, onResume, onRetry }: DetailProps) {
+type DetailProps = { a: Automation; runs: Run[]; runsError?: string; now: number; usage: Usage | null; agent: string; tab: "overview" | "runs"; onTab: (t: "overview" | "runs") => void; onRun: () => void; onToggle: () => void; live?: (r: Run) => boolean; onView?: (r: Run) => void; onResume?: (r: Run) => void; onRetry: () => void };
+function Detail({ a, runs, runsError, now, usage, agent, tab, onTab, onRun, onToggle, live, onView, onResume, onRetry }: DetailProps) {
   const mine = runs.filter((r) => r.automationId === a.id).sort((x, y) => y.number - x.number);
   // AUTO-018: a prompt that does not fit is folded; the guess holds until the box is measured, and
   // a narrower window brings the control up. The control stays put when used, so focus stays on it.
@@ -506,7 +518,7 @@ function Detail({ a, runs, runsError, now, agent, tab, onTab, onRun, onToggle, l
           <dt>Runs</dt>
           <dd>{runsError ? "unknown" : mine.length}</dd>
           <dt>Usage</dt>
-          <dd>Not recorded yet</dd>
+          <dd>{runsError ? "unknown" : totalUsage(mine, usage, agent)}</dd>
         </dl>
         {runsError && <div className="note warn">The run history could not be read: {runsError}</div>}
         <pre ref={box} className={`autos-prompt${unfolded ? "" : " folded"}`}>{a.prompt}</pre>
@@ -547,7 +559,7 @@ function Detail({ a, runs, runsError, now, agent, tab, onTab, onRun, onToggle, l
                   {r.output ? <pre className="auto-output">{r.output}</pre> : <p className="muted">No terminal output was saved for this run.</p>}
                 </div>
               )}
-              {r.output && !r.worktreeGone && <pre className="auto-output">{r.output}</pre>}
+              {r.output && !r.worktreeGone && r.outputFrom === undefined && <pre className="auto-output">{r.output}</pre>}
             </li>
           ))}
         </ol>

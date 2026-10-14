@@ -559,7 +559,8 @@ impl Terminals {
         let exit_app = app;
         let registry = self.inner.clone();
         let out_registry = self.inner.clone();
-        let is_program = program.as_deref().map(str::trim).is_some_and(|p| !p.is_empty());
+        // Council MERGE 51: a shell (a chosen default shell too, SET-026) stays a plain terminal, not a program session.
+        let is_program = program.as_deref().map(str::trim).is_some_and(|p| !p.is_empty() && !is_shell_program(p));
         // GIT-026: a pull-request link printed in any pane, hidden or parked ones too, attaches to its workspace.
         let mut prs = crate::scm::PrScan::default();
         let link_dir = cwd.clone();
