@@ -970,19 +970,23 @@ mod tests {
         let mut s = Session::default();
         state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"plan the refactor"}"#);
         let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PreToolUse","tool_name":"ExitPlanMode","tool_input":{"plan":"Refactor auth\n1. Extract the token check"}}"#)).unwrap();
-        assert_eq!((c.state, c.ask.as_deref(), c.detail.as_deref()), ("waiting", Some("Refactor auth\n1. Extract the token check"), Some("Refactor auth")));
+        // The plan rides on `plan` alone (SAFE-001; fit_plan sizes the whole update): `ask` is the question's field (T-123-d).
+        assert_eq!((c.state, c.ask.as_deref(), c.plan.as_deref(), c.detail.as_deref()), ("waiting", None, Some("Refactor auth\n1. Extract the token check"), Some("Refactor auth")));
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"auth.rs"}}"#), Some("working"));
-        // A question asked as a permission waits, and clears on any later tool step.
-        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which framework?","header":"Framework","options":[]}]}}"#)).unwrap();
-        assert_eq!((c.state, c.ask.as_deref()), ("waiting", Some("Which framework?")));
+        // A question asked as a permission waits with every question (one per line; the card's line is the first), and clears on any later tool step.
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which framework?","header":"Framework","options":[]},{"question":"Which database?","header":"Data","options":[]},{"question":"Deploy where?","header":"Deploy","options":[]}]}}"#)).unwrap();
+        assert_eq!((c.state, c.ask.as_deref(), c.detail.as_deref(), c.plan.as_deref()), ("waiting", Some("Which framework?\nWhich database?\nDeploy where?"), Some("Which framework?"), None));
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Read"}"#), Some("working"));
         // A real permission still waits for its own tool.
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"rm -rf build"}}"#), Some("permission"));
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Read"}"#), None);
-        // A plan past the limit is cut and says so.
-        let long = serde_json::json!({"hook_event_name":"PreToolUse","tool_name":"ExitPlanMode","tool_input":{"plan":"x".repeat(9000)}});
+        // A question past the limit is cut and says so; a long plan never rides on `ask` (its cut is fit_plan's, SAFE-006).
+        let long = serde_json::json!({"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"x".repeat(9000)}]}});
         let ask = crate::hooks::claude_change(&long).unwrap().ask.unwrap();
         assert!(ask.ends_with("… (cut)") && ask.chars().count() == 8000 + "\n… (cut)".chars().count());
+        let long_plan = serde_json::json!({"hook_event_name":"PreToolUse","tool_name":"ExitPlanMode","tool_input":{"plan":"x".repeat(9000)}});
+        let c = crate::hooks::claude_change(&long_plan).unwrap();
+        assert_eq!((c.ask, c.plan.map(|p| p.chars().count())), (None, Some(9000)));
     }
 
     #[test]
