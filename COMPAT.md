@@ -1426,7 +1426,7 @@ Started without default arguments of the user's own, these agents run in the mod
 | Agent | No-prompt switch |
 |---|---|
 | Claude (Claude Code) | `--permission-mode` with the value auto |
-| Codex | the single flag `--dangerously-bypass-approvals-and-sandbox` |
+| Codex | `--sandbox workspace-write --ask-for-approval never` (DT-C46, 2026-10-13: sandboxed, never asks; the bypass flag is never used) |
 | Gemini (Gemini CLI) | `--yolo` |
 | Aider | `--yes-always` |
 | Goose | no flag: `GOOSE_MODE` given the value auto |
