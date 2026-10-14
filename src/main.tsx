@@ -10,6 +10,7 @@ import { applyLanguage, LANGUAGE_FIELD } from "./language";
 import { applyZoom, ZOOM_FIELD } from "./settings/zoom";
 import { followText } from "./terminal/text";
 import { LAYOUT_FIELD, restoreLayout, resumeArgs, stillThere } from "./terminal/layout";
+import { installMenuWheel } from "./settings/menuWheel";
 import "./styles.css";
 
 // SET-004: the window starts hidden (tauri.conf.json). The saved look goes on the root first, read
@@ -58,4 +59,5 @@ async function start() {
   requestAnimationFrame(() => requestAnimationFrame(() => void getCurrentWindow().show().catch(() => {})));
 }
 
+installMenuWheel(document);
 void start();

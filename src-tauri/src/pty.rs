@@ -53,12 +53,22 @@ fn store_alias(p: &Path) -> bool {
     p.components().any(|c| c.as_os_str().eq_ignore_ascii_case("WindowsApps"))
 }
 
-/// The automatic shells for a new pane (ACCT-046), each starting in `cwd`, or in the home folder
-/// when there is none. ACCT-049: on Windows the home folder is the home drive plus the home path
+/// ACCT-046 with SET-026: the chosen default shell (when there is one) is tried first and the
+/// automatic shells stay behind it as fallbacks, without the chosen one twice.
+pub fn chosen_then_auto(chosen: Option<(String, Vec<String>)>, auto: Vec<(PathBuf, Vec<&'static str>)>) -> Vec<(PathBuf, Vec<String>)> {
+    let same = |a: &Path, b: &Path| a.as_os_str().to_string_lossy().eq_ignore_ascii_case(&b.as_os_str().to_string_lossy());
+    let first = chosen.map(|(p, a)| (PathBuf::from(p), a));
+    let rest = auto.into_iter().filter(|(p, _)| !first.as_ref().is_some_and(|(f, _)| same(f, p))).map(|(p, a)| (p, a.into_iter().map(String::from).collect()));
+    first.clone().into_iter().chain(rest).collect()
+}
+
+/// The shells a new pane tries in turn (ACCT-046): `chosen`, the default shell from settings
+/// (SET-026), first, then the automatic ones; each starts in `cwd`, or in the home folder when
+/// there is none. ACCT-049: on Windows the home folder is the home drive plus the home path
 /// when that folder exists, else the user profile.
-pub fn shell_commands(cwd: Option<&str>) -> Vec<CommandBuilder> {
+pub fn shell_commands(cwd: Option<&str>, chosen: Option<(String, Vec<String>)>) -> Vec<CommandBuilder> {
     let dir = cwd.map(PathBuf::from).or_else(home_dir);
-    auto_shells(crate::agents::find_program, std::env::var_os("ComSpec").map(PathBuf::from))
+    chosen_then_auto(chosen, auto_shells(crate::agents::find_program, std::env::var_os("ComSpec").map(PathBuf::from)))
         .into_iter()
         .map(|(program, args)| {
             let mut c = CommandBuilder::new(program);
@@ -289,6 +299,14 @@ pub struct PtySession {
     job: Option<crate::procs::Job>,
 }
 
+/// Council FS 2 on ACCT-046: when a shell earlier in the list did not start, the pane opens with
+/// one dim line naming it and the shell that opened instead, so a fallback is never silent.
+fn fallback_note(failed: &[(String, String)], opened: &str) -> Option<String> {
+    let name = |p: &str| Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.to_string());
+    let (first, _) = failed.first()?;
+    Some(format!("\x1b[2m{} did not start; opened {}\x1b[0m\r\n", name(first), name(opened)))
+}
+
 impl PtySession {
     /// Spawns `cmd` in a fresh PTY of `cols` x `rows`. `on_output` receives every chunk the program
     /// prints; `on_exit` runs once with the exit code when the program ends.
@@ -333,6 +351,7 @@ impl PtySession {
             });
         };
         drop(pair.slave);
+        let note = fallback_note(&failed, &program);
         let killer = child.clone_killer();
         let pid = child.process_id();
         let job = crate::procs::pane_job(&*child);
@@ -342,6 +361,9 @@ impl PtySession {
         thread::Builder::new()
             .name("pty-reader".into())
             .spawn(move || {
+                if let Some(n) = note {
+                    on_output(n.as_bytes());
+                }
                 let mut buf = [0u8; 8192];
                 loop {
                     match reader.read(&mut buf) {
@@ -481,13 +503,42 @@ mod tests {
         assert_eq!(default_shell(&serde_json::json!({ "defaultShell": "auto" })), None);
     }
 
+    /// ACCT-046 with SET-026: a chosen default shell is tried first and the automatic shells stay
+    /// behind it as fallbacks (council: a chosen shell used to be the only one tried).
+    #[test]
+    fn acct046_a_chosen_default_shell_keeps_the_fallbacks_behind_it() {
+        let auto = || vec![(PathBuf::from("C:/PS7/pwsh.exe"), vec!["-NoLogo"]), (PathBuf::from("C:/Windows/cmd.exe"), CMD_ARGS.to_vec())];
+        let line = |l: Vec<(PathBuf, Vec<String>)>| l.into_iter().map(|(p, a)| format!("{} {}", p.display(), a.join(" ")).trim().to_string()).collect::<Vec<_>>();
+        let bash = Some(("C:/Git/bin/bash.exe".to_string(), vec!["--login".to_string(), "-i".to_string()]));
+        assert_eq!(line(chosen_then_auto(bash, auto())), ["C:/Git/bin/bash.exe --login -i", "C:/PS7/pwsh.exe -NoLogo", "C:/Windows/cmd.exe /k chcp 65001 >nul"]);
+        // The chosen shell is one of the automatic ones: it moves to the front, not in twice.
+        let cmd = Some(("c:/windows/CMD.EXE".to_string(), CMD_ARGS.iter().map(|s| s.to_string()).collect()));
+        assert_eq!(line(chosen_then_auto(cmd, auto())), ["c:/windows/CMD.EXE /k chcp 65001 >nul", "C:/PS7/pwsh.exe -NoLogo"]);
+        assert_eq!(line(chosen_then_auto(None, auto())), ["C:/PS7/pwsh.exe -NoLogo", "C:/Windows/cmd.exe /k chcp 65001 >nul"]);
+        // And the real list: a chosen shell that will not start gives way to the automatic ones.
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let gone = Some(("kolux-rs-no-such-default-shell-9c1d".to_string(), vec![]));
+        let mut session = PtySession::spawn_first(shell_commands(None, gone), 80, 24, move |c| {
+            let _ = tx.send(c.to_vec());
+        }, |_| {})
+        .expect("a missing default shell falls back to an automatic one");
+        // Council FS 2: the pane says, in one dim line, which shell did not start and which opened.
+        let first = rx.recv_timeout(Duration::from_secs(30)).expect("the fallback shell prints");
+        let note = String::from_utf8_lossy(&first).to_string();
+        assert!(note.starts_with("\x1b[2mkolux-rs-no-such-default-shell-9c1d did not start; opened "), "{note:?}");
+        assert!(note.ends_with("\x1b[0m\r\n") && note.matches('\n').count() == 1, "{note:?}");
+        let opened = Path::new(session.program()).file_name().unwrap().to_string_lossy().to_string();
+        assert!(note.contains(&opened), "{note:?} names {opened}");
+        session.kill();
+    }
+
     /// The round trip every pane depends on: a real shell, a typed command, its output read back.
     #[test]
     fn shell_echoes_a_marker_back_through_the_pty() {
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
         let (exit_tx, exit_rx) = mpsc::channel::<Option<u32>>();
         let mut session = PtySession::spawn(
-            shell_commands(None).remove(0),
+            shell_commands(None, None).remove(0),
             100,
             30,
             move |chunk| {
@@ -707,7 +758,7 @@ mod tests {
     fn acct046_a_shell_that_will_not_start_gives_way_to_the_next() {
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
         let mut cmds = vec![program_command("kolux-rs-no-such-shell-7f3a", &[], None)];
-        cmds.extend(shell_commands(None));
+        cmds.extend(shell_commands(None, None));
         let mut session = PtySession::spawn_first(cmds, 80, 24, move |c| {
             let _ = tx.send(c.to_vec());
         }, |_| {})
@@ -760,7 +811,7 @@ mod tests {
     #[test]
     fn kill_ends_a_running_shell() {
         let (exit_tx, exit_rx) = mpsc::channel::<Option<u32>>();
-        let mut session = PtySession::spawn(shell_commands(None).remove(0), 80, 24, |_| {}, move |code| {
+        let mut session = PtySession::spawn(shell_commands(None, None).remove(0), 80, 24, |_| {}, move |code| {
             let _ = exit_tx.send(code);
         })
         .expect("spawn shell in a pty");
