@@ -9,13 +9,15 @@ import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
 import { actionLabel, keyCard, ownSignInLine, RESUME_FIELD, resumeOn, type KeyAction, type KeyStatus, type OwnSignIn } from "./claudeKey";
 import ClaudeAccounts, { addClaudeAccount } from "./ClaudeAccounts";
+import CodexAccounts from "./CodexAccounts";
 import CodexCard from "./CodexCard";
-import { ConnectGrid, OtherWays, taglineOf } from "./ConnectGrid";
+import { ConnectGrid, liveCheck, OtherWays, taglineOf } from "./ConnectGrid";
 import { settleWithin } from "./pending";
 import Ask from "../chrome/Ask";
 import GrokCard from "./GrokCard";
-import { AttentionNote, openInstallPage, type Fix } from "./Attention";
+import { AttentionNote, fixDoes, openInstallPage, type Fix } from "./Attention";
 import type { Project } from "../projects/model";
+import RepoPage from "./RepoPage";
 import { PAGES, pageOf, rememberPage, lastPage, type Page, type SettingsTarget } from "./pages";
 import { markGuide } from "../onboarding/guide";
 import { useKeymap } from "../keys/KeymapContext";
@@ -38,7 +40,7 @@ const Activity = lazy(() => import("../usage/Activity"));
 export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, own = null, resume = false, onResume }: { status: KeyStatus | null; busy: boolean; error?: string | null; onAction: (a: KeyAction) => void; onUseAccount?: () => void; own?: OwnSignIn | null; resume?: boolean; onResume?: (on: boolean) => void }) {
   const card = keyCard(status);
   const ownLine = card.state === "disconnected" || card.state === "attention" ? ownSignInLine(own) : null;
-  const fix = (f: Fix) => (f === "Open install page" ? void openInstallPage("claude").catch(() => {}) : onAction("connect"));
+  const fix = (f: Fix) => (fixDoes(f) === "install-page" ? void openInstallPage("claude").catch(() => {}) : onAction(fixDoes(f) === "check" ? "cancel" : "connect"));
   const chip = card.state === "connected" || card.state === "warning" ? "Connected" : card.state === "expired" ? "Ran out" : card.state === "connecting" ? "Connecting" : card.state === "attention" ? "Needs attention" : card.state === "reading" ? "" : "Not connected";
   return (
     <section className="conn-card" data-state={card.state} aria-label="Claude">
@@ -109,7 +111,8 @@ export function ClaudeCard({ onConnected = () => {} }: { onConnected?: (on: bool
       .then((s) => setResume(resumeOn(s)))
       .catch(() => {});
     const offs = [listen("claude-key", read), listen("claude-accounts", read)];
-    return () => offs.forEach((o) => void o.then((u) => u()).catch(() => {}));
+    const stop = liveCheck(read, window, document, 0);
+    return () => (stop(), offs.forEach((o) => void o.then((u) => u()).catch(() => {})));
   }, [read]);
   const saveResume = (on: boolean) => {
     setResume(on);
@@ -160,21 +163,9 @@ export function ClaudeCard({ onConnected = () => {} }: { onConnected?: (on: bool
   );
 }
 
-const later = <p className="conn-detail">Nothing to set here yet.</p>;
-
-function RepoPage({ project }: { project: Project }) {
-  return (
-    <section className="conn-card" data-section="repo">
-      <h2 className="conn-name">{project.name}</h2>
-      <p className="conn-detail">Folder: {project.path}</p>
-      <p className="conn-detail">Workspaces folder: {project.workspacesDir || "the global one (Git & worktrees)"}</p>
-      <p className="conn-detail">New workspaces start from: {project.base || "the default branch"}</p>
-    </section>
-  );
-}
 
 /** One page's settings; Settings draws one, a search draws each page that holds a match. */
-function PageBody({ page, repo }: { page: Page; repo?: Project }) {
+function PageBody({ page, repo, onSaved }: { page: Page; repo?: Project; onSaved: (p: Project) => void }) {
   return (
     <>
       {page === "general" && <GeneralPage />}
@@ -193,6 +184,7 @@ function PageBody({ page, repo }: { page: Page; repo?: Project }) {
           <div className="conn-advanced" data-section="accounts-advanced">
             <h3 className="conn-advanced-head">Manage accounts (advanced)</h3>
             <ClaudeAccounts />
+            <CodexAccounts />
           </div>
         </>
       )}
@@ -219,8 +211,15 @@ function PageBody({ page, repo }: { page: Page; repo?: Project }) {
           </div>
         </>
       )}
-      {page === "safety" && later}
-      {repo && <RepoPage project={repo} />}
+      {page === "safety" && (
+        <p className="conn-detail">
+          Protected commands are advisory and cover Claude only: Claude asks before a command that trips a built-in rule
+          (force-push to main, throwing away uncommitted work, deleting database objects, Stripe changes, infrastructure
+          changes, production deploys). This is not a safety control: a command can be written around it, and Codex is not
+          covered.
+        </p>
+      )}
+      {repo && <RepoPage project={repo} onSaved={onSaved} />}
     </>
   );
 }
@@ -249,6 +248,7 @@ function useScrollTo(section: string | undefined, page: Page, n: number) {
 /** `target` comes from a link elsewhere in the app; `n` changes on every open so a repeat link scrolls again. */
 export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () => void; target?: SettingsTarget | null; n?: number }) {
   const [projects, setProjects] = useState<Project[]>([]);
+  const saved = (u: Project) => setProjects((ps) => ps.map((x) => (x.id === u.id ? u : x)));
   const [page, setPage] = useState<Page>(() => pageOf(target?.page ?? lastPage(), []));
   useEffect(() => {
     invoke<Project[]>("project_list")
@@ -345,15 +345,15 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
               <div key={h.page} className="settings-found" data-page={h.page}>
                 <h2 className="settings-found-title">{PAGES[h.page]}</h2>
                 <Suspense fallback={null}>
-                  <PageBody page={h.page} />
+                  <PageBody page={h.page} onSaved={saved} />
                 </Suspense>
               </div>
             ))}
-            {repoHits.length <= MAX_REPOS_DRAWN ? repoHits.map((p) => <RepoPage key={p.id} project={p} />) : <p className="conn-detail">{repoHits.length} repositories match; pick one on the left.</p>}
+            {repoHits.length <= MAX_REPOS_DRAWN ? repoHits.map((p) => <RepoPage key={p.id} project={p} onSaved={saved} />) : <p className="conn-detail">{repoHits.length} repositories match; pick one on the left.</p>}
           </SearchFolds.Provider>
         ) : (
           <Suspense fallback={null}>
-            <PageBody page={page} repo={repo} />
+            <PageBody page={page} repo={repo} onSaved={saved} />
           </Suspense>
         )}
       </main>

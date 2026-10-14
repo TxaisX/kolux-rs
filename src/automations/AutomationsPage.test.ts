@@ -108,3 +108,21 @@ test("a long prompt starts folded behind an expand control; a short one is shown
   expect(html).toMatch(/class="autos-prompt folded"/);
   expect(render({ data: { automations: [{ id: "auto-1", name: "Short", prompt: "audit", provider: "claude", projectId: "p1", enabled: true }], runs: [] } })).not.toContain("Show the whole prompt");
 });
+
+test("AUTO-013: the Runs tab is a list to step through; a failed run offers Rerun, a gone worktree its snapshot, and unread history a way to try again", () => {
+  const data: Data = {
+    automations: [{ id: "auto-1", name: "Nightly checks", prompt: "", provider: "claude", projectId: "p1", enabled: true }],
+    runs: [
+      { id: "run-1", automationId: "auto-1", number: 1, trigger: "manual", status: "failed", at: Date.now() - 60000, detail: "claude did not start" },
+      { id: "run-2", automationId: "auto-1", number: 2, trigger: "schedule", status: "completed", at: Date.now(), worktree: "C:/gone", worktreeName: "nightly-2", worktreeGone: true },
+    ],
+  };
+  const html = render({ data, open: "auto-1" });
+  expect(html).toContain('role="listbox"');
+  expect(html.match(/role="option"/g)?.length).toBe(2);
+  expect(html).toContain("Rerun");
+  expect(html).toContain("Saved output");
+  const broken = render({ data: { ...data, runs: [], runsError: "the saved runs could not be read" }, open: "auto-1" });
+  expect(broken).toContain("Try again");
+  expect(broken).not.toContain("No runs yet");
+});

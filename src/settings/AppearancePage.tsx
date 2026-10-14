@@ -6,14 +6,15 @@ import { MAX_LEVEL, MIN_LEVEL, onZoom, percentOf, stepZoom, zoomLevel, type Zoom
 import { SearchFolds } from "./search";
 import { saveChanged } from "./saveChanged";
 import { invoke } from "@tauri-apps/api/core";
-import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, uiFont, monoFont, writeAppearance, type Appearance, type Mode } from "../theme";
+import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, uiFont, monoFont, writeAppearance, WEIGHTS, THEMED_SCREENS, type Appearance, type FontWeight, type Mode } from "../theme";
 import { importScheme } from "../terminal/schemes";
-import { currentText } from "../terminal/text";
+import { GPU_FIELD, gpuOn } from "../terminal/renderer";
 import { schemeOptions, SchemeList } from "./SchemePicker";
 import { useSettings } from "./useSettings";
 import { fontStack, loadFonts, rankFonts } from "./fonts";
 import { FIELDS as STATUS_FIELDS, readStatusBar, STATUS_ITEMS, toggleItem } from "../chrome/statusItems";
 import { CHROME, chromeShown, windowSummary } from "../chrome/chromeItems";
+import { PERCENT_FIELD, percentMode, type PercentMode } from "../usage/meter";
 import { Segmented } from "./GeneralPage";
 import { applyLanguage, LANGUAGE_FIELD, LANGUAGES, savedLanguage, systemLanguage, type LanguageChoice } from "../language";
 
@@ -194,6 +195,22 @@ export function AppearanceView({ look, onChange, windowPart, windowSummary = "",
           <Segmented<Mode> label="Mode" options={MODES.map((m) => ({ id: m, label: MODE_LABEL[m] }))} value={look.mode} onPick={(mode) => onChange({ ...look, mode })} />
         </div>
         {look.mode === "system" && <p className="conn-detail">Follows Windows, also while Kolux is running.</p>}
+        {/* VIEW-006: one of the three workspace screens can paint in its own mode. */}
+        {THEMED_SCREENS.map((s) => (
+          <div key={s} className="look-select" data-screen-theme={s}>
+            <span>{s[0].toUpperCase() + s.slice(1)} screen</span>
+            <Segmented<Mode | "app">
+              label={`${s} screen mode`}
+              options={[{ id: "app", label: "Same as app" }, ...MODES.map((m) => ({ id: m, label: MODE_LABEL[m] }))]}
+              value={look.screens[s] ?? "app"}
+              onPick={(m) => {
+                const rest = Object.fromEntries(Object.entries(look.screens).filter(([k]) => k !== s));
+                onChange({ ...look, screens: m === "app" ? rest : { ...rest, [s]: m } });
+              }}
+            />
+          </div>
+        ))}
+        <p className="conn-detail">Inbox and Artifacts follow the Terminals screen. The classic look uses the Terminals choice everywhere.</p>
       </section>
       <ZoomControl />
       {languagePart}
@@ -227,7 +244,35 @@ export function AppearanceView({ look, onChange, windowPart, windowSummary = "",
         <p className="conn-detail">Leave a field empty for the default. A font that is not installed falls back to the default, so text always shows.</p>
       </section>
       </Fold>
-      <Fold id="terminal" title="Terminal" summary={[currentText().family || firstFamily(monoFont), look.lightTerminal ? `${name(look.terminal)} / ${name(look.lightScheme)}` : name(look.terminal)].join(" · ")} {...fold("terminal")}>
+      <Fold id="terminal" title="Terminal" summary={[look.termFont || firstFamily(monoFont), `${look.termSize} pt`, look.lightTerminal ? `${name(look.terminal)} / ${name(look.lightScheme)}` : name(look.terminal)].join(" · ")} {...fold("terminal")}>
+      <section className="conn-card" data-section="terminal-font">
+        <h2 className="conn-name">Terminal font</h2>
+        {/* TERM-097: every pane and, unless it has its own font, the editor redraw with these. */}
+        <FontField label="Terminal font" value={look.termFont} placeholder={`Default (${firstFamily(monoFont)})`} onPick={(termFont) => onChange({ ...look, termFont })} />
+        <label className="look-slider">
+          <span>Size</span>
+          <input type="range" min={SPAN.termSize[0]} max={SPAN.termSize[1]} step={1} value={look.termSize} onChange={(e) => onChange({ ...look, termSize: Number(e.target.value) })} />
+          <output>{look.termSize} pt</output>
+        </label>
+        <label className="look-slider">
+          <span>Line height</span>
+          <input type="range" min={SPAN.termLineHeight[0]} max={SPAN.termLineHeight[1]} step={0.1} value={look.termLineHeight} onChange={(e) => onChange({ ...look, termLineHeight: Number(e.target.value) })} />
+          <output>{look.termLineHeight.toFixed(1)}</output>
+        </label>
+        {([["termWeight", "Weight"], ["termWeightBold", "Bold weight"]] as const).map(([key, label]) => (
+          <label key={key} className="look-select">
+            <span>{label}</span>
+            <select aria-label={label} value={look[key]} onChange={(e) => onChange({ ...look, [key]: e.target.value as FontWeight })}>
+              {WEIGHTS.map((w) => (
+                <option key={w} value={w}>
+                  {w[0].toUpperCase() + w.slice(1)}
+                </option>
+              ))}
+            </select>
+          </label>
+        ))}
+        <p className="conn-detail">Zoom In, Zoom Out and Reset Size (the View menu, Ctrl+= / Ctrl+- / Ctrl+0) change only the focused terminal.</p>
+      </section>
       <section className="conn-card" data-section="terminal-colours">
         <h2 className="conn-name">Terminal colours</h2>
         <TerminalColours look={look} onChange={onChange} />
@@ -326,6 +371,22 @@ function TerminalColours({ look, onChange }: { look: Appearance; onChange: (a: A
   );
 }
 
+/** USAGE-025: how plan usage percentages read. Only the Agents screen's usage footer follows it. */
+export function UsagePercentPick({ value, onPick }: { value: PercentMode; onPick: (v: PercentMode) => void }) {
+  return (
+    <>
+      <div className="look-select">
+        <span>Usage percentages</span>
+        <select aria-label="Usage percentages" className="field" value={value} onChange={(e) => onPick(percentMode(e.target.value))}>
+          <option value="used">Used</option>
+          <option value="remaining">Remaining</option>
+        </select>
+      </div>
+      <p className="conn-detail">How the Agents screen's usage footer reads plan use; the top bar always shows what is left.</p>
+    </>
+  );
+}
+
 /** SET-020: the app name, the Tasks and Automations buttons, and the status bar with its items.
  *  VIEW-096: a status bar hidden from its right-click menu comes back here. */
 function WindowSwitches({ settings, error, save }: ReturnType<typeof useSettings>) {
@@ -341,6 +402,16 @@ function WindowSwitches({ settings, error, save }: ReturnType<typeof useSettings
             <span>{c.label}</span>
           </label>
         ))}
+      </section>
+      <section className="conn-card" data-section="terminal-drawing">
+        <h2 className="conn-name">Terminal drawing</h2>
+        <label className="conn-switch">
+          <input type="checkbox" role="switch" checked={gpuOn(settings)} onChange={(e) => void save({ [GPU_FIELD]: e.target.checked })} />
+          <span>
+            Draw terminals with the GPU
+            <small>Up to six at a time; the rest, and every terminal when this is off, draw the plain way. Applies to terminals opened from now on.</small>
+          </span>
+        </label>
       </section>
       <section className="conn-card" data-section="status-bar">
         <h2 className="conn-name">Status bar</h2>
@@ -359,6 +430,7 @@ function WindowSwitches({ settings, error, save }: ReturnType<typeof useSettings
             </label>
           ))}
         </div>
+        <UsagePercentPick value={percentMode(settings[PERCENT_FIELD])} onPick={(v) => void save({ [PERCENT_FIELD]: v })} />
         {error && <p className="conn-detail warn">{error}</p>}
       </section>
     </>

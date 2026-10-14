@@ -52,6 +52,8 @@ type Props = {
   onOpenFile?: (role: number, file: string) => void;
   /** SKILL-011: start the role again in a new session on this AI. */
   onRestart?: (role: number, ai: string) => void;
+  /** SKILL-011: a role stopped on a sign-in opens the AI connection settings. */
+  onSignIn?: () => void;
 };
 
 export function kitRows(check: RunCheck, seats: (SeatInfo | null)[], sent: Record<string, number>, now: number): RoleRow[] {
@@ -65,7 +67,7 @@ export function kitRows(check: RunCheck, seats: (SeatInfo | null)[], sent: Recor
 
 const noop = () => {};
 
-export default function KitStrip({ check, seats, sent, now, folded, onFold, onOpen, onFocusSeat, connected = [], onCollect = noop, onPreview = noop, onOpenFile = noop, onRestart = noop }: Props) {
+export default function KitStrip({ check, seats, sent, now, folded, onFold, onOpen, onFocusSeat, connected = [], onCollect = noop, onPreview = noop, onOpenFile = noop, onRestart = noop, onSignIn = noop }: Props) {
   const kit = KITS.find((k) => k.id === check.record.kit);
   const roles = check.record.roles;
   const done = roles.filter((r) => roleDone(check, r.id)).length;
@@ -120,18 +122,25 @@ export default function KitStrip({ check, seats, sent, now, folded, onFold, onOp
                     ))}
                   </span>
                 )}
-                {row?.state === "stopped" && (
+                {(row?.state === "stopped" || row?.state === "limit") && (
                   <span className="kit-strip-files" onClick={hold} onKeyDown={hold}>
                     {moveTargets(ai, connected).map((v) => (
                       <button key={v} className="btn small" onClick={() => onRestart(i, v)}>
                         {`Move to ${VENDOR_NAME[v]}`}
                       </button>
                     ))}
-                    {ai && (
+                    {ai && row.state === "stopped" && (
                       <button className="btn small" onClick={() => onRestart(i, ai)}>
                         Restart
                       </button>
                     )}
+                  </span>
+                )}
+                {row?.state === "signin" && (
+                  <span className="kit-strip-files" onClick={hold} onKeyDown={hold}>
+                    <button className="btn small" onClick={onSignIn}>
+                      Sign in
+                    </button>
                   </span>
                 )}
               </li>

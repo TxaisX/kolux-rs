@@ -25,6 +25,10 @@ pub const GRACE_MINUTES: [u64; 7] = [0, 30, 60, 180, 720, 1440, 2880];
 const KEEP_RUNS: usize = 100;
 /// A due time older than this was missed, not merely caught late by the half-minute clock.
 const ON_TIME_MS: i64 = 120_000;
+/// AUTO-004: what an event trigger can listen for, and how long an automation rests after an
+/// event has started a run.
+const EVENTS: [&str; 3] = ["pr-opened", "checks-failed", "agent-finished"];
+const EVENT_REST_MS: i64 = 5 * 60_000;
 /// AUTO-008: how long a precheck may take, in seconds; the first is the default.
 pub const PRECHECK_SECONDS: [u64; 4] = [60, 120, 300, 600];
 /// The end of a precheck's output kept with its skipped run.
@@ -61,7 +65,19 @@ pub fn list(store: &Store) -> Result<Value, String> {
         })
         .collect();
     Ok(match load(store, RUNS_KEY) {
-        Ok(runs) => json!({ "automations": autos, "runs": runs }),
+        Ok(runs) => {
+            // AUTO-013: a run whose worktree folder is gone opens its saved output instead.
+            let runs: Vec<Value> = runs
+                .into_iter()
+                .map(|mut r| {
+                    if r["worktree"].as_str().is_some_and(|w| !Path::new(w).exists()) {
+                        r["worktreeGone"] = json!(true);
+                    }
+                    r
+                })
+                .collect();
+            json!({ "automations": autos, "runs": runs })
+        }
         Err(e) => json!({ "automations": autos, "runs": [], "runsError": e.replace("automations", "runs") }),
     })
 }
@@ -156,7 +172,17 @@ pub fn save_automation(store: &Store, input: &Value, now: i64) -> Result<Value, 
         "new-per-run" => Value::Null,
         _ => return Err("choose an existing workspace or a new one for every run".into()),
     };
-    let timing = preview(&input["schedule"], now)?;
+    // AUTO-004: an event trigger has no timetable; going back to Schedule works the run out afresh.
+    let timing = match input["trigger"]["kind"].as_str() {
+        Some("event") => {
+            let event = input["trigger"]["event"].as_str().unwrap_or_default();
+            if !EVENTS.contains(&event) {
+                return Err("choose the event: a pull request opens, checks fail, or an agent finishes".into());
+            }
+            json!({ "trigger": { "kind": "event", "event": event }, "nextRunAt": null })
+        }
+        _ => preview(&input["schedule"], now)?,
+    };
     let g = &input["missedRunGraceMinutes"];
     let grace = match g.is_null() {
         true => None,
@@ -192,6 +218,8 @@ pub fn save_automation(store: &Store, input: &Value, now: i64) -> Result<Value, 
         ("workspace", workspace),
         // Empty means the project's default branch (AUTO-005).
         ("baseBranch", json!(text("baseBranch"))),
+        // AUTO-010: only a new worktree runs the project setup, and only when chosen.
+        ("runSetup", json!(mode == "new-per-run" && input["runSetup"].as_bool().unwrap_or(false))),
         ("trigger", timing["trigger"].clone()),
         ("nextRunAt", timing["nextRunAt"].clone()),
         ("missedRunGraceMinutes", json!(grace)),
@@ -231,6 +259,68 @@ pub fn tick(l: &Launch, now: i64) -> Result<Vec<Value>, String> {
         }
     }
     Ok(started)
+}
+
+/// AUTO-004: the folders whose pull request went from none to open since the last poll, drafts
+/// included. The first state learned about a folder is only a starting point, so opening Kolux
+/// never sets off a burst of runs; a failed lookup is no news, and a hand-linked pull request
+/// (GIT-025) is not one opened from the branch.
+pub fn pr_opened(seen: &mut std::collections::HashMap<String, bool>, polled: &[crate::scm::PolledPr]) -> Vec<(String, crate::scm::Pr)> {
+    let mut out = Vec::new();
+    for p in polled.iter().filter(|p| p.error.is_none() && !p.linked) {
+        let open = p.pr.as_ref().filter(|pr| pr.state.eq_ignore_ascii_case("open"));
+        if seen.insert(projects::name_key(&p.path), open.is_some()) == Some(false) {
+            out.extend(open.map(|pr| (p.path.clone(), pr.clone())));
+        }
+    }
+    out
+}
+
+/// AUTO-004: a happening in the worktree at `path` starts every switched-on automation of that
+/// repo that listens for it, with `line` on the end of its prompt. Once an event has started a
+/// run the automation ignores further events for five minutes, and a worktree an automation made
+/// never sets one off, so no automation triggers itself. The run lands in the workspace the
+/// automation names, not where the event came from. Returns the runs it began.
+pub fn on_event(l: &Launch, event: &str, path: &str, line: &str, now: i64) -> Result<Vec<Value>, String> {
+    let ids: Vec<String> = {
+        let store = l.store.lock().map_err(|e| e.to_string())?;
+        let mut all = load(&store, KEY)?;
+        let projects = projects::load_projects(&store);
+        let from_here = |a: &Value| {
+            let Some(project) = projects.iter().find(|p| a["projectId"] == p.id.as_str()) else { return false };
+            let listed = projects::list_workspaces(l.git, &store, project).unwrap_or_default();
+            listed.iter().any(|w| projects::same_folder(Path::new(&w.path), Path::new(path)) && w.made_by.as_deref() != Some("automation"))
+        };
+        let ids: Vec<String> = all
+            .iter()
+            .filter(|a| a["enabled"] == true && a["trigger"]["kind"] == "event" && a["trigger"]["event"] == event)
+            .filter(|a| a["lastEventAt"].as_i64().is_none_or(|t| now - t >= EVENT_REST_MS))
+            .filter(|a| from_here(a))
+            .filter_map(|a| a["id"].as_str().map(String::from))
+            .collect();
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        for a in all.iter_mut().filter(|a| ids.iter().any(|id| a["id"] == id.as_str())) {
+            a["lastEventAt"] = json!(now);
+        }
+        save(&store, KEY, &all)?;
+        ids
+    };
+    ids.iter().map(|id| run_with(l, id, "event", Some(line))).collect()
+}
+
+/// AUTO-004: fed every round of the window's pull request poll (GIT-027), so a new pull request
+/// is spotted only while Kolux is already polling that branch.
+pub fn on_poll(app: &tauri::AppHandle, polled: &[crate::scm::PolledPr]) {
+    static SEEN: std::sync::OnceLock<Mutex<std::collections::HashMap<String, bool>>> = std::sync::OnceLock::new();
+    let opened = pr_opened(&mut SEEN.get_or_init(Default::default).lock().unwrap_or_else(std::sync::PoisonError::into_inner), polled);
+    for (path, pr) in opened {
+        let line = format!("Event: pull request #{} opened from {}: {} {}", pr.number, pr.head.as_deref().unwrap_or("its branch"), pr.title.as_deref().unwrap_or("(no title)"), pr.url);
+        if let Err(e) = launch_for(app, |l| on_event(l, "pr-opened", &path, &line, now_ms() as i64)) {
+            eprintln!("automations event: {e}");
+        }
+    }
 }
 
 /// A run that never started, logged so the gap shows (AUTO-007, AUTO-022). AUTO-012: when the
@@ -284,7 +374,7 @@ fn prune(runs: &mut Vec<Value>, id: &str) {
 
 /// AUTO-021 on load: an old run without a number is given the next one, and a history saved too
 /// large is cut down to each automation's newest 100.
-pub fn tidy(store: &Store) -> Result<(), String> {
+pub fn tidy(store: &Store, now: u64) -> Result<(), String> {
     let mut all = load(store, KEY)?;
     let mut runs = load(store, RUNS_KEY)?;
     let mut bare: Vec<usize> = (0..runs.len()).filter(|&i| runs[i]["number"].as_u64().is_none()).collect();
@@ -301,11 +391,18 @@ pub fn tidy(store: &Store) -> Result<(), String> {
     }
     // AUTO-012: a run an earlier start left queued or starting was never handed to an agent, so it
     // cannot finish now; one already dispatched stays, since Kolux cannot tell its agent was lost.
-    // ponytail: reconnecting dispatched runs to their panes and closing the unfound ones after a
-    // settling period need agent status (T-025), as does completing a run (T-072-b).
     for r in runs.iter_mut().filter(|r| r["status"] == "pending" || r["status"] == "dispatching") {
         r["status"] = json!("failed");
         r["detail"] = json!("Kolux closed before this run was handed to its agent");
+    }
+    // AUTO-012 (T-072-b): a dispatched run's terminal number belonged to the last process; it waits
+    // for its pane to open again in its worktree and is closed by `settle` if none does in time.
+    for r in runs.iter_mut().filter(|r| tracked(r)) {
+        if let Some(row) = r.as_object_mut() {
+            row.remove("terminal");
+            row.remove("paneKey");
+            row.insert("settleBy".into(), json!(now + SETTLE_MS));
+        }
     }
     let ids: std::collections::BTreeSet<String> = runs.iter().filter_map(|r| r["automationId"].as_str().map(String::from)).collect();
     for id in &ids {
@@ -313,6 +410,147 @@ pub fn tidy(store: &Store) -> Result<(), String> {
     }
     save(store, RUNS_KEY, &runs)?;
     save(store, KEY, &all)
+}
+
+// ---------------------------------------------------------------- AUTO-012: following a run to its end
+
+/// How long after a restart a run still dispatched may take to find its pane again before it is
+/// closed as lost (a resumed Claude pane reports within seconds; two minutes covers a slow start).
+pub const SETTLE_MS: u64 = 120_000;
+/// The agents that report their state through Kolux's hooks (STAT-001); any other agent's run
+/// ends with its process: a clean exit is its finish.
+const HOOKED: [&str; 2] = ["claude", "codex"];
+/// Set when Kolux ends every pane on its way out (quit, update restart): those panes did not stop
+/// by themselves, so their runs stay dispatched and reconnect after the restart.
+pub static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn tracked(r: &Value) -> bool {
+    r["status"] == "dispatched"
+}
+
+/// The same folder however it is spelled (separators, a trailing slash, case on Windows).
+fn same_dir(a: &str, b: &str) -> bool {
+    let norm = |s: &str| {
+        let c = Path::new(s).canonicalize().map(|c| c.to_string_lossy().into_owned()).unwrap_or_else(|_| s.to_string());
+        let c = c.replace('\\', "/").trim_end_matches('/').to_string();
+        if cfg!(windows) {
+            c.to_lowercase()
+        } else {
+            c
+        }
+    };
+    norm(a) == norm(b)
+}
+
+fn finish(r: &mut Value, status: &str, detail: Option<&str>, now: u64) {
+    if let Some(row) = r.as_object_mut() {
+        row.insert("status".into(), json!(status));
+        row.insert("finishedAt".into(), json!(now));
+        if let Some(d) = detail {
+            row.insert("detail".into(), json!(d));
+        }
+    }
+}
+
+/// A pane `terminal` (hook pane `pane_key`) just started `agent` in `cwd`: the oldest dispatched run
+/// of that agent in that worktree with no pane yet is followed through it. Shells and other agents
+/// are never a run's pane. Returns the run picked up.
+pub fn claim(store: &Store, terminal: u32, pane_key: Option<u32>, cwd: &str, agent: Option<&str>) -> Result<Option<String>, String> {
+    let Some(agent) = agent else { return Ok(None) };
+    let mut runs = load(store, RUNS_KEY)?;
+    let free = |r: &Value| tracked(r) && r.get("terminal").is_none_or(Value::is_null) && r["provider"].as_str().is_none_or(|p| p == agent) && r["worktree"].as_str().is_some_and(|w| same_dir(w, cwd));
+    let Some(i) = (0..runs.len()).filter(|&i| free(&runs[i])).min_by_key(|&i| runs[i]["at"].as_u64().unwrap_or(0)) else { return Ok(None) };
+    if let Some(row) = runs[i].as_object_mut() {
+        row.insert("terminal".into(), json!(terminal));
+        row.insert("paneKey".into(), json!(pane_key));
+        row.remove("settleBy");
+    }
+    let id = runs[i]["id"].as_str().map(String::from);
+    save(store, RUNS_KEY, &runs)?;
+    Ok(id)
+}
+
+/// One agent status for a pane (STAT-001). A run completes only on its lead's own finish after the
+/// agent was seen at work since launch: a finish at a session boundary (start, resume, clear), an
+/// old idle state or a ready prompt already on screen never counts, nor does a sub-agent's finish.
+/// Returns the run that completed.
+pub fn on_status(store: &Store, terminal: Option<u32>, pane_key: u32, state: &str, boundary: bool, child: bool, now: u64) -> Result<Option<String>, String> {
+    if boundary || child {
+        return Ok(None);
+    }
+    let mut runs = load(store, RUNS_KEY)?;
+    let mine = |r: &Value| tracked(r) && !r["terminal"].is_null() && terminal.map_or(r["paneKey"] == pane_key, |t| r["terminal"] == t);
+    let Some(i) = runs.iter().position(mine) else { return Ok(None) };
+    match state {
+        "working" | "permission" | "waiting" if runs[i]["worked"] != true => {
+            runs[i]["worked"] = json!(true);
+            save(store, RUNS_KEY, &runs)?;
+            Ok(None)
+        }
+        "done" if runs[i]["worked"] == true => {
+            finish(&mut runs[i], "completed", None, now);
+            let id = runs[i]["id"].as_str().map(String::from);
+            save(store, RUNS_KEY, &runs)?;
+            Ok(id)
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Pane `terminal` closed (its agent exited or was killed). A run still dispatched there is over:
+/// failed when its agent never began working or stopped before it finished; an agent without
+/// hooks completes on a clean exit. Returns the run closed.
+pub fn pane_ended(store: &Store, terminal: u32, code: Option<u32>, now: u64) -> Result<Option<String>, String> {
+    if QUITTING.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(None);
+    }
+    let mut runs = load(store, RUNS_KEY)?;
+    let Some(i) = runs.iter().position(|r| tracked(r) && r["terminal"] == terminal) else { return Ok(None) };
+    let hooked = runs[i]["provider"].as_str().is_none_or(|p| HOOKED.contains(&p));
+    let exit = code.map(|c| format!(" (exit code {c})")).unwrap_or_default();
+    match (hooked, runs[i]["worked"] == true) {
+        (false, _) if code == Some(0) => finish(&mut runs[i], "completed", None, now),
+        (false, _) => finish(&mut runs[i], "failed", Some(&format!("The agent exited without finishing{exit}")), now),
+        (true, true) => finish(&mut runs[i], "failed", Some(&format!("The agent stopped before it finished{exit}")), now),
+        (true, false) => finish(&mut runs[i], "failed", Some(&format!("The agent stopped before it began working{exit}")), now),
+    }
+    let id = runs[i]["id"].as_str().map(String::from);
+    save(store, RUNS_KEY, &runs)?;
+    Ok(id)
+}
+
+/// After a restart, the dispatched runs whose pane has not come back by the end of the settling
+/// period are closed as failed. Returns the runs closed.
+pub fn settle(store: &Store, now: u64) -> Result<Vec<String>, String> {
+    let mut runs = load(store, RUNS_KEY)?;
+    let mut closed = Vec::new();
+    for r in runs.iter_mut().filter(|r| tracked(r) && r["settleBy"].as_u64().is_some_and(|t| t < now)) {
+        if let Some(row) = r.as_object_mut() {
+            row.remove("settleBy");
+        }
+        finish(r, "failed", Some("Kolux restarted and this run's agent could not be found again"), now);
+        closed.extend(r["id"].as_str().map(String::from));
+    }
+    if !closed.is_empty() {
+        save(store, RUNS_KEY, &runs)?;
+    }
+    Ok(closed)
+}
+
+/// The app's side of the hooks above: the store is locked, the change saved, and the Automations
+/// page told when a run moved.
+pub fn follow(app: &tauri::AppHandle, f: impl FnOnce(&Store) -> Result<Option<String>, String>) {
+    use tauri::{Emitter, Manager};
+    let Some(state) = app.try_state::<Mutex<Store>>() else { return };
+    let moved = match state.lock() {
+        Ok(store) => f(&store),
+        Err(e) => Err(e.to_string()),
+    };
+    match moved {
+        Ok(Some(id)) => drop(app.emit(EVENT, json!({ "runId": id }))),
+        Ok(None) => {}
+        Err(e) => eprintln!("automation run tracking: {e}"),
+    }
 }
 
 fn position(list: &[Value], id: &str) -> Result<usize, String> {
@@ -392,7 +630,17 @@ pub struct Launch<'a> {
 /// timed or event-started run first runs the automation's precheck in its target folder and is
 /// skipped with the exit code and output when it fails; Run now never runs it.
 pub fn run(l: &Launch, id: &str, trigger: &str) -> Result<Value, String> {
-    let (auto, run) = {
+    run_with(l, id, trigger, None)
+}
+
+/// AUTO-004: an event-started run carries the happening's line (`eventDetail`, the marker's
+/// tooltip) and has it on the end of the agent's prompt.
+fn run_with(l: &Launch, id: &str, trigger: &str, event: Option<&str>) -> Result<Value, String> {
+    let marked = |store: &Store, run: Value| match event {
+        Some(line) => patch_run(store, run["id"].as_str().unwrap_or_default(), json!({ "eventDetail": line })),
+        None => Ok(run),
+    };
+    let (mut auto, run) = {
         let store = l.store.lock().map_err(|e| e.to_string())?;
         let all = load(&store, KEY)?;
         let auto = all[position(&all, id)?].clone();
@@ -400,14 +648,20 @@ pub fn run(l: &Launch, id: &str, trigger: &str) -> Result<Value, String> {
             if trigger == "manual" {
                 return Err(format!("Run now is blocked: {why}"));
             }
-            let out = skip(&store, id, trigger, cause, &why)?;
+            let out = marked(&store, skip(&store, id, trigger, cause, &why)?)?;
             reschedule(&store, id, now_ms() as i64)?;
             drop(store);
             (l.notify)(EVENT, json!({ "runId": out["id"] }));
             return Ok(out);
         }
-        (auto, new_run(&store, id, trigger)?)
+        let run = marked(&store, new_run(&store, id, trigger)?)?;
+        (auto, run)
     };
+    if let Some(line) = event {
+        auto["prompt"] = json!(format!("{}
+
+{line}", auto["prompt"].as_str().unwrap_or_default()));
+    }
     let check = auto["precheck"].as_str().map(str::trim).unwrap_or_default();
     if trigger != "manual" && !check.is_empty() {
         let dir = match auto["workspaceMode"] == "new-per-run" {
@@ -431,9 +685,9 @@ pub fn run(l: &Launch, id: &str, trigger: &str) -> Result<Value, String> {
     }
     let run_id = run["id"].as_str().unwrap_or_default().to_string();
     (l.notify)(EVENT, json!({ "runId": run_id }));
-    let outcome = place_and_start(l, &auto);
+    let outcome = place_and_start(l, &auto, &run_id);
     let fields = match outcome {
-        Ok((wt, project_id)) => json!({ "status": "dispatched", "worktree": wt.path, "worktreeName": wt.name.clone().or(wt.branch.clone()).unwrap_or_else(|| folder_name(&wt.path)), "projectId": project_id }),
+        Ok((wt, project_id)) => json!({ "status": "dispatched", "provider": auto["provider"], "dispatchedAt": now_ms(), "worktree": wt.path, "worktreeName": wt.name.clone().or(wt.branch.clone()).unwrap_or_else(|| folder_name(&wt.path)), "projectId": project_id }),
         Err(Stop::Skipped(why)) => json!({ "status": "skipped", "cause": "unavailable", "detail": why }),
         Err(Stop::Failed(why)) => json!({ "status": "failed", "detail": why }),
     };
@@ -529,8 +783,15 @@ fn folder_name(path: &str) -> String {
     Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())
 }
 
+/// The window's notice that a run made its worktree. AUTO-010: it runs the project setup only when
+/// the automation chose that; one saved before the choice existed skips it.
+fn created_event(project_id: &str, wt: &Worktree, auto: &Value) -> Value {
+    let setup = if auto["runSetup"].as_bool() == Some(true) { "run" } else { "skip" };
+    json!({ "kind": "created", "projectId": project_id, "worktree": { "path": wt.path, "branch": wt.branch, "name": wt.name, "isMain": false }, "agent": Value::Null, "prompt": "", "activate": false, "setup": setup })
+}
+
 /// Finds or makes the run's workspace and asks the window to start the agent there.
-fn place_and_start(l: &Launch, auto: &Value) -> Result<(Worktree, String), Stop> {
+fn place_and_start(l: &Launch, auto: &Value, run_id: &str) -> Result<(Worktree, String), Stop> {
     let agent = auto["provider"].as_str().unwrap_or_default().to_string();
     if !(l.installed)(&agent) {
         return Err(Stop::Failed(format!("{agent} is not installed")));
@@ -557,13 +818,14 @@ fn place_and_start(l: &Launch, auto: &Value) -> Result<(Worktree, String), Stop>
         if !Path::new(&path).is_dir() {
             return Err(Stop::Skipped(format!("its worktree {path} is gone")));
         }
-        Worktree { name: None, branch: None, head: String::new(), is_main: path == project.path, path, parent: None, locked: None, hidden: false, kind: String::new(), source: None, made_by: None }
+        Worktree { name: None, branch: None, head: String::new(), is_main: path == project.path, path, parent: None, locked: None, hidden: false, kind: String::new(), source: None, made_by: None, number: None, comment: None }
     };
-    let _ = crate::trust::trust_folders(&l.claude_config, &agent, &[PathBuf::from(&wt.path), PathBuf::from(&project.path)]);
+    // SAFE-023 (T-443): only a worktree Kolux made is trusted ahead of time, never the main checkout.
+    let _ = crate::trust::trust_folders(&l.claude_config, &agent, &crate::trust::made_by_kolux(l.store, &[PathBuf::from(&wt.path)]));
     if new_per_run {
-        (l.notify)(crate::cli::EVENT, json!({ "kind": "created", "projectId": project.id, "worktree": { "path": wt.path, "branch": wt.branch, "name": wt.name, "isMain": false }, "agent": Value::Null, "prompt": "", "activate": false }));
+        (l.notify)(crate::cli::EVENT, created_event(&project.id, &wt, auto));
     }
-    (l.notify)(crate::cli::EVENT, json!({ "kind": "start", "path": wt.path, "branch": wt.branch, "agent": agent, "prompt": auto["prompt"], "extra": [], "title": auto["name"] }));
+    (l.notify)(crate::cli::EVENT, json!({ "kind": "start", "path": wt.path, "branch": wt.branch, "agent": agent, "prompt": auto["prompt"], "extra": [], "title": auto["name"], "runId": run_id }));
     Ok((wt, project.id))
 }
 
@@ -613,13 +875,18 @@ fn launch_for<R>(app: &tauri::AppHandle, f: impl FnOnce(&Launch) -> R) -> R {
 pub fn start_clock(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         // AUTO-021: a history saved too large is cut down as Kolux loads it.
-        if let Err(e) = launch_for(&app, |l| tidy(&*l.store.lock().map_err(|e| e.to_string())?)) {
+        if let Err(e) = launch_for(&app, |l| tidy(&*l.store.lock().map_err(|e| e.to_string())?, now_ms())) {
             eprintln!("automations history: {e}");
         }
         loop {
             std::thread::sleep(std::time::Duration::from_secs(30));
             if let Err(e) = launch_for(&app, |l| tick(l, now_ms() as i64)) {
                 eprintln!("automations clock: {e}");
+            }
+            // AUTO-012: runs whose pane did not come back after a restart are closed once settled.
+            match launch_for(&app, |l| settle(&*l.store.lock().map_err(|e| e.to_string())?, now_ms())) {
+                Ok(closed) => closed.iter().for_each(|id| drop(tauri::Emitter::emit(&app, EVENT, json!({ "runId": id })))),
+                Err(e) => eprintln!("automations settle: {e}"),
             }
         }
     });
@@ -663,6 +930,99 @@ mod tests {
         store.set(KEY, &autos.to_string()).unwrap();
     }
 
+    fn polled(path: &str, state: Option<&str>) -> crate::scm::PolledPr {
+        let pr = state.map(|st| crate::scm::Pr { number: 7, url: "https://github.com/o/r/pull/7".into(), state: st.into(), title: Some("Fix".into()), head: Some("feat".into()), draft: true });
+        crate::scm::PolledPr { path: path.into(), linked: false, pr, error: None }
+    }
+
+    #[test]
+    fn auto004_a_pull_request_counts_as_opened_only_on_the_step_from_none_to_open() {
+        let mut seen = std::collections::HashMap::new();
+        // The first state Kolux learns is a starting point: an open one at start-up never fires.
+        assert!(pr_opened(&mut seen, &[polled("C:/a", Some("OPEN")), polled("C:/b", None)]).is_empty());
+        assert!(pr_opened(&mut seen, &[polled("C:/a", Some("OPEN"))]).is_empty());
+        // None to open fires once, drafts included; staying open does not fire again.
+        let fired = pr_opened(&mut seen, &[polled("c:/B/", Some("OPEN"))]);
+        assert_eq!(fired.iter().map(|(p, pr)| (p.as_str(), pr.number)).collect::<Vec<_>>(), [("c:/B/", 7)]);
+        assert!(pr_opened(&mut seen, &[polled("C:/b", Some("OPEN"))]).is_empty());
+        // A failed lookup is no news; a hand-linked pull request is not one opened from the branch.
+        let mut e = polled("C:/c", None);
+        e.error = Some("rate limited".into());
+        assert!(pr_opened(&mut seen, &[polled("C:/c", None), e, polled("C:/c", Some("OPEN"))]).len() == 1);
+        let mut l = polled("C:/d", None);
+        assert!(pr_opened(&mut seen, std::slice::from_ref(&l)).is_empty());
+        l.linked = true;
+        l.pr = polled("C:/d", Some("OPEN")).pr;
+        assert!(pr_opened(&mut seen, &[l]).is_empty());
+    }
+
+    #[test]
+    fn auto004_an_event_starts_one_run_with_its_line_on_the_prompt_then_rests_five_minutes() {
+        let dir = temp("a004");
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        for args in [&["init", "-q", "-b", "main"][..], &["config", "user.email", "t@example.com"], &["config", "user.name", "t"], &["commit", "-q", "--allow-empty", "-m", "first"]] {
+            assert!(std::process::Command::new("git").args(args).current_dir(&repo).status().unwrap().success());
+        }
+        let wt = dir.join("feat");
+        assert!(std::process::Command::new("git").args(["worktree", "add", "-q", "-b", "feat"]).arg(&wt).current_dir(&repo).status().unwrap().success());
+        let store = Mutex::new(Store::open(&dir.join("db")).unwrap());
+        let ev = json!({ "kind": "event", "event": "pr-opened" });
+        {
+            let s = store.lock().unwrap();
+            s.set("projects", &json!([{ "id": "p1", "name": "repo", "path": repo.to_string_lossy() }, { "id": "p2", "name": "other", "path": dir.to_string_lossy() }]).to_string()).unwrap();
+            let row = |id: &str, project: &str, trigger: &Value, on: bool| json!({ "id": id, "name": id, "prompt": "review it", "provider": "claude", "projectId": project, "workspaceMode": "existing", "workspace": repo.to_string_lossy(), "trigger": trigger, "enabled": on });
+            s.set(KEY, &json!([row("auto-1", "p1", &ev, true), row("auto-2", "p1", &ev, false), row("auto-3", "p2", &ev, true), row("auto-4", "p1", &json!({ "kind": "schedule", "cron": "0 * * * *", "timezone": "UTC" }), true), row("auto-5", "p1", &json!({ "kind": "event", "event": "checks-failed" }), true)]).to_string()).unwrap();
+        }
+        let git = Git::detect().unwrap();
+        let said = RefCell::new(Vec::<(String, Value)>::new());
+        let notify = |e: &str, v: Value| said.borrow_mut().push((e.to_string(), v));
+        let yes = |_: &str| true;
+        let l = Launch { git: &git, store: &store, claude_config: dir.join("claude.json"), installed: &yes, notify: &notify };
+        let line = "Event: pull request #7 opened from feat: Fix https://github.com/o/r/pull/7";
+        let path = wt.to_string_lossy().to_string();
+        let started = on_event(&l, "pr-opened", &path, line, FRI_NOON).unwrap();
+        // Only the switched-on automation of that repo listening for that event runs.
+        assert_eq!(started.iter().map(|r| r["automationId"].as_str().unwrap()).collect::<Vec<_>>(), ["auto-1"]);
+        assert_eq!((started[0]["trigger"].as_str(), started[0]["status"].as_str(), started[0]["eventDetail"].as_str()), (Some("event"), Some("dispatched"), Some(line)));
+        let start = said.borrow().iter().find(|(e, v)| e == crate::cli::EVENT && v["kind"] == "start").cloned().expect("a start");
+        assert!(start.1["prompt"].as_str().unwrap().ends_with(line), "{}", start.1["prompt"]);
+        // AUTO-013: the window learns which run the pane belongs to, so View run finds it.
+        assert_eq!(start.1["runId"], started[0]["id"]);
+        assert!(start.1["prompt"].as_str().unwrap().starts_with("review it"));
+        // Another event inside five minutes is ignored; after that it runs again.
+        assert!(on_event(&l, "pr-opened", &path, line, FRI_NOON + 4 * 60_000).unwrap().is_empty());
+        assert_eq!(on_event(&l, "pr-opened", &path, line, FRI_NOON + 5 * 60_000 + 1).unwrap().len(), 1);
+        // A folder that is not one of the project's worktrees starts nothing.
+        assert!(on_event(&l, "pr-opened", &dir.join("elsewhere").to_string_lossy(), line, FRI_NOON + 20 * 60_000).unwrap().is_empty());
+        // A worktree an automation made never sets off an automation (no automation triggers itself).
+        projects::set_origin(&store.lock().unwrap(), &path, Some(&json!({ "madeBy": "automation", "automationId": "auto-9" }))).unwrap();
+        assert!(on_event(&l, "pr-opened", &path, line, FRI_NOON + 40 * 60_000).unwrap().is_empty());
+        drop(l);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn auto004_saving_an_event_drops_the_timetable_and_going_back_works_it_out_afresh() {
+        let dir = temp("a004s");
+        let store = Store::open(&dir.join("db")).unwrap();
+        seed(&store, &dir);
+        let base = json!({ "name": "Review", "prompt": "look", "provider": "claude", "projectId": "p1", "workspaceMode": "existing", "workspace": dir.to_string_lossy(), "schedule": { "preset": "hourly", "time": "00:15", "timezone": "UTC" } });
+        let mut ev = base.clone();
+        ev["trigger"] = json!({ "kind": "event", "event": "pr-opened" });
+        let saved = save_automation(&store, &ev, FRI_NOON).unwrap();
+        assert_eq!((saved["trigger"].clone(), saved["nextRunAt"].clone()), (json!({ "kind": "event", "event": "pr-opened" }), Value::Null));
+        let mut back = base.clone();
+        back["id"] = saved["id"].clone();
+        let timed = save_automation(&store, &back, FRI_NOON).unwrap();
+        assert_eq!((timed["trigger"]["kind"].as_str(), timed["nextRunAt"].as_i64()), (Some("schedule"), Some(FRI_NOON + 15 * 60_000)));
+        ev["trigger"]["event"] = json!("lunch");
+        assert!(save_automation(&store, &ev, FRI_NOON).unwrap_err().contains("event"));
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_broken_saved_list_is_an_error_not_an_empty_one() {
         let dir = temp("broken");
@@ -677,6 +1037,11 @@ mod tests {
         let out = list(&store).unwrap();
         assert_eq!((out["automations"].clone(), out["runs"].clone()), (json!([]), json!([])));
         assert!(out["runsError"].as_str().unwrap().contains("could not be read"));
+        // AUTO-013: a run whose worktree folder is gone says so, so the page opens its saved output.
+        let here = dir.to_string_lossy().to_string();
+        store.set(RUNS_KEY, &json!([{ "id": "r1", "worktree": here }, { "id": "r2", "worktree": dir.join("gone").to_string_lossy() }, { "id": "r3" }]).to_string()).unwrap();
+        let runs = list(&store).unwrap()["runs"].clone();
+        assert_eq!((runs[0].get("worktreeGone"), &runs[1]["worktreeGone"], runs[2].get("worktreeGone")), (None, &json!(true), None));
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -772,6 +1137,34 @@ mod tests {
 
     fn form(ws: &Path, schedule: Value) -> Value {
         json!({ "requestId": "r1", "name": "Morning", "prompt": "check", "provider": "claude", "projectId": "p1", "workspaceMode": "existing", "workspace": ws.to_string_lossy(), "schedule": schedule })
+    }
+
+    #[test]
+    fn auto010_a_new_per_run_worktree_runs_the_setup_only_when_chosen_and_old_ones_skip() {
+        let dir = temp("auto010");
+        let store = Store::open(&dir.join("db")).unwrap();
+        seed(&store, &dir);
+        let schedule = json!({ "preset": "weekdays", "time": "09:00", "timezone": "UTC" });
+        let mut f = form(&dir, schedule.clone());
+        f["workspaceMode"] = json!("new-per-run");
+        f["runSetup"] = json!(true);
+        assert_eq!(save_automation(&store, &f, FRI_NOON).unwrap()["runSetup"], json!(true));
+        let mut f = form(&dir, schedule.clone());
+        f["requestId"] = json!("r2");
+        f["runSetup"] = json!(true);
+        assert_eq!(save_automation(&store, &f, FRI_NOON).unwrap()["runSetup"], json!(false), "an existing worktree never runs setup again");
+        let mut f = form(&dir, schedule);
+        f["requestId"] = json!("r3");
+        f["workspaceMode"] = json!("new-per-run");
+        assert_eq!(save_automation(&store, &f, FRI_NOON).unwrap()["runSetup"], json!(false), "no choice sent is skip");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let wt = Worktree { name: Some("run-1".into()), branch: Some("b".into()), head: String::new(), is_main: false, path: "C:/w/run-1".into(), parent: None, locked: None, hidden: false, kind: String::new(), source: None, made_by: None, number: None, comment: None };
+        assert_eq!(created_event("p1", &wt, &json!({ "runSetup": true }))["setup"], json!("run"));
+        assert_eq!(created_event("p1", &wt, &json!({ "runSetup": false }))["setup"], json!("skip"));
+        let old = created_event("p1", &wt, &json!({ "name": "made before the choice existed" }));
+        assert_eq!((old["setup"].as_str(), old["kind"].as_str(), old["worktree"]["path"].as_str()), (Some("skip"), Some("created"), Some("C:/w/run-1")));
     }
 
     #[test]
@@ -1003,7 +1396,7 @@ mod tests {
         let mut runs: Vec<Value> = (1..=120u64).map(|i| json!({ "id": format!("run-{i}"), "automationId": "auto-1", "number": i, "status": "failed", "at": i })).collect();
         runs.push(json!({ "id": "run-121", "automationId": "auto-2", "status": "skipped", "at": 5 }));
         store.set(RUNS_KEY, &Value::Array(runs).to_string()).unwrap();
-        tidy(&store).unwrap();
+        tidy(&store, 0).unwrap();
         let all = list(&store).unwrap();
         let mine: Vec<u64> = all["runs"].as_array().unwrap().iter().filter(|r| r["automationId"] == "auto-1").map(|r| r["number"].as_u64().unwrap()).collect();
         assert_eq!(mine, (21..=120).collect::<Vec<u64>>());
@@ -1062,7 +1455,7 @@ mod tests {
             { "id": "run-3", "automationId": "auto-1", "number": 3, "status": "dispatched", "at": 3 },
         ]);
         store.set(RUNS_KEY, &runs.to_string()).unwrap();
-        tidy(&store).unwrap();
+        tidy(&store, 0).unwrap();
         let got = load(&store, RUNS_KEY).unwrap();
         let st: Vec<&str> = got.iter().map(|r| r["status"].as_str().unwrap()).collect();
         assert_eq!(st, ["failed", "failed", "dispatched"], "Kolux cannot tell a running agent was lost, so it stays dispatched");
@@ -1116,6 +1509,121 @@ mod tests {
         assert!(why.contains("me@example.com") && why.contains("sign"), "{why}");
         assert!(runs_of(&store, "auto-1").is_empty());
         drop(l);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn dispatched(store: &Store, ws: &Path, n: u64, provider: &str) {
+        let mut runs = load(store, RUNS_KEY).unwrap();
+        runs.push(json!({ "id": format!("run-{n}"), "automationId": "auto-1", "number": n, "status": "dispatched", "at": n, "worktree": ws.to_string_lossy(), "provider": provider }));
+        save(store, RUNS_KEY, &runs).unwrap();
+    }
+
+    fn status_of(store: &Store, id: &str) -> (String, String) {
+        let r = load(store, RUNS_KEY).unwrap().into_iter().find(|r| r["id"] == id).unwrap();
+        (r["status"].as_str().unwrap().to_string(), r["detail"].as_str().unwrap_or_default().to_string())
+    }
+
+    #[test]
+    fn auto012_a_run_completes_only_when_its_agent_really_finishes() {
+        let dir = temp("finish");
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let store = Store::open(&dir.join("db")).unwrap();
+        seed(&store, &ws);
+        dispatched(&store, &ws, 1, "claude");
+        // A shell or another agent opened in the same folder is not the run's pane.
+        assert_eq!(claim(&store, 4, Some(40), &ws.to_string_lossy(), None).unwrap(), None);
+        assert_eq!(claim(&store, 5, Some(50), &ws.to_string_lossy(), Some("codex")).unwrap(), None);
+        // The run's agent opens in its worktree (spelled with a trailing slash) and is picked up.
+        let spelled = format!("{}/", ws.to_string_lossy());
+        assert_eq!(claim(&store, 6, Some(60), &spelled, Some("claude")).unwrap().as_deref(), Some("run-1"));
+        // A second claude pane in the same folder takes nothing: the run already has its pane.
+        assert_eq!(claim(&store, 7, Some(70), &ws.to_string_lossy(), Some("claude")).unwrap(), None);
+        // The session boundary (start, resume, clear) and an idle prompt at launch never finish it.
+        on_status(&store, Some(6), 60, "working", true, false, 10).unwrap();
+        on_status(&store, Some(6), 60, "done", false, false, 11).unwrap();
+        assert_eq!(status_of(&store, "run-1").0, "dispatched", "a ready prompt already on screen is not a finish");
+        on_status(&store, Some(6), 60, "done", true, false, 12).unwrap();
+        assert_eq!(status_of(&store, "run-1").0, "dispatched", "a finish at a session boundary is not a finish");
+        // Real work, a sub-agent finishing on the way, then the lead's own finish.
+        on_status(&store, Some(6), 60, "working", false, false, 13).unwrap();
+        on_status(&store, Some(6), 60, "done", false, true, 14).unwrap();
+        assert_eq!(status_of(&store, "run-1").0, "dispatched", "a sub-agent finishing is not the run finishing");
+        assert_eq!(on_status(&store, Some(6), 60, "done", false, false, 15).unwrap().as_deref(), Some("run-1"));
+        let r = load(&store, RUNS_KEY).unwrap().remove(0);
+        assert_eq!((r["status"].as_str(), r["finishedAt"].as_u64()), (Some("completed"), Some(15)));
+        // Closing the pane afterwards leaves the finished run alone.
+        assert_eq!(pane_ended(&store, 6, Some(1), 16).unwrap(), None);
+        assert_eq!(status_of(&store, "run-1").0, "completed");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn auto012_an_agent_killed_before_it_starts_working_reads_failed() {
+        let dir = temp("killed");
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let store = Store::open(&dir.join("db")).unwrap();
+        seed(&store, &ws);
+        dispatched(&store, &ws, 1, "claude");
+        dispatched(&store, &ws, 2, "claude");
+        claim(&store, 3, Some(30), &ws.to_string_lossy(), Some("claude")).unwrap();
+        claim(&store, 4, Some(40), &ws.to_string_lossy(), Some("claude")).unwrap();
+        on_status(&store, Some(3), 30, "working", true, false, 5).unwrap();
+        assert_eq!(pane_ended(&store, 3, None, 6).unwrap().as_deref(), Some("run-1"));
+        let (st, why) = status_of(&store, "run-1");
+        assert_eq!(st, "failed");
+        assert!(why.contains("before it began working"), "{why}");
+        // One that had started working and was stopped mid-way failed too, with its own reason.
+        on_status(&store, Some(4), 40, "working", false, false, 7).unwrap();
+        pane_ended(&store, 4, None, 8).unwrap();
+        let (st, why) = status_of(&store, "run-2");
+        assert_eq!(st, "failed");
+        assert!(why.contains("before it finished"), "{why}");
+        // An agent without status hooks: a clean exit is its finish, anything else a failure.
+        dispatched(&store, &ws, 3, "gemini");
+        dispatched(&store, &ws, 4, "gemini");
+        claim(&store, 8, None, &ws.to_string_lossy(), Some("gemini")).unwrap();
+        claim(&store, 9, None, &ws.to_string_lossy(), Some("gemini")).unwrap();
+        pane_ended(&store, 8, Some(0), 9).unwrap();
+        pane_ended(&store, 9, Some(1), 9).unwrap();
+        assert_eq!((status_of(&store, "run-3").0.as_str(), status_of(&store, "run-4").0.as_str()), ("completed", "failed"));
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn auto012_after_a_restart_runs_reconnect_and_unfound_ones_close_after_settling() {
+        let dir = temp("reconnect");
+        let ws = dir.join("ws");
+        let other = dir.join("other");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let store = Store::open(&dir.join("db")).unwrap();
+        seed(&store, &ws);
+        dispatched(&store, &ws, 1, "claude");
+        dispatched(&store, &other, 2, "claude");
+        // Before the restart run-1 had its pane and its agent was at work.
+        claim(&store, 3, Some(30), &ws.to_string_lossy(), Some("claude")).unwrap();
+        on_status(&store, Some(3), 30, "working", false, false, 4).unwrap();
+        tidy(&store, 1_000).unwrap();
+        // The old terminal number means nothing in the new process.
+        assert_eq!(pane_ended(&store, 3, None, 1_001).unwrap(), None);
+        assert_eq!(status_of(&store, "run-1").0, "dispatched");
+        // Inside the settling period nothing is closed; the resumed pane is picked up again.
+        assert!(settle(&store, 1_000 + SETTLE_MS - 1).unwrap().is_empty());
+        assert_eq!(claim(&store, 1, Some(10), &ws.to_string_lossy(), Some("claude")).unwrap().as_deref(), Some("run-1"));
+        // Past it, the run whose pane never came back is closed; the reconnected one is kept.
+        assert_eq!(settle(&store, 1_000 + SETTLE_MS + 1).unwrap(), vec!["run-2".to_string()]);
+        let (st, why) = status_of(&store, "run-2");
+        assert_eq!(st, "failed");
+        assert!(why.contains("restarted"), "{why}");
+        // Tracking carried on: the work seen before the restart counts, and its finish completes it.
+        on_status(&store, Some(1), 10, "working", true, false, 2_000).unwrap();
+        on_status(&store, Some(1), 10, "done", false, false, 2_001).unwrap();
+        assert_eq!(status_of(&store, "run-1").0, "completed");
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }

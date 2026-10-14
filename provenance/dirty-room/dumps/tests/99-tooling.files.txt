@@ -1,6 +1,0 @@
-# 99-tooling: titles	file  (5 files)
-6	tests/tools/win-update-e2e/app-driver.test.mjs
-3	tests/tools/benchmarks/startup-bench-isolated-env.test.mjs
-3	tests/tools/windows-pty-native-capability-smoke/packaged-node-pty-capability-probe.test.mjs
-3	tests/tools/windows-pty-native-capability-smoke/run.test.mjs
-1	tests/tools/windows-pty-native-capability-smoke/packaged-node-pty-capability-oracle.test.mjs

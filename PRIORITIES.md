@@ -369,3 +369,5 @@ and the difference goes under "Needs Txais" in STATE.md.
     screen, build that screen to the theme 7 description the first time.
 12. **Dependencies:** a later card moves forward only when an earlier card cannot pass its
     acceptance without it; note the move in PLAN.md.
+
+Cutline: T-152-gate, T-152, T-167-a, T-025-d, T-166, T-067, T-184, T-441, T-442, T-442-b, T-443, T-073-a, T-047, T-069-a, T-069-b, T-418, T-500, T-544 (set by council C2 2026-10-13; T-544 trial build added at the freeze; since T-540-b plan-check exits 1 on an id with no PLAN line)

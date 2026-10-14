@@ -1,10 +1,12 @@
-// PROJ-002: the Add Project dialog's first step and its keys.
+// PROJ-002: the Add Project dialog's first step and its keys. PROJ-003 and PROJ-004: the clone
+// and new-project steps in each of their states.
 import { expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { AddProjectView, nextChoice } from "./AddProject";
+import { AddProjectView, nextChoice, type Form, type Step } from "./AddProject";
 
 const noop = () => {};
+const view = (step: Step, start?: Partial<Form>) => renderToString(createElement(AddProjectView, { step, onStep: noop, onBrowse: noop, onClose: noop, start }));
 
 test("arrow keys move between the three choices and wrap; other keys leave focus alone", () => {
   expect(nextChoice("ArrowDown", 0)).toBe(1);
@@ -17,7 +19,7 @@ test("arrow keys move between the three choices and wrap; other keys leave focus
 });
 
 test("cloning is the main choice, with Browse then New project beside it", () => {
-  const html = renderToString(createElement(AddProjectView, { step: "choose", onStep: noop, onBrowse: noop, onClose: noop }));
+  const html = view("choose");
   expect(html).toContain('role="dialog"');
   const clone = html.indexOf(">Copy from a web address<");
   const browse = html.indexOf("Open a folder");
@@ -30,13 +32,36 @@ test("cloning is the main choice, with Browse then New project beside it", () =>
   expect(html.slice(html.lastIndexOf("<button", clone), clone)).toContain("primary");
 });
 
-test("the clone and new steps say plainly what works today and lead back", () => {
-  for (const step of ["clone", "new"] as const) {
-    const html = renderToString(createElement(AddProjectView, { step, onStep: noop, onBrowse: noop, onClose: noop }));
-    expect(html).toContain("Back");
-    expect(html).toContain("Open a folder");
-  }
-  const clone = renderToString(createElement(AddProjectView, { step: "clone", onStep: noop, onBrowse: noop, onClose: noop }));
-  expect(clone).toContain('aria-label="web address of the project"');
-  expect(clone).toMatch(/<button[^>]*disabled[^>]*>Copy<\/button>/);
+test("the clone step takes an address and a folder, and Copy waits for both", () => {
+  const empty = view("clone");
+  expect(empty).not.toContain("not built yet");
+  expect(empty).toContain('aria-label="web address of the project"');
+  expect(empty).toContain('aria-label="folder the copy goes in"');
+  expect(empty).toMatch(/<button[^>]*disabled[^>]*>Copy<\/button>/);
+  const ready = view("clone", { url: "https://github.com/o/p.git", dest: "C:/Users/me/p" });
+  expect(ready).toMatch(/<button class="btn primary"(?![^>]*disabled)[^>]*>Copy<\/button>/);
+  expect(ready).toContain('value="C:/Users/me/p"');
+});
+
+test("a running clone shows Git's progress and a Cancel button, and Git's own words when it fails", () => {
+  const running = view("clone", { url: "u", dest: "d", ticket: "clone-1", progress: "Receiving objects:  40% (4/10)" });
+  expect(running).toContain("Receiving objects:  40% (4/10)");
+  expect(running).toMatch(/<button class="btn"[^>]*>Cancel<\/button>/);
+  expect(running).not.toContain(">Copy<");
+  expect(running).toMatch(/<button class="btn"[^>]*disabled[^>]*>Back<\/button>/);
+  const failed = view("clone", { url: "u", dest: "d", error: "fatal: could not read Username for 'https://github.com': terminal prompts disabled" });
+  expect(failed).toMatch(/role="alert"[^>]*>fatal: could not read Username/);
+});
+
+test("the new-project step takes a name and a parent folder, and says what stops it", () => {
+  const empty = view("new");
+  expect(empty).not.toContain("not built yet");
+  expect(empty).toContain('aria-label="project name"');
+  expect(empty).toContain('aria-label="folder the project goes in"');
+  expect(empty).toMatch(/<button[^>]*disabled[^>]*>Create<\/button>/);
+  const ready = view("new", { name: "demo", parent: "C:/Users/me" });
+  expect(ready).toMatch(/<button class="btn primary"(?![^>]*disabled)[^>]*>Create<\/button>/);
+  const noGit = view("new", { name: "demo", parent: "C:/Users/me", problem: "Git is not installed on this computer" });
+  expect(noGit).toMatch(/role="alert"[^>]*>Git is not installed/);
+  expect(noGit).toMatch(/<button[^>]*disabled[^>]*>Create<\/button>/);
 });

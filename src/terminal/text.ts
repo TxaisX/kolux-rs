@@ -8,7 +8,7 @@ import { fontStack } from "../settings/fonts";
 
 export const FIELDS = {
   size: "terminalFontSize",
-  family: "terminalFontFamily",
+  family: "terminalFont", // the same setting Appearance > Terminal font (TERM-097) writes
   weight: "terminalFontWeight",
   bold: "terminalFontWeightBold",
   lineHeight: "terminalLineHeight",

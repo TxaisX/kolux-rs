@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Close, Refresh, Spinner, CheckCircle } from "../chrome/icons";
 import { TICK_MS, UpdateSchedule, type Outcome } from "./schedule";
-import { cardReducer, initialCard, mainAction, tipVisible, type UpdateInfo } from "./card";
+import { barItem, cardReducer, initialCard, mainAction, tipVisible, type BarItem, type UpdateInfo } from "./card";
 
 interface Status {
   enabled: boolean;
@@ -25,6 +25,12 @@ export function requestUpdateCheck() {
 }
 
 const FADE_MS = 2500;
+
+// VIEW-100: the status bar reads the update item from here, so a bar shown again picks it up.
+export const BAR_EVENT = "kolux-update-bar";
+export const SHOW_EVENT = "kolux-update-show";
+let bar: BarItem | null = null;
+export const currentBar = () => bar;
 
 export default function UpdateCenter() {
   const [s, dispatch] = useReducer(cardReducer, initialCard(null, true));
@@ -120,6 +126,16 @@ export default function UpdateCenter() {
       window.removeEventListener(EVENT, onAsk);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    bar = barItem(s.phase);
+    window.dispatchEvent(new Event(BAR_EVENT));
+  }, [s.phase]);
+  useEffect(() => {
+    const onShow = () => dispatch({ type: "show" });
+    window.addEventListener(SHOW_EVENT, onShow);
+    return () => window.removeEventListener(SHOW_EVENT, onShow);
   }, []);
 
   // Up to date: the card closes itself.

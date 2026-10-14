@@ -37,6 +37,10 @@ pub struct Worktree {
     /// AUTO-024: who made it, from Kolux's record of how it came to be ("app", "cli" or
     /// "automation"); none when Kolux has no record.
     pub made_by: Option<String>,
+    /// VIEW-038: the issue or pull request number it is linked to, so the palette finds it by number.
+    pub number: Option<u64>,
+    /// EDIT-047: the comment it was made with (`worktree create --comment`); the palette shows it.
+    pub comment: Option<String>,
 }
 
 /// GIT-063: what an unattended git is given, so it fails at once instead of waiting on a password
@@ -46,6 +50,9 @@ pub const NO_PROMPT: [(&str, &str); 2] = [("GIT_TERMINAL_PROMPT", "0"), ("GCM_IN
 pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
     let mut cmd = Command::new("git");
     cmd.args(args);
+    // GIT-001 (T-033-b): a status read never rewrites the index on its own (git's optional lock),
+    // so the Source Control watcher is not woken by its own reads. Required locks are unaffected.
+    cmd.env("GIT_OPTIONAL_LOCKS", "0");
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
@@ -418,7 +425,7 @@ pub fn parse_worktrees(text: &str) -> Vec<Worktree> {
             }
         }
         if let Some(path) = path {
-            out.push(Worktree { path, branch, head, is_main: i == 0, name: None, parent: None, locked, hidden: false, kind: String::new(), source: None, made_by: None });
+            out.push(Worktree { path, branch, head, is_main: i == 0, name: None, parent: None, locked, hidden: false, kind: String::new(), source: None, made_by: None, number: None, comment: None });
         }
     }
     out

@@ -93,6 +93,8 @@ export const actions: Action[] = [
   a("floatingTerminal.toggle", "Toggle Floating Terminal", "global", ["Mod+Alt+A"], { terminalSafe: true }),
   a("floatingWorkspace.maximize", "Maximize Floating Workspace Panel", "global", [], { darwin: ["Mod+Alt+Shift+A"] }),
   a("view.inbox", "Show Inbox", "global", []),
+  a("view.tower", "Show Tower", "global", []),
+  a("sidebar.sleeping.toggle", "Show or Hide Sleeping Workspaces", "global", [], { keywords: ["sleep", "asleep", "wake"] }),
   a("view.floor", "Show Floor", "global", []),
   a("view.code", "Show Code", "global", ["Mod+Shift+3"]),
   a("floatingWorkspace.minimize", "Minimize Floating Workspace Panel", "global", []),
@@ -109,7 +111,9 @@ export const actions: Action[] = [
   a("tab.close", "Close active tab", "tabs", ["Mod+W"]),
   a("tab.closeAll", "Close all editor tabs", "tabs", ["Mod+Alt+W"]),
   a("tab.rename", "Rename active tab", "tabs", [], { darwin: ["Mod+R"], group: "workspace-shell" }),
-  a("tab.reopenClosed", "Reopen closed tab", "tabs", ["Mod+Shift+T"]),
+  // T-543-b: ships unbound until T-164-b wires the closed-tab ring (src/terminal/closedTabs.ts) into the window;
+  // with Mod+Shift+T it was a shortcut that did nothing. Its default chord was ["Mod+Shift+T"].
+  a("tab.reopenClosed", "Reopen closed tab", "tabs", []),
   a("tab.nextSameType", "Next tab (same type)", "tabs", ["Mod+Alt+BracketRight"], { terminalSafe: true }),
   a("tab.previousSameType", "Previous tab (same type)", "tabs", ["Mod+Alt+BracketLeft"], { terminalSafe: true }),
   a("tab.nextAllTypes", "Next tab (all types)", "tabs", ["Mod+Shift+BracketRight"], { terminalSafe: true }),

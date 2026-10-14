@@ -5,6 +5,7 @@ import { Help } from "../chrome/icons";
 import { milestonesShown, openExplore, openGuide, ring } from "./guide";
 import { Ring, useGuideState } from "./Guides";
 import { replayTour, TOURS } from "./tour";
+import { REOPEN_WIZARD } from "./firstRun";
 
 export default function HelpMenu() {
   const [at, setAt] = useState<{ bottom: number; left: number } | null>(null);
@@ -37,6 +38,10 @@ export default function HelpMenu() {
             </button>
             <button role="menuitem" className="menu-item" onClick={() => pick(openExplore)}>
               Explore Kolux
+            </button>
+            {/* ONB-009: the first-run wizard again. */}
+            <button role="menuitem" className="menu-item" onClick={() => pick(() => window.dispatchEvent(new CustomEvent(REOPEN_WIZARD)))}>
+              Onboarding
             </button>
             {milestonesShown(g.done) && (
               <button role="menuitem" className="menu-item" onClick={() => pick(() => openGuide())}>

@@ -1,6 +1,6 @@
 import design from "../design/DESIGN.md?raw";
 import { expect, test } from "vitest";
-import { applyTheme, buildTheme, classic, coreTokens, isDark, previewOf, readAppearance, terminalFor, terminalTheme, themeVars, THEMES, writeAppearance } from "./theme";
+import { applyTheme, buildTheme, classic, coreTokens, isDark, previewOf, readAppearance, terminalFor, terminalTheme, themeVars, THEMES, writeAppearance, appearanceVars, termFont, zoomTerm, screenMode } from "./theme";
 
 /** The `| \`--token\` | \`#hex\` |` rows of DESIGN.md section 2, as a name-to-hex map. */
 function designPalette(): Record<string, string> {
@@ -84,15 +84,18 @@ test("terminal colours follow the app hue only on Match", () => {
   expect(Object.keys(sky)).toEqual(expect.arrayContaining(["black", "red", "brightCyan", "brightWhite"]));
 });
 
-test("SET-005: System by default, saved modes kept, light turns the greys over", () => {
-  expect(look().mode).toBe("system");
+test("SET-005 with T-418: Dark when nothing is saved, saved modes kept, light turns the greys over", () => {
+  const system = look({ appearanceMode: "system" });
+  expect(look().mode).toBe("dark");
+  expect(system.mode).toBe("system");
   expect(look({ appearanceMode: "light" }).mode).toBe("light");
-  expect(look({ appearanceMode: "dim" }).mode).toBe("system");
+  expect(look({ appearanceMode: "dim" }).mode).toBe("dark");
   expect(writeAppearance({}, look({ appearanceMode: "dark" }))).toMatchObject({ appearanceMode: "dark", terminalLightScheme: true });
-  expect(isDark(look(), false)).toBe(false);
-  expect(isDark(look(), true)).toBe(true);
+  expect(isDark(look(), false)).toBe(true);
+  expect(isDark(system, false)).toBe(false);
+  expect(isDark(system, true)).toBe(true);
   expect(isDark(look({ appearanceMode: "light" }), true)).toBe(false);
-  const light = buildTheme(look(), false);
+  const light = buildTheme(system, false);
   const lum = (h: string) => parseInt(h.slice(1, 3), 16);
   expect(lum(light["app-bg"])).toBeGreaterThan(240);
   expect(lum(light.fg)).toBeLessThan(16);
@@ -129,4 +132,45 @@ test("SET-023: a custom scheme can be picked for either mode; a removed one fall
   expect(terminalFor(a, true)).toMatchObject({ background: "#123456", foreground: "#fedcba" });
   expect(look({ terminalScheme: "custom:Mine" }).terminal, "not in the saved list").toBe("default");
   expect(writeAppearance({}, a)).toMatchObject({ terminalScheme: "custom:Mine", terminalSchemeLight: "tango-light", terminalCustomSchemes: custom });
+});
+
+// TERM-097 / TERM-078 (T-144-b)
+test("terminal font defaults to size 13 (T-144-e: day one looks like today's 13 pt terminal), line height 1, normal and bold, and keeps saved values in range", () => {
+  expect(readAppearance({})).toMatchObject({ termFont: "", termSize: 13, termLineHeight: 1, termWeight: "normal", termWeightBold: "bold" });
+  const a = readAppearance({ terminalFont: " Fira Code ", terminalFontSize: 99, terminalLineHeight: 1.25, terminalFontWeight: 300, terminalFontWeightBold: "heavy" });
+  expect(a).toMatchObject({ termFont: "Fira Code", termSize: 32, termLineHeight: 1.3, termWeight: "300", termWeightBold: "bold" });
+  expect(writeAppearance({}, a)).toMatchObject({ terminalFont: "Fira Code", terminalFontSize: 32, terminalFontWeight: "300" });
+});
+
+test("the editor font follows the terminal font unless it has its own", () => {
+  const vars = (s: Record<string, unknown>) => appearanceVars(readAppearance(s), true);
+  expect(vars({ terminalFont: "Fira Code" })["--editor-font"]).toBe('"Fira Code", "Cascadia Mono", Consolas, monospace');
+  expect(vars({ terminalFont: "Fira Code", editorFont: "Hack" })["--editor-font"]).toBe('"Hack", "Fira Code", "Cascadia Mono", Consolas, monospace');
+});
+
+test("zooming in twice then reset returns to the configured size, and only the zoomed pane changes", () => {
+  expect(termFont(7).fontSize).toBe(13);
+  expect(zoomTerm(7, "in")).toBe(14);
+  expect(zoomTerm(7, "in")).toBe(15);
+  expect(termFont(7)).toMatchObject({ fontSize: 15, lineHeight: 1, fontWeight: "normal", fontWeightBold: "bold" });
+  expect(termFont(8).fontSize, "another pane").toBe(13);
+  expect(zoomTerm(7, "reset")).toBe(13);
+  expect(termFont(7).fontSize).toBe(13);
+  for (let i = 0; i < 20; i++) zoomTerm(8, "out");
+  expect(termFont(8).fontSize, "floor").toBe(6);
+  zoomTerm(8, "reset");
+});
+
+// VIEW-006 (T-146-c)
+test("a screen paints in its own mode; screens without one follow the app; Classic ignores Board and Agents", () => {
+  const a = readAppearance({ appearanceMode: "light", screenThemes: { board: "dark", agents: "nope", inbox: "dark" } });
+  expect(a.screens, "only the three screens and known modes are kept").toEqual({ board: "dark" });
+  expect(screenMode(a, "board", false)).toBe("dark");
+  expect(screenMode(a, "terminals", false)).toBe("light");
+  expect(screenMode(a, "agents", false)).toBe("light");
+  expect(screenMode(a, "board", true), "classic look").toBe("light");
+  const t = readAppearance({ appearanceMode: "dark", screenThemes: { terminals: "light" } });
+  expect(screenMode(t, "inbox", false), "no saved value counts as Terminals").toBe("light");
+  expect(screenMode(t, "board", true), "classic uses the Terminals choice").toBe("light");
+  expect(writeAppearance({}, a)).toMatchObject({ screenThemes: { board: "dark" } });
 });

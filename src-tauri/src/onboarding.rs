@@ -91,6 +91,39 @@ fn closed(mut rec: Onboarding, outcome: &str, now: u64) -> Result<Onboarding, St
     Ok(rec)
 }
 
+/// ONB-009: Onboarding in the help menu starts the wizard over on screen one; the close, the
+/// outcome and the progress go, and of the checklist only its dismissed mark (ONB-013).
+fn reopened(rec: Option<Onboarding>) -> Onboarding {
+    let mut rec = rec.unwrap_or(Onboarding { version: VERSION, step: -1, closed_at: None, outcome: None, rest: Default::default() });
+    rec.step = -1;
+    rec.closed_at = None;
+    rec.outcome = None;
+    rec.rest.remove("checklistDismissed");
+    rec
+}
+
+/// ONB-011: the three first-success milestones, kept in the record under "milestones".
+const MILESTONES: [&str; 3] = ["aiConnected", "kitLaunched", "resultsOpened"];
+
+/// ONB-011: a milestone's time is written at its first occurrence and never again. A profile with
+/// no record (one from before the wizard, ONB-008) has had its firsts already, so nothing is kept.
+fn mark(store: &Store, name: &str, now: u64) -> Result<(), String> {
+    if !MILESTONES.contains(&name) {
+        return Err(format!("{name} is not a first-run milestone"));
+    }
+    let Some(mut rec) = load(store) else { return Ok(()) };
+    let times = rec.rest.entry("milestones").or_insert_with(|| serde_json::json!({}));
+    if !times.is_object() {
+        *times = serde_json::json!({});
+    }
+    let times = times.as_object_mut().expect("an object");
+    if times.contains_key(name) {
+        return Ok(());
+    }
+    times.insert(name.into(), now.into());
+    save(store, &rec)
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
@@ -259,6 +292,18 @@ pub fn cli_status() -> Result<CliStatus, String> {
     Ok(cli_status_in(dir, &std::env::var_os("PATH").unwrap_or_default()))
 }
 
+#[tauri::command]
+pub fn onboarding_reopen(store: State<'_, Mutex<Store>>) -> Result<(), String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    save(&store, &reopened(load(&store)))
+}
+
+#[tauri::command]
+pub fn onboarding_milestone(store: State<'_, Mutex<Store>>, name: String) -> Result<(), String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    mark(&store, &name, now_ms())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,5 +410,30 @@ mod tests {
         assert_eq!(load(&s), Some(Onboarding { version: VERSION, step: -1, closed_at: None, outcome: None, rest: Default::default() }), "missing fields read as nothing finished");
         drop(s);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn reopening_starts_over_and_keeps_the_rest() {
+        let done = Onboarding { version: VERSION, step: 3, closed_at: Some(9), outcome: Some("completed".into()), rest: serde_json::from_str(r#"{"checklist":[true],"checklistDismissed":true,"milestones":{"aiConnected":5}}"#).unwrap() };
+        let back = reopened(Some(done));
+        assert_eq!((back.step, back.closed_at, back.outcome), (-1, None, None));
+        assert_eq!(serde_json::Value::Object(back.rest), serde_json::json!({"checklist":[true],"milestones":{"aiConnected":5}}), "only the dismissed mark goes");
+        assert_eq!(reopened(None), Onboarding { version: VERSION, step: -1, closed_at: None, outcome: None, rest: Default::default() }, "a profile with no record gets a fresh one");
+    }
+
+    #[test]
+    fn a_milestone_is_written_once() {
+        let dir = crate::test_dir::temp("onb-mile");
+        let s = Store::open(&dir).unwrap();
+        assert_eq!(mark(&s, "aiConnected", 10), Ok(()), "no record: nothing is written");
+        assert_eq!(load(&s), None);
+        first_start(&s, 1).unwrap();
+        mark(&s, "aiConnected", 10).unwrap();
+        mark(&s, "aiConnected", 20).unwrap();
+        mark(&s, "kitLaunched", 30).unwrap();
+        save(&s, &closed(load(&s).unwrap(), "completed", 40).unwrap()).unwrap();
+        mark(&s, "resultsOpened", 50).unwrap();
+        let rec = load(&s).unwrap();
+        assert_eq!(rec.rest["milestones"], serde_json::json!({"aiConnected":10,"kitLaunched":30,"resultsOpened":50}), "the first time stays, a closed wizard still records");
+        assert!(mark(&s, "lunch", 60).unwrap_err().contains("lunch"));
     }
 }

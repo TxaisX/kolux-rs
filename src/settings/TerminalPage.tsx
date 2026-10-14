@@ -7,6 +7,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { CONFIRM_CLOSE_FIELD, asksBeforeClose } from "../terminal/closing";
+import { PIN_ASK_FIELD, pinAsks } from "../terminal/pin";
+import { REMOVE_FIELD, readRemove } from "../terminal/remove";
 import { DEFAULT_PANES_FIELD, PANE_COUNTS, seedCount } from "../terminal/grid";
 import { clampNumber, CURSORS, DEFAULT_SHELL_FIELD, FIELDS, LINE_HEIGHT, optionsOf, readText, SCROLLBACK, SIZE, WEIGHTS, type TerminalText } from "../terminal/text";
 import { currentTerminal, TERMINAL_EVENT } from "../theme";
@@ -176,6 +178,22 @@ export default function TerminalPage() {
           <h2 className="conn-name">Closing terminals</h2>
           <Switch label="Ask Before Closing Running Terminals" checked={asksBeforeClose(settings)} onChange={(on) => save({ [CONFIRM_CLOSE_FIELD]: on })} />
           <p className="conn-detail">An idle shell always closes straight away.</p>
+          <label className="conn-switch">
+            <input type="checkbox" role="switch" checked={pinAsks(settings)} onChange={(e) => save({ [PIN_ASK_FIELD]: e.target.checked })} />
+            Ask before closing a pinned tab
+          </label>
+          <p className="conn-detail">Pinned tabs sit first in the strip and stay out of Close others, Close all and middle-click.</p>
+          <h2 className="conn-name">Removing a started session</h2>
+          <Segmented
+            label="Removing a started session"
+            options={[
+              { id: "ask", label: "Ask first" },
+              { id: "stop", label: "Stop without asking" },
+            ]}
+            value={readRemove(settings)}
+            onPick={(v) => save({ [REMOVE_FIELD]: v })}
+          />
+          <p className="conn-detail">Applies to Remove session on a running agent or a busy shell. A pane that has not started, or an idle shell, is removed straight away.</p>
         </section>
       )}
     </>

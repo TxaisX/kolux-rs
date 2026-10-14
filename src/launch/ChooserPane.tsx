@@ -10,7 +10,7 @@
 // be undone from the note it leaves. A model with
 // effort levels or fast mode shows those options on its seat only (SESS-016); "Use last lineup"
 // (SESS-021) appears when this project has one whose agents are still here.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Close, Dots } from "../chrome/icons";
 import { openSettings } from "../settings/pages";
@@ -20,10 +20,26 @@ import { markFor, type AgentInfo } from "./PlusMenu";
 import { KitIcon, openKits } from "../kits/Kits";
 import { KITS, VENDOR_NAME, assignRoles, type Vendor } from "../kits/catalog";
 import { canLaunch, FEATURED, type AgentPass } from "./agents";
+import { useKeymap } from "../keys/KeymapContext";
 import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, renameShape, resizeLineup, sameForAll, saveShape, seatGap, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type SavedShape, type Seat, type Shape, choiceOf, DEFAULT_MODEL, lineupAgents, type Lineup } from "./seats";
 
-/** Agents whose own page `open_install_page` knows (agents.rs `install_page`). */
-const DOC_PAGES = ["claude", "codex", "grok"];
+/** SESS-017: a link to the agent's own documentation, when Kolux knows it (agents.rs `install_page`). */
+function DocsLink({ agent }: { agent: AgentInfo }) {
+  if (!agent.docs) return null;
+  return (
+    <button className="btn link agent-link" onClick={() => void invoke("open_install_page", { agent: agent.id }).catch(() => {})} aria-label={`${agent.name} docs`} title={`Open ${agent.name}'s own documentation`}>
+      Docs
+    </button>
+  );
+}
+
+/** SESS-018: what a key does on the New session page: Ctrl+Enter (Cmd+Enter on a Mac) launches a
+ * complete lineup and is "blocked" while a seat is unfinished; Escape closes the page. */
+export function sheetKey(e: { key: string; ctrlKey: boolean; metaKey: boolean }, seats: Seat[], mac: boolean): "launch" | "blocked" | "close" | null {
+  if (e.key === "Escape") return "close";
+  if (e.key !== "Enter" || !(mac ? e.metaKey : e.ctrlKey)) return null;
+  return allReady(seats) ? "launch" : "blocked";
+}
 
 /** SESS-017: the featured three first (a missing one only once detection is done), the other
  * installed agents behind the fold, and whether no AI was found at all. */
@@ -74,9 +90,14 @@ type Props = {
   kit?: string | null;
   onKit?: (kit: string | null) => void;
   vendors?: Vendor[];
+  /** SESS-018: set on the New look: the chooser is the full-page New session sheet for this project. */
+  sheet?: { project: string; path: string } | null;
 };
 
-export default function ChooserPane({ number, hidden = false, focused = false, agents, detecting = false, seats, onSeats, shape, onLineup, task, onTask, onStart, copies, inGit, onCopies, busy = false, closable, onClose, onFocus, saved, onSaved, onPickSaved, pass, onRefresh, lastLineup, onUseLineup, kit = null, onKit = () => {}, vendors = [] }: Props) {
+export default function ChooserPane({ number, hidden = false, focused = false, agents, detecting = false, seats, onSeats, shape, onLineup, task, onTask, onStart, copies, inGit, onCopies, busy = false, closable, onClose, onFocus, saved, onSaved, onPickSaved, pass, onRefresh, lastLineup, onUseLineup, kit = null, onKit = () => {}, vendors = [], sheet = null }: Props) {
+  const mac = useKeymap().platform === "darwin";
+  // SESS-018: a Ctrl+Enter that cannot launch points at the footer's unfinished seat.
+  const [nudged, setNudged] = useState(false);
   // SESS-019: a chosen kit folds Advanced (shape, count, folders) and takes the seats' place.
   const chosen = KITS.find((k) => k.id === kit) ?? null;
   const [unfold, setUnfold] = useState(false);
@@ -140,8 +161,39 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
     if (Number.isFinite(n) && n >= 1 && n !== seats.length) recount(n);
     else e.currentTarget.value = String(seats.length);
   };
+  const onSheetKey = (e: KeyboardEvent) => {
+    if (!sheet || e.defaultPrevented) return;
+    const what = sheetKey(e, seats, mac);
+    if (what === "close") {
+      // Escape inside an open name field closes that field first (its own handler).
+      if ((e.target as HTMLElement).closest?.(".count-row input")) return;
+      e.preventDefault();
+      onClose();
+    } else if (what === "launch" && !chosen && ready) {
+      e.preventDefault();
+      onStart(seats);
+    } else if (what === "blocked" || what === "launch") {
+      e.preventDefault();
+      setNudged(true);
+    }
+  };
+  const launchKeys = [mac ? "Cmd" : "Ctrl", "Enter"];
   return (
-    <section ref={box} tabIndex={-1} className={`pane chooser${focused ? " focused" : ""}`} hidden={hidden} aria-label={`Session ${number} chooser`} onMouseDown={onFocus}>
+    <section ref={box} tabIndex={-1} className={`pane chooser${sheet ? " sheet" : ""}${focused ? " focused" : ""}`} hidden={hidden} aria-label={sheet ? "New session" : `Session ${number} chooser`} onMouseDown={onFocus} onKeyDown={onSheetKey}>
+      {sheet ? (
+        <header className="sheet-head">
+          <div className="sheet-title">
+            <h2>New session</h2>
+            <span className="sheet-project">{sheet.project}</span>
+            <span className="sheet-path" title={sheet.path}>
+              {sheet.path}
+            </span>
+          </div>
+          <button className="ib" onClick={onClose} title="Close (Esc)" aria-label="Close New session">
+            <Close size={12} />
+          </button>
+        </header>
+      ) : (
       <header className="pane-head">
         <span className="title">Session {number}</span>
         <span className="word">Choose what to run</span>
@@ -153,6 +205,7 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
           )}
         </span>
       </header>
+      )}
       <div className="chooser-body">
         <p className="caption">{chosen ? "A kit gives each of its roles one of the AIs you have connected." : "Every seat starts blank. Kolux never picks an AI or a model for you."}</p>
         {pass?.error ? (
@@ -346,21 +399,20 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
                         Set up
                       </button>
                     )}
-                    {DOC_PAGES.includes(a.id) && (
-                      <button className="btn link agent-link" onClick={() => void invoke("open_install_page", { agent: a.id }).catch(() => {})} aria-label={`${a.name} docs`} title={`Open ${a.name}'s own documentation`}>
-                        Docs
-                      </button>
-                    )}
+                    <DocsLink agent={a} />
                   </span>
                 ))}
                 {lineup.more.length > 0 &&
                   (unfolded.includes(i) || lineup.more.some((a) => a.id === seat.agent) ? (
                     lineup.more.map((a) => (
-                      <label key={a.id} className="choice" title={a.path ?? a.name}>
-                        <input type="radio" name={`seat-${number}-${i}-ai`} checked={seat.agent === a.id} onChange={() => pickAgent(i, a.id)} />
-                        <VendorMark agent={markFor(a.id)} size={12} />
-                        {a.name}
-                      </label>
+                      <span key={a.id} className="agent-seat">
+                        <label className="choice" title={a.path ?? a.name}>
+                          <input type="radio" name={`seat-${number}-${i}-ai`} checked={seat.agent === a.id} onChange={() => pickAgent(i, a.id)} />
+                          <VendorMark agent={markFor(a.id)} size={12} />
+                          {a.name}
+                        </label>
+                        <DocsLink agent={a} />
+                      </span>
                     ))
                   ) : (
                     <button className="btn link agent-link" onClick={() => setUnfolded((u) => [...u, i])}>
@@ -423,9 +475,14 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
         </div>
         </>
         )}
+        {sheet && (
+          <button className="btn link chooser-advanced" onClick={() => openSettings("accounts")} title="Connect or install another AI in Settings">
+            Add more agents
+          </button>
+        )}
       </div>
       <footer className="chooser-foot">
-        <div className="caption chooser-count" role="status">
+        <div className={`caption chooser-count${nudged && gap ? " warn" : ""}`} role={nudged && gap ? "alert" : "status"}>
           {`${sessions} ${sessions === 1 ? "session" : "sessions"}${gap ? ` · ${gap}` : ""}`}
         </div>
         {warnings.map((w) => (
@@ -434,6 +491,11 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
           </div>
         ))}
         <div className="btn-row">
+          {sheet && (
+            <button className="btn" onClick={onClose}>
+              Cancel
+            </button>
+          )}
           {onRefresh && (
             <button className="btn" disabled={pass?.looking} onClick={onRefresh} title="Look for installed agent CLIs again, for one you just installed">
               {pass?.looking ? "Looking…" : "Refresh agents"}
@@ -446,6 +508,16 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
           ) : (
           <button className="btn primary" disabled={!ready} onClick={() => onStart(seats)} title={ready ? "Start every seat" : !searched ? "Waiting for a search for agents that succeeds" : "Pick an AI and a model (or Terminal) for every seat first"}>
             {busy ? "Starting…" : `Start${seats.length > 1 ? ` ${seats.length}` : ""}`}
+            {sheet && !busy && (
+              <span className="kbd-part sheet-keys" aria-label={launchKeys.join("+")}>
+                {launchKeys.map((k, i) => (
+                  <span key={k} className="kbd-part">
+                    {i > 0 && <span className="kbd-plus">+</span>}
+                    <span className="kbd">{k}</span>
+                  </span>
+                ))}
+              </span>
+            )}
           </button>
           )}
         </div>

@@ -1,6 +1,6 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { expect, test } from "vitest";
-import { canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, select, discardAsk, type Section, budgetLine, budgetLow, mergeActions, mergeLabel, type MergeInfo, graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, commitUrl, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge } from "./model";
+import { canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, select, discardAsk, type Section, budgetLine, budgetLow, mergeActions, mergeLabel, type MergeInfo, graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, commitUrl, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, discardPlan, fileTree, reviewPrompt } from "./model";
 
 const commit = (hash: string, parents: string[], subject = hash): Commit => ({ hash, short: hash, parents, author: "a", time: 0, subject, message: subject, labels: [], outgoing: false, incoming: false });
 
@@ -366,4 +366,41 @@ test("GIT-028: each GitHub budget reads what is left and when it resets", () => 
   expect(budgetLow({ name: "REST", limit: 5000, remaining: 499, reset: now })).toBe(true);
   expect(budgetLow({ name: "REST", limit: 5000, remaining: 500, reset: now })).toBe(false);
   expect(budgetLow({ name: "Search", limit: 30, remaining: 0, reset: now })).toBe(true);
+});
+
+test("GIT-003: the discard question is worded per case and names the button, every version warning there is no undo", () => {
+  const c = (path: string, status: string, from: string | null = null) => ({ path, status, from });
+  expect(discardPlan([c("notes.txt", "U")])).toEqual({ title: "Delete notes.txt?", body: "This file is in no commit, so it is removed for good. There is no undo.", button: "Delete" });
+  expect(discardPlan([c("added.txt", "A")]).button).toBe("Delete");
+  expect(discardPlan([c("gone.txt", "D")])).toEqual({ title: "Restore gone.txt?", body: "The file comes back as it was in the last commit. There is no undo.", button: "Restore" });
+  expect(discardPlan([c("src/a.ts", "M")])).toEqual({ title: "Discard changes to src/a.ts?", body: "Its edits since the last commit are lost. There is no undo.", button: "Discard" });
+  // A whole section of untracked files says how many go.
+  const forty = Array.from({ length: 40 }, (_, i) => c(`u${i}.txt`, "U"));
+  expect(discardPlan(forty)).toEqual({ title: "Delete 40 new files?", body: "40 new files are removed for good. There is no undo.", button: "Delete" });
+  // Mixed rows: each kind is counted, and the button is the general Discard.
+  const mixed = discardPlan([c("a.txt", "U"), c("b.txt", "D"), c("c.txt", "M"), c("d.txt", "R", "old.txt"), c("e.txt", "D")]);
+  expect(mixed).toEqual({ title: "Discard 5 changes?", body: "1 new file is removed for good, 2 deleted files come back from the last commit, 2 files lose their edits. There is no undo.", button: "Discard" });
+  expect(discardPlan([c("a.txt", "D"), c("b.txt", "D")]).button).toBe("Restore");
+});
+
+test("GIT-001: the tree view puts folders first, each folder row knows every file beneath it, and a closed folder hides them", () => {
+  const rows = ["src/a.ts", "src/lib/b.ts", "README.md", "src/lib/c d.ts"].map((path) => ({ path, status: "M", from: null }));
+  const open = fileTree(rows, new Set());
+  expect(open.map((i) => `${i.depth}:${i.kind}:${i.name}`)).toEqual(["0:dir:src", "1:dir:lib", "2:file:b.ts", "2:file:c d.ts", "1:file:a.ts", "0:file:README.md"]);
+  expect(open[0].kind === "dir" && open[0].files).toEqual(["src/a.ts", "src/lib/b.ts", "src/lib/c d.ts"]);
+  const shut = fileTree(rows, new Set(["src/lib"]));
+  expect(shut.map((i) => i.name)).toEqual(["src", "lib", "a.ts", "README.md"]);
+  expect(shut[1].kind === "dir" && shut[1].files).toEqual(["src/lib/b.ts", "src/lib/c d.ts"]);
+});
+
+test("GIT-016: the review prompt names the base and stops each file list at 50; a branch with nothing to look at gets no prompt", () => {
+  const files = Array.from({ length: 60 }, (_, i) => ({ path: `src/f${i + 1}.ts`, status: "M", from: null }));
+  const p = reviewPrompt("origin/main", files, 60, ["notes.md"]);
+  expect(p).toContain("origin/main");
+  expect(p).toContain("- src/f50.ts");
+  expect(p).not.toContain("- src/f51.ts");
+  expect(p).toContain("and 10 more");
+  expect(p).toContain("- notes.md");
+  expect(reviewPrompt("main", files.slice(0, 2), 1200, [])).toContain("and 1198 more");
+  expect(reviewPrompt("main", [], 0, [])).toBeNull();
 });

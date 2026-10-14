@@ -2,7 +2,12 @@
 // front end says where the pane's body is and whether it is on screen; the page is laid over
 // that spot and hidden, never torn down, while its tab or screen is away, so scroll position,
 // form fields, sign-in and history all survive. Pages get no Tauri capability (the capability
-// names the main web view only), so a site can never reach the app's commands.
+// names the main web view only), so a site can never reach the app's commands. T-500: Tauri still
+// hands every app command to a page whose origin it counts as its own (a `*.localhost` host, the
+// dev server), so a tab may only ever open http, https or the blank page, never such a host, by
+// the address bar or by any navigation the page makes (`evidence/T-500-isolation.txt`). Tauri's
+// IPC objects stay in the page (it defines them first, non-configurable); its origin check is
+// what refuses them, and this gate is what keeps a tab off every origin that check trusts.
 use serde::{Deserialize, Serialize};
 use tauri::webview::{PageLoadEvent, WebviewBuilder};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Url, Webview, WebviewUrl};
@@ -89,6 +94,31 @@ pub fn parse(url: &str) -> Result<Url, String> {
     Url::parse(url).map_err(|e| format!("invalid address: {e}"))
 }
 
+/// Whether a tab may go to `url` (T-500): http, https or the blank page only. A `*.localhost`
+/// host is where the app itself (tauri.localhost), its IPC (ipc.localhost) and every custom scheme
+/// (kolux-artifact.localhost) answer, and `app` is the app's own origin in a development build;
+/// Tauri counts a page at any of those as its own and opens every app command to it, so a tab
+/// never goes there. Plain `localhost` (a user's own dev server) is fine.
+pub fn allowed(url: &Url, app: Option<&Url>) -> Result<(), String> {
+    if url.as_str() == "about:blank" {
+        return Ok(());
+    }
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(format!("{}: addresses do not open in a browser tab", url.scheme()));
+    }
+    let host = url.host_str().unwrap_or_default();
+    if host.ends_with(".localhost") || app.is_some_and(|a| a.origin() == url.origin()) {
+        return Err(format!("{host} is the app's own address and does not open in a browser tab"));
+    }
+    Ok(())
+}
+
+/// The app's own origin while it runs from the dev server; a release build serves itself from a
+/// `*.localhost` host, which `allowed` refuses on its own.
+fn app_origin(app: &AppHandle) -> Option<Url> {
+    tauri::is_dev().then(|| app.config().build.dev_url.clone()).flatten()
+}
+
 fn view(app: &AppHandle, id: u32) -> Result<Webview, String> {
     app.get_webview(&label(id)).ok_or_else(|| format!("browser tab {id} is not open"))
 }
@@ -104,13 +134,18 @@ fn err(e: tauri::Error) -> String {
 #[tauri::command]
 pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webview, id: u32, url: String, spot: Spot) -> Result<(), String> {
     let url = parse(&url)?;
+    let dev = app_origin(&app);
+    allowed(&url, dev.as_ref())?;
     let load_app = app.clone();
     let chord_app = app.clone();
     let builder = WebviewBuilder::new(label(id), WebviewUrl::External(url))
         .focused(false)
         .initialization_script(CHORD_SCRIPT)
         .on_navigation(move |url| {
-            let Some(what) = chord_of(url.as_str()) else { return true };
+            let Some(what) = chord_of(url.as_str()) else {
+                // T-500: a redirect, link or script cannot take the tab where the bar may not.
+                return allowed(url, dev.as_ref()).is_ok();
+            };
             if what == "focusAddressBar" {
                 // The keyboard is inside the page; the bar lives in the app's own web view.
                 if let Some(main) = chord_app.get_webview("main") {
@@ -147,7 +182,9 @@ pub async fn browser_bounds(app: AppHandle, id: u32, spot: Spot, shown: bool) ->
 
 #[tauri::command]
 pub async fn browser_navigate(app: AppHandle, id: u32, url: String) -> Result<(), String> {
-    view(&app, id)?.navigate(parse(&url)?).map_err(err)
+    let url = parse(&url)?;
+    allowed(&url, app_origin(&app).as_ref())?;
+    view(&app, id)?.navigate(url).map_err(err)
 }
 
 /// What the toolbar does to the page (BROW-005). wry offers reload only, so the rest runs as
@@ -200,6 +237,28 @@ mod tests {
         for needle in ["kolux-chord:", "ArrowLeft", "ArrowRight", "preventDefault", "window.top"] {
             assert!(CHORD_SCRIPT.contains(needle), "{needle}");
         }
+    }
+
+    #[test]
+    fn t500_a_tab_never_opens_an_origin_tauri_counts_as_the_apps_own() {
+        // evidence/T-500-isolation.txt: a page at the dev origin or at a custom-scheme host got
+        // every app command; remote http, https and the blank page are what a tab is for.
+        let dev = Url::parse("http://localhost:1420").unwrap();
+        let ok = |u: &str| allowed(&Url::parse(u).unwrap(), Some(&dev));
+        assert_eq!(ok("https://example.com/"), Ok(()));
+        assert_eq!(ok("http://localhost:3000/app"), Ok(()));
+        assert_eq!(ok("http://127.0.0.1:8745/probe.html"), Ok(()));
+        assert_eq!(ok("about:blank"), Ok(()));
+        assert!(ok("http://localhost:1420/kolux-probe").unwrap_err().contains("app's own address"));
+        assert!(ok("http://kolux-artifact.localhost/x/index.html").unwrap_err().contains("app's own address"));
+        assert!(ok("http://tauri.localhost/").unwrap_err().contains("app's own address"));
+        assert!(ok("https://ipc.localhost/app_info").is_err());
+        assert!(ok("file:///G:/Temp/browser-t195/probe.html").unwrap_err().starts_with("file: addresses do not open"));
+        assert!(ok("tauri://localhost/").is_err());
+        assert!(ok("javascript:alert(1)").is_err());
+        // A release build has no dev origin; the *.localhost rule still holds.
+        assert_eq!(allowed(&Url::parse("http://localhost:1420/").unwrap(), None), Ok(()));
+        assert!(allowed(&Url::parse("http://tauri.localhost/").unwrap(), None).is_err());
     }
 
     #[test]

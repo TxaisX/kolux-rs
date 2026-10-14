@@ -3,7 +3,7 @@
 // folder in the user's home, and that folder is opened as a project. The kit catalogue itself
 // (roles, inputs, prompts) lives in the frontend, src/kits/catalog.ts.
 use crate::git::Git;
-use crate::projects::{add_project, start_git, Project};
+use crate::projects::{locate_repo, register_project, start_git, Project};
 use crate::state::Store;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -63,11 +63,12 @@ pub fn copy_samples(root: &Path, kit: &str) -> Result<PathBuf, String> {
 }
 
 /// SKILL-005: Try with sample data. Returns the samples project, added like any repository.
-#[tauri::command]
+/// Off the window thread, and Git runs before the state store is locked (T-442-c).
+#[tauri::command(async)]
 pub fn kit_samples(git: State<'_, Git>, store: State<'_, Mutex<Store>>, kit: String) -> Result<Project, String> {
     let dir = copy_samples(&samples_root(), &kit)?;
-    let store = store.lock().map_err(|e| e.to_string())?;
-    add_project(&git, &store, &dir)
+    let found = locate_repo(&git, &dir)?;
+    register_project(&*store.lock().map_err(|e| e.to_string())?, found)
 }
 
 /// The samples folder for a kit, so the setup dialog can tell a sample workspace from a real one.
@@ -210,8 +211,9 @@ pub fn prepare(dir: &Path, record: RunRecord, earlier_name: &str) -> Prepared {
 }
 
 #[tauri::command]
-pub fn kit_check(dir: String) -> Option<RunCheck> {
-    check(Path::new(&dir))
+/// ACCT-055: only a project or the samples folder, like the other kit commands.
+pub fn kit_check(store: State<'_, Mutex<Store>>, dir: String) -> Option<RunCheck> {
+    guard(&store, &dir).ok().and_then(|d| check(&d))
 }
 
 /// SKILL-015: refused for an unknown kit or a folder that is not a project or under samples.

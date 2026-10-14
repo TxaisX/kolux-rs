@@ -1,8 +1,9 @@
 // Reading and saving the text of a file shown in an editor tab (EDIT-001). A save goes to a
 // temporary file beside the target and is then moved over it, so a failed write never leaves a
 // half-written file behind. Every command here takes only paths inside the user's projects and
-// worktrees (ACCT-055, fence.rs); the WSL and share parts of EDIT-045 are T-062;
-// large and binary files are EDIT-046 (T-178).
+// worktrees (ACCT-055, fence.rs); EDIT-045's `links::fence` guards the file operations and
+// `path_kind` (inside a project or granted exactly, never out through a link); the WSL and share
+// parts of EDIT-045 are T-062; large and binary files are EDIT-046 (T-178).
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -26,20 +27,120 @@ pub fn write_text(path: &Path, text: &str) -> Result<(), String> {
     fs::rename(&temp, path).map_err(fail)
 }
 
-#[tauri::command]
+type Store<'a> = tauri::State<'a, std::sync::Mutex<crate::state::Store>>;
+type Grants<'a> = tauri::State<'a, crate::links::Grants>;
+
+/// SAFE-021 / EDIT-045: a path on another machine, outside the projects, or leading out through a
+/// link is refused before the file is touched.
+// T-442-c: async, because fence.allow can ask git for every project's worktrees (a path outside
+// the project roots, such as a Kolux worktree, on a cold 3 s cache) and that must never hold up typing.
+#[tauri::command(async)]
 pub fn file_read(path: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<String, String> {
     read_text(&fence.allow(&path, &store, &git, true)?)
 }
 
-#[tauri::command]
-pub fn file_write(path: String, text: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
-    write_text(&fence.allow(&path, &store, &git, true)?, &text)
+/// T-073-a (EDIT-003): the SHA-256 of a file's bytes as lowercase hex. The editor hashes the UTF-8
+/// bytes of the text it loaded the same way (file_read hands the bytes back unchanged).
+pub fn text_hash(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Why file_write did not save. `Failed` goes to the window as the plain message it always was;
+/// `ChangedOnDisk` goes as `{ kind: "stale", message, path, diskHash }` (diskHash null
+/// when the file is gone), so the editor can offer to reload or overwrite.
+#[derive(Debug, PartialEq)]
+pub enum WriteError {
+    ChangedOnDisk { path: String, disk_hash: Option<String> },
+    Failed(String),
+}
+
+impl From<String> for WriteError {
+    fn from(message: String) -> Self {
+        WriteError::Failed(message)
+    }
+}
+
+impl serde::Serialize for WriteError {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            WriteError::Failed(message) => s.serialize_str(message),
+            WriteError::ChangedOnDisk { path, disk_hash } => serde_json::json!({
+                "kind": "stale", // the kind the editor's isStale (src/editor/buffers.ts) looks for
+                "message": format!("{path} changed on disk since it was opened, so it was not saved"),
+                "path": path,
+                "diskHash": disk_hash,
+            })
+            .serialize(s),
+        }
+    }
+}
+
+/// Saves `text` over `path`. With `loaded_hash` (the `text_hash` of the text the editor loaded)
+/// the save is refused when the file on disk no longer has that hash, so an agent's edit is never
+/// overwritten unseen. Without it the save goes ahead as before.
+/// ponytail: the check and the rename are not one atomic step; a write landing in between is lost.
+pub fn write_checked(path: &Path, text: &str, loaded_hash: Option<&str>) -> Result<(), WriteError> {
+    if let Some(want) = loaded_hash {
+        let disk_hash = match fs::read(path) {
+            Ok(bytes) => Some(text_hash(&bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(WriteError::Failed(format!("could not check {} before saving: {e}", path.display()))),
+        };
+        if disk_hash.as_deref() != Some(want.trim()) {
+            return Err(WriteError::ChangedOnDisk { path: path.display().to_string(), disk_hash });
+        }
+    }
+    Ok(write_text(path, text)?)
+}
+
+/// Saves run one at a time (T-442-c): the disk-hash check and the write happen under one lock,
+/// so two saves that now run on worker threads can never both pass the check and land out of
+/// order; the later one is refused as changed on disk instead.
+// ponytail: one lock for every path; saves are milliseconds, a per-path map if that ever shows.
+static WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// T-073 (EDIT-003): answers with the stamp of the file it just wrote, taken under the same lock,
+/// so the editor remembers its own save and the disk-change check never takes it for an agent's.
+#[tauri::command(async)]
+pub fn file_write(path: String, text: String, loaded_hash: Option<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Option<Stamp>, WriteError> {
+    let path = fence.allow(&path, &store, &git, true)?;
+    let _one = WRITES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    write_checked(&path, &text, loaded_hash.as_deref())?;
+    Ok(stamp_of(&path))
+}
+
+/// T-073 (EDIT-003): what a cheap disk-change check compares: the modified time in milliseconds
+/// and the size in bytes. It is advisory only (the banner); a same-size rewrite inside one check
+/// or a tool that puts the old modified time back slips past it, and the save's hash check
+/// (`write_checked`) is the guard that still refuses then.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Stamp {
+    pub mtime: u64,
+    pub size: u64,
+}
+
+/// The stamp of a file, or None when it is gone or cannot be looked at.
+pub fn stamp_of(path: &Path) -> Option<Stamp> {
+    let meta = fs::metadata(path).ok()?;
+    let mtime = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_millis() as u64;
+    Some(Stamp { mtime, size: meta.len() })
+}
+
+/// T-073 (EDIT-003): the stamps of the files open in editor tabs, in the order asked, None for a
+/// file that is gone, unreadable or outside the projects. The editor asks every two seconds for
+/// the tabs in front and when the window gets focus.
+/// ponytail: polling; a file watcher (the one the git-status lane adds) is the upgrade path, so the
+/// two never both add a dependency.
+#[tauri::command(async)]
+pub fn file_stamps(paths: Vec<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Vec<Option<Stamp>> {
+    paths.iter().map(|p| fence.allow(p, &store, &git, true).ok().and_then(|p| stamp_of(&p))).collect()
 }
 
 /// ACCT-055: Open a file shows the system picker here, so only the file the user chose is
 /// granted (never its folder); none when the picker was cancelled.
 #[tauri::command]
-pub async fn file_pick(app: tauri::AppHandle, default_path: Option<String>, fence: tauri::State<'_, crate::fence::Fence>) -> Result<Option<String>, String> {
+pub async fn file_pick(app: tauri::AppHandle, default_path: Option<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
     let mut pick = app.dialog().file().set_title("Open a file");
     if let Some(dir) = default_path {
@@ -47,7 +148,7 @@ pub async fn file_pick(app: tauri::AppHandle, default_path: Option<String>, fenc
     }
     let Some(chosen) = pick.blocking_pick_file() else { return Ok(None) };
     let path = chosen.into_path().map_err(|e| e.to_string())?;
-    fence.grant(&path)?;
+    fence.grant(&path, &*store.lock().map_err(|e| e.to_string())?)?;
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
@@ -58,7 +159,8 @@ pub struct Notes {
     capped: bool,
 }
 
-#[tauri::command]
+// TERM-115: async, so listing a big worktree through git never holds typing in another pane.
+#[tauri::command(async)]
 pub fn md_list(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Notes, String> {
     let (files, capped) = git.markdown_files(&fence.allow(&root, &store, &git, false)?, 2000)?;
     Ok(Notes { files, capped })
@@ -192,26 +294,26 @@ pub struct Sides {
 }
 
 #[tauri::command]
-pub fn diff_sides(path: String, staged: bool, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Sides, String> {
+pub async fn diff_sides(path: String, staged: bool, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Sides, String> {
     let (original, modified) = git.diff_sides(&fence.allow(&path, &store, &git, false)?, staged)?;
     Ok(Sides { original, modified })
 }
 
 /// The changed files the diff picker lists (EDIT-027).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_changes(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<crate::git::Change>, String> {
     git.changes(&fence.allow(&root, &store, &git, false)?)
 }
 
 /// Every change of the worktree for All Changes (EDIT-029); see Git::change_entries.
 #[tauri::command]
-pub fn change_entries(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<crate::git::Entry>, String> {
+pub async fn change_entries(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<crate::git::Entry>, String> {
     git.change_entries(&fence.allow(&root, &store, &git, false)?)
 }
 
 /// One side of a changed image, as bytes (EDIT-029: images load on their own); empty when the
 /// file is not on that side.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn diff_image(path: String, staged: bool, new: bool, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<tauri::ipc::Response, String> {
     let (old, now) = git.diff_bytes(&fence.allow(&path, &store, &git, false)?, staged)?;
     Ok(tauri::ipc::Response::new(if new { now } else { old }))
@@ -220,7 +322,7 @@ pub fn diff_image(path: String, staged: bool, new: bool, fence: tauri::State<'_,
 /// Mod+Shift+M: an empty note at the worktree root named untitled.md, then untitled-2.md and
 /// onwards. It never overwrites a file and gives up after 100 taken names. Naming it on the
 /// first save is EDIT-054 (T-237).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn md_new(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<String, String> {
     new_note(&fence.allow(&root, &store, &git, false)?)
 }
@@ -266,15 +368,25 @@ pub fn list_dir(dir: &Path) -> Result<Vec<DirEntry>, String> {
     Ok(out)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dir_list(path: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<DirEntry>, String> {
     list_dir(&fence.allow(&path, &store, &git, false)?)
 }
 
-/// What a path really is, following links: "dir", "file" or "missing".
+/// What a path really is: "remote" (another machine, never looked up; SAFE-021), "outside" (not
+/// in a project, or out through a link; EDIT-045), else following links "dir", "file" or "missing".
 #[tauri::command]
-pub fn path_kind(path: String) -> &'static str {
-    match fs::metadata(&path) {
+pub fn path_kind(store: Store<'_>, grants: Grants<'_>, path: String) -> &'static str {
+    let roots = crate::links::roots(&store);
+    match crate::links::fence(&path, &roots, &grants.snapshot(), true) {
+        Ok(p) => kind_of(&p),
+        Err(_) if crate::links::host_path(&path, &roots) => "remote",
+        Err(_) => "outside",
+    }
+}
+
+pub fn kind_of(path: &Path) -> &'static str {
+    match fs::metadata(path) {
         Ok(m) if m.is_dir() => "dir",
         Ok(_) => "file",
         Err(_) => "missing",
@@ -303,9 +415,84 @@ mod tests {
         }
         let got: Vec<_> = list_dir(&d).unwrap().into_iter().map(|e| (e.name, e.kind)).collect();
         assert_eq!(got, [("Alpha".to_string(), "dir"), ("zeta".to_string(), "dir"), ("A.txt".to_string(), "file"), ("b.txt".to_string(), "file")]);
-        assert_eq!(path_kind(d.join("zeta").to_string_lossy().into()), "dir");
-        assert_eq!(path_kind(d.join("nope").to_string_lossy().into()), "missing");
+        assert_eq!(kind_of(&d.join("zeta")), "dir");
+        assert_eq!(kind_of(&d.join("nope")), "missing");
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn t073a_a_save_with_the_loaded_hash_is_refused_once_the_file_changed_on_disk() {
+        let d = temp_dir("t073a");
+        let f = d.join("notes.md");
+        fs::write(&f, "first\n").unwrap();
+        let loaded = text_hash(read_text(&f).unwrap().as_bytes());
+        // SHA-256, lowercase hex: the standard test vector, so the editor's crypto.subtle digest matches.
+        assert_eq!(text_hash(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+
+        // Unchanged on disk: the save goes through, and the new text's hash is the next one to send.
+        write_checked(&f, "second\n", Some(&loaded)).unwrap();
+        assert_eq!(fs::read_to_string(&f).unwrap(), "second\n");
+        let loaded = text_hash(b"second\n");
+
+        // An agent edits the file: the save with the old hash is refused and the agent's text stays.
+        fs::write(&f, "agent\n").unwrap();
+        let err = write_checked(&f, "mine\n", Some(&loaded)).unwrap_err();
+        assert_eq!(err, WriteError::ChangedOnDisk { path: f.display().to_string(), disk_hash: Some(text_hash(b"agent\n")) });
+        assert_eq!(fs::read_to_string(&f).unwrap(), "agent\n");
+        let sent = serde_json::to_value(&err).unwrap();
+        assert_eq!((sent["kind"].as_str(), sent["diskHash"].as_str()), (Some("stale"), Some(text_hash(b"agent\n").as_str())));
+
+        // Deleted on disk: refused with no disk hash. No hash given: saves as before.
+        fs::remove_file(&f).unwrap();
+        let gone = serde_json::to_value(write_checked(&f, "mine\n", Some(&loaded)).unwrap_err()).unwrap();
+        assert!(gone["diskHash"].is_null() && !f.exists());
+        write_checked(&f, "mine\n", None).unwrap();
+        assert_eq!(fs::read_to_string(&f).unwrap(), "mine\n");
+
+        // Any other failure reaches the window as the plain message it always was.
+        assert_eq!(serde_json::to_value(WriteError::Failed("could not save x".into())).unwrap(), serde_json::json!("could not save x"));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn t073_the_stamp_follows_a_rewrite_and_is_none_for_a_missing_file() {
+        let dir = temp_dir("stamp");
+        let f = dir.join("a.txt");
+        fs::write(&f, "one
+").unwrap();
+        let first = stamp_of(&f).unwrap();
+        assert_eq!(first.size, 4);
+        fs::write(&f, "one two
+").unwrap();
+        let second = stamp_of(&f).unwrap();
+        assert_ne!(first, second, "a rewrite to another size changes the stamp");
+        assert_eq!(stamp_of(&dir.join("gone.txt")), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn t073_council_the_hash_check_refuses_even_when_the_stamp_says_unchanged() {
+        // The banner's stamp is advisory: a same-size rewrite that puts the old modified time
+        // back looks unchanged to it, and the save must still be refused by the hash check.
+        let dir = temp_dir("stamp-equal");
+        let f = dir.join("a.txt");
+        fs::write(&f, "aaaa
+").unwrap();
+        let loaded = text_hash(b"aaaa
+");
+        let before = stamp_of(&f).unwrap();
+        let mtime = fs::metadata(&f).unwrap().modified().unwrap();
+        fs::write(&f, "bbbb
+").unwrap();
+        fs::OpenOptions::new().write(true).open(&f).unwrap().set_modified(mtime).unwrap();
+        assert_eq!(stamp_of(&f).unwrap(), before, "same size and the old modified time: the stamp cannot tell");
+        let refused = write_checked(&f, "mine
+", Some(&loaded));
+        assert_eq!(refused, Err(WriteError::ChangedOnDisk { path: f.display().to_string(), disk_hash: Some(text_hash(b"bbbb
+")) }));
+        assert_eq!(fs::read_to_string(&f).unwrap(), "bbbb
+", "the agent's text stays on disk");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

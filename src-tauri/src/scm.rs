@@ -1,11 +1,15 @@
-//! GIT-002 / GIT-004 / GIT-006 / GIT-007: the Source Control panel's back end: what one worktree
-//! has changed, staging and unstaging by path, committing, and the remote actions (push, pull,
+//! GIT-002 / GIT-003 / GIT-004 / GIT-006 / GIT-007: the Source Control panel's back end: what one
+//! worktree has changed, staging and unstaging by path, discarding work, committing, and the remote actions (push, pull,
 //! sync, fetch, fast-forward, force push with lease, publish, rebase from base). Every call names
 //! the worktree it acts on, so one workspace's index is never touched from another's panel.
 //! Reading status never touches the network: the ahead / behind counts come from the refs git
 //! already has, so an unpublished branch is not checked against the remote over and over.
 
 use crate::git::{command, native, run, Git};
+
+#[path = "scm_watch.rs"]
+pub mod watch;
+use std::fs;
 use std::io::Write;
 use std::path::{Component, Path};
 
@@ -44,6 +48,46 @@ pub struct Status {
     pub operation: Option<String>,
     /// GIT-015: conflicted files whose clash markers are gone, so they only need staging.
     pub resolved: Vec<String>,
+    /// GIT-001: the lines each file adds and removes, per section; a binary file has no entry.
+    pub lines: LineCounts,
+}
+
+/// GIT-001: `[added, removed]` by path for the staged, changed and untracked sections.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct LineCounts {
+    pub staged: std::collections::BTreeMap<String, [u32; 2]>,
+    pub changed: std::collections::BTreeMap<String, [u32; 2]>,
+    pub untracked: std::collections::BTreeMap<String, [u32; 2]>,
+}
+
+/// `git diff --numstat -M -z` output by path; a rename is keyed by its new path and a binary
+/// file ("-" for both counts) is left out.
+fn numstat(text: &str) -> std::collections::BTreeMap<String, [u32; 2]> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut f = text.split('\0');
+    while let Some(head) = f.next() {
+        let mut p = head.splitn(3, '\t');
+        let (Some(a), Some(r), Some(path)) = (p.next(), p.next(), p.next()) else { continue };
+        // A rename leaves the path empty and gives the old and new paths as the next two fields.
+        let path = if path.is_empty() { f.nth(1).unwrap_or_default() } else { path };
+        if let (Ok(a), Ok(r)) = (a.parse(), r.parse()) {
+            out.insert(path.to_string(), [a, r]);
+        }
+    }
+    out
+}
+
+/// An untracked file's lines, the last one counted without its newline; None for a binary file
+/// (a NUL byte) or one over a megabyte.
+fn file_lines(path: &Path) -> Option<u32> {
+    if std::fs::metadata(path).ok()?.len() > 1_000_000 {
+        return None;
+    }
+    let b = std::fs::read(path).ok()?;
+    if b.contains(&0) {
+        return None;
+    }
+    Some(b.iter().filter(|&&c| c == b'\n').count() as u32 + u32::from(b.last().is_some_and(|&c| c != b'\n')))
 }
 
 /// What a commit attempt came to: `id` is the new commit when it worked; otherwise `output` is
@@ -69,6 +113,10 @@ pub fn status(worktree: &Path) -> Result<Status, String> {
     }
     st.base = Git::detect().ok().and_then(|g| g.default_branch(worktree));
     st.operation = operation(worktree);
+    st.lines.staged = run(&["diff", "--cached", "--numstat", "-M", "-z"], Some(worktree)).map(|t| numstat(&t)).unwrap_or_default();
+    st.lines.changed = run(&["diff", "--numstat", "-z"], Some(worktree)).map(|t| numstat(&t)).unwrap_or_default();
+    // ponytail: the first 2 000 untracked files are counted; a folder of thousands shows the rest bare.
+    st.lines.untracked = st.untracked.iter().take(2_000).filter_map(|c| Some((c.path.clone(), [file_lines(&worktree.join(&c.path))?, 0]))).collect();
     st.resolved = st
         .conflicts
         .iter()
@@ -132,6 +180,26 @@ pub fn pushed(worktree: &Path) -> Option<Pushed> {
 #[tauri::command]
 pub async fn scm_pushed(worktrees: Vec<String>) -> Vec<Pushed> {
     tauri::async_runtime::spawn_blocking(move || worktrees.iter().filter_map(|w| pushed(Path::new(w))).collect()).await.unwrap_or_default()
+}
+
+/// TERM-022: what the pane header's branch chip reads: the branch, else the commit a detached
+/// HEAD is on (None before the first commit). None for a folder outside git.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Head {
+    pub branch: Option<String>,
+    pub head: Option<String>,
+}
+
+pub fn head_of(dir: &Path) -> Option<Head> {
+    run(&["rev-parse", "--git-dir"], Some(dir)).ok()?;
+    let branch = run(&["symbolic-ref", "-q", "--short", "HEAD"], Some(dir)).ok().filter(|b| !b.is_empty());
+    Some(Head { branch, head: run(&["rev-parse", "-q", "--verify", "HEAD"], Some(dir)).ok().filter(|h| !h.is_empty()) })
+}
+
+/// TERM-022: read off the UI thread; every pane asks when it shows and when it takes focus.
+#[tauri::command]
+pub async fn scm_head(dir: String) -> Option<Head> {
+    tauri::async_runtime::spawn_blocking(move || head_of(Path::new(&dir))).await.ok().flatten()
 }
 
 /// Lines added and removed in one row of the branch summary.
@@ -481,7 +549,7 @@ fn gh_repo_arg(worktree: &Path, ssh_config: &str) -> Option<String> {
 
 /// GIT-060: the worktree's GitHub repository, for grouping checkouts (the Tasks picker, T-231-b).
 #[tauri::command]
-pub fn scm_github_repo(worktree: String) -> Option<GhRepo> {
+pub async fn scm_github_repo(worktree: String) -> Option<GhRepo> {
     let url = run(&["remote", "get-url", "origin"], Some(Path::new(&worktree))).ok()?;
     github_repo(&url, &ssh_config())
 }
@@ -493,11 +561,12 @@ pub fn gh_login() -> Option<String> {
     (out.status.success() && !login.is_empty()).then_some(login)
 }
 
-fn gh_program() -> Result<std::path::PathBuf, String> {
-    // Development builds only: KOLUX_DEV_GH names a stand-in gh for live proofs, since the
-    // registry's search path (which finds the real gh) comes before the process PATH.
+pub(crate) fn gh_program() -> Result<std::path::PathBuf, String> {
+    // Development builds only: KOLUX_DEV_GH (or the worktrees lane's KOLUX_RS_GH) names a stand-in
+    // gh for live proofs, since the registry's search path (which finds the real gh) comes before
+    // the process PATH.
     #[cfg(debug_assertions)]
-    if let Some(p) = std::env::var_os("KOLUX_DEV_GH") {
+    if let Some(p) = std::env::var_os("KOLUX_DEV_GH").or_else(|| std::env::var_os("KOLUX_RS_GH")) {
         return Ok(p.into());
     }
     crate::agents::find_program("gh").ok_or_else(|| "The GitHub CLI (gh) is not installed; install it, then run gh auth login".to_string())
@@ -508,7 +577,7 @@ const GH_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Runs gh in the worktree with every prompt off; `input` goes to standard input. A failure
 /// carries what gh printed.
-fn gh_run(program: &Path, worktree: &Path, args: &[&str], input: Option<&str>) -> Result<String, String> {
+pub(crate) fn gh_run(program: &Path, worktree: &Path, args: &[&str], input: Option<&str>) -> Result<String, String> {
     gh_run_for(program, worktree, args, input, GH_LIMIT)
 }
 
@@ -599,6 +668,89 @@ pub fn pr_link(gh: &Path, worktree: &Path, url: &str) -> Result<Pr, String> {
     }
     let text = gh_run(gh, worktree, &["pr", "view", url, "--json", PR_FIELDS], None).map_err(|e| gh_words(&e))?;
     serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))
+}
+
+/// VIEW-073: one check on a pull request, in the Checks panel's words.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Check {
+    pub name: String,
+    pub workflow: Option<String>,
+    /// passed, failed, running, skipped, cancelled or unresolved.
+    pub outcome: String,
+    pub link: Option<String>,
+    pub started: Option<String>,
+    pub finished: Option<String>,
+    pub description: Option<String>,
+}
+
+/// VIEW-073: the Checks panel's answer; `pr` is None when the branch has no pull request.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, Default)]
+pub struct PrChecks {
+    pub pr: Option<Pr>,
+    pub conflict: bool,
+    pub checks: Vec<Check>,
+}
+
+const CHECK_FIELDS: &str = "number,url,state,title,headRefName,isDraft,mergeable,statusCheckRollup";
+
+/// VIEW-073: a check run's status and conclusion, or a commit status's state, as one word. A run
+/// that finished without a conclusion is unresolved, never pending.
+fn check_outcome(v: &serde_json::Value) -> &'static str {
+    let word = |k: &str| v[k].as_str().unwrap_or("").to_ascii_uppercase();
+    if v["__typename"] == "StatusContext" || v.get("status").is_none() {
+        return match word("state").as_str() {
+            "SUCCESS" => "passed",
+            "PENDING" | "EXPECTED" => "running",
+            "FAILURE" | "ERROR" => "failed",
+            _ => "unresolved",
+        };
+    }
+    if word("status") != "COMPLETED" {
+        return "running";
+    }
+    match word("conclusion").as_str() {
+        "SUCCESS" | "NEUTRAL" => "passed",
+        "FAILURE" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => "failed",
+        "SKIPPED" | "STALE" => "skipped",
+        "CANCELLED" => "cancelled",
+        _ => "unresolved",
+    }
+}
+
+/// VIEW-073: gh's pull request answer, read into the review header, the conflict notice and the checks.
+pub fn checks_from(text: &str) -> Result<PrChecks, String> {
+    let bad = |e: serde_json::Error| format!("gh answered in a form Kolux cannot read: {e}");
+    let v: serde_json::Value = serde_json::from_str(text).map_err(bad)?;
+    let pr: Pr = serde_json::from_value(v.clone()).map_err(bad)?;
+    // gh writes a zero time for a run that has not finished yet.
+    let time = |x: &serde_json::Value| x.as_str().filter(|t| !t.is_empty() && !t.starts_with("0001-")).map(String::from);
+    let text_of = |x: &serde_json::Value| x.as_str().filter(|t| !t.is_empty()).map(String::from);
+    let checks = v["statusCheckRollup"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|c| Check {
+                    name: text_of(&c["name"]).or_else(|| text_of(&c["context"])).unwrap_or_else(|| "check".into()),
+                    workflow: text_of(&c["workflowName"]),
+                    outcome: check_outcome(c).into(),
+                    link: text_of(&c["detailsUrl"]).or_else(|| text_of(&c["targetUrl"])),
+                    started: time(&c["startedAt"]),
+                    finished: time(&c["completedAt"]),
+                    description: text_of(&c["description"]),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(PrChecks { pr: Some(pr), conflict: v["mergeable"] == "CONFLICTING", checks })
+}
+
+/// VIEW-073: the checks of the pull request for `target` (a branch or a hand-linked PR link).
+pub fn pr_checks(gh: &Path, worktree: &Path, target: &str) -> Result<PrChecks, String> {
+    match gh_run(gh, worktree, &["pr", "view", target, "--json", CHECK_FIELDS], None) {
+        Ok(text) => checks_from(&text),
+        Err(e) if e.to_lowercase().contains("no pull requests found") => Ok(PrChecks::default()),
+        Err(e) => Err(gh_words(&e)),
+    }
 }
 
 /// GIT-017: the most diff text a commit-message prompt carries.
@@ -840,7 +992,7 @@ pub async fn scm_commit_message(worktree: String, command: Option<String>, instr
 
 /// GIT-017: stops the commit-message run for `worktree`.
 #[tauri::command]
-pub fn scm_commit_message_stop(worktree: String) {
+pub async fn scm_commit_message_stop(worktree: String) {
     stop_message(&worktree);
 }
 
@@ -931,8 +1083,15 @@ pub fn prs_poll(gh: &Path, items: &[PollItem], gap: std::time::Duration) -> PrPo
 }
 
 #[tauri::command]
-pub async fn scm_prs_poll(items: Vec<PollItem>) -> Result<PrPoll, String> {
-    tauri::async_runtime::spawn_blocking(move || Ok(prs_poll(&gh_program()?, &items, std::time::Duration::from_millis(400)))).await.map_err(|e| e.to_string())?
+pub async fn scm_prs_poll(app: tauri::AppHandle, items: Vec<PollItem>) -> Result<PrPoll, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let out = prs_poll(&gh_program()?, &items, std::time::Duration::from_millis(400));
+        // AUTO-004: each round is what pull-request-opened automations listen to.
+        crate::automations::on_poll(&app, &out.prs);
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// GIT-021: creates the branch's pull request against `base` on origin, pushing unpushed work
@@ -980,6 +1139,7 @@ pub fn pr_create(gh: &Path, worktree: &Path, title: &str, body: &str, base: &str
     let said = gh_run(gh, worktree, &args, Some(body)).map_err(|e| gh_words(&e))?;
     let url = said.lines().rev().map(str::trim).find(|l| l.contains("/pull/")).ok_or_else(|| format!("gh did not say where the pull request is: {said}"))?;
     let number = url.rsplit('/').next().and_then(|n| n.parse().ok()).ok_or_else(|| format!("gh gave a link without a number: {url}"))?;
+    crate::activity::pr_created(); // USAGE-011
     Ok(Pr { number, url: url.to_string(), state: "OPEN".into(), title: Some(title.trim().to_string()), head: Some(branch.clone()), draft })
 }
 
@@ -1209,7 +1369,7 @@ pub async fn scm_tasks_search(host: String, queries: Vec<String>, page: u32) -> 
 
 /// GIT-043: the account gh is signed in with on `host`, from gh's own config (no network).
 #[tauri::command]
-pub fn scm_gh_account(host: String) -> Option<String> {
+pub async fn scm_gh_account(host: String) -> Option<String> {
     let out = std::process::Command::new(gh_program().ok()?).args(["config", "get", "-h", &host, "user"]).output().ok()?;
     let login = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (out.status.success() && !login.is_empty()).then_some(login)
@@ -1479,6 +1639,22 @@ pub async fn scm_pr(worktree: String, linked: Option<String>) -> Result<Option<P
     .map_err(|e| e.to_string())?
 }
 
+/// VIEW-073: the Checks panel's lookup, for the worktree's branch or its hand-linked pull request.
+#[tauri::command]
+pub async fn scm_pr_checks(worktree: String, linked: Option<String>) -> Result<PrChecks, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = Path::new(&worktree);
+        let target = match linked {
+            Some(url) if safe_pr_url(url.trim()) => url.trim().to_string(),
+            Some(_) => return Err("The linked pull request is not a pull request link".into()),
+            None => status(dir)?.branch.ok_or("No branch is checked out here")?,
+        };
+        pr_checks(&gh_program()?, dir, &target)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn scm_pr_create(worktree: String, title: String, body: String, base: String, draft: bool) -> Result<Pr, String> {
     tauri::async_runtime::spawn_blocking(move || pr_create(&gh_program()?, Path::new(&worktree), &title, &body, &base, draft)).await.map_err(|e| e.to_string())?
@@ -1486,7 +1662,7 @@ pub async fn scm_pr_create(worktree: String, title: String, body: String, base: 
 
 /// Opens a pull request in the browser.
 #[tauri::command]
-pub fn scm_open_pr(url: String) -> Result<(), String> {
+pub async fn scm_open_pr(url: String) -> Result<(), String> {
     if !safe_pr_url(&url) {
         return Err("That is not a pull request link".into());
     }
@@ -1627,7 +1803,7 @@ pub async fn scm_history(worktree: String) -> Result<Vec<Commit>, String> {
 }
 
 #[tauri::command]
-pub fn scm_commit_files(worktree: String, hash: String) -> Result<Vec<Change>, String> {
+pub async fn scm_commit_files(worktree: String, hash: String) -> Result<Vec<Change>, String> {
     commit_files(Path::new(&worktree), &hash)
 }
 
@@ -1722,6 +1898,70 @@ fn piped(worktree: &Path, args: &[&str], paths: &[String]) -> Result<(), String>
     }
 }
 
+/// GIT-003: throws away the uncommitted work on `paths`. A new file (untracked, or only staged)
+/// is removed for good, a deleted file comes back from the last commit, a modified or renamed
+/// file is put back as the last commit had it; staged work is unstaged first. A link is only ever
+/// removed or rewritten as a link: what it points at is never followed, so nothing outside the
+/// repository is touched. An untracked folder (`box/`) goes with everything in it.
+pub fn discard_paths(worktree: &Path, paths: &[String]) -> Result<(), String> {
+    check_paths(paths)?;
+    let st = status(worktree)?;
+    let (mut staged, mut tracked, mut remove) = (Vec::new(), Vec::new(), Vec::new());
+    for p in paths {
+        let p = p.trim_end_matches('/');
+        let index = st.staged.iter().find(|c| c.path == p);
+        if let Some(c) = index {
+            staged.push(c.path.clone());
+            if let Some(from) = &c.from {
+                staged.push(from.clone());
+                tracked.push(from.clone());
+            }
+        }
+        if st.untracked.iter().any(|c| c.path.trim_end_matches('/') == p) || index.is_some_and(|c| c.status == "A" || c.from.is_some()) {
+            remove.push(p.to_string());
+        } else {
+            tracked.push(p.to_string());
+        }
+    }
+    if !staged.is_empty() {
+        with_paths(worktree, &["reset", "-q"], &staged)?;
+    }
+    for p in &tracked {
+        // A link is removed before git rewrites it, so git never writes through it.
+        let full = worktree.join(native(p));
+        if fs::symlink_metadata(&full).is_ok_and(|m| m.is_symlink()) {
+            fs::remove_file(&full).or_else(|_| fs::remove_dir(&full)).map_err(|e| format!("{p}: {e}"))?;
+        }
+    }
+    if !tracked.is_empty() {
+        with_paths(worktree, &["checkout", "-q", "HEAD"], &tracked)?;
+    }
+    for p in &remove {
+        let full = worktree.join(native(p));
+        let Ok(meta) = fs::symlink_metadata(&full) else { continue };
+        let done = if meta.is_dir() { fs::remove_dir_all(&full) } else { fs::remove_file(&full).or_else(|_| fs::remove_dir(&full)) };
+        done.map_err(|e| format!("{p}: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Runs `git <args>` over `paths` handed on stdin, NUL-separated and literal, so no name is
+/// read as a pattern.
+fn with_paths(worktree: &Path, args: &[&str], paths: &[String]) -> Result<(), String> {
+    let mut all = vec!["--literal-pathspecs"];
+    all.extend_from_slice(args);
+    all.extend_from_slice(&["--pathspec-from-file=-", "--pathspec-file-nul"]);
+    let mut child = command(&all, Some(worktree)).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().map_err(|e| format!("could not run git: {e}"))?;
+    let input = paths.iter().map(|p| format!("{p}\0")).collect::<String>();
+    child.stdin.take().ok_or("git has no input")?.write_all(input.as_bytes()).map_err(|e| e.to_string())?;
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
 /// VIEW-067: throws away the changes in one section of the panel. Staged rows go back to the last
 /// commit in the index and on disk (so a staged new file is deleted), changed rows go back to what
 /// is staged, untracked rows are deleted. git clean only ever removes untracked files, so a tracked
@@ -1770,44 +2010,73 @@ fn has_commit_hook(worktree: &Path) -> bool {
 }
 
 #[tauri::command]
-pub fn scm_status(worktree: String) -> Result<Status, String> {
+pub async fn scm_status(worktree: String) -> Result<Status, String> {
     status(Path::new(&worktree))
 }
 
+/// GIT-001 (T-033-b): starts or joins the watch of the worktree holding `path`; its status arrives
+/// as the `scm-status-<id>` event, the same shape `scm_status` returns.
 #[tauri::command]
-pub fn scm_summary(worktree: String, pinned: Option<String>, upstream: bool) -> Result<Summary, String> {
+pub async fn scm_watch(app: tauri::AppHandle, path: String) -> Result<watch::WatchStart, String> {
+    use tauri::{Emitter, Manager};
+    let dir = app.path().app_data_dir().ok();
+    let sink = move |id: u64| {
+        let (app, event) = (app.clone(), format!("scm-status-{id}"));
+        std::sync::Arc::new(move |st: &Status| drop(app.emit(&event, st))) as std::sync::Arc<dyn Fn(&Status) + Send + Sync>
+    };
+    let log = std::sync::Arc::new(move |line: &str| {
+        if let Some(d) = &dir {
+            crate::diag::write(d, line);
+        }
+    });
+    watch::watch(Path::new(&path), sink, log)
+}
+
+#[tauri::command]
+pub async fn scm_unwatch(id: u64) {
+    watch::unwatch(id);
+}
+
+#[tauri::command]
+pub async fn scm_summary(worktree: String, pinned: Option<String>, upstream: bool) -> Result<Summary, String> {
     summary(Path::new(&worktree), pinned.as_deref(), upstream)
 }
 
 #[tauri::command]
-pub fn scm_abort(worktree: String) -> Result<(), String> {
+pub async fn scm_abort(worktree: String) -> Result<(), String> {
     abort(Path::new(&worktree))
 }
 
 #[tauri::command]
-pub fn scm_stage(worktree: String, paths: Vec<String>, on: bool) -> Result<(), String> {
-    stage(Path::new(&worktree), &paths, on)
+/// ACCT-055: stage and discard only in a project or worktree (fence.rs).
+pub async fn scm_stage(worktree: String, paths: Vec<String>, on: bool, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
+    stage(&fence.allow(&worktree, &store, &git, false)?, &paths, on)
 }
 
 #[tauri::command]
-pub fn scm_discard(worktree: String, section: String, paths: Vec<String>) -> Result<(), String> {
-    discard(Path::new(&worktree), &section, &paths)
+/// VIEW-067 discards one section; GIT-003 rows picked across sections come without one.
+/// ACCT-055: only inside a project or worktree (fence.rs).
+pub async fn scm_discard(worktree: String, section: Option<String>, paths: Vec<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
+    let root = fence.allow(&worktree, &store, &git, false)?;
+    match section {
+        Some(section) => discard(&root, &section, &paths),
+        None => discard_paths(&root, &paths),
+    }
 }
 
 #[tauri::command]
-pub fn scm_commit(worktree: String, message: String) -> Result<CommitOutcome, String> {
+pub async fn scm_commit(worktree: String, message: String) -> Result<CommitOutcome, String> {
     commit(Path::new(&worktree), &message)
 }
 
 #[tauri::command]
-pub fn scm_remote(worktree: String, action: String) -> Result<ActionOutcome, String> {
+pub async fn scm_remote(worktree: String, action: String) -> Result<ActionOutcome, String> {
     remote(Path::new(&worktree), &action)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use std::path::PathBuf;
 
     fn temp_repo(name: &str) -> PathBuf {
@@ -1822,6 +2091,26 @@ mod tests {
         run(&["add", "."], Some(&dir)).unwrap();
         run(&["commit", "-q", "-m", "first"], Some(&dir)).unwrap();
         dir
+    }
+
+    #[test]
+    fn git001_each_change_carries_its_added_and_removed_lines_and_a_binary_file_none() {
+        let dir = temp_repo("lines");
+        commit_file(&dir, "a.txt", "one\ntwo\nthree\n");
+        commit_file(&dir, "old name.txt", "keep\nthis\n");
+        fs::write(dir.join("a.txt"), "one\n2\nthree\nfour\n").unwrap();
+        fs::write(dir.join("b.txt"), "x\n").unwrap();
+        run(&["add", "b.txt"], Some(&dir)).unwrap();
+        run(&["mv", "old name.txt", "new ü.txt"], Some(&dir)).unwrap();
+        fs::write(dir.join("new.txt"), "1\n2\n3").unwrap();
+        fs::write(dir.join("pic.bin"), [0u8, 1, 2, 10, 0]).unwrap();
+        let st = status(&dir).unwrap();
+        assert_eq!(st.lines.changed.get("a.txt"), Some(&[2, 1]));
+        assert_eq!(st.lines.staged.get("b.txt"), Some(&[1, 0]));
+        assert_eq!(st.lines.staged.get("new ü.txt"), Some(&[0, 0]), "a rename counts at its new path");
+        assert_eq!(st.lines.untracked.get("new.txt"), Some(&[3, 0]), "the last line counts without its newline");
+        assert_eq!(st.lines.untracked.get("pic.bin"), None, "a binary file carries no counts");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     fn paths(list: &[Change]) -> Vec<&str> {
@@ -1859,6 +2148,47 @@ mod tests {
         let err = gh_run_for(&gh, &tools, &["pr", "view"], None, std::time::Duration::from_secs(1)).unwrap_err();
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "took {:?}", started.elapsed());
         assert!(err.contains("did not answer within 1 second"), "{err}");
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    #[test]
+    fn checks_read_every_kind_and_a_finished_check_without_an_outcome_is_unresolved() {
+        // VIEW-073: gh's statusCheckRollup mixes check runs (status + conclusion) and commit
+        // statuses (state); each reads as one word, and COMPLETED with no conclusion is unresolved.
+        let text = r#"{"number":12,"url":"https://github.com/o/r/pull/12","state":"OPEN","title":"Helper work","headRefName":"helper","isDraft":false,"mergeable":"CONFLICTING","statusCheckRollup":[
+            {"__typename":"CheckRun","name":"build","workflowName":"CI","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://github.com/o/r/runs/1","startedAt":"2026-10-13T10:00:00Z","completedAt":"2026-10-13T10:04:00Z"},
+            {"__typename":"CheckRun","name":"test","workflowName":"CI","status":"IN_PROGRESS","conclusion":"","detailsUrl":"https://github.com/o/r/runs/2","startedAt":"2026-10-13T10:00:00Z","completedAt":"0001-01-01T00:00:00Z"},
+            {"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"","startedAt":"2026-10-13T10:00:00Z","completedAt":"2026-10-13T10:01:00Z"},
+            {"__typename":"CheckRun","name":"docs","status":"COMPLETED","conclusion":"SKIPPED"},
+            {"__typename":"CheckRun","name":"deploy","status":"COMPLETED","conclusion":"CANCELLED"},
+            {"__typename":"StatusContext","context":"ci/legacy","state":"FAILURE","targetUrl":"https://ci.example/9","description":"2 tests failed","startedAt":"2026-10-13T10:02:00Z"}
+        ]}"#;
+        let got = checks_from(text).unwrap();
+        let pr = got.pr.as_ref().unwrap();
+        assert_eq!((pr.number, pr.title.as_deref()), (12, Some("Helper work")));
+        assert!(got.conflict, "CONFLICTING is a merge conflict notice");
+        let words: Vec<(&str, &str)> = got.checks.iter().map(|c| (c.name.as_str(), c.outcome.as_str())).collect();
+        assert_eq!(words, [("build", "passed"), ("test", "running"), ("lint", "unresolved"), ("docs", "skipped"), ("deploy", "cancelled"), ("ci/legacy", "failed")]);
+        assert_eq!(got.checks[0].workflow.as_deref(), Some("CI"));
+        assert_eq!(got.checks[0].link.as_deref(), Some("https://github.com/o/r/runs/1"));
+        assert_eq!(got.checks[1].finished, None, "gh's zero time for a running check is no finish time");
+        assert_eq!(got.checks[5].description.as_deref(), Some("2 tests failed"));
+        assert_eq!(got.checks[5].link.as_deref(), Some("https://ci.example/9"));
+
+        // A PR without checks, or mergeable, reads as none and no conflict.
+        let bare = checks_from(r#"{"number":3,"url":"https://github.com/o/r/pull/3","state":"OPEN","mergeable":"MERGEABLE","statusCheckRollup":[]}"#).unwrap();
+        assert!(!bare.conflict && bare.checks.is_empty());
+    }
+
+    #[test]
+    fn a_branch_without_a_pull_request_has_no_checks_rather_than_an_error() {
+        // VIEW-073: gh's "no pull requests found" is the plain no-review answer.
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-checks-gh-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        let gh = stand_in_gh(&tools);
+        let got = pr_checks(&gh, &tools, "feat").unwrap();
+        assert!(got.pr.is_none() && got.checks.is_empty() && !got.conflict);
+        assert!(fs::read_to_string(tools.join("calls.txt")).unwrap().contains("statusCheckRollup"));
         let _ = fs::remove_dir_all(&tools);
     }
 
@@ -1937,7 +2267,10 @@ mod tests {
         // None yet; creating pushes the unpublished branch first, then hands gh the title, base,
         // head and draft flag, with the description on standard input.
         assert_eq!(pr_find(&gh, &dir, "feat").unwrap(), None);
+        let counted = crate::activity::activity_counts().prs_created;
         let pr = pr_create(&gh, &dir, "Add feat", "Why:\nbecause", "origin/main", true).unwrap();
+        // USAGE-011: a pull request Kolux made counts once on the Stats & Usage page.
+        assert_eq!(crate::activity::activity_counts().prs_created, counted + 1);
         assert_eq!((pr.number, pr.url.as_str(), pr.state.as_str()), (7, "https://github.com/o/r/pull/7", "OPEN"));
         assert!(run(&["rev-parse", "--verify", "refs/heads/feat"], Some(&bare)).is_ok(), "the branch was pushed first");
         let said = calls();
@@ -1947,6 +2280,7 @@ mod tests {
         // A second create links the PR the branch already has instead of making another.
         assert_eq!(pr_create(&gh, &dir, "Add feat", "", "main", false).unwrap().number, 7);
         assert_eq!(calls().matches("pr create").count(), 1);
+        assert_eq!(crate::activity::activity_counts().prs_created, counted + 1, "linking the PR a branch has is not a new one");
 
         // gh's own failures come back in plain words.
         assert!(gh_words("none of the git remotes configured for this repository point to a known GitHub host").contains("not supported"));
@@ -2144,6 +2478,16 @@ mod tests {
 
         run(&["switch", "-q", "--detach"], Some(&dir)).unwrap();
         assert_eq!(state(&dir), None, "a detached HEAD has no branch to push");
+        // TERM-022: the header chip shows the commit a detached HEAD is on, and a branch by name.
+        let head = head_of(&dir).unwrap();
+        assert_eq!(head.branch, None);
+        assert_eq!(head.head.as_deref().map(str::len), Some(40));
+        run(&["switch", "-q", "feature"], Some(&dir)).unwrap();
+        assert_eq!(head_of(&dir).unwrap().branch.as_deref(), Some("feature"));
+        let plain = std::env::temp_dir().join(format!("kolux-rs-scm-plain-{}", std::process::id()));
+        fs::create_dir_all(&plain).unwrap();
+        assert_eq!(head_of(&plain), None, "a plain folder has no chip");
+        let _ = fs::remove_dir_all(&plain);
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&bare);
     }
@@ -2854,6 +3198,60 @@ mod tests {
         fs::write(tools.join("answer.json"), r#"{"resources":{"core":{"limit":60,"remaining":59,"reset":5}}}"#).unwrap();
         assert_eq!(gh_budget(&gh).unwrap().len(), 1);
         let _ = fs::remove_dir_all(&tools);
+    }
+
+    #[test]
+    fn git003_discard_deletes_new_files_restores_deleted_ones_and_never_follows_a_link_out() {
+        let dir = temp_repo("discard-paths");
+        run(&["config", "core.symlinks", "true"], Some(&dir)).unwrap();
+        let target = std::env::temp_dir().join(format!("kolux-rs-scm-target-{}", std::process::id()));
+        fs::write(&target, "keep me\n").unwrap();
+        let link = |name: &str, to: &Path| {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(to, dir.join(name)).unwrap();
+            #[cfg(windows)]
+            std::os::windows::fs::symlink_file(to, dir.join(name)).unwrap();
+        };
+        commit_file(&dir, "gone.txt", "g\n");
+        commit_file(&dir, "edit.txt", "e\n");
+        commit_file(&dir, "old.txt", "o\n");
+        link("tracked-link", Path::new("README.md"));
+        run(&["add", "tracked-link"], Some(&dir)).unwrap();
+        run(&["commit", "-q", "-m", "link"], Some(&dir)).unwrap();
+
+        fs::remove_file(dir.join("gone.txt")).unwrap();
+        fs::write(dir.join("edit.txt"), "changed\n").unwrap();
+        fs::write(dir.join("new.txt"), "n\n").unwrap();
+        fs::write(dir.join("added.txt"), "a\n").unwrap();
+        run(&["add", "added.txt"], Some(&dir)).unwrap();
+        run(&["mv", "old.txt", "moved.txt"], Some(&dir)).unwrap();
+        // The committed link re-aimed outside the repository, and an untracked link and an
+        // untracked folder holding a link, all pointing at the outside file.
+        fs::remove_file(dir.join("tracked-link")).unwrap();
+        link("tracked-link", &target);
+        link("loose-link", &target);
+        fs::create_dir(dir.join("box")).unwrap();
+        link("box/inner-link", &target);
+        let st = status(&dir).unwrap();
+        assert_eq!(paths(&st.untracked), ["box/inner-link", "loose-link", "new.txt"]);
+        assert_eq!(paths(&st.staged), ["added.txt", "moved.txt"]);
+        assert_eq!(paths(&st.changed), ["edit.txt", "gone.txt", "tracked-link"]);
+
+        assert!(discard_paths(&dir, &["../outside.txt".to_string()]).unwrap_err().contains("outside"));
+        let all: Vec<String> = ["gone.txt", "edit.txt", "new.txt", "added.txt", "moved.txt", "tracked-link", "loose-link", "box/inner-link"].iter().map(|s| s.to_string()).collect();
+        discard_paths(&dir, &all).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("gone.txt")).unwrap(), "g\n", "a deleted file comes back from the last commit");
+        assert_eq!(fs::read_to_string(dir.join("edit.txt")).unwrap(), "e\n", "a modified file loses its edits");
+        assert_eq!(fs::read_to_string(dir.join("old.txt")).unwrap(), "o\n", "a rename is undone");
+        for new in ["new.txt", "added.txt", "moved.txt", "loose-link", "box/inner-link"] {
+            assert!(fs::symlink_metadata(dir.join(new)).is_err(), "{new} is removed for good");
+        }
+        assert_eq!(fs::read_link(dir.join("tracked-link")).unwrap(), Path::new("README.md"), "the link is rewritten as the commit had it");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "keep me\n", "no link's target is ever touched");
+        let st = status(&dir).unwrap();
+        assert!(st.staged.is_empty() && st.changed.is_empty() && st.untracked.is_empty(), "{st:?}");
+        let _ = fs::remove_file(&target);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

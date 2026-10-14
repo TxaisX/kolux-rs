@@ -10,9 +10,8 @@ import { useState, type CSSProperties } from "react";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import { Kbd, useLabel } from "../keys/KeymapContext";
 import { agentRows, MAX_SEARCH, searchAgents, wantsTerminal, type AgentPass } from "./agents";
-import { openSettings } from "../settings/pages";
 
-export type AgentInfo = { id: string; name: string; program: string; args: string[]; installed: boolean; path: string | null };
+export type AgentInfo = { id: string; name: string; program: string; args: string[]; installed: boolean; path: string | null; docs?: boolean };
 
 /** Which vendor mark an agent id draws; anything unknown gets the plain-shell glyph. */
 export function markFor(id: string): Agent {
@@ -64,10 +63,6 @@ export default function PlusMenu({ agents, defaultId = "", onPick, onSetDefault,
   const first = () => (shown[0] ? !busy && onPick(shown[0]) : terminalRow && onTerminal?.());
   // With no default the new-agent shortcut opens the first agent listed (SET-027).
   const opens = shown.find((a) => a.id === defaultId) ?? (defaultId === "" ? shown[0] : undefined);
-  const agentSettings = () => {
-    onClose();
-    openSettings("agents", "agents");
-  };
   return (
     <>
       <div className="menu-backdrop" onClick={onClose} aria-hidden="true" />
@@ -146,11 +141,6 @@ export default function PlusMenu({ agents, defaultId = "", onPick, onSetDefault,
         {onRefresh && (
           <button role="menuitem" className="menu-item muted" disabled={pass?.looking} onClick={onRefresh} title="Look for installed agent CLIs again">
             {pass?.looking ? "Looking for agents…" : "Refresh agents"}
-          </button>
-        )}
-        {!onManage && (
-          <button role="menuitem" className="menu-item muted" onClick={agentSettings} title="Switch agents on or off, and pick the default, in Settings › Agents">
-            {allOff ? "Agent settings…" : "Hide agents…"}
           </button>
         )}
         <button role="menuitem" className="menu-item muted" onClick={onClose}>
