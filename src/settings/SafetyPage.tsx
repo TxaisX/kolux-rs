@@ -4,7 +4,7 @@
 // settings keys `protectedAsk` (never saved means on) and `protectedOff` (the ids switched off).
 // The rule names and example commands come from Rust (`protected_rules`), so they cannot drift.
 // Custom rules, per-project overrides and the recent-attempts list are T-156-b (SAFE-016..018).
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { hooksOn } from "./AgentsPage";
 import { useSettings } from "./useSettings";
@@ -88,17 +88,45 @@ export function SafetyView({ settings, rules, error = null, save }: ViewProps) {
   );
 }
 
+/** Saves `patch`, then reads the settings back: what is on disk once the save has settled, whether
+ * it worked or not. null when they cannot be read. The page draws this, so a write that failed
+ * never leaves a switch showing a state that is not saved (a rule that looks on but is off). */
+export async function savedState(save: (patch: Settings) => unknown, read: () => Promise<Settings>, patch: Settings): Promise<Settings | null> {
+  try {
+    await save(patch);
+  } catch {
+    // The page already shows why the save failed.
+  }
+  try {
+    return await read();
+  } catch {
+    return null;
+  }
+}
+
 export default function SafetyPage() {
   const { settings, error, save } = useSettings();
   const [rules, setRules] = useState<RuleInfo[] | null>(null);
   const [rulesError, setRulesError] = useState<string | null>(null);
+  const [disk, setDisk] = useState<Settings | null>(null);
+  const latest = useRef(0);
   useEffect(() => {
     invoke<RuleInfo[]>("protected_rules").then(setRules, (e) => setRulesError(String(e)));
   }, []);
-  if (!settings) return error ? <p className="conn-detail warn" role="alert">{error}</p> : null;
+  // Each save shows the new state at once, then the page draws what a re-read finds on disk; only
+  // the newest save's re-read counts.
+  const guarded = (patch: Settings) => {
+    const mine = ++latest.current;
+    setDisk(null);
+    return savedState(save, () => invoke<Settings>("get_settings"), patch).then((s) => {
+      if (mine === latest.current) setDisk(s);
+    });
+  };
+  const shown = disk ?? settings;
+  if (!shown) return error ? <p className="conn-detail warn" role="alert">{error}</p> : null;
   return (
     <>
-      <SafetyView settings={settings} rules={rules} error={rulesError} save={save} />
+      <SafetyView settings={shown} rules={rules} error={rulesError} save={guarded} />
       {error && (
         <p className="conn-detail warn" role="alert">
           {error}

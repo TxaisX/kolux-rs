@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { asksAtAll, ASK_FIELD, OFF_FIELD, offIds, ruleOn, SafetyView, switchAll, switchRule, type RuleInfo } from "./SafetyPage";
+import { asksAtAll, ASK_FIELD, OFF_FIELD, offIds, ruleOn, SafetyView, savedState, switchAll, switchRule, type RuleInfo } from "./SafetyPage";
 
 // The seven rules as protected_rules lists them (the Rust catalog test proves each example asks).
 const RULES: RuleInfo[] = [
@@ -81,4 +81,20 @@ test("SAFE-015: a settings file that was never saved, or hand-edited badly, leav
   for (const bad of [undefined, null, "force-push", 7, {}, [1, null, {}]]) expect(offIds({ [OFF_FIELD]: bad }), String(bad)).toEqual([]);
   expect(offIds({ [OFF_FIELD]: ["a", 3, "b"] })).toEqual(["a", "b"]);
   expect(ruleOn({ [OFF_FIELD]: "stripe" }, "stripe")).toBe(true);
+});
+
+test("SAFE-015: after a save that failed, the page draws what is on disk, never the switch the user just flipped", async () => {
+  // The rule was off on disk; the user flips it back on; the write fails.
+  const disk: Record<string, unknown> = { [OFF_FIELD]: ["force-push"] };
+  const failing = () => Promise.reject(new Error("settings.json is read-only"));
+  const read = () => Promise.resolve({ ...disk });
+  const after = await savedState(failing, read, switchRule(disk, "force-push", true));
+  expect(after).toEqual({ [OFF_FIELD]: ["force-push"] });
+  expect(switchOf(view(after as Record<string, unknown>), "Force-push to main")).not.toContain("checked");
+  // A save that worked is read back as written; a read that fails leaves the page on its own state (null).
+  const writing = (patch: Record<string, unknown>) => Promise.resolve(Object.assign(disk, patch));
+  expect(await savedState(writing, read, switchRule(disk, "force-push", true))).toEqual({ [OFF_FIELD]: [] });
+  expect(await savedState(writing, () => Promise.reject(new Error("gone")), switchAll(false))).toBeNull();
+  // A save that throws at once, before returning a promise, is treated the same way.
+  expect(await savedState(() => { throw new Error("boom"); }, read, switchAll(false))).toEqual(disk);
 });
