@@ -38,7 +38,7 @@ import SignInNotice from "./settings/SignInNotice";
 import KeyLostNotice from "./settings/KeyLostNotice";
 import { LAST_SCREEN_FIELD, lastWriter, OPEN_PAGE_FIELD, openPageAt, saveLayout, startScreen, stripOn } from "./settings/general";
 import { cacheDue, cacheMinutes } from "./projects/cache";
-import { sessionEnv, startTail } from "./projects/startArgs";
+import { startFields, startTail } from "./projects/startArgs";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
 import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./projects/WorktreePalette";
 import { navTarget, travel, visit, type Place } from "./projects/nav";
@@ -113,6 +113,7 @@ import { useTowerBridge } from "./tower/TowerWindow";
 import { LANES, chipOf } from "./board/chip";
 import Ring from "./usage/Ring";
 import { capOn, contextFill, meterOf, meterText, planOf, readsLeft, usageLine } from "./usage/meter";
+import { readoutOf } from "./terminal/headerUsage";
 import { usePlan } from "./usage/plan";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, sheetStart, type Lineup } from "./launch/seats";
@@ -1097,7 +1098,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     await pretrust(agent.id, [dir]);
     const line = await invoke<StartLine>("agent_start_line", { id: agent.id, extra, prompt });
     const key = nextKey.current++;
-    const pane: Pane = { key, cwd: dir, branch, agent: markFor(agent.id), agentId: agent.id, program: line.program ?? agent.program, args: line.args, env: sessionEnv(line.env, dispatch), title, typed: line.typed ?? undefined };
+    const pane: Pane = { key, cwd: dir, branch, agent: markFor(agent.id), agentId: agent.id, ...startFields(line, agent.program, dispatch), title };
     // TERM-007: an empty pane in that workspace takes the session; else it gets a cell of its own.
     setPanes((ps) => {
       const free = freeCell(cellsOf(panesIn(ps, dir)));
@@ -2493,6 +2494,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     env={p.env}
                     stop={turn[p.key]?.stop}
                     context={context[p.key] ? contextFill(context[p.key], capOn(settings)) : null}
+                    usage={p.agent === "shell" ? undefined : readoutOf(context[p.key], capOn(settings), readsLeft(settings))}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
                     onRunning={(on) => {

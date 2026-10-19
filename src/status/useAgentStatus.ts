@@ -24,9 +24,12 @@ export type TurnInfo = { tool?: string; detail?: string; ask?: string; reply?: s
  * resume in a new terminal, which keeps the id but starts the running time over, is a new clock
  * and only ever compared for equality here. A resume in the same terminal keeps the clock; its
  * boundary is `fresh`, which forgets the reading without a floor (useAgentEvents). */
-export type UsageEvent = { paneKey: number; contextTokens: number | null; contextWindow: number | null; session?: string | null; at?: number | null };
-/** A pane's context reading with the stamp it came with, when it had one. */
-export type Reading = ContextReading & { session?: string; at?: number };
+export type UsageEvent = { paneKey: number; contextTokens: number | null; contextWindow: number | null; session?: string | null; at?: number | null;
+  /** USAGE-034: the session's total cost so far, in US dollars (the status line's cost.total_cost_usd). */
+  costUsd?: number | null };
+/** A pane's context reading with the stamp it came with, when it had one, and (USAGE-034) the
+ * session's cost so far. */
+export type Reading = ContextReading & { session?: string; at?: number; costUsd?: number };
 /** The stamp of a reading a clear forgot, so a straggler from before the clear stays out. */
 export type Floor = { session?: string; at?: number };
 
@@ -39,6 +42,25 @@ export const FRESH_WINDOW_MS = 30_000;
  * start hook fires a little after the process begins. */
 export const FRESH_MARGIN_MS = 10_000;
 
+/** USAGE-001: true when report `e` is one the new process cannot have made: inside the window after a
+ * fresh start (`sinceFresh`, ms, undefined when there was none) and stamped with more running time
+ * than the process has existed. Such a report is the old process's, or the new process's first
+ * word under a clock that kept counting or a start hook that fired late; the listener holds it as a
+ * candidate (stand-in review of lane/marks c75f5900, FIX-SOON 1). */
+export function heldByFresh(e: UsageEvent, sinceFresh: number | undefined): boolean {
+  return sinceFresh !== undefined && sinceFresh >= 0 && sinceFresh < FRESH_WINDOW_MS && typeof e.at === "number" && e.at > sinceFresh + FRESH_MARGIN_MS;
+}
+
+/** USAGE-001: a second held report agrees with the held one: same clock, running time risen by about
+ * the time that passed since the first arrived, so a live process is making them, not a straggler
+ * (a dead process sends only the one in flight). */
+export function sameRun(held: { e: UsageEvent; heldAt: number }, e: UsageEvent, now: number): boolean {
+  if (!held.e.session || held.e.session !== e.session || typeof held.e.at !== "number" || typeof e.at !== "number") return false;
+  const rose = e.at - held.e.at;
+  const passed = now - held.heldAt;
+  return rose >= 0 && Math.abs(rose - passed) <= FRESH_MARGIN_MS;
+}
+
 /** USAGE-001: the reading a pane should show after report `e`, or null to keep what it has. The
  * newest report wins, even a smaller figure (a compact shrinks context); a report of the same
  * session stamped earlier than the one on screen, or no later than a reading a clear forgot, is
@@ -48,12 +70,15 @@ export const FRESH_MARGIN_MS = 10_000;
  * the restart, and is thrown away too (stand-in review of lane/marks 54b27f5e, AFTER 1). */
 export function takeReading(shown: Reading | undefined, floor: Floor | undefined, e: UsageEvent, sinceFresh?: number): Reading | null {
   if (e.contextTokens === null || e.contextWindow === null) return null;
-  if (sinceFresh !== undefined && sinceFresh >= 0 && sinceFresh < FRESH_WINDOW_MS && typeof e.at === "number" && e.at > sinceFresh + FRESH_MARGIN_MS) return null;
+  if (heldByFresh(e, sinceFresh)) return null;
   const next: Reading = { tokens: e.contextTokens, window: e.contextWindow };
   if (e.session) next.session = e.session;
   if (typeof e.at === "number") next.at = e.at;
   if (sameClock(shown, next) && (next.at as number) < shown.at) return null;
   if (sameClock(floor, next) && (next.at as number) <= floor.at) return null;
+  // USAGE-034: the session's cost; a report that carries none leaves the last figure on the chip.
+  if (typeof e.costUsd === "number" && Number.isFinite(e.costUsd) && e.costUsd >= 0) next.costUsd = e.costUsd;
+  else if (shown?.costUsd !== undefined) next.costUsd = shown.costUsd;
   return next;
 }
 
@@ -159,6 +184,19 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
   const shownRef = useRef<Record<number, Reading>>({});
   // USAGE-001: when each pane last saw a fresh start, to tell the old process's late report from the new one's.
   const freshRef = useRef<Record<number, number>>({});
+  // USAGE-001: each pane's held report (see heldByFresh), shown when the window ends with nothing else.
+  const heldRef = useRef<Record<number, { e: UsageEvent; heldAt: number; timer: ReturnType<typeof setTimeout> }>>({});
+  const dropHeld = (paneKey: number) => {
+    const h = heldRef.current[paneKey];
+    if (!h) return;
+    clearTimeout(h.timer);
+    heldRef.current = without(heldRef.current, paneKey);
+  };
+  const show = (paneKey: number, next: Reading) => {
+    dropHeld(paneKey);
+    shownRef.current = { ...shownRef.current, [paneKey]: next };
+    setContext((c) => ({ ...c, [paneKey]: next }));
+  };
   useEffect(() => {
     // STAT-001: the hooks report each pane's state; a turn ending out of view is noticed like an exit.
     const off = listen<{ paneKey: number; children: Crew; tool?: string; detail?: string; ask?: string; wrote?: string; plan?: string; planCut?: boolean; session?: string; fresh?: boolean } & Turn>("agent-status", (e) => {
@@ -185,6 +223,7 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
       // resume in the same terminal), so it sets no floor and lifts any earlier one (stand-in review
       // of lane/marks 3efef76, FIX-SOON 1).
       if (boundary) {
+        dropHeld(paneKey);
         const r = shownRef.current[paneKey];
         if (fresh) {
           delete floorRef.current[paneKey];
@@ -206,10 +245,31 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
       const { paneKey } = e.payload;
       if (!panesRef.current.some((p) => p.key === paneKey)) return;
       const since = freshRef.current[paneKey];
-      const next = takeReading(shownRef.current[paneKey], floorRef.current[paneKey], e.payload, since === undefined ? undefined : Date.now() - since);
+      const sinceMs = since === undefined ? undefined : Date.now() - since;
+      let guard = sinceMs;
+      if (heldByFresh(e.payload, sinceMs)) {
+        const held = heldRef.current[paneKey];
+        if (!(held && sameRun(held, e.payload, Date.now()))) {
+          // The new process's first word or the old one's straggler: keep it as the candidate. If
+          // nothing else comes before the window ends it is shown, without its clock so whatever
+          // the new process reports next is taken (it cannot freeze the gauge).
+          dropHeld(paneKey);
+          if (e.payload.contextTokens === null || e.payload.contextWindow === null) return;
+          const timer = setTimeout(() => {
+            const h = heldRef.current[paneKey];
+            if (!h || !panesRef.current.some((p) => p.key === paneKey)) return;
+            const late = takeReading(shownRef.current[paneKey], floorRef.current[paneKey], { ...h.e, session: null, at: null });
+            if (late) show(paneKey, late);
+          }, FRESH_WINDOW_MS - (sinceMs as number));
+          heldRef.current = { ...heldRef.current, [paneKey]: { e: e.payload, heldAt: Date.now(), timer } };
+          return;
+        }
+        // A live process is making these: take the newer, with its clock.
+        guard = undefined;
+      }
+      const next = takeReading(shownRef.current[paneKey], floorRef.current[paneKey], e.payload, guard);
       if (!next) return;
-      shownRef.current = { ...shownRef.current, [paneKey]: next };
-      setContext((c) => ({ ...c, [paneKey]: next }));
+      show(paneKey, next);
     });
     const offQuiet = listen<{ paneKey: number; minutes: number }>("agent-quiet", (e) => {
       const p = panesRef.current.find((x) => x.key === e.payload.paneKey);
@@ -240,6 +300,7 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
     shownRef.current = forgetGone(shownRef.current, open);
     floorRef.current = forgetGone(floorRef.current, open);
     freshRef.current = forgetGone(freshRef.current, open);
+    for (const k of Object.keys(heldRef.current)) if (!open.has(Number(k))) dropHeld(Number(k));
   }, [panes]);
   return { noticed, panesRef };
 }
