@@ -601,11 +601,11 @@ fn gh_account_within(program: &Path, host: &str, limit: std::time::Duration) -> 
     Ok((ok && !login.is_empty()).then_some(login))
 }
 
-/// FIX-2: a pull request request goes only to a host gh is signed in to, so a link to some other
-/// host never hands it anything. ponytail: scm-local stand-in for github::host_allowed (tasks
-/// FIX-1, not on main yet); switch to that one when it lands.
+/// FIX-2 / FIX-3: a pull request request goes only to a host Kolux may talk to (github.com, the host
+/// GH_HOST names, or one gh is signed in to with a user of its own), so a link to some other host
+/// never hands it anything. The one shared gate, github::host_allowed, decides.
 fn signed_host(gh: &Path, host: &str) -> Result<(), String> {
-    gh_account_within(gh, host, GH_ACCOUNT_LIMIT)?.map(|_| ()).ok_or_else(|| format!("gh is not signed in to {host}, so Kolux sends nothing there. Run gh auth login --hostname {host} first."))
+    crate::github::host_allowed(gh, host)
 }
 
 /// FIX-2: every program this module starts comes through here, so none flashes a console window
@@ -669,37 +669,73 @@ fn run_within(mut cmd: std::process::Command, input: Option<&str>, limit: std::t
     use std::process::Stdio;
     cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("could not run gh: {e}"))?;
-    if let (Some(text), Some(mut pipe)) = (input, child.stdin.take()) {
-        pipe.write_all(text.as_bytes()).map_err(|e| format!("could not hand gh the description: {e}"))?;
+    let pid = child.id();
+    // Everything gh starts joins this job and ends with it (Windows kill-on-close); where jobs are
+    // not available the tree kill on a timeout still applies.
+    let job = crate::procs::Job::new().ok();
+    if let Some(j) = &job {
+        let _ = j.assign_pid(pid);
     }
-    // The pipes are drained on their own threads so a chatty gh never blocks on a full pipe.
-    let drain = |pipe: Option<Box<dyn Read + Send>>| {
-        let (tx, rx) = std::sync::mpsc::channel();
+    let deadline = std::time::Instant::now() + limit;
+    let secs = limit.as_secs();
+    let too_slow = || format!("gh did not answer within {secs} second{}; try again in a moment", if secs == 1 { "" } else { "s" });
+    // FIX-3: the description goes to gh on its own thread, so a gh that never reads it cannot hold
+    // this call past its limit (the pipe closes when gh is stopped, which ends the write).
+    if let (Some(text), Some(mut pipe)) = (input, child.stdin.take()) {
+        let text = text.to_string();
         std::thread::spawn(move || {
-            let mut text = String::new();
-            if let Some(mut p) = pipe {
-                let _ = p.read_to_string(&mut text);
-            }
-            let _ = tx.send(text);
+            let _ = pipe.write_all(text.as_bytes());
         });
-        rx
+    }
+    // The pipes are drained on their own threads so a chatty gh never blocks on a full pipe; what
+    // they have read so far is kept, so a program left holding a pipe cannot take the answer away.
+    type Pipe = (std::sync::Arc<std::sync::Mutex<Vec<u8>>>, std::sync::mpsc::Receiver<()>);
+    let drain = |pipe: Option<Box<dyn Read + Send>>| -> Pipe {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let kept = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = kept.clone();
+        std::thread::spawn(move || {
+            if let Some(mut p) = pipe {
+                let mut chunk = [0u8; 8192];
+                while let Ok(n) = p.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    if let Ok(mut k) = sink.lock() {
+                        k.extend_from_slice(&chunk[..n]);
+                    }
+                }
+            }
+            let _ = tx.send(());
+        });
+        (kept, rx)
     };
     let stdout = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
     let stderr = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let deadline = std::time::Instant::now() + limit;
     let code = loop {
         if let Some(code) = child.try_wait().map_err(|e| format!("gh did not finish: {e}"))? {
             break code;
         }
         if std::time::Instant::now() >= deadline {
+            // FIX-3: a timeout ends gh and every program it started (a gh.cmd shim's real gh keeps
+            // the pipes open), not only the direct child.
+            crate::procs::kill_tree(pid);
             let _ = child.kill();
             let _ = child.wait();
-            let secs = limit.as_secs();
-            return Err(format!("gh did not answer within {secs} second{}; try again in a moment", if secs == 1 { "" } else { "s" }));
+            return Err(too_slow());
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     };
-    Ok((code.success(), stdout.recv().unwrap_or_default(), stderr.recv().unwrap_or_default()))
+    // gh is done. Its output normally closes at once; a program it left behind that still holds the
+    // pipes gets a short grace, then goes with the job, and the call still answers inside its limit.
+    let grace = std::time::Duration::from_millis(500).min(deadline.saturating_duration_since(std::time::Instant::now()));
+    let until = std::time::Instant::now() + grace;
+    let closed = [&stdout, &stderr].map(|(_, rx)| rx.recv_timeout(until.saturating_duration_since(std::time::Instant::now())).is_ok());
+    if closed.contains(&false) {
+        drop(job);
+    }
+    let text = |(kept, _): &Pipe| kept.lock().map(|k| String::from_utf8_lossy(&k).into_owned()).unwrap_or_default();
+    Ok((code.success(), text(&stdout), text(&stderr)))
 }
 
 /// GIT-023: gh's failures in the words the panel shows.
@@ -730,9 +766,11 @@ pub fn pr_link(gh: &Path, worktree: &Path, url: &str) -> Result<Pr, String> {
     if !safe_pr_url(url) {
         return Err("Paste a pull request link, such as https://github.com/owner/repo/pull/12".into());
     }
-    let (host, ..) = pr_parts(url).ok_or("Paste a pull request link, such as https://github.com/owner/repo/pull/12")?;
+    // FIX-3 (review AFTER 1): gh gets the cleaned form of the link, never the raw text.
+    let clean = pr_url_in(url).ok_or("Paste a pull request link, such as https://github.com/owner/repo/pull/12")?;
+    let (host, ..) = pr_parts(&clean).ok_or("Paste a pull request link, such as https://github.com/owner/repo/pull/12")?;
     signed_host(gh, &host)?;
-    let text = gh_run(gh, worktree, &["pr", "view", url, "--json", PR_FIELDS], None).map_err(|e| gh_words(&e))?;
+    let text = gh_run(gh, worktree, &["pr", "view", &clean, "--json", PR_FIELDS], None).map_err(|e| gh_words(&e))?;
     serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))
 }
 
@@ -1261,12 +1299,14 @@ fn pr_url_in(link: &str) -> Option<String> {
     let number = parts.get(4).map(|n| n.split(['#', '?']).next().unwrap_or(""))?;
     // FIX-2: the owner and name follow GitHub's rules (no @, no leading dot, no slash of either
     // kind), so neither can reach gh as a file to read or a path to walk.
-    let host_ok = |h: &str| !h.is_empty() && h.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+    // FIX-3 (review AFTER 2): the host starts with a letter or digit (never `-`, so it cannot read as
+    // an option) and is lower case in the cleaned form.
+    let host_ok = |h: &str| h.starts_with(|c: char| c.is_ascii_alphanumeric()) && h.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
     // FIX-SOON: an Enterprise Managed User login is name_shortcode, so `_` may follow the first character.
     let owner_ok = |o: &str| (1..=39).contains(&o.len()) && o.starts_with(|c: char| c.is_ascii_alphanumeric()) && o.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
     let name_ok = |n: &str| (1..=100).contains(&n.len()) && !n.starts_with('.') && n.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
     let ok = parts.len() >= 5 && host_ok(parts[0]) && owner_ok(parts[1]) && name_ok(parts[2]) && parts[3] == "pull" && !number.is_empty() && number.chars().all(|c| c.is_ascii_digit());
-    ok.then(|| format!("https://{}/{}/{}/pull/{number}", parts[0], parts[1], parts[2]))
+    ok.then(|| format!("https://{}/{}/{}/pull/{number}", parts[0].to_ascii_lowercase(), parts[1], parts[2]))
 }
 
 /// GIT-026: makes a printed link the workspace's linked pull request (the `scmLinkedPrs`
@@ -1676,7 +1716,9 @@ pub fn merge_info(gh: &Path, worktree: &Path, url: &str) -> Result<MergeInfo, St
 pub fn merge_act(gh: &Path, worktree: &Path, url: &str, action: &str, method: Option<&str>) -> Result<String, String> {
     let (host, ..) = pr_parts(url).ok_or("That is not a pull request link")?;
     signed_host(gh, &host)?;
-    let url = url.trim();
+    // FIX-3 (review AFTER 1): gh gets the cleaned form of the link, never the raw text.
+    let clean = pr_url_in(url.trim()).ok_or("That is not a pull request link")?;
+    let url = clean.as_str();
     let flag = match method {
         None => None,
         Some(m @ ("merge" | "squash" | "rebase")) => Some(format!("--{m}")),
@@ -1793,12 +1835,20 @@ fn reveal_target(worktree: &Path, path: &str) -> Result<std::path::PathBuf, Stri
     Ok(full)
 }
 
+/// FIX-3 (review AFTER 3): what the browser is handed for a pull request link: the cleaned
+/// `https://host/owner/repo/pull/N` form, never the raw text.
+fn open_target(url: &str) -> Result<String, String> {
+    let url = url.trim();
+    if !safe_pr_url(url) {
+        return Err("That is not a pull request link".into());
+    }
+    pr_url_in(url).ok_or_else(|| "That is not a pull request link".into())
+}
+
 /// Opens a pull request in the browser.
 #[tauri::command]
 pub async fn scm_open_pr(url: String) -> Result<(), String> {
-    if !safe_pr_url(&url) {
-        return Err("That is not a pull request link".into());
-    }
+    let url = open_target(&url)?;
     #[cfg(windows)]
     let opener = "explorer.exe";
     #[cfg(target_os = "macos")]
@@ -2311,19 +2361,55 @@ mod tests {
     /// FIX-2 (b) / FIX-R2: no console window flashes up behind the app, so every program this file
     /// builds a command for, its tests included, goes through `quiet`, the one place that hides the
     /// console. (git runs go through git::command, which hides it the same way.)
+    /// FIX-3 (review AFTER 4): lines (1-based) of every program started with a bare `Command`
+    /// constructor call (any spacing around the path) in `src` that neither sits inside `fn quiet`
+    /// nor has a `creation_flags` call within the next thirty lines. A file whose commands all come
+    /// from `quiet` or `git::command` has none.
+    fn bare_spawns(src: &str) -> Vec<usize> {
+        let quiet_at = src.find("fn quiet(");
+        let quiet_end = quiet_at.map(|q| q + src[q..].find("\n}").unwrap_or(0));
+        let lines: Vec<&str> = src.lines().collect();
+        let mut found = Vec::new();
+        let bytes = src.as_bytes();
+        let mut from = 0;
+        while let Some(i) = src[from..].find("Command") {
+            let at = from + i;
+            from = at + "Command".len();
+            let rest: String = src[from..].chars().filter(|c| !c.is_whitespace()).take(6).collect();
+            if !rest.starts_with("::new(") {
+                continue;
+            }
+            if quiet_at.zip(quiet_end).is_some_and(|(q, e)| (q..e).contains(&at)) {
+                continue;
+            }
+            let line = bytes[..at].iter().filter(|b| **b == b'\n').count();
+            if lines[line].trim_start().starts_with("//") {
+                continue;
+            }
+            let hidden = lines[line..lines.len().min(line + 30)].iter().any(|l| l.contains("creation_flags"));
+            if !hidden {
+                found.push(line + 1);
+            }
+        }
+        found
+    }
+
     #[test]
     fn fix2_every_spawn_hides_its_console() {
-        let body = include_str!("scm.rs");
-        let quiet_at = body.find("fn quiet(").expect("a quiet spawn helper");
-        let quiet_end = quiet_at + body[quiet_at..].find("\n}").unwrap();
-        let needle = ["Command", "::new("].concat();
-        let bare: Vec<usize> = body
-            .match_indices(&needle)
-            .map(|(at, _)| at)
-            .filter(|at| !(quiet_at..quiet_end).contains(at))
-            .map(|at| body[..at].lines().count())
-            .collect();
-        assert!(bare.is_empty(), "programs started without hiding their console, at lines {bare:?}");
+        // The scanner itself: a bare spawn is seen, however it is spaced; one with its own flag is not.
+        let new = ["Command", "::new("].concat();
+        let spaced = ["Command", "\n        ::new("].concat();
+        let bad = format!("fn a() {{\n    let c = std::process::{new}\"x\");\n}}\nfn b() {{\n    let c = {spaced}\"y\");\n}}\n// {new}\"z\") in a comment\n");
+        assert_eq!(bare_spawns(&bad), vec![2, 5]);
+        let good = format!("fn a() {{\n    let mut c = {new}\"x\");\n    c.creation_flags(0x0800_0000);\n}}\n");
+        assert!(bare_spawns(&good).is_empty());
+        // The files that start programs for source control and gh: none opens a console window.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for name in ["scm.rs", "scm_watch.rs", "git.rs", "github.rs"] {
+            let body = fs::read_to_string(dir.join(name)).unwrap();
+            let bare = bare_spawns(&body);
+            assert!(bare.is_empty(), "{name}: programs started without hiding their console, at lines {bare:?}");
+        }
     }
 
     /// FIX-2 AFTER 1: Show in file manager only works on a worktree inside a registered project or
@@ -2669,9 +2755,11 @@ mod tests {
         let got = ask(std::time::Duration::from_secs(1)).recv_timeout(std::time::Duration::from_secs(8)).expect("the account question returns within its bound");
         assert!(started.elapsed() < std::time::Duration::from_secs(8), "took {:?}", started.elapsed());
         assert!(got.as_ref().unwrap_err().contains("did not answer within 1 second"), "{got:?}");
-        // The host gate and the plain lookup use the real bound and give up too.
-        let gate = signed_host(&gh, "github.com").unwrap_err();
-        assert!(gate.contains("did not answer within") && !gate.contains("not signed in"), "{gate}");
+        // The host gate (FIX-3: github::host_allowed, which asks gh only about a host other than
+        // github.com) and the plain lookup use their own bounds and give up too; a gh that never
+        // answers counts as not signed in there.
+        let gate = crate::github::host_allowed(&gh, "ghe.example").unwrap_err();
+        assert!(gate.contains("ghe.example is not one of them"), "{gate}");
         assert_eq!(gh_account(&gh, "github.com"), None);
         assert!(started.elapsed() < std::time::Duration::from_secs(1 + 2 * GH_ACCOUNT_LIMIT.as_secs() + 6), "took {:?}", started.elapsed());
         let _ = fs::remove_dir_all(&tools);
@@ -2744,13 +2832,13 @@ mod tests {
                 "exit /b 0",
                 ":config",
                 "if \"%4\"==\"nobody.example\" exit /b 1",
-                "echo octo",
+                "if \"%3\"==\"-h\" echo octo",
             ];
             fs::write(&file, script.join("\r\n")).unwrap();
             file
         } else {
             let file = dir.join("gh");
-            let script = "#!/bin/sh\nd=$(dirname \"$0\")\necho \"$*\" >> \"$d/calls.txt\"\nif [ \"$1\" = config ]; then [ \"$4\" = nobody.example ] && exit 1; echo octo; exit 0; fi\ncase \"$3\" in https*) echo '{\"number\":12,\"url\":\"https://github.com/o/r/pull/12\",\"state\":\"MERGED\",\"title\":\"Other work\",\"headRefName\":\"other\",\"isDraft\":false}'; exit 0;; esac\nif [ \"$2\" = create ]; then cat > \"$d/body.txt\"; touch \"$d/made\"; echo https://github.com/o/r/pull/7; exit 0; fi\nif [ -f \"$d/made\" ]; then echo '{\"number\":7,\"url\":\"https://github.com/o/r/pull/7\",\"state\":\"OPEN\"}'; exit 0; fi\necho 'no pull requests found for branch \"feat\"' >&2\nexit 1\n";
+            let script = "#!/bin/sh\nd=$(dirname \"$0\")\necho \"$*\" >> \"$d/calls.txt\"\nif [ \"$1\" = config ]; then [ \"$4\" = nobody.example ] && exit 1; [ \"$3\" = -h ] && echo octo; exit 0; fi\ncase \"$3\" in https*) echo '{\"number\":12,\"url\":\"https://github.com/o/r/pull/12\",\"state\":\"MERGED\",\"title\":\"Other work\",\"headRefName\":\"other\",\"isDraft\":false}'; exit 0;; esac\nif [ \"$2\" = create ]; then cat > \"$d/body.txt\"; touch \"$d/made\"; echo https://github.com/o/r/pull/7; exit 0; fi\nif [ -f \"$d/made\" ]; then echo '{\"number\":7,\"url\":\"https://github.com/o/r/pull/7\",\"state\":\"OPEN\"}'; exit 0; fi\necho 'no pull requests found for branch \"feat\"' >&2\nexit 1\n";
             fs::write(&file, script).unwrap();
             #[cfg(unix)]
             {
@@ -3707,9 +3795,9 @@ mod tests {
         let _ = fs::remove_dir_all(&tools);
         let gh = stand_in_gh(&tools);
         let url = "https://nobody.example/o/r/pull/3";
-        assert!(merge_info(&gh, &tools, url).unwrap_err().contains("not signed in"));
-        assert!(merge_act(&gh, &tools, url, "close", None).unwrap_err().contains("not signed in"));
-        assert!(pr_link(&gh, &tools, url).unwrap_err().contains("not signed in"));
+        assert!(merge_info(&gh, &tools, url).unwrap_err().contains("is not one of them"));
+        assert!(merge_act(&gh, &tools, url, "close", None).unwrap_err().contains("is not one of them"));
+        assert!(pr_link(&gh, &tools, url).unwrap_err().contains("is not one of them"));
         let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
         assert!(calls.lines().all(|c| c.trim().starts_with("config get -h nobody.example")), "{calls}");
         let _ = fs::remove_dir_all(&tools);
@@ -3728,7 +3816,7 @@ mod tests {
             assert!(pr_checks_linked(&gh, &tools, bad).unwrap_err().contains("not a pull request link"), "{bad}");
         }
         assert_eq!(calls(), "", "a malformed link reaches no gh at all");
-        assert!(pr_checks_linked(&gh, &tools, "https://nobody.example/o/r/pull/3").unwrap_err().contains("not signed in"));
+        assert!(pr_checks_linked(&gh, &tools, "https://nobody.example/o/r/pull/3").unwrap_err().contains("is not one of them"));
         assert!(calls().lines().all(|c| c.trim().starts_with("config get -h nobody.example")), "{}", calls());
         let got = pr_checks_linked(&gh, &tools, " https://github.com/o/r/pull/12/files#diff-1 ").unwrap();
         assert_eq!(got.pr.map(|p| p.number), Some(12));
@@ -3760,13 +3848,136 @@ mod tests {
         let gh = stand_in_gh(&tools);
         let url = "https://nobody.example/octo/repo.name/pull/3";
         assert!(pr_url_in(url).is_some(), "the link itself is well formed");
-        assert!(merge_info(&gh, &tools, url).unwrap_err().contains("not signed in"));
-        assert!(merge_act(&gh, &tools, url, "close", None).unwrap_err().contains("not signed in"));
-        assert!(pr_link(&gh, &tools, url).unwrap_err().contains("not signed in"));
-        assert!(pr_checks_linked(&gh, &tools, url).unwrap_err().contains("not signed in"));
+        assert!(merge_info(&gh, &tools, url).unwrap_err().contains("is not one of them"));
+        assert!(merge_act(&gh, &tools, url, "close", None).unwrap_err().contains("is not one of them"));
+        assert!(pr_link(&gh, &tools, url).unwrap_err().contains("is not one of them"));
+        assert!(pr_checks_linked(&gh, &tools, url).unwrap_err().contains("is not one of them"));
         let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
         assert_eq!(calls.lines().count(), 4, "{calls}");
         assert!(calls.lines().all(|c| c.trim().starts_with("config get -h nobody.example user")), "{calls}");
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    /// FIX-3 (review FIX-SOON 1): gh answers `config get -h <host> user` with its top-level `user`
+    /// when the host has none of its own, so that echo is no sign-in. A link to such a host gets no
+    /// pull request request from the merge box, its actions, the PR link or the Checks panel; gh is
+    /// asked only about its own config (the shared gate, github::host_allowed).
+    #[test]
+    fn fix3_a_host_that_only_echoes_the_top_level_user_gets_no_request() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fix3-top-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        let gh = if cfg!(windows) {
+            let f = tools.join("gh.cmd");
+            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%1\"==\"config\" echo octo& exit /b 0\r\necho {}\r\n").unwrap();
+            f
+        } else {
+            let f = tools.join("gh");
+            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\n[ \"$1\" = config ] && echo octo && exit 0\necho '{}'\n").unwrap();
+            quiet("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let url = "https://ghe.example/o/r/pull/3";
+        let refused = [
+            merge_info(&gh, &tools, url).err(),
+            merge_act(&gh, &tools, url, "close", None).err(),
+            pr_link(&gh, &tools, url).err(),
+            pr_checks_linked(&gh, &tools, url).err(),
+        ];
+        for e in refused {
+            let e = e.expect("refused");
+            assert!(e.contains("ghe.example is not one of them"), "{e}");
+        }
+        let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
+        assert!(calls.lines().all(|c| c.trim().starts_with("config get")), "only gh's own config is read: {calls}");
+        assert!(calls.lines().any(|c| c.trim() == "config get user"), "the top-level user was compared: {calls}");
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    /// FIX-3 (review AFTER 1-3): gh and the browser get the cleaned `https://host/owner/repo/pull/N`
+    /// form of a link, never the raw text, and the host in it is lower case with a letter or digit first.
+    #[test]
+    fn fix3_gh_and_the_browser_get_only_the_cleaned_link() {
+        assert_eq!(pr_url_in("https://GitHub.COM/o/r/pull/1").as_deref(), Some("https://github.com/o/r/pull/1"));
+        for bad in ["https://-evil.example/o/r/pull/1", "https://.evil.example/o/r/pull/1", "https:///o/r/pull/1"] {
+            assert_eq!(pr_url_in(bad), None, "{bad}");
+        }
+        assert_eq!(open_target(" https://github.com/o/r/pull/12/files#diff-1 ").as_deref(), Ok("https://github.com/o/r/pull/12"));
+        assert!(open_target("https://u@github.com/o/r/pull/12").is_err());
+        assert!(open_target("https://github.com/o/r/issues/12").is_err());
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fix3-clean-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        let gh = stand_in_gh(&tools);
+        let url = " https://github.com/o/r/pull/12/files#diff-1 ";
+        assert_eq!(pr_link(&gh, &tools, url).unwrap().number, 12);
+        merge_act(&gh, &tools, url, "close", None).unwrap();
+        let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
+        let pr: Vec<String> = calls.lines().map(|c| c.trim().replace('"', "")).filter(|c| c.starts_with("pr ")).collect();
+        assert_eq!(pr.len(), 2, "{calls}");
+        assert!(pr[0].starts_with("pr view https://github.com/o/r/pull/12 --json"), "{}", pr[0]);
+        assert_eq!(pr[1], "pr close https://github.com/o/r/pull/12");
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    /// FIX-3 (review FIX-SOON 3): a gh that runs past its time limit is stopped together with every
+    /// program it started (a gh.cmd shim's real gh), so nothing it began keeps running afterwards.
+    #[cfg(windows)]
+    #[test]
+    fn fix3_a_gh_that_times_out_is_stopped_with_everything_it_started() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fix3-tree-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        // gh.cmd starts a second program that would leave a mark about five seconds later.
+        fs::write(tools.join("late.cmd"), "@echo off\r\nping -n 6 127.0.0.1 >nul\r\necho late>\"%~dp0late.txt\"\r\n").unwrap();
+        let gh = tools.join("gh.cmd");
+        fs::write(&gh, "@echo off\r\ncmd /c \"%~dp0late.cmd\"\r\n").unwrap();
+        let started = std::time::Instant::now();
+        let err = gh_run_for(&gh, &tools, &["pr", "view"], None, std::time::Duration::from_secs(1)).unwrap_err();
+        assert!(err.contains("did not answer within 1 second"), "{err}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
+        std::thread::sleep(std::time::Duration::from_secs(8));
+        assert!(!tools.join("late.txt").exists(), "a program gh started outlived its time limit");
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    /// FIX-3 (review FIX-SOON 3): gh has finished, but a program it started still holds its output;
+    /// the answer comes back anyway, within the limit, and the leftover program is stopped.
+    #[cfg(windows)]
+    #[test]
+    fn fix3_a_gh_that_leaves_a_program_holding_its_output_still_answers_in_time() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fix3-hold-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        let gh = tools.join("gh.cmd");
+        fs::write(&gh, "@echo off\r\nstart \"\" /b ping -n 30 127.0.0.1 >nul\r\necho octo\r\n").unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (g, t) = (gh.clone(), tools.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(gh_run_for(&g, &t, &["pr", "view"], None, std::time::Duration::from_secs(3)));
+        });
+        let got = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("the call returns within its bound");
+        assert_eq!(got.as_deref(), Ok("octo"));
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    /// FIX-3 (review FIX-SOON 3): a long pull request description goes to gh on its own thread, so a
+    /// gh that never reads it cannot hold the call past its time limit.
+    #[cfg(windows)]
+    #[test]
+    fn fix3_a_long_description_cannot_hang_a_gh_that_never_reads_it() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fix3-stdin-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        let gh = tools.join("gh.cmd");
+        fs::write(&gh, "@echo off\r\nping -n 8 127.0.0.1 >nul\r\n").unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (g, t) = (gh.clone(), tools.clone());
+        std::thread::spawn(move || {
+            let body = "x".repeat(2 << 20);
+            let _ = tx.send(gh_run_for(&g, &t, &["pr", "create"], Some(&body), std::time::Duration::from_secs(1)));
+        });
+        let got = rx.recv_timeout(std::time::Duration::from_secs(6)).expect("the call returns within its bound");
+        assert!(got.as_ref().unwrap_err().contains("did not answer within 1 second"), "{got:?}");
         let _ = fs::remove_dir_all(&tools);
     }
 
@@ -3779,11 +3990,11 @@ mod tests {
         fs::write(tools.join("answer.json"), answer).unwrap();
         let gh = if cfg!(windows) {
             let f = tools.join("gh.cmd");
-            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%1\"==\"config\" if not \"%4\"==\"nobody.example\" echo octo\r\nif \"%1\"==\"api\" type \"%~dp0answer.json\"\r\n").unwrap();
+            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%1\"==\"config\" if \"%3\"==\"-h\" if not \"%4\"==\"nobody.example\" echo octo\r\nif \"%1\"==\"api\" type \"%~dp0answer.json\"\r\n").unwrap();
             f
         } else {
             let f = tools.join("gh");
-            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\n[ \"$1\" = config ] && [ \"$4\" != nobody.example ] && echo octo\n[ \"$1\" = api ] && cat \"$(dirname \"$0\")/answer.json\"\nexit 0\n").unwrap();
+            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\n[ \"$1\" = config ] && [ \"$3\" = -h ] && [ \"$4\" != nobody.example ] && echo octo\n[ \"$1\" = api ] && cat \"$(dirname \"$0\")/answer.json\"\nexit 0\n").unwrap();
             quiet("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
             f
         };
@@ -3800,7 +4011,7 @@ mod tests {
         assert!(merge_act(&gh, &tools, "https://x/o/r/issues/1", "close", None).is_err());
         let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
         // git.example.com stands in for a host gh is signed in to; each request asks gh first.
-        let calls: Vec<&str> = calls.lines().map(str::trim).filter(|c| !c.starts_with("config get -h git.example.com")).collect();
+        let calls: Vec<&str> = calls.lines().map(str::trim).filter(|c| !c.starts_with("config get")).collect();
         assert!(calls[0].starts_with("api graphql --hostname git.example.com "), "{}", calls[0]);
         assert!(calls[0].contains("owner=o") && calls[0].contains("name=r") && calls[0].contains("number=42") && !calls[0].contains("--repo"), "{}", calls[0]);
         // FIX-2: owner and name go as raw strings, never as -F (which reads an @value from a file).

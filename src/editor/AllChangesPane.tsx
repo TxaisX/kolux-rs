@@ -71,6 +71,19 @@ export function statusGate(take: (s: Status) => void): { first: (s: Status) => v
     },
   };
 }
+/** FIX-3 (review AFTER 7): how the tab gets its status as it opens. `read` is the one-off status
+ * read (`first` settles once it has been used or has failed), `watch` starts the watcher and returns
+ * its stop; both feed `take` through statusGate, so the read never replaces a watcher status that
+ * arrived first. `onWatched` runs after each watcher status has been taken. */
+export function openStatus(read: () => Promise<Status>, watch: (on: (s: Status) => void) => () => void, take: (s: Status) => void, onWatched: (s: Status) => void): { first: Promise<void>; stop: () => void } {
+  const gate = statusGate(take);
+  const first = read().then(gate.first, () => undefined);
+  const stop = watch((s) => {
+    gate.watched(s);
+    onWatched(s);
+  });
+  return { first, stop };
+}
 /** The command and arguments a section reads its two texts with. */
 export const sidesCall = (base: Base | null, root: string, e: Entry): [string, Record<string, unknown>] => (base ? ["scm_base_sides", { worktree: root, path: e.path, since: base.since }] : ["diff_sides", { path: e.path, staged: e.staged }]);
 
@@ -122,22 +135,24 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
         },
         (err) => alive && setError(String(err)),
       );
-    const gate = statusGate((s) => {
-      if (!alive) return;
-      latest.current = s;
-      setStatus(s);
-    });
     // One status as the tab opens: Commit is ready at once instead of after the watcher's first
     // tick, and in base mode the first read already knows the base. A watcher status that came in
-    // first wins over it.
-    const first = invoke<Status>("scm_status", { worktree: root }).then(gate.first, () => undefined);
+    // first wins over it (openStatus wires the two through statusGate).
+    const { first, stop } = openStatus(
+      () => invoke<Status>("scm_status", { worktree: root }),
+      (on) => watchStatus(root, on),
+      (s) => {
+        if (!alive) return;
+        latest.current = s;
+        setStatus(s);
+      },
+      () => {
+        if (front.current) void fetch();
+        else missed.current = () => void fetch();
+      },
+    );
     if (mode === "base") void first.then(fetch);
     else void fetch();
-    const stop = watchStatus(root, (s) => {
-      gate.watched(s);
-      if (front.current) void fetch();
-      else missed.current = () => void fetch();
-    });
     return () => {
       alive = false;
       missed.current = null;
