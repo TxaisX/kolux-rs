@@ -256,15 +256,20 @@ static RUNNING: Mutex<Option<HashMap<PathBuf, Held>>> = Mutex::new(None);
 /// flag; when the folder is held by a higher generation (a newer search, or a cancel), the flag comes
 /// back already raised and the folder is left alone.
 fn claim(root: &Path, gen: u64) -> Arc<AtomicBool> {
+    match RUNNING.lock() {
+        Ok(mut m) => claim_in(m.get_or_insert_with(HashMap::new), root, gen),
+        Err(_) => Arc::new(AtomicBool::new(false)),
+    }
+}
+
+/// `claim` on a map of its own, so a test can fill hundreds of folders without touching `RUNNING`.
+fn claim_in(map: &mut HashMap<PathBuf, Held>, root: &Path, gen: u64) -> Arc<AtomicBool> {
     let flag = Arc::new(AtomicBool::new(false));
-    if let Ok(mut m) = RUNNING.lock() {
-        let map = m.get_or_insert_with(HashMap::new);
-        match map.get(root) {
-            Some((held, _)) if *held > gen => flag.store(true, Ordering::SeqCst),
-            _ => {
-                if let Some((_, old)) = map.insert(root.to_path_buf(), (gen, flag.clone())) {
-                    old.store(true, Ordering::SeqCst);
-                }
+    match map.get(root) {
+        Some((held, _)) if *held > gen => flag.store(true, Ordering::SeqCst),
+        _ => {
+            if let Some((_, old)) = map.insert(root.to_path_buf(), (gen, flag.clone())) {
+                old.store(true, Ordering::SeqCst);
             }
         }
     }
@@ -280,21 +285,31 @@ fn claim(root: &Path, gen: u64) -> Arc<AtomicBool> {
 /// stops a newer search.
 pub fn cancel(root: &Path, gen: u64) {
     if let Ok(mut m) = RUNNING.lock() {
-        let map = m.get_or_insert_with(HashMap::new);
-        if map.get(root).is_some_and(|(held, _)| *held > gen) {
-            return;
-        }
-        if let Some((_, old)) = map.insert(root.to_path_buf(), (gen, Arc::new(AtomicBool::new(true)))) {
-            old.store(true, Ordering::SeqCst);
-        }
-        prune_markers(map, MAX_MARKERS);
+        cancel_in(m.get_or_insert_with(HashMap::new), root, gen);
     }
+}
+
+/// FIX-7 (council d2 FIX-SOON 1): `cancel` on a map of its own, so a test can run many cancels and
+/// see that the map stays at `MAX_MARKERS`. `cancel` is only the lock around this.
+fn cancel_in(map: &mut HashMap<PathBuf, Held>, root: &Path, gen: u64) {
+    if map.get(root).is_some_and(|(held, _)| *held > gen) {
+        return;
+    }
+    if let Some((_, old)) = map.insert(root.to_path_buf(), (gen, Arc::new(AtomicBool::new(true)))) {
+        old.store(true, Ordering::SeqCst);
+    }
+    prune_markers(map, MAX_MARKERS);
 }
 
 /// FIX-6 (council d2 AFTER 2): a cancel leaves a raised marker on its folder, so an older search
 /// still in the fence stops on arrival. A folder nobody searches again would keep its marker for the
 /// whole run; past `keep` entries the oldest raised ones go (a search still in the fence is seconds
 /// old, never hundreds of folders old). A search that is still running is never dropped.
+/// FIX-7 (council d2 AFTER 1): in this map "flag raised" means "this entry is a marker". That holds
+/// because only `cancel_in` inserts an already-raised flag; a search whose flag was raised by a newer
+/// claim has been replaced in the map, and a search `claim_in` refused (a higher number holds the
+/// folder) was never inserted. Keep both true, or give `Held` an explicit marker field, before any
+/// change that leaves a raised flag on a still-running search in the map: it would become prunable.
 const MAX_MARKERS: usize = 256;
 
 fn prune_markers(map: &mut HashMap<PathBuf, Held>, keep: usize) {
@@ -663,6 +678,39 @@ mod tests {
         assert!(!map.contains_key(Path::new("C:/done-2")) && map.contains_key(Path::new("C:/done-20")), "the oldest markers go first");
         prune_markers(&mut map, 0);
         assert_eq!(map.len(), 1, "only the running search is left when nothing else can go");
+    }
+
+    // FIX-7 (council d2 FIX-SOON 1): the bound holds through the cancel itself, not only through
+    // prune_markers. Red when the prune call is taken out of cancel_in (verified, see evidence).
+    #[test]
+    fn fix7_cancel_itself_bounds_the_map_and_keeps_a_running_search() {
+        let mut map: HashMap<PathBuf, Held> = HashMap::new();
+        let running = claim_in(&mut map, Path::new("C:/fix7-running"), 1);
+        for g in 2..(MAX_MARKERS as u64 * 2) {
+            cancel_in(&mut map, Path::new(&format!("C:/fix7-cancelled-{g}")), g);
+            assert!(map.len() <= MAX_MARKERS, "the map never grows past the bound (at cancel {g})");
+        }
+        assert_eq!(map.len(), MAX_MARKERS, "it settles at the bound, not below it");
+        assert!(!running.load(Ordering::SeqCst), "a running search is not stopped by other folders' cancels");
+        assert!(map.get(Path::new("C:/fix7-running")).is_some_and(|(_, f)| Arc::ptr_eq(f, &running)), "and it stays in the map");
+        assert!(map.contains_key(Path::new(&format!("C:/fix7-cancelled-{}", MAX_MARKERS as u64 * 2 - 1))), "the newest marker stays");
+        assert!(!map.contains_key(Path::new("C:/fix7-cancelled-2")), "the oldest marker went");
+    }
+
+    // FIX-7 (council d2 AFTER 3): the accepted limit, written down. A marker that fell off the bound
+    // no longer stops an older search arriving from the fence; a marker inside the bound still does.
+    #[test]
+    fn fix7_a_pruned_marker_no_longer_stops_an_older_search_but_a_kept_one_does() {
+        let mut map: HashMap<PathBuf, Held> = HashMap::new();
+        let first_old = 1u64;
+        let last_old = 2u64;
+        cancel_in(&mut map, Path::new("C:/fix7-first"), 10);
+        for g in 11..(11 + MAX_MARKERS as u64) {
+            cancel_in(&mut map, Path::new(&format!("C:/fix7-more-{g}")), g);
+        }
+        assert!(!claim_in(&mut map, Path::new("C:/fix7-first"), first_old).load(Ordering::SeqCst), "past the bound the first marker is gone");
+        let newest = 10 + MAX_MARKERS as u64;
+        assert!(claim_in(&mut map, Path::new(&format!("C:/fix7-more-{newest}")), last_old).load(Ordering::SeqCst), "a marker inside the bound still stops it");
     }
 
     #[test]

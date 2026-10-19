@@ -273,6 +273,32 @@ mod script_runs {
 
     const STOP: &str = r#"{"hook_event_name":"Stop","session_id":"s1","cwd":"C:/w"}"#;
 
+    /// How long this PC takes right now to start a Windows PowerShell and leave it at once.
+    fn powershell_start() -> Duration {
+        let exe = PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into())).join("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe");
+        let mut cmd = Command::new(exe);
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", "exit"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        let t = Instant::now();
+        assert!(cmd.status().unwrap().success(), "a plain PowerShell starts");
+        t.elapsed()
+    }
+
+    /// hooks FIX-7 (stand-in review AFTER 1): the time a held run may take, from the PowerShell
+    /// start timed before the run and the one timed after it; the slower of the two decides, so a
+    /// load spike that begins right after the first sample cannot outrun the bound.
+    fn held_run_bound(before: Duration, after: Duration) -> Duration {
+        before.max(after) * 2 + Duration::from_secs(3)
+    }
+
+    #[test]
+    fn fix_7_the_held_run_bound_follows_the_slower_of_the_two_powershell_starts() {
+        let quick = Duration::from_millis(400);
+        let slow = Duration::from_secs(4);
+        assert_eq!(held_run_bound(quick, slow), Duration::from_secs(11), "a spike after the first sample raises the bound");
+        assert_eq!(held_run_bound(slow, quick), Duration::from_secs(11), "a spike before it does too");
+        assert_eq!(held_run_bound(quick, quick), Duration::from_millis(3800), "an idle PC keeps the tight bound");
+    }
+
     /// The script itself lives in a plain folder; only the data paths carry the awkward characters.
     fn scripts(name: &str) -> PathBuf {
         temp(&format!("scripts-{name}"))
@@ -303,26 +329,24 @@ mod script_runs {
             }
             v
         };
-        // hooks FIX-6 (stand-in review FIX-SOON 3): the bound follows how long this PC takes to
-        // start a Windows PowerShell right now (0.4 s idle, over 2 s with other builds running),
-        // measured the same way just before: twice that start, the script's own retry window (20
-        // tries 100 ms apart, 2 s) and 1 s of slack. A hard 30 s ceiling still catches a true hang.
-        let baseline = {
-            let exe = PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into())).join("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe");
-            let mut cmd = Command::new(exe);
-            cmd.args(["-NoProfile", "-NonInteractive", "-Command", "exit"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-            let t = Instant::now();
-            assert!(cmd.status().unwrap().success(), "a plain PowerShell starts");
-            t.elapsed()
-        };
+        // hooks FIX-6/FIX-7 (stand-in review FIX-SOON 3, AFTER 1-2): the bound follows how long this
+        // PC takes to start a Windows PowerShell (0.4 s idle, over 2 s with other builds running).
+        // That start is timed just before the run and again just after it, and the larger of the
+        // two counts, so a load spike on either side of the run raises the bound with it. The bound
+        // is twice that start plus a 3 s allowance: curl's 0.5 s connect timeout, the cmd and
+        // script work, the script's retry window (20 tries 100 ms apart, 2 s), which nothing uses
+        // here because no one holds the file, and 1 s of slack. A hard 30 s ceiling still catches
+        // a true hang.
+        let before = powershell_start();
         let started = Instant::now();
         let out = run(&dir, &env(false), r#"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","session_id":"s1"}"#);
         let elapsed = started.elapsed();
+        let after = powershell_start();
         assert!(out.status.success() && out.stdout.is_empty(), "{out:?}");
-        let bound = baseline * 2 + Duration::from_secs(3);
-        println!("PowerShell start baseline {baseline:?}; the held run took {elapsed:?}; bound {bound:?} (the fixed bound before hooks FIX-6 was 5 s)");
+        let bound = held_run_bound(before, after);
+        println!("PowerShell start before {before:?}, after {after:?}; the held run took {elapsed:?}; bound {bound:?} (the fixed bound before hooks FIX-6 was 5 s)");
         assert!(elapsed < Duration::from_secs(30), "a closed Kolux never holds the agent up (hang ceiling): {elapsed:?}");
-        assert!(elapsed < bound, "a closed Kolux never holds the agent up: {elapsed:?} against a {baseline:?} PowerShell start");
+        assert!(elapsed < bound, "a closed Kolux never holds the agent up: {elapsed:?} against PowerShell starts of {before:?} and {after:?}");
         // Kolux took its endpoint file away as it quit: the pane's own variables name the address.
         fs::remove_file(&endpoint).unwrap();
         let out = run(&dir, &env(true), STOP);
@@ -423,6 +447,33 @@ mod script_runs {
         let _ = fs::remove_dir_all(&data);
     }
 
+    /// hooks FIX-7 (stand-in review FIX-SOON 1): where the held-append test aims the release. A
+    /// real retry proves itself only when the release falls between HELD_PASS_LEAD_MS after the
+    /// stamp (earlier, a script with no retry could pass) and the end of the script's retries
+    /// (later, nothing lands). The aim at the middle keeps room for a load swing either way.
+    const HELD_AIM_PAST_STAMP_MS: i64 = 1100;
+    const HELD_PASS_LEAD_MS: i64 = 400;
+
+    /// How long past the stamp the script's retries last, read from the script itself: the pauses
+    /// between its tries, (tries - 1) x the pause.
+    fn retries_reach_ms() -> i64 {
+        let text = super::super::super::SPOOL_LINE;
+        let number_after = |key: &str| -> i64 {
+            let rest = &text[text.find(key).unwrap_or_else(|| panic!("the holding script has {key}")) + key.len()..];
+            rest.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap()
+        };
+        (number_after("$i -lt ") - 1) * number_after("Start-Sleep -Milliseconds ")
+    }
+
+    #[test]
+    fn fix_7_the_held_append_aim_keeps_600_ms_of_room_each_side() {
+        let reach = retries_reach_ms();
+        assert_eq!(reach, 1900, "20 tries with 19 pauses of 100 ms");
+        let (aim, pass) = (std::hint::black_box(HELD_AIM_PAST_STAMP_MS), HELD_PASS_LEAD_MS);
+        assert!(aim - pass >= 600, "room for a stamp that comes late: {aim} against {pass}");
+        assert!(reach - aim >= 600, "room for a stamp that comes early: {aim} against {reach}");
+    }
+
     /// hooks FIX-3 (stand-in review AFTER 2): while another writer holds the holding file shut, the
     /// held append is tried again, so the event lands once the file is free instead of being lost.
     #[test]
@@ -436,8 +487,9 @@ mod script_runs {
         // falling well before the lock was let go. How long PowerShell takes from its start to
         // that stamp depends on the PC's load (0.4 s idle, over 2 s with other builds running),
         // and the retries reach only about 2 s past the stamp, so no fixed hold fits every PC:
-        // each run measures the stamp's offset and the next hold aims 600 ms past it, until one
-        // run proves the retry. A run whose hold outlasted the retries (nothing landed) only
+        // each run measures the stamp's offset and the next hold aims HELD_AIM_PAST_STAMP_MS past
+        // it (hooks FIX-7: the middle of the window a real retry can prove), until one run
+        // proves the retry. A run whose hold outlasted the retries (nothing landed) only
         // shortens the next hold; it never passes the test.
         let unix_ms = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
         let mut hold: i64 = 1000;
@@ -472,13 +524,13 @@ mod script_runs {
             // hooks FIX-6 (stand-in review FIX-SOON 2): 400 ms clear of the release. The first
             // try comes a few ms after the stamp (ConvertTo-Json and the line between them), so a
             // script with no retry at all could pass only if that gap stretched past 400 ms; the
-            // hold aims 600 ms past the stamp, so a real retry keeps its margin.
-            if lead >= 400 {
+            // hold aims about 1100 ms past the stamp (hooks FIX-7), so a real retry keeps its margin.
+            if lead >= HELD_PASS_LEAD_MS {
                 met = Some(attempt);
                 break;
             }
-            // The stamp came `hold - lead` ms after PowerShell was seen; hold 600 ms past that.
-            hold = (hold - lead + 600).clamp(400, 8_000);
+            // The stamp came `hold - lead` ms after PowerShell was seen; hold the aim past that.
+            hold = (hold - lead + HELD_AIM_PAST_STAMP_MS).clamp(400, 8_000);
         }
         assert!(met.is_some(), "no run had its first append meet the lock, so none proved the retry");
         let _ = fs::remove_dir_all(&data);
@@ -520,23 +572,32 @@ mod script_runs {
         let dir = scripts("fix4-gone");
         let gone = data.join("gone").join(super::super::super::ENDPOINT_FILE);
         let gone_env: Vec<(&str, String)> = env.iter().map(|(k, v)| (*k, if *k == "KOLUX_HOOK_ENDPOINT" { gone.display().to_string() } else { v.clone() })).collect();
-        // The quickest of three runs each, so one slow PowerShell start does not decide it.
-        let quickest = |env: &[(&str, String)]| {
-            (0..3)
-                .map(|_| {
-                    let t = Instant::now();
-                    assert!(run(&dir, env, STOP).status.success());
-                    t.elapsed()
-                })
-                .min()
-                .unwrap()
+        // hooks FIX-7 (stand-in review AFTER 5b): the two paths are timed in turns (held, missing,
+        // held, missing, ...), so a load swing lands on both alike, and each keeps its quickest of
+        // ROUNDS, so one slow PowerShell start does not decide it. The two paths do the same work
+        // but for the one append (it lands, or it fails at once on the missing folder), so what
+        // sets them apart is the script's retries: (tries - 1) x its pause, 1900 ms, read from
+        // the script. The allowed difference sits well under that, and a missing-folder run that
+        // retried would cost at least that much more than the held one.
+        const ROUNDS: usize = 4;
+        const MARGIN_MS: u64 = 1000;
+        let timed = |env: &[(&str, String)]| {
+            let t = Instant::now();
+            assert!(run(&dir, env, STOP).status.success());
+            t.elapsed()
         };
-        let held = quickest(&env);
-        let missing = quickest(&gone_env);
-        println!("held path {held:?}, missing folder {missing:?}");
-        assert_eq!(fs::read_to_string(&spool).unwrap().lines().filter(|l| !l.is_empty()).count(), 3, "the folder that is there takes every event");
+        let (mut held, mut missing) = (Duration::MAX, Duration::MAX);
+        for round in 0..ROUNDS {
+            let (h, m) = (timed(&env), timed(&gone_env));
+            println!("round {round}: held path {h:?}, missing folder {m:?}");
+            held = held.min(h);
+            missing = missing.min(m);
+        }
+        println!("quickest: held path {held:?}, missing folder {missing:?}; retries would add {} ms", retries_reach_ms());
+        assert!(MARGIN_MS as i64 + 500 <= retries_reach_ms(), "the allowed difference stays well under what the retries would cost");
+        assert_eq!(fs::read_to_string(&spool).unwrap().lines().filter(|l| !l.is_empty()).count(), ROUNDS, "the folder that is there takes every event");
         assert!(!data.join("gone").exists(), "a missing holding folder is not made");
-        assert!(missing < held + Duration::from_millis(1000), "no retries for a missing folder: {missing:?} against {held:?}");
+        assert!(missing < held + Duration::from_millis(MARGIN_MS), "no retries for a missing folder: {missing:?} against {held:?}");
         let _ = fs::remove_dir_all(&data);
     }
 
@@ -1450,7 +1511,7 @@ fn fix_5_codex_a_rollback_never_overwrites_or_removes_a_file_saved_meanwhile() {
     let f = file.clone();
     BEFORE_REREAD.with(|c| c.borrow_mut().extend([Box::new(move || fs::write(&f, users(5)).unwrap()) as Box<dyn FnOnce()>, Box::new(|| {})]));
     let err = install_codex_with(&home, command, |_| None).unwrap_err();
-    println!("rewritten, saved at the rename: {err}");
+    println!("rewritten, saved just before the re-read: {err}");
     assert!(BEFORE_REREAD.with(|c| c.borrow().is_empty()), "the rollback wrote through the atomic write");
     assert!(err.ends_with(CHANGED), "{err}");
     assert_eq!(fs::read_to_string(&file).unwrap(), users(5), "the save just before the re-read is kept");
