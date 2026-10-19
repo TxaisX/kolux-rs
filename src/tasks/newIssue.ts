@@ -26,10 +26,18 @@ export const emptyDraft = (host: string, repo: string): IssueDraft => ({ host, r
 /** GitHub's longest issue title. */
 export const TITLE_MAX = 256;
 
+/** A title's length the way GitHub counts it: characters (an emoji is one), not UTF-16 units. */
+export const titleLength = (t: string): number => [...t.trim()].length;
+
 /** FIX-3 (review FIX-SOON 1): an issue created after the workspace changed belongs to the host and
  * repository it was sent to, not to whatever Tasks shows now; it joins the list and opens only when
  * both match the workspace on screen. */
 export const createdHere = (here: { host: string; repos: string[] } | null | undefined, host: string, repo: string): boolean => !!here && sameHost(here.host, host) && here.repos.some((r) => r.toLowerCase() === repo.toLowerCase());
+
+/** FIX-4 (review AFTER 5): whether a finished create closes the New issue dialog on screen. It does
+ * when the issue belongs to the workspace on screen, or when that dialog is the opening that sent
+ * the create; a create from an older opening never closes a dialog opened since. */
+export const closesDialog = (belongsHere: boolean, sentBy: number, onScreen: number): boolean => belongsHere || sentBy === onScreen;
 
 /** Label names the field can hold: it splits on commas, so a suggestion with one could never be picked whole. */
 export const pickableLabels = (labels: string[]): string[] => labels.filter((l) => !l.includes(","));
@@ -73,11 +81,17 @@ export function draftFrom(v: unknown): IssueDraft | null {
 // dialog while "Creating…" and opening it again can never send the same issue twice.
 export type CreateEvent = "busy" | "created" | "failed";
 let inFlight = false;
+// FIX-4 (council FIX-SOON 2): the last create's failure stays here, so a New issue dialog opened
+// after the create failed (the user had left Tasks) still says so instead of offering a second click.
+let lastFailure: string | null = null;
 const watchers = new Set<(e: CreateEvent, error?: string) => void>();
 const tell = (e: CreateEvent, error?: string) => watchers.forEach((w) => w(e, error));
 
 /** True while a create is out. */
 export const createBusy = () => inFlight;
+
+/** The error of the last create when it failed and no later create has started; null otherwise. */
+export const lastCreateFailure = (): string | null => lastFailure;
 
 /** Calls `w` when a create starts ("busy") and when it settles ("failed" carries gh's error, so a
  * dialog opened after the create began still tells the user what went wrong); returns the unsubscribe. */
@@ -90,6 +104,7 @@ export function watchCreate(w: (e: CreateEvent, error?: string) => void): () => 
 export async function createOnce<T>(send: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: string } | null> {
   if (inFlight) return null;
   inFlight = true;
+  lastFailure = null;
   tell("busy");
   try {
     const value = await send();
@@ -98,6 +113,7 @@ export async function createOnce<T>(send: () => Promise<T>): Promise<{ ok: true;
     return { ok: true, value };
   } catch (e) {
     inFlight = false;
+    lastFailure = String(e);
     tell("failed", String(e));
     return { ok: false, error: String(e) };
   }

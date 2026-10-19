@@ -11,7 +11,7 @@ import { Refresh, Search } from "../chrome/icons";
 import { useSettings } from "../settings/useSettings";
 import { beyondWindow, defaultPreset, FILTERS, type FilterKey, filterValue, issueSource, pageButtons, pageCount, PER_PAGE, PRESETS, setFilter, type Task, type TaskLabel, type TaskPage, taskKind, taskQueries } from "./model";
 import NewIssueDialog from "./NewIssueDialog";
-import { createdHere, issueTargets } from "./newIssue";
+import { closesDialog, createdHere, issueTargets } from "./newIssue";
 import { type GhRepo, loadRepoFacts, type ParentRead, type Person, resetFacts } from "./repoFacts";
 import ProjectsView from "./ProjectsView";
 import TaskDialog from "./TaskDialog";
@@ -72,6 +72,9 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<Task | null>(null);
   const [newIssue, setNewIssue] = useState(false);
+  // FIX-4 (review AFTER 5): which opening of the New issue dialog is on screen, so a create that
+  // comes back for an older opening never closes the dialog the user has opened since.
+  const opening = useRef(0);
   // FIX-3: an issue created for another workspace than the one on screen (the user switched while
   // gh was slow) is reported here, never added to this list.
   const [elsewhere, setElsewhere] = useState<string | null>(null);
@@ -102,6 +105,7 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
   const sourceKey = gh ? `${gh.host}/${own}` : "";
   const source = issueSource(settings, sourceKey, own, parent, parentFailed);
   here.current = gh ? { host: gh.host, repos: [own, source.repo] } : null;
+  const mine = opening.current;
   const savedSources = (settings?.tasksIssueSource ?? {}) as Record<string, unknown>;
   const chosenSource = savedSources[sourceKey] === "upstream" ? "upstream" : "fork";
   const load = () => {
@@ -217,7 +221,10 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
             {gh.host} · {login ? `@${login}` : "not signed in"} · {gh.owner}/{gh.name}
           </span>
         )}
-        <button className="btn" data-new-issue-open disabled={!gh} onClick={() => setNewIssue(true)}>
+        <button className="btn" data-new-issue-open disabled={!gh} onClick={() => {
+            opening.current += 1;
+            setNewIssue(true);
+          }}>
           New issue
         </button>
         <button className="ib" title="Refresh" disabled={!gh} onClick={load}>
@@ -233,7 +240,10 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
       )}
       {elsewhere && (
         <div className="note warn" role="status" data-created-elsewhere>
-          {elsewhere}
+          {elsewhere}{" "}
+          <button className="task-x" aria-label="Dismiss this note" title="Dismiss" onClick={() => setElsewhere(null)}>
+            ×
+          </button>
         </div>
       )}
       {source.warning && (
@@ -293,6 +303,7 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
       )}
       {newIssue && gh && (
         <NewIssueDialog
+          key={opening.current}
           host={gh.host}
           targets={issueTargets(source.repo, own)}
           saved={settings?.tasksIssueDraft}
@@ -302,8 +313,11 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
           people={people.map((x) => x.login)}
           onClose={() => setNewIssue(false)}
           onCreated={(t: Task, host: string) => {
-            setNewIssue(false);
-            if (!createdHere(here.current, host, t.repo)) {
+            // Close only the dialog that sent this create (an older opening's create is finished
+            // with its own dialog), or any dialog when the issue belongs on this screen.
+            const local = createdHere(here.current, host, t.repo);
+            if (closesDialog(local, mine, opening.current)) setNewIssue(false);
+            if (!local) {
               setElsewhere(`Issue #${t.number} was created in ${t.repo} on ${host} (${t.url}). This workspace is somewhere else now, so it is not added to this list.`);
               return;
             }

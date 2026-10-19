@@ -390,7 +390,7 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
                   <span key={a.id} className="agent-card">
                     <label className={`choice${missing ? " missing" : ""}`} title={missing ? `${a.name} is not installed on this computer` : a.path ?? a.name}>
                       <input type="radio" name={`seat-${number}-${i}-ai`} checked={seat.agent === a.id} disabled={missing} onChange={() => pickAgent(i, a.id)} />
-                      <VendorMark agent={markFor(a.id, a.program)} size={12} />
+                      <VendorMark agent={markFor(a.id)} size={12} />
                       {a.name}
                       {missing && <span className="agent-missing">Not installed</span>}
                     </label>
@@ -408,7 +408,7 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
                       <span key={a.id} className="agent-seat">
                         <label className="choice" title={a.path ?? a.name}>
                           <input type="radio" name={`seat-${number}-${i}-ai`} checked={seat.agent === a.id} onChange={() => pickAgent(i, a.id)} />
-                          <VendorMark agent={markFor(a.id, a.program)} size={12} />
+                          <VendorMark agent={markFor(a.id)} size={12} />
                           {a.name}
                         </label>
                         <DocsLink agent={a} />
