@@ -74,7 +74,11 @@ async function mountWizard(settings: Record<string, unknown> = {}) {
   const { PROJECT_ADDED } = await import("./sidebar");
   win.addEventListener(CHECKLIST_CHANGED, () => heard.push("checklist"));
   win.addEventListener(PROJECT_ADDED, () => heard.push("project"));
-  const agents = [{ id: "claude", name: "Claude Code", program: "claude", args: [], installed: true, path: "C:/bin/claude" }];
+  // FIX-5: an installed plain-terminal entry sits in the list, so a "terminal" default is stopped by the guard and not by a missing agent.
+  const agents = [
+    { id: "claude", name: "Claude Code", program: "claude", args: [], installed: true, path: "C:/bin/claude" },
+    { id: "terminal", name: "Terminal", program: "powershell", args: [], installed: true, path: "C:/bin/powershell" },
+  ];
   const deps = {
     setToast: (t: string) => void toasts.push(t),
     agents,

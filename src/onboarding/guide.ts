@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { locale } from "../language";
 import type { FirstRun } from "./newcomer";
 import { noteUse, type Features } from "./features";
+import { isAiAgent } from "./agentKind";
 
 export type StepId = "browser" | "notifications" | "agent" | "cli" | "integrations" | "multitask" | "automate" | "repos";
 type Words = { name: string; about: string };
@@ -204,12 +205,6 @@ export const pageCounts = (url: string | null | undefined): boolean => {
   return u !== "" && u !== "about:blank" && !u.startsWith("about:");
 };
 
-/** FIX-4: the saved default agent counts for the agent step only when it is an AI agent's id: blank, or a plain terminal ("terminal"), does not. */
-const isAiAgent = (id: string | null | undefined): boolean => {
-  const v = (id ?? "").trim().toLowerCase();
-  return v !== "" && v !== "terminal";
-};
-
 /** ONB-015: the steps done, each from the thing it stands for. */
 export function doneFrom(f: Facts): Set<StepId> {
   const done = new Set<StepId>();
@@ -219,7 +214,7 @@ export function doneFrom(f: Facts): Set<StepId> {
   if (f.integrations === "connected") done.add("integrations");
   if (f.cli) done.add("cli");
   if (f.notifications === true) done.add("notifications");
-  if (isAiAgent(f.agent)) done.add("agent");
+  if (isAiAgent(f.agent)) done.add("agent"); // FIX-4: a blank or plain-terminal default does not count (agentKind.ts)
   if (f.setupScript === true) done.add("automate");
   return done;
 }

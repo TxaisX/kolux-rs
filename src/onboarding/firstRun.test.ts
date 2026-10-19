@@ -151,6 +151,17 @@ test("ONB-010: the first folder starts only the saved default agent, never a gue
   expect(firstFolderAgent(agents, "grok")).toBeNull();
 });
 
+test("FIX-5: a terminal entry in the offered list is never the first folder agent, however the default is spelled", () => {
+  const agents = [
+    { id: "terminal", installed: true },
+    { id: "Terminal", installed: true },
+    { id: "claude", installed: true },
+  ];
+  for (const spelled of ["terminal", "Terminal", " terminal ", " Terminal "]) expect(firstFolderAgent(agents, spelled)).toBeNull();
+  expect(firstFolderAgent(agents, "   ")).toBeNull();
+  expect(firstFolderAgent(agents, "claude")?.id).toBe("claude");
+});
+
 test("ONB-009: clicks on Onboarding less than half a second apart count as one", () => {
   const click = oneClick();
   expect([click(1000), click(1300), click(1700), click(2300), click(2799), click(3300)]).toEqual([true, false, false, true, false, true]);
