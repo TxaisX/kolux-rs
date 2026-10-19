@@ -1,0 +1,2 @@
+# Append this ONE line to the end of STATE-history.md on main (the file does not exist on lane/docs, which predates the split; creating it here would collide at merge).
+- [docs] FIX-1 (pre-merge, from the docs-de5958ea review): command-line.md and troubleshooting.md worker text re-verified at 5e6726c2: release left-open reason in plain text, stamp-based worker detection and the current timeout wording, two stop-warning forms, new Late agents paragraph; release-wording row deleted; docs only, plan-check OK; evidence/docs-FIX-1.txt
