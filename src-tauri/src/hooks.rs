@@ -1514,6 +1514,15 @@ mod tests {
         assert_eq!((bare.session, bare.at), (None, None));
         let blank = post(&t2, r#"{"session_id":"  ","cost":{"total_duration_ms":5}}"#);
         assert_eq!((blank.session, blank.at), (None, None));
+        // An over-long session id is cut at 200 characters plus the ellipsis `trim` adds, and the
+        // terminal still follows (stand-in review of lane/marks 54b27f5e, AFTER 2).
+        let long = "x".repeat(250);
+        let cut = post(&t2, &format!(r#"{{"session_id":"{long}","cost":{{"total_duration_ms":7}}}}"#));
+        let want = format!("{}…@2", "x".repeat(200));
+        assert_eq!((cut.session.as_deref(), cut.at), (Some(want.as_str()), Some(7)));
+        // Exactly 200 is kept whole.
+        let kept = post(&t2, &format!(r#"{{"session_id":"{}","cost":{{"total_duration_ms":8}}}}"#, "y".repeat(200)));
+        assert_eq!(kept.session, Some(format!("{}@2", "y".repeat(200))));
         // The names the window's listener reads.
         let j = serde_json::to_value(&u).unwrap();
         assert_eq!((j["session"].as_str(), j["at"].as_u64(), j["paneKey"].as_u64()), (Some("0b3c-9f@2"), Some(61_000), Some(4)));

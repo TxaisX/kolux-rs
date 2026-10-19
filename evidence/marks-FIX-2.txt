@@ -75,5 +75,10 @@ LIVE PROOF PENDING (batched; builders do not launch the app):
 3. /clear (SessionStart source clear) then a late report stamped earlier than the cleared one on the
    same session: the gauge stays grey (floor kept).
 4. A status line of 90.4% shows "90%" with the red tint; 69.6% shows "70%" without the yellow tint.
-5. Request changes with the stand-in making terminal_write fail (close the pty after the Esc): a toast
-   says Kolux could not type into the agent's terminal; nothing is pressed.
+5. Request changes, then close the stand-in's pane (or let it exit) right after the Esc. Pass: nothing
+   is pressed in any terminal. If the pane is closed the job ends as "gone" and no toast is shown
+   (the window has none for "gone"); whether a write to a terminal whose program only exited fails is
+   not known, so the "could not type into the agent's terminal" toast may or may not appear. The
+   write-failed path itself (a failed paste is never followed by Enter) is proven by the unit test in
+   src/terminal/planReview.test.ts, not by this step (stand-in review of lane/marks 54b27f5e,
+   FIX-SOON 1; reworded in FIX-3).
