@@ -888,7 +888,7 @@ fn header_context(t: &str, i: usize) -> bool {
     let head = t[line..i].to_ascii_lowercase();
     head.contains("authorization") || head.contains("--header") || {
         let words = words_before(t, i);
-        words.iter().any(|w| w == "-h") && runs(&words, |w| matches!(w, "curl" | "wget" | "http" | "https" | "xh"))
+        words.iter().any(|w| w.name == "-h") && runs(&words, |w| matches!(w, "curl" | "wget" | "http" | "https" | "xh"))
     }
 }
 
@@ -896,7 +896,8 @@ fn header_context(t: &str, i: usize) -> bool {
 /// `(` that is not inside a quoted argument already closed by then, or after the last backtick or
 /// line break. A separator inside the quote that wraps the command (`bash -c "cd x; mysql ..`) is
 /// still a separator, because that quote is still open. Quotes are paired as they come, one kind
-/// inside another (`"a 'b; c' d"`), and an escaped quote (`\"`) is a kind of its own.
+/// inside another (`"a 'b; c' d"`), and an escaped quote (`\"`) is a kind of its own. A `'` inside an
+/// open `"` is an opener only when a matching `'` comes before the next `"` (`"it's; ..` is text).
 fn segment_start(head: &str) -> usize {
     let b = head.as_bytes();
     // Open quotes as (kind, id); a separator remembers the ids that were open where it stood.
@@ -910,6 +911,7 @@ fn segment_start(head: &str) -> usize {
                 p += 1;
                 Some(b[p] | 0x80)
             }
+            b'\'' if open.last().is_some_and(|(top, _)| *top == b'"') && !apostrophe_closes(&b[p + 1..]) => None,
             b'"' | b'\'' => Some(c),
             _ => None,
         };
@@ -932,39 +934,93 @@ fn segment_start(head: &str) -> usize {
     live.max(hard)
 }
 
+/// Whether the text after a `'` that sits inside an open `"` holds a `'` before the next `"` that is
+/// not escaped: only then does that `'` open a quote of its own (`"mysql -e 'a; b'"`), else it is
+/// an apostrophe (`"don't; ..."`).
+fn apostrophe_closes(rest: &[u8]) -> bool {
+    let mut p = 0;
+    while p < rest.len() {
+        match rest[p] {
+            b'\\' => p += 1,
+            b'\'' => return true,
+            b'"' => return false,
+            _ => {}
+        }
+        p += 1;
+    }
+    false
+}
+
+/// One word of a command: `name` is lower case, without a folder or `.exe`; `raw` keeps its case
+/// (`sudo -S` and `sudo -s` are different options); `folder` says the word had a folder part and is
+/// no program path (`/var/lib/mysql`, `C:\ProgramData\MySQL\my.ini`). A `.exe` path is a program.
+struct Word {
+    name: String,
+    raw: String,
+    folder: bool,
+}
+
 /// The words of the command before byte `i`, back to the start of that command (`segment_start`):
-/// lower case, without a folder or `.exe`, so `sudo /usr/bin/MySQL -p..` reads as `sudo`, `mysql`.
-/// Quotes split words too, so a wrapped command (`bash -c "mysql ..`) still shows its program.
-fn words_before(t: &str, i: usize) -> Vec<String> {
+/// without a folder (cut at `/` and at `\`) or `.exe`, so `sudo C:\bin\MySQL.exe -p..` reads as
+/// `sudo`, `mysql`. Quotes split words too, so a wrapped command (`bash -c "mysql ..`) still shows
+/// its program.
+fn words_before(t: &str, i: usize) -> Vec<Word> {
     let head = &t[..i];
     let start = segment_start(head);
     head[start..]
-        .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '\\'))
-        .filter(|w| !w.is_empty())
-        .map(|w| {
-            let name = w.rsplit('/').next().unwrap_or(w).to_ascii_lowercase();
-            name.strip_suffix(".exe").map_or(name.clone(), str::to_string)
+        .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\''))
+        .filter_map(|w| {
+            let raw = w.rsplit(['/', '\\']).next().unwrap_or(w);
+            if raw.is_empty() {
+                return None;
+            }
+            let lower = raw.to_ascii_lowercase();
+            let exe = lower.strip_suffix(".exe");
+            Some(Word { name: exe.unwrap_or(&lower).to_string(), raw: raw.to_string(), folder: raw.len() < w.len() && exe.is_none() })
         })
         .collect()
 }
 
-/// Words that only run the command after them. Shells, `cmd` and PowerShell are the ones whose
-/// options (`-c`, `/c`, `-Command`) never take a value of their own.
-const PASS_THROUGH: [&str; 25] = ["sudo", "doas", "env", "nohup", "time", "exec", "command", "nice", "ionice", "xargs", "stdbuf", "timeout", "setsid", "watch", "start", "call", "bash", "sh", "zsh", "dash", "ksh", "fish", "cmd", "powershell", "pwsh"];
+/// Words that only run the command after them: wrappers, shells, and the keywords a shell script
+/// puts in front of a command (`then`, `do`, `else`, `!`, `{`). Shells, `cmd` and PowerShell are the
+/// ones whose options (`-c`, `/c`, `-Command`) never take a value of their own.
+const PASS_THROUGH: &[&str] = &["sudo", "doas", "env", "nohup", "time", "exec", "command", "nice", "ionice", "xargs", "stdbuf", "timeout", "setsid", "watch", "start", "call", "winpty", "bash", "sh", "zsh", "dash", "ksh", "fish", "cmd", "powershell", "pwsh", "if", "elif", "while", "until", "then", "do", "else", "!", "{"];
 const SHELLS: [&str; 9] = ["bash", "sh", "zsh", "dash", "ksh", "fish", "cmd", "powershell", "pwsh"];
-/// Wrapper options whose value is the next word (`sudo -u root mysql`, `xargs -n 1 curl`).
-const WRAPPER_OPTIONS: [&str; 6] = ["-u", "-g", "-n", "-d", "-s", "-i"];
+/// Programs that take a pattern or a name, not a command, as their first argument: a program name
+/// after one of them (`grep curl -u a:b notes.txt`) is only text to search for.
+const SEARCHERS: [&str; 11] = ["grep", "egrep", "fgrep", "rg", "ag", "ack", "man", "which", "where", "whereis", "type"];
+/// The options of a wrapper whose value is the next word (`sudo -u root mysql`, `xargs -n 1 curl`).
+/// They are per wrapper and case sensitive: `sudo -n`, `-i`, `-s`, `-S` and `env -i` take no value.
+fn takes_value(wrapper: &str, option: &str) -> bool {
+    let options: &[&str] = match wrapper {
+        "sudo" => &["-u", "-g", "-p", "-C", "-D", "-R", "-r", "-t", "-T", "-U", "--user", "--group", "--prompt", "--chdir", "--role", "--type"],
+        "doas" => &["-u", "-C"],
+        "env" => &["-u", "-C", "--unset", "--chdir"],
+        "nice" => &["-n"],
+        "ionice" => &["-c", "-n", "-p", "-P", "-u"],
+        "timeout" => &["-s", "-k", "--signal", "--kill-after"],
+        "xargs" => &["-n", "-I", "-L", "-P", "-d", "-s", "-E", "-a"],
+        "stdbuf" => &["-i", "-o", "-e"],
+        "watch" => &["-n"],
+        "time" => &["-f", "-o"],
+        "exec" => &["-a"],
+        _ => &[],
+    };
+    options.contains(&option)
+}
+
 /// Programs that run another program given later on their line (`ssh host mysql -p..`).
 const LAUNCHERS: [&str; 15] = ["ssh", "docker", "podman", "nerdctl", "kubectl", "oc", "wsl", "su", "runuser", "chroot", "nsenter", "lxc", "incus", "distrobox", "toolbox"];
 
 /// The index of the command word in `words` (what `words_before` returns): the first word that is
 /// not a wrapper, a wrapper's own option or value (`sudo -u root`, `timeout 5`, `cmd /c`) or a
 /// `NAME=value` placed before the program.
-fn command_index(words: &[String]) -> Option<usize> {
+fn command_index(words: &[Word]) -> Option<usize> {
     let mut wrapper: Option<&str> = None;
     let mut k = 0;
     while k < words.len() {
-        let w = words[k].as_str();
+        let w = words[k].name.as_str();
+        let raw = words[k].raw.as_str();
         k += 1;
         if PASS_THROUGH.contains(&w) {
             wrapper = Some(w);
@@ -975,7 +1031,7 @@ fn command_index(words: &[String]) -> Option<usize> {
         }
         let Some(wrap) = wrapper else { return Some(k - 1) };
         if w.starts_with('-') {
-            if !SHELLS.contains(&wrap) && WRAPPER_OPTIONS.contains(&w) {
+            if !SHELLS.contains(&wrap) && takes_value(wrap, raw) {
                 k += 1;
             }
             continue;
@@ -990,12 +1046,23 @@ fn command_index(words: &[String]) -> Option<usize> {
     None
 }
 
-/// Whether the program these words run is one `is` accepts: the command word itself, or, when the
-/// command word only launches another program (`ssh host mysql ..`, `docker exec db mysql ..`),
-/// any word after it. An argument that merely looks like a program (`find /var/lib/mysql`) is not.
-fn runs(words: &[String], is: impl Fn(&str) -> bool) -> bool {
-    let Some(k) = command_index(words) else { return false };
-    is(&words[k]) || (LAUNCHERS.contains(&words[k].as_str()) && words[k + 1..].iter().any(|w| is(w)))
+/// Whether the program these words run is one `is` accepts: the command word itself, or any other
+/// word that is not part of a folder path (`echo "mysql -p.."` writes a command, `winpty mysql ..`
+/// and `ssh host mysql ..` run one), or any word after a launcher, folder or not. A folder part
+/// (`find /var/lib/mysql`) is no program, and a program that only is the pattern of a search tool
+/// (`grep curl -u a:b notes.txt`) is no program either. A `.exe` path is a program.
+fn runs(words: &[Word], is: impl Fn(&str) -> bool) -> bool {
+    let command = command_index(words);
+    if let Some(k) = command {
+        let name = words[k].name.as_str();
+        if is(name) || (LAUNCHERS.contains(&name) && words[k + 1..].iter().any(|w| is(&w.name))) {
+            return true;
+        }
+        if SEARCHERS.contains(&name) {
+            return false;
+        }
+    }
+    words.iter().any(|w| !w.folder && is(&w.name))
 }
 
 /// Programs that take their password attached to a short flag (`-pSecret`). That flag is read as a
@@ -1084,7 +1151,7 @@ fn secret_flags(t: &str) -> String {
         if let Some(after) = rest.strip_prefix("-p") {
             let gap = run(after, |b| b == b' ' || b == b'\t');
             let words = words_before(t, i);
-            let own = words.iter().rposition(|w| w == "sshpass").is_some_and(|p| words[p + 1..].iter().all(|w| w.starts_with('-')));
+            let own = words.iter().rposition(|w| w.name == "sshpass").is_some_and(|p| words[p + 1..].iter().all(|w| w.name.starts_with('-')));
             if gap > 0 && own {
                 let value = &after[gap..];
                 let len = value_span(value, COMMAND_END);
@@ -1649,7 +1716,7 @@ mod tests {
     /// in front of the real program still shows it.
     #[test]
     fn safe019_the_command_word_decides_which_program_it_is() {
-        for c in ["find /var/lib/mysql -perm 644", "cat /etc/mysql/my.cnf -pfoo", "ls -h; echo \"Basic HttpClient\"", "ls -h \"Basic HttpClient\"", "grep curl -u admin:hunter2 notes.txt", "echo curl -u admin:hunter2"] {
+        for c in ["find /var/lib/mysql -perm 644", "cat /etc/mysql/my.cnf -pfoo", "ls -h; echo \"Basic HttpClient\"", "ls -h \"Basic HttpClient\"", "grep curl -u admin:hunter2 notes.txt"] {
             assert_eq!(masked(c), c, "{c}");
         }
         for (raw, shown) in [
@@ -1668,5 +1735,71 @@ mod tests {
         ] {
             assert_eq!(masked(raw), shown, "{raw}");
         }
+    }
+
+    /// FIX-3 item 2a (stand-in review FIX-SOON 1): a Windows folder in front of the program, or a
+    /// command that only writes another command, still shows the program. A path that merely
+    /// contains `mysql` or `curl` stays as typed.
+    #[test]
+    fn safe019_windows_paths_and_commands_that_write_commands_still_show_the_program() {
+        for (raw, shown) in [
+            (r"C:\xampp\mysql\bin\mysql.exe -u root -pS3cret", r"C:\xampp\mysql\bin\mysql.exe -u root -p[hidden]"),
+            (r".\7z.exe a -pS3cret out.7z src", r".\7z.exe a -p[hidden] out.7z src"),
+            (r#"& "C:\Program Files\7-Zip\7z.exe" a -pS3cret x.7z"#, r#"& "C:\Program Files\7-Zip\7z.exe" a -p[hidden] x.7z"#),
+            (r"C:\Windows\System32\curl.exe -u admin:hunter2 https://x", r"C:\Windows\System32\curl.exe -u [hidden] https://x"),
+            ("C:/xampp/mysql/bin/mysql.exe -pS3cret shop", "C:/xampp/mysql/bin/mysql.exe -p[hidden] shop"),
+            ("echo \"mysql -pS3cret\" >> ~/.bashrc", "echo \"mysql -p[hidden]\" >> ~/.bashrc"),
+            ("echo curl -u admin:hunter2", "echo curl -u [hidden]"),
+            ("printf 'mysql -u root -pS3cret' > run.sh", "printf 'mysql -u root -p[hidden]' > run.sh"),
+        ] {
+            assert_eq!(masked(raw), shown, "{raw}");
+        }
+        for c in [r"find C:\xampp\mysql -perm 644", r"cat C:\ProgramData\MySQL\my.ini -pfoo", r"dir C:\tools\curl -u admin:hunter2", "find /var/lib/mysql -perm 644", "ls /opt/curl -u admin:hunter2"] {
+            assert_eq!(masked(c), c, "{c}");
+        }
+    }
+
+    /// FIX-3 item 2b (FIX-SOON 1): wrapper options take a value only where that wrapper's own option
+    /// does (`sudo -u root`, not `sudo -n`), and `then`, `do`, `else`, `!`, `{` and `winpty` pass through.
+    #[test]
+    fn safe019_wrapper_options_and_shell_keywords_do_not_hide_the_program() {
+        for (raw, shown) in [
+            ("sudo -n mysql -pS3cret", "sudo -n mysql -p[hidden]"),
+            ("sudo -i mysql -pS3cret db", "sudo -i mysql -p[hidden] db"),
+            ("sudo -s mysql -pS3cret", "sudo -s mysql -p[hidden]"),
+            ("echo pw | sudo -S mysql -pS3cret", "echo pw | sudo -S mysql -p[hidden]"),
+            ("env -i mysql -pS3cret", "env -i mysql -p[hidden]"),
+            ("sudo -n curl -u admin:hunter2 https://x", "sudo -n curl -u [hidden] https://x"),
+            ("sudo --user root mysql -pS3cret", "sudo --user root mysql -p[hidden]"),
+            ("timeout -s KILL 5 mysql -pS3cret", "timeout -s KILL 5 mysql -p[hidden]"),
+            ("if true; then mysql -pS3cret; fi", "if true; then mysql -p[hidden]; fi"),
+            ("for d in a b; do mysql -pS3cret $d; done", "for d in a b; do mysql -p[hidden] $d; done"),
+            ("if false; then true; else mysql -pS3cret; fi", "if false; then true; else mysql -p[hidden]; fi"),
+            ("! mysql -pS3cret", "! mysql -p[hidden]"),
+            ("{ mysql -pS3cret; }", "{ mysql -p[hidden]; }"),
+            ("winpty mysql -pS3cret", "winpty mysql -p[hidden]"),
+            ("winpty docker exec -it db mysql -pS3cret", "winpty docker exec -it db mysql -p[hidden]"),
+        ] {
+            assert_eq!(masked(raw), shown, "{raw}");
+        }
+        // Where the command word is a search tool, the program name is only its pattern; the option
+        // of a wrapper in front of it must not push `curl` into the command word's place.
+        for c in ["sudo -n grep curl -u admin:hunter2 notes.txt", "env -i grep curl -u admin:hunter2 notes.txt", "sudo -S grep curl -u admin:hunter2 notes.txt", "sudo -u root grep curl -u admin:hunter2 notes.txt"] {
+            assert_eq!(masked(c), c, "{c}");
+        }
+    }
+
+    /// FIX-3 item 3 (FIX-SOON 2): a lone `'` inside a double-quoted argument is text, so a `;` or `&`
+    /// in that argument does not end the command and the program stays known.
+    #[test]
+    fn safe019_a_lone_apostrophe_inside_double_quotes_is_text_and_does_not_hide_the_program() {
+        assert_eq!(masked("mysql -u root -e \"select 1; -- don't\" -pS3cret"), "mysql -u root -e \"select 1; -- don't\" -p[hidden]");
+        assert_eq!(masked("curl \"https://x/?q=it's&a=1\" -u admin:hunter2"), "curl \"https://x/?q=it's&a=1\" -u [hidden]");
+        assert_eq!(masked("mysql -e \"it's; fine\" -e 'a;b' -pS3cret"), "mysql -e \"it's; fine\" -e 'a;b' -p[hidden]");
+        assert_eq!(masked("bash -c \"echo don't; mysql -pS3cret\""), "bash -c \"echo don't; mysql -p[hidden]\"");
+        assert_eq!(masked("bash -c \"mysql -e 'a; b' -pS3cret\""), "bash -c \"mysql -e 'a; b' -p[hidden]\"");
+        assert_eq!(masked("bash -c \"curl -d '{\\\"x\\\":1}' -u admin:hunter2 x\""), "bash -c \"curl -d '{\\\"x\\\":1}' -u [hidden] x\"");
+        // A separator outside the quote still ends the command.
+        assert_eq!(masked("mysql -e \"it's\"; find . -perm 644"), "mysql -e \"it's\"; find . -perm 644");
     }
 }
