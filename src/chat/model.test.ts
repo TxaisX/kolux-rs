@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
-import { HAND_CAP, SHELL_OFFER, agentsView, handInto, handTargets, handText, viewedFirst, applyRead, chatCovers, chatOffer, combine, pickChat, typingInto, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type OfferInput } from "./model";
+import { DRAFT_LIMIT } from "./composer";
+import { HAND_CAP, SHELL_OFFER, agentsView, handInto, handOver, handTargets, handText, handTooLongText, viewedFirst, applyRead, chatCovers, chatOffer, combine, pickChat, typingInto, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type OfferInput } from "./model";
 
 const base: OfferInput = { credited: "claude", screen: "agents", switchOn: false, showingChat: false, launching: false, readable: true };
 const item = (id: string, role: ChatItem["role"], text: string, at: number): ChatItem => ({ id, role, kind: "text", text, at });
@@ -143,4 +144,36 @@ test("T-080 (VIEW-020): a result path with a space arrives quoted, and the typed
   expect(handText("/compact keeps the context small")).toBe("/compact keeps the context small");
   expect(handInto("check this:  ", "the result")).toBe("check this:\n\nthe result");
   expect(handInto("", "the result")).toBe("the result");
+});
+
+test("FIX-SOON 2 of the 38be105 review: a $ in a quoted path arrives as typed", () => {
+  expect(handText("C:/My Docs/a$&b.md")).toBe('"C:/My Docs/a$&b.md"');
+  expect(handText("C:/My Docs/$$x.md")).toBe('"C:/My Docs/$$x.md"');
+  expect(handText("Saved:\n~/my notes/$`a$'b.md\nok")).toBe("Saved:\n\"~/my notes/$`a$'b.md\"\nok");
+});
+
+test("FIX-SOON 1 of the 38be105 review: a hand-over longer than a draft can be refuses and keeps the typed draft", () => {
+  const drafts = new Map<number, string>([[2, "check this:"]]);
+  const said: string[] = [];
+  const picked: number[] = [];
+  const io = {
+    draftOf: (k: number) => drafts.get(k) ?? "",
+    // The real keepDraft deletes a draft over DRAFT_LIMIT; the fix must never call it with one.
+    keepDraft: (k: number, t: string) => (t.length > DRAFT_LIMIT ? drafts.delete(k) : void drafts.set(k, t)),
+    pick: (k: number) => void picked.push(k),
+    say: (t: string) => void said.push(t),
+  };
+  // A result near the limit with a draft already there: refused, draft kept, screen stays, note says so.
+  expect(handOver(2, "docs", "x".repeat(DRAFT_LIMIT - 5), io)).toBe(false);
+  expect(drafts.get(2)).toBe("check this:");
+  expect(picked).toEqual([]);
+  expect(said).toEqual([handTooLongText("docs")]);
+  // A result that fits goes after the draft and the screen moves.
+  expect(handOver(2, "docs", "the result", io)).toBe(true);
+  expect(drafts.get(2)).toBe("check this:\n\nthe result");
+  expect(picked).toEqual([2]);
+  expect(said).toHaveLength(1);
+  // A result over the limit on an empty box is refused too, and the box stays empty.
+  expect(handOver(5, "api", "y".repeat(DRAFT_LIMIT + 1), io)).toBe(false);
+  expect(drafts.has(5)).toBe(false);
 });

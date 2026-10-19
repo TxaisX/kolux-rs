@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import type { KitWait } from "../kits/useKits";
 import { ASKING_NOTE } from "./composer";
-import { KIT_NOTICE_MS, askFirstText, askingText, failedText, hooksAbsent, kitInFlight, kitNotices, kitPasted, kitStep, kitTickEntry, kitWait, pasteUnchecked, readyText, sendPrompt, stoppedText, tooLongText, type KitTickDeps } from "./kitPrompt";
+import { KIT_NOTICE_MS, askFirstText, askingText, failedText, hooksAbsent, kitInFlight, kitNotices, kitPasted, kitStep, kitTickEntry, kitWait, noticeSeen, pasteUnchecked, readyText, sendPrompt, stoppedText, tooLongText, type KitTickDeps } from "./kitPrompt";
 import { LIMIT } from "../terminal/paste";
 import { UNSEEN_NOTE, type SendOutcome } from "./send";
 
@@ -16,6 +16,33 @@ describe("which panes Kolux knows have no hooks", () => {
     expect(hooksAbsent("grok", true)).toBe(true);
     expect(hooksAbsent(undefined, true)).toBe(true);
     expect(hooksAbsent("claude", true)).toBe(false);
+  });
+
+  it("AFTER 1 of the 38be105 review: the picked agent id is what counts (gemini, amp, antigravity have routes; the vendor mark of their pane is only shell)", () => {
+    expect(hooksAbsent("shell", true, "gemini")).toBe(false);
+    expect(hooksAbsent("shell", true, "amp")).toBe(false);
+    expect(hooksAbsent("claude", true, "claude-agent-teams")).toBe(false);
+    expect(hooksAbsent("claude", true, "grok")).toBe(true);
+    expect(hooksAbsent("shell", false, "gemini")).toBe(true);
+  });
+});
+
+describe("where a kit notice counts as seen in place (FIX-SOON 3 of the 38be105 review)", () => {
+  it("only on the role's own workspace, its terminals screen, with no page open", () => {
+    expect(noticeSeen(true, true, false)).toBe(true);
+    expect(noticeSeen(true, false, false)).toBe(false); // Agents, Board, Inbox or Tower screen
+    expect(noticeSeen(true, true, true)).toBe(false); // a page open over the terminals
+    expect(noticeSeen(false, true, false)).toBe(false); // another workspace
+  });
+
+  it("on the Agents screen of the same workspace the notice toasts once, and again never", async () => {
+    const said: string[] = [];
+    const w = wait();
+    const r = { waiting: [w], sent: {} as Record<string, number> };
+    const deps = (): KitTickDeps => ({ now: 0, why: () => undefined, absent: true, here: noticeSeen(true, false, false), paste: () => Promise.resolve(null), say: (t) => void said.push(t), changed: () => {}, stamp: () => 9 });
+    await kitTickEntry(r, w, deps());
+    await kitTickEntry(r, w, deps());
+    expect(said).toEqual([readyText("Reviewer", "Codex")]);
   });
 });
 

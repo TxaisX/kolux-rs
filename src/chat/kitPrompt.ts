@@ -11,9 +11,17 @@ import { tooLong, type SendOutcome } from "./send";
 export const KIT_NOTICE_MS = 60_000;
 /** The agents whose hooks Kolux installs, so their readings can be expected. Codex is not one yet:
  * its hooks are not written (T-025-e), so a Codex seat counts as hookless. */
-export const HOOK_AGENTS: readonly string[] = ["claude", "gemini", "antigravity", "amp"];
-/** Kolux knows it will never hear from this pane's agent: hooks are off, or the agent has no route. */
-export const hooksAbsent = (agent: string | undefined, hooksOn: boolean) => !hooksOn || agent === undefined || !HOOK_AGENTS.includes(agent);
+export const HOOK_AGENTS: readonly string[] = ["claude", "claude-agent-teams", "gemini", "antigravity", "amp"];
+/** Kolux knows it will never hear from this pane's agent: hooks are off, or the agent has no route.
+ * Stand-in review of 38be105, AFTER 1: `agentId` (the picked agent: gemini, amp...) is checked when
+ * the pane has one; `agent` is only the vendor mark (claude, codex or shell). */
+export const hooksAbsent = (agent: string | undefined, hooksOn: boolean, agentId?: string) => {
+  const id = agentId ?? agent;
+  return !hooksOn || id === undefined || !HOOK_AGENTS.includes(id);
+};
+/** Stand-in review of 38be105, FIX-SOON 3: a notice is seen in place only when the role's own
+ * workspace is on screen on its terminals screen with no page open; anywhere else it toasts once. */
+export const noticeSeen = (sameWorkspace: boolean, terminalsScreen: boolean, pageOpen: boolean) => sameWorkspace && terminalsScreen && !pageOpen;
 
 export const readyText = (role: string, agent: string) => `${role} is ready for its prompt, but Kolux can't see whether ${agent} is asking something.`;
 export const askingText = (role: string, agent: string) => `${role}'s prompt is waiting: ${agent} is asking something in its terminal. Answer it there.`;
