@@ -774,3 +774,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · skills FIX-6 · the stand-in review skills-efa2f15a-standin-review.md (items 1-6, AFTER 1-5) as given in the coordinator brief; this tree's own skill_delete.rs and skills.rs (spots, places, claude_plugins); Rust std docs for Path::is_absolute / is_dir; no outside source
 > 2026-10-19 · hooks FIX-8 · the stand-in review hooks-060af6b8-standin-review.md (Send-to-build 5-8); this tree's own agent_hooks/tests.rs; held-append timing measured on this PC in scratch folders; no outside source
 > 2026-10-19 · reliability FIX-7 · the stand-in review reliability-1b4b2dbd-standin-review.md (Send-to-build 4-6); this tree's own scm.rs and evidence; no outside source
+> 2026-10-19 · reliability FIX-8 · the stand-in review reliability-5bf0d5ce-standin-review.md (Send-to-build 4-6); this tree's own scm.rs and evidence; no outside source
