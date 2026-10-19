@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, Close } from "../chrome/icons";
 import { paint, rangesIn } from "./notefind";
-import { foldKey, hasChildren, loadFolded, outline, saveFolded, visibleEntries } from "./toc";
+import { foldKey, hasChildren, headingIndex, loadFolded, outline, saveFolded, visibleEntries } from "./toc";
 
 /** What opened the bar: replace or not, the text to start with, and a count so a repeat refocuses. */
 export type FindOpen = { replace: boolean; seed: string | null; n: number };
@@ -157,6 +157,15 @@ export function Contents({ md, path, root, onClose }: { md: string; path: string
     setFolded(next);
   };
   const top = Math.min(...list.map((e) => e.level));
+  // FIX-5 (council P2 P8): the heading with the entry's own level and words, not the one at its place in the list.
+  const jump = (i: number) => {
+    const found = Array.from(root()?.querySelectorAll(HEADS) ?? []);
+    const at = headingIndex(list, i, found.map((h) => ({ level: Number(h.tagName.slice(1)), text: h.textContent ?? "" })));
+    // Words that differ in the drawn page (an entity, an embedded element) fall back to the place in
+    // the list, which is reliable only when the page draws exactly as many headings as the outline has.
+    const target = at >= 0 ? found[at] : found.length === list.length ? found[i] : undefined;
+    target?.scrollIntoView({ block: "start" });
+  };
   return (
     <nav className="note-toc" aria-label="Contents">
       <div className="head">
@@ -179,7 +188,7 @@ export function Contents({ md, path, root, onClose }: { md: string; path: string
               ) : (
                 <span className="fold" />
               )}
-              <button className="entry" title={e.text} onClick={() => root()?.querySelectorAll(HEADS)[i]?.scrollIntoView({ block: "start" })}>
+              <button className="entry" title={e.text} onClick={() => jump(i)}>
                 {e.text || "(untitled)"}
               </button>
             </li>

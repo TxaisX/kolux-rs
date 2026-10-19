@@ -2311,7 +2311,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                 setAgentSel(key);
                 setFocused(key);
               }} />}
-          {tower && <TowerView rows={towerRows(towerSeats())} usage={usageByAccount(towerSeats(), plan)} now={now} onOpen={openPane} />}
+          {tower && <TowerView rows={towerRows(towerNow)} usage={usageByAccount(towerNow, plan)} now={now} onOpen={openPane} />}
           {floor && <FloorView />}
           {agentsScreen && selected === null && (
             <div className="empty">
