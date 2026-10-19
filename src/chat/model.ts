@@ -3,6 +3,7 @@
 // messages; this module decides whether a pane may show chat at all, folds each read into the
 // conversation, merges in what the hooks and the terminal said, and decides when the live preview
 // of a reply being written is worth showing.
+import { DRAFT_LIMIT } from "./composer";
 import type { Tool } from "./steps";
 
 /** One message as the transcript reader hands it over. */
@@ -120,12 +121,31 @@ export const handText = (result: string) =>
     .split("\n")
     .map((line) => {
       const t = line.trim();
-      return t.includes(" ") && /^([A-Za-z]:[\\/]|~[\\/]|\\\\|\/[^/\s]+\/)\S/.test(t) && !/[.!?:,;]$/.test(t) && !t.includes(": ") ? line.replace(t, `"${t}"`) : line;
+      return t.includes(" ") && /^([A-Za-z]:[\\/]|~[\\/]|\\\\|\/[^/\s]+\/)\S/.test(t) && !/[.!?:,;]$/.test(t) && !t.includes(": ") ? line.replace(t, () => `"${t}"`) : line;
     })
     .join("\n");
 
 /** VIEW-020: what the user already typed in the target's box stays, the result goes after it. */
 export const handInto = (draft: string, text: string) => (draft.trim() ? `${draft.trimEnd()}\n\n${text}` : text);
+
+/** Stand-in review of 38be105, FIX-SOON 1: the note when a result plus the target's draft is longer than a draft can be. */
+export const handTooLongText = (label: string) => `That result is too long to add to ${label}'s box beside what is typed there. Nothing was sent and the draft is kept.`;
+
+export type HandDeps = { draftOf: (key: number) => string; keepDraft: (key: number, text: string) => void; pick: (key: number) => void; say: (text: string) => void };
+/** VIEW-020: puts `result` after the draft kept for `to` and moves the screen there. When the two
+ * together are longer than DRAFT_LIMIT (keepDraft would delete the draft, VIEW-020 keeps it), the
+ * draft stays as it is, `say` tells why, and the screen stays. Nothing is ever written to a terminal.
+ * True when it was handed over. */
+export function handOver(to: number, label: string, result: string, io: HandDeps): boolean {
+  const merged = handInto(io.draftOf(to), handText(result));
+  if (merged.length > DRAFT_LIMIT) {
+    io.say(handTooLongText(label));
+    return false;
+  }
+  io.keepDraft(to, merged);
+  io.pick(to);
+  return true;
+}
 
 /** Council FIX-1: with nothing picked, the box types into the first pane that can chat, so it says
  * which one; with a pane picked the rail already shows it. */

@@ -11,7 +11,7 @@ import { locale } from "../language";
 import "./chat.css";
 import { fold, thoughtIds as idsOf, toggled, type View } from "./steps";
 import { NoticeRow, PlanRow, StepRow, ThoughtRow } from "./StepRows";
-import { SHELL_OFFER, agentsView, handInto, handTargets, handText, viewedFirst, applyRead, capPending, chatCovers, chatOffer, combine, pickChat, typingInto, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row } from "./model";
+import { SHELL_OFFER, agentsView, handOver, handTargets, viewedFirst, applyRead, capPending, chatCovers, chatOffer, combine, pickChat, typingInto, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row } from "./model";
 import { Composer, type ComposerHandle } from "./MessageBox";
 import { draftOf, forwardsToBox, keepDraft, nearBottom } from "./composer";
 import { sessionLabel } from "../agents/rail";
@@ -27,7 +27,7 @@ type Support = { agent?: string; launching: boolean; readable: boolean };
  * `ptyOf`: the pane's program session, asked at send time. `target`: names the pane the box types into.
  * `aside`: drawn at the top right (the Agents screen's Show terminal switch). `hand`: VIEW-020, the
  * sessions a finished turn's reply can be handed to, and what handing it does. */
-export type Hand = { targets: { key: number; label: string }[]; onHand: (key: number, text: string) => void };
+export type Hand = { targets: { key: number; label: string }[]; onHand: (key: number, text: string) => void; /** Why the last hand-over was refused (FIX-SOON 1), shown beside the menu. */ note?: string | null };
 export default function ChatView({ pane, agent, preview = null, pending = [], hookState, stateOf, ptyOf, target = null, aside, hand }: { pane: ChatPane; agent?: string; preview?: Preview | null; pending?: Pending[]; hookState?: string; stateOf?: (key: number) => string | undefined; ptyOf?: (key: number) => number | undefined; target?: string | null; aside?: ReactNode; hand?: Hand }) {
   const [items, setItems] = useState<ChatItem[]>([]);
   const [state, setState] = useState<ChatRead["state"]>("loading");
@@ -153,6 +153,7 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
       {(aside || result) && (
         <div className="chat-head">
           {result && hand && <HandOff targets={hand.targets} onPick={(k) => hand.onHand(k, result)} />}
+          {result && hand?.note && <span className="chat-hand-note" role="status">{hand.note}</span>}
           {aside}
         </div>
       )}
@@ -242,7 +243,7 @@ function ChatRow({ row, onImage }: { row: Row; onImage: (src: string) => void })
 /** The Agents screen's chat: the picked pane's chat when it can show one (`pickChat`). `hook`: the
  * window's hook readings by pane, for the box's note; `stateOf`: the same readings read live, so a
  * send stops on its own pane's menu even after the screen moved to another pane. */
-export function AgentsChat({ panes, focused, ptyOf, hook, stateOf, onPick }: { panes: ChatPane[]; focused: number | null; ptyOf?: (key: number) => number | undefined; hook?: Record<number, string | undefined>; stateOf?: (key: number) => string | undefined; onPick?: (key: number) => void }) {
+export function AgentsChat({ panes, focused, ptyOf, hook, stateOf, onPick, taskOf }: { panes: ChatPane[]; focused: number | null; ptyOf?: (key: number) => number | undefined; hook?: Record<number, string | undefined>; stateOf?: (key: number) => string | undefined; onPick?: (key: number) => void; taskOf?: (key: number) => string | undefined }) {
   const [offers, setOffers] = useState<Record<number, Offer & { agent?: string }>>({});
   // VIEW-019 (T-050-b): the sessions the user flipped to their terminal, kept while the screen is open.
   const [forced, setForced] = useState<ReadonlySet<number>>(() => new Set());
@@ -276,6 +277,9 @@ export function AgentsChat({ panes, focused, ptyOf, hook, stateOf, onPick }: { p
     if (shownKey !== null) setViewed((v) => (v[0] === shownKey ? v : viewedFirst(v, shownKey)));
   }, [shownKey]);
   const view = agentsView(shown, forced);
+  // FIX-SOON 1: why a hand-over was refused; it goes when the screen moves to another session.
+  const [handNote, setHandNote] = useState<string | null>(null);
+  useEffect(() => setHandNote(null), [shownKey]);
   // Shown before the screen's placeholder, which `.chat + .empty` then hides; `.chat.cover` hides
   // the terminal after it (the terminal stays mounted, so flipping back never restarts it).
   if (view === "none" || shown === null) return null;
@@ -295,10 +299,12 @@ export function AgentsChat({ panes, focused, ptyOf, hook, stateOf, onPick }: { p
   // VIEW-020: the result goes into the target's kept draft after what is typed there, then the
   // screen moves to the target, whose box opens with it.
   const hand: Hand = {
-    targets: handTargets(panes, key, offers, viewed).map((p) => ({ key: p.key, label: sessionLabel(p) })),
+    targets: handTargets(panes, key, offers, viewed).map((p) => ({ key: p.key, label: sessionLabel(p, taskOf?.(p.key)) })),
+    note: handNote,
     onHand: (to, text) => {
-      keepDraft(to, handInto(draftOf(to), handText(text)));
-      onPick?.(to);
+      setHandNote(null);
+      const label = sessionLabel(panes.find((p) => p.key === to) ?? { key: to, cwd: null }, taskOf?.(to));
+      handOver(to, label, text, { draftOf, keepDraft, pick: (k) => onPick?.(k), say: setHandNote });
     },
   };
   return <ChatView key={key} pane={shown} agent={offers[key]?.agent} hookState={hook?.[key]} stateOf={stateOf} ptyOf={ptyOf} target={typingInto(focused, shown)} aside={<TerminalSwitch on={false} onFlip={(on) => flip(key, on)} />} hand={hand} />;

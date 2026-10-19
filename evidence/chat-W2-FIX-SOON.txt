@@ -55,8 +55,9 @@ Tests:
 Readings:
   red (G:/Temp/chat-w1-logs/w2-fs-red.log): kitPrompt.test + hold.test 9 failed | 31 passed (the
     9 new behaviour tests; the FIX-SOON 4 card-answer test already passed, it pins existing code).
-  green (w2-fs-green.log after the redraw-count update; w2-fs-related.log): vitest related
-    kitPrompt.ts send.ts KitNotice.tsx: 4 files, 57 passed (57).
+  green (w2-fs-related.log, after the redraw-count update): vitest related kitPrompt.ts send.ts
+    KitNotice.tsx: 4 files, 57 passed (57). w2-fs-green.log is the run BEFORE that update (1 failed |
+    39 passed, "expected 2 to be 1"); it is not the green.
   lane tsc --noEmit: exit 0 (w2-fs-tsc.log).
   scratch worktrees with the patch applied and lane src/chat copied in: tsc --noEmit exit 0 on
     136bb62 (w2-fs-chat-w2-wt-tsc.log) and 12496de (w2-fs-chat-w2-wt12-tsc.log).
