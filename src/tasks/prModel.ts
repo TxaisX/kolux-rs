@@ -6,10 +6,11 @@ import type { Person } from "./repoFacts";
 
 export type PrReviewer = { login: string; state: string };
 export type PrCheck = { id: number; name: string; status: string; conclusion: string; url: string; runId: number | null };
-export type PrPageData = { number: number; title: string; body: string; state: string; draft: boolean; url: string; author: string; headRef: string; headSha: string; baseRef: string; mergeableState: string; labels: { name: string; color: string }[]; assignees: string[]; reviewers: PrReviewer[]; reactions: { content: string; count: number }[]; additions: number; deletions: number; changedFiles: number; reviewsTruncated: boolean };
-export type PrFiles = { files: PrFile[]; truncated: boolean };
-export type PrThreads = { threads: PrThread[]; truncated: boolean };
-export type PrFile ={ filename: string; status: string; additions: number; deletions: number; patch: string };
+export type PrPageData = { number: number; title: string; body: string; state: string; draft: boolean; url: string; author: string; headRef: string; headSha: string; baseRef: string; mergeableState: string; labels: { name: string; color: string }[]; assignees: string[]; reviewers: PrReviewer[]; reactions: { content: string; count: number }[]; additions: number; deletions: number; changedFiles: number; reviewsTruncated: boolean; reviewsLimit: number };
+/** `limit`: how many items the backend reads at most; `truncated` says there were more. */
+export type PrFiles = { files: PrFile[]; truncated: boolean; limit: number };
+export type PrThreads = { threads: PrThread[]; truncated: boolean; limit: number };
+export type PrFile = { filename: string; status: string; additions: number; deletions: number; patch: string };
 export type PrComment = { id: number; author: string; body: string; at: string };
 export type PrThread = { id: number; path: string; line: number | null; comments: PrComment[] };
 
@@ -56,7 +57,7 @@ export function rerunTargets(checks: PrCheck[], failedOnly: boolean): number[] {
   const runs: number[] = [];
   for (const c of checks) {
     if (c.runId === null || runs.includes(c.runId)) continue;
-    if (failedOnly && !checks.some((x) => x.runId === c.runId && x.status === "completed" && ["failure", "timed_out", "cancelled"].includes(x.conclusion))) continue;
+    if (failedOnly && !checks.some((x) => x.runId === c.runId && x.status === "completed" && ["failure", "timed_out", "cancelled", "action_required"].includes(x.conclusion))) continue;
     runs.push(c.runId);
   }
   return runs;
@@ -93,12 +94,9 @@ export function mergeBox(p: Pick<PrPageData, "state" | "draft" | "mergeableState
   if (p.mergeableState === "dirty") return { canMerge: false, reason: "Has conflicts with the base branch." };
   if (p.mergeableState === "blocked") return { canMerge: false, reason: "Blocked: GitHub is waiting for reviews or checks." };
   if (p.mergeableState === "behind") return { canMerge: false, reason: "Behind the base branch; update it first." };
-  if (!["clean", "has_hooks", "unstable"].includes(p.mergeableState)) return { canMerge: false, reason: "GitHub is still checking whether it can merge" };
+  if (!["clean", "has_hooks", "unstable"].includes(p.mergeableState)) return { canMerge: false, reason: "GitHub is still checking whether it can merge." };
   return { canMerge: true, reason: p.mergeableState === "unstable" ? "Some checks are not passing." : "Ready to merge." };
 }
-
-/** Files, reviews and review comments are read 100 at a time up to this many; past it the page says so. */
-export const PAGE_LIMIT = 500;
 
 export const MERGE_METHODS: { id: "merge" | "squash" | "rebase"; label: string }[] = [
   { id: "merge", label: "Create a merge commit" },

@@ -3,7 +3,7 @@
 // component, mounted into the small stand-in DOM in fakeDom.ts and clicked like a user would.
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { byLabel, byText, click, type FakeDocument, type FakeNode, installDom, mount, typeInto, until, withText } from "./fakeDom";
+import { byLabel, byText, click, type FakeDocument, type FakeNode, installDom, mount, settle, typeInto, until, withText } from "./fakeDom";
 import type { PrPageData } from "./prModel";
 
 const h = vi.hoisted(() => ({
@@ -43,6 +43,7 @@ const page = (over: Partial<PrPageData> = {}): PrPageData => ({
   deletions: 1,
   changedFiles: 1,
   reviewsTruncated: false,
+  reviewsLimit: 500,
   ...over,
 });
 const thread = { id: 100, path: "src/a.ts", line: 4, comments: [{ id: 100, author: "bo", body: "why?", at: "2026-10-01T00:00:00Z" }, { id: 101, author: "ana", body: "because", at: "2026-10-02T00:00:00Z" }] };
@@ -55,8 +56,8 @@ beforeEach(() => {
   h.answers = {
     pr_page: page(),
     pr_checks: [],
-    pr_threads: { threads: [thread], truncated: false },
-    pr_files: { files: [{ filename: "src/a.ts", status: "modified", additions: 3, deletions: 1, patch: "@@" }], truncated: false },
+    pr_threads: { threads: [thread], truncated: false, limit: 500 },
+    pr_files: { files: [{ filename: "src/a.ts", status: "modified", additions: 3, deletions: 1, patch: "@@" }], truncated: false, limit: 500 },
     github_people: [],
     pr_merge: null,
     pr_reply: null,
@@ -106,6 +107,49 @@ describe("T-232-c the pull request page only writes when told to", () => {
     await until(() => sent("pr_merge").length > 0, "the merge");
     expect(sent("pr_merge")).toHaveLength(1);
     expect(sent("pr_merge")[0].args).toEqual({ host: "github.com", repo: "acme/app", number: 7, method: "squash", confirmed: true, sha: "abc1234def" });
+  });
+
+  it("a Reload that finds new commits closes the merge confirm, says so, and reads the files again", async () => {
+    const c = await open();
+    await click(c, withText(c, "button", "Files changed")[0]);
+    await until(() => withText(c, "summary", "src/a.ts").length > 0, "the files");
+    expect(sent("pr_files")).toHaveLength(1);
+    await click(c, withText(c, "button", "Conversation")[0]);
+    await click(c, byText(c, "button", "Merge...")[0]);
+    expect(byLabel(c, "div", "Confirm merge")).toHaveLength(1);
+    // someone pushes: the next read of the page answers a new head commit
+    h.answers.pr_page = page({ headSha: "fed9876cba" });
+    await click(c, byText(c, "button", "Reload")[0]);
+    await until(() => sent("pr_threads").length > 1, "the reload");
+    await settle();
+    expect(byLabel(c, "div", "Confirm merge")).toHaveLength(0);
+    expect(mergeBox(c)).toContain("New commits were pushed");
+    expect(mergeBox(c)).toContain("check Files changed again");
+    // the old diff is gone: opening Files changed asks for the new one
+    await click(c, withText(c, "button", "Files changed")[0]);
+    await settle();
+    expect(sent("pr_files")).toHaveLength(2);
+    // and a merge now pins the new head, after both clicks again
+    await click(c, withText(c, "button", "Conversation")[0]);
+    await click(c, byText(c, "button", "Merge...")[0]);
+    await click(c, byText(c, "button", "Yes, merge it")[0]);
+    await until(() => sent("pr_merge").length > 0, "the merge");
+    expect(sent("pr_merge")[0].args).toMatchObject({ sha: "fed9876cba" });
+  });
+
+  it("a Reload on the same head leaves the confirm and the files alone", async () => {
+    const c = await open();
+    await click(c, withText(c, "button", "Files changed")[0]);
+    await until(() => withText(c, "summary", "src/a.ts").length > 0, "the files");
+    await click(c, withText(c, "button", "Conversation")[0]);
+    await click(c, byText(c, "button", "Merge...")[0]);
+    await click(c, byText(c, "button", "Reload")[0]);
+    await until(() => sent("pr_threads").length > 1, "the reload");
+    await settle();
+    expect(byLabel(c, "div", "Confirm merge")).toHaveLength(1);
+    expect(mergeBox(c)).not.toContain("New commits were pushed");
+    await click(c, withText(c, "button", "Files changed")[0]);
+    expect(sent("pr_files")).toHaveLength(1);
   });
 
   it("Cancel on the confirm step sends nothing and closes it", async () => {
@@ -162,14 +206,14 @@ describe("T-232-c the pull request page only writes when told to", () => {
   });
 
   it("says when files, review threads or reviews were cut at the page limit", async () => {
-    h.answers.pr_files = { files: [{ filename: "src/a.ts", status: "modified", additions: 3, deletions: 1, patch: "@@" }], truncated: true };
-    h.answers.pr_threads = { threads: [thread], truncated: true };
-    h.answers.pr_page = page({ reviewsTruncated: true });
+    h.answers.pr_files = { files: [{ filename: "src/a.ts", status: "modified", additions: 3, deletions: 1, patch: "@@" }], truncated: true, limit: 250 };
+    h.answers.pr_threads = { threads: [thread], truncated: true, limit: 250 };
+    h.answers.pr_page = page({ reviewsTruncated: true, reviewsLimit: 250 });
     const c = await open();
-    expect(mergeBox(c)).toContain("Showing the first 500 review comments");
-    expect(mergeBox(c)).toContain("Showing the first 500 reviews");
+    expect(mergeBox(c)).toContain("Showing the first 250 review comments");
+    expect(mergeBox(c)).toContain("Showing the first 250 reviews");
     await click(c, withText(c, "button", "Files changed")[0]);
     await until(() => withText(c, "summary", "src/a.ts").length > 0, "the files");
-    expect(mergeBox(c)).toContain("Showing the first 500 files");
+    expect(mergeBox(c)).toContain("Showing the first 250 files");
   });
 });

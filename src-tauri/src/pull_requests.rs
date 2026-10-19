@@ -19,6 +19,8 @@ const PER_PAGE: usize = 100;
 /// Files, reviews and review comments are read this many pages deep (500 each); past that the page
 /// says it shows the first 500 (FIX-1, review FIX-SOON 2).
 const PAGE_CAP: usize = 5;
+/// What one list read can hold; sent with every answer so the page never keeps its own copy.
+const READ_LIMIT: usize = PAGE_CAP * PER_PAGE;
 /// The reactions GitHub accepts.
 const REACTIONS: [&str; 8] = ["+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"];
 
@@ -66,6 +68,8 @@ pub struct PrPage {
     pub changed_files: u64,
     /// More reviews exist than were read (the page says the reviewer states may be stale).
     pub reviews_truncated: bool,
+    /// How many reviews are read at most; the page names it when `reviews_truncated`.
+    pub reviews_limit: usize,
 }
 
 /// A pull request's files; `truncated` when GitHub has more than the page reads.
@@ -73,6 +77,8 @@ pub struct PrPage {
 pub struct PrFiles {
     pub files: Vec<PrFile>,
     pub truncated: bool,
+    /// How many files are read at most (the page says "the first N" from this, not its own copy).
+    pub limit: usize,
 }
 
 /// A pull request's review threads; `truncated` when GitHub has more comments than the page reads.
@@ -80,6 +86,8 @@ pub struct PrFiles {
 pub struct PrThreads {
     pub threads: Vec<PrThread>,
     pub truncated: bool,
+    /// How many review comments are read at most.
+    pub limit: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -206,6 +214,7 @@ pub fn page_of(pull: &Value, reviews: &Value, issue: &Value) -> Result<PrPage, S
         deletions: n(&pull["deletions"]),
         changed_files: n(&pull["changed_files"]),
         reviews_truncated: false,
+        reviews_limit: READ_LIMIT,
     })
 }
 
@@ -307,7 +316,7 @@ pub fn read_page(gh: &Path, host: &str, repo: &str, number: u64) -> Result<PrPag
 
 pub fn read_files(gh: &Path, host: &str, repo: &str, number: u64) -> Result<PrFiles, String> {
     let (all, truncated) = read_all(gh, host, &pull_path(host, repo, number, "files")?)?;
-    Ok(PrFiles { files: files_of(&all), truncated })
+    Ok(PrFiles { files: files_of(&all), truncated, limit: READ_LIMIT })
 }
 
 /// A commit id as GitHub prints it: 7 to 64 hex digits.
@@ -324,7 +333,7 @@ pub fn read_checks(gh: &Path, host: &str, repo: &str, sha: &str) -> Result<Vec<P
 
 pub fn read_threads(gh: &Path, host: &str, repo: &str, number: u64) -> Result<PrThreads, String> {
     let (all, truncated) = read_all(gh, host, &pull_path(host, repo, number, "comments")?)?;
-    Ok(PrThreads { threads: threads_of(&all), truncated })
+    Ok(PrThreads { threads: threads_of(&all), truncated, limit: READ_LIMIT })
 }
 
 /// One write: `method` on `path`, the JSON body (when there is one) on standard input.
@@ -443,6 +452,18 @@ pub fn merge(gh: &Path, host: &str, repo: &str, number: u64, method: &str, confi
     Ok(s(&v["sha"]))
 }
 
+/// The merge, only for a repository added in Kolux (stand-in review FIX-BEFORE 3): `remotes` is one
+/// `git config --get-regexp` text per added project, and `host/owner/name` must be a GitHub remote of
+/// one of them. The page already hides Merge for other repositories; this keeps the rule when the
+/// command is called any other way. Nothing reaches gh when it is refused.
+pub fn merge_in_added(gh: &Path, remotes: &[String], (host, repo): (&str, &str), number: u64, method: &str, confirmed: bool, sha: &str) -> Result<String, String> {
+    let added = repo.split_once('/').is_some_and(|(owner, name)| remotes.iter().any(|r| crate::pr_checkout::has_repo(r, host, owner, name)));
+    if !added {
+        return Err("Add this repository in Kolux to merge from here.".into());
+    }
+    merge(gh, host, repo, number, method, confirmed, sha)
+}
+
 async fn blocking<T: Send + 'static>(f: impl FnOnce(&Path) -> Result<T, String> + Send + 'static) -> Result<T, String> {
     tauri::async_runtime::spawn_blocking(move || f(&gh_program()?)).await.map_err(|e| e.to_string())?
 }
@@ -507,8 +528,14 @@ pub async fn pr_reply(host: String, repo: String, number: u64, comment: u64, bod
 }
 
 #[tauri::command]
-pub async fn pr_merge(host: String, repo: String, number: u64, method: String, confirmed: bool, sha: String) -> Result<String, String> {
-    blocking(move |gh| merge(gh, &host, &repo, number, &method, confirmed, &sha)).await
+pub async fn pr_merge(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, host: String, repo: String, number: u64, method: String, confirmed: bool, sha: String) -> Result<String, String> {
+    // the folders of the projects added in Kolux; the lock is held only to read that list
+    let paths: Vec<String> = crate::projects::load_projects(&*store.lock().map_err(|e| e.to_string())?).into_iter().map(|p| p.path).collect();
+    blocking(move |gh| {
+        let remotes: Vec<String> = paths.iter().map(|p| crate::pr_checkout::remotes(Path::new(p))).collect();
+        merge_in_added(gh, &remotes, (&host, &repo), number, &method, confirmed, &sha)
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -733,6 +760,28 @@ mod tests {
     }
 
     #[test]
+    fn a_merge_is_refused_for_a_repository_no_added_project_has_as_a_remote() {
+        let (gh, dir) = stand_in("pr-merge-added", &json!({ "merged": true, "sha": "deadbeef" }));
+        let mine = vec!["remote.origin.url https://github.com/Acme/App.git\n".to_string(), "remote.origin.url git@github.com:corp/lib.git\nremote.up.url https://github.com/other/thing\n".to_string()];
+        let go = |host: &str, repo: &str| merge_in_added(&gh, &mine, (host, repo), 7, "squash", true, "abc1234");
+        let refused = "Add this repository in Kolux to merge from here.";
+        // another host with the same name, a stranger, no projects at all, a malformed name
+        assert_eq!(go("git.corp.example", "acme/app").unwrap_err(), refused);
+        assert_eq!(go("git.corp.example", "corp/lib").unwrap_err(), refused);
+        assert_eq!(go("github.com", "nobody/nothing").unwrap_err(), refused);
+        assert_eq!(merge_in_added(&gh, &[], ("github.com", "acme/app"), 7, "squash", true, "abc1234").unwrap_err(), refused);
+        assert_eq!(go("github.com", "acme").unwrap_err(), refused);
+        assert!(!dir.join("calls.txt").exists(), "a refused merge never reached gh");
+        // added: https in another case, ssh, a second remote of the same checkout
+        assert_eq!(go("github.com", "acme/app").unwrap(), "deadbeef");
+        assert_eq!(go("github.com", "corp/lib").unwrap(), "deadbeef");
+        assert_eq!(go("github.com", "other/thing").unwrap(), "deadbeef");
+        assert_eq!(calls(&dir).lines().count(), 3);
+        // being added does not skip the other checks
+        assert!(merge_in_added(&gh, &mine, ("github.com", "acme/app"), 7, "squash", false, "abc1234").unwrap_err().contains("confirm"));
+    }
+
+    #[test]
     fn a_merge_after_someone_pushed_reads_as_changed_and_other_failures_stay_as_they_are() {
         let (gh, dir) = failing_stand_in("pr-merge-409", "gh: Head branch was modified. Review and try the merge again. (HTTP 409)");
         assert_eq!(merge(&gh, "github.com", "acme/app", 7, "squash", true, "abc1234").unwrap_err(), "The pull request changed. Reload it before merging.");
@@ -753,6 +802,7 @@ mod tests {
         fs::write(dir.join("answer2.json"), json!(file_items(3)).to_string()).unwrap();
         let got = read_files(&gh, "github.com", "acme/app", 7).unwrap();
         assert_eq!((got.files.len(), got.truncated), (103, false));
+        assert_eq!(got.limit, 500, "the page cap travels with the answer");
         let c = calls(&dir).replace('"', "");
         assert!(c.contains("pulls/7/files?per_page=100&page=1") && c.contains("pulls/7/files?per_page=100&page=2"), "{c}");
         assert_eq!(c.lines().count(), 2, "{c}");
@@ -780,12 +830,14 @@ mod tests {
         let p = read_page(&gh, "github.com", "acme/app", 7).unwrap();
         assert!(p.reviewers.iter().any(|r| r.login == "late" && r.state == "changes_requested"), "{:?}", p.reviewers);
         assert!(!p.reviews_truncated);
+        assert_eq!(p.reviews_limit, 500);
         assert_eq!(p.reviewers.len(), 102, "cy requested + 100 + late");
 
         let comments: Vec<Value> = (0..100).map(|i| json!({ "id": i + 1, "path": "a.rs", "line": 1, "body": "c", "user": { "login": "ana" }, "created_at": "t" })).collect();
         let (gh, dir) = stand_in("pr-comments-cap", &json!(comments));
         let got = read_threads(&gh, "github.com", "acme/app", 7).unwrap();
         assert!(got.truncated);
+        assert_eq!(got.limit, 500);
         assert_eq!(calls(&dir).lines().count(), PAGE_CAP + 1);
     }
 }

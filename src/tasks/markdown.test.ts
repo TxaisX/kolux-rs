@@ -21,6 +21,11 @@ describe("GIT-050 rendered descriptions", () => {
     expect(spans.some((s) => s.t === "text" && s.text.includes("<img src=x onerror=alert(1)>"))).toBe(true);
     expect(spans.some((s) => s.t === "text" && s.text.includes("[bad](javascript:alert(1)"))).toBe(true);
   });
+  it("leaves HTML comments out, as a pull request template's hints, but keeps them in code", () => {
+    const blocks = parseMarkdown("Intro\n\n<!-- Describe the change\nover two lines -->\n\nAfter <!-- inline --> text <!-- unclosed\nstill hidden\n\n```\n<!-- kept -->\n```\n");
+    const words = blocks.map((b) => (b.t === "code" ? b.text : b.t === "list" ? "" : b.spans.map((x) => x.text).join("")));
+    expect(words).toEqual(["Intro", "After  text", "<!-- kept -->"]);
+  });
   it("reads bold, italic and inline code", () => {
     expect(parseInline("a **b** *c* `d`").map((s) => s.t)).toEqual(["text", "bold", "text", "italic", "text", "code"]);
   });

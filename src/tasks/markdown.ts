@@ -47,8 +47,33 @@ export function parseInline(text: string): Span[] {
   return out;
 }
 
+/** HTML comments (a pull request template's hints) never show, even across lines; code blocks keep theirs. */
+function withoutComments(lines: string[]): string[] {
+  let fenced = false;
+  let inComment = false;
+  return lines.map((line) => {
+    if (/^```/.test(line)) fenced = !fenced;
+    if (fenced || /^```/.test(line)) return line;
+    let rest = line;
+    let out = "";
+    for (;;) {
+      if (inComment) {
+        const end = rest.indexOf("-->");
+        if (end < 0) return out;
+        rest = rest.slice(end + 3);
+        inComment = false;
+      }
+      const start = rest.indexOf("<!--");
+      if (start < 0) return out + rest;
+      out += rest.slice(0, start);
+      rest = rest.slice(start + 4);
+      inComment = true;
+    }
+  });
+}
+
 export function parseMarkdown(source: string): Block[] {
-  const lines = source.replace(/\r\n?/g, "\n").split("\n");
+  const lines = withoutComments(source.replace(/\r\n?/g, "\n").split("\n"));
   const blocks: Block[] = [];
   let para: string[] = [];
   const flush = () => {

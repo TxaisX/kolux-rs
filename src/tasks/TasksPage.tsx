@@ -20,7 +20,7 @@ import ProjectsView from "./ProjectsView";
 import PullRequestPage from "./PullRequestPage";
 import { parseGitHubUrl, type Target } from "./prModel";
 import TaskDialog from "./TaskDialog";
-import { existingWorkspace, workItem, type WorkItem, workLabel } from "./workStart";
+import { existingWorkspace, linkKey, workItem, type WorkItem, workLabel } from "./workStart";
 import "./tasks.css";
 
 /** GIT-043: preset, query, page and scroll survive leaving the page and coming back (app session);
@@ -220,7 +220,7 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
   // GIT-049: the workspaces already made for the chosen repositories' checkouts, so an item that
   // has one offers resume instead of start.
   const loadLinked = () => {
-    const all = chosen.flatMap((r) => r.projects.map((p) => ({ repo: r.repo.toLowerCase(), id: p.id })));
+    const all = chosen.flatMap((r) => r.projects.map((p) => ({ repo: linkKey(r.host, r.repo), id: p.id })));
     void Promise.all(all.map((x) => invoke<Worktree[]>("workspace_list", { projectId: x.id }).then((w) => [x.repo, w] as const, () => [x.repo, [] as Worktree[]] as const))).then((got) => {
       const next: Record<string, Worktree[]> = {};
       for (const [r, w] of got) next[r] = [...(next[r] ?? []), ...w];
@@ -228,7 +228,7 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
     });
   };
   useEffect(loadLinked, [groupsKey, result]);
-  const resumeDir = (t: Task) => existingWorkspace(linked[t.repo.toLowerCase()] ?? [], t.number);
+  const resumeDir = (t: Task) => existingWorkspace(linked[linkKey(t.host ?? gh?.host ?? "", t.repo)] ?? [], t.number);
   const work = (t: Task) => {
     const dir = resumeDir(t);
     if (dir) return onResume ? onResume(dir) : setNote(`Workspace already made for #${t.number}: ${dir}`);

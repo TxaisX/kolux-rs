@@ -24,6 +24,10 @@ describe("GIT-051 the pull request page's rules", () => {
     expect(rerunTargets(list, true)).toEqual([1, 3]);
     expect(rerunTargets([], true)).toEqual([]);
   });
+  it("counts a check that needs action as failing, so rerun failed includes its run", () => {
+    const list = [check("a", "completed", "success", 1), check("b", "completed", "action_required", 2)];
+    expect(rerunTargets(list, true)).toEqual([2]);
+  });
   it("suggests reviewers who are not the author or already on it, and refuses the sixteenth", () => {
     const people = ["ana", "bo", "cy", "dee"].map((login) => ({ login, avatar: "" }));
     const page = { author: "ana", reviewers: [{ login: "bo", state: "approved" }, { login: "cy", state: "dismissed" }] };
@@ -57,7 +61,7 @@ describe("GIT-051 the pull request page's rules", () => {
     for (const mergeableState of ["unknown", "", "something-new"]) {
       const b = mergeBox({ state: "open", draft: false, mergeableState });
       expect(b.canMerge, mergeableState).toBe(false);
-      expect(b.reason, mergeableState).toBe("GitHub is still checking whether it can merge");
+      expect(b.reason, mergeableState).toBe("GitHub is still checking whether it can merge.");
     }
     expect(mergeBox({ state: "open", draft: false, mergeableState: "has_hooks" }).canMerge).toBe(true);
   });

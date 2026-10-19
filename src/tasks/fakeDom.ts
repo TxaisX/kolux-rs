@@ -243,6 +243,13 @@ export async function until(ok: () => boolean, what = "the page to settle") {
   throw new Error(`gave up waiting for ${what}`);
 }
 
+/** Let the mocked commands' promises and React's effects finish (for asserting something did NOT show). */
+export async function settle(ms = 40) {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, ms));
+  });
+}
+
 /** Mount a React element into a fresh container; react-dom is loaded after the DOM exists. */
 export async function mount(el: ReactElement, doc: FakeDocument) {
   const { createRoot } = await import("react-dom/client");

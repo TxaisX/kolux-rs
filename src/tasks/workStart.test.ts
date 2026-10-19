@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { existingWorkspace, workItem, workLabel } from "./workStart";
+import { existingWorkspace, linkKey, workItem, workLabel } from "./workStart";
 
 describe("GIT-049 starting or resuming a workspace from an item", () => {
   it("turns a task row into the item the create command takes", () => {
@@ -23,6 +23,10 @@ describe("GIT-049 starting or resuming a workspace from an item", () => {
     expect(existingWorkspace(list, 12)).toBe("C:/dev/app-ws/fix");
     expect(existingWorkspace(list, 99)).toBeNull();
     expect(existingWorkspace([list[0]], 12)).toBeNull();
+  });
+  it("keys the workspace lists by host and repository, without case", () => {
+    expect(linkKey("GitHub.com", "Acme/App")).toBe("github.com/acme/app");
+    expect(linkKey("github.com", "acme/app")).not.toBe(linkKey("git.corp.example", "acme/app"));
   });
   it("offers resume when one exists, else start", () => {
     expect(workLabel("C:/x", { kind: "issue" })).toBe("Resume workspace");

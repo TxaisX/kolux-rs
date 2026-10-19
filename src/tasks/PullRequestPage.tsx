@@ -5,13 +5,14 @@
 // The tab last open on a pull request is remembered (localStorage, per pull request).
 // ponytail: not here yet (T-232-d): viewed-file sync, "fix checks with AI", a fork's parent owner.
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Close } from "../chrome/icons";
 import Markdown from "./MarkdownView";
 import { safeHref } from "./markdown";
-import { askForReview, MERGE_METHODS, mergeBox, PAGE_LIMIT, type PrCheck, type PrFiles, type PrPageData, type PrTab, type PrThreads, REACTION_EMOJI, REVIEW_LABEL, rerunTargets, reviewerSuggestions, saveTab, savedTab, summarizeChecks, type Target } from "./prModel";
+import { askForReview, MERGE_METHODS, mergeBox, type PrCheck, type PrFiles, type PrPageData, type PrTab, type PrThreads, REACTION_EMOJI, REVIEW_LABEL, rerunTargets, reviewerSuggestions, saveTab, savedTab, summarizeChecks, type Target } from "./prModel";
 import type { Person } from "./repoFacts";
 
+const NO_THREADS: PrThreads = { threads: [], truncated: false, limit: 0 };
 const say = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : "That did not work.");
 
 /** `added`: the repository is added in Kolux (a project's checkout is here); without it the page reads but does not merge. */
@@ -21,7 +22,7 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
   const [tab, setTab] = useState<PrTab>(() => savedTab(window.localStorage, target));
   const [checks, setChecks] = useState<PrCheck[]>([]);
   const [files, setFiles] = useState<PrFiles | null>(null);
-  const [threads, setThreads] = useState<PrThreads>({ threads: [], truncated: false });
+  const [threads, setThreads] = useState<PrThreads>(NO_THREADS);
   const [people, setPeople] = useState<Person[]>([]);
   const [typed, setTyped] = useState("");
   const [assignee, setAssignee] = useState("");
@@ -31,12 +32,22 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // The head commit the page last showed. When a reload finds another one, the files read for the
+  // old head are dropped and a merge confirm still open is closed, so a merge never pins a commit
+  // whose files were not shown (stand-in review FIX-BEFORE 1).
+  const shown = useRef<string | null>(null);
   const reload = useCallback(async () => {
     try {
       const p = await invoke<PrPageData>("pr_page", args);
+      if (shown.current !== null && shown.current !== p.headSha) {
+        setFiles(null);
+        setSure(false);
+        setNote("New commits were pushed since you opened this page; check Files changed again.");
+      }
+      shown.current = p.headSha;
       setPage(p);
       setChecks(await invoke<PrCheck[]>("pr_checks", { host: args.host, repo: args.repo, sha: p.headSha }).catch(() => []));
-      setThreads(await invoke<PrThreads>("pr_threads", args).catch(() => ({ threads: [], truncated: false })));
+      setThreads(await invoke<PrThreads>("pr_threads", args).catch(() => NO_THREADS));
     } catch (e) {
       setNote(say(e));
     }
@@ -48,7 +59,7 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
     void invoke<Person[]>("github_people", { host: target.host, repo: target.repo }).then(setPeople, () => setPeople([]));
   }, [reload, target.host, target.repo]);
   useEffect(() => {
-    if (tab === "files" && files === null) void invoke<PrFiles>("pr_files", args).then(setFiles, (e) => (setFiles({ files: [], truncated: false }), setNote(say(e))));
+    if (tab === "files" && files === null) void invoke<PrFiles>("pr_files", args).then(setFiles, (e) => (setFiles({ files: [], truncated: false, limit: 0 }), setNote(say(e))));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, files]);
 
@@ -152,7 +163,7 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
             </div>
             <h3>Review threads</h3>
             {threads.threads.length === 0 && <p className="tasks-kind">No review comments.</p>}
-            {threads.truncated && <p className="tasks-kind">Showing the first {PAGE_LIMIT} review comments; the rest are on GitHub.</p>}
+            {threads.truncated && <p className="tasks-kind">Showing the first {threads.limit} review comments; the rest are on GitHub.</p>}
             {threads.threads.map((t) => (
               <div key={t.id} className="pr-thread">
                 <div className="tasks-kind">
@@ -185,7 +196,7 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
           </div>
           <aside className="pr-side">
             <h3>Reviewers</h3>
-            {page.reviewsTruncated && <p className="tasks-kind">Showing the first {PAGE_LIMIT} reviews; some reviewers may be missing.</p>}
+            {page.reviewsTruncated && <p className="tasks-kind">Showing the first {page.reviewsLimit} reviews; some reviewers may be missing.</p>}
             {page.reviewers.map((r) => (
               <div key={r.login} className="pr-person">
                 {r.login} <span className={`pr-review ${r.state}`}>{REVIEW_LABEL[r.state] ?? r.state}</span>
@@ -281,7 +292,7 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
         <div className="pr-body">
           <div className="pr-main">
             {files === null && <p className="tasks-kind">Reading files...</p>}
-            {files?.truncated && <p className="tasks-kind">Showing the first {PAGE_LIMIT} files; the rest are on GitHub.</p>}
+            {files?.truncated && <p className="tasks-kind">Showing the first {files.limit} files; the rest are on GitHub.</p>}
             {files?.files.map((f) => (
               <details key={f.filename} className="pr-file">
                 <summary>

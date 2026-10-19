@@ -24,3 +24,7 @@ export function existingWorkspace(worktrees: Pick<Worktree, "path" | "isMain" | 
 
 /** What the item's button offers: resume when a workspace exists, else start. */
 export const workLabel = (existing: string | null, task: Pick<Task, "kind">): string => (existing ? "Resume workspace" : task.kind === "issue" ? "Start workspace" : "Check out in a workspace");
+
+/** Which repository a workspace list belongs to: host and owner/name, without case. The same name on
+ * two hosts is two repositories, so a row never resumes the other host's workspace (review AFTER 5). */
+export const linkKey = (host: string, repo: string): string => `${host}/${repo}`.toLowerCase();
