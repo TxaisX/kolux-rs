@@ -22,5 +22,5 @@ Not yet in the folder:
 | Mark | Why | Shown as, meanwhile |
 |---|---|---|
 | Mistral | The brand page https://mistral.ai/brand links its logo zips on a document host that answered 403 to every fetch on 2026-10-19 (a plain request, then one with browser headers and the brand page as referrer). | Kolux's own neutral spark glyph (`src/chrome/icons.tsx`, `Spark`) next to the agent's name. |
-| GitLab, Jira (Atlassian), Linear, iOS, Android | Cut features (HID-044: they leave with their dropped integrations and the phone page), so no mark is shipped or planned. A Linear mark was taken on 2026-10-19 and removed again the same day. | Nothing; no screen offers them. |
+| GitLab, Jira, Linear, iOS, Android | Cut features (HID-044: they leave with their dropped integrations and the phone page), so no mark is shipped or planned. A Linear mark was taken on 2026-10-19 and removed again the same day. | Nothing; no screen offers them. |
 | Gemini, Cursor, Kimi, Qwen, JetBrains, Zed, Warp and the other agent makers | Not attempted yet; the next kit round is T-335-b. | The neutral glyph and the agent's name. |

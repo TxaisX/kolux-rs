@@ -35,3 +35,4 @@ LIVE PROOF PENDING (batched, after the coordinator applies marks-T-335-VendorMar
 1. Windows in light, Kolux set to Dark (the default): a Codex pane header shows the WHITE OpenAI blossom. Windows in dark, Kolux set to Light: the BLACK blossom. A screen with its own mode override follows that screen.
 2. Select the Codex mark with a screen reader or inspect the accessibility tree: exactly one image named Codex is exposed in either mode.
 3. Dev tools Network tab: no request for any icon (every picture is bundled); the bundle holds no Linear, GitLab, Jira, iOS or Android file.
+Correction (FIX-7, 2026-10-19): item 4 above overclaimed. T-335-b then named only 13 makers of the 35 agents in src/keys/actions.ts; FIX-7 now names every catalogue agent and the open-in presets (kit mark, name only, or the explicit default name only until a kit is found) and the usage-view rule follows the same per-vendor call. See evidence/marks-FIX-7.txt.
