@@ -399,7 +399,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### H · theme 6 · Business-user frame (1 cards)
 
-- [ ] T-333-b · ONB 013 rest: the kits flow sends the kit-launch and results-opened first-success milestones and calls the own-file mark when a kit runs on a file the user picked, so the newcomer checklist's last three items tick (kits files; the marks are firstRun.ts milestone and newcomer.ts ranOnOwnFile)
+- [x] T-333-b · ONB 013 rest: the kits flow sends the kit-launch and results-opened first-success milestones and calls the own-file mark when a kit runs on a file the user picked, so the newcomer checklist's last three items tick (kits files; the marks are firstRun.ts milestone and newcomer.ts ranOnOwnFile) · done 2026-10-19 (lane/kits from b6e8ab4a; evidence/T-333-b.txt: launch and results marks were already sent, now Preview and Open file send the results mark too, and Start kit on a file outside the samples folder sends the own-file mark once the kit started; vitest kits+onboarding 116, tsc 0; the own-file mark needs the one-hunk App.tsx patch evidence/kits-T-333-b-App.tsx.patch from the coordinator; live proof pending (batched))
 
 ### H · theme none · No theme (5 cards)
 
