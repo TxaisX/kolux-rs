@@ -10,12 +10,15 @@ import { Chip, Cup, Plug } from "./icons";
 import { STATUS_ITEMS } from "./statusItems";
 import { BAR_EVENT, SHOW_EVENT, currentBar } from "../update/UpdateCenter";
 import { KeepAwakeItem, useKeepAwake } from "../launch/KeepAwakeCard";
+import PortsItem from "../ports/PortsItem";
 
 type Props = {
   terminals: number;
   agents?: number;
   names?: () => Record<number, string>;
   workspaces?: string[];
+  /** VIEW-078: when given, the ports item counts and lists only this workspace's ports as its own. */
+  active?: string;
   hidden?: string[];
   onToggle?: (id: string) => void;
   onHideBar?: () => void;
@@ -25,7 +28,7 @@ type Props = {
   loaded?: () => boolean;
 };
 
-export default function StatusBar({ terminals, agents = 0, names = () => ({}), workspaces = [], hidden = [], onToggle, onHideBar, hooks = null, loaded }: Props) {
+export default function StatusBar({ terminals, agents = 0, names = () => ({}), workspaces = [], active, hidden = [], onToggle, onHideBar, hooks = null, loaded }: Props) {
   const [memory, setMemory] = useState<number | null>(null);
   const [open, setOpen] = useState(false);
   const [menu, setMenu] = useState<{ left: number; bottom: number } | null>(null);
@@ -91,6 +94,7 @@ export default function StatusBar({ terminals, agents = 0, names = () => ({}), w
           {agents}
         </span>
       )}
+      {shows("ports") && <PortsItem workspaces={workspaces} active={active} />}
       {shows("awake") && <KeepAwakeItem held={awake} />}
       {menu && (
         <>

@@ -1,0 +1,21 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index e3306b7a..dbaf4646 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -41,6 +41,7 @@ mod notifications;
+ mod onboarding;
+ mod orchestration;
+ mod foreground;
++mod ports;
+ mod procs;
+ mod protected;
+ mod resources;
+@@ -344,6 +345,8 @@ pub fn run() {
+             hooks::agent_hooks::saved::agent_resumable,
+             hooks::claude_usage,
+             sysmem::process_memory,
++            ports::ports_scan,
++            ports::ports_stop,
+             fonts::list_fonts,
+             resources::resources,
+             sessions::claude_workspace_sessions,

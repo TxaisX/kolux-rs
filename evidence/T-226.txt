@@ -1,0 +1,77 @@
+T-226 (VIEW-078 only) evidence, lane/ports from 562c8347, 2026-10-19, Claude Sonnet 5.5
+
+== RED (deepest_worktree stubbed to return nothing): cargo test --lib ports::
+test ports::tests::view_078_slashes_trailing_separators_and_the_extended_prefix_do_not_hide_a_match ... FAILED
+test ports::tests::view_078_stopping_a_port_that_already_exited_counts_as_success ... ok
+test ports::tests::view_078_a_folder_that_is_not_a_worktree_or_is_a_root_cannot_license_a_stop ... ok
+test ports::tests::view_078_lsof_output_is_read_into_programs_and_ports ... ok
+test ports::tests::view_078_a_port_belongs_to_the_deepest_worktree_holding_its_folder ... FAILED
+test ports::tests::view_078_rows_tie_ports_to_workspaces_fold_twins_and_mark_the_rest_external ... FAILED
+test ports::tests::view_078_a_port_held_outside_the_workspaces_is_never_stopped ... FAILED
+test ports::tests::view_078_a_real_listener_is_found_with_its_programs_working_folder ... ok
+test ports::tests::view_078_a_server_started_in_a_worktree_is_listed_and_stopped_and_one_outside_is_refused ... FAILED
+test result: FAILED. 4 passed; 5 failed; 0 ignored; 0 measured; 978 filtered out; finished in 0.91s
+
+== RED (status bar without the ports item): vitest src/chrome/statusItems.test.ts
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  src/chrome/statusItems.test.ts > VIEW-096: everything shows until something is hidden
+ FAIL  src/chrome/statusItems.test.ts > VIEW-078: the ports item can be unticked like the others
+      Tests  2 failed | 3 passed (5)
+
+== GREEN: cargo test --lib ports::
+test ports::tests::view_078_a_port_belongs_to_the_deepest_worktree_holding_its_folder ... ok
+test ports::tests::view_078_lsof_output_is_read_into_programs_and_ports ... ok
+test ports::tests::view_078_rows_tie_ports_to_workspaces_fold_twins_and_mark_the_rest_external ... ok
+test ports::tests::view_078_slashes_trailing_separators_and_the_extended_prefix_do_not_hide_a_match ... ok
+test ports::tests::view_078_stopping_a_port_that_already_exited_counts_as_success ... ok
+test ports::tests::view_078_a_port_held_outside_the_workspaces_is_never_stopped ... ok
+test ports::tests::view_078_a_folder_that_is_not_a_worktree_or_is_a_root_cannot_license_a_stop ... ok
+test ports::tests::view_078_a_real_listener_is_found_with_its_programs_working_folder ... ok
+test ports::tests::view_078_a_server_started_in_a_worktree_is_listed_and_stopped_and_one_outside_is_refused ... ok
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 978 filtered out; finished in 1.10s
+
+== cargo build / clippy -D warnings (all targets)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 12s
+exit=0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 55.04s
+exit=0
+
+== vitest run src/ports src/chrome + tsc --noEmit
+ Test Files  7 passed (7)
+      Tests  44 passed (44)
+exit=0
+exit=0
+
+== full cargo test --no-fail-fast
+test result: ok. 985 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 76.01s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+exit=0
+
+== full pnpm test
+ Test Files  227 passed (227)
+      Tests  1544 passed (1544)
+exit=0
+
+== PATCH LEFT FOR THE COORDINATOR (lib.rs is not this lane's file)
+evidence/ports-T-226-lib.rs.patch: one `mod ports;` line and two generate_handler! lines (ports::ports_scan, ports::ports_stop).
+Checked with a temporary index: git read-tree 562c8347; git apply --cached --check -> PATCH_OK. No capabilities line is needed
+(custom commands have no permission manifest). All gates above ran WITH the patch applied; the lane commit leaves lib.rs untouched,
+so ports.rs stays unbuilt in the lane until the patch lands. Optional later patch: App.tsx passes `active={<active workspace path>}`
+to StatusBar so the item counts only the active workspace (without it, every open workspace's ports are listed together).
+
+== OUTSIDE-OWNS EDIT (one literal): src/chrome/chromeItems.test.ts "Status bar, 4 of 5 items" -> "5 of 6 items"
+Adding the Ports item to the status bar list makes the Window and Sidebar header count six items; that look-lane test reads the list length.
+
+== LIVE PROOF PENDING (batched), for the coordinator on the second screen, app launched with scratch config dirs
+1. Open a workspace; in its terminal run a dev server (for example `pnpm exec vite --port 5173`). The status bar shows a globe
+   item with 1 (it may take up to 3 s).
+2. Click the item: a popover lists ":5173 http://localhost:5173/", under it the program name and the workspace folder name, with Open and Stop.
+3. Click Open: the Kolux browser pane shows that address. Shift+Ctrl-click Open: the system browser opens it.
+4. Click Stop: the row disappears within ~2 s and the note says "Stopped port 5173"; run the server again, close it from the
+   terminal (Ctrl+C) while the popover is open and click Stop on the stale row: the note says it had already stopped.
+5. Start a server outside any workspace (a terminal opened in the home folder, or any other program holding a port): it appears
+   under "External (n)" with Open and no Stop button.
+6. Right-click the status bar and untick Ports: the item goes away; tick it again: it returns.
