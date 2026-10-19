@@ -12,9 +12,12 @@
 //! HID-036 (T-331): settings retired before this rebuild are dropped quietly from an older profile,
 //! with no message and no failed load, and never come back: `without_retired` is the filter the
 //! settings load and save apply (coordinator hunk in state.rs, T-331 commit body), and the
-//! carry-over applies it to what it brings in.
-// ponytail: wired into the app's start by the coordinator (hunk in the T-213 commit body); until
-// then only the tests call it. The release smoke check of this migration is T-213-b.
+//! carry-over applies it to what it brings in. A retired setting is recognised by its exact old
+//! spelling only, so a key a newer build writes is never dropped.
+// ponytail: T-213 is PARKED and must not be wired (council review i18n-f914eb3, B1): copying the former
+// app's whole data folder breaks the no-importer default (COMPAT 5.3, OD-05). Nothing calls
+// `first_launch` or `carry_over` outside the tests; it waits on Txais's yes, and if he says yes it is
+// rebuilt as an allow-list importer (see the T-213 line in PLAN.md).
 #![cfg_attr(not(test), allow(dead_code))]
 
 use crate::state::Store;
@@ -62,7 +65,9 @@ pub fn copy_missing(from: &Path, to: &Path, out: &mut Carried) {
         match e.file_type() {
             Ok(t) if t.is_symlink() => out.skipped.push(src),
             Ok(t) if t.is_dir() => {
-                if dst.is_dir() || (dst.symlink_metadata().is_err() && fs::create_dir(&dst).is_ok()) {
+                // symlink_metadata, never is_dir(): a link or junction on this side is not followed and nothing is written through it.
+                let real_dir = dst.symlink_metadata().is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink());
+                if real_dir || (dst.symlink_metadata().is_err() && fs::create_dir(&dst).is_ok()) {
                     copy_missing(&src, &dst, out);
                 } else {
                     out.skipped.push(src);
@@ -171,30 +176,39 @@ fn same_folder(a: &Path, b: &Path) -> bool {
 }
 
 
-/// HID-036 (T-331): settings retired before this rebuild, each by the names an older profile may
-/// have saved it under (compared without letter case, dots, dashes or underscores). They are
-/// dropped quietly whenever settings are read or saved, so they never fail a load and never come
-/// back with a later change.
+/// HID-036 (T-331): settings retired before this rebuild, each by the exact camelCase names an older
+/// profile may have saved it under (letter case and separators matter, so a newer key that only
+/// looks like one is kept). They are dropped quietly whenever settings are read or saved, so they
+/// never fail a load and never come back with a later change.
 pub const RETIRED: &[(&str, &[&str])] = &[
-    ("scrollback size in bytes", &["scrollbackbytes", "terminalscrollbackbytes", "scrollbacksizebytes", "scrollbackbuffersize"]),
-    ("GitHub attribution", &["githubattribution", "gitattribution", "commitattribution", "addgithubattribution"]),
-    ("agents sidebar", &["agentssidebar", "agentsidebar", "showagentssidebar", "agentssidebaropen"]),
-    ("OpenCode sign-in cookie", &["opencodecookie", "opencodesignincookie", "opencodesessioncookie", "opencodeauthcookie"]),
-    ("OpenCode workspace id", &["opencodeworkspaceid", "opencodeworkspace"]),
-    ("dashboard open mode", &["dashboardopenmode", "dashboardmode", "dashboardwindowmode"]),
-    ("artifact sharing", &["artifactsharing", "artifactssharing", "shareartifacts"]),
-    ("artifacts on or off", &["artifactsenabled", "enableartifacts", "artifactson"]),
-    ("artifacts button", &["artifactsbutton", "artifactbutton", "showartifactsbutton"]),
-    ("skip the artifact delete confirmation", &["skipartifactdeleteconfirm", "skipartifactdeleteconfirmation", "artifactdeleteconfirmskip", "confirmartifactdelete"]),
-    ("skill sharing", &["skillsharing", "skillssharing", "shareskills"]),
-    ("phone-pairing connection mode", &["pairingconnectionmode", "phonepairingmode", "mobilepairingmode", "pairingmode"]),
+    ("scrollback size in bytes", &["scrollbackBytes", "terminalScrollbackBytes", "scrollbackSizeBytes", "scrollbackBufferSize"]),
+    ("GitHub attribution", &["githubAttribution", "gitAttribution", "commitAttribution", "addGithubAttribution"]),
+    ("agents sidebar", &["agentsSidebar", "agentSidebar", "showAgentsSidebar", "agentsSidebarOpen"]),
+    ("OpenCode sign-in cookie", &["opencodeCookie", "opencodeSigninCookie", "opencodeSessionCookie", "opencodeAuthCookie"]),
+    ("OpenCode workspace id", &["opencodeWorkspaceId", "opencodeWorkspace"]),
+    ("dashboard open mode", &["dashboardOpenMode", "dashboardMode", "dashboardWindowMode"]),
+    ("artifact sharing", &["artifactSharing", "artifactsSharing", "shareArtifacts"]),
+    ("artifacts on or off", &["artifactsEnabled", "enableArtifacts", "artifactsOn"]),
+    ("artifacts button", &["artifactsButton", "artifactButton", "showArtifactsButton"]),
+    ("skip the artifact delete confirmation", &["skipArtifactDeleteConfirm", "skipArtifactDeleteConfirmation", "artifactDeleteConfirmSkip", "confirmArtifactDelete"]),
+    ("skill sharing", &["skillSharing", "skillsSharing", "shareSkills"]),
+    ("phone-pairing connection mode", &["pairingConnectionMode", "phonePairingMode", "mobilePairingMode"]),
 ];
 
-/// A saved setting's name with letter case and separators taken out (`agents-sidebar` and
-/// `agentsSidebar` read the same), and a leading product prefix (`kolux.`, `nightshift.`) dropped.
+/// A saved setting's name as the retired list spells it: a name a profile saved under the old
+/// product's or the current product's camelCase prefix (`nightshiftSkillSharing`, `koluxSkillSharing`)
+/// reads as the bare name (`skillSharing`). Nothing else is normalised: not letter case, not dots,
+/// dashes or underscores.
 fn bare(key: &str) -> String {
-    let flat: String = key.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase();
-    ["kolux", FORMER_NAME].iter().find_map(|p| flat.strip_prefix(p).filter(|r| !r.is_empty()).map(str::to_owned)).unwrap_or(flat)
+    for p in ["kolux", FORMER_NAME] {
+        if let Some(rest) = key.strip_prefix(p) {
+            let mut c = rest.chars();
+            if let Some(first) = c.next().filter(|c| c.is_ascii_uppercase()) {
+                return format!("{}{}", first.to_ascii_lowercase(), c.as_str());
+            }
+        }
+    }
+    key.to_owned()
 }
 
 /// Whether `key` names a retired setting.
@@ -345,9 +359,9 @@ mod tests {
         for (i, (_, names)) in RETIRED.iter().enumerate() {
             m.insert(names[0].to_owned(), json!(i));
         }
-        m.insert("terminal.scrollback-bytes".into(), json!(1_000_000));
-        m.insert("Kolux.AgentsSidebar".into(), json!(true));
-        m.insert("nightshift_github_attribution".into(), json!(false));
+        m.insert("terminalScrollbackBytes".into(), json!(1_000_000));
+        m.insert("koluxAgentsSidebar".into(), json!(true));
+        m.insert("nightshiftGithubAttribution".into(), json!(false));
         m.insert("theme".into(), json!("dark"));
         m.insert("language".into(), json!("ja"));
         m.insert("artifacts".into(), json!({"kept": "the library is a live feature"}));
@@ -361,8 +375,55 @@ mod tests {
         for live in ["theme", "language", "artifacts", "skills", "rightSidebarOpen", "leftSidebarWidth", "sidebar", "scrollback", "agentStatusHooks", "confirmWorkspaceDelete"] {
             assert!(!is_retired(live), "{live} is a live setting");
         }
-        assert!(is_retired("scrollbackBytes") && is_retired("SCROLLBACK_BYTES") && is_retired("terminal.scrollback-bytes"));
-        assert!(is_retired("kolux.opencodeWorkspaceId") && is_retired("nightshiftSkillSharing"));
+        assert!(is_retired("scrollbackBytes") && is_retired("terminalScrollbackBytes"));
+        assert!(is_retired("koluxOpencodeWorkspaceId") && is_retired("nightshiftSkillSharing"));
+    }
+
+    #[test]
+    fn fix1_after1_only_the_exact_old_spellings_are_dropped_and_a_newer_key_is_kept() {
+        // Newer keys that merely look like a retired one (other letter case, other separators, a
+        // shorter name) belong to a newer build and must survive a load and a save.
+        for newer in ["pairingmode", "pairingMode", "pairing-mode", "pairing.mode", "scrollbackbytes", "scrollback_bytes", "SCROLLBACK_BYTES", "terminal.scrollback-bytes", "agents-sidebar", "Agents_Sidebar", "artifactsEnabledV2", "skillSharingMode"] {
+            assert!(!is_retired(newer), "{newer} is not an old spelling");
+        }
+        let mut s = json!({"pairingmode": "relay", "scrollbackbytes": 5, "phonePairingMode": "old", "scrollbackBytes": 1, "theme": "dark"});
+        assert_eq!(drop_retired(&mut s), 2);
+        assert_eq!(s, json!({"pairingmode": "relay", "scrollbackbytes": 5, "theme": "dark"}));
+        // every listed name is written in the camelCase an older profile used, so each matches itself exactly
+        for (_, names) in RETIRED {
+            for n in *names {
+                assert!(is_retired(n), "{n}");
+                assert!(n.chars().all(|c| c.is_ascii_alphanumeric()) && n.starts_with(|c: char| c.is_ascii_lowercase()), "{n} must be a camelCase key");
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fix1_soon1_a_destination_link_is_never_written_through() {
+        let (root, profile) = profile("imp-dstlink");
+        let old = seed_former(&root, "nightshift");
+        let outside = root.join("outside-the-profile");
+        fs::create_dir_all(&outside).unwrap();
+        let link = profile.join("projects");
+        let made = std::process::Command::new("cmd").args(["/c", "mklink", "/J"]).arg(&link).arg(&outside).output();
+        if !made.as_ref().is_ok_and(|o| o.status.success()) {
+            eprintln!("NOTE fix1_soon1: the junction could not be made here ({made:?}); the destination-link check did NOT run");
+            return;
+        }
+        // The link must really be there before the skip means anything.
+        let meta = link.symlink_metadata().expect("the junction exists");
+        assert!(meta.file_type().is_symlink(), "a junction reads as a link: {:?}", meta.file_type());
+        assert!(outside.read_dir().unwrap().next().is_none());
+        let mut out = Carried::default();
+        copy_missing(&old, &profile, &mut out);
+        assert!(outside.read_dir().unwrap().next().is_none(), "nothing was written through the link");
+        assert!(!outside.join("site.json").exists());
+        assert!(out.skipped.contains(&old.join("projects")), "the folder behind the link is reported as skipped: {:?}", out.skipped);
+        assert_eq!(out.copied, 1, "the rest (settings.json) still carries on");
+        assert!(profile.join("settings.json").is_file());
+        fs::remove_dir(&link).unwrap(); // removes the junction itself, never its target
+        assert!(outside.is_dir());
     }
 
     #[test]

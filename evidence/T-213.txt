@@ -18,4 +18,4 @@ cargo clippy --all-targets -- -D warnings (log cargo-t213b-clippy.log):
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 28.57s
 exit codes: test=0 clippy=0
 
-Not user-visible in the UI (start-up copy), so no CDP proof; the start-up call in lib.rs setup is a coordinator hunk; release smoke of the migration is T-213-b.
+Not user-visible in the UI (start-up copy), so no CDP proof; WITHDRAWN 2026-10-19 (council review i18n-f914eb3, B1): T-213 is parked and must not be wired; the lib.rs start-up call that was offered here is deleted and never to be applied. See evidence/i18n-FIX-1.txt.
