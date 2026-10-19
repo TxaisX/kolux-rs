@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { doneFrom, type Facts, type StepId } from "./guide";
 import { checklistOf, OWN_FILE, type FirstRun } from "./newcomer";
-import { entryLine, FOCUS_FLOOR_MS, guideWanted, onReread, PROJECT_ADDED, sidebarSlot } from "./sidebar";
+import { entryLine, FOCUS_FLOOR_MS, guideWanted, onReread, PROJECT_ADDED, rereadFloor, sidebarSlot } from "./sidebar";
 import { GUIDE_CLOSED } from "./guide";
 
 const run = (more: Partial<FirstRun> = {}): FirstRun => ({ closed: true, outcome: "completed", checklistDismissed: false, milestones: {}, ...more });
@@ -88,6 +88,22 @@ describe("when the sidebar entry reads its steps again (VIEW-114, FIX-2, FIX-3)"
     now += 1;
     target.dispatchEvent(new Event("focus"));
     now += FOCUS_FLOOR_MS - 2;
+    target.dispatchEvent(new Event("focus"));
+    expect(bumps).toBe(0);
+    now += 1;
+    target.dispatchEvent(new Event("focus"));
+    expect(bumps).toBe(1);
+  });
+
+  it("a read stamped on the shared floor from outside the events holds a focus off for the floor (FIX-4)", () => {
+    const target = new EventTarget();
+    let now = 5_000;
+    let bumps = 0;
+    const floor = rereadFloor(() => now);
+    onReread(target, () => bumps++, () => now, floor);
+    now += FOCUS_FLOOR_MS - 1;
+    floor.stamp();
+    now += FOCUS_FLOOR_MS - 1;
     target.dispatchEvent(new Event("focus"));
     expect(bumps).toBe(0);
     now += 1;

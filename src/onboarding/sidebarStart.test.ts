@@ -3,6 +3,10 @@
 // this repo, so React's three hooks these components use are swapped for a tiny runtime that keeps
 // state slots, runs an effect when its deps change and draws again while state is dirty. Children
 // are never drawn (JSX only builds elements), so only SidebarStart's own hooks run.
+// Limit (FIX-4): only useState, useRef and useEffect are swapped. If SidebarStart or useGuideState later
+// uses useCallback or useMemo, the real hook throws outside a render and this file fails loudly (it
+// fails safe); add the hook to the runtime below then. The checklist branch of the slot is covered by
+// sidebar.test.ts (sidebarSlot), not here, since children are never drawn.
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 type Effect = { deps: unknown[] | undefined; cleanup?: () => void };
@@ -122,6 +126,31 @@ test("the first window focus after mount does not read the steps a second time; 
     win.dispatchEvent(new Event("focus"));
     await app.settle();
     expect(reads()).toBe(2);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+test("a read caused by the guide switching on resets the focus floor, so a focus soon after does not read again (VIEW-114, FIX-4)", async () => {
+  const { CHECKLIST_CHANGED } = await import("./firstRun");
+  let mono = 50_000;
+  const spy = vi.spyOn(performance, "now").mockImplementation(() => mono);
+  try {
+    // The first-run wizard is still open: the guide is not wanted, so nothing is read at mount.
+    record = { tipsSeen: [], visited: [], tried: [], toursSeen: [], toursAuto: null, firstRun: { closed: false, outcome: null, checklistDismissed: false, milestones: {} } };
+    const app = await mount();
+    expect(reads()).toBe(0);
+    // 25 s later the wizard closes; the slot now wants the guide and reads once (that read is at 75 s).
+    mono += 25_000;
+    record = { tipsSeen: [], visited: [], tried: [], toursSeen: [], toursAuto: null, firstRun: { closed: true, outcome: "dismissed", checklistDismissed: true, milestones: {} } };
+    win.dispatchEvent(new Event(CHECKLIST_CHANGED));
+    await app.settle();
+    expect(reads()).toBe(1);
+    // 10 s after that read, a focus is well inside the 30 s floor: no second read.
+    mono += 10_000;
+    win.dispatchEvent(new Event("focus"));
+    await app.settle();
+    expect(reads()).toBe(1);
   } finally {
     spy.mockRestore();
   }

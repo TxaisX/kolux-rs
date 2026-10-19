@@ -130,6 +130,10 @@ describe("Setup Guide steps tick from real state (ONB-015)", () => {
   it("the default agent, notifications, CLI and setup-script steps tick from their own state", () => {
     expect(doneFrom({ ...none, agent: "" }).has("agent")).toBe(false);
     expect(doneFrom({ ...none, agent: "claude" }).has("agent")).toBe(true);
+    // FIX-4: a plain terminal is not an AI agent, so a saved "terminal" default does not tick the step.
+    expect(doneFrom({ ...none, agent: "terminal" }).has("agent")).toBe(false);
+    expect(doneFrom({ ...none, agent: " Terminal " }).has("agent")).toBe(false);
+    expect(doneFrom({ ...none, agent: "   " }).has("agent")).toBe(false);
     expect(doneFrom({ ...none, notifications: false }).has("notifications")).toBe(false);
     expect(doneFrom({ ...none, notifications: true }).has("notifications")).toBe(true);
     expect(doneFrom({ ...none, cli: true }).has("cli")).toBe(true);
@@ -194,7 +198,8 @@ describe("the browser pane's page note (ONB-015)", () => {
     const kept: string[] = [];
     let fail = true;
     const mark = (list: string, id: string) => (kept.push(`${list}:${id}`), fail ? Promise.reject(new Error("locked")) : Promise.resolve({ tipsSeen: [], visited: [], tried: [], toursSeen: [], toursAuto: null }));
-    const note = pageNoter(mark, () => {});
+    const used: string[] = [];
+    const note = pageNoter(mark, (id) => used.push(id));
     const flush = () => new Promise((r) => setTimeout(r, 0));
     note("https://example.com/");
     await flush();
@@ -204,6 +209,8 @@ describe("the browser pane's page note (ONB-015)", () => {
     note("https://example.org/");
     await flush();
     expect(kept).toEqual([`tried:${PAGE_SHOWN}`, `tried:${PAGE_SHOWN}`]);
+    // FIX-4: the retry writes the mark again but the use is counted once (the same first page).
+    expect(used).toEqual(["browser-page"]);
   });
 
   it("the saved record merges into what this window already saw; an early visit is never lost (FIX-1)", () => {
