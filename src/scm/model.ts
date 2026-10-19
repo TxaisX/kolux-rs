@@ -360,13 +360,16 @@ export const rowKeys = (s: Status, order?: unknown, drawn?: Drawn): RowKey[] => 
   return keys;
 };
 
-/** FIX-3: `select` for clicks on drawn rows. A Shift span runs between the two clicked ROWS (their
- * own sections, so a partly staged file does not pull in rows outside the two clicks) and takes
- * those rows' paths; every other mode is `select` on paths. */
+/** FIX-3 / FIX-4: `select` for clicks on drawn rows. A Shift span runs between the two clicked ROWS
+ * (their own sections, so a partly staged file does not pull in rows outside the two clicks) and
+ * takes those rows' paths; every other mode is `select` on paths. An anchor row that is no longer
+ * drawn (its folder was closed, or the section cap hides it) makes the Shift-click a plain click:
+ * falling back to the anchor's path would find its copy in the other section and span from there. */
 export const selectRows = (selected: string[], keys: RowKey[], target: RowKey, mode: SelectMode, anchor: RowKey | null): string[] => {
   const at = (k: RowKey) => keys.findIndex((x) => x.section === k.section && x.path === k.path);
   const paths = [...new Set(keys.map((k) => k.path))];
-  if (mode === "span" && anchor !== null && at(anchor) >= 0 && at(target) >= 0) {
+  if (mode === "span" && anchor !== null) {
+    if (at(anchor) < 0 || at(target) < 0) return select(selected, paths, target.path, "one", null);
     const [a, b] = [at(anchor), at(target)].sort((x, y) => x - y);
     return [...new Set(keys.slice(a, b + 1).map((k) => k.path))];
   }
