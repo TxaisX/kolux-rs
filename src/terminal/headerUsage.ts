@@ -71,6 +71,8 @@ export type Pieces = { tokens: boolean; plan: boolean; countdowns: boolean; cost
  * countdowns, then the plan figures, then the tokens, so the ring and percentage always remain.
  * A piece with nothing to show takes no room. Unmeasured (undefined) shows everything there is. */
 export function piecesFor(width: number | undefined, have: { tokens: boolean; windows: number; cost: boolean }): Pieces {
+  // The card: a pane with no plan figures shows only the gauge (Decisions made for Txais, FIX-5).
+  if (have.windows === 0) return { tokens: false, plan: false, countdowns: false, cost: false };
   if (width === undefined) return { tokens: have.tokens, plan: have.windows > 0, countdowns: have.windows > 0, cost: have.cost };
   let need = BASE + RING;
   const fits = (more: number) => {
