@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closingDraft, createBusy, createdHere, createOnce, DRAFT_MAX, pickableLabels, TITLE_MAX, draftFrom, draftToSave, emptyDraft, issueTargets, openDraft, watchCreate, withRepo } from "./newIssue";
+import { closingDraft, createBusy, createdHere, createOnce, DRAFT_MAX, lastCreateFailure, closesDialog, titleLength, pickableLabels, TITLE_MAX, draftFrom, draftToSave, emptyDraft, issueTargets, openDraft, watchCreate, withRepo } from "./newIssue";
 
 const d = (over = {}) => ({ ...emptyDraft("github.com", "acme/app"), title: "Crash on start", body: "Steps", labels: ["bug"], assignees: ["ana"], ...over });
 
@@ -96,6 +96,38 @@ describe("FIX-3: what a New issue create reports after the user has moved on", (
     expect(createdHere({ host: "github.com", repos: ["acme/app"] }, "ghe.corp", "acme/app")).toBe(false);
     expect(createdHere(here, "ghe.corp", "acme/other")).toBe(false);
     expect(createdHere(null, "ghe.corp", "acme/app")).toBe(false);
+  });
+
+  it("a create that failed while no dialog was open is still there when New issue opens, until the next create", async () => {
+    // Nobody is watching: the user left Tasks while "Creating…".
+    expect(await createOnce(() => Promise.reject("gh: HTTP 504 timeout"))).toEqual({ ok: false, error: "gh: HTTP 504 timeout" });
+    expect(lastCreateFailure()).toBe("gh: HTTP 504 timeout");
+    // The next create clears it while it runs, and a create that goes through leaves nothing.
+    let finish: (n: number) => void = () => {};
+    const next = createOnce(() => new Promise<number>((r) => (finish = r)));
+    expect(lastCreateFailure()).toBeNull();
+    finish(1);
+    expect(await next).toEqual({ ok: true, value: 1 });
+    expect(lastCreateFailure()).toBeNull();
+    // A newer failure replaces an older one.
+    await createOnce(() => Promise.reject("first"));
+    await createOnce(() => Promise.reject("second"));
+    expect(lastCreateFailure()).toBe("second");
+    await createOnce(async () => 2);
+    expect(lastCreateFailure()).toBeNull();
+  });
+
+  it("a create that comes back closes its own dialog, or any dialog when the issue belongs on screen, never a newer opening", () => {
+    expect(closesDialog(false, 3, 3)).toBe(true);
+    expect(closesDialog(true, 3, 4)).toBe(true);
+    // The user switched workspace, the old create came back, and a dialog was opened in the new one.
+    expect(closesDialog(false, 3, 4)).toBe(false);
+  });
+
+  it("a title is counted in characters, the way GitHub counts them, not in UTF-16 units", () => {
+    expect(titleLength("  hello ")).toBe(5);
+    expect(titleLength("😀".repeat(200))).toBe(200);
+    expect("😀".repeat(200).length).toBe(400);
   });
 
   it("label suggestions with a comma are left out (the field splits on commas) and titles stop at 256", () => {
