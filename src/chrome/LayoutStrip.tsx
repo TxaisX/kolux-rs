@@ -73,7 +73,7 @@ export default function LayoutStrip({ count, onLayout, agents = [], shells = [],
             {agents.map((a) => (
               <button key={a.id} role="menuitem" className="menu-item" onClick={() => pick(a)}>
                 <span className="agent-mark">
-                  <VendorMark agent={markFor(a.id, a.program)} size={14} />
+                  <VendorMark agent={markFor(a.id)} size={14} />
                 </span>
                 <span className="name">{a.name}</span>
                 <Kbd id={`tab.newAgent.${a.id}`} />
