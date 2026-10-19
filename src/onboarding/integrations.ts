@@ -75,22 +75,44 @@ export async function readSeen(call: Call): Promise<Seen> {
 /** How long a read of GitHub is trusted before gh is asked again. */
 export const SEEN_FRESH_MS = 60_000;
 
-/** FIX-1: `readSeen` with a memory. A read is answered from memory for a minute, so opening the guide, focusing
+/** Whether an answer is a complete good one: signed in, token accepted, task search answered. Only that is worth
+ *  remembering; anything else (not connected, a token turned down, a half answer) is looked at again next time, so
+ *  a sign-in done in a terminal shows on the very next focus, guide close or project add (FIX-2). */
+const good = (s: Seen) => s.account !== null && s.token === "ok" && s.tracker === "ok";
+
+/** FIX-1: `readSeen` with a memory. A good read is answered from memory for a minute, so opening the guide, focusing
  *  the window or adding a project does not start gh (and a network round trip) every time. When a later read fails
  *  on the network the last good answer for the same account stands, so the sidebar ring does not dip while offline.
  *  A token GitHub turns down, a different account or a sign-out is never covered up. `force` (the Re-check button)
- *  always asks again and reports what it finds, but a good answer it gets is remembered. */
+ *  always asks again and reports what it finds, but a good answer it gets is remembered.
+ *  FIX-2: only a good answer is held, and reads asked while one is running share it (a `force` read never joins an
+ *  older one, and an older read that lands late does not overwrite a newer answer). The one gap left: a sign-out
+ *  or a revoked token inside the minute still reads as connected until the minute ends or Re-check is pressed. */
 export function createSeenReader(now: () => number = Date.now) {
   let kept: { at: number; seen: Seen } | null = null;
-  return async (call: Call, opts: { force?: boolean } = {}): Promise<Seen> => {
-    if (!opts.force && kept && now() - kept.at < SEEN_FRESH_MS) return kept.seen;
+  let flying: Promise<Seen> | null = null;
+  let latest = 0;
+  const run = async (call: Call, force: boolean, mine: number): Promise<Seen> => {
     const { seen, offline } = await look(call);
-    if (offline && !opts.force && kept?.seen.token === "ok" && kept.seen.account === seen.account) {
-      kept = { at: now(), seen: kept.seen };
+    const newest = mine === latest;
+    if (offline && !force && kept?.seen.token === "ok" && kept.seen.account === seen.account) {
+      if (newest) kept = { at: now(), seen: kept.seen };
       return kept.seen;
     }
-    kept = offline ? null : { at: now(), seen };
+    if (newest) kept = !offline && good(seen) ? { at: now(), seen } : null;
     return seen;
+  };
+  return (call: Call, opts: { force?: boolean } = {}): Promise<Seen> => {
+    const force = opts.force === true;
+    if (!force) {
+      if (kept && now() - kept.at < SEEN_FRESH_MS) return Promise.resolve(kept.seen);
+      if (flying) return flying;
+    }
+    const p: Promise<Seen> = run(call, force, ++latest).finally(() => {
+      if (flying === p) flying = null;
+    });
+    flying = p;
+    return p;
   };
 }
 

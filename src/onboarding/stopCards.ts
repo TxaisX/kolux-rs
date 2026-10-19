@@ -3,7 +3,7 @@
 // writer. Left for T-321-c: usage (connected accounts) and the orchestration / browser skill command
 // cards (their terminal belongs to T-244-b).
 import { awakeMode, type AwakeMode } from "../launch/KeepAwakeCard";
-import { hooksOn } from "../settings/AgentsPage";
+import { hooksOn } from "./hooksOn";
 import { WRITER_COMMAND_KEY, writerOf, type Writer } from "../scm/generate";
 
 export type StopCard =

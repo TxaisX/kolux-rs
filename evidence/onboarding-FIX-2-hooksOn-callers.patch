@@ -1,0 +1,48 @@
+diff --git a/src/App.tsx b/src/App.tsx
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -132,7 +132,7 @@
+ import { stepZoom, zoomFactor, type ZoomStep } from "./settings/zoom";
+ import { aiOf, useKitRun, useKits, type KitWait } from "./kits/useKits";
+ import { useWizard } from "./onboarding/useWizard";
+-import { hooksOn } from "./settings/AgentsPage";
++import { hooksOn } from "./onboarding/hooksOn";
+ import ToolNotices from "./launch/ToolNotices";
+ import { AgentsChat } from "./chat/ChatView";
+ import { useTeamsHost, withTeams } from "./launch/teams";
+diff --git a/src/launch/KeepAwakeCard.tsx b/src/launch/KeepAwakeCard.tsx
+--- a/src/launch/KeepAwakeCard.tsx
++++ b/src/launch/KeepAwakeCard.tsx
+@@ -3,7 +3,7 @@
+ // the same `keepAwake` key; an older plain `true` reads as Agent.
+ import { invoke } from "@tauri-apps/api/core";
+ import { useEffect, useState } from "react";
+-import { hooksOn } from "../settings/AgentsPage";
++import { hooksOn } from "../onboarding/hooksOn";
+ 
+ export const AWAKE_KEY = "keepAwake";
+ export const AWAKE_MODES = ["off", "agent", "on"] as const;
+diff --git a/src/settings/AgentsPage.tsx b/src/settings/AgentsPage.tsx
+--- a/src/settings/AgentsPage.tsx
++++ b/src/settings/AgentsPage.tsx
+@@ -11,6 +11,7 @@
+ import { useTeamsHost } from "../launch/teams";
+ import { CAP_FIELD, capOn } from "../usage/meter";
+ import { CACHE_LENGTH, CACHE_ON, cacheMinutes } from "../projects/cache";
++import { HOOKS_FIELD, hooksOn } from "../onboarding/hooksOn";
+ 
+ const OPTIONS_FIELD = "agentOptions";
+ const PERMISSIONS_FIELD = "agentPermissions";
+@@ -53,9 +54,9 @@
+ 
+ // STAT-002: one switch for every agent's status hooks, on unless saved off. Rust takes Kolux's
+ // entries out (or puts them back) when `agent_hooks_sync` runs after the save.
+-export const HOOKS_FIELD = "agentStatusHooks";
+-// T-152-gate: off until the user turns it on; that choice is the recorded approval to write hooks.
+-export const hooksOn = (s: Record<string, unknown>) => s[HOOKS_FIELD] === true;
++// FIX-2: the key and the rule live in src/onboarding/hooksOn.ts (T-152-gate: off until the user turns it on;
++// that choice is the recorded approval to write hooks); re-exported so existing importers keep working.
++export { HOOKS_FIELD, hooksOn };
+ 
+ // T-152-c (3): `agent_hooks_sync` answers with one {agent, done, error} per agent; the errors are
+ // shown beside the switch so a refused install or a failed removal never stays silent.

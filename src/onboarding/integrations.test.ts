@@ -205,4 +205,120 @@ describe("the sign-in check is remembered for about a minute (FIX-1)", () => {
     said = "error connecting to api.github.com";
     expect(await read(gh.call, { force: true })).toEqual({ account: "octo", token: "failed", tracker: "failed" });
   });
+
+  // FIX-2 (review FIX-SOON 1): the memory holds only a good answer, so the focus, guide-close and project-add
+  // re-reads see a new sign-in at once instead of waiting out the minute.
+  it("a not-connected answer is not held: signing in and coming back inside the minute reads as connected", async () => {
+    const t = clock();
+    const read = createSeenReader(t.now);
+    const gh = host(() => rows);
+    let signedIn = false;
+    const call = async <T>(cmd: string): Promise<T> => (cmd === "scm_gh_account" && !signedIn ? (null as T) : gh.call<T>(cmd));
+    expect(await read(call)).toEqual({ account: null, token: "pending", tracker: "pending" });
+    signedIn = true;
+    t.tick(20_000);
+    expect(await read(call)).toEqual(good);
+  });
+  it("a failed answer (a token gh turns down) is not held", async () => {
+    const t = clock();
+    const read = createSeenReader(t.now);
+    let said: Row[] | string = "HTTP 401: Bad credentials";
+    const gh = host(() => said);
+    expect(await read(gh.call)).toEqual({ account: "octo", token: "failed", tracker: "failed" });
+    said = rows;
+    t.tick(10_000);
+    expect(await read(gh.call)).toEqual(good);
+    expect(gh.n.budget).toBe(2);
+  });
+  it("a token with no task search is not held either, so a later read looks again", async () => {
+    const t = clock();
+    const read = createSeenReader(t.now);
+    let said: Row[] = [{ name: "REST" }, { name: "GraphQL" }];
+    const gh = host(() => said);
+    expect(await read(gh.call)).toEqual({ account: "octo", token: "ok", tracker: "failed" });
+    said = rows;
+    t.tick(10_000);
+    expect(await read(gh.call)).toEqual(good);
+  });
+  it("a good answer is still held inside the minute (the saving the memory exists for)", async () => {
+    const t = clock();
+    const read = createSeenReader(t.now);
+    const gh = host(() => rows);
+    await read(gh.call);
+    t.tick(20_000);
+    await read(gh.call);
+    expect(gh.n).toEqual({ account: 1, budget: 1 });
+  });
+
+  // FIX-2 (review FIX-SOON 2): the offline cover is for the same account only.
+  it("a re-read that fails on the network after the account changed does not borrow the old account's answer", async () => {
+    const t = clock();
+    const read = createSeenReader(t.now);
+    let account = "octo";
+    let said: Row[] | string = rows;
+    const call = async <T>(cmd: string): Promise<T> => {
+      if (cmd === "scm_gh_account") return account as T;
+      if (typeof said === "string") throw new Error(said);
+      return said as T;
+    };
+    expect(await read(call)).toEqual(good);
+    account = "hubot";
+    said = "error connecting to api.github.com";
+    t.tick(SEEN_FRESH_MS + 1);
+    expect(await read(call)).toEqual({ account: "hubot", token: "failed", tracker: "failed" });
+    // and the old account's answer is gone: coming back to it while offline has nothing to cover with
+    account = "octo";
+    t.tick(SEEN_FRESH_MS + 1);
+    expect(await read(call)).toEqual({ account: "octo", token: "failed", tracker: "failed" });
+  });
+
+  // FIX-2 (review FIX-SOON 3): callers that ask while a read is already running share it.
+  it("two reads asked together share one run of gh", async () => {
+    const read = createSeenReader(clock().now);
+    const n = { account: 0, budget: 0 };
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const call = async <T>(cmd: string): Promise<T> => {
+      if (cmd === "scm_gh_account") return (n.account++, "octo") as T;
+      n.budget++;
+      await gate;
+      return rows as T;
+    };
+    const a = read(call);
+    const b = read(call);
+    release();
+    expect(await a).toEqual(good);
+    expect(await b).toEqual(good);
+    expect(n).toEqual({ account: 1, budget: 1 });
+  });
+  it("Re-check never joins an older read: it asks again, and the older read does not overwrite the newer answer", async () => {
+    const read = createSeenReader(clock().now);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    let budgets = 0;
+    const call = async <T>(cmd: string): Promise<T> => {
+      if (cmd === "scm_gh_account") return "octo" as T;
+      // the first budget call is the older read: it waits, then finds the token turned down
+      if (++budgets === 1) {
+        await gate;
+        throw new Error("HTTP 401: Bad credentials");
+      }
+      return rows as T;
+    };
+    const old = read(call);
+    expect(await read(call, { force: true })).toEqual(good);
+    release();
+    expect(await old).toEqual({ account: "octo", token: "failed", tracker: "failed" });
+    expect(budgets).toBe(2);
+    // the late, older answer did not replace the newer good one in memory
+    expect(await read(call)).toEqual(good);
+    expect(budgets).toBe(2);
+  });
+  it("a read asked after the shared one has finished starts a new run when the answer was not good", async () => {
+    const read = createSeenReader(clock().now);
+    const gh = host(() => "HTTP 401: Bad credentials");
+    await read(gh.call);
+    await read(gh.call);
+    expect(gh.n.budget).toBe(2);
+  });
 });
