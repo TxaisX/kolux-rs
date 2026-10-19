@@ -618,6 +618,12 @@ fn quiet(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000);
     }
+    // Its own process group, so the tree kill's group signal (procs::kill_tree) has a group to end.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
     cmd
 }
 
@@ -644,7 +650,6 @@ pub(crate) fn gh_run(program: &Path, worktree: &Path, args: &[&str], input: Opti
 }
 
 /// GIT-028: `gh_run` with a time limit; a gh that has not finished by then is stopped.
-// ponytail: stopping gh.cmd leaves a child it started running until it ends; its output is dropped.
 fn gh_run_for(program: &Path, worktree: &Path, args: &[&str], input: Option<&str>, limit: std::time::Duration) -> Result<String, String> {
     let mut cmd = quiet(program);
     cmd.args(args);
@@ -662,20 +667,24 @@ fn gh_run_for(program: &Path, worktree: &Path, args: &[&str], input: Option<&str
 
 /// GIT-028 / FIX-R2: runs a gh command, `input` on standard input, and waits at most `limit`:
 /// (succeeded, standard output, standard error), or Err when it cannot start or has not finished in
-/// time (it is stopped then). ponytail: stopping gh.cmd leaves a child it started running until it
-/// ends; its output is dropped.
-fn run_within(mut cmd: std::process::Command, input: Option<&str>, limit: std::time::Duration) -> Result<(bool, String, String), String> {
+/// time (it is stopped then, with everything it started).
+fn run_within(cmd: std::process::Command, input: Option<&str>, limit: std::time::Duration) -> Result<(bool, String, String), String> {
+    run_within_in(cmd, input, limit, true, &crate::procs::kill_tree)
+}
+
+/// The body of `run_within`: `with_job` false starts gh with no job (the fallback path), and
+/// `tree_kill` is what ends a tree when there is no job.
+fn run_within_in(mut cmd: std::process::Command, input: Option<&str>, limit: std::time::Duration, with_job: bool, tree_kill: &dyn Fn(u32)) -> Result<(bool, String, String), String> {
     use std::io::Read;
     use std::process::Stdio;
     cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("could not run gh: {e}"))?;
     let pid = child.id();
-    // Everything gh starts joins this job and ends with it (Windows kill-on-close); where jobs are
-    // not available the tree kill on a timeout still applies.
-    let job = crate::procs::Job::new().ok();
-    if let Some(j) = &job {
-        let _ = j.assign_pid(pid);
-    }
+    // Everything gh starts joins this job and ends with it (Windows kill-on-close); the job is the
+    // precise way to end the tree. Where there is no job (not Windows, or the assignment failed) the
+    // tree kill is the fallback, and only then: it walks by parent pid, which can reach a program
+    // gh never started.
+    let job = if with_job && cfg!(windows) { crate::procs::Job::new().ok().filter(|j| j.assign_pid(pid).is_ok()) } else { None };
     let deadline = std::time::Instant::now() + limit;
     let secs = limit.as_secs();
     let too_slow = || format!("gh did not answer within {secs} second{}; try again in a moment", if secs == 1 { "" } else { "s" });
@@ -717,9 +726,12 @@ fn run_within(mut cmd: std::process::Command, input: Option<&str>, limit: std::t
             break code;
         }
         if std::time::Instant::now() >= deadline {
-            // FIX-3: a timeout ends gh and every program it started (a gh.cmd shim's real gh keeps
-            // the pipes open), not only the direct child.
-            crate::procs::kill_tree(pid);
+            // FIX-3 / FIX-4: a timeout ends gh and every program it started (a gh.cmd shim's real gh
+            // keeps the pipes open): through the job when one holds gh, the tree kill otherwise.
+            match job {
+                Some(j) => drop(j),
+                None => tree_kill(pid),
+            }
             let _ = child.kill();
             let _ = child.wait();
             return Err(too_slow());
@@ -728,14 +740,28 @@ fn run_within(mut cmd: std::process::Command, input: Option<&str>, limit: std::t
     };
     // gh is done. Its output normally closes at once; a program it left behind that still holds the
     // pipes gets a short grace, then goes with the job, and the call still answers inside its limit.
-    let grace = std::time::Duration::from_millis(500).min(deadline.saturating_duration_since(std::time::Instant::now()));
+    let grace = grace_after(std::time::Instant::now(), deadline);
     let until = std::time::Instant::now() + grace;
     let closed = [&stdout, &stderr].map(|(_, rx)| rx.recv_timeout(until.saturating_duration_since(std::time::Instant::now())).is_ok());
     if closed.contains(&false) {
-        drop(job);
+        match job {
+            Some(j) => drop(j),
+            None => tree_kill(pid),
+        }
+        // The leftover is gone now, so its pipes close; give the drains a moment to hand over the
+        // last of what gh printed before it is read.
+        for (_, rx) in [&stdout, &stderr] {
+            let _ = rx.recv_timeout(std::time::Duration::from_millis(200));
+        }
     }
     let text = |(kept, _): &Pipe| kept.lock().map(|k| String::from_utf8_lossy(&k).into_owned()).unwrap_or_default();
     Ok((code.success(), text(&stdout), text(&stderr)))
+}
+
+/// How long a finished gh's output gets to close: what is left of the limit up to 500 ms, but never
+/// under 200 ms, so a gh that ends just as the limit runs out is not read before its last chunk.
+fn grace_after(now: std::time::Instant, deadline: std::time::Instant) -> std::time::Duration {
+    std::time::Duration::from_millis(500).min(deadline.saturating_duration_since(now)).max(std::time::Duration::from_millis(200))
 }
 
 /// GIT-023: gh's failures in the words the panel shows.
@@ -3940,23 +3966,107 @@ mod tests {
         let _ = fs::remove_dir_all(&tools);
     }
 
+    /// FIX-4 (review FIX-SOON 1): a timeout ends the tree through the job that holds gh; the tree
+    /// kill (a parent-pid walk that can reach a program gh never started) is asked only when there
+    /// is no job.
+    #[cfg(windows)]
+    #[test]
+    fn fix4_a_timeout_ends_the_tree_through_the_job_and_uses_the_tree_kill_only_without_one() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fix4-job-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        // gh.cmd starts a second program that would leave a mark about five seconds later.
+        fs::write(tools.join("late.cmd"), "@echo off\r\nping -n 6 127.0.0.1 >nul\r\necho late>\"%~dp0late.txt\"\r\n").unwrap();
+        let gh = tools.join("gh.cmd");
+        fs::write(&gh, "@echo off\r\ncmd /c \"%~dp0late.cmd\"\r\n").unwrap();
+        let limit = std::time::Duration::from_secs(1);
+        let asked = std::sync::Mutex::new(Vec::new());
+        let mut cmd = quiet(&gh);
+        cmd.current_dir(&tools);
+        let err = run_within_in(cmd, None, limit, true, &|p| asked.lock().unwrap().push(p)).unwrap_err();
+        assert!(err.contains("did not answer within 1 second"), "{err}");
+        assert!(asked.lock().unwrap().is_empty(), "the tree kill ran although a job held gh: {:?}", asked.lock().unwrap());
+        std::thread::sleep(std::time::Duration::from_secs(8));
+        assert!(!tools.join("late.txt").exists(), "a program gh started outlived its time limit");
+        // Without a job the tree kill is the fallback and is asked for gh's pid.
+        let mut cmd = quiet(&gh);
+        cmd.current_dir(&tools);
+        let err = run_within_in(cmd, None, limit, false, &|p| {
+            asked.lock().unwrap().push(p);
+            crate::procs::kill_tree(p);
+        })
+        .unwrap_err();
+        assert!(err.contains("did not answer within 1 second"), "{err}");
+        assert_eq!(asked.lock().unwrap().len(), 1, "the fallback tree kill is asked once");
+        std::thread::sleep(std::time::Duration::from_secs(8));
+        assert!(!tools.join("late.txt").exists(), "the fallback left the program gh started running");
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    /// FIX-4 (review AFTER 2): when no job holds gh, a finished gh that left a program holding its
+    /// output gets the tree-kill fallback asked once, and the call still returns gh's answer inside
+    /// its limit. (On Windows taskkill needs the root alive, so only a job reaches such a leftover;
+    /// the fallback is best effort there and complete with the process group on Unix.)
+    #[cfg(windows)]
+    #[test]
+    fn fix4_without_a_job_a_program_left_holding_the_output_goes_with_the_fallback_kill() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fix4-nojob-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        fs::write(tools.join("late.cmd"), "@echo off\r\nping -n 6 127.0.0.1 >nul\r\necho late>\"%~dp0late.txt\"\r\n").unwrap();
+        let gh = tools.join("gh.cmd");
+        fs::write(&gh, "@echo off\r\nstart \"\" /b cmd /c \"%~dp0late.cmd\"\r\necho octo\r\n").unwrap();
+        let asked = std::sync::Mutex::new(Vec::new());
+        let mut cmd = quiet(&gh);
+        cmd.current_dir(&tools);
+        let started = std::time::Instant::now();
+        let got = run_within_in(cmd, None, std::time::Duration::from_secs(3), false, &|p| {
+            asked.lock().unwrap().push(p);
+            crate::procs::kill_tree(p);
+        })
+        .unwrap();
+        assert_eq!(got.1.trim(), "octo");
+        assert!(started.elapsed() < std::time::Duration::from_secs(4), "took {:?}", started.elapsed());
+        assert_eq!(asked.lock().unwrap().len(), 1, "the fallback kill ran once for the holder");
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    /// FIX-4 (review AFTER 1): a gh that finishes just as the limit runs out still gets a short
+    /// floor to close its output, so a `pr create` that worked is not cut off before its link.
+    #[test]
+    fn fix4_the_grace_has_a_floor_even_when_the_limit_has_run_out() {
+        let now = std::time::Instant::now();
+        assert!(grace_after(now, now) >= std::time::Duration::from_millis(200), "{:?}", grace_after(now, now));
+        assert!(grace_after(now + std::time::Duration::from_secs(10), now) >= std::time::Duration::from_millis(200));
+        assert_eq!(grace_after(now, now + std::time::Duration::from_secs(60)), std::time::Duration::from_millis(500));
+    }
+
     /// FIX-3 (review FIX-SOON 3): gh has finished, but a program it started still holds its output;
-    /// the answer comes back anyway, within the limit, and the leftover program is stopped.
+    /// the answer comes back anyway, within the limit, and the leftover program is stopped (FIX-4:
+    /// the answer comes back inside the limit and the leftover leaves no mark).
     #[cfg(windows)]
     #[test]
     fn fix3_a_gh_that_leaves_a_program_holding_its_output_still_answers_in_time() {
         let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fix3-hold-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tools);
         fs::create_dir_all(&tools).unwrap();
+        // gh prints its answer and exits, leaving a program that holds its output and would leave a
+        // mark about five seconds later.
+        fs::write(tools.join("late.cmd"), "@echo off\r\nping -n 6 127.0.0.1 >nul\r\necho late>\"%~dp0late.txt\"\r\n").unwrap();
         let gh = tools.join("gh.cmd");
-        fs::write(&gh, "@echo off\r\nstart \"\" /b ping -n 30 127.0.0.1 >nul\r\necho octo\r\n").unwrap();
+        fs::write(&gh, "@echo off\r\nstart \"\" /b cmd /c \"%~dp0late.cmd\"\r\necho octo\r\n").unwrap();
+        let limit = std::time::Duration::from_secs(3);
         let (tx, rx) = std::sync::mpsc::channel();
         let (g, t) = (gh.clone(), tools.clone());
+        let started = std::time::Instant::now();
         std::thread::spawn(move || {
-            let _ = tx.send(gh_run_for(&g, &t, &["pr", "view"], None, std::time::Duration::from_secs(3)));
+            let _ = tx.send(gh_run_for(&g, &t, &["pr", "view"], None, limit));
         });
         let got = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("the call returns within its bound");
         assert_eq!(got.as_deref(), Ok("octo"));
+        assert!(started.elapsed() < limit + std::time::Duration::from_secs(1), "took {:?}", started.elapsed());
+        std::thread::sleep(std::time::Duration::from_secs(8));
+        assert!(!tools.join("late.txt").exists(), "the leftover program was not stopped");
         let _ = fs::remove_dir_all(&tools);
     }
 

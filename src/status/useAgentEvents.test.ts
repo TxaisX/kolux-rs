@@ -1,4 +1,4 @@
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { Reading } from "./useAgentStatus";
 
 // USAGE-001 (stand-in review of lane/marks ee2bfbc, FIX-SOON 7): the window's own wiring, not just
@@ -50,6 +50,10 @@ const usage = (paneKey: number, tokens: number, session?: string, at?: number) =
 const clear = (paneKey: number) => bus["agent-status"]({ payload: { paneKey, state: "done", interrupted: false, boundary: true, children: [] } });
 // A Claude SessionStart from a start or a resume: a new agent process (`fresh`, marks-FIX-1-hooks.patch).
 const resume = (paneKey: number) => bus["agent-status"]({ payload: { paneKey, state: "done", interrupted: false, boundary: true, fresh: true, session: "s1", children: [] } });
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 beforeEach(() => {
   refs.length = 0;
@@ -138,4 +142,48 @@ test("the clear's floor comes from what the pane showed, never from a state upda
   replay = null;
   usage(1, 88_000, "s1@2", 59_000);
   expect(context[1]).toBeUndefined();
+});
+
+test("a late report from the old process after a fresh start is ignored, the new process's reports are taken (USAGE-001)", () => {
+  // Stand-in review of lane/marks 54b27f5e, AFTER 1: `claude` for 40 minutes, /exit, `claude --continue`
+  // in the same pane; a status-line report from the old process is still in flight and lands after
+  // the new process's SessionStart, on the same `<id>@N` clock.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(1_000_000);
+  render([1]);
+  usage(1, 90_000, "s1@2", 2_400_000);
+  resume(1);
+  vi.setSystemTime(1_000_800);
+  usage(1, 91_000, "s1@2", 2_400_900);
+  expect(context[1]).toBeUndefined();
+  // The new process restarts its running time; without the guard its figures would be thrown away
+  // as older than the late report until it passed 40 minutes.
+  vi.setSystemTime(1_002_000);
+  usage(1, 30_000, "s1@2", 1_200);
+  expect(context[1]).toEqual({ tokens: 30_000, window: 200_000, session: "s1@2", at: 1_200 });
+  usage(1, 31_000, "s1@2", 3_300);
+  expect(context[1]?.at).toBe(3_300);
+});
+
+test("the late-report guard lasts only a moment after the start: later large running times are ordinary (USAGE-001)", () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(1_000_000);
+  render([1]);
+  resume(1);
+  // A long session where Claude keeps counting across a resume (UNKNOWN), reported a minute on.
+  vi.setSystemTime(1_060_000);
+  usage(1, 50_000, "s1@2", 2_400_000);
+  expect(context[1]?.at).toBe(2_400_000);
+});
+
+test("closing a pane forgets its fresh mark: the same key back is not guarded (USAGE-001)", () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(1_000_000);
+  render([1]);
+  resume(1);
+  render([]);
+  render([1]);
+  vi.setSystemTime(1_000_500);
+  usage(1, 50_000, "s1@2", 2_400_000);
+  expect(context[1]?.at).toBe(2_400_000);
 });

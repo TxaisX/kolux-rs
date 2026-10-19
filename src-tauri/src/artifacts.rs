@@ -462,8 +462,20 @@ pub(crate) fn system_open(url: &str) -> Result<(), String> {
     {
         let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
         let (verb, file) = (wide("open"), wide(url));
-        // SAFETY: NUL-terminated wide strings that live across the call.
-        let r = unsafe { windows_sys::Win32::UI::Shell::ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), 1) };
+        use windows_sys::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE};
+        // FIX-5 (council P2 P12): ShellExecute may hand the link to shell extensions that use COM, so
+        // the calling thread joins COM for the call (the documented way) and leaves it again after.
+        // A negative result (the thread already joined another way) means nothing to undo.
+        // SAFETY: NUL-terminated wide strings that live across the call; every successful
+        // CoInitializeEx is matched by one CoUninitialize on this thread.
+        let r = unsafe {
+            let com = CoInitializeEx(std::ptr::null(), (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32);
+            let r = windows_sys::Win32::UI::Shell::ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), 1);
+            if com >= 0 {
+                CoUninitialize();
+            }
+            r
+        };
         if (r as isize) <= 32 {
             return Err(format!("Windows could not open {url}"));
         }
