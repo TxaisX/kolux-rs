@@ -30,7 +30,7 @@ ITEMS
 3. useMemo of the seats: evidence/look-FIX-6-App.patch (checked with git apply --check against main 1c102af4 and built:
    tsc clean, 1366 vitest green). towerNow and the new towerUsage are useMemo values; the deps are panes, titles,
    context, plan, settings, hook, running, stale, turn, stamp, now (now ticks every 30 s and moves the chips).
-   TowerView and useTowerBridge read towerUsage. No unit test (it is a render-count change); LIVE PROOF PENDING step C.
+   TowerView and useTowerBridge read towerUsage. No unit test (it is a render-count change); LIVE PROOF PENDING steps B and C.
 4. Marker in RUNNING (AFTER 2): fixed. editor_search.rs prune_markers keeps at most 256 entries; past that the
    oldest raised (cancelled or finished) markers go, a running search never does. Test:
    fix6_cancel_markers_are_bounded_and_a_running_search_is_never_dropped (a pure function on a local map, so it cannot
