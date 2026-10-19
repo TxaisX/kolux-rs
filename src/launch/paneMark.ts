@@ -104,12 +104,16 @@ export function creditedAgent(commandLine: string): string | null {
   return null;
 }
 
-/** tools::credited_program in TypeScript: the agent a pane's program (one path to run) is credited to. Read quoted first, so a path with spaces stays whole, then as a command line. */
+/**
+ * tools::credited_program in TypeScript: the agent a pane's program (one path to run) is credited to. A line is read as a
+ * command line only when it is quoted or its first word is a bare name (`claude --x`, `node <script>`); otherwise it is a path
+ * and is read whole, quoted, so a path with spaces stays together and a folder name (`C:\Users\Grok Fan\...`) never credits it.
+ */
 export function creditedProgram(program: string): string | null {
   const p = program.replace(LEADING_WS, "").replace(TRAILING_WS, "");
   if (!p) return null;
-  if (p.startsWith('"')) return creditedAgent(p);
-  return creditedAgent(`"${p}"`) ?? creditedAgent(p);
+  const bareFirst = !/[\\/]/.test(p.split(WS_RUN)[0]);
+  return p.startsWith('"') || bareFirst ? creditedAgent(p) : creditedAgent(`"${p}"`);
 }
 
 /** The mark a program earns: Claude or Codex when Rust would credit it to that agent, else the plain shell. */

@@ -2,7 +2,7 @@ launch FIX-4 (council stand-in review launch-75e39584-standin-review.md, FIX-SOO
 lane/launch from 8c856676 (BEFORE; STEP 0 `git merge --ff-only 8c856676` from 75e39584, tree clean). No app launched, no Rust call site outside OWNS edited in the tree.
 
 WHAT THE USER CAN DO NOW
-A Command set in Settings > Agents to a bare path with a space (for example the Program Files path of claude.exe) draws the Claude mark, and once the evidence patch is applied it also gets the managed account / key variables, is counted as Claude by orchestration peers and the inventory, and gets the context cap. Today (without the patch) the window and Rust still disagree on that one form.
+A Command set in Settings > Agents to a bare path with a space (for example the Program Files path of claude.exe) draws the Claude mark, and once the evidence patch is applied it also gets the managed account / key variables and the context cap (the orchestration peers and the inventory already counted a bare path with a space as Claude on main before the patch; what the patch changes for them is an argument line such as `claude --x`, and the raw-fallback forms). Today (without the patch) the window and Rust still disagree on that one form. (Corrected in FIX-5: the first draft said the peers and the inventory gained the bare path with a space from the patch.)
 
 ITEM 4 (one way to credit a spawn program)
 Chosen form: the inventory.rs agent_of form (quoted first, then raw), not "Rust returns the credited agent in Spawned/StartLine" - that needs terminal.rs and App.tsx pane state, both outside OWNS; it is the better end state and is left in a ponytail note in tools.rs.
@@ -41,7 +41,7 @@ No App.tsx or LayoutStrip patch this round.
 LIVE PROOF PENDING (batched; after the patch is applied; nothing launched)
 1. Settings > Agents: set OpenClaude's Command to the full Program Files path of claude.exe (a path with a space, no quotes). Start an OpenClaude pane: the header shows the Claude mark (before the patch too), and with a managed Claude account active the pane starts signed in as that account (the account folder variable is set; Settings > Accounts shows it in use).
 2. Same with codex.cmd under Program Files and a managed Codex account.
-3. Orchestration: the same pane is listed as a Claude peer (kolux peers / the worker list shows agent claude).
+3. Orchestration: a pane whose Command is `claude --permission-mode auto` (a bare name plus arguments) is listed as a Claude peer (kolux peers / the worker list shows agent claude); this is what the patch changes for peers. The bare Program Files path of claude.exe was already a Claude peer on main, so it does not tell the patched build from the unpatched one (FIX-5 correction).
 4. A Command "C:\Program Files\Tools\notclaude.exe": plain shell mark, no account.
 
 SEEN, NOT FIXED

@@ -462,9 +462,11 @@ fn process_table() -> Vec<(u32, u32, String)> {
 }
 
 /// FIX-4: the ONE way to credit the program Kolux starts in a pane to a catalogue agent. The program
-/// is a single path to run (`program_command` takes the whole text), so it is read quoted first,
-/// which keeps a path with spaces whole (`C:\Program Files\Claude\claude.exe`), and only then as a
-/// command line (`claude --x`, `node <entry script>`). The window's `creditedProgram`
+/// is a single path to run (`program_command` takes the whole text). A line is read as a command line
+/// only when it is quoted or its first word is a bare name (`claude --x`, `node <entry script>`);
+/// otherwise it is a path and is read whole, quoted, which keeps a path with spaces together
+/// (`C:\Program Files\Claude\claude.exe`) and never credits it by a folder name (`C:\Users\Grok Fan\...`).
+/// An unquoted path followed by arguments is ambiguous and is credited to nobody. The window's `creditedProgram`
 /// (src/launch/paneMark.ts) is this function, pinned by the asserts below, so the mark a pane draws
 /// and the account or key it is handed cannot disagree. Callers: every place that credits a spawn
 /// program (terminal start, the Claude and Codex account variables, the key variables, the peers
@@ -476,10 +478,13 @@ pub fn credited_program(program: &str) -> Option<&'static str> {
     if p.is_empty() {
         return None;
     }
-    if p.starts_with('"') {
+    // A quoted program, or a bare name with arguments (`claude --x`, `node <script>`), is a command line.
+    // Anything else is a path to run whole: its folder names (`C:\Users\Grok Fan\...`) are not the program.
+    let bare_first = p.split_whitespace().next().is_some_and(|w| !w.contains(['\\', '/']));
+    if p.starts_with('"') || bare_first {
         crate::agents::credited_agent(p)
     } else {
-        crate::agents::credited_agent(&format!("\"{p}\"")).or_else(|| crate::agents::credited_agent(p))
+        crate::agents::credited_agent(&format!("\"{p}\""))
     }
 }
 
@@ -501,12 +506,58 @@ mod tests {
         assert_eq!(credited_program(r"node C:\Users\t\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\cli.js"), Some("claude"));
         assert_eq!(credited_program("node /usr/lib/node_modules/@openai/codex/bin/codex.js"), Some("codex"));
         assert_eq!(credited_program(r"C:\Program Files\Claude\claude.exe --x"), None, "unquoted path plus arguments: the cut is ambiguous");
+        assert_eq!(credited_program(r"C:\Users\Grok Fan\bin\tool.exe"), None, "a folder name with a space is not the program");
+        assert_eq!(credited_program(r"C:\Users\Codex Fan\tools\x.exe"), None);
+        assert_eq!(credited_program(r"D:\Apps\Claude Code\launcher.exe"), None);
+        assert_eq!(credited_program(r"codex --cd C:\work\claude"), Some("codex"), "a bare name plus arguments: the first word is the program");
+        assert_eq!(credited_program(r"claude C:\tools\codex.cmd"), Some("claude"));
+        assert_eq!(credited_program("/opt/Grok Tools/grok"), Some("grok"), "a path with a space, read whole");
         assert_eq!(credited_program(r"C:\Program Files\Tools\notclaude.exe"), None);
         assert_eq!(credited_program(r"C:\Program Files\Kiro\kiro.exe"), None, "plain kiro is not Kiro");
         assert_eq!(credited_program("claude-teams"), None);
         assert_eq!(credited_program("pwsh"), None);
         assert_eq!(credited_program("   "), None);
         assert_eq!(credited_program(""), None);
+    }
+
+    /// The text of a Rust source with whole-line comments dropped.
+    fn code_only(src: &str) -> String {
+        src.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n")
+    }
+
+    /// Whether `name` appears in `text` as a whole word (a call, a path segment or a function pointer).
+    fn uses_word(text: &str, name: &str) -> bool {
+        let word = |c: char| c.is_alphanumeric() || c == '_';
+        text.match_indices(name).any(|(at, _)| {
+            !text[..at].chars().next_back().is_some_and(word) && !text[at + name.len()..].chars().next().is_some_and(word)
+        })
+    }
+
+    #[test]
+    fn fix5_only_agents_tools_and_foreground_name_credited_agent() {
+        // A spawn program is credited through credited_program; credited_agent stays for the three files that read a command line.
+        assert!(uses_word("a(credited_agent(x)) b", "credited_agent") && uses_word(".map(credited_agent)", "credited_agent"));
+        assert!(!uses_word("fix4_credited_agent_x credited_agent2", "credited_agent"));
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![dir.clone()];
+        let (mut seen, mut users) = (0, Vec::new());
+        while let Some(d) = stack.pop() {
+            for entry in std::fs::read_dir(&d).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    seen += 1;
+                    let text = code_only(&std::fs::read_to_string(&path).unwrap());
+                    if uses_word(&text, "credited_agent") {
+                        users.push(path.strip_prefix(&dir).unwrap().to_string_lossy().replace('\\', "/"));
+                    }
+                }
+            }
+        }
+        users.sort();
+        assert!(seen > 20, "read {seen} source files");
+        assert_eq!(users, ["agents.rs", "foreground.rs", "tools.rs"], "a spawn program is credited through the tools reader, not the agents one");
     }
 
     #[test]
