@@ -13,7 +13,7 @@ import { integrationSteps, readSeen } from "./integrations";
 import { defaultAgentId } from "../launch/agents";
 import {
   caps, demoFrames, doneFrom, paletteKeys, doneId, firstOpen, forward, latest, markGuide, moveOn, nextTip, OPEN_EXPLORE, OPEN_GUIDE, guideClosed, PAGE_SHOWN, railKey, ring, startTicked, STEPS, stopDone, stopOf, TWO_REPOS, withRecord, words, workflowDone, WORKFLOWS,
-  type At, type Cap, type CapId, type CliStatus, type Facts, type GuideRecord, type Place, type Setup, type StepId, type TipId,
+  legacyProfile, type At, type Cap, type CapId, type CliStatus, type Facts, type GuideRecord, type Place, type Setup, type StepId, type TipId,
 } from "./guide";
 
 type Scan = { skills: { name: string; source: string }[] };
@@ -28,7 +28,7 @@ const UNREAD: Read = { workspaces: null, gitProjects: null, pageShown: false, in
 async function readFacts(check: ReturnType<typeof latest<boolean>>, put: (f: Partial<Read>) => void, alive: () => boolean): Promise<boolean | null> {
   const [settings, g] = await Promise.all([invoke<Record<string, unknown>>("get_settings").catch(() => null), invoke<GuideRecord>("guide_get").catch(() => null)]);
   if (!alive()) return null;
-  put({ notifications: settings ? settings.notifyOnFinish !== false : null, agent: settings ? defaultAgentId(settings) : null, pageShown: !!g?.tried.includes(PAGE_SHOWN) });
+  put({ notifications: settings ? settings.notifyOnFinish !== false : null, agent: settings ? defaultAgentId(settings) : null, pageShown: !!g?.tried.includes(PAGE_SHOWN), legacy: legacyProfile(settings, g?.tried ?? null) });
   put({ integrations: "checking" });
   // ONB-018: connected means signed in and the token accepted, not only a cached sign-in.
   const gh = readSeen(invoke).then(

@@ -51,6 +51,7 @@ vi.mock("@tauri-apps/api/core", () => ({
       guide_get: record,
       get_settings: { notifyOnFinish: false },
       scm_gh_account: null,
+      settings_patch: null,
       project_list: [],
       cli_status: { installed: false, onPath: false },
       skills_scan: { skills: [] },
@@ -154,4 +155,16 @@ test("a read caused by the guide switching on resets the focus floor, so a focus
   } finally {
     spy.mockRestore();
   }
+});
+
+test("Hide from sidebar saves the choice and the entry goes (ONB-020)", async () => {
+  const app = await mount();
+  const root = app.out() as { props: { className: string; children: { props: { title?: string; onClick?: () => void } }[] } };
+  expect(root.props.className).toBe("onb-entry");
+  const hide = root.props.children.find((c) => c?.props?.title === "Hide from sidebar");
+  expect(hide).toBeTruthy();
+  hide!.props.onClick!();
+  await app.settle();
+  expect(calls).toContain("settings_patch");
+  expect(app.out()).toBeNull();
 });

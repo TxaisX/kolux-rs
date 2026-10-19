@@ -24,6 +24,7 @@
 .onb-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 /* VIEW-114: the Setup Guide entry in the sidebar, above the footer. */
 .onb-entry { display: flex; align-items: center; gap: 8px; margin: 6px 8px; padding: 6px 8px; border: 1px solid var(--line-subtle); border-radius: 8px; background: var(--pane-bg); color: var(--fg); text-align: left; min-width: 0; }
+.onb-open { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 0; border: 0; background: none; color: inherit; text-align: left; }
 .onb-entry:hover { background: var(--row-selected); }
 .onb-entry .text { display: flex; flex-direction: column; min-width: 0; }
 .onb-entry .name { font-size: 13px; font-weight: 500; }
