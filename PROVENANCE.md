@@ -792,3 +792,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · editor T-318 · Rust std docs for fs::read_dir, FileType::is_symlink and jiff Zoned::strftime; no outside source
 > 2026-10-19 · editor T-316 · CodeMirror 6 reference docs (StreamLanguage, Compartment, LanguageDescription), the JSON grammar on json.org, the Nim manual keyword list, RFC 4180 for CSV quoting; no outside source
 > 2026-10-19 · worktrees FIX-2 (T-299, T-294) · council stand-in review of lane/worktrees 313721b4 as given in the brief; this tree own projects.rs, setup.rs and src/projects; no outside source
+> 2026-10-19 · reliability FIX-8 · the stand-in review reliability-5bf0d5ce-standin-review.md (Send-to-build 4-6); this tree's own scm.rs and evidence; no outside source
