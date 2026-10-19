@@ -77,6 +77,44 @@ describe("usageByAccount", () => {
   });
 });
 
+// T-548 (council AFTER, MERGE 42): with the active accounts known, a card says whose figures it shows and a
+// Codex pane on another account is not counted under the active account's figures.
+describe("usageByAccount with the active accounts", () => {
+  const plan = {
+    claude: [{ kind: "five_hour", usedPercent: 42, resetsAt: null }],
+    codex: { state: "ok" as const, fiveHour: { usedPercent: 5, resetsAt: null, windowMins: 300 }, weekly: null, resetCredits: null, plan: null, message: null },
+  };
+
+  it("names the account the Claude figures are read for", () => {
+    const [card] = usageByAccount([{ agent: "claude", account: null }], plan, { claude: "work", codex: null });
+    expect(card.forAccount).toBe("work");
+    expect(card.figures).toEqual({ fiveHour: 42, weekly: null });
+    expect(card.elsewhere).toBe(0);
+  });
+
+  it("shows Codex figures when a pane runs on the active account and counts the others as elsewhere", () => {
+    const seats = [{ agent: "codex", account: "a" }, { agent: "codex", account: "b" }, { agent: "codex", account: null }];
+    const [card] = usageByAccount(seats, plan, { claude: null, codex: "a" });
+    expect(card.figures).toEqual({ fiveHour: 5, weekly: null });
+    expect(card.forAccount).toBe("a");
+    expect(card.elsewhere).toBe(2);
+  });
+
+  it("shows no Codex figures when every pane is on another account than the active one", () => {
+    const [card] = usageByAccount([{ agent: "codex", account: "b" }, { agent: "codex", account: "c" }], plan, { claude: null, codex: "a" });
+    expect(card.figures).toBeNull();
+    expect(card.elsewhere).toBe(2);
+    expect(card.panes).toBe(2);
+  });
+
+  it("treats the system default (null) as the active account when none is chosen", () => {
+    const [card] = usageByAccount([{ agent: "codex", account: null }], plan, { claude: null, codex: null });
+    expect(card.figures).toEqual({ fiveHour: 5, weekly: null });
+    expect(card.elsewhere).toBe(0);
+    expect(card.forAccount).toBeNull();
+  });
+});
+
 // FIX-5 (council P2 P12): the list's keys: Up and Down walk, Home and End jump to the ends, any other key is left alone.
 describe("FIX-5 the Tower list keys", () => {
   const keys = [4, 7, 9];

@@ -1,0 +1,58 @@
+diff --git a/src/keys/actions.ts b/src/keys/actions.ts
+index 8d560ed4..0c098def 100644
+--- a/src/keys/actions.ts
++++ b/src/keys/actions.ts
+@@ -94,6 +94,9 @@ export const actions: Action[] = [
+   a("floatingWorkspace.maximize", "Maximize Floating Workspace Panel", "global", [], { darwin: ["Mod+Alt+Shift+A"] }),
+   a("view.inbox", "Show Inbox", "global", []),
+   a("view.tower", "Show Tower", "global", []),
++  // T-548 (OD-11): one key moves new panes to the provider's next account; unbound until Txais picks a chord.
++  a("account.switchClaude", "Switch Claude account", "global", [], { keywords: ["account", "sign in", "login"] }),
++  a("account.switchCodex", "Switch Codex account", "global", [], { keywords: ["account", "sign in", "login"] }),
+   a("sidebar.sleeping.toggle", "Show or Hide Sleeping Workspaces", "global", [], { keywords: ["sleep", "asleep", "wake"] }),
+   a("view.floor", "Show Floor", "global", []),
+   a("view.code", "Show Code", "global", ["Mod+Shift+3"]),
+diff --git a/src/keys/keymap.test.ts b/src/keys/keymap.test.ts
+index 57ab6695..16493e5f 100644
+--- a/src/keys/keymap.test.ts
++++ b/src/keys/keymap.test.ts
+@@ -6,13 +6,13 @@ import { chordMatches, chordsOf, labelOf, labelParts, matchEvent, parseChord, re
+ 
+ const key = (k: Partial<KeyLike>): KeyLike => ({ key: "", code: "", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...k });
+ 
+-test("the table registers the 129 carried commands (VIEW-053 added one, T-546 added view.tower); 53 ship unbound (T-543-b unbound Reopen closed tab) and 6 have only a macOS chord", () => {
+-  expect(actions.length).toBe(129);
++test("the table registers the 131 carried commands (VIEW-053 added one, T-546 added view.tower, T-548 added the two account switches); 55 ship unbound (T-543-b unbound Reopen closed tab) and 6 have only a macOS chord", () => {
++  expect(actions.length).toBe(131);
+   const ids = new Set(actions.map((a) => a.id));
+-  expect(ids.size).toBe(129);
++  expect(ids.size).toBe(131);
+   expect(ids.has("tab.newSimulator")).toBe(false);
+   expect(ids.has("tab.openQuickCommandsMenu")).toBe(false);
+-  expect(actions.filter((a) => a.win32.length === 0 && !a.darwin).length).toBe(53);
++  expect(actions.filter((a) => a.win32.length === 0 && !a.darwin).length).toBe(55);
+   expect(actions.filter((a) => a.win32.length === 0 && a.darwin).map((a) => a.id).sort()).toEqual(["floatingWorkspace.maximize", "sidebar.ports.toggle", "tab.newAgent", "tab.rename", "workspace.rename"].sort());
+   expect(actions.filter((a) => a.id.startsWith("tab.newAgent.")).length).toBe(35);
+ });
+diff --git a/src/settings/shortcutRows.test.ts b/src/settings/shortcutRows.test.ts
+index 77cb2528..bee08c5a 100644
+--- a/src/settings/shortcutRows.test.ts
++++ b/src/settings/shortcutRows.test.ts
+@@ -11,7 +11,7 @@ const ids = (r: ReturnType<typeof rows>) => r.map((x) => x.id);
+ 
+ test("every command is listed under its area with its chords and badges", () => {
+   const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+0", "zoom.in": null, "view.tasks": "Mod+P" } });
+-  expect(all.length).toBe(128); // 129 commands, Reopen closed tab hidden until T-164-b (T-543-b)
++  expect(all.length).toBe(130); // 131 commands, Reopen closed tab hidden until T-164-b (T-543-b)
+   expect(ids(all)).not.toContain("tab.reopenClosed");
+   const by = (id: string) => all.find((r) => r.id === id)!;
+   expect(by("terminal.clear")).toMatchObject({ area: "Terminal", labels: ["Ctrl+K"], badges: [] });
+@@ -28,7 +28,7 @@ test("every command is listed under its area with its chords and badges", () =>
+ 
+ test("filters: all, modified, unassigned, conflicting", () => {
+   const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+0", "zoom.in": null, "view.tasks": "Mod+P" } });
+-  expect(filterRows(all, "all", "").length).toBe(128);
++  expect(filterRows(all, "all", "").length).toBe(130);
+   expect(ids(filterRows(all, "modified", ""))).toEqual(["zoom.in", "zoom.reset"]);
+   expect(filterRows(all, "unassigned", "").every((r) => r.labels.length === 0)).toBe(true);
+   expect(ids(filterRows(all, "unassigned", ""))).toContain("zoom.in");

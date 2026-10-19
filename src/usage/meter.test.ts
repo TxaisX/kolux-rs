@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
-import { capOn, contextFill, meterOf, meterText, percentMode, planOf, readsLeft, shortTokens, shownPercent, tone, usageLine } from "./meter";
+import { capOn, codexOf, contextFill, meterOf, meterText, percentMode, planOf, readsLeft, shortTokens, shownPercent, tone, usageLine } from "./meter";
 import Ring from "./Ring";
 import type { ClaudeLimit } from "./claude";
 import type { CodexUsage } from "./codex";
@@ -92,4 +92,17 @@ test("T-263 USAGE-025: usage percentages read as used or left; missing or unknow
   expect(shownPercent(140, "remaining")).toBe(0);
   expect(shownPercent(-5, "used")).toBe(0);
   expect(shownPercent(Number.NaN, "remaining")).toBe(0);
+});
+
+// T-548 (council AFTER, MERGE 42): src/usage holds the figures of the ACTIVE Codex account only, so a pane
+// begun on another account must not carry them into its Board card or its Tower row.
+test("T-548: a Codex pane on another account than the active one gets no plan figures; a pane on the active one, or not yet started, keeps them", () => {
+  expect(codexOf("codex", "b", "a", codex)).toBeNull();
+  expect(codexOf("codex", null, "a", codex)).toBeNull(); // began on Codex's own sign-in, which is not the active account
+  expect(codexOf("codex", "a", "a", codex)).toBe(codex);
+  expect(codexOf("codex", null, null, codex)).toBe(codex);
+  expect(codexOf("codex", undefined, "a", codex)).toBe(codex); // no account recorded yet: unknown, so nothing is hidden
+  expect(codexOf("claude", "b", "a", codex)).toBe(codex); // only Codex panes are held back
+  expect(meterOf(undefined, "codex", claude, codexOf("codex", "b", "a", codex))).toBeNull();
+  expect(meterOf(undefined, "codex", claude, codexOf("codex", "a", "a", codex))?.plan).toEqual({ fiveHour: 12, weekly: null });
 });

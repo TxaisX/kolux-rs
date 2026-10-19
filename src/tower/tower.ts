@@ -43,7 +43,19 @@ export function laneCounts(rows: Row[]): Array<{ lane: Lane; count: number }> {
 
 /** One usage card per provider in use: its plan figures once, how many panes run under it, and the
  *  accounts those panes are on (in the order their panes appear) with a pane count each. */
-export type AccountUsage = { agent: string; figures: PlanFigures | null; panes: number; accounts: Array<{ account: string | null; panes: number }> };
+export type AccountUsage = {
+  agent: string;
+  figures: PlanFigures | null;
+  panes: number;
+  accounts: Array<{ account: string | null; panes: number }>;
+  /** T-548, only when the active accounts were passed: the account the figures are read for (null = the system default). */
+  forAccount?: string | null;
+  /** T-548: panes of this provider on an account other than the one the figures are read for (Codex only;
+   *  a Claude pane does not record its account yet, T-548-b). */
+  elsewhere?: number;
+};
+/** T-548: the account new panes use, per provider (null = the system default). */
+export type ActiveAccounts = { claude: string | null; codex: string | null };
 
 /** Providers in the order their panes appear; every provider seat counts, even before figures arrive.
  *  T-546-b (2): src/usage holds ONE Claude figure set and ONE Codex set (whichever account reported
@@ -51,7 +63,7 @@ export type AccountUsage = { agent: string; figures: PlanFigures | null; panes: 
  *  the screen used to decide where work goes. Until T-548 reads one set per account, the figures sit
  *  on one card per provider and the accounts are listed under it with their pane counts. The name
  *  stays `usageByAccount` because the T-546 wiring in App.tsx imports it by that name. */
-export function usageByAccount(seats: Pick<Seat, "agent" | "account">[], plan: Plan): AccountUsage[] {
+export function usageByAccount(seats: Pick<Seat, "agent" | "account">[], plan: Plan, active?: ActiveAccounts): AccountUsage[] {
   const out: AccountUsage[] = [];
   for (const s of seats) {
     if (s.agent !== "claude" && s.agent !== "codex") continue;
@@ -62,6 +74,15 @@ export function usageByAccount(seats: Pick<Seat, "agent" | "account">[], plan: P
     const acct = card.accounts.find((a) => a.account === account);
     if (acct) acct.panes += 1;
     else card.accounts.push({ account, panes: 1 });
+  }
+  if (!active) return out;
+  // T-548: the figures are the active account's. A Codex card with no pane on that account has none
+  // to show; a Claude pane's own account is not recorded, so all of its panes count as on the active one.
+  for (const card of out) {
+    const now = card.agent === "codex" ? active.codex : active.claude;
+    card.forAccount = now;
+    card.elsewhere = card.agent === "codex" ? card.accounts.filter((a) => a.account !== now).reduce((n, a) => n + a.panes, 0) : 0;
+    if (card.elsewhere === card.panes) card.figures = null;
   }
   return out;
 }
