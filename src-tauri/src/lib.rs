@@ -346,6 +346,7 @@ pub fn run() {
             hooks::agent_hooks::agent_hooks_file,
             hooks::agent_hooks::saved::agent_status_saved,
             hooks::agent_hooks::saved::agent_resumable,
+            protected::protected_rules,
             hooks::claude_usage,
             sysmem::process_memory,
             fonts::list_fonts,
