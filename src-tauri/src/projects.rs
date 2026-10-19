@@ -1672,6 +1672,17 @@ fn kolux_made(origins: &serde_json::Map<String, serde_json::Value>, all: Vec<Wor
     all.into_iter().filter(|w| origins.contains_key(&name_key(&w.path))).collect()
 }
 
+/// The sweep over one project's worktrees: `forget_gone`, and what Kolux remembers about each one
+/// it forgets goes too, the same as when the user removes the workspace. The store is locked only
+/// for each forgotten path, never while Git works.
+fn sweep_gone(store: &Mutex<Store>, repo: &Path, all: &[Worktree], busy: &[String]) -> Vec<String> {
+    forget_gone(repo, all, busy, |path| {
+        if let Ok(store) = store.lock() {
+            let _ = forget_workspace(&store, path);
+        }
+    })
+}
+
 /// APP-051 at launch, off the startup path: every project's gone worktrees that Kolux RS made are
 /// forgotten.
 pub fn forget_gone_at_start(app: tauri::AppHandle) {
@@ -1686,12 +1697,7 @@ pub fn forget_gone_at_start(app: tauri::AppHandle) {
         for p in projects {
             let repo = Path::new(&p.path);
             if let Ok(all) = git.worktrees(repo) {
-                let retire = |path: &str| {
-                    if let Ok(store) = app.state::<Mutex<Store>>().lock() {
-                        let _ = retire_workspace_names(&store, path);
-                    }
-                };
-                for path in forget_gone(repo, &kolux_made(&origins, all), &busy, retire) {
+                for path in sweep_gone(&app.state::<Mutex<Store>>(), repo, &kolux_made(&origins, all), &busy) {
                     if let Ok(dir) = app.path().app_data_dir() {
                         crate::diag::write(&dir, &format!("forgot the worktree {path}: its folder is gone and no session uses it"));
                     }
@@ -2683,7 +2689,7 @@ mod tests {
         let scope = name_key(&base.join("ws").to_string_lossy());
         assert_eq!(retired_names(&store, &scope), vec![name_form(&name)], "the name is retired in the folder it lived in");
         assert_ne!(pick_name(&store, &scope, vec![], 3), name, "and is not suggested again");
-        // a typed name that is not from the list, and a worktree left alone, retire nothing
+        // a worktree a session still uses (busy) is left alone: nothing is forgotten or retired
         let busy = base.join("ws").join("kept");
         git_in(&repo, &["worktree", "add", "-q", &busy.to_string_lossy(), "-b", "kept"]);
         fs::remove_dir_all(&busy).unwrap();
@@ -2691,6 +2697,51 @@ mod tests {
         let forgot = forget_gone(&repo, &all, &[busy.to_string_lossy().into_owned()], |p| retire_workspace_names(&store, p).unwrap());
         assert!(forgot.is_empty());
         assert_eq!(retired_names(&store, &scope).len(), 1);
+        drop(store);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn fix2_the_sweep_clears_the_same_record_as_a_removal_by_the_user() {
+        let base = temp("fix2-sweep");
+        let repo = base.join("r");
+        init_repo(&repo);
+        let git = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&base.join("db")).unwrap());
+        let creature = creature_name(&[], 3);
+        let (gone, kept) = (base.join("ws").join(&creature), base.join("ws").join("kept-one"));
+        for f in [&gone, &kept] {
+            let branch = f.file_name().unwrap().to_string_lossy().to_string();
+            git_in(&repo, &["worktree", "add", "-q", &f.to_string_lossy(), "-b", &branch]);
+        }
+        let (gone_p, kept_p) = (gone.to_string_lossy().to_string(), kept.to_string_lossy().to_string());
+        {
+            let s = store.lock().unwrap();
+            for p in [&gone_p, &kept_p] {
+                set_name(&s, p, Some("typed name")).unwrap();
+                set_parent(&s, p, Some("C:/ws/parent")).unwrap();
+                save_workspace_note(&s, p, "handoff text").unwrap();
+                set_origin(&s, p, Some(&serde_json::json!({"issue": 7}))).unwrap();
+            }
+        }
+        fs::remove_dir_all(&gone).unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        assert_eq!(sweep_gone(&store, &repo, &all, &[]), vec![gone_p.clone()]);
+        let s = store.lock().unwrap();
+        // the swept workspace leaves no record, so a new one made at the same path starts clean
+        assert!(!load_names(&s).contains_key(&name_key(&gone_p)), "typed name");
+        let parents: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&s.get(PARENTS_KEY).unwrap().unwrap()).unwrap();
+        assert!(!parents.contains_key(&name_key(&gone_p)) && parents.contains_key(&name_key(&kept_p)), "parent: {parents:?}");
+        assert_eq!(workspace_note(&s, &gone_p).text, "", "note");
+        assert!(!load_origins(&s).contains_key(&name_key(&gone_p)), "origin");
+        // its suggested folder name is still retired in the folder it lived in
+        let scope = name_key(&base.join("ws").to_string_lossy());
+        assert_eq!(retired_names(&s, &scope), vec![name_form(&creature)]);
+        // the one that is still there keeps everything
+        assert!(load_names(&s).contains_key(&name_key(&kept_p)));
+        assert_eq!(workspace_note(&s, &kept_p).text, "handoff text");
+        assert!(load_origins(&s).contains_key(&name_key(&kept_p)));
+        drop(s);
         drop(store);
         let _ = fs::remove_dir_all(&base);
     }
