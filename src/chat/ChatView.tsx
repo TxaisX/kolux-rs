@@ -11,7 +11,7 @@ import { locale } from "../language";
 import "./chat.css";
 import { fold, thoughtIds as idsOf, toggled, type View } from "./steps";
 import { NoticeRow, PlanRow, StepRow, ThoughtRow } from "./StepRows";
-import { SHELL_OFFER, agentsView, handOver, handTargets, viewedFirst, applyRead, capPending, chatCovers, chatOffer, combine, pickChat, typingInto, lastReply, lastReplyItem, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row } from "./model";
+import { SHELL_OFFER, agentsView, handOver, handTargets, viewedFirst, capPending, chatCovers, chatOffer, combine, pickChat, typingInto, lastReply, lastReplyItem, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row } from "./model";
 import { Composer, type ComposerHandle } from "./MessageBox";
 import { draftOf, forwardsToBox, keepDraft, nearBottom } from "./composer";
 import { sessionLabel } from "../agents/rail";
@@ -20,6 +20,7 @@ import { answerCard, askOf, cardOf, dismissAsk, hearAsks, subscribeAsk } from ".
 import { PermissionCard } from "./PermissionCard";
 import { BrowserChoice, ChatText, LinkContext, type LinkHost } from "./ChatText";
 import { printedPaths } from "./chatLinks";
+import { ChatReader, NOTHING, watchHidden, type Seen } from "./reading";
 import { CANNOT_STOP_NOTE, STOPPING_NOTE } from "./stop";
 import type { Answer } from "../terminal/permissionAnswer";
 
@@ -43,11 +44,10 @@ export type ChatOpen = { onOpenLink?: (url: string) => void; onOpenFile?: (path:
 export const GONE_NOTE = "That question was already answered. Look at the terminal.";
 /** The refusal of a hand-over and the id of the reply it was refused for. */
 export type HandNote = { text: string; forResult: string };
-export default function ChatView({ pane, agent, preview = null, pending = [], hookState, stateOf, ptyOf, target = null, aside, hand, open: opener }: { pane: ChatPane; agent?: string; preview?: Preview | null; pending?: Pending[]; hookState?: string; stateOf?: (key: number) => string | undefined; ptyOf?: (key: number) => number | undefined; target?: string | null; aside?: ReactNode; hand?: Hand; open?: ChatOpen }) {
-  const [items, setItems] = useState<ChatItem[]>([]);
-  const [state, setState] = useState<ChatRead["state"]>("loading");
-  const [error, setError] = useState<string | null>(null);
-  const [open, setOpen] = useState(false);
+export default function ChatView({ pane, agent, preview = null, pending = [], hookState, stateOf, ptyOf, target = null, aside, hand, open: opener, hidden: hiddenProp }: { pane: ChatPane; agent?: string; preview?: Preview | null; pending?: Pending[]; hookState?: string; stateOf?: (key: number) => string | undefined; ptyOf?: (key: number) => number | undefined; target?: string | null; aside?: ReactNode; hand?: Hand; open?: ChatOpen; /** CHAT-009: true while the screen hides the chat; it reads nothing then. */ hidden?: boolean }) {
+  // CHAT-009 (T-330): what the transcript last said, kept per pane while the chat is hidden (reading.ts).
+  const [seen, setSeen] = useState<Seen>(NOTHING);
+  const { items, state, error, open } = seen;
   const [extras, setExtras] = useState<Extra[]>([]);
   // CHAT-022 (council FIX-1): the box sends only while Kolux can see the agent is not asking in its
   // terminal; a send's keys would land in a menu and its Enter would pick the default (Yes).
@@ -61,30 +61,8 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
   useEffect(() => subscribeAsk(() => setAsked((n) => n + 1)), []);
 
   useEffect(() => {
-    let alive = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    setItems([]);
-    setState("loading");
     setHeard(undefined);
     setNote(null);
-    const look = () => {
-      invoke<ChatRead>("chat_read", { paneKey: pane.key })
-        .then((r) => {
-          if (!alive) return;
-          setItems((prev) => applyRead(prev, r));
-          setState(r.state);
-          setError(r.error ?? null);
-          setOpen(r.open);
-          timer = setTimeout(look, r.retryMs);
-        })
-        .catch((e) => {
-          if (!alive) return;
-          setState("error");
-          setError(String(e));
-          timer = setTimeout(look, 10_000);
-        });
-    };
-    look();
     // CHAT-010: what the hooks say arrives first; the transcript's version replaces it.
     const off = listen<{ paneKey: number; reply?: string; state?: string }>("agent-status", (e) => {
       if (e.payload.paneKey !== pane.key) return;
@@ -94,12 +72,7 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
       const text = e.payload.reply;
       setExtras((xs) => (xs.some((x) => x.text === text) ? xs : [...xs.slice(-20), { id: `hook-${Date.now()}`, role: "assistant", text, at: Date.now() }]));
     });
-    return () => {
-      alive = false;
-      if (timer) clearTimeout(timer);
-      void off.then((u) => u()).catch(() => {});
-      invoke("chat_close", { paneKey: pane.key }).catch(() => {});
-    };
+    return () => void off.then((u) => u()).catch(() => {});
   }, [pane.key]);
 
   // CHAT-020: what this view sent and the transcript has not confirmed yet (at most 8 per pane).
@@ -109,6 +82,24 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
   const rows = useMemo(() => combine(items, extras, previewToShow(preview, open, lastReply(items)), allPending), [items, extras, preview, open, allPending]);
   const key = pane.key;
   const terminalOf = (k: number) => (k === key && pane.terminal !== undefined ? pane.terminal : ptyOf?.(k));
+  // CHAT-009: a hidden chat (its screen left, `hidden`, or the window's page hidden) reads nothing; shown again it
+  // opens on its last good view and one new read replaces it. A new terminal behind the pane drops the kept view.
+  const session = terminalOf(key);
+  const [pageHidden, setPageHidden] = useState(() => typeof document !== "undefined" && document.visibilityState === "hidden");
+  useEffect(() => watchHidden(document, setPageHidden), []);
+  const paused = !!hiddenProp || pageHidden;
+  useLayoutEffect(() => {
+    const reader = new ChatReader({
+      pane: key,
+      session,
+      hidden: paused,
+      read: () => invoke<ChatRead>("chat_read", { paneKey: key }),
+      close: () => void invoke("chat_close", { paneKey: key }).catch(() => {}),
+      onChange: setSeen,
+    });
+    setSeen(reader.seen);
+    return () => reader.hide();
+  }, [key, session, paused]);
   // Council FIX-2: a reading from the pane's earlier terminal does not count (FS4).
   const held = holdReading(key, hookState, stateOf !== undefined, terminalOf(key));
   /** False when nothing was sent, so the box keeps the text; the box then says why (council FIX-2, FS3). */

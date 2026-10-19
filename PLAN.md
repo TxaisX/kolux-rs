@@ -388,7 +388,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### H · theme 9 · Reliability and no lost work (2 cards)
 
-- [ ] T-330 · CHAT-009 Hidden chats pause reading and keep their last good view
+- [x] T-330 · CHAT-009 Hidden chats pause reading and keep their last good view · done 2026-10-19 (lane/chat from f1ad80d5; evidence/T-330.txt: a chat that is hidden (screen left or window minimised) reads nothing and holds no retry; shown again it opens on its last good conversation and one new read replaces it with nothing repeated; kept messages go if the terminal behind the pane changed; a failed read after messages were shown leaves them and shows no full-pane error; vitest src/chat 177, tsc 0; live proof pending (batched))
 - [ ] T-331 · HID-036 [compat] Retired settings quietly dropped when an old profile loads
 
 ### H · theme 11 · Orchestration and automations (1 cards)
