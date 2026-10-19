@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { laneCounts, towerRows, usageByAccount, type Seat } from "./tower";
+import { laneCounts, selectionForKey, towerRows, usageByAccount, type Seat } from "./tower";
 import type { Chip } from "../board/chip";
 
 const chip = (lane: Chip["lane"], word: string = lane, line = "", file?: string): Chip => ({ lane, word, line, file, answer: lane === "needs" });
@@ -74,5 +74,27 @@ describe("usageByAccount", () => {
 
   it("keeps a provider whose figures have not arrived, with null figures", () => {
     expect(usageByAccount([{ agent: "codex", account: "b" }], { claude: [], codex: null })).toEqual([{ agent: "codex", figures: null, panes: 1, accounts: [{ account: "b", panes: 1 }] }]);
+  });
+});
+
+// FIX-5 (council P2 P12): the list's keys: Up and Down walk, Home and End jump to the ends, any other key is left alone.
+describe("FIX-5 the Tower list keys", () => {
+  const keys = [4, 7, 9];
+  it("walks with the arrows, stopping at the ends", () => {
+    expect(selectionForKey("ArrowDown", keys, 4)).toEqual({ to: 7 });
+    expect(selectionForKey("ArrowDown", keys, 9)).toEqual({ to: 9 });
+    expect(selectionForKey("ArrowUp", keys, 7)).toEqual({ to: 4 });
+    expect(selectionForKey("ArrowDown", keys, null)).toEqual({ to: 4 });
+  });
+
+  it("Home goes to the first row and End to the last, from anywhere", () => {
+    expect(selectionForKey("Home", keys, 7)).toEqual({ to: 4 });
+    expect(selectionForKey("End", keys, null)).toEqual({ to: 9 });
+    expect(selectionForKey("End", [], null)).toEqual({ to: null });
+  });
+
+  it("leaves every other key to the page", () => {
+    expect(selectionForKey("a", keys, 4)).toBeNull();
+    expect(selectionForKey("Enter", keys, 4)).toBeNull();
   });
 });

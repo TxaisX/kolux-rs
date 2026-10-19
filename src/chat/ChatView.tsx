@@ -27,7 +27,9 @@ type Support = { agent?: string; launching: boolean; readable: boolean };
  * `ptyOf`: the pane's program session, asked at send time. `target`: names the pane the box types into.
  * `aside`: drawn at the top right (the Agents screen's Show terminal switch). `hand`: VIEW-020, the
  * sessions a finished turn's reply can be handed to, and what handing it does. */
-export type Hand = { targets: { key: number; label: string }[]; onHand: (key: number, text: string) => void; /** Why the last hand-over was refused (FIX-SOON 1), shown beside the menu. */ note?: string | null };
+export type Hand = { targets: { key: number; label: string }[]; onHand: (key: number, text: string) => void; /** Why the last hand-over was refused (FIX-SOON 1), shown beside the menu while the reply it was for is still the one shown (FIX-5). */ note?: string | null; noteFor?: string | null };
+/** The refusal of a hand-over and the reply it was refused for. */
+export type HandNote = { text: string; forResult: string };
 export default function ChatView({ pane, agent, preview = null, pending = [], hookState, stateOf, ptyOf, target = null, aside, hand }: { pane: ChatPane; agent?: string; preview?: Preview | null; pending?: Pending[]; hookState?: string; stateOf?: (key: number) => string | undefined; ptyOf?: (key: number) => number | undefined; target?: string | null; aside?: ReactNode; hand?: Hand }) {
   const [items, setItems] = useState<ChatItem[]>([]);
   const [state, setState] = useState<ChatRead["state"]>("loading");
@@ -152,9 +154,7 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
     <div className={`chat${covers ? " cover" : ""}`} aria-label="Chat" onKeyDown={onKeyDown}>
       {(aside || result) && (
         <div className="chat-head">
-          {result && hand && <HandOff targets={hand.targets} onPick={(k) => hand.onHand(k, result)} />}
-          {result && hand?.note && <span className="chat-hand-note" role="status">{hand.note}</span>}
-          {aside}
+          <ChatHead result={result} hand={hand} aside={aside} />
         </div>
       )}
       {state === "loading" && rows.length === 0 && <div className="chat-state" role="status">Loading the conversation…</div>}
@@ -240,6 +240,44 @@ function ChatRow({ row, onImage }: { row: Row; onImage: (src: string) => void })
   );
 }
 
+/** The head of a chat: the Send result to menu and, beside it, why the last hand-over was refused,
+ * but only while that same reply is the one shown (review of 6c0ea802, AFTER 2); then the aside. */
+export function ChatHead({ result, hand, aside }: { result?: string; hand?: Hand; aside?: ReactNode }) {
+  return (
+    <>
+      {result && hand && <HandOff targets={hand.targets} onPick={(k) => hand.onHand(k, result)} />}
+      {result && hand?.note && hand.noteFor === result && <span className="chat-hand-note" role="status">{hand.note}</span>}
+      {aside}
+    </>
+  );
+}
+
+/** VIEW-020 and FIX-SOON 1: the Hand the Agents screen gives the chat of pane `key`. Handing a reply
+ * over goes through `handOver`, which refuses a too-long one and keeps the draft; `say` stores why. */
+export function makeHand(a: {
+  panes: ChatPane[];
+  key: number;
+  offers: Record<number, Offer | undefined>;
+  viewed: readonly number[];
+  taskOf?: (key: number) => string | undefined;
+  note: HandNote | null;
+  setNote: (n: HandNote | null) => void;
+  onPick?: (key: number) => void;
+  draftOf: (key: number) => string;
+  keepDraft: (key: number, text: string) => void;
+}): Hand {
+  return {
+    targets: handTargets(a.panes, a.key, a.offers, a.viewed).map((p) => ({ key: p.key, label: sessionLabel(p, a.taskOf?.(p.key)) })),
+    note: a.note?.text ?? null,
+    noteFor: a.note?.forResult ?? null,
+    onHand: (to, text) => {
+      a.setNote(null);
+      const label = sessionLabel(a.panes.find((p) => p.key === to) ?? { key: to, cwd: null }, a.taskOf?.(to));
+      handOver(to, label, text, { draftOf: a.draftOf, keepDraft: a.keepDraft, pick: (k) => a.onPick?.(k), say: (t) => a.setNote({ text: t, forResult: text }) });
+    },
+  };
+}
+
 /** The Agents screen's chat: the picked pane's chat when it can show one (`pickChat`). `hook`: the
  * window's hook readings by pane, for the box's note; `stateOf`: the same readings read live, so a
  * send stops on its own pane's menu even after the screen moved to another pane. */
@@ -278,7 +316,7 @@ export function AgentsChat({ panes, focused, ptyOf, hook, stateOf, onPick, taskO
   }, [shownKey]);
   const view = agentsView(shown, forced);
   // FIX-SOON 1: why a hand-over was refused; it goes when the screen moves to another session.
-  const [handNote, setHandNote] = useState<string | null>(null);
+  const [handNote, setHandNote] = useState<HandNote | null>(null);
   useEffect(() => setHandNote(null), [shownKey]);
   // Shown before the screen's placeholder, which `.chat + .empty` then hides; `.chat.cover` hides
   // the terminal after it (the terminal stays mounted, so flipping back never restarts it).
@@ -298,15 +336,7 @@ export function AgentsChat({ panes, focused, ptyOf, hook, stateOf, onPick, taskO
     );
   // VIEW-020: the result goes into the target's kept draft after what is typed there, then the
   // screen moves to the target, whose box opens with it.
-  const hand: Hand = {
-    targets: handTargets(panes, key, offers, viewed).map((p) => ({ key: p.key, label: sessionLabel(p, taskOf?.(p.key)) })),
-    note: handNote,
-    onHand: (to, text) => {
-      setHandNote(null);
-      const label = sessionLabel(panes.find((p) => p.key === to) ?? { key: to, cwd: null }, taskOf?.(to));
-      handOver(to, label, text, { draftOf, keepDraft, pick: (k) => onPick?.(k), say: setHandNote });
-    },
-  };
+  const hand = makeHand({ panes, key, offers, viewed, taskOf, note: handNote, setNote: setHandNote, onPick, draftOf, keepDraft });
   return <ChatView key={key} pane={shown} agent={offers[key]?.agent} hookState={hook?.[key]} stateOf={stateOf} ptyOf={ptyOf} target={typingInto(focused, shown)} aside={<TerminalSwitch on={false} onFlip={(on) => flip(key, on)} />} hand={hand} />;
 }
 

@@ -135,11 +135,29 @@ fn delete_held(app_dir: &Path, items: &[PathBuf]) -> Result<Outcome, String> {
     // and could not be put back is never written over.
     let mut carry = vec![];
     if app_dir.join(JOURNAL).exists() {
-        recover(app_dir);
+        let stuck = recover(app_dir);
         if app_dir.join(JOURNAL).exists() {
             match read(app_dir) {
-                Some(old) if old.done => carry = old.moves.into_iter().map(|(_, aside)| aside).chain(old.left).filter(|a| std::fs::symlink_metadata(a).is_ok()).collect(),
-                _ => return Err("Nothing was deleted: an earlier delete is still being cleared up; restart Kolux and try again".into()),
+                Some(old) if old.done => {
+                    // FIX-4 (1): only entries that are what a delete here writes are carried. A refused
+                    // entry (a copy that is not next to its original, or not named as a set-aside copy)
+                    // would otherwise become a carried copy, which is checked by name alone, and be
+                    // removed by this delete. It is dropped from the record and left on disk.
+                    let (kept, refused): (Vec<_>, Vec<_>) = old.moves.into_iter().partition(|(from, aside)| aside_of(from, aside));
+                    for (from, aside) in refused {
+                        crate::diag::write(app_dir, &format!("skill delete: dropped {} from the record and left it alone, it is not a copy set aside from {}", aside.display(), from.display()));
+                    }
+                    let (kept_left, refused_left): (Vec<_>, Vec<_>) = old.left.into_iter().partition(|a| set_aside_name(a));
+                    for a in refused_left {
+                        crate::diag::write(app_dir, &format!("skill delete: dropped {} from the record and left it alone, it is not a copy this app set aside", a.display()));
+                    }
+                    carry = kept.into_iter().map(|(_, aside)| aside).chain(kept_left).filter(|a| std::fs::symlink_metadata(a).is_ok()).collect();
+                }
+                _ => {
+                    // FIX-4 (2): the error names what is in the way and where, so the user can clear it.
+                    let why = if stuck.is_empty() { format!("its record {} cannot be read; move that file away", app_dir.join(JOURNAL).display()) } else { stuck.join("; ") };
+                    return Err(format!("Nothing was deleted: an earlier delete could not be cleared up: {why}"));
+                }
             }
         }
     }
@@ -206,61 +224,95 @@ pub enum Startup {
 /// SKILL-023: what the app runs at start. An interrupted delete is undone or completed under the
 /// skill lock, so a second instance never puts back a delete the first one is still running.
 pub fn startup_recover(app_dir: &Path) -> Startup {
-    match lock(app_dir) {
-        Ok(_one) => {
-            recover(app_dir);
-            Startup::Recovered
-        }
-        Err(LockError::Busy) => {
-            crate::diag::write(app_dir, "skill delete: start-up recovery skipped, another instance holds the skill lock");
-            Startup::Skipped
-        }
-        Err(LockError::Failed(why)) => {
-            // A live holder makes the lock answer Busy, never Failed, so nothing is mid-delete here.
-            crate::diag::write(app_dir, &format!("skill delete: {why}; recovering without it"));
-            recover(app_dir);
-            Startup::RecoveredUnlocked
+    let mut tried = false;
+    loop {
+        match lock(app_dir) {
+            Ok(_one) => {
+                recover(app_dir);
+                return Startup::Recovered;
+            }
+            Err(LockError::Busy) => {
+                crate::diag::write(app_dir, "skill delete: start-up recovery skipped, another instance holds the skill lock");
+                return Startup::Skipped;
+            }
+            // Busy is the usual answer while another instance holds the lock, but Failed does not
+            // rule one out: a backup or antivirus tool that opens the lock file without sharing, or
+            // sets it read-only, makes a second instance's open fail while the first is mid-delete.
+            // So one more try after a pause for a passing holder of the file; if it still fails,
+            // recovery runs without the lock, because leaving the record would hide a skill at every
+            // start. The only data that could then be put back or half-removed is what the other
+            // instance's user chose to delete.
+            Err(LockError::Failed(_)) if !tried => {
+                tried = true;
+                std::thread::sleep(PAUSE);
+            }
+            Err(LockError::Failed(why)) => {
+                crate::diag::write(app_dir, &format!("skill delete: {why}; recovering without it"));
+                recover(app_dir);
+                return Startup::RecoveredUnlocked;
+            }
         }
     }
 }
 
-/// An entry of the record is trusted only if it is what a delete here would have written: the
-/// set-aside copy sits next to the original and is named after it.
+/// `<pid>-<nanos>`: the stamp a delete puts between the prefix and the name (see `delete_held`).
+fn stamped(s: &str) -> bool {
+    let digits = |p: &str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
+    s.split_once('-').is_some_and(|(pid, nanos)| digits(pid) && digits(nanos))
+}
+
+/// The exact form of a set-aside copy's name, `.kolux-deleting-<pid>-<nanos>-<name>`, for an entry
+/// with no original on record (a carried copy). `is_set_aside` is looser on purpose: the list hides
+/// anything with the prefix.
+fn set_aside_name(p: &Path) -> bool {
+    p.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_prefix(ASIDE)).is_some_and(|rest| {
+        let mut parts = rest.splitn(3, '-');
+        matches!((parts.next(), parts.next(), parts.next()), (Some(pid), Some(nanos), Some(name)) if stamped(&format!("{pid}-{nanos}")) && !name.is_empty())
+    })
+}
+
+/// An entry of the record is trusted only if it is exactly what a delete here would have written:
+/// the set-aside copy sits next to the original and is named `.kolux-deleting-<pid>-<nanos>-<its name>`
+/// (FIX-4: not merely ending in its name, so `...-xalpha` is not alpha's copy).
 fn aside_of(from: &Path, aside: &Path) -> bool {
     let (Some(f), Some(a)) = (from.file_name().and_then(|n| n.to_str()), aside.file_name().and_then(|n| n.to_str())) else { return false };
     let same_parent = match (from.parent(), aside.parent()) {
         (Some(x), Some(y)) => same(x, y),
         _ => false,
     };
-    same_parent && a.starts_with(ASIDE) && a.ends_with(f)
+    same_parent && a.strip_prefix(ASIDE).and_then(|r| r.strip_suffix(f)).and_then(|r| r.strip_suffix('-')).is_some_and(stamped)
 }
 
-/// At startup: an unfinished delete is undone (not yet done) or completed (done).
-pub fn recover(app_dir: &Path) {
-    let Some(journal) = read(app_dir) else { return };
+/// At startup: an unfinished delete is undone (not yet done) or completed (done). Returns one line
+/// per entry that is in the way (also written to the log); empty when the record is cleared or done.
+pub fn recover(app_dir: &Path) -> Vec<String> {
+    let mut stuck = vec![];
+    let Some(journal) = read(app_dir) else { return stuck };
     if journal.done {
         finish(app_dir, &journal);
-        return;
+        return stuck;
     }
-    let mut stuck = false;
     for (from, aside) in journal.moves.iter().rev() {
         if std::fs::symlink_metadata(aside).is_err() {
             continue; // never moved, or already put back
         }
-        if !aside_of(from, aside) {
-            crate::diag::write(app_dir, &format!("skill delete: refused to put back {}, it is not a copy set aside from {}", aside.display(), from.display()));
-            stuck = true;
+        let why = if !aside_of(from, aside) {
+            format!("{} is not a copy set aside from {}, so it is not put back; move or remove it", aside.display(), from.display())
         } else if std::fs::symlink_metadata(from).is_err() {
-            stuck |= rename(aside, from).is_err();
+            match rename(aside, from) {
+                Ok(()) => continue,
+                Err(e) => format!("{} could not be put back as {} ({e}); close what holds it or move it by hand", aside.display(), from.display()),
+            }
         } else {
             // Both are there: the original came back after the delete set the copy aside. Neither is
             // overwritten or removed; the record stays so this is looked into, not forgotten.
-            crate::diag::write(app_dir, &format!("skill delete: {} and its set-aside copy {} both exist; move or remove one of them", from.display(), aside.display()));
-            stuck = true;
-        }
+            format!("{} and its set-aside copy {} both exist; move or remove one of them", from.display(), aside.display())
+        };
+        crate::diag::write(app_dir, &format!("skill delete: {why}"));
+        stuck.push(why);
     }
-    if stuck {
-        return;
+    if !stuck.is_empty() {
+        return stuck;
     }
     if journal.left.is_empty() {
         let _ = std::fs::remove_file(app_dir.join(JOURNAL));
@@ -271,6 +323,7 @@ pub fn recover(app_dir: &Path) {
             finish(app_dir, &rest);
         }
     }
+    stuck
 }
 
 /// Removes every set-aside copy the record names; returns the ones still on disk. The record is
@@ -280,9 +333,8 @@ fn finish(app_dir: &Path, journal: &Journal) -> Vec<PathBuf> {
     // launch, so an entry naming anything else (a damaged or hand-edited file) is refused, logged and
     // left on disk; the journal stays so the refusal can be looked into.
     // A move's copy must also sit next to its original and carry its name; a carried copy has no
-    // original on record, so only its name can be checked.
-    let ours = |a: &Path| a.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(ASIDE));
-    let candidates = journal.moves.iter().map(|(from, aside)| (aside, ours(aside) && aside_of(from, aside))).chain(journal.left.iter().map(|a| (a, ours(a))));
+    // original on record, so only its name's exact form can be checked.
+    let candidates = journal.moves.iter().map(|(from, aside)| (aside, aside_of(from, aside))).chain(journal.left.iter().map(|a| (a, set_aside_name(a))));
     let left: Vec<PathBuf> = candidates
         .filter(|(a, ok)| {
             if !ok {
@@ -1157,7 +1209,12 @@ mod tests {
         let t = temp("fix3-b");
         let (app, root) = (t.join("app"), t.join("skills"));
         let aside = not_done_record(&app, &root);
-        let _other = lock(&app).unwrap();
+        // FIX-4 (6): the other instance is a second handle holding the system lock on the file, not
+        // this process's own guard, so the Busy comes from the system lock as it would across processes.
+        std::fs::create_dir_all(&app).unwrap();
+        let other = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(app.join(LOCK)).unwrap();
+        other.lock().unwrap();
+        assert!(HELD.lock().unwrap().is_empty() || !HELD.lock().unwrap().contains(&app), "nothing in this process holds it");
         assert_eq!(startup_recover(&app), Startup::Skipped);
         assert_eq!(names(&root), [aside.file_name().unwrap().to_string_lossy().into_owned()], "nothing moved");
         assert!(app.join(JOURNAL).exists());
@@ -1190,9 +1247,12 @@ mod tests {
         assert_eq!(std::fs::read_to_string(back.join(SKILL_FILE)).unwrap(), "# new alpha");
         assert!(aside.join(SKILL_FILE).is_file(), "the hidden copy is untouched");
         assert!(log_of(&app).contains("both exist"), "{}", log_of(&app));
-        // A later delete is refused rather than writing over the record.
+        // A later delete is refused rather than writing over the record, and (FIX-4) the error names
+        // the cause and both paths instead of asking for a restart that would not help.
         let other = skill(&root, "beta");
-        assert!(delete(&app, &[other]).unwrap_err().contains("still being cleared up"));
+        let err = delete(&app, &[other]).unwrap_err();
+        assert!(err.starts_with("Nothing was deleted") && err.contains("both exist") && err.contains(&back.display().to_string()) && err.contains(&aside.display().to_string()), "{err}");
+        assert!(!err.contains("restart"), "{err}");
         assert!(root.join("beta").is_dir());
         // Once the user clears the original, the next start puts the copy back.
         std::fs::remove_dir_all(&back).unwrap();
@@ -1217,6 +1277,115 @@ mod tests {
         assert!(stray.is_dir(), "kept");
         assert!(app.join(JOURNAL).exists());
         assert!(log_of(&app).contains("refused"), "{}", log_of(&app));
+    }
+
+    // Fix round 4 (stand-in review of 0a444d4).
+
+    /// FIX-SOON 1: the fix3_e fixture, then a delete. The refused entry used to be carried into the
+    /// new record's `left` list, which is checked by name alone, and removed from `elsewhere`.
+    #[test]
+    fn fix4_a_refused_record_entry_is_dropped_by_the_next_delete_and_nothing_outside_the_skill_folder_goes() {
+        let t = temp("fix4-a");
+        let (app, root, other) = (t.join("app"), t.join("skills"), t.join("elsewhere"));
+        let stray = skill(&other, ".kolux-deleting-1-2-alpha");
+        let plain = skill(&other, "plain");
+        let beta = skill(&root, "beta");
+        write(&app, &Journal { done: true, moves: vec![(root.join("alpha"), stray.clone())], left: vec![plain.clone()] }).unwrap();
+        recover(&app);
+        assert!(app.join(JOURNAL).exists(), "start-up refuses both entries and keeps the record");
+        assert_eq!(delete(&app, &[beta]).unwrap(), Outcome::Deleted);
+        assert_eq!(names(&other), [".kolux-deleting-1-2-alpha", "plain"], "nothing outside the skill folder was removed");
+        assert!(names(&root).is_empty(), "the chosen skill is gone");
+        assert!(!app.join(JOURNAL).exists(), "the refused entries are dropped, not carried");
+        let log = log_of(&app);
+        assert!(log.contains(&format!("dropped {} from the record", stray.display())) && log.contains(&format!("dropped {} from the record", plain.display())), "{log}");
+    }
+
+    /// FIX-SOON 2 (refused-entry case): the delete error names the entry and both paths.
+    #[test]
+    fn fix4_a_delete_behind_a_refused_not_done_record_names_the_paths() {
+        let t = temp("fix4-b");
+        let (app, root, other) = (t.join("app"), t.join("skills"), t.join("elsewhere"));
+        let stray = skill(&other, ".kolux-deleting-1-2-alpha");
+        let from = root.join("alpha");
+        write(&app, &Journal { done: false, moves: vec![(from.clone(), stray.clone())], left: vec![] }).unwrap();
+        let beta = skill(&root, "beta");
+        let err = delete(&app, &[beta]).unwrap_err();
+        assert!(err.starts_with("Nothing was deleted") && err.contains("not a copy set aside") && err.contains(&stray.display().to_string()) && err.contains(&from.display().to_string()), "{err}");
+        assert!(root.join("beta").is_dir() && stray.is_dir());
+    }
+
+    /// FIX-SOON 2 (put-back case): the error says what could not be put back, and where.
+    #[cfg(windows)]
+    #[test]
+    fn fix4_a_delete_behind_a_failed_put_back_names_the_copy_and_its_place() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let t = temp("fix4-c");
+        let (app, root) = (t.join("app"), t.join("skills"));
+        let a = skill(&root, "alpha");
+        FAIL_PUT_BACK.with(|f| f.set(true));
+        assert!(delete(&app, &[a.clone(), a.clone()]).is_err());
+        FAIL_PUT_BACK.with(|f| f.set(false));
+        let aside = read(&app).expect("the not-done record stays").moves[0].1.clone();
+        assert!(aside.is_dir(), "alpha is still set aside as {}", aside.display());
+        // Another program holds a file in the copy, so the put-back at the next delete fails too.
+        let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(aside.join(SKILL_FILE)).unwrap();
+        let beta = skill(&root, "beta");
+        let err = delete(&app, &[beta]).unwrap_err();
+        assert!(err.contains("could not be put back as") && err.contains(&a.display().to_string()) && err.contains(&aside.display().to_string()), "{err}");
+        assert!(root.join("beta").is_dir() && aside.is_dir());
+        drop(held);
+        assert!(recover(&app).is_empty());
+        assert_eq!(names(&root), ["alpha", "beta"]);
+    }
+
+    /// AFTER 2: a copy is the original's only when its name is exactly `.kolux-deleting-<pid>-<nanos>-<name>`.
+    #[test]
+    fn fix4_a_copy_named_after_a_longer_name_is_not_the_originals_copy() {
+        let root = Path::new("C:\\s");
+        let alpha = root.join("alpha");
+        assert!(aside_of(&alpha, &root.join(".kolux-deleting-1-2-alpha")));
+        assert!(aside_of(&alpha, &root.join(".kolux-deleting-4294967295-1760000000000000000-alpha")));
+        assert!(!aside_of(&alpha, &root.join(".kolux-deleting-1-2-xalpha")), "ends with the name but is another skill's copy");
+        assert!(!aside_of(&alpha, &root.join(".kolux-deleting-x-2-alpha")), "no stamp");
+        assert!(!aside_of(&alpha, &root.join(".kolux-deleting-1-alpha")), "half a stamp");
+        assert!(!aside_of(&alpha, &root.join(".kolux-deleting-1-2-alpha-x")));
+        assert!(!aside_of(&alpha, &Path::new("C:\\t").join(".kolux-deleting-1-2-alpha")), "not next to the original");
+        assert!(set_aside_name(&root.join(".kolux-deleting-1-2-old")) && set_aside_name(&root.join(".kolux-deleting-1-2-a-b")));
+        assert!(!set_aside_name(&root.join(".kolux-deleting-1-2-")) && !set_aside_name(&root.join(".kolux-deleting-old")) && !set_aside_name(&root.join("plain")));
+        // On disk: a not-done record naming xalpha's copy as alpha's is refused, and xalpha's copy is not renamed to alpha.
+        let t = temp("fix4-d");
+        let (app, skills) = (t.join("app"), t.join("skills"));
+        let copy = skill(&skills, ".kolux-deleting-1-2-xalpha");
+        write(&app, &Journal { done: false, moves: vec![(skills.join("alpha"), copy.clone())], left: vec![] }).unwrap();
+        assert_eq!(recover(&app).len(), 1);
+        assert_eq!(names(&skills), [".kolux-deleting-1-2-xalpha"], "not moved");
+        assert!(app.join(JOURNAL).exists());
+        // Done: not removed either.
+        write(&app, &Journal { done: true, moves: vec![(skills.join("alpha"), copy.clone())], left: vec![] }).unwrap();
+        recover(&app);
+        assert!(copy.is_dir() && app.join(JOURNAL).exists());
+    }
+
+    /// AFTER 1: a passing holder of the lock file (a backup or antivirus tool) gets one retry before
+    /// recovery runs without the lock.
+    #[cfg(windows)]
+    #[test]
+    fn fix4_start_up_recovery_tries_the_lock_once_more_before_going_without_it() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let t = temp("fix4-e");
+        let (app, root) = (t.join("app"), t.join("skills"));
+        not_done_record(&app, &root);
+        let held = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).share_mode(0).open(app.join(LOCK)).unwrap();
+        assert!(matches!(lock(&app), Err(LockError::Failed(_))), "the file cannot be opened while it is held without sharing");
+        let gone = std::thread::spawn(move || {
+            std::thread::sleep(PAUSE / 2);
+            drop(held);
+        });
+        assert_eq!(startup_recover(&app), Startup::Recovered, "the second try gets the lock");
+        gone.join().unwrap();
+        assert_eq!(names(&root), ["alpha"]);
+        assert!(!log_of(&app).contains("recovering without it"), "{}", log_of(&app));
     }
 
     #[test]
