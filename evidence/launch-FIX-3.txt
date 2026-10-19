@@ -45,3 +45,46 @@ LIVE PROOF PENDING (batched; no app launched this pass)
 NOT DONE HERE: links.rs untouched (the shell lane is writing a links.rs patch).
 
 GATES: pnpm test (full) Test Files 166 passed (166), Tests 1031 passed (1031) (fix3-pnpm-test.log); plan-check --write-state: plan-check: OK; Last 10 passes headers: 1; duplicate PLAN ids: none; firewall -Baseline: 53 hit(s) in 22 file(s), 0 new.
+
+
+==== FIX-3 round 2 (council d2 review launch-b26fdad3-standin-review.md; lane/launch from b26fdad3) ====
+STEP 0: `git merge --ff-only 1dcade8e` fast-forwarded lane/launch b26fdad3 -> 1dcade8e (main already held the lane as MERGE 117). No merge commit.
+The FIX-BEFORE (live steps, "saved agent" wording, raw CR) was done by the coordinator at MERGE 117 and is not redone here (the blob of evidence/launch-FIX-2.txt at HEAD has 0 CR bytes).
+
+(1) FIX-SOON 1, tests with real catalogue ids and real program paths: src/launch/paneMark.test.ts
+    "the real catalogue ids take the mark of the program their Command names": markFor("openclaude", "C:\\tools\\claude.exe") = claude,
+    markFor("gemini", "C:\\tools\\codex-nightly.exe") = codex, markFor("openclaude", "openclaude") = shell, built-in ids unchanged.
+    "a Command that names Claude counts as hooked": hooksAbsent(markFor("openclaude", "claude"), true, "openclaude") = false (and true for codex, pwsh, own program).
+    The old FIX-2 tests with the unreal ids "my-reviewer" / "night-codex" are removed from PlusMenu.test.ts.
+    RED on the old stem rule (G:/Temp/launch-w1-logs/fix3-red.log): "expected 'shell' to be 'codex'" (codex-nightly), "expected 'shell' to be 'claude'" ("claude --x", quoted path, node ...claude-code\\cli.js),
+    paneMark(openclaude, {program: "claude --x"}); Tests 3 failed | 4 passed (7). GREEN with the new rule (fix3-green1.log): paneMark.test.ts + PlusMenu.test.ts 14 passed.
+
+(2) FIX-SOON 1, one tested pane-mark helper for the App sites: paneMark(agent, line) in src/launch/paneMark.ts (= markFor(agent.id, line.program ?? agent.program)), re-exported from PlusMenu.
+    test "paneMark ... follows the start line before the catalogue". Call-site change = evidence/launch-FIX-3-App.tsx.patch (App.tsx lines ~868, ~1058, ~1101 use paneMark(a, line) / paneMark(agent, line); import adds paneMark).
+    Guard test "App.tsx builds every pane mark from the start line's program" reads App.tsx (?raw) and requires every markFor/paneMark call that names the agent to carry the start line; it passes on main's current form and on the patched form,
+    and fails if a site is changed to a.program alone.
+    Applied the patch to the lane tree for checking: vitest src/launch src/agents src/chrome 17 files / 116 passed (fix3-patched.log), tsc --noEmit 0 lines (fix3-tsc-patched.log); then reverted (git apply -R). Tree holds no App.tsx change.
+
+(3) FIX-SOON 2, one credit rule shared with Rust: creditedAgent() in src/launch/paneMark.ts is agents::credited_agent in TypeScript (quoted first word, else text up to the first whitespace; stem without folder/quotes/case/.exe .cmd .bat .com .ps1 .js .mjs .cjs .py; codex-/grok- builds; interpreters node/bun/deno/python/python3/pwsh by entry script or package folder).
+    programMark() uses it, so markFor("openclaude", "claude --x") = claude (test "a program is read as a command line, the way Rust credits it").
+    Drift guards: "creditedAgent runs every case agents.rs asserts for credited_agent" parses the 16 assert_eq!(credited_agent(..)) lines out of src-tauri/src/agents.rs and runs each; "the program-name table matches the catalogue in agents.rs, in order" parses CATALOGUE (34 rows).
+    Known and kept the same as Rust: an unquoted path with a space (C:\\Program Files\\Claude\\claude.exe) is cut at the space and is NOT credited, in Rust and in the window alike, so the mark stays the shell glyph and no managed account is applied (the review's FIX-SOON 2a). Quoted, it is credited by both.
+    That is a Rust bug for the accounts/terminal lane (terminal_spawn should credit the program path whole, not as a command line); when it changes, change creditedAgent in the same commit and the drift test will say so.
+
+(4) AFTER 3, dead program arguments removed: PlusMenu.tsx (markFor(a.id)), ChooserPane.tsx x2 (markFor(a.id)): the catalogue's own program never changes a mark.
+    Outside OWNS, in evidence/launch-FIX-3-LayoutStrip.tsx.patch (LayoutStrip.tsx markFor(a.id)) and in the App patch (rail footer markFor(railPick.agentId ?? ""): a seats pane has program null). AgentsRail's markFor(p.agentId ?? g.id, p.program) stays: p.program is the session's real program.
+
+(5) AFTER 5, spent hunks cleared. Checked from the repo root against main 1dcade8e (git apply --check -R):
+    T-552-lib.patch and T-552-smoke.patch reverse-apply cleanly = applied on main: deleted.
+    FIX-3-status-comment, launch-FIX-1-{status,wiring}, launch-FIX-2-{status,wiring} apply neither way: main holds newer code (status.rs working_now(live) / terminal_ended, awake::start wiring in lib.rs; FIX-2-wiring 31/31 added lines on main), so they are superseded: deleted.
+    launch-FIX-2-{App,AgentsRail,LayoutStrip}.tsx.patch were already removed at the merge. The older-hunks list is gone from the lane handoff file.
+
+(last) AFTER 4 (raw CR in launch-FIX-2.txt): already 0 CR bytes in the committed blob. AFTER 1, 2 (usage gauge / hooksAbsent with an own CLAUDE_CONFIG_DIR): display/fail-safe only, in App.tsx and kitPrompt.ts, not this lane's files: left.
+No Rust changed: cargo not run (agents.rs is only read by the tests).
+
+GATES: pnpm test 209 files / 1419 passed (fix3-vitest-full.log); tsc --noEmit 0 lines (fix3-tsc.log); plan-check: OK (STATE.md unchanged); '## Last 10 passes' count 1; duplicate T-ids none;
+firewall-check -Baseline: 53 hit(s) in 22 file(s), 0 new.
+
+LIVE PROOF PENDING (batched, after the App and LayoutStrip patches are applied; no app launched this pass)
+- Settings > Agents > OpenClaude > Command = claude; start OpenClaude from the plus menu: the pane header and rail row show the Claude mark; with the status hooks on, no "ready, can't see" notice.
+  Set Command = `claude --permission-mode auto` (with arguments): same result. Set Command = pwsh: the shell glyph. The plus menu, chooser and layout strip rows keep OpenClaude's own (shell) glyph for every Command.
