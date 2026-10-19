@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { CARD_DENSITY_FIELD, CARD_DETAILS_FIELD, cardLine, cardShows, cardTitle, densityPatch, detailPatch, hoverLines, readCardDetails, tidyDetails, type CardFacts } from "./cards";
+import { CARD_DENSITY_FIELD, CARD_DETAILS_FIELD, detailsAfter, cardLine, cardShows, cardTitle, densityPatch, detailPatch, hoverLines, readCardDetails, tidyDetails, type CardFacts } from "./cards";
 import CardLine from "./CardLine";
 
 const facts = (o: Partial<CardFacts> = {}): CardFacts => ({ agents: 0, state: "idle", pr: null, changed: 0, note: null, ...o });
@@ -62,4 +62,13 @@ test("PROJ-062: CardLine draws the line indented under the name, or nothing", ()
   expect(html).toContain("1 agent · Working");
   expect(html).toContain("padding-left:58px");
   expect(renderToString(createElement(CardLine, { shown: ["status"], facts: facts({ agents: 1, state: "working" }), indent: 44 }))).toBe("");
+});
+
+test("PROJ-062: the sidebar chooser saves one list; status stays in, unknown ids change nothing, a preset-sized list reads as that preset", () => {
+  expect(detailsAfter({}, "pr", true)).toEqual(["status", "agents", "pr"]);
+  expect(detailsAfter({}, "agents", false)).toEqual(["status"]);
+  expect(detailsAfter({}, "status", false), "status stays on").toEqual(["status", "agents"]);
+  expect(detailsAfter({}, "mystery", true)).toEqual(["status", "agents"]);
+  const saved = { [CARD_DETAILS_FIELD]: detailsAfter({}, "agents", false) };
+  expect(readCardDetails(saved)).toEqual({ shown: ["status"], density: "compact" });
 });

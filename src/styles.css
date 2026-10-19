@@ -140,6 +140,12 @@ input { font: inherit; }
 .branch .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .branch .count, .sess .count { font-size: 11px; color: var(--fg); }
 /* PROJ-062: the second line of a workspace card (Default and Detailed). */
+.hdr-badge { flex: none; width: 10px; height: 10px; margin-right: 8px; border-radius: 3px; }
+.sb-group .hdr-badge { margin-right: 6px; }
+.hdr-swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.hdr-swatch { width: 18px; height: 18px; padding: 0; border: 2px solid transparent; border-radius: 50%; cursor: pointer; }
+.hdr-swatch.on { border-color: var(--fg); }
+.hdr-swatch:focus-visible { outline: 2px solid var(--line-focus); outline-offset: 2px; }
 .sess-line { margin-top: -6px; padding: 0 8px 6px 44px; font-size: 11px; line-height: 14px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sess.pane-row { height: 26px; gap: 8px; font-size: 12px; }
 .sess.pane-row .name { overflow: hidden; text-overflow: ellipsis; }

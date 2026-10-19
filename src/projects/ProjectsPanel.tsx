@@ -28,7 +28,9 @@ import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoice
 import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
 import AddProject from "./AddProject";
 import CardLine from "../look/CardLine";
-import { cardTitle, readCardDetails, type CardFacts } from "../look/cards";
+import { HeaderBadge, HeaderSwatches } from "../look/HeaderBadge";
+import { HEADER_COLOURS_SETTING, headerColourOf, pickHeaderColour } from "../look/headerColour";
+import { CARD_DETAILS, CARD_DETAILS_FIELD, cardTitle, detailsAfter, readCardDetails, type CardFacts } from "../look/cards";
 import Picker, { type PickItem } from "./Picker";
 import StartGit, { type FirstFile } from "./StartGit";
 import { openKits } from "../kits/Kits";
@@ -1396,6 +1398,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       return (
         <div key={p.id}>
           <div className="proj" title={p.path}>
+            <HeaderBadge colour={headerColourOf(settings, "p", p.id)} />
             <span className="name">{p.name}</span>
             <button className={`ib${settingsFor === p.id ? " on" : ""}`} title="Project settings: its workspaces folder and base ref" aria-pressed={settingsFor === p.id} onClick={() => (settingsFor === p.id ? setSettingsFor(null) : openSettings(p))}>
               <Gear />
@@ -1433,6 +1436,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                   </option>
                 ))}
               </select>
+              <label>Header colour</label>
+              <HeaderSwatches value={headerColourOf(settings, "p", p.id).id} onPick={(c) => onSetting(HEADER_COLOURS_SETTING, pickHeaderColour(settings, "p", p.id, c))} />
               <div className="btn-row">
                 <button className="btn" onClick={() => saveProject(p)}>
                   Save
@@ -1485,6 +1490,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
           </option>
         ))}
       </select>
+      <label>Header colour</label>
+      <HeaderSwatches value={headerColourOf(settings, "g", g.id).id} onPick={(c) => onSetting(HEADER_COLOURS_SETTING, pickHeaderColour(settings, "g", g.id, c))} />
       {dropGroup ? (
         <>
           <div className="sb-hint">
@@ -1526,6 +1533,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       <div key={n.group.id} className="proj-group" data-project-group={n.group.id}>
         <div className="sb-group-row">
           <button className="sb-group" aria-expanded={!folded.has(n.group.id)} onClick={() => toggleFold(n.group.id)}>
+            <HeaderBadge colour={headerColourOf(settings, "g", n.group.id)} />
             {n.group.name}
             <span className="count">{n.count}</span>
             <span className="chev">
@@ -1684,6 +1692,13 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                 <input type="checkbox" aria-label="show sleeping workspaces" checked={showSleeping} onChange={(e) => onSetting(SHOW_SLEEPING_SETTING, e.target.checked)} />
                 Show sleeping workspaces
               </label>
+              <label>Card details</label>
+              {CARD_DETAILS.map((d) => (
+                <label key={d.id} className="check">
+                  <input type="checkbox" aria-label={`card shows ${d.label.toLowerCase()}`} checked={cardDetails.shown.includes(d.id)} disabled={d.locked} onChange={(e) => onSetting(CARD_DETAILS_FIELD, detailsAfter(settings, d.id, e.target.checked))} />
+                  {d.label}
+                </label>
+              ))}
             </div>
           )}
           {creating === "" && nameField(null)}

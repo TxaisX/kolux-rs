@@ -774,3 +774,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · skills FIX-6 · the stand-in review skills-efa2f15a-standin-review.md (items 1-6, AFTER 1-5) as given in the coordinator brief; this tree's own skill_delete.rs and skills.rs (spots, places, claude_plugins); Rust std docs for Path::is_absolute / is_dir; no outside source
 > 2026-10-19 · look T-268 · spec card VIEW-052 and SET-021 only; this tree's own theme.ts and styles.css; no outside source
 > 2026-10-19 · look T-270 · spec cards SET-021, PROJ-062 and VIEW-052 only; this tree's own theme.ts, ProjectsPanel and settings pages; no outside source
+> 2026-10-19 · look T-266 · spec cards PROJ-017 and PROJ-062 only; this tree's own ProjectsPanel and look/ files; no outside source

@@ -122,3 +122,10 @@ export function hoverLines(shown: readonly string[], f: CardFacts): string[] {
 export function cardTitle(name: string, branch: string | null, shown: readonly string[], f: CardFacts, base: string): string {
   return [name, branch && branch !== name ? `Branch ${branch}` : null, ...hoverLines(shown, f), base].filter(Boolean).join("\n");
 }
+
+/** The `workspaceCardDetails` list after ticking or unticking one detail: one setting to save, for the
+ *  sidebar's chooser (status stays in; a list that equals a preset still shows as that preset). */
+export const detailsAfter = (settings: Record<string, unknown>, id: string, on: boolean): string[] => {
+  const now = readCardDetails(settings).shown;
+  return tidyDetails(!known.has(id) ? now : on ? [...now, id] : now.filter((x) => x !== id));
+};
