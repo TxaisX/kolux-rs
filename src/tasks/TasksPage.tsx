@@ -17,6 +17,8 @@ import { closesDialog, createdHere } from "./newIssue";
 import { type GhRepo, loadRepoFacts, type ParentRead, type Person, resetFacts } from "./repoFacts";
 import { byHost, chosenRows, hostWarnings, mergePages, newIssueTargets, type PickerProject, type PickerRow, pickerLabel, pickerRows, REPOS_SETTING, type RemoteRead, rowKey, savedChoice, toggled } from "./repoPicker";
 import ProjectsView from "./ProjectsView";
+import PullRequestPage from "./PullRequestPage";
+import { parseGitHubUrl, type Target } from "./prModel";
 import TaskDialog from "./TaskDialog";
 import { existingWorkspace, workItem, type WorkItem, workLabel } from "./workStart";
 import "./tasks.css";
@@ -97,6 +99,8 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
   const [hostFail, setHostFail] = useState<{ host: string; error: string }[]>([]);
   const [linked, setLinked] = useState<Record<string, Worktree[]>>({});
   const [note, setNote] = useState<string | null>(null);
+  const [pr, setPr] = useState<Target | null>(null);
+  const [pasted, setPasted] = useState("");
   const seq = useRef(0);
   const [gh, setGh] = useState<GhRepo | null | undefined>(undefined);
   const [login, setLogin] = useState<string | null>(null);
@@ -352,6 +356,19 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
           <Refresh />
         </button>
       </div>
+      <input
+        className="field tasks-paste"
+        aria-label="Paste a GitHub address"
+        placeholder="Paste a pull request or issue address…"
+        value={pasted}
+        onChange={(e) => {
+          const hit = parseGitHubUrl(e.target.value);
+          if (hit && hit.kind === "pull") {
+            setPasted("");
+            setPr(hit);
+          } else setPasted(e.target.value);
+        }}
+      />
       {gh && (
         <div className="tasks-filters" data-filters>
           {FILTERS.map((f) => (
@@ -473,11 +490,14 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
           }}
         />
       )}
+      {pr && <PullRequestPage key={`${pr.host}/${pr.repo}#${pr.number}`} target={pr} onClose={() => setPr(null)} />}
       {open && gh && (
         <TaskDialog
           task={open}
           host={gh.host}
           onClose={() => setOpen(null)}
+          work={open.state === "open" ? { label: workLabel(resumeDir(open), open), run: () => work(open) } : undefined}
+          onPage={open.kind === "pr" ? () => { setPr({ host: gh.host, repo: open.repo, number: open.number, kind: "pull" }); setOpen(null); } : undefined}
           onLabels={(labels: TaskLabel[]) => setResult((r) => r && { ...r, items: r.items.map((x) => (x.url === open.url ? { ...x, labels } : x)) })}
           onState={(state: string) => setResult((r) => r && { ...r, items: r.items.map((x) => (x.url === open.url ? { ...x, state } : x)) })}
         />

@@ -1,0 +1,282 @@
+// GIT-051 (T-232-c): the full pull request page: Conversation, Checks and Files changed tabs.
+// Everything is read and written through the pr_* commands (pull_requests.rs), one gh call each.
+// Merging asks first on the page itself and is only sent after the confirm button.
+// The tab last open on a pull request is remembered (localStorage, per pull request).
+// ponytail: not here yet (T-232-d): viewed-file sync, "fix checks with AI", a fork's parent owner.
+import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useState } from "react";
+import { Close } from "../chrome/icons";
+import Markdown from "./MarkdownView";
+import { askForReview, MERGE_METHODS, mergeBox, type PrCheck, type PrFile, type PrPageData, type PrTab, type PrThread, REACTION_EMOJI, REVIEW_LABEL, rerunTargets, reviewerSuggestions, saveTab, savedTab, summarizeChecks, type Target } from "./prModel";
+import type { Person } from "./repoFacts";
+
+const say = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : "That did not work.");
+
+export default function PullRequestPage({ target, onClose }: { target: Target; onClose: () => void }) {
+  const args = { host: target.host, repo: target.repo, number: target.number };
+  const [page, setPage] = useState<PrPageData | null>(null);
+  const [tab, setTab] = useState<PrTab>(() => savedTab(window.localStorage, target));
+  const [checks, setChecks] = useState<PrCheck[]>([]);
+  const [files, setFiles] = useState<PrFile[] | null>(null);
+  const [threads, setThreads] = useState<PrThread[]>([]);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [typed, setTyped] = useState("");
+  const [assignee, setAssignee] = useState("");
+  const [replying, setReplying] = useState<{ id: number; text: string } | null>(null);
+  const [method, setMethod] = useState<"merge" | "squash" | "rebase">("squash");
+  const [sure, setSure] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const reload = useCallback(async () => {
+    try {
+      const p = await invoke<PrPageData>("pr_page", args);
+      setPage(p);
+      setChecks(await invoke<PrCheck[]>("pr_checks", { host: args.host, repo: args.repo, sha: p.headSha }).catch(() => []));
+      setThreads(await invoke<PrThread[]>("pr_threads", args).catch(() => []));
+    } catch (e) {
+      setNote(say(e));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target.host, target.repo, target.number]);
+
+  useEffect(() => {
+    void reload();
+    void invoke<Person[]>("github_people", { host: target.host, repo: target.repo }).then(setPeople, () => setPeople([]));
+  }, [reload, target.host, target.repo]);
+  useEffect(() => {
+    if (tab === "files" && files === null) void invoke<PrFile[]>("pr_files", args).then(setFiles, (e) => (setFiles([]), setNote(say(e))));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, files]);
+
+  /** One write, then read the page again; its error shows in the note. */
+  const act = async (f: () => Promise<unknown>, done?: string) => {
+    setBusy(true);
+    setNote(null);
+    try {
+      await f();
+      if (done) setNote(done);
+      await reload();
+    } catch (e) {
+      setNote(say(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const pick = (t: PrTab) => {
+    setTab(t);
+    saveTab(window.localStorage, target, t);
+  };
+
+  if (!page) {
+    return (
+      <div className="pr-page">
+        <div className="pr-head">
+          <button className="ib" title="Back to Tasks" onClick={onClose}>
+            <Close />
+          </button>
+          <span>{note ?? `Reading ${target.repo}#${target.number}...`}</span>
+        </div>
+      </div>
+    );
+  }
+  const sum = summarizeChecks(checks);
+  const box = mergeBox(page);
+  const mine = (n: string) => ({ ...args, add: [], remove: [n] });
+  const copy = () => void navigator.clipboard.writeText(page.url).then(() => setNote("Link copied."), () => setNote(page.url));
+  const suggestions = typed.trim() ? reviewerSuggestions(people, page, typed) : [];
+  const askFor = (login: string) => {
+    const r = askForReview(page, [login]);
+    if (!r.ok) return setNote(r.reason);
+    setTyped("");
+    if (r.add.length) void act(() => invoke("pr_reviewers", { ...args, add: r.add, remove: [] }));
+  };
+
+  return (
+    <div className="pr-page">
+      <div className="pr-head">
+        <button className="ib" title="Back to Tasks" onClick={onClose}>
+          <Close />
+        </button>
+        <h2>
+          <span className={`task-state pull ${page.state}`}>{page.draft ? "draft" : page.state}</span> {page.title} <span className="tasks-kind">#{page.number}</span>
+        </h2>
+        <span className="tasks-kind">
+          {target.repo} · {page.headRef} into {page.baseRef} · +{page.additions} -{page.deletions} in {page.changedFiles} files
+        </span>
+        <button className="btn" onClick={copy}>
+          Copy link
+        </button>
+        <a className="btn" href={page.url} target="_blank" rel="noreferrer">
+          Open on GitHub
+        </a>
+        {page.state !== "merged" && (
+          <button className="btn" disabled={busy} onClick={() => void act(() => invoke("pr_set_state", { ...args, open: page.state !== "open" }))}>
+            {page.state === "open" ? "Close pull request" : "Reopen"}
+          </button>
+        )}
+      </div>
+      {note && (
+        <div className="note warn" role="status">
+          {note}
+        </div>
+      )}
+      <div className="pr-tabs" role="tablist">
+        {(["conversation", "checks", "files"] as PrTab[]).map((t) => (
+          <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "on" : ""} onClick={() => pick(t)}>
+            {t === "conversation" ? "Conversation" : t === "checks" ? `Checks · ${sum.label}` : `Files changed · ${page.changedFiles}`}
+          </button>
+        ))}
+      </div>
+      {tab === "conversation" && (
+        <div className="pr-body">
+          <div className="pr-main">
+            {page.body.trim() ? <Markdown text={page.body} /> : <p className="tasks-kind">No description.</p>}
+            <div className="pr-reactions">
+              {page.reactions.map((r) => (
+                <span key={r.content} className="pr-reaction">
+                  {REACTION_EMOJI[r.content] ?? r.content} {r.count}
+                </span>
+              ))}
+              {Object.keys(REACTION_EMOJI).map((c) => (
+                <button key={c} className="ib" title={`React ${c}`} disabled={busy} onClick={() => void act(() => invoke("pr_react", { ...args, content: c }))}>
+                  {REACTION_EMOJI[c]}
+                </button>
+              ))}
+            </div>
+            <h3>Review threads</h3>
+            {threads.length === 0 && <p className="tasks-kind">No review comments.</p>}
+            {threads.map((t) => (
+              <div key={t.id} className="pr-thread">
+                <div className="tasks-kind">
+                  {t.path}
+                  {t.line ? `:${t.line}` : ""}
+                </div>
+                {t.comments.map((c) => (
+                  <div key={c.id} className="pr-comment">
+                    <strong>{c.author}</strong> <span className="tasks-kind">{c.at.slice(0, 10)}</span>
+                    <Markdown text={c.body} />
+                  </div>
+                ))}
+                {replying?.id === t.id ? (
+                  <>
+                    <textarea value={replying.text} onChange={(e) => setReplying({ id: t.id, text: e.target.value })} rows={3} aria-label="Reply" />
+                    <button className="btn primary" disabled={busy || !replying.text.trim()} onClick={() => void act(async () => { await invoke("pr_reply", { ...args, comment: t.comments[t.comments.length - 1].id, body: replying.text }); setReplying(null); })}>
+                      Reply
+                    </button>
+                    <button className="btn" onClick={() => setReplying(null)}>
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button className="btn" onClick={() => setReplying({ id: t.id, text: "" })}>
+                    Reply
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+          <aside className="pr-side">
+            <h3>Reviewers</h3>
+            {page.reviewers.map((r) => (
+              <div key={r.login} className="pr-person">
+                {r.login} <span className={`pr-review ${r.state}`}>{REVIEW_LABEL[r.state] ?? r.state}</span>
+                {r.state === "requested" && (
+                  <button className="ib" title={`Take back the request to ${r.login}`} disabled={busy} onClick={() => void act(() => invoke("pr_reviewers", { ...args, add: [], remove: [r.login] }))}>
+                    <Close />
+                  </button>
+                )}
+              </div>
+            ))}
+            <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Ask for a review..." aria-label="Ask for a review" onKeyDown={(e) => e.key === "Enter" && typed.trim() && askFor(typed.trim().replace(/^@/, ""))} />
+            {suggestions.map((p) => (
+              <button key={p.login} className="btn" disabled={busy} onClick={() => askFor(p.login)}>
+                {p.login}
+              </button>
+            ))}
+            <h3>Assignees</h3>
+            {page.assignees.map((a) => (
+              <div key={a} className="pr-person">
+                {a}
+                <button className="ib" title={`Unassign ${a}`} disabled={busy} onClick={() => void act(() => invoke("pr_assignees", mine(a)))}>
+                  <Close />
+                </button>
+              </div>
+            ))}
+            <input value={assignee} onChange={(e) => setAssignee(e.target.value)} placeholder="Assign someone..." aria-label="Assign someone" onKeyDown={(e) => { if (e.key === "Enter" && assignee.trim()) { const a = assignee.trim().replace(/^@/, ""); setAssignee(""); void act(() => invoke("pr_assignees", { ...args, add: [a], remove: [] })); } }} />
+            <h3>Labels</h3>
+            <div>{page.labels.length ? page.labels.map((l) => <span key={l.name} className="tasks-label" style={{ borderColor: `#${l.color}` }}>{l.name}</span>) : <span className="tasks-kind">None</span>}</div>
+            <h3>Merge</h3>
+            <p className="tasks-kind">{box.reason}</p>
+            {box.canMerge && (
+              <>
+                <select value={method} onChange={(e) => { setMethod(e.target.value as typeof method); setSure(false); }} aria-label="How to merge">
+                  {MERGE_METHODS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+                {!sure ? (
+                  <button className="btn primary" onClick={() => setSure(true)}>
+                    Merge...
+                  </button>
+                ) : (
+                  <div role="alertdialog" aria-label="Confirm merge">
+                    <p>
+                      This {method}s #{page.number} into {page.baseRef} on GitHub. It cannot be undone from here.
+                    </p>
+                    <button className="btn primary" disabled={busy} onClick={() => void act(async () => { await invoke("pr_merge", { ...args, method, confirmed: true }); setSure(false); }, "Merged.")}>
+                      Yes, merge it
+                    </button>
+                    <button className="btn" onClick={() => setSure(false)}>
+                      Cancel
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </aside>
+        </div>
+      )}
+      {tab === "checks" && (
+        <div className="pr-body">
+          <div className="pr-main">
+            <div className={`pr-checks-sum ${sum.tone}`}>{sum.label}</div>
+            <button className="btn" disabled={busy || !rerunTargets(checks, false).length} onClick={() => void act(async () => { for (const run of rerunTargets(checks, false)) await invoke("pr_rerun", { host: args.host, repo: args.repo, runId: run, failedOnly: false }); }, "Asked GitHub to rerun all checks.")}>
+              Rerun all checks
+            </button>
+            <button className="btn" disabled={busy || !rerunTargets(checks, true).length} onClick={() => void act(async () => { for (const run of rerunTargets(checks, true)) await invoke("pr_rerun", { host: args.host, repo: args.repo, runId: run, failedOnly: true }); }, "Asked GitHub to rerun the failed checks.")}>
+              Rerun failed checks
+            </button>
+            <ul className="pr-checks">
+              {checks.map((c) => (
+                <li key={c.id} className={c.status === "completed" ? c.conclusion : "running"}>
+                  <a href={c.url} target="_blank" rel="noreferrer">
+                    {c.name}
+                  </a>{" "}
+                  <span className="tasks-kind">{c.status === "completed" ? c.conclusion : c.status}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+      {tab === "files" && (
+        <div className="pr-body">
+          <div className="pr-main">
+            {files === null && <p className="tasks-kind">Reading files...</p>}
+            {files?.map((f) => (
+              <details key={f.filename} className="pr-file">
+                <summary>
+                  {f.filename} <span className="tasks-kind">{f.status} +{f.additions} -{f.deletions}</span>
+                </summary>
+                <pre className="md-code">{f.patch || "No text diff (binary, renamed or too large)."}</pre>
+              </details>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

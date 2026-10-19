@@ -1,0 +1,22 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 854750a9..50c7b751 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -460,6 +460,17 @@ pub fn run() {
+             github::github_issue_state,
+             github::github_issue_comment,
+             github::github_issue_create,
++            github::pull_requests::pr_page,
++            github::pull_requests::pr_files,
++            github::pull_requests::pr_checks,
++            github::pull_requests::pr_threads,
++            github::pull_requests::pr_set_state,
++            github::pull_requests::pr_rerun,
++            github::pull_requests::pr_reviewers,
++            github::pull_requests::pr_assignees,
++            github::pull_requests::pr_react,
++            github::pull_requests::pr_reply,
++            github::pull_requests::pr_merge,
+             scm::scm_task_labels,
+             scm::scm_task_body,
+             scm::scm_stage,

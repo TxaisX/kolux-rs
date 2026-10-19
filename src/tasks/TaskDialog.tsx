@@ -4,25 +4,27 @@
 // unsaved draft until it is saved or cancelled.
 // GIT-053 (T-314-b): typing @ in the description editor offers this repository's people.
 // GIT-047 (T-231-c): an issue can be closed (completed, not planned, duplicate), reopened and commented on.
-// ponytail: the description shows as plain text, not rendered markdown; assignee edits and opening a
-// workspace come later, the full pull request page with T-232-c.
+// T-232-c: the description is drawn as markdown (MarkdownView.tsx, never HTML), assignees can be added and
+// removed, a workspace can be started or resumed from here, and a pull request opens its full page.
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { Close } from "../chrome/icons";
 import { type IssueAction, runAction } from "./issueActions";
+import Markdown from "./MarkdownView";
 import MentionField from "./MentionField";
 import { duplicateQuery, eventLine, issueNumber, type Task, type TaskDetail, type TaskLabel, type TaskPage, taskKind } from "./model";
 import type { Person } from "./repoFacts";
 
 const FRESH_MS = 15_000;
 
-export default function TaskDialog({ task, host, onClose, onLabels, onState }: { task: Task; host: string; onClose: () => void; onLabels: (labels: TaskLabel[]) => void; onState: (state: string) => void }) {
+export default function TaskDialog({ task, host, onClose, onLabels, onState, work, onPage }: { task: Task; host: string; onClose: () => void; onLabels: (labels: TaskLabel[]) => void; onState: (state: string) => void; work?: { label: string; run: () => void }; onPage?: () => void }) {
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
   const [offer, setOffer] = useState<TaskLabel[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [who, setWho] = useState("");
   const box = useRef<HTMLDivElement>(null);
   const tell = useRef(onLabels);
   tell.current = onLabels;
@@ -86,6 +88,14 @@ export default function TaskDialog({ task, host, onClose, onLabels, onState }: {
       .finally(() => setBusy(false));
   };
 
+  const assign = (add: string[], remove: string[]) => {
+    setBusy(true);
+    setError(null);
+    invoke("pr_assignees", { ...args, add, remove })
+      .then(refresh)
+      .catch((e) => setError(String(e)))
+      .finally(() => setBusy(false));
+  };
   const refresh = () =>
     invoke<TaskDetail>("scm_task_detail", args)
       .then((d) => {
@@ -107,6 +117,16 @@ export default function TaskDialog({ task, host, onClose, onLabels, onState }: {
           <span className="tasks-kind">
             {taskKind(task)} · {task.repo}
           </span>
+          {onPage && (
+            <button className="btn" onClick={onPage}>
+              Open full page
+            </button>
+          )}
+          {work && (
+            <button className="btn" onClick={work.run}>
+              {work.label}
+            </button>
+          )}
           <a className="btn" href={task.url} target="_blank" rel="noreferrer">
             Open on GitHub
           </a>
@@ -142,7 +162,7 @@ export default function TaskDialog({ task, host, onClose, onLabels, onState }: {
               <MentionField className="task-body-edit" label="Description" value={draft} onChange={setDraft} people={people} />
             ) : (
               <div className="task-body" data-task-body>
-                {detail === null ? "Loading…" : detail.body || <span className="muted">No description.</span>}
+                {detail === null ? "Loading…" : detail.body ? <Markdown text={detail.body} /> : <span className="muted">No description.</span>}
               </div>
             )}
             <span className="task-cap">Timeline</span>
@@ -180,7 +200,17 @@ export default function TaskDialog({ task, host, onClose, onLabels, onState }: {
               ))}
             </select>
             <span className="task-cap">Assignees</span>
-            <div className="task-labels">{(detail?.assignees ?? task.assignees).map((a) => <span key={a} className="tasks-who">@{a}</span>)}</div>
+            <div className="task-labels">
+              {(detail?.assignees ?? task.assignees).map((a) => (
+                <span key={a} className="tasks-who">
+                  @{a}
+                  <button className="task-x" title={`Unassign ${a}`} disabled={busy} onClick={() => assign([], [a])}>
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+            <input className="field" aria-label="Assign someone" placeholder="Assign someone…" value={who} disabled={busy} onChange={(e) => setWho(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && who.trim()) { const a = who.trim().replace(/^@/, ""); setWho(""); assign([a], []); } }} />
             {(detail?.assignees ?? task.assignees).length === 0 && <span className="muted">No one</span>}
           </div>
         </div>
