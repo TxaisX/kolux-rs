@@ -75,14 +75,17 @@ export type SendSteps = {
   deny: () => Promise<boolean>;
   /** Whether the pane still sits in its plan-approval ask. */
   asking: () => boolean;
-  /** Types the message into the pane as one bracketed paste. */
-  type: (text: string) => Promise<void>;
-  enter: () => Promise<void>;
+  /** Types the message into the pane as one bracketed paste; false when the write did not reach
+   * the pane (stand-in review of lane/marks 243736d, AFTER 11). */
+  type: (text: string) => Promise<boolean | void>;
+  /** Presses Enter; false when the write did not reach the pane. */
+  enter: () => Promise<boolean | void>;
   /** Whether the pane is still open. */
   alive: () => boolean;
   wait: (ms: number) => Promise<void>;
 };
-export type SendOutcome = "sent" | "cancelled" | "no-answer" | "still-asking" | "gone";
+/** `write-failed`: the paste (typed false) or the Enter (typed true) did not reach the pane. */
+export type SendOutcome = "sent" | "cancelled" | "no-answer" | "still-asking" | "gone" | "write-failed";
 /** How the send ended, whether the agent's no went out, and whether the message was typed in. */
 export type SendResult = { outcome: SendOutcome; answered: boolean; typed: boolean };
 export type PendingSend = { cancel: () => void; done: Promise<SendResult> };
@@ -113,15 +116,16 @@ export function startFeedback(text: string, s: SendSteps): PendingSend {
     if (cancelled) return end("cancelled");
     if (s.asking()) return end("still-asking");
     if (!s.alive()) return end("gone");
-    await s.type(text);
-    typed = true;
+    // A paste that did not reach the pane is never followed by Enter, which would send whatever
+    // sits in the prompt.
+    typed = (await s.type(text)) !== false;
     if (cancelled) return end("cancelled");
+    if (!typed) return end("write-failed");
     await s.wait(300);
     if (cancelled) return end("cancelled");
     if (s.asking()) return end("still-asking");
     if (!s.alive()) return end("gone");
-    await s.enter();
-    return end("sent");
+    return end((await s.enter()) === false ? "write-failed" : "sent");
   };
   return { cancel: () => void (cancelled = true), done: run() };
 }
