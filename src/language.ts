@@ -2,8 +2,8 @@
 // when it is one of the six; anything else, Traditional Chinese included, is English, and so is an
 // unknown saved value read as System. The saved choice applies as soon as settings load (main.tsx),
 // and dates, weekday names, relative times and sorted lists follow it through `locale()`.
-// ponytail: Kolux's own words stay English until the language packs arrive with the plugin
-// runtime (T-210-b, SKILL-040); this sets the locale they will read.
+// Kolux's own words are read through `src/i18n/lookup.ts` (T-210-b), which uses this locale and
+// shows English for any text the language's pack lacks; no packs ship yet (DT-C30, T-210-c).
 
 export const LANGUAGE_FIELD = "language";
 
