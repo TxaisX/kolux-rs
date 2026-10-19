@@ -1080,9 +1080,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
 
   // PROJ-038: the agent is the new workspace's first tab, started with its prompt; nothing else
   // opens there. Shown only when the sidebar says the user has not moved on.
-  const startIn = async (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean, extra: string[] = [], title?: string): Promise<number | null> => {
+  const startIn = async (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean, extra: string[] = [], title?: string, dispatch?: string): Promise<number | null> => {
     try {
-      return await openIn(agent, dir, branch, prompt, show, extra, title);
+      return await openIn(agent, dir, branch, prompt, show, extra, title, dispatch);
     } catch (err) {
       setNotice(String(err));
       return null;
@@ -1090,11 +1090,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   };
   // The start itself; it throws when the start line or the folder's trust cannot be set up, so a
   // caller that reports its own failure (VIEW-069) can say what did not start.
-  const openIn = async (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean, extra: string[] = [], title?: string) => {
+  // T-172-e: `dispatch` (a worker start) goes into the session's environment, so Kolux can tell the
+  // worker's own session from a tab the user opens in the same folder.
+  const openIn = async (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean, extra: string[] = [], title?: string, dispatch?: string) => {
     await pretrust(agent.id, [dir]);
     const line = await invoke<StartLine>("agent_start_line", { id: agent.id, extra, prompt });
     const key = nextKey.current++;
-    const pane: Pane = { key, cwd: dir, branch, agent: markFor(agent.id), agentId: agent.id, program: line.program ?? agent.program, args: line.args, env: line.env, title, typed: line.typed ?? undefined };
+    const pane: Pane = { key, cwd: dir, branch, agent: markFor(agent.id), agentId: agent.id, program: line.program ?? agent.program, args: line.args, env: dispatch ? [...line.env, ["KOLUX_DISPATCH_ID", dispatch]] : line.env, title, typed: line.typed ?? undefined };
     // TERM-007: an empty pane in that workspace takes the session; else it gets a cell of its own.
     setPanes((ps) => {
       const free = freeCell(cellsOf(panesIn(ps, dir)));
@@ -1299,7 +1301,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       if (p.kind === "start") {
         const a = agents.find((x) => x.id === p.agent);
         if (a)
-          void cli.current.startIn(a, p.path, p.branch, p.prompt, false, p.extra, p.title ?? undefined).then((key) => {
+          void cli.current.startIn(a, p.path, p.branch, p.prompt, false, p.extra, p.title ?? undefined, p.dispatch).then((key) => {
             // AUTO-013: an automation run remembers its pane, so View run opens that terminal.
             if (key !== null && p.runId) runPanes.current[p.runId] = key;
           });

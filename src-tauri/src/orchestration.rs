@@ -211,10 +211,11 @@ pub fn start_check(tasks: &[Value], id: &str, run: Option<&str>) -> Result<usize
 /// during the wait is the worker's: `fresh` lists each with the agent Kolux credits it to (none for
 /// a shell or another program). Only a terminal running the worker's own agent counts, and only
 /// when exactly one does: a tab the user opened there during the wait running that agent too makes
-/// it ambiguous, and then none is recorded. When the worker's own tab never shows, a tab the user
-/// opened there running that same agent is the one recorded, and a stop or release ends it (the
-/// CLI's custom-command fallback has the same limit, for the start's own command); stamping the
-/// start's own session (T-172-e) closes that.
+/// it ambiguous, and then none is recorded. When the worker's own tab has not shown by the time the
+/// user's tab reads ready, a tab the user opened there running that same agent is the one recorded,
+/// and a stop or release ends it (the CLI's custom-command fallback has the same limit, for the
+/// start's own command). The CLI stamps the start's own session (T-172-e) and uses this only after
+/// the stamp has not come within the grace, which closes that.
 pub fn worker_terminal(fresh: &[(u32, Option<String>)], agent: &str) -> Option<u32> {
     let mut mine = fresh.iter().filter(|(_, a)| a.as_deref() == Some(agent)).map(|(id, _)| *id);
     match (mine.next(), mine.next()) {
