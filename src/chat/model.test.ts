@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { applyRead, chatOffer, combine, pickChat, typingInto, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type OfferInput } from "./model";
+import { HAND_CAP, SHELL_OFFER, agentsView, handInto, handTargets, handText, viewedFirst, applyRead, chatCovers, chatOffer, combine, pickChat, typingInto, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type OfferInput } from "./model";
 
 const base: OfferInput = { credited: "claude", screen: "agents", switchOn: false, showingChat: false, launching: false, readable: true };
 const item = (id: string, role: ChatItem["role"], text: string, at: number): ChatItem => ({ id, role, kind: "text", text, at });
@@ -95,4 +95,52 @@ test("with nothing picked the box names the pane it types into (council FIX-1, m
   expect(typingInto(null, { title: "  " })).toBe("Typing into the first agent that can chat");
   expect(typingInto(null, {})).toBe("Typing into the first agent that can chat");
   expect(typingInto(4, { title: "api tests" })).toBeNull();
+});
+
+test("T-050-b (VIEW-019): a plain shell shows its terminal with no switch, never a Starting line", () => {
+  expect(pickChat([{ key: 1 }], 1, { 1: SHELL_OFFER })).toBeNull();
+  expect(agentsView(pickChat([{ key: 1 }], 1, { 1: SHELL_OFFER }), new Set())).toBe("none");
+  // Nothing picked: a shell is never the chat the screen falls back to.
+  expect(pickChat([{ key: 1 }, { key: 2 }], null, { 1: SHELL_OFFER, 2: { chat: true, back: false, chooser: false } })).toEqual({ key: 2 });
+});
+
+test("T-050-b (VIEW-019): Show terminal flips only the session it was flipped for", () => {
+  const forced = new Set([1]);
+  expect(agentsView({ key: 1 }, forced)).toBe("terminal");
+  expect(agentsView({ key: 2 }, forced)).toBe("chat");
+  expect(agentsView({ key: 1 }, new Set())).toBe("chat");
+  expect(agentsView("starting", forced)).toBe("starting");
+});
+
+test("T-050-b: the chat covers the terminal only once the transcript is found", () => {
+  expect(chatCovers("ready")).toBe(true);
+  expect(chatCovers("empty")).toBe(true);
+  // Not found yet (the agent may be showing a launch prompt in its terminal) or unreadable.
+  expect(chatCovers("loading")).toBe(false);
+  expect(chatCovers("error")).toBe(false);
+});
+
+const yes = { chat: true, back: false, chooser: false };
+test("T-080 (VIEW-020): the targets are the other chat sessions, the last viewed first, capped", () => {
+  const panes = [{ key: 1 }, { key: 2 }, { key: 3 }, { key: 4 }];
+  const offers = { 1: yes, 2: yes, 3: yes, 4: SHELL_OFFER };
+  // Two other chat sessions exist, 3 viewed last: it is listed first; the source and the shell are not.
+  expect(handTargets(panes, 1, offers, [3, 1, 2]).map((p) => p.key)).toEqual([3, 2]);
+  // A session never viewed comes after the viewed ones, in pane order.
+  expect(handTargets(panes, 1, offers, [2]).map((p) => p.key)).toEqual([2, 3]);
+  const many = Array.from({ length: HAND_CAP + 3 }, (_, i) => ({ key: i + 10 }));
+  expect(handTargets(many, 1, Object.fromEntries(many.map((p) => [p.key, yes])), [])).toHaveLength(HAND_CAP);
+  expect(viewedFirst([3, 1, 2], 2)).toEqual([2, 3, 1]);
+});
+
+test("T-080 (VIEW-020): a result path with a space arrives quoted, and the typed draft is kept", () => {
+  expect(handText("C:\\Users\\me\\My Docs\\report.md")).toBe('"C:\\Users\\me\\My Docs\\report.md"');
+  expect(handText("Wrote it to:\n/home/me/my notes/a.md\ndone")).toBe('Wrote it to:\n"/home/me/my notes/a.md"\ndone');
+  // No space, already quoted, or a sentence: untouched.
+  expect(handText("/home/me/a.md")).toBe("/home/me/a.md");
+  expect(handText('"C:\\a b\\c.md"')).toBe('"C:\\a b\\c.md"');
+  expect(handText("All tests pass now.")).toBe("All tests pass now.");
+  expect(handText("/compact keeps the context small")).toBe("/compact keeps the context small");
+  expect(handInto("check this:  ", "the result")).toBe("check this:\n\nthe result");
+  expect(handInto("", "the result")).toBe("the result");
 });

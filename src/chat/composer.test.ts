@@ -68,7 +68,7 @@ describe("sending into the terminal (CHAT-020, T-327)", () => {
     expect(s[1].waitMs).toBeGreaterThanOrEqual(200);
   });
 
-  it("a one-line body that starts with a menu key is bracketed, so a menu never reads it as a pick (council FIX-1)", () => {
+  it("a one-line body that starts with a menu key goes out as one bracketed paste (the bytes only; council FIX-1)", () => {
     for (const t of ["y", "yes please", "1", "2 then stop", "n"]) expect(sendSteps("claude", t)[1].data).toBe(`\x1b[200~${t}\x1b[201~`);
     expect(sendSteps("codex", "y")[1].data).toBe("\x1b[200~y\x1b[201~");
   });
@@ -90,6 +90,17 @@ describe("sending into the terminal (CHAT-020, T-327)", () => {
     expect(picker.map((x) => x.data)).toEqual(["\x15", "/", "m", "o", "d", "e", "l", "\r"]);
     expect(sendSteps("codex", "/compact now").map((x) => x.data)).toEqual(["\x15", "/compact now", "\r"]);
     expect(sendSteps("claude", "/model").map((x) => x.data)).toEqual(["\x15", "/model", "\r"]);
+  });
+
+  it("a Tab in a one-line slash command goes in as a space, never as the Tab key (council AFTER 3)", () => {
+    expect(sendSteps("claude", "/compact\tkeep the plan").map((x) => x.data)).toEqual(["\x15", "/compact keep the plan", "\r"]);
+    expect(sendSteps("claude", "plain\tline").map((x) => x.data)).toEqual(["\x15", "\x1b[200~plain\tline\x1b[201~", "\r"]);
+  });
+
+  it("council FIX-3 (AFTER 1): a Codex picker command typed key by key sends a Tab as a space too", () => {
+    const keys = sendSteps("codex", "/model\tgpt-5").map((x) => x.data);
+    expect(keys).not.toContain("\t");
+    expect(keys).toEqual(["\x15", ..."/model gpt-5", "\r"]);
   });
 
   it("two sends within 100 ms reach one terminal whole and in order", async () => {
