@@ -2660,10 +2660,12 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               // SKILL-005: real inputs are remembered for this workspace; a sample workspace's are not.
               const real = !!activeDir && !sameDir(activeDir, kits.sampleDir);
               if (real) saveSetting(RECALL_KEY, remember(settings, activeDir!, kit, values)[RECALL_KEY]);
+              // ONB-013 (T-333-b): hands the launch back so KitSetup can mark a run on the user's own file.
               if (activeDir)
-                void startKit(kit, values, assigned, activeDir).then((ok) => {
+                return startKit(kit, values, assigned, activeDir).then((ok) => {
                   if (ok && fromWizard) endWizard("completed", startGridTour); // ONB-012
                   if (ok && chooser !== null) closePane(chooser);
+                  return ok;
                 });
             }}
           />
