@@ -688,21 +688,37 @@ fn run_within(cmd: std::process::Command, input: Option<&str>, limit: std::time:
 /// FIX-5: what ends a program a finished gh left holding its output, when no job holds gh. gh has
 /// been reaped by then (on Unix `try_wait` is a waitpid), so its pid may already belong to another
 /// program: only the process group is signalled (the group id stays reserved while any member
-/// lives), never the bare pid. Windows has no group; taskkill needs the root alive, so there this
+/// lives), never the bare pid. That greatly narrows the window for a stray kill; it does not close
+/// it: a leftover that moved into its own session leaves the group empty, and the id could then
+/// have been taken by a new group leader inside the grace (a pid wrap in 500 ms at most, very
+/// unlikely). Closing it needs gh kept as a zombie until after the group kill (waitid with
+/// WNOWAIT, which needs libc; recorded, not done). The Unix path is compiled nowhere on this PC
+/// and run nowhere (FIX-6). Windows has no group; taskkill needs the root alive, so there this
 /// is best effort and the job is what reaches a leftover.
 fn kill_leftover(pid: u32) {
     #[cfg(unix)]
     {
-        let _ = quiet("kill").args(group_kill_args(pid)).output();
+        kill_leftover_with(pid, &|program, args| {
+            let _ = quiet(program).args(args).output();
+        });
     }
     #[cfg(not(unix))]
     crate::procs::kill_tree(pid);
 }
 
-/// The arguments of the group-only signal: the group form (`-pid`), never the bare pid.
+/// The arguments of the group-only signal: the group form (`-pid`), never the bare pid. The `--`
+/// ends the options first, so a negative process-group id is never read as one (FIX-6).
 #[cfg_attr(not(unix), allow(dead_code))]
-fn group_kill_args(pid: u32) -> [String; 2] {
-    ["-9".into(), format!("-{pid}")]
+fn group_kill_args(pid: u32) -> Vec<String> {
+    vec!["-9".into(), "--".into(), format!("-{pid}")]
+}
+
+/// FIX-6 (review AFTER 2): the whole leftover kill with the program runner passed in, so a test
+/// can see exactly what `kill_leftover` asks for without a Unix host: the program `kill` and the
+/// group arguments, nothing else.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn kill_leftover_with(pid: u32, run: &dyn Fn(&str, &[String])) {
+    run("kill", &group_kill_args(pid));
 }
 
 /// The body of `run_within`: `with_job` false starts gh with no job (the fallback path), `tree_kill`
@@ -4088,8 +4104,32 @@ mod tests {
     #[test]
     fn fix5_the_leftover_kill_names_the_group_and_never_the_bare_pid() {
         let args = group_kill_args(4242);
-        assert_eq!(args, ["-9", "-4242"]);
+        assert_eq!(args, ["-9", "--", "-4242"]);
         assert!(!args.iter().any(|a| a == "4242"), "{args:?}");
+    }
+
+    /// FIX-6 (review AFTER 1): a negative process-group id is never read as an option: the `--`
+    /// ends the options before it.
+    #[test]
+    fn fix6_the_group_id_comes_after_the_end_of_options_marker() {
+        let args = group_kill_args(4242);
+        let dashdash = args.iter().position(|a| a == "--").expect("no -- in the arguments");
+        let group = args.iter().position(|a| a == "-4242").expect("no group id in the arguments");
+        assert!(dashdash < group, "{args:?}");
+        assert_eq!(group, args.len() - 1, "{args:?}");
+    }
+
+    /// FIX-6 (review AFTER 2): `kill_leftover` itself (through its runner seam) runs the program
+    /// `kill` once with the group arguments, and never with the bare pid.
+    #[test]
+    fn fix6_the_leftover_kill_runs_kill_once_with_the_group_arguments() {
+        let seen = std::cell::RefCell::new(Vec::<(String, Vec<String>)>::new());
+        kill_leftover_with(4242, &|program, args| seen.borrow_mut().push((program.to_string(), args.to_vec())));
+        let seen = seen.into_inner();
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert_eq!(seen[0].0, "kill");
+        assert_eq!(seen[0].1, ["-9", "--", "-4242"]);
+        assert!(!seen[0].1.iter().any(|a| a == "4242"), "{seen:?}");
     }
 
     /// FIX-4 (review AFTER 1): a gh that finishes just as the limit runs out still gets a short
