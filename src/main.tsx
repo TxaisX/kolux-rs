@@ -3,7 +3,6 @@ import { saveChanged } from "./settings/saveChanged";
 import ReactDOM from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import App from "./App";
 import { applyAppearance, cachedAppearance, followSystemMode, readAppearance } from "./theme";
 import { stampLook } from "./settings/general";
 import { applyLanguage, LANGUAGE_FIELD } from "./language";
@@ -26,6 +25,9 @@ async function start() {
     ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(<TowerWindow />);
     return;
   }
+  // FIX-4 (council d2 AFTER 8): the App module (and everything it imports) is loaded for the main
+  // window only; the Tower window never evaluates it. The load starts now and runs beside the settings read.
+  const loadApp = import("./App");
   const saved = await Promise.race([
     invoke<Record<string, unknown>>("get_settings").catch(() => null),
     new Promise<null>((r) => setTimeout(() => r(null), 1500)),
@@ -61,6 +63,7 @@ async function start() {
       else p.resumed = false;
     }
   }
+  const { default: App } = await loadApp;
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       <App initial={stamped || saved || {}} layout={layout} read={saved !== null} />

@@ -342,6 +342,10 @@ fn walk(dir: &Path, depth: usize, seen: &mut HashSet<PathBuf>, limit: usize, w: 
             w.stopped = true;
             return;
         }
+        // SKILL-023: a folder or link set aside by an unfinished delete is not a skill.
+        if p.file_name().and_then(|n| n.to_str()).is_some_and(crate::skill_delete::is_set_aside) {
+            continue;
+        }
         // A broken link is not a skill and not a failure.
         let Ok(meta) = std::fs::metadata(&p) else { continue };
         if !meta.is_dir() {
@@ -525,7 +529,8 @@ fn read_skill(dir: &Path) -> (String, Option<String>, Option<u64>) {
     (name, desc, updated)
 }
 
-fn key(p: &Path) -> String {
+/// The same folder however it was reached: through links, and on Windows without case.
+pub(crate) fn key(p: &Path) -> String {
     let c = canon(p).unwrap_or_else(|| p.to_path_buf());
     let s = c.to_string_lossy().to_string();
     if cfg!(windows) {
@@ -535,7 +540,8 @@ fn key(p: &Path) -> String {
     }
 }
 
-fn plain(p: &Path) -> String {
+/// A path as the list prints it, without the long-path prefix.
+pub(crate) fn plain(p: &Path) -> String {
     let s = p.to_string_lossy().to_string();
     s.strip_prefix("\\\\?\\").map(str::to_string).unwrap_or(s)
 }
@@ -611,6 +617,75 @@ pub fn scan(env: &Env, workspace: Option<&Path>) -> Scan {
     run(spots(env, workspace), &crate::cli::bundled_skills(), ROOT_LIMIT)
 }
 
+/// SKILL-022: where a delete may act. `deletable` are the home and workspace skills folders that
+/// were scanned; `plugin` are the folders plugins put skills in (never deleted from here).
+pub struct Places {
+    pub deletable: Vec<PathBuf>,
+    pub plugin: Vec<PathBuf>,
+}
+
+pub fn places(env: &Env, workspace: Option<&Path>) -> Places {
+    let all = spots(env, workspace);
+    // One root per real folder: the home folder opened as the workspace, or a skills folder that
+    // is a link to another, would otherwise list every skill in it twice.
+    let mut seen = HashSet::new();
+    let deletable = all
+        .iter()
+        .filter(|s| s.kind == Kind::Skills && s.skip.is_none() && matches!(s.source, "home" | "workspace"))
+        .map(|s| s.path.clone())
+        .filter(|p| seen.insert(key(p)))
+        .collect();
+    let plugin = all.iter().filter(|s| s.source == "plugin").map(|s| s.path.clone()).collect();
+    Places { deletable, plugin }
+}
+
+/// SKILL-022: every skill folder under `root`, links included, without the scan's merging: a link
+/// and the folder it points at are both listed, so a delete can take both. Links are followed only
+/// `DEPTH` folders down and never back into a folder they came from. A folder that cannot be read
+/// is an error, so a delete never works from a short list.
+pub fn occurrences(root: &Path) -> Result<Vec<PathBuf>, String> {
+    fn every(dir: &Path, depth: usize, chain: &mut Vec<PathBuf>, out: &mut Vec<PathBuf>) -> Result<(), String> {
+        let mut kids: Vec<PathBuf> = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?.map(|e| e.map(|e| e.path()).map_err(|e| format!("{}: {e}", dir.display()))).collect::<Result<_, _>>()?;
+        kids.sort();
+        for p in kids {
+            if remote_link(&p) || p.file_name().and_then(|n| n.to_str()).is_some_and(crate::skill_delete::is_set_aside) || !p.is_dir() {
+                continue;
+            }
+            let Some(c) = canon(&p) else { continue };
+            if chain.contains(&c) {
+                continue;
+            }
+            let file = p.join(SKILL_FILE);
+            if remote_link(&file) {
+                continue;
+            }
+            if file.is_file() {
+                out.push(p);
+            } else if depth > 0 {
+                chain.push(c);
+                every(&p, depth - 1, chain, out)?;
+                chain.pop();
+            }
+        }
+        Ok(())
+    }
+    let mut out = vec![];
+    // A share is never opened, so it holds nothing a delete may take.
+    if !local_dir(root) {
+        return Ok(out);
+    }
+    let mut chain: Vec<PathBuf> = canon(root).into_iter().collect();
+    every(root, DEPTH, &mut chain, &mut out)?;
+    Ok(out)
+}
+
+/// SKILL-022: a finished delete makes the next list a fresh scan.
+pub fn forget_scans() {
+    if let Ok(mut g) = CACHE.lock() {
+        *g = None;
+    }
+}
+
 static CACHE: Mutex<Option<HashMap<String, (Instant, Scan)>>> = Mutex::new(None);
 static SCANNING: Mutex<()> = Mutex::new(());
 
@@ -640,6 +715,25 @@ pub fn scan_cached(workspace: Option<String>, refresh: bool) -> Scan {
 #[tauri::command]
 pub async fn skills_scan(workspace: Option<String>, refresh: bool) -> Result<Scan, String> {
     tauri::async_runtime::spawn_blocking(move || scan_cached(workspace, refresh)).await.map_err(|e| e.to_string())
+}
+
+/// SKILL-020: Reveal file opens only a skill file the list shows, on this computer and still there;
+/// a bundled skill (no file) or any other path is refused.
+fn revealable(scan: &Scan, path: &str) -> Result<PathBuf, String> {
+    let s = scan.skills.iter().find(|s| s.path == path).ok_or("That skill is not in the list any more; refresh first")?;
+    if s.source == "bundled" {
+        return Err("Built into Kolux; there is no file on disk".into());
+    }
+    let p = PathBuf::from(&s.path);
+    if remote_path(&p) || remote_link(&p) || !p.is_file() {
+        return Err("That skill file is no longer on disk; refresh first".into());
+    }
+    Ok(p)
+}
+
+#[tauri::command]
+pub async fn skills_reveal(workspace: Option<String>, path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || revealable(&scan_cached(workspace, false), &path).and_then(|p| crate::links::reveal(&p))).await.map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -709,6 +803,63 @@ mod tests {
         return std::os::unix::fs::symlink("//kolux-unc-test.invalid/share/skills", link).ok();
     }
 
+    /// `share_link`, but a skip is never silent: only a missing symbolic-link right (Windows
+    /// error 1314, Developer Mode off) skips, and says so on stderr (shown with --nocapture);
+    /// any other failure fails the test.
+    fn share_link_or_say_why(link: &Path, test: &str) -> bool {
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_dir(r"\\kolux-unc-test.invalid\share\skills", link);
+        #[cfg(not(windows))]
+        let made = std::os::unix::fs::symlink("//kolux-unc-test.invalid/share/skills", link);
+        match made {
+            Ok(()) => true,
+            Err(e) if e.raw_os_error() == Some(1314) => {
+                eprintln!("SKIPPED {test}: its share-link half did not run, this account cannot make symbolic links ({e}); turn on Developer Mode to run it");
+                false
+            }
+            Err(e) => panic!("{test}: the share link could not be made: {e}"),
+        }
+    }
+
+    #[test]
+    fn skill020_reveal_opens_only_a_listed_skill_file_still_on_disk() {
+        let home = temp("skills-reveal");
+        let root = home.join(".claude").join("skills");
+        skill(&root.join("alpha"), "# alpha\n");
+        skill(&root.join("beta"), "# beta\n");
+        let s = run(spots(&env(&home), None), &[("orchestration", "# o\n")], ROOT_LIMIT);
+        let alpha = s.skills.iter().find(|k| k.name == "alpha").unwrap().path.clone();
+        assert!(same_file(&revealable(&s, &alpha).unwrap(), &root.join("alpha").join(SKILL_FILE)));
+        // A bundled skill has no file; a path the list does not show is refused even if it exists.
+        let bundled = s.skills.iter().find(|k| k.source == "bundled").unwrap().path.clone();
+        assert!(revealable(&s, &bundled).unwrap_err().contains("no file on disk"));
+        let elsewhere = home.join("notes.txt");
+        fs::write(&elsewhere, "x").unwrap();
+        assert!(revealable(&s, &elsewhere.to_string_lossy()).unwrap_err().contains("refresh first"));
+        // Gone since the list loaded.
+        let beta = s.skills.iter().find(|k| k.name == "beta").unwrap().path.clone();
+        fs::remove_dir_all(root.join("beta")).unwrap();
+        assert!(revealable(&s, &beta).unwrap_err().contains("no longer on disk"));
+    }
+
+    fn same_file(a: &Path, b: &Path) -> bool {
+        canon(a).is_some() && canon(a) == canon(b)
+    }
+
+    #[test]
+    fn skill022_a_delete_never_lists_a_skill_reached_through_a_share() {
+        let home = temp("skills-unc-delete");
+        let root = home.join(".claude").join("skills");
+        skill(&root.join("alpha"), "# alpha\n");
+        let began = Instant::now();
+        // A share root is refused by its text: nothing to delete there, and nothing waited on.
+        assert_eq!(occurrences(Path::new(r"\\kolux-unc-test.invalid\share\skills")).unwrap(), Vec::<PathBuf>::new());
+        if share_link_or_say_why(&root.join("share"), "skill022_a_delete_never_lists_a_skill_reached_through_a_share") {
+            assert_eq!(occurrences(&root).unwrap(), vec![root.join("alpha")]);
+        }
+        assert!(began.elapsed() < Duration::from_secs(2), "the delete list waited on a share: {:?}", began.elapsed());
+    }
+
     #[test]
     fn links_to_another_computer_are_never_followed() {
         let home = temp("skills-unc");
@@ -720,8 +871,7 @@ mod tests {
         // The junction is seen as a link (so its hop is judged), not as a plain folder.
         assert!(fs::symlink_metadata(root.join("local")).unwrap().file_type().is_symlink());
         assert!(!remote_link(&root.join("alpha")));
-        if share_link(&root.join("share")).is_none() {
-            eprintln!("skipped the share-link half: this account cannot make symbolic links");
+        if !share_link_or_say_why(&root.join("share"), "links_to_another_computer_are_never_followed") {
             return;
         }
         assert!(remote_link(&root.join("share")));

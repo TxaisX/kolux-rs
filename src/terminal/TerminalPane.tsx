@@ -1472,8 +1472,10 @@ export function ContextGauge({ context, agent }: { context?: number | null; agen
   const percent = none ? 0 : Math.round(context);
   const waiting = agent === "codex" ? "Context used: Codex does not report its context to Kolux, so there is no figure to show." : "Context used: nothing received yet. The figure appears with the agent's first status report.";
   const title = none ? (agent === "shell" ? "Context used (agents only)" : waiting) : `Context used: ${percent}% of the agent's context window`;
+  // The tint reads the real figure: 90.4% is beyond 90 though it shows as 90% (stand-in review of
+  // lane/marks 243736d, AFTER 9).
   return (
-    <span className={none ? "gauge none" : `gauge ${toneOf(percent)}`.trim()} title={title}>
+    <span className={none ? "gauge none" : `gauge ${toneOf(context ?? 0)}`.trim()} title={title}>
       <Ring percent={percent} />
       {percent}%
     </span>

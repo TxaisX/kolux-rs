@@ -32,8 +32,21 @@ export function pickScreen(all: Screen[], current: Screen | null): Screen | null
   return all.find((s) => !current || s.x !== current.x || s.y !== current.y) ?? null;
 }
 
+/** FIX-4 (council d2 AFTER 6): a snapshot written out once, however many renders ask about it. */
+const written = new WeakMap<Snapshot, string>();
+const writtenOut = (s: Snapshot) => {
+  let w = written.get(s);
+  if (w === undefined) written.set(s, (w = JSON.stringify(s)));
+  return w;
+};
+
+/** Asked on every render of the main window, so the cheap answers come first: the very same lists
+ * are unchanged, a different count is changed, and only then are the two written out and compared. */
 export function snapshotChanged(last: Snapshot | null, next: Snapshot): boolean {
-  return last === null || JSON.stringify(last) !== JSON.stringify(next);
+  if (last === null) return true;
+  if (last === next || (last.seats === next.seats && last.usage === next.usage)) return false;
+  if (last.seats.length !== next.seats.length || last.usage.length !== next.usage.length) return true;
+  return writtenOut(last) !== writtenOut(next);
 }
 
 /** What openTowerWindow needs from the window system; the real one is below, tests pass their own. */
