@@ -1,0 +1,24 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index d4db83d1..3ada10aa 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1738,9 +1738,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     if (!planLive(p, plan)) return;
+     const key = draftKey(p.key, plan);
+     const d = planDrafts[key] ?? { comments: [], note: "" };
++    // A write that did not reach the pane says false, so a failed paste is never followed by Enter.
+     const write = (data: string) => {
+       const id = ptys.current[p.key];
+-      return id === undefined ? Promise.resolve() : invoke("terminal_write", { id, data }).then(() => {}, () => {});
++      return id === undefined ? Promise.resolve(false) : invoke("terminal_write", { id, data }).then(() => true, () => false);
+     };
+     // SAFE-004 / T-032-b: the send runs as a job (planReview) that the sheet can cancel until Enter.
+     const job = startFeedback(feedbackMessage(d.comments, d.note), {
+@@ -1762,6 +1763,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+       setHook((h) => ({ ...h, [p.key]: "working" }));
+       setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
+     } else if (outcome === "no-answer") setToast("Kolux could not answer the agent. Answer it in its terminal; your feedback was not typed.");
++    else if (outcome === "write-failed") setToast(typed ? "Kolux could not press Enter in the agent's terminal: your feedback is typed but was not sent." : "Kolux could not type into the agent's terminal: Claude's plan prompt was dismissed and your feedback was not typed.");
+     else if (outcome === "still-asking") setToast(`The agent is still asking. Answer it in its terminal; your feedback was not ${typed ? "sent" : "typed"}.`);
+     else if (outcome === "cancelled" && answered) setToast(typed ? "Cancelled before sending: your feedback is typed in the agent's prompt but was not sent." : "Cancelled: Claude's plan prompt was dismissed and your feedback was not typed.");
+   };

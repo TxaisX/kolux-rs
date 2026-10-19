@@ -22,7 +22,8 @@ export type TurnInfo = { tool?: string; detail?: string; ask?: string; reply?: s
  * ordered by arrival, which the hook server's one-at-a-time loop keeps. `session` is the report's
  * clock, the session id with the terminal that ran it (evidence/marks-FIX-1-hooks.patch), so a
  * resume in a new terminal, which keeps the id but starts the running time over, is a new clock
- * and only ever compared for equality here. */
+ * and only ever compared for equality here. A resume in the same terminal keeps the clock; its
+ * boundary is `fresh`, which forgets the reading without a floor (useAgentEvents). */
 export type UsageEvent = { paneKey: number; contextTokens: number | null; contextWindow: number | null; session?: string | null; at?: number | null };
 /** A pane's context reading with the stamp it came with, when it had one. */
 export type Reading = ContextReading & { session?: string; at?: number };
@@ -52,6 +53,14 @@ export function forgetGone<T>(byPane: Record<number, T>, open: Set<number>): Rec
   if (gone.length === 0) return byPane;
   const kept = { ...byPane };
   for (const k of gone) delete kept[Number(k)];
+  return kept;
+}
+
+/** The record without one pane's entry; the same object back when it has none. */
+function without<T>(byPane: Record<number, T>, key: number): Record<number, T> {
+  if (!(key in byPane)) return byPane;
+  const kept = { ...byPane };
+  delete kept[key];
   return kept;
 }
 
@@ -134,10 +143,14 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
   panesRef.current = panes;
   // USAGE-001: the stamp of each reading a clear forgot.
   const floorRef = useRef<Record<number, Floor>>({});
+  // USAGE-001: what each pane's gauge shows, kept beside the state so the listeners decide outside
+  // the state updaters; an updater must stay pure, React may run it again (stand-in review of
+  // lane/marks 243736d, AFTER 10). The listeners here are the only writers of the readings.
+  const shownRef = useRef<Record<number, Reading>>({});
   useEffect(() => {
     // STAT-001: the hooks report each pane's state; a turn ending out of view is noticed like an exit.
-    const off = listen<{ paneKey: number; children: Crew; tool?: string; detail?: string; ask?: string; wrote?: string; plan?: string; planCut?: boolean; session?: string } & Turn>("agent-status", (e) => {
-      const { paneKey, state, children, tool, detail, ask, reply, wrote, boundary, stop, plan, planCut, session, monitoring } = e.payload;
+    const off = listen<{ paneKey: number; children: Crew; tool?: string; detail?: string; ask?: string; wrote?: string; plan?: string; planCut?: boolean; session?: string; fresh?: boolean } & Turn>("agent-status", (e) => {
+      const { paneKey, state, children, tool, detail, ask, reply, wrote, boundary, stop, plan, planCut, session, monitoring, fresh } = e.payload;
       // SESS-030: the newest session id is what a restart resumes (a /clear or a resume brings a new one).
       if (session) setPanes((ps) => (ps.some((p) => p.key === paneKey && p.session !== session) ? ps.map((p) => (p.key === paneKey ? { ...p, session } : p)) : ps));
       setCrew((c) => (children.length === 0 && !(paneKey in c) ? c : { ...c, [paneKey]: children }));
@@ -154,16 +167,20 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
       // (SignInNotice) names the lapsed account without waiting for the next start.
       if (stop?.cause === "signin" && prev !== "blocked") invoke("claude_account_check").catch(() => {});
       // USAGE-001: clearing the pane (a /clear, a resume, a manual compact) forgets its reading; the
-      // next status report brings the new figure.
-      if (boundary)
-        setContext((c) => {
-          const r = c[paneKey];
-          if (!r) return c;
-          floorRef.current[paneKey] = { session: r.session, at: r.at };
-          const kept = { ...c };
-          delete kept[paneKey];
-          return kept;
-        });
+      // next status report brings the new figure. A clear or a compact keeps the agent's process, so
+      // a report from before it may still turn up: the forgotten stamp is the floor. A start or a
+      // resume (`fresh`) is a new process whose running time may start over on the same clock (a
+      // resume in the same terminal), so it sets no floor and lifts any earlier one (stand-in review
+      // of lane/marks 3efef76, FIX-SOON 1).
+      if (boundary) {
+        const r = shownRef.current[paneKey];
+        if (fresh) delete floorRef.current[paneKey];
+        else if (r) floorRef.current[paneKey] = { session: r.session, at: r.at };
+        if (r) {
+          shownRef.current = without(shownRef.current, paneKey);
+          setContext((c) => without(c, paneKey));
+        }
+      }
       if (prev !== state) {
         setHook((h) => ({ ...h, [paneKey]: state }));
         setStamp((m) => ({ ...m, [paneKey]: { at: Date.now(), interrupted: e.payload.interrupted || boundary } }));
@@ -174,10 +191,10 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
     const offUsage = listen<UsageEvent>("claude-usage", (e) => {
       const { paneKey } = e.payload;
       if (!panesRef.current.some((p) => p.key === paneKey)) return;
-      setContext((c) => {
-        const next = takeReading(c[paneKey], floorRef.current[paneKey], e.payload);
-        return next ? { ...c, [paneKey]: next } : c;
-      });
+      const next = takeReading(shownRef.current[paneKey], floorRef.current[paneKey], e.payload);
+      if (!next) return;
+      shownRef.current = { ...shownRef.current, [paneKey]: next };
+      setContext((c) => ({ ...c, [paneKey]: next }));
     });
     const offQuiet = listen<{ paneKey: number; minutes: number }>("agent-quiet", (e) => {
       const p = panesRef.current.find((x) => x.key === e.payload.paneKey);
@@ -205,6 +222,7 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
     // USAGE-001: closing a pane forgets its reading.
     const open = new Set(panes.map((p) => p.key));
     setContext((c) => forgetGone(c, open));
+    shownRef.current = forgetGone(shownRef.current, open);
     floorRef.current = forgetGone(floorRef.current, open);
   }, [panes]);
   return { noticed, panesRef };

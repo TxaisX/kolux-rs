@@ -50,9 +50,13 @@ LIVE PROOF PENDING (batched; builders do not launch the app):
 1. Apply the App patch on main; dev app with a scratch profile.
 2. A Claude stand-in pane posts an ExitPlanMode ask; open Review plan, add a section comment.
 3. Request changes: the sheet shows the sending note, "Sending…" and "Cancel sending".
-4. Keep the stand-in asking and click Cancel sending at once: the Esc has already gone out, so the
-   prompt is dismissed, the sheet closes with the toast "Claude's plan prompt was dismissed" and the
-   draft is kept (stand-in review FIX-BEFORE 1: a cancel before anything is sent cannot be reached).
+4. Make the stand-in post its permission ask again right after the Esc (within 100 ms), so the
+   pane still looks like it is asking, and click Cancel sending at once: the Esc has already gone out,
+   so the prompt is dismissed, the sheet closes with the toast "Claude's plan prompt was dismissed"
+   and the draft is kept. The Esc turns the pane to working, so a stand-in that does not re-post its
+   ask lets the paste go before any click can land; then the toast reads "typed in the agent's
+   prompt but was not sent" or the send completes. Either is the job working as built, not a failure
+   of this step (stand-in review of lane/marks 3efef76, FIX-SOON 2).
 5. Request changes again and let the stand-in leave the ask: one pasted message, then one Enter;
    the sheet closes and reopening the pane's review shows an empty draft.
 6. Request changes with the stand-in still asking past 3 s: a toast says the feedback was not
