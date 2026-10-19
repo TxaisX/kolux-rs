@@ -384,7 +384,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### H · theme 5 · Safety and trust (3 cards)
 
-- [ ] T-329 · CHAT-018 Stop interrupts the agent · CHAT-023 Allow or deny a tool permission in chat · CHAT-025 Links in chat open files and web pages
+- [x] T-329 · CHAT-018 Stop interrupts the agent · CHAT-023 Allow or deny a tool permission in chat · CHAT-025 Links in chat open files and web pages · done 2026-10-19 (lane/chat from 2d14c7db; evidence/T-329.txt: the button beside the box turns to Stop mid-turn and types Escape after cancelling any waiting send, a Stop within 700 ms of a send is ignored; Claude and Codex permission prompts show an Allow/Deny card (Review plan on plan exit) that types the keys only while the prompt is still showing; web, mail and file links in replies open, files only if the agent printed them, a plain web click offers the two browsers; vitest src/chat 159, tsc 0; App.tsx hunk in evidence/chat-T-329-App.patch; live proof pending (batched))
 
 ### H · theme 9 · Reliability and no lost work (2 cards)
 

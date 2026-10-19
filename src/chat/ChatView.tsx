@@ -15,7 +15,13 @@ import { SHELL_OFFER, agentsView, handOver, handTargets, viewedFirst, applyRead,
 import { Composer, type ComposerHandle } from "./MessageBox";
 import { draftOf, forwardsToBox, keepDraft, nearBottom } from "./composer";
 import { sessionLabel } from "../agents/rail";
-import { boxSend, hearStates, holdReading, writeTerminal } from "./send";
+import { NO_TERMINAL_NOTE, boxSend, hearStates, holdReading, stopPane, writeTerminal } from "./send";
+import { answerCard, askOf, cardOf, dismissAsk, hearAsks, subscribeAsk } from "./ask";
+import { PermissionCard } from "./PermissionCard";
+import { BrowserChoice, ChatText, LinkContext, type LinkHost } from "./ChatText";
+import { printedPaths } from "./chatLinks";
+import { CANNOT_STOP_NOTE, STOPPING_NOTE } from "./stop";
+import type { Answer } from "../terminal/permissionAnswer";
 
 /** `terminal`: the program session the pane types into (the window's own pane-to-terminal map).
  * `program`: what Kolux started in the pane; null for a plain shell (T-050-b: no chat, no switch). */
@@ -28,9 +34,16 @@ type Support = { agent?: string; launching: boolean; readable: boolean };
  * `aside`: drawn at the top right (the Agents screen's Show terminal switch). `hand`: VIEW-020, the
  * sessions a finished turn's reply can be handed to, and what handing it does. */
 export type Hand = { targets: { key: number; label: string }[]; onHand: (key: number, text: string, replyId: string) => void; /** Why the last hand-over was refused (FIX-SOON 1), shown beside the menu while the reply it was for is still the one shown (FIX-5). */ note?: string | null; /** The id of that reply (FIX-6: not its words, so a newer reply with the same words does not inherit the note). */ noteFor?: string | null };
+/** CHAT-025, CHAT-023: what the window gives a chat to open things with. `onOpenLink`: Kolux's own viewer for a web page;
+ * `onOpenFile`: the editor at a line and column; `inKolux`: the setting that makes Kolux's viewer the main choice for a
+ * web link; `onReview`: opens the plan review for this pane's pending plan. Every one is optional: a chat without them
+ * hands links to the system and shows the plan inside the card. */
+export type ChatOpen = { onOpenLink?: (url: string) => void; onOpenFile?: (path: string, line?: number, column?: number) => void; inKolux?: boolean; onReview?: (key: number, plan: string, cut: boolean) => void };
+/** The card's note when the prompt it was drawn for was already answered or has gone. */
+export const GONE_NOTE = "That question was already answered. Look at the terminal.";
 /** The refusal of a hand-over and the id of the reply it was refused for. */
 export type HandNote = { text: string; forResult: string };
-export default function ChatView({ pane, agent, preview = null, pending = [], hookState, stateOf, ptyOf, target = null, aside, hand }: { pane: ChatPane; agent?: string; preview?: Preview | null; pending?: Pending[]; hookState?: string; stateOf?: (key: number) => string | undefined; ptyOf?: (key: number) => number | undefined; target?: string | null; aside?: ReactNode; hand?: Hand }) {
+export default function ChatView({ pane, agent, preview = null, pending = [], hookState, stateOf, ptyOf, target = null, aside, hand, open: opener }: { pane: ChatPane; agent?: string; preview?: Preview | null; pending?: Pending[]; hookState?: string; stateOf?: (key: number) => string | undefined; ptyOf?: (key: number) => number | undefined; target?: string | null; aside?: ReactNode; hand?: Hand; open?: ChatOpen }) {
   const [items, setItems] = useState<ChatItem[]>([]);
   const [state, setState] = useState<ChatRead["state"]>("loading");
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +55,10 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
   const [, setHeard] = useState<string | undefined>(undefined);
   const [note, setNote] = useState<string | null>(null);
   useEffect(() => void hearStates(listen).catch(() => {}), []);
+  // CHAT-023: every pane's permission prompts are counted for the whole window; the card redraws when this pane's record moves.
+  const [, setAsked] = useState(0);
+  useEffect(() => void hearAsks(listen).catch(() => {}), []);
+  useEffect(() => subscribeAsk(() => setAsked((n) => n + 1)), []);
 
   useEffect(() => {
     let alive = true;
@@ -106,7 +123,49 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
         stick.current = true;
       },
       onFailed: failed,
+      // CHAT-018: Stop cancelled this send before its Enter; the waiting row goes (nothing was sent).
+      onCancelled: () => setSent((xs) => xs.filter((x) => x.id !== id)),
     });
+  };
+  // CHAT-018: Stop. The box says so once; the note goes when the turn is over.
+  const stop = () => {
+    setNote(STOPPING_NOTE);
+    stopPane(key, { terminalOf, stateOf, write: writeTerminal }).then(
+      (r) => setNote(r === "stopped" ? STOPPING_NOTE : CANNOT_STOP_NOTE),
+      () => setNote(CANNOT_STOP_NOTE),
+    );
+  };
+  useEffect(() => {
+    if (!open) setNote((n) => (n === STOPPING_NOTE ? null : n));
+  }, [open]);
+  // CHAT-023: the permission card, while the agent's hook says it is asking and the user has not answered.
+  const card = cardOf(agent, askOf(key), terminalOf(key));
+  const answer = (a: Answer) => {
+    if (!card || !agent) return;
+    answerCard(key, agent, a, card.drawnAt, { terminalOf, write: writeTerminal }).then(
+      (r) => setNote(r === "gone" ? GONE_NOTE : r === "no-terminal" ? NO_TERMINAL_NOTE : null),
+      () => setNote(CANNOT_STOP_NOTE),
+    );
+  };
+  // CHAT-025: links in the agent's replies. Only files the agent printed recently open.
+  const [menu, setMenu] = useState<{ url: string; at: { x: number; y: number } } | null>(null);
+  useEffect(() => setMenu(null), [pane.key]);
+  const printed = useMemo(() => printedPaths(items, pane.cwd), [items, pane.cwd]);
+  const host: LinkHost = {
+    cwd: pane.cwd,
+    printed,
+    mac: /^Mac/i.test(navigator.platform),
+    inKolux: !!opener?.inKolux,
+    onOpenLink: opener?.onOpenLink,
+    onOpenFile: opener?.onOpenFile,
+    say: setNote,
+    chooseBrowser: (url, at) => setMenu({ url, at }),
+  };
+  const pickBrowser = (where: "kolux" | "system") => {
+    if (!menu) return;
+    if (where === "kolux" && opener?.onOpenLink) opener.onOpenLink(menu.url);
+    else invoke("open_external", { url: menu.url }).catch((e) => setNote(String(e)));
+    setMenu(null);
   };
   // CHAT-027: within 48 px of the bottom the view follows new output; further up it holds still.
   const list = useRef<HTMLDivElement>(null);
@@ -151,6 +210,7 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
   const toggle = (id: string) => setThoughts((t) => toggled(t, id));
 
   return (
+    <LinkContext.Provider value={host}>
     <div className={`chat${covers ? " cover" : ""}`} aria-label="Chat" onKeyDown={onKeyDown}>
       {(aside || head.result) && (
         <div className="chat-head">
@@ -177,13 +237,16 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
         </button>
       )}
       {target && <div className="chat-target" role="status">{target}</div>}
-      <Composer ref={box} paneKey={pane.key} live={terminalOf(key) !== undefined} blocked={held} note={note ?? undefined} onSend={send} />
+      {card && <PermissionCard card={card} onAllow={() => answer("approve")} onDeny={() => answer("deny")} onReview={opener?.onReview ? () => opener.onReview?.(key, card.plan ?? "", !!card.planCut) : undefined} onDismiss={() => dismissAsk(key, card.drawnAt)} />}
+      {menu && <BrowserChoice url={menu.url} at={menu.at} onPick={pickBrowser} onClose={() => setMenu(null)} />}
+      <Composer ref={box} paneKey={pane.key} live={terminalOf(key) !== undefined} blocked={held} note={note ?? undefined} onSend={send} working={open} onStop={stop} />
       {full && (
         <button type="button" className="chat-full" aria-label="Close image" onClick={() => setFull(null)}>
           <img src={full} alt="Attached" />
         </button>
       )}
     </div>
+    </LinkContext.Provider>
   );
 }
 
@@ -228,7 +291,7 @@ function ChatRow({ row, onImage }: { row: Row; onImage: (src: string) => void })
           ))}
         </div>
       )}
-      {row.text && <div className="chat-text">{row.text}</div>}
+      {row.text && <div className="chat-text">{row.role === "assistant" && row.kind === "text" ? <ChatText text={row.text} /> : row.text}</div>}
       <div className="chat-meta">
         {when && <time title={when.full}>{when.short}</time>}
         <button type="button" className="chat-copy" onClick={copy}>{copied ? "Copied" : "Copy"}</button>
@@ -288,7 +351,7 @@ export function makeHand(a: {
 /** The Agents screen's chat: the picked pane's chat when it can show one (`pickChat`). `hook`: the
  * window's hook readings by pane, for the box's note; `stateOf`: the same readings read live, so a
  * send stops on its own pane's menu even after the screen moved to another pane. */
-export function AgentsChat({ panes, focused, ptyOf, hook, stateOf, onPick, taskOf }: { panes: ChatPane[]; focused: number | null; ptyOf?: (key: number) => number | undefined; hook?: Record<number, string | undefined>; stateOf?: (key: number) => string | undefined; onPick?: (key: number) => void; taskOf?: (key: number) => string | undefined }) {
+export function AgentsChat({ panes, focused, ptyOf, hook, stateOf, onPick, taskOf, open }: { panes: ChatPane[]; focused: number | null; ptyOf?: (key: number) => number | undefined; hook?: Record<number, string | undefined>; stateOf?: (key: number) => string | undefined; onPick?: (key: number) => void; taskOf?: (key: number) => string | undefined; open?: ChatOpen }) {
   const [offers, setOffers] = useState<Record<number, Offer & { agent?: string }>>({});
   // VIEW-019 (T-050-b): the sessions the user flipped to their terminal, kept while the screen is open.
   const [forced, setForced] = useState<ReadonlySet<number>>(() => new Set());
@@ -344,7 +407,7 @@ export function AgentsChat({ panes, focused, ptyOf, hook, stateOf, onPick, taskO
   // VIEW-020: the result goes into the target's kept draft after what is typed there, then the
   // screen moves to the target, whose box opens with it.
   const hand = makeHand({ panes, key, offers, viewed, taskOf, note: handNote, setNote: setHandNote, onPick, draftOf, keepDraft });
-  return <ChatView key={key} pane={shown} agent={offers[key]?.agent} hookState={hook?.[key]} stateOf={stateOf} ptyOf={ptyOf} target={typingInto(focused, shown)} aside={<TerminalSwitch on={false} onFlip={(on) => flip(key, on)} />} hand={hand} />;
+  return <ChatView key={key} pane={shown} agent={offers[key]?.agent} hookState={hook?.[key]} stateOf={stateOf} ptyOf={ptyOf} target={typingInto(focused, shown)} aside={<TerminalSwitch on={false} onFlip={(on) => flip(key, on)} />} hand={hand} open={open} />;
 }
 
 /** VIEW-019: the Show terminal switch: on, the session's raw terminal shows in place of its chat. */

@@ -102,6 +102,10 @@
 .chat-box { flex: 1; min-width: 0; resize: none; font: inherit; line-height: 1.4; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--input-bg); color: var(--fg); overflow-y: auto; }
 .chat-box:focus { outline: none; border-color: var(--line-focus); }
 .chat-box:disabled { color: var(--fg-faint); }
+/* CHAT-018: Send turns into Stop while a turn runs; it sits above the pane's own controls so it can always be clicked */
+.chat-send { position: relative; z-index: 6; flex: none; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--chip-bg); color: var(--fg); font: inherit; cursor: pointer; }
+.chat-send:disabled { color: var(--fg-faint); cursor: default; }
+.chat-send.stop { border-color: var(--danger); color: var(--danger); }
 
 /* CHAT-022: the agent is asking in its terminal, so the box holds its send */
 .chat-asking { position: absolute; left: 12px; right: 12px; bottom: calc(100% + 6px); padding: 6px 12px; font-size: 12px; color: var(--warn); background: var(--pane-bg); border: 1px solid var(--line-subtle); border-radius: 8px; }
@@ -113,3 +117,17 @@
 .kit-prompt-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .kit-prompt-notice button { background: none; border: 1px solid var(--line-subtle); border-radius: 6px; padding: 2px 8px; font: inherit; color: var(--fg); cursor: pointer; }
 .kit-prompt-notice button:hover { background: var(--pane-bg); }
+.chat-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; overflow-wrap: anywhere; }
+.chat-link:hover, .chat-link:focus-visible { text-decoration-thickness: 2px; }
+.chat-permission { margin: 0 12px 6px; padding: 8px 12px; background: var(--pane-bg); border: 1px solid var(--warn); border-radius: 8px; font-size: 12px; }
+.chat-permission-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.chat-permission-x { background: none; border: 0; color: var(--fg-muted); font: inherit; font-size: 16px; line-height: 1; cursor: pointer; }
+.chat-permission-detail, .chat-permission-plan { margin: 6px 0 0; max-height: 8em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono-font); font-size: 11px; color: var(--fg-muted); }
+.chat-permission-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chat-permission-actions button { padding: 4px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--chip-bg); color: var(--fg); font: inherit; cursor: pointer; }
+.chat-permission-actions .allow { border-color: var(--accent); }
+.chat-permission-actions .deny { border-color: var(--danger); color: var(--danger); }
+.chat-browser-menu { position: fixed; z-index: 20; display: flex; flex-direction: column; min-width: 180px; max-width: min(320px, 90vw); padding: 4px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 16px rgb(0 0 0 / 30%); }
+.chat-browser-url { padding: 4px 8px; font-size: 11px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-browser-menu button { text-align: left; background: none; border: 0; padding: 5px 8px; font: inherit; color: var(--fg); cursor: pointer; border-radius: 6px; }
+.chat-browser-menu button:hover, .chat-browser-menu button:focus-visible { background: var(--chip-bg); }
