@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyCellEdit, cellEditable, cellKey, endSave, isNewest, newBook, sendEdit, settleEdit, isSaving, startSave, groupItems, labelChange, openingView, parseProjectRef, type Project, type ProjectField, projectHostRefused, type ProjectItem, pushRecent, refsFrom, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
+import { applyCellEdit, cellEditable, cellKey, endSave, newBook, sendEdit, settleEdit, isSaving, startSave, groupItems, labelChange, openingView, parseProjectRef, type Project, type ProjectField, projectHostRefused, type ProjectItem, pushRecent, refsFrom, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
 
 const status: ProjectField = { id: "F_s", name: "Status", kind: "single_select", options: [{ id: "o1", name: "Todo", start: "", days: 0 }, { id: "o2", name: "Done", start: "", days: 0 }] };
 const points: ProjectField = { id: "F_p", name: "Points", kind: "number", options: [] };
@@ -108,21 +108,45 @@ describe("FIX-1 (council review of 674122c)", () => {
 });
 
 describe("FIX-2 AFTER 3: one saving mark per edit", () => {
-  it("two edits to one cell keep the mark until both are back, and only the newest reply is applied", () => {
+  it("two edits to one cell keep the mark until both are back", () => {
     const cell = cellKey("a", "F_status");
-    const newest = new Map<string, number>();
     let s = startSave([], 1, cell);
-    newest.set(cell, 1);
     s = startSave(s, 2, cell);
-    newest.set(cell, 2);
     s = startSave(s, 3, cellKey("a", "labels"));
     s = endSave(s, 1);
     expect(isSaving(s, cell)).toBe(true);
-    expect(isNewest(newest, cell, 1)).toBe(false);
-    expect(isNewest(newest, cell, 2)).toBe(true);
     s = endSave(s, 2);
     expect(isSaving(s, cell)).toBe(false);
     expect(isSaving(s, cellKey("a", "labels"))).toBe(true);
+  });
+});
+
+describe("FIX-4 AFTER 6: a burst of edits to one cell is re-read", () => {
+  // GitHub is not promised to apply a burst in the order it was sent, so after two or more
+  // successful edits to one cell settle together, the page reads the item back instead of
+  // trusting the highest id.
+  const settle = (steps: [number, boolean][]) => {
+    const b = newBook();
+    const c = cellKey("a", "F_status");
+    steps.forEach(([id]) => sendEdit(b, c, id));
+    return steps.map(([id, ok]) => settleEdit(b, c, id, ok, () => {}));
+  };
+  it("asks for a re-read only when the last edit settles and two or more went through", () => {
+    expect(settle([[1, true], [2, true], [3, true]])).toEqual([false, false, true]);
+    expect(settle([[1, true], [2, true]])).toEqual([false, true]);
+  });
+  it("a single success, or successes mixed with failures down to one, need none", () => {
+    expect(settle([[1, true]])).toEqual([false]);
+    expect(settle([[1, true], [2, false]])).toEqual([false, false]);
+    expect(settle([[1, false], [2, false]])).toEqual([false, false]);
+  });
+  it("the next burst starts counting from zero", () => {
+    const b = newBook();
+    const c = cellKey("a", "F_status");
+    [1, 2].forEach((id) => sendEdit(b, c, id));
+    [1, 2].forEach((id) => settleEdit(b, c, id, true, () => {}));
+    sendEdit(b, c, 3);
+    expect(settleEdit(b, c, 3, true, () => {})).toBe(false);
   });
 });
 

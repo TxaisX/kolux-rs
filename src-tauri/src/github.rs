@@ -201,15 +201,28 @@ enum ConfigRead {
     Failed,
 }
 
-/// FIX-3: one `gh config get` through the bounded runner in scm.rs, which ends the whole process
-/// tree gh started at the limit (never only gh itself). A read that cannot run or does not answer
-/// in time is `Failed`; gh answering with nothing, or with an error, is `Unset`.
+/// FIX-3 / FIX-4: one `gh config get` through the bounded runner in scm.rs, which ends the whole
+/// process tree gh started at the limit (never only gh itself). A read that cannot run or does not
+/// answer in time is `Failed`; so is a non-zero exit that is not gh's "key not found" answer.
 fn gh_config(gh: &Path, args: &[&str], limit: std::time::Duration) -> ConfigRead {
     match crate::scm::gh_config_within(gh, args, limit) {
-        Ok(Some(v)) => ConfigRead::Value(v),
-        Ok(None) => ConfigRead::Unset,
+        Ok(r) => config_read(r.ok, &r.out, &r.err),
         Err(_) => ConfigRead::Failed,
     }
+}
+
+/// FIX-4 (council FIX-SOON 1): what one finished read means. Exit 0 with a value is the value, exit
+/// 0 with nothing is "not set" (an older gh prints nothing for a key that is not set). A non-zero
+/// exit is "not set" only when gh's own error says it could not find the key (the text gh's config
+/// library gives; an unexpected wording fails closed to `Failed`, which refuses the host). Any other
+/// non-zero exit (a config file being rewritten, a lock, a shim error) is no answer, never "no
+/// top-level user", which would sign in a host that has none of its own.
+fn config_read(ok: bool, out: &str, err: &str) -> ConfigRead {
+    if ok {
+        return if out.is_empty() { ConfigRead::Unset } else { ConfigRead::Value(out.to_string()) };
+    }
+    let err = err.to_ascii_lowercase();
+    if err.contains("could not find key") || err.contains("key not found") { ConfigRead::Unset } else { ConfigRead::Failed }
 }
 
 /// A GraphQL node id as GitHub gives them (letters, digits, `_`, `-`, `=`), so an id from the page
@@ -919,11 +932,11 @@ mod tests {
         let dir = crate::test_dir::temp(name);
         let gh = if cfg!(windows) {
             let f = dir.join("gh.cmd");
-            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%1\"==\"config\" goto config\r\necho {\"fork\":false,\"data\":{}}\r\nexit /b 0\r\n:config\r\nif /i \"%3\"==\"-h\" if /i \"%4\"==\"ghe.corp\" (echo ana& exit /b 0)\r\nif exist \"%~dp0top.txt\" (type \"%~dp0top.txt\"& exit /b 0)\r\nexit /b 1\r\n").unwrap();
+            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%1\"==\"config\" goto config\r\necho {\"fork\":false,\"data\":{}}\r\nexit /b 0\r\n:config\r\nif /i \"%3\"==\"-h\" if /i \"%4\"==\"ghe.corp\" (echo ana& exit /b 0)\r\nif exist \"%~dp0top.txt\" (type \"%~dp0top.txt\"& exit /b 0)\r\nif exist \"%~dp0locked.txt\" (echo gh: the config file is busy 1>&2& exit /b 1)\r\necho could not find key user 1>&2\r\nexit /b 1\r\n").unwrap();
             f
         } else {
             let f = dir.join("gh");
-            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\nif [ \"$1\" = config ]; then if [ \"$3\" = -h ] && [ \"$4\" = ghe.corp ]; then echo ana; exit 0; fi; [ -f \"$(dirname \"$0\")/top.txt\" ] && cat \"$(dirname \"$0\")/top.txt\" && exit 0; exit 1; fi\necho '{\"fork\":false,\"data\":{}}'\n").unwrap();
+            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\nif [ \"$1\" = config ]; then if [ \"$3\" = -h ] && [ \"$4\" = ghe.corp ]; then echo ana; exit 0; fi; [ -f \"$(dirname \"$0\")/top.txt\" ] && cat \"$(dirname \"$0\")/top.txt\" && exit 0; if [ -f \"$(dirname \"$0\")/locked.txt\" ]; then echo 'gh: the config file is busy' >&2; exit 1; fi; echo 'could not find key user' >&2; exit 1; fi\necho '{\"fork\":false,\"data\":{}}'\n").unwrap();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -987,6 +1000,43 @@ mod tests {
         assert!(host_allowed_with(&gh, "ghe.corp", None).is_ok());
         assert_eq!(repo_parent(&gh, "ghe.corp", "acme/app").unwrap(), None);
         assert_eq!(api_calls(), 1);
+    }
+
+    /// FIX-4 (council FIX-SOON 1): gh failing a config read for a reason other than "key not set"
+    /// (a config file being rewritten, a lock, a shim error) is no answer, so it refuses the host;
+    /// only gh's own "could not find key" answer counts as the key being unset.
+    #[test]
+    fn a_config_read_that_fails_for_another_reason_is_no_answer_and_refuses_the_host() {
+        let (gh, dir) = gate_stand_in("github-host-gate-locked");
+        let busy = || dir.join("locked.txt");
+        // ghe.corp has its own user; the top-level read exits 1 with an error that is not "key not found".
+        fs::write(busy(), "x").unwrap();
+        let why = host_allowed_with(&gh, "ghe.corp", None).unwrap_err();
+        assert!(why.contains("did not answer its config read"), "{why}");
+        // The host's own read failing the same way is no answer either, not the plain refusal.
+        let why = host_allowed_with(&gh, "evil.example", None).unwrap_err();
+        assert!(why.contains("did not answer its config read"), "{why}");
+        // gh saying the key is not set is an answer: ghe.corp's own user stands, evil.example is plainly refused.
+        fs::remove_file(busy()).unwrap();
+        assert!(host_allowed_with(&gh, "ghe.corp", None).is_ok());
+        let plain = host_allowed_with(&gh, "evil.example", None).unwrap_err();
+        assert!(plain.contains("is not one of them") && !plain.contains("did not answer"), "{plain}");
+    }
+
+    #[test]
+    fn only_gh_s_key_not_found_answer_reads_as_unset() {
+        let read = |ok: bool, out: &str, err: &str| match config_read(ok, out, err) {
+            ConfigRead::Value(v) => format!("value:{v}"),
+            ConfigRead::Unset => "unset".into(),
+            ConfigRead::Failed => "failed".into(),
+        };
+        assert_eq!(read(true, "ana", ""), "value:ana");
+        assert_eq!(read(true, "", ""), "unset", "an older gh prints nothing for a key that is not set");
+        assert_eq!(read(false, "", "Could not find key \"user\""), "unset");
+        assert_eq!(read(false, "", "gh: could not find key: user"), "unset");
+        assert_eq!(read(false, "", ""), "failed", "a bare non-zero exit says nothing about the key");
+        assert_eq!(read(false, "", "gh: the config file is busy"), "failed");
+        assert_eq!(read(false, "ana", "permission denied"), "failed", "output on a failed read is not an answer");
     }
 
     /// FIX-3 (reliability review FIX-SOON 6): a gh_config read that fails or times out is no answer,
