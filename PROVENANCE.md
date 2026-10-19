@@ -785,3 +785,6 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · worktrees T-299 · spec/01 PROJ-019 and PROJ-024 as given in the brief; this tree's own projects.rs, creatures.rs and chrome/icons.tsx; no outside source
 > 2026-10-19 · worktrees T-294 · spec/01 PROJ-035 as given in the brief; this tree's own setup.rs and ImportSetup.tsx; no outside source
 > 2026-10-19 · worktrees FIX-1 (T-212, T-299, T-294) · pre-merge review findings as given in the brief; this tree's own projects.rs, setup.rs and src/projects; no outside source
+> 2026-10-19 · marks T-336 · card USAGE-020 in spec; this tree's own src/usage; no outside source
+> 2026-10-19 · marks T-338 · card HID-042 in spec; this tree's own src and src-tauri/icons; no outside source
+> 2026-10-19 · marks T-335 · card list SESS-044/TERM-131/VIEW-104/SET-048/HID-039-041/HID-043/HID-044 in spec; vendor brand-kit pages and zips named row by row in src/assets/vendors/NOTICE.md (OpenAI, GitHub, Linear, VS Code; Anthropic kit from 2026-10-08), public downloads only; this tree's own src/chrome, src/launch and src/marks; no old-app file
