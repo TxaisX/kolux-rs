@@ -594,19 +594,30 @@ fn gh_account(program: &Path, host: &str) -> Option<String> {
 /// FIX-R2: `gh_account` with a time limit: Ok(None) when gh says it is signed out on `host`, Err
 /// when gh cannot run or has not answered by `limit` (it is stopped then).
 fn gh_account_within(program: &Path, host: &str, limit: std::time::Duration) -> Result<Option<String>, String> {
-    gh_config_within(program, &["config", "get", "-h", host, "user"], limit)
+    let read = gh_config_within(program, &["config", "get", "-h", host, "user"], limit)?;
+    Ok((read.ok && !read.out.is_empty()).then_some(read.out))
 }
 
-/// FIX-3 (tasks): one `gh config get ...` answer through the bounded runner (the whole process
-/// tree ends at the limit): Ok(Some(value)) when gh printed one, Ok(None) when gh answered with
-/// nothing or a failure, Err when it cannot run or has not answered by `limit`. The host gate in
-/// github.rs reads gh's config through this and refuses the host on an Err.
-pub(crate) fn gh_config_within(program: &Path, args: &[&str], limit: std::time::Duration) -> Result<Option<String>, String> {
+/// FIX-4 (tasks): what one finished `gh config get ...` printed: whether gh exited 0, its standard
+/// output and its standard error, both trimmed. The host gate in github.rs tells gh's own "key not
+/// found" answer from any other failure by these.
+pub(crate) struct GhConfigRead {
+    pub ok: bool,
+    pub out: String,
+    pub err: String,
+}
+
+/// FIX-3 / FIX-4 (tasks): one `gh config get ...` through the bounded runner (the whole process
+/// tree ends at the limit): Ok with what gh printed and whether it exited 0, Err when it cannot
+/// run or has not answered by `limit`. It runs in the temp folder, so a gh that cannot find that
+/// folder fails (gh_login and gh_account then answer None). The host gate in github.rs reads gh's
+/// config through this, refuses the host on an Err, and counts a non-zero exit as "not set" only
+/// when the error text is gh's own "key not found".
+pub(crate) fn gh_config_within(program: &Path, args: &[&str], limit: std::time::Duration) -> Result<GhConfigRead, String> {
     let mut cmd = quiet(program);
     cmd.args(args).current_dir(std::env::temp_dir()).envs(crate::git::NO_PROMPT).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
-    let (ok, out, _) = run_within(cmd, None, limit)?;
-    let value = out.trim().to_string();
-    Ok((ok && !value.is_empty()).then_some(value))
+    let (ok, out, err) = run_within(cmd, None, limit)?;
+    Ok(GhConfigRead { ok, out: out.trim().to_string(), err: err.trim().to_string() })
 }
 
 /// FIX-2 / FIX-3: a pull request request goes only to a host Kolux may talk to (github.com, the host

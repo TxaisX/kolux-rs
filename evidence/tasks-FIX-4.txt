@@ -1,0 +1,54 @@
+tasks FIX-4 (wave 12, lane/tasks from 3937cbbd -> main 1dcade8e fast-forward): council review fixes
+=====================================================================================================
+
+FIX-SOON 1 (src-tauri/src/github.rs + HUNK evidence/tasks-FIX-4-scm.patch)
+- gh_config_within (scm.rs) now returns what gh printed: whether it exited 0, stdout and stderr (new
+  struct GhConfigRead). gh_account_within adapts, so gh_login / gh_account behave as before.
+- github.rs config_read: exit 0 with a value = Value; exit 0 with nothing = Unset (older gh); a non-zero
+  exit is Unset ONLY when stderr says "could not find key" / "key not found" (case-insensitive); any other
+  non-zero exit (config file being rewritten, lock, shim error, bare exit 1) = Failed, which refuses the host
+  ("... gh did not answer its config read; try again in a moment"). Nothing is cached on a refusal.
+- ASSUMPTION to confirm live (real gh was not run, by rule): the wording of gh's own error for an unset key.
+  An unexpected wording fails CLOSED (the host is refused), never open.
+- HUNK REQUIRED: github.rs does not compile without tasks-FIX-4-scm.patch (it replaces the FIX-3 scm hunk
+  that is already on main). `git apply --check evidence/tasks-FIX-4-scm.patch` is ok on main 1dcade8e.
+  Locally: patch applied for every run below, then `git checkout -- src-tauri/src/scm.rs` before the commit.
+  The patch also records (AFTER 3) that gh_config_within, hence gh_login and gh_account, runs in the temp
+  folder: they answer None when TEMP is missing.
+- Tests (github.rs): a_config_read_that_fails_for_another_reason_is_no_answer_and_refuses_the_host (stand-in gh:
+  host read echoes ana, top-level read prints "config file is busy" on stderr and exits 1: refused; with the
+  key-not-found stderr: allowed), only_gh_s_key_not_found_answer_reads_as_unset (7 cases of config_read).
+  Stand-in gate_stand_in now prints "could not find key user" to stderr for an unset key, as real gh does.
+- RED: fix4-red.log (old fail-open mapping stubbed in): 19 passed; 2 FAILED -
+  "called Result::unwrap_err() on an Ok value" (ghe.corp allowed on a failed top-level read) and
+  "a bare non-zero exit says nothing about the key: left unset, right failed".
+- GREEN: fix4-green1.log: 23 passed; 0 failed (github:: + fixr2 + fix3 scm gate tests). fix4-scm.log: scm:: 71 passed.
+
+FIX-SOON 2 (src/tasks/newIssue.ts, NewIssueDialog.tsx)
+- The last create failure is kept in module state next to inFlight (lastCreateFailure()). A new create
+  clears it, a create that goes through leaves none, a newer failure replaces an older one. The dialog starts
+  with actionError(lastFailure, "create") when it mounts, so after leaving Tasks mid-"Creating..." and coming
+  back, New issue says the create failed/timed out instead of offering a silent second click.
+- Test: newIssue.test.ts "a create that failed while no dialog was open is still there when New issue opens, until the next create".
+  RED: fix4-ts-red.log "TypeError: lastCreateFailure is not a function" (2 failed | 12 passed).
+
+AFTER items
+1. projects.ts: orphaned isNewest docstring and the unused isNewest export deleted (its test line removed; the test now checks only the saving marks).
+2. newIssue.ts titleLength = [...title.trim()].length, used for the 256 warning and the Create button; test with 200 emoji (400 UTF-16 units, 200 characters).
+3. Documented above (gh_config_within runs in the temp folder).
+4. TasksPage.tsx: the "created elsewhere" note has a Dismiss button.
+5. newIssue.ts closesDialog + TasksPage.tsx: a finished create closes the dialog only when the issue belongs on screen or that dialog opening sent it (opening counter); test "a create that comes back closes its own dialog...".
+6. projects.ts settleEdit returns true after a burst (two or more edits to one cell went through); ProjectsView.tsx then re-reads the project (github_project) and shows what GitHub holds. Tests: "FIX-4 AFTER 6" (3 cases), RED fix4-ts-red2.log (3 failed, settleEdit returned undefined).
+7. (component tests: focus return, long-title disable, elsewhere note, watcher error display) STILL OPEN: needs a jsdom/vitest config (package.json, vitest config) outside this lane's OWNS.
+
+GATES (logs in G:/Temp/tasks-w1-logs/, scm.rs patch applied)
+- cargo clippy --all-targets -D warnings: clean (fix4-clippy.log, exit 0)
+- cargo test --no-fail-fast: lib 903 passed; 1 failed (scm::fix4_a_timeout_ends_the_tree..., load flake under 19 builders) - rerun alone: 1 passed (fix4-flake.log); other test results ok (fix4-cargo.log)
+- pnpm exec tsc --noEmit: exit 0; pnpm test: 208 files, 1420 passed (fix4-vitest.log)
+- plan-check: OK; '## Last 10 passes' count 1; duplicate T- ids: none; firewall -Baseline: 53 hits, 0 new
+
+LIVE PROOF PENDING (batched, after the scm patch is applied)
+- Tasks page > New issue with a stand-in gh that never answers: click Create, leave Tasks, wait for the timeout, return, open New issue: the red failure line is shown and the draft is still there.
+- Switch workspace while a create is out, open New issue in the new workspace, let the old create finish: the new dialog stays open; the "created elsewhere" note shows and its x dismisses it.
+- Projects table: change one Status cell three times quickly: afterwards the cell shows GitHub's value.
+- A title of 200 emoji does not trigger the 256-character warning.
