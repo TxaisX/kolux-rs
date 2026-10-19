@@ -112,7 +112,12 @@ export function activeOf(claude: ClaudeSwitchView | null, codex: CodexSwitchView
 /** FIX-1: the label the switcher shows for an account id of a provider (an agent word), so the Tower
  *  names "Team" and not the id. An id no longer listed keeps the id. */
 export function switcherLabel(groups: Group[], agent: string, id: string): string {
-  return groups.find((g) => g.provider === agent)?.choices.find((c) => c.id === id)?.label ?? id;
+  const choices = groups.find((g) => g.provider === agent)?.choices ?? [];
+  const at = choices.find((c) => c.id === id);
+  if (!at) return id;
+  // FIX-2: two accounts of one provider that read the same get the last four characters of their id,
+  // so the Tower never shows two cards or rows under one name. The pill menu keeps the plain label.
+  return choices.some((c) => c !== at && c.label === at.label) ? `${at.label} (${id.slice(-4)})` : at.label;
 }
 
 /** FIX-1: a switch from a shortcut or the palette, with pick's error words shown as a notice
@@ -121,11 +126,17 @@ export function pickWithNotice(pick: (provider: Provider, id: string | null) => 
   return (provider, id) => void pick(provider, id).then((failed) => failed && notify(failed));
 }
 
-/** FIX-1: calls `onClose` for Escape on `target` (the document, wherever focus is) until the returned stop runs. */
-export function watchEscape(target: Pick<EventTarget, "addEventListener" | "removeEventListener">, onClose: () => void): () => void {
+/** FIX-1/FIX-2: while `isOpen()` says the menu is open, Escape on `target` (the window, wherever focus is)
+ *  closes it and goes no further: the listener sits in the capture phase, ahead of a focused terminal or
+ *  agent pane, and stops the key there, because Escape is also the key that interrupts an agent's turn.
+ *  When the menu is shut, or the key is anything else, the event is not touched. Runs until the returned stop runs. */
+export function watchEscape(target: Pick<EventTarget, "addEventListener" | "removeEventListener">, onClose: () => void, isOpen: () => boolean = () => true): () => void {
   const on = (e: Event) => {
-    if ((e as KeyboardEvent).key === "Escape") onClose();
+    if ((e as KeyboardEvent).key !== "Escape" || !isOpen()) return;
+    e.stopPropagation();
+    e.preventDefault();
+    onClose();
   };
-  target.addEventListener("keydown", on);
-  return () => target.removeEventListener("keydown", on);
+  target.addEventListener("keydown", on, { capture: true });
+  return () => target.removeEventListener("keydown", on, { capture: true });
 }

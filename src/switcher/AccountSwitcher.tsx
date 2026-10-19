@@ -131,9 +131,10 @@ export default function AccountSwitcher() {
   );
 }
 
-/** FIX-1: while the menu is open, Escape closes it wherever focus is. The old handler sat on the menu
- *  and only fired with focus inside it; with every row disabled (a sign-in running) nothing took focus. */
+/** FIX-1/FIX-2: while the menu is open (this component is only mounted then), Escape closes it wherever
+ *  focus is and stops there, so a focused terminal or agent pane never sees it. The old handler sat on
+ *  the menu and only fired with focus inside it; with every row disabled (a sign-in running) nothing took focus. */
 export function EscapeWatch({ onClose }: { onClose: () => void }) {
-  useEffect(() => watchEscape(document, onClose), [onClose]);
+  useEffect(() => watchEscape(window, onClose), [onClose]);
   return null;
 }

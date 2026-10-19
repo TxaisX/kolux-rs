@@ -196,6 +196,21 @@ describe("switcherLabel", () => {
     expect(switcherLabel(groups, "codex", "c-91")).toBe("c-91");
     expect(switcherLabel([], "claude", "c-91")).toBe("c-91");
   });
+  // FIX-2 (AFTER 2): two accounts that read the same would look like one account on the Tower card.
+  it("adds a short id suffix only to accounts whose label another account of that provider shares", () => {
+    const twins = groupsOf(
+      claude({ accounts: [{ id: "c-aa11", email: "work@example.com", organization: null, stale: false }, { id: "c-bb22", email: "work@example.com", organization: null, stale: false }, { id: "c-cc33", email: "me@example.com", organization: null, stale: false }], active: "c-aa11" }),
+      codex({ accounts: [{ id: "x-dd44", email: "work@example.com", signInError: false }], active: "x-dd44" }),
+    );
+    const a = switcherLabel(twins, "claude", "c-aa11");
+    const b = switcherLabel(twins, "claude", "c-bb22");
+    expect(a).not.toBe(b);
+    expect(a.startsWith("work@example.com")).toBe(true);
+    expect(a).toContain("aa11");
+    expect(b).toContain("bb22");
+    expect(switcherLabel(twins, "claude", "c-cc33")).toBe("me@example.com");
+    expect(switcherLabel(twins, "codex", "x-dd44")).toBe("work@example.com");
+  });
 });
 
 // FIX-1 (FIX-SOON 2): a failed shortcut or palette switch is told to the person, not dropped.
@@ -230,5 +245,63 @@ describe("watchEscape", () => {
     stop();
     target.dispatchEvent(key("Escape"));
     expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
+// FIX-2 (FIX-SOON 1): Escape interrupts an agent turn, so the Escape that closes the menu must not reach a focused pane.
+describe("watchEscape (FIX-2: the menu keeps Escape to itself)", () => {
+  const standIn = (name: string) => ({ key: name, stopPropagation: vi.fn(), preventDefault: vi.fn() });
+  /** A target that keeps the handler and the options it was registered with. */
+  const recording = () => {
+    const calls: Array<{ type: string; fn: (e: unknown) => void; capture: unknown }> = [];
+    return {
+      calls,
+      addEventListener: (type: string, fn: (e: unknown) => void, capture?: unknown) => void calls.push({ type, fn, capture }),
+      removeEventListener: vi.fn(),
+    };
+  };
+
+  it("listens in the capture phase, and releases the same registration", () => {
+    const target = recording();
+    const stop = watchEscape(target as never, vi.fn());
+    expect(target.calls).toHaveLength(1);
+    expect(target.calls[0]).toMatchObject({ type: "keydown", capture: { capture: true } });
+    stop();
+    expect(target.removeEventListener).toHaveBeenCalledWith("keydown", target.calls[0].fn, { capture: true });
+  });
+
+  it("closes the menu and stops the Escape there when the menu is open", () => {
+    const target = recording();
+    const close = vi.fn();
+    watchEscape(target as never, close, () => true);
+    const esc = standIn("Escape");
+    target.calls[0].fn(esc);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(esc.stopPropagation).toHaveBeenCalledTimes(1);
+    expect(esc.preventDefault).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets the Escape through untouched when the menu is shut", () => {
+    const target = recording();
+    const close = vi.fn();
+    watchEscape(target as never, close, () => false);
+    const esc = standIn("Escape");
+    target.calls[0].fn(esc);
+    expect(close).not.toHaveBeenCalled();
+    expect(esc.stopPropagation).not.toHaveBeenCalled();
+    expect(esc.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("leaves every other key alone even when the menu is open", () => {
+    const target = recording();
+    const close = vi.fn();
+    watchEscape(target as never, close, () => true);
+    for (const name of ["Enter", "a", "ArrowDown"]) {
+      const ev = standIn(name);
+      target.calls[0].fn(ev);
+      expect(ev.stopPropagation).not.toHaveBeenCalled();
+      expect(ev.preventDefault).not.toHaveBeenCalled();
+    }
+    expect(close).not.toHaveBeenCalled();
   });
 });

@@ -14,7 +14,8 @@ RED FIRST (behaviour tests, module present, stubs returning the old behaviour)
 log: G:/Temp/accounts-w16-logs/FIX1-red.keep.log
 result: 12 failed, every one on an assertion (not on an import or type error):
   tower: Claude card carries no forAccount; nameUsage x2; nameSeats
-  accounts: activeOf x3; switcherLabel; pickWithNotice x2; watchEscape x2
+  accounts: activeOf x3; the label test (still named "accountLabel" in the stub run, renamed switcherLabel in the code) x1; pickWithNotice x1; watchEscape x1
+  (breakdown corrected by FIX-2 to match FIX1-red.keep.log: 4 tower + 6 accounts + 2 AccountSwitcher = 12)
   AccountSwitcher: hint wording; Escape watcher present with all rows disabled
 The click-to-pick test (item 5) passed at once because the behaviour already existed. Mutation check, log FIX1-mutation.log: onPick(g.provider, c.id) changed to onPick(g.provider, null) made it fail with an AssertionError; restored, 7/7 passed.
 
