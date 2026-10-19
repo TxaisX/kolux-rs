@@ -308,11 +308,81 @@ describe("the sign-in check is remembered for about a minute (FIX-1)", () => {
     const old = read(call);
     expect(await read(call, { force: true })).toEqual(good);
     release();
-    expect(await old).toEqual({ account: "octo", token: "failed", tracker: "failed" });
+    // FIX-3: the older caller is answered with the newest answer too, so a screen that shows what it gets (the guide)
+    // cannot flip back to "not connected" next to the Integrations panel that says connected.
+    expect(await old).toEqual(good);
     expect(budgets).toBe(2);
     // the late, older answer did not replace the newer good one in memory
     expect(await read(call)).toEqual(good);
     expect(budgets).toBe(2);
+  });
+
+  // FIX-3 (review FIX-SOON 1): the guide's own read (Guides.tsx, opening and the Explore tour) is a non-forced read; Re-check
+  // in the Integrations panel is forced. Whatever order the two land in, the guide shows the Re-check's answer.
+  it("a non-forced read in flight, a forced Re-check lands connected, then the older one lands failed: the older caller still gets connected", async () => {
+    const read = createSeenReader(clock().now);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    let budgets = 0;
+    const call = async <T>(cmd: string): Promise<T> => {
+      if (cmd === "scm_gh_account") return "octo" as T;
+      if (++budgets === 1) {
+        await gate;
+        throw new Error("HTTP 401: Bad credentials");
+      }
+      return rows as T;
+    };
+    const guide = read(call); // what the guide shows is whatever this resolves to
+    expect(await read(call, { force: true })).toEqual(good); // the panel's Re-check lands connected
+    release(); // the older read now lands, failed
+    expect(await guide).toEqual(good);
+  });
+  it("an older read that lands before the newer Re-check has finished waits for it and takes its answer", async () => {
+    const read = createSeenReader(clock().now);
+    let releaseOld: () => void = () => {};
+    let releaseNew: () => void = () => {};
+    const gateOld = new Promise<void>((r) => (releaseOld = r));
+    const gateNew = new Promise<void>((r) => (releaseNew = r));
+    let budgets = 0;
+    const call = async <T>(cmd: string): Promise<T> => {
+      if (cmd === "scm_gh_account") return "octo" as T;
+      if (++budgets === 1) {
+        await gateOld;
+        throw new Error("HTTP 401: Bad credentials");
+      }
+      await gateNew;
+      return rows as T;
+    };
+    const guide = read(call);
+    const recheck = read(call, { force: true });
+    let settled = false;
+    void guide.then(() => (settled = true));
+    releaseOld(); // the older read lands first, failed, while the Re-check is still running
+    await new Promise((r) => setTimeout(r, 0));
+    expect(settled).toBe(false);
+    releaseNew();
+    expect(await recheck).toEqual(good);
+    expect(await guide).toEqual(good);
+  });
+  it("the newest read decides, however many are in flight (three reads, the last forced)", async () => {
+    const read = createSeenReader(clock().now);
+    const gates: (() => void)[] = [];
+    let budgets = 0;
+    const call = async <T>(cmd: string): Promise<T> => {
+      if (cmd === "scm_gh_account") return "octo" as T;
+      const mine = ++budgets;
+      await new Promise<void>((r) => gates.push(r));
+      if (mine < 3) throw new Error("HTTP 401: Bad credentials");
+      return rows as T;
+    };
+    const a = read(call);
+    const b = read(call, { force: true });
+    const c = read(call, { force: true });
+    await new Promise((r) => setTimeout(r, 0));
+    gates.forEach((g) => g()); // all three land together; two are failed, the newest is good
+    expect(await a).toEqual(good);
+    expect(await b).toEqual(good);
+    expect(await c).toEqual(good);
   });
   it("a read asked after the shared one has finished starts a new run when the answer was not good", async () => {
     const read = createSeenReader(clock().now);

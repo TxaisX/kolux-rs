@@ -86,20 +86,31 @@ const good = (s: Seen) => s.account !== null && s.token === "ok" && s.tracker ==
  *  A token GitHub turns down, a different account or a sign-out is never covered up. `force` (the Re-check button)
  *  always asks again and reports what it finds, but a good answer it gets is remembered.
  *  FIX-2: only a good answer is held, and reads asked while one is running share it (a `force` read never joins an
- *  older one, and an older read that lands late does not overwrite a newer answer). The one gap left: a sign-out
- *  or a revoked token inside the minute still reads as connected until the minute ends or Re-check is pressed. */
+ *  older one). The one gap left: a sign-out, a revoked token or an account switch (`gh auth switch`) inside the
+ *  minute still reads as connected until the minute ends or Re-check is pressed.
+ *  FIX-3: a read that was running when a newer one began is answered with the newer one's answer, in memory and for
+ *  the caller alike, so a screen that shows what it gets (the guide, which asks without `force`) never lands on an
+ *  older answer after the Integrations panel's Re-check showed a newer one. Every caller gets this from here, so none
+ *  needs its own latest-wins counter. (StepPanels keeps its own `turn` counter for a different reason: it also ignores
+ *  an answer that arrives after the panel was closed.)
+ *  Cost of re-reading a not-good answer: each such read runs gh once (an account lookup and one API call). It is bounded
+ *  by who asks, not by a timer: window focus is floored at 30 s (sidebar.ts FOCUS_FLOOR_MS), guide close and project add
+ *  are user actions, and reads asked while one is running share it. A short hold for not-good answers was left out on
+ *  purpose, so a sign-in done in a terminal is seen by the very next read and a failure is never held. */
 export function createSeenReader(now: () => number = Date.now) {
   let kept: { at: number; seen: Seen } | null = null;
   let flying: Promise<Seen> | null = null;
+  let newest: Promise<Seen> | null = null;
   let latest = 0;
   const run = async (call: Call, force: boolean, mine: number): Promise<Seen> => {
     const { seen, offline } = await look(call);
-    const newest = mine === latest;
+    // A newer read began while this one ran (a Re-check, or a read after this one failed): its answer stands for this caller too.
+    if (mine !== latest && newest) return newest;
     if (offline && !force && kept?.seen.token === "ok" && kept.seen.account === seen.account) {
-      if (newest) kept = { at: now(), seen: kept.seen };
+      kept = { at: now(), seen: kept.seen };
       return kept.seen;
     }
-    if (newest) kept = !offline && good(seen) ? { at: now(), seen } : null;
+    kept = !offline && good(seen) ? { at: now(), seen } : null;
     return seen;
   };
   return (call: Call, opts: { force?: boolean } = {}): Promise<Seen> => {
@@ -112,6 +123,7 @@ export function createSeenReader(now: () => number = Date.now) {
       if (flying === p) flying = null;
     });
     flying = p;
+    newest = p;
     return p;
   };
 }
