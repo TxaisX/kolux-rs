@@ -124,11 +124,12 @@ fn write_settings(app: &tauri::AppHandle, store: &Mutex<Store>, change: impl FnO
     Ok(())
 }
 
-/// A desktop notification (STAT-041). The window decides when one is due and with which words.
+/// A desktop notification (STAT-041). The window decides when one is due and with which words, and
+/// (STAT-043) whether the system's own sound plays with it: `sound` is false when Kolux plays its
+/// own tone or file instead, or the volume is 0.
 #[tauri::command]
-fn notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
-    use tauri_plugin_notification::NotificationExt;
-    app.notification().builder().title(title).body(body).show().map_err(|e| e.to_string())
+fn notify(app: tauri::AppHandle, title: String, body: String, sound: Option<bool>) -> Result<(), String> {
+    notifications::show(&app, title, body, sound.unwrap_or(true))
 }
 
 /// The minutes of silence before a working agent is reported quiet; 10 by default, 0 is off
@@ -338,6 +339,7 @@ pub fn run() {
             settings_patch,
             notify,
             notifications::notification_test,
+            notifications::notification_sound_load,
             notifications::open_notification_settings,
             hooks::agent_hooks::agent_hooks_sync,
             hooks::agent_hooks::agent_hooks_file,

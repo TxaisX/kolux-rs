@@ -4,7 +4,8 @@
 // USAGE-009: the usage-alerts preference, on by default (shown in the same view).
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { KINDS, playTone, readNotifications, SOUND_FIELD, SOUNDS, SUPPRESS_FOCUSED_FIELD, testPlan, VOLUME_FIELD, type Sound } from "./notifications";
+import { open } from "@tauri-apps/plugin-dialog";
+import { AUDIO_TYPES, audioTypeAllowed, CUSTOM_FIELD, KINDS, loadSound, preparePlan, readNotifications, SOUND_FIELD, SOUNDS, SUPPRESS_FOCUSED_FIELD, VOLUME_FIELD, type Sound } from "./notifications";
 import { ALERTS_FIELD, alertsOn } from "../usage/alerts";
 import { useSettings } from "./useSettings";
 
@@ -14,15 +15,36 @@ export function NotificationsView({ settings, onSave }: { settings: Record<strin
   const n = readNotifications(settings);
   const [result, setResult] = useState<Result | { error: string } | null>(null);
   const openSystem = () => invoke("open_notification_settings").catch((e) => setResult({ error: String(e) }));
+  const [fileProblem, setFileProblem] = useState<string | null>(null);
   const test = () => {
-    const plan = testPlan(n);
-    invoke<Result>("notification_test", { sound: plan.toastSound })
-      .then((r) => {
-        setResult(r);
-        if (r.shown && plan.tone) playTone(plan.tone, plan.gain);
-      })
-      .catch((e) => setResult({ error: String(e) }));
+    void preparePlan(n).then(({ plan, play, close, problem }) => {
+      setFileProblem(problem);
+      return invoke<Result>("notification_test", { sound: plan.toastSound })
+        .then((r) => {
+          setResult(r);
+          if (r.shown) play();
+        })
+        .catch((e) => {
+          close();
+          setResult({ error: String(e) });
+        });
+    });
   };
+  // STAT-043: a custom sound must be an allowed audio type; the file is read once here so a bad one
+  // is refused with a reason instead of being saved and failing silently later.
+  const choose = async () => {
+    const picked = await open({ multiple: false, directory: false, filters: [{ name: "Audio", extensions: [...AUDIO_TYPES] }] }).catch(() => null);
+    if (typeof picked !== "string") return;
+    if (!audioTypeAllowed(picked)) return setFileProblem(`That file is not an allowed sound type (${AUDIO_TYPES.join(", ")}).`);
+    try {
+      (await loadSound(picked, 1)).close();
+    } catch (e) {
+      return setFileProblem(`That file cannot be used as a sound: ${String(e)}`);
+    }
+    setFileProblem(null);
+    onSave({ [CUSTOM_FIELD]: picked, [SOUND_FIELD]: "custom" });
+  };
+  const fileName = n.customFile?.split(/[\\/]/).pop() ?? null;
   return (
     <>
       <section className="conn-card" data-section="kinds">
@@ -53,6 +75,22 @@ export function NotificationsView({ settings, onSave }: { settings: Record<strin
             ))}
           </select>
         </div>
+        {n.sound === "custom" && (
+          <div className="look-select">
+            <span>Custom file</span>
+            <span className="notif-volume">
+              <output>{fileName ?? "No file chosen: the system sound plays"}</output>
+              <button className="btn" onClick={() => void choose()}>
+                Choose a sound file
+              </button>
+            </span>
+          </div>
+        )}
+        {fileProblem && (
+          <p className="conn-detail warn" role="alert">
+            {fileProblem}
+          </p>
+        )}
         <div className="look-select">
           <span>Volume</span>
           <span className="notif-volume">
