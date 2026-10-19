@@ -7,7 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { actionError } from "./issueActions";
 import type { Task } from "./model";
-import { closingDraft, createBusy, createOnce, draftFrom, draftToSave, emptyDraft, type IssueDraft, names, openDraft, pickableLabels, TITLE_MAX, watchCreate, withRepo } from "./newIssue";
+import { closingDraft, createBusy, createOnce, draftFrom, draftToSave, emptyDraft, type IssueDraft, names, openDraft, pickableLabels, TITLE_MAX, titleLength, lastCreateFailure, watchCreate, withRepo } from "./newIssue";
 
 /** The draft kept for this run (also one too long for settings); null after an issue is created.
  * The one-create-at-a-time flag lives next to it, in newIssue.ts (createOnce). */
@@ -29,7 +29,11 @@ export default function NewIssueDialog(p: {
   const [labelText, setLabelText] = useState(d.labels.join(", "));
   const [peopleText, setPeopleText] = useState(d.assignees.join(", "));
   const [busy, setBusy] = useState(createBusy);
-  const [error, setError] = useState<string | null>(null);
+  // FIX-4: a create that failed while no dialog was open (the user had left Tasks) still shows here.
+  const [error, setError] = useState<string | null>(() => {
+    const gone = lastCreateFailure();
+    return gone ? actionError(gone, "create") : null;
+  });
   const box = useRef<HTMLDivElement>(null);
   // Nothing is saved until the user changes something, so opening the dialog in a workspace on
   // another host never overwrites the draft kept for the first host.
@@ -152,9 +156,9 @@ export default function NewIssueDialog(p: {
         <input className="field" aria-label="Assignees" placeholder="Assignees (logins), comma separated" list="new-issue-people" disabled={busy} value={peopleText} onChange={(e) => setPeopleText(e.target.value)} onBlur={() => edit({ ...d, assignees: names(peopleText) })} />
         <datalist id="new-issue-labels">{facts && pickableLabels(p.labels).map((l) => <option key={l} value={l} />)}</datalist>
         <datalist id="new-issue-people">{facts && p.people.map((l) => <option key={l} value={l} />)}</datalist>
-        {d.title.trim().length > TITLE_MAX && (
+        {titleLength(d.title) > TITLE_MAX && (
           <div className="tasks-warn" role="alert" data-title-long>
-            GitHub titles can be at most {TITLE_MAX} characters; this one has {d.title.trim().length}.
+            GitHub titles can be at most {TITLE_MAX} characters; this one has {titleLength(d.title)}.
           </div>
         )}
         {out === "too-long" && (
@@ -167,7 +171,7 @@ export default function NewIssueDialog(p: {
             {error}
           </div>
         )}
-        <button className="btn primary" disabled={busy || !d.title.trim() || d.title.trim().length > TITLE_MAX || !d.repo} onClick={create}>
+        <button className="btn primary" disabled={busy || !d.title.trim() || titleLength(d.title) > TITLE_MAX || !d.repo} onClick={create}>
           {busy ? "Creating…" : "Create issue"}
         </button>
       </div>
