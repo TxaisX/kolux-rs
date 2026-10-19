@@ -1,7 +1,7 @@
 // VIEW-010 / GIT-043: the Tasks page, opened from the sidebar's Tasks row or the view.tasks
 // shortcut: a preset or a typed GitHub search over the workspace's repository, 25 to a page.
 // T-314: the default preset is a setting (GIT-044), PR filter pickers rewrite the query (GIT-054),
-// and a fork may take its issues from its parent (GIT-055).
+// and a fork may take its issues from its parent (GIT-055); T-314-c adds the Projects tab (GIT-056).
 // ponytail: one repository (the workspace's); the multi-repository picker, the remembered choice,
 // new issue, close / reopen / comment and start-from-item are T-231-c. Clicking an item opens its
 // preview (GIT-050, TaskDialog).
@@ -10,14 +10,16 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Refresh, Search } from "../chrome/icons";
 import { useSettings } from "../settings/useSettings";
 import { beyondWindow, defaultPreset, FILTERS, type FilterKey, filterValue, issueSource, pageButtons, pageCount, PER_PAGE, PRESETS, setFilter, type Task, type TaskLabel, type TaskPage, taskKind, taskQueries } from "./model";
+import NewIssueDialog from "./NewIssueDialog";
+import { issueTargets } from "./newIssue";
+import { type GhRepo, loadRepoFacts, type ParentRead, type Person, resetFacts } from "./repoFacts";
+import ProjectsView from "./ProjectsView";
 import TaskDialog from "./TaskDialog";
 import "./tasks.css";
 
-type GhRepo = { host: string; owner: string; name: string };
-type Person = { login: string; avatar: string };
 /** GIT-043: preset, query, page and scroll survive leaving the page and coming back (app session);
  * GIT-044: the first visit of the session opens on the saved default preset. */
-const kept: { preset: string | null; query: string; page: number; scroll: number } = { preset: null, query: "", page: 1, scroll: 0 };
+const kept: { preset: string | null; query: string; page: number; scroll: number; tab: "items" | "projects" } = { preset: null, query: "", page: 1, scroll: 0, tab: "items" };
 
 /** GIT-054: one filter picker; typing or picking a suggestion sets its part of the query on Enter or
  * on leaving the field, and the cross clears only that part. */
@@ -60,7 +62,7 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
   const [gh, setGh] = useState<GhRepo | null | undefined>(undefined);
   const [login, setLogin] = useState<string | null>(null);
   const [preset, setPreset] = useState<string | null>(kept.preset);
-  const [parent, setParent] = useState<string | null | undefined>(undefined);
+  const [{ parent, failed: parentFailed }, setParent] = useState<ParentRead>({ parent: undefined, failed: false });
   const [people, setPeople] = useState<Person[]>([]);
   const [labels, setLabels] = useState<string[]>([]);
   const [typed, setTyped] = useState(kept.query);
@@ -69,44 +71,41 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
   const [result, setResult] = useState<TaskPage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<Task | null>(null);
+  const [newIssue, setNewIssue] = useState(false);
+  // T-314-c: Issues and pull requests, or GitHub Projects (GIT-056).
+  const [tab, setTab] = useState(kept.tab);
   const list = useRef<HTMLUListElement>(null);
   const restore = useRef(kept.scroll);
-  Object.assign(kept, { preset, query, page });
+  Object.assign(kept, { preset, query, page, tab });
 
   useEffect(() => {
     if (preset === null && settings) setPreset(defaultPreset(settings));
   }, [settings]);
 
   useEffect(() => {
-    setGh(undefined);
-    setParent(undefined);
+    const set = { gh: setGh, login: setLogin, parent: setParent, people: setPeople, labels: setLabels };
+    resetFacts(set);
     if (!repo) return;
-    invoke<GhRepo | null>("scm_github_repo", { worktree: repo.dir })
-      .then((g) => {
-        setGh(g);
-        if (!g) return;
-        const repoName = `${g.owner}/${g.name}`;
-        void invoke<string | null>("scm_gh_account", { host: g.host }).then(setLogin);
-        invoke<string | null>("github_repo_parent", { host: g.host, repo: repoName }).then(setParent, () => setParent(undefined));
-        invoke<Person[]>("github_people", { host: g.host, repo: repoName }).then(setPeople, () => setPeople([]));
-        invoke<TaskLabel[]>("scm_repo_labels", { host: g.host, repo: repoName }).then((l) => setLabels(l.map((x) => x.name)), () => setLabels([]));
-      })
-      .catch(() => setGh(null));
+    let live = true;
+    void loadRepoFacts(invoke, repo.dir, () => live, set);
+    return () => {
+      live = false;
+    };
   }, [repo?.dir]);
 
   const own = gh ? `${gh.owner}/${gh.name}` : "";
   const sourceKey = gh ? `${gh.host}/${own}` : "";
-  const source = issueSource(settings, sourceKey, own, parent);
+  const source = issueSource(settings, sourceKey, own, parent, parentFailed);
   const savedSources = (settings?.tasksIssueSource ?? {}) as Record<string, unknown>;
   const chosenSource = savedSources[sourceKey] === "upstream" ? "upstream" : "fork";
   const load = () => {
-    if (!gh || preset === null || !settings) return;
+    if (!gh || preset === null || !settings || tab !== "items") return;
     setError(null);
     invoke<TaskPage>("scm_tasks_search", { host: gh.host, queries: taskQueries(preset, query, [own], [source.repo]), page })
       .then(setResult)
       .catch((e) => setError(String(e)));
   };
-  useEffect(load, [gh, preset, query, page, source.repo, settings === null]);
+  useEffect(load, [gh, preset, query, page, source.repo, settings === null, tab]);
   useLayoutEffect(() => {
     if (result && list.current && restore.current) {
       list.current.scrollTop = restore.current;
@@ -127,10 +126,31 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
   };
   const isDefault = preset === defaultPreset(settings);
   const whoOptions = ["@me", ...people.map((p) => p.login)];
+  const tabs = (
+    <div className="tasks-tabs" role="tablist">
+      {([["items", "Issues & pull requests"], ["projects", "Projects"]] as const).map(([id, label]) => (
+        <button key={id} role="tab" className="btn" aria-selected={tab === id} data-tab={id} onClick={() => setTab(id)}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+  if (tab === "projects") {
+    return (
+      <div className="autos tasks" data-tasks>
+        <div className="autos-bar">
+          <h2>Tasks</h2>
+          {tabs}
+        </div>
+        <ProjectsView host={gh?.host ?? "github.com"} owner={gh?.owner ?? "@me"} settings={settings} save={save} />
+      </div>
+    );
+  }
   return (
     <div className="autos tasks" data-tasks>
       <div className="autos-bar">
         <h2>Tasks</h2>
+        {tabs}
         <select
           className="field"
           aria-label="Preset"
@@ -191,6 +211,9 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
             {gh.host} · {login ? `@${login}` : "not signed in"} · {gh.owner}/{gh.name}
           </span>
         )}
+        <button className="btn" data-new-issue-open disabled={!gh} onClick={() => setNewIssue(true)}>
+          New issue
+        </button>
         <button className="ib" title="Refresh" disabled={!gh} onClick={load}>
           <Refresh />
         </button>
@@ -257,12 +280,30 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
           {beyondWindow(result.deepest) && <span className="tasks-count tasks-window">Results past {pages * PER_PAGE} are beyond GitHub search and cannot be reached; narrow the search.</span>}
         </div>
       )}
+      {newIssue && gh && (
+        <NewIssueDialog
+          host={gh.host}
+          targets={issueTargets(source.repo, own)}
+          saved={settings?.tasksIssueDraft}
+          save={save}
+          factsRepo={own}
+          labels={labels}
+          people={people.map((x) => x.login)}
+          onClose={() => setNewIssue(false)}
+          onCreated={(t: Task) => {
+            setNewIssue(false);
+            setResult((r) => r && { ...r, items: [t, ...r.items.filter((x) => x.url !== t.url)] });
+            setOpen(t);
+          }}
+        />
+      )}
       {open && gh && (
         <TaskDialog
           task={open}
           host={gh.host}
           onClose={() => setOpen(null)}
           onLabels={(labels: TaskLabel[]) => setResult((r) => r && { ...r, items: r.items.map((x) => (x.url === open.url ? { ...x, labels } : x)) })}
+          onState={(state: string) => setResult((r) => r && { ...r, items: r.items.map((x) => (x.url === open.url ? { ...x, state } : x)) })}
         />
       )}
     </div>

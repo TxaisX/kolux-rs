@@ -26,10 +26,34 @@ const ALLOWED = {
 // The one loopback call each file may make, as exact text: it is cut out before the scan, so any
 // other fetch in the same file is still caught (an ALLOWED entry would pass the whole file).
 // A whole-file reqwest pass covers one client only: a second builder in the same file fails the audit.
-const ONE_CLIENT = { "src-tauri/src/browser.rs": "reqwest::Client::builder(", "src-tauri/src/artifacts.rs": "reqwest::Client::builder(" };
+const ONE_CLIENT = { "src-tauri/src/artifacts.rs": "reqwest::Client::builder(" };
+// browser.rs (council FIX-4, Ruling 1): its icon clients both come from one builder line, kept as
+// exact text with the public-only lookup and no proxy, and from exactly three calls of the function
+// that holds it; any other way of making a client (a bare constructor, an imported Client, the
+// one-shot get) is counted too, so a second client written any of the ways the second test lists fails the audit.
+const PINNED = {
+  "src-tauri/src/browser.rs": [
+    ["reqwest::Client::builder().timeout(Duration::from_secs(8)).redirect(policy).no_proxy().dns_resolver(resolver).build()", 1],
+    [/\b(?:Client|ClientBuilder)\s*::\s*(?:builder|new|default)\s*\(|\breqwest\s*::\s*(?:blocking\s*::\s*)?get\s*\(/g, 1],
+    ["icon_client_for(", 3],
+    // every reqwest path and every mention of the client function, so an aliased import or a function pointer moves a count
+    [/\breqwest::/g, 11],
+    [/\bicon_client_for\b/g, 4],
+  ],
+};
 const EXACT = {
   "src-tauri/src/agent_hooks/vendors.rs": /\bfetch\(`http:\/\/127\.0\.0\.1:\$\{port\}\/amp`/g, // the Amp status plugin posting to Kolux on 127.0.0.1
 };
+
+const count = (text, what) => (typeof what === "string" ? text.split(what).length - 1 : (text.match(what) ?? []).length);
+// Rust tests sit at the end of each file in its `#[cfg(test)] mod tests`; a client used only there is
+// not shipped. The cut is at that module, not at the first `#[cfg(test)]`, so a test-only helper
+// earlier in the file cannot hide the rest of the file from the scan (council FIX-4, Ruling 1).
+const shipped = (text) => {
+  const m = /#\[cfg\(test\)\]\s*mod tests\b/.exec(text);
+  return m ? text.slice(0, m.index) : text;
+};
+const pinnedProblems = (rel, text) => (PINNED[rel] ?? []).filter(([what, n]) => count(text, what) !== n).map(([what, n]) => `${rel}: ${String(what)} x${count(text, what)}, want ${n}`);
 
 test("app070: no network client in the shipped source beyond the connections the statement names", () => {
   // scripts/evidence drives a dev build over loopback for proofs and never ships.
@@ -38,16 +62,43 @@ test("app070: no network client in the shipped source beyond the connections the
   const found = [];
   for (const f of files) {
     const rel = path.relative(root, f).replace(/\\/g, "/");
-    // Rust tests sit at the end of each file behind #[cfg(test)]; a client used only there is not shipped.
-    let text = fs.readFileSync(f, "utf8").split("#[cfg(test)]")[0];
+    let text = shipped(fs.readFileSync(f, "utf8"));
     if (EXACT[rel]) {
       expect(text.match(EXACT[rel]) ?? [], rel).toHaveLength(1);
       text = text.replace(EXACT[rel], "");
     }
     if (ONE_CLIENT[rel]) expect(text.split(ONE_CLIENT[rel]).length - 1, rel).toBe(1);
+    found.push(...pinnedProblems(rel, text));
     for (const re of CLIENTS) {
       if (re.test(text) && !(ALLOWED[rel] ?? []).some((a) => a.source === re.source)) found.push(`${rel}: ${re.source}`);
     }
   }
   expect(found).toEqual([]);
+});
+
+test("app070: a second network client in browser.rs fails the audit in each listed form", () => {
+  const rel = "src-tauri/src/browser.rs";
+  const full = fs.readFileSync(path.join(root, rel), "utf8");
+  const real = shipped(full);
+  expect(pinnedProblems(rel, real)).toEqual([]);
+  const chain = PINNED[rel][0][0];
+  const second = {
+    "Client::new": real + "\nfn x() { let _ = reqwest::Client::new(); }\n",
+    "ClientBuilder::new": real + "\nfn x() { let _ = reqwest::ClientBuilder::new().build(); }\n",
+    "imported Client": real + "\nuse reqwest::Client;\nfn x() { let _ = Client::builder().build(); }\n",
+    "one-shot get": real + "\nasync fn x() { let _ = reqwest::get(\"https://example.com\").await; }\n",
+    "a third icon_client_for": real + "\nfn x() { let _ = icon_client_for(None, true, system_lookup); }\n",
+    "no public-only lookup": real.replace(chain, chain.replace(".dns_resolver(resolver)", "")),
+    "through a proxy": real.replace(chain, chain.replace(".no_proxy()", "")),
+    "Client::default": real + "\nfn x() { let _ = reqwest::Client::default(); }\n",
+    "ClientBuilder::default": real + "\nfn x() { let _ = reqwest::ClientBuilder::default().build(); }\n",
+    "aliased import": real + "\nuse reqwest::Client as Web;\nfn x() { let _ = Web::builder().build(); }\n",
+    "function pointer": real + "\nfn x() { let make = icon_client_for; let _ = make(None, true, system_lookup); }\n",
+    "spaced path": real + "\nfn x() { let _ = reqwest::Client :: new(); }\n",
+  };
+  for (const [name, text] of Object.entries(second)) expect(pinnedProblems(rel, text).length, name).toBeGreaterThan(0);
+  // A test-only helper above the shipped code no longer hides what follows it.
+  const hidden = real + "\n#[cfg(test)]\nfn helper() {}\nfn x() { let _ = reqwest::Client::new(); }\n" + full.slice(real.length);
+  expect(shipped(hidden).includes("reqwest::Client::new()")).toBe(true);
+  expect(pinnedProblems(rel, shipped(hidden)).length).toBeGreaterThan(0);
 });

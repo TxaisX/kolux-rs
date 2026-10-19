@@ -95,7 +95,7 @@ export default function ContentSearch({ root, hidden, focusAsk, onOpen }: Props)
                     onClick={() => {
                       const path = joinPath(root, f.path);
                       onOpen(path);
-                      revealAt(path, { line: h.line, col: h.col, len: h.text.length });
+                      revealAt(path, { line: h.line, col: h.col, len: h.len });
                     }}
                   >
                     <span className="cs-line">{h.line}</span>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openerRefocus, pageChord } from "./chord";
+import { CHORD_GAP_MS, focusAllowed, limitChord, openerRefocus, pageChord } from "./chord";
 
 // Council FIX-3 (FIX-SOON 1): a chord the page sends while the app's own window holds the
 // keyboard was not pressed in the page, so it never moves the keyboard or the focused pane.
@@ -24,5 +24,55 @@ describe("BROW-003 / BROW-005 chords sent by a page", () => {
     expect(openerRefocus(false, false)).toBe(true);
     expect(openerRefocus(false, true)).toBe(false);
     expect(openerRefocus(true, false)).toBe(false);
+  });
+});
+
+// Council FIX-4 (review item 3): the user is in another program, so the app's window is not
+// focused and the page's `document.hasFocus()` reads false as well.
+describe("BROW-003 / BROW-005 chords while the user is in another program", () => {
+  it("no chord moves the keyboard or the focused pane; page-only actions still run", () => {
+    for (const what of ["focusAddressBar", "find"]) expect(pageChord(what, false, false)).toEqual({ focusPane: false, run: false, takeKeyboard: false });
+    for (const what of ["zoomIn", "back", "reload"]) expect(pageChord(what, false, false)).toEqual({ focusPane: false, run: true, takeKeyboard: false });
+  });
+
+  it("a tab opened behind does not pull the keyboard back to its opener", () => {
+    expect(openerRefocus(false, false, false)).toBe(false);
+    expect(openerRefocus(false, false, true)).toBe(true);
+  });
+});
+
+// Council FIX-4 (review item 3b): a page in another split cannot be told apart from a real key
+// press without the engine's own key events (T-272-d), so each tab moves focus at most once a second.
+describe("BROW-003 focus-moving chords are rate-limited per tab", () => {
+  it("one per tab per second, other tabs unaffected, and the limit lifts at exactly one second", () => {
+    const last = new Map<number, number>();
+    expect(focusAllowed(last, 1, 10_000)).toBe(true);
+    expect(focusAllowed(last, 1, 10_300)).toBe(false);
+    expect(focusAllowed(last, 1, 10_000 + CHORD_GAP_MS - 1)).toBe(false);
+    expect(focusAllowed(last, 2, 10_300)).toBe(true);
+    expect(focusAllowed(last, 1, 10_000 + CHORD_GAP_MS)).toBe(true);
+    // A refused chord does not push the window out: the next one is due a second after the last allowed.
+    expect(focusAllowed(last, 1, 11_500)).toBe(false);
+    expect(focusAllowed(last, 1, 12_000)).toBe(true);
+  });
+
+  it("a page looping focusAddressBar every 300 ms takes the keyboard at most once a second", () => {
+    const last = new Map<number, number>();
+    let took = 0;
+    for (let t = 0; t < 3000; t += 300) {
+      const plan = limitChord("focusAddressBar", pageChord("focusAddressBar", false, true), last, 7, t);
+      if (plan.takeKeyboard) took++;
+      else expect(plan).toEqual({ focusPane: false, run: false, takeKeyboard: false });
+    }
+    expect(took).toBe(3);
+  });
+
+  it("page-only chords are never limited and never use up the allowance", () => {
+    const last = new Map<number, number>();
+    for (let t = 0; t < 1000; t += 100) expect(limitChord("zoomIn", pageChord("zoomIn", true), last, 3, t)).toEqual({ focusPane: false, run: true, takeKeyboard: false });
+    expect(last.has(3)).toBe(false);
+    expect(limitChord("reload", pageChord("reload", false, true), last, 3, 0)).toEqual({ focusPane: true, run: true, takeKeyboard: false });
+    expect(limitChord("reload", pageChord("reload", false, true), last, 3, 10)).toEqual({ focusPane: false, run: true, takeKeyboard: false });
+    expect(limitChord("find", pageChord("find", false, true), last, 3, 20)).toEqual({ focusPane: false, run: false, takeKeyboard: false });
   });
 });

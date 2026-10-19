@@ -17,8 +17,9 @@ test("T-546-c (council AFTER 2): the listbox is the list of rows, not the whole 
   expect(html.indexOf("Tower summary")).toBeLessThan(html.indexOf('role="listbox"'));
 });
 
-test("FIX-2 (council P3): until the Tower's own window is wired, the main window's Tower does not offer it", () => {
-  expect(view()).not.toContain("Own window");
+test("T-546-c (look FIX-3 patch): the Tower's own window is wired, so the main window's Tower offers it by default; passing ownWindow false hides it", () => {
+  expect(view()).toContain("Own window");
+  expect(view(false, false)).not.toContain("Own window");
   expect(view()).toContain("Refresh");
 });
 

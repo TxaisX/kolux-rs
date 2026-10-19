@@ -27,11 +27,16 @@ export default function PlanSheet({ title, plan, draft, onDraft, onApprove, onRe
   const sections = useMemo(() => planSections(plan), [plan]);
   const [writing, setWriting] = useState<number | null>(null);
   const [text, setText] = useState("");
+  // T-032-b: closing while a send waits stops that send first, so it never runs on with its Cancel gone.
+  const close = () => {
+    if (sending) onCancel?.();
+    onClose();
+  };
   useEffect(() => {
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && !e.isComposing && onClose();
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && !e.isComposing && close();
     window.addEventListener("keydown", esc);
     return () => window.removeEventListener("keydown", esc);
-  }, [onClose]);
+  }, [onClose, onCancel, sending]);
   const add = (i: number) => {
     const s = sections[i];
     if (!text.trim()) return;
@@ -46,7 +51,7 @@ export default function PlanSheet({ title, plan, draft, onDraft, onApprove, onRe
       <header className="plan-sheet-head">
         <h3>Review the plan</h3>
         <span className="muted">{title}</span>
-        <button className="btn" onClick={onClose} title="Close (Esc); comments are kept for this plan">
+        <button className="btn" onClick={close} title={sending ? "Close (Esc) stops the waiting send; your feedback is kept" : "Close (Esc); comments are kept for this plan"}>
           Close
         </button>
       </header>
@@ -57,7 +62,7 @@ export default function PlanSheet({ title, plan, draft, onDraft, onApprove, onRe
       )}
       {sending && (
         <div className="note plan-sheet-note" role="status">
-          Sending your feedback once Claude has left its plan prompt. Cancel stops it before anything more is typed.
+          Sending your feedback: Claude&apos;s plan prompt is dismissed first, then your feedback is typed and sent a moment later. Cancel, Close or Esc stops it before it is sent, though it may already be typed in Claude&apos;s prompt.
         </div>
       )}
       {cut && <div className="note plan-sheet-note">This plan is too long to show whole, so it is cut short here. The whole plan is in the terminal.</div>}
