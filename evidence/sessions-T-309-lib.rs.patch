@@ -1,0 +1,56 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index e25ccf8..9a8726f 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -123,11 +123,12 @@ fn write_settings(app: &tauri::AppHandle, store: &Mutex<Store>, change: impl FnO
+     Ok(())
+ }
+ 
+-/// A desktop notification (STAT-041). The window decides when one is due and with which words.
++/// A desktop notification (STAT-041). The window decides when one is due and with which words, and
++/// (STAT-043) whether the system's own sound plays with it: `sound` is false when Kolux plays its
++/// own tone or file instead, or the volume is 0.
+ #[tauri::command]
+-fn notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
+-    use tauri_plugin_notification::NotificationExt;
+-    app.notification().builder().title(title).body(body).show().map_err(|e| e.to_string())
++fn notify(app: tauri::AppHandle, title: String, body: String, sound: Option<bool>) -> Result<(), String> {
++    notifications::show(&app, title, body, sound.unwrap_or(true))
+ }
+ 
+ /// The minutes of silence before a working agent is reported quiet; 10 by default, 0 is off
+@@ -337,6 +338,7 @@ pub fn run() {
+             settings_patch,
+             notify,
+             notifications::notification_test,
++            notifications::notification_sound_load,
+             notifications::open_notification_settings,
+             hooks::agent_hooks::agent_hooks_sync,
+             hooks::agent_hooks::agent_hooks_file,
+diff --git a/src-tauri/src/notifications.rs b/src-tauri/src/notifications.rs
+index 1f33100..22a8a7b 100644
+--- a/src-tauri/src/notifications.rs
++++ b/src-tauri/src/notifications.rs
+@@ -41,14 +41,11 @@ pub fn show(app: &tauri::AppHandle, title: String, body: String, sound: bool) ->
+ }
+ 
+ /// The audio types a custom sound may be, with the byte check each one must pass.
+-#[allow(dead_code)] // STAT-043: used once lib.rs registers notification_sound_load (evidence/sessions-T-309-lib.rs.patch)
+ const SOUND_TYPES: [&str; 8] = ["wav", "mp3", "ogg", "oga", "opus", "m4a", "aac", "flac"];
+ /// A custom sound is a short alert; anything bigger than this is not one.
+-#[allow(dead_code)] // STAT-043: used once lib.rs registers notification_sound_load (evidence/sessions-T-309-lib.rs.patch)
+ const SOUND_MAX_BYTES: u64 = 10 * 1024 * 1024;
+ 
+ /// STAT-043: does this file name's type, and the file's first bytes, say it is an allowed audio file?
+-#[allow(dead_code)] // STAT-043: used once lib.rs registers notification_sound_load (evidence/sessions-T-309-lib.rs.patch)
+ pub fn sound_file_ok(name: &str, head: &[u8]) -> Result<(), String> {
+     let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+     if !SOUND_TYPES.contains(&ext.as_str()) {
+@@ -74,7 +71,6 @@ pub fn sound_file_ok(name: &str, head: &[u8]) -> Result<(), String> {
+ /// STAT-043: the bytes of the user's custom sound file (base64), after the type and size checks.
+ /// The page decodes and plays it; nothing else is ever read through this command.
+ #[tauri::command]
+-#[allow(dead_code)] // STAT-043: used once lib.rs registers notification_sound_load (evidence/sessions-T-309-lib.rs.patch)
+ pub fn notification_sound_load(path: String) -> Result<String, String> {
+     use base64::Engine;
+     use std::io::Read;
