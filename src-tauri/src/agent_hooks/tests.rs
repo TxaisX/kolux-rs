@@ -581,12 +581,14 @@ mod script_runs {
         let _ = fs::remove_dir_all(&data);
     }
 
-    /// hooks FIX-9 (stand-in review FIX-SOON 1): what the timed rounds of the missing-folder test
-    /// say. `Noisy`: the two quickest held rounds, which do the same work, differ by more than
-    /// the margin, so the PC's load swung more than the margin, the quickest is not a time the
-    /// PC can repeat, and no verdict is safe (time more rounds). `Retried`: the quickest held
-    /// time is repeatable, and even the two quickest missing-folder times cost a margin more.
-    /// `Fine`: some missing-folder round came in within the margin of the held path.
+    /// hooks FIX-10 (stand-in review hooks-891b834f FIX-SOON 1): what the timed rounds of the
+    /// missing-folder test say. Every round times the held path and then the missing-folder path
+    /// back to back, so a load swing lands on both and cancels in their difference; each round's
+    /// verdict is that difference against the margin. `Retried`: at least three rounds in four came
+    /// in a margin or more slower on the missing folder, which is what a script that retries costs.
+    /// `Fine`: at most one round in eight did, so the missing folder costs what the held path does
+    /// (a lucky round on either side moves one count, never the verdict). `Noisy`: in between, so
+    /// the load swung the pairs and no verdict is safe (time more rounds); never a pass.
     #[derive(Debug, PartialEq)]
     enum Reading {
         Noisy,
@@ -595,18 +597,14 @@ mod script_runs {
     }
 
     fn judge_missing_folder(held: &[Duration], missing: &[Duration], margin: Duration) -> Reading {
-        let quickest_two = |v: &[Duration]| {
-            let mut v = v.to_vec();
-            v.sort();
-            (v[0], *v.get(1).unwrap_or(&v[0]))
-        };
-        let ((held, held_next), (missing, missing_next)) = (quickest_two(held), quickest_two(missing));
-        if held_next - held > margin {
-            Reading::Noisy
-        } else if missing >= held + margin && missing_next >= held + margin {
+        assert!(!held.is_empty() && held.len() == missing.len(), "one missing-folder round for every held round");
+        let over = held.iter().zip(missing).filter(|(h, m)| **m >= **h + margin).count();
+        if over * 4 >= held.len() * 3 {
             Reading::Retried
-        } else {
+        } else if over * 8 <= held.len() {
             Reading::Fine
+        } else {
+            Reading::Noisy
         }
     }
 
@@ -617,23 +615,43 @@ mod script_runs {
         // The rounds of the false red in w13-merge-cargo.log (a full cargo test with other builders running).
         let (held, missing) = (secs(&[11.384, 7.717, 9.879, 11.621]), secs(&[9.904, 10.568, 11.408, 9.288]));
         assert_eq!(judge_missing_folder(&held, &missing, margin), Reading::Noisy);
-        // Rounds of a script that retries on every error (the R3 rerun in w14-red.log): calm, and 1.5 s slower.
-        let (held, missing) = (secs(&[2.18, 2.13, 2.34, 2.22]), secs(&[3.93, 3.66, 4.27, 3.88]));
+        // The raw rounds of a script that retries on every error (w14-red-R3.log, round order as printed:
+        // 1.413, 1.523, 1.573 and 0.989 s apart): one round came in a hair under the margin, three did not.
+        let (held, missing) = (secs(&[2.592, 2.339, 2.540, 3.301]), secs(&[4.005, 3.862, 4.113, 4.290]));
         assert_eq!(judge_missing_folder(&held, &missing, margin), Reading::Retried);
         // A correct script on a calm PC: the two paths differ by well under the margin.
         let (held, missing) = (secs(&[0.52, 0.49, 0.55, 0.50]), secs(&[0.47, 0.51, 0.46, 0.50]));
         assert_eq!(judge_missing_folder(&held, &missing, margin), Reading::Fine);
-        // The two quickest held rounds exactly a margin apart are still calm; a ms more is noisy.
-        // Slower rounds above the quickest two do not matter (a load spike on one round is not a swing).
-        let at = secs(&[2.0, 3.0, 9.0, 7.5]);
-        assert_eq!(judge_missing_folder(&at, &secs(&[2.0]), margin), Reading::Fine);
-        let over = secs(&[2.0, 3.001, 2.5, 9.0]);
-        assert_eq!(judge_missing_folder(&over, &secs(&[2.0]), margin), Reading::Fine, "2.0 and 2.5 are the quickest two");
-        let over = secs(&[2.0, 3.001, 9.0, 7.5]);
-        assert_eq!(judge_missing_folder(&over, &secs(&[2.0]), margin), Reading::Noisy);
-        // One missing-folder round inside the margin is enough for a correct script (the other may be slow).
-        let (held, missing) = (secs(&[2.1, 2.2, 2.3, 2.4]), secs(&[3.9, 2.5, 4.0, 4.1]));
-        assert_eq!(judge_missing_folder(&held, &missing, margin), Reading::Fine);
+        // stand-in review hooks-891b834f FIX-SOON 1: ONE lucky missing-folder round (2.9 s against
+        // 2.4 s held) must not clear a script that retries; the old quickest-against-quickest rule
+        // read this Fine.
+        let (held, missing) = (secs(&[2.5, 2.4, 2.6, 2.5]), secs(&[4.0, 2.9, 4.1, 4.0]));
+        assert_eq!(judge_missing_folder(&held, &missing, margin), Reading::Retried);
+        // Nor may two lucky rounds clear it: the review's swinging numbers (a retry that two quick
+        // missing rounds make look calm) are undecided, so more rounds are timed, never Fine.
+        let (held, missing) = (secs(&[3.20, 3.44, 3.49, 3.60]), secs(&[3.80, 4.39, 4.54, 4.65]));
+        assert_eq!(judge_missing_folder(&held, &missing, margin), Reading::Noisy);
+        // A difference of exactly the margin counts as a retry-sized one, a ms under it does not.
+        let flat = secs(&[2.0, 2.0, 2.0, 2.0]);
+        assert_eq!(judge_missing_folder(&flat, &secs(&[3.0, 3.0, 3.0, 3.0]), margin), Reading::Retried);
+        assert_eq!(judge_missing_folder(&flat, &secs(&[2.999, 2.999, 2.999, 2.999]), margin), Reading::Fine);
+        // How many of 4 rounds sit a margin above decides: 0 is Fine, 1 and 2 are undecided, 3 and 4 are a retry.
+        let reading = |over: usize| {
+            let missing: Vec<f64> = (0..4).map(|i| if i < over { 3.5 } else { 2.0 }).collect();
+            judge_missing_folder(&flat, &secs(&missing), margin)
+        };
+        assert_eq!([reading(0), reading(1), reading(2), reading(3), reading(4)], [Reading::Fine, Reading::Noisy, Reading::Noisy, Reading::Retried, Reading::Retried]);
+        // The pool grows over attempts: of 8 rounds one over the margin is still Fine, of 16 two are,
+        // and 3 of 16 is undecided. A slow round on its own (the PC's spike) is not a retry.
+        let flat8 = secs(&[2.0; 8]);
+        let flat16 = secs(&[2.0; 16]);
+        let with_over = |n: usize, over: usize| secs(&(0..n).map(|i| if i < over { 3.5 } else { 2.0 }).collect::<Vec<_>>());
+        assert_eq!(judge_missing_folder(&flat8, &with_over(8, 1), margin), Reading::Fine);
+        assert_eq!(judge_missing_folder(&flat8, &with_over(8, 2), margin), Reading::Noisy);
+        assert_eq!(judge_missing_folder(&flat16, &with_over(16, 2), margin), Reading::Fine);
+        assert_eq!(judge_missing_folder(&flat16, &with_over(16, 3), margin), Reading::Noisy);
+        assert_eq!(judge_missing_folder(&flat16, &with_over(16, 12), margin), Reading::Retried);
+        assert_eq!(judge_missing_folder(&flat16, &with_over(16, 11), margin), Reading::Noisy);
     }
 
     /// hooks FIX-4 (stand-in review AFTER 2): only another writer holding the file is waited out.
@@ -645,25 +663,29 @@ mod script_runs {
         let gone = data.join("gone").join(super::super::super::ENDPOINT_FILE);
         let gone_env: Vec<(&str, String)> = env.iter().map(|(k, v)| (*k, if *k == "KOLUX_HOOK_ENDPOINT" { gone.display().to_string() } else { v.clone() })).collect();
         // hooks FIX-7 (stand-in review AFTER 5b): the two paths are timed in turns (held, missing,
-        // held, missing, ...), so a load swing lands on both alike, and each keeps its quickest of
-        // ROUNDS, so one slow PowerShell start does not decide it. The two paths do the same work
+        // held, missing, ...), so a load swing lands on both alike. The two paths do the same work
         // but for the one append (it lands, or it fails at once on the missing folder), so what
         // sets them apart is the script's retries: (tries - 1) x its pause, 1900 ms, read from
         // the script. The allowed difference sits well under that, and a missing-folder run that
         // retried would cost about that much more than the held one (hooks FIX-9, stand-in review
         // AFTER 3: three raw recaptures of a script that retries on every error, quickest to
-        // quickest 1.52, 1.79 and 1.49 s, w14-red-R3.log, w14-red-R3-2.log, w14-red-R3-3.log, so
-        // about 0.5 s of headroom over the 1000 ms margin on a calm PC).
+        // quickest 1.52, 1.79 and 1.49 s, w14-red-R3.log, w14-red-R3-2.log, w14-red-R3-3.log; those
+        // three ran the earlier per-attempt rule, see evidence/hooks-FIX-10.txt for the reruns of
+        // this rule, w15-red-R3*.log).
         //
-        // hooks FIX-9 (stand-in review FIX-SOON 1): that headroom holds only on a calm PC. With
-        // other builds running, the same script took 7.7-11.6 s a round and the quickest held and
-        // missing times came 1.57 s apart, which read as a retry (w13-merge-cargo.log). The held
-        // rounds all do the same work, so when their two quickest differ by more than MARGIN_MS
-        // the load swung more than the margin and the quickest time cannot be trusted, so more
-        // rounds are timed and added to the pool, up to TRIES attempts of ROUNDS rounds, like
-        // fix_3_a's re-aim. Only a calm reading
-        // judges: a script that retries on every error fails on its first calm reading, and a PC
-        // that never gets a calm reading fails too (never passes unjudged).
+        // hooks FIX-9: with other builds running, the same script took 7.7-11.6 s a round and the
+        // quickest held and missing times came 1.57 s apart, which read as a retry
+        // (w13-merge-cargo.log), so a swing that big must not be judged. hooks FIX-10 (stand-in
+        // review hooks-891b834f FIX-SOON 1): the FIX-9 rule compared the two quickest times of each
+        // path, so one lucky missing round (the retry costs only about 0.5 s more than the margin
+        // allows) cleared a script that retries. Now every round is judged on its own held-to-missing
+        // difference (judge_missing_folder): a retry-sized difference in three rounds of four is
+        // Retried, in at most one round of eight is Fine, anything between is Noisy and more rounds
+        // are timed into the pool, up to TRIES attempts of ROUNDS rounds, like fix_3_a's re-aim.
+        // Only a decided reading judges: a script that retries on every error fails on its first
+        // decided reading, and a PC that never gets one fails too (never passes unjudged).
+        // How often a correct script gets a decided reading under builder load is not claimed here:
+        // see the --nocapture rounds in evidence/hooks-FIX-10.txt.
         const ROUNDS: usize = 4;
         const TRIES: usize = 4;
         const MARGIN_MS: u64 = 1000;
@@ -674,7 +696,7 @@ mod script_runs {
             t.elapsed()
         };
         assert!(MARGIN_MS as i64 + 500 <= retries_reach_ms(), "the allowed difference stays well under what the retries would cost");
-        let (mut held, mut missing) = (Vec::new(), Vec::new());
+        let (mut held, mut missing): (Vec<Duration>, Vec<Duration>) = (Vec::new(), Vec::new());
         let mut reading = Reading::Noisy;
         for attempt in 0..TRIES {
             for round in 0..ROUNDS {
@@ -684,11 +706,12 @@ mod script_runs {
                 missing.push(m);
             }
             reading = judge_missing_folder(&held, &missing, margin);
+            let over = held.iter().zip(&missing).filter(|(h, m)| **m >= **h + margin).count();
             println!(
-                "after attempt {attempt}: quickest held {:?}, missing {:?} over {} rounds; retries would add {} ms: {reading:?}",
+                "after attempt {attempt}: {over} of {} rounds a margin or more slower on the missing folder (quickest held {:?}, missing {:?}); retries would add {} ms: {reading:?}",
+                held.len(),
                 held.iter().min().unwrap(),
                 missing.iter().min().unwrap(),
-                held.len(),
                 retries_reach_ms()
             );
             if reading != Reading::Noisy {
@@ -697,8 +720,8 @@ mod script_runs {
         }
         assert_eq!(fs::read_to_string(&spool).unwrap().lines().filter(|l| !l.is_empty()).count(), held.len(), "the folder that is there takes every event");
         assert!(!data.join("gone").exists(), "a missing holding folder is not made");
-        assert_ne!(reading, Reading::Noisy, "{TRIES} attempts of {ROUNDS} rounds never gave two held times within {MARGIN_MS} ms of each other: the PC is too loaded to judge");
-        assert_eq!(reading, Reading::Fine, "no retries for a missing folder: quickest {:?} against {:?}", missing.iter().min().unwrap(), held.iter().min().unwrap());
+        assert_ne!(reading, Reading::Noisy, "{TRIES} attempts of {ROUNDS} rounds never gave a decided reading (neither at most 1 round in 8 nor at least 3 in 4 a {MARGIN_MS} ms margin slower on the missing folder): the PC is too loaded to judge");
+        assert_eq!(reading, Reading::Fine, "no retries for a missing folder: held {held:?}, missing {missing:?}");
         let _ = fs::remove_dir_all(&data);
     }
 
