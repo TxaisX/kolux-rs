@@ -157,25 +157,50 @@ fn is_wsl(p: &Path) -> bool {
     s.starts_with("\\\\wsl$\\") || s.starts_with("\\\\wsl.localhost\\") || s.starts_with("\\\\?\\unc\\wsl")
 }
 
-/// Every place to look, in the order the folders popover lists them.
-fn spots(env: &Env, workspace: Option<&Path>) -> Vec<Spot> {
+/// The skill folders in the user's home, without the plugin folders: nothing here reads a file.
+fn home_spots(env: &Env) -> Vec<Spot> {
     let claude = claude_home(env);
     let codex = codex_home(env);
     let grok = crate::grok::home(usable(&env.grok).as_deref().and_then(Path::to_str), Some(&env.home)).unwrap_or_else(|| env.home.join(".grok"));
-    let mut out = vec![
+    vec![
         Spot::new(claude.join("skills"), "Claude Code", "home", &["claude"]),
         Spot::new(codex.join("skills"), "Codex", "home", &["codex"]),
         Spot::new(env.home.join(".agents").join("skills"), "Shared skills folder", "home", &["shared", "codex"]),
         Spot::new(grok.join("skills"), "Grok", "home", &["grok"]),
         Spot::new(hermes_home(env).join("skills"), "Hermes", "home", &["hermes"]),
-    ];
+    ]
+}
+
+/// FIX-6 (4): the home skill folders a start-up delete recovery may act on, one per real folder,
+/// found without reading any file (the plugin list is not needed and would read settings files).
+pub fn home_roots(env: &Env) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    home_spots(env).into_iter().map(|s| s.path).filter(|p| seen.insert(key(p))).collect()
+}
+
+/// The folders inside a workspace that hold skills: `<workspace>/<one of these>/skills`.
+const WORKSPACE_SKILL_DIRS: [&str; 3] = [".claude", ".agents", ".grok"];
+
+/// FIX-6 (4): `p` has the shape of a workspace skills folder (`.../.claude/skills`, `.../.agents/skills`
+/// or `.../.grok/skills`), as a delete record may name one from a workspace that is not open now.
+pub fn workspace_skills_shape(p: &Path) -> bool {
+    let name = |q: &Path| q.file_name().and_then(|n| n.to_str()).map(str::to_lowercase);
+    name(p).as_deref() == Some("skills") && p.parent().and_then(name).is_some_and(|up| WORKSPACE_SKILL_DIRS.contains(&up.as_str()))
+}
+
+/// Every place to look, in the order the folders popover lists them.
+fn spots(env: &Env, workspace: Option<&Path>) -> Vec<Spot> {
+    let claude = claude_home(env);
+    let codex = codex_home(env);
+    let mut out = home_spots(env);
     match workspace {
         Some(ws) => {
             // When the workspace is the home folder it is scanned as a repo too.
+            let [c, a, g] = WORKSPACE_SKILL_DIRS;
             let mut repo = vec![
-                Spot::new(ws.join(".claude").join("skills"), "Workspace: Claude Code", "workspace", &["claude"]),
-                Spot::new(ws.join(".agents").join("skills"), "Workspace: shared skills folder", "workspace", &["shared", "codex"]),
-                Spot::new(ws.join(".grok").join("skills"), "Workspace: Grok", "workspace", &["grok"]),
+                Spot::new(ws.join(c).join("skills"), "Workspace: Claude Code", "workspace", &["claude"]),
+                Spot::new(ws.join(a).join("skills"), "Workspace: shared skills folder", "workspace", &["shared", "codex"]),
+                Spot::new(ws.join(g).join("skills"), "Workspace: Grok", "workspace", &["grok"]),
             ];
             if is_wsl(ws) {
                 for s in &mut repo {
