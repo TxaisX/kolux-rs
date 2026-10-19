@@ -9,7 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { locale } from "../language";
 import "./chat.css";
-import { fold, thoughtIds as idsOf, toggled, type View } from "./steps";
+import { fold, isFullPath, thoughtIds as idsOf, toggled, type View } from "./steps";
 import { NoticeRow, PlanRow, StepRow, ThoughtRow } from "./StepRows";
 import { SHELL_OFFER, agentsView, handOver, handTargets, viewedFirst, capPending, chatCovers, chatOffer, combine, pickChat, typingInto, lastReply, lastReplyItem, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row } from "./model";
 import { Composer, type ComposerHandle } from "./MessageBox";
@@ -95,7 +95,7 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
       session,
       hidden: paused,
       read: () => invoke<ChatRead>("chat_read", { paneKey: key }),
-      close: () => void invoke("chat_close", { paneKey: key }).catch(() => {}),
+      close: () => invoke("chat_close", { paneKey: key }).catch(() => {}),
       onChange: setSeen,
     });
     setSeen(reader.seen);
@@ -131,10 +131,10 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
     if (!open) setNote((n) => (n === STOPPING_NOTE ? null : n));
   }, [open]);
   // CHAT-023: the permission card, while the agent's hook says it is asking and the user has not answered.
-  const card = cardOf(agent, askOf(key), terminalOf(key));
+  const card = cardOf(agent, askOf(key), terminalOf(key), stateOf ? () => stateOf(key) : undefined);
   const answer = (a: Answer) => {
     if (!card || !agent) return;
-    answerCard(key, agent, a, card.drawnAt, { terminalOf, write: writeTerminal }).then(
+    answerCard(key, agent, a, card.drawnAt, { terminalOf, stateOf, write: writeTerminal }).then(
       (r) => setNote(r === "gone" ? GONE_NOTE : r === "no-terminal" ? NO_TERMINAL_NOTE : null),
       () => setNote(CANNOT_STOP_NOTE),
     );
@@ -191,7 +191,7 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
     if (t.closest("button, a") && (e.key === " " || e.key === "Enter")) return;
     if (forwardsToBox({ key: e.key, ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey, isComposing: e.nativeEvent.isComposing })) box.current?.focus();
   };
-  const views = useMemo(() => fold(rows, open), [rows, open]);
+  const views = useMemo(() => fold(rows, open, pane.cwd), [rows, open, pane.cwd]);
   useLayoutEffect(() => {
     if (stick.current && list.current) list.current.scrollTop = list.current.scrollHeight;
   }, [views]);
@@ -426,7 +426,7 @@ export function FilesRow({ id, files, targets, onSend, note }: { id: string; fil
           <li key={f.path}>
             <span className="chat-file" title={f.path}>{name(f.path)}</span>
             <span className="chat-file-change">{f.change === "added" ? "new" : f.change === "renamed" ? "renamed" : "edited"}</span>
-            {targets.length > 0 && <HandOff label="Send to…" what="this file" targets={targets} onPick={(k) => onSend(k, f.path)} />}
+            {targets.length > 0 && isFullPath(f.path) && <HandOff label="Send to…" what="this file" targets={targets} onPick={(k) => onSend(k, f.path)} />}
           </li>
         ))}
       </ul>

@@ -96,10 +96,13 @@ export const CARD_AGENTS = ["claude", "codex"] as const;
 export type Card = { tool: string; detail?: string; plan?: string; planCut?: boolean; /** The prompt count this card was drawn for. */ drawnAt: number; review: boolean };
 
 /** CHAT-023: the card to draw for a pane, or null: only for an agent whose keys are known, while its hook still says
- * "permission" for a named tool, the prompt is not the answered one, and the event came from the pane's current terminal. */
-export function cardOf(agent: string | undefined, ask: Ask | undefined, terminal?: number): Card | null {
+ * "permission" for a named tool, the prompt is not the answered one, and the event came from the pane's current terminal.
+ * FIX-2: `window` is the window's own reading of the pane (when it gives readings at all); an answer given on a surface this
+ * file never hears of (the board, the plan sheet) moves that reading on, and then there is no card. */
+export function cardOf(agent: string | undefined, ask: Ask | undefined, terminal?: number, window?: () => string | undefined): Card | null {
   if (!ask || !agent || !(CARD_AGENTS as readonly string[]).includes(agent)) return null;
   if (ask.terminal !== undefined && terminal !== undefined && ask.terminal !== terminal) return null;
+  if (window && window() !== "permission") return null;
   if (!buttonsShown(agent, ask.state as H, ask.answered, ask.count, ask.tool)) return null;
   return { tool: ask.tool as string, detail: ask.detail, plan: ask.plan, planCut: ask.planCut, drawnAt: ask.count, review: showsReview(ask.state as AgentState, { tool: ask.tool, plan: ask.plan }) };
 }
@@ -122,7 +125,12 @@ export function answeredElsewhere(key: number) {
   poke();
 }
 
-export type AnswerDeps = { terminalOf: (key: number) => number | undefined; write: (terminal: number, data: string) => Promise<unknown> };
+export type AnswerDeps = {
+  terminalOf: (key: number) => number | undefined;
+  /** FIX-2: the window's hook reading for a pane, read live. When given, a click types only while it still says "permission". */
+  stateOf?: (key: number) => string | undefined;
+  write: (terminal: number, data: string) => Promise<unknown>;
+};
 /** What came of a click: the keys went in, the prompt had already gone (nothing typed), or the pane has no terminal. */
 export type AnswerOutcome = "sent" | "gone" | "no-terminal";
 
@@ -138,12 +146,14 @@ export async function answerCard(key: number, agent: string, answer: Answer, dra
   const keys = answerKeys(agent, answer);
   const stale = ask?.terminal !== undefined && ask.terminal !== terminal;
   if (!ask || already || keys === null || stale || !canAnswer(agent, ask.state as H, drawnAt, ask.count, ask.tool)) return "gone";
+  if (deps.stateOf && deps.stateOf(key) !== "permission") return "gone"; // FIX-2: answered on a surface this file did not hear
   const since = hearingNow();
   // FIX-1: the queue may hold earlier writes; the prompt is checked again when this one's turn comes.
   const typed = await enqueue(terminal, async () => {
     const now = asks.get(key);
     if (!now || (now.elsewhere ?? 0) >= drawnAt || deps.terminalOf(key) !== terminal) return false;
     if (now.terminal !== undefined && now.terminal !== terminal) return false;
+    if (deps.stateOf && deps.stateOf(key) !== "permission") return false;
     if (!canAnswer(agent, now.state as H, drawnAt, now.count, now.tool)) return false;
     await deps.write(terminal, keys);
     return true;

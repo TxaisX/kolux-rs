@@ -38,7 +38,21 @@ export function keepSeen(pane: number, session: number | undefined, seen: Seen) 
 }
 
 export const forgetKept = (pane: number) => void kept.delete(pane);
-export const forgetAllKept = () => kept.clear();
+export const forgetAllKept = () => {
+  kept.clear();
+  closing.clear();
+  reading.clear();
+};
+
+/** FIX-2: the close of each pane's transcript that is still out. chat_close and chat_read are separate async commands that
+ * run in no fixed order, so the next read for a pane waits for this (it could otherwise be served by the follower that is
+ * about to be dropped, and its snapshot would replace the conversation that was kept). */
+const closing = new Map<number, Promise<unknown>>();
+/** FIX-2: the read each pane has out, so a hide can close again behind it (a read that starts after the close would otherwise
+ * open a follower nobody closes). */
+const reading = new Map<number, Promise<unknown>>();
+const settled = (p: unknown): Promise<unknown> => Promise.resolve(p).then(() => {}, () => {});
+const thenable = (x: unknown): x is PromiseLike<unknown> => typeof (x as { then?: unknown } | null)?.then === "function";
 
 /** Folds one look into what is shown. `got`: the transcript's answer, or the reason the call failed.
  * `first`: this is the first look since the chat was shown, whose snapshot replaces whatever was
@@ -63,8 +77,9 @@ export type ReaderOptions = {
   /** True when the chat begins hidden: it reads nothing until `show`. */
   hidden: boolean;
   read: () => Promise<ChatRead>;
-  /** Lets go of the transcript, so the next read starts from the top. */
-  close: () => void;
+  /** Lets go of the transcript, so the next read starts from the top. FIX-2: return the call's promise so the next read
+   * (of this or a new reader for the pane) waits for it. */
+  close: () => void | PromiseLike<unknown>;
   onChange: (seen: Seen) => void;
   timers?: Timers;
 };
@@ -99,7 +114,19 @@ export class ChatReader {
     this.turn++;
     this.stopTimer();
     keepSeen(this.o.pane, this.o.session, this.seen);
-    this.o.close();
+    const { pane, close } = this.o;
+    const first = close();
+    // FIX-2: a read still out may reach the transcript after this close; close again once it has settled.
+    const out = reading.get(pane);
+    const waits: Promise<unknown>[] = [];
+    const earlier = closing.get(pane); // a close of this pane still out is waited for too, so the order is kept
+    if (earlier) waits.push(earlier);
+    if (thenable(first)) waits.push(settled(first));
+    if (out) waits.push(settled(out).then(() => settled(close())));
+    if (waits.length === 0) return;
+    const pending: Promise<unknown> = Promise.all(waits).then(() => {});
+    closing.set(pane, pending);
+    void pending.then(() => void (closing.get(pane) === pending && closing.delete(pane)));
   }
 
   private stopTimer() {
@@ -124,7 +151,14 @@ export class ChatReader {
       this.o.onChange(this.seen);
       again("failed" in got ? FAILED_RETRY_MS : got.retryMs);
     };
-    this.o.read().then(take, (e) => take({ failed: String(e) }));
+    // FIX-2: the read waits for a close still out for this pane; a chat hidden meanwhile never starts it.
+    const run = (): Promise<ChatRead | null> => (this.on && mine === this.turn ? this.o.read() : Promise.resolve(null));
+    const wait = closing.get(this.o.pane);
+    const read = wait ? wait.then(run) : run();
+    const pane = this.o.pane;
+    reading.set(pane, read);
+    void settled(read).then(() => void (reading.get(pane) === read && reading.delete(pane)));
+    read.then((got) => void (got && take(got)), (e) => take({ failed: String(e) }));
   }
 }
 

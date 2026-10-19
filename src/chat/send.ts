@@ -254,6 +254,8 @@ export async function stopPane(key: number, deps: Pick<SendDeps, "terminalOf" | 
   cancelQueued(terminal);
   // FIX-1: the interrupt waits behind any write already in flight, and a prompt can open meanwhile; look again at its turn.
   return enqueue<StopOutcome>(terminal, async () => {
+    // FIX-2: a program started again (or gone) meanwhile: the Escape would go to a dead session or to one nobody asked to stop.
+    if (deps.terminalOf(key) !== terminal) return "no-terminal";
     if (asksInTerminal(deps.stateOf?.(key)) || asksInTerminal(heardOf(key))) return "asking";
     await deps.write(terminal, INTERRUPT_KEY);
     return "stopped";

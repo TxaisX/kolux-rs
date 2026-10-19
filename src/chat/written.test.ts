@@ -100,3 +100,37 @@ describe("sending a file to another agent (CHAT-028 acceptance 2)", () => {
     expect(html).toContain("That is too long.");
   });
 });
+
+// FIX-2 (stand-in review of 47de0346, item 6): a Codex patch names files relative to the agent's own folder; handed to
+// another agent in another folder that path would mean a different file. The list holds full paths, resolved against the
+// pane's working folder, and a path that cannot be resolved is not offered for sending.
+describe("FIX-2: written paths are resolved against the pane's folder", () => {
+  const cwd = "C:\\work\\x";
+  it("lists a Codex relative path as a full path in the pane's folder", () => {
+    const v = fold([user("u", 0), wrote("1", 1000, "src/app.ts"), wrote("2", 2000, "..\\y\\b.ts", "edited"), say("m", 3000)], false, cwd);
+    expect(names(v)).toEqual(["C:\\work\\y\\b.ts", "C:\\work\\x\\src\\app.ts"]);
+  });
+  it("keeps an absolute path as it is", () => {
+    expect(names(fold([user("u", 0), wrote("1", 1000, "C:/w/a.md"), say("m", 3000)], false, cwd))).toEqual(["C:/w/a.md"]);
+  });
+  it("folds a relative and an absolute spelling of one file into one entry", () => {
+    const got = writtenFiles([wrote("1", 1, "src/app.ts"), wrote("2", 2, "C:\\work\\x\\src\\app.ts", "edited")].map((r) => r as ChatItem), 4, cwd);
+    expect(got).toEqual([{ path: "C:\\work\\x\\src\\app.ts", change: "edited" }]);
+  });
+  it("uses a posix folder's own separator", () => {
+    expect(writtenFiles([wrote("1", 1, "src/app.ts")].map((r) => r as ChatItem), 4, "/home/u/repo")).toEqual([{ path: "/home/u/repo/src/app.ts", change: "added" }]);
+  });
+  it("what is handed to another agent's draft is the full path, not the relative one", () => {
+    const l = { drafts: new Map<number, string>([[2, ""]]) };
+    const [f] = writtenFiles([wrote("1", 1, "src/app.ts")].map((r) => r as ChatItem), 4, cwd);
+    handOver(2, "docs", f.path, { draftOf: (k) => l.drafts.get(k) ?? "", keepDraft: (k, t) => void l.drafts.set(k, t), pick: () => {}, say: () => {} });
+    expect(l.drafts.get(2)).toBe("C:\\work\\x\\src\\app.ts");
+  });
+  it("with no folder known a relative path stays relative and is not offered for sending", () => {
+    const [f] = writtenFiles([wrote("1", 1, "src/app.ts")].map((r) => r as ChatItem), 4, null);
+    expect(f.path).toBe("src/app.ts");
+    const html = renderToStaticMarkup(createElement(FilesRow, { id: "f", files: [f, { path: "C:/w/a.md", change: "added" }], targets: [{ key: 2, label: "docs" }], onSend: () => {}, note: null }));
+    expect(html.match(/Send to…/g)).toHaveLength(1);
+    expect(html).toContain("src/app.ts");
+  });
+});

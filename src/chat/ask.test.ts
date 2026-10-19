@@ -231,3 +231,61 @@ describe("FIX-1: a different tool or detail is a new prompt", () => {
     expect(cardOf("claude", askOf(1), 70)).toMatchObject({ tool: "Edit" });
   });
 });
+
+// FIX-2 (stand-in review of 47de0346, item 5): the window's own reading of the pane must still say "permission", so an
+// answer given on a surface the card cannot hear (the board, the plan sheet) hides the card and a waiting click types nothing.
+describe("FIX-2: the window's own reading must still be permission", () => {
+  const withState = (get: () => string | undefined, terminal: number | null = 70) => ({ ...deps(terminal), stateOf: () => get() });
+  it("no card once the window's reading has left permission, though the hook record still says permission", () => {
+    ask();
+    expect(cardOf("claude", askOf(1), 70, () => "working")).toBeNull();
+    expect(cardOf("claude", askOf(1), 70, () => undefined)).toBeNull();
+    expect(cardOf("claude", askOf(1), 70, () => "permission")).toMatchObject({ tool: "Bash" });
+  });
+  it("a window that gives no readings leaves the card as the hook record says", () => {
+    ask();
+    expect(cardOf("claude", askOf(1), 70)).toMatchObject({ tool: "Bash" });
+  });
+  it("a click types nothing when the window already reads working (answered on the board)", async () => {
+    ask();
+    const drawn = askOf(1)!.count;
+    expect(await answerCard(1, "claude", "deny", drawn, withState(() => "working"))).toBe("gone");
+    expect(writes).toEqual([]);
+  });
+  it("a click waiting behind another write types nothing when a board or plan-sheet answer moves the window to working meanwhile", async () => {
+    ask();
+    const drawn = askOf(1)!.count;
+    let state = "permission";
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    void enqueue(70, () => gate);
+    const click = answerCard(1, "claude", "deny", drawn, withState(() => state));
+    await new Promise((r) => setTimeout(r, 0));
+    state = "working"; // no agent-status event: App's answer() only moves the window's own reading
+    release();
+    expect(await click).toBe("gone");
+    expect(writes).toEqual([]);
+    expect(askOf(1)!.state).toBe("permission"); // the hook record never heard of it
+  });
+  it("a click whose window reading is still permission after the wait types its key", async () => {
+    ask();
+    const drawn = askOf(1)!.count;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    void enqueue(70, () => gate);
+    const click = answerCard(1, "claude", "approve", drawn, withState(() => "permission"));
+    await new Promise((r) => setTimeout(r, 0));
+    release();
+    expect(await click).toBe("sent");
+    expect(writes).toEqual([{ id: 70, data: "\r" }]);
+  });
+  it("a card answered once cannot be answered again, and an expired one (the agent moved on) cannot either", async () => {
+    ask();
+    const drawn = askOf(1)!.count;
+    let state = "permission";
+    expect(await answerCard(1, "claude", "approve", drawn, withState(() => state))).toBe("sent");
+    state = "working";
+    expect(await answerCard(1, "claude", "approve", drawn, withState(() => state))).toBe("gone");
+    expect(writes).toHaveLength(1);
+  });
+});

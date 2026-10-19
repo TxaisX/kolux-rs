@@ -228,3 +228,93 @@ describe("the message box across a dropped terminal (CHAT-009 acceptance 2)", ()
     expect(draftOf(5)).toBe("half a sentence");
   });
 });
+
+// FIX-2 (stand-in review of 47de0346, item 7): chat_close and chat_read are separate async commands that run in no fixed
+// order. A read started while the close is still out could be served by the follower that is about to go (a delta, often
+// nothing) and its snapshot would replace the kept conversation; a read still out when the chat is hidden could create a
+// follower after the close has run. The next read waits for the close, and a hide closes again behind a read still out.
+describe("FIX-2: the close and the next read", () => {
+  /** A reader whose close and read the test settles by hand; `reads` and `closes` are the calls made. */
+  function manual(pane = 1, hidden = false) {
+    const reads: { ok: (r: ChatRead) => void }[] = [];
+    const closes: { done: () => void }[] = [];
+    const seen: Seen[] = [];
+    const reader = new ChatReader({
+      pane,
+      session: 10,
+      hidden,
+      read: () => new Promise<ChatRead>((ok) => reads.push({ ok })),
+      close: () => new Promise<void>((done) => closes.push({ done })),
+      onChange: (s) => seen.push(s),
+      timers: { set: () => 0, clear: () => {} },
+    });
+    return { reader, reads, closes, seen };
+  }
+  const later = () => new Promise((r) => setTimeout(r, 0));
+
+  it("a chat shown again reads only after the close of the one it replaces has finished", async () => {
+    const a = manual();
+    a.reads[0].ok(ready([item("a"), item("b")], { reset: true }));
+    await later();
+    a.reader.hide();
+    expect(a.closes).toHaveLength(1);
+    const b = manual(); // the layout effect: cleanup (hide) and the new reader in the same tick
+    await later();
+    expect(b.reads).toHaveLength(0);
+    a.closes[0].done();
+    await later();
+    expect(b.reads).toHaveLength(1);
+    expect(ids(b.reader.seen)).toEqual(["a", "b"]); // the kept view stays up the whole time
+  });
+  it("the kept conversation is not replaced by a delta read that raced the close", async () => {
+    const a = manual();
+    a.reads[0].ok(ready([item("a"), item("b")], { reset: true }));
+    await later();
+    a.reader.hide();
+    const b = manual();
+    await later();
+    expect(b.seen).toHaveLength(0);
+    a.closes[0].done();
+    await later();
+    b.reads[0].ok(ready([item("a"), item("b"), item("c")], { reset: true }));
+    await later();
+    expect(ids(b.reader.seen)).toEqual(["a", "b", "c"]);
+  });
+  it("a chat hidden again before its wait is over never starts the read", async () => {
+    const a = manual();
+    a.reads[0].ok(ready([item("a")], { reset: true }));
+    await later();
+    a.reader.hide();
+    const b = manual();
+    b.reader.hide();
+    a.closes[0].done();
+    await later();
+    expect(b.reads).toHaveLength(0);
+  });
+  it("a read still out when the chat is hidden is ignored and the transcript is closed again once it has settled", async () => {
+    const a = manual();
+    a.reader.hide();
+    expect(a.closes).toHaveLength(1);
+    a.reads[0].ok(ready([item("late")]));
+    await later();
+    expect(a.seen).toHaveLength(0);
+    expect(a.reader.seen.items).toEqual([]);
+    expect(a.closes).toHaveLength(2); // the second close is the one that cannot lose to the read
+  });
+  it("a hide with no read out closes once", async () => {
+    const a = manual();
+    a.reads[0].ok(ready([item("a")], { reset: true }));
+    await later();
+    a.reader.hide();
+    await later();
+    expect(a.closes).toHaveLength(1);
+  });
+  it("another pane's close does not hold this pane's read", async () => {
+    const a = manual(1);
+    a.reads[0].ok(ready([item("a")], { reset: true }));
+    await later();
+    a.reader.hide();
+    const other = manual(2);
+    expect(other.reads).toHaveLength(1);
+  });
+});

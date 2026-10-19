@@ -177,3 +177,45 @@ describe("FIX-1: Stop while a send waits out a tool", () => {
     expect(writes).toEqual([{ id: 70, data: INTERRUPT_KEY }]);
   });
 });
+
+// FIX-2 (stand-in review of 47de0346, item 8): like a card click, Stop looks at the pane's terminal again when its turn
+// in the terminal's queue comes; after a restart the Escape must not go to the old (dead) session or the new one.
+describe("FIX-2: Stop checks the terminal again at its turn", () => {
+  it("types nothing when the pane's terminal changed while the interrupt waited in the queue", async () => {
+    let terminal: number | undefined = 70;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const { enqueue } = await import("./composer");
+    void enqueue(70, () => gate);
+    const stop = stopPane(1, { terminalOf: () => terminal, stateOf: () => "working", write });
+    await flush();
+    terminal = 71; // the program was started again
+    release();
+    expect(await stop).toBe("no-terminal");
+    expect(writes).toEqual([]);
+  });
+  it("types nothing when the pane has no terminal any more at its turn", async () => {
+    let terminal: number | undefined = 70;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const { enqueue } = await import("./composer");
+    void enqueue(70, () => gate);
+    const stop = stopPane(1, { terminalOf: () => terminal, stateOf: () => "working", write });
+    await flush();
+    terminal = undefined;
+    release();
+    expect(await stop).toBe("no-terminal");
+    expect(writes).toEqual([]);
+  });
+  it("still types Escape when the terminal is the same at its turn", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const { enqueue } = await import("./composer");
+    void enqueue(70, () => gate);
+    const stop = stopPane(1, { terminalOf: () => 70, stateOf: () => "working", write });
+    await flush();
+    release();
+    expect(await stop).toBe("stopped");
+    expect(writes).toEqual([{ id: 70, data: INTERRUPT_KEY }]);
+  });
+});
