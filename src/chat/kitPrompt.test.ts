@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { KitWait } from "../kits/useKits";
 import { ASKING_NOTE } from "./composer";
 import { KIT_NOTICE_MS, askFirstText, askingText, failedText, hooksAbsent, kitInFlight, kitNotices, kitPasted, kitStep, kitTickEntry, kitWait, noticeSeen, pasteUnchecked, readyText, sendPrompt, stoppedText, tooLongText, type KitTickDeps } from "./kitPrompt";
+import { markFor } from "../launch/PlusMenu";
 import { LIMIT } from "../terminal/paste";
 import { UNSEEN_NOTE, type SendOutcome } from "./send";
 
@@ -30,6 +31,24 @@ describe("which panes Kolux knows have no hooks", () => {
     expect(hooksAbsent("claude", true, "my-reviewer")).toBe(false);
     expect(hooksAbsent("claude", false, "my-reviewer")).toBe(true);
     expect(hooksAbsent("codex", true, "my-codex")).toBe(true);
+  });
+
+  // FIX-6 (review of 64abfea0, FIX-SOON 1): the mark is not hand-written here; it is what the launch
+  // path really gives a pane (markFor, since launch FIX-2 it follows the program of a saved agent).
+  it("a saved agent whose program is Claude, with the mark the launch path gives it, is hooked; one running another program is not", () => {
+    const hooked = (id: string, program: string) => !hooksAbsent(markFor(id, program), true, id);
+    expect(hooked("my-reviewer", "claude")).toBe(true);
+    expect(hooked("my-reviewer", "C:\\tools\\Claude.EXE")).toBe(true);
+    expect(hooked("my-reviewer", "claude-wrapper")).toBe(false);
+    expect(hooked("my-codex", "codex")).toBe(false);
+    expect(hooked("my-shell", "pwsh")).toBe(false);
+  });
+
+  // FIX-7 (review of e20000d6, FIX-SOON 1): this one is true because of the agent id, not the program.
+  it("an agent whose own id is a hooked one (gemini) is hooked whatever the program mark says", () => {
+    const hooked = (id: string, program: string) => !hooksAbsent(markFor(id, program), true, id);
+    expect(hooked("gemini", "gemini")).toBe(true);
+    expect(hooked("gemini", "pwsh")).toBe(true);
   });
 });
 

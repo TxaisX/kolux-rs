@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyCellEdit, cellEditable, cellKey, endSave, newBook, sendEdit, settleEdit, isSaving, startSave, groupItems, labelChange, openingView, parseProjectRef, type Project, type ProjectField, projectHostRefused, type ProjectItem, pushRecent, refsFrom, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
+import { applyCellEdit, cellEditable, cellKey, endSave, newBook, sendEdit, settleEdit, readBackStart, readBackFresh, isSaving, startSave, groupItems, labelChange, openingView, parseProjectRef, type Project, type ProjectField, projectHostRefused, type ProjectItem, pushRecent, refsFrom, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
 
 const status: ProjectField = { id: "F_s", name: "Status", kind: "single_select", options: [{ id: "o1", name: "Todo", start: "", days: 0 }, { id: "o2", name: "Done", start: "", days: 0 }] };
 const points: ProjectField = { id: "F_p", name: "Points", kind: "number", options: [] };
@@ -147,6 +147,43 @@ describe("FIX-4 AFTER 6: a burst of edits to one cell is re-read", () => {
     [1, 2].forEach((id) => settleEdit(b, c, id, true, () => {}));
     sendEdit(b, c, 3);
     expect(settleEdit(b, c, 3, true, () => {})).toBe(false);
+  });
+});
+
+describe("FIX-5 AFTER 4: the burst re-read never overwrites a newer edit", () => {
+  const burst = (b: ReturnType<typeof newBook>, cell: string, ids: number[]) => {
+    ids.forEach((id) => sendEdit(b, cell, id));
+    return ids.map((id) => settleEdit(b, cell, id, true, () => {}));
+  };
+  it("is skipped while an edit to another cell is still out", () => {
+    const b = newBook();
+    const other = cellKey("b", "F_points");
+    sendEdit(b, other, 9);
+    expect(burst(b, cellKey("a", "F_status"), [1, 2])[1]).toBe(true);
+    expect(readBackStart(b)).toBeNull();
+    // Once that edit settles too, the read goes ahead.
+    settleEdit(b, other, 9, true, () => {});
+    expect(readBackStart(b)).not.toBeNull();
+  });
+  it("is dropped when an edit was sent after the read, even if it has settled by the time the read comes back", () => {
+    const b = newBook();
+    burst(b, cellKey("a", "F_status"), [1, 2]);
+    const token = readBackStart(b);
+    expect(token).not.toBeNull();
+    expect(readBackFresh(b, token!)).toBe(true);
+    // A quick edit to another cell: sent after the read, settled before its answer.
+    const other = cellKey("b", "F_points");
+    sendEdit(b, other, 3);
+    expect(readBackFresh(b, token!)).toBe(false);
+    settleEdit(b, other, 3, true, () => {});
+    expect(readBackFresh(b, token!)).toBe(false);
+  });
+  it("is dropped while a later edit is still out", () => {
+    const b = newBook();
+    burst(b, cellKey("a", "F_status"), [1, 2]);
+    const token = readBackStart(b)!;
+    sendEdit(b, cellKey("b", "F_points"), 3);
+    expect(readBackFresh(b, token)).toBe(false);
   });
 });
 

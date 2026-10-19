@@ -1,11 +1,12 @@
-// FIX-3: the vendor mark a pane carries, decided by ONE rule that the Rust side shares.
-// Rust credits a pane's program with agents::credited_agent (it reads the program as a command
-// line: a quoted first word, else the text up to the first space; the file's stem with folder, case
-// and program/script endings dropped; an interpreter such as node is credited by its entry script).
-// creditedAgent below is that function, and paneMark.test.ts reads agents.rs and runs every
-// credited_agent case that file asserts, and compares the program-name table, so the two cannot
-// drift apart without a red test. When the Rust rule changes (the review of b26fdad3 asks for a
-// path with spaces to be credited), change this in the same commit.
+// FIX-3 / FIX-4: the vendor mark a pane carries, decided by ONE rule that the Rust side shares.
+// Rust credits a pane's program with tools::credited_program: the program is read quoted first (so a
+// path with spaces stays whole), then as a command line, by agents::credited_agent (a quoted first
+// word, else the text up to the first space; the file's stem with folder, case and program/script
+// endings dropped; an interpreter such as node is credited by its entry script). creditedAgent and
+// creditedProgram below are those two functions, and paneMark.test.ts reads agents.rs and tools.rs,
+// runs every assert they make and checks that every call was read, and compares the program-name
+// table, so the two cannot drift apart without a red test. When the Rust rule changes, change this
+// in the same commit. (The end state is Rust returning the credited agent with the start line.)
 import type { Agent } from "../chrome/VendorMark";
 
 /** The catalogue ids and the program names Rust credits them by (agents.rs CATALOGUE, same order: the first match wins). */
@@ -49,9 +50,18 @@ export const CREDIT_NAMES: readonly (readonly [string, readonly string[]])[] = [
 const INTERPRETERS = ["node", "bun", "deno", "python", "python3", "pwsh"];
 const ENDINGS = [".exe", ".cmd", ".bat", ".com", ".ps1", ".js", ".mjs", ".cjs", ".py"];
 
+// Rust's char::is_whitespace (Unicode White_Space): U+0085 is in, U+FEFF is out; JS \s is the other way round.
+const WS = "[\\t-\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]";
+const LEADING_WS = new RegExp("^" + WS + "+");
+const TRAILING_WS = new RegExp(WS + "+$");
+const ANY_WS = new RegExp(WS);
+const WS_RUN = new RegExp(WS + "+");
+/** Rust's to_ascii_lowercase: A-Z only (toLowerCase would also fold the Kelvin sign to k). */
+const asciiLower = (s: string) => s.replace(/[A-Z]/g, (c) => c.toLowerCase());
+
 /** The bare lower-case name of a program word: no folder, no quotes, no program/script ending. */
 function programStem(word: string): string {
-  const base = (word.replace(/^"+|"+$/g, "").split(/[\\/]/).pop() ?? "").toLowerCase();
+  const base = asciiLower(word.replace(/^"+|"+$/g, "").split(/[\\/]/).pop() ?? "");
   const ext = ENDINGS.find((e) => base.endsWith(e));
   return ext ? base.slice(0, -ext.length) : base;
 }
@@ -68,7 +78,7 @@ function creditedName(stem: string, packages: boolean): string | null {
 
 /** agents::credited_agent in TypeScript: which catalogue agent a program (read as a command line) runs, or null. */
 export function creditedAgent(commandLine: string): string | null {
-  const line = commandLine.replace(/^\s+/, "");
+  const line = commandLine.replace(LEADING_WS, "");
   let first: string;
   let rest: string;
   const quoted = line.startsWith('"') ? line.slice(1).indexOf('"') : -1;
@@ -76,7 +86,7 @@ export function creditedAgent(commandLine: string): string | null {
     first = line.slice(1, 1 + quoted);
     rest = line.slice(quoted + 2);
   } else {
-    const at = line.search(/\s/);
+    const at = line.search(ANY_WS);
     first = at < 0 ? line : line.slice(0, at);
     rest = at < 0 ? "" : line.slice(at + 1);
   }
@@ -85,7 +95,7 @@ export function creditedAgent(commandLine: string): string | null {
   const own = creditedName(name, false);
   if (own) return own;
   if (!INTERPRETERS.includes(name)) return null;
-  for (const word of rest.split(/\s+/).filter(Boolean)) {
+  for (const word of rest.split(WS_RUN).filter(Boolean)) {
     for (const part of word.split(/[\\/]/)) {
       const id = creditedName(programStem(part), true);
       if (id) return id;
@@ -94,9 +104,17 @@ export function creditedAgent(commandLine: string): string | null {
   return null;
 }
 
+/** tools::credited_program in TypeScript: the agent a pane's program (one path to run) is credited to. Read quoted first, so a path with spaces stays whole, then as a command line. */
+export function creditedProgram(program: string): string | null {
+  const p = program.replace(LEADING_WS, "").replace(TRAILING_WS, "");
+  if (!p) return null;
+  if (p.startsWith('"')) return creditedAgent(p);
+  return creditedAgent(`"${p}"`) ?? creditedAgent(p);
+}
+
 /** The mark a program earns: Claude or Codex when Rust would credit it to that agent, else the plain shell. */
 export function programMark(program: string | null | undefined): Agent {
-  const id = creditedAgent(program ?? "");
+  const id = creditedProgram(program ?? "");
   return id === "claude" || id === "codex" ? id : "shell";
 }
 

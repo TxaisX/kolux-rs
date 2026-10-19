@@ -11,7 +11,7 @@ import { locale } from "../language";
 import "./chat.css";
 import { fold, thoughtIds as idsOf, toggled, type View } from "./steps";
 import { NoticeRow, PlanRow, StepRow, ThoughtRow } from "./StepRows";
-import { SHELL_OFFER, agentsView, handOver, handTargets, viewedFirst, applyRead, capPending, chatCovers, chatOffer, combine, pickChat, typingInto, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row } from "./model";
+import { SHELL_OFFER, agentsView, handOver, handTargets, viewedFirst, applyRead, capPending, chatCovers, chatOffer, combine, pickChat, typingInto, lastReply, lastReplyItem, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row } from "./model";
 import { Composer, type ComposerHandle } from "./MessageBox";
 import { draftOf, forwardsToBox, keepDraft, nearBottom } from "./composer";
 import { sessionLabel } from "../agents/rail";
@@ -27,8 +27,8 @@ type Support = { agent?: string; launching: boolean; readable: boolean };
  * `ptyOf`: the pane's program session, asked at send time. `target`: names the pane the box types into.
  * `aside`: drawn at the top right (the Agents screen's Show terminal switch). `hand`: VIEW-020, the
  * sessions a finished turn's reply can be handed to, and what handing it does. */
-export type Hand = { targets: { key: number; label: string }[]; onHand: (key: number, text: string) => void; /** Why the last hand-over was refused (FIX-SOON 1), shown beside the menu while the reply it was for is still the one shown (FIX-5). */ note?: string | null; noteFor?: string | null };
-/** The refusal of a hand-over and the reply it was refused for. */
+export type Hand = { targets: { key: number; label: string }[]; onHand: (key: number, text: string, replyId: string) => void; /** Why the last hand-over was refused (FIX-SOON 1), shown beside the menu while the reply it was for is still the one shown (FIX-5). */ note?: string | null; /** The id of that reply (FIX-6: not its words, so a newer reply with the same words does not inherit the note). */ noteFor?: string | null };
+/** The refusal of a hand-over and the id of the reply it was refused for. */
 export type HandNote = { text: string; forResult: string };
 export default function ChatView({ pane, agent, preview = null, pending = [], hookState, stateOf, ptyOf, target = null, aside, hand }: { pane: ChatPane; agent?: string; preview?: Preview | null; pending?: Pending[]; hookState?: string; stateOf?: (key: number) => string | undefined; ptyOf?: (key: number) => number | undefined; target?: string | null; aside?: ReactNode; hand?: Hand }) {
   const [items, setItems] = useState<ChatItem[]>([]);
@@ -129,7 +129,7 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
   // T-050-b: once the chat covers the terminal, keys must not keep going to the hidden terminal.
   const covers = chatCovers(state);
   // VIEW-020: a finished session's result, the last reply once the turn is over.
-  const result = !open && hand && hand.targets.length > 0 ? lastReply(items) : undefined;
+  const head = headOf(items, open, hand);
   useEffect(() => {
     if (covers && document.activeElement?.closest(".grid.agents")) box.current?.focus();
   }, [covers]);
@@ -152,9 +152,9 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
 
   return (
     <div className={`chat${covers ? " cover" : ""}`} aria-label="Chat" onKeyDown={onKeyDown}>
-      {(aside || result) && (
+      {(aside || head.result) && (
         <div className="chat-head">
-          <ChatHead result={result} hand={hand} aside={aside} />
+          <ChatHead {...head} hand={hand} aside={aside} />
         </div>
       )}
       {state === "loading" && rows.length === 0 && <div className="chat-state" role="status">Loading the conversation…</div>}
@@ -240,13 +240,20 @@ function ChatRow({ row, onImage }: { row: Row; onImage: (src: string) => void })
   );
 }
 
+/** VIEW-020: the reply the head offers to hand over, with its id (FIX-7: one place makes both, so the
+ * id cannot be left out); none while a turn is open or when there is nowhere to send it. */
+export function headOf(items: ChatItem[], open: boolean, hand?: Hand): { result: string | undefined; resultId: string | undefined } {
+  const item = !open && hand && hand.targets.length > 0 ? lastReplyItem(items) : undefined;
+  return { result: item?.text, resultId: item?.id };
+}
+
 /** The head of a chat: the Send result to menu and, beside it, why the last hand-over was refused,
  * but only while that same reply is the one shown (review of 6c0ea802, AFTER 2); then the aside. */
-export function ChatHead({ result, hand, aside }: { result?: string; hand?: Hand; aside?: ReactNode }) {
+export function ChatHead({ result, resultId, hand, aside }: { result: string | undefined; resultId: string | undefined; hand?: Hand; aside?: ReactNode }) {
   return (
     <>
-      {result && hand && <HandOff targets={hand.targets} onPick={(k) => hand.onHand(k, result)} />}
-      {result && hand?.note && hand.noteFor === result && <span className="chat-hand-note" role="status">{hand.note}</span>}
+      {result && resultId && hand && <HandOff targets={hand.targets} onPick={(k) => hand.onHand(k, result, resultId)} />}
+      {result && resultId && hand?.note && hand.noteFor === resultId && <span className="chat-hand-note" role="status">{hand.note}</span>}
       {aside}
     </>
   );
@@ -270,10 +277,10 @@ export function makeHand(a: {
     targets: handTargets(a.panes, a.key, a.offers, a.viewed).map((p) => ({ key: p.key, label: sessionLabel(p, a.taskOf?.(p.key)) })),
     note: a.note?.text ?? null,
     noteFor: a.note?.forResult ?? null,
-    onHand: (to, text) => {
+    onHand: (to, text, replyId) => {
       a.setNote(null);
       const label = sessionLabel(a.panes.find((p) => p.key === to) ?? { key: to, cwd: null }, a.taskOf?.(to));
-      handOver(to, label, text, { draftOf: a.draftOf, keepDraft: a.keepDraft, pick: (k) => a.onPick?.(k), say: (t) => a.setNote({ text: t, forResult: text }) });
+      handOver(to, label, text, { draftOf: a.draftOf, keepDraft: a.keepDraft, pick: (k) => a.onPick?.(k), say: (t) => a.setNote({ text: t, forResult: replyId }) });
     },
   };
 }

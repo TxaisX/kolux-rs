@@ -739,7 +739,7 @@ impl Terminals {
             inner.hist.insert(id, h);
         }
         if is_program {
-            let agent = program.as_deref().and_then(crate::agents::credited_agent);
+            let agent = program.as_deref().and_then(crate::tools::credited_program);
             inner.marks.insert(id, Mark { started: Instant::now(), last_output: None, program: program.unwrap_or_default().trim().to_string(), agent, pane: pane_key, home_env, cwd: chat_cwd });
         }
         if let Some(dir) = cwd {
@@ -1051,7 +1051,7 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
     // TERM-040: `cwd` is the workspace folder; `start` may ask for a folder relative to it.
     let cwd = cwd.map(|w| start_dir(&w, start.as_deref()));
     // ACCT-023: a resumed Codex pane runs on the account it began on, or not at all.
-    let codex = program.as_deref().and_then(crate::agents::credited_agent) == Some("codex");
+    let codex = program.as_deref().and_then(crate::tools::credited_program) == Some("codex");
     let resumed = match account.as_deref().filter(|_| codex) {
         Some(id) => Some(crate::codex_accounts::wait_home(&store, id)?),
         None => None,
@@ -1121,7 +1121,7 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
             crate::hooks::install_codex_home(std::path::Path::new(home));
         }
     }
-    let agent = program.as_deref().and_then(crate::agents::credited_agent);
+    let agent = program.as_deref().and_then(crate::tools::credited_program);
     let dir = cwd.clone();
     // T-172-e: a worker start puts its dispatch id in the first session's environment; the start that is
     // waiting for it learns which session that is (only a start still waiting is told).
