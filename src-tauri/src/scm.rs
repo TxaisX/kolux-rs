@@ -665,25 +665,54 @@ fn gh_run_for(program: &Path, worktree: &Path, args: &[&str], input: Option<&str
     if ok { Ok(out.trim().to_string()) } else { Err(plain(&said)) }
 }
 
-/// GIT-028 / FIX-R2: runs a gh command, `input` on standard input, and waits at most `limit`:
+/// GIT-028 / FIX-R2: runs a gh command, `input` on standard input, and waits about `limit`:
 /// (succeeded, standard output, standard error), or Err when it cannot start or has not finished in
-/// time (it is stopped then, with everything it started).
+/// time (it is stopped then, with everything it started). The call can end a little after `limit`: a
+/// finished gh's output gets a grace of at least 200 ms, then up to two 200 ms waits for the last
+/// of it, and without a job the tree kill takes its own time (FIX-5).
+/// On Windows gh runs in a kill-on-close job, so when the call ends it also ends background helpers
+/// a gh child auto-started (a git fsmonitor daemon, say); that costs only a restart of the helper,
+/// and no gh call here opens a browser, so nothing the user sees is cut.
 fn run_within(cmd: std::process::Command, input: Option<&str>, limit: std::time::Duration) -> Result<(bool, String, String), String> {
-    run_within_in(cmd, input, limit, true, &crate::procs::kill_tree)
+    run_within_in(cmd, input, limit, true, &crate::procs::kill_tree, &kill_leftover)
 }
 
-/// The body of `run_within`: `with_job` false starts gh with no job (the fallback path), and
-/// `tree_kill` is what ends a tree when there is no job.
-fn run_within_in(mut cmd: std::process::Command, input: Option<&str>, limit: std::time::Duration, with_job: bool, tree_kill: &dyn Fn(u32)) -> Result<(bool, String, String), String> {
+/// FIX-5: what ends a program a finished gh left holding its output, when no job holds gh. gh has
+/// been reaped by then (on Unix `try_wait` is a waitpid), so its pid may already belong to another
+/// program: only the process group is signalled (the group id stays reserved while any member
+/// lives), never the bare pid. Windows has no group; taskkill needs the root alive, so there this
+/// is best effort and the job is what reaches a leftover.
+fn kill_leftover(pid: u32) {
+    #[cfg(unix)]
+    {
+        let _ = quiet("kill").args(group_kill_args(pid)).output();
+    }
+    #[cfg(not(unix))]
+    crate::procs::kill_tree(pid);
+}
+
+/// The arguments of the group-only signal: the group form (`-pid`), never the bare pid.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn group_kill_args(pid: u32) -> [String; 2] {
+    ["-9".into(), format!("-{pid}")]
+}
+
+/// The body of `run_within`: `with_job` false starts gh with no job (the fallback path), `tree_kill`
+/// is what ends a tree when there is no job and gh is still running (a timeout: gh is not reaped,
+/// so its pid is still its own), and `leftover_kill` is what ends the program a gh that already
+/// finished left holding its output (gh is reaped: its pid must not be signalled, FIX-5).
+fn run_within_in(mut cmd: std::process::Command, input: Option<&str>, limit: std::time::Duration, with_job: bool, tree_kill: &dyn Fn(u32), leftover_kill: &dyn Fn(u32)) -> Result<(bool, String, String), String> {
     use std::io::Read;
     use std::process::Stdio;
     cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("could not run gh: {e}"))?;
     let pid = child.id();
-    // Everything gh starts joins this job and ends with it (Windows kill-on-close); the job is the
-    // precise way to end the tree. Where there is no job (not Windows, or the assignment failed) the
-    // tree kill is the fallback, and only then: it walks by parent pid, which can reach a program
-    // gh never started.
+    // What gh starts after the assignment below joins this job and ends with it (Windows
+    // kill-on-close); the job is the precise way to end the tree. A child gh.cmd starts in the
+    // instants between `spawn` and the assignment is not in the job, and nothing ends it on a
+    // timeout (FIX-5: a rare leak, not a safety problem; closing it needs a suspended spawn). Where
+    // there is no job (not Windows, or the assignment failed) the tree kill is the fallback, and
+    // only then: it walks by parent pid, which can reach a program gh never started.
     let job = if with_job && cfg!(windows) { crate::procs::Job::new().ok().filter(|j| j.assign_pid(pid).is_ok()) } else { None };
     let deadline = std::time::Instant::now() + limit;
     let secs = limit.as_secs();
@@ -739,14 +768,15 @@ fn run_within_in(mut cmd: std::process::Command, input: Option<&str>, limit: std
         std::thread::sleep(std::time::Duration::from_millis(50));
     };
     // gh is done. Its output normally closes at once; a program it left behind that still holds the
-    // pipes gets a short grace, then goes with the job, and the call still answers inside its limit.
+    // pipes gets a short grace, then goes with the job, and the call still answers (a little past its
+    // limit at worst, see the doc on `run_within`).
     let grace = grace_after(std::time::Instant::now(), deadline);
     let until = std::time::Instant::now() + grace;
     let closed = [&stdout, &stderr].map(|(_, rx)| rx.recv_timeout(until.saturating_duration_since(std::time::Instant::now())).is_ok());
     if closed.contains(&false) {
         match job {
             Some(j) => drop(j),
-            None => tree_kill(pid),
+            None => leftover_kill(pid),
         }
         // The leftover is gone now, so its pipes close; give the drains a moment to hand over the
         // last of what gh printed before it is read.
@@ -759,7 +789,8 @@ fn run_within_in(mut cmd: std::process::Command, input: Option<&str>, limit: std
 }
 
 /// How long a finished gh's output gets to close: what is left of the limit up to 500 ms, but never
-/// under 200 ms, so a gh that ends just as the limit runs out is not read before its last chunk.
+/// under 200 ms, so a gh that ends just as the limit runs out is not read before its last chunk
+/// (the floor is why a call can end a little after its limit).
 fn grace_after(now: std::time::Instant, deadline: std::time::Instant) -> std::time::Duration {
     std::time::Duration::from_millis(500).min(deadline.saturating_duration_since(now)).max(std::time::Duration::from_millis(200))
 }
@@ -3983,7 +4014,7 @@ mod tests {
         let asked = std::sync::Mutex::new(Vec::new());
         let mut cmd = quiet(&gh);
         cmd.current_dir(&tools);
-        let err = run_within_in(cmd, None, limit, true, &|p| asked.lock().unwrap().push(p)).unwrap_err();
+        let err = run_within_in(cmd, None, limit, true, &|p| asked.lock().unwrap().push(p), &|p| asked.lock().unwrap().push(p)).unwrap_err();
         assert!(err.contains("did not answer within 1 second"), "{err}");
         assert!(asked.lock().unwrap().is_empty(), "the tree kill ran although a job held gh: {:?}", asked.lock().unwrap());
         std::thread::sleep(std::time::Duration::from_secs(8));
@@ -3994,7 +4025,7 @@ mod tests {
         let err = run_within_in(cmd, None, limit, false, &|p| {
             asked.lock().unwrap().push(p);
             crate::procs::kill_tree(p);
-        })
+        }, &|_| {})
         .unwrap_err();
         assert!(err.contains("did not answer within 1 second"), "{err}");
         assert_eq!(asked.lock().unwrap().len(), 1, "the fallback tree kill is asked once");
@@ -4003,32 +4034,54 @@ mod tests {
         let _ = fs::remove_dir_all(&tools);
     }
 
-    /// FIX-4 (review AFTER 2): when no job holds gh, a finished gh that left a program holding its
-    /// output gets the tree-kill fallback asked once, and the call still returns gh's answer inside
-    /// its limit. (On Windows taskkill needs the root alive, so only a job reaches such a leftover;
-    /// the fallback is best effort there and complete with the process group on Unix.)
+    /// FIX-5 (review FIX-SOON 1 and 2): when no job holds gh, a finished gh that left a program
+    /// holding its output is handed to the leftover kill once and NEVER to the tree kill (gh is
+    /// reaped, so on Unix its pid may belong to another program by then), and the call still returns
+    /// gh's answer inside its limit. (On Windows taskkill needs the root alive, so only a job reaches
+    /// such a leftover; the leftover kill is best effort there and the group signal on Unix.) The
+    /// test waits for the leftover to finish, so it leaves no program behind.
     #[cfg(windows)]
     #[test]
-    fn fix4_without_a_job_a_program_left_holding_the_output_goes_with_the_fallback_kill() {
+    fn fix5_without_a_job_a_finished_gh_with_a_holder_asks_only_the_leftover_kill_once_and_still_answers_in_time() {
         let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fix4-nojob-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tools);
         fs::create_dir_all(&tools).unwrap();
         fs::write(tools.join("late.cmd"), "@echo off\r\nping -n 6 127.0.0.1 >nul\r\necho late>\"%~dp0late.txt\"\r\n").unwrap();
         let gh = tools.join("gh.cmd");
         fs::write(&gh, "@echo off\r\nstart \"\" /b cmd /c \"%~dp0late.cmd\"\r\necho octo\r\n").unwrap();
-        let asked = std::sync::Mutex::new(Vec::new());
+        let tree = std::sync::Mutex::new(Vec::new());
+        let leftover = std::sync::Mutex::new(Vec::new());
         let mut cmd = quiet(&gh);
         cmd.current_dir(&tools);
         let started = std::time::Instant::now();
-        let got = run_within_in(cmd, None, std::time::Duration::from_secs(3), false, &|p| {
-            asked.lock().unwrap().push(p);
+        let got = run_within_in(cmd, None, std::time::Duration::from_secs(3), false, &|p| tree.lock().unwrap().push(p), &|p| {
+            leftover.lock().unwrap().push(p);
             crate::procs::kill_tree(p);
         })
         .unwrap();
         assert_eq!(got.1.trim(), "octo");
         assert!(started.elapsed() < std::time::Duration::from_secs(4), "took {:?}", started.elapsed());
-        assert_eq!(asked.lock().unwrap().len(), 1, "the fallback kill ran once for the holder");
+        assert!(tree.lock().unwrap().is_empty(), "the tree kill was asked for a pid gh had already given up: {:?}", tree.lock().unwrap());
+        assert_eq!(leftover.lock().unwrap().len(), 1, "the leftover kill runs once for the holder");
+        // Windows cannot end the leftover without a job, so it is still running: wait (bounded) for
+        // its mark before the folder goes, instead of leaving it behind.
+        let mark = tools.join("late.txt");
+        for _ in 0..100 {
+            if mark.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
         let _ = fs::remove_dir_all(&tools);
+    }
+
+    /// FIX-5 (review FIX-SOON 1): the Unix leftover kill names the process group (`-pid`) and never
+    /// the bare pid, which may already belong to another program once gh has been reaped.
+    #[test]
+    fn fix5_the_leftover_kill_names_the_group_and_never_the_bare_pid() {
+        let args = group_kill_args(4242);
+        assert_eq!(args, ["-9", "-4242"]);
+        assert!(!args.iter().any(|a| a == "4242"), "{args:?}");
     }
 
     /// FIX-4 (review AFTER 1): a gh that finishes just as the limit runs out still gets a short
