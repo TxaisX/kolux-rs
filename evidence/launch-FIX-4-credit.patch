@@ -1,0 +1,198 @@
+diff --git a/src-tauri/src/cap.rs b/src-tauri/src/cap.rs
+index 616e2a49..cad43389 100644
+--- a/src-tauri/src/cap.rs
++++ b/src-tauri/src/cap.rs
+@@ -26,7 +26,7 @@ pub fn env_set() -> bool {
+ /// any `--`, unless the user's arguments already name either key, a profile or OSS mode. Nothing
+ /// else is touched, and a second pass adds nothing.
+ pub fn apply(program: Option<&str>, args: &mut Vec<String>, env: &mut Vec<(String, String)>, env_set: bool) {
+-    match program.and_then(crate::agents::credited_agent) {
++    match program.and_then(crate::tools::credited_program) {
+         Some("claude") => {
+             let explicit = args.iter().any(|a| a == "--autocompact" || a.starts_with("--autocompact="));
+             if !env_set && !explicit {
+diff --git a/src-tauri/src/claude_accounts.rs b/src-tauri/src/claude_accounts.rs
+index caeb07ef..9541958b 100644
+--- a/src-tauri/src/claude_accounts.rs
++++ b/src-tauri/src/claude_accounts.rs
+@@ -79,7 +79,7 @@ pub fn upkeep_left_to_claude(settings: &Value) -> bool {
+ /// The variable a new pane gets for the managed account: only a Claude pane, only when the 1-year
+ /// key is not the connection (key mode wins), only with an active account.
+ pub fn pane_env(program: Option<&str>, key_mode: bool, active_dir: Option<String>) -> Option<(&'static str, String)> {
+-    if key_mode || crate::agents::credited_agent(program?) != Some("claude") {
++    if key_mode || crate::tools::credited_program(program?) != Some("claude") {
+         return None;
+     }
+     active_dir.map(|d| (CONFIG_ENV, d))
+@@ -701,6 +701,14 @@ mod tests {
+         assert_eq!(pane_env(Some("claude"), false, None), None);
+     }
+ 
++    /// launch FIX-4: a Command that is a bare path with a space starts fine, so it gets the account too.
++    #[test]
++    fn fix4_a_claude_path_with_a_space_gets_the_account() {
++        let d = Some(r"C:\p\claude-accounts\a1".to_string());
++        assert_eq!(pane_env(Some(r"C:\Program Files\Claude\claude.exe"), false, d.clone()), Some((CONFIG_ENV, d.clone().unwrap())));
++        assert_eq!(pane_env(Some(r"C:\Program Files\Tools\notclaude.exe"), false, d), None);
++    }
++
+     #[test]
+     fn upkeep_is_left_to_claude_code_unless_turned_off() {
+         assert!(upkeep_left_to_claude(&json!({})));
+diff --git a/src-tauri/src/claude_key.rs b/src-tauri/src/claude_key.rs
+index b4e8847a..b47f8628 100644
+--- a/src-tauri/src/claude_key.rs
++++ b/src-tauri/src/claude_key.rs
+@@ -220,7 +220,7 @@ pub fn status_at(settings: &Value, has_token: bool, now: i64) -> KeyStatus {
+ /// The variable a new pane gets: only a Claude pane, only in key mode, only with a key.
+ pub fn pane_env(program: Option<&str>, settings: &Value, token: Option<String>) -> Option<(&'static str, String)> {
+     let program = program?;
+-    if crate::agents::credited_agent(program) != Some("claude") {
++    if crate::tools::credited_program(program) != Some("claude") {
+         return None;
+     }
+     if settings.get(MODE_FIELD).and_then(Value::as_str) != Some(KEY_MODE) {
+@@ -232,7 +232,7 @@ pub fn pane_env(program: Option<&str>, settings: &Value, token: Option<String>)
+ /// ACCT-024: whether a pane drops a key variable Kolux itself was started with: every Claude pane
+ /// that is not handed the key (plain and managed panes use their own login).
+ pub fn strip_inherited(program: Option<&str>, env: &[(String, String)]) -> bool {
+-    program.and_then(crate::agents::credited_agent) == Some("claude") && !env.iter().any(|(k, _)| k == ENV)
++    program.and_then(crate::tools::credited_program) == Some("claude") && !env.iter().any(|(k, _)| k == ENV)
+ }
+ 
+ /// Stores a fresh key: sealed, with its creation date and the key-mode marker.
+diff --git a/src-tauri/src/cli.rs b/src-tauri/src/cli.rs
+index 2a292de9..8615e45d 100644
+--- a/src-tauri/src/cli.rs
++++ b/src-tauri/src/cli.rs
+@@ -3079,10 +3079,7 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
+ /// ORCH-004: every open terminal with the agent Kolux started in it (none for a shell; a pane title
+ /// plays no part) and whether it has been quiet for `IDLE`.
+ fn peers(ctx: &Ctx) -> Vec<crate::orchestration::Peer> {
+-    let credited = |p: &str| match p.starts_with('"') {
+-        true => crate::agents::credited_agent(p),
+-        false => crate::agents::credited_agent(&format!("\"{p}\"")),
+-    };
++    let credited = crate::tools::credited_program;
+     ctx.terminals
+         .sessions()
+         .into_iter()
+diff --git a/src-tauri/src/codex_accounts.rs b/src-tauri/src/codex_accounts.rs
+index c8964aba..edf1f3f2 100644
+--- a/src-tauri/src/codex_accounts.rs
++++ b/src-tauri/src/codex_accounts.rs
+@@ -155,7 +155,7 @@ pub fn wait_home(store: &Mutex<Store>, id: &str) -> Result<String, String> {
+ 
+ /// The variable a new pane gets: only a Codex pane, only with an active account.
+ pub fn pane_env(program: Option<&str>, home: Option<String>) -> Option<(&'static str, String)> {
+-    if crate::agents::credited_agent(program?) != Some("codex") {
++    if crate::tools::credited_program(program?) != Some("codex") {
+         return None;
+     }
+     home.map(|h| (HOME_ENV, h))
+@@ -863,6 +863,14 @@ mod tests {
+         assert_eq!(pane_env(Some("claude"), active_home(&s)), None);
+     }
+ 
++    /// launch FIX-4: a Command that is a bare path with a space starts fine, so it gets the account too.
++    #[test]
++    fn fix4_a_codex_path_with_a_space_gets_the_account() {
++        let home = Some(r"C:\p\codex-accounts\c1".to_string());
++        assert_eq!(pane_env(Some(r"C:\Program Files\nodejs\codex.cmd"), home.clone()), Some((HOME_ENV, home.clone().unwrap())));
++        assert_eq!(pane_env(Some(r"C:\Program Files\Tools\notcodex.exe"), home), None);
++    }
++
+     #[test]
+     fn signing_in_again_updates_the_account_in_place_and_clears_its_error() {
+         let profile = temp("again");
+diff --git a/src-tauri/src/grok.rs b/src-tauri/src/grok.rs
+index 1bbf472c..8946d7a1 100644
+--- a/src-tauri/src/grok.rs
++++ b/src-tauri/src/grok.rs
+@@ -72,7 +72,7 @@ pub fn failure(ended: &Ended, output: &str, code: Option<&str>) -> Option<Attent
+ 
+ /// The variable a new pane gets: only a Grok pane, only with a saved key.
+ pub fn pane_env(program: Option<&str>, key: Option<String>) -> Option<(&'static str, String)> {
+-    if crate::agents::credited_agent(program?) != Some("grok") {
++    if crate::tools::credited_program(program?) != Some("grok") {
+         return None;
+     }
+     key.map(|k| (KEY_ENV, k))
+diff --git a/src-tauri/src/inventory.rs b/src-tauri/src/inventory.rs
+index 9a6c75ab..9408cf6a 100644
+--- a/src-tauri/src/inventory.rs
++++ b/src-tauri/src/inventory.rs
+@@ -45,12 +45,7 @@ pub struct Tab {
+ 
+ /// The agent a program line was credited to, quoted or not.
+ fn agent_of(program: Option<&str>) -> Option<&'static str> {
+-    let p = program.map(str::trim).filter(|p| !p.is_empty())?;
+-    if p.starts_with('"') {
+-        super::credited_agent(p)
+-    } else {
+-        super::credited_agent(&format!("\"{p}\"")).or_else(|| super::credited_agent(p))
+-    }
++    crate::tools::credited_program(program?)
+ }
+ 
+ /// Joins the live sessions (handle, start folder, program, in handle order) with the window's
+@@ -162,6 +157,13 @@ mod tests {
+         assert_eq!((tabs[0].agent, tabs[1].agent), (Some("codex"), None));
+     }
+ 
++    /// launch FIX-4: the inventory, the account variables and the window credit a program one way.
++    #[test]
++    fn fix4_a_bare_path_with_a_space_is_credited_like_the_account_callers_do() {
++        let tabs = compose(vec![session("term-1", Some(r"C:\Program Files\Claude\claude.exe")), session("term-2", Some("claude --x"))], &[]);
++        assert_eq!((tabs[0].agent, tabs[1].agent), (Some("claude"), Some("claude")));
++    }
++
+     /// T-279-c: over the runtime socket a tab's program line is only the program's name; the
+     /// app's own list keeps the whole line.
+     #[test]
+diff --git a/src-tauri/src/terminal.rs b/src-tauri/src/terminal.rs
+index f2ff7f7c..8081ef95 100644
+--- a/src-tauri/src/terminal.rs
++++ b/src-tauri/src/terminal.rs
+@@ -739,7 +739,7 @@ impl Terminals {
+             inner.hist.insert(id, h);
+         }
+         if is_program {
+-            let agent = program.as_deref().and_then(crate::agents::credited_agent);
++            let agent = program.as_deref().and_then(crate::tools::credited_program);
+             inner.marks.insert(id, Mark { started: Instant::now(), last_output: None, program: program.unwrap_or_default().trim().to_string(), agent, pane: pane_key, home_env, cwd: chat_cwd });
+         }
+         if let Some(dir) = cwd {
+@@ -1051,7 +1051,7 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
+     // TERM-040: `cwd` is the workspace folder; `start` may ask for a folder relative to it.
+     let cwd = cwd.map(|w| start_dir(&w, start.as_deref()));
+     // ACCT-023: a resumed Codex pane runs on the account it began on, or not at all.
+-    let codex = program.as_deref().and_then(crate::agents::credited_agent) == Some("codex");
++    let codex = program.as_deref().and_then(crate::tools::credited_program) == Some("codex");
+     let resumed = match account.as_deref().filter(|_| codex) {
+         Some(id) => Some(crate::codex_accounts::wait_home(&store, id)?),
+         None => None,
+@@ -1121,7 +1121,7 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
+             crate::hooks::install_codex_home(std::path::Path::new(home));
+         }
+     }
+-    let agent = program.as_deref().and_then(crate::agents::credited_agent);
++    let agent = program.as_deref().and_then(crate::tools::credited_program);
+     let dir = cwd.clone();
+     // T-172-e: a worker start puts its dispatch id in the first session's environment; the start that is
+     // waiting for it learns which session that is (only a start still waiting is told).
+--- a/src-tauri/src/tools.rs
++++ b/src-tauri/src/tools.rs
+@@ -468,11 +468,9 @@
+ /// (src/launch/paneMark.ts) is this function, pinned by the asserts below, so the mark a pane draws
+ /// and the account or key it is handed cannot disagree. Callers: every place that credits a spawn
+ /// program (terminal start, the Claude and Codex account variables, the key variables, the peers
+-/// list, the inventory, the context cap), which patch evidence/launch-FIX-4-credit.patch moves here
+-/// from `agents::credited_agent`. Nothing calls it until that patch is applied.
++/// list, the inventory, the context cap), which all call it instead of `agents::credited_agent`.
+ // ponytail: the better end state is Rust returning the credited agent in Spawned/StartLine so the
+ // window keeps no copy of the rule; that needs terminal.rs and App.tsx state, outside this lane.
+-#[allow(dead_code)]
+ pub fn credited_program(program: &str) -> Option<&'static str> {
+     let p = program.trim();
+     if p.is_empty() {

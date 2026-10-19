@@ -461,9 +461,55 @@ fn process_table() -> Vec<(u32, u32, String)> {
     Vec::new()
 }
 
+/// FIX-4: the ONE way to credit the program Kolux starts in a pane to a catalogue agent. The program
+/// is a single path to run (`program_command` takes the whole text), so it is read quoted first,
+/// which keeps a path with spaces whole (`C:\Program Files\Claude\claude.exe`), and only then as a
+/// command line (`claude --x`, `node <entry script>`). The window's `creditedProgram`
+/// (src/launch/paneMark.ts) is this function, pinned by the asserts below, so the mark a pane draws
+/// and the account or key it is handed cannot disagree. Callers: every place that credits a spawn
+/// program (terminal start, the Claude and Codex account variables, the key variables, the peers
+/// list, the inventory, the context cap), which patch evidence/launch-FIX-4-credit.patch moves here
+/// from `agents::credited_agent`. Nothing calls it until that patch is applied.
+// ponytail: the better end state is Rust returning the credited agent in Spawned/StartLine so the
+// window keeps no copy of the rule; that needs terminal.rs and App.tsx state, outside this lane.
+#[allow(dead_code)]
+pub fn credited_program(program: &str) -> Option<&'static str> {
+    let p = program.trim();
+    if p.is_empty() {
+        return None;
+    }
+    if p.starts_with('"') {
+        crate::agents::credited_agent(p)
+    } else {
+        crate::agents::credited_agent(&format!("\"{p}\"")).or_else(|| crate::agents::credited_agent(p))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // FIX-4: src/launch/paneMark.test.ts parses these asserts and replays every one through
+    // creditedProgram, and fails if a credited_program( call here is not a literal assert_eq! it can read.
+    #[test]
+    fn fix4_credited_program_reads_a_spawn_program_quoted_first_then_as_a_line() {
+        assert_eq!(credited_program("claude"), Some("claude"));
+        assert_eq!(credited_program("  codex  "), Some("codex"), "trimmed");
+        assert_eq!(credited_program("claude --permission-mode auto"), Some("claude"), "a line with arguments");
+        assert_eq!(credited_program("\"claude\""), Some("claude"));
+        assert_eq!(credited_program(r#""C:\Program Files\Claude\claude.exe" --x"#), Some("claude"), "quoted path, arguments");
+        assert_eq!(credited_program(r"C:\Program Files\Claude\claude.exe"), Some("claude"), "a bare path with a space");
+        assert_eq!(credited_program(r"C:\Program Files\nodejs\codex.cmd"), Some("codex"));
+        assert_eq!(credited_program(r"node C:\Users\t\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\cli.js"), Some("claude"));
+        assert_eq!(credited_program("node /usr/lib/node_modules/@openai/codex/bin/codex.js"), Some("codex"));
+        assert_eq!(credited_program(r"C:\Program Files\Claude\claude.exe --x"), None, "unquoted path plus arguments: the cut is ambiguous");
+        assert_eq!(credited_program(r"C:\Program Files\Tools\notclaude.exe"), None);
+        assert_eq!(credited_program(r"C:\Program Files\Kiro\kiro.exe"), None, "plain kiro is not Kiro");
+        assert_eq!(credited_program("claude-teams"), None);
+        assert_eq!(credited_program("pwsh"), None);
+        assert_eq!(credited_program("   "), None);
+        assert_eq!(credited_program(""), None);
+    }
 
     #[test]
     fn t191b_agent_teams_is_offered_only_off_windows_and_wsl_with_the_command_line_found() {
