@@ -532,8 +532,13 @@ mod tests {
         assert_eq!(lane(), Some((false, Some("working".to_string()))), "Restart: the new terminal reopens the lane");
         crate::status::report(PANE, Some(OLD), claude, &stop);
         assert_eq!(lane(), Some((false, Some("working".to_string()))), "the old terminal's late Stop changes nothing");
-        crate::status::terminal_ended(OLD);
+        // hooks FIX-4/5: the dropped hook does not take the pane's session back to OLD either, so
+        // NEW's exit finds the pane and ends the lane.
+        assert_eq!(crate::status::terminal_of(PANE), Some(NEW), "the late hook is not adopted by the session");
+        terminal_ended(NEW);
         crate::status::terminal_ended(NEW);
+        assert_eq!(lane(), Some((true, Some("done".to_string()))), "the new terminal's exit ends the lane");
+        assert_eq!(crate::status::terminal_of(PANE), None, "and the pane's session is gone");
         with(|a| {
             a.tracks.remove(&PANE);
             a.open.remove(&PANE);

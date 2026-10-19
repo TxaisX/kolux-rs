@@ -187,3 +187,82 @@ test("closing a pane forgets its fresh mark: the same key back is not guarded (U
   usage(1, 50_000, "s1@2", 2_400_000);
   expect(context[1]?.at).toBe(2_400_000);
 });
+
+// Stand-in review of lane/marks c75f5900, FIX-SOON 1: a report the guard holds back is the first
+// word of the new process when Claude's running time keeps counting across a resume, or when the
+// start hook fired late. It is kept as a candidate, not thrown away.
+test("a held first report is shown when the window ends and nothing else has come (USAGE-001)", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000_000);
+  render([1]);
+  usage(1, 90_000, "s1@2", 2_400_000);
+  resume(1);
+  vi.setSystemTime(1_000_800);
+  usage(1, 91_000, "s1@2", 2_400_900);
+  expect(context[1]).toBeUndefined();
+  vi.advanceTimersByTime(28_000);
+  expect(context[1]).toBeUndefined();
+  vi.advanceTimersByTime(2_000);
+  // Shown without its clock, so whatever the new process reports next is taken and never held back.
+  expect(context[1]).toEqual({ tokens: 91_000, window: 200_000 });
+  usage(1, 30_000, "s1@2", 1_200);
+  expect(context[1]).toEqual({ tokens: 30_000, window: 200_000, session: "s1@2", at: 1_200 });
+});
+
+test("two held reports that agree on one running clock show the newer at once, with its clock (USAGE-001)", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000_000);
+  render([1]);
+  resume(1);
+  // A slow start hook: Kolux saw the start 3 s into a process whose running time already reads 15 s.
+  vi.setSystemTime(1_003_000);
+  usage(1, 40_000, "s1@2", 15_000);
+  expect(context[1]).toBeUndefined();
+  vi.setSystemTime(1_013_000);
+  usage(1, 45_000, "s1@2", 25_000);
+  expect(context[1]).toEqual({ tokens: 45_000, window: 200_000, session: "s1@2", at: 25_000 });
+  // The candidate is spent: the window's end shows nothing new.
+  vi.advanceTimersByTime(60_000);
+  expect(context[1]?.tokens).toBe(45_000);
+});
+
+test("a report the guard does not hold takes the place of the candidate (USAGE-001)", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000_000);
+  render([1]);
+  usage(1, 90_000, "s1@2", 2_400_000);
+  resume(1);
+  vi.setSystemTime(1_000_800);
+  usage(1, 91_000, "s1@2", 2_400_900);
+  vi.setSystemTime(1_002_000);
+  usage(1, 30_000, "s1@2", 1_200);
+  expect(context[1]?.tokens).toBe(30_000);
+  vi.advanceTimersByTime(60_000);
+  expect(context[1]?.tokens).toBe(30_000);
+});
+
+test("a clear or a closed pane drops the candidate: nothing shows when the window ends (USAGE-001)", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000_000);
+  render([1, 2]);
+  resume(1);
+  resume(2);
+  vi.setSystemTime(1_000_500);
+  usage(1, 91_000, "s1@2", 2_400_900);
+  usage(2, 92_000, "s2@3", 2_400_900);
+  clear(1);
+  render([1]);
+  vi.advanceTimersByTime(60_000);
+  expect(context[1]).toBeUndefined();
+  expect(context[2]).toBeUndefined();
+});
+
+test("the cost rides on the listener's reading and a clear takes it away with the gauge (USAGE-034)", () => {
+  render([1]);
+  bus["claude-usage"]({ payload: { paneKey: 1, contextTokens: 50_000, contextWindow: 200_000, session: "s1@2", at: 1_000, costUsd: 3.15 } });
+  expect(context[1]).toEqual({ tokens: 50_000, window: 200_000, session: "s1@2", at: 1_000, costUsd: 3.15 });
+  clear(1);
+  expect(context[1]).toBeUndefined();
+  bus["claude-usage"]({ payload: { paneKey: 1, contextTokens: 5_000, contextWindow: 200_000, session: "s9@2", at: 100 } });
+  expect(context[1]?.costUsd).toBeUndefined();
+});

@@ -2866,6 +2866,9 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
     let mut tasks = load_list(store, TASKS_KEY);
     o::promote(&mut tasks);
     let mut dispatches = load_list(store, DISPATCHES_KEY);
+    // cli FIX-8: a session the window started after its start gave up is recorded on its row first, so
+    // worker-show, worker-stop and worker-release see (and can end) it.
+    reconcile_late(&mut dispatches, &|t| ctx.terminals.live(&crate::terminal::handle_of(t)).then(|| mark_program(ctx.terminals, t)));
     // ORCH-033: a pane acts in its own Run; another Run can be named to read it, never to change it.
     let own = pane.and_then(|p| m.run_of(p, &dispatches));
     let run = named.clone().or_else(|| own.clone());
@@ -3467,42 +3470,114 @@ pub(crate) fn dispatch_in(env: &[(String, String)]) -> Option<String> {
     env.iter().rfind(|(k, _)| k == DISPATCH_ENV).map(|(_, v)| v.clone())
 }
 
-/// The starts waiting for their session's stamp: dispatch id, and the session once it is stamped.
-static STAMPS: Mutex<Vec<(String, Option<u32>)>> = Mutex::new(Vec::new());
+/// A start waiting for its session's stamp: the dispatch id, the session once it is stamped, and
+/// (cli FIX-8) the moment a start that gave up waiting stops being told about a late session.
+struct Stamp {
+    dispatch: String,
+    session: Option<u32>,
+    late_until: Option<Instant>,
+}
 
-fn stamps() -> std::sync::MutexGuard<'static, Vec<(String, Option<u32>)>> {
+/// The starts waiting for their session's stamp, and those that timed out and still may be told.
+static STAMPS: Mutex<Vec<Stamp>> = Mutex::new(Vec::new());
+
+fn stamps() -> std::sync::MutexGuard<'static, Vec<Stamp>> {
     STAMPS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// A start is about to ask the window for its session: only a dispatch registered here can be stamped.
 pub(crate) fn expect_stamp(dispatch: &str) {
     let mut s = stamps();
-    s.retain(|(d, _)| d != dispatch);
-    s.push((dispatch.to_string(), None));
+    s.retain(|e| e.dispatch != dispatch);
+    s.push(Stamp { dispatch: dispatch.to_string(), session: None, late_until: None });
     if s.len() > 64 {
         s.remove(0);
     }
 }
 
 /// The window started session `id` with `dispatch` in its environment (`terminal_spawn`). Only the
-/// first session of a start that is still waiting is stamped; any other call changes nothing.
+/// first session of a start that is still waiting (or timed out less than `LATE_WINDOW` ago) is
+/// stamped; any other call changes nothing.
 pub(crate) fn stamp_session(dispatch: &str, id: u32) -> bool {
     let mut s = stamps();
-    match s.iter_mut().find(|(d, t)| d == dispatch && t.is_none()) {
-        Some((_, t)) => {
-            *t = Some(id);
+    let now = Instant::now();
+    match s.iter_mut().find(|e| e.dispatch == dispatch && e.session.is_none() && e.late_until.is_none_or(|u| now < u)) {
+        Some(e) => {
+            e.session = Some(id);
             true
         }
         None => false,
     }
 }
 
+/// cli FIX-8: spawns a session and stamps it. `dispatch` is the id read from the spawn's own
+/// environment (`dispatch_in`) before the environment is handed to the spawn; a spawn that fails
+/// stamps nothing. `terminal_spawn` runs every session through this.
+pub(crate) fn spawn_stamped<E>(dispatch: Option<String>, spawn: impl FnOnce() -> Result<u32, E>) -> Result<u32, E> {
+    let id = spawn()?;
+    if let Some(d) = dispatch {
+        stamp_session(&d, id);
+    }
+    Ok(id)
+}
+
 fn stamped(dispatch: &str) -> Option<u32> {
-    stamps().iter().find(|(d, _)| d == dispatch).and_then(|(_, t)| *t)
+    stamps().iter().find(|e| e.dispatch == dispatch).and_then(|e| e.session)
 }
 
 fn forget_stamp(dispatch: &str) {
-    stamps().retain(|(d, _)| d != dispatch);
+    stamps().retain(|e| e.dispatch != dispatch);
+}
+
+/// cli FIX-8 (council FIX-SOON 2 on 800b8a94): how long after a start gave up waiting its session,
+/// if the window starts it after all (a loaded PC), is still tied to the dispatch.
+const LATE_WINDOW: Duration = Duration::from_secs(600);
+
+/// A start that ended `unknown` with no session stamped keeps its place for `window`, so a session
+/// the window starts later is stamped to it and `reconcile_late` can record it on the row.
+fn keep_late(dispatch: &str, window: Duration) {
+    let mut s = stamps();
+    if let Some(e) = s.iter_mut().find(|e| e.dispatch == dispatch) {
+        e.late_until = Some(Instant::now() + window);
+    }
+}
+
+/// cli FIX-8: what a start does with its stamp entry once its wait is over: a session was found, so
+/// the entry is done; none was, so it stays for `window` and a late session can still be tied to it.
+fn finish_stamp(dispatch: &str, found: Option<u32>, window: Duration) {
+    if found.is_some() {
+        forget_stamp(dispatch);
+    } else {
+        keep_late(dispatch, window);
+    }
+}
+
+/// cli FIX-8: records the late sessions on their rows. A row of this run whose terminal was never
+/// recorded and whose dispatch was stamped after the start gave up gets the session (and the
+/// program Kolux started in it, `mark`) while that session is still open; the row's status is left
+/// as the start reported it. Entries past their window are dropped; one is kept until then (a
+/// refused call may not save the row), and a row that has its terminal is never changed again.
+/// `session(t)` is None when `t` is gone, else its mark. Returns how many rows changed.
+fn reconcile_late(dispatches: &mut [Value], session: &dyn Fn(u32) -> Option<Option<String>>) -> usize {
+    let now = Instant::now();
+    let me = u64::from(std::process::id());
+    let mut changed = 0;
+    let mut s = stamps();
+    s.retain(|e| e.late_until.is_none_or(|u| now < u));
+    for d in dispatches.iter_mut() {
+        if !d["terminal"].is_null() || d["runtime"].as_u64() != Some(me) {
+            continue;
+        }
+        let Some(i) = s.iter().position(|e| e.late_until.is_some() && d["id"].as_str() == Some(e.dispatch.as_str()) && e.session.is_some()) else { continue };
+        let t = s[i].session.unwrap_or_default();
+        if let Some(mark) = session(t) {
+            d["terminal"] = json!(t);
+            d["terminalProgram"] = json!(mark);
+            d["lateStamp"] = json!(true);
+            changed += 1;
+        }
+    }
+    changed
 }
 
 /// One open session as a start sees it: its id, and how long it has been quiet.
@@ -3511,9 +3586,10 @@ struct Tab {
     quiet: Option<Duration>,
 }
 
-/// Every session in the terminals.
-fn tabs(terminals: &Terminals) -> Vec<Tab> {
-    terminals.list().into_iter().map(|(id, _, _)| Tab { id, quiet: terminals.quiet_for(id) }).collect()
+/// cli FIX-8: the dispatch's stamped session when it is still open, and nothing else. The wait polls
+/// every 100 ms and only ever reads that one, so no other session is looked at or locked.
+fn tabs(terminals: &Terminals, dispatch: &str) -> Vec<Tab> {
+    stamped(dispatch).filter(|id| terminals.live(&crate::terminal::handle_of(*id))).map(|id| Tab { id, quiet: terminals.quiet_for(id) }).into_iter().collect()
 }
 
 /// Waits for the worker's terminal: ready once it has written and is still there `SETTLE` later;
@@ -3524,7 +3600,7 @@ fn tabs(terminals: &Terminals) -> Vec<Tab> {
 /// stamp never arrives (the window did not start the session) ends `unknown` with the terminal
 /// unrecorded, and the offered commands clean up from there.
 pub(crate) fn wait_ready(terminals: &Terminals, dispatch: &str, since: Instant, timeout: Duration) -> (Option<u32>, bool) {
-    wait_ready_over(&|| tabs(terminals), dispatch, since, timeout)
+    wait_ready_over(&|| tabs(terminals, dispatch), dispatch, since, timeout)
 }
 
 fn wait_ready_over(open: &dyn Fn() -> Vec<Tab>, dispatch: &str, since: Instant, timeout: Duration) -> (Option<u32>, bool) {
@@ -4013,7 +4089,9 @@ fn worker_start_as(ctx: &Ctx, req: &Request, coordinator: Option<String>) -> Res
     expect_stamp(&dispatch_id);
     (ctx.notify)(json!({ "kind": "start", "path": worktree.path, "branch": worktree.branch, "agent": agent_id, "prompt": brief, "extra": extra, "title": task["title"], "dispatch": dispatch_id }));
     let (terminal, ready) = wait_ready(ctx.terminals, &dispatch_id, since, timeout);
-    forget_stamp(&dispatch_id);
+    // cli FIX-8: a start that found no session keeps its place, so a session the window starts after
+    // the timeout is still tied to this dispatch (reconcile_late records it on the row).
+    finish_stamp(&dispatch_id, terminal, LATE_WINDOW);
     let status = if ready { "ready" } else { "unknown" };
 
     let mut receipt = json!({
@@ -4042,7 +4120,7 @@ fn worker_start_as(ctx: &Ctx, req: &Request, coordinator: Option<String>) -> Res
         let setup = receipt["setup"].clone();
         crate::orchestration::start_failed(&mut receipt, "worker", setup);
         start_failed_run(&mut receipt, run_id.as_deref());
-        Err(Fail { code: "timeout", message: format!("the worker did not come up within {} ms; it may still be starting in the background ({dispatch_id} in {})", timeout.as_millis(), worktree.path), data: receipt })
+        Err(Fail { code: "timeout", message: format!("the worker did not come up within {} ms; it may still be starting in the background ({dispatch_id} in {}); if it does, worker-show and worker-stop find its session", timeout.as_millis(), worktree.path), data: receipt })
     }
 }
 
@@ -6356,7 +6434,7 @@ mod tests {
     #[test]
     fn fix7_a_no_stamp_takes_no_tab() {
         let t = Instant::now();
-        let got = wait_ready_over(&|| vec![tab(5, 5000), tab(6, 5000)], "dispatch-fix7-a", t, Duration::from_millis(900));
+        let got = wait_ready_over(&|| vec![tab(5, 5000)], "dispatch-fix7-a", t, Duration::from_millis(900));
         assert_eq!(got, (None, false));
         assert!(t.elapsed() >= Duration::from_millis(900), "waited the whole timeout: {:?}", t.elapsed());
         // Registered but never stamped: the same.
@@ -6426,10 +6504,12 @@ mod tests {
         terminals.fake_session(8, &wd, None);
         terminals.fake_session(9, &wd, Some("npx"));
         terminals.fake_session(10, &wd, Some("npx"));
+        // 11: a tab the user opened that a row names, but marked with another program than the row recorded.
+        terminals.fake_session(11, &wd, Some("node"));
         let row = |n: u32, status: &str, term: u32| worker_row(json!({ "id": format!("dispatch-{n}"), "runId": null, "taskId": format!("task-{n}"), "status": status, "worktree": wd, "agent": "claude", "terminal": term, "terminalProgram": "npx" }));
         let task = |n: u32| json!({ "id": format!("task-{n}"), "status": "dispatched", "dispatchId": format!("dispatch-{n}") });
-        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[row(1, "ready", 7), row(2, "ready", 8), row(3, "stopped", 10), row(4, "stopped", 8)]).unwrap();
-        save_list(&store.lock().unwrap(), TASKS_KEY, &[task(1), task(2), task(3), task(4)]).unwrap();
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[row(1, "ready", 7), row(2, "ready", 8), row(3, "stopped", 10), row(4, "stopped", 8), row(5, "ready", 11), row(6, "stopped", 11)]).unwrap();
+        save_list(&store.lock().unwrap(), TASKS_KEY, &[task(1), task(2), task(3), task(4), task(5), task(6)]).unwrap();
         let call = |command: &str, id: &str| {
             let req = Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args: json!({ "dispatch": id }), pane: None, cli: String::new(), arrived: None };
             dispatch(&ctx, &req)
@@ -6450,11 +6530,179 @@ mod tests {
         let r = call(RELEASE, "dispatch-4").unwrap();
         assert!(r["terminalLeftOpen"].is_string(), "{r}");
         assert!(terminals.live("term-8") && terminals.live("term-9"), "a shell and the user's tab stay open");
-        for t in [8, 9] {
+        // cli FIX-8: a session a row names whose mark is not the row's recorded program is the user's, not the
+        // worker's (runs_now's mark check): stop and release both leave it open and say why.
+        let r = call(STOP, "dispatch-5").unwrap();
+        assert!(r["terminalLeftOpen"].is_string(), "{r}");
+        assert!(terminals.live("term-11"), "stop left the differently-marked session open");
+        let r = call(RELEASE, "dispatch-6").unwrap();
+        assert!(r["terminalLeftOpen"].is_string(), "{r}");
+        assert!(terminals.live("term-11"), "release left it open");
+        for t in [8, 9, 11] {
             let _ = terminals.kill(t);
         }
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The Ctx pieces a dispatch-level test needs: a scratch folder, its store and the git runner.
+    fn fix8_world(tag: &str) -> (std::path::PathBuf, Git, Mutex<Store>) {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-clifix8-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        (dir, Git::detect().unwrap(), store)
+    }
+
+    /// cli FIX-8 item 2 (council FIX-SOON 2 on 800b8a94): a worker the window starts after the start
+    /// gave up (a loaded PC) is not lost. Its session is stamped to the dispatch inside the late
+    /// window, the next worker-show / stop / release call records it on the row, and a stop then
+    /// ends it, and only it. Without this a stop freed the task but killed nothing and the retry made
+    /// a second agent on the same task.
+    #[test]
+    fn fix8_a_a_late_stamp_lands_on_the_row_and_a_stop_ends_it() {
+        let (dir, git_, store) = fix8_world("a");
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = dir.display().to_string();
+        let row = |n: u32, status: &str| worker_row(json!({ "id": format!("dispatch-fix8-a{n}"), "runId": null, "taskId": format!("task-fix8-a{n}"), "status": status, "worktree": wd, "agent": "claude", "terminal": null, "terminalProgram": null }));
+        let task = |n: u32| json!({ "id": format!("task-fix8-a{n}"), "status": "dispatched", "dispatchId": format!("dispatch-fix8-a{n}") });
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[row(1, "unknown"), row(2, "unknown"), row(3, "unknown")]).unwrap();
+        save_list(&store.lock().unwrap(), TASKS_KEY, &[task(1), task(2), task(3)]).unwrap();
+        let call = |command: &str, id: &str| {
+            let req = Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args: json!({ "dispatch": id }), pane: None, cli: String::new(), arrived: None };
+            dispatch(&ctx, &req)
+        };
+        let saved = |id: &str| load_list(&store.lock().unwrap(), DISPATCHES_KEY).into_iter().find(|d| d["id"] == id).unwrap();
+        // Both starts ended `unknown` without a session; they keep their place for the window.
+        for n in [1, 2] {
+            let d = format!("dispatch-fix8-a{n}");
+            expect_stamp(&d);
+            finish_stamp(&d, None, LATE_WINDOW);
+        }
+        // Nothing has arrived yet: a call changes nothing.
+        call(WORKER_SHOW, "dispatch-fix8-a1").unwrap();
+        assert!(saved("dispatch-fix8-a1")["terminal"].is_null());
+        // The window starts both agents late (7 and 8) and the user opens a tab (9) with the same program.
+        terminals.fake_session(7, &wd, Some("npx"));
+        terminals.fake_session(8, &wd, Some("npx"));
+        terminals.fake_session(9, &wd, Some("npx"));
+        assert!(stamp_session("dispatch-fix8-a1", 7), "a start that timed out can still be stamped");
+        assert!(!stamp_session("dispatch-fix8-a1", 9), "once");
+        // worker-show records it on the row.
+        call(WORKER_SHOW, "dispatch-fix8-a1").unwrap();
+        let d1 = saved("dispatch-fix8-a1");
+        assert_eq!((d1["terminal"].as_u64(), d1["terminalProgram"].as_str(), d1["lateStamp"].as_bool()), (Some(7), Some("npx"), Some(true)), "{d1}");
+        assert_eq!(d1["status"], "unknown", "the status stays as the start reported it");
+        // A stop now ends that session, not the user's tab or the other worker's.
+        let r = call(STOP, "dispatch-fix8-a1").unwrap();
+        assert_eq!(r["process"], "ended", "{r}");
+        assert!(!terminals.live("term-7"), "the late worker ended");
+        assert!(terminals.live("term-8") && terminals.live("term-9"), "the other worker and the user's tab stay");
+        // The stop came first for the second dispatch (nothing recorded, so it kills nothing and says so).
+        let r = call(STOP, "dispatch-fix8-a2").unwrap();
+        assert_eq!(r["process"], "unverifiable", "{r}");
+        assert!(terminals.live("term-8"));
+        // Its session arrives after the stop: it is recorded, so the offered release can close it.
+        assert!(stamp_session("dispatch-fix8-a2", 8));
+        call(WORKER_SHOW, "dispatch-fix8-a2").unwrap();
+        assert_eq!(saved("dispatch-fix8-a2")["terminal"].as_u64(), Some(8));
+        let r = call(RELEASE, "dispatch-fix8-a2").unwrap();
+        assert_eq!(r["terminalState"], "released", "{r}");
+        assert!(!terminals.live("term-8"), "release closed the late worker");
+        assert!(terminals.live("term-9"), "the user's tab stays");
+        // A third start whose session is gone before anything reads it records nothing.
+        let d3 = "dispatch-fix8-a3";
+        expect_stamp(d3);
+        finish_stamp(d3, None, LATE_WINDOW);
+        terminals.fake_session(11, &wd, Some("npx"));
+        assert!(stamp_session(d3, 11));
+        terminals.kill(11).unwrap();
+        call(WORKER_SHOW, d3).unwrap();
+        assert!(saved(d3)["terminal"].is_null());
+        forget_stamp(d3);
+        let _ = terminals.kill(9);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cli FIX-8 item 2: the late window is bounded and a found session ends the entry. A start that
+    /// found its session forgets the entry; one that found none keeps it for the window only; and a
+    /// row of an earlier run, or one that already has a terminal, is never changed.
+    #[test]
+    fn fix8_b_the_late_window_is_bounded() {
+        let d = "dispatch-fix8-b";
+        expect_stamp(d);
+        finish_stamp(d, Some(4), LATE_WINDOW);
+        assert!(!stamp_session(d, 5), "a start that found its session is done");
+        // Kept for a window that has already passed: nothing can be stamped any more.
+        expect_stamp(d);
+        finish_stamp(d, None, Duration::ZERO);
+        assert!(!stamp_session(d, 5), "past the window");
+        // A late session is recorded once, on this run's row without a terminal only.
+        let me = u64::from(std::process::id());
+        expect_stamp(d);
+        finish_stamp(d, None, LATE_WINDOW);
+        assert!(stamp_session(d, 6));
+        let open = |t: u32| (t == 6).then(|| Some("npx".to_string()));
+        let mut rows = vec![
+            json!({ "id": d, "runtime": me + 1, "terminal": null }),
+            json!({ "id": d, "runtime": me, "terminal": 3 }),
+            json!({ "id": "dispatch-fix8-b-other", "runtime": me, "terminal": null }),
+        ];
+        assert_eq!(reconcile_late(&mut rows, &open), 0, "an earlier run's row, a recorded row and another dispatch stay: {rows:?}");
+        rows.push(json!({ "id": d, "runtime": me, "terminal": null }));
+        assert_eq!(reconcile_late(&mut rows, &open), 1);
+        assert_eq!(rows[3]["terminal"], 6);
+        assert_eq!(reconcile_late(&mut rows, &open), 0, "recorded once");
+        forget_stamp(d);
+    }
+
+    /// cli FIX-8 AFTER 4: the wait reads only the stamped session. With no stamp, or a stamped
+    /// session that has gone, it sees nothing; with one it sees that session and no other.
+    #[test]
+    fn fix8_c_tabs_reads_only_the_stamped_session() {
+        let terminals = Terminals::default();
+        terminals.fake_session(5, "C:/w", Some("npx"));
+        terminals.fake_session(6, "C:/w", Some("npx"));
+        let d = "dispatch-fix8-c";
+        assert!(tabs(&terminals, d).is_empty(), "no entry");
+        expect_stamp(d);
+        assert!(tabs(&terminals, d).is_empty(), "no stamp yet");
+        assert!(stamp_session(d, 6));
+        let seen = tabs(&terminals, d);
+        assert_eq!(seen.iter().map(|t| t.id).collect::<Vec<_>>(), vec![6]);
+        assert!(seen[0].quiet.is_some_and(|q| q >= SETTLE));
+        terminals.kill(6).unwrap();
+        assert!(tabs(&terminals, d).is_empty(), "the stamped session is gone");
+        let _ = terminals.kill(5);
+        forget_stamp(d);
+    }
+
+    /// cli FIX-8 AFTER 1: the step terminal_spawn runs around a spawn. The id comes from the
+    /// environment before it is handed over, the new session is stamped only once the spawn
+    /// succeeded, and the user's own value (an entry no start registered) stamps nothing.
+    #[test]
+    fn fix8_d_spawn_stamped_stamps_the_new_session_on_success_only() {
+        let e = |k: &str, v: &str| (k.to_string(), v.to_string());
+        let env = [e(DISPATCH_ENV, "dispatch-fix8-user"), e("A", "1"), e(DISPATCH_ENV, "dispatch-fix8-d")];
+        expect_stamp("dispatch-fix8-d");
+        let id: Result<u32, String> = spawn_stamped(dispatch_in(&env), || Ok(21));
+        assert_eq!(id, Ok(21));
+        assert_eq!(stamped("dispatch-fix8-d"), Some(21));
+        forget_stamp("dispatch-fix8-d");
+        // A spawn that fails stamps nothing and its error comes back.
+        expect_stamp("dispatch-fix8-d2");
+        let id: Result<u32, String> = spawn_stamped(Some("dispatch-fix8-d2".into()), || Err("no pty".into()));
+        assert_eq!(id, Err("no pty".to_string()));
+        assert_eq!(stamped("dispatch-fix8-d2"), None);
+        assert!(stamp_session("dispatch-fix8-d2", 1), "still waiting: the failed spawn used no stamp");
+        forget_stamp("dispatch-fix8-d2");
+        // No dispatch in the environment, or the user's alone: nothing to stamp, the id still comes back.
+        assert_eq!(spawn_stamped::<String>(dispatch_in(&[e("A", "1")]), || Ok(22)), Ok(22));
+        assert_eq!(spawn_stamped::<String>(dispatch_in(&[e(DISPATCH_ENV, "dispatch-fix8-user")]), || Ok(23)), Ok(23));
+        assert_eq!(stamped("dispatch-fix8-user"), None);
     }
 
     /// cli FIX-7 (earlier AFTER on c5fb49c): the receipt says what the window does about setup, and
