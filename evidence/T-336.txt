@@ -1,0 +1,19 @@
+T-336 · USAGE-020 X logo on the post-sharing button (marks lane, 2026-10-19, from 53807a11)
+
+What was built
+- src/usage/ShareButton.tsx: the share-to-X button is the words "Share on X" and nothing else (no svg, img or background picture).
+  It is not mounted yet: the share dialog is T-263-b, which should use this component for its X button.
+- src/usage/ShareButton.test.ts, 3 tests:
+  1. the rendered button holds the label and no svg, img, path or url() (exactly one button)
+  2. a busy button is disabled and still plain text
+  3. no file under src/assets or src/usage is named x-logo / twitter / x-mark / x-icon, and no source or svg there
+     carries the X glyph path start or a twimg host
+- Mutation check: a stray src/assets/vendors/claudino.svg (T-338's twin test) turned its tests red, so the file scans really look at the folder.
+
+Gate readings (log G:/Temp/marks-w1-logs/t338-vitest-green.log)
+- vitest run src/marks/noPetArt.test.ts src/usage/ShareButton.test.ts: Test Files 2 passed (2), Tests 7 passed (7)
+- tsc --noEmit: no output (clean)
+
+LIVE PROOF PENDING (after T-263-b mounts the button)
+1. Open the usage share dialog. Expected: the X button reads "Share on X" in text, with no picture of any logo on any button.
+2. Click it. Expected: the post opens in the browser (T-263-b's job), no network request for an icon.
