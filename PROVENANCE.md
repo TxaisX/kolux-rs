@@ -773,3 +773,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · tasks FIX-4 · the stand-in review tasks-3937cbbd-standin-review.md (FIX-SOON 1-2; AFTER 1-6) as given in the coordinator brief; this tree's own github.rs, scm.rs (patch only) and src/tasks; the "could not find key" wording is the error text of gh's public config library as remembered, not read from a source; an unexpected wording fails closed (host refused); no other outside source
 > 2026-10-19 · skills FIX-6 · the stand-in review skills-efa2f15a-standin-review.md (items 1-6, AFTER 1-5) as given in the coordinator brief; this tree's own skill_delete.rs and skills.rs (spots, places, claude_plugins); Rust std docs for Path::is_absolute / is_dir; no outside source
 > 2026-10-19 · marks T-336 · card USAGE-020 in spec; this tree's own src/usage; no outside source
+> 2026-10-19 · marks T-338 · card HID-042 in spec; this tree's own src and src-tauri/icons; no outside source
