@@ -42,7 +42,13 @@ describe("which panes Kolux knows have no hooks", () => {
     expect(hooked("my-reviewer", "claude-wrapper")).toBe(false);
     expect(hooked("my-codex", "codex")).toBe(false);
     expect(hooked("my-shell", "pwsh")).toBe(false);
+  });
+
+  // FIX-7 (review of e20000d6, FIX-SOON 1): this one is true because of the agent id, not the program.
+  it("an agent whose own id is a hooked one (gemini) is hooked whatever the program mark says", () => {
+    const hooked = (id: string, program: string) => !hooksAbsent(markFor(id, program), true, id);
     expect(hooked("gemini", "gemini")).toBe(true);
+    expect(hooked("gemini", "pwsh")).toBe(true);
   });
 });
 
