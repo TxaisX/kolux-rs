@@ -1,0 +1,19 @@
+diff --git a/src/projects/ProjectsPanel.tsx b/src/projects/ProjectsPanel.tsx
+index fa7f3e08..ae93cfc8 100644
+--- a/src/projects/ProjectsPanel.tsx
++++ b/src/projects/ProjectsPanel.tsx
+@@ -439,6 +439,14 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+     setPrDraft(null);
+     setLinked((l) => (creating === null ? null : keepOnSwitch(l))); // SESS-038
+   }, [creating]);
++  const waitPath = projects.find((x) => x.id === creating)?.path;
++  useEffect(() => {
++    // SET-033: the repository's own choice of whether the agent waits for setup starts the checkbox
++    if (!waitPath) return;
++    let live = true;
++    invoke<{ wait: boolean }>("repo_setup_get", { path: waitPath }).then((s) => live && setSetupWait(s.wait)).catch(() => {});
++    return () => void (live = false);
++  }, [waitPath]);
+   useEffect(() => {
+     // SESS-036: the chosen project's own issues and pull requests matching the name, and a pasted
+     // link resolved to its item (its title seeds the name). Lookups that fail for want of gh stay quiet.

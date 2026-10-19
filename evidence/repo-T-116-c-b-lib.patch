@@ -1,0 +1,16 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index e3306b7a..7c379c4a 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -405,6 +405,11 @@ pub fn run() {
+             setup::setup_suggestion,
+             setup::setup_suggestion_save,
+             setup::setup_suggestion_dismiss,
++            setup::repo_setup_get,
++            setup::repo_setup_save,
++            setup::repo_setup_remove,
++            setup::repo_setup_policy_set,
++            setup::repo_setup_wait_set,
+             projects::handoff_note_prepare,
+             projects::workspace_remove,
+             projects::workspace_remove_check,
