@@ -1,0 +1,38 @@
+diff --git a/src/usage/TokenAnalytics.tsx b/src/usage/TokenAnalytics.tsx
+index e609ed25..9d4b29ba 100644
+--- a/src/usage/TokenAnalytics.tsx
++++ b/src/usage/TokenAnalytics.tsx
+@@ -9,6 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
+ import { Segmented } from "../settings/GeneralPage";
+ import { locale } from "../language";
+ import { estimate } from "./pricing";
++import ShareCard from "./ShareCard";
+ import { byModel, daily, filterRows, grid, NAMES, overview, panelState, recentSessions, rowsOf, shownProviders, type Filters, type Pick, type Provider, type Range, type Row, type Saved, type Scope, type Usage } from "./tokens";
+ 
+ const PICKS: Array<{ id: Pick; label: string }> = [
+@@ -198,6 +199,7 @@ function Figures({ p, rows, filters, today }: { p: Provider; rows: Row[]; filter
+ }
+ 
+ function ProviderPanel({ usage, p, today, filters, onTrack, onFilters }: { usage: Usage; p: Provider; today: Date; filters: Filters; onTrack: ViewProps["onTrack"]; onFilters: ViewProps["onFilters"] }) {
++  const [sharing, setSharing] = useState(false);
+   const on = usage.tracking[p];
+   const state = panelState(usage, p);
+   const rows = filterRows(rowsOf(usage, p), { ...filters, today });
+@@ -205,11 +207,17 @@ function ProviderPanel({ usage, p, today, filters, onTrack, onFilters }: { usage
+     <section className="conn-card ta-card" data-panel={p}>
+       <header className="conn-head">
+         <h2 className="conn-name">{NAMES[p]} tokens</h2>
++        {state === "figures" && rows.length > 0 && (
++          <button type="button" className="btn" onClick={() => setSharing(true)}>
++            Share
++          </button>
++        )}
+         <label className="conn-switch ta-switch">
+           <input type="checkbox" role="switch" checked={on} onChange={(e) => onTrack(p, e.target.checked)} />
+           Track
+         </label>
+       </header>
++      {sharing && <ShareCard provider={p} rows={rows} range={filters.range} today={today} onClose={() => setSharing(false)} />}
+       {state === "off" && <p className="conn-detail">Turn this on to see {NAMES[p]}'s token use on this computer. {WHY}</p>}
+       {state === "empty" && <p className="conn-detail">No {LOGS[p]} logs on this computer yet. Figures arrive after the next {NAMES[p]} session.</p>}
+       {state === "figures" && (
