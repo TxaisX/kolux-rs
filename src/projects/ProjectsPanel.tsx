@@ -31,6 +31,12 @@ import CardLine from "../look/CardLine";
 import { HeaderBadge, HeaderSwatches } from "../look/HeaderBadge";
 import { HEADER_COLOURS_SETTING, headerColourOf, pickHeaderColour } from "../look/headerColour";
 import { CARD_DETAILS, CARD_DETAILS_FIELD, cardTitle, detailsAfter, readCardDetails, type CardFacts } from "../look/cards";
+import { takeSuggestion } from "./suggest";
+import { IconPicker } from "./IconPicker";
+import { ProjectIcon } from "./IconView";
+import { SetupCard } from "./SetupCard";
+import { cardView, saveArgs, type SetupSuggestion } from "./setupSuggestion";
+import { cardProjectOf, newestOnly } from "./cardAsk";
 import Picker, { type PickItem } from "./Picker";
 import StartGit, { type FirstFile } from "./StartGit";
 import { openKits } from "../kits/Kits";
@@ -291,6 +297,18 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     invoke("activity_touch", { path }).catch(() => {});
   }
   const say = (kind: "ok" | "warn" | "error", text: string) => setMessage({ kind, text });
+  const [icons, setIcons] = useState<Record<string, string>>({}); // PROJ-019: icons chosen by hand, by project id
+  const setIcon = async (p: Project, icon: string) => {
+    try {
+      const kept = await invoke<string | null>("project_icon_set", { projectId: p.id, icon });
+      setIcons((o) => {
+        const { [p.id]: _gone, ...rest } = o;
+        return kept ? { ...rest, [p.id]: kept } : rest;
+      });
+    } catch (err) {
+      say("error", String(err));
+    }
+  };
   const fail = (err: unknown) => say("error", String(err));
 
   const scanned = useRef<Record<string, Worktree[]>>({}); // ACCT-056: the last list each scan gave
@@ -385,6 +403,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     setProjects(list);
     const g = await invoke<Groups>("groups_get");
     setGroups((o) => keepNewer(o, g));
+    setIcons(await invoke<Record<string, string>>("project_icons_list").catch(() => ({}))); // PROJ-019
     const a = await invoke<Record<string, number>>("activity_get");
     setActivity((o) => ({ ...a, ...Object.fromEntries(Object.entries(o).filter(([k, t]) => t > (a[k] ?? 0))) }));
     await refreshWorktrees(list);
@@ -440,6 +459,26 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       clearTimeout(t);
     };
   }, [name, creating, linked, existing, prList]);
+
+  // PROJ-023: the name field opens with a creature name nobody uses; one the user has changed stays.
+  const shownSuggestion = useRef<string | null>(null);
+  useEffect(() => {
+    if (!creating) {
+      shownSuggestion.current = null;
+      return;
+    }
+    let live = true;
+    invoke<string>("workspace_suggest_name", { projectId: creating })
+      .then((s) => {
+        if (!live) return;
+        setName((cur) => takeSuggestion(cur, shownSuggestion.current, s));
+        shownSuggestion.current = s;
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [creating]);
 
   useEffect(() => {
     // SESS-036: the name field suggests the project's branches too.
@@ -1102,6 +1141,39 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   };
 
   const same = (a: string, b: string) => a.replace(/[\\/]+$/, "").toLowerCase() === b.replace(/[\\/]+$/, "").toLowerCase();
+  // PROJ-035: the setup-script card for the project of the active workspace. It is asked again when the
+  // window is focused or the project or the active folder changes (not on every worktrees update),
+  // and an older answer never replaces a newer one. The setup policy is the app's one stored setting,
+  // read on the Rust side by the card, the save and the runner alike.
+  const [card, setCard] = useState<{ id: string; s: SetupSuggestion } | null>(null);
+  const [cardBusy, setCardBusy] = useState(false);
+  const cardProject = cardProjectOf(projects, worktrees, activeDir, same);
+  const cardId = cardProject?.id ?? null;
+  const cardPath = cardProject?.path ?? null;
+  const cardAsks = useRef(newestOnly());
+  const askCard = useCallback(async () => {
+    const current = cardAsks.current.begin();
+    if (!cardId || !cardPath) return setCard(null);
+    const s = await invoke<SetupSuggestion>("setup_suggestion", { projectId: cardId, path: cardPath }).catch((err) => ({ kind: "error", message: String(err) }) as SetupSuggestion);
+    if (current()) setCard(s.kind === "none" ? null : { id: cardId, s });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cardId, cardPath, activeDir]);
+  useEffect(() => {
+    void askCard();
+    window.addEventListener("focus", askCard);
+    return () => window.removeEventListener("focus", askCard);
+  }, [askCard]);
+  const cardDo = async (cmd: string, args: Record<string, unknown>) => {
+    setCardBusy(true);
+    try {
+      await invoke(cmd, args);
+    } catch (err) {
+      say("error", String(err)); // a refused save ("That suggestion changed") is followed by the card's new offer
+    } finally {
+      setCardBusy(false);
+    }
+    await askCard();
+  };
   const openCount = (w: Worktree) => openDirs.filter((d) => same(d, w.path)).length;
   const isActive = (w: Worktree) => openCount(w) > 0;
   // VIEW-051: only running panes count, so an exited tab drops out; none shows no count.
@@ -1399,6 +1471,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         <div key={p.id}>
           <div className="proj" title={p.path}>
             <HeaderBadge colour={headerColourOf(settings, "p", p.id)} />
+            <ProjectIcon value={icons[p.id]} name={p.name} />
             <span className="name">{p.name}</span>
             <button className={`ib${settingsFor === p.id ? " on" : ""}`} title="Project settings: its workspaces folder and base ref" aria-pressed={settingsFor === p.id} onClick={() => (settingsFor === p.id ? setSettingsFor(null) : openSettings(p))}>
               <Gear />
@@ -1438,6 +1511,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
               </select>
               <label>Header colour</label>
               <HeaderSwatches value={headerColourOf(settings, "p", p.id).id} onPick={(c) => onSetting(HEADER_COLOURS_SETTING, pickHeaderColour(settings, "p", p.id, c))} />
+              <IconPicker value={icons[p.id]} name={p.name} onSet={(icon) => setIcon(p, icon)} onProblem={(text) => say("warn", text)} />
               <div className="btn-row">
                 <button className="btn" onClick={() => saveProject(p)}>
                   Save
@@ -1743,6 +1817,20 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
               </div>
             ))}
 
+          {card && cardProject && card.id === cardProject.id && (
+            <SetupCard
+              project={cardProject.name}
+              suggestion={card.s}
+              busy={cardBusy}
+              onSave={() => {
+                const v = cardView(card.s, cardProject.name);
+                const a = v && saveArgs(cardProject.path, v);
+                if (a) void cardDo("setup_suggestion_save", a);
+              }}
+              onDismiss={() => cardDo("setup_suggestion_dismiss", { projectId: cardProject.id })}
+              onRetry={() => void askCard()}
+            />
+          )}
           {message && <div className={`note ${message.kind}`}>{message.text}</div>}
         </div>
 

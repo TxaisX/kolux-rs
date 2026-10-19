@@ -781,3 +781,7 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · look T-268 · spec card VIEW-052 and SET-021 only; this tree's own theme.ts and styles.css; no outside source
 > 2026-10-19 · look T-270 · spec cards SET-021, PROJ-062 and VIEW-052 only; this tree's own theme.ts, ProjectsPanel and settings pages; no outside source
 > 2026-10-19 · look T-266 · spec cards PROJ-017 and PROJ-062 only; this tree's own ProjectsPanel and look/ files; no outside source
+> 2026-10-19 · worktrees T-212 · spec/01 PROJ-023 as given in the brief; this tree's own projects.rs and creatures.rs; no outside source
+> 2026-10-19 · worktrees T-299 · spec/01 PROJ-019 and PROJ-024 as given in the brief; this tree's own projects.rs, creatures.rs and chrome/icons.tsx; no outside source
+> 2026-10-19 · worktrees T-294 · spec/01 PROJ-035 as given in the brief; this tree's own setup.rs and ImportSetup.tsx; no outside source
+> 2026-10-19 · worktrees FIX-1 (T-212, T-299, T-294) · pre-merge review findings as given in the brief; this tree's own projects.rs, setup.rs and src/projects; no outside source

