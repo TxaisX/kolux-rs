@@ -127,6 +127,9 @@ test("SKILL-022: the confirmation counts folders and links, names where linked c
   expect(s.headline).toBe("2 skills will be deleted: 1 folder and 2 links removed across all skill folders.");
   expect(s.remains).toEqual([String.raw`L: only a link is removed; the content stays in D:\dev\beta`]);
   expect(s.blocked).toEqual([`KOLUX:X: ${BLOCKED.bundled}`, `C: ${BLOCKED.changed}`]);
+  const gone: Planned[] = [{ path: "f", blocked: null, items: [{ path: "f", kind: "folder" }], remains: null, dangling: [String.raw`D:	eam`] }];
+  expect(sumUp(gone, (p) => p.toUpperCase()).dangling).toEqual([String.raw`F: the link D:	eam is outside the skill folders, so it stays and will point at nothing`]);
+  expect(s.dangling).toEqual([]);
   expect(sumUp([plan[2]], (p) => p).headline).toBe("None of the chosen skills can be deleted.");
 });
 
