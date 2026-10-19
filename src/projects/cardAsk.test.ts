@@ -36,7 +36,7 @@ describe("PROJ-035 the card's asking", () => {
     expect(cardProjectOf(projects, {}, "C:/a", same)).toBeNull();
   });
 
-  it("the same project and folder give the same key whatever else in the list changed", () => {
+  it("cardProjectOf names the same project id and path when only another folder is added to the list", () => {
     const projects = [{ id: "a", path: "C:/a" }];
     const same = (x: string, y: string) => x === y;
     const one = cardProjectOf(projects, { a: [{ path: "C:/a" }] }, "C:/a", same);

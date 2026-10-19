@@ -38,7 +38,7 @@ Tests added or changed
   shown script).
 
 Readings (real)
-- RED before the code: cargo test (log fix1-red-cargo.log) did not compile: POLICY_KEY, READ_MAX,
+- Failed to compile before the code (not a behaviour red): cargo test (log fix1-red-cargo.log) did not compile: POLICY_KEY, READ_MAX,
   SHOWN_NAME_MAX, retire_workspace_names missing and forget_gone/save_suggestion arity (the tests were written
   first). vitest (fix1-red-vitest.log): 2 files failed, "1 failed | 3 passed (4)".
 - GREEN cargo setup:: 31 passed, projects:: 40 passed (fix1-green-cargo-setup.log, fix1-green-cargo-projects.log).
