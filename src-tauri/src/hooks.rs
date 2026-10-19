@@ -1117,15 +1117,27 @@ pub(crate) fn install_codex_with(home: &Path, command: &str, listing: impl FnOnc
     // record stays in the Codex home. hooks FIX-4: the file first, the record only once the file
     // is gone, so a file that cannot be removed (held open, say) keeps the record that names it as
     // Kolux's, and the next start does not refuse it as someone else's file with Kolux's entries.
-    let restore = || match &text {
-        Some(t) => std::fs::write(&file, t).map_err(|e| e.to_string()),
-        None => {
-            std::fs::remove_file(&file).map_err(|e| format!("{} could not be removed ({e}); its record stays, so the next start still knows it as Kolux's", file.display()))?;
-            let record = agent_hooks::codex_record(&file);
-            if agent_hooks::was_created(&record, &file) {
-                let _ = std::fs::remove_file(record);
+    // hooks FIX-5 (stand-in review AFTER 1): only while the file still holds what Kolux wrote. A
+    // save by the user or another tool while Codex was asked is kept, and the error says so; the
+    // rewrite goes through the same atomic write as the install, so it never leaves half a file.
+    // Nothing written (the entries were already in): nothing to put back.
+    let wrote = if changed { Some(String::from_utf8(render(&hooks, text.as_deref())?).map_err(|e| e.to_string())?) } else { None };
+    let restore = || -> Result<(), String> {
+        let Some(wrote) = wrote.as_deref() else { return Ok(()) };
+        match &text {
+            Some(t) => write_atomic(&file, t.as_bytes(), Some(wrote)),
+            None => {
+                let now = std::fs::read(&file).map_err(|e| format!("{} could not be read back ({e}); its record stays, so the next start still knows it as Kolux's", file.display()))?;
+                if now != wrote.as_bytes() {
+                    return Err(format!("{} {CHANGED}", file.display()));
+                }
+                std::fs::remove_file(&file).map_err(|e| format!("{} could not be removed ({e}); its record stays, so the next start still knows it as Kolux's", file.display()))?;
+                let record = agent_hooks::codex_record(&file);
+                if agent_hooks::was_created(&record, &file) {
+                    let _ = std::fs::remove_file(record);
+                }
+                Ok(())
             }
-            Ok(())
         }
     };
     let listing = listing(home);
@@ -1141,8 +1153,11 @@ pub(crate) fn install_codex_with(home: &Path, command: &str, listing: impl FnOnc
         });
     }
     if let Err(e) = crate::trust::write_whole(&config, &doc.to_string()) {
-        restore()?;
-        return Err(e);
+        // hooks FIX-5 (stand-in review AFTER 2): a rollback that fails too never hides the trust error.
+        return Err(match restore() {
+            Ok(()) => e,
+            Err(r) => format!("{e}; {r}"),
+        });
     }
     Ok(true)
 }
@@ -1514,6 +1529,15 @@ mod tests {
         assert_eq!((bare.session, bare.at), (None, None));
         let blank = post(&t2, r#"{"session_id":"  ","cost":{"total_duration_ms":5}}"#);
         assert_eq!((blank.session, blank.at), (None, None));
+        // An over-long session id is cut at 200 characters plus the ellipsis `trim` adds, and the
+        // terminal still follows (stand-in review of lane/marks 54b27f5e, AFTER 2).
+        let long = "x".repeat(250);
+        let cut = post(&t2, &format!(r#"{{"session_id":"{long}","cost":{{"total_duration_ms":7}}}}"#));
+        let want = format!("{}…@2", "x".repeat(200));
+        assert_eq!((cut.session.as_deref(), cut.at), (Some(want.as_str()), Some(7)));
+        // Exactly 200 is kept whole.
+        let kept = post(&t2, &format!(r#"{{"session_id":"{}","cost":{{"total_duration_ms":8}}}}"#, "y".repeat(200)));
+        assert_eq!(kept.session, Some(format!("{}@2", "y".repeat(200))));
         // The names the window's listener reads.
         let j = serde_json::to_value(&u).unwrap();
         assert_eq!((j["session"].as_str(), j["at"].as_u64(), j["paneKey"].as_u64()), (Some("0b3c-9f@2"), Some(61_000), Some(4)));

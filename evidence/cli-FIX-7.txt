@@ -37,7 +37,7 @@ WITHOUT THE PATCHES the lane's test build does not compile (terminal.rs's old te
 
 LIVE PROOF PENDING (T-172-e stays unticked until this passes; the coordinator runs it with the three patches applied)
 1. Open a Claude tab in a project folder and let it settle (the user's own tab).
-2. From a coordinator pane run: kolux orchestration worker-start --spec "say hi" --agent claude --worktree current --setup skip (the app's own CLI name).
+2. From a coordinator pane run: kolux-dev orchestration worker-start --spec "say hi" --agent claude --worktree current --setup skip (the dev build's CLI name; never the old app's kolux).
 3. Expect a new background tab to start; the receipt names that tab (terminals[0].id) and not the user's tab; worker-show on the dispatch shows the same terminal.
 4. Run worker-stop on the dispatch. Expect only the worker's tab to end; the user's tab stays open and responsive.
 5. Negative case: with the App patch NOT applied (window does not stamp), run the same worker-start. Expect the start to end "unknown"/timeout with no terminal recorded on the dispatch, and the user's tab untouched by a later worker-stop (it answers terminalLeftOpen or has no terminal to end).

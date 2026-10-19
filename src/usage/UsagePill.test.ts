@@ -39,3 +39,11 @@ test("T-550: a click on the pill opens Settings at Accounts & keys", () => {
   button.props.onClick?.();
   expect(seen).toEqual([{ page: "accounts", section: undefined }]);
 });
+
+// FIX-5 (council P2 P12): the hover title is not read out by every screen reader, so the same words are also the button's description.
+test("FIX-5: the pill's words are also its description, not only a hover title", () => {
+  const html = renderToString(createElement(UsagePillView, { hidden: false, onOpen: () => {} }));
+  const id = html.match(/aria-describedby="([^"]+)"/)?.[1];
+  expect(id).toBeTruthy();
+  expect(html).toMatch(new RegExp(`<span id="${id}"[^>]*display:none[^>]*>Usage: open Settings › Accounts &amp; keys</span>`));
+});

@@ -33,12 +33,22 @@ export type Floor = { session?: string; at?: number };
 const sameClock = (a: { session?: string; at?: number } | undefined, b: Reading): a is { session: string; at: number } =>
   a !== undefined && a.session !== undefined && a.session === b.session && a.at !== undefined && b.at !== undefined;
 
+/** After a fresh start, how long a report can still be one the old process had in flight. */
+export const FRESH_WINDOW_MS = 30_000;
+/** The margin on the new process's running time over the time since Kolux saw its start: the
+ * start hook fires a little after the process begins. */
+export const FRESH_MARGIN_MS = 10_000;
+
 /** USAGE-001: the reading a pane should show after report `e`, or null to keep what it has. The
  * newest report wins, even a smaller figure (a compact shrinks context); a report of the same
  * session stamped earlier than the one on screen, or no later than a reading a clear forgot, is
- * a late one and is thrown away. */
-export function takeReading(shown: Reading | undefined, floor: Floor | undefined, e: UsageEvent): Reading | null {
+ * a late one and is thrown away. `sinceFresh` is the time since the pane's last fresh start
+ * (a Claude start or resume), while that is recent: a new process cannot have run longer than
+ * that, so a report stamped with more running time is the old process's, still in flight across
+ * the restart, and is thrown away too (stand-in review of lane/marks 54b27f5e, AFTER 1). */
+export function takeReading(shown: Reading | undefined, floor: Floor | undefined, e: UsageEvent, sinceFresh?: number): Reading | null {
   if (e.contextTokens === null || e.contextWindow === null) return null;
+  if (sinceFresh !== undefined && sinceFresh >= 0 && sinceFresh < FRESH_WINDOW_MS && typeof e.at === "number" && e.at > sinceFresh + FRESH_MARGIN_MS) return null;
   const next: Reading = { tokens: e.contextTokens, window: e.contextWindow };
   if (e.session) next.session = e.session;
   if (typeof e.at === "number") next.at = e.at;
@@ -147,6 +157,8 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
   // the state updaters; an updater must stay pure, React may run it again (stand-in review of
   // lane/marks 243736d, AFTER 10). The listeners here are the only writers of the readings.
   const shownRef = useRef<Record<number, Reading>>({});
+  // USAGE-001: when each pane last saw a fresh start, to tell the old process's late report from the new one's.
+  const freshRef = useRef<Record<number, number>>({});
   useEffect(() => {
     // STAT-001: the hooks report each pane's state; a turn ending out of view is noticed like an exit.
     const off = listen<{ paneKey: number; children: Crew; tool?: string; detail?: string; ask?: string; wrote?: string; plan?: string; planCut?: boolean; session?: string; fresh?: boolean } & Turn>("agent-status", (e) => {
@@ -174,8 +186,10 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
       // of lane/marks 3efef76, FIX-SOON 1).
       if (boundary) {
         const r = shownRef.current[paneKey];
-        if (fresh) delete floorRef.current[paneKey];
-        else if (r) floorRef.current[paneKey] = { session: r.session, at: r.at };
+        if (fresh) {
+          delete floorRef.current[paneKey];
+          freshRef.current[paneKey] = Date.now();
+        } else if (r) floorRef.current[paneKey] = { session: r.session, at: r.at };
         if (r) {
           shownRef.current = without(shownRef.current, paneKey);
           setContext((c) => without(c, paneKey));
@@ -191,7 +205,8 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
     const offUsage = listen<UsageEvent>("claude-usage", (e) => {
       const { paneKey } = e.payload;
       if (!panesRef.current.some((p) => p.key === paneKey)) return;
-      const next = takeReading(shownRef.current[paneKey], floorRef.current[paneKey], e.payload);
+      const since = freshRef.current[paneKey];
+      const next = takeReading(shownRef.current[paneKey], floorRef.current[paneKey], e.payload, since === undefined ? undefined : Date.now() - since);
       if (!next) return;
       shownRef.current = { ...shownRef.current, [paneKey]: next };
       setContext((c) => ({ ...c, [paneKey]: next }));
@@ -224,6 +239,7 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
     setContext((c) => forgetGone(c, open));
     shownRef.current = forgetGone(shownRef.current, open);
     floorRef.current = forgetGone(floorRef.current, open);
+    freshRef.current = forgetGone(freshRef.current, open);
   }, [panes]);
   return { noticed, panesRef };
 }

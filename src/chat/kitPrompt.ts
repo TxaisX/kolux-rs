@@ -14,14 +14,18 @@ export const KIT_NOTICE_MS = 60_000;
 export const HOOK_AGENTS: readonly string[] = ["claude", "claude-agent-teams", "gemini", "antigravity", "amp"];
 /** Kolux knows it will never hear from this pane's agent: hooks are off, or the agent has no route.
  * Stand-in review of 38be105, AFTER 1: `agentId` (the picked agent: gemini, amp...) is checked when
- * the pane has one; `agent` is only the vendor mark (claude, codex or shell). */
+ * the pane has one; `agent` is only the vendor mark (claude, codex or shell). Review of 6c0ea802,
+ * AFTER 1: a saved agent with an id of its own that runs Claude still has Claude's hooks, so the mark
+ * counts too (this only ever says "hooked" for Claude, never for Codex or a shell). */
 export const hooksAbsent = (agent: string | undefined, hooksOn: boolean, agentId?: string) => {
-  const id = agentId ?? agent;
-  return !hooksOn || id === undefined || !HOOK_AGENTS.includes(id);
+  const hooked = (agentId !== undefined && HOOK_AGENTS.includes(agentId)) || (agent !== undefined && HOOK_AGENTS.includes(agent));
+  return !hooksOn || !hooked;
 };
 /** Stand-in review of 38be105, FIX-SOON 3: a notice is seen in place only when the role's own
- * workspace is on screen on its terminals screen with no page open; anywhere else it toasts once. */
-export const noticeSeen = (sameWorkspace: boolean, terminalsScreen: boolean, pageOpen: boolean) => sameWorkspace && terminalsScreen && !pageOpen;
+ * workspace is on screen on its terminals screen with no page open; anywhere else it toasts once.
+ * Review of 6c0ea802, AFTER 3: the App folds an open page into `terminalsScreen`, so `pageOpen` is
+ * optional (default closed); it is kept so the rule reads whole. */
+export const noticeSeen = (sameWorkspace: boolean, terminalsScreen: boolean, pageOpen = false) => sameWorkspace && terminalsScreen && !pageOpen;
 
 export const readyText = (role: string, agent: string) => `${role} is ready for its prompt, but Kolux can't see whether ${agent} is asking something.`;
 export const askingText = (role: string, agent: string) => `${role}'s prompt is waiting: ${agent} is asking something in its terminal. Answer it there.`;

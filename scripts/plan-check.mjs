@@ -10,8 +10,10 @@
 // `confirmed by Txais YYYY-MM-DD`. A row still marked "confirm" (pending) strikes nothing.
 // Run: node scripts/plan-check.mjs                (exit 1 on any coverage failure)
 //      node scripts/plan-check.mjs --write-state  (also rewrites the STATE.md `Done:` head line)
+// PLAN.md is read together with PLAN-done.md (ticked tasks moved out on 2026-10-19), and DECISIONS.md
+// with DECISIONS-history.md when it exists, so every count covers both halves.
 // Test: pnpm exec vitest run scripts/plan-check.test.mjs
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -126,7 +128,9 @@ export function readLanes(root = ROOT) {
     refs = git(['for-each-ref', '--format=%(refname:short)', 'refs/heads/lane/']).split(/\r?\n/).filter(Boolean);
   } catch { return lanes; }
   for (const ref of refs) {
-    try { lanes.set(ref.replace(/^lane\//, ''), planTasks(git(['show', `${ref}:PLAN.md`]))); }
+    let done = '';
+    try { done = git(['show', `${ref}:PLAN-done.md`]); } catch { /* a lane from before the split */ }
+    try { lanes.set(ref.replace(/^lane\//, ''), planTasks(git(['show', `${ref}:PLAN.md`]) + '\n' + done)); }
     catch { /* a lane without PLAN.md has nothing to merge */ }
   }
   return lanes;
@@ -176,11 +180,17 @@ export function coverageErrors(cards, decisionsText, planText) {
   return { errors, expected: expected.size, planned: seen.size };
 }
 
+/** A file plus the file its old entries were moved to, when that one exists. */
+function withMoved(root, file, moved) {
+  const text = readFileSync(join(root, file), 'utf8');
+  return existsSync(join(root, moved)) ? text + '\n' + readFileSync(join(root, moved), 'utf8') : text;
+}
+
 /** Everything plan-check counts, from the files under root and the lane refs. */
 export function headCounts(root = ROOT, lanes = readLanes(root)) {
   const cards = readCards(root);
-  const decisions = readFileSync(join(root, 'DECISIONS.md'), 'utf8');
-  const plan = readFileSync(join(root, 'PLAN.md'), 'utf8');
+  const decisions = withMoved(root, 'DECISIONS.md', 'DECISIONS-history.md');
+  const plan = withMoved(root, 'PLAN.md', 'PLAN-done.md');
   const tasks = planTasks(plan);
   const cutline = parseCutline(readFileSync(join(root, 'PRIORITIES.md'), 'utf8')) || [];
   const { left, missing } = cutlineLeft(cutline, tasks);

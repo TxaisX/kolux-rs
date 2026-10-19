@@ -22,8 +22,14 @@ describe("which panes Kolux knows have no hooks", () => {
     expect(hooksAbsent("shell", true, "gemini")).toBe(false);
     expect(hooksAbsent("shell", true, "amp")).toBe(false);
     expect(hooksAbsent("claude", true, "claude-agent-teams")).toBe(false);
-    expect(hooksAbsent("claude", true, "grok")).toBe(true);
+    expect(hooksAbsent("shell", true, "grok")).toBe(true);
     expect(hooksAbsent("shell", false, "gemini")).toBe(true);
+  });
+
+  it("AFTER 1 of the 6c0ea802 review: a saved agent with its own id that runs Claude still counts as hooked (the vendor mark is the fallback)", () => {
+    expect(hooksAbsent("claude", true, "my-reviewer")).toBe(false);
+    expect(hooksAbsent("claude", false, "my-reviewer")).toBe(true);
+    expect(hooksAbsent("codex", true, "my-codex")).toBe(true);
   });
 });
 
@@ -33,6 +39,7 @@ describe("where a kit notice counts as seen in place (FIX-SOON 3 of the 38be105 
     expect(noticeSeen(true, false, false)).toBe(false); // Agents, Board, Inbox or Tower screen
     expect(noticeSeen(true, true, true)).toBe(false); // a page open over the terminals
     expect(noticeSeen(false, true, false)).toBe(false); // another workspace
+    expect(noticeSeen(true, true)).toBe(true); // AFTER 3 of the 6c0ea802 review: the page is already folded into the screen flag, so the argument is optional
   });
 
   it("on the Agents screen of the same workspace the notice toasts once, and again never", async () => {

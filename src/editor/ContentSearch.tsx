@@ -45,13 +45,14 @@ export default function ContentSearch({ root, hidden, focusAsk, onOpen }: Props)
   useEffect(() => {
     const s = session.current;
     if (!s) return;
-    s.drop();
     if (!query) {
+      s.empty();
       setFound(null);
       setError(null);
       setBusy(false);
       return;
     }
+    s.drop();
     const t = window.setTimeout(() => {
       setBusy(true);
       s.run(
