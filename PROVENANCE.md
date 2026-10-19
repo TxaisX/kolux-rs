@@ -769,3 +769,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · hooks FIX-7 · the stand-in review hooks-d9c329ef-standin-review.md (Send-to-build 3-6); this tree's own agent_hooks/tests.rs; Windows PowerShell 5.1 start time measured on this PC in scratch folders; no outside source
 > 2026-10-19 · look FIX-7 · the stand-in review look-439081cb-standin-review.md (FIX-SOON 1, AFTER 1-3); this tree's own editor_search.rs; no outside source
 > 2026-10-19 · marks FIX-5 and FIX-6 · the stand-in reviews marks-b08c624c-standin-review.md and marks-2d4235af-standin-review.md; this tree's own useAgentStatus.ts, headerUsage.ts, UsageReadout.tsx, theme.ts and their tests; no outside source
+> 2026-10-19 · hooks FIX-8 · the stand-in review hooks-060af6b8-standin-review.md (Send-to-build 5-8); this tree's own agent_hooks/tests.rs; held-append timing measured on this PC in scratch folders; no outside source
