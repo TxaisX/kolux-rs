@@ -48,8 +48,11 @@ export function settle(keys: number[], selected: number | null): number | null {
 }
 
 /** T-035-b: what the detail says for a prompt whose terminal has exited; null when the terminal is alive. */
-export function exitNote(item: Pick<Item, "exited">): string | null {
-  return item.exited ? "Its terminal has exited, so the prompt cannot be answered from here. Answer in Code to see it in the pane." : null;
+export function exitNote(item: Pick<Item, "exited" | "state">): string | null {
+  if (!item.exited) return null;
+  // A stop (a limit or a sign-in) is not a prompt: it has no question to answer, only a reason to read.
+  if (item.state === "blocked") return "The agent stopped and its terminal has exited. Open its pane in Code to see why.";
+  return "Its terminal has exited, so the prompt cannot be answered from here. Answer in Code to see it in the pane.";
 }
 
 /** EDIT-041: the detail's button. Nothing is answered in the Inbox itself yet, so a question or a

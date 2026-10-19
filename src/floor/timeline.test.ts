@@ -80,6 +80,21 @@ describe("VIEW-013 Floor timeline", () => {
     expect(html.indexOf("Terminal 11")).toBeLessThan(html.indexOf("Terminal 12"));
   });
 
+  it("FIX-1: the name column widens with the deepest nesting, every lane and the axis share it, and a long name is cut with its full text as a tooltip", async () => {
+    const { createElement } = await import("react");
+    const { renderToString } = await import("react-dom/server");
+    const { default: FloorView } = await import("./FloorView");
+    const m = [{ at: at(8, 52), state: "working" }];
+    const flat = renderToString(createElement(FloorView, { now: at(9), initial: [track({ pane: 1, terminal: 11, marks: m })] }));
+    expect(flat).toContain("width:110px");
+    expect(flat).toContain("margin-left:118px");
+    const nested = renderToString(createElement(FloorView, { now: at(9), initial: [track({ pane: 1, terminal: 11, marks: m }), track({ pane: 2, terminal: 12, parent: 1, live: false, marks: m }), track({ pane: 3, terminal: 13, parent: 2, marks: m })] }));
+    expect([...nested.matchAll(/class="floor-name" [^>]*style="[^"]*?width:(\d+)px/g)].map((x) => x[1])).toEqual(["138", "138", "138"]);
+    expect(nested).toContain("margin-left:146px");
+    expect(nested).toContain('title="Terminal 12 (closed)"');
+    expect(nested).toContain("text-overflow:ellipsis");
+  });
+
   it("T-035-b: a live lane is a button that jumps to its pane, a closed lane is not, and the page without a handler draws no button", async () => {
     const { createElement } = await import("react");
     const { renderToString } = await import("react-dom/server");

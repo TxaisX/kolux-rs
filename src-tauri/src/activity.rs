@@ -324,7 +324,8 @@ pub fn nest_lanes(lanes: &mut [Track], tasks: &[serde_json::Value], dispatches: 
         .iter()
         .map(|l| {
             let own = dispatches.iter().rev().filter(mine).find(|d| d["terminal"].as_u64().is_some() && d["terminal"].as_u64() == l.terminal.map(u64::from))?;
-            let task = tasks.iter().find(|t| t["id"] == own["taskId"] && t["runId"] == own["runId"])?;
+            // A record with no runId (null == null in Value equality) is never "the same Run".
+            let task = tasks.iter().find(|t| t["id"] == own["taskId"] && t["runId"].is_string() && t["runId"] == own["runId"])?;
             let up = task["parent"].as_str()?;
             dispatches
                 .iter()
@@ -722,6 +723,36 @@ mod tests {
         // Nothing stored at all: every lane stays on top.
         nest_lanes(&mut lanes, &[], &[], me);
         assert!(lanes.iter().all(|l| l.parent.is_none()));
+    }
+
+    #[test]
+    fn fix1_a_task_and_a_dispatch_with_no_run_id_never_count_as_the_same_run() {
+        use serde_json::json;
+        let me = u64::from(std::process::id());
+        // Legacy records: a null runId on either side. null == null is not a match.
+        for (parent_run, child_run, d_parent, d_child) in [
+            (json!(null), json!(null), json!(null), json!(null)),
+            (json!(null), json!("run-1"), json!(null), json!("run-1")),
+            (json!("run-1"), json!(null), json!("run-1"), json!(null)),
+        ] {
+            let tasks = vec![json!({ "id": "task-1", "runId": parent_run }), json!({ "id": "task-2", "runId": child_run, "parent": "task-1" })];
+            let ds = vec![
+                json!({ "id": "d-1", "runtime": me, "runId": d_parent, "taskId": "task-1", "terminal": 10 }),
+                json!({ "id": "d-2", "runtime": me, "runId": d_child, "taskId": "task-2", "terminal": 11 }),
+            ];
+            let mut lanes = vec![lane(1, Some(10)), lane(2, Some(11))];
+            nest_lanes(&mut lanes, &tasks, &ds, me);
+            assert_eq!(parents(&lanes), vec![(1, None), (2, None)], "tasks {tasks:?} dispatches {ds:?}");
+        }
+        // A real runId on both sides still nests.
+        let tasks = vec![json!({ "id": "task-1", "runId": "run-1" }), json!({ "id": "task-2", "runId": "run-1", "parent": "task-1" })];
+        let ds = vec![
+            json!({ "id": "d-1", "runtime": me, "runId": "run-1", "taskId": "task-1", "terminal": 10 }),
+            json!({ "id": "d-2", "runtime": me, "runId": "run-1", "taskId": "task-2", "terminal": 11 }),
+        ];
+        let mut lanes = vec![lane(1, Some(10)), lane(2, Some(11))];
+        nest_lanes(&mut lanes, &tasks, &ds, me);
+        assert_eq!(parents(&lanes), vec![(1, None), (2, Some(1))]);
     }
 
     #[test]
