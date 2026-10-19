@@ -19,9 +19,10 @@ const SAMPLE: usize = 8192;
 
 /// EDIT-046: true when the start of a file is plainly not text: a well-known binary signature, a
 /// NUL byte, or mostly control characters. A UTF-16 text file has NULs too and is also refused (the
-/// editor only reads UTF-8).
+/// editor only reads UTF-8). "MZ" is not a signature here: it is two letters real text can start with,
+/// and a Windows program always has NUL bytes in its first 64 bytes.
 pub fn looks_binary(sample: &[u8]) -> bool {
-    const MAGIC: [&[u8]; 9] = [b"PK\x03\x04", b"\x1f\x8b", b"%PDF-", b"\x89PNG", b"GIF8", b"MZ", b"\x7fELF", b"\xff\xd8\xff", b"7z\xbc\xaf"];
+    const MAGIC: [&[u8]; 8] = [b"PK\x03\x04", b"\x1f\x8b", b"%PDF-", b"\x89PNG", b"GIF8", b"\x7fELF", b"\xff\xd8\xff", b"7z\xbc\xaf"];
     if MAGIC.iter().any(|m| sample.starts_with(m)) || sample.contains(&0) {
         return true;
     }
@@ -874,6 +875,24 @@ mod tests {
     }
 
     #[test]
+    fn edit046_mz_at_the_start_is_text_but_a_program_header_is_still_binary() {
+        // FIX-1: "MZ" is no signature on its own; a country-code CSV starting with it opens as text.
+        let d = temp_dir("mz");
+        fs::write(d.join("codes.csv"), "MZ,Mozambique\n").unwrap();
+        fs::write(d.join("MZ-notes.txt"), "MZ is the start of this note\n").unwrap();
+        assert_eq!(read_text(&d.join("codes.csv")).unwrap(), "MZ,Mozambique\n");
+        assert!(read_text(&d.join("MZ-notes.txt")).unwrap().starts_with("MZ is"));
+        assert!(!looks_binary(b"MZ,Mozambique\n"));
+        // A Windows program has NUL bytes in its first 64 bytes, which the NUL check catches.
+        let mut exe = b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00\xff\xff\x00\x00".to_vec();
+        exe.extend([0u8; 48]);
+        assert!(looks_binary(&exe));
+        fs::write(d.join("prog.exe"), &exe).unwrap();
+        let err = read_text(&d.join("prog.exe")).unwrap_err();
+        assert!(err.contains("is a binary file"), "{err}");
+    }
+
+    #[test]
     fn edit046_only_the_start_is_sampled_so_a_big_binary_is_turned_away_by_its_first_bytes() {
         let d = temp_dir("sampled");
         let f = d.join("big.bin");
@@ -919,20 +938,32 @@ mod tests {
         put(&t.join("vendor").join("v.md"), "v");
         put(&t.join("file10.md"), "10");
         put(&t.join("file2.md"), "2");
-        // A link to a folder holding a template, and a link to a template file, are both skipped
-        // (creating links needs a privilege on some Windows setups: skip that part when refused).
+        // A link to a folder holding a template, a link to a template file and a junction to a folder
+        // are all skipped. Each link is checked to exist before the skip is asserted; when none could
+        // be made (a PC refusing links) the test says so and stops instead of passing silently.
         let outside = d.join("elsewhere");
         put(&outside.join("linked.md"), "l");
+        let mut made = Vec::new();
+        for (name, junction) in [("dirlink", false), ("junction", true)] {
+            if make_dir_link(&t.join(name), &outside, junction) {
+                made.push(name);
+            }
+        }
         #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(&outside, t.join("dirlink")).unwrap();
-            std::os::unix::fs::symlink(outside.join("linked.md"), t.join("filelink.md")).unwrap();
-        }
+        let _ = std::os::unix::fs::symlink(outside.join("linked.md"), t.join("filelink.md"));
         #[cfg(windows)]
-        {
-            let _ = std::os::windows::fs::symlink_dir(&outside, t.join("dirlink"));
-            let _ = std::os::windows::fs::symlink_file(outside.join("linked.md"), t.join("filelink.md"));
+        let _ = std::os::windows::fs::symlink_file(outside.join("linked.md"), t.join("filelink.md"));
+        if link_exists(&t.join("filelink.md")) {
+            made.push("filelink.md");
         }
+        if made.is_empty() {
+            println!("edit055 link skip NOT exercised: no link or junction could be made here");
+            return;
+        }
+        for name in &made {
+            assert!(link_exists(&t.join(name)), "{name} was made but is not a link");
+        }
+        println!("edit055 link skip exercised with: {made:?}");
         let names: Vec<String> = list_templates(&d).into_iter().map(|t| t.name).collect();
         assert_eq!(names, ["Bug report", "File2", "File10", "Meeting notes"]);
     }
@@ -947,11 +978,43 @@ mod tests {
         assert!(list_templates(&d).is_empty());
         let real = d.join("real-templates");
         put(&real.join("a.md"), "a");
+        let at = d.join(".kolux").join("templates");
+        let mut exercised = 0;
+        for junction in [false, true] {
+            if make_dir_link(&at, &real, junction) {
+                assert!(link_exists(&at), "the link in place of templates must exist");
+                assert!(list_templates(&d).is_empty(), "a templates folder that is a link (junction: {junction}) gives no templates");
+                exercised += 1;
+                fs::remove_dir(&at).or_else(|_| fs::remove_file(&at)).unwrap();
+            }
+        }
+        if exercised == 0 {
+            println!("edit055 link-in-place NOT exercised: no link or junction could be made here");
+        }
+    }
+
+    /// True when `p` is itself a link (a symlink, or a junction on Windows), not what it points at.
+    fn link_exists(p: &Path) -> bool {
+        fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink())
+    }
+
+    /// Makes a folder link at `link` to `target`; `junction` asks for a Windows junction (made with
+    /// `mklink /J`, which needs no privilege) rather than a symlink. True only when the link exists.
+    fn make_dir_link(link: &Path, target: &Path, junction: bool) -> bool {
         #[cfg(unix)]
-        std::os::unix::fs::symlink(&real, d.join(".kolux").join("templates")).unwrap();
+        {
+            let _ = junction;
+            let _ = std::os::unix::fs::symlink(target, link);
+        }
         #[cfg(windows)]
-        let _ = std::os::windows::fs::symlink_dir(&real, d.join(".kolux").join("templates"));
-        assert!(list_templates(&d).is_empty());
+        {
+            if junction {
+                let _ = std::process::Command::new("cmd").arg("/c").arg("mklink").arg("/J").arg(link).arg(target).output();
+            } else {
+                let _ = std::os::windows::fs::symlink_dir(target, link);
+            }
+        }
+        link_exists(link)
     }
 
     #[test]
