@@ -131,3 +131,13 @@
 .chat-browser-url { padding: 4px 8px; font-size: 11px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-browser-menu button { text-align: left; background: none; border: 0; padding: 5px 8px; font: inherit; color: var(--fg); cursor: pointer; border-radius: 6px; }
 .chat-browser-menu button:hover, .chat-browser-menu button:focus-visible { background: var(--chip-bg); }
+
+/* CHAT-028 (T-332): files the agent wrote, under a finished turn */
+.chat-files { margin: 4px 12px 8px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; background: var(--surface); }
+.chat-files-title { font-size: 11px; color: var(--fg-muted); margin-bottom: 4px; }
+.chat-files ul { list-style: none; margin: 0; padding: 0; }
+.chat-files li { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 2px 0; }
+.chat-file { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono, monospace); }
+.chat-file-change { flex: none; font-size: 11px; color: var(--fg-muted); }
+.chat-files .chat-hand { flex: none; }
+.chat-files .chat-hand-note { max-width: none; margin-top: 4px; }

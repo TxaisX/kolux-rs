@@ -393,7 +393,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### H · theme 11 · Orchestration and automations (1 cards)
 
-- [ ] T-332 · CHAT-028 Files the agent wrote, with send to another agent
+- [x] T-332 · CHAT-028 Files the agent wrote, with send to another agent · done 2026-10-19 (lane/chat from f1ad80d5; evidence/T-332.txt: under a finished turn a Files written box lists up to four files the agent wrote, newest first, each once; Send to... beside each puts its path in the other agent's message box (quoted if it has a space), moves the screen there and types nothing into any terminal until Enter is pressed; vitest src/chat 191, tsc 0; live proof pending (batched))
 
 ### H · theme 6 · Business-user frame (1 cards)
 

@@ -21,6 +21,7 @@ import { PermissionCard } from "./PermissionCard";
 import { BrowserChoice, ChatText, LinkContext, type LinkHost } from "./ChatText";
 import { printedPaths } from "./chatLinks";
 import { ChatReader, NOTHING, watchHidden, type Seen } from "./reading";
+import type { WrittenFile } from "./steps";
 import { CANNOT_STOP_NOTE, STOPPING_NOTE } from "./stop";
 import type { Answer } from "../terminal/permissionAnswer";
 
@@ -219,7 +220,7 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
       )}
       <div className="chat-list" ref={list} onScroll={onScroll}>
         {views.map((v) => (
-          <ViewRow key={`${v.row}-${v.id}`} view={v} onImage={setFull} thoughts={thoughts} onToggle={toggle} />
+          <ViewRow key={`${v.row}-${v.id}`} view={v} onImage={setFull} thoughts={thoughts} onToggle={toggle} hand={hand} />
         ))}
       </div>
       {away && (
@@ -241,7 +242,9 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
   );
 }
 
-function ViewRow({ view, onImage, thoughts, onToggle }: { view: View; onImage: (src: string) => void; thoughts: Set<string>; onToggle: (id: string) => void }) {
+function ViewRow({ view, onImage, thoughts, onToggle, hand }: { view: View; onImage: (src: string) => void; thoughts: Set<string>; onToggle: (id: string) => void; hand?: Hand }) {
+  // CHAT-028: the files a finished turn wrote; a pick puts the path in the other agent's draft (never sent).
+  if (view.row === "files") return <FilesRow id={view.id} files={view.files} targets={hand?.targets ?? []} onSend={(to, path) => hand?.onHand(to, path, view.id)} note={hand?.noteFor === view.id ? (hand.note ?? null) : null} />;
   if (view.row !== "message") return view.row === "preview" || view.row === "pending" ? <ChatRow row={view} onImage={onImage} /> : <StepRow view={view} />;
   if (view.kind === "thought") return <ThoughtRow item={view} open={thoughts.has(view.id)} onToggle={() => onToggle(view.id)} />;
   if (view.kind === "plan") return <PlanRow item={view} />;
@@ -411,12 +414,33 @@ export function TerminalSwitch({ on, onFlip }: { on: boolean; onFlip: (on: boole
   );
 }
 
-/** VIEW-020: Send result to, a short list of other chat sessions (the last viewed first). */
-export function HandOff({ targets, onPick }: { targets: { key: number; label: string }[]; onPick: (key: number) => void }) {
+/** CHAT-028: the files the agent wrote in a finished turn (at most four, newest first), each with a menu to send its path to
+ * another agent's draft. Nothing reaches that agent until the user presses Enter there. `note`: why the last send was refused. */
+export function FilesRow({ id, files, targets, onSend, note }: { id: string; files: WrittenFile[]; targets: { key: number; label: string }[]; onSend: (to: number, path: string) => void; note: string | null }) {
+  const name = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
+  return (
+    <div className="chat-files" role="group" aria-label="Files the agent wrote" data-row={id}>
+      <div className="chat-files-title">Files written</div>
+      <ul>
+        {files.map((f) => (
+          <li key={f.path}>
+            <span className="chat-file" title={f.path}>{name(f.path)}</span>
+            <span className="chat-file-change">{f.change === "added" ? "new" : f.change === "renamed" ? "renamed" : "edited"}</span>
+            {targets.length > 0 && <HandOff label="Send to…" what="this file" targets={targets} onPick={(k) => onSend(k, f.path)} />}
+          </li>
+        ))}
+      </ul>
+      {note && <div className="chat-hand-note" role="status">{note}</div>}
+    </div>
+  );
+}
+
+/** VIEW-020: Send result to, a short list of other chat sessions (the last viewed first). CHAT-028 reuses it for one file. */
+export function HandOff({ targets, onPick, label = "Send result to…", what = "the result" }: { targets: { key: number; label: string }[]; onPick: (key: number) => void; label?: string; what?: string }) {
   return (
     <details className="chat-hand">
-      <summary>Send result to…</summary>
-      <ul aria-label="Sessions to send the result to">
+      <summary>{label}</summary>
+      <ul aria-label={`Sessions to send ${what} to`}>
         {targets.map((t) => (
           <li key={t.key}>
             <button type="button" onClick={(e) => {

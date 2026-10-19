@@ -3,6 +3,7 @@
 // calls into one steps row, gives each edit its own diff card, gathers a turn's subagents into one
 // roster row, and adds the working, worked-for and responding lines.
 import type { ChatItem, Row } from "./model";
+import { pathKey } from "./chatLinks";
 
 export type DiffLine = { sign: "+" | "-" | " " | "@"; old?: number; new?: number; text: string };
 export type FileDiff = { path: string; change: "added" | "deleted" | "renamed" | "edited"; from?: string; lines: DiffLine[]; hidden: number };
@@ -20,6 +21,30 @@ export type Tool = {
   endedAt?: number;
 };
 
+/** CHAT-028: a file the agent wrote in a turn. */
+export type WrittenFile = { path: string; change: FileDiff["change"] };
+/** CHAT-028: how many written files a finished turn lists. */
+export const WRITTEN_LIMIT = 4;
+
+/** CHAT-028: the files a turn's tool calls wrote, newest first, each once (at its latest write), at most WRITTEN_LIMIT.
+ * A deleted file is not "written"; a renamed one counts under its new name. */
+export function writtenFiles(tools: readonly ChatItem[], limit = WRITTEN_LIMIT): WrittenFile[] {
+  const out: WrittenFile[] = [];
+  const seen = new Set<string>();
+  for (let i = tools.length - 1; i >= 0 && out.length < limit; i--) {
+    const diffs = tools[i].tool?.diffs ?? [];
+    for (let j = diffs.length - 1; j >= 0 && out.length < limit; j--) {
+      const d = diffs[j];
+      if (d.change === "deleted" || !d.path) continue;
+      const k = pathKey(d.path);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({ path: d.path, change: d.change });
+    }
+  }
+  return out;
+}
+
 /** CHAT-015: a subagent's state; later in this list is worse, and the worst decides the row. */
 export const CHILD_STATES = ["completed", "idle", "working", "stopped", "unverifiable", "failed"] as const;
 export type ChildState = (typeof CHILD_STATES)[number];
@@ -32,7 +57,8 @@ export type View =
   | { row: "roster"; id: string; children: Child[]; verdict: ChildState }
   | { row: "working"; id: string; since?: number; label: string }
   | { row: "worked"; id: string; ms: number }
-  | { row: "responding"; id: string };
+  | { row: "responding"; id: string }
+  | { row: "files"; id: string; files: WrittenFile[] };
 
 type Turn = { user: ChatItem | null; interrupted: boolean; replied: boolean; last?: number; end?: number; tools: ChatItem[] };
 
@@ -50,11 +76,15 @@ export function fold(rows: Row[], open: boolean): View[] {
   let lastSteps: { view: Extract<View, { row: "steps" }>; turn: Turn } | null = null;
   let roster: (typeof rosters)[number] | null = null;
   const settle = (t: Turn) => {
+    const at = t.end ?? out.length;
+    // CHAT-028: the files the turn wrote sit under it, below the worked-for line.
+    const written = writtenFiles(t.tools);
+    if (written.length > 0) out.splice(at, 0, { row: "files", id: `files-${t.user?.id ?? "start"}`, files: written });
     // CHAT-016: how long a settled turn took, at its end.
     if (t.user?.at === undefined || t.interrupted || !t.replied || t.last === undefined) return;
     const ms = t.last - t.user.at;
     // It sits under the turn's last reply, above any status line (a compaction) that followed.
-    if (ms >= 1000) out.splice(t.end ?? out.length, 0, { row: "worked", id: `worked-${t.user.id}`, ms });
+    if (ms >= 1000) out.splice(at, 0, { row: "worked", id: `worked-${t.user.id}`, ms });
   };
   for (const r of rows) {
     if (r.row !== "message") {
