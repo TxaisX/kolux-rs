@@ -8,7 +8,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { Refresh } from "../chrome/icons";
 import type { Project as KoluxProject } from "../projects/model";
 import Timeline from "./RoadmapTimeline";
-import { applyCellEdit, cellEditable, cellKey, cellText, endSave, isSaving, newBook, sendEdit, settleEdit, type Saving, startSave, GROUPABLE, groupItems, labelChange, openingView, parseProjectRef, type Project, projectHostRefused, type ProjectField, type ProjectItem, projectKey, type ProjectRef, pushRecent, refsFrom, type Scope, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
+import { applyCellEdit, cellEditable, cellKey, cellText, endSave, isSaving, newBook, readBackFresh, readBackStart, sendEdit, settleEdit, type Saving, startSave, GROUPABLE, groupItems, labelChange, openingView, parseProjectRef, type Project, projectHostRefused, type ProjectField, type ProjectItem, projectKey, type ProjectRef, pushRecent, refsFrom, type Scope, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
 
 type Settings = Record<string, unknown> | null;
 type Save = (patch: Record<string, unknown>) => Promise<unknown> | void;
@@ -156,8 +156,12 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
     // the order sent, so the project is read back and shown as GitHub holds it.
     const settle = (ok: boolean, apply: () => void) => {
       if (!settleEdit(editIds.current.book, cell, id, ok, apply)) return;
+      // FIX-5: not while another edit is out, and not shown if one was sent since (it would put
+      // GitHub's older value of that cell back over the newer edit).
+      const token = readBackStart(editIds.current.book);
+      if (token === null) return;
       invoke<Project>("github_project", { host: ref.host, owner: ref.owner, number: ref.number })
-        .then((p) => setProject((cur) => (cur && cur.id === p.id ? p : cur)))
+        .then((p) => readBackFresh(editIds.current.book, token) && setProject((cur) => (cur && cur.id === p.id ? p : cur)))
         .catch(() => {});
     };
     if (field.kind === "labels") {

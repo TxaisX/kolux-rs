@@ -1,0 +1,58 @@
+diff --git a/src-tauri/src/scm.rs b/src-tauri/src/scm.rs
+index 30d3439b..ef5d7719 100644
+--- a/src-tauri/src/scm.rs
++++ b/src-tauri/src/scm.rs
+@@ -2923,14 +2923,14 @@ mod tests {
+                 "echo https://github.com/o/r/pull/7",
+                 "exit /b 0",
+                 ":config",
+-                "if \"%4\"==\"nobody.example\" exit /b 1",
++                "if \"%4\"==\"nobody.example\" (echo could not find key \"user\" 1>&2 & exit /b 1)",
+                 "if \"%3\"==\"-h\" echo octo",
+             ];
+             fs::write(&file, script.join("\r\n")).unwrap();
+             file
+         } else {
+             let file = dir.join("gh");
+-            let script = "#!/bin/sh\nd=$(dirname \"$0\")\necho \"$*\" >> \"$d/calls.txt\"\nif [ \"$1\" = config ]; then [ \"$4\" = nobody.example ] && exit 1; [ \"$3\" = -h ] && echo octo; exit 0; fi\ncase \"$3\" in https*) echo '{\"number\":12,\"url\":\"https://github.com/o/r/pull/12\",\"state\":\"MERGED\",\"title\":\"Other work\",\"headRefName\":\"other\",\"isDraft\":false}'; exit 0;; esac\nif [ \"$2\" = create ]; then cat > \"$d/body.txt\"; touch \"$d/made\"; echo https://github.com/o/r/pull/7; exit 0; fi\nif [ -f \"$d/made\" ]; then echo '{\"number\":7,\"url\":\"https://github.com/o/r/pull/7\",\"state\":\"OPEN\"}'; exit 0; fi\necho 'no pull requests found for branch \"feat\"' >&2\nexit 1\n";
++            let script = "#!/bin/sh\nd=$(dirname \"$0\")\necho \"$*\" >> \"$d/calls.txt\"\nif [ \"$1\" = config ]; then [ \"$4\" = nobody.example ] && { echo 'could not find key \"user\"' >&2; exit 1; }; [ \"$3\" = -h ] && echo octo; exit 0; fi\ncase \"$3\" in https*) echo '{\"number\":12,\"url\":\"https://github.com/o/r/pull/12\",\"state\":\"MERGED\",\"title\":\"Other work\",\"headRefName\":\"other\",\"isDraft\":false}'; exit 0;; esac\nif [ \"$2\" = create ]; then cat > \"$d/body.txt\"; touch \"$d/made\"; echo https://github.com/o/r/pull/7; exit 0; fi\nif [ -f \"$d/made\" ]; then echo '{\"number\":7,\"url\":\"https://github.com/o/r/pull/7\",\"state\":\"OPEN\"}'; exit 0; fi\necho 'no pull requests found for branch \"feat\"' >&2\nexit 1\n";
+             fs::write(&file, script).unwrap();
+             #[cfg(unix)]
+             {
+@@ -3887,9 +3887,9 @@ mod tests {
+         let _ = fs::remove_dir_all(&tools);
+         let gh = stand_in_gh(&tools);
+         let url = "https://nobody.example/o/r/pull/3";
+-        assert!(merge_info(&gh, &tools, url).unwrap_err().contains("is not one of them"));
+-        assert!(merge_act(&gh, &tools, url, "close", None).unwrap_err().contains("is not one of them"));
+-        assert!(pr_link(&gh, &tools, url).unwrap_err().contains("is not one of them"));
++        for e in [merge_info(&gh, &tools, url).unwrap_err(), merge_act(&gh, &tools, url, "close", None).unwrap_err(), pr_link(&gh, &tools, url).unwrap_err()] {
++            assert!(e.contains("is not one of them") && !e.contains("did not answer"), "{e}");
++        }
+         let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
+         assert!(calls.lines().all(|c| c.trim().starts_with("config get -h nobody.example")), "{calls}");
+         let _ = fs::remove_dir_all(&tools);
+@@ -3908,7 +3908,8 @@ mod tests {
+             assert!(pr_checks_linked(&gh, &tools, bad).unwrap_err().contains("not a pull request link"), "{bad}");
+         }
+         assert_eq!(calls(), "", "a malformed link reaches no gh at all");
+-        assert!(pr_checks_linked(&gh, &tools, "https://nobody.example/o/r/pull/3").unwrap_err().contains("is not one of them"));
++        let e = pr_checks_linked(&gh, &tools, "https://nobody.example/o/r/pull/3").unwrap_err();
++        assert!(e.contains("is not one of them") && !e.contains("did not answer"), "{e}");
+         assert!(calls().lines().all(|c| c.trim().starts_with("config get -h nobody.example")), "{}", calls());
+         let got = pr_checks_linked(&gh, &tools, " https://github.com/o/r/pull/12/files#diff-1 ").unwrap();
+         assert_eq!(got.pr.map(|p| p.number), Some(12));
+@@ -3940,10 +3941,9 @@ mod tests {
+         let gh = stand_in_gh(&tools);
+         let url = "https://nobody.example/octo/repo.name/pull/3";
+         assert!(pr_url_in(url).is_some(), "the link itself is well formed");
+-        assert!(merge_info(&gh, &tools, url).unwrap_err().contains("is not one of them"));
+-        assert!(merge_act(&gh, &tools, url, "close", None).unwrap_err().contains("is not one of them"));
+-        assert!(pr_link(&gh, &tools, url).unwrap_err().contains("is not one of them"));
+-        assert!(pr_checks_linked(&gh, &tools, url).unwrap_err().contains("is not one of them"));
++        for e in [merge_info(&gh, &tools, url).unwrap_err(), merge_act(&gh, &tools, url, "close", None).unwrap_err(), pr_link(&gh, &tools, url).unwrap_err(), pr_checks_linked(&gh, &tools, url).unwrap_err()] {
++            assert!(e.contains("is not one of them") && !e.contains("did not answer"), "{e}");
++        }
+         let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
+         assert_eq!(calls.lines().count(), 4, "{calls}");
+         assert!(calls.lines().all(|c| c.trim().starts_with("config get -h nobody.example user")), "{calls}");
