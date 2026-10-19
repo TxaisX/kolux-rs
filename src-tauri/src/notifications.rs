@@ -30,8 +30,16 @@ fn blocked() -> bool {
 }
 
 /// STAT-043: one desktop notification. `sound` true lets the system's default sound play with it;
-/// false keeps the toast silent (Kolux plays its own tone or file, or the volume is 0).
+/// false keeps the toast silent (Kolux plays its own tone or file, or the volume is 0). An agent's
+/// notification also pings the tray (APP-008 / STAT-047): the dot lights while the window is out of
+/// sight, whether or not the toast itself gets through.
 pub fn show(app: &tauri::AppHandle, title: String, body: String, sound: bool) -> Result<(), String> {
+    crate::tray::ping(app, crate::tray::Ping::AgentFinished);
+    show_plain(app, title, body, sound)
+}
+
+/// The toast alone, for the Notifications page's test button: no tray dot.
+fn show_plain(app: &tauri::AppHandle, title: String, body: String, sound: bool) -> Result<(), String> {
     use tauri_plugin_notification::NotificationExt;
     let mut n = app.notification().builder().title(title).body(body);
     if sound {
@@ -95,7 +103,7 @@ pub fn notification_test(app: tauri::AppHandle, sound: bool) -> Result<Value, St
     if blocked() {
         return Ok(json!({ "shown": false, "blocked": true }));
     }
-    show(&app, "Kolux".into(), "This is how a notification from Kolux looks and sounds.".into(), sound)?;
+    show_plain(&app, "Kolux".into(), "This is how a notification from Kolux looks and sounds.".into(), sound)?;
     Ok(json!({ "shown": true, "blocked": false }))
 }
 

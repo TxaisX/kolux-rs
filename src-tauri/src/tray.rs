@@ -1,13 +1,20 @@
-//! APP-008 / T-248-a: what the tray icon shows, kept free of the tray itself so it is testable.
-//! The icon has a two-item menu (Open Kolux, Quit); a dot appears when a bell rang or an agent
-//! finished while the window was hidden and clears once the window is shown; development copies
-//! carry a DEV label with the branch they run from; Linux gets no tray icon. Putting this on a real
-//! tray icon needs tauri's `tray-icon` feature (a Cargo.toml change for the coordinator) and is
-//! T-248-b, together with the left-click-opens rule on Windows.
-// Nothing outside the tests calls this until T-248-b puts it on a real tray icon.
-#![allow(dead_code)]
+//! APP-008 / STAT-047: the tray icon. Its menu is Open Kolux and Quit; on Windows a left click
+//! opens the window; an amber dot appears when a bell rang, an agent finished or a usage alert fired
+//! while the window was hidden or minimised, and clears once the window is shown; development
+//! copies carry DEV and the branch they run from in the icon and the tooltip, kept when the
+//! attention icon is swapped in; Linux gets no tray icon.
+//! The real icon needs tauri's `tray-icon` feature, switched on through this crate's `tray`
+//! feature (Cargo.toml is the coordinator's file: `evidence/tray-T-248-b-Cargo.toml.patch`).
+//! Without it `install` puts nothing in the tray and every model function still builds and tests.
+#![allow(unexpected_cfgs)] // the `tray` feature is declared by that Cargo.toml patch
+#![allow(dead_code)] // without it only the tests reach the model; `install` and `window_shown` wait on the lib.rs patch
 
 use crate::menu::Os;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+/// The tray icon's id, for the lookups that swap its icon.
+pub const TRAY_ID: &str = "kolux";
 
 pub const OPEN_ID: &str = "tray.open";
 pub const QUIT_ID: &str = "tray.quit";
@@ -68,6 +75,225 @@ impl Dot {
     }
 }
 
+/// On Windows only a released left click opens the window; a right click, and any click
+/// elsewhere, is the menu.
+pub fn click_opens(os: Os, left: bool, released: bool) -> bool {
+    left_click_opens(os) && left && released
+}
+
+/// APP-008: the branch a Git HEAD file names; a detached HEAD shows the short commit.
+pub fn branch_from_head(head: &str) -> Option<String> {
+    let head = head.trim();
+    if head.is_empty() {
+        return None;
+    }
+    match head.strip_prefix("ref: refs/heads/") {
+        Some(b) => Some(b.trim().to_string()),
+        None => Some(head.chars().take(7).collect()),
+    }
+}
+
+/// Where a checkout keeps its HEAD: inside `.git` when that is a folder, or inside the folder a
+/// `.git` file names (a worktree), read relative to the checkout.
+pub fn git_head_file(checkout: &Path) -> Option<PathBuf> {
+    let dot_git = checkout.join(".git");
+    let dir = if dot_git.is_dir() {
+        dot_git
+    } else {
+        let text = std::fs::read_to_string(&dot_git).ok()?;
+        let target = text.lines().find_map(|l| l.strip_prefix("gitdir:")).map(str::trim)?;
+        checkout.join(target)
+    };
+    let head = dir.join("HEAD");
+    head.is_file().then_some(head)
+}
+
+/// A development copy runs from its source tree: the branch of the checkout that holds src-tauri.
+fn dev_branch() -> Option<String> {
+    if !tauri::is_dev() {
+        return None;
+    }
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).parent()?;
+    let head = git_head_file(checkout)?;
+    branch_from_head(&std::fs::read_to_string(head).ok()?)
+}
+
+/// The attention dot's colour (amber) and the DEV marker's (blue), as RGBA.
+pub const AMBER: [u8; 4] = [245, 166, 35, 255];
+pub const DEV_MARK: [u8; 4] = [59, 130, 246, 255];
+const RING: [u8; 4] = [24, 24, 24, 255];
+
+/// The icon's pixels with, when asked, the amber dot in the bottom-right corner (a dark ring keeps
+/// it visible on a light icon) and the DEV marker, a square in the top-left corner. Both fit any
+/// icon size; a request for neither returns the pixels unchanged.
+pub fn paint(rgba: &[u8], w: u32, h: u32, dot: bool, dev: bool) -> Vec<u8> {
+    let mut out = rgba.to_vec();
+    let (wi, hi) = (w as i64, h as i64);
+    let mut set = |x: i64, y: i64, c: [u8; 4]| {
+        if x >= 0 && y >= 0 && x < wi && y < hi {
+            let i = ((y * wi + x) * 4) as usize;
+            if i + 4 <= out.len() {
+                out[i..i + 4].copy_from_slice(&c);
+            }
+        }
+    };
+    if dev {
+        let side = (wi / 4).max(1);
+        for y in 0..side {
+            for x in 0..side {
+                set(x, y, DEV_MARK);
+            }
+        }
+    }
+    if dot {
+        let r = (wi / 4).max(1);
+        let (cx, cy) = (wi - r - 1, hi - r - 1);
+        for y in (cy - r - 1)..=(cy + r + 1) {
+            for x in (cx - r - 1)..=(cx + r + 1) {
+                let d2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+                if d2 <= r * r {
+                    set(x, y, AMBER);
+                } else if d2 <= (r + 1) * (r + 1) {
+                    set(x, y, RING);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The tray's state, shared by the pings and the window events.
+#[derive(Default)]
+pub struct TrayState {
+    dot: Mutex<Dot>,
+}
+
+/// Puts Kolux's icon in the tray on Windows and macOS. Nothing happens on Linux, or in a build
+/// without the `tray` feature. Called from the app's setup (lib.rs, the coordinator's file:
+/// `evidence/tray-T-248-b-lib.rs.patch`).
+pub fn install(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::Manager;
+    app.manage(TrayState::default());
+    #[cfg(feature = "tray")]
+    if has_tray(Os::current()) {
+        real::install(app)?;
+    }
+    Ok(())
+}
+
+/// Is the main window out of sight: hidden, or minimised to the taskbar?
+fn window_hidden(app: &tauri::AppHandle) -> bool {
+    use tauri::Manager;
+    app.get_webview_window("main").map(|w| !w.is_visible().unwrap_or(true) || w.is_minimized().unwrap_or(false)).unwrap_or(true)
+}
+
+/// A bell, a finished agent or a usage alert: the dot lights only while the window is out of sight.
+pub fn ping(app: &tauri::AppHandle, what: Ping) {
+    use tauri::Manager;
+    let Some(state) = app.try_state::<TrayState>() else { return };
+    let hidden = window_hidden(app);
+    let changed = state.dot.lock().map(|mut d| {
+        if hidden {
+            d.window_hidden();
+        } else {
+            d.window_shown();
+        }
+        d.ping(what)
+    });
+    if matches!(changed, Ok(true)) {
+        refresh(app, true);
+    }
+}
+
+/// The window came back (shown, restored or focused): the dot clears. Called when the main window
+/// gains focus (the same lib.rs patch).
+pub fn window_shown(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    let Some(state) = app.try_state::<TrayState>() else { return };
+    let was_on = state.dot.lock().map(|mut d| {
+        let was = d.on;
+        d.window_shown();
+        was
+    });
+    if matches!(was_on, Ok(true)) {
+        refresh(app, false);
+    }
+}
+
+/// Open Kolux from the tray: the main window is shown, restored and focused, and the dot clears.
+pub fn open_window(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+    window_shown(app);
+}
+
+/// Quit from the tray: the app's ordinary exit, whose Exit step stops every pane and child process
+/// (the same path as File > Exit), never the close button's path.
+pub fn quit(app: &tauri::AppHandle) {
+    app.exit(0);
+}
+
+#[cfg(feature = "tray")]
+fn refresh(app: &tauri::AppHandle, dot: bool) {
+    real::set_icon(app, dot);
+}
+#[cfg(not(feature = "tray"))]
+fn refresh(_app: &tauri::AppHandle, _dot: bool) {}
+
+#[cfg(feature = "tray")]
+mod real {
+    use super::*;
+    use tauri::image::Image;
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+    pub fn install(app: &tauri::AppHandle) -> tauri::Result<()> {
+        let [(open_id, open), (quit_id, quit_label)] = items();
+        let open_item = MenuItem::with_id(app, open_id, open, true, None::<&str>)?;
+        let quit_item = MenuItem::with_id(app, quit_id, quit_label, true, None::<&str>)?;
+        let menu = Menu::with_items(app, &[&open_item, &quit_item])?;
+        let os = Os::current();
+        let mut tray = TrayIconBuilder::with_id(TRAY_ID)
+            .menu(&menu)
+            .tooltip(tooltip(tauri::is_dev(), dev_branch().as_deref()))
+            .show_menu_on_left_click(!left_click_opens(os))
+            .on_menu_event(|app, e| match e.id().as_ref() {
+                OPEN_ID => open_window(app),
+                QUIT_ID => quit(app),
+                _ => {}
+            })
+            .on_tray_icon_event(move |tray, e| {
+                if let TrayIconEvent::Click { button, button_state, .. } = e {
+                    if click_opens(os, button == MouseButton::Left, button_state == MouseButtonState::Up) {
+                        open_window(tray.app_handle());
+                    }
+                }
+            });
+        if let Some(icon) = icon(app, false) {
+            tray = tray.icon(icon);
+        }
+        tray.build(app)?;
+        Ok(())
+    }
+
+    /// The app icon with the DEV marker on a development copy and, when asked, the dot.
+    fn icon(app: &tauri::AppHandle, dot: bool) -> Option<Image<'static>> {
+        let base = app.default_window_icon()?;
+        let (w, h) = (base.width(), base.height());
+        Some(Image::new_owned(paint(base.rgba(), w, h, dot, tauri::is_dev()), w, h))
+    }
+
+    pub fn set_icon(app: &tauri::AppHandle, dot: bool) {
+        if let (Some(tray), Some(img)) = (app.tray_by_id(TRAY_ID), icon(app, dot)) {
+            let _ = tray.set_icon(Some(img));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,6 +315,70 @@ mod tests {
         assert_eq!(tooltip(true, Some("lane/chrome")), "Kolux DEV (lane/chrome)");
         assert_eq!(tooltip(true, Some("  ")), "Kolux DEV");
         assert_eq!(tooltip(true, None), "Kolux DEV");
+    }
+
+    #[test]
+    fn app_008_a_dev_copy_reads_its_branch_from_the_checkouts_git_head() {
+        assert_eq!(branch_from_head("ref: refs/heads/lane/tray\n"), Some("lane/tray".into()));
+        assert_eq!(branch_from_head("ref: refs/heads/main"), Some("main".into()));
+        // a detached checkout shows the short commit
+        assert_eq!(branch_from_head("0123456789abcdef0123456789abcdef01234567\n"), Some("0123456".into()));
+        assert_eq!(branch_from_head(""), None);
+        assert_eq!(branch_from_head("   "), None);
+        let dir = std::env::temp_dir().join(format!("kolux-app008-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // a plain checkout keeps HEAD inside its .git folder
+        let plain = dir.join("plain");
+        std::fs::create_dir_all(plain.join(".git")).unwrap();
+        std::fs::write(plain.join(".git").join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        assert_eq!(git_head_file(&plain), Some(plain.join(".git").join("HEAD")));
+        // a worktree's .git is a file pointing at the main repo's worktree folder
+        let wt = dir.join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::create_dir_all(dir.join("repo").join(".git").join("worktrees").join("wt")).unwrap();
+        std::fs::write(dir.join("repo").join(".git").join("worktrees").join("wt").join("HEAD"), "ref: refs/heads/lane/tray\n").unwrap();
+        std::fs::write(wt.join(".git"), "gitdir: ../repo/.git/worktrees/wt\n").unwrap();
+        let head = git_head_file(&wt).expect("a worktree's HEAD is found through its .git file");
+        assert_eq!(std::fs::read_to_string(&head).map(|h| branch_from_head(&h)).unwrap(), Some("lane/tray".into()));
+        // no Git at all: no branch
+        let none = dir.join("none");
+        std::fs::create_dir_all(&none).unwrap();
+        assert_eq!(git_head_file(&none), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn app_008_the_icon_gets_an_amber_dot_and_a_dev_marker_only_when_asked() {
+        let (w, h) = (32u32, 32u32);
+        let base = vec![0u8; (w * h * 4) as usize];
+        let px = |img: &[u8], x: u32, y: u32| -> [u8; 4] {
+            let i = ((y * w + x) * 4) as usize;
+            [img[i], img[i + 1], img[i + 2], img[i + 3]]
+        };
+        assert_eq!(paint(&base, w, h, false, false), base, "nothing asked: the icon is untouched");
+        let dot = paint(&base, w, h, true, false);
+        assert_eq!(dot.len(), base.len());
+        assert_eq!(px(&dot, 27, 27), AMBER, "the dot sits in the bottom-right corner");
+        assert_eq!(px(&dot, 0, 0), [0, 0, 0, 0], "the top-left corner is untouched by the dot");
+        assert_eq!(px(&dot, 16, 16), [0, 0, 0, 0], "the middle of the icon is untouched");
+        let dev = paint(&base, w, h, false, true);
+        assert_eq!(px(&dev, 2, 2), DEV_MARK, "the DEV marker sits in the top-left corner");
+        assert_eq!(px(&dev, 27, 27), [0, 0, 0, 0], "no dot without a ping");
+        let both = paint(&base, w, h, true, true);
+        assert_eq!(px(&both, 2, 2), DEV_MARK, "the DEV marker stays when the attention icon is swapped in");
+        assert_eq!(px(&both, 27, 27), AMBER);
+        // a tiny icon still paints without going out of bounds
+        let tiny = paint(&[0u8; 16], 2, 2, true, true);
+        assert_eq!(tiny.len(), 16);
+    }
+
+    #[test]
+    fn app_008_only_a_released_left_click_on_windows_opens_the_window() {
+        assert!(click_opens(Os::Windows, true, true));
+        assert!(!click_opens(Os::Windows, true, false), "the press alone does nothing; the release opens");
+        assert!(!click_opens(Os::Windows, false, true), "a right click is the menu");
+        assert!(!click_opens(Os::Mac, true, true), "on macOS a click opens the menu");
+        assert!(!click_opens(Os::Linux, true, true));
     }
 
     #[test]

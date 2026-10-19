@@ -1,0 +1,25 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 854750a9..0d534c73 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -219,6 +219,7 @@ pub fn run() {
+                 });
+             }
+             app.manage(Terminals::default());
++            tray::install(app.handle())?; // APP-008 / T-248-b: the tray icon with Open Kolux, Quit and the dot
+             notifications::first_run_welcome(app.handle()); // VIEW-111: a Mac's one welcome notification
+             app.manage(resources::Sampler::default());
+             app.manage(resume::Registry::default());
+@@ -329,6 +330,12 @@ pub fn run() {
+                     }
+                 }
+             }
++            // APP-008 / T-248-b: the window is back on screen, so the tray's attention dot clears.
++            if let tauri::WindowEvent::Focused(true) = event {
++                if window.label() == "main" {
++                    tray::window_shown(window.app_handle());
++                }
++            }
+             // ACCT-055: files dropped in from outside may be copied into the Explorer, nothing else.
+             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                 window.state::<fence::Fence>().dropped(paths);
