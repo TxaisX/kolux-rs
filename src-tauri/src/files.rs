@@ -1,30 +1,106 @@
-// Reading and saving the text of a file shown in an editor tab (EDIT-001). A save goes to a
-// temporary file beside the target and is then moved over it, so a failed write never leaves a
-// half-written file behind. Every command here takes only paths inside the user's projects and
-// worktrees (ACCT-055, fence.rs); EDIT-045's `links::fence` guards the file operations and
-// `path_kind` (inside a project or granted exactly, never out through a link); the WSL and share
-// parts of EDIT-045 are T-062; large and binary files are EDIT-046 (T-178).
+// Reading and saving the text of a file shown in an editor tab (EDIT-001, EDIT-046). A save goes
+// to a temporary file beside the target, is flushed to disk and is then moved over it, so a save
+// that fails or is cut off never leaves a half-written file behind. A read has an upper bound and
+// samples the start of a file before treating it as text. Every command here takes only paths
+// inside the user's projects and worktrees (ACCT-055, fence.rs); EDIT-045's `links::fence` guards
+// the file operations and `path_kind` (inside a project or granted exactly, never out through a
+// link); the WSL and share parts of EDIT-045 are T-062.
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 
+/// EDIT-046 (T-178): the largest file the editor opens as text. The old limit was 5 MB; a 20 MB log
+/// has to open. Bigger files are refused with a plain message (the whole text travels to the window
+/// and into a syntax tree, so the bound stays modest).
+pub const TEXT_MAX: u64 = 32 * 1024 * 1024;
+
+/// EDIT-046: how much of the start of a file is looked at to tell text from binary.
+const SAMPLE: usize = 8192;
+
+/// EDIT-046: true when the start of a file is plainly not text: a well-known binary signature, a
+/// NUL byte, or mostly control characters. A UTF-16 text file has NULs too and is also refused (the
+/// editor only reads UTF-8).
+pub fn looks_binary(sample: &[u8]) -> bool {
+    const MAGIC: [&[u8]; 9] = [b"PK\x03\x04", b"\x1f\x8b", b"%PDF-", b"\x89PNG", b"GIF8", b"MZ", b"\x7fELF", b"\xff\xd8\xff", b"7z\xbc\xaf"];
+    if MAGIC.iter().any(|m| sample.starts_with(m)) || sample.contains(&0) {
+        return true;
+    }
+    let control = sample.iter().filter(|b| **b < 0x20 && !matches!(**b, b'\t' | b'\n' | b'\r' | 0x0c | 0x1b)).count();
+    !sample.is_empty() && control * 10 > sample.len() * 3
+}
+
 pub fn read_text(path: &Path) -> Result<String, String> {
-    let bytes = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    read_text_up_to(path, TEXT_MAX)
+}
+
+/// `read_text` with the size bound given, so the bound itself can be tested without a huge file.
+pub fn read_text_up_to(path: &Path, max: u64) -> Result<String, String> {
+    let io = |e: std::io::Error| format!("{}: {e}", path.display());
+    let mut f = fs::File::open(path).map_err(io)?;
+    let len = f.metadata().map_err(io)?.len();
+    if len > max {
+        return Err(format!("{} is too large to open ({} MB; the editor opens up to {} MB)", path.display(), len.div_ceil(1024 * 1024), max / (1024 * 1024)));
+    }
+    let mut bytes = Vec::with_capacity(len as usize);
+    // Sampled first, so a big archive is turned away after 8 KB instead of after being read whole.
+    (&mut f).take(SAMPLE as u64).read_to_end(&mut bytes).map_err(io)?;
+    if looks_binary(&bytes) {
+        return Err(format!("{} is a binary file, so it is not shown as text", path.display()));
+    }
+    f.read_to_end(&mut bytes).map_err(io)?;
     String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8 text", path.display()))
 }
 
+/// How old a leftover save copy must be before the next save of its file clears it away: far longer
+/// than any save takes, so a copy belonging to a save in progress is never touched.
+const STALE_COPY_SECS: u64 = 600;
+
 pub fn write_text(path: &Path, text: &str) -> Result<(), String> {
+    replace_with(path, |f| f.write_all(text.as_bytes()))
+}
+
+/// EDIT-046: the all-or-nothing save. `put` fills a temporary file beside `path`; the file is
+/// flushed to disk and only then moved over `path`. Any failure removes the temporary file and
+/// leaves `path` exactly as it was. A copy left by an app that died mid-save is cleared the next
+/// time that file is saved.
+fn replace_with(path: &Path, put: impl FnOnce(&mut fs::File) -> std::io::Result<()>) -> Result<(), String> {
+    static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let name = path.file_name().ok_or_else(|| format!("{} is not a file path", path.display()))?;
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let temp = dir.join(format!(".{}.kolux-save-{}", name.to_string_lossy(), std::process::id()));
+    let prefix = format!(".{}.kolux-save-", name.to_string_lossy());
+    clear_stale_copies(dir, &prefix);
+    let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp = dir.join(format!("{prefix}{}-{n}", std::process::id()));
     let fail = |e: std::io::Error| {
         let _ = fs::remove_file(&temp);
         format!("could not save {}: {e}", path.display())
     };
-    let mut f = fs::File::create(&temp).map_err(fail)?;
-    f.write_all(text.as_bytes()).and_then(|_| f.sync_all()).map_err(fail)?;
+    let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&temp).map_err(fail)?;
+    put(&mut f).and_then(|_| f.flush()).and_then(|_| f.sync_all()).map_err(fail)?;
     drop(f);
-    fs::rename(&temp, path).map_err(fail)
+    #[cfg(unix)]
+    if let Ok(meta) = fs::metadata(path) {
+        let _ = fs::set_permissions(&temp, meta.permissions());
+    }
+    fs::rename(&temp, path).map_err(fail)?;
+    #[cfg(unix)]
+    if let Ok(d) = fs::File::open(dir) {
+        let _ = d.sync_all(); // the swap itself reaches the disk
+    }
+    Ok(())
+}
+
+fn clear_stale_copies(dir: &Path, prefix: &str) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        if !e.file_name().to_string_lossy().starts_with(prefix) {
+            continue;
+        }
+        let old = e.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok()).is_some_and(|age| age.as_secs() > STALE_COPY_SECS);
+        if old && e.path().is_file() {
+            let _ = fs::remove_file(e.path());
+        }
+    }
 }
 
 type Store<'a> = tauri::State<'a, std::sync::Mutex<crate::state::Store>>;
@@ -525,8 +601,132 @@ mod tests {
         let missing = d.join("nope").join("a.txt");
         assert!(read_text(&missing).unwrap_err().contains("a.txt"));
         assert!(write_text(&missing, "x").unwrap_err().starts_with("could not save"));
-        fs::write(d.join("bin"), [0xff, 0xfe, 0x00]).unwrap();
-        assert!(read_text(&d.join("bin")).unwrap_err().contains("not UTF-8"));
+        fs::write(d.join("latin"), [b'c', b'a', b'f', 0xe9]).unwrap();
+        assert!(read_text(&d.join("latin")).unwrap_err().contains("not UTF-8"));
+    }
+
+    // The bound is above the old 5 MB limit (checked when this compiles).
+    const _: () = assert!(TEXT_MAX > 5 * 1024 * 1024);
+
+    fn entries(d: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn edit046_a_save_that_fails_part_way_leaves_the_original_whole_and_no_temporary() {
+        let d = temp_dir("cutsave");
+        let f = d.join("notes.txt");
+        fs::write(&f, "the original, whole\n").unwrap();
+        // The writer gets half the new text out and then the disk "fails".
+        let err = replace_with(&f, |t| {
+            t.write_all(b"half of the new te")?;
+            Err(std::io::Error::other("disk full"))
+        })
+        .unwrap_err();
+        assert!(err.starts_with("could not save") && err.contains("notes.txt"), "{err}");
+        assert_eq!(fs::read_to_string(&f).unwrap(), "the original, whole\n");
+        assert_eq!(entries(&d), vec!["notes.txt".to_string()]);
+    }
+
+    #[test]
+    fn edit046_a_swap_that_fails_leaves_the_target_and_no_temporary() {
+        let d = temp_dir("badswap");
+        // A folder in the file's place cannot be replaced by a file: the swap step fails.
+        let target = d.join("target");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("inside.txt"), "kept").unwrap();
+        let err = write_text(&target, "new text").unwrap_err();
+        assert!(err.starts_with("could not save"), "{err}");
+        assert_eq!(fs::read_to_string(target.join("inside.txt")).unwrap(), "kept");
+        assert_eq!(entries(&d), vec!["target".to_string()]);
+    }
+
+    #[test]
+    fn edit046_saves_in_a_row_leave_one_file_and_no_temporary() {
+        let d = temp_dir("twice");
+        let f = d.join("new.txt");
+        write_text(&f, "one").unwrap();
+        write_text(&f, "two, longer").unwrap();
+        assert_eq!(fs::read_to_string(&f).unwrap(), "two, longer");
+        assert_eq!(entries(&d), vec!["new.txt".to_string()]);
+    }
+
+    #[test]
+    fn edit046_a_copy_left_by_a_dead_save_is_cleared_by_the_next_save_but_a_fresh_one_is_not() {
+        let d = temp_dir("stale");
+        let f = d.join("a.txt");
+        let old = d.join(".a.txt.kolux-save-1-0");
+        let fresh = d.join(".a.txt.kolux-save-2-0");
+        let other = d.join(".b.txt.kolux-save-1-0");
+        for p in [&old, &fresh, &other] {
+            fs::write(p, "x").unwrap();
+        }
+        let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(STALE_COPY_SECS + 60);
+        for p in [&old, &other] {
+            fs::File::options().write(true).open(p).unwrap().set_modified(long_ago).unwrap();
+        }
+        write_text(&f, "saved").unwrap();
+        // Only this file's own old leftover goes; a recent copy (maybe a save in progress) and another file's stay.
+        assert_eq!(entries(&d), vec![".a.txt.kolux-save-2-0".to_string(), ".b.txt.kolux-save-1-0".to_string(), "a.txt".to_string()]);
+    }
+
+    #[test]
+    fn edit046_a_20_mb_log_opens() {
+        let d = temp_dir("biglog");
+        let f = d.join("big.log");
+        let line = "2026-10-19 12:00:00 INFO request handled in 12 ms\n";
+        let text = line.repeat(20 * 1024 * 1024 / line.len() + 1);
+        assert!(text.len() > 20 * 1024 * 1024);
+        fs::write(&f, &text).unwrap();
+        assert_eq!(read_text(&f).unwrap().len(), text.len());
+    }
+
+    #[test]
+    fn edit046_a_file_over_the_bound_is_refused_by_size_and_one_at_the_bound_opens() {
+        let d = temp_dir("bound");
+        let f = d.join("t.txt");
+        fs::write(&f, "x".repeat(100)).unwrap();
+        assert_eq!(read_text_up_to(&f, 100).unwrap().len(), 100);
+        let err = read_text_up_to(&f, 99).unwrap_err();
+        assert!(err.contains("too large to open") && err.contains("t.txt"), "{err}");
+    }
+
+    #[test]
+    fn edit046_an_archive_or_other_binary_is_never_shown_as_text() {
+        let d = temp_dir("binary");
+        // A zip starts with its signature and is mostly packed bytes.
+        let mut zip = b"PK\x03\x04\x14\x00\x00\x00".to_vec();
+        zip.extend((0u32..4000).map(|i| (i * 7 % 251) as u8));
+        fs::write(d.join("a.zip"), &zip).unwrap();
+        fs::write(d.join("noext"), [b'a', b'b', 0, b'c']).unwrap(); // a NUL in the sample
+        fs::write(d.join("ctl"), vec![0x01u8; 200]).unwrap(); // mostly control characters
+        fs::write(d.join("wide.txt"), "hi".encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>()).unwrap(); // UTF-16
+        for n in ["a.zip", "noext", "ctl", "wide.txt"] {
+            let err = read_text(&d.join(n)).unwrap_err();
+            assert!(err.contains("is a binary file"), "{n}: {err}");
+        }
+        // Text with tabs, a form feed, an escape and CRLF is still text, and so is an empty file.
+        fs::write(d.join("ok.txt"), "col\tcol\r\n\x0c\x1b[0m done\n").unwrap();
+        fs::write(d.join("empty"), "").unwrap();
+        assert!(read_text(&d.join("ok.txt")).unwrap().contains("done"));
+        assert_eq!(read_text(&d.join("empty")).unwrap(), "");
+    }
+
+    #[test]
+    fn edit046_only_the_start_is_sampled_so_a_big_binary_is_turned_away_by_its_first_bytes() {
+        let d = temp_dir("sampled");
+        let f = d.join("big.bin");
+        let mut head = vec![0u8; 100];
+        head.extend(vec![b'a'; 1024 * 1024]);
+        fs::write(&f, &head).unwrap();
+        assert!(read_text(&f).unwrap_err().contains("is a binary file"));
+        // A NUL after the sample is not seen: text with a stray NUL late on still opens.
+        let mut late = vec![b'a'; SAMPLE + 10];
+        late.push(0);
+        fs::write(d.join("late"), &late).unwrap();
+        assert_eq!(read_text(&d.join("late")).unwrap().len(), SAMPLE + 11);
     }
 }
 
