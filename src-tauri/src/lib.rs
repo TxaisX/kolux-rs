@@ -56,6 +56,7 @@ mod schedule;
 mod resume;
 mod secrets;
 mod sessions;
+mod shell_history;
 mod skill_delete;
 mod state;
 mod status;

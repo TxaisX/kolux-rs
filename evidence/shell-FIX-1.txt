@@ -56,3 +56,40 @@ LIVE PROOF PENDING (batched, coordinator):
    does not exist), open a new terminal: the first line is dim, "<name> did not start; opened
    <name>", and the fallback shell prompt follows.
 4. The main.tsx hunk (installMenuWheel) must be applied for 1 and 2 to be observable.
+
+================================================================
+ROUND 2 (2026-10-19) · FIX-1 pre-merge · council stand-in review of lane/shell dff7cd49..693dbb00 (T-256), main 1512cfee
+lane/shell from 693dbb00 · no app launched (standing rule) · logs under G:/Temp/shell-w1-logs/ (fix1r-*.log)
+
+HOW IT WAS RUN: the lane does not compile shell_history.rs (its mod line and spawn hunk are coordinator hunks), so the build and tests ran in a
+scratch checkout of main 1512cfee (git worktree --detach at G:/Temp/shell-w1/fix1-wt, removed afterwards) holding the lane's shell_history.rs,
+the lib.rs mod line patch and the re-cut terminal.rs patch, with the lane's target dir. Scratch env: envtest.sh with HOMEDRIVE/HOMEPATH added.
+
+DONE
+- FIX-BEFORE 1: fish session is now kolux_<tag>_<tail>_<hex> (letters, digits, underscores only); sweep reads the key back with rsplit_once('_').
+  RED first (fix1r-red.log, old code, new asserts): 6 passed, 2 FAILED: term119_bash_and_zsh_get_a_history_file_per_worktree_and_fish_a_session
+  ("kolux_d64103_a-fb5f577fff88e365" fails the [A-Za-z0-9_] check) and term119_the_sweep_removes_a_deleted_worktrees_history_and_leftover_fish_sessions.
+  GREEN (fix1r-green.log): 9 passed; 0 failed.
+- FIX-SOON 1: the history variable is worked out by shell_history::plan before the pane registry lock (commands, log_dir moved above the lock); under the lock only
+  command.env(name, value) runs, after the user's own variables.
+- FIX-SOON 2: terminal_spawn returns shell_history::enabled(&settings) from its existing single Store read and passes it as a bool into Terminals::spawn; no second Store lock.
+- FIX-SOON 4: sweep_once/plan take the fish folder as an argument (terminal.rs passes system_fish_dir()); tests pass None, so nothing outside the temp folder is read.
+  apply() is gone; the user-set test calls history_var directly. envtest.sh now also sets HOMEDRIVE/HOMEPATH (pty::home_dir prefers them on Windows).
+- New test term119_plan_gives_each_command_its_own_answer_and_reads_no_home_folder; changed: term119_a_history_the_user_set_keeps_being_used.
+- evidence/shell-T-256-terminal.rs.patch re-cut against 1512cfee (lib.rs patch unchanged, still applies). Both apply --cached --check clean on 1512cfee (temp GIT_INDEX_FILE), second after the first.
+  Apply order: shell-T-256-lib.rs.patch and shell-T-256-terminal.rs.patch together in one commit (the mod line is needed for terminal.rs to compile).
+
+GATES (scratch checkout of 1512cfee + both patches + lane shell_history.rs)
+- cargo test --lib shell_history: 9 passed; 0 failed (fix1r-green.log)
+- cargo test --lib terminal:: : 15 passed; 0 failed (fix1r-terminal.log)
+- cargo clippy --all-targets -- -D warnings: clean (fix1r-clippy.log)
+- lane: pnpm exec vitest run src/settings: 32 files, 149 tests passed (fix1r-vitest.log); no TS changed
+- plan-check: OK; grep -c "^## Last 10 passes" STATE.md = 1; duplicate-id grep prints nothing; firewall-check -Baseline: 0 new
+
+OPEN FOR A LATER ROUND (not done here)
+- FIX-SOON 3: Unix mount-point sweep (a fixed mount point left behind after unmount is judged "deleted"; needs a missing-since stamp or a device-id check).
+- AFTER 1: sweep guard (entry name equals key(record), shell-history not a link). AFTER 2: a verbatim UNC prefix should become a plain two-slash share path in normal_record.
+- AFTER 3: the real-bash test passes silently when Git Bash is missing (print a skip line). AFTER 4: vitest for the new Terminal switch.
+- AFTER 5: exclude a WindowsApps bash.exe too (reuse pty::store_alias).
+
+LIVE PROOF PENDING: unchanged from T-256 above, plus: in a fish pane, `echo $fish_history` shows kolux_<tag>_<name>_<hash> and fish prints no history-session error at start.
