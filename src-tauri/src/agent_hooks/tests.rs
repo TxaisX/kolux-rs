@@ -1,4 +1,4 @@
-use super::super::{install_claude, install_claude_hooks, install_codex_hooks, is_mine, write_codex_groups, write_script, CLAUDE_EVENTS, CODEX_EVENTS};
+use super::super::{install_claude, install_claude_hooks, install_codex_hooks, install_codex_with, is_mine, write_codex_groups, write_script, CLAUDE_EVENTS, CODEX_EVENTS};
 use super::*;
 use serde_json::json;
 
@@ -226,6 +226,11 @@ mod script_runs {
     /// Runs the Claude hook script under cmd with delayed expansion ON (as a user's registry can
     /// set it) and only the given Kolux variables, feeding `event` on stdin.
     fn run(dir: &Path, env: &[(&str, String)], event: &str) -> std::process::Output {
+        start(dir, env, event).wait_with_output().unwrap()
+    }
+
+    /// `run` without the wait: the script is running, its event already on stdin.
+    fn start(dir: &Path, env: &[(&str, String)], event: &str) -> std::process::Child {
         let script = dir.join("claude.cmd");
         fs::write(&script, super::super::super::claude_script()).unwrap();
         let mut cmd = Command::new("cmd");
@@ -238,7 +243,32 @@ mod script_runs {
         cmd.envs(env.iter().map(|(k, v)| (*k, v.as_str())));
         let mut child = cmd.spawn().unwrap();
         child.stdin.take().unwrap().write_all(event.as_bytes()).unwrap();
-        child.wait_with_output().unwrap()
+        child
+    }
+
+    /// Whether `pid` has started a Windows PowerShell (the script's held path) that still runs.
+    fn powershell_under(pid: u32) -> bool {
+        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
+        // SAFETY: the snapshot handle is checked before use and closed once; the entry is zeroed
+        // with its size set, as Process32FirstW/NextW require, and only read after a success.
+        unsafe {
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snap == INVALID_HANDLE_VALUE {
+                return false;
+            }
+            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+            entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            let mut ok = Process32FirstW(snap, &mut entry) != 0;
+            let mut found = false;
+            while ok && !found {
+                let len = entry.szExeFile.iter().position(|c| *c == 0).unwrap_or(entry.szExeFile.len());
+                found = entry.th32ParentProcessID == pid && String::from_utf16_lossy(&entry.szExeFile[..len]).eq_ignore_ascii_case("powershell.exe");
+                ok = Process32NextW(snap, &mut entry) != 0;
+            }
+            CloseHandle(snap);
+            found
+        }
     }
 
     const STOP: &str = r#"{"hook_event_name":"Stop","session_id":"s1","cwd":"C:/w"}"#;
@@ -387,22 +417,79 @@ mod script_runs {
         fs::write(&spool, "").unwrap();
         // Shared with nobody: the script's append fails while this handle is open.
         let lock = fs::OpenOptions::new().read(true).write(true).share_mode(0).open(&spool).unwrap();
-        let script_dir = dir.clone();
         let started = Instant::now();
-        let child = std::thread::spawn(move || run(&script_dir, &env, STOP));
-        // Once the script has written its event file it is past the post and on its held path;
-        // the lock then stays long enough that PowerShell's first append meets it.
-        let past_post = || fs::read_dir(std::env::temp_dir()).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("kolux-rs-hook-11-"));
-        while !past_post() && started.elapsed() < Duration::from_secs(10) {
-            std::thread::sleep(Duration::from_millis(20));
+        let child = start(&dir, &env, STOP);
+        // hooks FIX-4 (stand-in review AFTER 3): timed from PowerShell's own start, not from the
+        // event file. Its first append comes after it starts, so a 1 s hold always meets it, and
+        // the retries (2 s from that append) always outlast the hold, however fast or loaded the PC.
+        while !powershell_under(child.id()) && started.elapsed() < Duration::from_secs(20) {
+            std::thread::sleep(Duration::from_millis(5));
         }
-        std::thread::sleep(Duration::from_millis(2500));
+        let seen = started.elapsed();
+        std::thread::sleep(Duration::from_millis(1000));
         drop(lock);
-        let out = child.join().unwrap();
-        println!("held append took {:?}", started.elapsed());
+        let out = child.wait_with_output().unwrap();
+        println!("PowerShell seen after {seen:?}; held append took {:?}", started.elapsed());
+        assert!(seen < Duration::from_secs(20), "the script reached its held path");
         assert!(out.status.success(), "{out:?}");
         let held = fs::read_to_string(&spool).unwrap();
         assert_eq!(held.lines().filter(|l| !l.is_empty()).count(), 1, "the event landed after the other writer let go: {held:?}");
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    /// hooks FIX-4 (stand-in review FIX-SOON 1): in an event PowerShell cannot parse, the names
+    /// come only from top-level keys before the first nested object. A tool input that comes first
+    /// and holds the same key names never lends its words: that event is dropped. A key whose own
+    /// name ends in an escaped `"session_id` is not the session either.
+    #[test]
+    fn fix_4_the_names_only_pick_never_takes_words_from_the_tool_input() {
+        let (spool, data, env) = closed_kolux("fix4-pick", 12);
+        let dir = scripts("fix4-pick");
+        let first = r#"{"tool_input":{"session_id":"SEKRITWORD","hook_event_name":"SEKRITEVT"},"Path":1,"path":2,"hook_event_name":"PostToolUse","session_id":"s-4"}"#;
+        let out = run(&dir, &env, first);
+        assert!(out.status.success() && out.stdout.is_empty(), "{out:?}");
+        let held = fs::read_to_string(&spool).unwrap_or_default();
+        println!("after the nested-first event: {held:?}");
+        assert!(!held.contains("SEKRIT"), "{held}");
+        assert_eq!(held.lines().filter(|l| !l.is_empty()).count(), 0, "a nested object first: dropped, fail closed: {held:?}");
+        let key = r#"{"x\"session_id":"EVILKEY","hook_event_name":"Stop","list":["a","b"],"session_id":"s-4b","Path":1,"path":2}"#;
+        let out = run(&dir, &env, key);
+        assert!(out.status.success(), "{out:?}");
+        let held = fs::read_to_string(&spool).unwrap_or_default();
+        println!("after the escaped-key event: {held:?}");
+        assert!(!held.contains("EVILKEY"), "{held}");
+        let lines: Vec<_> = held.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines.len(), 1, "{held:?}");
+        let body = ev(lines[0].splitn(4, '|').nth(3).unwrap());
+        assert_eq!((body["hook_event_name"].as_str(), body["session_id"].as_str()), (Some("Stop"), Some("s-4b")));
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    /// hooks FIX-4 (stand-in review AFTER 2): only another writer holding the file is waited out.
+    /// A holding folder that is gone fails at once instead of costing the agent 2 s of retries.
+    #[test]
+    fn fix_4_a_missing_holding_folder_is_not_tried_again() {
+        let (spool, data, env) = closed_kolux("fix4-gone", 13);
+        let dir = scripts("fix4-gone");
+        let gone = data.join("gone").join(super::super::super::ENDPOINT_FILE);
+        let gone_env: Vec<(&str, String)> = env.iter().map(|(k, v)| (*k, if *k == "KOLUX_HOOK_ENDPOINT" { gone.display().to_string() } else { v.clone() })).collect();
+        // The quickest of three runs each, so one slow PowerShell start does not decide it.
+        let quickest = |env: &[(&str, String)]| {
+            (0..3)
+                .map(|_| {
+                    let t = Instant::now();
+                    assert!(run(&dir, env, STOP).status.success());
+                    t.elapsed()
+                })
+                .min()
+                .unwrap()
+        };
+        let held = quickest(&env);
+        let missing = quickest(&gone_env);
+        println!("held path {held:?}, missing folder {missing:?}");
+        assert_eq!(fs::read_to_string(&spool).unwrap().lines().filter(|l| !l.is_empty()).count(), 3, "the folder that is there takes every event");
+        assert!(!data.join("gone").exists(), "a missing holding folder is not made");
+        assert!(missing < held + Duration::from_millis(1000), "no retries for a missing folder: {missing:?} against {held:?}");
         let _ = fs::remove_dir_all(&data);
     }
 
@@ -1230,5 +1317,46 @@ fn fix_3_a_rebuilt_record_never_counts_as_created() {
     let made_record = dir.join("made.sha256");
     assert_eq!(back_up(&made, &made_record).unwrap(), None);
     assert!(was_created(&made_record, &made));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// hooks FIX-4 (stand-in review FIX-SOON 3): Codex cannot list the hooks (it is missing, say), so
+/// trust cannot be set and the hooks.json Kolux just created is rolled back. The file goes first
+/// and its record only after it: while the file cannot be removed, the record that names it as
+/// Kolux's stays; once it can, neither is left.
+#[cfg(windows)]
+#[test]
+fn fix_4_codex_a_created_file_rolled_back_goes_before_its_record() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let dir = temp("fix4-codex");
+    let home = dir.join("codex");
+    fs::create_dir_all(&home).unwrap();
+    let file = home.join("hooks.json");
+    let record = codex_record(&file);
+    let command = "\"C:\\Users\\me\\.kolux-rs\\agent-hooks\\codex.cmd\"";
+    // The file is held open while Codex is asked, so the rollback cannot remove it.
+    let mut held = None;
+    let err = install_codex_with(&home, command, |_| {
+        held = Some(fs::OpenOptions::new().read(true).share_mode(0).open(&file).unwrap());
+        None
+    })
+    .unwrap_err();
+    println!("held: {err}");
+    assert!(file.exists(), "the held file could not be removed");
+    assert!(was_created(&record, &file), "so its record still names it as Kolux's");
+    drop(held);
+    // The next start still knows the file as Kolux's: no refusal, only the same listing failure.
+    let err = install_codex_with(&home, command, |_| None).unwrap_err();
+    println!("next start: {err}");
+    assert!(err.contains("could not list") && err.contains("back as it was") && !err.contains("already holds"), "{err}");
+    assert!(remove_codex(&home).unwrap(), "off takes the file Kolux made");
+    assert!(!file.exists() && !record.exists(), "and its record with it");
+    // A created file that can be removed goes at once, with its record.
+    let err = install_codex_with(&home, command, |_| None).unwrap_err();
+    println!("free: {err}");
+    assert!(err.contains("could not list"), "{err}");
+    assert!(!file.exists(), "the created file is gone");
+    assert!(!record.exists(), "and its record with it");
+    assert!(!backup_of(&file).exists() && !home.join("config.toml").exists(), "nothing else is left");
     let _ = fs::remove_dir_all(&dir);
 }

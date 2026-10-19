@@ -665,8 +665,14 @@ pub fn status_command(script: &str, prev: &str) -> String {
 ///
 /// hooks FIX-3: an event PowerShell 5.1 cannot parse (keys that differ only in case, for one) is
 /// still held as a minimal pick, the event and session names found by a pattern that takes only
-/// name characters, so no input text can come along; one with no event name is dropped. The
-/// append is tried again (up to 20 times, 100 ms apart) while another hook holds the file.
+/// name characters; one with no event name is dropped. The append is tried again (up to 20 times,
+/// 100 ms apart) while another hook holds the file.
+///
+/// hooks FIX-4: the pattern looks only at top-level keys before the first nested `{` (the key
+/// must follow the opening brace or a comma, so it is never text inside a string), so a word from
+/// the tool's input never becomes the held event or session name: an event whose nested object
+/// comes first is dropped. Only a sharing violation (another writer holds the file) is tried
+/// again; any other failure, a missing holding folder for one, gives up at once.
 pub(crate) const SPOOL_LINE: &str = concat!(
     r#"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -Command ""#,
     r#"$ErrorActionPreference='Stop'; try { $t=[IO.File]::ReadAllText($env:KF,[Text.Encoding]::UTF8); $o=[ordered]@{}; $ok=$true; "#,
@@ -676,10 +682,11 @@ pub(crate) const SPOOL_LINE: &str = concat!(
     r#"$n=$e.toolCall.name; if ($n -is [string]) { $o['toolCall']=@{name=$n.Substring(0,[Math]::Min($n.Length,300))} }; "#,
     r#"foreach ($k in 'background_tasks','session_crons') { if ($null -ne $e.$k -and @($e.$k).Count -gt 0) { $o[$k]=@(1) } } } "#,
     r#"catch { $o.Clear(); $q=[char]34; foreach ($k in 'hook_event_name','session_id') "#,
-    r#"{ $m=[regex]::Match($t,$q+$k+$q+'\s*:\s*'+$q+'([\w.:-]{1,200})'+$q); if ($m.Success) { $o[$k]=$m.Groups[1].Value } }; $ok=$o.Contains('hook_event_name') }; "#,
+    r#"{ $m=[regex]::Match($t,'^\s*\{(?:[^{]*?,)?\s*'+$q+$k+$q+'\s*:\s*'+$q+'([\w.:-]{1,200})'+$q); if ($m.Success) { $o[$k]=$m.Groups[1].Value } }; $ok=$o.Contains('hook_event_name') }; "#,
     r#"if ($ok) { $o['spooled_at']=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); "#,
     r#"$l=$env:KR + (ConvertTo-Json -InputObject $o -Compress -Depth 3) + [char]13 + [char]10; "#,
-    r#"for ($i=0; $i -lt 20; $i++) { try { [IO.File]::AppendAllText($env:KS, $l, (New-Object Text.UTF8Encoding $false)); break } catch { Start-Sleep -Milliseconds 100 } } } } catch { }""#,
+    r#"for ($i=0; $i -lt 20; $i++) { try { [IO.File]::AppendAllText($env:KS, $l, (New-Object Text.UTF8Encoding $false)); break } "#,
+    r#"catch { $x=$_.Exception; if ($x.InnerException) { $x=$x.InnerException }; if ($x.HResult -ne -2147024864) { break }; Start-Sleep -Milliseconds 100 } } } } catch { }""#,
     r#" <NUL >NUL 2>&1"#
 );
 
@@ -1077,6 +1084,12 @@ pub(crate) fn write_codex_groups(file: &Path, text: Option<&str>, hooks: &mut Va
 /// unparsable file is left alone. When trust cannot be set, `hooks.json` goes back exactly as it
 /// was (or away, when Kolux created it). True when something was written.
 pub fn install_codex(home: &Path, command: &str) -> Result<bool, String> {
+    install_codex_with(home, command, codex_listing)
+}
+
+/// `install_codex` with Codex's own listing passed in, so a test can make it fail without
+/// starting Codex (hooks FIX-4).
+pub(crate) fn install_codex_with(home: &Path, command: &str, listing: impl FnOnce(&Path) -> Option<Vec<Value>>) -> Result<bool, String> {
     let _one = CODEX_INSTALL.lock().map_err(|e| e.to_string())?;
     let file = home.join("hooks.json");
     let config = home.join("config.toml");
@@ -1101,24 +1114,30 @@ pub fn install_codex(home: &Path, command: &str) -> Result<bool, String> {
         return Ok(false);
     }
     // hooks FIX-3: a file Kolux had just created goes with its `created` record, so no stray
-    // record stays in the Codex home.
+    // record stays in the Codex home. hooks FIX-4: the file first, the record only once the file
+    // is gone, so a file that cannot be removed (held open, say) keeps the record that names it as
+    // Kolux's, and the next start does not refuse it as someone else's file with Kolux's entries.
     let restore = || match &text {
         Some(t) => std::fs::write(&file, t).map_err(|e| e.to_string()),
         None => {
+            std::fs::remove_file(&file).map_err(|e| format!("{} could not be removed ({e}); its record stays, so the next start still knows it as Kolux's", file.display()))?;
             let record = agent_hooks::codex_record(&file);
             if agent_hooks::was_created(&record, &file) {
                 let _ = std::fs::remove_file(record);
             }
-            std::fs::remove_file(&file).map_err(|e| e.to_string())
+            Ok(())
         }
     };
-    let listing = codex_listing(home);
+    let listing = listing(home);
     let n = listing.as_deref().map(|l| apply_trust(&mut doc, l, &real)).unwrap_or(0);
     if n < CODEX_EVENTS.len() {
-        restore()?;
-        return Err(match listing {
-            Some(_) => format!("Codex listed {n} of {} Kolux hooks in {}; the file is back as it was", CODEX_EVENTS.len(), file.display()),
-            None => format!("Codex could not list the hooks of {}; the file is back as it was", home.display()),
+        let why = match listing {
+            Some(_) => format!("Codex listed {n} of {} Kolux hooks in {}", CODEX_EVENTS.len(), file.display()),
+            None => format!("Codex could not list the hooks of {}", home.display()),
+        };
+        return Err(match restore() {
+            Ok(()) => format!("{why}; the file is back as it was"),
+            Err(e) => format!("{why}; {e}"),
         });
     }
     if let Err(e) = crate::trust::write_whole(&config, &doc.to_string()) {

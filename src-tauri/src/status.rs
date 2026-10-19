@@ -654,11 +654,14 @@ pub fn fit_plan(mut s: Status) -> Status {
 
 /// Folds an event into the pane's session and builds what the window is told. T-563: a hook from
 /// a terminal whose exit already took this pane's session is dropped before it touches anything.
+/// hooks FIX-4: that check runs under the sessions lock, the same lock `terminal_ended` retires
+/// under, so a hook racing its terminal's exit can never pass the check and then recreate the
+/// session on the dead terminal. Lock order everywhere: SESSIONS, then RETIRED.
 pub fn report(pane_key: u32, terminal: Option<u32>, agent: Agent, event: &Value) -> Option<Status> {
-    if terminal.is_some_and(|t| retired(pane_key, t)) {
-        return None;
-    }
     with_sessions(|s| {
+        if terminal.is_some_and(|t| retired(pane_key, t)) {
+            return None;
+        }
         let session = s.entry(pane_key).or_default();
         session.terminal = terminal.or(session.terminal);
         let path = str_of(event, "transcript_path").map(str::to_string);
@@ -720,21 +723,22 @@ pub fn working_now(live: impl Fn(u32) -> bool) -> usize {
 
 /// A terminal ended (its program exited or crashed, or its pane closed): the panes its hooks
 /// reported for are forgotten, so a dead agent never reads working again (TERM-122). T-563: each
-/// such pane retires the terminal, so a late hook from it is dropped by `report`.
+/// such pane retires the terminal, so a late hook from it is dropped by `report`. hooks FIX-4:
+/// the sessions go and the terminal is retired under the one sessions lock (SESSIONS, then
+/// RETIRED), so no hook can slip in between and take the pane back to the ended terminal.
 pub fn terminal_ended(terminal: u32) {
-    let panes: Vec<u32> = with_sessions(|s| {
+    with_sessions(|s| {
         let gone: Vec<u32> = s.iter().filter(|(_, x)| x.terminal == Some(terminal)).map(|(k, _)| *k).collect();
         gone.iter().for_each(|k| drop(s.remove(k)));
-        gone
-    });
-    with_retired(|r| {
-        for pane in panes {
-            let list = r.entry(pane).or_default();
-            list.push_back(terminal);
-            while list.len() > RETIRED_KEEP {
-                list.pop_front();
+        with_retired(|r| {
+            for pane in gone {
+                let list = r.entry(pane).or_default();
+                list.push_back(terminal);
+                while list.len() > RETIRED_KEEP {
+                    list.pop_front();
+                }
             }
-        }
+        });
     });
 }
 
@@ -1426,6 +1430,41 @@ mod tests {
         assert!(report(PANE, Some(NEW), Agent::Claude, &stop).is_none(), "the new terminal is retired too now");
         assert!(report(PANE, Some(NEW + 10), Agent::Claude, &stop).is_some(), "another pane's ended terminal is not this pane's");
         with_sessions(|s| s.remove(&PANE));
+    }
+
+    /// hooks FIX-4 (stand-in review FIX-SOON 2): the agent's last hook and its exit handled on two
+    /// threads at the same moment. Whichever runs first, no session is left on the ended terminal:
+    /// the retired check and the retiring happen under the one sessions lock.
+    #[test]
+    fn fix_4_a_hook_racing_its_terminals_exit_never_keeps_the_dead_terminal() {
+        use std::sync::{Arc, Barrier};
+        const BASE: u32 = 957_100_000;
+        // Before the fix about half the rounds kept the dead terminal (10008 of 20000 in the red
+        // run), so this many rounds meets the race hundreds of times in a few seconds.
+        const ROUNDS: u32 = 2_000;
+        let go = ev(r#"{"hook_event_name":"PreToolUse","tool_name":"Bash"}"#);
+        for i in 0..ROUNDS {
+            assert!(report(BASE + i, Some(BASE + ROUNDS + i), Agent::Claude, &go).is_some());
+        }
+        let gate = Arc::new(Barrier::new(2));
+        let (g, e) = (gate.clone(), go.clone());
+        let hooks = std::thread::spawn(move || {
+            for i in 0..ROUNDS {
+                g.wait();
+                report(BASE + i, Some(BASE + ROUNDS + i), Agent::Claude, &e);
+            }
+        });
+        for i in 0..ROUNDS {
+            gate.wait();
+            terminal_ended(BASE + ROUNDS + i);
+        }
+        hooks.join().unwrap();
+        let stuck: Vec<u32> = with_sessions(|s| {
+            let stuck = (0..ROUNDS).filter(|i| s.get(&(BASE + i)).is_some_and(|x| x.terminal.is_some())).collect();
+            (0..ROUNDS).for_each(|i| drop(s.remove(&(BASE + i))));
+            stuck
+        });
+        assert!(stuck.is_empty(), "{} of {ROUNDS} panes kept a session on their ended terminal", stuck.len());
     }
 
     /// T-563: an in-band status names the pane's live terminal for the activity lane without
