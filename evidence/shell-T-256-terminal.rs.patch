@@ -1,0 +1,24 @@
+diff --git a/src-tauri/src/terminal.rs b/src-tauri/src/terminal.rs
+index 8081ef95..b163b887 100644
+--- a/src-tauri/src/terminal.rs
++++ b/src-tauri/src/terminal.rs
+@@ -577,6 +577,8 @@ impl Terminals {
+         // APP-041: each session's start and end go to the app's own log (no arguments: they may carry secrets).
+         let log_dir = app.path().app_data_dir().ok();
+         let exit_dir = log_dir.clone();
++        // TERM-119: a bash, zsh or fish shell keeps its history per worktree unless the user turned that off.
++        let per_worktree_history = app.state::<Mutex<crate::state::Store>>().lock().map_or(true, |s| crate::shell_history::enabled(&s.settings()));
+         let history = pane_key.and_then(|k| log_dir.as_deref().and_then(|d| History::open(d, k)));
+         let label = program.clone().unwrap_or_else(|| "shell".to_string());
+         let exit_app = app;
+@@ -644,6 +646,10 @@ impl Terminals {
+             for (k, v) in &env {
+                 command.env(k, v);
+             }
++            // TERM-119: after the user's own variables, so a history file they set is kept.
++            if let Some(dir) = log_dir.as_deref().filter(|_| per_worktree_history) {
++                crate::shell_history::apply(command, dir);
++            }
+         }
+         let flow = Arc::new(Flow::default());
+         let out_flow = flow.clone();

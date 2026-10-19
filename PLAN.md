@@ -276,7 +276,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P2 · theme 2 · Isolation: one worktree per agent (1 cards)
 
-- [ ] T-256 · TERM-119 Shell history per worktree
+- [x] T-256 · TERM-119 Shell history per worktree · bash and zsh get a HISTFILE and fish a fish_history session named after the worktree the pane starts in (shell_history.rs), cmd, PowerShell and unknown shells are left alone, a history the user set is kept, folders are private, a start-up sweep removes a deleted worktree's history and leftover fish sessions, and Settings > Terminal has an on-by-default switch · done 2026-10-19 (lane/shell from 2b425e51; evidence/T-256.txt: 8 shell_history tests incl. a real Git Bash keeping two worktrees apart in a temp folder; the spawn-env hunk in terminal.rs and the mod line in lib.rs wait for the coordinator as evidence/shell-T-256-terminal.rs.patch and shell-T-256-lib.rs.patch; live proof pending (batched))
 
 ### P2 · theme 3 · Knowing what each agent is doing (7 cards)
 
