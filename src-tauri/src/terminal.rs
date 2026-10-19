@@ -322,6 +322,36 @@ pub struct Read {
     pub more: bool,
 }
 
+/// T-151-d: what a line shows after its last redraw. A repaint starts over at the line's first column
+/// with a carriage return or its cursor-movement twin (CSI n G, CSI row;col H / f with the column
+/// left out, 0 or 1); a shell that repaints what is typed that way would otherwise have every
+/// drawing run together and read as the command twice. A move to any other column keeps the text.
+/// ponytail: the row of an H / f move is ignored, a full-screen program's lines are loose anyway.
+fn last_drawing(s: &str) -> &str {
+    let b = s.as_bytes();
+    let (mut start, mut i) = (0, 0);
+    while i < b.len() {
+        if b[i] == b'\r' {
+            start = i + 1;
+        } else if b[i] == 0x1b && b.get(i + 1) == Some(&b'[') {
+            let mut j = i + 2;
+            while j < b.len() && (b[j].is_ascii_digit() || b[j] == b';') {
+                j += 1;
+            }
+            if j < b.len() && matches!(b[j], b'G' | b'H' | b'f') {
+                let params = &s[i + 2..j];
+                let col = if b[j] == b'G' { Some(params) } else { params.split(';').nth(1) };
+                if matches!(col, None | Some("" | "0" | "1")) {
+                    start = j + 1;
+                }
+            }
+            i = j;
+        }
+        i += 1;
+    }
+    &s[start..]
+}
+
 /// Drops CSI, OSC and two-byte escape sequences, control characters other than tab.
 pub fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -376,7 +406,7 @@ impl OutputLog {
             let raw = String::from_utf8_lossy(&std::mem::replace(&mut self.pending, rest)).into_owned();
             let line = raw.trim_end_matches(['\n', '\r']);
             // A carriage return redraws the line from its start: keep what was drawn last.
-            let line = line.rsplit('\r').next().unwrap_or(line);
+            let line = last_drawing(line);
             if self.lines.is_empty() && self.oldest == 0 {
                 self.oldest = 1;
             }
@@ -420,7 +450,7 @@ impl OutputLog {
                 }
             }
         }
-        let pending = if more && after.is_some() { String::new() } else { strip_ansi(self.pending_text().rsplit('\r').next().unwrap_or_default()) };
+        let pending = if more && after.is_some() { String::new() } else { strip_ansi(last_drawing(self.pending_text())) };
         let cursor = lines.last().map_or(if from < oldest { 0 } else { from.min(self.cursor()) }, |l| l.cursor);
         Read { lines, pending, cursor, oldest, dropped: self.dropped && from + 1 < self.oldest, more }
     }
@@ -1381,6 +1411,28 @@ mod tests {
         assert_eq!(log.read(Some(5), None).pending, "");
         log.push(&bytes[2..]);
         assert_eq!(log.read(Some(5), None).lines[0].text, "\u{2588}>");
+    }
+
+    #[test]
+    fn log_keeps_one_drawing_of_a_repainted_line() {
+        let mut log = OutputLog::default();
+        // T-151-d: a shell that repaints what is typed shows the command once, whichever way it starts over.
+        log.push(b"PS> d\rPS> di\rPS> dir\r\n");
+        log.push(b"PS> d\x1b[1GPS> di\x1b[0G\x1b[2KPS> dir\n");
+        log.push(b"\x1b[?25l\x1b[3;1HPS> dir\x1b[H\x1b[KPS> dir\x1b[?25h\n");
+        log.push(b"PS> d\x1b[2;1fPS> dir\n");
+        let texts: Vec<String> = log.read(None, None).lines.into_iter().map(|l| l.text).collect();
+        assert_eq!(texts, ["PS> dir"; 4]);
+        // The part not finished yet reads the same way.
+        log.push(b"PS> d\x1b[1GPS> dir");
+        assert_eq!(log.read(None, None).pending, "PS> dir");
+        log.push(b"\n");
+        // A move to another column is not a repaint: the text before it stays.
+        log.push(b"ab\x1b[1;5Hcd\x1b[3Gef\x1b[;12Hgh\n");
+        assert_eq!(log.read(Some(5), None).lines[0].text, "abcdefgh");
+        // The 1-second progress line still keeps its last drawing.
+        log.push(b"10%\r\x1b[K50%\r100%\n");
+        assert_eq!(log.read(Some(6), None).lines[0].text, "100%");
     }
 
     #[test]
