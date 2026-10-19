@@ -8,6 +8,7 @@ import { defaultsOnly, labelOf } from "../keys/keymap";
 import "./onboarding.css";
 import { useSettings } from "../settings/useSettings";
 import Tours from "./Tours";
+import { AgentPanel, AutomatePanel, composer, MultitaskPanel, NotificationsPanel } from "./StepPanels";
 import { defaultAgentId } from "../launch/agents";
 import {
   caps, demoFrames, doneFrom, paletteKeys, doneId, firstOpen, forward, latest, markGuide, moveOn, nextTip, OPEN_EXPLORE, OPEN_GUIDE, guideClosed, PAGE_SHOWN, railKey, ring, startTicked, STEPS, stopDone, stopOf, TWO_REPOS, withRecord, words, workflowDone, WORKFLOWS,
@@ -156,6 +157,7 @@ function SetupGuide({ ask, open, onClose }: { ask: StepId | null; open: boolean;
     if (open) setAt(firstOpen(g.done, ask));
   }, [open, ask]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => setAt((a) => moveOn(a, g.done)), [doneKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => composer.reset(), [open]); // ONB-016: a composer request from before a close and reopen is void
   const shown = useClosing(open);
   if (!shown) return null;
   const r = ring(g.done);
@@ -198,6 +200,10 @@ function SetupGuide({ ask, open, onClose }: { ask: StepId | null; open: boolean;
           </header>
           <p>{words(step).about}</p>
           {step.id === "cli" && <CliStep list={g.caps} onCheck={g.refresh} />}
+          {step.id === "multitask" && <MultitaskPanel close={onClose} />}
+          {step.id === "notifications" && <NotificationsPanel />}
+          {step.id === "agent" && <AgentPanel />}
+          {step.id === "automate" && <AutomatePanel onCheck={g.refresh} />}
           {g.done.has(step.id) && <p className="guide-done">Done</p>}
         </section>
       </div>

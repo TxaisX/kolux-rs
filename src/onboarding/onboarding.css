@@ -28,3 +28,6 @@
 .onb-entry .text { display: flex; flex-direction: column; min-width: 0; }
 .onb-entry .name { font-size: 13px; font-weight: 500; }
 .onb-entry .about { font-size: 12px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* ONB-016: the Setup Guide's action panels. */
+.guide-note.warn { color: var(--warn); }
+.guide-code { margin: 4px 0; padding: 8px 10px; border: 1px solid var(--line-subtle); border-radius: 8px; background: var(--pane-bg); font-size: 12px; overflow-x: auto; user-select: text; }
