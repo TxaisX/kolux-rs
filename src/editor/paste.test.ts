@@ -124,6 +124,19 @@ test("EDIT-008 (FIX-1): the rich view takes a paste only up to its own size limi
   expect(richRefusal(RICH_LIMIT + 1)).toBe("Paste refused in the rich view: it is just over the 600 KB it takes in one paste. Paste it in source view instead. Nothing was pasted.");
 });
 
+// FIX-5 (council P1 AFTER 4): the limit is on the note the paste would make, not on the paste alone.
+test("EDIT-008 (FIX-5): the rich view counts what the note already holds, so two pastes under the limit cannot add up past it", () => {
+  const said: string[] = [];
+  const ev = (text: string) => ({ clipboardData: { getData: () => text }, preventDefault: () => said.push("prevented") }) as unknown as ClipboardEvent;
+  const half = Math.floor(RICH_LIMIT / 2);
+  expect(refusePaste(ev("x".repeat(half)), (t) => said.push(t), half)).toBe(false); // exactly at the limit: taken
+  expect(said).toEqual([]);
+  expect(refusePaste(ev("x".repeat(half + 2)), (t) => said.push(t), half)).toBe(true); // 2 over: refused
+  expect(said).toEqual(["prevented", richRefusal(half + 2, half)]);
+  expect(richRefusal(half + 2, half)).toBe("Paste refused in the rich view: the note would be just over the 600 KB the rich view takes. Paste it in source view instead. Nothing was pasted.");
+  expect(richRefusal(1000, 700 * 1024)).toBe("Paste refused in the rich view: the note would be 701 KB, over the 600 KB the rich view takes. Paste it in source view instead. Nothing was pasted.");
+});
+
 // FIX-2 (council FS-3): a second paste while the first is still going in is refused out loud and
 // leaves the first paste whole; a piece that throws clears the hold so the editor takes input again.
 test("EDIT-008 (FIX-2): a second paste mid-paste is refused with a toast, and a failing piece does not hold input forever", () => {

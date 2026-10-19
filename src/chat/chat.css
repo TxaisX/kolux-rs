@@ -29,7 +29,7 @@
 .chat-head { display: flex; justify-content: flex-end; align-items: flex-start; gap: 12px; padding: 6px 12px 0; }
 /* VIEW-020 (T-080): Send result to, a small menu of other chat sessions */
 .chat-hand { position: relative; font-size: 11px; color: var(--fg-muted); }
-.chat-hand-note { font-size: 11px; color: var(--warn, var(--fg-muted)); max-width: 60%; }
+.chat-hand-note { font-size: 11px; color: var(--warn); max-width: 60%; }
 .chat-hand summary { cursor: pointer; list-style: none; user-select: none; }
 .chat-hand summary:hover, .chat-hand[open] summary { color: var(--fg); }
 .chat-hand ul { position: absolute; right: 0; z-index: 5; margin: 4px 0 0; padding: 4px; list-style: none; min-width: 160px; max-width: 70vw; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }

@@ -13,8 +13,10 @@ WHAT THE USER CAN NOW DO
   both paths ("... both exist; move or remove one of them"), and the next start puts the copy back once the original is cleared.
   Before, the record was dropped and the hidden copy orphaned.
 - (AFTER 8) A record entry is trusted only if its set-aside copy sits next to the original and is named after it (not just the name
-  prefix). A damaged or hand-edited record can no longer make start-up move or remove a folder elsewhere. Carried copies (the record's
-  "left" list) have no original on record, so only their name prefix can still be checked.
+  prefix). A damaged or hand-edited record can no longer make START-UP move or remove a folder elsewhere. [Corrected by FIX-4, review of
+  0a444d4: at this commit the check covered start-up only; the next delete still carried a refused entry into its "left" list, which was
+  checked by name prefix alone, and removed it. FIX-4 carries only trusted entries and matches the exact set-aside name form; see
+  evidence/skills-FIX-4.txt.] Carried copies (the record's "left" list) have no original on record, so only their name can be checked.
 - (AFTER 3) The delete confirmation now says, per skill, when a link outside the skill folders points at a folder being deleted:
   "<skill>: the link <path> is outside the skill folders, so it stays and will point at nothing". New field Planned.dangling.
 - (AFTER 4, lock text) The lock file's pid/time text is documented as unreadable by other programs on Windows while the lock is held.
