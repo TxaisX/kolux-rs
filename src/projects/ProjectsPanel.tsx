@@ -27,6 +27,8 @@ import { mergePoll, nextDelay, pollItems, STALE_MS, type PrPoll } from "../scm/p
 import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
 import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
 import AddProject from "./AddProject";
+import CardLine from "../look/CardLine";
+import { cardTitle, readCardDetails, type CardFacts } from "../look/cards";
 import Picker, { type PickItem } from "./Picker";
 import StartGit, { type FirstFile } from "./StartGit";
 import { openKits } from "../kits/Kits";
@@ -260,6 +262,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const [dropGroup, setDropGroup] = useState<{ remove: boolean } | null>(null); // PROJ-015: the delete question
   const seen = useRef<Record<string, AgentState>>({});
   const groupBy = groupFromSetting(settings[GROUP_SETTING]);
+  const cardDetails = readCardDetails(settings); // PROJ-062, SET-021: Compact, Default, Detailed or a chosen set
+
   const sortBy = sortFromSetting(settings[SORT_SETTING]);
   // PROJ-050: an old "Recent" choice is moved to Smart once and saved that way.
   useEffect(() => {
@@ -1178,12 +1182,15 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const row = ({ p, w }: Entry, depth = 0, kids = false) => {
     const asking = confirm?.path === w.path;
     const info = infoOf(w);
+    // PROJ-062: what the card shows under its name, and what a hover adds for the rest.
+    const facts: CardFacts = { agents: liveIn(w).length, state: info.state, pr: info.pr, changed: info.changed, note: w.comment ?? null };
+    const hoverTitle = cardTitle(worktreeLabel(w), w.branch, cardDetails.shown, facts, `Show ${w.path}${isAsleep(w) ? " (asleep: showing it wakes it)" : ""}`);
     const un = isUnread(w);
     const shut = shutKids.has(w.path);
     const up = w.parent ? (worktrees[p.id] ?? []).find((x) => !x.isMain && same(x.path, w.parent as string)) : undefined;
     return (
       <div key={w.path} data-worktree={worktreeLabel(w)} data-depth={depth} data-path={w.path}>
-        <div className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onClick={() => show(w)} onKeyDown={(e) => (e.key === "Enter" ? show(w) : e.key === "F2" && startRename(w))} title={`Show ${w.path}${isAsleep(w) ? " (asleep: showing it wakes it)" : ""}`} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
+        <div className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onClick={() => show(w)} onKeyDown={(e) => (e.key === "Enter" ? show(w) : e.key === "F2" && startRename(w))} title={hoverTitle} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
           {kids && (
             <button
               className={`fold${shut ? " shut" : ""}`}
@@ -1216,7 +1223,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
           ) : (
             <span
               className="name"
-              title="Double-click (or F2) to rename"
+              title={hoverTitle + "\nDouble-click (or F2) to rename"}
               onDoubleClick={(e) => {
                 e.stopPropagation();
                 startRename(w);
@@ -1315,6 +1322,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
             </button>
           )}
         </div>
+        <CardLine shown={cardDetails.shown} facts={facts} indent={44 + depth * 14} />
         {paneRows(w, depth)}
         {moving === w.path && !asking && (
           <div className="sb-form" data-moving={worktreeLabel(w)}>

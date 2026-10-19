@@ -1,0 +1,124 @@
+// PROJ-062 / SET-021 (T-270, T-266): what a workspace card in the sidebar shows besides its name and
+// status dot. Three presets - Compact (status only), Default (status and an agent summary) and
+// Detailed (adds the pull request, the changed-file count and the workspace's note) - or a list of
+// separate details the user ticks one by one (T-266's chooser).
+//
+// Saved as two settings: `workspaceCardDensity` (the preset) and `workspaceCardDetails` (a custom
+// list; empty or missing means "follow the preset", so a preset picks up details added in later
+// versions, and an older profile never gets a duplicate).
+//
+// For a later card that adds a detail (T-291-d's Automation tag): add one entry to CARD_DETAILS
+// (its `line` reads a new field of `CardFacts`, which ProjectsPanel fills), name it in the presets
+// that should show it, and nothing else changes. The chooser, the Settings page and the saved
+// forms all read this list.
+import type { PrState } from "../projects/rows";
+import { VOCAB, type StatusKey } from "../terminal/status";
+
+export const CARD_DENSITY_FIELD = "workspaceCardDensity";
+export const CARD_DETAILS_FIELD = "workspaceCardDetails";
+
+export const DENSITIES = ["default", "compact", "detailed"] as const;
+export type Density = (typeof DENSITIES)[number];
+export const DENSITY_LABEL: Record<Density, string> = { default: "Default", compact: "Compact", detailed: "Detailed" };
+export const DENSITY_NOTE: Record<Density, string> = {
+  default: "Status and an agent summary under the name.",
+  compact: "One line per workspace; the rest shows when you hover it.",
+  detailed: "Status, agents, pull request, changed files and the note.",
+};
+
+/** What the sidebar knows about one workspace, for the cards to draw. */
+export type CardFacts = { agents: number; state: StatusKey; pr: PrState; changed: number; note: string | null };
+
+export type CardDetail = {
+  id: string;
+  label: string;
+  /** Status is the dot; it is on in every preset and cannot be switched off (PROJ-062). */
+  locked?: boolean;
+  /** The words this detail adds to the card's second line, or null when there is nothing to say. */
+  line: (f: CardFacts) => string | null;
+};
+
+const PR_WORDS: Record<string, string> = { open: "Pull request open", draft: "Draft pull request", merged: "Pull request merged", closed: "Pull request closed" };
+
+export const CARD_DETAILS: readonly CardDetail[] = [
+  { id: "status", label: "Status", locked: true, line: () => null },
+  {
+    id: "agents",
+    label: "Agent summary",
+    line: (f) => {
+      if (f.agents <= 0 && (f.state === "idle" || f.state === "stopped")) return null;
+      const word = f.state === "idle" ? "" : VOCAB[f.state].word;
+      const n = f.agents > 0 ? `${f.agents} ${f.agents === 1 ? "agent" : "agents"}` : "";
+      return [n, word].filter(Boolean).join(" · ") || null;
+    },
+  },
+  { id: "pr", label: "Pull request", line: (f) => (f.pr ? PR_WORDS[f.pr] ?? null : null) },
+  { id: "changes", label: "Changed files", line: (f) => (f.changed > 0 ? `${f.changed} changed ${f.changed === 1 ? "file" : "files"}` : null) },
+  {
+    id: "note",
+    label: "Note",
+    line: (f) => {
+      const first = (f.note ?? "").split(/\r?\n/).find((l) => l.trim())?.trim() ?? "";
+      return first ? (first.length > 60 ? first.slice(0, 59) + "…" : first) : null;
+    },
+  },
+];
+
+export const PRESETS: Record<Density, readonly string[]> = {
+  compact: ["status"],
+  default: ["status", "agents"],
+  detailed: ["status", "agents", "pr", "changes", "note"],
+};
+
+const known = new Set(CARD_DETAILS.map((d) => d.id));
+const lockedIds = CARD_DETAILS.filter((d) => d.locked).map((d) => d.id);
+/** Known ids only, once each, in the list's own order, with the locked ones always in. */
+export const tidyDetails = (v: unknown): string[] => {
+  const asked = new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  return CARD_DETAILS.filter((d) => d.locked || asked.has(d.id)).map((d) => d.id);
+};
+
+const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((x) => b.includes(x));
+export const densityOf = (v: unknown): Density => ((DENSITIES as readonly string[]).includes(v as string) ? (v as Density) : "default");
+
+/** The cards' details now: the custom list when one is saved, else the preset. `density` is the
+ *  preset the set equals, or "custom". */
+export function readCardDetails(settings: Record<string, unknown>): { shown: string[]; density: Density | "custom" } {
+  const saved = settings[CARD_DETAILS_FIELD];
+  const custom = Array.isArray(saved) && saved.length > 0 ? tidyDetails(saved) : null;
+  const shown = custom ?? tidyDetails(PRESETS[densityOf(settings[CARD_DENSITY_FIELD])]);
+  const preset = DENSITIES.find((d) => sameSet(tidyDetails(PRESETS[d]), shown));
+  return { shown, density: preset ?? "custom" };
+}
+
+export const cardShows = (settings: Record<string, unknown>, id: string): boolean => readCardDetails(settings).shown.includes(id);
+
+/** Choosing a preset: the preset is saved and any custom list is cleared. */
+export const densityPatch = (d: Density): Record<string, unknown> => ({ [CARD_DENSITY_FIELD]: d, [CARD_DETAILS_FIELD]: [] });
+
+/** Ticking or unticking one detail. A set that equals a preset is saved as that preset, so it keeps
+ *  following the preset; anything else is saved as a custom list. */
+export function detailPatch(settings: Record<string, unknown>, id: string, on: boolean): Record<string, unknown> {
+  if (!known.has(id) || lockedIds.includes(id)) return {};
+  const now = readCardDetails(settings).shown;
+  const next = tidyDetails(on ? [...now, id] : now.filter((x) => x !== id));
+  const preset = DENSITIES.find((d) => sameSet(tidyDetails(PRESETS[d]), next));
+  return preset ? densityPatch(preset) : { [CARD_DETAILS_FIELD]: next };
+}
+
+/** The second line under a workspace's name: the shown details' words joined, or null for none. */
+export function cardLine(shown: readonly string[], f: CardFacts): string | null {
+  const words = CARD_DETAILS.filter((d) => shown.includes(d.id)).flatMap((d) => d.line(f) ?? []);
+  return words.length ? words.join(" · ") : null;
+}
+
+/** What a hover adds for the details the card does not show (Compact: everything but the status). */
+export function hoverLines(shown: readonly string[], f: CardFacts): string[] {
+  return CARD_DETAILS.filter((d) => !shown.includes(d.id)).flatMap((d) => d.line(f) ?? []);
+}
+
+/** The hover text of a card (PROJ-062): the full name and branch (a long title shows again even when
+ *  the branch is also shown), then whatever the card leaves out, then `base` (where it lives). */
+export function cardTitle(name: string, branch: string | null, shown: readonly string[], f: CardFacts, base: string): string {
+  return [name, branch && branch !== name ? `Branch ${branch}` : null, ...hoverLines(shown, f), base].filter(Boolean).join("\n");
+}
