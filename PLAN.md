@@ -328,7 +328,7 @@ foundations every later card stands on; the cards they touch are finished in the
 ### P2 · theme 11 · Orchestration and automations (8 cards)
 
 - [ ] T-289-b · the rest of T-289's cards: printed orchestration task references (task-N) opening that task, once the window has a view of orchestration tasks
-- [ ] T-291-d · the rest of T-291-c's cards: the Automation tag as a workspace card property, which needs the card details chooser (T-266)
+- [x] T-291-d · the rest of T-291-c's cards: the Automation tag as a workspace card property, which needs the card details chooser (T-266) · done 2026-10-19 (lane/look from 34e7ea29; evidence/T-291-d.txt: the Card details chooser has a sixth tick-box, Automation, in no preset; with it ticked a card line says "Automation" for a worktree an automation run made (madeBy) and nothing for one made by hand, and the hover names it when the tick is off; vitest src/look + settings + projects 300/300, tsc clean, no Rust; needs the coordinator hunk evidence/look-T-291-d-ProjectsPanel.patch: two lines in ProjectsPanel.tsx fill CardFacts.automation) · live proof pending (batched)
 - [ ] T-292-b · the rest of T-292's cards: the skill freshness pill, the status bar's running skill update with its count, the green check that fades and the failure that stays until clicked (needs the skill update flow of T-196-b, which waits on a published Kolux skills repository)
 
 ### P2 · theme 8 · Release, update and CI pipeline (1 cards)
