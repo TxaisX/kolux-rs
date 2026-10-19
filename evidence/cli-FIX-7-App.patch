@@ -1,0 +1,85 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index c1129f2f..4eeed12f 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -38,6 +38,7 @@ import SignInNotice from "./settings/SignInNotice";
+ import KeyLostNotice from "./settings/KeyLostNotice";
+ import { LAST_SCREEN_FIELD, lastWriter, OPEN_PAGE_FIELD, openPageAt, saveLayout, startScreen, stripOn } from "./settings/general";
+ import { cacheDue, cacheMinutes } from "./projects/cache";
++import { sessionEnv, startTail } from "./projects/startArgs";
+ import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
+ import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./projects/WorktreePalette";
+ import { navTarget, travel, visit, type Place } from "./projects/nav";
+@@ -1096,7 +1097,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     await pretrust(agent.id, [dir]);
+     const line = await invoke<StartLine>("agent_start_line", { id: agent.id, extra, prompt });
+     const key = nextKey.current++;
+-    const pane: Pane = { key, cwd: dir, branch, agent: markFor(agent.id), agentId: agent.id, program: line.program ?? agent.program, args: line.args, env: dispatch ? [...line.env, ["KOLUX_DISPATCH_ID", dispatch]] : line.env, title, typed: line.typed ?? undefined };
++    const pane: Pane = { key, cwd: dir, branch, agent: markFor(agent.id), agentId: agent.id, program: line.program ?? agent.program, args: line.args, env: sessionEnv(line.env, dispatch), title, typed: line.typed ?? undefined };
+     // TERM-007: an empty pane in that workspace takes the session; else it gets a cell of its own.
+     setPanes((ps) => {
+       const free = freeCell(cellsOf(panesIn(ps, dir)));
+@@ -1301,7 +1302,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+       if (p.kind === "start") {
+         const a = agents.find((x) => x.id === p.agent);
+         if (a)
+-          void cli.current.startIn(a, p.path, p.branch, p.prompt, false, p.extra, p.title ?? undefined, p.dispatch).then((key) => {
++          void cli.current.startIn(a, p.path, p.branch, ...startTail(p)).then((key) => {
+             // AUTO-013: an automation run remembers its pane, so View run opens that terminal.
+             if (key !== null && p.runId) runPanes.current[p.runId] = key;
+           });
+diff --git a/src/projects/startArgs.test.ts b/src/projects/startArgs.test.ts
+new file mode 100644
+index 00000000..03d1be03
+--- /dev/null
++++ b/src/projects/startArgs.test.ts
+@@ -0,0 +1,21 @@
++import { expect, test } from "vitest";
++import { DISPATCH_ENV, sessionEnv, startTail } from "./startArgs";
++
++test("T-172-e / cli FIX-7: a worker start's first session carries its dispatch id, last, and only one", () => {
++  const base: [string, string][] = [["A", "1"]];
++  expect(DISPATCH_ENV).toBe("KOLUX_DISPATCH_ID");
++  expect(sessionEnv(base, "dispatch-3")).toEqual([["A", "1"], ["KOLUX_DISPATCH_ID", "dispatch-3"]]);
++  // An entry the agent's settings already held is dropped: the runtime reads the real dispatch.
++  const held: [string, string][] = [["KOLUX_DISPATCH_ID", "dispatch-user"], ["B", "2"]];
++  expect(sessionEnv(held, "dispatch-3")).toEqual([["B", "2"], ["KOLUX_DISPATCH_ID", "dispatch-3"]]);
++  expect(sessionEnv(held, "dispatch-3").filter(([k]) => k === DISPATCH_ENV)).toHaveLength(1);
++  // A tab the user opens has no dispatch and is untouched.
++  expect(sessionEnv(base)).toBe(base);
++  expect(sessionEnv(held, "")).toBe(held);
++});
++
++test("T-172-e: the runtime's start notice hands its dispatch id to startIn", () => {
++  const notice = { kind: "start", path: "C:/w", branch: "b", agent: "claude", prompt: "do it", extra: ["--x"], title: null, dispatch: "dispatch-9" } as const;
++  expect(startTail({ ...notice, extra: [...notice.extra] })).toEqual(["do it", false, ["--x"], undefined, "dispatch-9"]);
++  expect(startTail({ ...notice, extra: [], title: "T", dispatch: undefined })).toEqual(["do it", false, [], "T", undefined]);
++});
+diff --git a/src/projects/startArgs.ts b/src/projects/startArgs.ts
+new file mode 100644
+index 00000000..910dcaeb
+--- /dev/null
++++ b/src/projects/startArgs.ts
+@@ -0,0 +1,22 @@
++import type { CliWorkspace } from "./model";
++
++/** T-172-e: the variable a worker start puts in its first session's environment (the runtime's DISPATCH_ENV). */
++export const DISPATCH_ENV = "KOLUX_DISPATCH_ID";
++
++type StartLine = [string, string][];
++
++/**
++ * cli FIX-7: the environment the agent's first session starts with. A worker start (it has a
++ * dispatch id) ends the list with its own KOLUX_DISPATCH_ID, and any entry for that name the
++ * agent's settings already held is dropped, so the runtime reads the real dispatch and a value the
++ * user set can never stand in for it. A start with no dispatch (a tab the user opens) is unchanged.
++ */
++export function sessionEnv(env: StartLine, dispatch?: string): StartLine {
++  if (!dispatch) return env;
++  return [...env.filter(([k]) => k !== DISPATCH_ENV), [DISPATCH_ENV, dispatch]];
++}
++
++/** What the "start" notice from the runtime hands startIn after the folder: prompt, show, extra, title, dispatch. */
++export function startTail(p: Extract<CliWorkspace, { kind: "start" }>): [string, boolean, string[], string | undefined, string | undefined] {
++  return [p.prompt, false, p.extra, p.title ?? undefined, p.dispatch];
++}
