@@ -7,8 +7,8 @@
 //! The files live in Kolux's own data folder under `shell-history/<worktree key>/`, a folder only
 //! the user can open on a Unix system (on Windows it inherits the profile's own private rights).
 //! A folder is removed at start-up when the worktree it belongs to has been gone for 30 days across
-//! start-ups (so a drive that is only unplugged keeps its history), and so is its fish session file,
-//! which fish keeps in its own data folder.
+//! start-ups while the folder above it is there (a drive that is not plugged in keeps its history for
+//! good), and so is its fish session file, which fish keeps in its own data folder.
 //!
 //! ponytail: a shell start-up file that sets `HISTFILE` itself (zsh's new-user setup does) wins over
 //! the variable, as the user's own settings should; the start-up hook layer (TERM-137) is where that
@@ -152,6 +152,8 @@ fn history_var(command: &CommandBuilder, data: &Path, chosen: &dyn Fn(&str) -> b
     let key = key(&root);
     let dir = data.join(DIR).join(&key);
     make_private(&dir).ok()?;
+    // The pane's folder is there, so the worktree is back: drop the sweep's missing-since note.
+    let _ = std::fs::remove_file(dir.join(MISSING));
     let record = dir.join(RECORD);
     if !record.is_file() {
         std::fs::write(&record, normal_record(&root)).ok()?;
@@ -189,12 +191,14 @@ pub fn system_fish_dir() -> Option<PathBuf> {
 }
 
 /// Removes what a deleted worktree left: its history folder in `data`, and the fish session of any
-/// folder that is gone. A worktree counts as deleted only after a sweep has found it missing and a
-/// later one, at least `GRACE_SECS` after, finds it still missing (a note in its history folder holds
-/// the first time), so a drive that is unplugged or unmounted, a share that does not answer, or a
-/// mount point left behind empty, never costs a worktree its history; a worktree that is back clears
-/// the note. Only real folders named after the worktree their record names are touched, and never
-/// through a link. Returns how many files and folders were removed.
+/// folder that is gone. A worktree counts as deleted only when the folder above it is there and a
+/// sweep has found it missing and a later one, at least `GRACE_SECS` after, finds it still missing (a
+/// note in its history folder holds the first time). So a drive that is not plugged in or a share that
+/// does not answer (nothing above the worktree) never costs a worktree its history, and a mount point
+/// left behind empty keeps it for the grace period; a worktree that is back clears the note (so does a
+/// pane started in it). Only real folders named after the worktree their record names are touched, and
+/// never through a link; when the history folder is itself a link no fish session is touched either.
+/// Returns how many files and folders were removed.
 pub fn sweep(data: &Path, fish: Option<&Path>) -> usize {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     sweep_at(data, fish, now, GRACE_SECS)
@@ -224,25 +228,39 @@ fn sweep_at(data: &Path, fish: Option<&Path>, now: u64, grace: u64) -> usize {
                 Ok(true) => {
                     let _ = std::fs::remove_file(dir.join(MISSING));
                 }
-                Ok(false) if now > 0 => match std::fs::read_to_string(dir.join(MISSING)).ok().and_then(|s| s.trim().parse::<u64>().ok()) {
-                    Some(since) if now.saturating_sub(since) >= grace => {
-                        if std::fs::remove_dir_all(&dir).is_ok() {
-                            removed += 1;
+                // Missing with the folder above it there (a mount point left behind, a deleted worktree):
+                // the clock runs. With the folder above it missing too (a drive that is not plugged in, a
+                // share that is away) nothing is deleted, ever, and an earlier note is dropped so the clock
+                // starts over when the folder above comes back.
+                Ok(false) if now > 0 => {
+                    let above = wt.parent().is_some_and(|p| !p.as_os_str().is_empty() && matches!(p.try_exists(), Ok(true)));
+                    if !above {
+                        let _ = std::fs::remove_file(dir.join(MISSING));
+                        continue;
+                    }
+                    match std::fs::read_to_string(dir.join(MISSING)).ok().and_then(|s| s.trim().parse::<u64>().ok()) {
+                        Some(since) if now.saturating_sub(since) >= grace => {
+                            if std::fs::remove_dir_all(&dir).is_ok() {
+                                removed += 1;
+                            }
+                        }
+                        Some(_) => {}
+                        None => {
+                            let _ = std::fs::write(dir.join(MISSING), now.to_string());
                         }
                     }
-                    Some(_) => {}
-                    None => {
-                        let _ = std::fs::write(dir.join(MISSING), now.to_string());
-                    }
-                },
+                }
                 // "Cannot tell" (a share that does not respond) changes nothing.
                 _ => {}
             }
         }
     }
     // Fish sessions are named after the folder: any this build made without a folder are leftovers.
+    // A history folder that exists but is not a real folder (a link, a file) cannot tell which
+    // sessions are leftovers, so none is touched then.
     let prefix = format!("{FISH_PREFIX}{}_", build_tag(data));
-    if let Some(fish) = fish {
+    let unreadable = std::fs::symlink_metadata(&base).is_ok() && !real_base;
+    if let (false, Some(fish)) = (unreadable, fish) {
         for e in std::fs::read_dir(fish).into_iter().flatten().flatten() {
             let name = e.file_name().to_string_lossy().to_string();
             // `<tail>_<hex>` back to the folder's `<tail>-<hex>`; both parts are alphanumeric.
@@ -492,7 +510,7 @@ mod tests {
     }
 
     #[test]
-    fn term119_a_drive_letter_or_mount_that_is_not_there_at_all_is_kept_for_the_grace_period() {
+    fn term119_a_drive_letter_or_mount_that_is_not_there_at_all_keeps_its_history() {
         let t = temp("term119-nodrive");
         let data = t.join("data");
         let gone = Path::new(if cfg!(windows) { r"Q:\no\such\drive\wt" } else { "/no/such/mount/point/wt" });
@@ -500,12 +518,92 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(RECORD), gone.to_string_lossy().as_bytes()).unwrap();
         std::fs::write(dir.join("bash_history"), "x").unwrap();
+        // The folder above the worktree is not there either (an unplugged drive): no note is made and
+        // the history survives the grace period twice over, as it did before the note existed.
         assert_eq!(sweep_at(&data, None, T0, GRACE_SECS), 0);
+        assert!(!dir.join(MISSING).exists(), "no note when the folder above the worktree is not there");
         assert_eq!(sweep_at(&data, None, T0 + GRACE_SECS - 1, GRACE_SECS), 0);
+        assert_eq!(sweep_at(&data, None, T0 + 2 * GRACE_SECS, GRACE_SECS), 0);
+        assert_eq!(sweep_at(&data, None, T0 + 10 * GRACE_SECS, GRACE_SECS), 0);
         assert!(dir.join("bash_history").is_file());
         // A clock that went backwards removes nothing.
         assert_eq!(sweep_at(&data, None, T0 - 5, GRACE_SECS), 0);
         assert!(dir.is_dir());
+    }
+
+    #[test]
+    fn term119_a_note_from_before_the_drive_went_away_does_not_count_when_it_comes_back_empty() {
+        let t = temp("term119-stale-note");
+        let data = t.join("data");
+        let mount = t.join("mnt");
+        let wt = worktree(&mount, "proj");
+        let (_, v) = history_var(&shell("bash", &wt), &data, &none).unwrap();
+        std::fs::write(Path::new(&v), "echo precious").unwrap();
+        let kept = || data.join(DIR).join(key(&wt)).join("bash_history").is_file();
+        // The worktree goes missing under a mount point that is there: the note is made.
+        std::fs::remove_dir_all(&wt).unwrap();
+        assert_eq!(sweep_at(&data, None, T0, GRACE_SECS), 0);
+        assert!(stamp(&data, &wt).is_file());
+        // The whole mount then goes away (nothing above the worktree): the note is dropped, not aged.
+        std::fs::remove_dir_all(&mount).unwrap();
+        assert_eq!(sweep_at(&data, None, T0 + DAY, GRACE_SECS), 0);
+        assert!(!stamp(&data, &wt).exists());
+        // The mount comes back empty after the old note's 30 days: the clock starts over, nothing goes.
+        std::fs::create_dir_all(&mount).unwrap();
+        assert_eq!(sweep_at(&data, None, T0 + GRACE_SECS, GRACE_SECS), 0);
+        assert!(kept());
+        assert_eq!(sweep_at(&data, None, T0 + 2 * GRACE_SECS, GRACE_SECS), 1);
+    }
+
+    #[test]
+    fn term119_starting_a_pane_in_a_worktree_clears_its_missing_note() {
+        let t = temp("term119-pane-clears");
+        let data = t.join("data");
+        let mount = t.join("mnt");
+        let wt = worktree(&mount, "proj");
+        let (_, v) = history_var(&shell("bash", &wt), &data, &none).unwrap();
+        std::fs::write(Path::new(&v), "echo precious").unwrap();
+        let kept = || data.join(DIR).join(key(&wt)).join("bash_history").is_file();
+        // Day 1: the share is not mounted yet when Kolux starts, so the sweep notes the time.
+        std::fs::remove_dir_all(&wt).unwrap();
+        assert_eq!(sweep_at(&data, None, T0, GRACE_SECS), 0);
+        assert!(stamp(&data, &wt).is_file());
+        // The user mounts it and works in the worktree: a pane starts there.
+        std::fs::create_dir_all(wt.join(".git")).unwrap();
+        history_var(&shell("bash", &wt), &data, &none).unwrap();
+        assert!(!stamp(&data, &wt).exists(), "using the worktree clears the note");
+        // Later it is missing again at a start-up 30 days after day 1: a fresh note, not a removal.
+        std::fs::remove_dir_all(&wt).unwrap();
+        assert_eq!(sweep_at(&data, None, T0 + GRACE_SECS, GRACE_SECS), 0);
+        assert!(kept());
+        assert!(stamp(&data, &wt).is_file());
+    }
+
+    #[test]
+    fn term119_the_fish_sessions_are_left_alone_when_the_history_folder_is_a_link() {
+        let t = temp("term119-fish-link");
+        let data = t.join("data");
+        let fish = t.join("fish");
+        std::fs::create_dir_all(&fish).unwrap();
+        let wt = worktree(&t, "wt");
+        let (_, v) = history_var(&shell("fish", &wt), &data, &none).unwrap();
+        let session = fish.join(format!("{}_history", v.to_string_lossy()));
+        std::fs::write(&session, "- cmd: x").unwrap();
+        // The history folder is replaced by a link to somewhere else that holds none of the folders.
+        std::fs::remove_dir_all(data.join(DIR)).unwrap();
+        let elsewhere = t.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        if !link_dir(&elsewhere, &data.join(DIR)) {
+            eprintln!("term119: SKIPPED the fish link check, no folder link could be made here");
+            return;
+        }
+        assert_eq!(sweep_at(&data, Some(&fish), T0, GRACE_SECS), 0);
+        assert!(session.is_file(), "a history folder that cannot be read as ours must not cost a fish session");
+        // With a real history folder that lacks the worktree's folder, the session is a leftover.
+        std::fs::remove_dir(data.join(DIR)).unwrap();
+        std::fs::create_dir_all(data.join(DIR)).unwrap();
+        assert_eq!(sweep_at(&data, Some(&fish), T0, GRACE_SECS), 1);
+        assert!(!session.exists());
     }
 
     /// Makes `link` a folder link to `target` (a symbolic link on Unix, a junction on Windows).
@@ -563,6 +661,7 @@ mod tests {
             sweep_at(&data2, None, now, GRACE_SECS);
         }
         assert!(inside.join("bash_history").is_file(), "an entry that is a link is not followed");
+        assert!(!inside.join(MISSING).exists(), "and no note is written through it");
         assert!(elsewhere.join(key(&missing)).join("bash_history").is_file(), "a history folder that is a link is not followed");
     }
 

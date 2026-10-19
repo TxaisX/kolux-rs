@@ -1,3 +1,4 @@
+NOTE (2026-10-19): shell-FIX-2-links.patch and shell-FIX-2-pty.patch (first round below) are already on main; do NOT apply them.
 shell-FIX-2 (council D2 re-review of lane/shell 2963ba6: FS1, FS2, AFTER 3 and 4) · 2026-10-14
 Lane/shell from 2963ba6, merged with main 950ba36 as e6818c5 (no conflicts; tree == 950ba36).
 Logs: G:/Temp/shell-w1-logs/fix2-*.log. All Rust runs: GIT_* and KOLUX_* unset, HOME/USERPROFILE,
