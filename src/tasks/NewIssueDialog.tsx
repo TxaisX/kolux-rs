@@ -7,7 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { actionError } from "./issueActions";
 import type { Task } from "./model";
-import { closingDraft, createBusy, createOnce, draftFrom, draftToSave, emptyDraft, type IssueDraft, names, openDraft, pickableLabels, TITLE_MAX, titleLength, lastCreateFailure, watchCreate, withRepo } from "./newIssue";
+import { closingDraft, createBusy, createOnce, draftFrom, draftToSave, emptyDraft, type IssueDraft, names, openDraft, pickableLabels, TITLE_MAX, titleLength, lastCreateFailure, sameScope, watchCreate, withRepo } from "./newIssue";
 
 /** The draft kept for this run (also one too long for settings); null after an issue is created.
  * The one-create-at-a-time flag lives next to it, in newIssue.ts (createOnce). */
@@ -30,14 +30,18 @@ export default function NewIssueDialog(p: {
   const [peopleText, setPeopleText] = useState(d.assignees.join(", "));
   const [busy, setBusy] = useState(createBusy);
   // FIX-4: a create that failed while no dialog was open (the user had left Tasks) still shows here.
+  // FIX-5: only a failure sent to this host and repository (scoped in newIssue.ts).
   const [error, setError] = useState<string | null>(() => {
-    const gone = lastCreateFailure();
+    const gone = lastCreateFailure(p.host, start.draft.repo);
     return gone ? actionError(gone, "create") : null;
   });
   const box = useRef<HTMLDivElement>(null);
   // Nothing is saved until the user changes something, so opening the dialog in a workspace on
   // another host never overwrites the draft kept for the first host.
   const touched = useRef(false);
+  // The repository the dialog is aimed at now, for the failure watcher below.
+  const repoNow = useRef(d.repo);
+  repoNow.current = d.repo;
   const pending = useRef<IssueDraft | null | undefined>(undefined);
   const save = useRef(p.save);
   save.current = p.save;
@@ -61,11 +65,12 @@ export default function NewIssueDialog(p: {
   // draft when it went through.
   useEffect(
     () =>
-      watchCreate((e, err) => {
+      watchCreate((e, err, scope) => {
         setBusy(e === "busy");
         // A create started by an earlier opening of this dialog failed (or timed out): say so here
         // too, or the user would click Create again on a gh that may have opened the issue.
-        if (e === "failed" && err) setError(actionError(err, "create"));
+        // FIX-5: and only when it was sent to this dialog's own host and repository.
+        if (e === "failed" && err && scope && sameScope(scope, { host: p.host, repo: repoNow.current })) setError(actionError(err, "create"));
         if (e === "created") {
           touched.current = false;
           setD((x) => emptyDraft(p.host, x.repo));
@@ -111,7 +116,7 @@ export default function NewIssueDialog(p: {
   const create = () => {
     const f = closingDraft(d, labelText, peopleText);
     setError(null);
-    void createOnce(() => invoke<{ number: number; url: string; title: string }>("github_issue_create", { host: p.host, repo: f.repo, title: f.title, body: f.body, labels: f.labels, assignees: f.assignees })).then((r) => {
+    void createOnce(() => invoke<{ number: number; url: string; title: string }>("github_issue_create", { host: p.host, repo: f.repo, title: f.title, body: f.body, labels: f.labels, assignees: f.assignees }), { host: p.host, repo: f.repo }).then((r) => {
       if (!r) return;
       if (!r.ok) return setError(actionError(r.error, "create"));
       held = null;

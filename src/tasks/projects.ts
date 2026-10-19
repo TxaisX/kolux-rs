@@ -191,13 +191,22 @@ export const isSaving = (s: Saving[], cell: string) => s.some((x) => x.cell === 
  * edit that succeeded, once no edit for it is still out; so a newer edit that fails leaves the cell
  * on the older value GitHub really holds, and an older edit that comes back late is never put over
  * a newer success. */
-export type CellBook = { pending: Map<string, Set<number>>; best: Map<string, { id: number; apply: () => void }>; wins: Map<string, number> };
-export const newBook = (): CellBook => ({ pending: new Map(), best: new Map(), wins: new Map() });
+export type CellBook = { pending: Map<string, Set<number>>; best: Map<string, { id: number; apply: () => void }>; wins: Map<string, number>; sent: number };
+export const newBook = (): CellBook => ({ pending: new Map(), best: new Map(), wins: new Map(), sent: 0 });
 export function sendEdit(b: CellBook, cell: string, id: number): void {
+  b.sent++;
   const set = b.pending.get(cell) ?? new Set<number>();
   set.add(id);
   b.pending.set(cell, set);
 }
+/** FIX-5 (review AFTER 4): the burst re-read replaces the whole project with what GitHub held when
+ * the read was answered, so it must never run over an edit of another cell that is out, or was sent
+ * after the read. `readBackStart` gives a token to send the read with, or null (no read) while any
+ * edit is still out; `readBackFresh` says whether the answer may still be shown (no edit has been
+ * sent since the token was given, and none is out now). */
+export const editsOut = (b: CellBook): boolean => [...b.pending.values()].some((s) => s.size > 0);
+export const readBackStart = (b: CellBook): number | null => (editsOut(b) ? null : b.sent);
+export const readBackFresh = (b: CellBook, token: number): boolean => b.sent === token && !editsOut(b);
 /** An edit came back. `apply` shows its value; it runs (for the highest-numbered success) when the last edit for the cell settles.
  * FIX-4 (review AFTER 6): returns true when that was a burst (two or more edits went through): the
  * highest id wins on screen only on the assumption that GitHub applied them in the order sent, so
