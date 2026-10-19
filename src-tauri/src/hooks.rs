@@ -1127,11 +1127,19 @@ pub(crate) fn install_codex_with(home: &Path, command: &str, listing: impl FnOnc
         match &text {
             Some(t) => write_atomic(&file, t.as_bytes(), Some(wrote)),
             None => {
-                let now = std::fs::read(&file).map_err(|e| format!("{} could not be read back ({e}); its record stays, so the next start still knows it as Kolux's", file.display()))?;
-                if now != wrote.as_bytes() {
-                    return Err(format!("{} {CHANGED}", file.display()));
+                // hooks FIX-6 (stand-in review AFTER 2): a file the user deleted in the window is
+                // what the rollback wanted; only the record saying Kolux created it is left to drop.
+                let now = match std::fs::read(&file) {
+                    Ok(now) => Some(now),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(e) => return Err(format!("{} could not be read back ({e}); its record stays, so the next start still knows it as Kolux's", file.display())),
+                };
+                if let Some(now) = now {
+                    if now != wrote.as_bytes() {
+                        return Err(format!("{} {CHANGED}", file.display()));
+                    }
+                    std::fs::remove_file(&file).map_err(|e| format!("{} could not be removed ({e}); its record stays, so the next start still knows it as Kolux's", file.display()))?;
                 }
-                std::fs::remove_file(&file).map_err(|e| format!("{} could not be removed ({e}); its record stays, so the next start still knows it as Kolux's", file.display()))?;
                 let record = agent_hooks::codex_record(&file);
                 if agent_hooks::was_created(&record, &file) {
                     let _ = std::fs::remove_file(record);
