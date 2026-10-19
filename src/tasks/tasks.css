@@ -65,3 +65,11 @@
 .task-issue .task-sect { flex-wrap: wrap; gap: 6px; }
 .task-comment { min-height: 64px; resize: vertical; font: inherit; }
 .task-issue > .btn.primary { align-self: flex-end; }
+/* T-231-e: the repository picker (GIT-043) and the start / resume button on an item (GIT-049). */
+.tasks-picker { position: relative; font-size: 12px; }
+.tasks-picker > summary { cursor: pointer; list-style: none; }
+.tasks-picker > summary::-webkit-details-marker { display: none; }
+.tasks-picker-list { position: absolute; left: 0; top: 100%; z-index: 6; min-width: 240px; max-height: 280px; overflow-y: auto; margin: 2px 0 0; padding: 4px; list-style: none; background: var(--pane-bg); border: 1px solid var(--line-focus); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+.tasks-picker-list label { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 4px; cursor: pointer; }
+.tasks-picker-list label:hover { background: var(--row-selected); }
+.tasks-work { flex: none; font-size: 11px; padding: 1px 8px; }

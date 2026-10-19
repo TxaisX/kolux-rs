@@ -1,0 +1,13 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index d77f632..831d2a8 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -2204,7 +2204,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+               }}
+             />
+           )}
+-          {terminals && page === "tasks" && <TasksPage repo={tasksRepo(projects, activeDir)} />}
++          {terminals && page === "tasks" && <TasksPage repo={tasksRepo(projects, activeDir)} onStart={fromItem} onResume={(dir) => cli.current.select(dir, null, true)} />}
+           {terminals && page === "routing" && (
+             <RoutingPage
+               agents={agents}

@@ -2,19 +2,23 @@
 // shortcut: a preset or a typed GitHub search over the workspace's repository, 25 to a page.
 // T-314: the default preset is a setting (GIT-044), PR filter pickers rewrite the query (GIT-054),
 // and a fork may take its issues from its parent (GIT-055); T-314-c adds the Projects tab (GIT-056).
-// ponytail: one repository (the workspace's); the multi-repository picker, the remembered choice,
-// new issue, close / reopen / comment and start-from-item are T-231-c. Clicking an item opens its
-// preview (GIT-050, TaskDialog).
+// T-231-e: the repository picker (GIT-043) chooses several GitHub projects at once, remembered in
+// the tasksRepos setting; a host that cannot be reached is named without blanking the others; an
+// item offers start or resume of its workspace (GIT-049). Clicking an item opens its preview
+// (GIT-050, TaskDialog).
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Refresh, Search } from "../chrome/icons";
+import type { Worktree } from "../projects/model";
 import { useSettings } from "../settings/useSettings";
 import { beyondWindow, defaultPreset, FILTERS, type FilterKey, filterValue, issueSource, pageButtons, pageCount, PER_PAGE, PRESETS, setFilter, type Task, type TaskLabel, type TaskPage, taskKind, taskQueries } from "./model";
 import NewIssueDialog from "./NewIssueDialog";
-import { closesDialog, createdHere, issueTargets } from "./newIssue";
+import { closesDialog, createdHere } from "./newIssue";
 import { type GhRepo, loadRepoFacts, type ParentRead, type Person, resetFacts } from "./repoFacts";
+import { byHost, chosenRows, hostWarnings, mergePages, newIssueTargets, type PickerProject, type PickerRow, pickerLabel, pickerRows, REPOS_SETTING, type RemoteRead, rowKey, savedChoice, toggled } from "./repoPicker";
 import ProjectsView from "./ProjectsView";
 import TaskDialog from "./TaskDialog";
+import { existingWorkspace, workItem, type WorkItem, workLabel } from "./workStart";
 import "./tasks.css";
 
 /** GIT-043: preset, query, page and scroll survive leaving the page and coming back (app session);
@@ -57,8 +61,43 @@ function FilterPicker({ k, label, query, options, onSet }: { k: FilterKey; label
   );
 }
 
-export default function TasksPage({ repo }: { repo: { dir: string; name: string } | null }) {
+/** GIT-043: the repository picker: one row per GitHub project (checkouts folded), several choosable. */
+function RepoPicker({ rows, chosen, onToggle }: { rows: PickerRow[]; chosen: PickerRow[]; onToggle: (key: string) => void }) {
+  const on = new Set(chosen.map((r) => r.key));
+  return (
+    <details className="tasks-picker" data-repo-picker>
+      <summary className="btn" title="Which repositories the list covers">
+        {pickerLabel(chosen)}
+      </summary>
+      <ul className="tasks-picker-list">
+        {rows.map((r) => (
+          <li key={r.key} data-row={r.key}>
+            <label title={r.projects.map((p) => p.path).join("\n")}>
+              <input type="checkbox" checked={on.has(r.key)} disabled={r.checking} onChange={() => onToggle(r.key)} />
+              <span>{r.label}</span>
+              {r.checking && <span className="muted"> checking…</span>}
+              {!r.checking && r.host.toLowerCase() !== "github.com" && <span className="muted"> {r.host}</span>}
+              {r.projects.length > 1 && <span className="muted"> {r.projects.length} checkouts</span>}
+            </label>
+          </li>
+        ))}
+        {rows.length === 0 && <li className="muted">No project here has a GitHub remote.</li>}
+      </ul>
+    </details>
+  );
+}
+
+export type TasksWork = { onStart?: (item: WorkItem) => void; onResume?: (dir: string) => void };
+
+export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: string; name: string } | null } & TasksWork) {
   const { settings, save } = useSettings();
+  const [projects, setProjects] = useState<PickerProject[]>([]);
+  const [reads, setReads] = useState<Record<string, RemoteRead>>({});
+  const [active, setActive] = useState<string | null>(null);
+  const [hostFail, setHostFail] = useState<{ host: string; error: string }[]>([]);
+  const [linked, setLinked] = useState<Record<string, Worktree[]>>({});
+  const [note, setNote] = useState<string | null>(null);
+  const seq = useRef(0);
   const [gh, setGh] = useState<GhRepo | null | undefined>(undefined);
   const [login, setLogin] = useState<string | null>(null);
   const [preset, setPreset] = useState<string | null>(kept.preset);
@@ -89,33 +128,114 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
     if (preset === null && settings) setPreset(defaultPreset(settings));
   }, [settings]);
 
+  // GIT-043: every project's GitHub remote, read once; the picker rows come from them.
   useEffect(() => {
-    const set = { gh: setGh, login: setLogin, parent: setParent, people: setPeople, labels: setLabels };
-    resetFacts(set);
-    setElsewhere(null);
+    let live = true;
+    invoke<PickerProject[]>("project_list")
+      .then((list) => {
+        if (!live) return;
+        setProjects(list);
+        setReads(Object.fromEntries(list.map((p) => [p.path, undefined])));
+        for (const p of list) {
+          invoke<GhRepo | null>("scm_github_repo", { worktree: p.path }).then(
+            (g) => live && setReads((r) => ({ ...r, [p.path]: g })),
+            () => live && setReads((r) => ({ ...r, [p.path]: null })),
+          );
+        }
+      })
+      .catch(() => live && setProjects([]));
+    return () => {
+      live = false;
+    };
+  }, []);
+  // The repository the workspace on screen belongs to: what the choice falls back to.
+  useEffect(() => {
+    setActive(null);
     if (!repo) return;
     let live = true;
-    void loadRepoFacts(invoke, repo.dir, () => live, set);
+    invoke<GhRepo | null>("scm_github_repo", { worktree: repo.dir }).then(
+      (g) => live && setActive(g ? rowKey(g) : null),
+      () => {},
+    );
     return () => {
       live = false;
     };
   }, [repo?.dir]);
+  const rows = pickerRows(projects, reads);
+  const saved = savedChoice(settings?.[REPOS_SETTING]);
+  const chosen = chosenRows(rows, saved, active);
+  // The facts (parent, people, labels, new issue) follow the first chosen repository's checkout.
+  const factsDir = chosen[0]?.projects[0]?.path ?? repo?.dir ?? null;
+
+  useEffect(() => {
+    const set = { gh: setGh, login: setLogin, parent: setParent, people: setPeople, labels: setLabels };
+    resetFacts(set);
+    setElsewhere(null);
+    if (!factsDir) return;
+    let live = true;
+    void loadRepoFacts(invoke, factsDir, () => live, set);
+    return () => {
+      live = false;
+    };
+  }, [factsDir]);
 
   const own = gh ? `${gh.owner}/${gh.name}` : "";
   const sourceKey = gh ? `${gh.host}/${own}` : "";
   const source = issueSource(settings, sourceKey, own, parent, parentFailed);
-  here.current = gh ? { host: gh.host, repos: [own, source.repo] } : null;
+  // No picker rows yet (projects still loading): the repository facts alone stand for the choice.
+  const groups = byHost(chosen.length ? chosen : gh ? [{ key: rowKey(gh), host: gh.host, repo: own, checking: false, label: own, projects: [] }] : []);
+  const groupsKey = JSON.stringify(groups);
+  here.current = gh ? { host: gh.host, repos: [...new Set([own, source.repo, ...(groups[0]?.repos ?? [])])] } : null;
   const mine = opening.current;
   const savedSources = (settings?.tasksIssueSource ?? {}) as Record<string, unknown>;
   const chosenSource = savedSources[sourceKey] === "upstream" ? "upstream" : "fork";
   const load = () => {
-    if (!gh || preset === null || !settings || tab !== "items") return;
+    if (!gh || preset === null || !settings || tab !== "items" || groups.length === 0) return;
     setError(null);
-    invoke<TaskPage>("scm_tasks_search", { host: gh.host, queries: taskQueries(preset, query, [own], [source.repo]), page })
-      .then(setResult)
-      .catch((e) => setError(String(e)));
+    const mineSeq = ++seq.current;
+    // One search per host; a host that fails is named and the others still fill the list.
+    Promise.all(
+      groups.map((g) =>
+        invoke<TaskPage>("scm_tasks_search", { host: g.host, queries: taskQueries(preset, query, g.repos, g.repos.map((r) => (r === own ? source.repo : r))), page }).then(
+          (p) => ({ p }),
+          (e) => ({ host: g.host, error: String(e) }),
+        ),
+      ),
+    ).then((rs) => {
+      if (mineSeq !== seq.current) return;
+      const pages = rs.flatMap((r) => ("p" in r ? [r.p] : []));
+      const failed = rs.flatMap((r) => ("p" in r ? [] : [r]));
+      setHostFail(failed);
+      if (pages.length === 0) return setError(failed[0]?.error ?? "Nothing answered.");
+      setResult(mergePages(pages));
+    });
   };
-  useEffect(load, [gh, preset, query, page, source.repo, settings === null, tab]);
+  useEffect(load, [gh, preset, query, page, source.repo, settings === null, tab, groupsKey]);
+  // GIT-049: the workspaces already made for the chosen repositories' checkouts, so an item that
+  // has one offers resume instead of start.
+  const loadLinked = () => {
+    const all = chosen.flatMap((r) => r.projects.map((p) => ({ repo: r.repo.toLowerCase(), id: p.id })));
+    void Promise.all(all.map((x) => invoke<Worktree[]>("workspace_list", { projectId: x.id }).then((w) => [x.repo, w] as const, () => [x.repo, [] as Worktree[]] as const))).then((got) => {
+      const next: Record<string, Worktree[]> = {};
+      for (const [r, w] of got) next[r] = [...(next[r] ?? []), ...w];
+      setLinked(next);
+    });
+  };
+  useEffect(loadLinked, [groupsKey, result]);
+  const resumeDir = (t: Task) => existingWorkspace(linked[t.repo.toLowerCase()] ?? [], t.number);
+  const work = (t: Task) => {
+    const dir = resumeDir(t);
+    if (dir) return onResume ? onResume(dir) : setNote(`Workspace already made for #${t.number}: ${dir}`);
+    const item = workItem(t, gh?.host ?? "github.com");
+    if (!item) return setNote(`${t.repo} is not a repository name Kolux can start from.`);
+    if (onStart) return onStart(item);
+    invoke<{ path: string }>("workspace_from_item", { item })
+      .then((made) => {
+        setNote(`Workspace made for #${t.number}: ${made.path}`);
+        loadLinked();
+      })
+      .catch((e) => setNote(String(e)));
+  };
   useLayoutEffect(() => {
     if (result && list.current && restore.current) {
       list.current.scrollTop = restore.current;
@@ -216,9 +336,10 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
             issues {source.repo} · pull requests {own}
           </span>
         )}
+        {rows.length > 0 && <RepoPicker rows={rows} chosen={chosen} onToggle={(k) => void save({ [REPOS_SETTING]: toggled(chosen.map((r) => r.key), k) })} />}
         {gh && (
           <span className="tasks-repo" title="Where the list comes from">
-            {gh.host} · {login ? `@${login}` : "not signed in"} · {gh.owner}/{gh.name}
+            {groups.length > 1 ? groups.map((g) => g.host).join(", ") : gh.host} · {login ? `@${login}` : "not signed in"} · {chosen.length > 1 ? pickerLabel(chosen) : `${gh.owner}/${gh.name}`}
           </span>
         )}
         <button className="btn" data-new-issue-open disabled={!gh} onClick={() => {
@@ -242,6 +363,19 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
         <div className="note warn" role="status" data-created-elsewhere>
           {elsewhere}{" "}
           <button className="task-x" aria-label="Dismiss this note" title="Dismiss" onClick={() => setElsewhere(null)}>
+            ×
+          </button>
+        </div>
+      )}
+      {hostWarnings(hostFail).map((w) => (
+        <div key={w} className="note warn" role="status" data-host-warning>
+          {w}
+        </div>
+      ))}
+      {note && (
+        <div className="note" role="status" data-work-note>
+          {note}{" "}
+          <button className="task-x" aria-label="Dismiss this note" title="Dismiss" onClick={() => setNote(null)}>
             ×
           </button>
         </div>
@@ -279,6 +413,19 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
               {t.checks && <span className={`tasks-checks ${t.checks}`}>{t.checks}</span>}
               <span className="tasks-kind">{taskKind(t)}</span>
               <span className="tasks-when">{t.updated.slice(0, 10)}</span>
+              {t.state === "open" && (
+                <button
+                  className="btn tasks-work"
+                  data-work={`${t.kind}-${t.number}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    work(t);
+                  }}
+                  onKeyDown={(e) => e.stopPropagation()}
+                >
+                  {workLabel(resumeDir(t), t)}
+                </button>
+              )}
             </li>
           ))}
         </ul>
@@ -305,7 +452,7 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
         <NewIssueDialog
           key={opening.current}
           host={gh.host}
-          targets={issueTargets(source.repo, own)}
+          targets={newIssueTargets(chosen.length ? chosen : [{ key: "", host: gh.host, repo: own, checking: false, label: own, projects: [] }], source.repo !== own ? source.repo : undefined)}
           saved={settings?.tasksIssueDraft}
           save={save}
           factsRepo={own}
