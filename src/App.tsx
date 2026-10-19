@@ -634,6 +634,12 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           }
           zoomTerm(focused, hit.id === "zoom.in" ? "in" : hit.id === "zoom.out" ? "out" : "reset"); // TERM-078
           break;
+        case "ui.zoomIn":
+        case "ui.zoomOut":
+        case "ui.zoomReset":
+          // SET-019 (T-246-c): the saved interface zoom, which has keys of its own apart from the pane zoom above.
+          void stepZoom(hit.id === "ui.zoomIn" ? "in" : hit.id === "ui.zoomOut" ? "out" : "reset").catch(() => {});
+          break;
         case "tab.newTerminal":
           void newTab(null);
           break;
