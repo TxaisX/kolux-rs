@@ -37,3 +37,10 @@ export function pickHeaderColour(settings: Record<string, unknown>, kind: Header
   const { [keyOf(kind, id)]: _gone, ...rest } = now;
   return colour === "grey" ? rest : { ...rest, [keyOf(kind, id)]: colour };
 }
+
+/** The `headerColours` setting without the entries of deleted projects or groups (FIX-1: the map no
+ *  longer only grows). Returns the same map object's content when nothing was there to drop. */
+export function forgetHeaderColours(settings: Record<string, unknown>, gone: ReadonlyArray<{ kind: HeaderKind; id: string }>): Record<string, string> {
+  const drop = new Set(gone.map((g) => keyOf(g.kind, g.id)));
+  return Object.fromEntries(Object.entries(readHeaderColours(settings)).filter(([k]) => !drop.has(k)));
+}

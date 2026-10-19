@@ -1,0 +1,70 @@
+diff --git a/src/projects/ProjectsPanel.tsx b/src/projects/ProjectsPanel.tsx
+index 23bd880a..1fbd4e2e 100644
+--- a/src/projects/ProjectsPanel.tsx
++++ b/src/projects/ProjectsPanel.tsx
+@@ -28,9 +28,10 @@ import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoice
+ import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
+ import AddProject from "./AddProject";
+ import CardLine from "../look/CardLine";
+-import { HeaderBadge, HeaderSwatches } from "../look/HeaderBadge";
+-import { HEADER_COLOURS_SETTING, headerColourOf, pickHeaderColour } from "../look/headerColour";
+-import { CARD_DETAILS, CARD_DETAILS_FIELD, cardTitle, detailsAfter, readCardDetails, type CardFacts } from "../look/cards";
++import { HeaderBadge, HeaderColourPicker } from "../look/HeaderBadge";
++import { CardDetailsChooser } from "../look/CardDetailsChooser";
++import { HEADER_COLOURS_SETTING, forgetHeaderColours, headerColourOf } from "../look/headerColour";
++import { cardTitle, readCardDetails, type CardFacts } from "../look/cards";
+ import Picker, { type PickItem } from "./Picker";
+ import StartGit, { type FirstFile } from "./StartGit";
+ import { openKits } from "../kits/Kits";
+@@ -585,7 +586,9 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+   };
+   const deleteGroup = async (g: Group, remove: boolean) => {
+     try {
++      const members = Object.entries(groups.members).filter(([, gid]) => gid === g.id).map(([pid]) => pid);
+       takeGroups(await invoke<Groups>("group_delete", { id: g.id, removeProjects: remove }));
++      onSetting(HEADER_COLOURS_SETTING, forgetHeaderColours(settings, [{ kind: "g", id: g.id }, ...(remove ? members.map((id) => ({ kind: "p" as const, id })) : [])]));
+       setGroupFor(null);
+       setDropGroup(null);
+       say("ok", remove ? `Deleted the group ${g.name} and took its projects out of Kolux; their folders are still on disk` : `Deleted the group ${g.name}; its projects are at the top level now`);
+@@ -1324,7 +1327,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+             </button>
+           )}
+         </div>
+-        <CardLine shown={cardDetails.shown} facts={facts} indent={44 + depth * 14} />
++        <CardLine shown={cardDetails.shown} facts={facts} depth={depth} />
+         {paneRows(w, depth)}
+         {moving === w.path && !asking && (
+           <div className="sb-form" data-moving={worktreeLabel(w)}>
+@@ -1437,7 +1440,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+                 ))}
+               </select>
+               <label>Header colour</label>
+-              <HeaderSwatches value={headerColourOf(settings, "p", p.id).id} onPick={(c) => onSetting(HEADER_COLOURS_SETTING, pickHeaderColour(settings, "p", p.id, c))} />
++              <HeaderColourPicker settings={settings} kind="p" id={p.id} onSetting={onSetting} />
+               <div className="btn-row">
+                 <button className="btn" onClick={() => saveProject(p)}>
+                   Save
+@@ -1491,7 +1494,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+         ))}
+       </select>
+       <label>Header colour</label>
+-      <HeaderSwatches value={headerColourOf(settings, "g", g.id).id} onPick={(c) => onSetting(HEADER_COLOURS_SETTING, pickHeaderColour(settings, "g", g.id, c))} />
++      <HeaderColourPicker settings={settings} kind="g" id={g.id} onSetting={onSetting} />
+       {dropGroup ? (
+         <>
+           <div className="sb-hint">
+@@ -1692,13 +1695,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+                 <input type="checkbox" aria-label="show sleeping workspaces" checked={showSleeping} onChange={(e) => onSetting(SHOW_SLEEPING_SETTING, e.target.checked)} />
+                 Show sleeping workspaces
+               </label>
+-              <label>Card details</label>
+-              {CARD_DETAILS.map((d) => (
+-                <label key={d.id} className="check">
+-                  <input type="checkbox" aria-label={`card shows ${d.label.toLowerCase()}`} checked={cardDetails.shown.includes(d.id)} disabled={d.locked} onChange={(e) => onSetting(CARD_DETAILS_FIELD, detailsAfter(settings, d.id, e.target.checked))} />
+-                  {d.label}
+-                </label>
+-              ))}
++              <CardDetailsChooser settings={settings} onSetting={onSetting} />
+             </div>
+           )}
+           {creating === "" && nameField(null)}
