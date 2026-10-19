@@ -134,7 +134,7 @@ export type Pick = { path: string; updated: number | null };
 export const pickOf = (s: Skill): Pick => ({ path: s.path, updated: s.updated });
 
 export type Blocked = "bundled" | "plugin" | "outside" | "gone" | "changed";
-export type Planned = { path: string; blocked: Blocked | null; items: { path: string; kind: "folder" | "link" | "receipt" }[]; remains: string | null };
+export type Planned = { path: string; blocked: Blocked | null; items: { path: string; kind: "folder" | "link" | "receipt" }[]; remains: string | null; dangling?: string[] };
 export type Outcome = "deleted" | "skipped" | "busy" | "partly" | "failed";
 export type Done = { path: string; outcome: Outcome; note: string | null };
 
@@ -171,6 +171,7 @@ export function sumUp(plan: Planned[], nameOf: (path: string) => string) {
     count: going.length,
     headline: going.length === 0 ? "None of the chosen skills can be deleted." : `${many(going.length, "skill")} will be deleted: ${parts} removed across all skill folders.`,
     remains: going.filter((p) => p.remains).map((p) => `${nameOf(p.path)}: only a link is removed; the content stays in ${p.remains}`),
+    dangling: going.flatMap((p) => (p.dangling ?? []).map((l) => `${nameOf(p.path)}: the link ${l} is outside the skill folders, so it stays and will point at nothing`)),
     blocked: plan.filter((p) => p.blocked).map((p) => `${nameOf(p.path)}: ${BLOCKED[p.blocked!]}`),
   };
 }

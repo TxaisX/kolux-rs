@@ -403,6 +403,9 @@ export default function SkillsPage({ workspace, onClose }: Props) {
                 {sum.remains.map((r, i) => (
                   <p key={i}>{r}</p>
                 ))}
+                {sum.dangling.map((d, i) => (
+                  <p key={`d${i}`}>{d}</p>
+                ))}
                 {sum.blocked.length > 0 && (
                   <>
                     <p>Left alone:</p>
