@@ -2,7 +2,7 @@
 // a small picture, or the automatic icon (the first letter of the name).
 import type { ReactElement } from "react";
 import { Bell, Book, Box, Chip, Clock, Cup, Globe, Megaphone, Merge, Moon, Pin, Plug, Pulse, Rocket, Shell, Spark, Table, Target } from "../chrome/icons";
-import { iconView } from "./projectIcon";
+import { iconView, type AutoIcon } from "./projectIcon";
 
 const Folder = ({ size = 14 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -12,8 +12,8 @@ const Folder = ({ size = 14 }: { size?: number }) => (
 
 const GLYPHS: Record<string, (p: { size?: number }) => ReactElement> = { folder: Folder, rocket: Rocket, box: Box, globe: Globe, chip: Chip, book: Book, pulse: Pulse, megaphone: Megaphone, cup: Cup, moon: Moon, clock: Clock, table: Table, plug: Plug, spark: Spark, target: Target, merge: Merge, shell: Shell, pin: Pin, bell: Bell };
 
-export function ProjectIcon({ value, name, size = 14 }: { value: string | undefined; name: string; size?: number }) {
-  const v = iconView(value, name);
+export function ProjectIcon({ value, name, size = 14, auto }: { value: string | undefined; name: string; size?: number; auto?: AutoIcon | null }) {
+  const v = iconView(value, name, auto);
   const box = { display: "inline-flex", alignItems: "center", justifyContent: "center", width: size + 2, height: size + 2, marginRight: 6, flex: "none", fontSize: size - 1, lineHeight: 1 } as const;
   if (v.kind === "emoji") return <span style={box} data-project-icon="emoji" aria-hidden="true">{v.emoji}</span>;
   if (v.kind === "image") return <img src={v.src} alt="" width={size + 2} height={size + 2} style={{ ...box, objectFit: "contain", borderRadius: 3 }} data-project-icon="image" />;

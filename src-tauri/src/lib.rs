@@ -407,6 +407,7 @@ pub fn run() {
             projects::workspace_suggest_name,
             projects::project_icons_list,
             projects::project_icon_set,
+            projects::project_auto_icon,
             setup::setup_suggestion,
             setup::setup_suggestion_save,
             setup::setup_suggestion_dismiss,
