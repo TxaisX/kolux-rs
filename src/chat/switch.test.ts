@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
-import { TerminalSwitch } from "./ChatView";
+import { HandOff, TerminalSwitch } from "./ChatView";
 
 describe("the Show terminal switch", () => {
   it("is a labelled checkbox with the switch role that says whether it is on", () => {
@@ -13,5 +13,14 @@ describe("the Show terminal switch", () => {
     const on = renderToStaticMarkup(createElement(TerminalSwitch, { on: true, onFlip: () => {} }));
     expect(on).toContain('aria-checked="true"');
     expect(on).toContain("checked");
+  });
+});
+
+describe("Send result to (VIEW-020)", () => {
+  it("lists the target sessions in the order given, as buttons", () => {
+    const html = renderToStaticMarkup(createElement(HandOff, { targets: [{ key: 3, label: "api tests" }, { key: 2, label: "docs" }], onPick: () => {} }));
+    expect(html).toContain("Send result to");
+    expect(html.indexOf("api tests")).toBeLessThan(html.indexOf("docs"));
+    expect(html.match(/<button/g)).toHaveLength(2);
   });
 });
