@@ -1,4 +1,4 @@
-//! T-121 (STAT-012..016): the five vendors' events drive the dot, and each vendor's settings are
+//! T-121 (STAT-012..016) and T-122 (STAT-017..021): the nine vendors' events drive the dot, and each vendor's settings are
 //! written next to the user's own entries and taken out again without a trace.
 
 use super::*;
@@ -101,7 +101,10 @@ fn stat_016_hermes_hook_points_drive_the_dot() {
 #[test]
 fn routes_agents_and_scripts() {
     assert!(is_route("/cursor") && is_route("/droid") && is_route("/command-code") && is_route("/kimi") && is_route("/hermes"));
-    assert!(!is_route("/claude") && !is_route("/gemini") && !is_route("/cursor/x"));
+    assert!(!is_route("/claude") && !is_route("/gemini") && !is_route("/cursor/x") && !is_route("/grok/x"));
+    assert!(is_route("/copilot") && is_route("/copilot/preToolUse") && is_route("/grok") && is_route("/devin/Stop") && is_route("/pi"));
+    assert_eq!((agent_of("/copilot/preToolUse"), agent_of("devin/Stop"), agent_of("/mimo-code")), (Some("copilot"), Some("devin"), None));
+    assert!(manages("pi") && !manages("mimo-code") && !manages("omp"));
     assert_eq!((agent_of("cursor"), agent_of("/kimi"), agent_of("codex")), (Some("cursor"), Some("kimi"), None));
     assert!(manages("hermes") && !manages("amp"));
     let sh = kimi_script();
@@ -185,7 +188,7 @@ fn stat_013_014_droid_and_command_code_take_claude_style_groups() {
     assert!(remove_hooks(&home, &cc).unwrap());
     assert!(!cc.exists(), "the file Kolux created is gone");
     let names: Vec<String> = rows(&home).iter().map(|r| r["agent"].as_str().unwrap().to_string()).collect();
-    assert_eq!(names, ["cursor", "droid", "command-code", "kimi", "hermes"]);
+    assert_eq!(names[..5], ["cursor", "droid", "command-code", "kimi", "hermes"]);
     let _ = fs::remove_dir_all(&home);
 }
 
@@ -257,5 +260,192 @@ fn stat_016_hermes_plugin_files_are_kolux_s_alone_and_its_yaml_switch_is_read_no
     assert!(!remove_hermes(&dir).unwrap());
     assert!(dir.join("__init__.py").exists(), "the user's plugin stays");
     assert_eq!(inspect_hermes(&dir).0, "error");
+    let _ = fs::remove_dir_all(&home);
+}
+
+// ---- T-122 (STAT-017..021): Copilot CLI, Grok, Devin and Pi ----
+
+#[test]
+fn stat_017_copilot_events_ride_the_route_and_an_error_ends_the_turn_only_when_it_cannot_recover() {
+    let mut s = Session::default();
+    assert_eq!(state(&mut s, "/copilot/sessionStart", json!({"sessionId":"c1","source":"startup"})), Some("working"));
+    assert_eq!(normalize("/copilot/userPromptSubmitted", &json!({"sessionId":"c1","prompt":"go"})).unwrap(), json!({"hook_event_name":"UserPromptSubmit","prompt":"go","session_id":"c1"}));
+    assert_eq!(state(&mut s, "/copilot/userPromptSubmitted", json!({"sessionId":"c1","prompt":"go"})), Some("working"));
+    let t = normalize("/copilot/preToolUse", &json!({"toolName":"bash","toolArgs":{"command":"ls"}})).unwrap();
+    assert_eq!((t["tool_name"].as_str(), t["tool_input"]["command"].as_str()), (Some("bash"), Some("ls")));
+    assert_eq!(state(&mut s, "/copilot/preToolUse", json!({"toolName":"bash"})), Some("working"));
+    assert_eq!(state(&mut s, "/copilot/postToolUseFailure", json!({"toolName":"bash","error":"x"})), Some("working"));
+    assert_eq!(state(&mut s, "/copilot/errorOccurred", json!({"recoverable":true,"errorContext":"tool_execution"})), Some("working"));
+    assert_eq!(state(&mut s, "/copilot/notification", json!({"notification_type":"permission_prompt","message":"x"})), Some("waiting"));
+    for e in ["subagentStart", "subagentStop", "preCompact"] {
+        assert_eq!(normalize(&format!("/copilot/{e}"), &json!({"sessionId":"c1"})), None, "{e}: registered, changes nothing");
+    }
+    assert_eq!(state(&mut s, "/copilot/agentStop", json!({"stopReason":"end_turn"})), Some("done"));
+    // The VS Code shape names the event in the body, Pascal-case, snake-case fields.
+    assert_eq!(state(&mut s, "/copilot", json!({"hook_event_name":"UserPromptSubmit","session_id":"c1","prompt":"more"})), Some("working"));
+    assert_eq!(state(&mut s, "/copilot", json!({"hook_event_name":"PermissionRequest","tool_name":"bash","tool_input":{}})), Some("permission"));
+    assert_eq!(state(&mut s, "/copilot/errorOccurred", json!({"recoverable":false})), Some("done"), "an error Copilot cannot recover from ends the turn");
+    assert_eq!(state(&mut s, "/copilot/userPromptSubmitted", json!({"prompt":"x"})), Some("working"));
+    assert_eq!(state(&mut s, "/copilot/sessionEnd", json!({"reason":"user_exit"})), Some("done"));
+    assert_eq!(normalize("/copilot", &json!({"sessionId":"c1"})), None, "no event name anywhere");
+}
+
+#[test]
+fn stat_018_grok_events_drive_the_dot_and_routine_notices_change_nothing() {
+    let mut s = Session::default();
+    assert_eq!(normalize("/grok", &json!({"hookEventName":"SessionStart","sessionId":"g1"})), None, "COMPAT 3.5: no change");
+    assert_eq!(state(&mut s, "/grok", json!({"hookEventName":"UserPromptSubmit","sessionId":"g1","prompt":"go"})), Some("working"));
+    let t = normalize("/grok", &json!({"hookEventName":"PreToolUse","sessionId":"g1","toolName":"bash","toolInput":{"command":"ls"}})).unwrap();
+    assert_eq!((t["session_id"].as_str(), t["tool_name"].as_str(), t["tool_input"]["command"].as_str()), (Some("g1"), Some("bash"), Some("ls")));
+    assert_eq!(state(&mut s, "/grok", json!({"hookEventName":"PreToolUse","toolName":"bash"})), Some("working"));
+    assert_eq!(state(&mut s, "/grok", json!({"hookEventName":"PostToolUseFailure","toolName":"bash"})), Some("working"));
+    assert_eq!(normalize("/grok", &json!({"hookEventName":"Notification","message":"bash wants to run"})), None, "a routine notice keeps the pane working and never notifies");
+    assert_eq!(state(&mut s, "/grok", json!({"hookEventName":"StopFailure"})), Some("done"));
+    assert_eq!(state(&mut s, "/grok", json!({"hook_event_name":"UserPromptSubmit","prompt":"x"})), Some("working"));
+    assert_eq!(state(&mut s, "/grok", json!({"hookEventName":"SessionEnd"})), Some("done"));
+}
+
+#[test]
+fn stat_019_devin_events_drive_the_dot_and_a_flagged_stop_is_an_interruption() {
+    let mut s = Session::default();
+    assert_eq!(normalize("/devin/SessionStart", &json!({"session_id":"d1","source":"startup"})), None, "Devin's session start is ignored");
+    assert_eq!(state(&mut s, "/devin/UserPromptSubmit", json!({"session_id":"d1","prompt":"go"})), Some("working"));
+    assert_eq!(state(&mut s, "/devin/PreToolUse", json!({"tool_name":"exec","tool_input":{"command":"ls"}})), Some("working"));
+    assert_eq!(state(&mut s, "/devin/PermissionRequest", json!({"tool_name":"exec","tool_input":{}})), Some("waiting"));
+    assert_eq!(state(&mut s, "/devin/PostToolUse", json!({"tool_name":"exec"})), Some("working"));
+    assert_eq!(state(&mut s, "/devin/PostCompaction", json!({"summary":"..."})), Some("working"));
+    assert_eq!(state(&mut s, "/devin/Stop", json!({"stop_hook_active":false})), Some("done"));
+    assert_eq!(state(&mut s, "/devin", json!({"hook_event_name":"UserPromptSubmit","prompt":"more"})), Some("working"));
+    assert_eq!(state(&mut s, "/devin/Stop", json!({"interrupted":true})), Some("interrupted"));
+    assert_eq!(state(&mut s, "/devin/UserPromptSubmit", json!({"prompt":"x"})), Some("working"));
+    assert_eq!(state(&mut s, "/devin/SessionEnd", json!({"reason":"complete"})), Some("done"));
+}
+
+#[test]
+fn stat_021_pi_extension_events_drive_the_dot() {
+    let mut s = Session::default();
+    assert_eq!(state(&mut s, "/pi", json!({"event":"session_start"})), Some("working"));
+    assert_eq!(normalize("/pi", &json!({"event":"before_agent_start","prompt":"go"})).unwrap()["prompt"], "go");
+    assert_eq!(state(&mut s, "/pi", json!({"event":"before_agent_start","prompt":"go"})), Some("working"));
+    assert_eq!(state(&mut s, "/pi", json!({"event":"tool_execution_start","tool_name":"bash"})), Some("working"));
+    assert_eq!(state(&mut s, "/pi", json!({"event":"tool_execution_end","tool_name":"bash"})), Some("working"));
+    assert_eq!(normalize("/pi", &json!({"event":"agent_end"})), None, "Pi's doc: agent_end is not a final-idle signal");
+    assert_eq!(state(&mut s, "/pi", json!({"event":"agent_settled"})), Some("done"));
+    assert_eq!(state(&mut s, "/pi", json!({"event":"before_agent_start","prompt":"x"})), Some("working"));
+    assert_eq!(state(&mut s, "/pi", json!({"event":"session_shutdown"})), Some("done"));
+    let js = pi_extension();
+    assert!(js.starts_with("// Kolux RS status extension for Pi. Written by Kolux RS") && js.contains("export default function (pi)") && js.contains("pi.on(event") && js.contains("/pi`"));
+    for e in PI_EVENTS {
+        assert!(js.contains(&format!("\"{e}\"")), "{e}");
+    }
+}
+
+#[test]
+fn stat_017_018_copilot_and_grok_own_files_come_and_go() {
+    let home = scratch("own");
+    let copilot = copilot_file_in(&home, None);
+    assert_eq!(copilot, home.join(".copilot").join("hooks").join("kolux.json"));
+    assert_eq!(copilot_file_in(&home, Some(PathBuf::from("C"))), Path::new("C").join("hooks").join("kolux.json"));
+    assert_eq!(inspect_copilot(&copilot).0, "not installed");
+    assert!(install_copilot(&home, &copilot).unwrap());
+    assert!(!install_copilot(&home, &copilot).unwrap());
+    let v = read(&copilot);
+    assert_eq!((v["version"].as_i64(), v["disableAllHooks"].as_bool()), (Some(1), Some(false)));
+    assert_eq!(v["hooks"].as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), COPILOT_EVENTS.to_vec());
+    let entry = &v["hooks"]["preToolUse"][0];
+    assert_eq!((entry["type"].as_str(), entry["timeoutSec"].as_i64(), entry.get("bash"), entry.get("command")), (Some("command"), Some(5), None, None));
+    let ps = entry["powershell"].as_str().unwrap();
+    assert!(ps.starts_with("& '") && ps.ends_with("' preToolUse") && ps.contains(SCRIPT_DIR) && ps.contains(COPILOT_SCRIPT), "{ps}");
+    assert!(home.join(SCRIPT_DIR).join(COPILOT_SCRIPT).exists());
+    assert_eq!(inspect_copilot(&copilot).0, "installed");
+    let mut off = v.clone();
+    off["disableAllHooks"] = json!(true);
+    fs::write(&copilot, off.to_string()).unwrap();
+    assert_eq!(inspect_copilot(&copilot).0, "disabled");
+    assert!(install_copilot(&home, &copilot).unwrap(), "switching on clears the switch in Kolux's file");
+    assert_eq!(inspect_copilot(&copilot).0, "installed");
+    assert!(remove_copilot(&copilot).unwrap());
+    assert!(!copilot.exists() && !copilot.parent().unwrap().exists());
+    assert!(!remove_copilot(&copilot).unwrap());
+    fs::create_dir_all(copilot.parent().unwrap()).unwrap();
+    fs::write(&copilot, r#"{"hooks":{"preToolUse":[{"type":"command","bash":"mine.sh"}]}}"#).unwrap();
+    assert!(install_copilot(&home, &copilot).unwrap_err().contains("not Kolux's"));
+    assert!(remove_copilot(&copilot).unwrap_err().contains("not Kolux's"));
+    assert_eq!(inspect_copilot(&copilot).0, "error");
+    // Grok: Claude-style groups with no matcher, in Kolux's own file; gone without a trace.
+    let grok = grok_file_in(&home, None);
+    assert_eq!(grok, home.join(".grok").join("hooks").join("kolux-status.json"));
+    assert_eq!(grok_file_in(&home, Some(PathBuf::from("G"))), Path::new("G").join("hooks").join("kolux-status.json"));
+    assert!(install_grok(&home, &grok).unwrap());
+    let g = read(&grok);
+    assert_eq!(g["hooks"].as_object().unwrap().len(), 9);
+    assert_eq!(g["hooks"]["PreToolUse"][0].get("matcher"), None, "Grok's matcher is a regex; none means every tool");
+    assert!(g["hooks"]["PreToolUse"][0]["hooks"][0]["command"].as_str().unwrap().contains(GROK_SCRIPT));
+    assert_eq!(switch::inspect(&grok, &GROK_EVENTS).0, "installed");
+    assert!(remove_hooks(&home, &grok).unwrap());
+    assert!(!grok.exists(), "a file Kolux created goes");
+    let names: Vec<String> = rows(&home).iter().map(|r| r["agent"].as_str().unwrap().to_string()).collect();
+    assert_eq!(names, ["cursor", "droid", "command-code", "kimi", "hermes", "copilot", "grok", "devin", "pi"]);
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn stat_019_devin_block_keeps_the_users_comments_and_leaves_as_it_came() {
+    let home = scratch("devin");
+    let file = devin_file(&home);
+    let user = "{\n  // my model\n  \"model\": \"x\", /* keep */\n  \"url\": \"https://a/b\"\n}\n";
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, user).unwrap();
+    assert!(install_devin(&home, &file).unwrap());
+    assert!(!install_devin(&home, &file).unwrap());
+    let text = fs::read_to_string(&file).unwrap();
+    assert!(text.starts_with(&format!("{{\n  {DEVIN_START}\n  \"hooks\": {{")) && text.ends_with(user.trim_start_matches('{')), "{text}");
+    let v: Value = serde_json::from_str(&strip_comments(&text)).unwrap();
+    assert_eq!(v["hooks"].as_object().unwrap().len(), 8);
+    assert_eq!(v["hooks"]["PreToolUse"][0]["matcher"], "*");
+    assert!(v["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap().ends_with(" Stop"));
+    assert_eq!((v["model"].as_str(), v["url"].as_str()), (Some("x"), Some("https://a/b")));
+    assert_eq!(inspect_devin(&file).0, "installed");
+    assert!(remove_devin(&home, &file).unwrap());
+    assert_eq!(fs::read_to_string(&file).unwrap(), user, "byte for byte");
+    assert!(!remove_devin(&home, &file).unwrap());
+    assert_eq!(inspect_devin(&file).0, "not installed");
+    fs::write(&file, "{\n  \"hooks\": {}\n}\n").unwrap();
+    assert!(install_devin(&home, &file).unwrap_err().contains("hooks of its own"));
+    fs::write(&file, "not json").unwrap();
+    assert!(install_devin(&home, &file).unwrap_err().contains("not JSON"));
+    assert_eq!(strip_comments("{\"a\": \"// not a comment\", // c\n \"b\": 1 /* x */}"), "{\"a\": \"// not a comment\", \n \"b\": 1 }");
+    // Created from nothing: gone again at removal.
+    let home2 = scratch("devin2");
+    let file2 = devin_file(&home2);
+    assert!(install_devin(&home2, &file2).unwrap());
+    let v: Value = serde_json::from_str(&strip_comments(&fs::read_to_string(&file2).unwrap())).unwrap();
+    assert_eq!(v.as_object().unwrap().keys().collect::<Vec<_>>(), ["hooks"]);
+    assert!(remove_devin(&home2, &file2).unwrap());
+    assert!(!file2.exists());
+    let _ = fs::remove_dir_all(&home);
+    let _ = fs::remove_dir_all(&home2);
+}
+
+#[test]
+fn stat_021_pi_extension_file_is_kolux_s_alone() {
+    let home = scratch("pi");
+    let file = pi_file(&home);
+    assert_eq!(file, home.join(".pi").join("agent").join("extensions").join(PI_EXTENSION));
+    assert_eq!(inspect_pi(&file).0, "not installed");
+    assert!(install_pi(&file).unwrap());
+    assert!(!install_pi(&file).unwrap());
+    assert_eq!(fs::read_to_string(&file).unwrap(), pi_extension());
+    assert_eq!(inspect_pi(&file).0, "installed");
+    fs::write(&file, "// Written by Kolux RS (older)\n").unwrap();
+    assert_eq!(inspect_pi(&file).0, "partial");
+    assert!(install_pi(&file).unwrap());
+    assert!(remove_pi(&file).unwrap());
+    assert!(!file.exists());
+    fs::write(&file, "export default function (pi) {}\n").unwrap();
+    assert!(install_pi(&file).unwrap_err().contains("not Kolux's own"));
+    assert!(!remove_pi(&file).unwrap());
+    assert!(file.exists(), "the user's extension stays");
+    assert_eq!(inspect_pi(&file).0, "error");
     let _ = fs::remove_dir_all(&home);
 }

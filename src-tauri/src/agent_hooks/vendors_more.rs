@@ -1,5 +1,6 @@
-//! T-121 (STAT-012..016): status hooks for Cursor Agent, Droid, Command Code, Kimi and Hermes, from
-//! each vendor's public hook or plugin docs (PROVENANCE.md, T-121). Like T-120-b's `vendors`, each
+//! T-121 (STAT-012..016): status hooks for Cursor Agent, Droid, Command Code, Kimi and Hermes, and
+//! T-122 (STAT-017..021): Copilot CLI, Grok, Devin and Pi, from each vendor's public hook or plugin
+//! docs (PROVENANCE.md, T-121 and T-122; the T-122 vendors are described above their code). Like T-120-b's `vendors`, each
 //! event is turned into the one shape the status rules read (`normalize`) and then follows the
 //! rules for an agent whose hook semantics are unverified (`status::Agent::Vendor`, which reads
 //! `vendors::change`); nothing here answers for the agent except where its doc says a hook must.
@@ -45,7 +46,7 @@ const KIMI_START_PREFIX: &str = "# >>> Kolux RS hooks";
 const KIMI_END_PREFIX: &str = "# <<< Kolux RS hooks";
 /// The ask tool that makes a Droid or Hermes pane wait (`vendors::change` reads it).
 const ASK: &str = "ask_permission";
-const AGENTS: [&str; 5] = ["cursor", "droid", "command-code", "kimi", "hermes"];
+const AGENTS: [&str; 9] = ["cursor", "droid", "command-code", "kimi", "hermes", "copilot", "grok", "devin", "pi"];
 
 /// `id` is one of this module's agents.
 pub fn manages(id: &str) -> bool {
@@ -59,7 +60,11 @@ pub fn is_route(path: &str) -> bool {
 
 /// The agent id a route reports for.
 pub fn agent_of(path: &str) -> Option<&'static str> {
-    AGENTS.into_iter().find(|a| path.trim_start_matches('/') == *a)
+    let mut parts = path.trim_start_matches('/').splitn(2, '/');
+    let first = parts.next()?;
+    let agent = AGENTS.into_iter().find(|a| *a == first)?;
+    // Only a routed vendor's path goes on (`copilot/<event>`); every other route is bare.
+    (parts.next().is_none() || ROUTED.contains(&agent)).then_some(agent)
 }
 
 /// The vendor's event as the status rules read it (`hook_event_name` and Claude Code's field
@@ -69,6 +74,9 @@ pub fn normalize(path: &str, event: &Value) -> Option<Value> {
     let str_of = |k: &str| event.get(k).and_then(Value::as_str).filter(|s| !s.is_empty());
     let flag = |k: &str| event.get(k).and_then(Value::as_bool) == Some(true);
     let tool = || json!({ "tool_name": str_of("tool_name"), "tool_input": event.get("tool_input") });
+    // Copilot and Grok spell their fields camel-case in their own payload shape.
+    let either = |a: &str, b: &str| str_of(a).or_else(|| str_of(b));
+    let camel_tool = || json!({ "tool_name": either("tool_name", "toolName"), "tool_input": event.get("tool_input").or_else(|| event.get("toolArgs")).or_else(|| event.get("toolInput")) });
     let (name, session, mut out) = match agent_of(path)? {
         "cursor" => {
             let (name, out) = match str_of("hook_event_name")? {
@@ -140,6 +148,68 @@ pub fn normalize(path: &str, event: &Value) -> Option<Value> {
             };
             (name, str_of("session_id"), out)
         }
+        "copilot" => {
+            let name = routed_event(path).or_else(|| str_of("hook_event_name"))?;
+            let (name, out) = match name {
+                "sessionStart" | "SessionStart" => ("SessionStart", json!({})),
+                "sessionEnd" | "SessionEnd" => ("Stop", json!({})),
+                "userPromptSubmitted" | "UserPromptSubmit" => ("UserPromptSubmit", json!({ "prompt": str_of("prompt") })),
+                "preToolUse" | "PreToolUse" => ("PreToolUse", camel_tool()),
+                "postToolUse" | "postToolUseFailure" | "PostToolUse" | "PostToolUseFailure" => ("PostToolUse", camel_tool()),
+                "agentStop" | "Stop" => ("Stop", json!({})),
+                // STAT-017: an error Copilot can recover from keeps the turn going; any other ends it.
+                "errorOccurred" | "ErrorOccurred" if flag("recoverable") => ("PostToolUse", json!({})),
+                "errorOccurred" | "ErrorOccurred" => ("Stop", json!({})),
+                "permissionRequest" | "PermissionRequest" => ("PermissionRequest", camel_tool()),
+                "notification" | "Notification" => match str_of("notification_type") {
+                    Some("permission_prompt") => ("PreToolUse", json!({ "tool_name": ASK })),
+                    _ => return None,
+                },
+                // subagentStart, subagentStop and preCompact are registered and change nothing (COMPAT 3.5).
+                _ => return None,
+            };
+            (name, either("session_id", "sessionId"), out)
+        }
+        "grok" => {
+            let (name, out) = match either("hook_event_name", "hookEventName")? {
+                "UserPromptSubmit" => ("UserPromptSubmit", json!({ "prompt": str_of("prompt") })),
+                "Stop" | "StopFailure" | "SessionEnd" => ("Stop", json!({})),
+                "PreToolUse" => ("PreToolUse", camel_tool()),
+                "PostToolUse" | "PostToolUseFailure" => ("PostToolUse", camel_tool()),
+                // STAT-018: a routine notice changes nothing and never notifies; the wording rule for
+                // the notices that mean needs-you or done waits on Grok's payload doc (T-122-b).
+                _ => return None,
+            };
+            (name, either("session_id", "sessionId"), out)
+        }
+        "devin" => {
+            let name = routed_event(path).or_else(|| str_of("hook_event_name"))?;
+            let (name, out) = match name {
+                "UserPromptSubmit" => ("UserPromptSubmit", json!({ "prompt": str_of("prompt") })),
+                // STAT-019: a stop flagged as the user's interruption is one.
+                "Stop" => ("Stop", json!({ "kolux_interrupted": flag("interrupted") || flag("is_interrupt") || flag("user_interrupted") })),
+                "PostCompaction" => ("PostToolUse", json!({})),
+                "SessionEnd" => ("Stop", json!({})),
+                "PreToolUse" => ("PreToolUse", tool()),
+                "PostToolUse" => ("PostToolUse", tool()),
+                "PermissionRequest" => ("PreToolUse", json!({ "tool_name": ASK, "tool_input": event.get("tool_input") })),
+                // SessionStart changes nothing (COMPAT 3.5).
+                _ => return None,
+            };
+            (name, str_of("session_id"), out)
+        }
+        "pi" => {
+            let (name, out) = match str_of("event")? {
+                "session_start" => ("SessionStart", json!({})),
+                "before_agent_start" => ("UserPromptSubmit", json!({ "prompt": str_of("prompt") })),
+                "tool_execution_start" => ("PreToolUse", json!({ "tool_name": str_of("tool_name") })),
+                "tool_execution_end" => ("PostToolUse", json!({ "tool_name": str_of("tool_name") })),
+                // Pi's doc: agent_end is not a final-idle signal; agent_settled is.
+                "agent_settled" | "session_shutdown" => ("Stop", json!({})),
+                _ => return None,
+            };
+            (name, str_of("session_id"), out)
+        }
         _ => return None,
     };
     let o = out.as_object_mut()?;
@@ -186,7 +256,10 @@ pub fn write_scripts(home: &Path) -> Result<String, String> {
     write_cursor_script(home)?;
     write_droid_script(home)?;
     write_command_code_script(home)?;
-    write_kimi_script(home)
+    write_kimi_script(home)?;
+    write_copilot_script(home)?;
+    write_grok_script(home)?;
+    write_devin_script(home)
 }
 
 /// Kimi's hook as a POSIX shell script (LF line ends): the `.cmd` script's steps in sh, posting to
@@ -640,7 +713,7 @@ pub fn hermes_disabled(config: &Path) -> bool {
     false
 }
 
-/// `agent_hooks::apply` for these five.
+/// `agent_hooks::apply` for these nine.
 pub fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'static str, String> {
     let done = |installed: bool| if installed { "installed" } else { "removed" };
     let install = plan == Plan::Install;
@@ -665,6 +738,22 @@ pub fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'stat
             let dir = target(profile, hermes_dir(home).join("__init__.py"))?;
             let dir = dir.parent().unwrap_or(&dir);
             if install { install_hermes(dir) } else { remove_hermes(dir) }
+        }
+        "copilot" => {
+            let file = target(profile, copilot_file(home))?;
+            if install { install_copilot(home, &file) } else { remove_copilot(&file) }
+        }
+        "grok" => {
+            let file = target(profile, grok_file(home))?;
+            if install { install_grok(home, &file) } else { remove_hooks(home, &file) }
+        }
+        "devin" => {
+            let file = target(profile, devin_file(home))?;
+            if install { install_devin(home, &file) } else { remove_devin(home, &file) }
+        }
+        "pi" => {
+            let file = target(profile, pi_file(home))?;
+            if install { install_pi(&file) } else { remove_pi(&file) }
         }
         _ => return Ok("left as it was"),
     }
@@ -710,7 +799,7 @@ fn inspect_hermes(dir: &Path) -> (&'static str, Option<String>) {
     }
 }
 
-/// `kolux agent hooks status` rows for the five vendors.
+/// `kolux agent hooks status` rows for the nine vendors.
 pub fn rows(home: &Path) -> Vec<Value> {
     let row = |agent: &str, name: &str, file: PathBuf, (state, reason): (&str, Option<String>)| json!({ "agent": agent, "name": name, "state": state, "file": file.display().to_string(), "reason": reason });
     vec![
@@ -719,8 +808,405 @@ pub fn rows(home: &Path) -> Vec<Value> {
         row("command-code", "Command Code", command_code_file(home), switch::inspect(&command_code_file(home), &COMMAND_CODE_EVENTS)),
         row("kimi", "Kimi", kimi_file(home), inspect_kimi(&kimi_file(home))),
         row("hermes", "Hermes", hermes_dir(home), inspect_hermes(&hermes_dir(home))),
+        row("copilot", "GitHub Copilot", copilot_file(home), inspect_copilot(&copilot_file(home))),
+        row("grok", "Grok", grok_file(home), switch::inspect(&grok_file(home), &GROK_EVENTS)),
+        row("devin", "Devin", devin_file(home), inspect_devin(&devin_file(home))),
+        row("pi", "Pi", pi_file(home), inspect_pi(&pi_file(home))),
     ]
 }
+// ---- T-122 (STAT-017..021): Copilot CLI, Grok, Devin, Pi ----
+//
+// - Copilot: Kolux's own `~/.copilot/hooks/kolux.json` (or under `COPILOT_HOME`): `version` 1,
+//   `disableAllHooks` false, one `{type, powershell, timeoutSec}` entry per event in its PowerShell
+//   slot. Its camel-case payload carries no event name, so the entry names the event as the
+//   script's argument and the route is `copilot/<event>`; a Pascal-case `hook_event_name` in the
+//   body (its VS Code shape) is read too.
+// - Grok: Kolux's own `~/.grok/hooks/kolux-status.json` (or under `GROK_HOME`), Claude-style groups
+//   (no matcher: Grok's is a regex, and none matches everything). Removal at quit is T-122-b.
+// - Devin: `hooks` groups inside Kolux marker comment lines at the top of Devin's `config.json`
+//   (`%APPDATA%\devin` here, `~/.config/devin` elsewhere); the file is JSON with comments, so the
+//   text around the block is never rewritten, only read (comments stripped) to check it.
+// - Pi: a Kolux extension file `~/.pi/agent/extensions/kolux-status.js` that posts Pi's events
+//   itself. Dialogs, titles and OMP are T-122-b.
+
+pub const COPILOT_SCRIPT: &str = "copilot.cmd";
+pub const GROK_SCRIPT: &str = "grok.cmd";
+pub const DEVIN_SCRIPT: &str = "devin.cmd";
+pub const PI_EXTENSION: &str = "kolux-status.js";
+pub const COPILOT_EVENTS: [&str; 13] = ["sessionStart", "sessionEnd", "userPromptSubmitted", "preToolUse", "postToolUse", "postToolUseFailure", "subagentStart", "subagentStop", "preCompact", "agentStop", "errorOccurred", "permissionRequest", "notification"];
+pub const GROK_EVENTS: [&str; 9] = ["SessionStart", "UserPromptSubmit", "Stop", "StopFailure", "SessionEnd", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Notification"];
+pub const DEVIN_EVENTS: [&str; 8] = ["SessionStart", "UserPromptSubmit", "Stop", "PostCompaction", "SessionEnd", "PreToolUse", "PostToolUse", "PermissionRequest"];
+const DEVIN_TOOL_EVENTS: [&str; 3] = ["PreToolUse", "PostToolUse", "PermissionRequest"];
+pub const PI_EVENTS: [&str; 6] = ["session_start", "before_agent_start", "tool_execution_start", "tool_execution_end", "agent_settled", "session_shutdown"];
+pub const DEVIN_START: &str = "// >>> Kolux RS hooks (Devin) >>>";
+pub const DEVIN_END: &str = "// <<< Kolux RS hooks (Devin) <<<";
+/// The vendors whose hook names the event as the script's argument, so the route carries it.
+const ROUTED: [&str; 2] = ["copilot", "devin"];
+
+fn routed_event(path: &str) -> Option<&str> {
+    path.trim_start_matches('/').split_once('/').map(|x| x.1).filter(|s| !s.is_empty())
+}
+
+pub fn write_copilot_script(home: &Path) -> Result<String, String> {
+    write_script(home, COPILOT_SCRIPT, &script("copilot", "copilot/%~1", false))
+}
+
+pub fn write_grok_script(home: &Path) -> Result<String, String> {
+    write_script(home, GROK_SCRIPT, &script("grok", "grok", false))
+}
+
+pub fn write_devin_script(home: &Path) -> Result<String, String> {
+    write_script(home, DEVIN_SCRIPT, &script("devin", "devin/%~1", false))
+}
+
+pub fn copilot_file(home: &Path) -> PathBuf {
+    copilot_file_in(home, std::env::var_os("COPILOT_HOME").map(PathBuf::from))
+}
+
+pub fn copilot_file_in(home: &Path, copilot_home: Option<PathBuf>) -> PathBuf {
+    copilot_home.unwrap_or_else(|| home.join(".copilot")).join("hooks").join("kolux.json")
+}
+
+pub fn grok_file(home: &Path) -> PathBuf {
+    grok_file_in(home, std::env::var_os("GROK_HOME").map(PathBuf::from))
+}
+
+pub fn grok_file_in(home: &Path, grok_home: Option<PathBuf>) -> PathBuf {
+    grok_home.unwrap_or_else(|| home.join(".grok")).join("hooks").join("kolux-status.json")
+}
+
+/// Devin's settings: the roaming application-data folder on Windows (read from `home`, never from
+/// the environment, so a fenced run stays in its scratch home).
+pub fn devin_file(home: &Path) -> PathBuf {
+    if cfg!(windows) {
+        home.join("AppData").join("Roaming").join("devin").join("config.json")
+    } else {
+        home.join(".config").join("devin").join("config.json")
+    }
+}
+
+pub fn pi_file(home: &Path) -> PathBuf {
+    home.join(".pi").join("agent").join("extensions").join(PI_EXTENSION)
+}
+
+/// Copilot's whole file: the script, with the event as its argument, in each event's PowerShell slot.
+pub fn copilot_hooks(command: &str) -> Value {
+    let hooks: serde_json::Map<String, Value> = COPILOT_EVENTS
+        .iter()
+        .map(|e| (e.to_string(), json!([{ "type": "command", "powershell": format!("& '{}' {e}", command.replace('\'', "''")), "timeoutSec": 5 }])))
+        .collect();
+    json!({ "version": 1, "disableAllHooks": false, "hooks": hooks })
+}
+
+/// Every entry in the file calls Kolux's script (the `powershell` slot, which `names_mine` does not read).
+fn copilot_mine(v: &Value) -> bool {
+    let entry_mine = |e: &Value| e.get("powershell").and_then(Value::as_str).is_some_and(|c| c.contains(SCRIPT_DIR));
+    v.get("hooks").and_then(Value::as_object).is_some_and(|h| h.values().all(|g| g.as_array().is_some_and(|a| a.iter().all(entry_mine))))
+}
+
+/// Copilot: Kolux's own file is written whole; one holding entries that are not Kolux's is refused.
+pub fn install_copilot(home: &Path, file: &Path) -> Result<bool, String> {
+    let command = write_copilot_script(home)?;
+    let want = copilot_hooks(&command);
+    let text = read_opt(file)?;
+    if let Some(t) = &text {
+        let v = parse(file, Some(t))?;
+        if v == want {
+            return Ok(false);
+        }
+        if !copilot_mine(&v) {
+            return Err(format!("{} holds entries that are not Kolux's; left alone", file.display()));
+        }
+    }
+    write_json(file, &want, text.as_deref())?;
+    Ok(true)
+}
+
+pub fn remove_copilot(file: &Path) -> Result<bool, String> {
+    let Some(text) = read_opt(file)? else { return Ok(false) };
+    if !copilot_mine(&parse(file, Some(&text))?) {
+        return Err(format!("{} holds entries that are not Kolux's; left alone", file.display()));
+    }
+    fs::remove_file(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    if let Some(dir) = file.parent() {
+        let _ = fs::remove_dir(dir);
+    }
+    Ok(true)
+}
+
+fn inspect_copilot(file: &Path) -> (&'static str, Option<String>) {
+    let v = match read_opt(file) {
+        Ok(Some(t)) => match parse(file, Some(&t)) {
+            Ok(v) => v,
+            Err(e) => return ("error", Some(e)),
+        },
+        Ok(None) => return ("not installed", None),
+        Err(e) => return ("error", Some(e)),
+    };
+    if !copilot_mine(&v) {
+        return ("error", Some(format!("{} holds entries that are not Kolux's", file.display())));
+    }
+    let hooks = v.get("hooks").and_then(Value::as_object);
+    let missing: Vec<&str> = COPILOT_EVENTS.iter().copied().filter(|e| hooks.and_then(|h| h.get(*e)).and_then(Value::as_array).is_none_or(Vec::is_empty)).collect();
+    if missing.len() == COPILOT_EVENTS.len() {
+        ("not installed", None)
+    } else if !missing.is_empty() {
+        ("partial", Some(format!("no Kolux entry for {}", missing.join(", "))))
+    } else if v.get("disableAllHooks").and_then(Value::as_bool) == Some(true) {
+        ("disabled", Some("disableAllHooks is true in Kolux's Copilot hook file".into()))
+    } else {
+        ("installed", None)
+    }
+}
+
+/// Grok: Claude-style groups in Kolux's own file, no matcher (Grok's is a regex).
+pub fn install_grok(home: &Path, file: &Path) -> Result<bool, String> {
+    let command = write_grok_script(home)?;
+    install_hooks(home, file, "grok", &command, &GROK_EVENTS, &[])
+}
+
+/// Devin's block: the groups, pretty-printed two spaces in, between the marker comment lines.
+pub fn devin_block(command: &str, comma: &str) -> String {
+    // The script's route is `devin/<event>`, so each event's command carries its own name (the
+    // block is Kolux's alone, so the groups are built outright rather than merged in).
+    let groups: serde_json::Map<String, Value> = DEVIN_EVENTS
+        .iter()
+        .map(|e| {
+            let hook = json!([{ "type": "command", "command": format!("\"{command}\" {e}"), "timeout": 10 }]);
+            let group = if DEVIN_TOOL_EVENTS.contains(e) { json!({ "matcher": "*", "hooks": hook }) } else { json!({ "hooks": hook }) };
+            (e.to_string(), json!([group]))
+        })
+        .collect();
+    let hooks = serde_json::to_string_pretty(&Value::Object(groups)).unwrap_or_default().replace('\n', "\n  ");
+    format!("  {DEVIN_START}\n  \"hooks\": {hooks}{comma}\n  {DEVIN_END}\n")
+}
+
+/// The JSON of a file with comments: `//` and `/* */` outside strings become spaces, so what is
+/// left parses and keeps its byte positions.
+pub fn strip_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let (mut in_str, mut esc, mut line, mut block) = (false, false, false, false);
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if line {
+            if c == '\n' {
+                line = false;
+                out.push(c);
+            }
+            continue;
+        }
+        if block {
+            if c == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                block = false;
+            } else if c == '\n' {
+                out.push(c);
+            }
+            continue;
+        }
+        if in_str {
+            out.push(c);
+            if esc {
+                esc = false;
+            } else if c == '\\' {
+                esc = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_str = true;
+                esc = false;
+                out.push(c);
+            }
+            '/' if chars.peek() == Some(&'/') => line = true,
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                block = true;
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// The text without Kolux's block (marker lines included), and whether there was one.
+fn strip_devin(text: &str) -> (String, bool) {
+    let mut out = String::with_capacity(text.len());
+    let (mut inside, mut found) = (false, false);
+    for line in text.split_inclusive('\n') {
+        let l = line.trim();
+        if !inside && l.starts_with(DEVIN_START) {
+            inside = true;
+            found = true;
+            continue;
+        }
+        if inside {
+            if l.starts_with(DEVIN_END) {
+                inside = false;
+            }
+            continue;
+        }
+        out.push_str(line);
+    }
+    (out, found)
+}
+
+/// Devin: the block goes right after the file's opening brace; comments, layout and the other keys
+/// stay as they were. A file that is not JSON (once its comments are stripped), or that has hooks of
+/// its own, is refused and never rewritten.
+pub fn install_devin(home: &Path, file: &Path) -> Result<bool, String> {
+    let command = write_devin_script(home)?;
+    let text = read_opt(file)?;
+    let (bare, mine_already) = strip_devin(text.as_deref().unwrap_or("{\n}\n"));
+    let not_json = |e: String| format!("{} is not JSON with comments ({e}); left alone", file.display());
+    let v: Value = serde_json::from_str(&strip_comments(&bare)).map_err(|e| not_json(e.to_string()))?;
+    let obj = v.as_object().ok_or_else(|| not_json("the top level is not an object".into()))?;
+    // ponytail: Kolux adds hooks only to a file without any; merging into the user's own
+    // groups while keeping their comments is T-122-b if a user ever has both.
+    if obj.contains_key("hooks") {
+        return Err(format!("{} has hooks of its own; left alone", file.display()));
+    }
+    let brace = bare.find('{').ok_or_else(|| not_json("no opening brace".into()))?;
+    let rest = bare[brace + 1..].trim_start_matches(['\r', '\n']);
+    let new = format!("{}\n{}{rest}", &bare[..=brace], devin_block(&command, if obj.is_empty() { "" } else { "," }));
+    serde_json::from_str::<Value>(&strip_comments(&new)).map_err(|e| not_json(format!("after Kolux's block it would not parse: {e}")))?;
+    if text.as_deref() == Some(new.as_str()) {
+        return Ok(false);
+    }
+    keep_copy(home, file, "devin", text.is_some(), mine_already)?;
+    write_atomic(file, new.as_bytes(), text.as_deref())?;
+    Ok(true)
+}
+
+/// Devin: the block goes; the kept copy's bytes come back when the rest reads as it did, and a
+/// file Kolux created is deleted.
+pub fn remove_devin(home: &Path, file: &Path) -> Result<bool, String> {
+    let Some(text) = read_opt(file)? else { return Ok(false) };
+    let (rest, found) = strip_devin(&text);
+    if !found {
+        return Ok(false);
+    }
+    let record = target_dir(home, file).join(BACKUP_RECORD);
+    let copy = fs::read(backup_of(file)).ok();
+    let bytes = match copy {
+        Some(c) if String::from_utf8_lossy(&c).trim() == rest.trim() => c,
+        None if rest.trim() == "{\n}" || rest.trim() == "{}" => {
+            if was_created(&record, file) {
+                fs::remove_file(file).map_err(|e| format!("{}: {e}; nothing removed", file.display()))?;
+                let _ = fs::remove_file(record);
+                return Ok(true);
+            }
+            rest.into_bytes()
+        }
+        _ => rest.into_bytes(),
+    };
+    write_atomic(file, &bytes, Some(&text))?;
+    Ok(true)
+}
+
+fn inspect_devin(file: &Path) -> (&'static str, Option<String>) {
+    let text = match read_opt(file) {
+        Ok(Some(t)) => t,
+        Ok(None) => return ("not installed", None),
+        Err(e) => return ("error", Some(e)),
+    };
+    let (_, found) = strip_devin(&text);
+    if !found {
+        return ("not installed", None);
+    }
+    let block: String = text.lines().skip_while(|l| !l.trim().starts_with(DEVIN_START)).take_while(|l| !l.trim().starts_with(DEVIN_END)).collect::<Vec<_>>().join("\n");
+    let missing: Vec<&str> = DEVIN_EVENTS.iter().copied().filter(|e| !block.contains(&format!("\"{e}\""))).collect();
+    if missing.is_empty() && block.contains(SCRIPT_DIR) {
+        ("installed", None)
+    } else {
+        ("partial", Some(format!("no Kolux entry for {}", if missing.is_empty() { "the script".to_string() } else { missing.join(", ") })))
+    }
+}
+
+/// The Pi extension: it reports Pi's events to the Kolux that opened the pane and answers nothing
+/// (no handler returns a value, so nothing is blocked or continued). Nothing is held while Kolux is
+/// away: Pi's next event says what it is doing.
+pub fn pi_extension() -> String {
+    r#"// Kolux RS status extension for Pi. Written by Kolux RS; edits are overwritten.
+// It tells Kolux RS what this pane's agent is doing and never answers for Pi.
+import fs from "node:fs";
+
+const EVENTS = {EVENTS};
+
+function send(event, fields) {
+  const env = process.env;
+  if (!env.KOLUX_PANE_KEY || !env.KOLUX_HOOK_IDENTITY) return;
+  let port = env.KOLUX_AGENT_HOOK_PORT;
+  let token = env.KOLUX_AGENT_HOOK_TOKEN;
+  try {
+    [port, token] = fs.readFileSync(env.KOLUX_HOOK_ENDPOINT, "utf8").split(/\s+/);
+  } catch {}
+  if (!port || !token) return;
+  const body = { event };
+  for (const [k, v] of Object.entries(fields)) {
+    if (typeof v === "string" && v) body[k] = v.slice(0, 16000);
+  }
+  // Loopback only: the same hook listener the .cmd scripts post to with curl.
+  fetch(`http://127.0.0.1:${port}/pi`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Kolux-Token": token, "X-Kolux-Pane": env.KOLUX_HOOK_IDENTITY },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(1500),
+  })
+    .then((r) => r.arrayBuffer())
+    .catch(() => {});
+}
+
+export default function (pi) {
+  for (const event of EVENTS) {
+    pi.on(event, (ev) => {
+      send(event, { prompt: ev && ev.prompt, tool_name: ev && ev.toolName });
+    });
+  }
+}
+"#
+    .replace("{EVENTS}", &json!(PI_EVENTS).to_string())
+}
+
+fn pi_mine(text: &str) -> bool {
+    text.lines().next().is_some_and(|l| l.starts_with("//") && l.contains("Written by Kolux RS"))
+}
+
+/// Pi: Kolux's extension file; a file of the user's under its name is never replaced.
+pub fn install_pi(file: &Path) -> Result<bool, String> {
+    let want = pi_extension();
+    let old = read_opt(file)?;
+    if old.as_deref().is_some_and(|o| !pi_mine(o)) {
+        return Err(format!("{} is not Kolux's own extension; left alone", file.display()));
+    }
+    if old.as_deref() == Some(want.as_str()) {
+        return Ok(false);
+    }
+    write_atomic(file, want.as_bytes(), old.as_deref())?;
+    Ok(true)
+}
+
+pub fn remove_pi(file: &Path) -> Result<bool, String> {
+    if !read_opt(file)?.is_some_and(|t| pi_mine(&t)) {
+        return Ok(false);
+    }
+    fs::remove_file(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    Ok(true)
+}
+
+fn inspect_pi(file: &Path) -> (&'static str, Option<String>) {
+    match read_opt(file) {
+        Ok(None) => ("not installed", None),
+        Ok(Some(t)) if t == pi_extension() => ("installed", None),
+        Ok(Some(t)) if pi_mine(&t) => ("partial", Some("an older Kolux extension".into())),
+        Ok(Some(_)) => ("error", Some(format!("{} is not Kolux's own extension; left alone", file.display()))),
+        Err(e) => ("error", Some(e)),
+    }
+}
+
 
 #[cfg(test)]
 #[path = "vendors_more_tests.rs"]

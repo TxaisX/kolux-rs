@@ -1,0 +1,125 @@
+T-122 · STAT-017 Copilot CLI · STAT-018 Grok · STAT-019 Devin · STAT-020 MiMo Code · STAT-021 Pi and OMP
+lane/vendors from 2d14c7db · 2026-10-19 · builder Fable 5.1 · NO APP LAUNCHES (proof by stand-in events and scratch homes)
+
+WHAT THE USER CAN NOW DO
+- A Copilot CLI, Grok, Devin or Pi pane shows the same status dot as a Claude pane: working while a tool runs,
+  waiting when the agent asks a question or permission, idle when the turn ends, interrupted when Devin says the
+  user stopped it. `kolux agent hooks status` lists GitHub Copilot, Grok, Devin and Pi after Hermes, and
+  `kolux agent hooks on|off` (and the Settings switch through agent_hooks::apply) installs or removes each one.
+- Not built, left unticked inside the PLAN line: STAT-020 MiMo Code (its public config-files page shows no plugin
+  events and no home variable, so there is nothing to hook; DECISIONS says a separate home, which needs that
+  doc) and the OMP half of STAT-021 (no public extension doc found; Pi's doc does not mention OMP).
+
+FILES (owned)
+- src-tauri/src/agent_hooks/vendors_more.rs: the four vendors added to the T-121 module (AGENTS 9, ROUTED, routed_event,
+  normalize arms, write_scripts, apply arms, rows, and the per-vendor install/remove/inspect code appended at the end).
+- src-tauri/src/agent_hooks/vendors_more_tests.rs: 7 new tests (17 in the module).
+- evidence/vendors-T-122-mod.patch, evidence/vendors-T-122-tests.patch: the hooks-lane hunks (see PATCHES).
+
+PER-VENDOR RULES (each from the public doc cited in PROVENANCE.md, T-122)
+- Copilot CLI (route /copilot/<event>): $COPILOT_HOME/hooks/kolux.json or ~/.copilot/hooks/kolux.json, a file of
+  Kolux's own ({"version":1,"disableAllHooks":false,"hooks":{<event>:[{"type":"command","powershell":"& '<copilot.cmd>' <event>","timeoutSec":5}]}}),
+  all 13 documented events registered. The camelCase payload carries no event name, so the event rides the route
+  (the script's first argument, the Antigravity pattern); the PascalCase shape with hook_event_name is read too.
+  sessionStart -> SessionStart; userPromptSubmitted -> UserPromptSubmit; preToolUse -> PreToolUse; postToolUse and
+  postToolUseFailure -> PostToolUse; permissionRequest -> PermissionRequest; agentStop and sessionEnd -> Stop;
+  errorOccurred -> PostToolUse when recoverable, Stop otherwise (COMPAT 3.5: the turn ends only on an error it
+  cannot recover from); notification with notification_type permission_prompt -> the ask-the-user shape (waiting);
+  subagentStart, subagentStop, preCompact change nothing. Tool fields: tool_name|toolName, tool_input|toolArgs|toolInput.
+  Only the powershell slot is written (Windows build); the bash slot is not.
+  Off deletes kolux.json and the hooks folder when it is then empty. inspect: not installed / partial / disabled
+  (disableAllHooks true) / installed / error (the file is not JSON).
+- Grok (route /grok): $GROK_HOME/hooks/kolux-status.json or ~/.grok/hooks/kolux-status.json, a file of Kolux's own
+  with Claude-style groups for 9 events and no matcher (Grok's matcher is a regex, so none is written); timeout
+  5 s as Grok's default. hook_event_name|hookEventName: UserPromptSubmit; Stop, StopFailure and SessionEnd ->
+  Stop; PreToolUse; PostToolUse and PostToolUseFailure -> PostToolUse; Notification and SessionStart change
+  nothing (a routine notice never notifies; which notices mean needs-you or done waits on the payload doc).
+  Install = install_hooks (the T-121 helper), off = remove_hooks: a file Kolux created goes, a user's own
+  entries stay. Removal at quit, the wording rule and "emptied by hand stays empty" are T-122-b.
+- Devin (route /devin/<event>): %APPDATA%\devin\config.json read as <home>\AppData\Roaming\devin\config.json
+  (never APPDATA itself, so a scratch HOME is enough; .config/devin/config.json elsewhere). The file may carry
+  // and /* */ comments (strip_comments is string-aware, so https://a/b inside a value survives). Kolux's groups
+  go in one block between the marker lines `// >>> Kolux RS hooks (Devin) >>>` and `// <<< ... <<<` inserted
+  right after the first `{`, pretty-printed two spaces in, each event's command carrying its own name
+  ("<devin.cmd>" <Event>) because the script's route names the event; PreToolUse, PostToolUse and
+  PermissionRequest get the match-everything matcher. The user's text after the block is kept byte for byte
+  and the whole file must still parse after the insert (else nothing is written). A file with hooks of its own is
+  refused with a message (merging into the user's groups is past the ponytail ceiling; T-122-b if wanted), as is a
+  file that is not JSON. Off restores the kept copy of the original bytes, or deletes the file Kolux created.
+  Events: UserPromptSubmit; Stop (interrupted|is_interrupt|user_interrupted true -> kolux_interrupted);
+  PostCompaction -> PostToolUse (still working); SessionEnd -> Stop; PreToolUse; PostToolUse; PermissionRequest ->
+  the ask-the-user shape (waiting); SessionStart changes nothing. Devin's doc does not say whether its settings
+  share the Claude settings key, so the overlap warning is unticked (T-122-b).
+- Pi (route /pi): ~/.pi/agent/extensions/kolux-status.js, a file of Kolux's own: `export default function (pi)` that
+  registers pi.on for session_start, before_agent_start (prompt), tool_execution_start / tool_execution_end
+  (toolName), agent_settled and session_shutdown, and POSTs {event, prompt, tool_name, session_id} to
+  http://127.0.0.1:<port>/pi with the X-Kolux-Token and X-Kolux-Pane headers (fetch, fire-and-forget). agent_end is
+  not registered: Pi's doc says it is not the final-idle signal; agent_settled is. Dialog/title forwarding and
+  approval prompts: no public API shown -> T-122-b. Off deletes the file; inspect: installed / not installed.
+- All four normalize into the Vendor shape and status::Agent::Vendor (status.rs untouched); PreToolUse with the
+  ask tool name -> waiting, PermissionRequest -> permission, PostToolUse -> working, Stop -> idle.
+
+TESTS (src-tauri/src/agent_hooks/vendors_more_tests.rs; stand-in events, scratch homes under G:/Temp/kolux-rs-vendors-more-*)
+- stat_017_copilot_events_ride_the_route_and_an_error_ends_the_turn_only_when_it_cannot_recover
+- stat_018_grok_events_drive_the_dot_and_routine_notices_change_nothing
+- stat_019_devin_events_drive_the_dot_and_a_flagged_stop_is_an_interruption
+- stat_021_pi_extension_events_drive_the_dot
+- stat_017_018_copilot_and_grok_own_files_come_and_go (also: rows order is the nine vendors)
+- stat_019_devin_block_keeps_the_users_comments_and_leaves_as_it_came (install twice, parse through strip_comments,
+  8 events, matcher on PreToolUse, Stop command ends with " Stop", user keys intact, off = byte for byte, refusals)
+- stat_021_pi_extension_file_is_kolux_s_alone
+- routes test extended: /copilot/preToolUse and /devin/Stop route, /grok/x does not; mimo-code and omp are not managed.
+- Failing first: t122-test-1.log 16 passed 1 failed (devin_block wrote the bare script path, no event argument);
+  t122-test-2.log still 1 failed (per-event install_groups calls cleared each other through clear_unused);
+  t122-test-4.log 17 passed after the block is built outright.
+
+GATES (logs G:/Temp/vendors-w16-logs/, scratch HOME/USERPROFILE/CLAUDE_CONFIG_DIR/CODEX_HOME/TEMP/TMP under G:/Temp/vendors-w16/,
+KOLUX_* unset, slot acquired/released around every cargo run)
+- cargo test --lib agent_hooks::vendors_more: 17 passed; 0 failed (t122-test-4.log, 0.14s)
+- cargo test --lib agent_hooks: 89 passed; 0 failed (t122-test-agent_hooks.log, 28.54s; 82 before + 7)
+  (a first run without TEMP under the scratch root failed t_152_1_a, t_152_b_2 and fix1_apply on the scratch fence
+  "the temp folder holds the home folder", not on this card's code; TEMP/TMP set to the marked scratch folder as in T-121)
+- cargo build: Finished dev, 1m 29s then 29.94s (t122-build.log)
+- cargo clippy --all-targets -- -D warnings: clean (t122-clippy.log; first run flagged manual_split_once in routed_event, fixed)
+- pnpm exec tsc --noEmit: empty output, rc 0 (t122-tsc.log); no TS changed in this card, no vitest dir changed
+- patches: GIT_INDEX_FILE=G:/Temp/vendors-w16/tmp/index-check git read-tree 2d14c7db; git apply --cached --check
+  evidence/vendors-T-122-mod.patch evidence/vendors-T-122-tests.patch -> clean
+
+PATCHES (hard-stop files, never committed from this lane)
+- evidence/vendors-T-122-mod.patch (39 lines) and evidence/vendors-T-122-tests.patch (15 lines) are the WHOLE diff of
+  mod.rs / tests.rs against 2d14c7db, so they contain and supersede evidence/vendors-T-121-mod.patch and
+  vendors-T-121-tests.patch (apply the T-122 ones only). mod.rs: MANAGED grows to 14 (copilot, grok, devin, pi),
+  `pub mod vendors_more;`, the apply arm and the refresh call to vendors_more::write_scripts. tests.rs: stat_004
+  plan slices [2..5], [5..10], [10..] with grok installed -> copilot Leave, grok Install, devin Leave, pi Leave.
+- evidence/vendors-T-121-hooks.patch, -saved.patch, -switch.patch are unchanged by T-122 (checked with diff -q against
+  the live diff) and still needed.
+- evidence/vendors-T-122-privacy-audit.patch (scripts/privacy-audit.test.mjs, out of scope for this lane): one EXACT
+  allow-list line for the Pi extension's loopback fetch (fetch(`http://127.0.0.1:${port}/pi`), the same shape as
+  the Amp entry. Without it the full `pnpm test` fails app070 on exactly that line (batch-pnpm-test.log: 1 failed,
+  1524 passed; the only hit is src-tauri/src/agent_hooks/vendors_more.rs). Checked with node: the regex matches the
+  one fetch in the shipped part of the file and no client pattern remains after it is removed; the patch applies
+  clean on 2d14c7db. Not applied locally (scripts/** is not this lane's), so pnpm test stays red on this branch
+  until the hooks/coordinator applies it.
+
+BATCH END (after T-122, patched tree, logs G:/Temp/vendors-w16-logs/batch-*.log)
+- cargo test --no-fail-fast: 990 passed; 0 failed; 2 ignored (lib, 97.14s) + 3 passed (bin) + 3 empty targets, rc 0
+- pnpm test: Test Files 1 failed | 224 passed; Tests 1 failed | 1524 passed; the one failure is app070 above
+- firewall-check -Baseline: 53 hits in 22 files, 0 new, 0 baseline entries missing
+
+LIVE PROOF PENDING (batched) — for the proof lane, no app launched in this lane
+1. Start the dev app with HOME and COPILOT_HOME/GROK_HOME pointed at a marked scratch folder; `kolux agent hooks on`;
+   check the four files exist at the paths above and `kolux agent hooks status` shows installed for all four.
+2. From a pane's shell: `echo {"tool_name":"x"} | <home>/.kolux-rs/agent-hooks/copilot.cmd preToolUse` -> dot working;
+   `... copilot.cmd agentStop` -> idle; `echo {"recoverable":false} | copilot.cmd errorOccurred` -> idle;
+   check that PowerShell's `& '<copilot.cmd>' <event>` passes Copilot's stdin through to the script (the cmd reads it).
+3. `echo {"hookEventName":"PreToolUse","toolName":"x"} | grok.cmd` -> working; `{"hookEventName":"Stop"}` -> idle.
+4. `echo {"interrupted":true} | devin.cmd Stop` -> interrupted; `echo {} | devin.cmd PermissionRequest` -> waiting.
+5. Pi: run `pi` with the extension installed, send a prompt -> working, let it settle -> idle; the extension's
+   fetch must reach the loopback port (check the port and token the dev app wrote into the file).
+6. `kolux agent hooks off` -> the four files are gone (Devin's config.json restored byte for byte if it existed).
+
+SEEN, NOT FIXED
+- vendors.rs keep_copy compares the resolved path (hooks lane, carried from T-121).
+- Copilot's ask-the-user tool name is not in the public reference, so "blocked with a question" is only reached
+  through the notification permission_prompt notice.
+- Grok removal at quit (DT-06) needs the quit path (lib.rs), out of scope here -> T-122-b.

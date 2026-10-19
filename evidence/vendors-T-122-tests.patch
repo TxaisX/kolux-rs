@@ -1,0 +1,15 @@
+diff --git a/src-tauri/src/agent_hooks/tests.rs b/src-tauri/src/agent_hooks/tests.rs
+index 73bf4eba..00e6bc62 100644
+--- a/src-tauri/src/agent_hooks/tests.rs
++++ b/src-tauri/src/agent_hooks/tests.rs
+@@ -21,7 +21,9 @@ fn stat_004_hooks_go_only_to_found_agents_and_leave_switched_off_ones() {
+     // The status hooks switch is on (T-152-gate: it reads off until saved on).
+     let none = json!({ "agentStatusHooks": true });
+     assert_eq!(plan(&none, &ids(&["claude"]), true)[..2], [("claude", Plan::Install), ("codex", Plan::Leave)], "only Claude Code installed: only it gains hooks");
+-    assert_eq!(plan(&none, &ids(&["gemini", "amp"]), true)[2..], [("gemini", Plan::Install), ("antigravity", Plan::Leave), ("amp", Plan::Install)], "T-120-b: the vendors follow the same rule");
++    assert_eq!(plan(&none, &ids(&["gemini", "amp"]), true)[2..5], [("gemini", Plan::Install), ("antigravity", Plan::Leave), ("amp", Plan::Install)], "T-120-b: the vendors follow the same rule");
++    assert_eq!(plan(&none, &ids(&["kimi"]), true)[5..10], [("cursor", Plan::Leave), ("droid", Plan::Leave), ("command-code", Plan::Leave), ("kimi", Plan::Install), ("hermes", Plan::Leave)], "T-121: so do the next five");
++    assert_eq!(plan(&none, &ids(&["grok"]), true)[10..], [("copilot", Plan::Leave), ("grok", Plan::Install), ("devin", Plan::Leave), ("pi", Plan::Leave)], "T-122: and the last four");
+     let off = json!({ "agentStatusHooks": true, "disabledAgents": ["codex"] });
+     assert_eq!(plan(&off, &ids(&["claude", "codex"]), true)[..2], [("claude", Plan::Install), ("codex", Plan::Remove)], "a switched-off agent has its hooks taken out");
+     assert_eq!(plan(&off, &[], false)[..2], [("claude", Plan::Leave), ("codex", Plan::Remove)], "detection failed: nothing installed, nothing removed for being unfound");
