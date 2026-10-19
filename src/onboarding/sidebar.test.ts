@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { doneFrom, type Facts, type StepId } from "./guide";
 import { checklistOf, OWN_FILE, type FirstRun } from "./newcomer";
 import { entryLine, FOCUS_FLOOR_MS, guideWanted, onReread, PROJECT_ADDED, sidebarSlot } from "./sidebar";
@@ -57,12 +57,13 @@ describe("the sidebar's onboarding slot (VIEW-114)", () => {
   });
 });
 
-describe("when the sidebar entry reads its steps again (VIEW-114, FIX-2)", () => {
-  it("every Setup Guide close and every added project re-reads; window focus re-reads at most once per floor; the cleanup stops all three", () => {
+describe("when the sidebar entry reads its steps again (VIEW-114, FIX-2, FIX-3)", () => {
+  it("every Setup Guide close and every added project bumps; window focus bumps at most once per floor; the cleanup stops all three", () => {
     const target = new EventTarget();
     let now = 100_000;
     let bumps = 0;
     const stop = onReread(target, () => bumps++, () => now);
+    now += FOCUS_FLOOR_MS;
     target.dispatchEvent(new Event("focus"));
     target.dispatchEvent(new Event("focus"));
     expect(bumps).toBe(1);
@@ -77,5 +78,61 @@ describe("when the sidebar entry reads its steps again (VIEW-114, FIX-2)", () =>
     now += FOCUS_FLOOR_MS;
     for (const t of ["focus", GUIDE_CLOSED, PROJECT_ADDED]) target.dispatchEvent(new Event(t));
     expect(bumps).toBe(5);
+  });
+
+  it("a focus right after subscribing does not bump: the mount read counts as the last read (FIX-3)", () => {
+    const target = new EventTarget();
+    let now = 5_000;
+    let bumps = 0;
+    onReread(target, () => bumps++, () => now);
+    now += 1;
+    target.dispatchEvent(new Event("focus"));
+    now += FOCUS_FLOOR_MS - 2;
+    target.dispatchEvent(new Event("focus"));
+    expect(bumps).toBe(0);
+    now += 1;
+    target.dispatchEvent(new Event("focus"));
+    expect(bumps).toBe(1);
+  });
+
+  it("a focus within the floor of a Setup Guide close or an added project does not bump again (FIX-3)", () => {
+    for (const first of [GUIDE_CLOSED, PROJECT_ADDED]) {
+      const target = new EventTarget();
+      let now = 0;
+      let bumps = 0;
+      onReread(target, () => bumps++, () => now);
+      now = 10 * FOCUS_FLOOR_MS;
+      target.dispatchEvent(new Event(first));
+      expect(bumps).toBe(1);
+      now += FOCUS_FLOOR_MS - 1;
+      target.dispatchEvent(new Event("focus"));
+      expect(bumps).toBe(1);
+      now += 1;
+      target.dispatchEvent(new Event("focus"));
+      expect(bumps).toBe(2);
+    }
+  });
+
+  it("the floor runs on the monotonic clock, so a wall clock stepped back an hour cannot hold focus re-reads off (FIX-3)", () => {
+    const target = new EventTarget();
+    let bumps = 0;
+    let mono = 1_000;
+    let wall = 1_700_000_000_000;
+    const spy = vi.spyOn(performance, "now").mockImplementation(() => mono);
+    const date = vi.spyOn(Date, "now").mockImplementation(() => wall);
+    try {
+      onReread(target, () => bumps++);
+      mono += FOCUS_FLOOR_MS;
+      wall += FOCUS_FLOOR_MS;
+      target.dispatchEvent(new Event("focus"));
+      expect(bumps).toBe(1);
+      mono += FOCUS_FLOOR_MS;
+      wall -= 3_600_000;
+      target.dispatchEvent(new Event("focus"));
+      expect(bumps).toBe(2);
+    } finally {
+      spy.mockRestore();
+      date.mockRestore();
+    }
   });
 });

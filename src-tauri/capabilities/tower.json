@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "tower",
+  "description": "T-546-c: the Tower's own window: events to and from the main window, and closing itself. Plugin and core permissions beyond these are not granted to it; the app's own commands stay callable from it, as from the main window (Tauri 2 allows every registered app command to every window unless the build restricts them with an app manifest), and it loads the same bundle as the main window",
+  "windows": [
+    "tower"
+  ],
+  "permissions": [
+    "core:event:default",
+    "core:window:allow-close"
+  ]
+}

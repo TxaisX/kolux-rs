@@ -12,6 +12,8 @@ import { followText } from "./terminal/text";
 import { installMenuWheel } from "./settings/menuWheel";
 import { LAYOUT_FIELD, restoreAsks, restoreLayout, stillThere } from "./terminal/layout";
 import "./styles.css";
+import TowerWindow from "./tower/TowerWindow";
+import { isTowerWindow } from "./tower/ownWindow";
 
 // SET-004: the window starts hidden (tauri.conf.json). The saved look goes on the root first, read
 // from the settings (the last run's copy if they take too long), then the page draws, and only then
@@ -19,6 +21,11 @@ import "./styles.css";
 async function start() {
   applyAppearance(cachedAppearance());
   followSystemMode();
+  // T-546-c: the Tower's own window draws only the Tower; the panes, the settings and the layout stay the main window's.
+  if (isTowerWindow(location.hash)) {
+    ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(<TowerWindow />);
+    return;
+  }
   const saved = await Promise.race([
     invoke<Record<string, unknown>>("get_settings").catch(() => null),
     new Promise<null>((r) => setTimeout(() => r(null), 1500)),

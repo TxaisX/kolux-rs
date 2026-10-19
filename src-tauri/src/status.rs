@@ -38,6 +38,21 @@ const CONTINUATION: &str = "This session is being continued from a previous conv
 /// Every pane's stored status, by pane key. ponytail: in memory only; a restart starts clean
 /// (STAT-006's catch-up is its own card).
 pub static SESSIONS: Mutex<Option<HashMap<u32, Session>>> = Mutex::new(None);
+/// T-563: per pane key, the terminals whose exit took that pane's session, newest last. A hook
+/// still in flight from one of them is dropped, so it never points the session back at a dead
+/// terminal. Terminal ids are never reused within a run, so a few per pane are enough.
+static RETIRED: Mutex<Option<HashMap<u32, VecDeque<u32>>>> = Mutex::new(None);
+const RETIRED_KEEP: usize = 16;
+
+fn with_retired<T>(f: impl FnOnce(&mut HashMap<u32, VecDeque<u32>>) -> T) -> T {
+    let mut guard = RETIRED.lock().unwrap_or_else(|p| p.into_inner());
+    f(guard.get_or_insert_with(HashMap::new))
+}
+
+/// T-563: `terminal`'s exit already took `pane_key`'s session.
+fn retired(pane_key: u32, terminal: u32) -> bool {
+    with_retired(|r| r.get(&pane_key).is_some_and(|t| t.contains(&terminal)))
+}
 /// When the usage window the status line last saw used up lifts (ms), 0 for none (STAT-040); a
 /// limit stop carries it (STAT-022).
 pub static LIMIT_RESETS_AT: AtomicI64 = AtomicI64::new(0);
@@ -609,8 +624,12 @@ pub fn fit_plan(mut s: Status) -> Status {
     s
 }
 
-/// Folds an event into the pane's session and builds what the window is told.
+/// Folds an event into the pane's session and builds what the window is told. T-563: a hook from
+/// a terminal whose exit already took this pane's session is dropped before it touches anything.
 pub fn report(pane_key: u32, terminal: Option<u32>, agent: Agent, event: &Value) -> Option<Status> {
+    if terminal.is_some_and(|t| retired(pane_key, t)) {
+        return None;
+    }
     with_sessions(|s| {
         let session = s.entry(pane_key).or_default();
         session.terminal = terminal.or(session.terminal);
@@ -672,9 +691,23 @@ pub fn working_now(live: impl Fn(u32) -> bool) -> usize {
 }
 
 /// A terminal ended (its program exited or crashed, or its pane closed): the panes its hooks
-/// reported for are forgotten, so a dead agent never reads working again (TERM-122).
+/// reported for are forgotten, so a dead agent never reads working again (TERM-122). T-563: each
+/// such pane retires the terminal, so a late hook from it is dropped by `report`.
 pub fn terminal_ended(terminal: u32) {
-    with_sessions(|s| s.retain(|_, x| x.terminal != Some(terminal)));
+    let panes: Vec<u32> = with_sessions(|s| {
+        let gone: Vec<u32> = s.iter().filter(|(_, x)| x.terminal == Some(terminal)).map(|(k, _)| *k).collect();
+        gone.iter().for_each(|k| drop(s.remove(k)));
+        gone
+    });
+    with_retired(|r| {
+        for pane in panes {
+            let list = r.entry(pane).or_default();
+            list.push_back(terminal);
+            while list.len() > RETIRED_KEEP {
+                list.pop_front();
+            }
+        }
+    });
 }
 
 /// STAT-032: the panes whose working reading just went the whole window without a signal, each
@@ -699,20 +732,28 @@ pub fn parse_inband(bytes: &[u8]) -> Option<&'static str> {
 }
 
 /// STAT-034: a status a program printed in band; the window's terminal parser hands the payload
-/// over (and never draws the sequence). True when the pane's status moved.
-// Listed in lib.rs's generate_handler (T-124 hunk, RE-APPLY ON MERGE); drop the allow once that lands.
+/// over (and never draws the sequence). True when the pane's status moved. T-563: `terminal` is
+/// the pane's live terminal as the window knows it (absent from an older window); the activity lane
+/// takes it, the session does not store it.
 #[tauri::command]
-pub fn status_inband(app: tauri::AppHandle, pane_key: u32, data: String) -> bool {
+pub fn status_inband(app: tauri::AppHandle, pane_key: u32, terminal: Option<u32>, data: String) -> bool {
     let Some(state) = parse_inband(data.as_bytes()) else {
         return false;
     };
-    let status = with_sessions(|s| {
+    let (status, _) = inband_change(pane_key, terminal, state);
+    tauri::Emitter::emit(&app, crate::hooks::EVENT, status).is_ok()
+}
+
+/// STAT-034 / T-563: folds an in-band state into the pane's session; the activity lane is noted
+/// for `terminal`, else the session's own. Returns the status and the terminal that was noted.
+fn inband_change(pane_key: u32, terminal: Option<u32>, state: &'static str) -> (Status, Option<u32>) {
+    with_sessions(|s| {
         let session = s.entry(pane_key).or_default();
         let change = session.inband(state);
-        crate::activity::note_from(pane_key, session.terminal, change.state);
-        status_of(pane_key, session.terminal, session, change, None)
-    });
-    tauri::Emitter::emit(&app, crate::hooks::EVENT, status).is_ok()
+        let noted = terminal.or(session.terminal);
+        crate::activity::note_from(pane_key, noted, change.state);
+        (status_of(pane_key, session.terminal, session, change, None), noted)
+    })
 }
 
 /// The terminal `pane_key`'s hooks last reported for.
@@ -1280,9 +1321,10 @@ mod tests {
         assert!(!s.believed_working(s.seen));
     }
 
-    /// TERM-122: only a session tied to a live terminal keeps the computer awake. A pane reporting
-    /// with no terminal (an in-band state from a hookless pane) and a straggler hook arriving after
-    /// its terminal ended both read working, but neither holds the computer awake.
+    /// TERM-122: only a session tied to a live terminal keeps the computer awake. A hook report that
+    /// carries no terminal id and a straggler hook arriving after its terminal ended both read
+    /// working, but neither holds the computer awake. (This drives the hook path, report(); the
+    /// in-band path, status_inband, leaves the terminal None unless a hook named one, and is not run here.)
     #[test]
     fn term122_a_session_without_a_live_terminal_never_keeps_the_computer_awake() {
         const NO_TERM: u32 = 922_301;
@@ -1325,6 +1367,53 @@ mod tests {
         assert_eq!(state_of(TERM + 1), Some("working"), "another terminal's pane stays");
         terminal_ended(TERM + 1);
         assert_eq!(state_of(TERM + 1), None);
+    }
+
+    /// T-563: after a Restart, a Stop still in flight from the old terminal lands once the new one
+    /// reports. It is dropped before it touches the session, so the session stays on the new
+    /// terminal and that terminal's exit ends it (and, through panes_of, the activity lane).
+    #[test]
+    fn t563_a_late_hook_from_a_retired_terminal_never_takes_the_pane_back() {
+        const PANE: u32 = 956_301;
+        const OLD: u32 = 956_303;
+        const NEW: u32 = 956_304;
+        let go = ev(r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        let stop = ev(r#"{"hook_event_name":"Stop","last_assistant_message":"built"}"#);
+        assert!(report(PANE, Some(OLD), Agent::Claude, &go).is_some());
+        terminal_ended(OLD);
+        assert_eq!(terminal_of(PANE), None, "the old terminal's exit took the session");
+        assert!(report(PANE, Some(NEW), Agent::Claude, &go).is_some(), "Restart: the new terminal reports");
+        assert!(report(PANE, Some(OLD), Agent::Claude, &stop).is_none(), "the old terminal's late Stop is dropped");
+        assert_eq!(terminal_of(PANE), Some(NEW), "and never points the session back at the old terminal");
+        assert_eq!(panes_of(NEW), vec![PANE], "so the new terminal's exit finds the pane (activity ends its lane)");
+        assert!(working(PANE), "the new turn is still working");
+        terminal_ended(NEW);
+        assert_eq!(terminal_of(PANE), None, "the new terminal's exit ends the session");
+        // Retired for this pane only: another pane on another terminal is untouched, and a hook
+        // with no terminal is not a straggler.
+        assert!(report(PANE + 1, Some(NEW + 10), Agent::Claude, &go).is_some());
+        terminal_ended(NEW + 10);
+        assert!(report(PANE + 1, Some(NEW + 10), Agent::Claude, &stop).is_none(), "retired for the pane it ended");
+        assert!(report(PANE, None, Agent::Claude, &go).is_some(), "no terminal given: not dropped");
+        assert!(report(PANE, Some(NEW), Agent::Claude, &stop).is_none(), "the new terminal is retired too now");
+        assert!(report(PANE, Some(NEW + 10), Agent::Claude, &stop).is_some(), "another pane's ended terminal is not this pane's");
+        with_sessions(|s| s.remove(&PANE));
+    }
+
+    /// T-563: an in-band status names the pane's live terminal for the activity lane without
+    /// storing it, so a hookless program on a pane key that had an agent before still gets its lane.
+    #[test]
+    fn t563_an_in_band_status_notes_the_given_terminal_without_storing_it() {
+        const PANE: u32 = 956_401;
+        let (status, noted) = inband_change(PANE, Some(956_402), "working");
+        assert_eq!((status.change.state, noted), ("working", Some(956_402)));
+        assert_eq!(terminal_of(PANE), None, "the terminal is not stored on the session");
+        let go = ev(r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        report(PANE, Some(956_403), Agent::Claude, &go);
+        assert_eq!(inband_change(PANE, None, "idle").1, Some(956_403), "none given: the session's own terminal");
+        assert_eq!(inband_change(PANE, Some(956_404), "working").1, Some(956_404), "given: it wins");
+        assert_eq!(terminal_of(PANE), Some(956_403), "and the session keeps the one its hooks named");
+        with_sessions(|s| s.remove(&PANE));
     }
 
     #[test]

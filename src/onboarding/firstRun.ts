@@ -55,10 +55,10 @@ export function oneClick(gap = 500) {
 export type Milestone = "aiConnected" | "kitLaunched" | "resultsOpened";
 
 /** ONB-011: records a milestone (kept only the first time); the user sees nothing, even when the write fails. */
-export const milestone = (name: Milestone, send: (cmd: string, args: { name: Milestone }) => Promise<unknown> = invoke): Promise<void> =>
+export const milestone = (name: Milestone, send: (cmd: string, args: { name: Milestone }) => Promise<unknown> = invoke): Promise<boolean> =>
   send("onboarding_milestone", { name }).then(
-    () => checklistChanged(),
-    () => {},
+    () => (checklistChanged(), true),
+    () => false,
   );
 
 /** ONB-013: the newcomer checklist reads its record again when this event fires. */
@@ -144,15 +144,26 @@ export const STATUSES_FAILED = "Kolux could not read your AI connections just no
  *  line goes away once a read works again while a connect failure the user has not seen out stays. */
 export const clearReadFailure = (e: string | null): string | null => (e === STATUSES_FAILED ? null : e);
 
+/** ACCT-035 (FIX-3): each card passes this to its error setter when a read fails, so the read-failure
+ *  line fills an empty line or its own, but never replaces a connect failure the user has not seen out
+ *  (a connect that fails is followed by a read, and that read may fail too). */
+export const readFailed = (e: string | null): string => (e && e !== STATUSES_FAILED ? e : STATUSES_FAILED);
+
 /** ACCT-035: the AI connections page reports each card's connected state here; the first time any
  * card says connected, the first-AI milestone is sent (onboarding.rs keeps only the first time,
- * across the wizard and this page). One send per window: later reports change nothing. */
-export function firstConnection(send: (name: Milestone) => Promise<void> = milestone) {
+ * across the wizard and this page). One landed write per window: later reports change nothing, while a
+ * write that failed is tried again on the next connected report (FIX-3). */
+export function firstConnection(send: (name: Milestone) => Promise<boolean> = milestone) {
   let sent = false;
   return (on: boolean) => {
     if (!on || sent) return;
+    // Held while the write is out so a burst of reports sends once; a write that did not land frees
+    // it again, so the next connected report retries (FIX-3: it was spent before the write answered).
     sent = true;
-    void send("aiConnected");
+    void send("aiConnected").then(
+      (ok) => void (ok || (sent = false)),
+      () => void (sent = false),
+    );
   };
 }
 

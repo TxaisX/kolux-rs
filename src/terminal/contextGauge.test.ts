@@ -34,3 +34,11 @@ test("a shell pane's gauge says it is for agents only (USAGE-001)", () => {
   expect(html).toContain('class="gauge none"');
   expect(html).toContain("agents only");
 });
+
+test("a Codex pane's gauge says Codex does not report its context, not that a figure is coming (USAGE-001)", () => {
+  const html = gauge(undefined, "codex");
+  expect(html).toContain('class="gauge none"');
+  expect(html).toContain("Codex does not report its context to Kolux");
+  expect(html).not.toContain("first status report");
+  expect(html).not.toContain("nothing received yet");
+});

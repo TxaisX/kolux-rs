@@ -17,24 +17,29 @@ export const projectAddedNote = () => {
 /** Window focus re-reads at most this often: each read asks gh, the CLI and every workspace. */
 export const FOCUS_FLOOR_MS = 30_000;
 
-/** VIEW-114 (FIX-2 FIX-SOON 2): the events that make the sidebar entry read its steps again: every
- *  Setup Guide close and every added project, and window focus at most once per FOCUS_FLOOR_MS (so a
- *  step done in Settings or outside the app ticks when the user comes back). Returns the cleanup. */
-export function onReread(target: EventTarget, bump: () => void, now: () => number = Date.now): () => void {
-  let last = -Infinity;
-  const focus = () => {
-    const t = now();
-    if (t - last < FOCUS_FLOOR_MS) return;
-    last = t;
+/** VIEW-114 (FIX-2 FIX-SOON 2, FIX-3): the events that make the sidebar entry read its steps again:
+ *  every Setup Guide close and every added project, and window focus only once FOCUS_FLOOR_MS has
+ *  passed since the last read of any kind (so a step done in Settings or outside the app ticks when the
+ *  user comes back). Subscribing counts as a read, since the entry reads on mount, so the first focus
+ *  after startup does not read twice. The clock is the monotonic one: a wall clock stepped back never
+ *  holds focus re-reads off. Returns the cleanup. */
+export function onReread(target: EventTarget, bump: () => void, now: () => number = () => performance.now()): () => void {
+  let last = now();
+  const read = () => {
+    last = now();
     bump();
   };
+  const focus = () => {
+    if (now() - last < FOCUS_FLOOR_MS) return;
+    read();
+  };
   target.addEventListener("focus", focus);
-  target.addEventListener(GUIDE_CLOSED, bump);
-  target.addEventListener(PROJECT_ADDED, bump);
+  target.addEventListener(GUIDE_CLOSED, read);
+  target.addEventListener(PROJECT_ADDED, read);
   return () => {
     target.removeEventListener("focus", focus);
-    target.removeEventListener(GUIDE_CLOSED, bump);
-    target.removeEventListener(PROJECT_ADDED, bump);
+    target.removeEventListener(GUIDE_CLOSED, read);
+    target.removeEventListener(PROJECT_ADDED, read);
   };
 }
 

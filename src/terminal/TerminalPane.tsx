@@ -3,7 +3,7 @@
 // The card and its header follow design/DESIGN.md section 7: status icon, agent mark, title,
 // branch chip, program, status word; then gauge, more, expand, split, close on the right.
 import { useEffect, useRef, useState } from "react";
-import { branchChip, crewLabel, crewLine, foundAgent, headerOf, titleState, type Crew } from "./status";
+import { branchChip, crewLabel, crewLine, foundAgent, headerOf, takesInband, titleState, type Crew } from "./status";
 import PaneMenu from "./PaneMenu";
 import type { Chip } from "../board/chip";
 import type { AgentState } from "../projects/rows";
@@ -277,6 +277,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   const [plusAt, setPlusAt] = useState<{ top: number; right: number } | null>(null);
   // ACCT-050: the agent the user started by hand in this shell, as Rust recognises it.
   const [found, setFound] = useState<Agent | null>(null);
+  // STAT-034 (hooks FIX-3): in-band status is taken only in an agent pane; the OSC handler is set up once.
+  const inbandRef = useRef(false);
+  inbandRef.current = takesInband(agent, program, found);
   // TERM-025 / TERM-027: the pane menu, opened by "..." or a right-click on the header, and the inline name field.
   const [menuAt, setMenuAt] = useState<{ top: number; left: number } | null>(null);
   const [naming, setNaming] = useState(false);
@@ -362,7 +365,12 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     // STAT-033: the title the program sets stands in for its state while no hook reports.
     term.onTitleChange((t) => setGuess((g) => titleState(t) ?? g));
     // STAT-034: a status printed in band (OSC 9999) goes to Rust; xterm never draws the sequence.
-    term.parser.registerOscHandler(9999, (data) => (invoke("status_inband", { paneKey: number, data }).catch(() => {}), true));
+    // T-563: the pane's live terminal goes with it, for the activity lane. hooks FIX-3: a plain shell's
+    // output never moves the dot; the sequence is still kept off the screen.
+    term.parser.registerOscHandler(9999, (data) => {
+      if (inbandRef.current) invoke("status_inband", { paneKey: number, terminal: idRef.current, data }).catch(() => {});
+      return true;
+    });
     // council D2 MERGE 31 (3): in a dev build the pane's terminal is reachable from its host element, so the
     // evidence probes can read the scrollback cap and the buffer length (the way launchWarn.ts exposes
     // __koluxUsage). A release build has no handle.
@@ -1456,11 +1464,14 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
 }
 
 /** USAGE-001: the header's context ring and percentage. Always there; a greyed 0% until the
- * first reading (a real 0% is a reading), then tinted yellow from 70% and red beyond 90%. */
+ * first reading (a real 0% is a reading), then tinted yellow from 70% and red beyond 90%. Only
+ * Claude's status line reports context, so a Codex pane's hover says so instead of promising a
+ * figure (stand-in review of lane/marks ee2bfbc, FIX-SOON 6). */
 export function ContextGauge({ context, agent }: { context?: number | null; agent: string }) {
   const none = context === null || context === undefined;
   const percent = none ? 0 : Math.round(context);
-  const title = none ? (agent === "shell" ? "Context used (agents only)" : "Context used: nothing received yet. The figure appears with the agent's first status report.") : `Context used: ${percent}% of the agent's context window`;
+  const waiting = agent === "codex" ? "Context used: Codex does not report its context to Kolux, so there is no figure to show." : "Context used: nothing received yet. The figure appears with the agent's first status report.";
+  const title = none ? (agent === "shell" ? "Context used (agents only)" : waiting) : `Context used: ${percent}% of the agent's context window`;
   return (
     <span className={none ? "gauge none" : `gauge ${toneOf(percent)}`.trim()} title={title}>
       <Ring percent={percent} />

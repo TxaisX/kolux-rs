@@ -23,7 +23,7 @@ export type Screen = { x: number; y: number; width: number; height: number; scal
  * change first (the window-creating capability, main.tsx drawing the Tower for its hash, a
  * tower-only capability, and closing the main window closing the Tower: T-546-c); until then
  * the Own window button is not offered, since every click would only show NO_WINDOW. */
-export const OWN_WINDOW_WIRED = false;
+export const OWN_WINDOW_WIRED = true;
 
 export const isTowerWindow = (hash: string) => hash === TOWER_HASH;
 
