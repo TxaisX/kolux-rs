@@ -1,0 +1,27 @@
+diff --git a/src-tauri/src/hooks.rs b/src-tauri/src/hooks.rs
+index 1574d6cd..1f4d29e3 100644
+--- a/src-tauri/src/hooks.rs
++++ b/src-tauri/src/hooks.rs
+@@ -345,6 +345,11 @@ pub fn answer(req: &Request, token: &str) -> (u16, Option<crate::status::Status>
+             Some(e) => (crate::status::Agent::Vendor, e),
+             None => return (200, None),
+         },
++        // T-121: Cursor, Droid, Command Code, Kimi and Hermes, the same way.
++        p if agent_hooks::vendors_more::is_route(p) => match agent_hooks::vendors_more::normalize(p, &event) {
++            Some(e) => (crate::status::Agent::Vendor, e),
++            None => return (200, None),
++        },
+         _ => return (404, None),
+     };
+     (200, crate::status::report(pane_key, terminal, agent, &event))
+@@ -359,6 +364,10 @@ pub fn reply_body(path: &str, body: &[u8], settings: &Value) -> String {
+     if path == "/antigravity/PreToolUse" {
+         return json!({ "decision": "allow" }).to_string();
+     }
++    // T-121: Cursor's hooks that must answer get "continue" or "allow".
++    if let Some(r) = agent_hooks::vendors_more::reply(path, body) {
++        return r;
++    }
+     let ask = || {
+         if path != "/claude" {
+             return None;

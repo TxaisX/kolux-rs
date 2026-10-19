@@ -1,0 +1,87 @@
+T-121 · STAT-012 Cursor Agent · STAT-013 Droid · STAT-014 Command Code · STAT-015 Kimi · STAT-016 Hermes
+lane/vendors from 2d14c7db · 2026-10-19 · builder Fable 5.1 · NO APP LAUNCHES (proof by stand-in events and scratch homes)
+
+WHAT THE USER CAN NOW DO
+With the status hooks switch on, a Cursor, Droid, Command Code, Kimi or Hermes pane shows the same
+working / waiting / permission / done / interrupted dot as a Gemini or Amp pane, and `kolux agent hooks
+status` lists the five with installed / partial / not installed / disabled / error. Each vendor's own
+settings keep the user's entries; off takes Kolux's out again byte for byte (or deletes a file Kolux created).
+
+FILES
+- NEW src-tauri/src/agent_hooks/vendors_more.rs (normalize, reply, scripts, install/remove/inspect, rows)
+- NEW src-tauri/src/agent_hooks/vendors_more_tests.rs (10 tests, pulled in by #[path] from vendors_more.rs)
+- evidence/vendors-T-121-{mod,tests,hooks,saved,switch}.patch — the coordinator's hunks (hard-stop files, hooks lane):
+  mod.rs: `pub mod vendors_more;`, MANAGED 5 -> 10 ids, apply arm `vendors_more::manages(id)`, refresh list + `vendors_more::write_scripts`
+  tests.rs: stat_004 slices [2..5] (MANAGED grew) + one assert for the five new ids
+  hooks.rs: `answer()` route arm for vendors_more::is_route/normalize; `reply_body` asks vendors_more::reply first (Cursor answers)
+  saved.rs: spool replay falls back to vendors_more::agent_of / normalize
+  switch.rs: `report()` extends vendors_more::rows
+  Checked: GIT_INDEX_FILE=<temp> git read-tree 2d14c7db; git apply --cached --check -> all 5 apply.
+  The patch was applied to the working copy for the gates below and is NOT in the commit.
+
+PER VENDOR (public doc in PROVENANCE.md, T-121 line)
+- Cursor (route /cursor): ~/.cursor/hooks.json, {"version":1,"hooks":{event:[{command,timeout}]}} flat entries (no matcher groups);
+  8 events installed (COMPAT 3.4), sessionStart/sessionEnd mapped not installed. beforeSubmitPrompt -> UserPromptSubmit(prompt);
+  stop -> Stop, interrupted when status != "completed"; preToolUse/beforeMCPExecution -> PreToolUse; beforeShellExecution ->
+  PreToolUse tool "Shell"; postToolUse/postToolUseFailure -> PostToolUse; afterAgentResponse -> no change (COMPAT 3.5).
+  The hook prints {"continue":true} on beforeSubmitPrompt and {"permission":"allow"} on the three before-tool events (COMPAT 3.1);
+  the cursor.cmd script is written with prints=true for that.
+- Droid (route /droid): ~/.factory/settings.json "hooks" Claude-style groups, 8 events, matcher "*" on PreToolUse/PostToolUse/PermissionRequest,
+  timeout 10 s. SessionStart/SubagentStop -> no change (COMPAT 3.5); PermissionRequest and Notification permission_prompt -> waiting
+  (sent as the ask tool, since status::Agent::Vendor reads vendors::change and that is where "waiting" lives); idle_prompt -> done.
+  Droid's doc names no "hooks disabled globally" setting, so none is read (DECISION for Txais: none).
+- Command Code (route /command-code): ~/.commandcode/settings.json "hooks" groups, PreToolUse/PostToolUse (matcher "*") and Stop, timeout 10 s.
+  The transcript/screen part of STAT-014 is NOT built: split to T-121-b.
+- Kimi (route /kimi): $KIMI_CODE_HOME/config.toml or ~/.kimi-code/config.toml; one block between
+  `# >>> Kolux RS hooks (Kimi) >>>` and `# <<< Kolux RS hooks (Kimi) <<<` at the end of the file, seven [[hooks]] tables with ONLY
+  event/matcher/command/timeout (Kimi's doc: any other key stops the file loading); an older block under the former name
+  (any `# >>> Kolux RS hooks` marker) is replaced. The command is `bash <home>/.kolux-rs/agent-hooks/kimi.sh` (forward slashes, LF,
+  COMPAT 3.4); the sh script posts like the .cmd scripts and spools only hook_event_name/session_id/tool_name. A file that is not TOML
+  is refused. StopFailure -> done (DT-C13: no cause for Kimi yet; vendors::change carries none); Stop with "interrupted"/"is_interrupt"
+  true -> interrupted; PostToolUseFailure -> working; PermissionRequest -> permission (Codex's rule, as Gemini's vendors).
+- Hermes (route /hermes): $HERMES_HOME or ~/.hermes, plugins/kolux-status/{plugin.yaml,__init__.py}; the Python plugin registers all
+  10 hook points of COMPAT 3.4 (each register_hook in try/except: the vendor doc documents 6, the other 4 are COMPAT's names) and
+  posts {event, session_id, tool_name, user_message, assistant_response, interrupted} to /hermes; tool/approval events are never
+  spooled, the spool line holds event/session_id/tool_name/interrupted only. pre_llm_call -> UserPromptSubmit(prompt),
+  post_llm_call -> Stop(last_assistant_message), pre_approval_request -> waiting, post_approval_response -> working,
+  on_session_end -> Stop (interrupted when flagged), finalize/reset -> Stop. Hermes's config.yaml `plugins: disabled:` list is READ
+  (status "disabled" when kolux-status is listed) and never written, as Antigravity's "enabled" switch is (FIX-1 (e) precedent).
+  DECISION for Txais: COMPAT says "enabled in config.yaml"; Hermes's doc says plugins are on unless listed under disabled, so
+  Kolux writes nothing there.
+- Both files of the Hermes plugin are checked before either is written, so a refusal leaves nothing of Kolux's behind.
+
+TESTS (src-tauri/src/agent_hooks/vendors_more_tests.rs; red first: the first run compiled with the patch and failed 4 of 10 on
+key order, record resolution of a file in a folder that did not exist yet, and the Hermes half-write; all fixed in vendors_more.rs)
+stat_012_cursor_events_drive_the_dot_and_its_hooks_are_answered
+stat_013_droid_events_drive_the_dot_and_a_permission_waits
+stat_014_command_code_tool_events_and_stop
+stat_015_kimi_events_drive_the_dot_and_a_flagged_stop_is_an_interruption
+stat_016_hermes_hook_points_drive_the_dot
+routes_agents_and_scripts
+stat_012_cursor_entries_sit_beside_the_users_and_leave_without_a_trace
+stat_013_014_droid_and_command_code_take_claude_style_groups
+stat_015_kimi_block_sits_between_markers_and_leaves_the_users_toml_as_it_was
+stat_016_hermes_plugin_files_are_kolux_s_alone_and_its_yaml_switch_is_read_not_written
+
+GATES (logs G:/Temp/vendors-w16-logs/, scratch HOME/USERPROFILE/CLAUDE_CONFIG_DIR/CODEX_HOME/TEMP under G:/Temp/vendors-w16/)
+cargo test --lib agent_hooks::vendors_more   t121-test-3.log: test result: ok. 10 passed; 0 failed (first run t121-test-2.log: 6 passed; 4 failed)
+cargo build                                  t121-build.log: Finished `dev` profile in 1m 55s
+cargo clippy --all-targets -- -D warnings    t121-clippy.log: exit 0, Finished `dev` profile in 3m 50s
+cargo test --lib agent_hooks                 t121-test-mod.log: test result: ok. 82 passed; 0 failed (58.22s)
+pnpm exec tsc --noEmit                       t121-tsc.log: exit 0, empty
+pnpm exec vitest                             skipped: no TypeScript changed on this card
+
+LIVE PROOF PENDING (batched)
+1. Settings > Agents: status hooks on; with cursor-agent found on PATH, `kolux agent hooks status --json` lists cursor "installed"
+   and ~/.cursor/hooks.json holds 8 flat Kolux entries beside any of the user's.
+2. From a Cursor pane's shell: `echo {"hook_event_name":"beforeSubmitPrompt","prompt":"hi","conversation_id":"x"} | <home>/.kolux-rs/agent-hooks/cursor.cmd`
+   prints {"continue":true} and the pane's dot turns working; the same with {"hook_event_name":"stop","status":"completed"} turns it done.
+3. Status hooks off: the file is byte for byte as before (or gone when Kolux created it); `kolux agent hooks status` says not installed.
+4. The same for droid (~/.factory/settings.json), command-code (~/.commandcode/settings.json), kimi (~/.kimi-code/config.toml block,
+   posted through Git Bash: `bash <home>/.kolux-rs/agent-hooks/kimi.sh`) and hermes (~/.hermes/plugins/kolux-status/, two files).
+
+SEEN, NOT FIXED
+- vendors.rs keep_copy (Gemini/Antigravity/Amp): the "created" record line names a file in a folder that does not exist yet by its
+  plain absolute path, while removal resolves it with the \\?\ prefix, so drop_created never deletes a file Kolux created in a brand-new
+  ~/.gemini folder. Fixed in vendors_more's keep_copy only (the folder is made before the record); hooks lane's file.
+- DT-C13 still holds for Kimi: StopFailure ends the turn as done; a cause needs vendors::change (hooks lane) to carry one.
