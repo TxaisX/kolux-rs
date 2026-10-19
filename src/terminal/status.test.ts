@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { VOCAB, ageLabel, branchChip, foundAgent, headerOf, nextNeedsYou, titleState, crewLabel, crewLine, stoppedLabel, type Crew, type StatusKey } from "./status";
+import { VOCAB, ageLabel, branchChip, foundAgent, headerOf, nextNeedsYou, takesInband, titleState, crewLabel, crewLine, stoppedLabel, type Crew, type StatusKey } from "./status";
 
 test("a plain shell reads as a terminal with a neutral status; an agent's word is tinted (TERM-020, TERM-021)", () => {
   expect(headerOf("shell", "running", undefined, false, null, 0)).toMatchObject({ word: "Ready", tone: "", needsYou: false });
@@ -138,4 +138,14 @@ test("a title that starts with the done mark reads done first, even when permiss
   expect(titleState("  ✳ Needs you: allow Bash?")).toBe("done");
   // The mark only counts at the start; elsewhere the words decide as before.
   expect(titleState("Waiting for permission ✳")).toBe("permission");
+});
+
+test("an in-band status moves the dot only in an agent pane, never in a plain shell (STAT-034, hooks FIX-3)", () => {
+  expect(takesInband("shell", null, null)).toBe(false);
+  expect(takesInband("shell", undefined, null)).toBe(false);
+  expect(takesInband("shell", "", null)).toBe(false);
+  expect(takesInband("claude", null, null)).toBe(true);
+  expect(takesInband("codex", "codex", null)).toBe(true);
+  expect(takesInband("shell", "gemini", null)).toBe(true);
+  expect(takesInband("shell", null, "claude")).toBe(true);
 });

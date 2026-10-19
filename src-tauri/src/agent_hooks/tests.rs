@@ -294,16 +294,24 @@ mod script_runs {
 
     /// FIX-2 (S7, COMPAT 3.1): an event held while Kolux is closed keeps only what the status
     /// needs (event, tool, session, a few flags, the time), never the tool's input or output, the
-    /// prompt or the reply.
+    /// prompt or the reply. hooks FIX-3: run with CLAUDE_CONFIG_DIR unset and set, so the marker
+    /// check proves the leak on its own (the old script died at its first line with it unset).
     #[test]
     fn fix_2_s7_a_held_event_never_carries_tool_input_prompt_or_reply() {
+        for config in [None, Some("C:\\cfg s7\\")] {
+            s7_run(config);
+        }
+    }
+
+    fn s7_run(config: Option<&str>) {
         const MARK: &str = "S7-MARKER-sekrit";
-        let data = temp("s7 ) & z!");
-        let dir = scripts("s7");
+        let data = temp(&format!("s7 ) & z! {}", config.is_some()));
+        let dir = scripts(&format!("s7-{}", config.is_some()));
         let endpoint = data.join(super::super::super::ENDPOINT_FILE);
         let closed = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         fs::write(&endpoint, format!("{closed} tok\n")).unwrap();
-        let env = [("KOLUX_PANE_KEY", "8".to_string()), ("KOLUX_HOOK_IDENTITY", who(8)), ("KOLUX_HOOK_ENDPOINT", endpoint.display().to_string())];
+        let mut env = vec![("KOLUX_PANE_KEY", "8".to_string()), ("KOLUX_HOOK_IDENTITY", who(8)), ("KOLUX_HOOK_ENDPOINT", endpoint.display().to_string())];
+        env.extend(config.map(|c| ("CLAUDE_CONFIG_DIR", c.to_string())));
         let events = [
             format!(r#"{{"hook_event_name":"UserPromptSubmit","session_id":"s7","cwd":"C:/w","prompt":"do {MARK}"}}"#),
             format!(r#"{{"hook_event_name":"PreToolUse","session_id":"s7","tool_name":"Bash","tool_input":{{"command":"echo {MARK}"}}}}"#),
@@ -318,7 +326,9 @@ mod script_runs {
         println!("{held}");
         assert!(!held.contains(MARK), "no input, output, prompt or reply text is held: {held}");
         let lines: Vec<_> = held.lines().filter(|l| !l.is_empty()).collect();
-        assert_eq!(lines.len(), 4, "{held:?}");
+        assert_eq!(lines.len(), 4, "{config:?}: {held:?}");
+        let want = format!("claude|{}|{}|{{", who(8), if config.is_some() { "C:\\cfg s7" } else { "" });
+        assert!(lines.iter().all(|l| l.starts_with(&want)), "{config:?}: the config folder as the pane had it: {held}");
         let body = |l: &str| ev(l.splitn(4, '|').nth(3).unwrap());
         let tool = body(lines[1]);
         assert_eq!((tool["hook_event_name"].as_str(), tool["tool_name"].as_str(), tool["session_id"].as_str()), (Some("PreToolUse"), Some("Bash"), Some("s7")));
@@ -328,6 +338,72 @@ mod script_runs {
         let mut rows = Vec::new();
         assert_eq!(saved::replay(&held, &mut rows, 1), 4);
         assert_eq!((rows[0].pane_key, rows[0].state.as_str(), rows[0].session_id.as_deref()), (8, "working", Some("s7")), "a stop with work in the background stays working");
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    /// The held-event setup the FIX-3 tests share: a closed Kolux (its endpoint names a port
+    /// nobody listens on), the holding file beside it, and the pane's variables.
+    fn closed_kolux(name: &str, key: u32) -> (PathBuf, PathBuf, Vec<(&'static str, String)>) {
+        let data = temp(name);
+        let endpoint = data.join(super::super::super::ENDPOINT_FILE);
+        let closed = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        fs::write(&endpoint, format!("{closed} tok\n")).unwrap();
+        let env = vec![("KOLUX_PANE_KEY", key.to_string()), ("KOLUX_HOOK_IDENTITY", who(key)), ("KOLUX_HOOK_ENDPOINT", endpoint.display().to_string())];
+        (data.join(saved::SPOOL_FILE), data, env)
+    }
+
+    /// hooks FIX-3 (stand-in review AFTER 1): an event Windows PowerShell 5.1 cannot parse (keys
+    /// differing only in case) is held as the event and session names alone, not dropped.
+    #[test]
+    fn fix_3_an_event_powershell_cannot_parse_is_held_as_its_names_only() {
+        const MARK: &str = "FIX3-MARKER-sekrit";
+        let (spool, data, env) = closed_kolux("fix3-pick", 9);
+        let dir = scripts("fix3-pick");
+        let odd = format!(r#"{{"session_id":"s-9.a","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{{"Path":"{MARK}","path":"{MARK}"}}}}"#);
+        let out = run(&dir, &env, &odd);
+        assert!(out.status.success() && out.stdout.is_empty(), "{out:?}");
+        let held = fs::read_to_string(&spool).unwrap_or_default();
+        println!("{held}");
+        assert!(!held.contains(MARK), "{held}");
+        let lines: Vec<_> = held.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines.len(), 1, "the event is held, not dropped: {held:?}");
+        let body = ev(lines[0].splitn(4, '|').nth(3).unwrap());
+        assert_eq!((body["hook_event_name"].as_str(), body["session_id"].as_str()), (Some("PostToolUse"), Some("s-9.a")));
+        assert!(body.get("tool_name").is_none() && body["spooled_at"].as_u64().is_some(), "only the names and the time: {body}");
+        // Nothing that reads as an event at all is still dropped.
+        let out = run(&dir, &env, r#"{"Path":1,"path":2}"#);
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(fs::read_to_string(&spool).unwrap().lines().filter(|l| !l.is_empty()).count(), 1);
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    /// hooks FIX-3 (stand-in review AFTER 2): while another writer holds the holding file shut, the
+    /// held append is tried again, so the event lands once the file is free instead of being lost.
+    #[test]
+    fn fix_3_a_held_append_waits_out_another_writer() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (spool, data, env) = closed_kolux("fix3-busy", 11);
+        let dir = scripts("fix3-busy");
+        fs::write(&spool, "").unwrap();
+        // Shared with nobody: the script's append fails while this handle is open.
+        let lock = fs::OpenOptions::new().read(true).write(true).share_mode(0).open(&spool).unwrap();
+        let script_dir = dir.clone();
+        let started = Instant::now();
+        let child = std::thread::spawn(move || run(&script_dir, &env, STOP));
+        // Once the script has written its event file it is past the post and on its held path;
+        // the lock then stays long enough that PowerShell's first append meets it.
+        let past_post = || fs::read_dir(std::env::temp_dir()).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("kolux-rs-hook-11-"));
+        while !past_post() && started.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::thread::sleep(Duration::from_millis(2500));
+        drop(lock);
+        let out = child.join().unwrap();
+        println!("held append took {:?}", started.elapsed());
+        assert!(out.status.success(), "{out:?}");
+        let held = fs::read_to_string(&spool).unwrap();
+        assert_eq!(held.lines().filter(|l| !l.is_empty()).count(), 1, "the event landed after the other writer let go: {held:?}");
+        let _ = fs::remove_dir_all(&data);
     }
 
     #[test]
@@ -1053,7 +1129,7 @@ fn fix_2_s8_a_settings_file_kolux_created_installs_again_and_off_deletes_it() {
         install_claude_at(&home, &file).unwrap();
         assert!(file.exists() && !backup_of(&file).exists(), "round {round}: created, with nothing to copy");
         let record = fs::read_to_string(target_dir(&home, &file).join(BACKUP_RECORD)).unwrap();
-        assert!(record.lines().any(|l| l == format!("missing  {}", file.display())), "round {round}: {record}");
+        assert!(record.lines().any(|l| l == format!("created  {}", file.display())), "round {round}: {record}");
         // The next start: the file holds Kolux's entries and has no copy, which is right for it.
         install_claude_at(&home, &file).unwrap_or_else(|e| panic!("round {round}: a second start fails: {e}"));
         assert_eq!(switch::inspect(&file, &CLAUDE_EVENTS).0, "installed");
@@ -1084,5 +1160,75 @@ fn fix_2_s8_user_keys_in_a_created_file_stay_and_a_users_empty_file_stays() {
     install_claude_at(&home, &own).unwrap();
     assert!(remove_claude(&own, &target_dir(&home, &own).join(STATUS_PREV)).unwrap());
     assert_eq!(fs::read_to_string(&own).unwrap(), "{}\n", "the user's own file is never deleted");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// hooks FIX-3 (stand-in review FIX-SOON 1): a Codex `hooks.json` Kolux created installs again
+/// after the command changes (no "already holds Kolux's entries" error), and off deletes the file
+/// and its `hooks.json.bak-kolux.sha256` record, so nothing of Kolux's stays in the Codex home.
+#[test]
+fn fix_3_codex_a_hooks_file_kolux_created_installs_again_and_off_deletes_it_and_its_record() {
+    let dir = temp("fix3-codex");
+    let home = dir.join("codex");
+    fs::create_dir_all(&home).unwrap();
+    let file = home.join("hooks.json");
+    let record = codex_record(&file);
+    let (a, b) = ("\"C:\\Users\\me\\.kolux-rs\\agent-hooks\\codex.cmd\"", "\"D:\\moved\\.kolux-rs\\agent-hooks\\codex.cmd\"");
+    let install = |command: &str| {
+        let text = fs::read_to_string(&file).ok();
+        let mut v: Value = serde_json::from_str(text.as_deref().unwrap_or("{}")).unwrap();
+        write_codex_groups(&file, text.as_deref(), &mut v, command)
+    };
+    for round in 0..2 {
+        assert!(!file.exists() && !record.exists(), "round {round}: nothing there");
+        assert!(install(a).unwrap(), "round {round}: Kolux creates hooks.json");
+        assert!(!backup_of(&file).exists(), "round {round}: nothing to copy");
+        assert_eq!(fs::read_to_string(&record).unwrap(), format!("created  {}\n", file.display()), "round {round}");
+        // Kolux moved: the next start writes the new command into the file it made.
+        assert!(install(b).unwrap_or_else(|e| panic!("round {round}: a second start fails: {e}")));
+        assert!(fs::read_to_string(&file).unwrap().contains("moved"), "round {round}: the new command is in");
+        assert!(!install(b).unwrap(), "round {round}: the same command again changes nothing");
+        assert_eq!(switch::inspect(&file, &CODEX_EVENTS).0, "installed");
+        assert!(remove_codex(&home).unwrap());
+        assert!(!file.exists(), "round {round}: off leaves no hooks.json, not {:?}", fs::read_to_string(&file).ok());
+        assert!(!record.exists(), "round {round}: and no record in the Codex home");
+    }
+    // A hook the user added to the created file stays when Kolux's go, and so does the file.
+    assert!(install(a).unwrap());
+    let mut v: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+    v["hooks"]["Stop"].as_array_mut().unwrap().push(json!({"hooks": [{"command": "notify.cmd"}]}));
+    fs::write(&file, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+    assert!(remove_codex(&home).unwrap());
+    assert_eq!(ev(&fs::read_to_string(&file).unwrap()), json!({"hooks": {"Stop": [{"hooks": [{"command": "notify.cmd"}]}]}}));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// hooks FIX-3 (stand-in review FIX-SOON 2): a record rebuilt for a kept copy while the settings
+/// file is absent says `missing`, which never counts as Kolux having created the file: once that
+/// copy is gone, a file holding Kolux's entries refuses the install, and off never deletes it.
+#[test]
+fn fix_3_a_rebuilt_record_never_counts_as_created() {
+    let dir = temp("fix3-rebuilt");
+    let file = dir.join("settings.json");
+    let record = dir.join("record.sha256");
+    fs::write(backup_of(&file), "{\"model\":\"opus\"}").unwrap();
+    assert_eq!(back_up(&file, &record).unwrap(), None, "a kept copy with no record: the record is rebuilt");
+    let text = fs::read_to_string(&record).unwrap();
+    assert!(text.lines().any(|l| l == format!("missing  {}", file.display())), "{text}");
+    assert!(!was_created(&record, &file), "a rebuilt record is not Kolux creating the file");
+    fs::remove_file(backup_of(&file)).unwrap();
+    let mut s = json!({"model": "opus"});
+    assert!(install_claude_hooks(&mut s, MINE));
+    let mine = serde_json::to_string_pretty(&s).unwrap();
+    fs::write(&file, &mine).unwrap();
+    let err = back_up(&file, &record).unwrap_err();
+    assert!(err.contains("already holds Kolux's hook entries"), "{err}");
+    assert!(!drop_created(&file, &record, &json!({}), &mine).unwrap(), "off never deletes a file it did not create");
+    assert_eq!(fs::read_to_string(&file).unwrap(), mine);
+    // The created marker itself still counts.
+    let made = dir.join("made.json");
+    let made_record = dir.join("made.sha256");
+    assert_eq!(back_up(&made, &made_record).unwrap(), None);
+    assert!(was_created(&made_record, &made));
     let _ = fs::remove_dir_all(&dir);
 }
