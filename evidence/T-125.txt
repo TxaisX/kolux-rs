@@ -1,0 +1,73 @@
+T-125 · STAT-044 · STAT-047 · STAT-048 — lane/tray from main 4de08e1c, 2026-10-19
+STAT-049 and STAT-061 moved to the new open line T-125-b (with the OS toast-click hookup and a hook sequence id).
+
+WHAT WAS BUILT
+- src/notify/pacing.ts (new): the pacer. decide(state, event, {windowFocused, suppressFocused}) -> shown |
+  duplicate | cooldown | focused. Rules: a "test" kind always shows and is never remembered; an id already
+  seen is a duplicate; focused + suppress holds the event back but still records its id; two events for
+  one worktree closer than COOLDOWN_MS = 5000 merge into the first (a finish and a bell included);
+  worktree null is never merged; seen / last / targets each keep the newest MAX_TRACKED = 64.
+  paneFor(state, id) is the click target.
+- src/notify/badge.ts (new): badgeCount(dirs) counts distinct workspaces (slashes, trailing slash and
+  case normalised like sameDir) capped at BADGE_CAP = 99.
+- src/settings/notifications.ts: raiseNotification(settings, title, body, event?) runs decide on one
+  module-level pacer (window focus from document.hasFocus(), suppress from the Notifications page) and,
+  with an event, invokes notify_event {title, body, sound, id, pane, kind}; without one it is STAT-043's
+  notify as before. resetPacer() for tests.
+- src-tauri/src/notifications.rs: Targets (VecDeque of id -> pane, TARGETS_MAX = 64, record() false on a
+  repeat), commands notify_event (duplicate -> {shown:false, duplicate:true}; tray ping Bell for kind
+  "bell" else AgentFinished, so the dot lights even when the toast is blocked; then the toast),
+  notification_clicked(id) (open_window + emit "notification-click" {pane}; answers the pane),
+  badge_set(count) (Windows: set_overlay_icon with paint_badge, None at zero; elsewhere set_badge_count;
+  errors ignored). The three carry #[allow(dead_code)] until the lib.rs patch registers them.
+- src-tauri/src/tray.rs: BADGE_SIZE = 32, badge_text (0 -> none, >99 -> "99+"), paint_badge (amber disc,
+  the digits in a 3x5 pixel font in white, scale 3 for one or two glyphs, 2 for "99+").
+- STAT-047 came free from T-248-b: notifications::show already pings the tray; notify_event does the same.
+
+PATCHES FOR THE COORDINATOR (unified diffs against main 4de08e1c, each passes `git apply --cached --check`
+on a `git read-tree 4de08e1c` index)
+- evidence/tray-T-125-lib.rs.patch: registers notifications::notify_event, notification_clicked, badge_set.
+- evidence/tray-T-125-App.tsx.patch: listen("notification-click") -> setFocused(pane key) when the pane
+  exists; useEffect on unreadDirs -> invoke("badge_set", {count: badgeCount(unreadDirs)}); the import.
+- evidence/tray-T-125-useAgentStatus.ts.patch: noticed() and quiet() pass {id, worktree: p.cwd,
+  pane: String(p.key), kind} to raiseNotification; id = pane:what:body[0..40]:minute (quiet:
+  pane:quiet:minutes:minute); kind stop for notifyOnStopped, bell for notifyBell, else finish.
+- T-248-b's two patches (Cargo.toml tray feature, lib.rs install + Focused hook) are still required.
+
+TESTS (all written red first, then green)
+- src/notify/pacing.test.ts (9): two completions in one worktree inside the cooldown are one, shown
+  again after it; finish + bell merge; another worktree is not held; the same id never twice; test kind
+  ignores pacing; focused + suppress holds and still records; suppress off shows; bounded burst keeps
+  the newest 64 targets; paneFor; worktree null never merged.
+- src/notify/badge.test.ts (3): two workspaces -> 2, none -> 0; three spellings of one folder -> 1; cap.
+- src/settings/notifications.test.ts (+1): STAT-044 an event goes through notify_event with id and pane,
+  the same event never shows twice, a second finish in the worktree right after is merged.
+- src-tauri/src/notifications.rs (+1): stat044_each_event_id_is_remembered_once_with_its_pane_and_the_memory_is_bounded.
+- src-tauri/src/tray.rs (+2): stat048_the_badge_text_caps_large_counts_and_zero_clears,
+  stat048_the_overlay_badge_is_an_amber_disc_with_the_count_in_white.
+
+GATES (logs under G:/Temp/tray-w16-logs/T-125-*.log; every run under a build slot, scratch
+CLAUDE_CONFIG_DIR / CODEX_HOME / HOME / USERPROFILE / TEMP)
+- red run: vitest exit 1 (Cannot find module ./badge, ./pacing); cargo test --no-run exit 101
+  (badge_text, paint_badge, BADGE_SIZE, WHITE, Targets, TARGETS_MAX missing).
+- committed tree (no coordinator patches): pnpm exec vitest run src/notify src/settings -> 34 files,
+  167 tests passed; pnpm exec tsc --noEmit -> exit 0; cargo build -> exit 0;
+  cargo clippy --all-targets -- -D warnings -> exit 0; cargo test --lib tray -> 9 passed;
+  cargo test --lib notifications -> 5 passed.
+- wired tree (T-248-b + T-125 patches applied, then reverted): tsc exit 0; vitest src/notify src/settings
+  src/status -> 39 files, 211 tests passed (after the kind-key fix: 37 files, 199 tests for src/status
+  src/settings); cargo build exit 0; cargo clippy -D warnings exit 0; Cargo.lock unchanged.
+
+LIVE PROOF PENDING (batched) — steps for the proof lane, once the patches are in main
+1. Hide the window (minimise), let two agents in one worktree finish within 5 s: one toast, tray dot on.
+2. Show the window: the dot clears. Click the toast (once T-125-b wires activation; until then invoke
+   notification_clicked from the devtools console with the event id): the pane that raised it is focused.
+3. Two workspaces with unseen results: the taskbar icon carries an amber "2" overlay; open both tabs:
+   the overlay clears. 100+ unseen workspaces are not reachable by hand; "99+" is covered by the test.
+4. Notifications page test button: shows every time, no dot, no pacing.
+
+SEEN, NOT FIXED
+- tauri-plugin-notification 2.5.1 desktop show() drops the notify-rust handle, so an OS toast click
+  cannot reach notification_clicked yet (T-125-b).
+- The event id is pane+what+body+minute; a hook sequence number would be exact (T-125-b).
+- macOS / Linux badge: set_badge_count is wired but unproven here (Windows machine).

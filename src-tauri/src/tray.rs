@@ -162,6 +162,80 @@ pub fn paint(rgba: &[u8], w: u32, h: u32, dot: bool, dev: bool) -> Vec<u8> {
     out
 }
 
+/// STAT-048: the taskbar badge. Windows has no badge count, so the count is painted onto an overlay
+/// icon: an amber disc with the number in white, "99+" past the cap.
+pub const BADGE_SIZE: u32 = 32;
+pub const WHITE: [u8; 4] = [255, 255, 255, 255];
+const BADGE_CAP: u32 = 99;
+
+/// What the badge says for this many workspaces: nothing at zero, the number, or "99+".
+pub fn badge_text(count: u32) -> Option<String> {
+    match count {
+        0 => None,
+        n if n > BADGE_CAP => Some(format!("{BADGE_CAP}+")),
+        n => Some(n.to_string()),
+    }
+}
+
+/// A 3x5 pixel glyph for each character the badge can show, one row per byte (3 low bits).
+fn glyph(c: char) -> [u8; 5] {
+    match c {
+        '0' => [0b111, 0b101, 0b101, 0b101, 0b111],
+        '1' => [0b010, 0b110, 0b010, 0b010, 0b111],
+        '2' => [0b111, 0b001, 0b111, 0b100, 0b111],
+        '3' => [0b111, 0b001, 0b111, 0b001, 0b111],
+        '4' => [0b101, 0b101, 0b111, 0b001, 0b001],
+        '5' => [0b111, 0b100, 0b111, 0b001, 0b111],
+        '6' => [0b111, 0b100, 0b111, 0b101, 0b111],
+        '7' => [0b111, 0b001, 0b001, 0b001, 0b001],
+        '8' => [0b111, 0b101, 0b111, 0b101, 0b111],
+        '9' => [0b111, 0b101, 0b111, 0b001, 0b111],
+        '+' => [0b000, 0b010, 0b111, 0b010, 0b000],
+        _ => [0; 5],
+    }
+}
+
+/// The overlay badge's pixels (RGBA, BADGE_SIZE square): an amber disc with `text` centred in white.
+pub fn paint_badge(text: &str) -> (Vec<u8>, u32, u32) {
+    let size = BADGE_SIZE as i64;
+    let mut out = vec![0u8; (BADGE_SIZE * BADGE_SIZE * 4) as usize];
+    let mut set = |x: i64, y: i64, c: [u8; 4]| {
+        if x >= 0 && y >= 0 && x < size && y < size {
+            let i = ((y * size + x) * 4) as usize;
+            out[i..i + 4].copy_from_slice(&c);
+        }
+    };
+    let (c, r) = (size / 2, size / 2 - 1);
+    for y in 0..size {
+        for x in 0..size {
+            let (dx, dy) = (x - c, y - c);
+            if dx * dx + dy * dy <= r * r {
+                set(x, y, AMBER);
+            }
+        }
+    }
+    let chars: Vec<char> = text.chars().take(3).collect();
+    let scale = if chars.len() >= 3 { 2 } else { 3 };
+    let gap = scale;
+    let total_w = chars.len() as i64 * 3 * scale + (chars.len() as i64 - 1).max(0) * gap;
+    let (x0, y0) = ((size - total_w) / 2, (size - 5 * scale) / 2);
+    for (n, ch) in chars.iter().enumerate() {
+        let gx = x0 + n as i64 * (3 * scale + gap);
+        for (row, bits) in glyph(*ch).iter().enumerate() {
+            for col in 0..3 {
+                if bits & (0b100 >> col) != 0 {
+                    for sy in 0..scale {
+                        for sx in 0..scale {
+                            set(gx + col * scale + sx, y0 + row as i64 * scale + sy, WHITE);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (out, BADGE_SIZE, BADGE_SIZE)
+}
+
 /// The tray's state, shared by the pings and the window events.
 #[derive(Default)]
 pub struct TrayState {
@@ -379,6 +453,35 @@ mod tests {
         assert!(!click_opens(Os::Windows, false, true), "a right click is the menu");
         assert!(!click_opens(Os::Mac, true, true), "on macOS a click opens the menu");
         assert!(!click_opens(Os::Linux, true, true));
+    }
+
+    #[test]
+    fn stat048_the_badge_text_caps_large_counts_and_zero_clears() {
+        assert_eq!(badge_text(0), None);
+        assert_eq!(badge_text(1), Some("1".into()));
+        assert_eq!(badge_text(42), Some("42".into()));
+        assert_eq!(badge_text(99), Some("99".into()));
+        assert_eq!(badge_text(100), Some("99+".into()));
+        assert_eq!(badge_text(u32::MAX), Some("99+".into()));
+    }
+
+    #[test]
+    fn stat048_the_overlay_badge_is_an_amber_disc_with_the_count_in_white() {
+        let (px, w, h) = paint_badge("2");
+        assert_eq!((w, h), (BADGE_SIZE, BADGE_SIZE));
+        assert_eq!(px.len(), (w * h * 4) as usize);
+        let at = |img: &[u8], x: u32, y: u32| -> [u8; 4] {
+            let i = ((y * w + x) * 4) as usize;
+            [img[i], img[i + 1], img[i + 2], img[i + 3]]
+        };
+        assert_eq!(at(&px, 0, 0), [0, 0, 0, 0], "the corners stay clear: it is a disc");
+        assert_eq!(at(&px, w - 1, h - 1), [0, 0, 0, 0]);
+        assert_eq!(at(&px, 2, h / 2), AMBER, "the disc's edge is amber");
+        assert!(px.chunks(4).any(|p| p == WHITE), "the digit is drawn in white");
+        assert_ne!(paint_badge("1").0, paint_badge("2").0, "different counts look different");
+        let (three, ..) = paint_badge("99+");
+        assert!(three.chunks(4).any(|p| p == WHITE), "three glyphs still fit the disc");
+        assert_eq!(three.len(), px.len());
     }
 
     #[test]

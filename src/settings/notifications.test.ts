@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { audioTypeAllowed, AUDIO_TYPES, raiseNotification, readNotifications, SOUNDS, TONES, testPlan } from "./notifications";
+import { audioTypeAllowed, AUDIO_TYPES, raiseNotification, readNotifications, resetPacer, SOUNDS, TONES, testPlan } from "./notifications";
 
 const calls: Array<[string, Record<string, unknown>]> = [];
 let loadFails = false;
@@ -106,6 +106,20 @@ test("STAT-043: the system sound plays through the toast and Kolux plays nothing
   await raiseNotification({ notificationSound: "chime", notificationVolume: 0 }, "t", "b");
   expect(calls).toEqual([["notify", { title: "t", body: "b", sound: false }]]);
   expect(started).toEqual([]);
+});
+
+test("STAT-044: an event goes through notify_event with its id and pane, and the same event never shows twice", async () => {
+  resetPacer();
+  const ev = { id: "p1:s:done:x:1", worktree: "C:/w/a", pane: "1", kind: "finish" as const };
+  await raiseNotification({ notifySuppressFocused: false }, "t", "b", ev);
+  expect(calls).toEqual([["notify_event", { title: "t", body: "b", sound: true, id: ev.id, pane: "1", kind: "finish" }]]);
+  calls.length = 0;
+  await raiseNotification({ notifySuppressFocused: false }, "t", "b", ev);
+  expect(calls).toEqual([]);
+  // a second finish in the same worktree right after is merged into the first
+  await raiseNotification({ notifySuppressFocused: false }, "t", "b", { ...ev, id: "p2:s:done:y:1", pane: "2" });
+  expect(calls).toEqual([]);
+  resetPacer();
 });
 
 test("STAT-043: a custom file plays and not the system sound; a file that cannot load falls back to the system sound", async () => {

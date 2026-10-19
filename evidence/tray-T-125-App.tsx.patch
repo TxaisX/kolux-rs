@@ -1,0 +1,33 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index d77f6321..52b3ea97 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -120,6 +120,7 @@ import ChooserPane from "./launch/ChooserPane";
+ import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, sheetStart, type Lineup } from "./launch/seats";
+ import { folderName, NESTING_KEY, workItem, type Created, type WorkItem, type CliWorkspace, type Project, type Worktree } from "./projects/model";
+ import { focusIn, panesIn, sameDir, nameOf } from "./workspaces";
++import { badgeCount } from "./notify/badge";
+ import { LAYOUT_FIELD, layoutOf, type SavedLayout } from "./terminal/layout";
+ import { Kbd, KeymapProvider, useKeymap } from "./keys/KeymapContext";
+ import { recording } from "./keys/record";
+@@ -1887,6 +1888,20 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   report.current = reportLayout;
+   useEffect(() => report.current());
+   const { noticed, panesRef } = useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir });
++  // STAT-044: a clicked notification focuses the pane that raised it (notification_clicked emits the pane).
++  useEffect(() => {
++    const off = listen<{ pane: string }>("notification-click", (e) => {
++      const key = Number(e.payload.pane);
++      if (panesRef.current.some((x) => x.key === key)) setFocused(key);
++    });
++    return () => {
++      void off.then((f) => f());
++    };
++  }, [panesRef]);
++  // STAT-048: the taskbar badge counts the workspaces with unseen results; zero clears it.
++  useEffect(() => {
++    void invoke("badge_set", { count: badgeCount(unreadDirs) }).catch(() => {});
++  }, [unreadDirs]);
+   // The chooser, in a grid cell (SESS-007) or as the New session page (SESS-018).
+   const renderChooser = (p: Pane & { seats: Seat[] }, hidden: boolean, focused: boolean, onFocus: () => void, onClose: () => void, sheetOf: { project: string; path: string } | null = null) => (
+     <ChooserPane

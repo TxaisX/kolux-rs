@@ -3,6 +3,7 @@
 // hooks) play the same choice the test button does: the system's sound, one of nine Kolux tones, or
 // a custom audio file, at the saved volume, with the toast silent whenever Kolux plays its own.
 import { invoke } from "@tauri-apps/api/core";
+import { decide, emptyPacer, type NotifyEvent } from "../notify/pacing";
 
 /** The kinds of notification, their settings keys and what they are when nothing is saved. The
  * finish and stop keys are the ones the agent notifications read (STAT-041, STAT-023); usage alerts
@@ -140,12 +141,30 @@ export async function preparePlan(n: { sound: Sound; volume: number; customFile:
   return { plan, play, close, problem };
 }
 
+/** STAT-044: one pacer for the window; `resetPacer` is for tests. */
+let pacer = emptyPacer();
+export function resetPacer(): void {
+  pacer = emptyPacer();
+}
+
 /** STAT-043: a desktop notification with the chosen sound. The toast is silent whenever Kolux plays
- * its own tone or file, so one sound plays; the sound starts once the toast is shown. */
-export async function raiseNotification(settings: Record<string, unknown>, title: string, body: string): Promise<void> {
-  const { plan, play, close } = await preparePlan(readNotifications(settings));
+ * its own tone or file, so one sound plays; the sound starts once the toast is shown. STAT-044: with
+ * an `event` the notification is merged and paced (`decide`) and the backend learns its id and pane,
+ * so a click can focus that pane; a merged or repeated event raises nothing. */
+export async function raiseNotification(settings: Record<string, unknown>, title: string, body: string, event?: Omit<NotifyEvent, "at">): Promise<void> {
+  const prefs = readNotifications(settings);
+  if (event) {
+    const d = decide(pacer, { ...event, at: Date.now() }, { windowFocused: typeof document !== "undefined" && document.hasFocus(), suppressFocused: prefs.suppressFocused });
+    pacer = d.state;
+    if (!d.show) return;
+  }
+  const { plan, play, close } = await preparePlan(prefs);
   try {
-    await invoke("notify", { title, body, sound: plan.toastSound });
+    if (event) {
+      await invoke("notify_event", { title, body, sound: plan.toastSound, id: event.id, pane: event.pane, kind: event.kind });
+    } else {
+      await invoke("notify", { title, body, sound: plan.toastSound });
+    }
   } catch (e) {
     close();
     throw e;
