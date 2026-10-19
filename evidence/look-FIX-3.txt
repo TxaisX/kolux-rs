@@ -7,8 +7,11 @@ firewall-check -Baseline 0 new.
 ## 1. fence: a path without a drive is refused before it resolves (FIX-SOON 1)
 Rule: every page path is refused from its spelling unless it is C:\... or \?\C:\... ; the NT
 spellings \??\UNC\host\share and \??\GLOBALROOT\Device\Mup\host\share, \??\C:\..., \x, C:x,
-relative and empty paths never reach canonicalize, so no host is contacted. Drops and grants
-apply the same rule; saved grants that fail it are dropped on load.
+relative and empty paths never reach canonicalize, so those spellings contact no host. (Reworded in
+FIX-4: a mapped or subst drive letter such as Z:... passes the rule, and resolving it can still
+contact the share it points to before the share refusal applies; a symbolic link or junction that
+points at a share is the same open gap as the link-to-share item. Both are the user's own mappings.)
+Drops and grants apply the same rule; saved grants that fail it are dropped on load.
 Red first: with the helper defined but not wired into check(), the new test failed:
   "\??\UNC\kolux-none.invalid\share\p.txt: Kolux opens files only from your projects ... is outside
   them" (the old code resolved it, then said "outside").
@@ -71,9 +74,12 @@ Not on screen (an error path only).
 
 ## 5. AFTER: Open in fences the real folder again; long paths keep their verbatim form (AFTER 1, 2)
 - open_target puts the canonical folder to the fence a second time before handing it to the
-  launcher, so a junction swapped in after the first look cannot send it outside the projects.
+  launcher, which narrows the window for a junction swapped in after the first look. (Reworded in
+  FIX-4: it does not close it. A path component swapped after the second look can still redirect the
+  launcher; the residual window is the time between that check and the launcher's own open.)
 - plain_disk_path drops \\?\ only while the plain path fits in 259 characters; a longer one keeps
-  the verbatim prefix.
+  the verbatim prefix. (FIX-4: whether explorer.exe and code.cmd accept a verbatim path is UNKNOWN; only the
+  string change is tested. The live step for a 270-character folder is in evidence/look-FIX-4.txt.)
 Red first (old code): both new tests failed on their asserts (fence asked once; the 260-character
 path lost its prefix). Tests: files::open_in_tests::edit043_the_canonical_folder_is_fenced_again_before_it_opens,
 files::open_in_tests::edit043_a_folder_path_over_max_path_keeps_its_verbatim_prefix.

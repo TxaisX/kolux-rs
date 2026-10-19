@@ -542,6 +542,7 @@ pub fn run() {
             files::file_pick,
             files::md_list,
             editor_search::editor_search,
+            editor_search::editor_search_cancel,
             skills::skills_scan,
             skill_delete::skills_delete_plan,
             skill_delete::skills_delete,
