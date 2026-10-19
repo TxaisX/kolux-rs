@@ -1,12 +1,13 @@
 // T-548 (OD-11): the quick account switcher. A small pill in the top bar (beside the usage pill)
 // names the account new Claude and Codex panes use; clicking it opens a menu with every managed
 // account of each provider, and a click makes that one the account for NEW panes. Panes already
-// running keep their account (ACCT-017). It hides itself until a provider has a managed account,
+// running keep their account (ACCT-017) until the person accepts the prompt that offers to move a Codex
+// pane (ACCT-023). It hides itself until a provider has a managed account,
 // and the accounts themselves are still added, signed in again and removed in Settings.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { buttonText, groupsOf, pickAccount, type ClaudeSwitchView, type CodexSwitchView, type Group, type Provider } from "./accounts";
+import { activeOf, buttonText, groupsOf, pickAccount, watchEscape, type ClaudeSwitchView, type CodexSwitchView, type Group, type Provider } from "./accounts";
 import "./switcher.css";
 
 /** Both views, re-read when either provider's accounts change; the same events Settings listens to. */
@@ -31,10 +32,11 @@ export function useAccountSwitcher(): { groups: Group[]; active: { claude: strin
       stops.forEach((s) => s());
     };
   }, [read]);
-  const groups = groupsOf(claude, codex);
+  // One list per change of the views, so the Board and Tower memos keyed on it do not run on every render.
+  const groups = useMemo(() => groupsOf(claude, codex), [claude, codex]);
   const pick = useCallback(
     async (provider: Provider, id: string | null) => {
-      const group = groupsOf(claude, codex).find((g) => g.provider === provider);
+      const group = groups.find((g) => g.provider === provider);
       if (!group) return null;
       try {
         await pickAccount((command, args) => invoke(command, args), group, id);
@@ -45,10 +47,10 @@ export function useAccountSwitcher(): { groups: Group[]; active: { claude: strin
         read();
       }
     },
-    [claude, codex, read],
+    [groups, read],
   );
-  const claudeActive = claude?.active ?? null;
-  const codexActive = codex?.active ?? null;
+  // FIX-1: read against the listed accounts, so a stale id is the system default here as in the pill.
+  const { claude: claudeActive, codex: codexActive } = activeOf(claude, codex);
   // One object per change, so a memo or an effect keyed on it does not run on every render.
   const active = useMemo(() => ({ claude: claudeActive, codex: codexActive }), [claudeActive, codexActive]);
   return { groups, active, pick };
@@ -77,7 +79,8 @@ export function AccountSwitcherView({ groups, open, error = null, onOpen, onClos
       {open && (
         <>
           <div className="menu-backdrop" onClick={onClose} aria-hidden="true" />
-          <div className="menu acct-menu" role="menu" aria-label="Accounts for new panes" style={open} onKeyDown={(e) => e.key === "Escape" && onClose()}>
+          <EscapeWatch onClose={onClose} />
+          <div className="menu acct-menu" role="menu" aria-label="Accounts for new panes" style={open}>
             {groups.map((g) => (
               <div key={g.provider} role="group" aria-label={`${g.name} accounts`}>
                 <div className="menu-title">{g.name}</div>
@@ -92,7 +95,7 @@ export function AccountSwitcherView({ groups, open, error = null, onOpen, onClos
                 {g.note && <div className="menu-hint">{g.note}</div>}
               </div>
             ))}
-            <div className="menu-hint">Panes already running keep their account.</div>
+            <div className="menu-hint">Panes already running keep their account, until you accept the prompt to move one.</div>
             {error && (
               <div className="menu-hint acct-error" role="alert">
                 {error}
@@ -110,13 +113,14 @@ export default function AccountSwitcher() {
   const { groups, pick } = useAccountSwitcher();
   const [open, setOpen] = useState<{ top: number; left: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const close = useCallback(() => setOpen(null), []);
   return (
     <AccountSwitcherView
       groups={groups}
       open={open}
       error={error}
       onOpen={(at) => (setError(null), setOpen(at))}
-      onClose={() => setOpen(null)}
+      onClose={close}
       onPick={(provider, id) =>
         void pick(provider, id).then((failed) => {
           setError(failed);
@@ -125,4 +129,11 @@ export default function AccountSwitcher() {
       }
     />
   );
+}
+
+/** FIX-1: while the menu is open, Escape closes it wherever focus is. The old handler sat on the menu
+ *  and only fired with focus inside it; with every row disabled (a sign-in running) nothing took focus. */
+export function EscapeWatch({ onClose }: { onClose: () => void }) {
+  useEffect(() => watchEscape(document, onClose), [onClose]);
+  return null;
 }

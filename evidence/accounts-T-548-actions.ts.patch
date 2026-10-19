@@ -1,5 +1,5 @@
 diff --git a/src/keys/actions.ts b/src/keys/actions.ts
-index 8d560ed4..0c098def 100644
+index a1d3c4cc..d56cc290 100644
 --- a/src/keys/actions.ts
 +++ b/src/keys/actions.ts
 @@ -94,6 +94,9 @@ export const actions: Action[] = [
@@ -13,20 +13,20 @@ index 8d560ed4..0c098def 100644
    a("view.floor", "Show Floor", "global", []),
    a("view.code", "Show Code", "global", ["Mod+Shift+3"]),
 diff --git a/src/keys/keymap.test.ts b/src/keys/keymap.test.ts
-index 57ab6695..16493e5f 100644
+index 3483c1df..9876ca46 100644
 --- a/src/keys/keymap.test.ts
 +++ b/src/keys/keymap.test.ts
 @@ -6,13 +6,13 @@ import { chordMatches, chordsOf, labelOf, labelParts, matchEvent, parseChord, re
  
  const key = (k: Partial<KeyLike>): KeyLike => ({ key: "", code: "", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...k });
  
--test("the table registers the 129 carried commands (VIEW-053 added one, T-546 added view.tower); 53 ship unbound (T-543-b unbound Reopen closed tab) and 6 have only a macOS chord", () => {
--  expect(actions.length).toBe(129);
-+test("the table registers the 131 carried commands (VIEW-053 added one, T-546 added view.tower, T-548 added the two account switches); 55 ship unbound (T-543-b unbound Reopen closed tab) and 6 have only a macOS chord", () => {
-+  expect(actions.length).toBe(131);
+-test("the table registers the 132 carried commands (VIEW-053 added one, T-546 added view.tower, T-246-c added the three ui.zoom keys); 53 ship unbound (T-543-b unbound Reopen closed tab) and 6 have only a macOS chord", () => {
+-  expect(actions.length).toBe(132);
++test("the table registers the 134 carried commands (VIEW-053 added one, T-546 added view.tower, T-246-c added the three ui.zoom keys, T-548 added the two account switches); 55 ship unbound (T-543-b unbound Reopen closed tab) and 6 have only a macOS chord", () => {
++  expect(actions.length).toBe(134);
    const ids = new Set(actions.map((a) => a.id));
--  expect(ids.size).toBe(129);
-+  expect(ids.size).toBe(131);
+-  expect(ids.size).toBe(132);
++  expect(ids.size).toBe(134);
    expect(ids.has("tab.newSimulator")).toBe(false);
    expect(ids.has("tab.openQuickCommandsMenu")).toBe(false);
 -  expect(actions.filter((a) => a.win32.length === 0 && !a.darwin).length).toBe(53);
@@ -35,24 +35,24 @@ index 57ab6695..16493e5f 100644
    expect(actions.filter((a) => a.id.startsWith("tab.newAgent.")).length).toBe(35);
  });
 diff --git a/src/settings/shortcutRows.test.ts b/src/settings/shortcutRows.test.ts
-index 77cb2528..bee08c5a 100644
+index 4c1ee010..8689c77c 100644
 --- a/src/settings/shortcutRows.test.ts
 +++ b/src/settings/shortcutRows.test.ts
-@@ -11,7 +11,7 @@ const ids = (r: ReturnType<typeof rows>) => r.map((x) => x.id);
+@@ -12,7 +12,7 @@ const ids = (r: ReturnType<typeof rows>) => r.map((x) => x.id);
  
  test("every command is listed under its area with its chords and badges", () => {
-   const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+0", "zoom.in": null, "view.tasks": "Mod+P" } });
--  expect(all.length).toBe(128); // 129 commands, Reopen closed tab hidden until T-164-b (T-543-b)
-+  expect(all.length).toBe(130); // 131 commands, Reopen closed tab hidden until T-164-b (T-543-b)
+   const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+9", "zoom.in": null, "view.tasks": "Mod+P" } });
+-  expect(all.length).toBe(131); // 132 commands, Reopen closed tab hidden until T-164-b (T-543-b)
++  expect(all.length).toBe(133); // 134 commands, Reopen closed tab hidden until T-164-b (T-543-b)
    expect(ids(all)).not.toContain("tab.reopenClosed");
    const by = (id: string) => all.find((r) => r.id === id)!;
    expect(by("terminal.clear")).toMatchObject({ area: "Terminal", labels: ["Ctrl+K"], badges: [] });
-@@ -28,7 +28,7 @@ test("every command is listed under its area with its chords and badges", () =>
+@@ -29,7 +29,7 @@ test("every command is listed under its area with its chords and badges", () =>
  
  test("filters: all, modified, unassigned, conflicting", () => {
-   const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+0", "zoom.in": null, "view.tasks": "Mod+P" } });
--  expect(filterRows(all, "all", "").length).toBe(128);
-+  expect(filterRows(all, "all", "").length).toBe(130);
+   const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+9", "zoom.in": null, "view.tasks": "Mod+P" } });
+-  expect(filterRows(all, "all", "").length).toBe(131);
++  expect(filterRows(all, "all", "").length).toBe(133);
    expect(ids(filterRows(all, "modified", ""))).toEqual(["zoom.in", "zoom.reset"]);
    expect(filterRows(all, "unassigned", "").every((r) => r.labels.length === 0)).toBe(true);
    expect(ids(filterRows(all, "unassigned", ""))).toContain("zoom.in");

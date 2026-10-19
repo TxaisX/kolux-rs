@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { laneCounts, selectionForKey, towerRows, usageByAccount, type Seat } from "./tower";
+import { laneCounts, nameSeats, nameUsage, selectionForKey, towerRows, usageByAccount, type Seat } from "./tower";
 import type { Chip } from "../board/chip";
 
 const chip = (lane: Chip["lane"], word: string = lane, line = "", file?: string): Chip => ({ lane, word, line, file, answer: lane === "needs" });
@@ -85,9 +85,12 @@ describe("usageByAccount with the active accounts", () => {
     codex: { state: "ok" as const, fiveHour: { usedPercent: 5, resetsAt: null, windowMins: 300 }, weekly: null, resetCredits: null, plan: null, message: null },
   };
 
-  it("names the account the Claude figures are read for", () => {
+  // FIX-1 (council d2 stand-in review, FIX-BEFORE 2): the one stored Claude report belongs to whichever account
+  // was active before a switch, so a Claude card must not claim "Figures for <new account>" until T-548-b.
+  it("leaves the Claude card without a 'figures for' account, keeping its figures", () => {
     const [card] = usageByAccount([{ agent: "claude", account: null }], plan, { claude: "work", codex: null });
-    expect(card.forAccount).toBe("work");
+    expect(card.forAccount).toBeUndefined();
+    expect("forAccount" in card).toBe(false);
     expect(card.figures).toEqual({ fiveHour: 42, weekly: null });
     expect(card.elsewhere).toBe(0);
   });
@@ -112,6 +115,37 @@ describe("usageByAccount with the active accounts", () => {
     expect(card.figures).toEqual({ fiveHour: 5, weekly: null });
     expect(card.elsewhere).toBe(0);
     expect(card.forAccount).toBeNull();
+  });
+});
+
+// FIX-1 (council d2 stand-in review, FIX-SOON 1): the card and the rows hold account ids; what the person reads is the label.
+describe("FIX-1 account labels on the Tower", () => {
+  const labels: Record<string, string> = { "codex:7f3a9c": "Team", "claude:c-91": "work@example.com" };
+  const label = (agent: string, id: string) => labels[`${agent}:${id}`] ?? id;
+  const plan = { claude: [], codex: { state: "ok" as const, fiveHour: { usedPercent: 5, resetsAt: null, windowMins: 300 }, weekly: null, resetCredits: null, plan: null, message: null } };
+
+  it("swaps the ids on a usage card (the figures-for line and the accounts list) for their labels, leaving null and unknown ids", () => {
+    const cards = usageByAccount([{ agent: "codex", account: "7f3a9c" }, { agent: "codex", account: null }, { agent: "claude", account: "c-91" }, { agent: "codex", account: "gone" }], plan, { claude: "c-91", codex: "7f3a9c" });
+    const named = nameUsage(cards, label);
+    const codex = named.find((c) => c.agent === "codex")!;
+    expect(codex.forAccount).toBe("Team");
+    expect(codex.accounts.map((a) => a.account)).toEqual(["Team", null, "gone"]);
+    expect(named.find((c) => c.agent === "claude")!.accounts.map((a) => a.account)).toEqual(["work@example.com"]);
+    // the input is not changed (the window keeps the ids for the active-account comparison)
+    expect(cards.find((c) => c.agent === "codex")!.forAccount).toBe("7f3a9c");
+  });
+
+  it("keeps a null forAccount (system default) null and an unset one unset", () => {
+    const [codex] = nameUsage(usageByAccount([{ agent: "codex", account: null }], plan, { claude: null, codex: null }), label);
+    expect(codex.forAccount).toBeNull();
+    const [claude] = nameUsage(usageByAccount([{ agent: "claude", account: "c-91" }], plan, { claude: "c-91", codex: null }), label);
+    expect("forAccount" in claude).toBe(false);
+  });
+
+  it("labels the account on each row's seat, per provider", () => {
+    const seats = [seat(1, null, 0, { agent: "codex", account: "7f3a9c" }), seat(2, null, 0, { agent: "claude", account: "c-91" }), seat(3, null, 0, { account: null })];
+    expect(nameSeats(seats, label).map((s) => s.account)).toEqual(["Team", "work@example.com", null]);
+    expect(seats[0].account).toBe("7f3a9c");
   });
 });
 

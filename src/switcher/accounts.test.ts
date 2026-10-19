@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { buttonText, cycleTarget, groupsOf, paletteRows, pickAccount, type ClaudeSwitchView, type CodexSwitchView } from "./accounts";
+import { codexOf } from "../usage/meter";
+import { switcherLabel, activeOf, buttonText, cycleTarget, groupsOf, paletteRows, pickAccount, pickWithNotice, watchEscape, type ClaudeSwitchView, type CodexSwitchView } from "./accounts";
 
 const claude = (over: Partial<ClaudeSwitchView> = {}): ClaudeSwitchView => ({
   accounts: [
@@ -156,5 +157,78 @@ describe("cycleTarget", () => {
 
   it("has nowhere to go with a single choice, or while busy", () => {
     expect(cycleTarget(groupsOf(claude({ signingIn: "c9" }), null)[0])).toBeUndefined();
+  });
+});
+
+// FIX-1 (council d2 stand-in review, FIX-SOON 3): an active id that is no longer listed reads as System default
+// in the pill, so the figures logic must read it the same way.
+describe("activeOf", () => {
+  it("passes a listed active id through and reads an unlisted one as the system default (null)", () => {
+    expect(activeOf(claude(), codex({ active: "x2" }))).toEqual({ claude: "c1", codex: "x2" });
+    expect(activeOf(claude({ active: "removed" }), codex({ active: "stale-id" }))).toEqual({ claude: null, codex: null });
+  });
+
+  it("reads null for a provider with no accounts or no view yet, even when it names an active id", () => {
+    expect(activeOf(null, null)).toEqual({ claude: null, codex: null });
+    expect(activeOf(claude({ accounts: [], active: "c1" }), codex({ accounts: [], active: "x1" }))).toEqual({ claude: null, codex: null });
+  });
+
+  it("agrees with the pill: a stale Codex id shows System default and a pane on the system default keeps the figures", () => {
+    const view = codex({ active: "stale-id" });
+    expect(buttonText(groupsOf(null, view))).toBe("Codex System default");
+    const usage = { state: "ok" as const, fiveHour: null, weekly: null, resetCredits: null, plan: null, message: null };
+    // raw id: a pane begun on the system default (null) lost its figures; normalised: it keeps them
+    expect(codexOf("codex", null, view.active, usage)).toBeNull();
+    expect(codexOf("codex", null, activeOf(null, view).codex, usage)).toBe(usage);
+  });
+});
+
+// FIX-1 (FIX-SOON 1): the Tower reads the choice labels, not the ids.
+describe("switcherLabel", () => {
+  const groups = groupsOf(claude({ accounts: [{ id: "c-91", email: "work@example.com", organization: null, stale: false }], active: "c-91" }), codex({ accounts: [{ id: "7f3a9c", email: "a@example.com", label: "Team", signInError: false }, { id: "d41e02", email: "b@example.com", signInError: false }], active: "7f3a9c" }));
+  it("maps an id to the label the switcher shows, per provider", () => {
+    expect(switcherLabel(groups, "claude", "c-91")).toBe("work@example.com");
+    expect(switcherLabel(groups, "codex", "7f3a9c")).toBe("Team");
+    expect(switcherLabel(groups, "codex", "d41e02")).toBe("b@example.com");
+  });
+  it("falls back to the id for an account no longer listed, and does not cross providers", () => {
+    expect(switcherLabel(groups, "codex", "gone")).toBe("gone");
+    expect(switcherLabel(groups, "codex", "c-91")).toBe("c-91");
+    expect(switcherLabel([], "claude", "c-91")).toBe("c-91");
+  });
+});
+
+// FIX-1 (FIX-SOON 2): a failed shortcut or palette switch is told to the person, not dropped.
+describe("pickWithNotice", () => {
+  it("hands pick's error string to the notice, and says nothing when the switch worked", async () => {
+    const notify = vi.fn();
+    const failing = pickWithNotice(vi.fn(async () => "That Claude account is no longer listed."), notify);
+    failing("claude", "c9");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(notify).toHaveBeenCalledWith("That Claude account is no longer listed.");
+    const pick = vi.fn(async () => null);
+    const ok = pickWithNotice(pick, notify);
+    ok("codex", "x2");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(pick).toHaveBeenCalledWith("codex", "x2");
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+});
+
+// FIX-1 (AFTER 1): Escape closes the menu wherever focus is, including when every row is disabled.
+describe("watchEscape", () => {
+  const key = (name: string) => Object.assign(new Event("keydown"), { key: name });
+  it("closes on Escape only, and stops listening when released", () => {
+    const target = new EventTarget();
+    const close = vi.fn();
+    const stop = watchEscape(target, close);
+    target.dispatchEvent(key("a"));
+    target.dispatchEvent(key("Enter"));
+    expect(close).not.toHaveBeenCalled();
+    target.dispatchEvent(key("Escape"));
+    expect(close).toHaveBeenCalledTimes(1);
+    stop();
+    target.dispatchEvent(key("Escape"));
+    expect(close).toHaveBeenCalledTimes(1);
   });
 });

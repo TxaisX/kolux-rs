@@ -100,3 +100,32 @@ export function cycleTarget(group: Group): string | null | undefined {
   const at = group.choices.findIndex((c) => c.active);
   return group.choices[(at + 1) % group.choices.length].id;
 }
+
+/** FIX-1: the account new panes use, per provider, read the way the pill reads it: an active id that is
+ *  no longer listed (or a provider with no accounts) is the system default (null). The Board and Tower
+ *  figures compare panes against this, so they agree with what the pill says. */
+export function activeOf(claude: ClaudeSwitchView | null, codex: CodexSwitchView | null): { claude: string | null; codex: string | null } {
+  const live = (v: { accounts: Array<{ id: string }>; active: string | null } | null) => (v && v.accounts.some((a) => a.id === v.active) ? v.active : null);
+  return { claude: live(claude), codex: live(codex) };
+}
+
+/** FIX-1: the label the switcher shows for an account id of a provider (an agent word), so the Tower
+ *  names "Team" and not the id. An id no longer listed keeps the id. */
+export function switcherLabel(groups: Group[], agent: string, id: string): string {
+  return groups.find((g) => g.provider === agent)?.choices.find((c) => c.id === id)?.label ?? id;
+}
+
+/** FIX-1: a switch from a shortcut or the palette, with pick's error words shown as a notice
+ *  instead of dropped (the top-bar menu shows them in the menu itself). */
+export function pickWithNotice(pick: (provider: Provider, id: string | null) => Promise<string | null>, notify: (text: string) => void): (provider: Provider, id: string | null) => void {
+  return (provider, id) => void pick(provider, id).then((failed) => failed && notify(failed));
+}
+
+/** FIX-1: calls `onClose` for Escape on `target` (the document, wherever focus is) until the returned stop runs. */
+export function watchEscape(target: Pick<EventTarget, "addEventListener" | "removeEventListener">, onClose: () => void): () => void {
+  const on = (e: Event) => {
+    if ((e as KeyboardEvent).key === "Escape") onClose();
+  };
+  target.addEventListener("keydown", on);
+  return () => target.removeEventListener("keydown", on);
+}

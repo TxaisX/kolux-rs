@@ -48,7 +48,7 @@ export type AccountUsage = {
   figures: PlanFigures | null;
   panes: number;
   accounts: Array<{ account: string | null; panes: number }>;
-  /** T-548, only when the active accounts were passed: the account the figures are read for (null = the system default). */
+  /** T-548, only when the active accounts were passed, and FIX-1 only on a Codex card: the account the figures are read for (null = the system default). */
   forAccount?: string | null;
   /** T-548: panes of this provider on an account other than the one the figures are read for (Codex only;
    *  a Claude pane does not record its account yet, T-548-b). */
@@ -78,10 +78,16 @@ export function usageByAccount(seats: Pick<Seat, "agent" | "account">[], plan: P
   if (!active) return out;
   // T-548: the figures are the active account's. A Codex card with no pane on that account has none
   // to show; a Claude pane's own account is not recorded, so all of its panes count as on the active one.
+  // FIX-1: only a Codex card says whose figures they are. The one stored Claude report belongs to whichever
+  // account was active before a switch (it carries the old windows forward), so a Claude card claims no
+  // account until T-548-b reads one report per account.
   for (const card of out) {
-    const now = card.agent === "codex" ? active.codex : active.claude;
-    card.forAccount = now;
-    card.elsewhere = card.agent === "codex" ? card.accounts.filter((a) => a.account !== now).reduce((n, a) => n + a.panes, 0) : 0;
+    if (card.agent !== "codex") {
+      card.elsewhere = 0;
+      continue;
+    }
+    card.forAccount = active.codex;
+    card.elsewhere = card.accounts.filter((a) => a.account !== active.codex).reduce((n, a) => n + a.panes, 0);
     if (card.elsewhere === card.panes) card.figures = null;
   }
   return out;
@@ -94,4 +100,16 @@ export function selectionForKey(key: string, keys: number[], current: number | n
   if (key === "Home") return { to: keys[0] ?? null };
   if (key === "End") return { to: keys[keys.length - 1] ?? null };
   return null;
+}
+
+/** FIX-1: the usage cards with account ids swapped for the names the switcher shows (the card's
+ *  "figures for" line and its accounts list). Null stays null; the input is not changed. */
+export function nameUsage(usage: AccountUsage[], label: (agent: string, id: string) => string): AccountUsage[] {
+  const named = (agent: string, id: string | null) => (id === null ? null : label(agent, id));
+  return usage.map((u) => ({ ...u, ...(u.forAccount === undefined ? {} : { forAccount: named(u.agent, u.forAccount) }), accounts: u.accounts.map((a) => ({ ...a, account: named(u.agent, a.account) })) }));
+}
+
+/** FIX-1: the seats with their account id swapped for its name, for the rows. */
+export function nameSeats<T extends Pick<Seat, "agent" | "account">>(seats: T[], label: (agent: string, id: string) => string): T[] {
+  return seats.map((s) => (s.account === null ? s : { ...s, account: label(s.agent, s.account) }));
 }
