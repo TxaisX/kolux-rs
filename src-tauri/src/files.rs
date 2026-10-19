@@ -585,7 +585,9 @@ pub fn list_dir(dir: &Path) -> Result<Vec<DirEntry>, String> {
             DirEntry { name: e.file_name().to_string_lossy().into_owned(), path: e.path().to_string_lossy().into_owned(), kind }
         })
         .collect();
-    out.sort_by(|a, b| (a.kind != "dir").cmp(&(b.kind != "dir")).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    // EDIT-011: folders first, then natural order (file2 before file10); names that tie settle by their exact
+    // spelling, never by the order the disk returned them.
+    out.sort_by_cached_key(|e| (e.kind != "dir", natural_key(&e.name), e.name.clone()));
     Ok(out)
 }
 
@@ -623,6 +625,20 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn edit011_numbered_names_list_in_natural_order_and_ties_settle_the_same_way_every_time() {
+        let d = temp_dir("natural");
+        for f in ["file10.txt", "file2.txt", "file1.txt", "file02.txt"] {
+            fs::write(d.join(f), "x").unwrap();
+        }
+        fs::create_dir(d.join("sub")).unwrap();
+        let names = |d: &Path| list_dir(d).unwrap().into_iter().map(|e| e.name).collect::<Vec<_>>();
+        let got = names(&d);
+        // A folder above files; 2 before 10; file02 and file2 count the same, so their exact spelling settles it.
+        assert_eq!(got, ["sub", "file1.txt", "file02.txt", "file2.txt", "file10.txt"]);
+        assert_eq!(names(&d), got);
     }
 
     #[test]

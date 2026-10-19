@@ -18,8 +18,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
 import { EditorView } from "@codemirror/view";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
-import { LanguageDescription, syntaxHighlighting } from "@codemirror/language";
-import { languages } from "@codemirror/language-data";
+import { syntaxHighlighting } from "@codemirror/language";
+import { languageFor } from "./languages";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { MergeView, unifiedMergeView } from "@codemirror/merge";
 import { ChevronDown, Close, FileCode, List } from "../chrome/icons";
@@ -421,7 +421,7 @@ const Section = memo(function Section({ anchor, e, name, root, base, draw, cache
     } else {
       views = [new EditorView({ doc: sides.modified, parent: host.current, extensions: [...common, unifiedMergeView({ original: sides.original, mergeControls: false, gutter: true, collapseUnchanged, diffConfig })] })];
     }
-    LanguageDescription.matchFilename(languages, baseName(e.path))
+    languageFor(baseName(e.path))
       ?.load()
       .then((support) => views.forEach((v) => v.dispatch({ effects: lang.reconfigure(support) })))
       .catch(() => undefined);

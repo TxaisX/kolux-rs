@@ -774,3 +774,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · skills FIX-6 · the stand-in review skills-efa2f15a-standin-review.md (items 1-6, AFTER 1-5) as given in the coordinator brief; this tree's own skill_delete.rs and skills.rs (spots, places, claude_plugins); Rust std docs for Path::is_absolute / is_dir; no outside source
 > 2026-10-19 · editor T-178 · Rust std docs for File::sync_all, fs::rename and FileType::is_symlink; file signatures (zip, gzip, pdf, png, gif, jpeg, 7z, exe, elf) from their public format notes; no outside source
 > 2026-10-19 · editor T-318 · Rust std docs for fs::read_dir, FileType::is_symlink and jiff Zoned::strftime; no outside source
+> 2026-10-19 · editor T-316 · CodeMirror 6 reference docs (StreamLanguage, Compartment, LanguageDescription), the JSON grammar on json.org, the Nim manual keyword list, RFC 4180 for CSV quoting; no outside source
