@@ -5,8 +5,13 @@
 //! a short quiet timer, and when the timer runs out (or a burst has gone on for a second) it reads
 //! the status once and sends it to the window as `scm-status-<id>`, the same shape `scm_status`
 //! returns. Behind it, a safety read every 30 s. A watch that cannot start (a network drive, a
-//! junctioned path, no handle), or that later errors or overflows, goes back to reading every 4 s
-//! for that worktree and says so once in the diagnostics log.
+//! junctioned path, no handle), or that later errors, goes back to reading every 4 s for that
+//! worktree and says so once in the diagnostics log. T-033-e: a change-buffer overflow is not an
+//! error: the reader reads again and the worker catches up with one read; a worktree whose folder
+//! is gone ends its watch instead of reading a missing folder for the rest of the session; a
+//! workspace removal ends the watch and waits for the folder handles to close before git deletes
+//! the folder; the window closing ends every watch; the shared `packed-refs` is watched too; and a
+//! caller joining a watch that has already fallen back is told so.
 //!
 //! The watcher is Windows' own folder-change reader (ReadDirectoryChangesW); the `notify` crate is
 //! CC0-1.0 in every version, which the licence list refuses (T-033-b decision).
@@ -133,7 +138,7 @@ pub fn matters(root: &Path, spot: Spot, rel: &str) -> bool {
     let rule = match spot {
         Spot::Tree => is_rule_file(rel),
         Spot::Info => rel.trim_start_matches('/').eq_ignore_ascii_case("exclude"),
-        Spot::GitDir | Spot::Refs => false,
+        Spot::GitDir | Spot::Refs | Spot::Common => false,
     };
     if rule {
         ignores_of(root).lock().unwrap_or_else(|e| e.into_inner()).forget();
@@ -161,23 +166,28 @@ pub enum Spot {
     Refs,
     /// The shared `info` folder of a linked worktree's repository (its `exclude` file).
     Info,
+    /// The shared git folder itself of a linked worktree's repository, not recursive: only its
+    /// `packed-refs` counts (T-033-e; a pack, a prune or a packed branch delete moves refs there
+    /// without touching `refs/`).
+    Common,
 }
 
 /// Whether a change at `rel` (relative to its spot, forward slashes) can move the status. Inside
-/// git's folders only HEAD, the index and refs count: never objects, never `index.lock` churn,
-/// never FETCH_HEAD or logs, so a fetch costs one read for its ref updates.
+/// git's folders only HEAD, the index, refs and packed-refs count: never objects, never
+/// `index.lock` churn, never FETCH_HEAD or logs, so a fetch costs one read for its ref updates.
 pub fn counts(spot: Spot, rel: &str) -> bool {
     let rel = rel.trim_start_matches('/');
     match spot {
         Spot::Refs => true,
         Spot::GitDir => rel == "HEAD" || rel == "index",
         Spot::Info => false,
+        Spot::Common => rel == "packed-refs",
         Spot::Tree => {
             let mut segs = rel.split('/');
             let first = segs.next().unwrap_or_default();
             if first.eq_ignore_ascii_case(".git") {
                 let rest = &rel[first.len()..].trim_start_matches('/');
-                return *rest == "HEAD" || *rest == "index" || *rest == "refs" || rest.starts_with("refs/");
+                return *rest == "HEAD" || *rest == "index" || *rest == "packed-refs" || *rest == "refs" || rest.starts_with("refs/");
             }
             true
         }
@@ -222,7 +232,10 @@ impl Debounce {
 #[derive(Debug)]
 pub enum Signal {
     Change,
-    /// The watch broke (an error, an overflow, the folder went away); the reason is logged.
+    /// T-033-e: the change buffer overflowed, so some changes were never reported; the reader is
+    /// already reading again, and the worker reads once to catch up. Not a break.
+    Overflow,
+    /// The watch broke (an error, the folder went away); the reason is logged.
     Broken(String),
     Stop,
 }
@@ -271,6 +284,7 @@ impl Places {
             if self.common.join("info").is_dir() {
                 out.push((self.common.join("info"), false, Spot::Info));
             }
+            out.push((self.common.clone(), false, Spot::Common));
         }
         out
     }
@@ -329,16 +343,90 @@ pub fn parse_notify(buf: &[u8]) -> Vec<String> {
     out
 }
 
+/// A kernel handle, closed once when its last owner goes.
+#[cfg(windows)]
+struct Owned(windows_sys::Win32::Foundation::HANDLE);
+// SAFETY: a kernel handle may be used and closed from any thread.
+#[cfg(windows)]
+unsafe impl Send for Owned {}
+// SAFETY: as above; the handle itself is never changed after it is made.
+#[cfg(windows)]
+unsafe impl Sync for Owned {}
+#[cfg(windows)]
+impl Drop for Owned {
+    fn drop(&mut self) {
+        // SAFETY: the handle came from CreateFileW / CreateEventW and is closed once.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+
+/// T-033-e: the event that wakes every reader of a watch the moment it is stopped, so a stop never
+/// waits out a reader's 500 ms wait slice: a workspace removal joins its readers before git deletes
+/// the folder they hold open. Without the event (it could not be made) the readers still end on the
+/// stop flag within that slice.
+struct Wake {
+    #[cfg(windows)]
+    ev: Option<Owned>,
+}
+
+impl Wake {
+    fn new() -> Arc<Wake> {
+        #[cfg(windows)]
+        {
+            // SAFETY: a manual-reset, unnamed event; once set it stays set, which is what a stop is.
+            let ev = unsafe { windows_sys::Win32::System::Threading::CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
+            Arc::new(Wake { ev: (!ev.is_null()).then_some(Owned(ev)) })
+        }
+        #[cfg(not(windows))]
+        {
+            Arc::new(Wake {})
+        }
+    }
+    fn set(&self) {
+        #[cfg(windows)]
+        if let Some(ev) = &self.ev {
+            // SAFETY: our own event, open as long as self lives.
+            unsafe { windows_sys::Win32::System::Threading::SetEvent(ev.0) };
+        }
+    }
+}
+
 /// One open watch, shared by every caller of the same worktree.
 struct Watch {
     id: u64,
     refs: usize,
     tx: Sender<Signal>,
     stop: Arc<AtomicBool>,
-    watching: bool,
+    wake: Arc<Wake>,
+    /// Live: the worker turns it off when the watch falls back to the 4 s read (T-033-e), so a
+    /// caller joining later is told the truth.
+    watching: Arc<AtomicBool>,
+    /// The reader threads; joined only where the folder must be free of handles (`unwatch_root`).
+    #[cfg_attr(not(test), allow(dead_code))] // read by unwatch_root, see there
+    readers: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl Watch {
+    /// Tells the worker and every reader to end; nobody is waited for.
+    fn halt(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.wake.set();
+        let _ = self.tx.send(Signal::Stop);
+    }
 }
 
 static WATCHES: Mutex<BTreeMap<String, Watch>> = Mutex::new(BTreeMap::new());
+
+/// Takes watch `k` out of the table (and its ignore answers); the caller halts or joins it.
+#[cfg_attr(not(test), allow(dead_code))] // used by unwatch_root, see there
+fn take(k: &str) -> Option<Watch> {
+    take_from(&mut WATCHES.lock().unwrap_or_else(|e| e.into_inner()), k)
+}
+
+fn take_from(all: &mut BTreeMap<String, Watch>, k: &str) -> Option<Watch> {
+    IGNORES.lock().unwrap_or_else(|e| e.into_inner()).remove(k);
+    all.remove(k)
+}
 static NEXT: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -363,18 +451,24 @@ pub fn watch(path: &Path, sink: impl Fn(u64) -> Sink, log: Log) -> Result<WatchS
     let mut all = WATCHES.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(w) = all.get_mut(&k) {
         w.refs += 1;
-        return Ok(WatchStart { id: w.id, worktree, watching: w.watching });
+        return Ok(WatchStart { id: w.id, worktree, watching: w.watching.load(Ordering::Relaxed) });
     }
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = channel();
     let stop = Arc::new(AtomicBool::new(false));
+    let wake = Wake::new();
+    let mut readers = Vec::new();
     let mut why = unwatchable(&p.root);
     if why.is_none() {
         for (dir, recursive, spot) in p.watches() {
-            if let Err(e) = start_reader(&dir, recursive, spot, tx.clone(), stop.clone()) {
-                why = Some(format!("{} could not be watched: {e}", dir.display()));
-                stop.store(true, Ordering::Relaxed);
-                break;
+            match start_reader(&dir, recursive, spot, tx.clone(), stop.clone(), wake.clone()) {
+                Ok(h) => readers.push(h),
+                Err(e) => {
+                    why = Some(format!("{} could not be watched: {e}", dir.display()));
+                    stop.store(true, Ordering::Relaxed);
+                    wake.set();
+                    break;
+                }
             }
         }
     }
@@ -388,31 +482,68 @@ pub fn watch(path: &Path, sink: impl Fn(u64) -> Sink, log: Log) -> Result<WatchS
     let root = p.root.clone();
     let send = sink(id);
     let wlog = log.clone();
+    let watching = Arc::new(AtomicBool::new(mode == Mode::Watching));
+    let live = watching.clone();
     std::thread::Builder::new()
         .name(format!("scm-watch-{id}"))
-        .spawn(move || worker(&root, mode, rx, send, wlog))
+        .spawn(move || worker(id, &root, mode, rx, send, wlog, live))
         .map_err(|e| e.to_string())?;
-    let watching = mode == Mode::Watching;
-    all.insert(k, Watch { id, refs: 1, tx, stop, watching });
-    Ok(WatchStart { id, worktree, watching })
+    let start = WatchStart { id, worktree, watching: mode == Mode::Watching };
+    all.insert(k, Watch { id, refs: 1, tx, stop, wake, watching, readers });
+    Ok(start)
 }
 
-/// One caller is done with watch `id`; the last one stops it.
+/// One caller is done with watch `id`; the last one stops it (nobody is waited for).
 pub fn unwatch(id: u64) {
-    let mut all = WATCHES.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(k) = all.iter().find(|(_, w)| w.id == id).map(|(k, _)| k.clone()) else { return };
-    let w = all.get_mut(&k).expect("found above");
-    w.refs -= 1;
-    if w.refs == 0 {
-        w.stop.store(true, Ordering::Relaxed);
-        let _ = w.tx.send(Signal::Stop);
-        all.remove(&k);
-        IGNORES.lock().unwrap_or_else(|e| e.into_inner()).remove(&k);
+    let w = {
+        let mut all = WATCHES.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(k) = all.iter().find(|(_, w)| w.id == id).map(|(k, _)| k.clone()) else { return };
+        let w = all.get_mut(&k).expect("found above");
+        w.refs -= 1;
+        if w.refs > 0 {
+            return;
+        }
+        take_from(&mut all, &k)
+    };
+    if let Some(w) = w {
+        w.halt();
     }
 }
 
-/// Test seam and evidence harness: breaks watch `id` as an error or overflow would. False when no
-/// such watch is open.
+/// T-033-e: a workspace is being removed: its watch ends whatever the callers' count, and the
+/// readers are waited for, so no folder handle of ours stands in the way of git deleting the
+/// folder. `root` is the worktree as the caller has it (any slashes or case); true when there was
+/// a watch. Runs on the caller's thread, never the window's.
+/// Its caller is `workspace_remove` in projects.rs, a coordinator hunk
+/// (`evidence/watch-T-033-e-projects.rs.patch`); until that lands nothing in the app calls it.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn unwatch_root(root: &Path) -> bool {
+    let k = key(&root.to_string_lossy());
+    let w = take(&k).or_else(|| places(root).ok().and_then(|p| take(&key(&p.root.to_string_lossy()))));
+    let Some(w) = w else { return false };
+    w.halt();
+    for h in w.readers {
+        let _ = h.join();
+    }
+    true
+}
+
+/// T-033-e: the window is gone (closed, or its page torn down): every watch ends at once, none is
+/// waited for (this is called from the window's own thread). Returns how many were open.
+/// Its caller is the main window's Destroyed handler in lib.rs, a coordinator hunk
+/// (`evidence/watch-T-033-e-lib.rs.patch`); until that lands nothing in the app calls it.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn unwatch_all() -> usize {
+    let all: Vec<Watch> = std::mem::take(&mut *WATCHES.lock().unwrap_or_else(|e| e.into_inner())).into_values().collect();
+    IGNORES.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    for w in &all {
+        w.halt();
+    }
+    all.len()
+}
+
+/// Test seam and evidence harness: breaks watch `id` as an error would. False when no such watch
+/// is open.
 #[cfg(test)]
 pub fn break_watch(id: u64, why: &str) -> bool {
     let all = WATCHES.lock().unwrap_or_else(|e| e.into_inner());
@@ -420,6 +551,21 @@ pub fn break_watch(id: u64, why: &str) -> bool {
         w.stop.store(true, Ordering::Relaxed);
         w.tx.send(Signal::Broken(why.to_string())).is_ok()
     })
+}
+
+/// Test seam: overflows watch `id` as a too-full change buffer would (the readers keep going).
+#[cfg(test)]
+pub fn overflow_watch(id: u64) -> bool {
+    let all = WATCHES.lock().unwrap_or_else(|e| e.into_inner());
+    all.values().find(|w| w.id == id).is_some_and(|w| w.tx.send(Signal::Overflow).is_ok())
+}
+
+/// Test seam: the stop flag every reader of watch `id` holds a count on, so a test can see the
+/// readers go (the count falls to the test's own one).
+#[cfg(test)]
+pub fn stop_of(id: u64) -> Option<Arc<AtomicBool>> {
+    let all = WATCHES.lock().unwrap_or_else(|e| e.into_inner());
+    all.values().find(|w| w.id == id).map(|w| w.stop.clone())
 }
 
 /// How many watches are open (tests and the evidence harness).
@@ -483,15 +629,30 @@ impl Schedule {
 }
 
 /// Waits on the signals, reads the status when a change has settled or a tick is due, and sends it.
-fn worker(root: &Path, mut mode: Mode, rx: std::sync::mpsc::Receiver<Signal>, send: Sink, log: Log) {
+fn worker(id: u64, root: &Path, mut mode: Mode, rx: std::sync::mpsc::Receiver<Signal>, send: Sink, log: Log, watching: Arc<AtomicBool>) {
     let mut sched = Schedule::new(Instant::now(), GAP);
+    let mut said_overflow = false;
     loop {
         let wait = sched.wait(Instant::now(), mode.tick());
         match rx.recv_timeout(wait) {
             Ok(Signal::Change) => sched.change(Instant::now()),
+            Ok(Signal::Overflow) => {
+                // T-033-e: the reader is reading again already; what was missed is caught up by one
+                // read, on the same quiet time and gap as a change (a storm of overflows is still at
+                // most 15 reads a minute).
+                if !said_overflow {
+                    said_overflow = true;
+                    log(&format!("source control: too many changes at once under {}; read again, still watching", root.display()));
+                }
+                sched.change(Instant::now());
+            }
             Ok(Signal::Broken(why)) => {
+                if !root.is_dir() {
+                    return gone(id, root, &log);
+                }
                 let (next, first) = mode.broken();
                 if first {
+                    watching.store(false, Ordering::Relaxed);
                     log(&format!("source control: the watch on {} stopped ({why}); reading it every 4 s instead", root.display()));
                     sched.at_once(); // read now: changes may have been missed
                 }
@@ -502,6 +663,9 @@ fn worker(root: &Path, mut mode: Mode, rx: std::sync::mpsc::Receiver<Signal>, se
         }
         let now = Instant::now();
         if sched.due(now, mode.tick()) {
+            if !root.is_dir() {
+                return gone(id, root, &log);
+            }
             #[cfg(test)]
             STARTS.lock().unwrap_or_else(|e| e.into_inner()).push((root.to_path_buf(), now));
             if let Ok(st) = crate::scm::status(root) {
@@ -511,28 +675,35 @@ fn worker(root: &Path, mut mode: Mode, rx: std::sync::mpsc::Receiver<Signal>, se
     }
 }
 
+/// T-033-e: the worktree folder is gone (removed from outside, or by git): the watch ends instead
+/// of reading a missing folder every 4 s for the rest of the session. Said once in the log.
+fn gone(id: u64, root: &Path, log: &Log) {
+    let w = {
+        let mut all = WATCHES.lock().unwrap_or_else(|e| e.into_inner());
+        let k = all.iter().find(|(_, w)| w.id == id).map(|(k, _)| k.clone());
+        k.and_then(|k| take_from(&mut all, &k))
+    };
+    if let Some(w) = w {
+        w.halt();
+        log(&format!("source control: {} is gone; its watch stopped", root.display()));
+    }
+}
+
 /// Debug builds only: `KOLUX_DEV_INJECT=watch-error` breaks every watch on its first change, so
 /// the fall-back read can be shown live.
 fn injected_break() -> bool {
     cfg!(debug_assertions) && std::env::var("KOLUX_DEV_INJECT").is_ok_and(|v| v == "watch-error")
 }
 
+/// Starts the reader thread of one folder; the handle is the thread's, and the thread ends when the
+/// stop flag is set (at once through `wake`, else within its 500 ms wait slice).
 #[cfg(windows)]
-fn start_reader(dir: &Path, recursive: bool, spot: Spot, tx: Sender<Signal>, stop: Arc<AtomicBool>) -> Result<(), String> {
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE, WAIT_TIMEOUT};
+fn start_reader(dir: &Path, recursive: bool, spot: Spot, tx: Sender<Signal>, stop: Arc<AtomicBool>, wake: Arc<Wake>) -> Result<std::thread::JoinHandle<()>, String> {
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_NOTIFY_ENUM_DIR, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT};
     use windows_sys::Win32::Storage::FileSystem::*;
-    use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, WaitForSingleObject};
+    use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, WaitForMultipleObjects, WaitForSingleObject};
     use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 
-    struct Owned(HANDLE);
-    // SAFETY: a kernel handle may be used and closed from any thread.
-    unsafe impl Send for Owned {}
-    impl Drop for Owned {
-        fn drop(&mut self) {
-            // SAFETY: the handle came from CreateFileW / CreateEventW and is closed once.
-            unsafe { CloseHandle(self.0) };
-        }
-    }
     let root = dir.to_path_buf();
     let wide: Vec<u16> = dir.as_os_str().to_string_lossy().encode_utf16().chain(Some(0)).collect();
     // SAFETY: a NUL-terminated wide path; the flags open a folder for overlapped change reads.
@@ -569,11 +740,13 @@ fn start_reader(dir: &Path, recursive: bool, spot: Spot, tx: Sender<Signal>, sto
                 }
                 let mut n = 0u32;
                 loop {
-                    // SAFETY: waits on our own event.
-                    if unsafe { WaitForSingleObject(ev.0, 500) } != WAIT_TIMEOUT {
-                        break;
-                    }
-                    if stop.load(Ordering::Relaxed) {
+                    // SAFETY: waits on our own read event and, when there is one, the watch's stop event.
+                    let r = match &wake.ev {
+                        Some(w) => unsafe { WaitForMultipleObjects(2, [ev.0, w.0].as_ptr(), 0, 500) },
+                        None => unsafe { WaitForSingleObject(ev.0, 500) },
+                    };
+                    let stopped = r == WAIT_OBJECT_0 + 1 || (r == WAIT_TIMEOUT && stop.load(Ordering::Relaxed));
+                    if stopped {
                         // SAFETY: cancels our pending read, then waits for it to finish with the buffer.
                         unsafe {
                             CancelIoEx(h.0, &ov);
@@ -581,17 +754,32 @@ fn start_reader(dir: &Path, recursive: bool, spot: Spot, tx: Sender<Signal>, sto
                         }
                         return;
                     }
+                    if r != WAIT_TIMEOUT {
+                        break; // the read signalled (or the wait failed: the result call says which)
+                    }
                 }
                 // SAFETY: the read has signalled; collects its byte count.
                 if unsafe { GetOverlappedResult(h.0, &ov, &mut n, 0) } == 0 {
                     let e = unsafe { GetLastError() };
-                    return broke(if e == windows_sys::Win32::Foundation::ERROR_NOTIFY_ENUM_DIR { format!("{label}: too many changes at once") } else { format!("{label}: error {e}") });
+                    if e == ERROR_NOTIFY_ENUM_DIR {
+                        // T-033-e: the buffer overflowed. Windows dropped the records but keeps the
+                        // watch, so the next read is issued and the worker catches up with one read.
+                        if tx.send(Signal::Overflow).is_err() {
+                            return;
+                        }
+                        continue;
+                    }
+                    return broke(format!("{label}: error {e}"));
                 }
                 if stop.load(Ordering::Relaxed) {
                     return;
                 }
                 if n == 0 {
-                    return broke(format!("{label}: too many changes at once"));
+                    // The same overflow, reported as an empty result on some Windows versions.
+                    if tx.send(Signal::Overflow).is_err() {
+                        return;
+                    }
+                    continue;
                 }
                 // SAFETY: the first n bytes of the buffer were written by the read.
                 let raw = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), n as usize) };
@@ -605,12 +793,11 @@ fn start_reader(dir: &Path, recursive: bool, spot: Spot, tx: Sender<Signal>, sto
                 }
             }
         })
-        .map(|_| ())
         .map_err(|e| e.to_string())
 }
 
 #[cfg(not(windows))]
-fn start_reader(_dir: &Path, _recursive: bool, _spot: Spot, _tx: Sender<Signal>, _stop: Arc<AtomicBool>) -> Result<(), String> {
+fn start_reader(_dir: &Path, _recursive: bool, _spot: Spot, _tx: Sender<Signal>, _stop: Arc<AtomicBool>, _wake: Arc<Wake>) -> Result<std::thread::JoinHandle<()>, String> {
     Err("folder watching is only built for Windows".into())
 }
 
@@ -844,8 +1031,107 @@ mod tests {
         assert_eq!(main.watches().len(), 1);
         let linked = Places { root: "G:/w".into(), git_dir: "G:/r/.git/worktrees/w".into(), common: "G:/r/.git".into() };
         let w = linked.watches();
-        assert_eq!(w.iter().map(|(_, r, s)| (*r, *s)).collect::<Vec<_>>(), [(true, Spot::Tree), (false, Spot::GitDir), (true, Spot::Refs)]);
+        // T-033-e: the shared git folder itself too, not recursive, for its packed-refs.
+        assert_eq!(w.iter().map(|(_, r, s)| (*r, *s)).collect::<Vec<_>>(), [(true, Spot::Tree), (false, Spot::GitDir), (true, Spot::Refs), (false, Spot::Common)]);
         assert_eq!(w[2].0, PathBuf::from("G:/r/.git").join("refs"));
+        assert_eq!(w[3].0, PathBuf::from("G:/r/.git"));
+    }
+
+    #[test]
+    fn t033e_packed_refs_count_in_the_git_folder_and_in_the_shared_common_folder() {
+        assert!(counts(Spot::Tree, ".git/packed-refs"));
+        assert!(!counts(Spot::Tree, ".git/packed-refs.lock"));
+        assert!(counts(Spot::Common, "packed-refs"));
+        for rel in ["packed-refs.lock", "HEAD", "index", "config", "FETCH_HEAD", "ORIG_HEAD", "logs/HEAD", "objects/ab/cd"] {
+            assert!(!counts(Spot::Common, rel), "{rel}");
+        }
+        // Through `matters`: git's folders never ask the ignore rules.
+        let nowhere = Path::new("Q:/no-such-drive/r");
+        assert!(matters(nowhere, Spot::Common, "packed-refs"));
+        assert!(!matters(nowhere, Spot::Common, "config"));
+    }
+
+    /// The live tests share the one process-wide watch table (and `unwatch_all` empties it), so
+    /// they run one at a time.
+    static LIVE: Mutex<()> = Mutex::new(());
+    fn live() -> std::sync::MutexGuard<'static, ()> {
+        LIVE.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The git processes one `scm::status` read starts, from git's own trace2 event log.
+    fn git_argvs_of_one_status_read(dir: &Path) -> Vec<String> {
+        let trace = std::env::temp_dir().join(format!("kolux-rs-watch-argvs-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&trace);
+        crate::git::TRACE2.with(|t| *t.borrow_mut() = Some(trace.clone()));
+        crate::scm::status(dir).unwrap();
+        crate::git::TRACE2.with(|t| *t.borrow_mut() = None);
+        let log = std::fs::read_to_string(&trace).unwrap_or_default();
+        let _ = std::fs::remove_file(&trace);
+        log.lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|e| matches!(e["event"].as_str(), Some("start" | "child_start")))
+            .map(|e| e["argv"].as_array().map(|a| a.iter().skip(1).filter_map(|v| v.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default())
+            .collect()
+    }
+
+    /// T-033-e: the raw log of T-033-b counts two things in its churn minute, 120 status reads and
+    /// 404 git processes: one read is several git commands, so the process count is the read count
+    /// times this, plus the 15 s timer's own reads. With the gap holding reads to 15 a minute, the
+    /// watcher's git processes are bounded by 15 times what one read costs.
+    #[test]
+    fn t033e_one_status_read_is_several_git_processes_which_sizes_the_raw_logs_process_count() {
+        let dir = repo("cost");
+        let argvs = git_argvs_of_one_status_read(&dir);
+        println!("T-033-e: one status read = {} git processes: {argvs:?}", argvs.len());
+        assert!(!argvs.is_empty(), "trace2 log missing");
+        assert_eq!(argvs.iter().filter(|a| a.starts_with("status")).count(), 1, "{argvs:?}");
+        assert!(argvs.len() >= 5, "a read is status plus the base, the operation and the line counts: {argvs:?}");
+        let a_minute = argvs.len() * 60 / GAP.as_secs() as usize;
+        println!("T-033-e: at most {} reads a minute = at most {a_minute} git processes a minute", 60 / GAP.as_secs());
+        assert!(a_minute <= 180, "{a_minute} git processes a minute is more than the raw log's burst allows: {argvs:?}");
+    }
+
+    /// T-033-e: the 120 reads a minute in T-033-b's raw churn line, when the 1 s cap was thought to
+    /// bound reads at 60. The cap bounds one unbroken burst; the churn loop (86 `cargo clean` +
+    /// `cargo build` cycles a minute) paused for longer than the 250 ms quiet time at every process
+    /// start, and every pause ended a burst and read. So the count was the number of pauses (one or
+    /// two a cycle: 120 lies between 86 and 172), not the cap. The 4 s gap of T-033-c bounds the
+    /// read starts themselves, pauses or not: 15 a minute.
+    #[test]
+    fn t033e_the_raw_logs_120_reads_a_minute_were_a_churn_that_paused_which_the_cap_never_bounded_and_the_gap_does() {
+        let t0 = Instant::now();
+        let tick = Duration::from_secs(30);
+        // One cycle, 700 ms: the clean's rename, a 300 ms pause while the build starts, 150 ms of
+        // writes every 10 ms, a 250 ms pause while the next clean starts.
+        let cycle = Duration::from_millis(700);
+        let churn = |gap: Duration| {
+            let mut s = Schedule::new(t0, gap);
+            let (mut reads, mut cycles) = (0, 0);
+            let mut t = t0;
+            while t + cycle <= t0 + Duration::from_secs(60) {
+                cycles += 1;
+                let mut m = 0;
+                while m < 700 {
+                    let now = t + Duration::from_millis(m);
+                    if m == 0 || (300..450).contains(&m) {
+                        s.change(now);
+                    }
+                    if s.due(now, tick) {
+                        reads += 1;
+                    }
+                    m += 10;
+                }
+                t += cycle;
+            }
+            (reads, cycles)
+        };
+        let (no_gap, cycles) = churn(Duration::ZERO);
+        assert_eq!(cycles, 85);
+        assert_eq!(no_gap, 2 * cycles, "a read at every pause, two a cycle");
+        assert!(no_gap > 60, "{no_gap} reads: more than the 1 s cap's 60, because the cap is per burst");
+        let (gapped, _) = churn(GAP);
+        assert!(gapped <= 15, "{gapped} reads in a minute with the gap");
+        println!("T-033-e: the T-033-b churn shape: {no_gap} reads a minute without the gap, {gapped} with it");
     }
 
     /// A one-commit repo under KOLUX_TEST_REPOS (the temp folder when unset), removed afterwards.
@@ -881,6 +1167,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn a_real_repo_reports_tree_and_index_changes_but_not_build_folders() {
+        let _live = live();
         let dir = repo("live");
         std::fs::create_dir_all(dir.join("crate")).unwrap();
         let seen = Arc::new(Mutex::new(Vec::<crate::scm::Status>::new()));
@@ -947,7 +1234,7 @@ mod tests {
         std::fs::create_dir_all(&sub).unwrap();
         let (tx, rx) = channel();
         let stop = Arc::new(AtomicBool::new(false));
-        start_reader(&sub, true, Spot::Refs, tx, stop.clone()).unwrap();
+        start_reader(&sub, true, Spot::Refs, tx, stop.clone(), Wake::new()).unwrap();
         std::thread::sleep(Duration::from_millis(200));
         assert!(until(Duration::from_secs(5), || std::fs::remove_dir_all(&sub).is_ok() || !sub.exists()));
         let mut broke = false;
@@ -969,6 +1256,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn a_broken_watch_falls_back_to_reading_every_4_s_and_says_so_once() {
+        let _live = live();
         let dir = repo("fallback");
         let seen = Arc::new(Mutex::new(Vec::<Instant>::new()));
         let s = seen.clone();
@@ -993,6 +1281,159 @@ mod tests {
         let l = logs.lock().unwrap().clone();
         assert_eq!(l.len(), 1, "said once: {l:?}");
         assert!(l[0].contains("reading it every 4 s instead") && l[0].contains("test seam"));
+        // T-033-e: a caller joining now is told the watch is gone, not the flag from the start.
+        let join = watch(&dir, |_| Arc::new(|_: &crate::scm::Status| {}) as Sink, Arc::new(|_: &str| {})).unwrap();
+        assert_eq!(join.id, w.id);
+        assert!(!join.watching, "the watching flag stays true to life");
+        unwatch(join.id);
         unwatch(w.id);
+    }
+
+    /// Whether `r` (a worker's root, as git spelled it) is the test's repo folder.
+    fn same_dir(r: &Path, dir: &Path) -> bool {
+        std::fs::canonicalize(r).ok() == std::fs::canonicalize(dir).ok()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn t033e_an_overflow_reads_once_more_and_keeps_watching() {
+        let _live = live();
+        let dir = repo("overflow");
+        let logs = Arc::new(Mutex::new(Vec::<String>::new()));
+        let l = logs.clone();
+        let w = watch(&dir, |_| Arc::new(|_: &crate::scm::Status| {}) as Sink, Arc::new(move |m: &str| l.lock().unwrap().push(m.to_string()))).unwrap();
+        assert!(w.watching);
+        std::thread::sleep(Duration::from_millis(300));
+        let at = Instant::now();
+        assert!(overflow_watch(w.id));
+        assert!(overflow_watch(w.id), "two overflows close together");
+        let starts = || STARTS.lock().unwrap().iter().filter(|(r, t)| *t >= at && same_dir(r, &dir)).count();
+        assert!(until(Duration::from_secs(10), || starts() >= 1), "one catch-up read");
+        // Still watching: a joiner is told so, and no 4 s reads follow (one read, then quiet).
+        let join = watch(&dir, |_| Arc::new(|_: &crate::scm::Status| {}) as Sink, Arc::new(|_: &str| {})).unwrap();
+        assert!(join.watching, "an overflow is not a break");
+        std::thread::sleep(Duration::from_secs(9));
+        assert_eq!(starts(), 1, "no fall-back reads after an overflow");
+        // The readers went on reading: an edit is still seen.
+        std::fs::write(dir.join("a.txt"), "two\n").unwrap();
+        assert!(until(Duration::from_secs(10), || starts() >= 2), "the watch still reports changes");
+        let l = logs.lock().unwrap().clone();
+        assert_eq!(l.len(), 1, "said once: {l:?}");
+        assert!(l[0].contains("too many changes at once") && l[0].contains("still watching"), "{l:?}");
+        unwatch(join.id);
+        unwatch(w.id);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn t033e_unwatch_ends_the_reader_and_worker_threads_and_the_window_going_waits_for_nobody() {
+        let _live = live();
+        let dir = repo("threads");
+        let sink: Sink = Arc::new(|_: &crate::scm::Status| {});
+        let s = sink.clone();
+        let w = watch(&dir, move |_| s.clone(), Arc::new(|_: &str| {})).unwrap();
+        let stop = stop_of(w.id).unwrap();
+        // The table, the one reader (a main checkout) and this test hold the flag; the worker holds the sink.
+        assert_eq!(Arc::strong_count(&stop), 3);
+        assert!(Arc::strong_count(&sink) >= 2);
+        let t = Instant::now();
+        unwatch(w.id);
+        let took = t.elapsed();
+        assert!(took < Duration::from_millis(200), "unwatch waits for nobody: {took:?}");
+        assert!(until(Duration::from_secs(3), || Arc::strong_count(&stop) == 1), "the reader thread ended (count {})", Arc::strong_count(&stop));
+        assert!(until(Duration::from_secs(10), || Arc::strong_count(&sink) == 1), "the worker thread ended");
+        assert!(stop_of(w.id).is_none());
+        // The window going: every watch of every worktree ends at once, nobody is waited for, and
+        // the ids are gone, so a page that comes back starts fresh instead of leaking the old ones.
+        let other = repo("threads2");
+        let a = watch(&dir, |_| Arc::new(|_: &crate::scm::Status| {}) as Sink, Arc::new(|_: &str| {})).unwrap();
+        let b = watch(&other, |_| Arc::new(|_: &crate::scm::Status| {}) as Sink, Arc::new(|_: &str| {})).unwrap();
+        assert_ne!(a.id, b.id);
+        let (sa, sb) = (stop_of(a.id).unwrap(), stop_of(b.id).unwrap());
+        assert_eq!(open_count(), 2);
+        let t = Instant::now();
+        assert_eq!(unwatch_all(), 2);
+        let took = t.elapsed();
+        assert!(took < Duration::from_millis(200), "unwatch_all waits for nobody: {took:?}");
+        assert_eq!(open_count(), 0);
+        assert!(until(Duration::from_secs(3), || Arc::strong_count(&sa) == 1 && Arc::strong_count(&sb) == 1), "every reader thread ended ({}, {})", Arc::strong_count(&sa), Arc::strong_count(&sb));
+        unwatch(a.id); // a late caller of a gone id is a no-op
+        assert_eq!(open_count(), 0);
+        println!("T-033-e: unwatch took {took:?}; readers ended within 3 s of it");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn t033e_a_linked_worktree_commit_is_seen_and_its_removal_ends_the_watch() {
+        let _live = live();
+        let dir = repo("linked");
+        let git = |args: &[&str], cwd: &Path| crate::git::command(args, Some(cwd)).output().unwrap();
+        let ok = |args: &[&str], cwd: &Path| assert!(git(args, cwd).status.success(), "{args:?}");
+        let base = dir.parent().unwrap().to_path_buf();
+        let linked = base.join(format!("scm-watch-linked-wt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&linked);
+        ok(&["worktree", "add", "-q", &linked.to_string_lossy(), "-b", "t033e-linked"], &dir);
+        let seen = Arc::new(Mutex::new(Vec::<crate::scm::Status>::new()));
+        let s = seen.clone();
+        let logs = Arc::new(Mutex::new(Vec::<String>::new()));
+        let l = logs.clone();
+        let w = watch(&linked, move |_| { let s = s.clone(); Arc::new(move |st: &crate::scm::Status| s.lock().unwrap().push(st.clone())) as Sink }, Arc::new(move |m: &str| l.lock().unwrap().push(m.to_string()))).unwrap();
+        assert!(w.watching);
+        let p = places(&linked).unwrap();
+        assert!(p.watches().iter().any(|(d, r, s)| *s == Spot::Common && !r && d == &p.common), "{:?}", p.watches());
+        let stop = stop_of(w.id).unwrap();
+        let readers = Arc::strong_count(&stop) - 2;
+        assert!(readers >= 4, "tree, git folder, refs, info and common readers: {readers}");
+        std::thread::sleep(Duration::from_millis(300));
+        let n = || seen.lock().unwrap().len();
+        let last = |f: &dyn Fn(&crate::scm::Status) -> bool| seen.lock().unwrap().last().is_some_and(f);
+        // An edit in the linked worktree: a read showing the change.
+        std::fs::write(linked.join("a.txt"), "two\n").unwrap();
+        assert!(until(Duration::from_secs(15), || last(&|s| s.changed.len() == 1)), "the edit is seen");
+        // A commit from a terminal in the linked worktree (its own HEAD and index, the shared ref):
+        // the next read shows it clean.
+        ok(&["commit", "-q", "-a", "--no-verify", "-m", "linked"], &linked);
+        assert!(until(Duration::from_secs(15), || last(&|s| s.changed.is_empty() && s.staged.is_empty())), "the commit is seen");
+        // The shared packed-refs (what a pack, a gc or a prune writes): the common-folder reader sees it.
+        ok(&["pack-refs", "--all"], &dir);
+        let packed = p.common.join("packed-refs");
+        assert!(until(Duration::from_secs(10), || packed.is_file()));
+        std::thread::sleep(Duration::from_secs(5)); // let the pack's own refs/ changes settle and read
+        let before = n();
+        let same = std::fs::read(&packed).unwrap();
+        std::fs::write(&packed, same).unwrap(); // rewritten as git does, nothing else touched
+        assert!(until(Duration::from_secs(15), || n() > before), "a packed-refs write is read");
+        // Removal from outside (a terminal), with our readers holding the folder: the watch ends by
+        // itself once the folder is gone, says so once, and the readers go.
+        let out = git(&["worktree", "remove", "--force", &linked.to_string_lossy()], &dir);
+        println!("T-033-e: git worktree remove under a live watch: exit {:?}, stderr {:?}", out.status.code(), String::from_utf8_lossy(&out.stderr).trim());
+        assert!(until(Duration::from_secs(20), || stop_of(w.id).is_none()), "the watch ends when its folder is gone");
+        assert!(until(Duration::from_secs(5), || Arc::strong_count(&stop) == 1), "its readers ended ({})", Arc::strong_count(&stop));
+        assert!(until(Duration::from_secs(10), || !linked.exists()), "the folder is gone once the handles are closed");
+        let l = logs.lock().unwrap().clone();
+        assert_eq!(l.iter().filter(|m| m.contains("is gone; its watch stopped")).count(), 1, "{l:?}");
+        unwatch(w.id); // the page's late unwatch is a no-op
+        // Kolux's own removal (workspace remove): unwatch_root first, by the path as the project has
+        // it (backslashes, any case), joined, so git deletes the folder at the first try.
+        let linked2 = base.join(format!("scm-watch-linked-wt2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&linked2);
+        ok(&["worktree", "add", "-q", &linked2.to_string_lossy(), "-b", "t033e-linked2"], &dir);
+        let w2 = watch(&linked2, |_| Arc::new(|_: &crate::scm::Status| {}) as Sink, Arc::new(|_: &str| {})).unwrap();
+        let w2_again = watch(&linked2, |_| Arc::new(|_: &crate::scm::Status| {}) as Sink, Arc::new(|_: &str| {})).unwrap();
+        assert_eq!(w2.id, w2_again.id, "two callers");
+        let stop2 = stop_of(w2.id).unwrap();
+        let spelled = linked2.to_string_lossy().replace('/', "\\").to_uppercase();
+        let count = open_count();
+        assert!(unwatch_root(Path::new(&spelled)), "found by the project's spelling");
+        assert_eq!(Arc::strong_count(&stop2), 1, "every reader was joined before unwatch_root returned");
+        assert_eq!(open_count(), count - 1);
+        let out = git(&["worktree", "remove", "--force", &linked2.to_string_lossy()], &dir);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(!linked2.exists(), "gone at the first try");
+        assert!(!unwatch_root(&linked2), "nothing left to end");
+        unwatch(w2.id);
+        unwatch(w2_again.id);
+        let _ = std::fs::remove_dir_all(&linked);
+        let _ = std::fs::remove_dir_all(&linked2);
     }
 }

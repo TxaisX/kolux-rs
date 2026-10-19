@@ -1,0 +1,14 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index e3306b7..16f6d6e 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -321,6 +321,9 @@ pub fn run() {
+             if let tauri::WindowEvent::Destroyed = event {
+                 if window.label() == "main" {
+                     window.state::<Terminals>().kill_all();
++                    // T-033-e: no git watch outlives the window either, so a page that comes back
++                    // starts fresh instead of leaking the old ones (nothing is waited for here).
++                    scm::watch::unwatch_all();
+                     if let Some(t) = window.app_handle().get_webview_window("tower") {
+                         let _ = t.close();
+                     }

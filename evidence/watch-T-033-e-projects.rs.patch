@@ -1,0 +1,14 @@
+diff --git a/src-tauri/src/projects.rs b/src-tauri/src/projects.rs
+index d06eb46..6ffb79f 100644
+--- a/src-tauri/src/projects.rs
++++ b/src-tauri/src/projects.rs
+@@ -1537,6 +1537,9 @@ pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: S
+         let n = stopped.stuck.len();
+         return Err(format!("{n} process{} in this workspace did not stop. Tick Delete my changes too to delete it anyway, leaving {} running.", if n == 1 { "" } else { "es" }, if n == 1 { "it" } else { "them" }));
+     }
++    // T-033-e: the Source Control watch on this folder ends first and its folder handles are
++    // closed (joined) before git deletes the folder, so nothing of ours stands in the way.
++    crate::scm::watch::unwatch_root(Path::new(&path));
+     let keep = keeps_branch(&*store.lock().map_err(|e| e.to_string())?, &path);
+     remove_worktree(&git, &project, &path, force, keep)?;
+     let store = store.lock().map_err(|e| e.to_string())?;
