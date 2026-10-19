@@ -2,7 +2,7 @@
 // and idle over the chosen range, and six time ticks along the axis.
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
-import { lanes, RANGES, rangeStart, ticks, type Kind, type Range, type Track } from "./timeline";
+import { indent, lanes, RANGES, rangeStart, ticks, type Kind, type Range, type Track } from "./timeline";
 
 const COLOUR: Record<Kind, string> = { working: "var(--working)", needs: "var(--warn)", idle: "var(--line-strong)", unverifiable: "var(--line-subtle)" };
 const WORD: Record<Kind, string> = { working: "Working", needs: "Needs you", idle: "Idle", unverifiable: "Unverifiable" };
@@ -36,7 +36,8 @@ export default function FloorView({ initial, now: fixed, load = () => invoke<Tra
   const pct = (ms: number) => `${(ms / (now - from)) * 100}%`;
   // FIX-1: the name column is 110px plus one 14px step per level of the deepest nested lane, shared by
   // every lane and the axis so the bars stay in line; a longer name is cut and keeps its full text as a tooltip.
-  const gutter = 110 + 14 * Math.max(0, ...shown.map((r) => r.depth));
+  // FIX-2: the indent stops at five levels (timeline INDENT_LIMIT), so a very deep chain cannot eat the bar.
+  const gutter = 110 + 14 * Math.max(0, ...shown.map((r) => indent(r.depth)));
   const nameOf = (track: Track) => `${track.terminal === null ? `Pane ${track.pane}` : `Terminal ${track.terminal}`}${track.live ? "" : " (closed)"}`;
   return (
     <section className="floor" aria-label="Floor" style={{ padding: "16px 20px", color: "var(--fg)", overflow: "auto", height: "100%" }}>
@@ -60,7 +61,7 @@ export default function FloorView({ initial, now: fixed, load = () => invoke<Tra
       {!error && shown.length === 0 && <p className="muted">No agent reported any activity in this range.</p>}
       {shown.map(({ track, segs, depth }) => (
         <div key={track.pane} className="floor-lane" data-depth={depth} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-          <span className="floor-name" title={nameOf(track)} style={{ width: gutter, boxSizing: "border-box", paddingLeft: depth * 14, flexShrink: 0, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <span className="floor-name" title={nameOf(track)} style={{ width: gutter, boxSizing: "border-box", paddingLeft: indent(depth) * 14, flexShrink: 0, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {depth > 0 ? "↳ " : ""}
             {onOpen && track.live ? (
               <button type="button" className="floor-jump" data-pane={track.pane} title="Open in Code: go to this agent's pane" aria-label={`Open in Code: ${track.terminal === null ? `Pane ${track.pane}` : `Terminal ${track.terminal}`}`} onClick={() => onOpen(track.pane)} style={{ font: "inherit", padding: 0, border: 0, background: "none", color: "inherit", textDecoration: "underline", cursor: "pointer" }}>

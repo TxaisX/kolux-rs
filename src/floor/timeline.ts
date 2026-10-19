@@ -82,3 +82,7 @@ export function lanes(tracks: Track[], from: number, to: number) {
   shown.filter((l) => parentOf(l) === null).forEach((l) => place(l, 0));
   return out;
 }
+
+/** FIX-2: the Floor indents a nested lane by its depth up to this many levels, then stops. */
+export const INDENT_LIMIT = 5;
+export const indent = (depth: number): number => Math.min(depth, INDENT_LIMIT);

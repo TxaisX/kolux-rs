@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { kindOf, lanes, rangeStart, segments, ticks, type Track } from "./timeline";
+import { indent, INDENT_LIMIT, kindOf, lanes, rangeStart, segments, ticks, type Track } from "./timeline";
 
 const at = (h: number, m = 0) => new Date(2026, 9, 13, h, m).getTime();
 const track = (o: Partial<Track>): Track => ({ pane: 1, marks: [], ended: null, terminal: 7, live: true, parent: null, ...o });
@@ -93,6 +93,22 @@ describe("VIEW-013 Floor timeline", () => {
     expect(nested).toContain("margin-left:146px");
     expect(nested).toContain('title="Terminal 12 (closed)"');
     expect(nested).toContain("text-overflow:ellipsis");
+  });
+
+  it("FIX-2: the name column stops growing at five levels, a deeper lane keeps the same indent and its true depth", async () => {
+    const { createElement } = await import("react");
+    const { renderToString } = await import("react-dom/server");
+    const { default: FloorView } = await import("./FloorView");
+    const m = [{ at: at(8, 52), state: "working" }];
+    const chain = Array.from({ length: 9 }, (_, i) => track({ pane: i + 1, terminal: 11 + i, parent: i === 0 ? null : i, marks: m }));
+    const html = renderToString(createElement(FloorView, { now: at(9), initial: chain }));
+    // 110 + 14 * 5 = 180 for every lane, and the axis sits 8px further in.
+    expect([...html.matchAll(/class="floor-name" [^>]*style="[^"]*?width:(\d+)px/g)].map((x) => x[1])).toEqual(Array(9).fill("180"));
+    expect(html).toContain("margin-left:188px");
+    expect([...html.matchAll(/class="floor-name" [^>]*style="[^"]*?padding-left:(\d+)/g)].map((x) => x[1])).toEqual(["0", "14", "28", "42", "56", "70", "70", "70", "70"]);
+    expect([...html.matchAll(/data-depth="([0-9])"/g)].map((x) => x[1])).toEqual(["0", "1", "2", "3", "4", "5", "6", "7", "8"]);
+    expect(INDENT_LIMIT).toBe(5);
+    expect([0, 3, 5, 6, 40].map(indent)).toEqual([0, 3, 5, 5, 5]);
   });
 
   it("T-035-b: a live lane is a button that jumps to its pane, a closed lane is not, and the page without a handler draws no button", async () => {
