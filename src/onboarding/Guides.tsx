@@ -8,7 +8,7 @@ import { defaultsOnly, labelOf } from "../keys/keymap";
 import "./onboarding.css";
 import { useSettings } from "../settings/useSettings";
 import Tours from "./Tours";
-import { AgentPanel, AutomatePanel, composer, IntegrationsPanel, MultitaskPanel, NotificationsPanel } from "./StepPanels";
+import { AgentPanel, AutomatePanel, composer, IntegrationsPanel, MultitaskPanel, NotificationsPanel, StopSetup } from "./StepPanels";
 import { integrationSteps, readSeen } from "./integrations";
 import { defaultAgentId } from "../launch/agents";
 import {
@@ -304,6 +304,7 @@ function Explore({ onClose }: { onClose: () => void }) {
           )}
           <h3>{stop.title}</h3>
           <p>{stop.caption}</p>
+          <StopSetup stop={stop.id} taskSource={setup.taskSource} />
           <div className="btn-row">
             <span className="spacer" />
             <span className="hint">

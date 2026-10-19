@@ -14,6 +14,9 @@ import {
 } from "./actions";
 import { markGuide, type GuideRecord, type Place } from "./guide";
 import { replayTour } from "./tour";
+import { awakeToggle, stopCard } from "./stopCards";
+import { AWAKE_KEY } from "../launch/KeepAwakeCard";
+import { WRITER_INSTRUCTIONS_KEY, WRITER_KEY } from "../scm/generate";
 import { integrationSteps, readSeen, restale, taskSummary, UNSEEN, type Seen } from "./integrations";
 
 /** The first copy of `sel` that is really on screen. */
@@ -256,5 +259,43 @@ export function IntegrationsPanel({ onCheck }: { onCheck: () => void }) {
         </button>
       </div>
     </>
+  );
+}
+
+/** ONB-024: the setup an Explore Kolux stop carries, right on the stop. The skill command cards
+ *  (orchestration, browser) show without a terminal; the inline terminal is T-244-b's. */
+export function StopSetup({ stop, taskSource }: { stop: string; taskSource: boolean }) {
+  const { settings, save } = useSettings();
+  const card = stopCard(stop, { taskSource, settings });
+  if (!card) return null;
+  if (card.kind === "provider") {
+    return (
+      <p className="guide-note" data-card="provider" data-connected={card.connected}>
+        {card.label}: {card.connected ? "GitHub is connected." : "GitHub is not connected. Open Getting Started > Connect integrations to connect it."}
+      </p>
+    );
+  }
+  if (card.kind === "awake") {
+    return (
+      <label className="conn-switch" data-card="awake">
+        <input type="checkbox" role="switch" checked={card.on} onChange={() => void save({ [AWAKE_KEY]: awakeToggle(card.mode) })} />
+        Keep this computer awake while an agent is working
+      </label>
+    );
+  }
+  return (
+    <div data-card="writer">
+      <label className="conn-switch">
+        <input type="checkbox" role="switch" checked={card.writer.mode !== "off"} onChange={(e) => void save({ [WRITER_KEY]: e.target.checked ? "claude" : "off" })} />
+        Write the commit message and pull request text with an AI
+      </label>
+      <textarea
+        className="field"
+        aria-label="Instructions for the writer"
+        defaultValue={card.writer.instructions}
+        placeholder="Optional: how commit messages should read"
+        onBlur={(e) => void save({ [WRITER_INSTRUCTIONS_KEY]: e.target.value })}
+      />
+    </div>
   );
 }
