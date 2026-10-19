@@ -35,10 +35,13 @@ test("HID-042: the bundle config lists no resource folder, so no art rides along
 });
 
 test("HID-042: the only pictures under src are vendor marks listed in NOTICE.md; the icons folder holds only app icons", () => {
-  const notice = noticeText;
+  // A picture counts as listed only when it has its own table row (a row starts with the file name in
+  // back-ticks), not when the name merely appears in the NOTICE prose (review 52195201 AFTER 3).
+  const listed = new Set(noticeText.split("\n").map((line) => /^\| `([^`]+)` \|/.exec(line)?.[1]).filter(Boolean));
+  expect(listed.size).toBeGreaterThanOrEqual(8);
   for (const f of bundled().filter((p) => p.startsWith("src/"))) {
     expect(f.startsWith("src/assets/vendors/"), f).toBe(true);
-    expect(notice, f).toContain(f.split("/").pop()!);
+    expect(listed.has(f.split("/").pop()!), f).toBe(true);
   }
   const icons = bundled().filter((p) => p.startsWith("src-tauri/icons/")).map((p) => p.split("/").pop()!);
   for (const f of icons) expect(f, f).toMatch(/^(\d+x\d+(@2x)?\.png|icon\.(png|ico|icns)|Square\d+x\d+Logo\.png|StoreLogo\.png|app-icon\.svg)$/);

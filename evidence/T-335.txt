@@ -1,9 +1,9 @@
 T-335 · SESS-044 TERM-131 VIEW-104 SET-048 HID-039..041 HID-043 HID-044 Vendor logos from public brand kits (marks lane, 2026-10-19, from 53807a11)
 
 What now exists
-- src/assets/vendors/ holds 10 vendor SVGs, each copied unaltered from the vendor's public brand kit: Claude spark (already there), OpenAI blossom black + white, GitHub Invertocat black + white, GitHub Copilot icon black + white, Linear mark dark + light, VS Code icon.
-- src/assets/vendors/NOTICE.md lists each file with mark, source page and zip, date taken (2026-10-19), terms page, and SHA-256 (over LF text). A second table lists what was NOT obtained and why (Mistral kit host answered 403 twice; GitLab has no icon-only file) and what is next (T-335-b).
-- src/marks/registry.ts is the only code that names the files (claude, codex, copilot, github, linear, vscode; light and dark file each). vendorUrl() resolves bundled URLs through Vite, so nothing is fetched at run time.
+- src/assets/vendors/ holds 8 vendor SVGs, each copied unaltered from the vendor's public brand kit: Claude spark (already there), OpenAI blossom black + white, GitHub Invertocat black + white, GitHub Copilot icon black + white, VS Code icon. (Linear's two files were shipped by mistake and removed again in FIX-6b: Linear is a cut feature, HID-044.)
+- src/assets/vendors/NOTICE.md lists each file with mark, source page and zip, date taken (2026-10-19), terms page, and SHA-256 (over LF text). A second table lists what was NOT obtained and why (Mistral kit host answered 403 twice; GitLab has no icon-only file) and what is next (T-335-b); since FIX-6b the cut features (GitLab, Jira, Atlassian, Linear, iOS, Android) are listed there as "no mark, ever".
+- src/marks/registry.ts is the only code that names the files (claude, codex, copilot, github, vscode; light and dark file each). vendorUrl() resolves bundled URLs through Vite, so nothing is fetched at run time.
 - src/marks/AgentMark.tsx draws the mark for an id: two pictures (light, dark) toggled by src/marks/marks.css when the vendor has two colour sets, one picture otherwise, and Kolux's own neutral spark glyph with the name as aria-label when the id has no kit file.
 - Wiring into other lanes' files is delivered as patches (not applied here): evidence/marks-T-335-VendorMark.patch (src/chrome/VendorMark.tsx draws AgentMark for claude and codex; shell keeps its icon) and evidence/marks-T-335-PlusMenu.patch (src/launch/PlusMenu.tsx shows the VS Code mark on the Open in VS Code row).
 
@@ -33,4 +33,4 @@ LIVE PROOF PENDING (batched with the coordinator's merge of the two patches; no 
 4. Open the dev tools Network tab and open each of those views: no request for any icon or logo (every picture is bundled).
 5. An agent with no kit file (for example Mistral Vibe) shows the neutral spark glyph and its name, not a broken image.
 
-Left open: T-335-b (kits for Mistral when the host answers, Gemini, Cursor, Kimi, Qwen, JetBrains, Zed, Warp, Atlassian, GitLab icon; widening the Agent type to carry copilot without driving Claude-only pane logic) is a new PLAN line.
+Left open: T-335-b (kits for Mistral when the host answers, Gemini, Cursor, Kimi, Qwen, JetBrains, Zed, Warp; each remaining HID-039/040/043/044 and VIEW-104 item is now listed there as kit mark or name only; widening the Agent type to carry copilot without driving Claude-only pane logic) is a new PLAN line.

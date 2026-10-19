@@ -8,7 +8,8 @@ What was built
   2. a busy button is disabled and still plain text
   3. no file under src/assets or src/usage is named x-logo / twitter / x-mark / x-icon, and no source or svg there
      carries the X glyph path start or a twimg host
-- Mutation check: a stray src/assets/vendors/claudino.svg (T-338's twin test) turned its tests red, so the file scans really look at the folder.
+- Red run: none of its own. These three tests were written together with the component and only ever seen green (G:/Temp/marks-w1-logs/t336-vitest.log, 3 passed). The earlier line here that a stray claudino.svg "turned its tests red" was wrong: that file cannot fail any ShareButton test (it belongs to T-338). Corrected in FIX-6b (review of 52195201, AFTER 1); the scans were then really mutation-checked, see evidence/marks-FIX-6b.txt (stray x-logo.svg / logo-x.svg and an inlined glyph path turn tests 3 and 4 red).
+- Scope since FIX-6b: the file-name and glyph scans cover all of src (not only assets and usage), match either name order, and the glyph check also knows the path X's own brand kit uses.
 
 Gate readings (log G:/Temp/marks-w1-logs/t338-vitest-green.log)
 - vitest run src/marks/noPetArt.test.ts src/usage/ShareButton.test.ts: Test Files 2 passed (2), Tests 7 passed (7)

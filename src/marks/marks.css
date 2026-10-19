@@ -1,11 +1,7 @@
 /* T-335: a vendor with a light and a dark mark draws both pictures; the theme decides which one shows.
-   Same switch as the theme contract: the dark picture shows when the root is dark (explicitly, or by the
-   system when nothing is chosen) and the light picture shows otherwise. */
+   The app writes its resolved mode (System and a screen's own mode included) onto the root as the
+   data-mode attribute (theme.ts), so that is the one switch used here. */
 .vmark { flex: none; display: inline-block; vertical-align: middle; }
 .vmark-dark { display: none; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .vmark-light { display: none; }
-  :root:not([data-theme="light"]) .vmark-dark { display: inline-block; }
-}
-:root[data-theme="dark"] .vmark-light { display: none; }
-:root[data-theme="dark"] .vmark-dark { display: inline-block; }
+[data-mode="dark"] .vmark-light { display: none; }
+[data-mode="dark"] .vmark-dark { display: inline-block; }
