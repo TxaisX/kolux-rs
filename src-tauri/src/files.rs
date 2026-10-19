@@ -395,25 +395,170 @@ pub fn diff_image(path: String, staged: bool, new: bool, fence: tauri::State<'_,
     Ok(tauri::ipc::Response::new(if new { now } else { old }))
 }
 
-/// Mod+Shift+M: an empty note at the worktree root named untitled.md, then untitled-2.md and
-/// onwards. It never overwrites a file and gives up after 100 taken names. Naming it on the
-/// first save is EDIT-054 (T-237).
+/// Mod+Shift+M: a note at the worktree root named untitled.md, then untitled-2.md and onwards. It
+/// never overwrites a file and gives up after 100 taken names. With a `template` (one of
+/// `md_templates`' paths, EDIT-055) the note starts with that template's text, placeholders filled;
+/// without one it is empty. Naming it on the first save is EDIT-054 (T-237).
 #[tauri::command(async)]
-pub fn md_new(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<String, String> {
-    new_note(&fence.allow(&root, &store, &git, false)?)
+pub fn md_new(root: String, template: Option<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<String, String> {
+    let root = fence.allow(&root, &store, &git, false)?;
+    match template {
+        None => new_note(&root),
+        Some(t) => new_note_from(&root, &t, &jiff::Zoned::now()),
+    }
 }
 
 pub fn new_note(root: &Path) -> Result<String, String> {
+    new_note_with(root, |_| String::new())
+}
+
+/// The first free untitled name gets `body(file name)`. The file is made new (never over another),
+/// and a body that cannot be written takes the half-made file away again.
+fn new_note_with(root: &Path, body: impl Fn(&str) -> String) -> Result<String, String> {
     for n in 1..=100 {
         let name = if n == 1 { "untitled.md".to_string() } else { format!("untitled-{n}.md") };
-        let path = root.join(name);
+        let path = root.join(&name);
         match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(_) => return Ok(path.to_string_lossy().into_owned()),
+            Ok(mut f) => {
+                let text = body(&name);
+                if let Err(e) = f.write_all(text.as_bytes()).and_then(|_| f.sync_all()) {
+                    drop(f);
+                    let _ = fs::remove_file(&path);
+                    return Err(format!("could not create a note in {}: {e}", root.display()));
+                }
+                return Ok(path.to_string_lossy().into_owned());
+            }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(format!("could not create a note in {}: {e}", root.display())),
         }
     }
     Err(format!("{} already has 100 untitled notes; rename or delete some first", root.display()))
+}
+
+// ---- EDIT-055 (T-318): new notes from the repository's own templates ----
+
+/// A markdown template found in the repository's templates folder: the readable name shown in the
+/// picker and the full path.
+#[derive(serde::Serialize, Debug, PartialEq, Clone)]
+pub struct Template {
+    pub name: String,
+    pub path: String,
+}
+
+/// The templates folder inside the repository's hidden Kolux folder (COMPAT EDIT-055).
+const TEMPLATE_DIR: [&str; 2] = [".kolux", "templates"];
+/// Dependency and tool folders a template search never goes into.
+const DEPENDENCY_DIRS: [&str; 9] = ["node_modules", "bower_components", "vendor", "target", ".git", ".venv", "venv", "__pycache__", "site-packages"];
+const TEMPLATE_CAP: usize = 200;
+const TEMPLATE_DEPTH: usize = 6;
+
+/// A template's picker name from its file name: no extension, dashes and underscores turned into
+/// spaces, and a capital first letter ("meeting-notes.md" is "Meeting notes").
+pub fn template_name(file: &str) -> String {
+    let stem = file.rsplit_once('.').filter(|(s, _)| !s.is_empty()).map_or(file, |(s, _)| s);
+    let words = stem.replace(['-', '_'], " ").split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = words.chars();
+    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or(words)
+}
+
+fn is_markdown(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
+}
+
+fn walk_templates(dir: &Path, depth: usize, out: &mut Vec<Template>) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        if out.len() >= TEMPLATE_CAP {
+            return;
+        }
+        // file_type does not follow links: a symlink or junction, to a file or a folder, is skipped.
+        let Ok(kind) = e.file_type() else { continue };
+        let path = e.path();
+        let name = e.file_name().to_string_lossy().into_owned();
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            if depth < TEMPLATE_DEPTH && !DEPENDENCY_DIRS.iter().any(|d| d.eq_ignore_ascii_case(&name)) {
+                walk_templates(&path, depth + 1, out);
+            }
+        } else if kind.is_file() && is_markdown(&path) {
+            out.push(Template { name: template_name(&name), path: path.to_string_lossy().into_owned() });
+        }
+    }
+}
+
+/// The templates of the repository at `root`, by readable name in natural order (equal names keep a
+/// fixed order by path). No templates folder, or a link where it should be, gives an empty list.
+pub fn list_templates(root: &Path) -> Vec<Template> {
+    let mut dir = root.to_path_buf();
+    for part in TEMPLATE_DIR {
+        dir.push(part);
+        if !fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
+            return Vec::new();
+        }
+    }
+    let mut out = Vec::new();
+    walk_templates(&dir, 0, &mut out);
+    out.sort_by_cached_key(|t| (natural_key(&t.name), t.path.to_lowercase()));
+    out
+}
+
+/// The value of a placeholder such as `{{ Date }}`, or None for one Kolux does not know. Names ignore
+/// case, spaces, dashes and underscores; dates are year-month-day, times 24-hour hours and minutes.
+fn placeholder(name: &str, title: &str, file_name: &str, now: &jiff::Zoned) -> Option<String> {
+    let key: String = name.chars().filter(|c| !matches!(c, ' ' | '-' | '_')).flat_map(char::to_lowercase).collect();
+    match key.as_str() {
+        "title" => Some(title.to_string()),
+        "filename" => Some(file_name.to_string()),
+        "date" => Some(now.strftime("%Y-%m-%d").to_string()),
+        "time" => Some(now.strftime("%H:%M").to_string()),
+        "datetime" => Some(now.strftime("%Y-%m-%d %H:%M").to_string()),
+        _ => None,
+    }
+}
+
+/// Fills a template's placeholders (`{{title}}`, `{{date}}`, `{{time}}`, `{{datetime}}`, `{{filename}}`,
+/// spaces allowed inside the braces); any other `{{...}}` stays exactly as typed.
+pub fn fill_template(text: &str, title: &str, file_name: &str, now: &jiff::Zoned) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("{{") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 2..];
+        match after.find("}}") {
+            Some(j) if !after[..j].contains(['{', '}', '\n']) => {
+                match placeholder(&after[..j], title, file_name, now) {
+                    Some(v) => out.push_str(&v),
+                    None => out.push_str(&rest[i..i + 2 + j + 2]),
+                }
+                rest = &after[j + 2..];
+            }
+            _ => {
+                out.push_str("{{");
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// EDIT-055: the templates of the worktree, for the picker Mod+Shift+M opens. Empty means no picker.
+// Registered in lib.rs by the coordinator (evidence/editor-T-318-wiring.patch); lib.rs is not this lane file.
+#[allow(dead_code)]
+#[tauri::command(async)]
+pub fn md_templates(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<Template>, String> {
+    Ok(list_templates(&fence.allow(&root, &store, &git, false)?))
+}
+
+/// The note made from one of the worktree's templates: only a path that `list_templates` itself
+/// lists is accepted, so a caller cannot make Kolux copy some other file into a note.
+pub fn new_note_from(root: &Path, template: &str, now: &jiff::Zoned) -> Result<String, String> {
+    let wanted = Path::new(template);
+    let found = list_templates(root).into_iter().find(|t| Path::new(&t.path) == wanted).ok_or_else(|| format!("{template} is not one of this repository's templates"))?;
+    let text = read_text(Path::new(&found.path))?;
+    new_note_with(root, |file| fill_template(&text, file.strip_suffix(".md").unwrap_or(file), file, now))
 }
 
 /// One row of the explorer (EDIT-033). A symlink (or junction) is `link` until it is opened, so it
@@ -728,6 +873,120 @@ mod tests {
         fs::write(d.join("late"), &late).unwrap();
         assert_eq!(read_text(&d.join("late")).unwrap().len(), SAMPLE + 11);
     }
+
+    fn noon() -> jiff::Zoned {
+        jiff::civil::date(2026, 10, 9).at(7, 5, 0, 0).in_tz("UTC").unwrap()
+    }
+
+    fn put(path: &Path, text: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn edit055_a_template_is_named_from_its_file_name() {
+        assert_eq!(template_name("meeting-notes.md"), "Meeting notes");
+        assert_eq!(template_name("bug_report.markdown"), "Bug report");
+        assert_eq!(template_name("daily.MD"), "Daily");
+        assert_eq!(template_name("already Fine.md"), "Already Fine");
+        assert_eq!(template_name("é-note.md"), "É note");
+        assert_eq!(template_name(".md"), ".md");
+    }
+
+    #[test]
+    fn edit055_only_markdown_counts_subfolders_are_searched_and_links_and_dependencies_are_skipped() {
+        let d = temp_dir("tpl");
+        let t = d.join(".kolux").join("templates");
+        put(&t.join("meeting-notes.md"), "m");
+        put(&t.join("notes.txt"), "no");
+        put(&t.join("sub").join("bug-report.markdown"), "b");
+        put(&t.join("node_modules").join("dep").join("readme.md"), "dep");
+        put(&t.join(".git").join("x.md"), "git");
+        put(&t.join("vendor").join("v.md"), "v");
+        put(&t.join("file10.md"), "10");
+        put(&t.join("file2.md"), "2");
+        // A link to a folder holding a template, and a link to a template file, are both skipped
+        // (creating links needs a privilege on some Windows setups: skip that part when refused).
+        let outside = d.join("elsewhere");
+        put(&outside.join("linked.md"), "l");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, t.join("dirlink")).unwrap();
+            std::os::unix::fs::symlink(outside.join("linked.md"), t.join("filelink.md")).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            let _ = std::os::windows::fs::symlink_dir(&outside, t.join("dirlink"));
+            let _ = std::os::windows::fs::symlink_file(outside.join("linked.md"), t.join("filelink.md"));
+        }
+        let names: Vec<String> = list_templates(&d).into_iter().map(|t| t.name).collect();
+        assert_eq!(names, ["Bug report", "File2", "File10", "Meeting notes"]);
+    }
+
+    #[test]
+    fn edit055_no_templates_folder_or_a_link_in_its_place_means_no_picker() {
+        let d = temp_dir("tplnone");
+        assert!(list_templates(&d).is_empty());
+        fs::create_dir_all(d.join(".kolux")).unwrap();
+        assert!(list_templates(&d).is_empty());
+        put(&d.join("templates").join("x.md"), "x"); // a templates folder at the wrong place does not count
+        assert!(list_templates(&d).is_empty());
+        let real = d.join("real-templates");
+        put(&real.join("a.md"), "a");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, d.join(".kolux").join("templates")).unwrap();
+        #[cfg(windows)]
+        let _ = std::os::windows::fs::symlink_dir(&real, d.join(".kolux").join("templates"));
+        assert!(list_templates(&d).is_empty());
+    }
+
+    #[test]
+    fn edit055_placeholders_are_filled_with_spaces_allowed_and_unknown_ones_stay_as_typed() {
+        let now = noon();
+        let out = fill_template("# {{title}} ({{ Date }})\nAt {{time}} / {{ date time }} / {{datetime}} in {{file name}} {{filename}}\n{{unknown}} {{ other thing }} {{ {{date}} {{", "untitled", "untitled.md", &now);
+        assert_eq!(
+            out,
+            "# untitled (2026-10-09)\nAt 07:05 / 2026-10-09 07:05 / 2026-10-09 07:05 in untitled.md untitled.md\n{{unknown}} {{ other thing }} {{ 2026-10-09 {{"
+        );
+        // Nothing to fill, braces that never close, and a lone brace are all left alone.
+        assert_eq!(fill_template("plain {x} {{open", "t", "f", &now), "plain {x} {{open");
+        // 24-hour clock: an afternoon time is 15:30, not 3:30.
+        let late = jiff::civil::date(2026, 1, 2).at(15, 30, 0, 0).in_tz("UTC").unwrap();
+        assert_eq!(fill_template("{{time}} {{date}}", "t", "f", &late), "15:30 2026-01-02");
+    }
+
+    #[test]
+    fn edit055_a_note_from_a_template_has_its_text_filled_and_is_a_file_on_disk() {
+        let d = temp_dir("tplnote");
+        let t = d.join(".kolux").join("templates").join("daily.md");
+        put(&t, "# {{title}}\nDate: {{date}}\nFile: {{filename}}\n");
+        let path = new_note_from(&d, &t.to_string_lossy(), &noon()).unwrap();
+        assert!(path.ends_with("untitled.md"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# untitled\nDate: 2026-10-09\nFile: untitled.md\n");
+        // The next note counts up and never overwrites the first; its file name is the second's.
+        let second = new_note_from(&d, &t.to_string_lossy(), &noon()).unwrap();
+        assert!(second.ends_with("untitled-2.md"));
+        assert_eq!(fs::read_to_string(&second).unwrap(), "# untitled-2\nDate: 2026-10-09\nFile: untitled-2.md\n");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# untitled\nDate: 2026-10-09\nFile: untitled.md\n");
+    }
+
+    #[test]
+    fn edit055_only_a_listed_template_can_be_used() {
+        let d = temp_dir("tplguard");
+        put(&d.join(".kolux").join("templates").join("ok.md"), "ok");
+        put(&d.join("secret.md"), "do not copy");
+        let err = new_note_from(&d, &d.join("secret.md").to_string_lossy(), &noon()).unwrap_err();
+        assert!(err.contains("not one of this repository's templates"), "{err}");
+        assert!(!d.join("untitled.md").exists());
+    }
+
+    #[test]
+    fn edit055_a_blank_note_is_still_empty() {
+        let d = temp_dir("tplblank");
+        let p = new_note(&d).unwrap();
+        assert_eq!(fs::read_to_string(p).unwrap(), "");
+    }
+
 }
 
 // ---- EDIT-043 (T-237-a): Open in another app ----
