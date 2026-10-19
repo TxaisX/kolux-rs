@@ -1,0 +1,13 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 0c7daab6..8220d4af 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -794,7 +794,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     // TERM-003: a started session asks first (Cancel focused) unless the setting says stop; an unstarted pane or an idle shell goes at once (terminal/remove.ts).
+     const id = ptys.current[t.key];
+     const busy = id === undefined ? false : ((await invoke<boolean[]>("terminal_busy", { ids: [id] }).catch(() => [false]))[0] ?? false);
+-    const kind = classify(pane, busy);
++    const kind = classify(pane, busy, running[t.key]); // T-151-c: an agent pane whose program has ended is not asked about
+     switch (removePlan(settings, kind)) {
+       case "remove":
+         dropPane(t.key);

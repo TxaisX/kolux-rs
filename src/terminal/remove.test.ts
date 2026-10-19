@@ -10,6 +10,18 @@ describe("TERM-003 remove a started session", () => {
     expect(classify({ agent: "shell" }, false)).toBe("idle");
   });
 
+  it("T-151-c: an agent pane whose program has ended is \"ended\", never an agent that is still running", () => {
+    expect(classify({ agent: "claude" }, false, false)).toBe("ended");
+    expect(classify({ agent: "codex" }, true, false)).toBe("ended"); // busy is about a shell's children: an ended agent has none to stop
+    expect(classify({ agent: "claude" }, false, true)).toBe("agent");
+    expect(classify({ agent: "claude" }, false, undefined)).toBe("agent"); // not reported yet: still asks
+    expect(classify({ agent: "claude", seats: [{}] }, false, false)).toBe("unstarted");
+    expect(classify({ agent: "shell" }, false, false)).toBe("idle");
+    expect(classify({ agent: "shell" }, true, false)).toBe("shell");
+    expect(removePlan({}, "ended")).toBe("remove");
+    expect(removePlan({ removeStartedSession: "stop" }, "ended")).toBe("remove");
+  });
+
   it("removes unstarted panes and idle shells without a prompt, asks for started sessions by default", () => {
     expect(removePlan({}, "unstarted")).toBe("remove");
     expect(removePlan({}, "idle")).toBe("remove");
