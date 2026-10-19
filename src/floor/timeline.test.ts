@@ -79,4 +79,18 @@ describe("VIEW-013 Floor timeline", () => {
     expect([...html.matchAll(/data-depth="([0-9])"/g)].map((x) => x[1])).toEqual(["0", "1"]);
     expect(html.indexOf("Terminal 11")).toBeLessThan(html.indexOf("Terminal 12"));
   });
+
+  it("T-035-b: a live lane is a button that jumps to its pane, a closed lane is not, and the page without a handler draws no button", async () => {
+    const { createElement } = await import("react");
+    const { renderToString } = await import("react-dom/server");
+    const { default: FloorView } = await import("./FloorView");
+    const m = [{ at: at(8, 52), state: "working" }];
+    const initial = [track({ pane: 4, terminal: 14, marks: m }), track({ pane: 5, terminal: 15, live: false, marks: m })];
+    const html = renderToString(createElement(FloorView, { now: at(9), initial, onOpen: () => {} }));
+    expect(html.match(/class="floor-jump"/g)).toHaveLength(1);
+    expect(html).toContain('data-pane="4"');
+    expect(html).not.toContain('data-pane="5"');
+    expect(html).toContain("Open in Code");
+    expect(renderToString(createElement(FloorView, { now: at(9), initial }))).not.toContain("floor-jump");
+  });
 });

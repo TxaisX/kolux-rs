@@ -6,7 +6,8 @@ import type { AgentState } from "../projects/rows";
 
 export type Group = "needs" | "waiting" | "done";
 export type Source = { key: number; agent: string; title: string; branch: string | null; cwd: string | null; state: AgentState; interrupted: boolean; running: boolean; changed: number; finishedAt: number | null };
-export type Item = Omit<Source, "finishedAt" | "running" | "interrupted" | "changed"> & { group: Group; label: string; when: number };
+/** `exited` (T-035-b): the question or permission is still open but the agent's terminal is gone. */
+export type Item = Omit<Source, "finishedAt" | "running" | "interrupted" | "changed"> & { group: Group; label: string; when: number; exited: boolean };
 
 export const GROUPS: Array<{ id: Group; title: string }> = [
   { id: "needs", title: "Needs you" },
@@ -21,7 +22,7 @@ export const DONE_WINDOW_MS = 30 * 60_000;
 const NEEDS: Partial<Record<AgentState, string>> = { permission: "Permission", waiting: "Question", blocked: "Blocked" };
 
 export function inboxItems(sources: Source[], now: number): Item[] {
-  const item = (s: Source, group: Group, label: string, when: number): Item => ({ key: s.key, agent: s.agent, title: s.title, branch: s.branch, cwd: s.cwd, state: s.state, group, label, when });
+  const item = (s: Source, group: Group, label: string, when: number): Item => ({ key: s.key, agent: s.agent, title: s.title, branch: s.branch, cwd: s.cwd, state: s.state, group, label, when, exited: group === "needs" && !s.running });
   const newest = (a: Item, b: Item) => b.when - a.when;
   const needs = sources.filter((s) => NEEDS[s.state]).map((s) => item(s, "needs", NEEDS[s.state]!, s.changed));
   const waiting = sources.filter((s) => s.running && (s.state === "working" || s.state === "queued")).map((s) => item(s, "waiting", s.state === "queued" ? "Queued" : "Running", s.changed));
@@ -44,6 +45,11 @@ export function moveSelection(keys: number[], selected: number | null, dir: 1 | 
 export function settle(keys: number[], selected: number | null): number | null {
   if (selected === null) return null;
   return keys.includes(selected) ? selected : (keys[0] ?? null);
+}
+
+/** T-035-b: what the detail says for a prompt whose terminal has exited; null when the terminal is alive. */
+export function exitNote(item: Pick<Item, "exited">): string | null {
+  return item.exited ? "Its terminal has exited, so the prompt cannot be answered from here. Answer in Code to see it in the pane." : null;
 }
 
 /** EDIT-041: the detail's button. Nothing is answered in the Inbox itself yet, so a question or a

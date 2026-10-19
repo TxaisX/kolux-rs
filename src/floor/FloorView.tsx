@@ -8,9 +8,10 @@ const COLOUR: Record<Kind, string> = { working: "var(--working)", needs: "var(--
 const WORD: Record<Kind, string> = { working: "Working", needs: "Needs you", idle: "Idle", unverifiable: "Unverifiable" };
 const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-type Props = { initial?: Track[]; now?: number; load?: () => Promise<Track[]> };
+// onOpen (T-035-b): a live lane is a button that jumps to that agent's pane in the Code view.
+type Props = { initial?: Track[]; now?: number; load?: () => Promise<Track[]>; onOpen?: (pane: number) => void };
 
-export default function FloorView({ initial, now: fixed, load = () => invoke<Track[]>("activity_timeline") }: Props) {
+export default function FloorView({ initial, now: fixed, load = () => invoke<Track[]>("activity_timeline"), onOpen }: Props) {
   const [range, setRange] = useState<Range>("60m");
   const [tracks, setTracks] = useState<Track[]>(initial ?? []);
   const [error, setError] = useState<string | null>(null);
@@ -57,7 +58,13 @@ export default function FloorView({ initial, now: fixed, load = () => invoke<Tra
         <div key={track.pane} className="floor-lane" data-depth={depth} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
           <span style={{ width: 110, boxSizing: "border-box", paddingLeft: depth * 14, flexShrink: 0, fontSize: 12 }}>
             {depth > 0 ? "↳ " : ""}
-            {track.terminal === null ? `Pane ${track.pane}` : `Terminal ${track.terminal}`}
+            {onOpen && track.live ? (
+              <button type="button" className="floor-jump" data-pane={track.pane} title="Open in Code: go to this agent's pane" aria-label={`Open in Code: ${track.terminal === null ? `Pane ${track.pane}` : `Terminal ${track.terminal}`}`} onClick={() => onOpen(track.pane)} style={{ font: "inherit", padding: 0, border: 0, background: "none", color: "inherit", textDecoration: "underline", cursor: "pointer" }}>
+                {track.terminal === null ? `Pane ${track.pane}` : `Terminal ${track.terminal}`}
+              </button>
+            ) : (
+              track.terminal === null ? `Pane ${track.pane}` : `Terminal ${track.terminal}`
+            )}
             {track.live ? "" : " (closed)"}
           </span>
           <div style={{ position: "relative", flex: 1, height: 14, background: "var(--chip-bg)", borderRadius: 3 }}>
