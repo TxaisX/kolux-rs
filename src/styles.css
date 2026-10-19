@@ -245,6 +245,8 @@ input { font: inherit; }
 /* ---- Source Control card on the right (spec 11; GIT-002 / GIT-004) ---- */
 .sidebar-wrap.right { padding: 8px 8px 8px 0; }
 .sidebar.scm { width: 320px; }
+/* VIEW-052 / SET-021: only the left sidebar takes the tint or the terminal's ground (--sidebar-bg is set by theme.ts). */
+.sidebar-wrap:not(.right) > .sidebar:not(.scm) { background: var(--sidebar-bg, var(--surface)); }
 .scm-head { margin-top: 8px; }
 .scm-head .count { margin-left: 8px; font-size: 11px; color: var(--fg); }
 .scm-commit { display: flex; flex-direction: column; gap: 6px; margin: 8px 8px 0; }

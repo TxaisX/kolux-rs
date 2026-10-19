@@ -298,7 +298,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 - [ ] T-266 · PROJ-017 Project headers have a colour · PROJ-062 Workspace cards: Default and Compact looks
 - [ ] T-267 · TERM-011 Inactive panes dim · TERM-026 Pane header density · TERM-057 Tab strip overflow scrollbar · TERM-102 Minimum contrast and ligatures
-- [ ] T-268 · VIEW-052 [compat] Left sidebar tint
+- [x] T-268 · VIEW-052 [compat] Left sidebar tint · done 2026-10-19 (lane/look from 766ed2cd; evidence/T-268.txt: sidebar look standard / match terminal / tinted with tint colour and strength 0-100 saved and painted as --sidebar-bg on the left sidebar only, the pickers are T-270; vitest 1430 passed; live proof pending (batched))
 - [ ] T-270 · SET-021 Left sidebar look and worktree card density
 
 ### P2 · theme 5 · Safety and trust (3 cards)
