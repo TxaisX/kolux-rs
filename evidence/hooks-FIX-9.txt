@@ -1,12 +1,16 @@
 hooks FIX-9 (lane/hooks, review hooks-0cf01757-standin-review.md "Send to build session" 4-7; BEFORE 0cf01757, STEP 0 merge of main 00df419e = ef127b90, no conflicts)
 Only agent_hooks/tests.rs changed in code (tests only; no production code, no src/**), plus PROVENANCE.md +1, STATE-history.md +1 line,
-STATE.md (--write-state), evidence/hooks-FIX-8.txt (two wordings). Logs: G:\Temp\hooks-w1-logs\w14-*.log (each starts with "cmd:" and ends "exit=<code>").
+STATE.md (--write-state), evidence/hooks-FIX-8.txt (two wordings). Logs: G:\Temp\hooks-w1-logs\w14-*.log. Most gate logs start with "cmd:" and end "exit=<code>"; w14-red-fix9-judge.log starts with "Compiling",
+w14-red-R3/-2/-3 start with a description line, and w14-headers.log ends its second command with "exit=done" (not a code). hooks FIX-10 corrected
+this wording; FIX-10's own gate logs (w15-*.log) all carry a cmd: line and a real exit code (evidence/hooks-FIX-10.txt).
 
-4 FIX-SOON 1  fix_4_a_missing_holding_folder_is_not_tried_again no longer fails a correct script under load.
+4 FIX-SOON 1  fix_4_a_missing_holding_folder_is_not_tried_again: less likely to fail a correct script under load (hooks FIX-10 reworded this from
+  "no longer fails ... under load": no run of the rule under real load existed, and the rule was weaker than described, see FIX-10).
   Cause (w13-merge-cargo.log): the base failure was its MARGIN assert, not a timeout: quickest held 7.7 s, missing 9.3 s.
   Fix: the rounds go through judge_missing_folder -> Noisy / Retried / Fine. Noisy = the two quickest held rounds differ by more than
   MARGIN_MS (1000), so the quickest time is not repeatable; the test then times 4 more rounds into the same pool (up to 4 attempts, like
-  fix_3_a's re-aim). Retried needs both of the two quickest missing times a margin above the quickest held. Never passes unjudged: 4 noisy
+  fix_3_a's re-aim). Retried was meant to need both of the two quickest missing times a margin above the quickest held (hooks FIX-10: the second clause was dead, the
+  sorted second time is never below the first, so it was only quickest-against-quickest; replaced by the paired rule in FIX-10). Never passes unjudged: 4 noisy
   attempts in a row fail with "too loaded to judge".
   RED before the fix: new unit test fix_9_a_load_swing_bigger_than_the_margin_is_noisy_not_a_retry against the FIX-8 rule (quickest against
     quickest) -> FAILED, left Retried, right Noisy on the logged false-red rounds (w14-red-fix9-judge.log, exit=101).
@@ -22,7 +26,9 @@ STATE.md (--write-state), evidence/hooks-FIX-8.txt (two wordings). Logs: G:\Temp
   "-410 (a miss)" is worded as a re-aimed lead (a lead under 400 ms re-aims), not a miss. Test renamed
   fix_7_the_held_append_aim_constants_leave_600_ms_nominal_room_each_side, with a note that it checks the constants only.
 6 AFTER 3     the 1.5-1.9 s figure is recaptured with raw output: the three R3 runs above gave 1.52, 1.79, 1.49 s; the fix_4_a comment now cites those
-  logs and reads 1.5-1.8 s (the 1.9 s end was the hand-typed figure and is dropped).
+  logs and lists the three figures 1.52, 1.79 and 1.49 s (the "1.5-1.8 s" range wording is only in STATE-history.md; the 1.9 s end was the hand-typed
+  figure and is dropped). w14-red-R3, -2 and -3 ran the earlier per-attempt rule ("held rounds X apart", panic at tests.rs:685); only w14-red-R3-final.log ran the
+  FIX-9 pooled judge, which hooks FIX-10 has since replaced again (reruns: w15-red-R3-1..3.log).
 7 AFTER 4     every gate logs its command and exit code (w14-*.log): see GATES. evidence/hooks-FIX-8.txt corrected in place: "PowerShell starts
   took 8-11 s" -> whole script runs took 7.7-11.6 s a round; "fix_4_a 2 passed" -> the filter matched 2 tests (the hooks one and
   status::tests::fix_4_a_hook_racing_its_terminals_exit_...), only the hooks one failed; "load timeouts" -> failures under load, fix_4_a was a margin assert.
