@@ -1,0 +1,16 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index e035e16..c733bd3 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -410,6 +410,11 @@ pub fn run() {
+             scm::scm_repo_labels,
+             github::github_repo_parent,
+             github::github_people,
++            github::github_project,
++            github::github_projects,
++            github::github_project_set,
++            github::github_issue_state,
++            github::github_issue_comment,
+             scm::scm_task_labels,
+             scm::scm_task_body,
+             scm::scm_stage,

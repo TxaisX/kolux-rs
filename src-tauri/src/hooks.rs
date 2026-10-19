@@ -639,13 +639,40 @@ pub fn status_command(script: &str, prev: &str) -> String {
 /// start. Delayed expansion is off, the agent's home path loses quotes and a trailing backslash,
 /// and no parenthesised block holds a path, so `!`, `&` and `)` in paths change nothing.
 /// `prints` (SAFE-009): Kolux's answer goes to stdout for the agent to read instead of to NUL.
+///
+/// FIX-2 (S7, COMPAT 3.1): the held line is `route|identity|config|` (KR) and a small JSON object
+/// of only the fields the status rules read, made by Windows PowerShell (every Windows has it):
+/// the event, tool and session names, a few short flags and ids, `cwd`, whether the background
+/// lists were empty, and the time it was held. The tool's input and output, the prompt and the
+/// reply never reach the file. It runs only when Kolux cannot take the event.
+///
+/// hooks FIX-3: an event PowerShell 5.1 cannot parse (keys that differ only in case, for one) is
+/// still held as a minimal pick, the event and session names found by a pattern that takes only
+/// name characters, so no input text can come along; one with no event name is dropped. The
+/// append is tried again (up to 20 times, 100 ms apart) while another hook holds the file.
+pub(crate) const SPOOL_LINE: &str = concat!(
+    r#"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -Command ""#,
+    r#"$ErrorActionPreference='Stop'; try { $t=[IO.File]::ReadAllText($env:KF,[Text.Encoding]::UTF8); $o=[ordered]@{}; $ok=$true; "#,
+    r#"try { $e=ConvertFrom-Json -InputObject $t; "#,
+    r#"foreach ($k in 'hook_event_name','tool_name','session_id','agent_id','agent_type','model','source','trigger','error','is_interrupt','cwd','conversationId','fullyIdle') "#,
+    r#"{ $v=$e.$k; if ($v -is [string]) { $o[$k]=$v.Substring(0,[Math]::Min($v.Length,300)) } elseif ($v -is [bool]) { $o[$k]=$v } }; "#,
+    r#"$n=$e.toolCall.name; if ($n -is [string]) { $o['toolCall']=@{name=$n.Substring(0,[Math]::Min($n.Length,300))} }; "#,
+    r#"foreach ($k in 'background_tasks','session_crons') { if ($null -ne $e.$k -and @($e.$k).Count -gt 0) { $o[$k]=@(1) } } } "#,
+    r#"catch { $o.Clear(); $q=[char]34; foreach ($k in 'hook_event_name','session_id') "#,
+    r#"{ $m=[regex]::Match($t,$q+$k+$q+'\s*:\s*'+$q+'([\w.:-]{1,200})'+$q); if ($m.Success) { $o[$k]=$m.Groups[1].Value } }; $ok=$o.Contains('hook_event_name') }; "#,
+    r#"if ($ok) { $o['spooled_at']=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); "#,
+    r#"$l=$env:KR + (ConvertTo-Json -InputObject $o -Compress -Depth 3) + [char]13 + [char]10; "#,
+    r#"for ($i=0; $i -lt 20; $i++) { try { [IO.File]::AppendAllText($env:KS, $l, (New-Object Text.UTF8Encoding $false)); break } catch { Start-Sleep -Milliseconds 100 } } } } catch { }""#,
+    r#" <NUL >NUL 2>&1"#
+);
+
 fn script(agent: &str, route: &str, prints: bool) -> String {
     let head = format!("rem Kolux RS agent hook for {agent}. Written by Kolux RS; edits are overwritten.");
     let (out, after) = if prints { ("", "2>NUL") } else { ("-o NUL ", ">NUL 2>&1") };
     let post = format!("%SystemRoot%\\System32\\curl.exe -s -m 1.5 --connect-timeout 0.5 --noproxy \"*\" -X POST -H \"Content-Type: application/json\" -H \"X-Kolux-Token: %KT%\" -H \"X-Kolux-Pane: %KOLUX_HOOK_IDENTITY%\" -H \"X-Kolux-Config: %KC%\" --data-binary \"@%KF%\" {out}\"http://127.0.0.1:%KP%/{route}\" {after}");
     // A status-line reading is only worth its moment: it is never held for later.
     let spool = route != "claude-status";
-    let record = format!("<nul set /p \"={route}|%KOLUX_HOOK_IDENTITY%|%KC%|\" >\"%KF%.line\"");
+    let record = format!("set \"KR={route}|%KOLUX_HOOK_IDENTITY%|%KC%|\"");
     let keep = format!("for %%d in (\"%KE%\") do set \"KS=%%~dpd{}\"", agent_hooks::saved::SPOOL_FILE);
     let mut lines = vec![
         "@echo off",
@@ -660,8 +687,13 @@ fn script(agent: &str, route: &str, prints: bool) -> String {
         "rem The endpoint file names the Kolux running now, so a pane outlives a Kolux restart.",
         "if defined KE if exist \"%KE%\" for /f \"usebackq tokens=1,2\" %%a in (\"%KE%\") do (set \"KP=%%a\" & set \"KT=%%b\")",
         "set \"KC=%CLAUDE_CONFIG_DIR%\"",
-        "if defined KC set \"KC=%KC:\"=%\"",
-        "if defined KC if \"%KC:~-1%\"==\"\\\" set \"KC=%KC:~0,-1%\"",
+        // FIX-2: an unset variable's `%KC:...%` is not empty text but a broken line that stops
+        // the whole script, so the edits run only on lines reached when KC is set.
+        "if not defined KC goto config",
+        "set \"KC=%KC:\"=%\"",
+        "if not defined KC goto config",
+        "if \"%KC:~-1%\"==\"\\\" set \"KC=%KC:~0,-1%\"",
+        ":config",
         "set \"KN=%TIME::=%\"",
         "set \"KN=%KN:.=%\"",
         "set \"KN=%KN:,=%\"",
@@ -683,12 +715,11 @@ fn script(agent: &str, route: &str, prints: bool) -> String {
             "for %%z in (\"%KF%\") do if %%~zz==0 goto done",
             keep.as_str(),
             record.as_str(),
-            "type \"%KF%\" >>\"%KF%.line\"",
-            "echo(>>\"%KF%.line\"",
-            "type \"%KF%.line\" >>\"%KS%\"",
+            "rem Only what the status needs is held: never the tool's input or output, the prompt or the reply.",
+            SPOOL_LINE,
         ]);
     }
-    lines.extend([":done", "del \"%KF%\" \"%KF%.line\" >NUL 2>&1", "exit /b 0", ""]);
+    lines.extend([":done", "del \"%KF%\" >NUL 2>&1", "exit /b 0", ""]);
     lines.join("\r\n")
 }
 
@@ -1018,9 +1049,7 @@ pub fn apply_trust(doc: &mut toml_edit::DocumentMut, listing: &[Value], hooks_fi
 pub(crate) fn write_codex_groups(file: &Path, text: Option<&str>, hooks: &mut Value, command: &str) -> Result<bool, String> {
     let changed = install_codex_hooks(hooks, command);
     if changed {
-        let mut record = agent_hooks::backup_of(file).into_os_string();
-        record.push(".sha256");
-        agent_hooks::back_up(file, Path::new(&record))?;
+        agent_hooks::back_up(file, &agent_hooks::codex_record(file))?;
         write_json(file, hooks, text)?;
     }
     Ok(changed)
@@ -1054,9 +1083,17 @@ pub fn install_codex(home: &Path, command: &str) -> Result<bool, String> {
     if !changed && CODEX_EVENTS.iter().all(|e| trusted(e).is_some()) {
         return Ok(false);
     }
+    // hooks FIX-3: a file Kolux had just created goes with its `created` record, so no stray
+    // record stays in the Codex home.
     let restore = || match &text {
         Some(t) => std::fs::write(&file, t).map_err(|e| e.to_string()),
-        None => std::fs::remove_file(&file).map_err(|e| e.to_string()),
+        None => {
+            let record = agent_hooks::codex_record(&file);
+            if agent_hooks::was_created(&record, &file) {
+                let _ = std::fs::remove_file(record);
+            }
+            std::fs::remove_file(&file).map_err(|e| e.to_string())
+        }
     };
     let listing = codex_listing(home);
     let n = listing.as_deref().map(|l| apply_trust(&mut doc, l, &real)).unwrap_or(0);

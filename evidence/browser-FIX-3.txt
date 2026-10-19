@@ -47,8 +47,10 @@ GREEN
   cargo clippy --all-targets -- -D warnings  exit 0, Finished                (fix3-clippy.log)
   pnpm exec tsc --noEmit                     exit 0, no output              (fix3-tsc.log)
   pnpm test                                  163 files, 1006 passed (1006)  (fix3-vitest.log)
-  scripts/privacy-audit.test.mjs             1 passed (ONE_CLIENT: 1 `reqwest::Client::builder(` line in browser.rs
-                                             before tests; `icon_client_for(` 3 times; the full chain unchanged)
+  scripts/privacy-audit.test.mjs             1 passed. The audit asserts only ONE_CLIENT: one `reqwest::Client::builder(`
+                                             text in browser.rs before the first `#[cfg(test)]`. Checked by hand, not by
+                                             the audit: `icon_client_for(` 3 times and the full chain unchanged (council
+                                             FIX-4 reword; evidence/browser-FIX-4-audit.patch makes the audit pin both)
   With both coordinator patches applied (scratch worktree G:/Temp/browser-w5-wt from 9950a5f plus this change, removed after):
     git apply --check evidence/browser-FIX-3-App.patch evidence/browser-FIX-3-privacy.patch   both apply on this tree
     tsc --noEmit                             exit 0, no output              (fix3-wt-tsc2.log)

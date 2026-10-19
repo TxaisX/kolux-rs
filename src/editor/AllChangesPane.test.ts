@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseCall, entryKey, estimate, sidesCall, tagOf, WAIT_OVER, type Entry } from "./AllChangesPane";
+import { baseCall, entryKey, estimate, sidesCall, statusGate, tagOf, WAIT_OVER, type Entry } from "./AllChangesPane";
 import { AC_SPLIT_KEY, AC_TREE_KEY, AC_WHITESPACE_KEY, AC_WRAP_KEY, acLayoutOf, emptyStatus } from "../scm/model";
 
 const e = (over: Partial<Entry>): Entry => ({ path: "C:/r/a.ts", staged: false, code: "M", lines: 10, binary: false, stamp: "x", ...over });
@@ -45,5 +45,22 @@ describe("T-033-g: All Changes reads its base without a second status", () => {
     expect(baseCall("C:/r", "release", { ...emptyStatus, base: "main" })).toEqual(["scm_base_changes", { worktree: "C:/r", pinned: "release", known: "main" }]);
     expect(baseCall("C:/r", null, null)).toEqual(["scm_base_changes", { worktree: "C:/r", pinned: null, known: null }]);
     expect(baseCall("C:/r", null, emptyStatus)).toEqual(["scm_base_changes", { worktree: "C:/r", pinned: null, known: null }]);
+  });
+});
+
+describe("FIX-2: the status read as the tab opens", () => {
+  it("never replaces a newer status the watcher already gave", () => {
+    const seen: (string | null)[] = [];
+    const gate = statusGate((s) => seen.push(s.branch));
+    gate.watched({ ...emptyStatus, branch: "after-commit" });
+    gate.first({ ...emptyStatus, branch: "before-commit" });
+    expect(seen).toEqual(["after-commit"]);
+  });
+  it("is used when it arrives before the watcher's first tick", () => {
+    const seen: (string | null)[] = [];
+    const gate = statusGate((s) => seen.push(s.branch));
+    gate.first({ ...emptyStatus, branch: "open" });
+    gate.watched({ ...emptyStatus, branch: "tick" });
+    expect(seen).toEqual(["open", "tick"]);
   });
 });

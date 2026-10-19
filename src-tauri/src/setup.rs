@@ -221,11 +221,20 @@ pub fn with_env(mut line: SetupLine, vars: &[(&str, String)], unset: &[&str]) ->
 /// STAT-055: the Setup terminal's line for the worktree at `path`: its setup script from
 /// `local` (Kolux's own setting for the repository) or the worktree's kolux.yaml as `policy`
 /// says, with the setup variables set.
+/// SAFE-025: a shared kolux.yaml script runs only once its repository trusts it.
 #[tauri::command(async)]
-pub fn workspace_setup(path: String, local: Option<String>, policy: Option<String>) -> Result<Option<SetupLine>, String> {
-    let wt = Path::new(&path);
+pub fn workspace_setup(store: StoreState<'_>, path: String, local: Option<String>, policy: Option<String>) -> Result<Option<SetupLine>, String> {
+    setup_for(&path, local, policy, &|root, kind, script| require_trust(&store, root, kind, script))
+}
+
+/// STAT-055: workspace_setup's line, with `trust` asked before a shared script is used.
+fn setup_for(path: &str, local: Option<String>, policy: Option<String>, trust: Gate<'_>) -> Result<Option<SetupLine>, String> {
+    let wt = Path::new(path);
     let shared = std::fs::read_to_string(wt.join(crate::include::CONFIG_FILE)).ok().and_then(|t| setup_script(&t));
-    let Some((script, _)) = pick_setup(local.as_deref(), shared, policy.as_deref()) else { return Ok(None) };
+    let Some((script, is_shared)) = pick_setup(local.as_deref(), shared, policy.as_deref()) else { return Ok(None) };
+    if is_shared {
+        trust(&main_folder(wt), "setup", &script)?;
+    }
     let line = setup_line(&script, cfg!(windows), configured_shell().as_deref(), find_posix)?;
     let unset: &[&str] = if conda_now() { &CONDA_VARS } else { &[] };
     Ok(Some(with_env(line, &script_vars(&main_folder(wt), wt), unset)))
@@ -308,12 +317,154 @@ fn tail_of(r: &mut impl std::io::Read) -> String {
 }
 
 /// STAT-055: the archive script for the worktree at `path`, run before it is removed.
-// ponytail: not registered yet (council MERGE 53): wire into the removal after T-156 trust and an async workspace_remove.
+/// SAFE-025: it runs only once the repository trusts it; an untrusted one is refused with why.
+// ponytail: the trust prompt (T-156-a) is in; registration still waits for a removal that does not
+// wait on the window (council MERGE 53: after T-156 trust and an async workspace_remove); only the tests call it.
 #[allow(dead_code)]
 #[tauri::command(async)]
-pub fn workspace_archive(path: String) -> Result<bool, String> {
+pub fn workspace_archive(store: StoreState<'_>, path: String) -> Result<bool, String> {
     let wt = Path::new(&path);
-    run_archive(&main_folder(wt), wt, std::time::Duration::from_secs(120))
+    let root = main_folder(wt);
+    if let Some(script) = shared_script("archive", &root, wt, None, None) {
+        require_trust(&store, &root, "archive", &script)?;
+    }
+    run_archive(&root, wt, std::time::Duration::from_secs(120))
+}
+
+type StoreState<'a> = tauri::State<'a, std::sync::Mutex<crate::state::Store>>;
+/// SAFE-025: asked with the repository's main folder, the script's kind and its text before a shared
+/// script is used; an error is why it may not run.
+type Gate<'a> = &'a dyn Fn(&Path, &str, &str) -> Result<(), String>;
+
+/// SAFE-025 / STAT-056: the store key holding one project's script trust. Keyed by the project's
+/// id, which a project added again gets new, so removing or re-adding a repository forgets it.
+pub const TRUST_PREFIX: &str = "scriptTrust:";
+/// SAFE-025: the shared scripts that need trust. The VM recipe is not carried (COMPAT 14); the
+/// default tab commands join with PROJ-034's tabs (T-149).
+pub const TRUST_KINDS: [&str; 3] = ["setup", "archive", "issue"];
+
+/// SAFE-025: one project's trust: the whole kolux.yaml, or each script's approved fingerprint.
+#[derive(serde::Serialize, serde::Deserialize, Default, Debug, PartialEq, Clone)]
+struct Trust {
+    #[serde(default)]
+    all: bool,
+    #[serde(default)]
+    scripts: std::collections::BTreeMap<String, String>,
+}
+
+/// SAFE-025: what the trust prompt shows: the script that would run, of which kind, for which
+/// project, and whether an approved version of it has since changed.
+#[derive(serde::Serialize, Debug, PartialEq, Clone)]
+pub struct TrustAsk {
+    pub kind: String,
+    pub script: String,
+    pub changed: bool,
+    pub project: String,
+}
+
+/// SAFE-025: the fingerprint approval is remembered by: SHA-256 of the script with its line ends
+/// made plain, so a checkout that turns them into CRLF does not ask again.
+pub fn fingerprint(script: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(script.replace("\r\n", "\n").as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn trust_project(store: &crate::state::Store, root: &Path) -> Result<crate::projects::Project, String> {
+    crate::projects::load_projects(store)
+        .into_iter()
+        .find(|p| crate::projects::same_folder(Path::new(&p.path), root))
+        .ok_or_else(|| format!("Kolux cannot check whether {} is trusted (it is not one of your projects), so its kolux.yaml scripts do not run", root.display()))
+}
+
+fn kind_ok(kind: &str) -> Result<(), String> {
+    TRUST_KINDS.contains(&kind).then_some(()).ok_or_else(|| format!("{kind} is not a kolux.yaml script"))
+}
+
+/// SAFE-025 / STAT-056: None when the project at `root` trusts this `kind` of script with this text
+/// (or trusts its whole kolux.yaml); else what to ask. An error (no such project, an unreadable
+/// record) means trust cannot be checked, and nothing runs.
+pub fn trust_ask(store: &crate::state::Store, root: &Path, kind: &str, script: &str) -> Result<Option<TrustAsk>, String> {
+    kind_ok(kind)?;
+    let project = trust_project(store, root)?;
+    let why = |e: String| format!("Kolux could not read whether {} is trusted ({e}), so its kolux.yaml scripts do not run", project.name);
+    let trust: Trust = match store.get(&format!("{TRUST_PREFIX}{}", project.id)).map_err(|e| why(e.to_string()))? {
+        None => Trust::default(),
+        Some(s) => serde_json::from_str(&s).map_err(|e| why(e.to_string()))?,
+    };
+    let approved = trust.scripts.get(kind);
+    if trust.all || approved.is_some_and(|f| *f == fingerprint(script)) {
+        return Ok(None);
+    }
+    Ok(Some(TrustAsk { kind: kind.into(), script: script.into(), changed: approved.is_some(), project: project.name }))
+}
+
+/// SAFE-025: approves this `kind` of script with exactly this text for the project at `root`, and
+/// with `always`, its whole kolux.yaml. An unreadable record is replaced.
+pub fn trust_grant(store: &crate::state::Store, root: &Path, kind: &str, script: &str, always: bool) -> Result<(), String> {
+    kind_ok(kind)?;
+    let project = trust_project(store, root)?;
+    let key = format!("{TRUST_PREFIX}{}", project.id);
+    let mut trust: Trust = store.get(&key).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    trust.scripts.insert(kind.into(), fingerprint(script));
+    trust.all |= always;
+    store.set(&key, &serde_json::to_string(&trust).map_err(|e| e.to_string())?).map_err(|e| format!("Kolux could not save the trust ({e})"))
+}
+
+/// SAFE-025: Ok when the shared script may run; else why not, for the UI to show.
+fn require_trust(store: &std::sync::Mutex<crate::state::Store>, root: &Path, kind: &str, script: &str) -> Result<(), String> {
+    let store = store.lock().map_err(|_| "Kolux could not check this repository's trust, so its kolux.yaml scripts do not run".to_string())?;
+    match trust_ask(&store, root, kind, script)? {
+        None => Ok(()),
+        Some(ask) => Err(format!(
+            "The {} in kolux.yaml did not run: {}",
+            match kind {
+                "setup" => "setup script",
+                "archive" => "archive script",
+                _ => "issue command",
+            },
+            if ask.changed { "it changed since you trusted it" } else { "this repository's scripts are not trusted yet" }
+        )),
+    }
+}
+
+/// SAFE-025: the shared kolux.yaml script of `kind` that would run for the worktree at `wt` of the
+/// repository at `root`; None when the one that would run is the user's own, or there is none.
+fn shared_script(kind: &str, root: &Path, wt: &Path, local: Option<&str>, policy: Option<&str>) -> Option<String> {
+    let yaml = || std::fs::read_to_string(wt.join(crate::include::CONFIG_FILE)).ok();
+    match kind {
+        "setup" => pick_setup(local, yaml().and_then(|t| setup_script(&t)), policy).filter(|(_, s)| *s).map(|(s, _)| s),
+        "archive" => yaml().and_then(|y| scripts_entry(&y, "archive")),
+        "issue" => issue_command(root, wt).filter(|(_, s)| *s).map(|(c, _)| c),
+        _ => None,
+    }
+}
+
+/// SAFE-025 / STAT-056: what the trust prompt must ask before the `kind` script runs for the
+/// worktree at `path` (`root` is the repository's main folder for the issue command; `local` and
+/// `policy` as workspace_setup takes them); None when nothing shared would run or it is trusted.
+// ponytail: registered in lib.rs by the coordinator (hunk evidence/T-156-a-lib.patch); until then only the
+// tests call it, and an untrusted shared script fails closed in the runners.
+#[allow(dead_code)]
+#[tauri::command(async)]
+pub fn script_trust_needed(store: StoreState<'_>, path: String, kind: String, root: Option<String>, local: Option<String>, policy: Option<String>) -> Result<Option<TrustAsk>, String> {
+    kind_ok(&kind)?;
+    let wt = Path::new(&path);
+    let root = root.map(PathBuf::from).unwrap_or_else(|| main_folder(wt));
+    // git runs (the issue override check) before the store is locked
+    let Some(script) = shared_script(&kind, &root, wt, local.as_deref(), policy.as_deref()) else { return Ok(None) };
+    let store = store.lock().map_err(|_| "Kolux could not check this repository's trust, so its kolux.yaml scripts do not run".to_string())?;
+    trust_ask(&store, &root, &kind, &script)
+}
+
+/// SAFE-025: the user chose Run hooks on the prompt for `script` (the text it showed).
+// ponytail: registered in lib.rs by the coordinator (hunk evidence/T-156-a-lib.patch); until then only the
+// tests call it, and an untrusted shared script fails closed in the runners.
+#[allow(dead_code)]
+#[tauri::command(async)]
+pub fn script_trust_grant(store: StoreState<'_>, path: String, kind: String, script: String, always: bool, root: Option<String>) -> Result<(), String> {
+    let root = root.map(PathBuf::from).unwrap_or_else(|| main_folder(Path::new(&path)));
+    let store = store.lock().map_err(|_| "Kolux could not save the trust".to_string())?;
+    trust_grant(&store, &root, &kind, &script, always)
 }
 
 /// PROJ-036 / COMPAT 5.6: the per-user issue command, a file in the main folder's .kolux folder
@@ -378,10 +529,19 @@ pub struct IssueRun {
 /// PROJ-036: the issue command for issue `number` in the new workspace at `path` of the
 /// repository at `root`; None when the project has none; an error when it cannot run as written.
 #[tauri::command(async)]
-pub fn workspace_issue_command(root: String, path: String, number: u64, url: String) -> Result<Option<IssueRun>, String> {
-    let Some((command, shared)) = issue_command(Path::new(&root), Path::new(&path)) else { return Ok(None) };
+pub fn workspace_issue_command(store: StoreState<'_>, root: String, path: String, number: u64, url: String) -> Result<Option<IssueRun>, String> {
+    issue_run(&root, &path, number, &url, &|root, kind, script| require_trust(&store, root, kind, script))
+}
+
+/// PROJ-036: workspace_issue_command's run, with `trust` asked (after git, so the store is not
+/// held while it runs) before a shared command is used (SAFE-025).
+fn issue_run(root: &str, path: &str, number: u64, url: &str, trust: Gate<'_>) -> Result<Option<IssueRun>, String> {
+    let Some((command, shared)) = issue_command(Path::new(root), Path::new(path)) else { return Ok(None) };
+    if shared {
+        trust(Path::new(root), "issue", &command)?;
+    }
     let configured = crate::pty::auto_shells(crate::agents::find_program, std::env::var_os("ComSpec").map(PathBuf::from)).into_iter().next().map(|(p, _)| p);
-    let line = setup_line(&fill_issue(&command, number, &url), cfg!(windows), configured.as_deref(), find_posix).map_err(|e| e.replacen("The setup script", "The issue command", 1))?;
+    let line = setup_line(&fill_issue(&command, number, url), cfg!(windows), configured.as_deref(), find_posix).map_err(|e| e.replacen("The setup script", "The issue command", 1))?;
     Ok(Some(IssueRun { line, shared, command }))
 }
 
@@ -534,6 +694,11 @@ pub fn setup_import(path: String, file: String) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// A trust gate that lets everything run, for tests about something else.
+    fn open(_: &Path, _: &str, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+
     #[test]
     fn proj033_the_setup_script_is_read_from_kolux_yaml() {
         assert_eq!(setup_script("scripts:\n  setup: pnpm i\nworktree:\n  x: 1\n").as_deref(), Some("pnpm i"));
@@ -680,7 +845,7 @@ mod tests {
         let root = tree(&[("kolux.yaml", b"issueCommand: echo shared {{issue}}\n")]);
         crate::git::run(&["init", "-q"], Some(&root)).unwrap();
         let wt = tree(&[("kolux.yaml", b"issueCommand: echo worktree {{issue}}\n")]);
-        let run = |r: &PathBuf, w: &PathBuf| workspace_issue_command(r.to_string_lossy().into_owned(), w.to_string_lossy().into_owned(), 12, "https://github.com/o/r/issues/12".into()).unwrap();
+        let run = |r: &PathBuf, w: &PathBuf| issue_run(&r.to_string_lossy(), &w.to_string_lossy(), 12, "https://github.com/o/r/issues/12", &open).unwrap();
         let got = run(&root, &wt).expect("a shared issue command");
         assert!(got.shared);
         assert_eq!(got.line.script, "echo worktree 12", "the worktree's own kolux.yaml is read first");
@@ -711,9 +876,9 @@ mod tests {
         // the setup command reads kolux.yaml inside the worktree being created
         let wt = tree(&[("kolux.yaml", b"scripts:\n  setup: echo shared\n")]);
         let p = wt.to_string_lossy().into_owned();
-        assert_eq!(workspace_setup(p.clone(), None, None).unwrap().unwrap().script, "echo shared");
-        assert_eq!(workspace_setup(p.clone(), Some("echo local".into()), None).unwrap().unwrap().script, "echo local");
-        assert_eq!(workspace_setup(p, Some("echo local".into()), Some("shared".into())).unwrap().unwrap().script, "echo shared");
+        assert_eq!(setup_for(&p, None, None, &open).unwrap().unwrap().script, "echo shared");
+        assert_eq!(setup_for(&p, Some("echo local".into()), None, &open).unwrap().unwrap().script, "echo local");
+        assert_eq!(setup_for(&p, Some("echo local".into()), Some("shared".into()), &open).unwrap().unwrap().script, "echo shared");
         let _ = std::fs::remove_dir_all(wt);
     }
 
@@ -852,5 +1017,106 @@ mod tests {
             assert_eq!(issue_command(&main, &main), Some(("echo own".into(), false)), "a plain untracked file still counts");
         }
         let _ = std::fs::remove_dir_all(main);
+    }
+    fn trust_store() -> (crate::state::Store, PathBuf, PathBuf) {
+        let dir = tree(&[]);
+        let root = tree(&[("kolux.yaml", b"scripts:\n  setup: echo shared\n  archive: echo bye\nissueCommand: work {{issue}}\n")]);
+        let store = crate::state::Store::open(&dir).unwrap();
+        crate::projects::register_project(&store, (root.clone(), root.clone())).unwrap();
+        (store, dir, root)
+    }
+
+    #[test]
+    fn safe025_a_shared_script_asks_once_and_a_changed_one_asks_again() {
+        let (store, dir, root) = trust_store();
+        let ask = trust_ask(&store, &root, "setup", "echo shared").unwrap().expect("the first time it asks");
+        assert_eq!((ask.kind.as_str(), ask.script.as_str(), ask.changed), ("setup", "echo shared", false));
+        assert_eq!(ask.project, root.file_name().unwrap().to_string_lossy());
+        trust_grant(&store, &root, "setup", "echo shared", false).unwrap();
+        assert_eq!(trust_ask(&store, &root, "setup", "echo shared").unwrap(), None, "the same text runs without asking");
+        assert_eq!(trust_ask(&store, &root, "setup", "echo shared\r\necho two").unwrap().map(|a| a.changed), Some(true), "an edited script asks again, worded as changed");
+        assert_eq!(trust_ask(&store, &root, "archive", "echo bye").unwrap().map(|a| a.changed), Some(false), "each script is approved on its own");
+        assert_eq!(fingerprint("a\r\nb"), fingerprint("a\nb"), "CRLF line ends are the same script");
+        assert_ne!(fingerprint("a"), fingerprint("b"));
+        trust_grant(&store, &root, "issue", "work {{issue}}", true).unwrap();
+        for (kind, script) in [("setup", "anything new"), ("archive", "rm -rf build"), ("issue", "other")] {
+            assert_eq!(trust_ask(&store, &root, kind, script).unwrap(), None, "always trust covers the whole kolux.yaml");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn safe025_removing_and_adding_a_repository_again_forgets_its_trust() {
+        let (store, dir, root) = trust_store();
+        trust_grant(&store, &root, "setup", "echo shared", true).unwrap();
+        assert_eq!(trust_ask(&store, &root, "setup", "echo shared").unwrap(), None);
+        store.set("projects", "[]").unwrap();
+        assert!(trust_ask(&store, &root, "setup", "echo shared").is_err(), "a removed repository is trusted for nothing");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        crate::projects::register_project(&store, (root.clone(), root.clone())).unwrap();
+        assert!(trust_ask(&store, &root, "setup", "echo shared").unwrap().is_some(), "added again, it asks again");
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn safe025_when_trust_cannot_be_checked_nothing_runs() {
+        let (store, dir, root) = trust_store();
+        let stranger = tree(&[]);
+        assert!(trust_ask(&store, &stranger, "setup", "x").unwrap_err().contains("not one of your projects"));
+        assert!(trust_grant(&store, &stranger, "setup", "x", true).is_err());
+        assert!(trust_ask(&store, &root, "vm", "x").is_err(), "only the known scripts");
+        let id = crate::projects::load_projects(&store)[0].id.clone();
+        store.set(&format!("{TRUST_PREFIX}{id}"), "{not json").unwrap();
+        assert!(trust_ask(&store, &root, "setup", "echo shared").unwrap_err().contains("could not read"), "a broken record runs nothing");
+        trust_grant(&store, &root, "setup", "echo shared", false).unwrap();
+        assert_eq!(trust_ask(&store, &root, "setup", "echo shared").unwrap(), None, "approving again replaces the broken record");
+        for d in [dir, root, stranger] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn safe025_the_runners_refuse_an_untrusted_shared_script_and_never_ask_for_the_users_own() {
+        let (store, dir, root) = trust_store();
+        let store = std::sync::Mutex::new(store);
+        let asked = std::cell::RefCell::new(Vec::new());
+        let gate = |r: &Path, kind: &str, script: &str| {
+            asked.borrow_mut().push((kind.to_string(), script.to_string()));
+            require_trust(&store, r, kind, script)
+        };
+        let p = root.to_string_lossy().into_owned();
+        let err = setup_for(&p, None, None, &gate).unwrap_err();
+        assert_eq!(err, "The setup script in kolux.yaml did not run: this repository's scripts are not trusted yet");
+        assert_eq!(setup_for(&p, Some("echo mine".into()), None, &gate).unwrap().unwrap().script, "echo mine", "a local script never asks");
+        assert_eq!(asked.borrow().len(), 1);
+        trust_grant(&store.lock().unwrap(), &root, "setup", "echo shared", false).unwrap();
+        assert_eq!(setup_for(&p, None, None, &gate).unwrap().unwrap().script, "echo shared", "once trusted it runs");
+        std::fs::write(root.join("kolux.yaml"), "scripts:\n  setup: echo changed\nissueCommand: work {{issue}}\n").unwrap();
+        assert!(setup_for(&p, None, None, &gate).unwrap_err().ends_with("it changed since you trusted it"));
+        crate::git::run(&["init", "-q"], Some(&root)).unwrap();
+        assert!(issue_run(&p, &p, 12, "https://github.com/o/r/issues/12", &gate).unwrap_err().starts_with("The issue command in kolux.yaml did not run"));
+        assert_eq!(asked.borrow().last().unwrap(), &("issue".to_string(), "work {{issue}}".to_string()));
+        std::fs::create_dir_all(root.join(".kolux")).unwrap();
+        std::fs::write(root.join(ISSUE_OVERRIDE), "mine {{issue}}\n").unwrap();
+        let n = asked.borrow().len();
+        assert!(!issue_run(&p, &p, 12, "https://github.com/o/r/issues/12", &gate).unwrap().unwrap().shared, "the user's own override never asks");
+        assert_eq!(asked.borrow().len(), n);
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stat056_the_prompt_lists_exactly_the_shared_script_that_would_run() {
+        let root = tree(&[("kolux.yaml", b"scripts:\n  setup: echo shared\n  archive: echo bye\nissueCommand: work {{issue}}\n")]);
+        crate::git::run(&["init", "-q"], Some(&root)).unwrap();
+        assert_eq!(shared_script("setup", &root, &root, None, None).as_deref(), Some("echo shared"));
+        assert_eq!(shared_script("setup", &root, &root, Some("echo mine"), None), None, "the user's own setup wins and needs no trust");
+        assert_eq!(shared_script("setup", &root, &root, Some("echo mine"), Some("shared")).as_deref(), Some("echo shared"));
+        assert_eq!(shared_script("archive", &root, &root, None, None).as_deref(), Some("echo bye"));
+        assert_eq!(shared_script("issue", &root, &root, None, None).as_deref(), Some("work {{issue}}"));
+        assert_eq!(shared_script("vm", &root, &root, None, None), None);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -6,6 +6,8 @@ authors = ["Txais Xiong"]
 license-file = "../LICENSE"
 publish = false
 edition = "2021"
+# File::try_lock (the skill lock, SKILL-022) is stable from Rust 1.89.
+rust-version = "1.90"
 default-run = "kolux-rs"
 
 [lib]

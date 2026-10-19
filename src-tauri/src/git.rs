@@ -125,11 +125,34 @@ fn run_untrimmed(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
 /// progress was said. A `\r`-overwritten line counts as its last state.
 pub fn failure_reason(log: &str) -> Option<String> {
     const PROGRESS: [&str; 9] = ["Cloning into", "remote: ", "Receiving objects", "Resolving deltas", "Updating files", "Checking out files", "Filtering content", "Enumerating objects", "Counting objects"];
-    let lines: Vec<&str> = log.lines().map(|l| l.rsplit('\r').next().unwrap_or("").trim()).filter(|l| !l.is_empty()).collect();
+    // A line's last state is its last non-empty \r segment, so a line git ends with \r still counts.
+    let lines: Vec<&str> = log.lines().filter_map(|l| l.rsplit('\r').map(str::trim).find(|s| !s.is_empty())).collect();
     let tagged = |tag: &str| lines.iter().rev().find_map(|l| l.strip_prefix(tag)).map(str::trim);
     let line = tagged("fatal:").or_else(|| tagged("error:")).or_else(|| lines.iter().rev().copied().find(|l| !PROGRESS.iter().any(|p| l.starts_with(p))))?;
+    let line = hide_userinfo(line);
     let mut chars = line.chars();
     chars.next().map(|first| first.to_uppercase().chain(chars).collect())
+}
+
+/// FIX-2: `scheme://user:token@host` becomes `scheme://***@host`, so a reason never shows a
+/// password or token that was in a link.
+fn hide_userinfo(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("://") {
+        let (head, tail) = rest.split_at(at + 3);
+        out.push_str(head);
+        let authority_end = tail.find(|c: char| c == '/' || c.is_whitespace() || c == '\'' || c == '"').unwrap_or(tail.len());
+        match tail[..authority_end].rfind('@') {
+            Some(user_end) => {
+                out.push_str("***");
+                rest = &tail[user_end..];
+            }
+            None => rest = tail,
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// One changed file on one side of the index (EDIT-027): `code` is git's status letter.
@@ -632,6 +655,18 @@ mod tests {
         assert_eq!(failure_reason("Cloning into 'x'...\nReceiving objects:  3%\r"), None);
         let _ = fs::remove_dir_all(&src);
         let _ = fs::remove_dir_all(&dest);
+    }
+
+    /// FIX-2 AFTER 3: the reason never shows a password or token that was in the link, and a
+    /// line git ended with a bare \r still counts.
+    #[test]
+    fn fix2_a_clone_reason_hides_the_link_password_and_keeps_a_last_redrawn_line() {
+        let log = "Cloning into 'x'...\nfatal: unable to access 'https://me:ghp_secret123@github.com/o/r.git/': The requested URL returned error: 403\n";
+        let reason = failure_reason(log).unwrap();
+        assert!(!reason.contains("ghp_secret123") && !reason.contains("me:"), "{reason}");
+        assert!(reason.contains("https://***@github.com/o/r.git/"), "{reason}");
+        assert_eq!(failure_reason("Receiving objects:  3%\rfatal: repository not found\r").as_deref(), Some("Repository not found"));
+        assert_eq!(failure_reason("fatal: gone\r\n").as_deref(), Some("Gone"));
     }
 
     #[test]

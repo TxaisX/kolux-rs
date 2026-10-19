@@ -27,6 +27,7 @@ import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import SettingsPage from "./settings/SettingsPage";
 import Ask from "./chrome/Ask";
+import TrustPrompt, { trustedSetup } from "./setup/TrustPrompt";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { returnTab, type Which } from "./terminal/tabClose";
 import { bulkCloseSet, closeOne, middleClickCloses, orderPinnedFirst, pinMenu, pinQuestion } from "./terminal/pin";
@@ -42,7 +43,7 @@ import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./pro
 import { navTarget, travel, visit, type Place } from "./projects/nav";
 import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
 import BrowserPane, { OPEN_IN_BROWSER } from "./browser/BrowserPane";
-import { pageChord } from "./browser/chord";
+import { chordPlan } from "./browser/chord";
 import { writerOf } from "./scm/generate";
 import EditorPane, { editors } from "./editor/EditorPane";
 import { baseName, keyOf } from "./editor/buffers";
@@ -65,6 +66,7 @@ import { startGridTour } from "./onboarding/tour";
 import { KITS, RECALL_KEY, remember, type Kit, type Vendor } from "./kits/catalog";
 import KitStrip from "./kits/KitStrip";
 import { datedName, roleDone, rolePrompt, seatTitle, type RunCheck } from "./kits/run";
+import { noteKitLaunch } from "./kits/milestones";
 import DiffPane, { diffNav } from "./editor/DiffPane";
 import AllChangesPane from "./editor/AllChangesPane";
 import { DIFF_SPLIT_KEY, diffSplitOf, targetCell } from "./scm/split";
@@ -106,13 +108,14 @@ import { inboxItems, type Source } from "./inbox/inbox";
 import TowerView from "./tower/TowerView";
 import FloorView from "./floor/FloorView";
 import { towerRows, usageByAccount } from "./tower/tower";
+import { useTowerBridge } from "./tower/TowerWindow";
 import { LANES, chipOf } from "./board/chip";
 import Ring from "./usage/Ring";
 import { capOn, contextFill, meterOf, meterText, planOf, readsLeft, usageLine } from "./usage/meter";
 import { usePlan } from "./usage/plan";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, sheetStart, type Lineup } from "./launch/seats";
-import { folderName, NESTING_KEY, workItem, type Created, type WorkItem, type CliWorkspace, type Project, type SetupLine, type Worktree } from "./projects/model";
+import { folderName, NESTING_KEY, workItem, type Created, type WorkItem, type CliWorkspace, type Project, type Worktree } from "./projects/model";
 import { focusIn, panesIn, sameDir, nameOf } from "./workspaces";
 import { LAYOUT_FIELD, layoutOf, type SavedLayout } from "./terminal/layout";
 import { Kbd, KeymapProvider, useKeymap } from "./keys/KeymapContext";
@@ -130,6 +133,9 @@ import { hooksOn } from "./settings/AgentsPage";
 import ToolNotices from "./launch/ToolNotices";
 import { AgentsChat } from "./chat/ChatView";
 import { useTeamsHost, withTeams } from "./launch/teams";
+import { answered as cardAnswered, hearStates, hearingNow, holdFor, outcomeNote, pasteToPane, setHooksOn, writeTerminal } from "./chat/send";
+import { copyPrompt, hooksAbsent, kitTickEntry, kitWait, sendPrompt } from "./chat/kitPrompt";
+import { KitPromptNotices } from "./chat/KitNotice";
 import PlanSheet from "./terminal/PlanSheet";
 import { draftKey, feedbackMessage, keepDraft, showsReview, startFeedback, stillPending, type PendingSend, type PlanDraft } from "./terminal/planReview";
 
@@ -483,12 +489,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     // page never reaches the app, so the app may still think another split has the keyboard.
     // Council FIX-3: only a chord pressed in the page (the app's window does not hold the
     // keyboard) does that or moves the keyboard; one the page's script sent runs page-only actions.
-    const un = listen<{ id: number; what: string }>("browser-chord", (e) => {
+    // Council FIX-4: nor while the user is in another program, and at most once a second per tab.
+    const un = listen<{ id: number; what: string }>("browser-chord", async (e) => {
       const { id, what } = e.payload;
-      const plan = pageChord(what, document.hasFocus());
+      const plan = await chordPlan(id, what);
       if (plan.focusPane) setFocused(id);
       const run = () => plan.run && chord.current(id, what);
-      if (plan.takeKeyboard) void invoke("browser_go", { id, what: "focusApp" }).finally(run);
+      if (plan.takeKeyboard) void invoke("browser_go", { id, what: "focusApp" }).catch(() => {}).then(run);
       else run();
     });
     return () => {
@@ -1102,7 +1109,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const { afterSetup, startSetup, select, removedAll, removed, projectOf } = useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir, setStacked, nextKey, addShell, settings, screen, setScreen, setPage, owner, recentDirs, activeRef });
   // PROJ-033: a workspace made outside the composer runs its setup script in a background tab.
   const runSetup = (dir: string, branch: string | null) =>
-    invoke<SetupLine | null>("workspace_setup", { path: dir })
+    trustedSetup(dir)
       .then((line) => line && cli.current.startSetup(dir, branch, line, "tab", false))
       .catch((err) => setNotice(String(err)));
   // PROJ-037: a workspace straight from an issue or pull request address, shown once made.
@@ -1402,13 +1409,14 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       }
       const key = await startIn(agent, dir, branch, role.waitsFor ? "" : prompt, i === 0, [], seatTitle(role, agent.id as Vendor));
       keys.push(key);
-      if (key !== null && role.waitsFor) waiting.push({ role: role.id, upstream: role.waitsFor, key, prompt });
+      if (key !== null && role.waitsFor) waiting.push(kitWait({ role: role.id, upstream: role.waitsFor, key, prompt }, role.title, agent.name));
     }
     const started = keys.filter((k) => k !== null).length;
     if (started === 0) {
       setToast("Not one AI started for the kit, so nothing is running.");
       return false;
     }
+    void noteKitLaunch(started); // SKILL-016: the first-kit milestone
     // The role-to-session mapping is kept only when every seat started.
     kitRuns.current[dir] = { started: prep.started, seats: started === keys.length ? keys : null, waiting, sent: {}, prompts };
     setKitTick((n) => n + 1);
@@ -1427,6 +1435,12 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // marker and its session is found; once only, and a failed send is tried again next time.
   // ponytail: checks every ten seconds (and on any pane state change) while a role waits, whether
   // or not the strip is unfolded; a file watcher would make it instant.
+  // Council FIX-2 (chat 8151d6f re-review, FS2): the window's own pastes (a kit's role prompt, Send
+  // notes, Request changes' feedback) go in only while the pane's hook readings say it is not asking.
+  const toPane = { terminalOf: (k: number) => ptys.current[k], stateOf: (k: number) => hookRef.current[k], write: writeTerminal };
+  useEffect(() => void hearStates(listen).catch(() => {}), []);
+  // Stand-in review of 1e9613e, FIX-SOON 2: hooks off in Settings drop the chat's readings.
+  useEffect(() => setHooksOn(hooksOn(settings)), [settings]);
   const sending = useRef(false);
   const pendingKits = Object.values(kitRuns.current).some((r) => r.waiting.length > 0);
   useEffect(() => {
@@ -1442,16 +1456,24 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           for (const w of [...run.waiting]) {
             const id = ptys.current[w.key];
             if (!roleDone(check, w.upstream) || id === undefined) continue;
-            try {
-              await invoke("terminal_write", { id, data: w.prompt });
-              await new Promise((r) => setTimeout(r, 300));
-              await invoke("terminal_write", { id, data: "\r" });
-              run.waiting = run.waiting.filter((x) => x !== w);
-              run.sent[w.role] = Date.now();
-              setKitTick((n) => n + 1);
-            } catch (err) {
-              console.warn(`kit: ${String(err)}`);
-            }
+            // Council FIX-3 (chat e5412ff, FIX-BEFORE 1): held while the agent may be asking (its Enter
+            // would pick Yes); the strip says why once Kolux knows it cannot see, or after 60 s. Never
+            // sent by a timer: only on a clear reading, or by the notice's Send prompt. Stand-in review
+            // of 1e9613e, FIX-SOON 1 and 3: a role sent by hand meanwhile, or with a paste under way, is
+            // skipped; away from its workspace a notice also toasts once.
+            await kitTickEntry(run, w, {
+              now: Date.now(),
+              why: () => holdFor(w.key, toPane.stateOf, id),
+              absent: hooksAbsent(panesRef.current.find((x) => x.key === w.key)?.agent, hooksOn(settings)),
+              here: sameDir(dir, activeRef.current),
+              paste: () =>
+                pasteToPane(w.key, w.prompt, toPane, true).catch((err) => {
+                  console.warn(`kit: ${String(err)}`);
+                  return null;
+                }),
+              say: setToast,
+              changed: () => setKitTick((n) => n + 1),
+            });
           }
         }
       } finally {
@@ -1461,7 +1483,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     void tick();
     const t = window.setInterval(() => void tick(), 10_000);
     return () => window.clearInterval(t);
-  }, [pendingKits, kitTick, running, needs]);
+  }, [pendingKits, kitTick, running, needs, settings]);
 
   // TERM-014: closing a pane ends its program (the pane's own cleanup kills it); the next tab of
   // its cell takes over, else the neighbouring cells take the space; closing the last pane leaves
@@ -1551,6 +1573,16 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const tower = screen === "tower";
   const floor = screen === "floor";
   const agentsScreen = screen === "agents";
+  // T-050-b: an orchestrator-started session with no name or title is named after its worker's task
+  // (orchestration worker_labels, by terminal handle), looked up while the Agents screen is open.
+  const [workerNames, setWorkerNames] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!agentsScreen) return;
+    const look = () => void invoke<Record<string, string>>("worker_labels").then(setWorkerNames, () => {});
+    look();
+    const t = window.setInterval(look, 5000);
+    return () => window.clearInterval(t);
+  }, [agentsScreen]);
   // STAT-050: the Inbox and the Board read the panes the window already tracks; the clock ticks while one is open.
   const [now, setNow] = useState(Date.now());
   const timed = inbox || board || tower;
@@ -1707,15 +1739,23 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const laneOf = (p: Pane) => (p.seats || p.kind || p.agent === "shell" ? "idle" : (chipFor(p)?.lane ?? "idle"));
   // T-546: the control tower reads the same chip and meter per agent pane as the Board.
   const towerSeats = () => panes.filter((p) => !p.kind && !p.seats && p.agent !== "shell").map((p) => ({ key: p.key, agent: p.agent, title: tabName(p, titles), branch: p.branch, cwd: p.cwd, account: p.account ?? null, chip: chipFor(p), meter: meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)), since: stamp[p.key]?.at ?? 0 }));
+  // T-546-c: the Tower's own window shows the same seats and usage; a row clicked there opens the pane here.
+  const towerNow = towerSeats();
+  useTowerBridge({ seats: towerNow, usage: usageByAccount(towerNow, plan) }, openPane);
   const lanes = board ? LANES.filter((l) => cardPanes(panes).some((p) => laneOf(p) === l.id)) : [];
   const columnOf = (p: Pane) => lanes.findIndex((l) => l.id === laneOf(p)) + 1;
-  const answer = (p: Pane, approve: boolean) =>
-    invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve })
-      .then(() => {
-        setHook((h) => ({ ...h, [p.key]: "working" }));
+  // Council FIX-3 (FS2): the pane takes the state Kolux resolved after the answer (still "permission"
+  // while a second sub-agent asks), unless a newer hook event came in meanwhile.
+  const answer = (p: Pane, approve: boolean) => {
+    const since = hearingNow();
+    return invoke<AgentState | null>("agent_answer", { paneKey: p.key, agent: p.agent, approve })
+      .then((now) => {
+        const state = typeof now === "string" ? now : "working";
+        if (cardAnswered(p.key, state, since)) setHook((h) => ({ ...h, [p.key]: state }));
         setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
       })
       .catch(() => {});
+  };
   // SAFE-003, SAFE-004: Approve is the agent's own yes; Request changes is its no, then the
   // feedback typed into its prompt as one paste once it has left the question.
   // SAFE-005: the drafts are per pane and exact plan text, in memory only.
@@ -1739,7 +1779,18 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     // SAFE-004 / T-032-b: the send runs as a job (planReview) that the sheet can cancel until Enter.
     const job = startFeedback(feedbackMessage(d.comments, d.note), {
       // Claude has no hook for a deny inside its own menu, so the pane leaves "permission" here, as answer() does.
-      deny: () => invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).then(() => (setHook((h) => ({ ...h, [p.key]: "working" })), true), () => false),
+      // Council FIX-3 (FS2): the pane takes the state Kolux resolved after the deny, unless a newer hook event came in.
+      deny: () => {
+        const since = hearingNow();
+        return invoke<AgentState | null>("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).then(
+          (now) => {
+            const state = typeof now === "string" ? now : "working";
+            if (cardAnswered(p.key, state, since)) setHook((h) => ({ ...h, [p.key]: state }));
+            return true;
+          },
+          () => false,
+        );
+      },
       asking: () => hookRef.current[p.key] === "waiting" || hookRef.current[p.key] === "permission",
       type: (text) => write("\x1b[200~" + text + "\x1b[201~"),
       enter: () => write("\r"),
@@ -1748,8 +1799,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     });
     setReviewing((r) => (r && r.key === p.key ? { ...r, send: job } : r));
     const { outcome, answered, typed } = await job.done;
-    // A cancel before anything went out leaves the sheet open on the draft; any other end closes it.
-    setReviewing((r) => (r?.send === job ? (outcome === "cancelled" && !answered ? { ...r, send: undefined } : null) : r));
+    // Any end closes the sheet; the draft is kept unless the feedback was sent. A cancel can never
+    // land before the agent's no went out (stand-in review of lane/marks ee2bfbc, FIX-BEFORE 1).
+    setReviewing((r) => (r?.send === job ? null : r));
     if (outcome === "sent") {
       dropDraft(key); // SAFE-004: sending wipes the saved draft; a cancelled send keeps it.
       setHook((h) => ({ ...h, [p.key]: "working" }));
@@ -1760,10 +1812,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   };
   // GIT-041: every note goes to the workspace's agent (the focused one, else the first) as one
   // pasted message; a note edited while the send was in flight is not marked sent.
-  const pasteInto = async (id: number, text: string) => {
-    await invoke("terminal_write", { id, data: "\x1b[200~" + text + "\x1b[201~" });
-    await new Promise((r) => setTimeout(r, 300));
-    await invoke("terminal_write", { id, data: "\r" });
+  const pasteInto = async (key: number, text: string) => {
+    const got = await pasteToPane(key, text, toPane);
+    if (got !== "sent") throw outcomeNote(got, key, toPane);
   };
   const sendNotes = async (dir: string): Promise<string | null> => {
     const notes = notesFor(dir);
@@ -1771,7 +1822,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     const agent = [...panes].sort((a, b) => Number(b.key === focused) - Number(a.key === focused)).find((p) => !p.kind && p.agent !== "shell" && sameDir(p.cwd, dir) && ptys.current[p.key] !== undefined);
     if (!agent) return "No agent is running in this workspace. Start one, or copy the notes instead.";
     try {
-      await pasteInto(ptys.current[agent.key], noteBlocks(notes, dir));
+      await pasteInto(agent.key, noteBlocks(notes, dir));
     } catch (err) {
       return `The notes were not sent: ${String(err)}`;
     }
@@ -1786,7 +1837,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     const p = panesRef.current.find((x) => x.key === key);
     if (!p || !inWorktree(p)) return "That agent is no longer running, so nothing was sent. The notes are kept.";
     try {
-      await pasteInto(ptys.current[key], notesMarkdown(notes));
+      await pasteInto(key, notesMarkdown(notes));
     } catch (err) {
       return `The notes were not sent, so they are kept: ${String(err)}`;
     }
@@ -1931,6 +1982,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             }}
           />
         )}
+        <TrustPrompt />
         {quitAsk && (
           <Ask
             title="Quit with unsaved changes?"
@@ -2091,6 +2143,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             }}
             onAdd={addPreset}
             onSettings={() => openSettings("agents")}
+            taskOf={(k) => workerNames[`term-${ptys.current[k]}`]}
           />
         )}
         <div className="content">
@@ -2174,6 +2227,19 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                   }}
                 />
               )}
+              {page === null && activeDir && kitRuns.current[activeDir] && (
+                <KitPromptNotices
+                  waiting={kitRuns.current[activeDir].waiting}
+                  onCopy={(w) => void copyPrompt(w, setToast)}
+                  onSend={(w) => {
+                    // Stand-in review FIX-BEFORE 3: unchecked only while Kolux cannot see; refused while it sees a menu.
+                    const run = kitRuns.current[activeDir];
+                    if (!run) return;
+                    const id = ptys.current[w.key];
+                    void sendPrompt(run, w, { terminal: id, why: () => holdFor(w.key, toPane.stateOf, id), write: writeTerminal, say: setToast, changed: () => setKitTick((n) => n + 1) });
+                  }}
+                />
+              )}
               {page === null && <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} shells={shells} onNewTab={(a) => void newTab(a)} />}
               {picking === "file" && activeDir && (
                 <FilePicker
@@ -2234,7 +2300,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           )}
           {screen === "skills" && <SkillsPage workspace={activeDir} onClose={() => closeSkills(setScreen)} />}
           {inbox && <InboxView items={inboxItems(sources, now)} now={now} onOpen={openPane} />}
-          {screen === "agents" && <AgentsChat panes={panes.filter((p) => !p.kind && !p.seats).map((p) => ({ key: p.key, cwd: p.cwd, title: p.title }))} focused={selected ?? focused} ptyOf={(k) => ptys.current[k]} hook={hook} stateOf={(k) => hookRef.current[k]} />}
+          {screen === "agents" && <AgentsChat panes={panes.filter((p) => !p.kind && !p.seats).map((p) => ({ key: p.key, cwd: p.cwd, title: p.title, program: p.program }))} focused={selected ?? focused} ptyOf={(k) => ptys.current[k]} hook={hook} stateOf={(k) => hookRef.current[k]} onPick={(key) => {
+                setAgentSel(key);
+                setFocused(key);
+              }} />}
           {tower && <TowerView rows={towerRows(towerSeats())} usage={usageByAccount(towerSeats(), plan)} now={now} onOpen={openPane} />}
           {floor && <FloorView />}
           {agentsScreen && selected === null && (

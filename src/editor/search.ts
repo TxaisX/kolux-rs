@@ -2,7 +2,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { keyOf } from "./buffers";
 
-export type Hit = { line: number; col: number; before: string; text: string; after: string };
+/** `text` is cut to about 200 characters for the list; `len` is the hit's full length in UTF-16 units. */
+export type Hit = { line: number; col: number; before: string; text: string; after: string; len: number };
 export type FileHits = { path: string; hits: Hit[] };
 export type Found = { files: FileHits[]; total: number; capped: boolean; source: "rg" | "git" | "none" };
 export type Ask = { query: string; matchCase: boolean; wholeWord: boolean; regex: boolean; include: string; exclude: string };

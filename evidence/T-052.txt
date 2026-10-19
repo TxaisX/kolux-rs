@@ -20,10 +20,11 @@ forgets its reading, so the gauge goes back to the greyed 0% until the next repo
   session and running time when the report carries them and throws away a same-session report
   stamped earlier than the reading on screen, or no later than the reading a clear forgot.
 - Today's hook server does not forward those two fields, so the window falls back to arrival
-  order (correct for one route). evidence/marks-T-052-hooks.patch is the optional hooks.rs hunk
-  for the hooks lane: the usage payload gains the report's session id and cost.total_duration_ms
-  (both documented status-line input fields). `git apply --check` OK at 243736d; NOT compiled on
-  this lane (no Rust touched here).
+  order (correct for one route). The first hooks.rs hunk (marks-T-052-hooks.patch) is replaced
+  by evidence/marks-FIX-1-hooks.patch (see evidence/marks-FIX-1.txt part B): the usage payload
+  gains the report's clock, its session id with the terminal that ran it, and
+  cost.total_duration_ms, so a resume that keeps the session id while the running time restarts
+  is a new clock; compiled and tested on a scratch worktree, with a hooks.rs test.
 
 Code (lane-owned):
 - src/terminal/TerminalPane.tsx: Props context is number | null (null = no reading); the header's

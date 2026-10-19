@@ -154,3 +154,22 @@ test("EDIT-008 (FIX-2): a second paste mid-paste is refused with a toast, and a 
     vi.useRealTimers();
   }
 });
+
+// FIX-3 (council AFTER 6): when the view is gone, the release in the catch throws too. The failure
+// still ends the paste (done runs, so nothing waits on it) and the piece's own error is the one
+// reported, not the release's.
+test("EDIT-008 (FIX-3): a piece failing on a view that is gone still ends the paste with the piece's error", () => {
+  vi.useFakeTimers();
+  try {
+    const w = stubView(EditorState.create({ doc: "", extensions: [pasteMark, holdInput] }));
+    let ended = 0;
+    pasteChunked(w as unknown as EditorView, "y".repeat(CHUNK * 2 + 5), () => (ended += 1));
+    w.dispatch = (spec) => {
+      throw new Error(!(spec instanceof Transaction) && "changes" in spec ? "boom" : "view destroyed");
+    };
+    expect(() => vi.runOnlyPendingTimers()).toThrow("boom");
+    expect(ended).toBe(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});

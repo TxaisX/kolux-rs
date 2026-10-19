@@ -37,6 +37,10 @@
 //         the line `- [x] T-184 ` in its PLAN.md: the result is printed and written to evidence but does not
 //         change the exit code. Once T-184 is ticked, flow 5 is required like the others. The final close of
 //         the app is checked the same way (pre-close tree, survivors), and reported on the "close" line.
+//         T-552: every relaunch waits until the old tree has exited (survivors are killed first and counted).
+//         Then one stress relaunch starts the moment the app process is gone, while its WebView2 processes
+//         may still hold the profile folder: the page must come up, and the app's output after that point
+//         must not mention a webview failure, a panic or "still closing": FAIL otherwise.
 //
 // Launch mode wipes and reuses the profile of --identifier (refused unless it ends in ".smoke"), seeds
 // confirmCloseRunning=false so the close at the end is silent and agentStatusHooks=true so the hook install
@@ -262,6 +266,8 @@ const byName = (list) => {
 const killAll = async (list) => {
   for (const t of list) await run("taskkill", ["/PID", String(t.pid), "/F"]).catch(() => {});
 };
+// T-552: a relaunch starts only once every process of the old tree has exited.
+const treeGone = (tree) => waitFor("the old process tree to exit", async () => (await survivorsOf(tree)).length === 0, 15000, 250);
 const alive = async (pid) => (await ps(`if (Get-Process -Id ${pid} -ErrorAction SilentlyContinue) { 'alive' } else { 'gone' }`)) === "alive";
 // The app's own quit path: a window close request over CDP (what the X button sends; App.tsx may ask about
 // unsaved editor text, then the window is destroyed and the app exits). WM_CLOSE by PostMessage when the page
@@ -660,6 +666,7 @@ async function flow5() {
   parts.push(`quit: ${first.how}; pre-close tree ${first.tree.length} (${byName(first.tree)}); survivors ${first.survivors.length} (${byName(first.survivors)})`);
   if (first.survivors.length > 0) fails.push(`${first.survivors.length} process(es) from the pre-close tree survived the quit: ${byName(first.survivors)}`);
   await killAll(first.survivors);
+  await treeGone(first.tree);
   // Come back: bytes before anything is touched, the setting, the shells.
   await relaunch();
   const after = await settled(koluxSettings);
@@ -701,6 +708,7 @@ async function flow5() {
   // The storm: 12 saved shell panes, 10 relaunches, stalled shells (ThreadCount <= 1) 15 s after each launch.
   const second = await closeAndCount(appPid);
   await killAll(second.survivors);
+  await treeGone(second.tree);
   const cfg = JSON.parse(read(koluxSettings));
   const template = (cfg.savedLayout?.panes ?? []).find((p) => p.agent === "shell");
   if (!template) throw new Error(`the saved layout has no shell pane to copy: ${JSON.stringify(cfg.savedLayout).slice(0, 300)}`);
@@ -720,6 +728,32 @@ async function flow5() {
     const c = await closeAndCount(appPid);
     left.push(c.survivors.length);
     await killAll(c.survivors);
+    await treeGone(c.tree);
+  }
+  // T-552 stress: relaunch the moment the app process is gone (no settle, no survivor kill), while its
+  // WebView2 tree may still hold the profile folder. The new app has to wait that out and come up.
+  await relaunch();
+  const appLog = join(TEMP, "app.log");
+  const logAt = read(appLog)?.length ?? 0;
+  const tq = Date.now();
+  await invoke("plugin:window|close", { label: "main" }).catch(() => {});
+  await waitFor("the app to exit", async () => !(await alive(appPid)), 30000, 100);
+  const quitS = ((Date.now() - tq) / 1000).toFixed(1);
+  const tr = Date.now();
+  let upS = null;
+  try {
+    await relaunch();
+    upS = ((Date.now() - tr) / 1000).toFixed(1);
+  } catch (e) {
+    fails.push(`stress: the immediate relaunch did not come up (${e.message})`);
+  }
+  const said = (read(appLog) ?? "").slice(logAt).match(/failed to create webview|panicked|still closing/i);
+  if (said) fails.push(`stress: the immediate relaunch logged "${said[0]}"`);
+  parts.push(`stress: relaunched at once after a quit (exited in ${quitS} s); page ${upS === null ? "NOT up" : `up in ${upS} s`}; ${said ? `log says "${said[0]}"` : "no webview failure in the log"}`);
+  if (appPid && (await alive(appPid))) {
+    const last = await closeAndCount(appPid);
+    await killAll(last.survivors);
+    await treeGone(last.tree);
   }
   appPid = null;
   const stalledTotal = stalled.reduce((a, b) => a + b, 0);
