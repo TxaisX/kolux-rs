@@ -2,11 +2,11 @@ hooks FIX-8 (lane/hooks, review hooks-060af6b8-standin-review.md "Send to build 
 Only agent_hooks/tests.rs changed in code, and only comments and doc comments (tests only; no production code, no src/**). Logs: G:\Temp\hooks-w1-logs\w13-*.log
 
 BASE (STEP 0 tree, full cargo test, w13-merge-cargo.log): 904 passed, 2 failed, 2 ignored. Both failures were
-  load timeouts with other builders running, neither a hooks change:
-    hooks::agent_hooks::tests::script_runs::fix_4_a_missing_holding_folder_is_not_tried_again (PowerShell starts took 8-11 s;
+  failures under load with other builders running, neither a hooks change (hooks FIX-9 correction: fix_4_a failed its margin assert, it did not time out):
+    hooks::agent_hooks::tests::script_runs::fix_4_a_missing_holding_folder_is_not_tried_again (whole script runs took 7.7-11.6 s a round, hooks FIX-9 correction: not just PowerShell starts;
       quickest held 7.7 s vs missing 9.3 s at src\agent_hooks\tests.rs:600)
     scm::tests::fix4_a_timeout_ends_the_tree_through_the_job_and_uses_the_tree_kill_only_without_one (src\scm.rs:4057, not this lane's file)
-  Rerun alone: fix_4_a 2 passed (w13-merge-rerun.log), the scm test 1 passed (w13-merge-rerun2.log).
+  Rerun alone: the filter fix_4_a matched 2 tests, both passed (w13-merge-rerun.log); only hooks::agent_hooks::tests::script_runs::fix_4_a_missing_holding_folder_is_not_tried_again is the test that failed, the other is status::tests::fix_4_a_hook_racing_its_terminals_exit_never_keeps_the_dead_terminal (hooks FIX-9 correction), the scm test 1 passed (w13-merge-rerun2.log).
 
 ITEMS (all comments or doc comments in src-tauri/src/agent_hooks/tests.rs)
  5 AFTER 1  stat_006 comment: the 3 s allowance now lists curl's 0.5 s connect timeout, the cmd and script work, and slack;
