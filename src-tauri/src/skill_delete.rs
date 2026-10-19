@@ -42,9 +42,12 @@ struct Journal {
     /// the next delete's record so that delete can start, and are only ever removed, never put back.
     #[serde(default)]
     left: Vec<PathBuf>,
-    /// FIX-5 (2): the skill folders the delete scanned. A set-aside copy is removed only when it sits
-    /// under one of them, so a damaged or hand-edited record can never make the app remove a folder
-    /// elsewhere. A record without them (an older one) removes nothing; its entries are dropped.
+    /// FIX-5 (2), FIX-6: the skill folders the delete scanned. A set-aside copy is removed only when
+    /// it sits under one of them, and a folder named here counts only if it is an absolute folder
+    /// that exists and is one the app scans right now, or at start-up has the shape of a workspace
+    /// skills folder (`Trust`). So a damaged or hand-edited record can at most remove a folder with
+    /// the set-aside name form from a skill folder; nothing elsewhere. A record without them (an
+    /// older one) removes nothing; its entries are dropped.
     #[serde(default)]
     roots: Vec<PathBuf>,
 }
@@ -61,12 +64,60 @@ enum ReadError {
 
 /// What an earlier delete left behind, settled so a new delete can start.
 struct Settled {
-    /// Set-aside copies a finished delete could not remove yet; this delete takes them on.
+    /// Set-aside copies a finished delete could not remove yet. Those under a folder this delete
+    /// scans are taken on; those under a workspace skills folder it does not scan (FIX-6 (2)) stay on
+    /// record for the next start, which acts on them, and are left alone now.
     carry: Vec<PathBuf>,
-    /// The skill folders this delete and the carried copies belong to.
+    /// The skill folders this delete and the carried copies belong to: what goes in the record.
     roots: Vec<PathBuf>,
+    /// The skill folders this delete scans: what it may act on.
+    live: Vec<PathBuf>,
     /// Log lines for the entries the record is rewritten without; written once that happened.
     dropped: Vec<String>,
+    /// Log lines for the entries carried but left alone by this delete; written with `dropped`.
+    kept: Vec<String>,
+}
+
+/// FIX-6 (4): which of the skill folders a record names a recovery may act on.
+struct Trust {
+    /// The skill folders scanned right now: a delete's, or at start-up the home ones.
+    live: Vec<PathBuf>,
+    /// Start-up only: a folder shaped like a workspace skills folder counts too, since the workspace
+    /// that delete scanned need not be open. A delete acts only on what it scanned (FIX-6 (2)).
+    idle_ok: bool,
+}
+
+impl Trust {
+    fn startup(live: Vec<PathBuf>) -> Trust {
+        Trust { live, idle_ok: true }
+    }
+    fn delete(live: &[PathBuf]) -> Trust {
+        Trust { live: live.to_vec(), idle_ok: false }
+    }
+}
+
+/// What a recorded skill folder is worth.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum RootClass {
+    /// Not an absolute, existing folder, or not one the app scans: vouches for nothing.
+    Bogus,
+    /// A workspace skills folder by shape that is not scanned right now.
+    Idle,
+    /// A folder scanned right now.
+    Live,
+}
+
+/// What to do with a record entry that is still on disk.
+#[derive(Debug, PartialEq, Eq)]
+enum Verdict {
+    /// Exactly what a delete here wrote, under a folder it may act on: remove (or carry) it.
+    Act,
+    /// Vouched for by the record, but under a workspace skills folder not scanned right now: stays
+    /// on record, untouched, for the next start.
+    Keep(String),
+    /// Not a copy this app set aside, or not under a skill folder it scans: left alone and taken
+    /// off the record, so it never blocks a delete and is never removed.
+    Drop(String),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -159,14 +210,17 @@ pub fn lock(app_dir: &Path) -> Result<OpLock, LockError> {
 /// on, so they are never forgotten and never stop a delete; an entry the record cannot vouch for
 /// (FIX-4 (1), FIX-5 (2): not next to its original, not named as a set-aside copy, or not under a
 /// skill folder) is dropped from the record and left on disk, and logged once the new record is
-/// written without it (AFTER 3). A not-done record that could not be put back is never written over.
-fn settle(app_dir: &Path, roots: &[PathBuf]) -> Result<Settled, String> {
-    let mut settled = Settled { carry: vec![], roots: roots.to_vec(), dropped: vec![] };
+/// written without it (AFTER 3). FIX-6 (2): a vouched-for copy under a workspace skills folder this
+/// delete does not scan is carried but left alone, so the next start (which acts on such folders)
+/// clears it. A not-done record that could not be put back is never written over.
+fn settle(app_dir: &Path, live: &[PathBuf]) -> Result<Settled, String> {
+    let mut settled = Settled { carry: vec![], roots: live.to_vec(), live: live.to_vec(), dropped: vec![], kept: vec![] };
+    let trust = Trust::delete(live);
     let path = app_dir.join(JOURNAL);
     if !path.exists() {
         return Ok(settled);
     }
-    let mut stuck = recover(app_dir);
+    let mut stuck = recover(app_dir, &trust);
     if !path.exists() {
         return Ok(settled);
     }
@@ -175,16 +229,23 @@ fn settle(app_dir: &Path, roots: &[PathBuf]) -> Result<Settled, String> {
         Ok(old) if old.done => {
             let entries = old.moves.iter().map(|(from, aside)| (aside, Some(from.as_path()))).chain(old.left.iter().map(|a| (a, None)));
             for (aside, from) in entries {
-                match refusal(&old.roots, from, aside) {
-                    Some(why) => settled.dropped.push(format!("skill delete: dropped {} from the record and left it alone, {why}", aside.display())),
-                    None if std::fs::symlink_metadata(aside).is_ok() => settled.carry.push(aside.clone()),
-                    None => {}
+                if std::fs::symlink_metadata(aside).is_err() {
+                    continue; // already gone
+                }
+                match verdict(&old.roots, &trust, from, aside) {
+                    Verdict::Drop(why) => settled.dropped.push(format!("skill delete: dropped {} from the record and left it alone, {why}", aside.display())),
+                    Verdict::Keep(why) => {
+                        settled.kept.push(format!("skill delete: kept {} on the record and left it alone for now, {why}", aside.display()));
+                        settled.carry.push(aside.clone());
+                    }
+                    Verdict::Act => settled.carry.push(aside.clone()),
                 }
             }
             if !settled.carry.is_empty() {
-                // The carried copies stay under the folders their own delete scanned.
+                // The carried copies stay under the folders their own delete scanned, as far as
+                // those are skill folders at all (FIX-6 (4)).
                 for r in old.roots {
-                    if !settled.roots.iter().any(|known| same(known, &r)) {
+                    if classify(&r, &trust.live) != RootClass::Bogus && !settled.roots.iter().any(|known| same(known, &r)) {
                         settled.roots.push(r);
                     }
                 }
@@ -195,7 +256,7 @@ fn settle(app_dir: &Path, roots: &[PathBuf]) -> Result<Settled, String> {
             // FIX-5 (3): every copy was put back but the record itself could not be cleared (the
             // only lines are about the record): one more try before it is reported as in the way.
             if stuck.iter().all(|line| line.starts_with("its record")) {
-                stuck = recover(app_dir);
+                stuck = recover(app_dir, &trust);
                 if !path.exists() {
                     return Ok(settled);
                 }
@@ -209,17 +270,19 @@ fn settle(app_dir: &Path, roots: &[PathBuf]) -> Result<Settled, String> {
         // FIX-5 (3): a record another program holds is not a file to move away; moving it would
         // strand the hidden skills it names.
         Err(ReadError::Io(e)) => Err(format!("{prefix}: its record {} could not be read ({e}); try again", path.display())),
-        Err(ReadError::Parse(e)) => Err(format!(
-            "{prefix}: its record {} is damaged ({e}); move that file away, then look in the skill folders for folders named {ASIDE}*: they are hidden skills, rename each back to its own name",
-            path.display()
-        )),
+        Err(ReadError::Parse(e)) => Err(format!("{prefix}: its record {} is damaged ({e}); move that file away, then {RENAME_ADVICE}", path.display())),
     }
 }
+
+/// AFTER 2: how to get a hidden skill back by hand, and when not to: a finished delete leaves the
+/// same folders behind, so one is only worth renaming if the user did not mean to delete that skill.
+const RENAME_ADVICE: &str = "look in the skill folders for folders named .kolux-deleting-<pid>-<nanos>-<name>: each is a skill a delete hid, and <name> (what follows the second dash after the numbers) is its own name; rename one back to that name only if you did not mean to delete that skill (a delete that finished leaves such folders too)";
 
 /// Deletes `items` together for a caller that holds the lock and settled the record. Err means
 /// nothing changed.
 fn delete_held(app_dir: &Path, settled: Settled, items: &[PathBuf]) -> Result<Outcome, String> {
-    let Settled { carry, roots, dropped } = settled;
+    let Settled { carry, roots, live, dropped, kept } = settled;
+    let trust = Trust::delete(&live);
     let stamp = format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
     let mut moves = Vec::new();
     for item in items {
@@ -234,8 +297,8 @@ fn delete_held(app_dir: &Path, settled: Settled, items: &[PathBuf]) -> Result<Ou
     let fail = |e: std::io::Error| format!("Nothing was deleted: the delete record could not be written ({e})");
     let mut journal = Journal { done: false, moves, left: carry, roots };
     write(app_dir, &journal).map_err(fail)?;
-    // AFTER 3: the record now really is without the refused entries.
-    for line in &dropped {
+    // AFTER 3: the record now really is without the refused entries (and with the kept ones).
+    for line in dropped.iter().chain(&kept) {
         crate::diag::write(app_dir, line);
     }
     for (i, (from, aside)) in journal.moves.iter().enumerate() {
@@ -264,7 +327,7 @@ fn delete_held(app_dir: &Path, settled: Settled, items: &[PathBuf]) -> Result<Ou
     journal.done = true;
     write(app_dir, &journal).map_err(fail)?;
     // Only this delete's own copies decide its outcome; carried ones wait for the next try.
-    let mine: Vec<PathBuf> = finish(app_dir, &journal).into_iter().filter(|a| journal.moves.iter().any(|(_, m)| m == a)).collect();
+    let mine: Vec<PathBuf> = finish(app_dir, &journal, &trust).into_iter().filter(|a| journal.moves.iter().any(|(_, m)| m == a)).collect();
     Ok(if mine.is_empty() { Outcome::Deleted } else { Outcome::Partly(mine) })
 }
 
@@ -296,11 +359,17 @@ static ON_RETRY: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
 /// SKILL-023: what the app runs at start. An interrupted delete is undone or completed under the
 /// skill lock, so a second instance never puts back a delete the first one is still running.
 pub fn startup_recover(app_dir: &Path) -> Startup {
+    // FIX-6 (4): at start-up the record may act on the home skill folders of this environment and
+    // on folders shaped like a workspace skills folder; nothing else it names counts.
+    startup_recover_as(app_dir, &Trust::startup(skills::home_roots(&skills::Env::current())))
+}
+
+fn startup_recover_as(app_dir: &Path, trust: &Trust) -> Startup {
     let mut tried = false;
     loop {
         match lock(app_dir) {
             Ok(_one) => {
-                recover(app_dir);
+                recover(app_dir, trust);
                 return Startup::Recovered;
             }
             Err(LockError::Busy) => {
@@ -329,7 +398,7 @@ pub fn startup_recover(app_dir: &Path) -> Startup {
             }
             Err(LockError::Failed(why)) => {
                 crate::diag::write(app_dir, &format!("skill delete: {why}; recovering without it"));
-                recover(app_dir);
+                recover(app_dir, trust);
                 return Startup::RecoveredUnlocked;
             }
         }
@@ -364,28 +433,60 @@ fn aside_of(from: &Path, aside: &Path) -> bool {
     same_parent && a.strip_prefix(ASIDE).and_then(|r| r.strip_suffix(f)).and_then(|r| r.strip_suffix('-')).is_some_and(stamped)
 }
 
-/// FIX-5 (2): the copy sits in one of the skill folders the record names (or below one).
-fn under_root(aside: &Path, roots: &[PathBuf]) -> bool {
-    aside.parent().is_some_and(|parent| roots.iter().any(|root| inside(parent, root)))
+/// FIX-6 (3): a skill folder a record may name is an absolute folder that exists. An empty root
+/// would otherwise match everything (its key is "", which every path starts with), a relative one
+/// would resolve against whatever folder the process runs in, and a missing one is not a skill folder.
+fn usable_root(root: &Path) -> bool {
+    !root.as_os_str().is_empty() && root.is_absolute() && root.is_dir()
 }
 
-/// Why a record entry may not be removed, or None when it is exactly what a delete here writes:
-/// named `.kolux-deleting-<pid>-<nanos>-<name>`, next to its original when one is on record
-/// (`aside_of`), and under one of the skill folders the record names (`under_root`). A record
-/// without skill folders (an older one) vouches for nothing.
-fn refusal(roots: &[PathBuf], from: Option<&Path>, aside: &Path) -> Option<String> {
+/// FIX-5 (2): the copy sits in one of the given skill folders (or below one); a folder that is not
+/// `usable_root` counts for nothing.
+fn under_root(aside: &Path, roots: &[PathBuf]) -> bool {
+    aside.parent().is_some_and(|parent| roots.iter().any(|root| usable_root(root) && inside(parent, root)))
+}
+
+/// FIX-6 (4): what a recorded skill folder is worth against the folders scanned right now.
+fn classify(root: &Path, live: &[PathBuf]) -> RootClass {
+    if !usable_root(root) {
+        RootClass::Bogus
+    } else if live.iter().any(|l| same(l, root) || skills::key(l) == skills::key(root)) {
+        RootClass::Live
+    } else if skills::workspace_skills_shape(root) {
+        RootClass::Idle
+    } else {
+        RootClass::Bogus
+    }
+}
+
+/// The best of the recorded skill folders the copy sits under, with its class; None when it sits
+/// under none that counts (`under_root`).
+fn cover<'a>(roots: &'a [PathBuf], live: &[PathBuf], aside: &Path) -> Option<(RootClass, &'a Path)> {
+    roots.iter().filter(|r| under_root(aside, std::slice::from_ref(r))).map(|r| (classify(r, live), r.as_path())).max_by_key(|(c, _)| *c)
+}
+
+/// Whether a record entry is exactly what a delete here writes (named
+/// `.kolux-deleting-<pid>-<nanos>-<name>`, next to its original when one is on record, `aside_of`)
+/// and under a skill folder the record names that counts right now (`classify`): act on it, keep it
+/// for the next start, or drop it. A record without skill folders (an older one) vouches for nothing.
+fn verdict(roots: &[PathBuf], trust: &Trust, from: Option<&Path>, aside: &Path) -> Verdict {
     match from {
-        Some(f) if !aside_of(f, aside) => return Some(format!("it is not a copy set aside from {}", f.display())),
-        None if !set_aside_name(aside) => return Some("it is not a copy this app set aside".into()),
+        Some(f) if !aside_of(f, aside) => return Verdict::Drop(format!("it is not a copy set aside from {}", f.display())),
+        None if !set_aside_name(aside) => return Verdict::Drop("it is not a copy this app set aside".into()),
         _ => {}
     }
-    (!under_root(aside, roots)).then(|| "it is not under a skill folder this app scanned".to_string())
+    match cover(roots, &trust.live, aside) {
+        Some((RootClass::Live, _)) => Verdict::Act,
+        Some((RootClass::Idle, _)) if trust.idle_ok => Verdict::Act,
+        Some((RootClass::Idle, root)) => Verdict::Keep(format!("it is under {}, a workspace skills folder this delete did not scan; the next start clears it", root.display())),
+        _ => Verdict::Drop("it is not under a skill folder this app scans".into()),
+    }
 }
 
 /// At startup: an unfinished delete is undone (not yet done) or completed (done). Returns one line
 /// per entry that is in the way, or about the record itself when it could not be cleared (also
 /// written to the log); empty when the record is cleared or done.
-pub fn recover(app_dir: &Path) -> Vec<String> {
+fn recover(app_dir: &Path, trust: &Trust) -> Vec<String> {
     let mut stuck = vec![];
     let path = app_dir.join(JOURNAL);
     let journal = match read(app_dir) {
@@ -397,12 +498,12 @@ pub fn recover(app_dir: &Path) -> Vec<String> {
             return stuck;
         }
         Err(ReadError::Parse(e)) => {
-            crate::diag::write(app_dir, &format!("skill delete: the record {} is damaged ({e}) and is left in place; folders named {ASIDE}* in the skill folders are hidden skills to rename back by hand", path.display()));
+            crate::diag::write(app_dir, &format!("skill delete: the record {} is damaged ({e}) and is left in place; {RENAME_ADVICE}", path.display()));
             return stuck;
         }
     };
     if journal.done {
-        finish(app_dir, &journal);
+        finish(app_dir, &journal, trust);
         return stuck;
     }
     let mut dropped = vec![];
@@ -410,11 +511,20 @@ pub fn recover(app_dir: &Path) -> Vec<String> {
         if std::fs::symlink_metadata(aside).is_err() {
             continue; // never moved, or already put back
         }
-        if !aside_of(from, aside) {
-            // FIX-5 (1): an entry that is not a copy set aside from its original can never be put
-            // back, so keeping it would only stop every later delete. It is left on disk as it is and
-            // dropped from the record, which is said once the record is really without it.
-            dropped.push(format!("skill delete: dropped {} from the record and left it alone, it is not a copy set aside from {}", aside.display(), from.display()));
+        // FIX-5 (1): an entry that is not a copy set aside from its original can never be put back,
+        // so keeping it would only stop every later delete. It is left on disk as it is and dropped
+        // from the record, which is said once the record is really without it. AFTER 3 (FIX-6): when
+        // the record names its skill folders, the copy must also sit under one that counts (a put-back
+        // is a rename, so a workspace folder not scanned now is fine); older records put back as before.
+        let refused = if !aside_of(from, aside) {
+            Some(format!("it is not a copy set aside from {}", from.display()))
+        } else if !journal.roots.is_empty() && cover(&journal.roots, &trust.live, aside).is_none_or(|(c, _)| c == RootClass::Bogus) {
+            Some("it is not under a skill folder this app scans".to_string())
+        } else {
+            None
+        };
+        if let Some(why) = refused {
+            dropped.push(format!("skill delete: dropped {} from the record and left it alone, {why}", aside.display()));
             continue;
         }
         let why = if std::fs::symlink_metadata(from).is_err() {
@@ -441,7 +551,7 @@ pub fn recover(app_dir: &Path) -> Vec<String> {
         // Copies carried from an earlier finished delete are never put back, only removed.
         let rest = Journal { done: true, moves: vec![], left: journal.left, roots: journal.roots };
         write(app_dir, &rest).map_err(|e| format!("its record {} could not be rewritten ({e}); try again", path.display())).map(|()| {
-            finish(app_dir, &rest);
+            finish(app_dir, &rest, trust);
         })
     };
     match cleared {
@@ -458,32 +568,68 @@ pub fn recover(app_dir: &Path) -> Vec<String> {
     stuck
 }
 
-/// Removes every set-aside copy the record names; returns the ones still on disk. The record is
-/// removed once none is left.
-fn finish(app_dir: &Path, journal: &Journal) -> Vec<PathBuf> {
+/// Removes every set-aside copy the record names that it may act on; returns the ones still on the
+/// record: not removable yet, or kept for the next start. The record is removed once none is left.
+fn finish(app_dir: &Path, journal: &Journal, trust: &Trust) -> Vec<PathBuf> {
     // T-441-c: only a path Kolux set aside itself is ever removed. The journal is read back at every
-    // launch, so an entry naming anything else (a damaged or hand-edited file) is refused, logged and
-    // left on disk; the journal stays so the refusal can be looked into. What "set aside itself"
-    // means is `refusal`: the exact name form, next to its original when one is on record, and under
-    // a skill folder the record names (FIX-5 (2)).
-    let entries = journal.moves.iter().map(|(from, aside)| (aside, Some(from.as_path()))).chain(journal.left.iter().map(|a| (a, None)));
-    let left: Vec<PathBuf> = entries
-        .filter(|(a, from)| {
-            if std::fs::symlink_metadata(a).is_err() {
-                return false; // already gone
+    // launch, so an entry naming anything else (a damaged or hand-edited file) is left on disk and
+    // (AFTER 1, FIX-6) taken off the record, logged once the record is really without it, so it is
+    // neither removed nor reported again at every start. What "set aside itself" means is
+    // `verdict`: the exact name form, next to its original when one is on record, and under a skill
+    // folder the record names that counts right now (FIX-5 (2), FIX-6 (4)).
+    let (mut moves, mut left, mut dropped, mut kept, mut removed) = (vec![], vec![], vec![], vec![], false);
+    let entries = journal.moves.iter().map(|(from, aside)| (aside, Some(from))).chain(journal.left.iter().map(|a| (a, None)));
+    for (a, from) in entries {
+        if std::fs::symlink_metadata(a).is_err() {
+            continue; // already gone
+        }
+        let stays = match verdict(&journal.roots, trust, from.map(PathBuf::as_path), a) {
+            Verdict::Drop(why) => {
+                dropped.push((a.clone(), why));
+                false
             }
-            if let Some(why) = refusal(&journal.roots, *from, a) {
-                crate::diag::write(app_dir, &format!("skill delete: refused to remove {}, {why}", a.display()));
-                return true;
+            Verdict::Keep(why) => {
+                kept.push(format!("skill delete: kept {} on the record and left it alone for now, {why}", a.display()));
+                true
             }
-            remove(a).is_err()
-        })
-        .map(|(a, _)| a.clone())
-        .collect();
-    if left.is_empty() {
-        let _ = std::fs::remove_file(app_dir.join(JOURNAL));
+            Verdict::Act => {
+                let failed = remove(a).is_err();
+                removed |= !failed;
+                failed
+            }
+        };
+        if stays {
+            match from {
+                Some(f) => moves.push((f.clone(), a.clone())),
+                None => left.push(a.clone()),
+            }
+        }
     }
-    left
+    let still: Vec<PathBuf> = moves.iter().map(|(_, a)| a.clone()).chain(left.iter().cloned()).collect();
+    let cleared = if still.is_empty() {
+        std::fs::remove_file(app_dir.join(JOURNAL))
+    } else if dropped.is_empty() && !removed {
+        Ok(()) // nothing changed on disk, so the record is right as it is
+    } else {
+        write(app_dir, &Journal { done: true, moves, left, roots: journal.roots.clone() })
+    };
+    match cleared {
+        Ok(()) => {
+            for (a, why) in dropped {
+                crate::diag::write(app_dir, &format!("skill delete: dropped {} from the record and left it alone, {why}", a.display()));
+            }
+        }
+        Err(e) => {
+            // The record still names them: said as a refusal, not as a drop that did not happen.
+            for (a, why) in dropped {
+                crate::diag::write(app_dir, &format!("skill delete: refused to remove {}, {why}; the record could not be rewritten without it ({e})", a.display()));
+            }
+        }
+    }
+    for line in kept {
+        crate::diag::write(app_dir, &line);
+    }
+    still
 }
 
 /// A link goes without what it points at; a folder goes with its contents.
@@ -797,6 +943,11 @@ mod tests {
         v
     }
 
+    /// Start-up recovery that treats `root` as the one home skill folder.
+    fn trust(root: &Path) -> Trust {
+        Trust::startup(vec![root.to_path_buf()])
+    }
+
     #[test]
     fn skill023_a_delete_removes_the_skills_and_their_receipts_and_leaves_no_record() {
         let t = temp("skill023-a");
@@ -852,7 +1003,7 @@ mod tests {
         assert_eq!(status.code(), Some(9), "the child must die mid-delete");
         let mid = names(&root);
         assert!(mid.len() == 2 && mid.iter().all(|n| is_set_aside(n)), "both set aside: {mid:?}");
-        recover(&app);
+        recover(&app, &trust(&root));
         assert_eq!(names(&root), ["alpha", "beta"]);
         assert_eq!(std::fs::read_to_string(root.join("alpha/SKILL.md")).unwrap(), "# alpha");
         assert!(!app.join(JOURNAL).exists());
@@ -864,7 +1015,7 @@ mod tests {
         let (app, root) = (t.join("app"), t.join("skills"));
         let aside = skill(&root, ".kolux-deleting-1-2-alpha");
         write(&app, &Journal { done: true, moves: vec![(root.join("alpha"), aside)], left: vec![], roots: vec![root.clone()] }).unwrap();
-        recover(&app);
+        recover(&app, &trust(&root));
         assert!(names(&root).is_empty());
         assert!(!app.join(JOURNAL).exists());
     }
@@ -876,11 +1027,12 @@ mod tests {
         let plain = skill(&root, "alpha");
         let aside = skill(&root, ".kolux-deleting-1-2-beta");
         write(&app, &Journal { done: true, moves: vec![(root.join("x"), plain.clone()), (root.join("beta"), aside)], left: vec![], roots: vec![root.clone()] }).unwrap();
-        recover(&app);
+        recover(&app, &trust(&root));
         assert_eq!(names(&root), vec!["alpha".to_string()], "the plain folder is kept, the set-aside one goes");
         assert!(plain.join("SKILL.md").exists());
-        assert!(app.join(JOURNAL).exists(), "the journal is kept for a look");
-        assert!(std::fs::read_to_string(app.join("logs").join("kolux.log")).unwrap_or_default().contains("refused to remove"));
+        // AFTER 1 (FIX-6): the refused entry is taken off the record, which then has nothing left.
+        assert!(!app.join(JOURNAL).exists(), "the refused entry is dropped, so the record goes");
+        assert!(log_of(&app).contains(&format!("dropped {} from the record and left it alone", plain.display())), "{}", log_of(&app));
     }
 
     #[test]
@@ -1129,7 +1281,7 @@ mod tests {
         let kept = read(&app).expect("the record still names the leftover");
         assert!(kept.done && kept.left.contains(&old), "carried: {:?}", kept.left);
         drop(held);
-        recover(&app);
+        recover(&app, &trust(&root));
         assert!(names(&root).is_empty(), "the leftover goes at the next start");
         assert!(!app.join(JOURNAL).exists());
     }
@@ -1141,7 +1293,7 @@ mod tests {
         let aside = skill(&root, ".kolux-deleting-3-4-alpha");
         let old = skill(&root, ".kolux-deleting-1-2-old");
         write(&app, &Journal { done: false, moves: vec![(root.join("alpha"), aside)], left: vec![old], roots: vec![root.clone()] }).unwrap();
-        recover(&app);
+        recover(&app, &trust(&root));
         assert_eq!(names(&root), ["alpha"], "alpha is back, the carried copy is gone");
         assert!(!app.join(JOURNAL).exists());
     }
@@ -1156,10 +1308,10 @@ mod tests {
         let aside = skill(&root, ".kolux-deleting-1-2-alpha");
         std::fs::create_dir_all(&app).unwrap();
         std::fs::write(app.join(JOURNAL), serde_json::json!({ "done": true, "moves": [[root.join("alpha"), aside]] }).to_string()).unwrap();
-        recover(&app);
+        recover(&app, &trust(&root));
         assert_eq!(names(&root), [".kolux-deleting-1-2-alpha"], "left on disk");
-        assert!(app.join(JOURNAL).exists());
-        assert!(log_of(&app).contains("not under a skill folder"), "{}", log_of(&app));
+        assert!(!app.join(JOURNAL).exists(), "AFTER 1: dropped at start-up, so the record goes");
+        assert!(log_of(&app).contains("dropped") && log_of(&app).contains("not under a skill folder"), "{}", log_of(&app));
         let beta = skill(&root, "beta");
         assert_eq!(delete(&app, &[beta]), Ok(Outcome::Deleted));
         assert_eq!(names(&root), [".kolux-deleting-1-2-alpha"]);
@@ -1183,7 +1335,7 @@ mod tests {
         let kept = read(&app).expect("the carried copy stays on record");
         assert!(kept.done && kept.moves.is_empty() && kept.left == [old], "{:?} {:?}", kept.moves, kept.left);
         drop(held);
-        recover(&app);
+        recover(&app, &trust(&root));
         assert_eq!(names(&root), ["alpha"]);
         assert!(!app.join(JOURNAL).exists());
     }
@@ -1334,7 +1486,7 @@ mod tests {
         assert!(err.starts_with("Nothing was deleted") && err.contains("next start"), "{err}");
         let kept = read(&app).expect("the record that can put alpha back stays");
         assert!(!kept.done && kept.moves.len() == 2, "{:?} {:?}", kept.moves, kept.left);
-        recover(&app);
+        recover(&app, &trust(&root));
         assert_eq!(names(&root), ["alpha"], "alpha is back");
         assert!(!app.join(JOURNAL).exists());
     }
@@ -1399,7 +1551,7 @@ mod tests {
         let aside = not_done_record(&app, &root);
         let back = skill(&root, "alpha");
         std::fs::write(back.join(SKILL_FILE), "# new alpha").unwrap();
-        recover(&app);
+        recover(&app, &trust(&root));
         assert!(app.join(JOURNAL).exists(), "the record stays, so the hidden copy is not orphaned");
         assert_eq!(std::fs::read_to_string(back.join(SKILL_FILE)).unwrap(), "# new alpha");
         assert!(aside.join(SKILL_FILE).is_file(), "the hidden copy is untouched");
@@ -1413,7 +1565,7 @@ mod tests {
         assert!(root.join("beta").is_dir());
         // Once the user clears the original, the next start puts the copy back.
         std::fs::remove_dir_all(&back).unwrap();
-        recover(&app);
+        recover(&app, &trust(&root));
         assert_eq!(std::fs::read_to_string(root.join("alpha").join(SKILL_FILE)).unwrap(), "# .kolux-deleting-1-2-alpha");
         assert!(!app.join(JOURNAL).exists());
     }
@@ -1424,17 +1576,20 @@ mod tests {
         let (app, root, other) = (t.join("app"), t.join("skills"), t.join("elsewhere"));
         let stray = skill(&other, ".kolux-deleting-1-2-alpha");
         // Not done: putting it back would move a folder from outside the skill folders into one.
-        write(&app, &Journal { done: false, moves: vec![(root.join("alpha"), stray.clone())], left: vec![], roots: vec![] }).unwrap();
-        assert!(recover(&app).is_empty(), "FIX-5 (1): not stuck, the entry is dropped");
+        // FIX-6 (5): the record names both folders, so only the sibling check can refuse the entry.
+        let both = Trust::startup(vec![root.clone(), other.clone()]);
+        write(&app, &Journal { done: false, moves: vec![(root.join("alpha"), stray.clone())], left: vec![], roots: vec![root.clone(), other.clone()] }).unwrap();
+        assert!(recover(&app, &both).is_empty(), "FIX-5 (1): not stuck, the entry is dropped");
         assert!(stray.is_dir() && !root.join("alpha").exists());
         assert!(!app.join(JOURNAL).exists(), "the refused entry is dropped with the record, so later deletes go through");
-        assert!(log_of(&app).contains("dropped"), "{}", log_of(&app));
-        // Done: removing it would delete a folder that is not the original's neighbour.
-        write(&app, &Journal { done: true, moves: vec![(root.join("alpha"), stray.clone())], left: vec![], roots: vec![] }).unwrap();
-        recover(&app);
+        assert!(log_of(&app).contains("dropped") && log_of(&app).contains("not a copy set aside from"), "{}", log_of(&app));
+        // Done: removing it would delete a folder that is not the original's neighbour. AFTER 1
+        // (FIX-6): it is dropped from the record at start-up, not reported again at every start.
+        write(&app, &Journal { done: true, moves: vec![(root.join("alpha"), stray.clone())], left: vec![], roots: vec![root.clone(), other.clone()] }).unwrap();
+        recover(&app, &both);
         assert!(stray.is_dir(), "kept");
-        assert!(app.join(JOURNAL).exists());
-        assert!(log_of(&app).contains("refused"), "{}", log_of(&app));
+        assert!(!app.join(JOURNAL).exists());
+        assert_eq!(log_of(&app).matches("not a copy set aside from").count(), 2, "{}", log_of(&app));
     }
 
     // Fix round 4 (stand-in review of 0a444d4).
@@ -1448,9 +1603,10 @@ mod tests {
         let stray = skill(&other, ".kolux-deleting-1-2-alpha");
         let plain = skill(&other, "plain");
         let beta = skill(&root, "beta");
-        write(&app, &Journal { done: true, moves: vec![(root.join("alpha"), stray.clone())], left: vec![plain.clone()], roots: vec![] }).unwrap();
-        recover(&app);
-        assert!(app.join(JOURNAL).exists(), "start-up refuses both entries and keeps the record");
+        // FIX-6 (5): the record names both folders, so the sibling check (stray) and the name check
+        // (plain) are what refuse the entries. No start-up recovery first: since AFTER 1 (FIX-6) that
+        // would drop them itself; this test is about the delete's own settle.
+        write(&app, &Journal { done: true, moves: vec![(root.join("alpha"), stray.clone())], left: vec![plain.clone()], roots: vec![root.clone(), other.clone()] }).unwrap();
         assert_eq!(delete(&app, &[beta]).unwrap(), Outcome::Deleted);
         assert_eq!(names(&other), [".kolux-deleting-1-2-alpha", "plain"], "neither refused entry was removed");
         assert!(names(&root).is_empty(), "the chosen skill is gone");
@@ -1553,13 +1709,13 @@ mod tests {
         let doc_copy = skill(&work, ".kolux-deleting-1-2-doc");
         // A damaged or hand-edited done record: both entries pass the name and sibling checks.
         write(&app, &Journal { done: true, moves: vec![(work.join("doc"), doc_copy.clone())], left: vec![src_copy.clone()], roots: vec![root.clone()] }).unwrap();
-        recover(&app);
+        recover(&app, &trust(&root));
         assert!(src_copy.is_dir() && doc_copy.is_dir(), "start-up removes neither");
-        assert!(app.join(JOURNAL).exists());
+        assert!(!app.join(JOURNAL).exists(), "AFTER 1: both are dropped at start-up, and the record with them");
         let log = log_of(&app);
-        assert_eq!(log.matches("refused to remove").count(), 2, "{log}");
-        assert!(log.contains("not under a skill folder"), "{log}");
-        // The next delete drops them (they are not carried) and still removes nothing in `work`.
+        assert_eq!(log.matches("dropped").count(), 2, "{log}");
+        assert_eq!(log.matches("not under a skill folder").count(), 2, "{log}");
+        // The next delete still removes nothing in `work`.
         let beta = skill(&root, "beta");
         assert_eq!(delete(&app, &[beta]), Ok(Outcome::Deleted));
         assert!(src_copy.is_dir() && doc_copy.is_dir() && names(&root).is_empty());
@@ -1568,37 +1724,55 @@ mod tests {
         // The same form under the named skill folder is removed.
         let mine = skill(&root, ".kolux-deleting-1-2-old");
         write(&app, &Journal { done: true, moves: vec![], left: vec![mine.clone()], roots: vec![root.clone()] }).unwrap();
-        recover(&app);
+        recover(&app, &trust(&root));
         assert!(!mine.exists() && !app.join(JOURNAL).exists());
-        // An older record names no skill folders and so vouches for nothing.
+        // An older record names no skill folders and so vouches for nothing: dropped, left on disk.
         let older = skill(&root, ".kolux-deleting-1-2-older");
         write(&app, &Journal { done: true, moves: vec![], left: vec![older.clone()], roots: vec![] }).unwrap();
-        recover(&app);
-        assert!(older.is_dir() && app.join(JOURNAL).exists());
+        recover(&app, &trust(&root));
+        assert!(older.is_dir() && !app.join(JOURNAL).exists());
         // What `run` writes names the scanned folders, so its own copies are removed (see every
         // other delete test); a copy carried from an earlier record keeps that record's folders.
         assert!(under_root(&mine, std::slice::from_ref(&root)) && !under_root(&src_copy, std::slice::from_ref(&root)) && !under_root(&mine, &[]));
     }
 
-    /// AFTER 3: "dropped ... from the record" is logged only once the record was really rewritten
-    /// without the entry, so a delete that fails before writing does not claim a drop it did not do.
+    /// AFTER 3, then FIX-6 AFTER 4: "dropped ... from the record" is logged only once the record was
+    /// really rewritten without the entry. Here every record write fails (a folder sits where the
+    /// record's temporary file goes), both at start-up recovery and in the delete itself, so the
+    /// entry is reported as refused, not dropped, until a write goes through.
     #[test]
     fn fix5_d_a_drop_is_logged_only_after_the_record_was_rewritten() {
         let t = temp("fix5-d");
-        let (app, root, other) = (t.join("app"), t.join("skills"), t.join("elsewhere"));
+        let (app, root, other, ws) = (t.join("app"), t.join("skills"), t.join("elsewhere"), t.join("repo").join(".claude").join("skills"));
         let plain = skill(&other, "plain");
-        write(&app, &Journal { done: true, moves: vec![], left: vec![plain.clone()], roots: vec![] }).unwrap();
+        // A vouched-for copy under a workspace skills folder the delete does not scan keeps the record
+        // alive (FIX-6 (2)), so dropping `plain` needs a rewrite, not a removal of the record.
+        let idle = skill(&ws, ".kolux-deleting-1-2-old");
+        write(&app, &Journal { done: true, moves: vec![], left: vec![plain.clone(), idle.clone()], roots: vec![root.clone(), other.clone(), ws.clone()] }).unwrap();
         let beta = skill(&root, "beta");
-        let err = delete(&app, &[root.join("gone")]).unwrap_err();
-        assert!(err.contains("no longer on disk"), "{err}");
-        assert!(!log_of(&app).contains("dropped"), "the record still holds the entry, so nothing was dropped yet: {}", log_of(&app));
+        std::fs::create_dir_all(app.join(JOURNAL).with_extension("json.tmp")).unwrap();
+        let err = delete(&app, std::slice::from_ref(&beta)).unwrap_err();
+        assert!(err.contains("record could not be written"), "{err}");
+        let log = log_of(&app);
+        assert!(!log.contains("dropped"), "the record still holds the entry, so nothing was dropped yet: {log}");
+        assert!(log.contains(&format!("refused to remove {}", plain.display())) && log.contains("could not be rewritten"), "{log}");
+        assert!(beta.is_dir() && plain.is_dir() && idle.is_dir() && app.join(JOURNAL).exists());
+        std::fs::remove_dir(app.join(JOURNAL).with_extension("json.tmp")).unwrap();
         assert_eq!(delete(&app, &[beta]), Ok(Outcome::Deleted));
-        assert_eq!(log_of(&app).matches("dropped").count(), 1, "{}", log_of(&app));
-        assert!(plain.is_dir() && !app.join(JOURNAL).exists());
+        let log = log_of(&app);
+        assert_eq!(log.matches("dropped").count(), 1, "{log}");
+        assert!(log.contains(&format!("kept {} on the record", idle.display())), "{log}");
+        assert!(plain.is_dir() && idle.is_dir() && names(&root).is_empty());
+        let kept = read(&app).expect("the kept copy stays on record");
+        assert!(kept.done && kept.left == [idle.clone()] && kept.roots.iter().any(|r| same(r, &ws)), "{:?} {:?}", kept.left, kept.roots);
+        // The next start acts on a workspace skills folder by shape and clears it.
+        recover(&app, &trust(&root));
+        assert!(!idle.exists() && !app.join(JOURNAL).exists());
     }
 
     /// AFTER 5: a stuck record is checked once per request, not once per chosen skill: every skill
-    /// gets the same answer, the log says it once, and the put-back retries are paid once.
+    /// gets the same answer and the log says it once. (The stuck case here is "both exist", which
+    /// makes no rename retries; that the put-back retries are paid once follows from the one call.)
     #[test]
     fn fix5_e_a_stuck_record_is_checked_once_per_request_not_once_per_skill() {
         let t = temp("fix5-e");
@@ -1633,7 +1807,7 @@ mod tests {
         assert!(err.contains("could not be put back as") && err.contains(&a.display().to_string()) && err.contains(&aside.display().to_string()), "{err}");
         assert!(root.join("beta").is_dir() && aside.is_dir());
         drop(held);
-        assert!(recover(&app).is_empty());
+        assert!(recover(&app, &trust(&root)).is_empty());
         assert_eq!(names(&root), ["alpha", "beta"]);
     }
 
@@ -1656,13 +1830,139 @@ mod tests {
         let (app, skills) = (t.join("app"), t.join("skills"));
         let copy = skill(&skills, ".kolux-deleting-1-2-xalpha");
         write(&app, &Journal { done: false, moves: vec![(skills.join("alpha"), copy.clone())], left: vec![], roots: vec![] }).unwrap();
-        assert!(recover(&app).is_empty(), "FIX-5 (1): dropped, not stuck");
+        assert!(recover(&app, &trust(&skills)).is_empty(), "FIX-5 (1): dropped, not stuck");
         assert_eq!(names(&skills), [".kolux-deleting-1-2-xalpha"], "not moved");
         assert!(!app.join(JOURNAL).exists() && log_of(&app).contains("dropped"), "{}", log_of(&app));
-        // Done: not removed either.
-        write(&app, &Journal { done: true, moves: vec![(skills.join("alpha"), copy.clone())], left: vec![], roots: vec![] }).unwrap();
-        recover(&app);
-        assert!(copy.is_dir() && app.join(JOURNAL).exists());
+        // Done: not removed either. FIX-6 (5): the record names the folder, so only the name check
+        // refuses it; AFTER 1: the refused entry is dropped at start-up and the record goes with it.
+        write(&app, &Journal { done: true, moves: vec![(skills.join("alpha"), copy.clone())], left: vec![], roots: vec![skills.clone()] }).unwrap();
+        recover(&app, &trust(&skills));
+        assert!(copy.is_dir() && !app.join(JOURNAL).exists());
+        assert!(log_of(&app).contains(&format!("dropped {} from the record and left it alone, it is not a copy set aside from", copy.display())), "{}", log_of(&app));
+    }
+
+    // Fix round 6 (stand-in review of efa2f15a).
+
+    /// FIX-6 (3): a skill folder a record names counts only when it is an absolute folder that exists.
+    /// An empty one would match every path, a relative one whatever folder the process runs in.
+    #[test]
+    fn fix6_a_an_empty_relative_or_missing_root_vouches_for_nothing() {
+        let t = temp("fix6-a");
+        let (app, root) = (t.join("app"), t.join("skills"));
+        let copy = skill(&root, ".kolux-deleting-1-2-alpha");
+        assert!(under_root(&copy, std::slice::from_ref(&root)), "the real folder counts");
+        assert!(!under_root(&copy, &[PathBuf::from("")]), "empty");
+        assert!(!under_root(&copy, &[PathBuf::from("skills")]), "relative");
+        assert!(!under_root(&copy, &[PathBuf::from(".")]), "relative, the working folder");
+        assert!(!under_root(&copy, &[t.join("missing")]), "not on disk");
+        assert!(!under_root(&copy, &[PathBuf::from(""), PathBuf::from("skills"), t.join("missing")]), "none of them");
+        // On disk, each as a hand-edited record: the copy stays, the record is dropped and the log says why.
+        for (i, bad) in ["", "skills", ".", &t.join("missing").display().to_string()].iter().enumerate() {
+            std::fs::create_dir_all(&app).unwrap();
+            std::fs::write(app.join(JOURNAL), serde_json::json!({ "done": true, "moves": [], "left": [copy], "roots": [bad] }).to_string()).unwrap();
+            recover(&app, &trust(&root));
+            assert!(copy.is_dir(), "root {bad:?} must not make the app remove the copy");
+            assert!(!app.join(JOURNAL).exists(), "root {bad:?}: dropped");
+            assert_eq!(log_of(&app).matches("not under a skill folder this app scans").count(), i + 1, "root {bad:?}: {}", log_of(&app));
+        }
+    }
+
+    /// FIX-6 (4), FIX-SOON 1 scenario A: at start-up only the home skill folders of this environment
+    /// and folders shaped like a workspace skills folder count; a record naming any other folder
+    /// never makes the app remove anything under it.
+    #[test]
+    fn fix6_b_start_up_acts_only_on_home_skill_folders_and_workspace_shaped_ones() {
+        let t = temp("fix6-b");
+        let (app, home, work) = (t.join("app"), t.join("home"), t.join("work"));
+        let claude = home.join(".claude").join("skills");
+        let ws = t.join("repo").join(".agents").join("skills");
+        let in_home = skill(&claude, ".kolux-deleting-1-2-a");
+        let in_ws = skill(&ws, ".kolux-deleting-1-2-b");
+        let in_work = skill(&work, ".kolux-deleting-1-2-c");
+        let live = skills::home_roots(&env(&home));
+        assert!(live.iter().any(|r| same(r, &claude)), "{live:?}");
+        assert_eq!(classify(&claude, &live), RootClass::Live);
+        assert_eq!(classify(&ws, &live), RootClass::Idle);
+        assert_eq!(classify(&work, &live), RootClass::Bogus, "an existing folder that is no skill folder");
+        assert_eq!(classify(&t.join("repo").join(".claude"), &live), RootClass::Bogus, "shape needs the skills folder itself");
+        write(&app, &Journal { done: true, moves: vec![], left: vec![in_home.clone(), in_ws.clone(), in_work.clone()], roots: vec![claude.clone(), ws.clone(), work.clone()] }).unwrap();
+        assert_eq!(startup_recover_as(&app, &Trust::startup(live)), Startup::Recovered);
+        assert!(!in_home.exists() && !in_ws.exists(), "the home and workspace-shaped copies go");
+        assert!(in_work.is_dir(), "the copy under a plain folder stays, whatever the record says");
+        assert!(!app.join(JOURNAL).exists(), "dropped, so it is not reported again at every start");
+        assert!(log_of(&app).contains(&format!("dropped {} from the record and left it alone, it is not under a skill folder this app scans", in_work.display())), "{}", log_of(&app));
+    }
+
+    /// FIX-6 (2): a delete carries a leftover only when it sits under a folder the delete scans; one
+    /// under a workspace skills folder it does not scan stays on the record, untouched and logged,
+    /// and the next start clears it. One under a folder that is no skill folder is dropped.
+    #[test]
+    fn fix6_c_a_delete_keeps_a_leftover_from_a_workspace_it_does_not_scan_and_drops_one_from_elsewhere() {
+        let t = temp("fix6-c");
+        let (app, root, work) = (t.join("app"), t.join("skills"), t.join("work"));
+        let ws = t.join("repo").join(".claude").join("skills");
+        let mine = skill(&root, ".kolux-deleting-1-2-old");
+        let idle = skill(&ws, ".kolux-deleting-1-2-ws");
+        let stray = skill(&work, ".kolux-deleting-1-2-elsewhere");
+        write(&app, &Journal { done: true, moves: vec![], left: vec![mine.clone(), idle.clone(), stray.clone()], roots: vec![root.clone(), ws.clone(), work.clone()] }).unwrap();
+        let beta = skill(&root, "beta");
+        let done = run(&app, &places(&[&root], &[]), &[pick(&beta)]).unwrap();
+        assert_eq!(done[0].outcome, "deleted", "{done:?}");
+        assert!(!mine.exists() && names(&root).is_empty(), "the carried copy under the scanned folder goes with the delete");
+        assert!(idle.is_dir() && stray.is_dir());
+        let kept = read(&app).expect("the record stays for the kept copy");
+        assert!(kept.done && kept.moves.is_empty() && kept.left == [idle.clone()], "{:?} {:?}", kept.moves, kept.left);
+        assert!(kept.roots.iter().any(|r| same(r, &ws)) && !kept.roots.iter().any(|r| same(r, &work)), "{:?}", kept.roots);
+        let log = log_of(&app);
+        assert!(log.contains(&format!("kept {} on the record and left it alone for now, it is under {}", idle.display(), ws.display())), "{log}");
+        assert!(log.contains(&format!("dropped {} from the record and left it alone, it is not under a skill folder this app scans", stray.display())), "{log}");
+        assert!(!log.contains("refused to remove"), "{log}");
+        recover(&app, &trust(&root));
+        assert!(!idle.exists() && stray.is_dir() && !app.join(JOURNAL).exists(), "the next start clears the kept copy");
+    }
+
+    /// FIX-6 (5): with the folder on record, a wrongly named `left` entry is refused by the name check
+    /// alone: kept on disk, taken off the record, logged. The exact form next to it is removed.
+    #[test]
+    fn fix6_d_a_wrongly_named_left_entry_under_a_recorded_folder_is_kept_and_logged() {
+        let t = temp("fix6-d");
+        let (app, root) = (t.join("app"), t.join("skills"));
+        let no_stamp = skill(&root, ".kolux-deleting-old");
+        let no_name = skill(&root, ".kolux-deleting-1-2-");
+        let exact = skill(&root, ".kolux-deleting-1-2-old");
+        write(&app, &Journal { done: true, moves: vec![], left: vec![no_stamp.clone(), no_name.clone(), exact.clone()], roots: vec![root.clone()] }).unwrap();
+        recover(&app, &trust(&root));
+        assert_eq!(names(&root), [".kolux-deleting-1-2-", ".kolux-deleting-old"], "only the exact form went");
+        assert!(!app.join(JOURNAL).exists());
+        let log = log_of(&app);
+        for p in [&no_stamp, &no_name] {
+            assert!(log.contains(&format!("dropped {} from the record and left it alone, it is not a copy this app set aside", p.display())), "{log}");
+        }
+        assert!(!log.contains(&exact.display().to_string()), "{log}");
+    }
+
+    /// AFTER 3 (FIX-6): a not-done record that names its skill folders puts a copy back only when it
+    /// sits under one that counts; an older record without them puts back as before.
+    #[test]
+    fn fix6_e_a_not_done_record_puts_back_only_under_a_skill_folder_it_names() {
+        let t = temp("fix6-e");
+        let (app, root, work) = (t.join("app"), t.join("skills"), t.join("work"));
+        let stray = skill(&work, ".kolux-deleting-1-2-alpha");
+        write(&app, &Journal { done: false, moves: vec![(work.join("alpha"), stray.clone())], left: vec![], roots: vec![root.clone()] }).unwrap();
+        assert!(recover(&app, &trust(&root)).is_empty(), "dropped, not stuck");
+        assert!(stray.is_dir() && !work.join("alpha").exists(), "not renamed");
+        assert!(!app.join(JOURNAL).exists());
+        assert!(log_of(&app).contains(&format!("dropped {} from the record and left it alone, it is not under a skill folder this app scans", stray.display())), "{}", log_of(&app));
+        // A workspace skills folder the delete did not scan still puts back: a put-back is a rename.
+        let ws = t.join("repo").join(".claude").join("skills");
+        let hidden = skill(&ws, ".kolux-deleting-1-2-beta");
+        write(&app, &Journal { done: false, moves: vec![(ws.join("beta"), hidden.clone())], left: vec![], roots: vec![root.clone(), ws.clone()] }).unwrap();
+        assert!(recover(&app, &Trust::delete(std::slice::from_ref(&root))).is_empty());
+        assert!(ws.join("beta").is_dir() && !hidden.exists() && !app.join(JOURNAL).exists());
+        // An older record names no folders and puts back as it always did.
+        write(&app, &Journal { done: false, moves: vec![(work.join("alpha"), stray.clone())], left: vec![], roots: vec![] }).unwrap();
+        assert!(recover(&app, &trust(&root)).is_empty());
+        assert!(work.join("alpha").is_dir() && !stray.exists());
     }
 
     /// AFTER 1: a passing holder of the lock file (a backup or antivirus tool) gets one retry before
