@@ -152,7 +152,14 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
       setSaving((s) => startSave(s, id, cell));
     };
     const end = () => setSaving((s) => endSave(s, id));
-    const settle = (ok: boolean, apply: () => void) => settleEdit(editIds.current.book, cell, id, ok, apply);
+    // FIX-4 (review AFTER 6): after a burst of edits to one cell GitHub may not have applied them in
+    // the order sent, so the project is read back and shown as GitHub holds it.
+    const settle = (ok: boolean, apply: () => void) => {
+      if (!settleEdit(editIds.current.book, cell, id, ok, apply)) return;
+      invoke<Project>("github_project", { host: ref.host, owner: ref.owner, number: ref.number })
+        .then((p) => setProject((cur) => (cur && cur.id === p.id ? p : cur)))
+        .catch(() => {});
+    };
     if (field.kind === "labels") {
       const { add, remove } = labelChange(item.labels, value);
       if (add.length + remove.length === 0) return;

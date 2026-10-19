@@ -334,9 +334,9 @@ mod script_runs {
         // That start is timed just before the run and again just after it, and the larger of the
         // two counts, so a load spike on either side of the run raises the bound with it. The bound
         // is twice that start plus a 3 s allowance: curl's 0.5 s connect timeout, the cmd and
-        // script work, the script's retry window (20 tries 100 ms apart, 2 s), which nothing uses
-        // here because no one holds the file, and 1 s of slack. A hard 30 s ceiling still catches
-        // a true hang.
+        // script work, and slack. The script's retry window (20 tries 100 ms apart, 2 s) is not
+        // part of the allowance: nothing uses it here because no one holds the file (hooks
+        // FIX-8, stand-in review AFTER 1). A hard 30 s ceiling still catches a true hang.
         let before = powershell_start();
         let started = Instant::now();
         let out = run(&dir, &env(false), r#"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","session_id":"s1"}"#);
@@ -451,6 +451,14 @@ mod script_runs {
     /// real retry proves itself only when the release falls between HELD_PASS_LEAD_MS after the
     /// stamp (earlier, a script with no retry could pass) and the end of the script's retries
     /// (later, nothing lands). The aim at the middle keeps room for a load swing either way.
+    ///
+    /// hooks FIX-8 (stand-in review AFTER 3): the 600 ms of room each side is NOMINAL, what the
+    /// constants give. Where the release really falls varies by up to ~500 ms either way from run
+    /// to run: the leads of the aimed attempts measured 1481-1596 ms in the FIX-7 runs (early-side
+    /// room 300-420 ms against the 1900 ms reach) and 606-1175 ms in the FIX-8 runs. A discarded
+    /// warm-up run of the script before attempt 0 did not narrow that (leads 1329, 1643, 1968 and
+    /// one miss, evidence/hooks-FIX-8.txt), so none is kept. An overshoot is safe: nothing lands,
+    /// the hold shrinks by 700 ms and there are still tries left.
     const HELD_AIM_PAST_STAMP_MS: i64 = 1100;
     const HELD_PASS_LEAD_MS: i64 = 400;
 
@@ -578,7 +586,8 @@ mod script_runs {
         // but for the one append (it lands, or it fails at once on the missing folder), so what
         // sets them apart is the script's retries: (tries - 1) x its pause, 1900 ms, read from
         // the script. The allowed difference sits well under that, and a missing-folder run that
-        // retried would cost at least that much more than the held one.
+        // retried would cost about that much more than the held one (hooks FIX-8, stand-in review
+        // AFTER 2: measured 1.5-1.9 s, so about 0.5 s of headroom over the 1000 ms margin).
         const ROUNDS: usize = 4;
         const MARGIN_MS: u64 = 1000;
         let timed = |env: &[(&str, String)]| {

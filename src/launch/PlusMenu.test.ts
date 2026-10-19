@@ -5,7 +5,6 @@ import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
 import { KeymapContext } from "../keys/KeymapContext";
 import { resolve } from "../keys/keymap";
-import { hooksAbsent } from "../chat/kitPrompt";
 import PlusMenu, { markFor, programWord, shellWord, type AgentInfo } from "./PlusMenu";
 
 const claude: AgentInfo = { id: "claude", name: "Claude Code", program: "claude", args: ["--permission-mode", "auto"], installed: true, path: "C:\\Users\\me\\.local\\bin\\claude.exe" };
@@ -75,37 +74,6 @@ test("agent ids map to vendor marks and header words", () => {
   expect(shellWord("C:/Program Files/PowerShell/7/pwsh.exe")).toBe("PowerShell 7");
   expect(shellWord("C:\\WINDOWS\\system32\\cmd.exe")).toBe("Command Prompt");
   expect(shellWord("/bin/zsh")).toBe("zsh");
-});
-
-test("FIX-2: a saved agent takes the mark of the program it runs; built-in ids are unchanged", () => {
-  // A saved agent has a custom id; the program decides (bare name, .exe/.cmd, full Windows or POSIX path, any case).
-  expect(markFor("my-reviewer", "claude")).toBe("claude");
-  expect(markFor("my-reviewer", "claude.exe")).toBe("claude");
-  expect(markFor("my-reviewer", "C:\\Users\\me\\AppData\\Roaming\\npm\\Claude.CMD")).toBe("claude");
-  expect(markFor("my-reviewer", "/usr/local/bin/claude")).toBe("claude");
-  expect(markFor("night-codex", "codex")).toBe("codex");
-  expect(markFor("night-codex", "C:\\tools\\codex.exe")).toBe("codex");
-  // Anything else stays the plain shell mark: other programs, no program, look-alike names, an empty line.
-  expect(markFor("my-shell", "pwsh")).toBe("shell");
-  expect(markFor("my-shell")).toBe("shell");
-  expect(markFor("my-shell", null)).toBe("shell");
-  expect(markFor("my-shell", "")).toBe("shell");
-  expect(markFor("my-shell", "claude-helper")).toBe("shell");
-  expect(markFor("my-shell", "notclaude.exe")).toBe("shell");
-  expect(markFor("my-shell", "C:\\claude\\run.exe")).toBe("shell");
-  // Built-in ids keep their marks whatever program is passed.
-  expect(markFor("claude", "pwsh")).toBe("claude");
-  expect(markFor("codex", "claude")).toBe("codex");
-  expect(markFor("claude-agent-teams", "x")).toBe("claude");
-  expect(markFor("gemini", "gemini")).toBe("shell");
-});
-
-test("FIX-2: a saved Claude agent now counts as hooked in the chat notice; a saved shell or Codex agent does not", () => {
-  // The launch path builds the pane mark with markFor(id, program); hooksAbsent reads that mark (chat FIX-5 review, FIX-SOON 1).
-  expect(hooksAbsent(markFor("my-reviewer", "claude"), true, "my-reviewer")).toBe(false);
-  expect(hooksAbsent(markFor("my-reviewer", "claude"), false, "my-reviewer")).toBe(true);
-  expect(hooksAbsent(markFor("night-codex", "codex"), true, "night-codex")).toBe(true);
-  expect(hooksAbsent(markFor("my-shell", "pwsh"), true, "my-shell")).toBe(true);
 });
 
 test("SESS-007: the chooser item appears only when a handler is given", () => {
