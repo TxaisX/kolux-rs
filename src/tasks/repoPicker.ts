@@ -85,10 +85,15 @@ export function newIssueTargets(chosen: PickerRow[], source?: string): string[] 
   return [...new Set([...(source ? [source] : []), ...same])];
 }
 
-/** The pages several hosts answered with, as one: items newest-updated first, totals added. */
-export function mergePages(pages: TaskPage[]): TaskPage {
-  if (pages.length === 1) return pages[0];
-  const items: Task[] = pages.flatMap((p) => p.items);
+/** Whether the repository is added in Kolux: a project's checkout is on this machine for it (a row
+ * with at least one project, on that host; names compare without case). */
+export const repoAdded = (rows: PickerRow[], host: string, repo: string): boolean => rows.some((r) => !r.checking && r.projects.length > 0 && r.host.toLowerCase() === host.toLowerCase() && r.repo.toLowerCase() === repo.toLowerCase());
+
+/** The pages several hosts answered with, as one: items newest-updated first, totals added. With
+ * `hosts` (the host of each page, same order) every row is stamped with the host it came from. */
+export function mergePages(pages: TaskPage[], hosts?: string[]): TaskPage {
+  if (pages.length === 1 && !hosts) return pages[0];
+  const items: Task[] = pages.flatMap((p, i) => (hosts ? p.items.map((t) => ({ ...t, host: hosts[i] })) : p.items));
   items.sort((a, b) => (a.updated < b.updated ? 1 : a.updated > b.updated ? -1 : 0));
   return { total: pages.reduce((n, p) => n + p.total, 0), deepest: Math.max(0, ...pages.map((p) => p.deepest)), items };
 }

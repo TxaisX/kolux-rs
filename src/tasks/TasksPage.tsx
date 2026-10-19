@@ -15,7 +15,7 @@ import { beyondWindow, defaultPreset, FILTERS, type FilterKey, filterValue, issu
 import NewIssueDialog from "./NewIssueDialog";
 import { closesDialog, createdHere } from "./newIssue";
 import { type GhRepo, loadRepoFacts, type ParentRead, type Person, resetFacts } from "./repoFacts";
-import { byHost, chosenRows, hostWarnings, mergePages, newIssueTargets, type PickerProject, type PickerRow, pickerLabel, pickerRows, REPOS_SETTING, type RemoteRead, rowKey, savedChoice, toggled } from "./repoPicker";
+import { byHost, chosenRows, hostWarnings, mergePages, newIssueTargets, type PickerProject, type PickerRow, pickerLabel, pickerRows, REPOS_SETTING, type RemoteRead, repoAdded, rowKey, savedChoice, toggled } from "./repoPicker";
 import ProjectsView from "./ProjectsView";
 import PullRequestPage from "./PullRequestPage";
 import { parseGitHubUrl, type Target } from "./prModel";
@@ -201,17 +201,19 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
     Promise.all(
       groups.map((g) =>
         invoke<TaskPage>("scm_tasks_search", { host: g.host, queries: taskQueries(preset, query, g.repos, g.repos.map((r) => (r === own ? source.repo : r))), page }).then(
-          (p) => ({ p }),
+          (p) => ({ p, host: g.host }),
           (e) => ({ host: g.host, error: String(e) }),
         ),
       ),
     ).then((rs) => {
       if (mineSeq !== seq.current) return;
-      const pages = rs.flatMap((r) => ("p" in r ? [r.p] : []));
+      const answered = rs.flatMap((r) => ("p" in r ? [r] : []));
       const failed = rs.flatMap((r) => ("p" in r ? [] : [r]));
       setHostFail(failed);
-      if (pages.length === 0) return setError(failed[0]?.error ?? "Nothing answered.");
-      setResult(mergePages(pages));
+      if (answered.length === 0) return setError(failed[0]?.error ?? "Nothing answered.");
+      // Each row remembers the host that answered with it (FIX-1): the dialog, the full page and
+      // workspace start use it, never the first chosen repository's host.
+      setResult(mergePages(answered.map((r) => r.p), answered.map((r) => r.host)));
     });
   };
   useEffect(load, [gh, preset, query, page, source.repo, settings === null, tab, groupsKey]);
@@ -485,19 +487,20 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
               setElsewhere(`Issue #${t.number} was created in ${t.repo} on ${host} (${t.url}). This workspace is somewhere else now, so it is not added to this list.`);
               return;
             }
-            setResult((r) => r && { ...r, items: [t, ...r.items.filter((x) => x.url !== t.url)] });
-            setOpen(t);
+            const made = { ...t, host };
+            setResult((r) => r && { ...r, items: [made, ...r.items.filter((x) => x.url !== t.url)] });
+            setOpen(made);
           }}
         />
       )}
-      {pr && <PullRequestPage key={`${pr.host}/${pr.repo}#${pr.number}`} target={pr} onClose={() => setPr(null)} />}
+      {pr && <PullRequestPage key={`${pr.host}/${pr.repo}#${pr.number}`} target={pr} added={repoAdded(rows, pr.host, pr.repo)} onClose={() => setPr(null)} />}
       {open && gh && (
         <TaskDialog
           task={open}
-          host={gh.host}
+          host={open.host ?? gh.host}
           onClose={() => setOpen(null)}
           work={open.state === "open" ? { label: workLabel(resumeDir(open), open), run: () => work(open) } : undefined}
-          onPage={open.kind === "pr" ? () => { setPr({ host: gh.host, repo: open.repo, number: open.number, kind: "pull" }); setOpen(null); } : undefined}
+          onPage={open.kind === "pr" ? () => { setPr({ host: open.host ?? gh.host, repo: open.repo, number: open.number, kind: "pull" }); setOpen(null); } : undefined}
           onLabels={(labels: TaskLabel[]) => setResult((r) => r && { ...r, items: r.items.map((x) => (x.url === open.url ? { ...x, labels } : x)) })}
           onState={(state: string) => setResult((r) => r && { ...r, items: r.items.map((x) => (x.url === open.url ? { ...x, state } : x)) })}
         />

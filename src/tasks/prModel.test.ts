@@ -43,6 +43,24 @@ describe("GIT-051 the pull request page's rules", () => {
       expect(mergeBox(p).canMerge, JSON.stringify(p)).toBe(false);
     }
   });
+  it("needs the repository added in Kolux to merge, and says so", () => {
+    const open = { state: "open", draft: false, mergeableState: "clean" };
+    const no = mergeBox(open, false);
+    expect(no.canMerge).toBe(false);
+    expect(no.reason).toBe("Add this repository in Kolux to merge from here.");
+    expect(mergeBox(open, true).canMerge).toBe(true);
+    expect(mergeBox(open).canMerge).toBe(true);
+    // a merged pull request still reads as merged, whether or not the repository is added
+    expect(mergeBox({ ...open, state: "merged" }, false).reason).toBe("Already merged.");
+  });
+  it("does not offer a merge while GitHub is still working out whether it can", () => {
+    for (const mergeableState of ["unknown", "", "something-new"]) {
+      const b = mergeBox({ state: "open", draft: false, mergeableState });
+      expect(b.canMerge, mergeableState).toBe(false);
+      expect(b.reason, mergeableState).toBe("GitHub is still checking whether it can merge");
+    }
+    expect(mergeBox({ state: "open", draft: false, mergeableState: "has_hooks" }).canMerge).toBe(true);
+  });
   it("keeps the tab between visits, per pull request, and survives storage that throws", () => {
     const m = new Map<string, string>();
     const store = { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) };

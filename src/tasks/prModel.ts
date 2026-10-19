@@ -6,8 +6,10 @@ import type { Person } from "./repoFacts";
 
 export type PrReviewer = { login: string; state: string };
 export type PrCheck = { id: number; name: string; status: string; conclusion: string; url: string; runId: number | null };
-export type PrPageData = { number: number; title: string; body: string; state: string; draft: boolean; url: string; author: string; headRef: string; headSha: string; baseRef: string; mergeableState: string; labels: { name: string; color: string }[]; assignees: string[]; reviewers: PrReviewer[]; reactions: { content: string; count: number }[]; additions: number; deletions: number; changedFiles: number };
-export type PrFile = { filename: string; status: string; additions: number; deletions: number; patch: string };
+export type PrPageData = { number: number; title: string; body: string; state: string; draft: boolean; url: string; author: string; headRef: string; headSha: string; baseRef: string; mergeableState: string; labels: { name: string; color: string }[]; assignees: string[]; reviewers: PrReviewer[]; reactions: { content: string; count: number }[]; additions: number; deletions: number; changedFiles: number; reviewsTruncated: boolean };
+export type PrFiles = { files: PrFile[]; truncated: boolean };
+export type PrThreads = { threads: PrThread[]; truncated: boolean };
+export type PrFile ={ filename: string; status: string; additions: number; deletions: number; patch: string };
 export type PrComment = { id: number; author: string; body: string; at: string };
 export type PrThread = { id: number; path: string; line: number | null; comments: PrComment[] };
 
@@ -80,16 +82,23 @@ export function askForReview(page: Pick<PrPageData, "reviewers">, logins: string
 
 export type MergeBox = { canMerge: boolean; reason: string };
 
-/** What the merge box says: draft, closed, merged and blocked pull requests cannot be merged from here. */
-export function mergeBox(p: Pick<PrPageData, "state" | "draft" | "mergeableState">): MergeBox {
+/** What the merge box says: draft, closed, merged and blocked pull requests cannot be merged from
+ * here, nor one in a repository that is not added in Kolux (`added`, true unless told otherwise), nor
+ * one GitHub has not finished checking (its state reads unknown or empty for a moment after a push). */
+export function mergeBox(p: Pick<PrPageData, "state" | "draft" | "mergeableState">, added = true): MergeBox {
   if (p.state === "merged") return { canMerge: false, reason: "Already merged." };
   if (p.state !== "open") return { canMerge: false, reason: "Closed; reopen it to merge." };
   if (p.draft) return { canMerge: false, reason: "A draft; mark it ready on GitHub to merge." };
+  if (!added) return { canMerge: false, reason: "Add this repository in Kolux to merge from here." };
   if (p.mergeableState === "dirty") return { canMerge: false, reason: "Has conflicts with the base branch." };
   if (p.mergeableState === "blocked") return { canMerge: false, reason: "Blocked: GitHub is waiting for reviews or checks." };
   if (p.mergeableState === "behind") return { canMerge: false, reason: "Behind the base branch; update it first." };
+  if (!["clean", "has_hooks", "unstable"].includes(p.mergeableState)) return { canMerge: false, reason: "GitHub is still checking whether it can merge" };
   return { canMerge: true, reason: p.mergeableState === "unstable" ? "Some checks are not passing." : "Ready to merge." };
 }
+
+/** Files, reviews and review comments are read 100 at a time up to this many; past it the page says so. */
+export const PAGE_LIMIT = 500;
 
 export const MERGE_METHODS: { id: "merge" | "squash" | "rebase"; label: string }[] = [
   { id: "merge", label: "Create a merge commit" },

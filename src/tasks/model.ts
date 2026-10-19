@@ -3,7 +3,9 @@ import type { Project } from "../projects/model";
 import { sameDir } from "../workspaces";
 
 export type TaskLabel = { name: string; color: string };
-export type Task = { kind: string; number: number; title: string; url: string; repo: string; state: string; draft: boolean; labels: TaskLabel[]; assignees: string[]; updated: string; checks: string | null };
+export type Task = { kind: string; number: number; title: string; url: string; repo: string; state: string; draft: boolean; labels: TaskLabel[]; assignees: string[]; updated: string; checks: string | null;
+  /** The host that answered with this row (stamped by the page; the search itself does not know it). */
+  host?: string };
 export type TaskPage = { total: number; deepest: number; items: Task[] };
 
 /** The checkout whose GitHub repository the page lists: the workspace on screen, else the first project. */

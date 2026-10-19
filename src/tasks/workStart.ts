@@ -7,8 +7,10 @@ import type { Task } from "./model";
 /** The item as the create command takes it (host, owner, repository, kind, number). */
 export type WorkItem = { host: string; owner: string; repo: string; kind: "pull" | "issue"; number: number };
 
-/** The item in a task row, or null when its repository name is not owner/name. */
-export function workItem(task: Pick<Task, "kind" | "number" | "repo">, host: string): WorkItem | null {
+/** The item in a task row, or null when its repository name is not owner/name. The row's own host
+ * wins; `host` (the first chosen repository's) is only for a row that has none. */
+export function workItem(task: Pick<Task, "kind" | "number" | "repo" | "host">, fallbackHost: string): WorkItem | null {
+  const host = task.host ?? fallbackHost;
   const [owner, repo, extra] = task.repo.split("/");
   if (!owner || !repo || extra !== undefined || !task.number) return null;
   return { host, owner, repo, kind: task.kind === "issue" ? "issue" : "pull", number: task.number };

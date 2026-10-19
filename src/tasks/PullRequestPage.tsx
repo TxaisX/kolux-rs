@@ -1,24 +1,27 @@
 // GIT-051 (T-232-c): the full pull request page: Conversation, Checks and Files changed tabs.
 // Everything is read and written through the pr_* commands (pull_requests.rs), one gh call each.
-// Merging asks first on the page itself and is only sent after the confirm button.
+// Merging asks first on the page itself and is only sent after the confirm button, pinned to the head
+// commit the page showed, and only for a repository added in Kolux.
 // The tab last open on a pull request is remembered (localStorage, per pull request).
 // ponytail: not here yet (T-232-d): viewed-file sync, "fix checks with AI", a fork's parent owner.
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
 import { Close } from "../chrome/icons";
 import Markdown from "./MarkdownView";
-import { askForReview, MERGE_METHODS, mergeBox, type PrCheck, type PrFile, type PrPageData, type PrTab, type PrThread, REACTION_EMOJI, REVIEW_LABEL, rerunTargets, reviewerSuggestions, saveTab, savedTab, summarizeChecks, type Target } from "./prModel";
+import { safeHref } from "./markdown";
+import { askForReview, MERGE_METHODS, mergeBox, PAGE_LIMIT, type PrCheck, type PrFiles, type PrPageData, type PrTab, type PrThreads, REACTION_EMOJI, REVIEW_LABEL, rerunTargets, reviewerSuggestions, saveTab, savedTab, summarizeChecks, type Target } from "./prModel";
 import type { Person } from "./repoFacts";
 
 const say = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : "That did not work.");
 
-export default function PullRequestPage({ target, onClose }: { target: Target; onClose: () => void }) {
+/** `added`: the repository is added in Kolux (a project's checkout is here); without it the page reads but does not merge. */
+export default function PullRequestPage({ target, added, onClose }: { target: Target; added: boolean; onClose: () => void }) {
   const args = { host: target.host, repo: target.repo, number: target.number };
   const [page, setPage] = useState<PrPageData | null>(null);
   const [tab, setTab] = useState<PrTab>(() => savedTab(window.localStorage, target));
   const [checks, setChecks] = useState<PrCheck[]>([]);
-  const [files, setFiles] = useState<PrFile[] | null>(null);
-  const [threads, setThreads] = useState<PrThread[]>([]);
+  const [files, setFiles] = useState<PrFiles | null>(null);
+  const [threads, setThreads] = useState<PrThreads>({ threads: [], truncated: false });
   const [people, setPeople] = useState<Person[]>([]);
   const [typed, setTyped] = useState("");
   const [assignee, setAssignee] = useState("");
@@ -33,7 +36,7 @@ export default function PullRequestPage({ target, onClose }: { target: Target; o
       const p = await invoke<PrPageData>("pr_page", args);
       setPage(p);
       setChecks(await invoke<PrCheck[]>("pr_checks", { host: args.host, repo: args.repo, sha: p.headSha }).catch(() => []));
-      setThreads(await invoke<PrThread[]>("pr_threads", args).catch(() => []));
+      setThreads(await invoke<PrThreads>("pr_threads", args).catch(() => ({ threads: [], truncated: false })));
     } catch (e) {
       setNote(say(e));
     }
@@ -45,7 +48,7 @@ export default function PullRequestPage({ target, onClose }: { target: Target; o
     void invoke<Person[]>("github_people", { host: target.host, repo: target.repo }).then(setPeople, () => setPeople([]));
   }, [reload, target.host, target.repo]);
   useEffect(() => {
-    if (tab === "files" && files === null) void invoke<PrFile[]>("pr_files", args).then(setFiles, (e) => (setFiles([]), setNote(say(e))));
+    if (tab === "files" && files === null) void invoke<PrFiles>("pr_files", args).then(setFiles, (e) => (setFiles({ files: [], truncated: false }), setNote(say(e))));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, files]);
 
@@ -81,7 +84,8 @@ export default function PullRequestPage({ target, onClose }: { target: Target; o
     );
   }
   const sum = summarizeChecks(checks);
-  const box = mergeBox(page);
+  const box = mergeBox(page, added);
+  const pageUrl = safeHref(page.url);
   const mine = (n: string) => ({ ...args, add: [], remove: [n] });
   const copy = () => void navigator.clipboard.writeText(page.url).then(() => setNote("Link copied."), () => setNote(page.url));
   const suggestions = typed.trim() ? reviewerSuggestions(people, page, typed) : [];
@@ -107,9 +111,11 @@ export default function PullRequestPage({ target, onClose }: { target: Target; o
         <button className="btn" onClick={copy}>
           Copy link
         </button>
-        <a className="btn" href={page.url} target="_blank" rel="noreferrer">
-          Open on GitHub
-        </a>
+        {pageUrl && (
+          <a className="btn" href={pageUrl} target="_blank" rel="noreferrer">
+            Open on GitHub
+          </a>
+        )}
         {page.state !== "merged" && (
           <button className="btn" disabled={busy} onClick={() => void act(() => invoke("pr_set_state", { ...args, open: page.state !== "open" }))}>
             {page.state === "open" ? "Close pull request" : "Reopen"}
@@ -145,8 +151,9 @@ export default function PullRequestPage({ target, onClose }: { target: Target; o
               ))}
             </div>
             <h3>Review threads</h3>
-            {threads.length === 0 && <p className="tasks-kind">No review comments.</p>}
-            {threads.map((t) => (
+            {threads.threads.length === 0 && <p className="tasks-kind">No review comments.</p>}
+            {threads.truncated && <p className="tasks-kind">Showing the first {PAGE_LIMIT} review comments; the rest are on GitHub.</p>}
+            {threads.threads.map((t) => (
               <div key={t.id} className="pr-thread">
                 <div className="tasks-kind">
                   {t.path}
@@ -161,7 +168,7 @@ export default function PullRequestPage({ target, onClose }: { target: Target; o
                 {replying?.id === t.id ? (
                   <>
                     <textarea value={replying.text} onChange={(e) => setReplying({ id: t.id, text: e.target.value })} rows={3} aria-label="Reply" />
-                    <button className="btn primary" disabled={busy || !replying.text.trim()} onClick={() => void act(async () => { await invoke("pr_reply", { ...args, comment: t.comments[t.comments.length - 1].id, body: replying.text }); setReplying(null); })}>
+                    <button className="btn primary" disabled={busy || !replying.text.trim()} onClick={() => void act(async () => { await invoke("pr_reply", { ...args, comment: t.id, body: replying.text }); setReplying(null); })}>
                       Reply
                     </button>
                     <button className="btn" onClick={() => setReplying(null)}>
@@ -178,6 +185,7 @@ export default function PullRequestPage({ target, onClose }: { target: Target; o
           </div>
           <aside className="pr-side">
             <h3>Reviewers</h3>
+            {page.reviewsTruncated && <p className="tasks-kind">Showing the first {PAGE_LIMIT} reviews; some reviewers may be missing.</p>}
             {page.reviewers.map((r) => (
               <div key={r.login} className="pr-person">
                 {r.login} <span className={`pr-review ${r.state}`}>{REVIEW_LABEL[r.state] ?? r.state}</span>
@@ -208,6 +216,9 @@ export default function PullRequestPage({ target, onClose }: { target: Target; o
             <div>{page.labels.length ? page.labels.map((l) => <span key={l.name} className="tasks-label" style={{ borderColor: `#${l.color}` }}>{l.name}</span>) : <span className="tasks-kind">None</span>}</div>
             <h3>Merge</h3>
             <p className="tasks-kind">{box.reason}</p>
+            <button className="btn" disabled={busy} onClick={() => void act(async () => {})}>
+              Reload
+            </button>
             {box.canMerge && (
               <>
                 <select value={method} onChange={(e) => { setMethod(e.target.value as typeof method); setSure(false); }} aria-label="How to merge">
@@ -226,7 +237,7 @@ export default function PullRequestPage({ target, onClose }: { target: Target; o
                     <p>
                       This {method}s #{page.number} into {page.baseRef} on GitHub. It cannot be undone from here.
                     </p>
-                    <button className="btn primary" disabled={busy} onClick={() => void act(async () => { await invoke("pr_merge", { ...args, method, confirmed: true }); setSure(false); }, "Merged.")}>
+                    <button className="btn primary" disabled={busy} onClick={() => void act(async () => { try { await invoke("pr_merge", { ...args, method, confirmed: true, sha: page.headSha }); } finally { setSure(false); } }, "Merged.")}>
                       Yes, merge it
                     </button>
                     <button className="btn" onClick={() => setSure(false)}>
@@ -252,9 +263,13 @@ export default function PullRequestPage({ target, onClose }: { target: Target; o
             <ul className="pr-checks">
               {checks.map((c) => (
                 <li key={c.id} className={c.status === "completed" ? c.conclusion : "running"}>
-                  <a href={c.url} target="_blank" rel="noreferrer">
-                    {c.name}
-                  </a>{" "}
+                  {safeHref(c.url) ? (
+                    <a href={safeHref(c.url) ?? undefined} target="_blank" rel="noreferrer">
+                      {c.name}
+                    </a>
+                  ) : (
+                    c.name
+                  )}{" "}
                   <span className="tasks-kind">{c.status === "completed" ? c.conclusion : c.status}</span>
                 </li>
               ))}
@@ -266,7 +281,8 @@ export default function PullRequestPage({ target, onClose }: { target: Target; o
         <div className="pr-body">
           <div className="pr-main">
             {files === null && <p className="tasks-kind">Reading files...</p>}
-            {files?.map((f) => (
+            {files?.truncated && <p className="tasks-kind">Showing the first {PAGE_LIMIT} files; the rest are on GitHub.</p>}
+            {files?.files.map((f) => (
               <details key={f.filename} className="pr-file">
                 <summary>
                   {f.filename} <span className="tasks-kind">{f.status} +{f.additions} -{f.deletions}</span>

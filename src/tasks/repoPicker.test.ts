@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Task, TaskPage } from "./model";
-import { byHost, chosenRows, hostWarnings, mergePages, newIssueTargets, pickerLabel, pickerRows, rowKey, savedChoice, toggled } from "./repoPicker";
+import { byHost, chosenRows, hostWarnings, mergePages, newIssueTargets, pickerLabel, pickerRows, repoAdded, rowKey, savedChoice, toggled } from "./repoPicker";
 
 const p = (id: string, path = `C:/dev/${id}`) => ({ id, name: id, path });
 const gh = (owner: string, name: string, host = "github.com") => ({ host, owner, name });
@@ -82,6 +82,22 @@ describe("several hosts in one list", () => {
     expect([m.total, m.deepest]).toEqual([17, 30]);
     const one = page(1, 1, t(1, "x"));
     expect(mergePages([one])).toBe(one);
+  });
+  it("stamps every row with the host that answered, so two hosts with the same repository name stay apart", () => {
+    const m = mergePages([page(1, 1, t(1, "2026-10-01")), page(1, 1, t(1, "2026-10-02"))], ["github.com", "git.corp.example"]);
+    expect(m.items.map((i) => [i.number, i.host])).toEqual([[1, "git.corp.example"], [1, "github.com"]]);
+    // one host: still stamped, and the page is not shared with the caller
+    const one = page(1, 1, t(5, "x"));
+    expect(mergePages([one], ["git.corp.example"]).items[0].host).toBe("git.corp.example");
+    expect(one.items[0].host).toBeUndefined();
+  });
+  it("knows which repositories are added in Kolux (a project with a checkout), per host", () => {
+    const row = (host: string, repo: string, projects: number) => ({ key: `${host}/${repo}`, host, repo, checking: false, label: repo, projects: Array.from({ length: projects }, (_, i) => p(`p${i}`)) });
+    const rows = [row("github.com", "acme/app", 1), row("git.corp.example", "acme/tool", 0), { ...row("", "", 1), checking: true }];
+    expect(repoAdded(rows, "github.com", "Acme/App")).toBe(true);
+    expect(repoAdded(rows, "git.corp.example", "acme/app")).toBe(false);
+    expect(repoAdded(rows, "git.corp.example", "acme/tool")).toBe(false);
+    expect(repoAdded(rows, "github.com", "zed/other")).toBe(false);
   });
   it("names every host that did not answer", () => {
     expect(hostWarnings([])).toEqual([]);

@@ -1,3 +1,7 @@
+NOTE FOR THE COORDINATOR (git apply ignores text before the first diff line):
+1. Apply this patch. It registers the eleven pr_* commands; FIX-1 added no command (pr_merge, pr_files and pr_threads only changed their arguments and answers), so the list below is complete.
+2. Then remove the module-level `#[allow(dead_code)]` on the `mod pull_requests` line in src-tauri/src/github.rs (about line 10). It only hid "never used" warnings until these handlers were registered. That is a change in code the tasks lane does not own, so it is made here, at merge, not in the lane.
+3. Run `cargo clippy --lib --tests -- -D warnings` and expect exit 0. A new dead_code warning means a pub fn in pull_requests.rs that is not in this list.
 diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
 index 854750a9..50c7b751 100644
 --- a/src-tauri/src/lib.rs

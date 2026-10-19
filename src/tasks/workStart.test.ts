@@ -9,6 +9,10 @@ describe("GIT-049 starting or resuming a workspace from an item", () => {
     expect(workItem({ kind: "issue", number: 1, repo: "a/b/c" }, "github.com")).toBeNull();
     expect(workItem({ kind: "issue", number: 0, repo: "a/b" }, "github.com")).toBeNull();
   });
+  it("starts a workspace on the row's own host, not the first chosen repository's", () => {
+    expect(workItem({ kind: "issue", number: 12, repo: "acme/app", host: "git.corp.example" }, "github.com")?.host).toBe("git.corp.example");
+    expect(workItem({ kind: "issue", number: 12, repo: "acme/app" }, "github.com")?.host).toBe("github.com");
+  });
   it("finds the workspace already linked to the number, never the main checkout", () => {
     const list = [
       { path: "C:/dev/app", isMain: true, number: 12 },

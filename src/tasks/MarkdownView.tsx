@@ -9,7 +9,7 @@ function spans(list: Span[]): ReactNode[] {
     if (s.t === "italic") return <em key={i}>{s.text}</em>;
     if (s.t === "link")
       return (
-        <a key={i} href={s.href} target="_blank" rel="noreferrer">
+        <a key={i} href={s.href} title={s.href} target="_blank" rel="noreferrer">
           {s.text}
         </a>
       );

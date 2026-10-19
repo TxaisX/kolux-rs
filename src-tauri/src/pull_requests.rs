@@ -16,6 +16,9 @@ const MAX_REVIEWERS: usize = 15;
 const PATCH_MAX: usize = 20_000;
 /// One page of files, checks or comments (GitHub's largest page).
 const PER_PAGE: usize = 100;
+/// Files, reviews and review comments are read this many pages deep (500 each); past that the page
+/// says it shows the first 500 (FIX-1, review FIX-SOON 2).
+const PAGE_CAP: usize = 5;
 /// The reactions GitHub accepts.
 const REACTIONS: [&str; 8] = ["+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"];
 
@@ -61,6 +64,22 @@ pub struct PrPage {
     pub additions: u64,
     pub deletions: u64,
     pub changed_files: u64,
+    /// More reviews exist than were read (the page says the reviewer states may be stale).
+    pub reviews_truncated: bool,
+}
+
+/// A pull request's files; `truncated` when GitHub has more than the page reads.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct PrFiles {
+    pub files: Vec<PrFile>,
+    pub truncated: bool,
+}
+
+/// A pull request's review threads; `truncated` when GitHub has more comments than the page reads.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct PrThreads {
+    pub threads: Vec<PrThread>,
+    pub truncated: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -186,6 +205,7 @@ pub fn page_of(pull: &Value, reviews: &Value, issue: &Value) -> Result<PrPage, S
         additions: n(&pull["additions"]),
         deletions: n(&pull["deletions"]),
         changed_files: n(&pull["changed_files"]),
+        reviews_truncated: false,
     })
 }
 
@@ -257,26 +277,54 @@ fn pull_path(host: &str, repo: &str, number: u64, tail: &str) -> Result<String, 
     Ok(if tail.is_empty() { base } else { format!("{base}/{tail}") })
 }
 
-pub fn read_page(gh: &Path, host: &str, repo: &str, number: u64) -> Result<PrPage, String> {
-    let pull = gh_json(gh, host, &pull_path(host, repo, number, "")?, &[])?;
-    let reviews = gh_json(gh, host, &format!("{}?per_page={PER_PAGE}", pull_path(host, repo, number, "reviews")?), &[])?;
-    let issue = gh_json(gh, host, &issue_path(host, repo, number, &format!("issues/{number}"))?, &[])?;
-    page_of(&pull, &reviews, &issue)
+/// A list endpoint read page by page, at most PAGE_CAP pages of PER_PAGE: everything it has, and
+/// whether it has more (one more page is asked for only when the last allowed page was full).
+fn read_all(gh: &Path, host: &str, path: &str) -> Result<(Value, bool), String> {
+    let mut all: Vec<Value> = Vec::new();
+    for page in 1..=PAGE_CAP + 1 {
+        let got = gh_json(gh, host, &format!("{path}?per_page={PER_PAGE}&page={page}"), &[])?;
+        let items = got.as_array().cloned().unwrap_or_default();
+        if page > PAGE_CAP {
+            return Ok((Value::Array(all), !items.is_empty()));
+        }
+        let full = items.len() >= PER_PAGE;
+        all.extend(items);
+        if !full {
+            break;
+        }
+    }
+    Ok((Value::Array(all), false))
 }
 
-pub fn read_files(gh: &Path, host: &str, repo: &str, number: u64) -> Result<Vec<PrFile>, String> {
-    Ok(files_of(&gh_json(gh, host, &format!("{}?per_page={PER_PAGE}", pull_path(host, repo, number, "files")?), &[])?))
+pub fn read_page(gh: &Path, host: &str, repo: &str, number: u64) -> Result<PrPage, String> {
+    let pull = gh_json(gh, host, &pull_path(host, repo, number, "")?, &[])?;
+    let (reviews, more) = read_all(gh, host, &pull_path(host, repo, number, "reviews")?)?;
+    let issue = gh_json(gh, host, &issue_path(host, repo, number, &format!("issues/{number}"))?, &[])?;
+    let mut page = page_of(&pull, &reviews, &issue)?;
+    page.reviews_truncated = more;
+    Ok(page)
+}
+
+pub fn read_files(gh: &Path, host: &str, repo: &str, number: u64) -> Result<PrFiles, String> {
+    let (all, truncated) = read_all(gh, host, &pull_path(host, repo, number, "files")?)?;
+    Ok(PrFiles { files: files_of(&all), truncated })
+}
+
+/// A commit id as GitHub prints it: 7 to 64 hex digits.
+fn sha_ok(sha: &str) -> bool {
+    sha.len() >= 7 && sha.len() <= 64 && sha.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 pub fn read_checks(gh: &Path, host: &str, repo: &str, sha: &str) -> Result<Vec<PrCheck>, String> {
-    if sha.len() < 7 || sha.len() > 64 || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+    if !sha_ok(sha) {
         return Err("This pull request's latest commit cannot be read.".into());
     }
     Ok(checks_of(&gh_json(gh, host, &format!("{}/commits/{sha}/check-runs?per_page={PER_PAGE}", repo_path(host, repo)?), &[])?))
 }
 
-pub fn read_threads(gh: &Path, host: &str, repo: &str, number: u64) -> Result<Vec<PrThread>, String> {
-    Ok(threads_of(&gh_json(gh, host, &format!("{}?per_page={PER_PAGE}", pull_path(host, repo, number, "comments")?), &[])?))
+pub fn read_threads(gh: &Path, host: &str, repo: &str, number: u64) -> Result<PrThreads, String> {
+    let (all, truncated) = read_all(gh, host, &pull_path(host, repo, number, "comments")?)?;
+    Ok(PrThreads { threads: threads_of(&all), truncated })
 }
 
 /// One write: `method` on `path`, the JSON body (when there is one) on standard input.
@@ -368,16 +416,27 @@ pub fn reply(gh: &Path, host: &str, repo: &str, number: u64, comment: u64, body:
     write(gh, host, "POST", &path, Some(json!({ "body": body }))).map(|_| ())
 }
 
-/// Merge a pull request. Outward: nothing is sent unless `confirmed` (the page asks first).
-pub fn merge(gh: &Path, host: &str, repo: &str, number: u64, method: &str, confirmed: bool) -> Result<String, String> {
+/// Merge a pull request. Outward: nothing is sent unless `confirmed` (the page asks first), and the
+/// merge is pinned to `sha`, the head commit the page showed: GitHub refuses (409) when someone has
+/// pushed since, so commits the user never saw are never merged.
+pub fn merge(gh: &Path, host: &str, repo: &str, number: u64, method: &str, confirmed: bool, sha: &str) -> Result<String, String> {
     if !confirmed {
         return Err("Merging changes the repository on GitHub; confirm it first.".into());
     }
     if !["merge", "squash", "rebase"].contains(&method) {
         return Err(format!("{method} is not a way to merge; use merge, squash or rebase."));
     }
+    if !sha_ok(sha) {
+        return Err("This pull request's latest commit cannot be read. Reload it before merging.".into());
+    }
     let path = pull_path(host, repo, number, "merge")?;
-    let v = write(gh, host, "PUT", &path, Some(json!({ "merge_method": method })))?;
+    let v = write(gh, host, "PUT", &path, Some(json!({ "merge_method": method, "sha": sha }))).map_err(|e| {
+        if e.contains("HTTP 409") || e.contains("Head branch was modified") {
+            "The pull request changed. Reload it before merging.".to_string()
+        } else {
+            e
+        }
+    })?;
     if v["merged"].as_bool() == Some(false) {
         return Err(if s(&v["message"]).is_empty() { "GitHub did not merge it.".into() } else { s(&v["message"]) });
     }
@@ -402,7 +461,7 @@ pub async fn pr_page(host: String, repo: String, number: u64) -> Result<PrPage, 
 }
 
 #[tauri::command]
-pub async fn pr_files(host: String, repo: String, number: u64) -> Result<Vec<PrFile>, String> {
+pub async fn pr_files(host: String, repo: String, number: u64) -> Result<PrFiles, String> {
     blocking(move |gh| read_files(gh, &host, &repo, number)).await
 }
 
@@ -412,7 +471,7 @@ pub async fn pr_checks(host: String, repo: String, sha: String) -> Result<Vec<Pr
 }
 
 #[tauri::command]
-pub async fn pr_threads(host: String, repo: String, number: u64) -> Result<Vec<PrThread>, String> {
+pub async fn pr_threads(host: String, repo: String, number: u64) -> Result<PrThreads, String> {
     blocking(move |gh| read_threads(gh, &host, &repo, number)).await
 }
 
@@ -448,8 +507,8 @@ pub async fn pr_reply(host: String, repo: String, number: u64, comment: u64, bod
 }
 
 #[tauri::command]
-pub async fn pr_merge(host: String, repo: String, number: u64, method: String, confirmed: bool) -> Result<String, String> {
-    blocking(move |gh| merge(gh, &host, &repo, number, &method, confirmed)).await
+pub async fn pr_merge(host: String, repo: String, number: u64, method: String, confirmed: bool, sha: String) -> Result<String, String> {
+    blocking(move |gh| merge(gh, &host, &repo, number, &method, confirmed, &sha)).await
 }
 
 #[cfg(test)]
@@ -565,7 +624,7 @@ mod tests {
         assert_eq!(p.reactions, vec![Reaction { content: "eyes".into(), count: 1 }]);
         let c = calls(&dir);
         assert!(c.contains("api repos/acme/app/pulls/7 --hostname github.com"), "{c}");
-        assert!(c.replace('"', "").contains("api repos/acme/app/pulls/7/reviews?per_page=100 --hostname github.com"), "{c}");
+        assert!(c.replace('"', "").contains("api repos/acme/app/pulls/7/reviews?per_page=100&page=1 --hostname github.com"), "{c}");
         assert!(c.contains("api repos/acme/app/issues/7 --hostname github.com"), "{c}");
         assert!(read_page(&gh, "github.com", "acme/../app", 7).is_err());
         assert!(read_page(&gh, "github.com", "acme/app", 0).is_err());
@@ -637,14 +696,96 @@ mod tests {
     #[test]
     fn merging_is_refused_until_the_user_confirmed_it() {
         let (gh, dir) = stand_in("pr-merge", &json!({ "merged": true, "sha": "deadbeef" }));
-        assert!(merge(&gh, "github.com", "acme/app", 7, "squash", false).unwrap_err().contains("confirm"));
-        assert!(merge(&gh, "github.com", "acme/app", 7, "fast-forward", true).is_err());
+        assert!(merge(&gh, "github.com", "acme/app", 7, "squash", false, "abc1234").unwrap_err().contains("confirm"));
+        assert!(merge(&gh, "github.com", "acme/app", 7, "fast-forward", true, "abc1234").is_err());
+        let long = "a".repeat(65);
+        for bad in ["", "xyz1234", "abc12", long.as_str()] {
+            assert!(merge(&gh, "github.com", "acme/app", 7, "squash", true, bad).unwrap_err().contains("Reload"), "{bad}");
+        }
         assert!(!dir.join("calls.txt").exists(), "nothing reached gh without a confirmation");
-        assert_eq!(merge(&gh, "github.com", "acme/app", 7, "squash", true).unwrap(), "deadbeef");
+        assert_eq!(merge(&gh, "github.com", "acme/app", 7, "squash", true, "abc1234").unwrap(), "deadbeef");
         assert!(calls(&dir).contains("api -X PUT repos/acme/app/pulls/7/merge --hostname github.com --input -"));
-        assert_eq!(body(&dir), json!({ "merge_method": "squash" }));
+        // FIX-1 (review FIX-BEFORE 3): the merge is pinned to the head commit the page showed
+        assert_eq!(body(&dir), json!({ "merge_method": "squash", "sha": "abc1234" }));
 
         let (gh, _keep) = stand_in("pr-merge-not", &json!({ "merged": false, "message": "Pull Request is not mergeable" }));
-        assert!(merge(&gh, "github.com", "acme/app", 7, "merge", true).unwrap_err().contains("not mergeable"));
+        assert!(merge(&gh, "github.com", "acme/app", 7, "merge", true, "abc1234").unwrap_err().contains("not mergeable"));
+    }
+
+    /// A stand-in gh that fails: prints `said` on standard error and exits 1, keeping the call and body.
+    fn failing_stand_in(name: &str, said: &str) -> (std::path::PathBuf, crate::test_dir::TempDir) {
+        let dir = crate::test_dir::temp(name);
+        let gh = if cfg!(windows) {
+            let f = dir.join("gh.cmd");
+            fs::write(&f, format!("@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nmore >>\"%~dp0body.txt\"\r\necho {said} 1>&2\r\nexit /b 1\r\n")).unwrap();
+            f
+        } else {
+            let f = dir.join("gh");
+            fs::write(&f, format!("#!/bin/sh\nd=\"$(dirname \"$0\")\"\necho \"$*\" >> \"$d/calls.txt\"\ncat >> \"$d/body.txt\"\necho '{said}' >&2\nexit 1\n")).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&f, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            f
+        };
+        (gh, dir)
+    }
+
+    #[test]
+    fn a_merge_after_someone_pushed_reads_as_changed_and_other_failures_stay_as_they_are() {
+        let (gh, dir) = failing_stand_in("pr-merge-409", "gh: Head branch was modified. Review and try the merge again. (HTTP 409)");
+        assert_eq!(merge(&gh, "github.com", "acme/app", 7, "squash", true, "abc1234").unwrap_err(), "The pull request changed. Reload it before merging.");
+        assert!(calls(&dir).contains("api -X PUT repos/acme/app/pulls/7/merge"));
+        let (gh, _keep) = failing_stand_in("pr-merge-500", "gh: Server Error (HTTP 500)");
+        let e = merge(&gh, "github.com", "acme/app", 7, "squash", true, "abc1234").unwrap_err();
+        assert!(e.contains("HTTP 500") && !e.contains("changed"), "{e}");
+    }
+
+    fn file_items(n: usize) -> Vec<Value> {
+        (0..n).map(|i| json!({ "filename": format!("f{i}.rs"), "status": "modified", "additions": 1, "deletions": 0, "patch": "x" })).collect()
+    }
+
+    #[test]
+    fn files_past_a_hundred_are_read_page_by_page_and_a_cap_says_so() {
+        // 100 on the first page, 3 on the second: all 103, nothing cut, two calls.
+        let (gh, dir) = stand_in("pr-files-103", &json!(file_items(100)));
+        fs::write(dir.join("answer2.json"), json!(file_items(3)).to_string()).unwrap();
+        let got = read_files(&gh, "github.com", "acme/app", 7).unwrap();
+        assert_eq!((got.files.len(), got.truncated), (103, false));
+        let c = calls(&dir).replace('"', "");
+        assert!(c.contains("pulls/7/files?per_page=100&page=1") && c.contains("pulls/7/files?per_page=100&page=2"), "{c}");
+        assert_eq!(c.lines().count(), 2, "{c}");
+
+        // every page full: five pages are read, one more is asked for, and the answer says there is more.
+        let (gh, dir) = stand_in("pr-files-cap", &json!(file_items(100)));
+        let got = read_files(&gh, "github.com", "acme/app", 7).unwrap();
+        assert_eq!((got.files.len(), got.truncated), (PAGE_CAP * PER_PAGE, true));
+        assert_eq!(calls(&dir).lines().count(), PAGE_CAP + 1);
+
+        // exactly five full pages and then nothing: not cut.
+        let (gh, dir) = stand_in("pr-files-exact", &json!(file_items(100)));
+        fs::write(dir.join(format!("answer{}.json", PAGE_CAP + 1)), "[]").unwrap();
+        let got = read_files(&gh, "github.com", "acme/app", 7).unwrap();
+        assert_eq!((got.files.len(), got.truncated), (PAGE_CAP * PER_PAGE, false));
+    }
+
+    #[test]
+    fn reviews_and_review_comments_past_a_hundred_are_read_too() {
+        let many_reviews: Vec<Value> = (0..100).map(|i| json!({ "user": { "login": format!("u{i}") }, "state": "APPROVED" })).collect();
+        let (gh, dir) = stand_in("pr-reviews-101", &pull());
+        fs::write(dir.join("answer2.json"), json!(many_reviews).to_string()).unwrap();
+        fs::write(dir.join("answer3.json"), json!([{ "user": { "login": "late" }, "state": "CHANGES_REQUESTED" }]).to_string()).unwrap();
+        fs::write(dir.join("answer4.json"), "{}").unwrap();
+        let p = read_page(&gh, "github.com", "acme/app", 7).unwrap();
+        assert!(p.reviewers.iter().any(|r| r.login == "late" && r.state == "changes_requested"), "{:?}", p.reviewers);
+        assert!(!p.reviews_truncated);
+        assert_eq!(p.reviewers.len(), 102, "cy requested + 100 + late");
+
+        let comments: Vec<Value> = (0..100).map(|i| json!({ "id": i + 1, "path": "a.rs", "line": 1, "body": "c", "user": { "login": "ana" }, "created_at": "t" })).collect();
+        let (gh, dir) = stand_in("pr-comments-cap", &json!(comments));
+        let got = read_threads(&gh, "github.com", "acme/app", 7).unwrap();
+        assert!(got.truncated);
+        assert_eq!(calls(&dir).lines().count(), PAGE_CAP + 1);
     }
 }
