@@ -20,3 +20,15 @@ export function sessionEnv(env: StartLine, dispatch?: string): StartLine {
 export function startTail(p: Extract<CliWorkspace, { kind: "start" }>): [string, boolean, string[], string | undefined, string | undefined] {
   return [p.prompt, false, p.extra, p.title ?? undefined, p.dispatch];
 }
+
+/** The start line the back end builds for an agent (the shape App's start line has). */
+export type AgentLine = { args: string[]; typed: string | null; program: string | null; env: [string, string][] };
+
+/**
+ * cli FIX-8: the pane fields a start takes from its start line: the program, its arguments, the
+ * environment (with the worker's dispatch id, see sessionEnv) and the text typed first. The pane
+ * hands `env` to terminal_spawn as it is, so this is what the runtime reads the dispatch from.
+ */
+export function startFields(line: AgentLine, agentProgram: string | null, dispatch?: string) {
+  return { program: line.program ?? agentProgram, args: line.args, env: sessionEnv(line.env, dispatch), typed: line.typed ?? undefined };
+}
