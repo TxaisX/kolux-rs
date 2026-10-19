@@ -37,7 +37,7 @@ export default function AgentsRail<S extends Session>({ groups, selected, classi
                 const ring = ringOf(p);
                 return (
                 <div key={p.key} className={`sess${p.key === selected ? " sel" : ""}${p.seats ? " pending" : ""}`} role="button" tabIndex={0} data-session={p.key} onClick={() => onSelect(p.key)} onKeyDown={(e) => e.key === "Enter" && onSelect(p.key)}>
-                  <VendorMark agent={markFor(p.agentId ?? g.id)} size={13} />
+                  <VendorMark agent={markFor(p.agentId ?? g.id, p.program)} size={13} />
                   <span className="name">{p.seats ? "New session" : sessionLabel(p, taskOf?.(p.key))}</span>
                   {ring && <Ring percent={ring.percent} size={10} title={ring.title} />}
                   <span className={`status${st.tone ? ` ${st.tone}` : ""}`} data-tip={st.explain}>

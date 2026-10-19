@@ -400,6 +400,9 @@ pub struct Usage {
     /// milliseconds. Both are none when either part is missing.
     pub session: Option<String>,
     pub at: Option<u64>,
+    /// USAGE-034: the session's cost so far in US dollars (the report's cost.total_cost_usd); none
+    /// when the report has none or a figure that is not a number of at least zero.
+    pub cost_usd: Option<f64>,
     /// The config folder the report came from (USAGE-021); none for the default sign-in.
     #[serde(skip)]
     pub config_dir: Option<String>,
@@ -415,6 +418,7 @@ pub fn usage(req: &Request, token: &str) -> Result<Usage, u16> {
     // At most 200 characters of the id, like the other fields this route passes on (marks FIX-2).
     let session = v["session_id"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(|s| trim(s, 200)).zip(terminal).map(|(s, t)| format!("{s}@{t}"));
     let at = session.as_ref().and(v["cost"]["total_duration_ms"].as_u64());
+    let cost_usd = v["cost"]["total_cost_usd"].as_f64().filter(|c| c.is_finite() && *c >= 0.0);
     let cw = &v["context_window"];
     let context_window = cw.get("context_window_size").and_then(Value::as_u64);
     // USAGE-005: the total it states, else input plus cache writes plus cache reads, else its
@@ -442,7 +446,7 @@ pub fn usage(req: &Request, token: &str) -> Result<Usage, u16> {
         })
         .collect();
     let config_dir = req.headers.get(CONFIG_HEADER).map(|h| h.trim().to_string()).filter(|h| !h.is_empty());
-    Ok(Usage { pane_key, context_tokens, context_window, limits, session, at, config_dir })
+    Ok(Usage { pane_key, context_tokens, context_window, limits, session, at, cost_usd, config_dir })
 }
 
 /// USAGE-021: a report counts only when it comes from the folder the active account runs under;
@@ -1117,15 +1121,35 @@ pub(crate) fn install_codex_with(home: &Path, command: &str, listing: impl FnOnc
     // record stays in the Codex home. hooks FIX-4: the file first, the record only once the file
     // is gone, so a file that cannot be removed (held open, say) keeps the record that names it as
     // Kolux's, and the next start does not refuse it as someone else's file with Kolux's entries.
-    let restore = || match &text {
-        Some(t) => std::fs::write(&file, t).map_err(|e| e.to_string()),
-        None => {
-            std::fs::remove_file(&file).map_err(|e| format!("{} could not be removed ({e}); its record stays, so the next start still knows it as Kolux's", file.display()))?;
-            let record = agent_hooks::codex_record(&file);
-            if agent_hooks::was_created(&record, &file) {
-                let _ = std::fs::remove_file(record);
+    // hooks FIX-5 (stand-in review AFTER 1): only while the file still holds what Kolux wrote. A
+    // save by the user or another tool while Codex was asked is kept, and the error says so; the
+    // rewrite goes through the same atomic write as the install, so it never leaves half a file.
+    // Nothing written (the entries were already in): nothing to put back.
+    let wrote = if changed { Some(String::from_utf8(render(&hooks, text.as_deref())?).map_err(|e| e.to_string())?) } else { None };
+    let restore = || -> Result<(), String> {
+        let Some(wrote) = wrote.as_deref() else { return Ok(()) };
+        match &text {
+            Some(t) => write_atomic(&file, t.as_bytes(), Some(wrote)),
+            None => {
+                // hooks FIX-6 (stand-in review AFTER 2): a file the user deleted in the window is
+                // what the rollback wanted; only the record saying Kolux created it is left to drop.
+                let now = match std::fs::read(&file) {
+                    Ok(now) => Some(now),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(e) => return Err(format!("{} could not be read back ({e}); its record stays, so the next start still knows it as Kolux's", file.display())),
+                };
+                if let Some(now) = now {
+                    if now != wrote.as_bytes() {
+                        return Err(format!("{} {CHANGED}", file.display()));
+                    }
+                    std::fs::remove_file(&file).map_err(|e| format!("{} could not be removed ({e}); its record stays, so the next start still knows it as Kolux's", file.display()))?;
+                }
+                let record = agent_hooks::codex_record(&file);
+                if agent_hooks::was_created(&record, &file) {
+                    let _ = std::fs::remove_file(record);
+                }
+                Ok(())
             }
-            Ok(())
         }
     };
     let listing = listing(home);
@@ -1141,8 +1165,11 @@ pub(crate) fn install_codex_with(home: &Path, command: &str, listing: impl FnOnc
         });
     }
     if let Err(e) = crate::trust::write_whole(&config, &doc.to_string()) {
-        restore()?;
-        return Err(e);
+        // hooks FIX-5 (stand-in review AFTER 2): a rollback that fails too never hides the trust error.
+        return Err(match restore() {
+            Ok(()) => e,
+            Err(r) => format!("{e}; {r}"),
+        });
     }
     Ok(true)
 }
@@ -1491,6 +1518,26 @@ mod tests {
     }
 
     #[test]
+    fn a_status_line_report_carries_the_sessions_cost() {
+        // USAGE-034: the status line's cost.total_cost_usd is the session's total so far, in US dollars.
+        let u = |body: &str| {
+            let id = base64::engine::general_purpose::STANDARD.encode(r#"{"paneKey":4,"terminal":2,"hookVersion":1}"#);
+            let raw = format!("POST /claude-status HTTP/1.1\r\nX-Kolux-Token: tok\r\nX-Kolux-Pane: {id}\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+            usage(&parse_request(&mut raw.as_bytes()).unwrap(), "tok").unwrap()
+        };
+        assert_eq!(u(r#"{"cost":{"total_cost_usd":3.1475},"context_window":{"context_window_size":200000,"total_input_tokens":5000}}"#).cost_usd, Some(3.1475));
+        assert_eq!(u(r#"{"cost":{"total_cost_usd":0}}"#).cost_usd, Some(0.0));
+        // Missing, not a number, or a broken figure: no cost, so the window keeps its last one.
+        assert_eq!(u(r#"{"context_window":{"context_window_size":200000}}"#).cost_usd, None);
+        assert_eq!(u(r#"{"cost":{"total_cost_usd":"3.15"}}"#).cost_usd, None);
+        assert_eq!(u(r#"{"cost":{"total_cost_usd":-1.5}}"#).cost_usd, None);
+        // It rides in the event the window listens to, under the name the window reads.
+        let v = json!(u(r#"{"cost":{"total_cost_usd":2.5}}"#));
+        assert_eq!(v["costUsd"], json!(2.5));
+        assert!(json!(u(r#"{}"#))["costUsd"].is_null());
+    }
+
+    #[test]
     fn a_status_line_report_carries_its_clock() {
         // USAGE-001 (marks FIX-1): the report's clock is its session id with the terminal that ran
         // it, and `at` is the session's running time. A resume in a new terminal keeps the session
@@ -1514,6 +1561,15 @@ mod tests {
         assert_eq!((bare.session, bare.at), (None, None));
         let blank = post(&t2, r#"{"session_id":"  ","cost":{"total_duration_ms":5}}"#);
         assert_eq!((blank.session, blank.at), (None, None));
+        // An over-long session id is cut at 200 characters plus the ellipsis `trim` adds, and the
+        // terminal still follows (stand-in review of lane/marks 54b27f5e, AFTER 2).
+        let long = "x".repeat(250);
+        let cut = post(&t2, &format!(r#"{{"session_id":"{long}","cost":{{"total_duration_ms":7}}}}"#));
+        let want = format!("{}…@2", "x".repeat(200));
+        assert_eq!((cut.session.as_deref(), cut.at), (Some(want.as_str()), Some(7)));
+        // Exactly 200 is kept whole.
+        let kept = post(&t2, &format!(r#"{{"session_id":"{}","cost":{{"total_duration_ms":8}}}}"#, "y".repeat(200)));
+        assert_eq!(kept.session, Some(format!("{}@2", "y".repeat(200))));
         // The names the window's listener reads.
         let j = serde_json::to_value(&u).unwrap();
         assert_eq!((j["session"].as_str(), j["at"].as_u64(), j["paneKey"].as_u64()), (Some("0b3c-9f@2"), Some(61_000), Some(4)));

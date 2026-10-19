@@ -360,14 +360,25 @@ export const rowKeys = (s: Status, order?: unknown, drawn?: Drawn): RowKey[] => 
   return keys;
 };
 
-/** FIX-3: `select` for clicks on drawn rows. A Shift span runs between the two clicked ROWS (their
- * own sections, so a partly staged file does not pull in rows outside the two clicks) and takes
- * those rows' paths; every other mode is `select` on paths. */
+/** FIX-5: whether a Shift span can run: there is an anchor and both it and the clicked row are drawn. */
+export const spanRuns = (keys: RowKey[], target: RowKey, anchor: RowKey | null): boolean => {
+  const drawn = (k: RowKey) => keys.some((x) => x.section === k.section && x.path === k.path);
+  return anchor !== null && drawn(anchor) && drawn(target);
+};
+
+/** FIX-3 / FIX-4 / FIX-5: `select` for clicks on drawn rows. A Shift span runs between the two clicked
+ * ROWS (their own sections, so a partly staged file does not pull in rows outside the two clicks) and
+ * takes those rows' paths; every other mode is `select` on paths. A Shift-click that cannot span (no
+ * anchor yet, or the anchor's folder was closed, or the section cap hides it) selects just the
+ * clicked row, even when it is the only one selected (a plain click would clear it), and the panel
+ * makes it the new anchor (`spanRuns`): falling back to the anchor's path would find its copy in the
+ * other section and span from there. */
 export const selectRows = (selected: string[], keys: RowKey[], target: RowKey, mode: SelectMode, anchor: RowKey | null): string[] => {
   const at = (k: RowKey) => keys.findIndex((x) => x.section === k.section && x.path === k.path);
   const paths = [...new Set(keys.map((k) => k.path))];
-  if (mode === "span" && anchor !== null && at(anchor) >= 0 && at(target) >= 0) {
-    const [a, b] = [at(anchor), at(target)].sort((x, y) => x - y);
+  if (mode === "span") {
+    if (!spanRuns(keys, target, anchor)) return [target.path];
+    const [a, b] = [at(anchor as RowKey), at(target)].sort((x, y) => x - y);
     return [...new Set(keys.slice(a, b + 1).map((k) => k.path))];
   }
   return select(selected, paths, target.path, mode, anchor?.path ?? null);

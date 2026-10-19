@@ -174,3 +174,8 @@ Done: <count> / <total> tasks  ·  P0 cards passing: <n>/<m>
 ```
 
 Write `STATE.md` in plain words. Txais reads it to see progress; he does not read code.
+
+Since 2026-10-19 STATE.md holds only the head, "What works today", "Needs Txais", the last 7 days of
+"Decisions made for Txais" and literally the last 10 passes. Older entries live in `STATE-history.md`
+(append-only; pass and decision lines from lanes go there), ticked tasks in `PLAN-done.md`, and old
+DECISIONS.md section 7 rows in `DECISIONS-history.md`. Those three are grep-only, never read at startup.

@@ -20,24 +20,41 @@ export function searchSession(root: string, call: (root: string, ask: Ask) => Pr
   let n = 0;
   let sent = false;
   let closed = false;
+  let asked = 0;
+  let out = false; // the newest search has not answered yet
+  const stop = () => void Promise.resolve(cancel(root)).catch(() => {});
   return {
     run(ask: Ask, done: (f: Found) => void, failed: (e: unknown) => void) {
       const mine = ++n;
+      const latest = ++asked;
       sent = true;
+      out = true;
+      // FIX-6 (council d2 AFTER 1): the newest search answering clears `out` even when the answer is
+      // dropped (the query moved on), so a later empty() does not send a cancel to an idle folder.
       call(root, ask).then(
-        (f) => mine === n && !closed && done(f),
-        (e) => mine === n && !closed && failed(e),
+        (f) => (latest === asked && (out = false), mine === n && !closed && done(f)),
+        (e) => (latest === asked && (out = false), mine === n && !closed && failed(e)),
       );
     },
-    /** The query was emptied: whatever is out is no longer wanted. */
+    /** The query changed: an older answer is dropped when it comes. The backend is left alone, because
+     * the next search of the folder replaces the running one. */
     drop() {
       n++;
+    },
+    /** FIX-5 (council d2 AFTER 3): the query was emptied, so no search follows. What is out is dropped
+     * and the backend is told to stop it, instead of letting it run on to its cap or its time limit. */
+    empty() {
+      n++;
+      if (out && !closed) {
+        out = false;
+        stop();
+      }
     },
     close() {
       if (closed) return;
       closed = true;
       n++;
-      if (sent) void Promise.resolve(cancel(root)).catch(() => {});
+      if (sent) stop();
     },
   };
 }

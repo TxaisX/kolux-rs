@@ -32,7 +32,8 @@ import { openSettings } from "../settings/pages";
 import { answerKeys, buttonsShown, canAnswer, nextPrompt } from "./permissionAnswer";
 import { Close, Dots, Expand, Plus, SplitRight, StatusGlyph } from "../chrome/icons";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
-import Ring from "../usage/Ring";
+import { ContextGauge, HeaderUsage } from "./UsageReadout";
+import type { Readout } from "./headerUsage";
 import { meterText, shortTokens, tone as toneOf, type Meter } from "../usage/meter";
 import PlusMenu, { programWord, shellWord, type AgentInfo } from "../launch/PlusMenu";
 import { useKeymap } from "../keys/KeymapContext";
@@ -98,8 +99,12 @@ type Props = {
   /** STAT-040: how full the agent's context is, 0 to 100, from its last status-line report;
    * null or left out while no reading has come in yet (USAGE-001: a greyed 0%). */
   context?: number | null;
-  /** USAGE-004: the agent's plan figures beside the gauge on the Agents screen. */
+  /** USAGE-004: the agent's plan figures beside the gauge on the Agents screen. Shown only while `usage`
+   * is left out; with it the header's full readout carries the plan figures on every screen. */
   plan?: string;
+  /** USAGE-034: the pane's reading for the full usage readout (tokens against the effective window,
+   * cost, used-or-left); left out for a shell, which shows the plain gauge. */
+  usage?: Readout;
   /** TERM-118: the program rang the terminal bell. */
   onBell?: () => void;
   /** TERM-118: finished or rang while not in view; the pane carries the mark until viewed. */
@@ -189,7 +194,7 @@ const stagger = () =>
     }, 150 + 60 * waiting++),
   );
 
-export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
+export default function TerminalPane({ hidden = false, gpu = true, name, plan, usage, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const keySettingsRef = useRef(keySettings);
   keySettingsRef.current = keySettings;
@@ -1151,7 +1156,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
           </span>
         )}
         <span className="right">
-          {plan && (
+          {plan && !usage && (
             <span className="meter-plan" title="This agent's plan: its 5-hour and weekly windows">
               {plan}
             </span>
@@ -1161,7 +1166,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
               Review plan
             </button>
           )}
-          <ContextGauge context={context} agent={agent} />
+          {usage ? <HeaderUsage context={context} agent={agent} readout={usage} /> : <ContextGauge context={context} agent={agent} />}
           <button
             className="ib"
             title="Pane menu"
@@ -1463,21 +1468,5 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   );
 }
 
-/** USAGE-001: the header's context ring and percentage. Always there; a greyed 0% until the
- * first reading (a real 0% is a reading), then tinted yellow from 70% and red beyond 90%. Only
- * Claude's status line reports context, so a Codex pane's hover says so instead of promising a
- * figure (stand-in review of lane/marks ee2bfbc, FIX-SOON 6). */
-export function ContextGauge({ context, agent }: { context?: number | null; agent: string }) {
-  const none = context === null || context === undefined;
-  const percent = none ? 0 : Math.round(context);
-  const waiting = agent === "codex" ? "Context used: Codex does not report its context to Kolux, so there is no figure to show." : "Context used: nothing received yet. The figure appears with the agent's first status report.";
-  const title = none ? (agent === "shell" ? "Context used (agents only)" : waiting) : `Context used: ${percent}% of the agent's context window`;
-  // The tint reads the real figure: 90.4% is beyond 90 though it shows as 90% (stand-in review of
-  // lane/marks 243736d, AFTER 9).
-  return (
-    <span className={none ? "gauge none" : `gauge ${toneOf(context ?? 0)}`.trim()} title={title}>
-      <Ring percent={percent} />
-      {percent}%
-    </span>
-  );
-}
+// USAGE-001: the gauge lives with the rest of the header readout (UsageReadout.tsx); kept importable from here.
+export { ContextGauge };

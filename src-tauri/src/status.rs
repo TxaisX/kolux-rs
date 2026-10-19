@@ -41,17 +41,35 @@ pub static SESSIONS: Mutex<Option<HashMap<u32, Session>>> = Mutex::new(None);
 /// T-563: per pane key, the terminals whose exit took that pane's session, newest last. A hook
 /// still in flight from one of them is dropped, so it never points the session back at a dead
 /// terminal. Terminal ids are never reused within a run, so a few per pane are enough.
-static RETIRED: Mutex<Option<HashMap<u32, VecDeque<u32>>>> = Mutex::new(None);
+static RETIRED: Mutex<Option<Retired>> = Mutex::new(None);
 const RETIRED_KEEP: usize = 16;
+/// hooks FIX-5: how many ended terminals are remembered on their own, whatever pane they had.
+const ENDED_KEEP: usize = 256;
+/// hooks FIX-6 (stand-in review FIX-SOON 1): the tests that lean on `ended` alone (a terminal
+/// ended, then its hook expected to be dropped) take this before anything else, so the race
+/// test's two thousand ends never flush the ring under them on a loaded PC.
+#[cfg(test)]
+static ENDED_TESTS: Mutex<()> = Mutex::new(());
 
-fn with_retired<T>(f: impl FnOnce(&mut HashMap<u32, VecDeque<u32>>) -> T) -> T {
-    let mut guard = RETIRED.lock().unwrap_or_else(|p| p.into_inner());
-    f(guard.get_or_insert_with(HashMap::new))
+/// T-563's per-pane retirements and, hooks FIX-5 (stand-in review AFTER 3), the last ended
+/// terminals on their own: an agent that crashes right after its first hook left its pane no
+/// session to retire from, so that hook, handled after the exit, would otherwise create one on
+/// the dead terminal. A terminal that ended can never send a hook that counts.
+#[derive(Default)]
+struct Retired {
+    by_pane: HashMap<u32, VecDeque<u32>>,
+    ended: VecDeque<u32>,
 }
 
-/// T-563: `terminal`'s exit already took `pane_key`'s session.
+fn with_retired<T>(f: impl FnOnce(&mut Retired) -> T) -> T {
+    let mut guard = RETIRED.lock().unwrap_or_else(|p| p.into_inner());
+    f(guard.get_or_insert_with(Retired::default))
+}
+
+/// T-563: `terminal`'s exit already took `pane_key`'s session; hooks FIX-5: or it ended lately,
+/// session or not.
 fn retired(pane_key: u32, terminal: u32) -> bool {
-    with_retired(|r| r.get(&pane_key).is_some_and(|t| t.contains(&terminal)))
+    with_retired(|r| r.ended.contains(&terminal) || r.by_pane.get(&pane_key).is_some_and(|t| t.contains(&terminal)))
 }
 /// When the usage window the status line last saw used up lifts (ms), 0 for none (STAT-040); a
 /// limit stop carries it (STAT-022).
@@ -726,17 +744,23 @@ pub fn working_now(live: impl Fn(u32) -> bool) -> usize {
 /// such pane retires the terminal, so a late hook from it is dropped by `report`. hooks FIX-4:
 /// the sessions go and the terminal is retired under the one sessions lock (SESSIONS, then
 /// RETIRED), so no hook can slip in between and take the pane back to the ended terminal.
+/// hooks FIX-5: the terminal is also remembered as ended on its own, so a pane that had no
+/// session yet (its first hook still in flight) drops that hook too.
 pub fn terminal_ended(terminal: u32) {
     with_sessions(|s| {
         let gone: Vec<u32> = s.iter().filter(|(_, x)| x.terminal == Some(terminal)).map(|(k, _)| *k).collect();
         gone.iter().for_each(|k| drop(s.remove(k)));
         with_retired(|r| {
             for pane in gone {
-                let list = r.entry(pane).or_default();
+                let list = r.by_pane.entry(pane).or_default();
                 list.push_back(terminal);
                 while list.len() > RETIRED_KEEP {
                     list.pop_front();
                 }
+            }
+            r.ended.push_back(terminal);
+            while r.ended.len() > ENDED_KEEP {
+                r.ended.pop_front();
             }
         });
     });
@@ -1354,9 +1378,12 @@ mod tests {
     }
 
     /// TERM-122: only a session tied to a live terminal keeps the computer awake. A hook report that
-    /// carries no terminal id and a straggler hook arriving after its terminal ended both read
-    /// working, but neither holds the computer awake. (This drives the hook path, report(); the
-    /// in-band path, status_inband, leaves the terminal None unless a hook named one, and is not run here.)
+    /// carries no terminal id and a session on a terminal that is no longer running (its exit not
+    /// yet handled, so not yet retired) both read working, but neither holds the computer awake.
+    /// (This drives the hook path, report(); the in-band path, status_inband, leaves the terminal
+    /// None unless a hook named one, and is not run here. hooks FIX-5: a straggler hook from a
+    /// terminal already handled as ended makes no session at all; see
+    /// fix_5_a_panes_first_hook_handled_after_its_terminals_exit_is_dropped.)
     #[test]
     fn term122_a_session_without_a_live_terminal_never_keeps_the_computer_awake() {
         const NO_TERM: u32 = 922_301;
@@ -1368,9 +1395,8 @@ mod tests {
         let live = |t: u32| t == LIVE_T;
         let go = ev(r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
         report(NO_TERM, None, Agent::Claude, &go);
-        terminal_ended(DEAD_T);
         report(STRAY, Some(DEAD_T), Agent::Claude, &go);
-        assert_eq!(state_of(DEAD_T), Some("working"), "the straggler does read working");
+        assert_eq!(state_of(DEAD_T), Some("working"), "the session on the terminal that stopped running does read working");
         assert_eq!(working_now(live), 0, "but no session without a live terminal counts");
         assert_eq!(working_now(|t| t == DEAD_T), 1, "the same reading on a running terminal would count");
         report(LIVE, Some(LIVE_T), Agent::Claude, &go);
@@ -1406,6 +1432,7 @@ mod tests {
     /// terminal and that terminal's exit ends it (and, through panes_of, the activity lane).
     #[test]
     fn t563_a_late_hook_from_a_retired_terminal_never_takes_the_pane_back() {
+        let _serial = ENDED_TESTS.lock().unwrap_or_else(|p| p.into_inner());
         const PANE: u32 = 956_301;
         const OLD: u32 = 956_303;
         const NEW: u32 = 956_304;
@@ -1428,8 +1455,35 @@ mod tests {
         assert!(report(PANE + 1, Some(NEW + 10), Agent::Claude, &stop).is_none(), "retired for the pane it ended");
         assert!(report(PANE, None, Agent::Claude, &go).is_some(), "no terminal given: not dropped");
         assert!(report(PANE, Some(NEW), Agent::Claude, &stop).is_none(), "the new terminal is retired too now");
-        assert!(report(PANE, Some(NEW + 10), Agent::Claude, &stop).is_some(), "another pane's ended terminal is not this pane's");
+        // hooks FIX-5: an ended terminal is ended for every pane; no hook from it counts anywhere.
+        assert!(report(PANE, Some(NEW + 10), Agent::Claude, &stop).is_none(), "another pane's ended terminal is ended here too");
         with_sessions(|s| s.remove(&PANE));
+    }
+
+    /// hooks FIX-5 (stand-in review AFTER 3): an agent crashes right after its first hook, and that
+    /// hook is handled after the exit. The pane had no session to retire from, so the terminal's
+    /// end is remembered on its own and the hook is dropped instead of making a session on the
+    /// dead terminal. No session is seeded here.
+    #[test]
+    fn fix_5_a_panes_first_hook_handled_after_its_terminals_exit_is_dropped() {
+        let _serial = ENDED_TESTS.lock().unwrap_or_else(|p| p.into_inner());
+        const PANE: u32 = 958_101;
+        const DEAD: u32 = 958_103;
+        let go = ev(r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        assert_eq!(terminal_of(PANE), None, "no session before");
+        terminal_ended(DEAD);
+        // hooks FIX-6: HOOKS_TEST_GAP_MS widens the window between the end and the hook, so a run
+        // without ENDED_TESTS shows the race test's burst evicting DEAD from the ring:
+        // `HOOKS_TEST_GAP_MS=1000 cargo test status::tests::fix_ -- --test-threads=2`.
+        if let Some(ms) = std::env::var("HOOKS_TEST_GAP_MS").ok().and_then(|v| v.parse().ok()) {
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+        }
+        assert!(report(PANE, Some(DEAD), Agent::Claude, &go).is_none(), "the first hook of a terminal that already ended is dropped");
+        assert!(with_sessions(|s| !s.contains_key(&PANE)), "and makes no session");
+        assert!(report(PANE, Some(DEAD + 1), Agent::Claude, &go).is_some(), "the pane's next terminal reports as usual");
+        assert_eq!(terminal_of(PANE), Some(DEAD + 1));
+        with_sessions(|s| s.remove(&PANE));
+        with_retired(|r| r.ended.retain(|t| *t != DEAD));
     }
 
     /// hooks FIX-4 (stand-in review FIX-SOON 2): the agent's last hook and its exit handled on two
@@ -1437,6 +1491,7 @@ mod tests {
     /// the retired check and the retiring happen under the one sessions lock.
     #[test]
     fn fix_4_a_hook_racing_its_terminals_exit_never_keeps_the_dead_terminal() {
+        let _serial = ENDED_TESTS.lock().unwrap_or_else(|p| p.into_inner());
         use std::sync::{Arc, Barrier};
         const BASE: u32 = 957_100_000;
         // Before the fix about half the rounds kept the dead terminal (10008 of 20000 in the red
@@ -1463,6 +1518,11 @@ mod tests {
             let stuck = (0..ROUNDS).filter(|i| s.get(&(BASE + i)).is_some_and(|x| x.terminal.is_some())).collect();
             (0..ROUNDS).for_each(|i| drop(s.remove(&(BASE + i))));
             stuck
+        });
+        // hooks FIX-5 (stand-in review AFTER 5): the retirements this test made go too.
+        with_retired(|r| {
+            (0..ROUNDS).for_each(|i| drop(r.by_pane.remove(&(BASE + i))));
+            r.ended.retain(|t| !(BASE + ROUNDS..BASE + 2 * ROUNDS).contains(t));
         });
         assert!(stuck.is_empty(), "{} of {ROUNDS} panes kept a session on their ended terminal", stuck.len());
     }

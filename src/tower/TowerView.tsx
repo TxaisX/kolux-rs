@@ -1,13 +1,13 @@
 // The control tower (OD-09 / DT-C35, T-546): a full-width switcher screen in the main window (T-546-c:
 // Own window also opens it in a window of its own, on the second screen; ownWindow.ts). Usage per provider across the top, then every
 // agent pane as one row, needs-you first.
-// One click on a row (or Enter on the selected one) jumps to that pane; Up and Down walk the rows.
+// One click on a row (or Enter on the selected one) jumps to that pane; Up, Down, Home and End walk the rows.
 // The rows come from `towerRows` in tower.ts; the window computes each pane's chip and meter the
 // same way the Board does, so the two never disagree.
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import "./tower.css";
 import { LANES, span, type Lane } from "../board/chip";
-import { moveSelection, settle } from "../inbox/inbox";
+import { settle } from "../inbox/inbox";
 import { StatusGlyph, type GlyphName } from "../chrome/icons";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import { programWord } from "../launch/PlusMenu";
@@ -16,7 +16,7 @@ import { tone } from "../usage/meter";
 import { refreshAll } from "../usage/refresh";
 import { OWN_WINDOW_WIRED, openTowerWindow } from "./ownWindow";
 import Ring from "../usage/Ring";
-import { laneCounts, type AccountUsage, type Row } from "./tower";
+import { laneCounts, selectionForKey, type AccountUsage, type Row } from "./tower";
 
 /** T-546-c: `detached` = drawn in the Tower's own window (no Own window button; Refresh asks the main window). */
 /** `ownWindow` = offer the Own window button (FIX-2: only once T-546-c's window side is wired). */
@@ -46,7 +46,8 @@ export default function TowerView({ rows, usage, now, onOpen, detached = false, 
   useEffect(() => list.current?.focus(), []);
 
   const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") setSelected(moveSelection(keys, current, e.key === "ArrowDown" ? 1 : -1));
+    const pick = selectionForKey(e.key, keys, current);
+    if (pick) setSelected(pick.to);
     else if (e.key === "Enter" && current !== null) onOpen(current);
     else return;
     e.preventDefault();

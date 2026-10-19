@@ -13,6 +13,7 @@ import { LAYOUT_FIELD, restoreAsks, restoreLayout, stillThere } from "./terminal
 import "./styles.css";
 import TowerWindow from "./tower/TowerWindow";
 import { isTowerWindow } from "./tower/ownWindow";
+import { showStartFailure } from "./tower/startFailed";
 
 // SET-004: the window starts hidden (tauri.conf.json). The saved look goes on the root first, read
 // from the settings (the last run's copy if they take too long), then the page draws, and only then
@@ -28,6 +29,8 @@ async function start() {
   // FIX-4 (council d2 AFTER 8): the App module (and everything it imports) is loaded for the main
   // window only; the Tower window never evaluates it. The load starts now and runs beside the settings read.
   const loadApp = import("./App");
+  // FIX-6 (council d2 AFTER 3): the load is awaited much later; a fast failure is already handled by then (the await below still throws).
+  loadApp.catch(() => {});
   const saved = await Promise.race([
     invoke<Record<string, unknown>>("get_settings").catch(() => null),
     new Promise<null>((r) => setTimeout(() => r(null), 1500)),
@@ -73,4 +76,6 @@ async function start() {
 }
 
 installMenuWheel(document);
-void start();
+// FIX-5 (council d2 AFTER 4): a start that fails (the App chunk did not load, a restore step threw)
+// shows a message and the window instead of leaving the hidden window blank.
+void start().catch((e) => showStartFailure(e, document, () => getCurrentWindow().show()));

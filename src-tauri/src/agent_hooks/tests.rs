@@ -273,6 +273,32 @@ mod script_runs {
 
     const STOP: &str = r#"{"hook_event_name":"Stop","session_id":"s1","cwd":"C:/w"}"#;
 
+    /// How long this PC takes right now to start a Windows PowerShell and leave it at once.
+    fn powershell_start() -> Duration {
+        let exe = PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into())).join("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe");
+        let mut cmd = Command::new(exe);
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", "exit"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        let t = Instant::now();
+        assert!(cmd.status().unwrap().success(), "a plain PowerShell starts");
+        t.elapsed()
+    }
+
+    /// hooks FIX-7 (stand-in review AFTER 1): the time a held run may take, from the PowerShell
+    /// start timed before the run and the one timed after it; the slower of the two decides, so a
+    /// load spike that begins right after the first sample cannot outrun the bound.
+    fn held_run_bound(before: Duration, after: Duration) -> Duration {
+        before.max(after) * 2 + Duration::from_secs(3)
+    }
+
+    #[test]
+    fn fix_7_the_held_run_bound_follows_the_slower_of_the_two_powershell_starts() {
+        let quick = Duration::from_millis(400);
+        let slow = Duration::from_secs(4);
+        assert_eq!(held_run_bound(quick, slow), Duration::from_secs(11), "a spike after the first sample raises the bound");
+        assert_eq!(held_run_bound(slow, quick), Duration::from_secs(11), "a spike before it does too");
+        assert_eq!(held_run_bound(quick, quick), Duration::from_millis(3800), "an idle PC keeps the tight bound");
+    }
+
     /// The script itself lives in a plain folder; only the data paths carry the awkward characters.
     fn scripts(name: &str) -> PathBuf {
         temp(&format!("scripts-{name}"))
@@ -303,10 +329,24 @@ mod script_runs {
             }
             v
         };
+        // hooks FIX-6/FIX-7 (stand-in review FIX-SOON 3, AFTER 1-2): the bound follows how long this
+        // PC takes to start a Windows PowerShell (0.4 s idle, over 2 s with other builds running).
+        // That start is timed just before the run and again just after it, and the larger of the
+        // two counts, so a load spike on either side of the run raises the bound with it. The bound
+        // is twice that start plus a 3 s allowance: curl's 0.5 s connect timeout, the cmd and
+        // script work, the script's retry window (20 tries 100 ms apart, 2 s), which nothing uses
+        // here because no one holds the file, and 1 s of slack. A hard 30 s ceiling still catches
+        // a true hang.
+        let before = powershell_start();
         let started = Instant::now();
         let out = run(&dir, &env(false), r#"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","session_id":"s1"}"#);
+        let elapsed = started.elapsed();
+        let after = powershell_start();
         assert!(out.status.success() && out.stdout.is_empty(), "{out:?}");
-        assert!(started.elapsed() < Duration::from_secs(5), "a closed Kolux never holds the agent up: {:?}", started.elapsed());
+        let bound = held_run_bound(before, after);
+        println!("PowerShell start before {before:?}, after {after:?}; the held run took {elapsed:?}; bound {bound:?} (the fixed bound before hooks FIX-6 was 5 s)");
+        assert!(elapsed < Duration::from_secs(30), "a closed Kolux never holds the agent up (hang ceiling): {elapsed:?}");
+        assert!(elapsed < bound, "a closed Kolux never holds the agent up: {elapsed:?} against PowerShell starts of {before:?} and {after:?}");
         // Kolux took its endpoint file away as it quit: the pane's own variables name the address.
         fs::remove_file(&endpoint).unwrap();
         let out = run(&dir, &env(true), STOP);
@@ -407,6 +447,33 @@ mod script_runs {
         let _ = fs::remove_dir_all(&data);
     }
 
+    /// hooks FIX-7 (stand-in review FIX-SOON 1): where the held-append test aims the release. A
+    /// real retry proves itself only when the release falls between HELD_PASS_LEAD_MS after the
+    /// stamp (earlier, a script with no retry could pass) and the end of the script's retries
+    /// (later, nothing lands). The aim at the middle keeps room for a load swing either way.
+    const HELD_AIM_PAST_STAMP_MS: i64 = 1100;
+    const HELD_PASS_LEAD_MS: i64 = 400;
+
+    /// How long past the stamp the script's retries last, read from the script itself: the pauses
+    /// between its tries, (tries - 1) x the pause.
+    fn retries_reach_ms() -> i64 {
+        let text = super::super::super::SPOOL_LINE;
+        let number_after = |key: &str| -> i64 {
+            let rest = &text[text.find(key).unwrap_or_else(|| panic!("the holding script has {key}")) + key.len()..];
+            rest.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap()
+        };
+        (number_after("$i -lt ") - 1) * number_after("Start-Sleep -Milliseconds ")
+    }
+
+    #[test]
+    fn fix_7_the_held_append_aim_keeps_600_ms_of_room_each_side() {
+        let reach = retries_reach_ms();
+        assert_eq!(reach, 1900, "20 tries with 19 pauses of 100 ms");
+        let (aim, pass) = (std::hint::black_box(HELD_AIM_PAST_STAMP_MS), HELD_PASS_LEAD_MS);
+        assert!(aim - pass >= 600, "room for a stamp that comes late: {aim} against {pass}");
+        assert!(reach - aim >= 600, "room for a stamp that comes early: {aim} against {reach}");
+    }
+
     /// hooks FIX-3 (stand-in review AFTER 2): while another writer holds the holding file shut, the
     /// held append is tried again, so the event lands once the file is free instead of being lost.
     #[test]
@@ -414,26 +481,58 @@ mod script_runs {
         use std::os::windows::fs::OpenOptionsExt;
         let (spool, data, env) = closed_kolux("fix3-busy", 11);
         let dir = scripts("fix3-busy");
-        fs::write(&spool, "").unwrap();
-        // Shared with nobody: the script's append fails while this handle is open.
-        let lock = fs::OpenOptions::new().read(true).write(true).share_mode(0).open(&spool).unwrap();
-        let started = Instant::now();
-        let child = start(&dir, &env, STOP);
-        // hooks FIX-4 (stand-in review AFTER 3): timed from PowerShell's own start, not from the
-        // event file. Its first append comes after it starts, so a 1 s hold always meets it, and
-        // the retries (2 s from that append) always outlast the hold, however fast or loaded the PC.
-        while !powershell_under(child.id()) && started.elapsed() < Duration::from_secs(20) {
-            std::thread::sleep(Duration::from_millis(5));
+        // hooks FIX-4 (stand-in review AFTER 3): the hold is timed from PowerShell's own start.
+        // hooks FIX-5 (stand-in review FIX-SOON 1): a run counts only when its first append met
+        // the lock, shown by the held line's `spooled_at` (stamped just before the first try)
+        // falling well before the lock was let go. How long PowerShell takes from its start to
+        // that stamp depends on the PC's load (0.4 s idle, over 2 s with other builds running),
+        // and the retries reach only about 2 s past the stamp, so no fixed hold fits every PC:
+        // each run measures the stamp's offset and the next hold aims HELD_AIM_PAST_STAMP_MS past
+        // it (hooks FIX-7: the middle of the window a real retry can prove), until one run
+        // proves the retry. A run whose hold outlasted the retries (nothing landed) only
+        // shortens the next hold; it never passes the test.
+        let unix_ms = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+        let mut hold: i64 = 1000;
+        let mut met = None;
+        for attempt in 0..6 {
+            fs::write(&spool, "").unwrap();
+            // Shared with nobody: the script's append fails while this handle is open.
+            let lock = fs::OpenOptions::new().read(true).write(true).share_mode(0).open(&spool).unwrap();
+            let started = Instant::now();
+            let child = start(&dir, &env, STOP);
+            while !powershell_under(child.id()) && started.elapsed() < Duration::from_secs(20) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let seen = started.elapsed();
+            assert!(seen < Duration::from_secs(20), "the script reached its held path");
+            std::thread::sleep(Duration::from_millis(hold as u64));
+            let released_ms = unix_ms();
+            drop(lock);
+            let out = child.wait_with_output().unwrap();
+            assert!(out.status.success(), "{out:?}");
+            let held = fs::read_to_string(&spool).unwrap();
+            let lines: Vec<_> = held.lines().filter(|l| !l.is_empty()).collect();
+            assert!(lines.len() <= 1, "one event at most: {held:?}");
+            let Some(line) = lines.first() else {
+                println!("attempt {attempt}: PowerShell seen after {seen:?}, held {hold} ms: nothing landed, the hold outlasted the retries");
+                hold = (hold - 700).max(400);
+                continue;
+            };
+            let spooled_at = ev(line.splitn(4, '|').nth(3).unwrap())["spooled_at"].as_i64().unwrap();
+            let lead = released_ms - spooled_at;
+            println!("attempt {attempt}: PowerShell seen after {seen:?}, held {hold} ms, first try {lead} ms before the release, took {:?}", started.elapsed());
+            // hooks FIX-6 (stand-in review FIX-SOON 2): 400 ms clear of the release. The first
+            // try comes a few ms after the stamp (ConvertTo-Json and the line between them), so a
+            // script with no retry at all could pass only if that gap stretched past 400 ms; the
+            // hold aims about 1100 ms past the stamp (hooks FIX-7), so a real retry keeps its margin.
+            if lead >= HELD_PASS_LEAD_MS {
+                met = Some(attempt);
+                break;
+            }
+            // The stamp came `hold - lead` ms after PowerShell was seen; hold the aim past that.
+            hold = (hold - lead + HELD_AIM_PAST_STAMP_MS).clamp(400, 8_000);
         }
-        let seen = started.elapsed();
-        std::thread::sleep(Duration::from_millis(1000));
-        drop(lock);
-        let out = child.wait_with_output().unwrap();
-        println!("PowerShell seen after {seen:?}; held append took {:?}", started.elapsed());
-        assert!(seen < Duration::from_secs(20), "the script reached its held path");
-        assert!(out.status.success(), "{out:?}");
-        let held = fs::read_to_string(&spool).unwrap();
-        assert_eq!(held.lines().filter(|l| !l.is_empty()).count(), 1, "the event landed after the other writer let go: {held:?}");
+        assert!(met.is_some(), "no run had its first append meet the lock, so none proved the retry");
         let _ = fs::remove_dir_all(&data);
     }
 
@@ -473,23 +572,32 @@ mod script_runs {
         let dir = scripts("fix4-gone");
         let gone = data.join("gone").join(super::super::super::ENDPOINT_FILE);
         let gone_env: Vec<(&str, String)> = env.iter().map(|(k, v)| (*k, if *k == "KOLUX_HOOK_ENDPOINT" { gone.display().to_string() } else { v.clone() })).collect();
-        // The quickest of three runs each, so one slow PowerShell start does not decide it.
-        let quickest = |env: &[(&str, String)]| {
-            (0..3)
-                .map(|_| {
-                    let t = Instant::now();
-                    assert!(run(&dir, env, STOP).status.success());
-                    t.elapsed()
-                })
-                .min()
-                .unwrap()
+        // hooks FIX-7 (stand-in review AFTER 5b): the two paths are timed in turns (held, missing,
+        // held, missing, ...), so a load swing lands on both alike, and each keeps its quickest of
+        // ROUNDS, so one slow PowerShell start does not decide it. The two paths do the same work
+        // but for the one append (it lands, or it fails at once on the missing folder), so what
+        // sets them apart is the script's retries: (tries - 1) x its pause, 1900 ms, read from
+        // the script. The allowed difference sits well under that, and a missing-folder run that
+        // retried would cost at least that much more than the held one.
+        const ROUNDS: usize = 4;
+        const MARGIN_MS: u64 = 1000;
+        let timed = |env: &[(&str, String)]| {
+            let t = Instant::now();
+            assert!(run(&dir, env, STOP).status.success());
+            t.elapsed()
         };
-        let held = quickest(&env);
-        let missing = quickest(&gone_env);
-        println!("held path {held:?}, missing folder {missing:?}");
-        assert_eq!(fs::read_to_string(&spool).unwrap().lines().filter(|l| !l.is_empty()).count(), 3, "the folder that is there takes every event");
+        let (mut held, mut missing) = (Duration::MAX, Duration::MAX);
+        for round in 0..ROUNDS {
+            let (h, m) = (timed(&env), timed(&gone_env));
+            println!("round {round}: held path {h:?}, missing folder {m:?}");
+            held = held.min(h);
+            missing = missing.min(m);
+        }
+        println!("quickest: held path {held:?}, missing folder {missing:?}; retries would add {} ms", retries_reach_ms());
+        assert!(MARGIN_MS as i64 + 500 <= retries_reach_ms(), "the allowed difference stays well under what the retries would cost");
+        assert_eq!(fs::read_to_string(&spool).unwrap().lines().filter(|l| !l.is_empty()).count(), ROUNDS, "the folder that is there takes every event");
         assert!(!data.join("gone").exists(), "a missing holding folder is not made");
-        assert!(missing < held + Duration::from_millis(1000), "no retries for a missing folder: {missing:?} against {held:?}");
+        assert!(missing < held + Duration::from_millis(MARGIN_MS), "no retries for a missing folder: {missing:?} against {held:?}");
         let _ = fs::remove_dir_all(&data);
     }
 
@@ -1358,5 +1466,108 @@ fn fix_4_codex_a_created_file_rolled_back_goes_before_its_record() {
     assert!(!file.exists(), "the created file is gone");
     assert!(!record.exists(), "and its record with it");
     assert!(!backup_of(&file).exists() && !home.join("config.toml").exists(), "nothing else is left");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// hooks FIX-5 (stand-in review AFTER 1): while Codex is asked to list the hooks, the user (or
+/// another tool) saves `hooks.json`. The rollback after a failed listing then leaves that save
+/// alone, whether Kolux had created the file or rewritten the user's, and says the file changed.
+/// The rewrite path goes through the same atomic write as every other, so a save just before
+/// that write's re-read is kept too.
+#[test]
+fn fix_5_codex_a_rollback_never_overwrites_or_removes_a_file_saved_meanwhile() {
+    use super::super::{BEFORE_REREAD, CHANGED};
+    let dir = temp("fix5-codex-saved");
+    let home = dir.join("codex");
+    fs::create_dir_all(&home).unwrap();
+    let file = home.join("hooks.json");
+    let record = codex_record(&file);
+    let command = "\"C:\\Users\\me\\.kolux-rs\\agent-hooks\\codex.cmd\"";
+    let users = |n: u32| format!("{{\n  \"hooks\": {{}},\n  \"saved\": {n}\n}}\n");
+    // Kolux created the file; the user's save in the window stays, record and all.
+    let err = install_codex_with(&home, command, |_| {
+        fs::write(&file, users(1)).unwrap();
+        None
+    })
+    .unwrap_err();
+    println!("created, saved meanwhile: {err}");
+    assert!(err.contains("could not list") && err.ends_with(CHANGED), "{err}");
+    assert_eq!(fs::read_to_string(&file).unwrap(), users(1), "the user's save is not removed");
+    assert!(record.exists(), "the record is left for the user's file to be looked at next start");
+    let _ = fs::remove_file(&record);
+    // The user's own file, rewritten by Kolux, then saved again in the window: that save stays.
+    fs::write(&file, users(2)).unwrap();
+    let err = install_codex_with(&home, command, |_| {
+        fs::write(&file, users(3)).unwrap();
+        None
+    })
+    .unwrap_err();
+    println!("rewritten, saved meanwhile: {err}");
+    assert!(err.contains("could not list") && err.ends_with(CHANGED), "{err}");
+    assert_eq!(fs::read_to_string(&file).unwrap(), users(3), "the user's later save is not overwritten");
+    // The rewrite re-reads before it renames: a save just before that re-read is kept as well.
+    // The install's own write pops the first closure (nothing); the rollback's pops the save.
+    fs::write(&file, users(4)).unwrap();
+    let f = file.clone();
+    BEFORE_REREAD.with(|c| c.borrow_mut().extend([Box::new(move || fs::write(&f, users(5)).unwrap()) as Box<dyn FnOnce()>, Box::new(|| {})]));
+    let err = install_codex_with(&home, command, |_| None).unwrap_err();
+    println!("rewritten, saved just before the re-read: {err}");
+    assert!(BEFORE_REREAD.with(|c| c.borrow().is_empty()), "the rollback wrote through the atomic write");
+    assert!(err.ends_with(CHANGED), "{err}");
+    assert_eq!(fs::read_to_string(&file).unwrap(), users(5), "the save just before the re-read is kept");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// hooks FIX-6 (stand-in review AFTER 2): Kolux created the file, and while Codex was asked to
+/// list the hooks the user deleted it. The rollback finds nothing to read back: the file is gone,
+/// which is what the rollback wanted, so the record saying Kolux created it goes too, instead of
+/// staying behind as a stray the next start would look at.
+#[test]
+fn fix_6_codex_a_file_deleted_in_the_window_leaves_no_record_behind() {
+    use super::super::CHANGED;
+    let dir = temp("fix6-codex-deleted");
+    let home = dir.join("codex");
+    fs::create_dir_all(&home).unwrap();
+    let file = home.join("hooks.json");
+    let record = codex_record(&file);
+    let command = "\"C:\\Users\\me\\.kolux-rs\\agent-hooks\\codex.cmd\"";
+    let err = install_codex_with(&home, command, |_| {
+        assert!(record.exists(), "the record is there while Codex is asked");
+        fs::remove_file(&file).unwrap();
+        None
+    })
+    .unwrap_err();
+    println!("created, deleted meanwhile: {err}");
+    assert!(err.contains("could not list") && !err.contains("could not be read back") && !err.ends_with(CHANGED), "{err}");
+    assert!(!file.exists(), "the file stays gone");
+    assert!(!record.exists(), "no stray record for a file that is gone");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// hooks FIX-5 (stand-in review AFTER 2): when trust cannot be written and the rollback fails
+/// too, the error names both, so the trust failure is never hidden behind the rollback's.
+#[test]
+fn fix_5_codex_a_failed_trust_write_keeps_its_own_error_when_the_rollback_fails_too() {
+    use super::super::{snake, CHANGED};
+    let dir = temp("fix5-codex-trust");
+    let home = dir.join("codex");
+    fs::create_dir_all(&home).unwrap();
+    let file = home.join("hooks.json");
+    let command = "\"C:\\Users\\me\\.kolux-rs\\agent-hooks\\codex.cmd\"";
+    // The trust write's temporary file cannot be made: a folder sits where it goes.
+    fs::create_dir_all(home.join("config.kolux-tmp")).unwrap();
+    fs::write(&file, "{}\n").unwrap();
+    let real = crate::trust::real_path(&file).unwrap();
+    let listing: Vec<Value> = CODEX_EVENTS.iter().map(|e| json!({ "key": format!("{real}:{}:0:0", snake(e)), "command": command, "currentHash": "sha256:00", "sourcePath": real })).collect();
+    let err = install_codex_with(&home, command, |_| {
+        fs::write(&file, "{ \"saved\": true }\n").unwrap();
+        Some(listing)
+    })
+    .unwrap_err();
+    println!("trust and rollback both failed: {err}");
+    assert!(err.contains("config.kolux-tmp"), "the trust write's own error is kept: {err}");
+    assert!(err.ends_with(CHANGED), "and the rollback's follows it: {err}");
+    assert_eq!(fs::read_to_string(&file).unwrap(), "{ \"saved\": true }\n", "the save in the window is kept");
+    assert!(!home.join("config.toml").exists(), "no trust was written");
     let _ = fs::remove_dir_all(&dir);
 }

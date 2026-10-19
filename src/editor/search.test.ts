@@ -76,7 +76,7 @@ describe("FIX-4 the search session of one explorer view", () => {
     expect(seen).toEqual(["ab ok"]);
   });
 
-  it("drops a search nobody wants any more (empty query) and an answer after the view closed", async () => {
+  it("drops an answer that arrives after the view closed, and tells the backend once", async () => {
     const one = deferred();
     const cancelled: string[] = [];
     const s = searchSession("C:/r", () => one.p, (r) => void cancelled.push(r));
@@ -87,6 +87,48 @@ describe("FIX-4 the search session of one explorer view", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(seen).toEqual([]);
     expect(cancelled).toEqual(["C:/r"]);
+  });
+
+  // FIX-5 (council d2 AFTER 3): emptying the query is the one change after which no new search
+  // replaces the old one, so it is the one that tells the backend.
+  it("emptying the query drops the answer still out and stops the backend search once; typing on does not", async () => {
+    const one = deferred();
+    const cancelled: string[] = [];
+    const s = searchSession("C:/r", () => one.p, (r) => void cancelled.push(r));
+    const seen: string[] = [];
+    s.run(ask("a"), () => seen.push("late"), () => seen.push("late"));
+    s.drop(); // typed another letter: the next search will replace the running one
+    expect(cancelled).toEqual([]);
+    s.empty();
+    s.empty(); // nothing is out any more: no second message
+    one.ok(found(1, 1));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(seen).toEqual([]);
+    expect(cancelled).toEqual(["C:/r"]);
+  });
+
+  // FIX-6 (council d2 AFTER 1): an answer that comes after the query moved on is dropped, but the
+  // search is over all the same, so emptying afterwards has nothing to stop.
+  it("emptying the query tells the backend nothing when the search it dropped has answered since", async () => {
+    const one = deferred();
+    const cancelled: string[] = [];
+    const s = searchSession("C:/r", () => one.p, (r) => void cancelled.push(r));
+    s.run(ask("a"), () => {}, () => {});
+    s.drop();
+    one.ok(found(1, 1));
+    await new Promise((r) => setTimeout(r, 0));
+    s.empty();
+    expect(cancelled).toEqual([]);
+  });
+
+  it("emptying the query tells the backend nothing when the last search already answered or none was asked", async () => {
+    const cancelled: string[] = [];
+    const s = searchSession("C:/r", () => Promise.resolve(found(1, 1)), (r) => void cancelled.push(r));
+    s.empty();
+    s.run(ask("a"), () => {}, () => {});
+    await new Promise((r) => setTimeout(r, 0));
+    s.empty();
+    expect(cancelled).toEqual([]);
   });
 
   it("asks the backend to release the folder when a view that searched closes, once, and not when it never searched", () => {

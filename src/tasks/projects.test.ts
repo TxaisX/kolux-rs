@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyCellEdit, cellEditable, cellKey, endSave, isNewest, isSaving, startSave, groupItems, labelChange, openingView, parseProjectRef, type Project, type ProjectField, projectHostRefused, type ProjectItem, pushRecent, refsFrom, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
+import { applyCellEdit, cellEditable, cellKey, endSave, isNewest, newBook, sendEdit, settleEdit, isSaving, startSave, groupItems, labelChange, openingView, parseProjectRef, type Project, type ProjectField, projectHostRefused, type ProjectItem, pushRecent, refsFrom, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
 
 const status: ProjectField = { id: "F_s", name: "Status", kind: "single_select", options: [{ id: "o1", name: "Todo", start: "", days: 0 }, { id: "o2", name: "Done", start: "", days: 0 }] };
 const points: ProjectField = { id: "F_p", name: "Points", kind: "number", options: [] };
@@ -123,5 +123,40 @@ describe("FIX-2 AFTER 3: one saving mark per edit", () => {
     s = endSave(s, 2);
     expect(isSaving(s, cell)).toBe(false);
     expect(isSaving(s, cellKey("a", "labels"))).toBe(true);
+  });
+});
+
+describe("FIX-3 FIX-SOON 4: a cell shows the last edit that succeeded", () => {
+  const run = (steps: [number, boolean][]) => {
+    const b = newBook();
+    const shown: number[] = [];
+    const c = cellKey("a", "F_status");
+    steps.forEach(([id]) => sendEdit(b, c, id));
+    steps.forEach(([id, ok]) => settleEdit(b, c, id, ok, () => shown.push(id)));
+    return shown;
+  };
+  it("the newest edit failing leaves the older success on screen", () => {
+    expect(run([[1, true], [2, false]])).toEqual([1]);
+  });
+  it("the newest failing first and the older one coming back later still shows the older one", () => {
+    expect(run([[2, false], [1, true]])).toEqual([1]);
+  });
+  it("two successes show the newest once, whatever order they come back in", () => {
+    expect(run([[2, true], [1, true]])).toEqual([2]);
+    expect(run([[1, true], [2, true]])).toEqual([2]);
+  });
+  it("a single edit shows at once, and all failing shows nothing", () => {
+    expect(run([[1, true]])).toEqual([1]);
+    expect(run([[1, false], [2, false]])).toEqual([]);
+  });
+  it("a later edit to the same cell starts clean", () => {
+    const b = newBook();
+    const c = cellKey("a", "F_status");
+    const shown: number[] = [];
+    sendEdit(b, c, 1);
+    settleEdit(b, c, 1, true, () => shown.push(1));
+    sendEdit(b, c, 2);
+    settleEdit(b, c, 2, false, () => shown.push(2));
+    expect(shown).toEqual([1]);
   });
 });

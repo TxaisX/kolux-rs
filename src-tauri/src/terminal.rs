@@ -996,6 +996,20 @@ impl Terminals {
         self.inner.lock().ok()?.dirs.get(&id).cloned()
     }
 
+    /// cli FIX-7: a session over a fake writer, for tests in other modules. `program` is the mark
+    /// Kolux recorded for it (none for a plain shell); it has been quiet for five seconds.
+    #[cfg(test)]
+    pub(crate) fn fake_session(&self, id: u32, dir: &str, program: Option<&str>) {
+        let long_ago = Instant::now() - Duration::from_secs(5);
+        let mut inner = self.inner.lock().unwrap();
+        inner.sessions.insert(id, PtySession::fake(Box::new(std::io::sink())));
+        inner.dirs.insert(id, dir.to_string());
+        inner.logs.insert(id, OutputLog { written: Some(long_ago), ..OutputLog::default() });
+        if let Some(program) = program {
+            inner.marks.insert(id, Mark { started: long_ago, last_output: Some(long_ago), program: program.into(), agent: None, pane: None, home_env: Vec::new(), cwd: None });
+        }
+    }
+
     /// Is `handle` an open terminal?
     pub fn live(&self, handle: &str) -> bool {
         let Some(id) = id_of(handle) else { return false };
@@ -1111,11 +1125,10 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
     let dir = cwd.clone();
     // T-172-e: a worker start puts its dispatch id in the first session's environment; the start that is
     // waiting for it learns which session that is (only a start still waiting is told).
-    let dispatch = env_own.iter().find(|(k, _)| k == crate::cli::DISPATCH_ENV).map(|(_, v)| v.clone());
-    let id = terminals.spawn(app.clone(), cols, rows, cwd, program, args, env_own, env, pane_key, shell)?;
-    if let Some(d) = dispatch {
-        crate::cli::stamp_session(&d, id);
-    }
+    // cli FIX-7: the last such entry in the environment names the dispatch (the window appends its own).
+    // cli FIX-8: spawn_stamped reads it before the environment is handed over and stamps the new
+    // session once the spawn succeeded (cli.rs fix8_d).
+    let id = crate::cli::spawn_stamped(crate::cli::dispatch_in(&env_own), || terminals.spawn(app.clone(), cols, rows, cwd, program, args, env_own, env, pane_key, shell))?;
     // AUTO-012: an automation run dispatched to this worktree for this agent is followed here.
     if let Some(dir) = dir {
         crate::automations::follow(&app, |s| crate::automations::claim(s, id, pane_key, &dir, agent));
@@ -1471,12 +1484,12 @@ mod tests {
         assert_eq!(std::env::split_paths(&cli_first(dir, None)).count(), 1);
     }
 
-    /// cli FIX-6 (council AFTER 2 on 152e581): the CLI's wait for a worker reads the mark Kolux
-    /// recorded for a session (the requested program), not the program the session's process runs.
-    /// A session over a fake writer reports "fake" as its own program; the start still finds it by
-    /// its mark "npx", and one that Kolux did not start a program in is never found.
+    /// cli FIX-7 (council FIX-SOON 1 and 2 on 4dce90d5): the CLI's wait for a worker over a real
+    /// `Terminals`. Two sessions sit in the folder and have settled, one of them marked as an agent
+    /// Kolux started; with no stamp neither is taken, and once a spawn's environment names the
+    /// dispatch (the step terminal_spawn runs) the stamped session, whichever it is, is the worker's.
     #[test]
-    fn fix6_wait_ready_reads_the_mark_of_a_real_terminals_session() {
+    fn fix7_wait_ready_takes_the_stamped_session_of_a_real_terminals() {
         let t = Terminals::default();
         let dir = std::env::temp_dir();
         let long_ago = Instant::now() - Duration::from_secs(5);
@@ -1487,18 +1500,21 @@ mod tests {
                 inner.dirs.insert(id, dir.to_string_lossy().into_owned());
                 inner.logs.insert(id, OutputLog { written: Some(long_ago), ..OutputLog::default() });
             }
-            inner.marks.insert(7, Mark { started: long_ago, last_output: Some(long_ago), program: "npx".into(), agent: None, pane: None, home_env: Vec::new(), cwd: None });
+            inner.marks.insert(7, Mark { started: long_ago, last_output: Some(long_ago), program: "claude".into(), agent: None, pane: None, home_env: Vec::new(), cwd: None });
         }
-        let none = HashSet::new();
-        let got = crate::cli::wait_ready(&t, &dir, &none, "dispatch-term-test", "codex", "npx", Instant::now(), Duration::from_millis(600));
-        assert_eq!(got, (Some(7), true));
-        // Session 8 has no mark (a shell): not found even when the start's own command is "fake".
-        let got = crate::cli::wait_ready(&t, &dir, &none, "dispatch-term-test", "codex", "fake", Instant::now(), Duration::from_millis(300));
+        // No stamp: the marked, settled session is not taken.
+        crate::cli::expect_stamp("dispatch-term-test");
+        let got = crate::cli::wait_ready(&t, "dispatch-term-test", Instant::now(), Duration::from_millis(600));
         assert_eq!(got, (None, false));
-        // The stamp names the session outright.
-        crate::cli::expect_stamp("dispatch-term-stamp");
-        assert!(crate::cli::stamp_session("dispatch-term-stamp", 8));
-        let got = crate::cli::wait_ready(&t, &dir, &none, "dispatch-term-stamp", "codex", "npx", Instant::now(), Duration::from_millis(600));
+        // terminal_spawn's step: the last KOLUX_DISPATCH_ID in the spawn environment names the dispatch.
+        let env_own = vec![
+            (crate::cli::DISPATCH_ENV.to_string(), "dispatch-term-user".to_string()),
+            (crate::cli::DISPATCH_ENV.to_string(), "dispatch-term-test".to_string()),
+        ];
+        // cli FIX-8: terminal_spawn runs the spawn through spawn_stamped, so the new session (8) is stamped by it.
+        let stamped_id: Result<u32, String> = crate::cli::spawn_stamped(crate::cli::dispatch_in(&env_own), || Ok(8));
+        assert_eq!(stamped_id, Ok(8));
+        let got = crate::cli::wait_ready(&t, "dispatch-term-test", Instant::now(), Duration::from_millis(600));
         assert_eq!(got, (Some(8), true));
         for id in [7, 8] {
             t.inner.lock().unwrap().sessions.remove(&id).unwrap().kill();
