@@ -1,0 +1,31 @@
+diff --git a/src-tauri/src/tools.rs b/src-tauri/src/tools.rs
+index 30d52b57..a87bd386 100644
+--- a/src-tauri/src/tools.rs
++++ b/src-tauri/src/tools.rs
+@@ -381,7 +381,25 @@ pub fn guarded_setup<R: tauri::Runtime>(
+     let configs: Vec<_> = app.config().app.windows.iter().filter(|w| labels.contains(&w.label)).cloned().collect();
+     for config in &configs {
+         let handle = app.handle().clone();
+-        let open = || tauri::WebviewWindowBuilder::from_config(&handle, config).and_then(|b| b.build()).map(|_| ());
++        // APP-015: the window never navigates away from the app; an outside web address opens in the
++        // default browser instead, and anything else is dropped (menu::navigation decides).
++        let dev = if cfg!(debug_assertions) { handle.config().build.dev_url.clone() } else { None };
++        let open = || {
++            let dev = dev.clone();
++            tauri::WebviewWindowBuilder::from_config(&handle, config)
++                .map(|b| {
++                    b.on_navigation(move |url| match crate::menu::navigation(url, dev.as_ref()) {
++                        crate::menu::Nav::Allow => true,
++                        crate::menu::Nav::External => {
++                            let _ = crate::artifacts::system_open(url.as_str());
++                            false
++                        }
++                        crate::menu::Nav::Block => false,
++                    })
++                })
++                .and_then(|b| b.build())
++                .map(|_| ())
++        };
+         if let Err(e) = open_retrying(open, std::thread::sleep) {
+             startup_failed(&e);
+         }

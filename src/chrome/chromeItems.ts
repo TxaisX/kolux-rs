@@ -85,3 +85,22 @@ export function menuSettingFlip(s: Record<string, unknown>, id: string): [string
 export function menuScreen(id: string): "agents" | "board" | "terminals" | null {
   return id === "screen.agents" ? "agents" : id === "screen.board" ? "board" : id === "screen.terminals" ? "terminals" : null;
 }
+
+// APP-009 Help / T-248-b: what a help.* menu click does. The page owns these (the guide, the tour and
+// the update card all live in the page), so the click never needs the app shell.
+export type HelpAction = "guide" | "explore" | "updates" | "crash";
+const HELP: Record<string, HelpAction> = { "help.gettingStarted": "guide", "help.explore": "explore", "help.checkUpdates": "updates", "help.reportCrash": "crash" };
+export const helpAction = (id: string): HelpAction | null => (Object.prototype.hasOwnProperty.call(HELP, id) ? HELP[id] : null);
+/** Help > Report Crash asks the crash report card (APP-039, T-183) to open the newest report. */
+export const REPORT_CRASH_EVENT = "kolux-report-crash";
+
+// SET-010 / T-248-b: chords the system menu owns (macOS stock items such as Quit). A command bound to
+// one counts as a clash on the Shortcuts page, the same as two commands sharing a chord.
+export type NativeChord = { chord: string; name: string };
+export type MenuSynced = { accelerators: string[]; native: NativeChord[] };
+/** The answer menu_sync gave, or an empty one when it was malformed. */
+export function readSynced(v: unknown): MenuSynced {
+  const o = (typeof v === "object" && v !== null ? v : {}) as Record<string, unknown>;
+  const native = Array.isArray(o.native) ? o.native.filter((n): n is NativeChord => typeof n?.chord === "string" && typeof n?.name === "string") : [];
+  return { accelerators: Array.isArray(o.accelerators) ? o.accelerators.filter((a): a is string => typeof a === "string") : [], native };
+}

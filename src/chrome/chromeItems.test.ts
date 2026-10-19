@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { CHROME, chromeShown, windowSummary } from "./chromeItems";
 import { describe, it } from "vitest";
-import { MENU_SHORTCUT_IDS, menuBarState, menuEdit, menuScreen, menuSettingFlip, toAccelerator } from "./chromeItems";
+import { helpAction, readSynced, REPORT_CRASH_EVENT, MENU_SHORTCUT_IDS, menuBarState, menuEdit, menuScreen, menuSettingFlip, toAccelerator } from "./chromeItems";
 
 test("SET-020: Tasks and Automations buttons show and the app name is hidden by default (DT-A6)", () => {
   expect(CHROME.map((c) => c.id)).toEqual(["titleBarAppName", "tasksButton", "automationsButton", "skillsButton"]);
@@ -78,5 +78,25 @@ describe("T-248-a menu bar state (APP-009, SET-020, SET-009)", () => {
     expect(menuEdit("edit.paste", true)).toBeNull();
     expect(menuEdit("edit.paste", false)).toBeNull();
     expect(menuEdit("zoom.in", true)).toBeNull();
+  });
+});
+
+describe("T-248-b Help items and the native chord answer (APP-009, SET-010)", () => {
+  it("each Help item maps to what the page does for it, anything else to nothing", () => {
+    expect(helpAction("help.gettingStarted")).toBe("guide");
+    expect(helpAction("help.explore")).toBe("explore");
+    expect(helpAction("help.checkUpdates")).toBe("updates");
+    expect(helpAction("help.reportCrash")).toBe("crash");
+    expect(helpAction("help.nothing")).toBeNull();
+    expect(helpAction("toString")).toBeNull();
+    expect(REPORT_CRASH_EVENT).toBe("kolux-report-crash");
+  });
+
+  it("reads the menu_sync answer and shrugs off a malformed one", () => {
+    const ok = { accelerators: ["app.settings"], native: [{ chord: "Mod+Q", name: "Quit Kolux" }] };
+    expect(readSynced(ok)).toEqual(ok);
+    expect(readSynced(null)).toEqual({ accelerators: [], native: [] });
+    expect(readSynced("x")).toEqual({ accelerators: [], native: [] });
+    expect(readSynced({ native: [{ chord: 1 }, null, { chord: "Mod+H", name: "Hide Kolux" }] }).native).toEqual([{ chord: "Mod+H", name: "Hide Kolux" }]);
   });
 });

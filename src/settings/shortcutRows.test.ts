@@ -55,3 +55,22 @@ test("groups the commands by area under the four filters and a capped search box
   for (const area of ["General", "Terminal", "File explorer"]) expect(html).toContain(`<h3 class="keys-area">${area}</h3>`);
   expect(html).toContain('data-id="terminal.clear"');
 });
+
+test("SET-010 (T-248-b): a global command on a chord the macOS menu owns conflicts with that menu item", () => {
+  const quit = [{ chord: "Mod+Q", name: "Quit Kolux" }];
+  const mac = (file: unknown, native = quit) => shortcutRows(resolve(file, "darwin"), native);
+  const by = (r: ReturnType<typeof rows>, id: string) => r.find((x) => x.id === id)!;
+  // Nothing bound there by default: no clash, with or without the menu's chords.
+  expect(mac(null).filter((r) => r.badges.includes("Conflicts"))).toEqual([]);
+  const hit = by(mac({ keybindings: { "view.tasks": "Mod+Q" } }), "view.tasks");
+  expect(hit.badges).toContain("Conflicts");
+  expect(hit.hint).toBe("Cmd+Q is also used by Quit Kolux in the menu here. Give one of them other keys.");
+  expect(ids(filterRows(mac({ keybindings: { "view.tasks": "Mod+Q" } }), "conflicting", ""))).toEqual(["view.tasks"]);
+  // Another spelling of the same chord still counts; a smaller scope is not shadowed by the menu.
+  expect(by(mac({ keybindings: { "view.tasks": "Cmd+Q" } }), "view.tasks").badges).toContain("Conflicts");
+  expect(by(mac({ keybindings: { "terminal.clear": "Mod+Q" } }), "terminal.clear").badges).not.toContain("Conflicts");
+  // Windows and Linux report no native chords, so nothing changes there.
+  expect(by(shortcutRows(resolve({ keybindings: { "view.tasks": "Mod+Q" } }, "win32"), []), "view.tasks").badges).not.toContain("Conflicts");
+  // Two commands on the menu's chord clash with each other first (the keymap drops both), as before.
+  expect(by(mac({ keybindings: { "view.tasks": "Mod+Q", "view.code": "Mod+Q" } }), "view.tasks").hint).toContain("is also used by Show Code here");
+});
