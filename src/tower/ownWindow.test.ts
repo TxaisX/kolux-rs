@@ -64,3 +64,26 @@ test("T-546-c: the main window sends the Tower window a snapshot only when what 
   expect(snapshotChanged(s, JSON.parse(JSON.stringify(s)))).toBe(false);
   expect(snapshotChanged(s, { ...s, seats: [{ ...s.seats[0], title: "b" }] })).toBe(true);
 });
+
+// FIX-3 (council FIX-SOON 3): two quick clicks on Own window used to both miss focus() and both make
+// the window; the second got "label taken" and reported failed while the window was up. Clicks that
+// land while one open is under way now share its answer, and only one window is made.
+test("FIX-3: a second click while the Tower window is being made shares the first click's answer", async () => {
+  let finish: (ok: boolean) => void = () => {};
+  const made: string[] = [];
+  const a = api({
+    // the first make is slow; a make while that window exists fails as the label is taken
+    create: (label) => {
+      made.push(label);
+      return made.length === 1 ? new Promise<boolean>((r) => (finish = r)) : Promise.resolve(false);
+    },
+  });
+  const first = openTowerWindow(a);
+  const second = openTowerWindow(a);
+  await new Promise((r) => setTimeout(r, 0));
+  finish(true);
+  expect(await Promise.all([first, second])).toEqual(["opened", "opened"]);
+  expect(made).toHaveLength(1);
+  // once that open is over, the next click asks again (here: the window is up, so it is brought forward)
+  expect(await openTowerWindow(api({ focus: async () => true }))).toBe("focused");
+});

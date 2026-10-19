@@ -234,7 +234,7 @@ struct IconPayload {
 pub fn icon_address(answer: &str, app: Option<&Url>, page: &Url) -> Option<Url> {
     let href: String = serde_json::from_str(answer).ok()?;
     let url = parse(&href).ok()?;
-    let near_ok = !local_host(&url) || url.host_str() == page.host_str();
+    let near_ok = !local_host(&url) || same_spot(&url, page);
     (url.scheme() != "about" && allowed(&url, app).is_ok() && near_ok).then_some(url)
 }
 
@@ -301,7 +301,7 @@ pub fn hop_ok(next: &Url, previous: &[Url], app: Option<&Url>) -> bool {
         && next.scheme() != "about"
         && allowed(next, app).is_ok()
         && !(last.scheme() == "https" && next.scheme() == "http")
-        && (!local_host(next) || next.host_str() == first.host_str())
+        && (!local_host(next) || same_spot(next, first))
 }
 
 /// How the icon fetch looks a host name up: the system's own lookup, or a stand-in in tests.
@@ -356,7 +356,7 @@ pub struct IconClients {
 /// An icon client with the redirect rule above: a refused hop fails the fetch.
 fn icon_client_for(app: Option<Url>, near: bool, lookup: Lookup) -> Option<reqwest::Client> {
     let policy = reqwest::redirect::Policy::custom(move |hop| {
-        let same = hop.previous().first().map(Url::host_str) == Some(hop.url().host_str());
+        let same = hop.previous().first().is_some_and(|first| same_spot(first, hop.url()));
         if !hop_ok(hop.url(), hop.previous(), app.as_ref()) {
             let to = hop.url().to_string();
             hop.error(format!("icon redirect to {to} refused"))
@@ -447,7 +447,30 @@ pub fn icon_data(kind: &str, bytes: &[u8]) -> Option<String> {
 /// own name or not, goes through the public-only lookup, so a name rebound to a local address
 /// after the page loaded is never asked.
 pub fn icon_near(url: &Url, page: &Url) -> bool {
-    local_host(page) && url.host_str() == page.host_str()
+    local_host(page) && same_spot(url, page)
+}
+
+/// Whether two addresses name the same host on the same port, a scheme's default port counting
+/// as written (council FIX-4, AFTER 2): a page on one port of this machine never reaches another.
+pub fn same_spot(a: &Url, b: &Url) -> bool {
+    a.host_str() == b.host_str() && a.port_or_known_default() == b.port_or_known_default()
+}
+
+/// What is left of an icon fetch's time limit after `elapsed`; `None` once it has run out
+/// (council FIX-4, AFTER 3: the far request after a hand-off gets only this).
+pub fn time_left(elapsed: Duration, limit: Duration) -> Option<Duration> {
+    limit.checked_sub(elapsed).filter(|d| !d.is_zero())
+}
+
+/// Whether a focusAddressBar chord may move the keyboard into the app's own view: only while the
+/// app's window holds the keyboard at the system level (a child page holding it still counts), so
+/// a page cannot pull the keyboard while the user is in another program (council FIX-4, item 3).
+pub fn focus_app_ok(window_focused: bool) -> Result<(), String> {
+    if window_focused {
+        Ok(())
+    } else {
+        Err("the app's window does not hold the keyboard".into())
+    }
 }
 
 /// Where a redirect the near client stopped at goes next, if the far client may follow it: the
@@ -477,7 +500,7 @@ async fn fetch_icon_within(clients: &IconClients, near: bool, url: Url, app: Opt
     if near && res.status().is_redirection() {
         // The near client stopped at a redirect off the page's host: the rest is the far client's.
         let next = hand_off(res.url(), res.headers().get(reqwest::header::LOCATION).and_then(|v| v.to_str().ok()), app)?;
-        let left = limit.checked_sub(start.elapsed()).filter(|d| !d.is_zero())?;
+        let left = time_left(start.elapsed(), limit)?;
         res = clients.far.get(next).timeout(left).send().await.ok()?;
     }
     let mut res = res.error_for_status().ok()?;
@@ -725,6 +748,7 @@ pub fn zoom_level(level: f64) -> f64 {
 pub async fn browser_go(app: AppHandle, id: u32, what: String, text: Option<String>, level: Option<f64>) -> Result<(), String> {
     if what == "focusApp" {
         // A focusAddressBar chord pressed in the page: the bar lives in the app's own web view.
+        focus_app_ok(app.get_window("main").ok_or("no app window")?.is_focused().map_err(err)?)?;
         return app.get_webview("main").ok_or("no app view")?.set_focus().map_err(err);
     }
     let v = view(&app, id)?;
@@ -938,7 +962,9 @@ mod tests {
         assert!(icon_address(r#""http://localhost:3000/favicon.ico""#, None, &dev).is_some());
         assert_eq!(icon_address(r#""http://192.168.1.1/favicon.ico""#, None, &dev), None);
         let lan = Url::parse("http://192.168.1.5/").unwrap();
-        assert!(icon_address(r#""http://192.168.1.5:8080/f.ico""#, None, &lan).is_some());
+        assert!(icon_address(r#""http://192.168.1.5/f.ico""#, None, &lan).is_some());
+        // Council FIX-4, AFTER 2 (flipped): the same host on another port is another service.
+        assert_eq!(icon_address(r#""http://192.168.1.5:8080/f.ico""#, None, &lan), None);
         // The app's own dev origin stays refused even for a page on localhost.
         let app = Url::parse("http://localhost:1420").unwrap();
         assert_eq!(icon_address(r#""http://localhost:1420/favicon.ico""#, Some(&app), &dev), None);
@@ -1044,11 +1070,32 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(!asked, "the redirect onto localhost was followed");
-        // A redirect within the host the chain started on is followed.
-        let (to, server) = answer_once("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 3\r\n\r\n".into(), 3);
-        let (url, first) = answer_once(format!("HTTP/1.1 302 Found\r\nLocation: {to}\r\nContent-Length: 0\r\n\r\n"), 0);
+        // A redirect within the host and port the chain started on is followed (council FIX-4,
+        // AFTER 2: another port of that host is refused, fix4_2_a_same_host_redirect_...).
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = Url::parse(&format!("http://127.0.0.1:{}/favicon.ico", l.local_addr().unwrap().port())).unwrap();
+        let server = std::thread::spawn(move || {
+            let answers: [&[u8]; 2] = [
+                b"HTTP/1.1 302 Found\r\nLocation: /real.png\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 3\r\nConnection: close\r\n\r\n\x07\x07\x07",
+            ];
+            let mut asked = Vec::new();
+            for answer in answers {
+                let (mut s, _) = l.accept().unwrap();
+                let (mut buf, mut got) = ([0u8; 4096], Vec::new());
+                while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match s.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => got.extend_from_slice(&buf[..n]),
+                    }
+                }
+                asked.push(String::from_utf8_lossy(&got).lines().next().unwrap_or_default().to_string());
+                let _ = s.write_all(answer);
+            }
+            asked
+        });
         assert_eq!(tauri::async_runtime::block_on(fetch_icon(&clients, true, url, None)), Some("data:image/png;base64,BwcH".into()));
-        assert!(first.join().unwrap() && server.join().unwrap());
+        assert_eq!(server.join().unwrap(), ["GET /favicon.ico HTTP/1.1", "GET /real.png HTTP/1.1"]);
     }
 
     #[test]
@@ -1290,5 +1337,52 @@ mod tests {
         assert_eq!(got, None);
         assert!(took < Duration::from_millis(1500), "took {took:?}");
         server.join().unwrap();
+    }
+
+    // Council FIX-4, item 3: a page cannot pull the keyboard while the app's window is not the
+    // one the user is typing in.
+    #[test]
+    fn fix4_1_focus_app_only_while_the_apps_window_holds_the_keyboard() {
+        assert_eq!(focus_app_ok(true), Ok(()));
+        assert!(focus_app_ok(false).is_err());
+    }
+
+    // Council FIX-4, AFTER 2: the port counts, so a page on one local port reaches no other.
+    #[test]
+    fn fix4_2_a_local_page_reaches_no_other_port_of_its_host() {
+        let u = |s: &str| Url::parse(s).unwrap();
+        assert!(same_spot(&u("http://localhost/"), &u("http://localhost:80/x")));
+        assert!(same_spot(&u("https://box.lan/"), &u("https://box.lan:443/i.png")));
+        assert!(!same_spot(&u("http://127.0.0.1:3000/"), &u("http://127.0.0.1:8745/")));
+        assert!(!same_spot(&u("http://box.lan/"), &u("https://box.lan/")));
+        let page = u("http://127.0.0.1:3000/app");
+        assert_eq!(icon_address(r#""http://127.0.0.1:3000/favicon.ico""#, None, &page), Some(u("http://127.0.0.1:3000/favicon.ico")));
+        assert_eq!(icon_address(r#""http://127.0.0.1:8745/x""#, None, &page), None);
+        assert!(!icon_near(&u("http://127.0.0.1:8745/x"), &page));
+        let first = u("http://127.0.0.1:3000/favicon.ico");
+        assert!(hop_ok(&u("http://127.0.0.1:3000/real.ico"), std::slice::from_ref(&first), None));
+        assert!(!hop_ok(&u("http://127.0.0.1:8745/x"), std::slice::from_ref(&first), None));
+    }
+
+    #[test]
+    fn fix4_2_a_same_host_redirect_to_another_port_is_never_followed() {
+        use std::sync::atomic::Ordering;
+        let (port, hits) = icon_server();
+        let clients = icon_clients(None, to_this_machine).unwrap();
+        let (url, first) = answer_once(format!("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{port}/x.png\r\nContent-Length: 0\r\n\r\n"), 0);
+        assert_eq!(tauri::async_runtime::block_on(fetch_icon(&clients, true, url, None)), None);
+        first.join().unwrap();
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "the redirect reached another port of this machine");
+    }
+
+    // Council FIX-4, AFTER 3: the far request after a hand-off gets only what is left.
+    #[test]
+    fn fix4_3_the_far_request_gets_only_what_is_left() {
+        let s = Duration::from_secs;
+        assert_eq!(time_left(s(0), s(8)), Some(s(8)));
+        assert_eq!(time_left(s(3), s(8)), Some(s(5)));
+        assert_eq!(time_left(Duration::from_millis(7999), s(8)), Some(Duration::from_millis(1)));
+        assert_eq!(time_left(s(8), s(8)), None);
+        assert_eq!(time_left(s(9), s(8)), None);
     }
 }

@@ -24,6 +24,11 @@ const sheet = (extra: Record<string, unknown>) =>
 test("T-032-b: while Request changes waits to send, the sheet says so and offers Cancel; both answers are held (SAFE-004)", () => {
   const html = sheet({ sending: true, onCancel: () => {} });
   expect(html).toContain("Sending your feedback");
+  // Stand-in review FIX-SOON 4: the note tells the real window: the prompt is dismissed first, and
+  // a cancel mostly lands once the feedback is already typed but not sent.
+  expect(html).toContain("plan prompt is dismissed first");
+  expect(html).toContain("it may already be typed");
+  expect(html).toMatch(/title="[^"]*stops the waiting send[^"]*"[^>]*>Close</);
   expect(html).toMatch(/<button[^>]*>Cancel sending<\/button>/);
   expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Approve<\/button>/);
   expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Sending…<\/button>/);

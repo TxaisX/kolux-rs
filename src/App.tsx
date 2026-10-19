@@ -27,6 +27,7 @@ import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import SettingsPage from "./settings/SettingsPage";
 import Ask from "./chrome/Ask";
+import TrustPrompt, { trustedSetup } from "./setup/TrustPrompt";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { returnTab, type Which } from "./terminal/tabClose";
 import { bulkCloseSet, closeOne, middleClickCloses, orderPinnedFirst, pinMenu, pinQuestion } from "./terminal/pin";
@@ -42,7 +43,7 @@ import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./pro
 import { navTarget, travel, visit, type Place } from "./projects/nav";
 import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
 import BrowserPane, { OPEN_IN_BROWSER } from "./browser/BrowserPane";
-import { pageChord } from "./browser/chord";
+import { chordPlan } from "./browser/chord";
 import { writerOf } from "./scm/generate";
 import EditorPane, { editors } from "./editor/EditorPane";
 import { baseName, keyOf } from "./editor/buffers";
@@ -106,13 +107,14 @@ import { inboxItems, type Source } from "./inbox/inbox";
 import TowerView from "./tower/TowerView";
 import FloorView from "./floor/FloorView";
 import { towerRows, usageByAccount } from "./tower/tower";
+import { useTowerBridge } from "./tower/TowerWindow";
 import { LANES, chipOf } from "./board/chip";
 import Ring from "./usage/Ring";
 import { capOn, contextFill, meterOf, meterText, planOf, readsLeft, usageLine } from "./usage/meter";
 import { usePlan } from "./usage/plan";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, sheetStart, type Lineup } from "./launch/seats";
-import { folderName, NESTING_KEY, workItem, type Created, type WorkItem, type CliWorkspace, type Project, type SetupLine, type Worktree } from "./projects/model";
+import { folderName, NESTING_KEY, workItem, type Created, type WorkItem, type CliWorkspace, type Project, type Worktree } from "./projects/model";
 import { focusIn, panesIn, sameDir, nameOf } from "./workspaces";
 import { LAYOUT_FIELD, layoutOf, type SavedLayout } from "./terminal/layout";
 import { Kbd, KeymapProvider, useKeymap } from "./keys/KeymapContext";
@@ -483,12 +485,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     // page never reaches the app, so the app may still think another split has the keyboard.
     // Council FIX-3: only a chord pressed in the page (the app's window does not hold the
     // keyboard) does that or moves the keyboard; one the page's script sent runs page-only actions.
-    const un = listen<{ id: number; what: string }>("browser-chord", (e) => {
+    // Council FIX-4: nor while the user is in another program, and at most once a second per tab.
+    const un = listen<{ id: number; what: string }>("browser-chord", async (e) => {
       const { id, what } = e.payload;
-      const plan = pageChord(what, document.hasFocus());
+      const plan = await chordPlan(id, what);
       if (plan.focusPane) setFocused(id);
       const run = () => plan.run && chord.current(id, what);
-      if (plan.takeKeyboard) void invoke("browser_go", { id, what: "focusApp" }).finally(run);
+      if (plan.takeKeyboard) void invoke("browser_go", { id, what: "focusApp" }).catch(() => {}).then(run);
       else run();
     });
     return () => {
@@ -1102,7 +1105,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const { afterSetup, startSetup, select, removedAll, removed, projectOf } = useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir, setStacked, nextKey, addShell, settings, screen, setScreen, setPage, owner, recentDirs, activeRef });
   // PROJ-033: a workspace made outside the composer runs its setup script in a background tab.
   const runSetup = (dir: string, branch: string | null) =>
-    invoke<SetupLine | null>("workspace_setup", { path: dir })
+    trustedSetup(dir)
       .then((line) => line && cli.current.startSetup(dir, branch, line, "tab", false))
       .catch((err) => setNotice(String(err)));
   // PROJ-037: a workspace straight from an issue or pull request address, shown once made.
@@ -1707,6 +1710,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const laneOf = (p: Pane) => (p.seats || p.kind || p.agent === "shell" ? "idle" : (chipFor(p)?.lane ?? "idle"));
   // T-546: the control tower reads the same chip and meter per agent pane as the Board.
   const towerSeats = () => panes.filter((p) => !p.kind && !p.seats && p.agent !== "shell").map((p) => ({ key: p.key, agent: p.agent, title: tabName(p, titles), branch: p.branch, cwd: p.cwd, account: p.account ?? null, chip: chipFor(p), meter: meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)), since: stamp[p.key]?.at ?? 0 }));
+  // T-546-c: the Tower's own window shows the same seats and usage; a row clicked there opens the pane here.
+  const towerNow = towerSeats();
+  useTowerBridge({ seats: towerNow, usage: usageByAccount(towerNow, plan) }, openPane);
   const lanes = board ? LANES.filter((l) => cardPanes(panes).some((p) => laneOf(p) === l.id)) : [];
   const columnOf = (p: Pane) => lanes.findIndex((l) => l.id === laneOf(p)) + 1;
   const answer = (p: Pane, approve: boolean) =>
@@ -1748,8 +1754,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     });
     setReviewing((r) => (r && r.key === p.key ? { ...r, send: job } : r));
     const { outcome, answered, typed } = await job.done;
-    // A cancel before anything went out leaves the sheet open on the draft; any other end closes it.
-    setReviewing((r) => (r?.send === job ? (outcome === "cancelled" && !answered ? { ...r, send: undefined } : null) : r));
+    // Any end closes the sheet; the draft is kept unless the feedback was sent. A cancel can never
+    // land before the agent's no went out (stand-in review of lane/marks ee2bfbc, FIX-BEFORE 1).
+    setReviewing((r) => (r?.send === job ? null : r));
     if (outcome === "sent") {
       dropDraft(key); // SAFE-004: sending wipes the saved draft; a cancelled send keeps it.
       setHook((h) => ({ ...h, [p.key]: "working" }));
@@ -1931,6 +1938,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             }}
           />
         )}
+        <TrustPrompt />
         {quitAsk && (
           <Ask
             title="Quit with unsaved changes?"

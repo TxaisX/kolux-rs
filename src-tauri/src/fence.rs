@@ -45,6 +45,21 @@ fn is_share(p: &Path) -> bool {
     matches!(p.components().next(), Some(Component::Prefix(x)) if matches!(x.kind(), Prefix::UNC(..) | Prefix::VerbatimUNC(..)))
 }
 
+/// FIX-3 (council FIX-SOON 1): a full path on one of this computer's drives, `C:\...` or the
+/// verbatim `\\?\C:\...`. Anything else (`\??\UNC\...`, `\??\GLOBALROOT\...`, a device path, a
+/// share, the drive-relative `C:x`, the root-relative `\x`, a relative path) is refused from the
+/// spelling, before anything resolves it, so Windows never hands it to the NT namespace.
+#[cfg(windows)]
+fn on_a_drive(p: &Path) -> bool {
+    let mut parts = p.components();
+    matches!(parts.next(), Some(Component::Prefix(x)) if matches!(x.kind(), Prefix::Disk(..) | Prefix::VerbatimDisk(..))) && matches!(parts.next(), Some(Component::RootDir))
+}
+
+#[cfg(not(windows))]
+fn on_a_drive(p: &Path) -> bool {
+    p.is_absolute()
+}
+
 fn is_drive_root(p: &Path) -> bool {
     p.parent().is_none()
 }
@@ -62,11 +77,18 @@ fn share(p: &Path) -> String {
     format!("Kolux does not open files from other computers' shares: {}", p.display())
 }
 
+fn not_on_a_drive(p: &Path) -> String {
+    format!("Kolux opens files only by their full path on this computer's drives, never from shares or device paths: {}", p.display())
+}
+
 /// `path` as given, so callers keep their own spelling rather than the long resolved form, once
 /// its resolved form is inside one of `roots` or, with `exact` set, is one of the granted files.
 pub fn check(path: &Path, roots: &[PathBuf], grants: &[PathBuf], exact: bool) -> Result<PathBuf, String> {
     if is_share(path) {
         return Err(share(path));
+    }
+    if !on_a_drive(path) {
+        return Err(not_on_a_drive(path));
     }
     let real = resolve(path).ok_or_else(|| refused(path))?;
     if is_share(&real) {
@@ -87,7 +109,7 @@ impl Fence {
     pub fn load(store: &Mutex<Store>) -> Fence {
         let saved = store.lock().ok().and_then(|s| s.get(KEY_GRANTS).ok().flatten());
         let list: Vec<PathBuf> = saved.and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-        let mut grants: VecDeque<PathBuf> = list.into_iter().filter(|p| !is_share(p)).filter_map(|p| p.canonicalize().ok()).filter(|p| grantable(p)).collect();
+        let mut grants: VecDeque<PathBuf> = list.into_iter().filter(|p| !is_share(p) && on_a_drive(p)).filter_map(|p| p.canonicalize().ok()).filter(|p| grantable(p)).collect();
         while grants.len() > GRANT_CAP {
             grants.pop_front();
         }
@@ -96,6 +118,9 @@ impl Fence {
 
     /// Grants one picked file exactly and saves the list; folders, drive roots and shares are never granted.
     pub fn grant(&self, path: &Path, store: &Store) -> Result<(), String> {
+        if is_share(path) || !on_a_drive(path) {
+            return Err(not_on_a_drive(path));
+        }
         let real = path.canonicalize().map_err(|e| format!("{}: {e}", path.display()))?;
         if !grantable(&real) {
             return Err(refused(path));
@@ -111,7 +136,7 @@ impl Fence {
 
     /// Notes the paths of a drop from outside Kolux, in place of the last drop's.
     pub fn dropped(&self, paths: &[PathBuf]) {
-        let real = paths.iter().filter(|p| !is_share(p)).filter_map(|p| p.canonicalize().ok()).filter(|p| !is_share(p) && !is_drive_root(p)).collect();
+        let real = paths.iter().filter(|p| !is_share(p) && on_a_drive(p)).filter_map(|p| p.canonicalize().ok()).filter(|p| !is_share(p) && !is_drive_root(p)).collect();
         if let Ok(mut d) = self.drop.lock() {
             *d = real;
         }
@@ -119,7 +144,7 @@ impl Fence {
 
     /// Whether `path` is one of the latest drop's paths.
     pub fn was_dropped(&self, path: &Path) -> bool {
-        !is_share(path) && path.canonicalize().is_ok_and(|r| self.drop.lock().is_ok_and(|d| d.contains(&r)))
+        !is_share(path) && on_a_drive(path) && path.canonicalize().is_ok_and(|r| self.drop.lock().is_ok_and(|d| d.contains(&r)))
     }
 
     /// EDIT-034 copy: a source inside the fence, or one the user just dropped in from outside.
@@ -212,6 +237,40 @@ mod tests {
         let verbatim = t.0.join("project/src/a.txt").canonicalize().unwrap();
         assert!(verbatim.to_string_lossy().starts_with(r"\\?\"), "{}", verbatim.display());
         assert!(check(&verbatim, &roots, &[], true).is_ok(), "a verbatim disk path inside a project is fine");
+    }
+
+    // FIX-3 (council FIX-SOON 1): the NT spellings `\??\UNC\...` and `\??\GLOBALROOT\...` start with
+    // one separator, carry no drive, and Windows passes them through to the NT namespace, so the old
+    // two-separator test missed them and canonicalize contacted the host. Every path without a drive
+    // (or a verbatim drive) is refused before anything resolves it, the drive-relative `C:x` and the
+    // root-relative `\x` too; the refusal names shares, and the drive's own spellings still work.
+    #[cfg(windows)]
+    #[test]
+    fn acct_055_a_path_without_a_drive_is_refused_before_it_resolves() {
+        let t = temp("nodrive");
+        let roots = [t.0.join("project")];
+        for p in [
+            r"\??\UNC\kolux-none.invalid\share\p.txt",
+            r"\??\GLOBALROOT\Device\Mup\kolux-none.invalid\share\p.txt",
+            r"\??\C:\Windows\win.ini",
+            r"\Windows\win.ini",
+            r"C:Windows\win.ini",
+            r"relative\a.txt",
+            "",
+        ] {
+            assert!(!on_a_drive(Path::new(p)), "{p}");
+            let err = check(Path::new(p), &roots, &[], true).unwrap_err();
+            assert!(err.contains("shares"), "{p}: {err}");
+        }
+        let plain = t.0.join("project/src/a.txt");
+        assert!(on_a_drive(&plain) && on_a_drive(&plain.canonicalize().unwrap()));
+        assert!(check(&plain, &roots, &[], true).is_ok());
+        // the other doors that take a page's path: a drop and a grant never accept one either
+        let f = Fence::default();
+        f.dropped(&[PathBuf::from(r"\??\C:\Windows\win.ini")]);
+        assert!(!f.was_dropped(Path::new(r"\??\C:\Windows\win.ini")));
+        let store = Store::open(&t.0.join("data")).unwrap();
+        assert!(f.grant(Path::new(r"\??\UNC\kolux-none.invalid\share\p.txt"), &store).is_err());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { CHECKLIST_CHANGED, chordFires, clearReadFailure, closer, connectFailed, firstAiConnected, firstConnection, firstFolderAgent, kitLaunch, leaveKey, milestone, oneClick, openAt, reopenWizard, SCREENS, STATUSES_FAILED, wizardCloser, type Outcome } from "./firstRun";
+import { CHECKLIST_CHANGED, chordFires, clearReadFailure, closer, readFailed, connectFailed, firstAiConnected, firstConnection, firstFolderAgent, kitLaunch, leaveKey, milestone, oneClick, openAt, reopenWizard, SCREENS, STATUSES_FAILED, wizardCloser, type Outcome } from "./firstRun";
 import wizardSource from "./useWizard.ts?raw";
 import { WizardView } from "./Wizard";
 import { jargon } from "../glossary";
@@ -159,9 +159,10 @@ test("ONB-009: clicks on Onboarding less than half a second apart count as one",
 
 test("ONB-011: a milestone goes to onboarding.rs by name, and a failed write shows nothing", async () => {
   const sent: unknown[] = [];
-  await milestone("aiConnected", async (cmd, args) => void sent.push([cmd, args]));
+  await expect(milestone("aiConnected", async (cmd, args) => void sent.push([cmd, args]))).resolves.toBe(true);
   expect(sent).toEqual([["onboarding_milestone", { name: "aiConnected" }]]);
-  await expect(milestone("kitLaunched", () => Promise.reject(new Error("disk full")))).resolves.toBeUndefined();
+  // FIX-3: the answer says whether the write landed (no throw, nothing shown), so a caller can retry.
+  await expect(milestone("kitLaunched", () => Promise.reject(new Error("disk full")))).resolves.toBe(false);
 });
 
 test("ACCT-035: a failed connect names the agent it was for, in plain words", () => {
@@ -234,7 +235,7 @@ test("VIEW-114 (FIX-2 FB1): useWizard closes and reopens only through the helper
 
 test("ACCT-035: the first connected report sends the first-AI milestone once; not-connected reports send nothing", () => {
   const sent: string[] = [];
-  const report = firstConnection(async (n) => void sent.push(n));
+  const report = firstConnection(async (n) => (sent.push(n), true));
   report(false);
   report(false);
   expect(sent).toEqual([]);
@@ -243,4 +244,46 @@ test("ACCT-035: the first connected report sends the first-AI milestone once; no
   report(true);
   expect(sent).toEqual(["aiConnected"]);
   expect(typeof firstAiConnected).toBe("function");
+});
+
+test("ACCT-035 (FIX-3): a first-AI write that fails is sent again on the next connected report; one that lands is never sent again", async () => {
+  const tries: boolean[] = [];
+  let works = false;
+  const report = firstConnection(async () => (tries.push(works), works));
+  report(true);
+  await Promise.resolve();
+  await Promise.resolve();
+  report(true);
+  await Promise.resolve();
+  expect(tries).toEqual([false, false]);
+  works = true;
+  report(false);
+  await Promise.resolve();
+  report(true);
+  await Promise.resolve();
+  await Promise.resolve();
+  report(true);
+  report(true);
+  await Promise.resolve();
+  expect(tries).toEqual([false, false, true]);
+});
+
+test("ACCT-035 (FIX-3): a failed read never replaces a connect failure the user has not seen out; it fills an empty line or its own", () => {
+  const connect = connectFailed("Codex", new Error("the sign-in window was closed"));
+  expect(readFailed(connect)).toBe(connect);
+  expect(readFailed(null)).toBe(STATUSES_FAILED);
+  expect(readFailed(STATUSES_FAILED)).toBe(STATUSES_FAILED);
+  expect(readFailed("")).toBe(STATUSES_FAILED);
+  // The full round: connect fails, the settle read fails too, then a good read clears only the read line.
+  let e: string | null = null;
+  const setError = (f: string | null | ((x: string | null) => string | null)) => (e = typeof f === "function" ? f(e) : f);
+  setError(connect);
+  setError(readFailed);
+  expect(e).toBe(connect);
+  setError(clearReadFailure);
+  expect(e).toBe(connect);
+  setError(null);
+  setError(readFailed);
+  setError(clearReadFailure);
+  expect(e).toBeNull();
 });

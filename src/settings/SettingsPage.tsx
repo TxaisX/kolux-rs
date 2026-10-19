@@ -20,7 +20,7 @@ import type { Project } from "../projects/model";
 import RepoPage from "./RepoPage";
 import { PAGES, pageOf, rememberPage, lastPage, type Page, type SettingsTarget } from "./pages";
 import { markGuide } from "../onboarding/guide";
-import { clearReadFailure, connectFailed, firstAiConnected, STATUSES_FAILED } from "../onboarding/firstRun";
+import { clearReadFailure, connectFailed, firstAiConnected, readFailed } from "../onboarding/firstRun";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
 import { hideRule, MAX_REPOS_DRAWN, MAX_SEARCH, SearchFolds, searchRepos, searchSettings } from "./search";
@@ -104,7 +104,7 @@ export function ClaudeCard({ onConnected = () => {} }: { onConnected?: (on: bool
         setStatus(v);
         setError(clearReadFailure);
       })
-      .catch(() => setError(STATUSES_FAILED));
+      .catch(() => setError(readFailed));
     invoke<OwnSignIn | null>("claude_own_sign_in")
       .then(setOwn)
       .catch(() => setOwn(null));

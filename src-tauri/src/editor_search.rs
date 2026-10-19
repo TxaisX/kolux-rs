@@ -6,9 +6,11 @@
 // long lines are trimmed around the hit, a slow search is stopped, an overly long query is
 // refused, and a search that fails says why instead of finding nothing.
 use std::io::{BufRead, BufReader, Read};
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const MAX_QUERY: usize = 1000;
@@ -16,6 +18,15 @@ const MAX_HITS: usize = 2000;
 const TIMEOUT: Duration = Duration::from_secs(15);
 /// Characters of a long line kept on each side of the hit.
 const SIDE: usize = 80;
+/// FIX-3 (council P5): characters of the hit itself sent to the window; a longer one (a regex
+/// spanning a minified line) is cut here and ends with an ellipsis, while `len` keeps its real length.
+const TEXT_MAX: usize = 200;
+/// FIX-3 (council P5): ripgrep skips files bigger than this (a dump or a bundle, not source).
+const MAX_FILESIZE: &str = "10M";
+/// How often a running search looks whether a newer one for the same folder has replaced it.
+const POLL: Duration = Duration::from_millis(50);
+/// The error a replaced search ends with; the window has already moved on and drops it.
+pub const SUPERSEDED: &str = "A newer search of this folder replaced this one.";
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +53,8 @@ pub struct Hit {
     before: String,
     text: String,
     after: String,
+    /// The hit's full length in UTF-16 units; `text` may be cut to TEXT_MAX characters.
+    len: usize,
 }
 
 #[derive(serde::Serialize)]
@@ -93,7 +106,12 @@ pub fn trim_around(line: &str, start: usize, end: usize) -> (String, String, Str
         Some((i, _)) => format!("{}…", &after[..i]),
         None => after.to_string(),
     };
-    (cut_before.trim_start().to_string(), line[start..end].to_string(), cut_after)
+    let mid = &line[start..end];
+    let text = match mid.char_indices().nth(TEXT_MAX) {
+        Some((i, _)) => format!("{}…", &mid[..i]),
+        None => mid.to_string(),
+    };
+    (cut_before.trim_start().to_string(), text, cut_after)
 }
 
 fn floor(s: &str, mut i: usize) -> usize {
@@ -110,8 +128,10 @@ fn hit(line_no: u64, line: &str, start: usize, end: usize) -> Hit {
 }
 
 fn hit_at(line_no: u64, line: &str, start: usize, end: usize, col: usize) -> Hit {
+    let s = floor(line, start.min(line.len()));
+    let len = line[s..floor(line, end.clamp(s, line.len()))].encode_utf16().count();
     let (before, text, after) = trim_around(line, start, end);
-    Hit { line: line_no, col, before, text, after }
+    Hit { line: line_no, col, before, text, after, len }
 }
 
 fn rel(p: &str) -> String {
@@ -163,7 +183,7 @@ pub fn parse_git(line: &str, fixed_len: Option<usize>) -> Option<(String, Vec<Hi
 
 fn rg_command(root: &Path, a: &Ask) -> Command {
     let mut cmd = Command::new("rg");
-    cmd.args(["--json", "--hidden", "--no-config", "--no-messages", "-g", "!.git/"]);
+    cmd.args(["--json", "--hidden", "--no-config", "--no-messages", "--max-filesize", MAX_FILESIZE, "-g", "!.git/"]);
     cmd.arg(if a.match_case { "-s" } else { "-i" });
     if a.whole_word {
         cmd.arg("-w");
@@ -207,7 +227,34 @@ fn git_command(root: &Path, a: &Ask) -> Command {
 }
 
 /// Runs a search command, collecting hits until the cap or the time limit.
-fn run(mut cmd: Command, parse: impl Fn(&str, usize) -> Option<(String, Vec<Hit>)>, source: &'static str) -> Result<Found, std::io::Error> {
+/// FIX-3 (council P4): the search running for each folder. A new search of the same folder raises
+/// the old one's flag, and the old one kills its ripgrep or git child at once instead of reading on
+/// to the cap or the time limit while the user types.
+static RUNNING: Mutex<Option<HashMap<PathBuf, Arc<AtomicBool>>>> = Mutex::new(None);
+
+/// This search's flag for `root`, replacing (and raising) the one of the search it supersedes.
+fn claim(root: &Path) -> Arc<AtomicBool> {
+    let flag = Arc::new(AtomicBool::new(false));
+    if let Ok(mut m) = RUNNING.lock() {
+        if let Some(old) = m.get_or_insert_with(HashMap::new).insert(root.to_path_buf(), flag.clone()) {
+            old.store(true, Ordering::SeqCst);
+        }
+    }
+    flag
+}
+
+/// The search behind `flag` is over: forget it unless a newer one already took its place.
+fn release(root: &Path, flag: &Arc<AtomicBool>) {
+    if let Ok(mut m) = RUNNING.lock() {
+        if let Some(map) = m.as_mut() {
+            if map.get(root).is_some_and(|f| Arc::ptr_eq(f, flag)) {
+                map.remove(root);
+            }
+        }
+    }
+}
+
+fn run(mut cmd: Command, parse: impl Fn(&str, usize) -> Option<(String, Vec<Hit>)>, source: &'static str, stop: &AtomicBool) -> Result<Found, std::io::Error> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -231,10 +278,18 @@ fn run(mut cmd: Command, parse: impl Fn(&str, usize) -> Option<(String, Vec<Hit>
     });
     let deadline = Instant::now() + TIMEOUT;
     let mut files: Vec<FileHits> = Vec::new();
-    let (mut total, mut capped, mut late) = (0, false, false);
+    let (mut total, mut capped, mut late, mut replaced) = (0, false, false, false);
     loop {
+        if stop.load(Ordering::SeqCst) {
+            replaced = true;
+            break;
+        }
         let left = deadline.saturating_duration_since(Instant::now());
-        match rx.recv_timeout(left) {
+        if left.is_zero() {
+            late = true;
+            break;
+        }
+        match rx.recv_timeout(left.min(POLL)) {
             Ok(line) => {
                 let Some((path, hits)) = parse(&line, MAX_HITS - total + 1) else { continue };
                 for h in hits {
@@ -252,18 +307,18 @@ fn run(mut cmd: Command, parse: impl Fn(&str, usize) -> Option<(String, Vec<Hit>
                     break;
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                late = true;
-                break;
-            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
-    if capped || late {
+    if capped || late || replaced {
         let _ = child.kill();
     }
     let status = child.wait()?;
     let stderr = errs.join().unwrap_or_default();
+    if replaced {
+        return Err(std::io::Error::other(SUPERSEDED));
+    }
     if late {
         return Err(std::io::Error::other(format!("The search took longer than {} seconds and was stopped; narrow it with an include pattern.", TIMEOUT.as_secs())));
     }
@@ -282,16 +337,20 @@ pub fn search(root: &Path, a: &Ask) -> Result<Found, String> {
     if a.query.chars().count() > MAX_QUERY {
         return Err(format!("The search text is longer than {MAX_QUERY} characters."));
     }
-    match run(rg_command(root, a), parse_rg, "rg") {
+    let stop = claim(root);
+    let found = match run(rg_command(root, a), parse_rg, "rg", &stop) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             if !root.join(".git").exists() {
-                return Err("ripgrep is not installed and this folder is not a git repository, so there is nothing to search with.".into());
+                Err("ripgrep is not installed and this folder is not a git repository, so there is nothing to search with.".into())
+            } else {
+                let len = (!a.regex).then_some(a.query.len());
+                run(git_command(root, a), |l, _| parse_git(l, len), "git", &stop).map_err(|e| e.to_string())
             }
-            let len = (!a.regex).then_some(a.query.len());
-            run(git_command(root, a), |l, _| parse_git(l, len), "git").map_err(|e| e.to_string())
         }
         other => other.map_err(|e| e.to_string()),
-    }
+    };
+    release(root, &stop);
+    found
 }
 
 #[tauri::command]
@@ -333,7 +392,7 @@ mod tests {
         assert_eq!(path, "sub/b.ts");
         assert_eq!(hits.len(), 2);
         // "é " is two UTF-16 units before the hit, though three bytes.
-        assert_eq!(hits[0], Hit { line: 7, col: 2, before: "é ".into(), text: "Todo".into(), after: " todo".into() });
+        assert_eq!(hits[0], Hit { line: 7, col: 2, before: "é ".into(), text: "Todo".into(), after: " todo".into(), len: 4 });
         assert!(parse_rg(r#"{"type":"begin","data":{}}"#, MAX_HITS).is_none());
         let (path, hits) = parse_git("a dir/x.txt\u{0}12\u{0}5\u{0}one todo here", Some(4)).unwrap();
         assert_eq!((path.as_str(), hits[0].line, hits[0].text.as_str(), hits[0].col), ("a dir/x.txt", 12, "todo", 4));
@@ -355,6 +414,78 @@ mod tests {
         assert_eq!(last.col, MAX_HITS);
         assert_eq!(last.before.chars().count(), SIDE + 1);
         assert_eq!(last.after.chars().count(), SIDE + 1);
+    }
+
+    // FIX-3 (council P5): a hit longer than TEXT_MAX characters (a regex across a minified line) is
+    // cut to TEXT_MAX plus an ellipsis for the list, but keeps its real UTF-16 length for the editor.
+    #[test]
+    fn a_long_hit_is_cut_for_the_list_but_keeps_its_length() {
+        let line = format!("ab{}cd", "é".repeat(5000));
+        let h = hit(3, &line, 2, 2 + 2 * 5000);
+        assert_eq!(h.text.chars().count(), TEXT_MAX + 1);
+        assert!(h.text.ends_with('…') && h.text.starts_with('é'));
+        assert_eq!((h.col, h.len), (2, 5000));
+        assert_eq!(h.after, "cd");
+        let short = hit(1, "one todo", 4, 8);
+        assert_eq!((short.text.as_str(), short.len), ("todo", 4));
+    }
+
+    // FIX-3 (council P5): ripgrep is told to skip files over 10 MB; a real 11 MB file with a match is
+    // not searched while a small one next to it is.
+    #[test]
+    fn ripgrep_skips_files_over_ten_megabytes() {
+        let args: Vec<String> = rg_command(Path::new("."), &ask("x")).get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert!(args.windows(2).any(|w| w[0] == "--max-filesize" && w[1] == "10M"), "{args:?}");
+        if Command::new("rg").arg("--version").output().is_err() {
+            eprintln!("ripgrep not installed; the size rule was checked on the arguments only");
+            return;
+        }
+        let d = std::env::temp_dir().join(format!("krs-search-big-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let mut big = "needle\n".to_string();
+        big.push_str(&"x".repeat(11 * 1024 * 1024));
+        std::fs::write(d.join("big.txt"), big).unwrap();
+        std::fs::write(d.join("small.txt"), "needle\n").unwrap();
+        let f = run(rg_command(&d, &ask("needle")), parse_rg, "rg", &AtomicBool::new(false)).unwrap();
+        assert_eq!(f.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), vec!["small.txt"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // FIX-3 (council P4): a new search of the same folder raises the running one's flag (another
+    // folder's search is left alone), and a raised flag kills the child at once: a command that would
+    // run for about 20 seconds ends within a few, with the superseded error the window drops.
+    #[test]
+    fn a_newer_search_of_the_same_folder_stops_the_older_one() {
+        let (a, b) = (Path::new("C:/krs-claim-a"), Path::new("C:/krs-claim-b"));
+        let first = claim(a);
+        let other = claim(b);
+        assert!(!first.load(Ordering::SeqCst));
+        let second = claim(a);
+        assert!(first.load(Ordering::SeqCst), "the older search of the folder is told to stop");
+        assert!(!second.load(Ordering::SeqCst) && !other.load(Ordering::SeqCst));
+        release(a, &first);
+        assert!(RUNNING.lock().unwrap().as_ref().unwrap().get(a).is_some_and(|f| Arc::ptr_eq(f, &second)), "a finished older search does not drop the newer one's entry");
+        release(a, &second);
+        release(b, &other);
+        assert!(RUNNING.lock().unwrap().as_ref().unwrap().get(a).is_none());
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let raise = stop.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            raise.store(true, Ordering::SeqCst);
+        });
+        let mut slow = if cfg!(windows) { Command::new("ping") } else { Command::new("sleep") };
+        if cfg!(windows) {
+            slow.args(["-n", "20", "127.0.0.1"]);
+        } else {
+            slow.arg("20");
+        }
+        let t0 = Instant::now();
+        let err = run(slow, |_, _| None, "rg", &stop).err().unwrap();
+        assert_eq!(err.to_string(), SUPERSEDED);
+        assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", t0.elapsed());
     }
 
     #[test]
@@ -384,9 +515,9 @@ mod tests {
             let go = |a: &Ask| -> Result<Found, std::io::Error> {
                 if use_git {
                     let len = (!a.regex).then_some(a.query.len());
-                    run(git_command(&d, a), |l, _| parse_git(l, len), "git")
+                    run(git_command(&d, a), |l, _| parse_git(l, len), "git", &AtomicBool::new(false))
                 } else {
-                    run(rg_command(&d, a), parse_rg, "rg")
+                    run(rg_command(&d, a), parse_rg, "rg", &AtomicBool::new(false))
                 }
             };
             let count = |a: &Ask| go(a).unwrap().total;

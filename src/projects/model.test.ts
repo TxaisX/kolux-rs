@@ -12,6 +12,11 @@ test("rows say the typed name, else the branch, else the short commit when detac
   expect(worktreeLabel(loose)).toBe("detached at ddddddd");
 });
 
+test("GIT-064: with neither a branch nor a commit known, no detached label shows; the row keeps its folder name", () => {
+  expect(worktreeLabel({ ...loose, head: "" })).toBe("loose");
+  expect(worktreeLabel({ ...loose, head: "" })).not.toContain("detached");
+});
+
 test("the main checkout is listed first, the rest by name, whatever order git gave", () => {
   expect(orderWorktrees([zeta, loose, fix, main]).map(worktreeLabel)).toEqual(["main", "detached at ddddddd", "fix-login", "zeta"]);
 });

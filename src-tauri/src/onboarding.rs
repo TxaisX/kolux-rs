@@ -87,7 +87,8 @@ fn closed(mut rec: Onboarding, outcome: &str, now: u64) -> Result<Onboarding, St
         if outcome == "completed" {
             rec.step = LAST;
         } else {
-            // ONB-006: Skip (the only way to close as dismissed) also dismisses the sidebar checklist.
+            // ONB-006: closing as dismissed (Skip, Esc, the X or a backdrop click) also dismisses the
+            // sidebar checklist.
             rec.rest.insert("checklistDismissed".into(), true.into());
         }
     }
