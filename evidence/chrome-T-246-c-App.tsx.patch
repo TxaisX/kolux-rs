@@ -1,8 +1,7 @@
 diff --git a/src/App.tsx b/src/App.tsx
-index 0c7daab6..adca4caa 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
-@@ -633,6 +633,12 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -634,6 +634,12 @@
            }
            zoomTerm(focused, hit.id === "zoom.in" ? "in" : hit.id === "zoom.out" ? "out" : "reset"); // TERM-078
            break;

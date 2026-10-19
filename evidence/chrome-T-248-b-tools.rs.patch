@@ -1,26 +1,34 @@
 diff --git a/src-tauri/src/tools.rs b/src-tauri/src/tools.rs
-index 30d52b57..a87bd386 100644
 --- a/src-tauri/src/tools.rs
 +++ b/src-tauri/src/tools.rs
-@@ -381,7 +381,25 @@ pub fn guarded_setup<R: tauri::Runtime>(
+@@ -381,7 +381,34 @@
      let configs: Vec<_> = app.config().app.windows.iter().filter(|w| labels.contains(&w.label)).cloned().collect();
      for config in &configs {
          let handle = app.handle().clone();
 -        let open = || tauri::WebviewWindowBuilder::from_config(&handle, config).and_then(|b| b.build()).map(|_| ());
 +        // APP-015: the window never navigates away from the app; an outside web address opens in the
-+        // default browser instead, and anything else is dropped (menu::navigation decides).
++        // default browser instead, and anything else is dropped (menu::navigation decides). A new-window
++        // request (target=_blank, window.open) takes the same road: web and mail addresses go to the
++        // browser, the rest is denied (menu::new_window).
 +        let dev = if cfg!(debug_assertions) { handle.config().build.dev_url.clone() } else { None };
++        let own = crate::menu::Own::for_platform(crate::menu::Os::current(), config.use_https_scheme);
 +        let open = || {
-+            let dev = dev.clone();
++            let (dev_nav, dev_win) = (dev.clone(), dev.clone());
 +            tauri::WebviewWindowBuilder::from_config(&handle, config)
 +                .map(|b| {
-+                    b.on_navigation(move |url| match crate::menu::navigation(url, dev.as_ref()) {
++                    b.on_navigation(move |url| match crate::menu::navigation(url, own, dev_nav.as_ref()) {
 +                        crate::menu::Nav::Allow => true,
 +                        crate::menu::Nav::External => {
 +                            let _ = crate::artifacts::system_open(url.as_str());
 +                            false
 +                        }
 +                        crate::menu::Nav::Block => false,
++                    })
++                    .on_new_window(move |url, _features| {
++                        if crate::menu::new_window(&url, own, dev_win.as_ref()) == crate::menu::Nav::External {
++                            let _ = crate::artifacts::system_open(url.as_str());
++                        }
++                        tauri::webview::NewWindowResponse::Deny
 +                    })
 +                })
 +                .and_then(|b| b.build())

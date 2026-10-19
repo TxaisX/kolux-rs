@@ -199,9 +199,10 @@ pub fn spec(os: Os, s: &MenuState) -> Vec<Node> {
         .concat(),
     });
     bar.push(Node::Sub { label: "Window", items: vec![Node::Stock(Stock::Minimize), Node::Stock(Stock::Maximize)] });
-    // APP-009: Help holds Report Crash, Explore Kolux and Getting Started everywhere; About and Check
+    // APP-009: Help holds Explore Kolux and Getting Started everywhere (Report Crash waits for T-183); About and Check
     // for Updates sit here on Windows and Linux, and in the app menu on macOS.
-    let mut help = vec![item("help.reportCrash", "Report Crash"), item("help.explore", "Explore Kolux"), item("help.gettingStarted", "Getting Started")];
+    // Report Crash joins this list with the crash report card (T-183): until then it would open nothing.
+    let mut help = vec![item("help.explore", "Explore Kolux"), item("help.gettingStarted", "Getting Started")];
     if os != Os::Mac {
         help.extend([Node::Sep, Node::Stock(Stock::About), item("help.checkUpdates", "Check for Updates")]);
     }
@@ -244,6 +245,10 @@ pub fn accelerators(nodes: &[Node]) -> Vec<String> {
 }
 
 /// APP-015: what the main window does when something tries to move it to an address.
+// ponytail: only the tools.rs hunk (evidence/chrome-T-248-b-tools.rs.patch) calls these; until the
+// coordinator lands it the non-test build has no caller, so dead_code is allowed. Drop the attribute
+// with the hunk.
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Nav {
     /// The app's own page (or its dev server): the window goes there.
@@ -254,21 +259,58 @@ pub enum Nav {
     Block,
 }
 
-/// Decides one navigation of the main window. `dev` is the dev server's address, passed only by a
-/// debug build. The app's own pages are `tauri://localhost` and `http(s)://tauri.localhost`; an
-/// address that only looks like them (the app's host after an `@`, another port, a file or data
-/// address) never matches, because the host and port are compared as parsed.
-pub fn navigation(url: &tauri::Url, dev: Option<&tauri::Url>) -> Nav {
+/// The one origin the app's own pages are served from on this platform (never a list of several).
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Own {
+    /// `tauri://localhost`: macOS and Linux.
+    Tauri,
+    /// `http://tauri.localhost`: Windows, the window config's default (no `useHttpsScheme`).
+    Http,
+    /// `https://tauri.localhost`: Windows with `useHttpsScheme` set in the window config.
+    Https,
+}
+
+impl Own {
+    /// `https` is the window config's `use_https_scheme`; it only changes Windows.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn for_platform(os: Os, https: bool) -> Own {
+        match (os, https) {
+            (Os::Windows, true) => Own::Https,
+            (Os::Windows, false) => Own::Http,
+            _ => Own::Tauri,
+        }
+    }
+
+    fn scheme_host(self) -> (&'static str, &'static str) {
+        match self {
+            Own::Tauri => ("tauri", "localhost"),
+            Own::Http => ("http", "tauri.localhost"),
+            Own::Https => ("https", "tauri.localhost"),
+        }
+    }
+}
+
+/// Decides one navigation of the main window. `own` is the platform's real origin and `dev` the dev
+/// server's address (a debug build passes it, a release build `None`). Only that exact scheme and host
+/// are the app: the other platforms' forms of the app's origin are outside addresses here (a web
+/// address goes to the browser, `tauri://` elsewhere is dropped), because an allowed page gets the
+/// app's command access. The host and port are compared as parsed (case folded, no userinfo, no port,
+/// no trailing dot, look-alike letters stay different), and `about:blank` is dropped like any other
+/// non-web address.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn navigation(url: &tauri::Url, own: Own, dev: Option<&tauri::Url>) -> Nav {
     let host = url.host_str().unwrap_or("").to_ascii_lowercase();
     let plain = url.username().is_empty() && url.password().is_none();
+    let (own_scheme, own_host) = own.scheme_host();
+    if url.scheme() == own_scheme && plain && url.port().is_none() && host == own_host {
+        return Nav::Allow;
+    }
     match url.scheme() {
-        "tauri" if plain && host == "localhost" && url.port().is_none() => Nav::Allow,
-        "about" if url.as_str() == "about:blank" => Nav::Allow,
         "http" | "https" => {
-            let own = plain && url.port().is_none() && host == "tauri.localhost";
             let dev_server = plain
                 && dev.is_some_and(|d| d.scheme() == url.scheme() && d.host_str().map(str::to_ascii_lowercase).as_deref() == Some(host.as_str()) && d.port_or_known_default() == url.port_or_known_default());
-            if own || dev_server {
+            if dev_server {
                 Nav::Allow
             } else {
                 Nav::External
@@ -276,6 +318,17 @@ pub fn navigation(url: &tauri::Url, dev: Option<&tauri::Url>) -> Nav {
         }
         "mailto" => Nav::External,
         _ => Nav::Block,
+    }
+}
+
+/// Decides one request to open a new window (`target=_blank`, `window.open`): a web or mail address
+/// opens in the default browser (`External`, the same path as a navigation), everything else is denied
+/// (`Block`). The app's own pages never open a second window, so this never answers `Allow`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn new_window(url: &tauri::Url, own: Own, dev: Option<&tauri::Url>) -> Nav {
+    match navigation(url, own, dev) {
+        Nav::External => Nav::External,
+        Nav::Allow | Nav::Block => Nav::Block,
     }
 }
 
@@ -554,16 +607,16 @@ mod tests {
     }
 
     #[test]
-    fn app_009_help_holds_the_three_page_items_everywhere_and_about_and_updates_on_windows_and_linux() {
+    fn app_009_help_holds_the_two_page_items_everywhere_and_about_and_updates_on_windows_and_linux() {
         for os in [Os::Windows, Os::Linux] {
             let bar = spec(os, &state("terminals"));
             let help = sub(&bar, "Help");
-            assert_eq!(ids(help), ["help.reportCrash", "help.explore", "help.gettingStarted", "help.checkUpdates"], "{os:?}");
+            assert_eq!(ids(help), ["help.explore", "help.gettingStarted", "help.checkUpdates"], "{os:?}");
             assert!(help.contains(&Node::Stock(Stock::About)));
         }
-        // macOS: About and Check for Updates are in the app menu, Help keeps the three page items.
+        // macOS: About and Check for Updates are in the app menu, Help keeps the two page items.
         let mac = spec(Os::Mac, &state("terminals"));
-        assert_eq!(ids(sub(&mac, "Help")), ["help.reportCrash", "help.explore", "help.gettingStarted"]);
+        assert_eq!(ids(sub(&mac, "Help")), ["help.explore", "help.gettingStarted"]);
         assert_eq!(sub(&mac, "Kolux")[0], Node::Stock(Stock::About));
     }
 
@@ -598,48 +651,140 @@ mod tests {
         assert_eq!(v["native"][2], serde_json::json!({ "chord": "Mod+Q", "name": "Quit Kolux" }));
     }
 
-    fn nav(url: &str, dev: Option<&str>) -> Nav {
+    fn nav_with(os: Os, https: bool, url: &str, dev: Option<&str>) -> Nav {
         let dev = dev.map(|d| tauri::Url::parse(d).unwrap());
-        navigation(&tauri::Url::parse(url).unwrap(), dev.as_ref())
+        navigation(&tauri::Url::parse(url).unwrap(), Own::for_platform(os, https), dev.as_ref())
+    }
+
+    fn nav(os: Os, url: &str) -> Nav {
+        nav_with(os, false, url, None)
+    }
+
+    fn nav_dev(url: &str, dev: &str) -> Nav {
+        nav_with(Os::Windows, false, url, Some(dev))
+    }
+
+    fn pop_up(os: Os, url: &str) -> Nav {
+        new_window(&tauri::Url::parse(url).unwrap(), Own::for_platform(os, false), None)
     }
 
     #[test]
-    fn app_015_the_apps_own_pages_load_and_a_web_address_goes_to_the_browser() {
-        for own in ["tauri://localhost/", "tauri://localhost/index.html", "http://tauri.localhost/", "https://tauri.localhost/settings", "about:blank"] {
-            assert_eq!(nav(own, None), Nav::Allow, "{own}");
+    fn app_015_the_origin_follows_the_platform_and_the_window_config() {
+        assert_eq!(Own::for_platform(Os::Windows, false), Own::Http, "tauri.conf.json sets no useHttpsScheme, so Windows serves http");
+        assert_eq!(Own::for_platform(Os::Windows, true), Own::Https);
+        assert_eq!(Own::for_platform(Os::Mac, false), Own::Tauri);
+        assert_eq!(Own::for_platform(Os::Mac, true), Own::Tauri, "the https flag only changes Windows");
+        assert_eq!(Own::for_platform(Os::Linux, true), Own::Tauri);
+    }
+
+    #[test]
+    fn app_015_each_platform_loads_only_the_origin_it_really_serves() {
+        // Windows (no useHttpsScheme): exactly http://tauri.localhost.
+        for own in ["http://tauri.localhost/", "http://tauri.localhost/index.html", "http://tauri.localhost/settings?x=1#y"] {
+            assert_eq!(nav(Os::Windows, own), Nav::Allow, "{own}");
         }
-        for web in ["https://example.com/", "http://example.com:8080/x", "mailto:someone@example.com"] {
-            assert_eq!(nav(web, None), Nav::External, "{web}");
+        assert_eq!(nav(Os::Windows, "https://tauri.localhost/"), Nav::External, "https would reach whatever listens on the loopback address");
+        assert_eq!(nav(Os::Windows, "tauri://localhost/"), Nav::Block, "an unregistered scheme on Windows");
+        // Windows with useHttpsScheme: exactly https://tauri.localhost.
+        assert_eq!(nav_with(Os::Windows, true, "https://tauri.localhost/", None), Nav::Allow);
+        assert_eq!(nav_with(Os::Windows, true, "http://tauri.localhost/", None), Nav::External);
+        assert_eq!(nav_with(Os::Windows, true, "tauri://localhost/", None), Nav::Block);
+        // macOS and Linux: exactly tauri://localhost.
+        for os in [Os::Mac, Os::Linux] {
+            assert_eq!(nav(os, "tauri://localhost/"), Nav::Allow, "{os:?}");
+            assert_eq!(nav(os, "tauri://localhost/index.html"), Nav::Allow, "{os:?}");
+            assert_eq!(nav(os, "http://tauri.localhost/"), Nav::External, "{os:?}");
+            assert_eq!(nav(os, "https://tauri.localhost/"), Nav::External, "{os:?}");
+        }
+    }
+
+    #[test]
+    fn app_015_a_web_address_goes_to_the_browser_and_nothing_else_loads_in_the_window() {
+        for os in [Os::Windows, Os::Mac, Os::Linux] {
+            for web in ["https://example.com/", "http://example.com:8080/x", "mailto:someone@example.com"] {
+                assert_eq!(nav(os, web), Nav::External, "{os:?} {web}");
+            }
+            // about:blank would blank the app window, so it is dropped like any other non-web address.
+            for bad in ["about:blank", "about:srcdoc", "file://server/share/page.html", "file:///C:/Windows/win.ini", "data:text/html,<script>1</script>", "javascript:alert(1)", "blob:https://tauri.localhost/1234", "ftp://example.com/x", "ms-msdt:/id", "kolux://x"] {
+                assert_eq!(nav(os, bad), Nav::Block, "{os:?} {bad}");
+            }
         }
     }
 
     #[test]
     fn app_015_addresses_dressed_up_as_the_apps_own_pages_never_match() {
         // The host is what is parsed, not what the text starts with.
-        assert_eq!(nav("http://tauri.localhost@evil.example/", None), Nav::External);
-        assert_eq!(nav("http://tauri.localhost:9999/", None), Nav::External);
-        assert_eq!(nav("http://tauri.localhost.evil.example/", None), Nav::External);
-        assert_eq!(nav("http://user:pw@tauri.localhost/", None), Nav::External);
-        assert_eq!(nav("tauri://localhost.evil.example/", None), Nav::Block);
-        assert_eq!(nav("tauri://evil/", None), Nav::Block);
-        assert_eq!(nav("tauri://user@localhost/", None), Nav::Block);
-        // Foreign file hosts, data addresses, scripts, blobs and other schemes are blocked outright.
-        for bad in ["file://server/share/page.html", "file:///C:/Windows/win.ini", "data:text/html,<script>1</script>", "javascript:alert(1)", "blob:https://tauri.localhost/1234", "ftp://example.com/x", "about:srcdoc", "ms-msdt:/id", "kolux://x"] {
-            assert_eq!(nav(bad, None), Nav::Block, "{bad}");
-        }
+        assert_eq!(nav(Os::Windows, "http://tauri.localhost@evil.example/"), Nav::External);
+        assert_eq!(nav(Os::Windows, "http://tauri.localhost:9999/"), Nav::External);
+        assert_eq!(nav(Os::Windows, "http://tauri.localhost.evil.example/"), Nav::External);
+        assert_eq!(nav(Os::Windows, "http://user:pw@tauri.localhost/"), Nav::External);
+        assert_eq!(nav(Os::Mac, "tauri://localhost.evil.example/"), Nav::Block);
+        assert_eq!(nav(Os::Mac, "tauri://evil/"), Nav::Block);
+        assert_eq!(nav(Os::Mac, "tauri://user@localhost/"), Nav::Block);
+        assert_eq!(nav(Os::Mac, "tauri://localhost:9999/"), Nav::Block);
+    }
+
+    #[test]
+    fn app_015_case_trailing_dot_idn_and_percent_encoding_resolve_the_way_the_parser_does() {
+        // Host case never matters.
+        assert_eq!(nav(Os::Windows, "http://TAURI.LOCALHOST/"), Nav::Allow);
+        assert_eq!(nav(Os::Windows, "HTTP://Tauri.Localhost/"), Nav::Allow);
+        assert_eq!(nav(Os::Mac, "tauri://LOCALHOST/"), Nav::Allow);
+        assert_eq!(nav(Os::Linux, "TAURI://localhost/"), Nav::Allow);
+        // A trailing dot is a different host (the DNS root form), so it is an outside address.
+        assert_eq!(nav(Os::Windows, "http://tauri.localhost./"), Nav::External);
+        assert_eq!(nav(Os::Mac, "tauri://localhost./"), Nav::Block);
+        // Look-alike letters (Cyrillic a and o, fullwidth dot) are other hosts.
+        assert_eq!(nav(Os::Windows, "http://t\u{430}uri.localhost/"), Nav::External);
+        assert_eq!(nav(Os::Windows, "http://tauri.l\u{43e}calhost/"), Nav::External);
+        assert_eq!(nav(Os::Windows, "http://tauri\u{ff0e}localhost.evil.example/"), Nav::External);
+        assert_eq!(nav(Os::Mac, "tauri://l\u{43e}calhost/"), Nav::Block);
+        // A percent-encoded dot decodes to the real host in a web address (so Allow is correct), and
+        // an encoded letter in the opaque tauri host stays encoded, so it is not the app.
+        assert_eq!(nav(Os::Windows, "http://tauri%2Elocalhost/"), Nav::Allow);
+        assert_eq!(nav(Os::Mac, "tauri://local%68ost/"), Nav::Block);
     }
 
     #[test]
     fn app_015_only_a_debug_build_allows_its_own_dev_server_and_only_that_host_and_port() {
-        let dev = Some("http://localhost:1441");
-        assert_eq!(nav("http://localhost:1441/", dev), Nav::Allow);
-        assert_eq!(nav("http://localhost:1441/some/page?x=1", dev), Nav::Allow);
-        assert_eq!(nav("http://localhost:3000/", dev), Nav::External);
-        assert_eq!(nav("https://localhost:1441/", dev), Nav::External);
-        assert_eq!(nav("http://127.0.0.1:1441/", dev), Nav::External);
-        assert_eq!(nav("http://localhost:1441@evil.example/", dev), Nav::External);
+        let dev = "http://localhost:1441";
+        assert_eq!(nav_dev("http://localhost:1441/", dev), Nav::Allow);
+        assert_eq!(nav_dev("http://localhost:1441/some/page?x=1", dev), Nav::Allow);
+        assert_eq!(nav_dev("http://localhost:3000/", dev), Nav::External);
+        assert_eq!(nav_dev("https://localhost:1441/", dev), Nav::External);
+        assert_eq!(nav_dev("http://127.0.0.1:1441/", dev), Nav::External);
+        assert_eq!(nav_dev("http://localhost:1441@evil.example/", dev), Nav::External);
         // A release build passes no dev server, so the same address is an outside one.
-        assert_eq!(nav("http://localhost:1441/", None), Nav::External);
+        assert_eq!(nav(Os::Windows, "http://localhost:1441/"), Nav::External);
+    }
+
+    #[test]
+    fn app_015_a_new_window_request_opens_web_and_mail_addresses_in_the_browser_and_denies_the_rest() {
+        for os in [Os::Windows, Os::Mac, Os::Linux] {
+            for web in ["https://example.com/", "http://example.com/x", "mailto:someone@example.com"] {
+                assert_eq!(pop_up(os, web), Nav::External, "{os:?} {web}");
+            }
+            // The app's own page never opens a second app window, and nothing else opens at all.
+            for own in ["tauri://localhost/", "http://tauri.localhost/", "https://tauri.localhost/"] {
+                assert_ne!(pop_up(os, own), Nav::Allow, "{os:?} {own}");
+            }
+            for bad in ["about:blank", "file:///C:/x.html", "data:text/html,1", "javascript:alert(1)", "blob:https://example.com/1", "ftp://example.com/x", "ms-msdt:/id"] {
+                assert_eq!(pop_up(os, bad), Nav::Block, "{os:?} {bad}");
+            }
+        }
+        assert_eq!(pop_up(Os::Windows, "http://tauri.localhost/"), Nav::Block);
+        assert_eq!(pop_up(Os::Mac, "tauri://localhost/"), Nav::Block);
+        // The dev server is the app too in a debug build.
+        let dev = tauri::Url::parse("http://localhost:1441").unwrap();
+        assert_eq!(new_window(&tauri::Url::parse("http://localhost:1441/").unwrap(), Own::Http, Some(&dev)), Nav::Block);
+    }
+
+    #[test]
+    fn app_009_report_crash_stays_out_of_the_menu_until_the_crash_card_lands() {
+        for os in [Os::Windows, Os::Mac, Os::Linux] {
+            let bar = spec(os, &state("terminals"));
+            assert!(!ids(sub(&bar, "Help")).contains(&"help.reportCrash"), "{os:?}");
+        }
     }
 
     #[test]
