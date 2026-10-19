@@ -50,3 +50,21 @@ of going out.
 
 NOT COMPILED / NOT RUN: the Unix variant of the timeout test and quiet()'s process_group (cfg(unix)
 code is not compiled on this Windows PC).
+
+== Item 3: tasks-ec9aa5a review, TS items fixed in src/tasks (second commit) ==
+FIX-SOON 1: New issue created for a different workspace than the open list no longer lands in it
+  (createdHere() in newIssue.ts; TasksPage shows a data-created-elsewhere note with the issue url).
+FIX-SOON 3: a failed or timed-out create reports its error to watchers, shown by the reopened dialog.
+FIX-SOON 4: Projects cell shows the highest-id successful edit once none is pending
+  (CellBook/sendEdit/settleEdit in projects.ts, wired in ProjectsView.tsx).
+AFTER 1: defaultTimeline docstring matches the code.  AFTER 5: title over 256 chars disables Create
+  with a warning; label suggestions drop labels containing commas.  A4: dialogs return focus to the
+  opener on close; roadmap bar link has an aria-label (title, dates).
+Red first: new tests in newIssue.test.ts + projects.test.ts, before the source change: 8 failed | 21 passed (fix3-ts-red.log)
+Green: pnpm exec tsc --noEmit exit 0; pnpm test (vitest) 205 files, 1371 passed (fix3-tsc2.log, fix3-vitest2.log)
+plan-check: OK; '## Last 10 passes' count 1; firewall-check -Baseline: 53 hit(s), 0 new
+Rust untouched since the first commit (cargo 882 passed, 2 load flakes that pass alone, see above).
+
+STILL OPEN from tasks-ec9aa5a: AFTER 3 (component tests: no .test.tsx/jsdom setup in the repo, needs a
+package.json + vitest config change outside OWNS); the scm git033 stand-in test change is the reliability lane's.
+LIVE PROOF PENDING: New issue dialog (wrong-workspace note, failed create, focus return) and Projects cell edits are user-visible; no app launch allowed here.

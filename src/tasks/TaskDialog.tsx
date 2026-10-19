@@ -28,6 +28,14 @@ export default function TaskDialog({ task, host, onClose, onLabels, onState }: {
   tell.current = onLabels;
   const args = { host, repo: task.repo, number: task.number };
 
+  // FIX-3 (review A4): closing the dialog returns focus to what had it before (declared before the
+  // effect that moves focus into the dialog, so it reads the opener first).
+  useEffect(() => {
+    const before = document.activeElement as HTMLElement | null;
+    return () => {
+      if (before?.isConnected) before.focus?.();
+    };
+  }, []);
   useEffect(() => {
     const read = () =>
       invoke<TaskDetail>("scm_task_detail", args)
