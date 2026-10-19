@@ -692,15 +692,14 @@ fn run_within(cmd: std::process::Command, input: Option<&str>, limit: std::time:
 /// it: a leftover that moved into its own session leaves the group empty, and the id could then
 /// have been taken by a new group leader inside the grace (a pid wrap in 500 ms at most, very
 /// unlikely). Closing it needs gh kept as a zombie until after the group kill (waitid with
-/// WNOWAIT, which needs libc; recorded, not done). The Unix path is compiled nowhere on this PC
-/// and run nowhere (FIX-6). Windows has no group; taskkill needs the root alive, so there this
+/// WNOWAIT, which needs libc; recorded, not done). The Unix-only parts (the `kill` program, the
+/// group signal) are compiled nowhere on this PC and run nowhere (FIX-6); the runner that starts
+/// the program is shared code and is run by a test here (FIX-7). Windows has no group; taskkill needs the root alive, so there this
 /// is best effort and the job is what reaches a leftover.
 fn kill_leftover(pid: u32) {
     #[cfg(unix)]
     {
-        kill_leftover_with(pid, &|program, args| {
-            let _ = quiet(program).args(args).output();
-        });
+        kill_leftover_with(pid, &run_program);
     }
     #[cfg(not(unix))]
     crate::procs::kill_tree(pid);
@@ -719,6 +718,20 @@ fn group_kill_args(pid: u32) -> Vec<String> {
 #[cfg_attr(not(unix), allow(dead_code))]
 fn kill_leftover_with(pid: u32, run: &dyn Fn(&str, &[String])) {
     run("kill", &group_kill_args(pid));
+}
+
+/// FIX-7 (review AFTER 1): the real runner behind `kill_leftover`: starts the program with its
+/// arguments through `quiet` (no console window), drops its output and waits for it to end. It is
+/// shared code, not behind `cfg(unix)`, so a Windows test runs it.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn run_program(program: &str, args: &[String]) {
+    let _ = run_program_output(program, args);
+}
+
+/// The one line `run_program` stands on, with the result kept so a test can read it.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn run_program_output(program: &str, args: &[String]) -> std::io::Result<std::process::Output> {
+    quiet(program).args(args).output()
 }
 
 /// The body of `run_within`: `with_job` false starts gh with no job (the fallback path), `tree_kill`
@@ -4030,8 +4043,11 @@ mod tests {
         let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fix4-job-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tools);
         fs::create_dir_all(&tools).unwrap();
-        // gh.cmd starts a second program that would leave a mark about five seconds later.
-        fs::write(tools.join("late.cmd"), "@echo off\r\nping -n 6 127.0.0.1 >nul\r\necho late>\"%~dp0late.txt\"\r\n").unwrap();
+        // gh.cmd starts a second program that says it started, then would leave a mark about five
+        // seconds later. The mark is written only if its wait ran to the end (`&&`): a tree kill
+        // ends the leaf (the wait, exit code 1) a moment before the batch above it, and the batch
+        // must not read that as the wait being over.
+        fs::write(tools.join("late.cmd"), "@echo off\r\necho started>\"%~dp0started.txt\"\r\nping -n 6 127.0.0.1 >nul && echo late>\"%~dp0late.txt\"\r\n").unwrap();
         let gh = tools.join("gh.cmd");
         fs::write(&gh, "@echo off\r\ncmd /c \"%~dp0late.cmd\"\r\n").unwrap();
         let limit = std::time::Duration::from_secs(1);
@@ -4043,11 +4059,22 @@ mod tests {
         assert!(asked.lock().unwrap().is_empty(), "the tree kill ran although a job held gh: {:?}", asked.lock().unwrap());
         std::thread::sleep(std::time::Duration::from_secs(8));
         assert!(!tools.join("late.txt").exists(), "a program gh started outlived its time limit");
-        // Without a job the tree kill is the fallback and is asked for gh's pid.
+        // Without a job the tree kill is the fallback and is asked for gh's pid. gh starts its
+        // second program only after about two seconds, as a loaded PC would, so the limit runs out
+        // before it exists; the tree kill waits for its started.txt (FIX-7), so the walk finds it.
+        fs::remove_file(tools.join("started.txt")).ok();
+        fs::write(&gh, "@echo off\r\nping -n 3 127.0.0.1 >nul\r\ncmd /c \"%~dp0late.cmd\"\r\n").unwrap();
+        let started = tools.join("started.txt");
         let mut cmd = quiet(&gh);
         cmd.current_dir(&tools);
         let err = run_within_in(cmd, None, limit, false, &|p| {
             asked.lock().unwrap().push(p);
+            // The limit has run out, but the walk by parent pid only finds a program that exists.
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !started.exists() && std::time::Instant::now() < end {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            assert!(started.exists(), "gh's second program never started");
             crate::procs::kill_tree(p);
         }, &|_| {})
         .unwrap_err();
@@ -4130,6 +4157,37 @@ mod tests {
         assert_eq!(seen[0].0, "kill");
         assert_eq!(seen[0].1, ["-9", "--", "-4242"]);
         assert!(!seen[0].1.iter().any(|a| a == "4242"), "{seen:?}");
+    }
+
+    /// FIX-7 (review AFTER 1): the real runner starts the program with its arguments and waits for it
+    /// to end, and a program that cannot start is not an error (the leftover kill is best effort).
+    #[test]
+    fn fix7_the_real_runner_runs_the_program_with_its_arguments_and_waits() {
+        #[cfg(windows)]
+        let (program, args) = ("cmd", vec!["/C".to_string(), "echo ran & exit 7".to_string()]);
+        #[cfg(not(windows))]
+        let (program, args) = ("sh", vec!["-c".to_string(), "echo ran; exit 7".to_string()]);
+        // It started the program with those arguments and waited for the end: the exit code and the
+        // whole output are in hand when it returns.
+        let out = run_program_output(program, &args).unwrap();
+        assert_eq!(out.status.code(), Some(7));
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "ran");
+        run_program(program, &args);
+        // A program that cannot start is dropped without a panic.
+        run_program("kolux-rs-no-such-program-fix7", &["-9".to_string()]);
+    }
+
+    /// FIX-7 (review AFTER 1): `kill_leftover` hands the shared runner to the seam, so the code a
+    /// Unix host runs is the code the runner test above runs (read from this file because Windows
+    /// cannot compile the Unix body).
+    #[test]
+    fn fix7_kill_leftover_uses_the_shared_runner() {
+        let src = include_str!("scm.rs");
+        let head = ["fn kill_leftover", "(pid: u32) {"].concat();
+        let from = src.find(&head).expect("kill_leftover not found");
+        let body = &src[from..from + src[from..].find("\n}").unwrap()];
+        let call = ["kill_leftover_with(pid, &", "run_program);"].concat();
+        assert!(body.contains(&call), "{body}");
     }
 
     /// FIX-4 (review AFTER 1): a gh that finishes just as the limit runs out still gets a short
