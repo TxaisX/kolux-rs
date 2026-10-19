@@ -1,74 +1,60 @@
-hooks FIX-4 · stand-in review hooks-b39463c-standin-review.md, Send-to-build 3-6 (FIX-SOON 1-3, AFTER 2-3, COMPAT notes)
-lane/hooks from b1e8457 (STEP 0 merge of main 871fbf3), 2026-10-19, Fable (fresh spawn; the stopped
-builder had written the tests and the install_codex_with seam, the code fixes are this pass's)
+FIX-4 (council fix on lane/chat, stand-in review of 38be105: chat-38be105-standin-review.md)
+BEFORE 38be105. STEP 0: merge of main 23df397 (explicit sha) was clean, merge commit 16057003, no conflicts.
+Main's App.tsx already holds the lane's earlier App patch (MERGE 94), so chat-FIX-2-App.patch and
+chat-FIX-3-status.patch in evidence/ are spent (git apply -R --check on status.rs: 0); a new
+patch for the one coordinator file this round touches is evidence/chat-FIX-4-App.patch.
 
-Every test below was run RED against the unfixed code first (G:\Temp\hooks-w1-logs\w9-red.log), then
-GREEN after the fix (w9-green.log). Scratch homes only (env6.sh: CLAUDE_CONFIG_DIR, CODEX_HOME, HOME,
-USERPROFILE under G:\Temp\hooks-w1\); the real settings.json and ~\.codex\hooks.json were never read.
+Items
+ 1  FIX-SOON 1  A hand-off longer than DRAFT_LIMIT refuses and keeps the draft.
+    model.ts handOver() (the function ChatView's onHand now runs) builds draft + result first; over
+    DRAFT_LIMIT it says handTooLongText(label) in a note beside the Send result to menu, does not call
+    keepDraft, does not move the screen. AgentsChat holds the note (cleared on the next hand-over and
+    when the shown session changes); ChatView draws it (.chat-hand-note, role=status).
+    Test: model.test.ts "FIX-SOON 1 of the 38be105 review ...": a near-limit result onto a typed draft
+    -> false, draft kept, nothing picked, note said; a fitting result -> draft + result, picked; an
+    over-limit result on an empty box -> refused, box stays empty. Nothing in the path can write to a
+    terminal (the deps are draftOf, keepDraft, pick, say).
+ 2  FIX-SOON 2  handText uses a function replacement: line.replace(t, () => `"${t}"`).
+    Test: model.test.ts "FIX-SOON 2 ...": a$&b, $$x, $` and $' in quoted paths arrive as typed.
+ 3  FIX-SOON 3  noticeSeen(sameWorkspace, terminalsScreen, pageOpen) in kitPrompt.ts; true only on
+    the role's own workspace's terminals screen with no page open. App hunk (the kit tick reads the
+    screen and page through a ref and passes here = noticeSeen(...)) is evidence/chat-FIX-4-App.patch.
+    Tests: kitPrompt.test.ts "where a kit notice counts as seen in place": the truth table, and a
+    kitTickEntry run with here = noticeSeen(true, false, false) toasts once and never again.
+ 4  FIX-SOON 4  PLAN.md T-050-b reworded to what was built; T-050-c names orchestrator and
+    typed-command sessions (program null, SHELL_OFFER) as part of its remainder.
+ 5  FIX-SOON 5  evidence/chat-W2-FIX-SOON.txt: the green run is w2-fs-related.log (57/57); the line
+    now says w2-fs-green.log (1 failed | 39 passed) is the run before the redraw-count update.
+ 6  AFTER 1  hooksAbsent(agent, hooksOn, agentId?) checks the picked agent id when the pane has one
+    (HOOK_AGENTS gained claude-agent-teams so Teams seats stay hooked as before). The App hunk
+    passes pane.agentId. Test: kitPrompt.test.ts "AFTER 1 of the 38be105 review ...".
+    AFTER 4  the hand-off menu labels (and the refusal note) use sessionLabel(p, taskOf?.(p.key)); new
+    optional AgentsChat prop taskOf; the App hunk passes the same workerNames lookup the rail uses.
+    AFTER 2 (useKits.ts) is not chat's file; AFTER 3 and 5 below.
+ NOT DONE / left
+    AFTER 3 (a handed result that starts with "/" is typed as a slash command when sent): left,
+      the user sees the text first and the fix touches the slash-command rule of decision (c).
+    AFTER 5 (focus after a hand-off) and the whole chat screen: LIVE PROOF PENDING.
+    Txais decision (c), slash commands only at rest: still open, written into the report only.
 
-(1) FIX-SOON 1: the names-only pick never takes words from the tool input
-- The holding line's fallback pattern now anchors at the start of the text and reads only top-level
-  keys before the first nested `{`, and the key must follow the opening brace or a comma, so neither
-  a nested object's keys nor a key name ending in an escaped `"session_id` is taken. A payload whose
-  nested object comes first is dropped (fail closed), as the review asked.
-- Test fix_4_the_names_only_pick_never_takes_words_from_the_tool_input (two events: tool_input first
-  with the same key names; a key `x\"session_id` plus a list before the real keys).
-  RED:   held `{"hook_event_name":"SEKRITEVT","session_id":"SEKRITWORD",...}` (the leak the review found)
-  GREEN: nested-first event held nothing (""); escaped-key event held hook_event_name Stop, session s-4b, no EVILKEY.
+Readings (logs in G:/Temp/chat-w1-logs/)
+  red   w9-red1.log: model.test.ts + kitPrompt.test.ts at HEAD sources: 5 failed | 37 passed (42).
+  green w9-green1.log: vitest run src/chat src/agents: 10 files, 121 passed (121).
+  full  w9-vitest-full.log: pnpm test: 202 files, 1319 passed (1319).
+  tsc   w9-tsc.log (with evidence/chat-FIX-4-App.patch applied): exit 0; w9-tsc2.log (lane alone,
+        patch not applied, new props optional): exit 0.
+  git apply --check evidence/chat-FIX-4-App.patch on lane HEAD (= main 23df397 App.tsx): exit 0.
+  plan-check: OK; grep -c '^## Last 10 passes' STATE.md = 1; duplicate PLAN ids: none.
+  firewall-check -Baseline: 0 new (53 hits in 22 files, all baseline).
+  cargo / clippy: no Rust file changed in this round (the merge brought main's), not re-run.
 
-(2) FIX-SOON 2: a hook racing its terminal's exit never keeps the dead terminal
-- status.rs report() checks the retired pane/terminal pair under the sessions lock; terminal_ended
-  removes the sessions and retires the terminal under that same lock. Lock order everywhere:
-  SESSIONS, then RETIRED (the only two places that take RETIRED).
-- Test fix_4_a_hook_racing_its_terminals_exit_never_keeps_the_dead_terminal: two threads behind a
-  barrier, report(pane, OLD) against terminal_ended(OLD), then no session may carry OLD.
-  RED:   10008 of 20000 panes kept a session on their ended terminal (60.4 s).
-  GREEN: 0 of 2000 (rounds cut to 2000 after the red run showed the race hits about half of them).
-
-(3) FIX-SOON 3: the Codex rollback removes the file before its record
-- install_codex now takes Codex's listing as a parameter (install_codex_with; install_codex passes
-  the real one), so a test can make trust fail without starting Codex. On a trust failure for a file
-  Kolux created, the file is removed first and the record only once that succeeded; when the file
-  cannot be removed the error says so and the record stays, so the next start still knows the file
-  as Kolux's instead of refusing it as the user's file holding Kolux's entries.
-- Test fix_4_codex_a_created_file_rolled_back_goes_before_its_record (file held open with no sharing
-  during the listing; then free; then a created file that can be removed).
-  RED:   panicked at tests.rs:1346 (record gone while the held file stayed).
-  GREEN: held -> "could not be removed (os error 32); its record stays"; next start -> "could not
-         list ...; the file is back as it was" (no "already holds"); off removes file and record;
-         free rollback leaves neither file, record, backup nor config.toml.
-
-(4) AFTER 2: the held append is tried again only on a sharing violation
-- The 20 x 100 ms retry loop now retries only when the failure's HResult is 0x80070020 (another
-  process holds the file); any other failure breaks out at once. A missing holding folder no longer
-  costs the agent about 2 s.
-- Test fix_4_a_missing_holding_folder_is_not_tried_again (quickest of three runs each way).
-  RED:   held path 2.10 s, missing folder 3.66 s (the retries), assert at tests.rs:492.
-  GREEN: held path 2.21 s, missing folder 1.59 s; the missing folder is not created.
-  (Both readings are under about 19 other lanes' load; the PowerShell start alone is 0.6-0.7 s here.)
-
-(5) AFTER 3: fix_3_a_held_append_waits_out_another_writer is timed from PowerShell's own start
-- The test now polls the process table for a powershell.exe whose parent is the script's cmd (a
-  Toolhelp snapshot, Windows only like the whole module), holds the file 1 s from that moment and
-  lets go. PowerShell's first append comes after it starts, so the 1 s hold always meets it, and the
-  2 s of retries always outlast the hold, however fast or loaded the PC.
-  Readings: PowerShell seen after 593 ms (red run) / 733 ms (green run); held append took 2.31 s / 3.72 s; ok both times.
-
-(6) COMPAT notes (COMPAT.md is outside this lane): evidence/hooks-FIX-4-COMPAT.md.patch adds three
-  lines to 3.1: the names-only hold and its cost, the STAT-029 replay note (prompt text never held),
-  and the fail-closed handling of pre-FIX-3 `missing` records. `git apply --check` exit 0 on this tree.
-
-Gates (G:\Temp\hooks-w1-logs\w9-*.log):
-- cargo test hooks::  80 passed, 0 failed · cargo test status::  29 passed, 0 failed
-- full cargo test --no-fail-fast (w9-full.log, under ~19 lanes' load): 812 ok, 1 ignored, stat_006 script_runs
-  FAILED, and the lib harness died before its summary with scm remote_actions and scm::watch a_real_repo
-  still running (both on the brief's load-sensitive list, outside this lane). Rerun alone (w9-stragglers.log):
-  stat_006 ok 5.6 s, remote_actions ok 13.7 s, a_real_repo ok 13.1 s, the shim binary 3/3 ok. Net: 815 ok,
-  0 failed, 1 ignored of 816 lib tests, plus 3/3 shim.
-- cargo clippy --all-targets -D warnings: exit 0 · pnpm exec tsc --noEmit: exit 0 (no src/** touched, vitest not run)
-- plan-check: OK (Done 440 / 682, P0 cards passing 6 / 228) · Last 10 passes heading count 1 · duplicate T-ids: none
-- firewall-check -Baseline: 53 hits in 22 files, 0 new, 0 baseline entries missing
-- NO APP LAUNCHES this pass (Txais 2026-10-13); the FIX-3 and T-563 live-proof steps stay batched.
-
-Seen, not fixed (outside this lane or this round): activity.rs:526-536 still calls
-status::terminal_ended(OLD) a second time (review AFTER 4, automations lane).
+LIVE PROOF PENDING (batched, coordinator, with the Agents-screen steps of T-050-b / T-080)
+  F1  Two chat sessions open, A with a very long last reply (about 64 KiB), B with some typed text.
+      On A: Send result to... B. Expect: the screen stays on A, a note under the header says the
+      result is too long for B's box, and B's typed text is still there when you open B.
+  F2  A reply whose last line is C:/My Docs/a$&b.md: Send result to... B. Expect B's box to hold
+      "C:/My Docs/a$&b.md" in quotes, letters and $ unchanged.
+  F3  A kit run with a waiting role whose agent has no hooks; switch to the Agents (or Board) screen
+      of the same workspace. Expect a toast for the notice, once. Back on the terminals screen the
+      strip shows it.
+  F4  Orchestrator worker named by its task in the rail: Send result to... lists it by the same name.

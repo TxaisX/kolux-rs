@@ -1109,7 +1109,13 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
     }
     let agent = program.as_deref().and_then(crate::agents::credited_agent);
     let dir = cwd.clone();
+    // T-172-e: a worker start puts its dispatch id in the first session's environment; the start that is
+    // waiting for it learns which session that is (only a start still waiting is told).
+    let dispatch = env_own.iter().find(|(k, _)| k == crate::cli::DISPATCH_ENV).map(|(_, v)| v.clone());
     let id = terminals.spawn(app.clone(), cols, rows, cwd, program, args, env_own, env, pane_key, shell)?;
+    if let Some(d) = dispatch {
+        crate::cli::stamp_session(&d, id);
+    }
     // AUTO-012: an automation run dispatched to this worktree for this agent is followed here.
     if let Some(dir) = dir {
         crate::automations::follow(&app, |s| crate::automations::claim(s, id, pane_key, &dir, agent));
@@ -1463,6 +1469,40 @@ mod tests {
         let parts: Vec<_> = std::env::split_paths(&path).collect();
         assert_eq!(parts, ["D:\\app", "C:\\old\\kolux", "C:\\Windows"].map(std::path::PathBuf::from));
         assert_eq!(std::env::split_paths(&cli_first(dir, None)).count(), 1);
+    }
+
+    /// cli FIX-6 (council AFTER 2 on 152e581): the CLI's wait for a worker reads the mark Kolux
+    /// recorded for a session (the requested program), not the program the session's process runs.
+    /// A session over a fake writer reports "fake" as its own program; the start still finds it by
+    /// its mark "npx", and one that Kolux did not start a program in is never found.
+    #[test]
+    fn fix6_wait_ready_reads_the_mark_of_a_real_terminals_session() {
+        let t = Terminals::default();
+        let dir = std::env::temp_dir();
+        let long_ago = Instant::now() - Duration::from_secs(5);
+        {
+            let mut inner = t.inner.lock().unwrap();
+            for id in [7, 8] {
+                inner.sessions.insert(id, PtySession::fake(Box::new(std::io::sink())));
+                inner.dirs.insert(id, dir.to_string_lossy().into_owned());
+                inner.logs.insert(id, OutputLog { written: Some(long_ago), ..OutputLog::default() });
+            }
+            inner.marks.insert(7, Mark { started: long_ago, last_output: Some(long_ago), program: "npx".into(), agent: None, pane: None, home_env: Vec::new(), cwd: None });
+        }
+        let none = HashSet::new();
+        let got = crate::cli::wait_ready(&t, &dir, &none, "dispatch-term-test", "codex", "npx", Instant::now(), Duration::from_millis(600));
+        assert_eq!(got, (Some(7), true));
+        // Session 8 has no mark (a shell): not found even when the start's own command is "fake".
+        let got = crate::cli::wait_ready(&t, &dir, &none, "dispatch-term-test", "codex", "fake", Instant::now(), Duration::from_millis(300));
+        assert_eq!(got, (None, false));
+        // The stamp names the session outright.
+        crate::cli::expect_stamp("dispatch-term-stamp");
+        assert!(crate::cli::stamp_session("dispatch-term-stamp", 8));
+        let got = crate::cli::wait_ready(&t, &dir, &none, "dispatch-term-stamp", "codex", "npx", Instant::now(), Duration::from_millis(600));
+        assert_eq!(got, (Some(8), true));
+        for id in [7, 8] {
+            t.inner.lock().unwrap().sessions.remove(&id).unwrap().kill();
+        }
     }
 }
 

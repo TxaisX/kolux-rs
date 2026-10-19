@@ -62,3 +62,11 @@ test("VIEW-017: a row's status word is one of the fixed set, from the same signa
   expect(rowStatus({}, null).word).toBe("Idle");
   for (const r of [rowStatus({ seats: [] }, null), rowStatus({}, sig({ stale: true }))]) expect(r.explain.length).toBeGreaterThan(0);
 });
+
+test("T-050-b: an orchestrator-started session with no name or title reads as its worker's task, never the wrapper", () => {
+  // The worker label (orchestration worker_labels) already holds the task's name or the brief's task text.
+  expect(sessionLabel({ key: 3, cwd: "C:/w/app" }, "Fix the login form")).toBe("Fix the login form");
+  expect(sessionLabel({ key: 3, title: "Login", cwd: "C:/w/app" }, "Fix the login form")).toBe("Login");
+  expect(sessionLabel({ key: 3, cwd: "C:/w/app" }, "  ")).toBe("app");
+  expect(sessionLabel({ key: 3, cwd: null }, undefined)).toBe("Session 3");
+});

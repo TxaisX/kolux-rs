@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { isTowerWindow, openTowerWindow, pickScreen, snapshotChanged, TOWER_HASH, TOWER_LABEL, type Screen, type WindowApi } from "./ownWindow";
 
 const main: Screen = { x: 0, y: 0, width: 2560, height: 1440, scale: 1.25 };
@@ -86,4 +86,27 @@ test("FIX-3: a second click while the Tower window is being made shares the firs
   expect(made).toHaveLength(1);
   // once that open is over, the next click asks again (here: the window is up, so it is brought forward)
   expect(await openTowerWindow(api({ focus: async () => true }))).toBe("focused");
+});
+
+// FIX-4 (council d2 AFTER 6): the main window asks "did the snapshot change?" on every render. The
+// answer is free when the seats and the usage are the very same lists, and the kept snapshot is
+// written out once, not once per render.
+test("FIX-4: snapshotChanged does not write the snapshots out again on every render", () => {
+  const seat = { key: 1, agent: "claude", title: "a", branch: null, cwd: null, account: null, chip: null, meter: null, since: 0 };
+  const last = { seats: [seat], usage: [] };
+  const spy = vi.spyOn(JSON, "stringify");
+  try {
+    // the same lists again: nothing to compare
+    expect(snapshotChanged(last, { seats: last.seats, usage: last.usage })).toBe(false);
+    expect(spy).toHaveBeenCalledTimes(0);
+    // a different number of seats: changed without writing anything out
+    expect(snapshotChanged(last, { seats: [], usage: [] })).toBe(true);
+    expect(spy).toHaveBeenCalledTimes(0);
+    // equal by value, new lists, three renders in a row: the kept snapshot is written out once
+    for (let i = 0; i < 3; i++) expect(snapshotChanged(last, { seats: [{ ...seat }], usage: [] })).toBe(false);
+    expect(spy).toHaveBeenCalledTimes(1 + 3);
+    expect(snapshotChanged(last, { seats: [{ ...seat, title: "b" }], usage: [] })).toBe(true);
+  } finally {
+    spy.mockRestore();
+  }
 });

@@ -9,6 +9,38 @@ export type Found = { files: FileHits[]; total: number; capped: boolean; source:
 export type Ask = { query: string; matchCase: boolean; wholeWord: boolean; regex: boolean; include: string; exclude: string };
 
 export const searchFiles = (root: string, ask: Ask) => invoke<Found>("editor_search", { root, ask });
+/** FIX-4: tells the backend that no view wants the folder's search any more (the view closed). */
+export const cancelSearch = (root: string) => invoke<void>("editor_search_cancel", { root });
+
+/** FIX-4 (council d2 AFTER 1, 7): the searches of one explorer view. Only the newest search's answer
+ * (or failure) reaches the view; an older one that comes back late is dropped. Closing the view drops
+ * what is still out and, if the view ever searched, lets the backend stop that folder's search, so a
+ * workspace switch does not leave one running to its cap or its time limit. */
+export function searchSession(root: string, call: (root: string, ask: Ask) => Promise<Found> = searchFiles, cancel: (root: string) => unknown = cancelSearch) {
+  let n = 0;
+  let sent = false;
+  let closed = false;
+  return {
+    run(ask: Ask, done: (f: Found) => void, failed: (e: unknown) => void) {
+      const mine = ++n;
+      sent = true;
+      call(root, ask).then(
+        (f) => mine === n && !closed && done(f),
+        (e) => mine === n && !closed && failed(e),
+      );
+    },
+    /** The query was emptied: whatever is out is no longer wanted. */
+    drop() {
+      n++;
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      n++;
+      if (sent) void Promise.resolve(cancel(root)).catch(() => {});
+    },
+  };
+}
 
 /** A result's path (relative, forward slashes) under the worktree, in the worktree's own style. */
 export function joinPath(root: string, rel: string): string {

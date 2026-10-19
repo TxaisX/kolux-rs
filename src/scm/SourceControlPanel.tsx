@@ -25,7 +25,7 @@ import HandoffNote from "./HandoffNote";
 import { watchStatus } from "./watch";
 import { DIFF_SPLITS, type DiffSplit } from "./split";
 import { openInBrowser } from "../browser/BrowserPane";
-import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine, PULL_POLICIES, filterRows, fullPath } from "./model";
+import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, type RowKey, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine, PULL_POLICIES, filterRows, fullPath } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -141,7 +141,7 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
   // GIT-016: Review changes asks an agent to check the branch, naming the base and the changed files.
   const review = () => {
     const base = summary?.against ?? status?.base ?? "the base branch";
-    const prompt = reviewPrompt(base, summary?.committed ?? [], summary?.files ?? 0, status ? [...new Set(rowOrder(status))] : []);
+    const prompt = reviewPrompt(base, summary?.committed ?? [], summary?.files ?? 0, status ? rowOrder(status, groupOrder) : []);
     if (prompt === null) return setInfo("This branch has no changes to look at yet, so no agent was started.");
     if (saved) return void runAgent(saved, prompt);
     if (agents.length === 0) return setAgentError("No agent was found on this computer, so nothing can review this branch.");
@@ -162,7 +162,7 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
   const [menu, setMenu] = useState<{ left: number; top: number } | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [closedDirs, setClosedDirs] = useState<Set<string>>(new Set());
-  const [anchor, setAnchor] = useState<string | null>(null);
+  const [anchor, setAnchor] = useState<RowKey | null>(null);
   const remoteButton = useRef<HTMLButtonElement>(null);
   const [discarding, setDiscarding] = useState<(DiscardAsk & { section: Section }) | null>(null);
 
@@ -472,11 +472,14 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
 
   // FIX-BEFORE-2: the rows on screen, in the order drawn (saved group order, filter, cap, closed
   // folders), so a span and the bulk bar only ever cover rows the user can see.
-  const drawnOrder = status ? rowOrder(status, groupOrder, { filter: filter ?? "", tree: view === "tree" ? closedDirs : null }) : [];
-  const pick = (path: string, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => {
+  // FIX-3: rows are keyed by (section, path), so a file drawn in both Changes and Staged is two rows
+  // and a span covers exactly the rows between the two clicks.
+  const drawnKeys = status ? rowKeys(status, groupOrder, { filter: filter ?? "", tree: view === "tree" ? closedDirs : null }) : [];
+  const drawnOrder = [...new Set(drawnKeys.map((k) => k.path))];
+  const pick = (row: RowKey, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => {
     if (!status) return;
-    setSelected((prev) => select(prev, drawnOrder, path, e.shiftKey ? "span" : e.ctrlKey || e.metaKey ? "toggle" : "one", anchor));
-    if (!e.shiftKey) setAnchor(path);
+    setSelected((prev) => selectRows(prev, drawnKeys, row, e.shiftKey ? "span" : e.ctrlKey || e.metaKey ? "toggle" : "one", anchor));
+    if (!e.shiftKey) setAnchor(row);
   };
   const chosen = status ? bulk(status, selected.filter((p) => drawnOrder.includes(p)), groupOrder) : { present: [], stage: [], unstage: [] };
   const plan = discardingRows && discardPlan(discardingRows);
@@ -501,7 +504,7 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
           setFileCtx({ x: Math.min(e.clientX, window.innerWidth - 240), y: Math.min(e.clientY, window.innerHeight - 170), path: r.path });
         }}
         onClick={(e) => {
-          pick(r.path, e);
+          pick({ section: name, path: r.path }, e);
           if (!e.shiftKey && !e.ctrlKey && !e.metaKey) onOpenDiff?.(r.path, name === "Staged");
         }}
       >

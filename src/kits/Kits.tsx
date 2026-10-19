@@ -9,6 +9,7 @@ import { Book, Box, Close, Funnel, Megaphone, Merge, Pulse, Table } from "../chr
 import { CATEGORY_NAME, KITS, RESULTS_FOLDER, VENDOR_NAME, assignRoles, extOf, fillEmpty, firstDropped, isWorkbook, recalled, sampleValues, unquote, type Kit, type Vendor } from "./catalog";
 import { sameDir } from "../workspaces";
 import type { Past } from "./run";
+import { noteResults } from "./milestones";
 
 export const OPEN_KITS = "kolux-open-kits";
 /** The gallery, or with `kit` that kit's setup; `chooser` is the chooser pane it came from (SESS-019), closed once the kit starts. */
@@ -52,7 +53,13 @@ export function RecentRuns({ runs, onResults, onProject }: { runs: Past[]; onRes
                 {r.dir}
               </span>
             </span>
-            <button className="btn small" onClick={() => onResults(r)}>
+            <button
+              className="btn small"
+              onClick={() => {
+                onResults(r);
+                void noteResults(); // SKILL-016
+              }}
+            >
               Open results
             </button>
             <button className="btn small" onClick={() => onProject(r)}>

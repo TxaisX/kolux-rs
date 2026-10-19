@@ -76,6 +76,11 @@ pub struct Change {
     pub prompt: Option<String>,
     /// A session boundary: the agent started, resumed or cleared; earlier state is forgotten.
     pub boundary: bool,
+    /// USAGE-001: the boundary is a new agent process (Claude's start or resume), not a clear or a
+    /// compact inside the running one. Its running time may start over, so the window's gauge
+    /// forgets its reading without keeping a floor against late reports (marks FIX-2).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub fresh: bool,
     /// The file a write tool just finished with (VIEW-023: the card links to the newest one).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wrote: Option<String>,
@@ -180,7 +185,8 @@ pub fn claude_change(event: &Value) -> Option<Change> {
     let tool = str_of("tool_name").map(|t| trim(t, 60));
     let plain = |state: &'static str| Some(Change { state, ..Change::default() });
     let change = match name {
-        "SessionStart" => matches!(str_of("source"), Some("startup" | "resume" | "clear")).then_some(Change { state: "done", boundary: true, ..Change::default() }),
+        "SessionStart" => matches!(str_of("source"), Some("startup" | "resume" | "clear"))
+            .then_some(Change { state: "done", boundary: true, fresh: matches!(str_of("source"), Some("startup" | "resume")), ..Change::default() }),
         "UserPromptSubmit" => Some(Change {
             state: "working",
             prompt: str_of("prompt").or_else(|| str_of("user_prompt")).map(|p| trim(&fold(p), 16000)),
@@ -386,6 +392,14 @@ pub struct Usage {
     pub context_tokens: Option<u64>,
     pub context_window: Option<u64>,
     pub limits: Vec<Limit>,
+    /// USAGE-001: the report's clock, so the window can throw away a report that turns up after a
+    /// newer one. `session` is the session id with the terminal that ran it: a resume in a new
+    /// terminal keeps the id but starts the running time over, so it is a new clock. A resume in
+    /// the same terminal keeps the clock; its SessionStart is a `fresh` boundary, which the window
+    /// answers by forgetting the reading without a floor. `at` is the session's running time in
+    /// milliseconds. Both are none when either part is missing.
+    pub session: Option<String>,
+    pub at: Option<u64>,
     /// The config folder the report came from (USAGE-021); none for the default sign-in.
     #[serde(skip)]
     pub config_dir: Option<String>,
@@ -396,8 +410,11 @@ pub fn usage(req: &Request, token: &str) -> Result<Usage, u16> {
     if req.headers.get(TOKEN_HEADER).map(String::as_str) != Some(token) {
         return Err(403);
     }
-    let (pane_key, _) = req.headers.get(IDENTITY_HEADER).and_then(|h| identity(h)).ok_or(400u16)?;
+    let (pane_key, terminal) = req.headers.get(IDENTITY_HEADER).and_then(|h| identity(h)).ok_or(400u16)?;
     let v: Value = serde_json::from_slice(&req.body).map_err(|_| 400u16)?;
+    // At most 200 characters of the id, like the other fields this route passes on (marks FIX-2).
+    let session = v["session_id"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(|s| trim(s, 200)).zip(terminal).map(|(s, t)| format!("{s}@{t}"));
+    let at = session.as_ref().and(v["cost"]["total_duration_ms"].as_u64());
     let cw = &v["context_window"];
     let context_window = cw.get("context_window_size").and_then(Value::as_u64);
     // USAGE-005: the total it states, else input plus cache writes plus cache reads, else its
@@ -425,7 +442,7 @@ pub fn usage(req: &Request, token: &str) -> Result<Usage, u16> {
         })
         .collect();
     let config_dir = req.headers.get(CONFIG_HEADER).map(|h| h.trim().to_string()).filter(|h| !h.is_empty());
-    Ok(Usage { pane_key, context_tokens, context_window, limits, config_dir })
+    Ok(Usage { pane_key, context_tokens, context_window, limits, session, at, config_dir })
 }
 
 /// USAGE-021: a report counts only when it comes from the folder the active account runs under;
@@ -1180,6 +1197,26 @@ mod tests {
     }
 
     #[test]
+    fn a_start_or_resume_is_a_fresh_boundary_a_clear_is_not() {
+        // USAGE-001 (marks FIX-2): a start or a resume is a new agent process, whose running time
+        // may start over on the same clock, so the window forgets the reading without a floor; a
+        // clear keeps the process, so its floor stays.
+        let c = |j: &str| claude_change(&ev(j)).unwrap();
+        let from = |source: &str| c(&format!(r#"{{"hook_event_name":"SessionStart","source":"{source}"}}"#));
+        let flags = |source: &str| {
+            let ch = from(source);
+            (ch.boundary, ch.fresh)
+        };
+        assert_eq!(flags("startup"), (true, true));
+        assert_eq!(flags("resume"), (true, true));
+        assert_eq!(flags("clear"), (true, false));
+        let manual = c(r#"{"hook_event_name":"PostCompact","trigger":"manual"}"#);
+        assert_eq!((manual.boundary, manual.fresh), (true, false));
+        assert!(!serde_json::to_value(from("clear")).unwrap().as_object().unwrap().contains_key("fresh"));
+        assert_eq!(serde_json::to_value(from("resume")).unwrap()["fresh"], true);
+    }
+
+    #[test]
     fn claude_events_map_to_pane_states() {
         let c = |j: &str| claude_change(&ev(j));
         let start = c(r#"{"hook_event_name":"SessionStart","source":"startup"}"#).unwrap();
@@ -1451,6 +1488,35 @@ mod tests {
         assert_eq!(install_claude_status(&mut none, &st), (true, None));
         assert_eq!(none["statusLine"]["type"], "command");
         assert_eq!(none["env"], json!({}));
+    }
+
+    #[test]
+    fn a_status_line_report_carries_its_clock() {
+        // USAGE-001 (marks FIX-1): the report's clock is its session id with the terminal that ran
+        // it, and `at` is the session's running time. A resume in a new terminal keeps the session
+        // id but starts the running time over, so it must read as a new clock, never as a late
+        // report of the old one (stand-in review of lane/marks ee2bfbc, FIX-SOON 5).
+        let id = |j: &str| base64::engine::general_purpose::STANDARD.encode(j);
+        let post = |pane: &str, body: &str| {
+            let raw = format!("POST /claude-status HTTP/1.1\r\nX-Kolux-Token: tok\r\nX-Kolux-Pane: {pane}\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+            usage(&parse_request(&mut raw.as_bytes()).unwrap(), "tok").unwrap()
+        };
+        let t2 = id(r#"{"paneKey":4,"terminal":2,"hookVersion":1}"#);
+        let t5 = id(r#"{"paneKey":4,"terminal":5,"hookVersion":1}"#);
+        let body = r#"{"session_id":"0b3c-9f","cost":{"total_duration_ms":61000},"context_window":{"context_window_size":200000,"total_input_tokens":5000}}"#;
+        let u = post(&t2, body);
+        assert_eq!((u.session.as_deref(), u.at), (Some("0b3c-9f@2"), Some(61_000)));
+        let resumed = post(&t5, r#"{"session_id":"0b3c-9f","cost":{"total_duration_ms":900}}"#);
+        assert_eq!((resumed.session.as_deref(), resumed.at), (Some("0b3c-9f@5"), Some(900)));
+        assert_ne!(resumed.session, u.session, "the resumed process is a new clock");
+        // No terminal in the identity, or no usable session id: no clock, so arrival order rules.
+        let bare = post(&id(r#"{"paneKey":4,"hookVersion":1}"#), body);
+        assert_eq!((bare.session, bare.at), (None, None));
+        let blank = post(&t2, r#"{"session_id":"  ","cost":{"total_duration_ms":5}}"#);
+        assert_eq!((blank.session, blank.at), (None, None));
+        // The names the window's listener reads.
+        let j = serde_json::to_value(&u).unwrap();
+        assert_eq!((j["session"].as_str(), j["at"].as_u64(), j["paneKey"].as_u64()), (Some("0b3c-9f@2"), Some(61_000), Some(4)));
     }
 
     #[test]

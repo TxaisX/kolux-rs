@@ -10,7 +10,9 @@ STEP 0: merge of main 950ba36 into lane/cli = 2543b75 (no conflicts; tree identi
   agent wins (orchestration::worker_terminal), else a single uncredited mark (the custom-command
   worker); a hand-credited shell never counts; two candidates record none.
   test cli::tests::fix3_a_custom_command_worker_still_reads_ready
-    on the old selection: FAILED (left None, right Some(7): the uncredited worker mark) - fix3-old.log
+    on the old code: a compile failure (worker_tab is new this round, cli FIX-4 correction); run
+    against the old selection rule (agent match only) it FAILED (left None, right Some(7): the
+    uncredited worker mark) - fix3-old.log. Not a behavioural red on the old code itself.
     now: ok
 (b) worker-release text when the terminal is left open
   "dispatch-3 released: its terminal term-4 is left open (<why>); the worktree C:\w stays"
@@ -24,7 +26,9 @@ STEP 0: merge of main 950ba36 into lane/cli = 2543b75 (no conflicts; tree identi
   when the start had them, so it starts the same worker again.
   test cli::tests::fix3_c_a_failed_start_offers_lines_that_parse_and_name_the_run
     (parses every offered line through cli::parse for both stages, with and without a Run)
-    old: FAILED (worker-stop line had no run: left None, right Some("run-2")); now: ok
+    on the old code: a compile failure (start_failed_run is new this round, cli FIX-4 correction);
+    run against start_failed alone it FAILED (worker-stop line had no run: left None, right
+    Some("run-2")). Only (b) was a behavioural red on the old code. now: ok
 (d) PLAN: T-279-d opened (task-reset command + held label in the CLI text; socket route stays
   T-262-b); T-134-b cut to the hooks uninstall path (COMPAT 3.4). T-089-c / T-089-d lines no longer
   point at the retired T-089-c.patch.

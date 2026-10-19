@@ -34,3 +34,5 @@ LIVE PROOF PENDING (batched, coordinator):
    only c2 and s1 are highlighted.
 3. Type "s" in the filter, Shift-click: only drawn rows take part. Switch to the tree view, close a
    folder, Shift-click across it: its files are not selected.
+
+NOTE (FIX-3, 2026-10-19): the claim above held for rows listed once. A file drawn in two sections (partly staged) kept only its first position, so a span could take in a Changes row outside the two clicks; FIX-3 keys rows by (section, path) (see evidence/reliability-FIX-3.txt), and from there the claim is true for those files too.

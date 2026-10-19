@@ -1,28 +1,34 @@
 // The chat view of one terminal-backed agent session (CHAT-006, CHAT-010; T-325): loading while
 // the transcript is not written yet, then the conversation so far, then each new turn as the
 // agent records it, with the agent's work folded into steps, diff cards and a subagent roster
-// (T-326). Thin on purpose: the Agents screen (T-050) mounts it in its body.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+// (T-326). Thin on purpose: the Agents screen (T-050) mounts it in its body; AgentsChat (T-050-b)
+// decides chat or terminal and carries the Show terminal switch; a finished turn's reply can be
+// handed to another session's box (T-080).
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { locale } from "../language";
 import "./chat.css";
 import { fold, thoughtIds as idsOf, toggled, type View } from "./steps";
 import { NoticeRow, PlanRow, StepRow, ThoughtRow } from "./StepRows";
-import { applyRead, capPending, chatOffer, combine, pickChat, typingInto, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row } from "./model";
+import { SHELL_OFFER, agentsView, handOver, handTargets, viewedFirst, applyRead, capPending, chatCovers, chatOffer, combine, pickChat, typingInto, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row } from "./model";
 import { Composer, type ComposerHandle } from "./MessageBox";
-import { forwardsToBox, nearBottom } from "./composer";
-import { LIMIT } from "../terminal/paste";
-import { TOO_LONG_NOTE, hearStates, holdFor, holdNote, sendToPane } from "./send";
+import { draftOf, forwardsToBox, keepDraft, nearBottom } from "./composer";
+import { sessionLabel } from "../agents/rail";
+import { boxSend, hearStates, holdReading, writeTerminal } from "./send";
 
-/** `terminal`: the program session the pane types into (the window's own pane-to-terminal map). */
-export type ChatPane = { key: number; cwd: string | null; title?: string; terminal?: number };
+/** `terminal`: the program session the pane types into (the window's own pane-to-terminal map).
+ * `program`: what Kolux started in the pane; null for a plain shell (T-050-b: no chat, no switch). */
+export type ChatPane = { key: number; cwd: string | null; title?: string; terminal?: number; program?: string | null };
 type Support = { agent?: string; launching: boolean; readable: boolean };
 
 /** `hookState`: the window's hook reading for the pane (permission, waiting, working, ...), when it has
  * one; `stateOf`: the same readings read live by pane key, so a send checks its own pane at every write.
- * `ptyOf`: the pane's program session, asked at send time. `target`: names the pane the box types into. */
-export default function ChatView({ pane, agent, preview = null, pending = [], hookState, stateOf, ptyOf, target = null }: { pane: ChatPane; agent?: string; preview?: Preview | null; pending?: Pending[]; hookState?: string; stateOf?: (key: number) => string | undefined; ptyOf?: (key: number) => number | undefined; target?: string | null }) {
+ * `ptyOf`: the pane's program session, asked at send time. `target`: names the pane the box types into.
+ * `aside`: drawn at the top right (the Agents screen's Show terminal switch). `hand`: VIEW-020, the
+ * sessions a finished turn's reply can be handed to, and what handing it does. */
+export type Hand = { targets: { key: number; label: string }[]; onHand: (key: number, text: string) => void; /** Why the last hand-over was refused (FIX-SOON 1), shown beside the menu. */ note?: string | null };
+export default function ChatView({ pane, agent, preview = null, pending = [], hookState, stateOf, ptyOf, target = null, aside, hand }: { pane: ChatPane; agent?: string; preview?: Preview | null; pending?: Pending[]; hookState?: string; stateOf?: (key: number) => string | undefined; ptyOf?: (key: number) => number | undefined; target?: string | null; aside?: ReactNode; hand?: Hand }) {
   const [items, setItems] = useState<ChatItem[]>([]);
   const [state, setState] = useState<ChatRead["state"]>("loading");
   const [error, setError] = useState<string | null>(null);
@@ -30,8 +36,8 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
   const [extras, setExtras] = useState<Extra[]>([]);
   // CHAT-022 (council FIX-1): the box sends only while Kolux can see the agent is not asking in its
   // terminal; a send's keys would land in a menu and its Enter would pick the default (Yes).
-  const [heardState, setHeard] = useState<string | undefined>(undefined);
-  const held = holdNote(hookState, heardState, stateOf !== undefined);
+  // `setHeard` only redraws the box when the pane's hook event arrives; the reading itself is send.ts's.
+  const [, setHeard] = useState<string | undefined>(undefined);
   const [note, setNote] = useState<string | null>(null);
   useEffect(() => void hearStates(listen).catch(() => {}), []);
 
@@ -84,23 +90,21 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
   const rows = useMemo(() => combine(items, extras, previewToShow(preview, open, lastReply(items)), allPending), [items, extras, preview, open, allPending]);
   const key = pane.key;
   const terminalOf = (k: number) => (k === key && pane.terminal !== undefined ? pane.terminal : ptyOf?.(k));
-  /** False when nothing was sent, so the box keeps the text. */
+  // Council FIX-2: a reading from the pane's earlier terminal does not count (FS4).
+  const held = holdReading(key, hookState, stateOf !== undefined, terminalOf(key));
+  /** False when nothing was sent, so the box keeps the text; the box then says why (council FIX-2, FS3). */
   const send = (text: string): boolean => {
-    if (text.length > LIMIT) {
-      setNote(TOO_LONG_NOTE);
-      return false;
-    }
-    if (terminalOf(key) === undefined || holdFor(key, stateOf) !== undefined) return false;
-    setNote(null);
     const id = `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    setSent((xs) => capPending([...xs, { id, text, at: Date.now() }]));
-    stick.current = true;
     const failed = () => setSent((xs) => xs.map((x) => (x.id === id ? { ...x, failed: true } : x)));
     // CHAT-022: the send is bound to this pane; a menu it opens mid-send drops the rest, the Enter above all.
-    sendToPane(key, agent, text, { terminalOf, stateOf, write: (t, data) => invoke("terminal_write", { id: t, data }) }).then((got) => {
-      if (got !== "sent") failed();
-    }, failed);
-    return true;
+    return boxSend(key, agent, text, { terminalOf, stateOf, write: writeTerminal }, {
+      note: setNote,
+      onQueued: () => {
+        setSent((xs) => capPending([...xs, { id, text, at: Date.now() }]));
+        stick.current = true;
+      },
+      onFailed: failed,
+    });
   };
   // CHAT-027: within 48 px of the bottom the view follows new output; further up it holds still.
   const list = useRef<HTMLDivElement>(null);
@@ -120,6 +124,13 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
     setAway(false);
   };
   const box = useRef<ComposerHandle>(null);
+  // T-050-b: once the chat covers the terminal, keys must not keep going to the hidden terminal.
+  const covers = chatCovers(state);
+  // VIEW-020: a finished session's result, the last reply once the turn is over.
+  const result = !open && hand && hand.targets.length > 0 ? lastReply(items) : undefined;
+  useEffect(() => {
+    if (covers && document.activeElement?.closest(".grid.agents")) box.current?.focus();
+  }, [covers]);
   // CHAT-017: typing anywhere in the chat pane goes to the box; Backspace or Delete moves focus there.
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const t = e.target as HTMLElement;
@@ -138,7 +149,14 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
   const toggle = (id: string) => setThoughts((t) => toggled(t, id));
 
   return (
-    <div className="chat" aria-label="Chat" onKeyDown={onKeyDown}>
+    <div className={`chat${covers ? " cover" : ""}`} aria-label="Chat" onKeyDown={onKeyDown}>
+      {(aside || result) && (
+        <div className="chat-head">
+          {result && hand && <HandOff targets={hand.targets} onPick={(k) => hand.onHand(k, result)} />}
+          {result && hand?.note && <span className="chat-hand-note" role="status">{hand.note}</span>}
+          {aside}
+        </div>
+      )}
       {state === "loading" && rows.length === 0 && <div className="chat-state" role="status">Loading the conversation…</div>}
       {state === "error" && <div className="chat-state chat-error" role="alert">{error}</div>}
       {state === "empty" && rows.length === 0 && <div className="chat-state">No messages yet. What you and the agent say shows up here.</div>}
@@ -225,13 +243,22 @@ function ChatRow({ row, onImage }: { row: Row; onImage: (src: string) => void })
 /** The Agents screen's chat: the picked pane's chat when it can show one (`pickChat`). `hook`: the
  * window's hook readings by pane, for the box's note; `stateOf`: the same readings read live, so a
  * send stops on its own pane's menu even after the screen moved to another pane. */
-export function AgentsChat({ panes, focused, ptyOf, hook, stateOf }: { panes: ChatPane[]; focused: number | null; ptyOf?: (key: number) => number | undefined; hook?: Record<number, string | undefined>; stateOf?: (key: number) => string | undefined }) {
+export function AgentsChat({ panes, focused, ptyOf, hook, stateOf, onPick, taskOf }: { panes: ChatPane[]; focused: number | null; ptyOf?: (key: number) => number | undefined; hook?: Record<number, string | undefined>; stateOf?: (key: number) => string | undefined; onPick?: (key: number) => void; taskOf?: (key: number) => string | undefined }) {
   const [offers, setOffers] = useState<Record<number, Offer & { agent?: string }>>({});
+  // VIEW-019 (T-050-b): the sessions the user flipped to their terminal, kept while the screen is open.
+  const [forced, setForced] = useState<ReadonlySet<number>>(() => new Set());
+  const flip = (key: number, on: boolean) =>
+    setForced((s) => {
+      const next = new Set(s);
+      if (on) next.add(key);
+      else next.delete(key);
+      return next;
+    });
   const keys = panes.map((p) => p.key).join(",");
   useEffect(() => {
     let alive = true;
     const check = () =>
-      Promise.all(panes.map((p) => invoke<Support>("chat_support", { paneKey: p.key }).then((s) => [p.key, { agent: s.agent, ...chatOffer({ credited: s.agent, title: p.title, screen: "agents", switchOn: false, showingChat: false, launching: s.launching, readable: s.readable }) }] as const).catch(() => [p.key, { chat: false, back: false, chooser: false }] as const))).then((list) => {
+      Promise.all(panes.map((p) => (p.program === null ? Promise.resolve([p.key, SHELL_OFFER] as const) : invoke<Support>("chat_support", { paneKey: p.key }).then((s) => [p.key, { agent: s.agent, ...chatOffer({ credited: s.agent, title: p.title, screen: "agents", switchOn: false, showingChat: false, launching: s.launching, readable: s.readable }) }] as const).catch(() => [p.key, { chat: false, back: false, chooser: false }] as const)))).then((list) => {
         if (alive) setOffers(Object.fromEntries(list));
       });
     void check();
@@ -243,13 +270,71 @@ export function AgentsChat({ panes, focused, ptyOf, hook, stateOf }: { panes: Ch
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keys]);
   const shown = pickChat(panes, focused, offers);
-  // Shown before the screen's placeholder, which `.chat + .empty` then hides.
-  if (shown === null) return null;
-  if (shown === "starting")
+  // VIEW-020: the sessions in the order last viewed, for the hand-off list.
+  const [viewed, setViewed] = useState<number[]>([]);
+  const shownKey = typeof shown === "object" && shown ? shown.key : null;
+  useEffect(() => {
+    if (shownKey !== null) setViewed((v) => (v[0] === shownKey ? v : viewedFirst(v, shownKey)));
+  }, [shownKey]);
+  const view = agentsView(shown, forced);
+  // FIX-SOON 1: why a hand-over was refused; it goes when the screen moves to another session.
+  const [handNote, setHandNote] = useState<string | null>(null);
+  useEffect(() => setHandNote(null), [shownKey]);
+  // Shown before the screen's placeholder, which `.chat + .empty` then hides; `.chat.cover` hides
+  // the terminal after it (the terminal stays mounted, so flipping back never restarts it).
+  if (view === "none" || shown === null) return null;
+  if (view === "starting" || shown === "starting")
     return (
       <div className="chat" aria-label="Chat">
         <div className="chat-state" role="status">Starting…</div>
       </div>
     );
-  return <ChatView key={shown.key} pane={shown} agent={offers[shown.key]?.agent} hookState={hook?.[shown.key]} stateOf={stateOf} ptyOf={ptyOf} target={typingInto(focused, shown)} />;
+  const key = shown.key;
+  if (view === "terminal")
+    return (
+      <div className="chat-switchbar">
+        <TerminalSwitch on onFlip={(on) => flip(key, on)} />
+      </div>
+    );
+  // VIEW-020: the result goes into the target's kept draft after what is typed there, then the
+  // screen moves to the target, whose box opens with it.
+  const hand: Hand = {
+    targets: handTargets(panes, key, offers, viewed).map((p) => ({ key: p.key, label: sessionLabel(p, taskOf?.(p.key)) })),
+    note: handNote,
+    onHand: (to, text) => {
+      setHandNote(null);
+      const label = sessionLabel(panes.find((p) => p.key === to) ?? { key: to, cwd: null }, taskOf?.(to));
+      handOver(to, label, text, { draftOf, keepDraft, pick: (k) => onPick?.(k), say: setHandNote });
+    },
+  };
+  return <ChatView key={key} pane={shown} agent={offers[key]?.agent} hookState={hook?.[key]} stateOf={stateOf} ptyOf={ptyOf} target={typingInto(focused, shown)} aside={<TerminalSwitch on={false} onFlip={(on) => flip(key, on)} />} hand={hand} />;
+}
+
+/** VIEW-019: the Show terminal switch: on, the session's raw terminal shows in place of its chat. */
+export function TerminalSwitch({ on, onFlip }: { on: boolean; onFlip: (on: boolean) => void }) {
+  return (
+    <label className="chat-switch">
+      <input type="checkbox" role="switch" checked={on} aria-checked={on} onChange={(e) => onFlip(e.currentTarget.checked)} />
+      Show terminal
+    </label>
+  );
+}
+
+/** VIEW-020: Send result to, a short list of other chat sessions (the last viewed first). */
+export function HandOff({ targets, onPick }: { targets: { key: number; label: string }[]; onPick: (key: number) => void }) {
+  return (
+    <details className="chat-hand">
+      <summary>Send result to…</summary>
+      <ul aria-label="Sessions to send the result to">
+        {targets.map((t) => (
+          <li key={t.key}>
+            <button type="button" onClick={(e) => {
+              e.currentTarget.closest("details")?.removeAttribute("open");
+              onPick(t.key);
+            }}>{t.label}</button>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
 }
