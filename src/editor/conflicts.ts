@@ -3,7 +3,7 @@
 // between them, wrapping at either end. In an editor tab F7 and Shift+F7 (editor.nextChange /
 // editor.previousChange, the change-stepping keys) step conflicts when the file has any, and the
 // header shows the count with two arrows.
-import { RangeSetBuilder, StateField, type EditorState, type Extension } from "@codemirror/state";
+import { RangeSetBuilder, StateField, type EditorState, type Extension, type Transaction } from "@codemirror/state";
 import { Decoration, EditorView, type DecorationSet } from "@codemirror/view";
 
 /** Line numbers (1-based) of one conflict's markers; `base` is the `|||||||` line or null. */
@@ -45,9 +45,26 @@ export function stepConflict(list: readonly Conflict[], line: number, dir: 1 | -
   return to;
 }
 
+const START_MARK = "<<<<<<<";
+
+/** Does the document hold a start marker anywhere (a cheap pre-check, no line copies)? */
+function holdsStart(state: EditorState): boolean {
+  return state.doc.sliceString(0, state.doc.length).includes(START_MARK);
+}
+
+/** Can this change have made a start marker? Only the new text and the characters around it are looked at. */
+function mayMakeStart(tr: Transaction): boolean {
+  let hit = false;
+  const doc = tr.state.doc;
+  tr.changes.iterChangedRanges((_fa, _ta, fromB, toB) => {
+    if (!hit && doc.sliceString(Math.max(0, fromB - START_MARK.length), Math.min(doc.length, toB + START_MARK.length)).includes(START_MARK)) hit = true;
+  });
+  return hit;
+}
+
 export function conflictsOf(state: EditorState): Conflict[] {
   const doc = state.doc;
-  if (!doc.sliceString(0, doc.length).includes("<<<<<<<")) return [];
+  if (!holdsStart(state)) return [];
   const lines: string[] = [];
   for (let i = 1; i <= doc.lines; i++) lines.push(doc.line(i).text);
   return findConflicts(lines);
@@ -69,15 +86,18 @@ function decorate(state: EditorState, list: Conflict[]): DecorationSet {
 }
 
 /** The file's conflicts, kept current as it is edited. */
-export const conflictField = StateField.define<{ list: Conflict[]; deco: DecorationSet }>({
+export const conflictField = StateField.define<{ list: Conflict[]; deco: DecorationSet; start: boolean }>({
   create: (s) => {
     const list = conflictsOf(s);
-    return { list, deco: decorate(s, list) };
+    return { list, deco: decorate(s, list), start: holdsStart(s) };
   },
   update: (v, tr) => {
     if (!tr.docChanged) return v;
+    // FIX-5 (council P2 P9): a file with no start marker anywhere is neither copied nor rescanned
+    // when the change cannot have made one.
+    if (!v.start && !mayMakeStart(tr)) return v;
     const list = conflictsOf(tr.state);
-    return { list, deco: decorate(tr.state, list) };
+    return { list, deco: decorate(tr.state, list), start: holdsStart(tr.state) };
   },
   provide: (f) => EditorView.decorations.from(f, (v) => v.deco),
 });

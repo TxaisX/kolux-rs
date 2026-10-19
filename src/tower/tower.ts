@@ -6,6 +6,7 @@
 import type { Chip, Lane } from "../board/chip";
 import type { Meter, PlanFigures } from "../usage/meter";
 import { planOf } from "../usage/meter";
+import { moveSelection } from "../inbox/inbox";
 import type { Plan } from "../usage/plan";
 
 /** One agent pane as the window sees it: its chip (null before any signal) and meter. */
@@ -63,4 +64,13 @@ export function usageByAccount(seats: Pick<Seat, "agent" | "account">[], plan: P
     else card.accounts.push({ account, panes: 1 });
   }
   return out;
+}
+
+/** FIX-5 (council P2 P12): what the list's selection becomes for a key: Up and Down walk the rows,
+ * Home and End jump to the first and last. `null` = not a selection key (the page keeps it). */
+export function selectionForKey(key: string, keys: number[], current: number | null): { to: number | null } | null {
+  if (key === "ArrowDown" || key === "ArrowUp") return { to: moveSelection(keys, current, key === "ArrowDown" ? 1 : -1) };
+  if (key === "Home") return { to: keys[0] ?? null };
+  if (key === "End") return { to: keys[keys.length - 1] ?? null };
+  return null;
 }

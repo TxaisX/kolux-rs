@@ -1,0 +1,40 @@
+diff --git a/src-tauri/Cargo.toml b/src-tauri/Cargo.toml
+index 6b92ec99..6c9b739b 100644
+--- a/src-tauri/Cargo.toml
++++ b/src-tauri/Cargo.toml
+@@ -55,7 +55,7 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
+ sha2 = "0.10"
+ 
+ [target.'cfg(windows)'.dependencies]
+-windows-sys = { version = "0.61", features = ["Wdk_System_Threading", "Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_DataExchange", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
++windows-sys = { version = "0.61", features = ["Wdk_System_Threading", "Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Console", "Win32_System_DataExchange", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+ 
+ [profile.release]
+ codegen-units = 1
+diff --git a/src-tauri/src/artifacts.rs b/src-tauri/src/artifacts.rs
+index dfcd1188..2f040b88 100644
+--- a/src-tauri/src/artifacts.rs
++++ b/src-tauri/src/artifacts.rs
+@@ -462,8 +462,20 @@ pub(crate) fn system_open(url: &str) -> Result<(), String> {
+     {
+         let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+         let (verb, file) = (wide("open"), wide(url));
+-        // SAFETY: NUL-terminated wide strings that live across the call.
+-        let r = unsafe { windows_sys::Win32::UI::Shell::ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), 1) };
++        use windows_sys::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE};
++        // FIX-5 (council P2 P12): ShellExecute may hand the link to shell extensions that use COM, so
++        // the calling thread joins COM for the call (the documented way) and leaves it again after.
++        // A negative result (the thread already joined another way) means nothing to undo.
++        // SAFETY: NUL-terminated wide strings that live across the call; every successful
++        // CoInitializeEx is matched by one CoUninitialize on this thread.
++        let r = unsafe {
++            let com = CoInitializeEx(std::ptr::null(), (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32);
++            let r = windows_sys::Win32::UI::Shell::ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), 1);
++            if com >= 0 {
++                CoUninitialize();
++            }
++            r
++        };
+         if (r as isize) <= 32 {
+             return Err(format!("Windows could not open {url}"));
+         }
