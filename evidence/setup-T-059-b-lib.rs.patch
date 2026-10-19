@@ -1,0 +1,12 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index e25ccf8..e9aa398 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -342,6 +342,7 @@ pub fn run() {
+             hooks::agent_hooks::agent_hooks_file,
+             hooks::agent_hooks::saved::agent_status_saved,
+             hooks::agent_hooks::saved::agent_resumable,
++            protected::protected_rules,
+             hooks::claude_usage,
+             sysmem::process_memory,
+             fonts::list_fonts,

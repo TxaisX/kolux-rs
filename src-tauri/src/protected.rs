@@ -24,17 +24,19 @@ pub const OFF_FIELD: &str = "protectedOff";
 pub struct Rule {
     pub id: &'static str,
     pub name: &'static str,
+    /// SAFE-015: two commands the rule asks about, shown as its examples on the Safety page.
+    pub samples: [&'static str; 2],
     hit: fn(&str, &Base) -> bool,
 }
 
 pub static RULES: [Rule; 7] = [
-    Rule { id: "stripe", name: "Stripe changes", hit: stripe },
-    Rule { id: "force-push", name: "Force-push to main", hit: force_push },
-    Rule { id: "db-drop", name: "Deleting database tables", hit: db_drop },
-    Rule { id: "infra", name: "Infrastructure changes", hit: infra },
-    Rule { id: "prod-deploy", name: "Production deploys", hit: prod_deploy },
-    Rule { id: "delete", name: "Deleting folders outside the workspace", hit: recursive_delete },
-    Rule { id: "discard", name: "Throwing away uncommitted work", hit: discard },
+    Rule { id: "stripe", name: "Stripe changes", samples: ["stripe refunds create --charge ch_1", "stripe customers delete cus_1"], hit: stripe },
+    Rule { id: "force-push", name: "Force-push to main", samples: ["git push --force origin main", "git push origin +main"], hit: force_push },
+    Rule { id: "db-drop", name: "Deleting database tables", samples: ["psql -c \"DROP TABLE users\"", "dropdb production"], hit: db_drop },
+    Rule { id: "infra", name: "Infrastructure changes", samples: ["terraform apply -auto-approve", "pulumi destroy"], hit: infra },
+    Rule { id: "prod-deploy", name: "Production deploys", samples: ["vercel --prod", "netlify deploy --prod"], hit: prod_deploy },
+    Rule { id: "delete", name: "Deleting folders outside the workspace", samples: ["rm -rf ../other-project", "rm -rf ~"], hit: recursive_delete },
+    Rule { id: "discard", name: "Throwing away uncommitted work", samples: ["git reset --hard", "git clean -fdx"], hit: discard },
 ];
 
 /// The first rule `command` trips, honouring the master switch and the switched-off list.
@@ -669,6 +671,324 @@ fn prod_deploy(command: &str, _base: &Base) -> bool {
     })
 }
 
+// SAFE-015: what the Safety page lists. The page reads this so its names and examples can never
+// drift from the rules that actually ask.
+#[derive(serde::Serialize)]
+pub struct RuleInfo {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub samples: [&'static str; 2],
+}
+
+/// The built-in rules in the order they are checked.
+pub fn catalog() -> Vec<RuleInfo> {
+    RULES.iter().map(|r| RuleInfo { id: r.id, name: r.name, samples: r.samples }).collect()
+}
+
+#[allow(dead_code)] // registered by evidence/setup-T-059-b-lib.rs.patch (the coordinator's lib.rs hunk)
+#[tauri::command]
+pub fn protected_rules() -> Vec<RuleInfo> {
+    catalog()
+}
+
+// SAFE-019: a command that was paused is masked before it is kept or shown. Pure text in, text
+// out; nothing here reads a file or the clock. Stripe secret keys keep their prefix and last four
+// characters (enough to tell two keys apart); everything else a secret could be is replaced by
+// HIDDEN. The passes run in this order, and a second run changes nothing.
+pub const HIDDEN: &str = "[hidden]";
+
+const STRIPE_PREFIXES: [&str; 5] = ["sk_live_", "sk_test_", "rk_live_", "rk_test_", "whsec_"];
+
+#[allow(dead_code)] // the recent-attempts list (T-156-b, SAFE-018) is its first caller
+pub fn mask(text: &str) -> String {
+    let t = stripe_keys(text);
+    let t = pem_blocks(&t);
+    let t = url_credentials(&t);
+    let t = provider_keys(&t);
+    let t = auth_headers(&t);
+    let t = secret_flags(&t);
+    let t = labelled_values(&t);
+    env_lines(&t)
+}
+
+/// Rewrites `t`: at each byte offset `f` may claim a span `i..end` and give its replacement.
+fn scan(t: &str, f: impl Fn(&str, usize) -> Option<(usize, String)>) -> String {
+    let mut out = String::with_capacity(t.len());
+    let (mut i, mut last) = (0, 0);
+    while i < t.len() {
+        match f(t, i) {
+            Some((end, rep)) if end > i && t.is_char_boundary(end) => {
+                out.push_str(&t[last..i]);
+                out.push_str(&rep);
+                i = end;
+                last = end;
+            }
+            _ => i += 1,
+        }
+    }
+    out.push_str(&t[last..]);
+    out
+}
+
+/// How many leading bytes of `s` are accepted by `ok` (ASCII only, so the cut is a char boundary).
+fn run(s: &str, ok: impl Fn(u8) -> bool) -> usize {
+    s.bytes().take_while(|b| ok(*b)).count()
+}
+
+/// A word begins at `i` when the byte before it is not a letter or digit.
+fn word_start(t: &str, i: usize) -> bool {
+    i == 0 || !t.as_bytes()[i - 1].is_ascii_alphanumeric()
+}
+
+fn key_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
+}
+
+fn stripe_keys(t: &str) -> String {
+    scan(t, |t, i| {
+        let rest = t.get(i..)?;
+        // Not inside a longer name such as `my_sk_live_...` (a file name), unlike `KEY=sk_live_...`.
+        if !word_start(t, i) || (i > 0 && t.as_bytes()[i - 1] == b'_') {
+            return None;
+        }
+        for p in STRIPE_PREFIXES {
+            if let Some(tail) = rest.strip_prefix(p) {
+                let n = run(tail, |b| b.is_ascii_alphanumeric());
+                if n >= 8 {
+                    return Some((i + p.len() + n, format!("{p}....{}", &tail[n - 4..n])));
+                }
+            }
+        }
+        None
+    })
+}
+
+/// A private key block (any `-----BEGIN ... PRIVATE KEY-----`) up to its END line, or to the end
+/// of the text when it was cut short.
+fn pem_blocks(t: &str) -> String {
+    scan(t, |t, i| {
+        let head = t.get(i..)?.strip_prefix("-----BEGIN ")?;
+        let close = head.find("-----")?;
+        if !head[..close].ends_with("PRIVATE KEY") {
+            return None;
+        }
+        let after = i + "-----BEGIN ".len() + close + 5;
+        let end = match t[after..].find("-----END ") {
+            Some(k) => {
+                let e = after + k + "-----END ".len();
+                t[e..].find("-----").map_or(t.len(), |m| e + m + 5)
+            }
+            None => t.len(),
+        };
+        Some((end, HIDDEN.to_string()))
+    })
+}
+
+/// `scheme://user:password@host`: the user and password go, in any scheme.
+fn url_credentials(t: &str) -> String {
+    scan(t, |t, i| {
+        let rest = t.get(i..)?.strip_prefix("://")?;
+        let auth = run(rest, |b| !(b.is_ascii_whitespace() || matches!(b, b'/' | b'?' | b'#' | b'\'' | b'"' | b'`' | b'<' | b'>')));
+        let at = rest[..auth].rfind('@')?;
+        let info = &rest[..at];
+        (info.contains(':') && info != HIDDEN).then(|| (i + 3 + at, format!("://{HIDDEN}")))
+    })
+}
+
+/// Well-known provider keys: Anthropic, OpenAI, xAI, Google, GitHub, AWS, Slack and JSON web tokens.
+fn provider_keys(t: &str) -> String {
+    // (prefix, shortest tail) over letters, digits, `_` and `-`.
+    const KEYS: [(&str, usize); 11] = [("sk-ant-", 16), ("sk-", 20), ("xai-", 20), ("AIza", 30), ("ghp_", 30), ("gho_", 30), ("ghu_", 30), ("ghs_", 30), ("ghr_", 30), ("github_pat_", 20), ("xox", 0)];
+    scan(t, |t, i| {
+        if !word_start(t, i) {
+            return None;
+        }
+        let rest = t.get(i..)?;
+        for (p, min) in KEYS {
+            if let Some(tail) = rest.strip_prefix(p) {
+                if p == "xox" {
+                    // Slack: xoxb-, xoxa-, xoxp-, xoxr-, xoxs- and a long run after it.
+                    let kind = tail.as_bytes().first().copied();
+                    let after = tail.get(1..)?.strip_prefix('-')?;
+                    let n = run(after, |b| b.is_ascii_alphanumeric() || b == b'-');
+                    if matches!(kind, Some(b'a' | b'b' | b'p' | b'r' | b's')) && n >= 10 {
+                        return Some((i + 5 + n, HIDDEN.to_string()));
+                    }
+                    continue;
+                }
+                let n = run(tail, key_char);
+                if n >= min {
+                    return Some((i + p.len() + n, HIDDEN.to_string()));
+                }
+            }
+        }
+        for p in ["AKIA", "ASIA"] {
+            if let Some(tail) = rest.strip_prefix(p) {
+                let n = run(tail, |b| b.is_ascii_uppercase() || b.is_ascii_digit());
+                if n >= 16 {
+                    return Some((i + 4 + n, HIDDEN.to_string()));
+                }
+            }
+        }
+        if rest.starts_with("eyJ") {
+            let a = run(rest, key_char);
+            let r1 = rest[a..].strip_prefix('.')?;
+            let b = run(r1, key_char);
+            let r2 = r1[b..].strip_prefix('.')?;
+            let c = run(r2, key_char);
+            if a >= 8 && b >= 4 && c >= 1 {
+                return Some((i + a + 1 + b + 1 + c, HIDDEN.to_string()));
+            }
+        }
+        None
+    })
+}
+
+/// `Bearer <token>` and `Basic <encoded>` as an Authorization header carries them.
+fn auth_headers(t: &str) -> String {
+    scan(t, |t, i| {
+        if !word_start(t, i) {
+            return None;
+        }
+        let rest = t.get(i..)?;
+        for word in ["bearer ", "basic "] {
+            let head = rest.get(..word.len())?;
+            if head.eq_ignore_ascii_case(word) {
+                let tail = &rest[word.len()..];
+                let n = run(tail, |b| b.is_ascii_alphanumeric() || b"._~+/=-".contains(&b));
+                // Plain prose after "basic" is not a token: a token has a digit or a symbol in it,
+                // or mixes upper and lower case the way encoded text does.
+                let body = &tail[..n];
+                let mixed = body.bytes().any(|b| b.is_ascii_uppercase()) && body.bytes().any(|b| b.is_ascii_lowercase());
+                if n >= 8 && (mixed || body.bytes().any(|b| !b.is_ascii_alphabetic())) {
+                    return Some((i + word.len() + n, format!("{head}{HIDDEN}")));
+                }
+            }
+        }
+        None
+    })
+}
+
+/// Whether a setting, variable or flag name holds a secret. A flag also hides a value that names
+/// a file or folder less often than it hides a secret, so those names are let through.
+fn secretish(name: &str, flag: bool) -> bool {
+    const PARTS: [&str; 12] = ["token", "secret", "password", "passwd", "passphrase", "credential", "apikey", "api_key", "api-key", "accesskey", "access_key", "access-key"];
+    let lower = name.to_ascii_lowercase();
+    if ["file", "path", "dir", "folder"].iter().any(|s| lower.ends_with(s)) {
+        return false;
+    }
+    if PARTS.iter().any(|p| lower.contains(p)) || lower.contains("privatekey") || lower.contains("private_key") || lower.contains("private-key") {
+        return true;
+    }
+    lower.split(['_', '-', '.']).any(|s| matches!(s, "pwd" | "auth" | "pass") || (!flag && s == "key"))
+}
+
+/// The value that begins `rest`: a quoted one (also `\"..\"` inside a quoted command) to its
+/// closing quote, or a bare one to the next space, quote or any byte in `stops`. 0 when none.
+fn value_span(rest: &str, stops: &[u8]) -> usize {
+    let b = rest.as_bytes();
+    let skip = usize::from(b.first() == Some(&b'\\') && matches!(b.get(1), Some(b'"' | b'\'')));
+    match b.get(skip) {
+        Some(q @ (b'"' | b'\'')) => rest[skip + 1..].find(*q as char).map_or(rest.len(), |k| skip + 1 + k + 1),
+        _ => run(rest, |c| !(c.is_ascii_whitespace() || matches!(c, b'"' | b'\'' | b'`') || stops.contains(&c))),
+    }
+}
+
+/// A value that needs no hiding: already hidden, a Stripe key already masked, a variable
+/// reference such as `$TOKEN`, or nothing at all.
+fn already(value: &str) -> bool {
+    let v = value.trim_matches(|c| matches!(c, '"' | '\'' | '\\'));
+    v.is_empty() || v == HIDDEN || v.starts_with('$') || STRIPE_PREFIXES.iter().any(|p| v.strip_prefix(p).is_some_and(|r| r.starts_with("....")))
+}
+
+/// `--password hunter2` and `--token abc` (a space before the value; `--token=abc` is the labelled
+/// pass), and a short password flag with the value attached, `-pS3cret`.
+fn secret_flags(t: &str) -> String {
+    let mysql = ["mysql", "mariadb"].iter().any(|k| t.to_ascii_lowercase().contains(k));
+    scan(t, |t, i| {
+        let prev = if i == 0 { b' ' } else { t.as_bytes()[i - 1] };
+        if !(prev.is_ascii_whitespace() || matches!(prev, b'"' | b'\'' | b'\\' | b'(' | b'`')) {
+            return None;
+        }
+        let rest = t.get(i..)?;
+        if let Some(flag) = rest.strip_prefix("--") {
+            let n = run(flag, key_char);
+            if n == 0 || !secretish(&flag[..n], true) {
+                return None;
+            }
+            let after = &flag[n..];
+            let gap = run(after, |b| b == b' ' || b == b'\t');
+            if gap == 0 {
+                return None;
+            }
+            let value = &after[gap..];
+            let len = value_span(value, &[]);
+            if len == 0 || value.starts_with('-') || already(&value[..len]) {
+                return None;
+            }
+            return Some((i + 2 + n + gap + len, format!("--{}{}{HIDDEN}", &flag[..n], &after[..gap])));
+        }
+        let tail = rest.strip_prefix("-p")?;
+        let len = value_span(tail, &[]);
+        let value = &tail[..len];
+        let long_enough = value.chars().count() >= if mysql { 1 } else { 3 };
+        (long_enough && !value.starts_with('-') && !value.starts_with('=') && !already(value)).then(|| (i + 2 + len, format!("-p{HIDDEN}")))
+    })
+}
+
+/// `NAME=value` where the name says it holds a secret.
+fn labelled_values(t: &str) -> String {
+    scan(t, |t, i| {
+        if t.as_bytes()[i] != b'=' {
+            return None;
+        }
+        let before = &t.as_bytes()[..i];
+        let start = before.iter().rposition(|b| !(b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))).map_or(0, |p| p + 1);
+        let name = &t[start..i];
+        if name.len() < 2 || !secretish(name, name.starts_with('-')) {
+            return None;
+        }
+        let rest = &t[i + 1..];
+        let len = value_span(rest, b"&;,)");
+        (len > 0 && !already(&rest[..len])).then(|| (i + 1 + len, format!("={HIDDEN}")))
+    })
+}
+
+/// A line written as an env file writes it (`NAME=value`, optionally after `export`): its value
+/// goes whatever the name says, because such lines are where secrets are pasted.
+fn env_lines(t: &str) -> String {
+    let mut out = String::with_capacity(t.len());
+    for (n, line) in t.split('\n').enumerate() {
+        if n > 0 {
+            out.push('\n');
+        }
+        out.push_str(&env_line(line));
+    }
+    out
+}
+
+fn env_line(line: &str) -> String {
+    let body = line.trim_end_matches('\r');
+    let ending = &line[body.len()..];
+    let lead = body.len() - body.trim_start().len();
+    let rest = &body[lead..];
+    let rest_nx = rest.strip_prefix("export ").map_or(rest, str::trim_start);
+    let name_len = run(rest_nx, |b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_');
+    let name = &rest_nx[..name_len];
+    let Some(raw) = rest_nx[name_len..].strip_prefix('=') else { return line.to_string() };
+    let value = raw.trim_end();
+    let single = match value.chars().next() {
+        Some(q @ ('"' | '\'')) => value.len() >= 2 && value.ends_with(q) && !value[1..value.len() - 1].contains(q),
+        Some(_) => !value.contains(char::is_whitespace),
+        None => false,
+    };
+    if name.len() < 2 || !name.starts_with(|c: char| c.is_ascii_uppercase() || c == '_') || !single || already(value) {
+        return line.to_string();
+    }
+    let start = body.len() - raw.len();
+    format!("{}{HIDDEN}{}{ending}", &body[..start], &body[start + value.len()..])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -810,5 +1130,123 @@ mod tests {
         ] {
             assert_eq!(hit(c), None, "runs: {c}");
         }
+    }
+
+    /// SAFE-015: the page lists the seven rules by plain name with two examples each, and every
+    /// example really trips its own rule (so the page never shows a command that would not ask).
+    #[test]
+    fn safe015_the_catalog_lists_seven_plain_names_and_each_example_trips_its_own_rule() {
+        let names: Vec<&str> = catalog().iter().map(|r| r.name).collect();
+        assert_eq!(names, ["Stripe changes", "Force-push to main", "Deleting database tables", "Infrastructure changes", "Production deploys", "Deleting folders outside the workspace", "Throwing away uncommitted work"]);
+        for r in catalog() {
+            for s in r.samples {
+                assert_eq!(hit(s), Some(r.id), "{} example {s}", r.id);
+            }
+        }
+        let v = serde_json::to_value(catalog()).unwrap();
+        assert_eq!((v[1]["id"].as_str(), v[1]["samples"][0].as_str()), (Some("force-push"), Some("git push --force origin main")));
+    }
+
+    /// SAFE-015 acceptance, through the real hook answer with a stand-in PreToolUse event: the
+    /// settings are written exactly as the Safety page writes them.
+    #[test]
+    fn safe015_switching_force_push_off_and_on_and_the_master_switch_change_the_next_answer() {
+        let ev = br#"{"hook_event_name":"PreToolUse","tool_name":"Bash","cwd":"/home/me/app","tool_input":{"command":"git push --force origin main"}}"#;
+        let ask = |s: &Value| crate::hooks::reply_body("/claude", ev, s) != "{}";
+        // Never saved: the master switch is on and every rule asks.
+        assert!(ask(&json!({})));
+        // The rule's switch off: the page saves protectedOff holding the id, and the next one runs.
+        assert!(!ask(&json!({ OFF_FIELD: ["force-push"] })));
+        // Switched back on: the page saves the list without it, and it asks again.
+        assert!(ask(&json!({ OFF_FIELD: [] })));
+        // Another rule off leaves this one asking.
+        assert!(ask(&json!({ OFF_FIELD: ["discard"] })));
+        // The master switch off: no protected command asks, whatever the list says.
+        assert!(!ask(&json!({ ASK_FIELD: false })));
+        assert!(!ask(&json!({ ASK_FIELD: false, OFF_FIELD: [] })));
+        assert!(ask(&json!({ ASK_FIELD: true })));
+        // A garbled list (hand-edited file) fails closed: the rules stay on.
+        assert!(ask(&json!({ OFF_FIELD: "force-push" })));
+        assert!(ask(&json!({ OFF_FIELD: [7, null] })));
+    }
+
+    const STRIPE_LIVE: &str = "sk_live_51HabcdEFGH1234567890WXYZ";
+
+    #[test]
+    fn safe019_stripe_secret_keys_keep_their_prefix_and_last_four_and_nothing_else() {
+        let cmd = format!("curl -u {STRIPE_LIVE}: https://api.stripe.com/v1/charges");
+        assert_eq!(mask(&cmd), "curl -u sk_live_....WXYZ: https://api.stripe.com/v1/charges");
+        for (raw, shown) in [("sk_test_4eC39HqLyjWDarjtT1zdp7dc", "sk_test_....p7dc"), ("rk_live_51HabcdEFGH1234567890Qrst", "rk_live_....Qrst"), ("rk_test_abcdefgh12345678", "rk_test_....5678"), ("whsec_8f3a9c1d2e4b5a6c7d8e9f0a", "whsec_....9f0a")] {
+            assert_eq!(mask(&format!("echo {raw} | tee k")), format!("echo {shown} | tee k"), "{raw}");
+        }
+        assert!(!mask(&format!("STRIPE_SECRET_KEY={STRIPE_LIVE} node pay.js")).contains("51Habcd"));
+        // Too short to be a key, a publishable key, and a name in a path stay as typed.
+        assert_eq!(mask("grep -r sk_live_ src"), "grep -r sk_live_ src");
+        assert_eq!(mask("echo pk_live_51HabcdEFGH1234567890WXYZ"), "echo pk_live_51HabcdEFGH1234567890WXYZ");
+        assert_eq!(mask("cat my_sk_live_51HabcdEFGH1234567890WXYZ.txt"), "cat my_sk_live_51HabcdEFGH1234567890WXYZ.txt");
+    }
+
+    #[test]
+    fn safe019_a_value_already_masked_passes_the_general_pass_untouched_and_a_second_run_changes_nothing() {
+        for already in ["curl -u sk_live_....WXYZ: https://x", "STRIPE_KEY=sk_live_....WXYZ", "export WEBHOOK_SECRET=whsec_....9f0a", "--token sk_test_....p7dc", "API_KEY=[hidden]", "DB_PASSWORD=$DB_PASSWORD"] {
+            assert_eq!(mask(already), already);
+        }
+        for c in [format!("STRIPE_KEY={STRIPE_LIVE}"), "mysql -u root -pS3cretPass".to_string(), "psql postgres://admin:hunter2@db:5432/app".to_string(), "FOO=bar\nTOKEN=abc123".to_string()] {
+            let once = mask(&c);
+            assert_eq!(mask(&once), once, "{c}");
+        }
+    }
+
+    /// SAFE-019 acceptance: a short password flag with the value attached, a token flag, and a
+    /// connection URL carrying a user and password.
+    #[test]
+    fn safe019_attached_password_flags_token_flags_and_url_credentials_are_hidden() {
+        let m = mask("mysql -u root -pS3cretPass -h db.example.com shop");
+        assert_eq!(m, "mysql -u root -p[hidden] -h db.example.com shop");
+        assert_eq!(mask("mysqldump -pa shop"), "mysqldump -p[hidden] shop", "a one-letter password to a MySQL client");
+        assert_eq!(mask("gh auth login --token ghp_not_a_real_one_but_long_enough_xx"), "gh auth login --token [hidden]");
+        assert_eq!(mask("deploy --token abc123def456 --env x"), "deploy --token [hidden] --env x");
+        assert_eq!(mask("deploy --token=abc123def456 --env x"), "deploy --token=[hidden] --env x");
+        assert_eq!(mask("deploy --password \"two words\" go"), "deploy --password [hidden] go");
+        assert_eq!(mask("bash -c \"deploy --password \\\"two words\\\" go\""), "bash -c \"deploy --password [hidden] go\"");
+        assert_eq!(mask("psql postgres://admin:hunter2@db.example.com:5432/app -c 'select 1'"), "psql postgres://[hidden]@db.example.com:5432/app -c 'select 1'");
+        assert_eq!(mask("redis-cli -u redis://:pw0rd@cache:6379"), "redis-cli -u redis://[hidden]@cache:6379");
+        assert_eq!(mask("git clone https://user:glpat-abcdef@gitlab.com/o/r.git"), "git clone https://[hidden]@gitlab.com/o/r.git");
+        assert_eq!(mask("amqp://guest:guest@localhost/vhost"), "amqp://[hidden]@localhost/vhost");
+        let m = mask(&format!("psql postgres://admin:hunter2@db:5432/app && mysql -pHunter2x && curl --token {STRIPE_LIVE}"));
+        assert!(!m.contains("hunter2") && !m.contains("Hunter2x") && !m.contains("51Habcd"), "{m}");
+    }
+
+    #[test]
+    fn safe019_labelled_secrets_provider_keys_headers_and_env_file_lines_are_hidden() {
+        assert_eq!(mask("API_KEY=abc123 node app.js"), "API_KEY=[hidden] node app.js");
+        assert_eq!(mask("PGPASSWORD='my pass' psql"), "PGPASSWORD=[hidden] psql");
+        assert_eq!(mask("curl 'https://x.test/hook?token=abc123&x=1'"), "curl 'https://x.test/hook?token=[hidden]&x=1'");
+        assert_eq!(mask("aws configure set aws_secret_access_key=wJalrXUtnFEMI"), "aws configure set aws_secret_access_key=[hidden]");
+        let tail = "a1B2c3D4e5F6g7H8i9J0k1L2m3N4";
+        for key in [format!("sk-ant-api03-{tail}"), format!("sk-proj-{tail}"), format!("xai-{tail}"), format!("AIzaSy{tail}x"), format!("ghp_{tail}abcd"), format!("github_pat_{tail}"), "AKIAIOSFODNN7EXAMPLE".to_string(), "ASIAIOSFODNN7EXAMPLE".to_string(), "xoxb-1234567890-abcdefghij".to_string(), "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.dBjftJeZ4CVP".to_string()] {
+            assert_eq!(mask(&format!("echo {key} > out")), "echo [hidden] > out", "{key}");
+        }
+        assert_eq!(mask("curl -H 'Authorization: Bearer abcDEF123.456_xyz' https://x"), "curl -H 'Authorization: Bearer [hidden]' https://x");
+        assert_eq!(mask("curl -H \"Authorization: Basic dXNlcjpwYXNz\" https://x"), "curl -H \"Authorization: Basic [hidden]\" https://x");
+        let pem = "echo '-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\n-----END RSA PRIVATE KEY-----' > id";
+        assert_eq!(mask(pem), "echo '[hidden]' > id");
+        assert_eq!(mask("echo '-----BEGIN PRIVATE KEY-----\nMIIBOg"), "echo '[hidden]", "a block cut short hides to the end");
+        // An env-file style line hides its value whatever the name, and keeps the export and the line ending.
+        assert_eq!(mask("cat > .env <<EOF\nDATABASE_HOST=db.internal\r\nexport SESSION_SALT=\"s a l t\"\nEOF"), "cat > .env <<EOF\nDATABASE_HOST=[hidden]\r\nexport SESSION_SALT=[hidden]\nEOF");
+    }
+
+    #[test]
+    fn safe019_ordinary_commands_and_prose_are_left_exactly_as_typed() {
+        for c in [
+            "git commit -m \"fix the token bug\"", "ls -p", "ssh -p 2222 host", "docker run -p 8080:80 nginx", "perl -pe 's/a/b/' f", "git push origin main",
+            "NODE_ENV=production npm run build", "echo author=bob", "npm run build -- --prefix /usr", "tool --password-file ./pw.txt run", "echo basic configuration", "cat key.pem",
+            "curl https://example.com/a@b", "git clone git@github.com:o/r.git", "ssh://git@host/repo", "echo $TOKEN", "TOKEN=$OTHER run", "tool --token --verbose", "rm -rf build", "",
+        ] {
+            assert_eq!(mask(c), c, "{c}");
+        }
+        // Non-ASCII text next to a secret never splits a character.
+        assert_eq!(mask("echo héllo ünï --token sécrét-é wörld"), "echo héllo ünï --token [hidden] wörld");
+        assert_eq!(mask("naïve=ü TOKEN=é"), "naïve=ü TOKEN=[hidden]");
     }
 }
