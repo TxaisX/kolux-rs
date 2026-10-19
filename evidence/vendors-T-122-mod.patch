@@ -15,7 +15,7 @@ index ca5f32bc..4f33c895 100644
          }
          // T-120-b: Gemini CLI, Antigravity and Amp.
          (id @ ("gemini" | "antigravity" | "amp"), Plan::Install | Plan::Remove) => vendors::apply(home, profile, id, plan),
-+        // T-121: Cursor, Droid, Command Code, Kimi and Hermes.
++        // T-121/T-122: the nine vendors_more agents (Cursor, Droid, Command Code, Kimi, Hermes, Copilot, Grok, Devin, Pi).
 +        (id, Plan::Install | Plan::Remove) if vendors_more::manages(id) => vendors_more::apply(home, profile, id, plan),
          _ => Ok("left as it was"),
      }

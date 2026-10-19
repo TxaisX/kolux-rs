@@ -222,17 +222,16 @@ pub fn normalize(path: &str, event: &Value) -> Option<Value> {
 }
 
 /// What the hook prints back when the vendor's doc says it must answer (COMPAT 3.1): Cursor's
-/// `beforeSubmitPrompt` gets "continue", its before-tool events "allow"; everything else nothing.
+/// `beforeSubmitPrompt` gets "continue"; everything else nothing. Its before-tool events are never
+/// answered (council FIX-SOON 4, 2026-10-19): Cursor's docs do not say whether "allow" skips its own
+/// approval prompt, and no output fails open there (failClosed is off by default), so Cursor asks as
+/// it would without Kolux and the pane's state comes from the events alone.
 pub fn reply(path: &str, body: &[u8]) -> Option<String> {
     if agent_of(path)? != "cursor" {
         return None;
     }
     let event: Value = serde_json::from_slice(body).ok()?;
-    match event.get("hook_event_name")?.as_str()? {
-        "beforeSubmitPrompt" => Some(json!({ "continue": true }).to_string()),
-        "preToolUse" | "beforeShellExecution" | "beforeMCPExecution" => Some(json!({ "permission": "allow" }).to_string()),
-        _ => None,
-    }
+    (event.get("hook_event_name")?.as_str()? == "beforeSubmitPrompt").then(|| json!({ "continue": true }).to_string())
 }
 
 pub fn write_cursor_script(home: &Path) -> Result<String, String> {
@@ -338,6 +337,7 @@ pub fn hermes_plugin() -> String {
 # It tells Kolux RS what this pane's agent is doing and never answers for Hermes.
 import json
 import os
+import re
 import urllib.request
 
 HOOKS = {HOOKS}
@@ -377,16 +377,18 @@ def _send(name, fields):
     body = {"event": name}
     body.update({k: _text(v) for k, v in fields.items() if k in SENT and _text(v) is not None})
     try:
-        if not port or not token:
+        # A port that is not 1-5 digits is not Kolux's.
+        if not port or not token or not re.fullmatch(r"[0-9]{1,5}", port):
             raise RuntimeError("no Kolux")
-        # Loopback only: the same hook listener the .cmd scripts post to with curl.
+        # Loopback only: the same hook listener the .cmd scripts post to with curl --noproxy, through
+        # an opener with no proxies at all, so neither HTTP_PROXY nor the system proxy sees a hook.
         req = urllib.request.Request(
             "http://127.0.0.1:%s/hermes" % port,
             data=json.dumps(body).encode("utf-8"),
             headers={"Content-Type": "application/json", "X-Kolux-Token": token, "X-Kolux-Pane": env["KOLUX_HOOK_IDENTITY"]},
             method="POST",
         )
-        urllib.request.urlopen(req, timeout=1.5).read()
+        urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=1.5).read()
     except Exception:
         # Kolux is closed or not answering: the event waits, one whole line, for the next start.
         # A tool event is only worth its moment: it is never held. Only what the status needs is
@@ -745,7 +747,7 @@ pub fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'stat
         }
         "grok" => {
             let file = target(profile, grok_file(home))?;
-            if install { install_grok(home, &file) } else { remove_hooks(home, &file) }
+            if install { install_grok(home, &file) } else { remove_grok(home, &file) }
         }
         "devin" => {
             let file = target(profile, devin_file(home))?;
@@ -860,7 +862,20 @@ pub fn write_devin_script(home: &Path) -> Result<String, String> {
 }
 
 pub fn copilot_file(home: &Path) -> PathBuf {
-    copilot_file_in(home, std::env::var_os("COPILOT_HOME").map(PathBuf::from))
+    copilot_file_in(home, home_var(std::env::var_os("COPILOT_HOME")))
+}
+
+/// A vendor's home variable as a path; an empty one is unset, never a path relative to the current
+/// folder (council AFTER 2).
+fn home_var(v: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    v.filter(|v| !v.is_empty()).map(PathBuf::from)
+}
+
+/// The folder of a file Kolux just removed goes too when nothing else is in it (council AFTER 4).
+fn drop_empty_dir(file: &Path) {
+    if let Some(dir) = file.parent() {
+        let _ = fs::remove_dir(dir);
+    }
 }
 
 pub fn copilot_file_in(home: &Path, copilot_home: Option<PathBuf>) -> PathBuf {
@@ -868,7 +883,7 @@ pub fn copilot_file_in(home: &Path, copilot_home: Option<PathBuf>) -> PathBuf {
 }
 
 pub fn grok_file(home: &Path) -> PathBuf {
-    grok_file_in(home, std::env::var_os("GROK_HOME").map(PathBuf::from))
+    grok_file_in(home, home_var(std::env::var_os("GROK_HOME")))
 }
 
 pub fn grok_file_in(home: &Path, grok_home: Option<PathBuf>) -> PathBuf {
@@ -928,9 +943,7 @@ pub fn remove_copilot(file: &Path) -> Result<bool, String> {
         return Err(format!("{} holds entries that are not Kolux's; left alone", file.display()));
     }
     fs::remove_file(file).map_err(|e| format!("{}: {e}", file.display()))?;
-    if let Some(dir) = file.parent() {
-        let _ = fs::remove_dir(dir);
-    }
+    drop_empty_dir(file);
     Ok(true)
 }
 
@@ -965,6 +978,16 @@ pub fn install_grok(home: &Path, file: &Path) -> Result<bool, String> {
     install_hooks(home, file, "grok", &command, &GROK_EVENTS, &[])
 }
 
+/// Grok: Kolux's entries go through the T-121 helper; a file Kolux created goes with them, and the
+/// `hooks` folder when nothing else is in it.
+pub fn remove_grok(home: &Path, file: &Path) -> Result<bool, String> {
+    let removed = remove_hooks(home, file)?;
+    if removed && !file.exists() {
+        drop_empty_dir(file);
+    }
+    Ok(removed)
+}
+
 /// Devin's block: the groups, pretty-printed two spaces in, between the marker comment lines.
 pub fn devin_block(command: &str, comma: &str) -> String {
     // The script's route is `devin/<event>`, so each event's command carries its own name (the
@@ -981,26 +1004,36 @@ pub fn devin_block(command: &str, comma: &str) -> String {
     format!("  {DEVIN_START}\n  \"hooks\": {hooks}{comma}\n  {DEVIN_END}\n")
 }
 
-/// The JSON of a file with comments: `//` and `/* */` outside strings become spaces, so what is
-/// left parses and keeps its byte positions.
+/// The JSON of a file with comments: `//` and `/* */` outside strings become spaces, one per byte
+/// (line ends kept), so what is left parses and an index in it is the same index in `text`.
 pub fn strip_comments(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let (mut in_str, mut esc, mut line, mut block) = (false, false, false, false);
     let mut chars = text.chars().peekable();
+    let blank = |out: &mut String, c: char| {
+        if c == '\n' || c == '\r' {
+            out.push(c);
+        } else {
+            for _ in 0..c.len_utf8() {
+                out.push(' ');
+            }
+        }
+    };
     while let Some(c) = chars.next() {
         if line {
             if c == '\n' {
                 line = false;
-                out.push(c);
             }
+            blank(&mut out, c);
             continue;
         }
         if block {
             if c == '*' && chars.peek() == Some(&'/') {
                 chars.next();
                 block = false;
-            } else if c == '\n' {
-                out.push(c);
+                out.push_str("  ");
+            } else {
+                blank(&mut out, c);
             }
             continue;
         }
@@ -1021,10 +1054,15 @@ pub fn strip_comments(text: &str) -> String {
                 esc = false;
                 out.push(c);
             }
-            '/' if chars.peek() == Some(&'/') => line = true,
+            '/' if chars.peek() == Some(&'/') => {
+                chars.next();
+                line = true;
+                out.push_str("  ");
+            }
             '/' if chars.peek() == Some(&'*') => {
                 chars.next();
                 block = true;
+                out.push_str("  ");
             }
             _ => out.push(c),
         }
@@ -1032,19 +1070,23 @@ pub fn strip_comments(text: &str) -> String {
     out
 }
 
-/// The text without Kolux's block (marker lines included), and whether there was one.
+/// The text without Kolux's block (marker lines included), and whether there was one. A start
+/// marker that shares the opening brace's line (a one-line file, see `install_devin`) leaves the
+/// text before it, so the file comes back byte for byte.
 fn strip_devin(text: &str) -> (String, bool) {
     let mut out = String::with_capacity(text.len());
     let (mut inside, mut found) = (false, false);
     for line in text.split_inclusive('\n') {
-        let l = line.trim();
-        if !inside && l.starts_with(DEVIN_START) {
-            inside = true;
-            found = true;
-            continue;
+        if !inside {
+            if let Some(at) = line.find(DEVIN_START) {
+                inside = true;
+                found = true;
+                out.push_str(line[..at].trim_end_matches(' '));
+                continue;
+            }
         }
         if inside {
-            if l.starts_with(DEVIN_END) {
+            if line.contains(DEVIN_END) {
                 inside = false;
             }
             continue;
@@ -1062,16 +1104,27 @@ pub fn install_devin(home: &Path, file: &Path) -> Result<bool, String> {
     let text = read_opt(file)?;
     let (bare, mine_already) = strip_devin(text.as_deref().unwrap_or("{\n}\n"));
     let not_json = |e: String| format!("{} is not JSON with comments ({e}); left alone", file.display());
-    let v: Value = serde_json::from_str(&strip_comments(&bare)).map_err(|e| not_json(e.to_string()))?;
+    let stripped = strip_comments(&bare);
+    let v: Value = serde_json::from_str(&stripped).map_err(|e| not_json(e.to_string()))?;
     let obj = v.as_object().ok_or_else(|| not_json("the top level is not an object".into()))?;
     // ponytail: Kolux adds hooks only to a file without any; merging into the user's own
     // groups while keeping their comments is T-122-b if a user ever has both.
     if obj.contains_key("hooks") {
         return Err(format!("{} has hooks of its own; left alone", file.display()));
     }
-    let brace = bare.find('{').ok_or_else(|| not_json("no opening brace".into()))?;
-    let rest = bare[brace + 1..].trim_start_matches(['\r', '\n']);
-    let new = format!("{}\n{}{rest}", &bare[..=brace], devin_block(&command, if obj.is_empty() { "" } else { "," }));
+    // The brace is looked for in the stripped text, so one inside a leading comment is passed over;
+    // its index is the same in `bare`, since comments become spaces byte for byte.
+    let brace = stripped.find('{').ok_or_else(|| not_json("no opening brace".into()))?;
+    let rest = &bare[brace + 1..];
+    let eol = if bare.contains("\r\n") { "\r\n" } else { "\n" };
+    let block = devin_block(&command, if obj.is_empty() { "" } else { "," }).replace('\n', eol);
+    // Nothing around the block is trimmed or reshaped (council FIX-SOON 1): after the brace's own
+    // line end the block takes whole lines of its own; in a one-line file the start marker shares
+    // the brace's line, and `strip_devin` gives that line back as it was.
+    let new = match rest.strip_prefix(eol).or_else(|| rest.strip_prefix('\n')) {
+        Some(after) => format!("{}{}{block}{after}", &bare[..=brace], &rest[..rest.len() - after.len()]),
+        None => format!("{} {}{rest}", &bare[..=brace], block.trim_start_matches(' ')),
+    };
     serde_json::from_str::<Value>(&strip_comments(&new)).map_err(|e| not_json(format!("after Kolux's block it would not parse: {e}")))?;
     if text.as_deref() == Some(new.as_str()) {
         return Ok(false);
@@ -1097,6 +1150,7 @@ pub fn remove_devin(home: &Path, file: &Path) -> Result<bool, String> {
             if was_created(&record, file) {
                 fs::remove_file(file).map_err(|e| format!("{}: {e}; nothing removed", file.display()))?;
                 let _ = fs::remove_file(record);
+                drop_empty_dir(file);
                 return Ok(true);
             }
             rest.into_bytes()
@@ -1117,7 +1171,7 @@ fn inspect_devin(file: &Path) -> (&'static str, Option<String>) {
     if !found {
         return ("not installed", None);
     }
-    let block: String = text.lines().skip_while(|l| !l.trim().starts_with(DEVIN_START)).take_while(|l| !l.trim().starts_with(DEVIN_END)).collect::<Vec<_>>().join("\n");
+    let block: String = text.lines().skip_while(|l| !l.contains(DEVIN_START)).take_while(|l| !l.contains(DEVIN_END)).collect::<Vec<_>>().join("\n");
     let missing: Vec<&str> = DEVIN_EVENTS.iter().copied().filter(|e| !block.contains(&format!("\"{e}\""))).collect();
     if missing.is_empty() && block.contains(SCRIPT_DIR) {
         ("installed", None)
@@ -1133,6 +1187,7 @@ pub fn pi_extension() -> String {
     r#"// Kolux RS status extension for Pi. Written by Kolux RS; edits are overwritten.
 // It tells Kolux RS what this pane's agent is doing and never answers for Pi.
 import fs from "node:fs";
+import http from "node:http";
 
 const EVENTS = {EVENTS};
 
@@ -1144,20 +1199,19 @@ function send(event, fields) {
   try {
     [port, token] = fs.readFileSync(env.KOLUX_HOOK_ENDPOINT, "utf8").split(/\s+/);
   } catch {}
-  if (!port || !token) return;
+  // A port that is not 1-5 digits is not Kolux's.
+  if (!/^\d{1,5}$/.test(port) || !token) return;
   const body = { event };
   for (const [k, v] of Object.entries(fields)) {
     if (typeof v === "string" && v) body[k] = v.slice(0, 16000);
   }
-  // Loopback only: the same hook listener the .cmd scripts post to with curl.
-  fetch(`http://127.0.0.1:${port}/pi`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Kolux-Token": token, "X-Kolux-Pane": env.KOLUX_HOOK_IDENTITY },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(1500),
-  })
-    .then((r) => r.arrayBuffer())
-    .catch(() => {});
+  const data = JSON.stringify(body);
+  // Loopback only: the same hook listener the .cmd scripts post to with curl --noproxy. node:http
+  // with the host fixed never reads a proxy variable, whatever runtime loads the extension.
+  const req = http.request({ host: "127.0.0.1", port: Number(port), path: "/pi", method: "POST", timeout: 1500, headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data), "X-Kolux-Token": token, "X-Kolux-Pane": env.KOLUX_HOOK_IDENTITY } }, (res) => res.resume());
+  req.on("timeout", () => req.destroy());
+  req.on("error", () => {});
+  req.end(data);
 }
 
 export default function (pi) {
@@ -1194,6 +1248,7 @@ pub fn remove_pi(file: &Path) -> Result<bool, String> {
         return Ok(false);
     }
     fs::remove_file(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    drop_empty_dir(file);
     Ok(true)
 }
 

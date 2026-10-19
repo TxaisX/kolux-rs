@@ -1,0 +1,110 @@
+FIX-1 on lane/vendors (wave 16, 2026-10-19) · from e33acbe8 (T-122) · ONE commit
+Review: G:/Dev/claude-config/state/kolux-rs-council/d2/vendors-e33acbe8-standin-review.md (BLOCKER 0 / FIX-BEFORE 3 / FIX-SOON 4 / AFTER 5)
+Builder: Claude Fable 5.1, two spawns: the first wrote the tests, code, patches and PLAN re-cut and ran the red run, the green run and
+the per-card gates, then was cut at ~15:48 by a coordinator restart (its last gate, the full cargo test, failed with link.exe
+0xC0000142, a load flake, not code); the second read the whole uncommitted diff, kept it entire, re-ran every gate and committed.
+No app launch, no real agent session; every cargo/node run under a scratch HOME/USERPROFILE/CLAUDE_CONFIG_DIR/CODEX_HOME/TEMP/TMP
+below G:/Temp/vendors-w16 (marker files present), KOLUX_* unset, one build slot per heavy job (slot.mjs acquire/release vendors).
+
+WHAT CHANGED (all in src-tauri/src/agent_hooks/vendors_more.rs unless named; tests in vendors_more_tests.rs)
+(a) FIX-BEFORE 1 · Hermes plugin (hermes_plugin): the post goes through
+    urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=1.5) so neither HTTP_PROXY/http_proxy nor the
+    Windows system proxy ever sees a hook; a port that is not 1-5 digits (re.fullmatch(r"[0-9]{1,5}", port)) is refused before any
+    request is built. No bare urlopen( remains.
+    Test: fix_1_hermes_and_pi_post_on_loopback_past_any_proxy_with_a_digits_only_port (ProxyHandler({}) present, "urlopen(" absent,
+    "import re" + the fullmatch present).
+(b) FIX-SOON 3 · Pi extension (pi_extension): `import http from "node:http"`; the port must pass /^\d{1,5}$/ (so `1@host` can no longer
+    turn 127.0.0.1 into userinfo); the post is http.request({ host: "127.0.0.1", port: Number(port), path: "/pi", method: "POST",
+    timeout: 1500, headers: {...} }) with req.on("timeout", destroy), req.on("error", ignore), req.end(data); no fetch( and no
+    "http://" string anywhere in the extension. The same test asserts each of those.
+    evidence/vendors-T-122-privacy-audit.patch is DROPPED (git rm): it added an EXACT entry requiring exactly one Pi fetch( in
+    vendors_more.rs, which would now turn the audit red; scripts/privacy-audit.test.mjs is untouched and passes without it (see GATES).
+(c) FIX-SOON 4 · Cursor (reply): only beforeSubmitPrompt is answered ({"continue":true}); preToolUse, beforeShellExecution and
+    beforeMCPExecution get NO reply (None), so Cursor asks as it would without Kolux (its docs do not say whether "allow" skips its own
+    approval prompt; no output fails open there since failClosed defaults to false). The pane state comes from the events alone.
+    Test: stat_012_cursor_events_drive_the_dot_and_its_hooks_are_answered now asserts None for the three before-tool events and that
+    NO Cursor reply for any of the 8 installed events + sessionStart/sessionEnd (with a Shell tool and an rm command in the body)
+    contains "allow". evidence/vendors-T-121-hooks.patch: the reply_body comment reads "Cursor's beforeSubmitPrompt gets 'continue';
+    its before-tool events are never answered" (the reply itself lives in vendors_more.rs, not the patch).
+    evidence/T-121.txt: live-proof steps 2a (in a pane, a shell command Cursor would ask about still asks; hook printed nothing) and
+    2b (outside a pane with hooks installed, prompts and shell commands run as usual) added under LIVE PROOF PENDING (batched).
+(d) FIX-BEFORE 2 · PLAN.md: T-121's ticked text now reads "STAT-014 Command Code status from tool events (its transcript: T-121-b)";
+    T-122's ticked text names only STAT-017, STAT-018 status (removed at quit: T-122-b), STAT-019 and STAT-021 Pi status (OMP, titles
+    and dialogs: T-122-b); STAT-020 (MiMo Code, no public plugin doc) moved to the open T-122-b line, which also now carries council
+    AFTER 1 (Copilot's disableAllHooks overwritten at start). Both ticked lines gained a "FIX-1 done 2026-10-19 (lane/vendors from
+    e33acbe8; evidence/vendors-FIX-1.txt: ...)" stamp.
+(e) FIX-SOON 1-2 · Devin:
+    - strip_comments turns every comment byte into a space (a multibyte char into as many spaces as it has bytes; \r and \n kept), the
+      two comment-opening and -closing bytes included, so stripped.len() == text.len() and an index in one is the same in the other;
+      its doc comment now says so.
+    - install_devin finds the opening brace in the STRIPPED text (a `{` inside a leading comment is passed over), then inserts the
+      block without trimming anything: after the brace's own line end (CRLF or LF, the block rewritten in the file's line ending), or,
+      when the brace has no line end of its own (`{}`, `{"a":1}`, `{ // top`), the start marker shares the brace's line.
+    - strip_devin finds the start marker anywhere on a line and keeps the text before it (trailing spaces dropped), finds the end
+      marker anywhere on a line, so the user's text comes back byte for byte; inspect_devin uses the same contains() rule.
+    Tests: fix_1_devin_block_leaves_crlf_one_line_and_blank_line_files_byte_for_byte (6 files: CRLF, `{}`, minified `{"a":1}`, blank
+    line after the brace, `// Devin {v2}` before the brace, comment on the brace's line; each: install true, second install false,
+    8 hooks parse, user's key kept, every line end CRLF when the file was CRLF, strip_devin == original, inspect "installed", remove
+    true, file == original byte for byte); stat_019_... now asserts the byte-preserving strip_comments on two inputs.
+(f) AFTER 2-4 (cheap, done): home_var() treats an empty COPILOT_HOME/GROK_HOME as unset (never a path relative to the current folder;
+    asserted in stat_017_018_...); the stale "T-121: Cursor, Droid, Command Code, Kimi and Hermes" comments in evidence/
+    vendors-T-121-hooks.patch and vendors-T-122-mod.patch now name the nine agents; drop_empty_dir() removes the folder Kolux
+    created when its file goes (Grok via the new remove_grok, Devin in remove_devin's created arm, Pi in remove_pi; Copilot already
+    did), asserted in stat_017_018_..., stat_019_... and stat_021_pi_extension_file_is_kolux_s_alone.
+    AFTER 1 (Copilot disableAllHooks) is NOT built: it is a design call (honour the file or drop the state); it sits on T-122-b.
+    AFTER 5 (Pi sends no session id; Devin may rewrite config.json) needs a live Pi/Devin run: proof lane.
+    FIX-BEFORE 3 (hidden dependency on lane/hooks' ranges) is the coordinator's merge step: re-run cargo test --lib agent_hooks on
+    main with both lanes and the FIVE patches in (89+ passed, 19 vendors_more::tests).
+
+RED FIRST (first spawn; G:/Temp/vendors-w16-logs/fix1-red.log, 15:31)
+  cargo test --lib vendors_more with the new/widened tests against the e33acbe8 code:
+  test result: FAILED. 12 passed; 7 failed · failing: fix_1_hermes_and_pi_post_on_loopback_past_any_proxy_with_a_digits_only_port,
+  fix_1_devin_block_leaves_crlf_one_line_and_blank_line_files_byte_for_byte, stat_012_cursor_... ("preToolUse: never answered"),
+  stat_019_devin_block_..., stat_021_pi_extension_events_drive_the_dot, stat_021_pi_extension_file_is_kolux_s_alone,
+  stat_017_018_copilot_and_grok_own_files_come_and_go.
+GREEN (first spawn): fix1-green-1.log 18 passed / 1 failed (stat_021_pi_extension_file_is_kolux_s_alone: the test re-created the
+  removed folder before writing the user's file; fixed in the test) → fix1-green-2.log: test result: ok. 19 passed; 0 failed.
+
+PATCH STATE (how vendors_more.rs is compiled at all)
+  vendors_more.rs is only compiled with the coordinator's patches applied (evidence/vendors-T-122-mod.patch adds `pub mod vendors_more;`).
+  For the gates the five patches (T-121-hooks, T-121-saved, T-121-switch, T-122-mod, T-122-tests) were applied to the working tree
+  (git apply, each rc=0) and the five target files (mod.rs, tests.rs, saved.rs, switch.rs, hooks.rs) were reverted with git checkout
+  before the commit; the commit carries none of them. T-121-mod and T-121-tests stay superseded (never apply them).
+  `git apply --cached --check` on main 3042c76f in a temporary index (GIT_INDEX_FILE, git read-tree 3042c76f):
+    vendors-T-121-hooks rc=0 · vendors-T-121-saved rc=0 · vendors-T-121-switch rc=0 · vendors-T-122-mod rc=0 · vendors-T-122-tests rc=0
+    all five together: rc=0 → 5 files changed, 20 insertions(+), 5 deletions(-) (mod.rs 7, saved.rs 4, switch.rs 1, tests.rs 4, hooks.rs 9)
+  Apply order after the lane merge: T-121-hooks, T-121-saved, T-121-switch, T-122-mod, T-122-tests (separate files; order free).
+  NOTE: the privacy-audit patch no longer exists; apply five, not six.
+
+GATES (second spawn, logs G:/Temp/vendors-w16-logs/fix1b-*.log; every heavy line inside slot acquire/release)
+  cargo build --manifest-path src-tauri/Cargo.toml → Finished `dev` profile in 36.55s, exit 0
+  cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings → Finished in 16.84s, exit 0 (no warnings)
+  cargo test --manifest-path src-tauri/Cargo.toml --lib agent_hooks → test result: ok. 91 passed; 0 failed; 903 filtered out;
+    finished in 29.52s · vendors_more::tests: 19 ok (both fix_1_* among them)
+  cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast → lib: test result: FAILED. 991 passed; 1 failed; 2 ignored;
+    finished in 118.06s (pty::tests::term098_colour_and_mode_queries_pass_through_the_console_layer, core's live PowerShell console
+    test in pty.rs, a file this lane does not touch; the console answered the colour query but the mode answer arrived cut); the
+    other targets: 0/0, 0/0, shim 3 passed, 0/0, all ok. Rerun alone (fix1b-term098-alone.log): cargo test --lib pty::tests::term098
+    → test result: ok. 2 passed; 0 failed; 992 filtered out; finished in 7.48s. Six slots were held by six lanes at the time: load.
+  (the 5 patch-target files were then reverted: git checkout -- mod.rs tests.rs saved.rs switch.rs hooks.rs; git status shows none)
+  node node_modules/vitest/vitest.mjs run (full; pnpm exec/pnpm test never run with a scratch HOME) → Test Files 225 passed (225),
+    Tests 1525 passed (1525), 62.00s, exit 0 (fix1b-vitest.log; the privacy audit runs inside it with no vendors patch any more).
+    A first attempt died together with the tool call that started it (log stuck at the RUN line, slot released by hand, rerun clean).
+  node node_modules/typescript/bin/tsc --noEmit → exit 0, empty output (fix1b-tsc.log 0 bytes)
+  node scripts/plan-check.mjs --write-state → first run exit 1: "STAT-021 appears 2 times" and "STAT-020 appears 2 times" (the re-cut
+    had left each id on both the T-122 and the T-122-b line); fixed by naming the cards without their ids on the second line
+    ("the MiMo Code card moved to T-122-b", "the OMP half of T-122's Pi/OMP card"); second run exit 0 → plan-check: OK;
+    STATE.md head rewritten: Done: 460 / 690 tasks · P0 cards passing: 6 / 228 cards · cutline 2 / 18 left · merge gate 61 waiting
+  grep -c '^## Last 10 passes' STATE.md → 1 · grep -oE '^- \[[ x]\] T-[0-9a-z-]+' PLAN.md | sort | uniq -d → (nothing)
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts/firewall-check.ps1 -Baseline → exit 0,
+    "firewall-check -Baseline: 53 hit(s) in 22 file(s), 0 new, 0 baseline entr(ies) no longer present"
+  (first spawn's per-card runs of the same, 15:42-15:48: fix1-build ok, fix1-clippy-2 ok after dead-code errors were fixed in
+  fix1-clippy, fix1-agent-hooks 91 passed, fix1-privacy 2 passed, fix1-tsc empty output, fix1-cargo-full link.exe 0xC0000142.)
+
+LIVE PROOF PENDING (batched): evidence/T-121.txt steps 2a and 2b (Cursor asks in a pane; Cursor outside a pane runs as usual).
+
+SEEN, NOT FIXED
+  - The older Amp plugin in vendors.rs posts with fetch( (same pattern as Pi had); the privacy audit's EXACT entry covers it; outside
+    this round and this lane's OWNS.
+  - FIX-BEFORE 3: coordinator merge step (above).
+  - AFTER 1 Copilot disableAllHooks: on T-122-b as a design call. AFTER 5: proof lane.

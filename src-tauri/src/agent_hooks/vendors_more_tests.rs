@@ -27,10 +27,16 @@ fn stat_012_cursor_events_drive_the_dot_and_its_hooks_are_answered() {
     assert_eq!(state(&mut s, "/cursor", json!({"hook_event_name":"sessionStart"})), Some("working"), "mapped though not installed");
     assert_eq!(state(&mut s, "/cursor", json!({"hook_event_name":"sessionEnd"})), Some("done"));
     assert_eq!(normalize("/cursor", &json!({"hook_event_name":"mystery"})), None);
-    // COMPAT 3.1: the hooks that must answer get "continue" or "allow", the rest print nothing.
+    // COMPAT 3.1: beforeSubmitPrompt, which must answer, gets "continue". FIX-1 (council FIX-SOON 4): the three
+    // before-tool events get NO answer, since Cursor's docs do not say whether "allow" skips its own approval
+    // prompt; no output fails open there (failClosed is false by default), so Cursor asks as it would without Kolux.
     assert_eq!(reply("/cursor", br#"{"hook_event_name":"beforeSubmitPrompt"}"#).as_deref(), Some(r#"{"continue":true}"#));
     for e in ["preToolUse", "beforeShellExecution", "beforeMCPExecution"] {
-        assert_eq!(reply("/cursor", format!(r#"{{"hook_event_name":"{e}"}}"#).as_bytes()).as_deref(), Some(r#"{"permission":"allow"}"#), "{e}");
+        assert_eq!(reply("/cursor", format!(r#"{{"hook_event_name":"{e}"}}"#).as_bytes()), None, "{e}: never answered");
+    }
+    for e in CURSOR_EVENTS.iter().chain(["sessionStart", "sessionEnd"].iter()) {
+        let r = reply("/cursor", format!(r#"{{"hook_event_name":"{e}","tool_name":"Shell","command":"rm -rf x"}}"#).as_bytes());
+        assert!(!r.as_deref().unwrap_or("").contains("allow"), "{e}: no Cursor reply ever carries allow: {r:?}");
     }
     assert_eq!(reply("/cursor", br#"{"hook_event_name":"stop"}"#), None);
     assert_eq!(reply("/droid", br#"{"hook_event_name":"PreToolUse"}"#), None);
@@ -117,6 +123,22 @@ fn routes_agents_and_scripts() {
     }
     assert_eq!(kimi_file_in(Path::new("H"), Some(PathBuf::from("K"))), Path::new("K").join("config.toml"));
     assert_eq!(kimi_file_in(Path::new("H"), None), Path::new("H").join(".kimi-code").join("config.toml"));
+}
+
+#[test]
+fn fix_1_hermes_and_pi_post_on_loopback_past_any_proxy_with_a_digits_only_port() {
+    // Council FIX-BEFORE 1: Python's default opener honours HTTP_PROXY and the Windows system proxy, 127.0.0.1 included.
+    let py = hermes_plugin();
+    assert!(py.contains("urllib.request.build_opener(urllib.request.ProxyHandler({}))"), "an opener with no proxies at all");
+    assert!(!py.contains("urlopen("), "never the default opener");
+    assert!(py.contains("import re") && py.contains(r#"re.fullmatch(r"[0-9]{1,5}", port)"#), "a port that is not 1-5 digits is refused");
+    // Council FIX-SOON 3: fetch honours HTTP_PROXY under Bun, and under Node with NODE_USE_ENV_PROXY; node:http never
+    // does, and a port such as `1@host` can no longer turn 127.0.0.1 into userinfo.
+    let js = pi_extension();
+    assert!(js.contains("import http from \"node:http\";"));
+    assert!(js.contains(r#"http.request({ host: "127.0.0.1", port: Number(port), path: "/pi", method: "POST""#), "{js}");
+    assert!(js.contains(r#"if (!/^\d{1,5}$/.test(port) || !token) return;"#), "{js}");
+    assert!(!js.contains("fetch(") && !js.contains("http://"), "no fetch and no URL string to bend");
 }
 
 fn scratch(tag: &str) -> PathBuf {
@@ -334,7 +356,7 @@ fn stat_021_pi_extension_events_drive_the_dot() {
     assert_eq!(state(&mut s, "/pi", json!({"event":"before_agent_start","prompt":"x"})), Some("working"));
     assert_eq!(state(&mut s, "/pi", json!({"event":"session_shutdown"})), Some("done"));
     let js = pi_extension();
-    assert!(js.starts_with("// Kolux RS status extension for Pi. Written by Kolux RS") && js.contains("export default function (pi)") && js.contains("pi.on(event") && js.contains("/pi`"));
+    assert!(js.starts_with("// Kolux RS status extension for Pi. Written by Kolux RS") && js.contains("export default function (pi)") && js.contains("pi.on(event") && js.contains("path: \"/pi\""));
     for e in PI_EVENTS {
         assert!(js.contains(&format!("\"{e}\"")), "{e}");
     }
@@ -382,8 +404,12 @@ fn stat_017_018_copilot_and_grok_own_files_come_and_go() {
     assert_eq!(g["hooks"]["PreToolUse"][0].get("matcher"), None, "Grok's matcher is a regex; none means every tool");
     assert!(g["hooks"]["PreToolUse"][0]["hooks"][0]["command"].as_str().unwrap().contains(GROK_SCRIPT));
     assert_eq!(switch::inspect(&grok, &GROK_EVENTS).0, "installed");
-    assert!(remove_hooks(&home, &grok).unwrap());
-    assert!(!grok.exists(), "a file Kolux created goes");
+    assert!(remove_grok(&home, &grok).unwrap());
+    assert!(!grok.exists() && !grok.parent().unwrap().exists(), "the file Kolux created goes, and the empty hooks folder with it");
+    // FIX-1 (council AFTER 2): an empty COPILOT_HOME or GROK_HOME is unset, never a path relative to the current folder.
+    assert_eq!(home_var(Some(std::ffi::OsString::new())), None);
+    assert_eq!(home_var(Some("C".into())), Some(PathBuf::from("C")));
+    assert_eq!(home_var(None), None);
     let names: Vec<String> = rows(&home).iter().map(|r| r["agent"].as_str().unwrap().to_string()).collect();
     assert_eq!(names, ["cursor", "droid", "command-code", "kimi", "hermes", "copilot", "grok", "devin", "pi"]);
     let _ = fs::remove_dir_all(&home);
@@ -414,7 +440,11 @@ fn stat_019_devin_block_keeps_the_users_comments_and_leaves_as_it_came() {
     assert!(install_devin(&home, &file).unwrap_err().contains("hooks of its own"));
     fs::write(&file, "not json").unwrap();
     assert!(install_devin(&home, &file).unwrap_err().contains("not JSON"));
-    assert_eq!(strip_comments("{\"a\": \"// not a comment\", // c\n \"b\": 1 /* x */}"), "{\"a\": \"// not a comment\", \n \"b\": 1 }");
+    // FIX-1 (council FIX-SOON 2): comments become spaces, byte for byte, so an index in the stripped text is one in the file.
+    let c = "{\"a\": \"// not a comment\", // c\n \"b\": 1 /* x */}";
+    assert_eq!(strip_comments(c), "{\"a\": \"// not a comment\",     \n \"b\": 1        }");
+    assert_eq!(strip_comments(c).len(), c.len());
+    assert_eq!(strip_comments("// é {\r\n{}"), "       \r\n{}", "a multibyte char is as many spaces as it has bytes; CR stays");
     // Created from nothing: gone again at removal.
     let home2 = scratch("devin2");
     let file2 = devin_file(&home2);
@@ -422,9 +452,44 @@ fn stat_019_devin_block_keeps_the_users_comments_and_leaves_as_it_came() {
     let v: Value = serde_json::from_str(&strip_comments(&fs::read_to_string(&file2).unwrap())).unwrap();
     assert_eq!(v.as_object().unwrap().keys().collect::<Vec<_>>(), ["hooks"]);
     assert!(remove_devin(&home2, &file2).unwrap());
-    assert!(!file2.exists());
+    assert!(!file2.exists() && !file2.parent().unwrap().exists(), "the file and the empty devin folder Kolux made go");
     let _ = fs::remove_dir_all(&home);
     let _ = fs::remove_dir_all(&home2);
+}
+
+#[test]
+fn fix_1_devin_block_leaves_crlf_one_line_and_blank_line_files_byte_for_byte() {
+    // Council FIX-SOON 1 and 2: the text around the block is never reshaped, whatever its line ends or layout,
+    // and a `{` inside a leading comment is not the opening brace.
+    let cases: [(&str, &str); 6] = [
+        ("{\r\n  \"a\": 1\r\n}\r\n", "crlf"),
+        ("{}", "empty one-line"),
+        ("{\"a\":1}", "minified"),
+        ("{\n\n  \"a\": 1\n}\n", "blank line after the brace"),
+        ("// Devin {v2}\n{\n  \"a\": 1\n}\n", "a brace inside a leading comment"),
+        ("{ // top\n  \"a\": 1 }\n", "a comment on the brace's line"),
+    ];
+    for (i, (user, why)) in cases.into_iter().enumerate() {
+        // Its own home each time: the copy kept before the first write belongs to one user file.
+        let home = scratch(&format!("devin-exact-{i}"));
+        let file = devin_file(&home);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, user).unwrap();
+        assert!(install_devin(&home, &file).unwrap(), "{why}");
+        assert!(!install_devin(&home, &file).unwrap(), "{why}: a second install changes nothing");
+        let text = fs::read_to_string(&file).unwrap();
+        let v: Value = serde_json::from_str(&strip_comments(&text)).unwrap_or_else(|e| panic!("{why}: {e}\n{text}"));
+        assert_eq!(v["hooks"].as_object().unwrap().len(), 8, "{why}");
+        assert_eq!(v.get("a").is_some(), user.contains("\"a\""), "{why}: the user's key stays");
+        if user.contains("\r\n") {
+            assert!(!text.replace("\r\n", "").contains('\n'), "{why}: every line end is CRLF\n{text:?}");
+        }
+        assert_eq!(strip_devin(&text), (user.to_string(), true), "{why}: the block alone comes out");
+        assert_eq!(inspect_devin(&file).0, "installed", "{why}");
+        assert!(remove_devin(&home, &file).unwrap(), "{why}");
+        assert_eq!(fs::read_to_string(&file).unwrap(), user, "{why}: byte for byte");
+        let _ = fs::remove_dir_all(&home);
+    }
 }
 
 #[test]
@@ -441,7 +506,8 @@ fn stat_021_pi_extension_file_is_kolux_s_alone() {
     assert_eq!(inspect_pi(&file).0, "partial");
     assert!(install_pi(&file).unwrap());
     assert!(remove_pi(&file).unwrap());
-    assert!(!file.exists());
+    assert!(!file.exists() && !file.parent().unwrap().exists(), "the file and the empty extensions folder Kolux made go");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(&file, "export default function (pi) {}\n").unwrap();
     assert!(install_pi(&file).unwrap_err().contains("not Kolux's own"));
     assert!(!remove_pi(&file).unwrap());

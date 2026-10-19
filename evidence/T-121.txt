@@ -24,8 +24,9 @@ PER VENDOR (public doc in PROVENANCE.md, T-121 line)
   8 events installed (COMPAT 3.4), sessionStart/sessionEnd mapped not installed. beforeSubmitPrompt -> UserPromptSubmit(prompt);
   stop -> Stop, interrupted when status != "completed"; preToolUse/beforeMCPExecution -> PreToolUse; beforeShellExecution ->
   PreToolUse tool "Shell"; postToolUse/postToolUseFailure -> PostToolUse; afterAgentResponse -> no change (COMPAT 3.5).
-  The hook prints {"continue":true} on beforeSubmitPrompt and {"permission":"allow"} on the three before-tool events (COMPAT 3.1);
-  the cursor.cmd script is written with prints=true for that.
+  The hook prints {"continue":true} on beforeSubmitPrompt and NOTHING on the three before-tool events (COMPAT 3.1; FIX-1 2026-10-19,
+  council FIX-SOON 4: Cursor's docs do not say whether "allow" skips its own approval prompt, and no output fails open there since
+  failClosed is off by default, so Cursor asks as it would without Kolux); the cursor.cmd script is written with prints=true for that.
 - Droid (route /droid): ~/.factory/settings.json "hooks" Claude-style groups, 8 events, matcher "*" on PreToolUse/PostToolUse/PermissionRequest,
   timeout 10 s. SessionStart/SubagentStop -> no change (COMPAT 3.5); PermissionRequest and Notification permission_prompt -> waiting
   (sent as the ask tool, since status::Agent::Vendor reads vendors::change and that is where "waiting" lives); idle_prompt -> done.
@@ -76,6 +77,11 @@ LIVE PROOF PENDING (batched)
    and ~/.cursor/hooks.json holds 8 flat Kolux entries beside any of the user's.
 2. From a Cursor pane's shell: `echo {"hook_event_name":"beforeSubmitPrompt","prompt":"hi","conversation_id":"x"} | <home>/.kolux-rs/agent-hooks/cursor.cmd`
    prints {"continue":true} and the pane's dot turns working; the same with {"hook_event_name":"stop","status":"completed"} turns it done.
+2a. (FIX-1, council FIX-SOON 4) In a Kolux pane with the hooks installed, ask Cursor to run a shell command it would normally ask about
+    (an `rm` of a scratch file): Cursor's OWN approval prompt still appears; the hook printed nothing for beforeShellExecution and the
+    pane's dot is working while it waits.
+2b. Outside a Kolux pane (a plain terminal with no KOLUX_* variables), with the hooks installed, a Cursor prompt and a shell command
+    both run as usual: cursor.cmd leaves before reading stdin and prints nothing, and Cursor's failClosed default (false) lets the turn go on.
 3. Status hooks off: the file is byte for byte as before (or gone when Kolux created it); `kolux agent hooks status` says not installed.
 4. The same for droid (~/.factory/settings.json), command-code (~/.commandcode/settings.json), kimi (~/.kimi-code/config.toml block,
    posted through Git Bash: `bash <home>/.kolux-rs/agent-hooks/kimi.sh`) and hermes (~/.hermes/plugins/kolux-status/, two files).
