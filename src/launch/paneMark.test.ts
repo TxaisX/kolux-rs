@@ -1,12 +1,54 @@
 // FIX-3: the pane mark, with real catalogue ids and real program paths, and the one credit rule shared with Rust.
 import { expect, test } from "vitest";
 import { hooksAbsent } from "../chat/kitPrompt";
-import { CREDIT_NAMES, creditedAgent, markFor, paneMark, programMark } from "./paneMark";
+import { CREDIT_NAMES, creditedAgent, creditedProgram, markFor, paneMark, programMark } from "./paneMark";
 import { markFor as markForViaMenu } from "./PlusMenu";
 import rustSource from "../../src-tauri/src/agents.rs?raw";
+import toolsSource from "../../src-tauri/src/tools.rs?raw";
 import appSource from "../App.tsx?raw";
 
 const rust = rustSource.replace(/\r/g, "");
+const tools = toolsSource.replace(/\r/g, "");
+
+/** The test module of a Rust file: from its last `#[cfg(test)]` to the end, without whole-line comments. */
+const testModule = (src: string) =>
+  src
+    .slice(src.lastIndexOf("#[cfg(test)]"))
+    .split("\n")
+    .filter((l) => !l.trimStart().startsWith("//"))
+    .join("\n");
+/** A Rust string literal as written in source (plain with escapes, r"..." or r#"..."#). */
+const STR = String.raw`(?:r#"(.*?)"#|r"(.*?)"|"((?:[^"\\]|\\.)*)")`;
+const unescape = (s: string) => s.replace(/\\(.)/g, (_m, c: string) => (c === "n" ? "\n" : c === "t" ? "\t" : c === "r" ? "\r" : c === "0" ? "\0" : c));
+/** Every `assert_eq!(<fn>(<literal>), None|Some("..."))` in a Rust test module, and how many `<fn>(` calls that module holds. */
+function rustCases(src: string, fn: string): { cases: [string, string | null][]; calls: number } {
+  const mod = testModule(src);
+  const re = new RegExp(String.raw`assert_eq!\(${fn}\(${STR}\), (?:None|Some\("(.*?)"\))`, "g");
+  const cases = [...mod.matchAll(re)].map((m): [string, string | null] => [m[1] ?? m[2] ?? unescape(m[3] ?? ""), m[4] ?? null]);
+  return { cases, calls: mod.split(`${fn}(`).length - 1 };
+}
+
+/** The pane-building calls in App.tsx: every `paneMark(` argument list, and every `markFor(` argument list, balanced. */
+function calls(source: string, name: string): string[] {
+  const out: string[] = [];
+  for (const m of source.matchAll(new RegExp(String.raw`\b${name}\(`, "g"))) {
+    let depth = 1;
+    let i = m.index + m[0].length;
+    const from = i;
+    for (; i < source.length && depth > 0; i++) depth += source[i] === "(" ? 1 : source[i] === ")" ? -1 : 0;
+    out.push(source.slice(from, i - 1));
+  }
+  return out;
+}
+/** What the guard demands of an App.tsx text: `paneMark(a|agent, line)` at 3+ sites, and no `markFor(` that names an agent. Returns the reasons it fails. */
+function guardFailures(app: string): string[] {
+  const bad: string[] = [];
+  const marks = calls(app, "paneMark");
+  if (marks.length < 3) bad.push(`only ${marks.length} paneMark( sites`);
+  for (const c of marks) if (!/^\s*(?:a|agent)\s*,\s*line\s*$/.test(c)) bad.push(`paneMark(${c})`);
+  for (const c of calls(app, "markFor")) if (/\b(?:a|agent)\b/.test(c)) bad.push(`markFor(${c})`);
+  return bad;
+}
 
 test("FIX-3: the real catalogue ids take the mark of the program their Command names", () => {
   // OpenClaude, Gemini and the rest never have a custom id: the Command field is the only route.
@@ -37,8 +79,13 @@ test("FIX-3: a program is read as a command line, the way Rust credits it", () =
   expect(markFor("openclaude", '"claude"')).toBe("claude");
   expect(markFor("gemini", "node C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js")).toBe("claude");
   expect(markFor("gemini", "node /usr/lib/node_modules/@openai/codex/bin/codex.js")).toBe("codex");
-  // Same as Rust: an unquoted path with a space is cut at the space ("C:\Program" is not an agent).
-  expect(markFor("openclaude", "C:\\Program Files\\Claude\\claude.exe")).toBe("shell");
+  // FIX-4: a spawn program is read quoted first, then as a line (tools.rs credited_program), so the
+  // one launchable form with a space, a bare path, is credited. With arguments after an unquoted
+  // path the cut is ambiguous and stays uncredited, the same as in Rust.
+  expect(markFor("openclaude", "C:\\Program Files\\Claude\\claude.exe")).toBe("claude");
+  expect(markFor("openclaude", "C:\\Program Files\\nodejs\\codex.cmd")).toBe("codex");
+  expect(markFor("openclaude", "C:\\Program Files\\Claude\\claude.exe --x")).toBe("shell");
+  expect(markFor("openclaude", "C:\\Program Files\\Tools\\notclaude.exe")).toBe("shell");
   // Look-alikes and other agents stay shell.
   expect(markFor("gemini", "claude-helper")).toBe("shell");
   expect(markFor("gemini", "claude-teams")).toBe("shell");
@@ -73,23 +120,60 @@ test("FIX-3: paneMark, the helper every pane-building site uses, follows the sta
 });
 
 test("FIX-3: App.tsx builds every pane mark from the start line's program", () => {
-  const app = appSource.replace(/\r/g, "");
-  const calls = [...app.matchAll(/\b(?:markFor|paneMark)\(([^()]*)\)/g)].map((m) => m[0]).filter((c) => /\b(?:a|agent)\b/.test(c));
-  expect(calls.length).toBeGreaterThanOrEqual(3);
-  // Swapping the line's program for the catalogue's (a.program) would lose the whole feature.
-  for (const c of calls) {
-    expect(c, "a pane built from an agent uses its start line").toContain("line");
+  // FIX-4: exactly paneMark(a, line) / paneMark(agent, line) at 3+ sites, and no markFor( call that names an agent.
+  expect(guardFailures(appSource.replace(/\r/g, ""))).toEqual([]);
+});
+
+test("FIX-4: the App.tsx guard rejects the forms that would lose the Command override", () => {
+  const good = "paneMark(a, line) paneMark(agent, line) paneMark(a, line)";
+  expect(guardFailures(good)).toEqual([]);
+  // The catalogue program wins over the line's: the Command never shows.
+  expect(guardFailures(`${good} markFor(a.id, a.program ?? line.program)`)).toEqual(["markFor(a.id, a.program ?? line.program)"]);
+  expect(guardFailures(`${good} markFor(agent.id, (line.program ?? agent.program))`)).toEqual(["markFor(agent.id, (line.program ?? agent.program))"]);
+  expect(guardFailures("paneMark(a, line) paneMark(a, line.program) paneMark(agent, line)")).toEqual(["paneMark(a, line.program)"]);
+  expect(guardFailures("paneMark(a, line) paneMark(agent, line)")).toEqual(["only 2 paneMark( sites"]);
+  // Other markFor( uses (a rail footer from an id) are not pane builds.
+  expect(guardFailures(`${good} markFor(railPick.agentId ?? "")`)).toEqual([]);
+});
+
+test("FIX-3: creditedAgent runs every case agents.rs asserts for credited_agent, and every call is parsed", () => {
+  const { cases, calls } = rustCases(rust, "credited_agent");
+  expect(cases.length).toBeGreaterThanOrEqual(16);
+  // An assert written another way (a variable, assert!(..is_none())) must not be skipped silently.
+  expect(cases.length, "every credited_agent( call in agents.rs tests is an assert_eq! with a literal this parser reads").toBe(calls);
+  for (const [input, want] of cases) {
+    expect(creditedAgent(input), `credited_agent(${JSON.stringify(input)})`).toBe(want);
   }
 });
 
-test("FIX-3: creditedAgent runs every case agents.rs asserts for credited_agent", () => {
-  const cases = [...rust.matchAll(/assert_eq!\(credited_agent\((r#"(.*?)"#|r"(.*?)"|"(.*?)")\), (None|Some\("(.*?)"\))/g)];
-  expect(cases.length).toBeGreaterThanOrEqual(16);
-  for (const m of cases) {
-    const input = m[2] ?? m[3] ?? m[4] ?? "";
-    const want = m[6] ?? null;
-    expect(creditedAgent(input), `credited_agent(${JSON.stringify(input)})`).toBe(want);
+test("FIX-4: creditedProgram runs every case tools.rs asserts for credited_program, and every call is parsed", () => {
+  const { cases, calls } = rustCases(tools, "credited_program");
+  expect(cases.length).toBeGreaterThanOrEqual(10);
+  expect(cases.length, "every credited_program( call in tools.rs tests is an assert_eq! with a literal this parser reads").toBe(calls);
+  for (const [input, want] of cases) {
+    expect(creditedProgram(input), `credited_program(${JSON.stringify(input)})`).toBe(want);
   }
+});
+
+test("FIX-4: the Rust assert parser reads escapes and counts calls it cannot read", () => {
+  const src = 'x\n#[cfg(test)]\nmod t { fn a() { assert_eq!(f("a\\\\b\\"c"), Some("claude")); assert_eq!(f(r"C:\\x"), None); let v = f(var); assert!(f("z").is_none()); } }';
+  const { cases, calls } = rustCases(src, "f");
+  expect(cases).toEqual([['a\\b"c', "claude"], ["C:\\x", null]]);
+  expect(calls).toBe(4);
+});
+
+test("FIX-4: creditedAgent is exact outside ASCII the way Rust is: its whitespace set, ASCII-only lowercase", () => {
+  // Rust char::is_whitespace includes U+0085 and not U+FEFF; JS \s is the other way round.
+  expect(creditedAgent("\u0085claude")).toBe("claude");
+  expect(creditedAgent("claude\u0085--x")).toBe("claude");
+  expect(creditedAgent("claude\u00a0--x")).toBe("claude");
+  expect(creditedAgent("\u3000claude")).toBe("claude");
+  expect(creditedAgent("\ufeffclaude")).toBeNull();
+  expect(creditedAgent("node\u0085C:\\x\\claude-code\\cli.js")).toBe("claude");
+  // to_ascii_lowercase leaves the Kelvin sign alone; JS toLowerCase folds it to k.
+  expect(creditedAgent("\u212Airo-cli")).toBeNull();
+  expect(creditedAgent("KIRO-CLI")).toBe("kiro");
+  expect(markFor("openclaude", "\ufeffclaude")).toBe("shell");
 });
 
 test("FIX-3: the program-name table matches the catalogue in agents.rs, in order", () => {

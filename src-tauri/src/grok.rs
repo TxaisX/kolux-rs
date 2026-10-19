@@ -72,7 +72,7 @@ pub fn failure(ended: &Ended, output: &str, code: Option<&str>) -> Option<Attent
 
 /// The variable a new pane gets: only a Grok pane, only with a saved key.
 pub fn pane_env(program: Option<&str>, key: Option<String>) -> Option<(&'static str, String)> {
-    if crate::agents::credited_agent(program?) != Some("grok") {
+    if crate::tools::credited_program(program?) != Some("grok") {
         return None;
     }
     key.map(|k| (KEY_ENV, k))

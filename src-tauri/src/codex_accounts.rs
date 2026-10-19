@@ -162,7 +162,7 @@ pub fn wait_home(store: &Mutex<Store>, id: &str) -> Result<String, String> {
 
 /// The variable a new pane gets: only a Codex pane, only with an active account.
 pub fn pane_env(program: Option<&str>, home: Option<String>) -> Option<(&'static str, String)> {
-    if crate::agents::credited_agent(program?) != Some("codex") {
+    if crate::tools::credited_program(program?) != Some("codex") {
         return None;
     }
     home.map(|h| (HOME_ENV, h))
@@ -868,6 +868,14 @@ mod tests {
         assert!(!vault.contains("kim@example.com") && !vault.contains("fake"), "the kept copy is sealed");
         assert_eq!(pane_env(Some("codex"), active_home(&s)), Some((HOME_ENV, a.home)));
         assert_eq!(pane_env(Some("claude"), active_home(&s)), None);
+    }
+
+    /// launch FIX-4: a Command that is a bare path with a space starts fine, so it gets the account too.
+    #[test]
+    fn fix4_a_codex_path_with_a_space_gets_the_account() {
+        let home = Some(r"C:\p\codex-accounts\c1".to_string());
+        assert_eq!(pane_env(Some(r"C:\Program Files\nodejs\codex.cmd"), home.clone()), Some((HOME_ENV, home.clone().unwrap())));
+        assert_eq!(pane_env(Some(r"C:\Program Files\Tools\notcodex.exe"), home), None);
     }
 
     #[test]

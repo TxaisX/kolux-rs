@@ -3081,10 +3081,7 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
 /// ORCH-004: every open terminal with the agent Kolux started in it (none for a shell; a pane title
 /// plays no part) and whether it has been quiet for `IDLE`.
 fn peers(ctx: &Ctx) -> Vec<crate::orchestration::Peer> {
-    let credited = |p: &str| match p.starts_with('"') {
-        true => crate::agents::credited_agent(p),
-        false => crate::agents::credited_agent(&format!("\"{p}\"")),
-    };
+    let credited = crate::tools::credited_program;
     ctx.terminals
         .sessions()
         .into_iter()

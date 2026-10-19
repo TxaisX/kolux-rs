@@ -45,12 +45,7 @@ pub struct Tab {
 
 /// The agent a program line was credited to, quoted or not.
 fn agent_of(program: Option<&str>) -> Option<&'static str> {
-    let p = program.map(str::trim).filter(|p| !p.is_empty())?;
-    if p.starts_with('"') {
-        super::credited_agent(p)
-    } else {
-        super::credited_agent(&format!("\"{p}\"")).or_else(|| super::credited_agent(p))
-    }
+    crate::tools::credited_program(program?)
 }
 
 /// Joins the live sessions (handle, start folder, program, in handle order) with the window's
@@ -160,6 +155,13 @@ mod tests {
     fn orch060_an_agent_started_from_a_quoted_path_is_credited() {
         let tabs = compose(vec![session("term-1", Some(r#""C:\Program Files\nodejs\codex.cmd" --sandbox workspace-write"#)), session("term-2", Some("  "))], &[]);
         assert_eq!((tabs[0].agent, tabs[1].agent), (Some("codex"), None));
+    }
+
+    /// launch FIX-4: the inventory, the account variables and the window credit a program one way.
+    #[test]
+    fn fix4_a_bare_path_with_a_space_is_credited_like_the_account_callers_do() {
+        let tabs = compose(vec![session("term-1", Some(r"C:\Program Files\Claude\claude.exe")), session("term-2", Some("claude --x"))], &[]);
+        assert_eq!((tabs[0].agent, tabs[1].agent), (Some("claude"), Some("claude")));
     }
 
     /// T-279-c: over the runtime socket a tab's program line is only the program's name; the
