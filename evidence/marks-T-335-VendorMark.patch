@@ -1,0 +1,28 @@
+diff --git a/src/chrome/VendorMark.tsx b/src/chrome/VendorMark.tsx
+index 107975b2..9c100bcf 100644
+--- a/src/chrome/VendorMark.tsx
++++ b/src/chrome/VendorMark.tsx
+@@ -1,15 +1,15 @@
+ // Model marks: a vendor's own public symbol stands for its agent (nominative use; Txais's call
+-// of 2026-10-08: vendor logos come only from public brand kits). Files live in src/assets/vendors
+-// with their source and terms in NOTICE.md. Codex has no kit file yet (openai.com/brand refuses
+-// every fetch), so it gets Kolux's neutral spark glyph until one is obtained. A plain shell keeps
+-// Kolux's neutral prompt glyph (TERM-020).
+-import claudeSpark from "../assets/vendors/anthropic-claude-spark.svg";
+-import { Shell, Spark } from "./icons";
++// of 2026-10-08: vendor logos come only from public brand kits). The files live in
++// src/assets/vendors with their source, terms and hash in NOTICE.md, and src/marks/registry.ts
++// is the one table that says which agent or tool wears which file (T-335). An id with no kit file
++// gets Kolux's neutral spark glyph and its name. A plain shell keeps Kolux's neutral prompt glyph
++// (TERM-020).
++import AgentMark from "../marks/AgentMark";
++import { Shell } from "./icons";
+ 
+ export type Agent = "claude" | "codex" | "shell";
+ 
+ export default function VendorMark({ agent, size = 13 }: { agent: Agent; size?: number }) {
+   if (agent === "shell") return <Shell size={size} />;
+-  if (agent === "codex") return <Spark size={size} role="img" aria-label="Codex" />;
+-  return <img src={claudeSpark} width={size} height={size} alt="Claude" draggable={false} />;
++  return <AgentMark id={agent} size={size} />;
+ }
