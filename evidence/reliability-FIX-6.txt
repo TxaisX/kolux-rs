@@ -16,8 +16,8 @@ reliability FIX-6 (council review reliability-60b23bb9-standin-review.md), lane/
     ["-9","--","-4242"], and the bare pid never appears. It runs on this Windows PC because the seam is not cfg(unix). It does
     not prove the real process spawn on Unix.
 (4) UNIX NOTE (review item 3): the Unix paths (process_group(0) in quiet(), kill_leftover on Unix, the "kill" invocation with
-    "--") are compiled but not run on this PC, and in fact not even compiled for a Unix target here (only
-    x86_64-pc-windows-msvc is installed); the project has no Unix CI. They are checked by reading and by the argument-list
+    "--") were never compiled for a Unix target and never run (only x86_64-pc-windows-msvc is installed on this PC;
+    FIX-7 corrected the earlier wording "compiled but not run"); the project has no Unix CI. They are checked by reading and by the argument-list
     tests above only. A Unix CI job (cargo test and clippy on Linux and macOS) would close the gap and is the coordinator's call.
 (5) Shift-click check stays LIVE PROOF PENDING (no app launched): in the Source Control panel, tree view, check one file in a
     folder under Staged, close that Staged folder, Shift-click another row: only that row is selected and it is now the anchor;

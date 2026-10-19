@@ -204,6 +204,12 @@ export const pageCounts = (url: string | null | undefined): boolean => {
   return u !== "" && u !== "about:blank" && !u.startsWith("about:");
 };
 
+/** FIX-4: the saved default agent counts for the agent step only when it is an AI agent's id: blank, or a plain terminal ("terminal"), does not. */
+const isAiAgent = (id: string | null | undefined): boolean => {
+  const v = (id ?? "").trim().toLowerCase();
+  return v !== "" && v !== "terminal";
+};
+
 /** ONB-015: the steps done, each from the thing it stands for. */
 export function doneFrom(f: Facts): Set<StepId> {
   const done = new Set<StepId>();
@@ -213,7 +219,7 @@ export function doneFrom(f: Facts): Set<StepId> {
   if (f.integrations === "connected") done.add("integrations");
   if (f.cli) done.add("cli");
   if (f.notifications === true) done.add("notifications");
-  if (f.agent) done.add("agent");
+  if (isAiAgent(f.agent)) done.add("agent");
   if (f.setupScript === true) done.add("automate");
   return done;
 }
@@ -276,16 +282,21 @@ export const withRecord = (seen: ReadonlySet<string>, kept: ReadonlySet<string>,
 /** ONB-015: the browser pane calls this when a page finishes loading; the first page other than a
  *  blank one marks the Browser step's fact on the profile and notes the use (ONB-042), once per
  *  window, so later page loads write nothing. A write that fails frees the note again, so the next
- *  page load tries once more (FIX-2). */
+ *  page load tries once more (FIX-2); the use is still noted only once (FIX-4). */
 export const pageNoter = (mark: typeof markGuide = markGuide, use: (id: string) => unknown = noteUse) => {
   let done = false;
+  let used = false;
   return (url: string | null | undefined): void => {
     if (done || !pageCounts(url)) return;
     done = true;
     void mark("tried", PAGE_SHOWN).catch(() => {
       done = false;
     });
-    use("browser-page");
+    // FIX-4: the use is noted once per window, so a retry of the write does not count the first page twice.
+    if (!used) {
+      used = true;
+      use("browser-page");
+    }
   };
 };
 

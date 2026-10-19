@@ -2,7 +2,6 @@ import { expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { CHECKLIST_CHANGED, chordFires, clearReadFailure, closer, readFailed, connectFailed, firstAiConnected, firstConnection, firstFolderAgent, kitLaunch, leaveKey, milestone, oneClick, openAt, reopenWizard, SCREENS, STATUSES_FAILED, wizardCloser, type Outcome } from "./firstRun";
-import wizardSource from "./useWizard.ts?raw";
 import { WizardView } from "./Wizard";
 import { jargon } from "../glossary";
 
@@ -221,17 +220,7 @@ test("VIEW-114 (FIX-2 FB1): a stored reopen shows screen one, then tells the sid
   expect(seen).toEqual(["Error: locked", "shown", CHECKLIST_CHANGED]);
 });
 
-test("VIEW-114 (FIX-2 FB1): useWizard closes and reopens only through the helpers that tell the sidebar, and announces every added project", () => {
-  const src = wizardSource;
-  expect(src).toMatch(/wizardCloser\(/);
-  expect(src).toMatch(/reopenWizard\(/);
-  expect(src).not.toMatch(/[^A-Za-z]closer\(/);
-  expect(src).not.toMatch(/invoke\("onboarding_reopen"\)\.then/);
-  // The project-added note comes before the first-folder check, so every add re-reads the entry.
-  const body = src.slice(src.indexOf("const projectAdded"));
-  expect(body.indexOf("projectAddedNote()")).toBeGreaterThan(-1);
-  expect(body.indexOf("projectAddedNote()")).toBeLessThan(body.indexOf("firstFolder.current"));
-});
+// FIX-4: the useWizard wiring (close, reopen, added project) is tested through the real hook in useWizard.test.ts.
 
 test("ACCT-035: the first connected report sends the first-AI milestone once; not-connected reports send nothing", () => {
   const sent: string[] = [];
@@ -246,7 +235,7 @@ test("ACCT-035: the first connected report sends the first-AI milestone once; no
   expect(typeof firstAiConnected).toBe("function");
 });
 
-test("ACCT-035 (FIX-3): a first-AI write that fails is sent again on the next connected report; one that lands is never sent again", async () => {
+test("ACCT-035 (FIX-3): a first-AI write that fails is sent again on the next connected report (in the app: the next page visit or connection change); one that lands is never sent again", async () => {
   const tries: boolean[] = [];
   let works = false;
   const report = firstConnection(async () => (tries.push(works), works));

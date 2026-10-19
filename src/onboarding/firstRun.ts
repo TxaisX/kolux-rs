@@ -152,7 +152,9 @@ export const readFailed = (e: string | null): string => (e && e !== STATUSES_FAI
 /** ACCT-035: the AI connections page reports each card's connected state here; the first time any
  * card says connected, the first-AI milestone is sent (onboarding.rs keeps only the first time,
  * across the wizard and this page). One landed write per window: later reports change nothing, while a
- * write that failed is tried again on the next connected report (FIX-3). */
+ * write that failed is tried again on the next connected report (FIX-3). A card reports only when its
+ * connected state changes or the page is visited again (it mounts), so in the app that retry waits for
+ * the next visit to AI connections, the next connection change or the next start (FIX-4). */
 export function firstConnection(send: (name: Milestone) => Promise<boolean> = milestone) {
   let sent = false;
   return (on: boolean) => {

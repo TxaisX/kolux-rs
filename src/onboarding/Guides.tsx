@@ -53,17 +53,21 @@ const doneOf = (s: Snapshot) => doneFrom({ ...s.read, cli: caps(s.cli, s.home).e
 /** What the guide can tell is done on this computer (ONB-015), read each time the guide opens and
  *  on Re-check. `refresh` reads it again; so does a change of `again` (VIEW-114: the sidebar entry
  *  bumps it on every Setup Guide close, every added project and window focus past the floor, see
- *  sidebar.ts onReread). `settled` is the done set of the last
+ *  sidebar.ts onReread). `onRead` is called as each read starts, the one made when `on` turns true included
+ *  (FIX-4: the sidebar entry stamps its focus floor with it). `settled` is the done set of the last
  *  read that fully answered, null until the first one has: it never shows a half-read state. */
-export function useGuideState(on: boolean, again: unknown = null) {
+export function useGuideState(on: boolean, again: unknown = null, onRead?: () => void) {
   const [cli, setCli] = useState<CliStatus | null>(null);
   const [home, setHome] = useState<string[]>([]);
   const [read, setRead] = useState<Read>(UNREAD);
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [n, setN] = useState(0);
   const check = useRef(latest<boolean>((v) => setRead((r) => ({ ...r, setupScript: v })))).current;
+  const told = useRef(onRead);
+  told.current = onRead;
   useEffect(() => {
     if (!on) return;
+    told.current?.();
     let live = true;
     let acc: Read = UNREAD;
     const c = invoke<CliStatus>("cli_status").then(

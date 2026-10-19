@@ -26,7 +26,7 @@ pub fn env_set() -> bool {
 /// any `--`, unless the user's arguments already name either key, a profile or OSS mode. Nothing
 /// else is touched, and a second pass adds nothing.
 pub fn apply(program: Option<&str>, args: &mut Vec<String>, env: &mut Vec<(String, String)>, env_set: bool) {
-    match program.and_then(crate::agents::credited_agent) {
+    match program.and_then(crate::tools::credited_program) {
         Some("claude") => {
             let explicit = args.iter().any(|a| a == "--autocompact" || a.starts_with("--autocompact="));
             if !env_set && !explicit {
