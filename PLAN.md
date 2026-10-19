@@ -334,7 +334,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P2 · theme 6 · Business-user frame (6 cards)
 
-- [ ] T-294 · PROJ-035 Sidebar card that suggests adding a setup script
+- [x] T-294 · PROJ-035 Sidebar card that suggests adding a setup script · done 2026-10-19 (lane/worktrees from d823b3f8; evidence/T-294.txt: a project with no setup script gets a sidebar card offering another tool's setup or its package manager's install command, saved as a local setup that takes effect, dismissal kept per project, an unreadable kolux.yaml shown with Retry; cargo test setup:: 26, vitest setupSuggestion 3; lib.rs hunk in evidence/worktrees-T-294-lib.patch, panel hunk in evidence/worktrees-T-294-ProjectsPanel.patch)
 - [ ] T-298-b · ONB 011 rest: the copied terminal diagnostics list when each first milestone happened (with T-166 TERM 116 and T-248 APP 010 Copy terminal diagnostics; the times are in the onboarding record under milestones)
 
 ### P2 · theme 10 · Identity and originality (4 cards)

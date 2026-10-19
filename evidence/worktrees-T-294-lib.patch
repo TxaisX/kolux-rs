@@ -1,0 +1,13 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -399,6 +399,9 @@ pub fn run() {
+             projects::workspace_suggest_name,
+             projects::project_icons_list,
+             projects::project_icon_set,
++            setup::setup_suggestion,
++            setup::setup_suggestion_save,
++            setup::setup_suggestion_dismiss,
+             projects::handoff_note_prepare,
+             projects::workspace_remove,
+             projects::workspace_remove_check,

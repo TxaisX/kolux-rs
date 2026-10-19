@@ -1,0 +1,64 @@
+diff --git a/src/projects/ProjectsPanel.tsx b/src/projects/ProjectsPanel.tsx
+index 9b77b6f..f000b70 100644
+--- a/src/projects/ProjectsPanel.tsx
++++ b/src/projects/ProjectsPanel.tsx
+@@ -30,6 +30,8 @@ import AddProject from "./AddProject";
+ import { takeSuggestion } from "./suggest";
+ import { IconPicker } from "./IconPicker";
+ import { ProjectIcon } from "./IconView";
++import { SetupCard } from "./SetupCard";
++import type { SetupSuggestion } from "./setupSuggestion";
+ import Picker, { type PickItem } from "./Picker";
+ import StartGit, { type FirstFile } from "./StartGit";
+ import { openKits } from "../kits/Kits";
+@@ -288,6 +290,33 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+     invoke("activity_touch", { path }).catch(() => {});
+   }
+   const say = (kind: "ok" | "warn" | "error", text: string) => setMessage({ kind, text });
++  // PROJ-035: the setup-script card for the project of the active workspace; asked again when the
++  // window is focused or another workspace becomes active.
++  const [card, setCard] = useState<{ project: Project; s: SetupSuggestion } | null>(null);
++  const [cardBusy, setCardBusy] = useState(false);
++  const askCard = useCallback(async () => {
++    const project = projects.find((p) => (worktrees[p.id] ?? []).some((w) => activeDir !== null && same(w.path, activeDir)));
++    if (!project) return setCard(null);
++    const s = await invoke<SetupSuggestion>("setup_suggestion", { projectId: project.id, path: project.path }).catch((err) => ({ kind: "error", message: String(err) }) as SetupSuggestion);
++    setCard(s.kind === "none" ? null : { project, s });
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [projects, worktrees, activeDir]);
++  useEffect(() => {
++    void askCard();
++    window.addEventListener("focus", askCard);
++    return () => window.removeEventListener("focus", askCard);
++  }, [askCard]);
++  const cardDo = async (cmd: string, args: Record<string, unknown>) => {
++    setCardBusy(true);
++    try {
++      await invoke(cmd, args);
++      await askCard();
++    } catch (err) {
++      say("error", String(err));
++    } finally {
++      setCardBusy(false);
++    }
++  };
+   const [icons, setIcons] = useState<Record<string, string>>({}); // PROJ-019: icons chosen by hand, by project id
+   const setIcon = async (p: Project, icon: string) => {
+     try {
+@@ -1758,6 +1787,16 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+               </div>
+             ))}
+ 
++          {card && (
++            <SetupCard
++              project={card.project.name}
++              suggestion={card.s}
++              busy={cardBusy}
++              onSave={(from) => cardDo("setup_suggestion_save", { path: card.project.path, from })}
++              onDismiss={() => cardDo("setup_suggestion_dismiss", { projectId: card.project.id })}
++              onRetry={() => void askCard()}
++            />
++          )}
+           {message && <div className={`note ${message.kind}`}>{message.text}</div>}
+         </div>
+ 
