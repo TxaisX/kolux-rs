@@ -58,3 +58,11 @@
 .cs-hit .cs-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; color: var(--fg-muted); font: 11.5px var(--mono-font); }
 .cs-hit mark { background: color-mix(in srgb, var(--warn) 32%, transparent); color: var(--fg); border-radius: 2px; }
 .explorer-head .ib.on { color: var(--fg); background: var(--row-selected); }
+/* EDIT-023: a CSV or TSV file shown as a grid. */
+.csv-table { display: flex; flex-direction: column; overflow: hidden; }
+.csv-note { margin: 0; padding: 6px 12px; color: var(--fg-muted); font-size: 11.5px; }
+.csv-scroll { flex: 1; min-height: 0; overflow: auto; }
+.csv-table table { border-collapse: collapse; font: 12px var(--editor-font, var(--mono-font)); }
+.csv-table th, .csv-table td { border: 1px solid var(--border, color-mix(in srgb, var(--fg) 14%, transparent)); padding: 2px 8px; text-align: left; white-space: pre; max-width: 40ch; overflow: hidden; text-overflow: ellipsis; }
+.csv-table thead th { position: sticky; top: 0; background: var(--pane-bg); color: var(--fg); font-weight: 600; z-index: 1; }
+.csv-table th.csv-n { position: sticky; left: 0; color: var(--fg-faint); font-weight: 400; text-align: right; background: var(--pane-bg); }

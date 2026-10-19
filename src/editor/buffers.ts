@@ -17,7 +17,11 @@ export function sameText(a: string, b: string): boolean {
   return a === b || norm(a) === norm(b);
 }
 
-/** Reads a file, trying again a few times before giving up with the last error (EDIT-001). */
+/** EDIT-046: the refusals a retry cannot change (the file is binary, over the size bound, or not UTF-8). */
+export const NOT_TEXT = /is a binary file|is too large to open|is not UTF-8 text/;
+
+/** Reads a file, trying again a few times before giving up with the last error (EDIT-001). A file
+ *  that is not text (EDIT-046) is given up on at once: reading it again changes nothing. */
 export async function loadText(read: () => Promise<string>, tries = 3, wait = 300): Promise<string> {
   let last: unknown;
   for (let i = 0; i < tries; i++) {
@@ -25,6 +29,7 @@ export async function loadText(read: () => Promise<string>, tries = 3, wait = 30
       return await read();
     } catch (e) {
       last = e;
+      if (NOT_TEXT.test(String(e))) break;
       if (i < tries - 1) await new Promise((r) => setTimeout(r, wait));
     }
   }

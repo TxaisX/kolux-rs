@@ -788,3 +788,6 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · marks T-336 · card USAGE-020 in spec; this tree's own src/usage; no outside source
 > 2026-10-19 · marks T-338 · card HID-042 in spec; this tree's own src and src-tauri/icons; no outside source
 > 2026-10-19 · marks T-335 · card list SESS-044/TERM-131/VIEW-104/SET-048/HID-039-041/HID-043/HID-044 in spec; vendor brand-kit pages and zips named row by row in src/assets/vendors/NOTICE.md (OpenAI, GitHub, Linear, VS Code; Anthropic kit from 2026-10-08), public downloads only; this tree's own src/chrome, src/launch and src/marks; no old-app file
+> 2026-10-19 · editor T-178 · Rust std docs for File::sync_all, fs::rename and FileType::is_symlink; file signatures (zip, gzip, pdf, png, gif, jpeg, 7z, exe, elf) from their public format notes; no outside source
+> 2026-10-19 · editor T-318 · Rust std docs for fs::read_dir, FileType::is_symlink and jiff Zoned::strftime; no outside source
+> 2026-10-19 · editor T-316 · CodeMirror 6 reference docs (StreamLanguage, Compartment, LanguageDescription), the JSON grammar on json.org, the Nim manual keyword list, RFC 4180 for CSV quoting; no outside source

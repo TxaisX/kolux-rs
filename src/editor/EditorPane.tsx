@@ -17,10 +17,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
 import { EditorView } from "@codemirror/view";
 import { Compartment, EditorState } from "@codemirror/state";
-import { LanguageDescription, syntaxHighlighting } from "@codemirror/language";
-import { languages } from "@codemirror/language-data";
+import { syntaxHighlighting } from "@codemirror/language";
+import { languageFor } from "./languages";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
-import { ChevronDown, Close, FileCode, List } from "../chrome/icons";
+import { ChevronDown, Close, List } from "../chrome/icons";
+import FileIcon from "./FileIcon";
+import CsvTable from "./CsvTable";
+import { isTable } from "./csv";
+import { useSettings } from "../settings/useSettings";
+import { prefPatch, readEditorPrefs } from "../settings/editorPrefs";
 import { undo } from "@codemirror/commands";
 import { attach, baseName, detach, isDirty, isStale, loadText, relay, replaceAll, save, subscribe, textOf } from "./buffers";
 import { beginSave, canUndo, checkOnce, endSave, forget, keep, POLL_MS, readFresh, reloadNow, remember, setBanner as markBanner, UNDO_TOAST_MS, type Io, type Stamp, type UndoEntry } from "./diskChange";
@@ -124,6 +129,7 @@ export function StaleNotice({ path, onDone, onToast }: { path: string; onDone: (
 }
 
 const lang = new Compartment();
+const wrapping = new Compartment(); // EDIT-006: word wrap, on unless the setting or Alt+Z turned it off
 export const look = EditorView.theme(
   {
     "&": { height: "100%", background: "var(--pane-bg)", color: "var(--fg)", fontSize: "13px" },
@@ -159,9 +165,21 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   const wantFocus = useRef(focused);
   wantFocus.current = focused;
   const md = isMarkdown(path);
+  const grid = isTable(path); // EDIT-023: a CSV or TSV file opens as a table, with Source beside it
+  const [table, setTable] = useState(grid);
+  const tableOn = grid && table;
+  // EDIT-006: wrapping is on by default; the saved setting decides once it has loaded, Alt+Z flips it.
+  const { settings, save: saveSetting } = useSettings();
+  const [wrap, setWrap] = useState(true);
+  const wrapOn = useRef(true);
+  wrapOn.current = wrap;
+  useEffect(() => {
+    if (settings) setWrap(readEditorPrefs(settings).wordWrap);
+  }, [settings === null]);
   const richHost = useRef<HTMLDivElement>(null);
   const rich = useRef<ReturnType<typeof mountRich> | null>(null);
   const [ready, setReady] = useState(0); // counts loads, so the rich view starts after each one
+  useEffect(() => view.current?.dispatch({ effects: wrapping.reconfigure(wrap ? EditorView.lineWrapping : []) }), [wrap, ready]);
   const [mode, setMode] = useState<"rich" | "source">(md ? "rich" : "source");
   const [banner, setBanner] = useState<{ text: string; big?: boolean } | null>(null);
   const [bigOk, setBigOk] = useState(false); // Open anyway, for this tab and this file only
@@ -209,7 +227,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
           doc: text,
           parent: host.current!,
           // A file with Windows line ends is saved with them.
-          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), findSupport, conflictColours, pasteGuard((t) => report.current.onToast?.(t)), EditorView.updateListener.of((u) => {
+          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), wrapping.of(wrapOn.current ? EditorView.lineWrapping : []), findSupport, conflictColours, pasteGuard((t) => report.current.onToast?.(t)), EditorView.updateListener.of((u) => {
             u.transactions.forEach((tr) => relay(path, u.view, tr));
             if (u.docChanged) setConflicts(u.state.field(conflictField).list.length);
             if (u.docChanged && isMarkdown(path)) {
@@ -229,7 +247,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
         goConflict(made, 0);
         // A newly opened file takes the keyboard at once.
         if (wantFocus.current) made.focus();
-        LanguageDescription.matchFilename(languages, baseName(path))
+        languageFor(baseName(path))
           ?.load()
           .then((support) => alive && made?.dispatch({ effects: lang.reconfigure(support) }))
           .catch(() => undefined);
@@ -322,6 +340,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   // A new file in this tab starts over: rich again, and Open anyway forgotten.
   useEffect(() => {
     setMode(isMarkdown(path) ? "rich" : "source");
+    setTable(isTable(path));
     setBigOk(false);
     setBanner(null);
   }, [path]);
@@ -334,11 +353,12 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     const cm = view.current;
     if (!cm || !hasSpot(path)) return;
     if (md && mode !== "source") return setMode("source");
+    if (tableOn) return setTable(false);
     const s = takeSpot(path)!;
     const r = spotRange(cm.state.doc, s);
     cm.dispatch({ selection: { anchor: r.from, head: r.to }, effects: EditorView.scrollIntoView(r.from, { y: "center" }) });
     cm.focus();
-  }, [reveals, ready, mode, path, md]);
+  }, [reveals, ready, mode, path, md, tableOn]);
 
   // EDIT-012: the rich view, started over the source text whenever the tab switches to it.
   useEffect(() => {
@@ -391,7 +411,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   const name = baseName(path);
   // EDIT-005 / EDIT-009: find and conflict stepping act on the source view (the rich view's
   // find comes with EDIT-017).
-  const sourceShown = !md || mode === "source";
+  const sourceShown = (!md || mode === "source") && !tableOn;
   const keymap = useKeymap();
   const stepConflicts = (dir: 1 | -1) => {
     const cm = view.current;
@@ -411,6 +431,14 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
       e.stopPropagation();
       return;
     }
+    if (hit?.id === "editor.toggleWordWrap" && sourceShown) {
+      const next = !wrap;
+      setWrap(next);
+      void saveSetting(prefPatch("wordWrap", next));
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (!sourceShown || !view.current) return;
     if (finding) {
       // Holding the chord down does not keep reopening the bar.
@@ -420,7 +448,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     e.preventDefault();
     e.stopPropagation();
   };
-  const shown = !md || mode === "source" ? "source" : richError ? "error" : "rich";
+  const shown = tableOn ? "table" : !md || mode === "source" ? "source" : richError ? "error" : "rich";
   const richRoot = useCallback(() => richHost.current, []);
   const hasHeadings = useMemo(() => md && outline(noteText).length > 0, [md, noteText]);
   const tocShown = toc && hasHeadings && shown === "rich";
@@ -459,7 +487,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     <section className={`pane editor${focused ? " focused" : ""}${tocShown ? " toc-open" : ""}`} hidden={hidden} aria-label={`${name} pane`} onMouseDown={onFocus} onKeyDownCapture={onKeys} data-kind="editor" data-key={id}>
       <header className="pane-head">
         <span className="agent-mark" title="File">
-          <FileCode size={13} />
+          <FileIcon name={name} size={13} />
         </span>
         <span className="title">{name}</span>
         {dirty && <span className="unsaved" title="Unsaved changes" aria-label="Unsaved changes" />}
@@ -479,6 +507,16 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
               }}
               title="Source view"
             >
+              Source
+            </button>
+          </span>
+        )}
+        {grid && (
+          <span className="view-switch" role="group" aria-label="View">
+            <button aria-pressed={table} onClick={() => setTable(true)} title="Table view">
+              Table
+            </button>
+            <button aria-pressed={!table} onClick={() => setTable(false)} title="Source view">
               Source
             </button>
           </span>
@@ -551,6 +589,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
       {tocShown && <Contents md={noteText} path={path} root={richRoot} onClose={() => setToc(false)} />}
       {comparing && <CompareView path={path} text={textOf(path) ?? ""} read={readDisk} onReload={reload} onKeep={keepMine} onClose={() => setComparing(false)} />}
       <div ref={host} className="pane-body" hidden={shown !== "source" || comparing} />
+      {grid && <CsvTable path={path} loaded={ready} hidden={shown !== "table" || comparing} />}
       {!hidden && shown === "source" && hint && copyKey && copiedSel !== hint.sel && !flash && (
         <div className="copy-hint" style={{ left: hint.x + 8, top: hint.y + 2 }}>
           {copyKey} copies with path and lines

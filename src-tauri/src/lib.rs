@@ -554,6 +554,7 @@ pub fn run() {
             files::open_in,
             files::file_list,
             files::md_new,
+            files::md_templates,
             files::diff_sides,
             files::git_changes,
             files::change_entries,

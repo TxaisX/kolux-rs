@@ -52,6 +52,7 @@ import { LINE_NOTES_KEY, clearDelivered, lineNotesOf, markSent, noteBlocks, with
 import LineNotes from "./scm/LineNotes";
 import ChecksPanel from "./scm/ChecksPanel";
 import PreviewPane from "./editor/PreviewPane";
+import TemplatePicker from "./editor/TemplatePicker";
 import ReviewNotes from "./editor/ReviewNotes";
 import { copiers } from "./editor/EditorPane";
 import { notesMarkdown, reviewOn, selections, sendTargets, type Note, type Picked } from "./editor/notes";
@@ -270,7 +271,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const teamsHost = useTeamsHost();
   const agents = useMemo(() => withTeams(offeredAgents(allAgents, settings), settings, teamsHost), [allAgents, settings, teamsHost]);
   const [dirty, setDirty] = useState<Record<number, boolean>>({}); // EDIT-001: editor tabs with unsaved text
-  const [picking, setPicking] = useState<"file" | "markdown" | "change" | null>(null); // EDIT-036 / EDIT-012 / EDIT-027: which file picker is open
+  const [picking, setPicking] = useState<"file" | "markdown" | "change" | "template" | null>(null); // EDIT-036 / EDIT-012 / EDIT-027: which file picker is open
   const defaultId = defaultAgentId(settings);
   const installedIds = agents.filter((a) => a.installed).map((a) => a.id);
   const { projects, setProjects, owner, setOwner, names, setNames, refresh, setRefresh, deleteRequest, setDeleteRequest, recentDirs, activeRef, createRequest, setCreateRequest, standIns, setStandIns, createName, setCreateName, hist, setHist } = useWorkspaces(activeDir);
@@ -834,7 +835,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     }
     if (what === "markdown-new") {
       if (!activeDir) setToast("Open a workspace to start a markdown note in it.");
-      else invoke<string>("md_new", { root: activeDir }).then(openFile, (err) => setToast(String(err)));
+      else setPicking("template"); // EDIT-055: TemplatePicker makes a blank note at once when there are no templates
       return;
     }
     if (what !== null && typeof what === "object" && "shell" in what) {
@@ -2260,6 +2261,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                   onClose={() => setPicking(null)}
                 />
               )}
+              {picking === "template" && activeDir && <TemplatePicker root={activeDir} onOpen={openFile} onError={(m) => setToast(m)} onClose={() => setPicking(null)} />}
               {picking === "markdown" && activeDir && (
                 <FilePicker
                   root={activeDir}

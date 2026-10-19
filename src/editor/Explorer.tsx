@@ -15,7 +15,8 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { ChevronDown, Close, Expand, FileCode, FolderPlus, Plus, Search } from "../chrome/icons";
+import { ChevronDown, Close, Expand, FolderPlus, Plus, Search } from "../chrome/icons";
+import FileIcon from "./FileIcon";
 import { loadTargets, openIn, type Target } from "./openIn";
 import ContentSearch from "./ContentSearch";
 import { useKeymap } from "../keys/KeymapContext";
@@ -601,7 +602,7 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
                 onClick={(e) => onRow(e, i)}
                 title={editing ? undefined : r.node.path}
               >
-                <span className="ex-twist">{dir ? <ChevronDown size={10} style={isOpen ? undefined : { transform: "rotate(-90deg)" }} /> : <FileCode size={11} />}</span>
+                <span className="ex-twist">{dir ? <ChevronDown size={10} style={isOpen ? undefined : { transform: "rotate(-90deg)" }} /> : <FileIcon name={r.node.name} size={11} />}</span>
                 {editing ? (
                   <NameField
                     initial={r.node.name}
