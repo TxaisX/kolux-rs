@@ -77,3 +77,72 @@ OPEN (not fixed this pass)
 - Earlier AFTER 1 (settings read under the Store lock each 5 s tick), AFTER 2 (a watcher panic in a
   debug build leaves HELD true), lid-switch inhibitor on older systemd (UNKNOWN), no PowerCreateRequest
   reason string; NeoVim blank console under a debug build (batched proof should use a release build).
+
+=====================================================================
+FIX-2 round 2 (2026-10-19): chat review item 3, markFor follows the program (lane/launch from main 25e1e190)
+=====================================================================
+Source: council stand-in review chat-64abfea0-standin-review.md (FIX-SOON 1) and the coordinator's decision: a saved agent whose
+program is Claude is a Claude pane.
+
+CHANGE
+- src/launch/PlusMenu.tsx: markFor(id, program?) . Built-in ids claude, claude-agent-teams, codex keep their marks whatever
+  program is passed. Any other id takes programMark(program): the file stem (folder, case, .exe/.cmd/.bat/.ps1/.com ignored)
+  claude -> "claude", codex -> "codex", anything else, no program, empty -> "shell". "claude-helper", "notclaude.exe" and
+  a folder named claude are NOT Claude.
+- Callers in OWNS updated: PlusMenu.tsx row, ChooserPane.tsx (2 rows): markFor(a.id, a.program).
+- Callers outside OWNS, one patch each (all git apply --check OK on clean 25e1e190):
+  1. evidence/launch-FIX-2-App.tsx.patch  (4 sites: the three launch paths pass line.program ?? agent.program, the footer passes railPick.program)
+  2. evidence/launch-FIX-2-AgentsRail.tsx.patch  (markFor(p.agentId ?? g.id, p.program))
+  3. evidence/launch-FIX-2-LayoutStrip.tsx.patch  (markFor(a.id, a.program))
+  Until they are applied the optional argument is simply absent there, so nothing breaks: a saved agent stays "shell" in that
+  spot. tsc --noEmit was clean with all three applied (fix2-tsc.log) and clean on the lane without them (fix2-tsc2.log).
+  Apply the App patch first or in any order (no overlap).
+
+TESTS (src/launch/PlusMenu.test.ts)
+- "FIX-2: a saved agent takes the mark of the program it runs; built-in ids are unchanged" : RED before the fix
+  (fix2-red.log: expected 'shell' to be 'claude' at markFor("my-reviewer","claude")), GREEN after (fix2-green.log).
+- "FIX-2: a saved Claude agent now counts as hooked in the chat notice; a saved shell or Codex agent does not":
+  hooksAbsent(markFor("my-reviewer","claude"), true, "my-reviewer") === false (the chat review's unreachable case is now reachable).
+  Written after the code in the same change (it only composes the two functions).
+
+WHAT CHANGES FOR A SAVED AGENT THAT RUNS CLAUDE (pane.agent "shell" -> "claude"); Codex is the same with Codex's rows
+(greps of src, provenance excluded; every item is UI or key routing, none writes a file or starts a process)
+- Status and rows: the pane counts as an agent pane everywhere p.agent !== "shell" is tested: rail/tower lanes and chips
+  (App laneOf, towerSeats, board/chip.ts chipOf), status words (terminal/status.ts: done/ready instead of "Ready, shell"),
+  tab unread/glow (tabs.ts, TerminalPane glow), "Enter restarts" instead of "Enter starts a shell here", remove/close
+  classification "agent" (terminal/remove.ts), the agent count on the status bar, notes/editor same-folder agent lookup, repo
+  list in useAgentStatus.
+- Hooks state: hooksAbsent now says hooked (no "ready, can't see" notice) when hooks are on. ONLY this notice changes; hook
+  INSTALL stays on the existing consent path: the only callers of agent_hooks_sync are the Settings > Agents switches
+  (AgentsPage.tsx:176 and :191). The mark never reaches any install call.
+- Usage gauge: ringOf/usageLine/meter.ts (plan windows from the signed-in Claude account) and the tower's usageByAccount now
+  include the pane; prompt-cache timer (projects/cache.ts) now counts it. Caveat for the reviewer: figures are the active
+  Claude account's, so a saved agent that points CLAUDE_CONFIG_DIR at another account shows the active account's figures.
+- Keys: Shift/Ctrl+Enter sends Claude's newline (shellKeys.ts; still decided by the program that really started, newlineAgent),
+  Approve/Deny on a permission hook answers "" / Esc (permissionAnswer.ts) instead of nothing; Codex mark gets its own answers.
+- Header: model chip read from args (TerminalPane modelOf), ContextGauge waits for the status-line figure instead of "agents only".
+- Layout restore (terminal/layout.ts): the saved pane now keeps args [] (an agent "comes back at its prompt") where a shell-mark
+  pane kept its args; restoreAsks was already true (agentId set, program set) so the Rust side still supplies the start line.
+- Codex only: App.tsx:2526 stamps the active Codex account on the pane and accountPrompt can then ask on an account change;
+  a saved Codex agent with its own CODEX_HOME would be stamped with the active account (note for the reviewer).
+- Chat hand-off: aiOf(p) in kits/useKits.ts now reads "claude"/"codex" for the pane, so kits and the hand-off treat it as that AI.
+- Vendor logo: the plus menu, chooser, layout strip, rail and pane header draw the Claude (or Codex) mark instead of the shell glyph.
+- Unchanged: the header word (a saved agent's own name wins), the program, args and env that start, and every built-in id.
+
+GATES (all from G:/Dev/kolux-rs-lanes/launch, logs in G:/Temp/launch-w1-logs/fix2-*.log; no Rust touched, so no cargo run)
+- vitest, whole repo: 205 files, 1366 tests passed (fix2-vitest2.log); before: 1365 with only the first new test.
+- pnpm exec tsc --noEmit: clean.
+- node scripts/plan-check.mjs --write-state: plan-check: OK; '^## Last 10 passes' count 1; duplicate task ids: none.
+- firewall-check.ps1 -Baseline: 53 hits in 22 files, 0 new.
+- No app launched.
+
+LIVE PROOF PENDING (batched; needs the three patches applied)
+1. Settings > Agents: add a saved agent whose program is claude (or point a copy of Claude Code at a new id). In the plus menu,
+   the chooser and the layout strip its row shows the Claude mark, not the shell glyph.
+2. Start it: the pane header shows the Claude mark; the status word leaves "Ready" for the agent words; with hooks on, the
+   chat/ready notice ("ready, can't see") does not appear for it.
+3. Pane tab key: Shift+Enter in it types a newline, not a submit.
+4. Quit and reopen: the pane comes back at its prompt (no old prompt text) with the same agent.
+5. A saved agent that runs pwsh keeps the shell glyph.
+
+AFTER items of the review: both are chat files (ChatView.tsx tests, note keyed by reply text), none inside this lane's OWNS; left to the chat lane.
