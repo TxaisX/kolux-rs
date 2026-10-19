@@ -44,9 +44,15 @@ vi.mock("react", async (orig) => {
 
 const calls: string[] = [];
 let record: unknown = null;
+let patchFails = false;
+const patches: unknown[] = [];
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (cmd: string) => {
+  invoke: (cmd: string, args?: unknown) => {
     calls.push(cmd);
+    if (cmd === "settings_patch") {
+      patches.push(args);
+      if (patchFails) return Promise.reject(new Error("the settings file could not be written"));
+    }
     const answers: Record<string, unknown> = {
       guide_get: record,
       get_settings: { notifyOnFinish: false },
@@ -67,6 +73,8 @@ beforeEach(() => {
   h.slots = [];
   h.effects = [];
   calls.length = 0;
+  patches.length = 0;
+  patchFails = false;
   record = { tipsSeen: [], visited: [], tried: [], toursSeen: [], toursAuto: null, firstRun: { closed: true, outcome: "dismissed", checklistDismissed: true, milestones: {} } };
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -166,5 +174,32 @@ test("Hide from sidebar saves the choice and the entry goes (ONB-020)", async ()
   hide!.props.onClick!();
   await app.settle();
   expect(calls).toContain("settings_patch");
+  expect(app.out()).toBeNull();
+});
+
+type Entry = { props: { className: string; children: { type?: string; props?: { title?: string; role?: string; children?: unknown; onClick?: () => void } }[] } };
+const hideButton = (out: unknown) => (out as Entry).props.children.find((c) => c?.props?.title === "Hide from sidebar")!;
+
+test("Hide goes through the settings save in turn: it reads what is saved, then writes only the changed key (FIX-1)", async () => {
+  const app = await mount();
+  hideButton(app.out()).props!.onClick!();
+  await app.settle();
+  expect(patches).toEqual([{ set: { setupChecklist: false }, remove: [] }]);
+  expect(calls[calls.indexOf("settings_patch") - 1]).toBe("get_settings");
+});
+
+test("a Hide that could not be saved brings the entry back with a short message (FIX-1)", async () => {
+  patchFails = true;
+  const app = await mount();
+  hideButton(app.out()).props!.onClick!();
+  await app.settle();
+  const out = app.out() as Entry;
+  expect(out?.props.className).toBe("onb-entry");
+  const note = out.props.children.find((c) => c?.props?.role === "status");
+  expect(String(note?.props?.children)).toMatch(/could not be hidden/);
+  // trying again once the save works hides it
+  patchFails = false;
+  hideButton(app.out()).props!.onClick!();
+  await app.settle();
   expect(app.out()).toBeNull();
 });

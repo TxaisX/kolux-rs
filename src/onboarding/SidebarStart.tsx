@@ -6,7 +6,7 @@
 // have passed since its last read of any kind (the read made when the guide switches on included),
 // so a step done elsewhere ticks in place (FIX-2, FIX-3, FIX-4).
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useSettings } from "../settings/useSettings";
 import Checklist, { useChecklistRecord } from "./Checklist";
 import { EyeOff } from "../chrome/icons";
 import { Ring, useGuideState } from "./Guides";
@@ -18,7 +18,8 @@ import "./onboarding.css";
 export default function SidebarStart() {
   const rec = useChecklistRecord();
   const [again, setAgain] = useState(0);
-  const [hidden, setHidden] = useState(false);
+  const [asked, setAsked] = useState(false);
+  const { save, error } = useSettings();
   const floor = useRef(rereadFloor()).current;
   useEffect(() => onReread(window, () => setAgain((n) => n + 1), undefined, floor), [floor]);
   const first = rec === undefined ? undefined : (rec?.firstRun ?? null);
@@ -26,12 +27,15 @@ export default function SidebarStart() {
   const g = useGuideState(guideWanted(c, first), again, floor.stamp);
   const slot = sidebarSlot(c, first, g.settled);
   if (slot === "checklist") return <Checklist compact record={rec} />;
-  if (hidden || slot !== "guide" || !g.settled) return null;
-  const line = entryLine(g.settled);
   // ONB-020: Hide from sidebar is remembered (setupChecklist false is read as the legacy rule on the next load).
+  // FIX-1: it is saved through the settings save in turn (merged with what is on disk), and when the save fails the
+  // entry comes back with a short message instead of returning silently on the next launch.
+  const failed = asked && error !== null;
+  if ((asked && !failed) || slot !== "guide" || !g.settled) return null;
+  const line = entryLine(g.settled);
   const hide = () => {
-    setHidden(true);
-    invoke("settings_patch", { set: { setupChecklist: false }, remove: [] }).then(() => setAgain((n) => n + 1), () => {});
+    setAsked(true);
+    void save({ setupChecklist: false }).then(() => setAgain((n) => n + 1));
   };
   return (
     <div className="onb-entry">
@@ -47,6 +51,11 @@ export default function SidebarStart() {
       <button className="ib" title="Hide from sidebar" aria-label="Hide from sidebar" onClick={hide}>
         <EyeOff />
       </button>
+      {failed && (
+        <span className="about warn" role="status">
+          Getting Started could not be hidden. Try again.
+        </span>
+      )}
     </div>
   );
 }

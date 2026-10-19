@@ -6,6 +6,7 @@ import {
   composeTarget,
   composerRequests,
   foldLabel,
+  guideOpenChanged,
   permissionCard,
   plusFor,
   soundPanel,
@@ -58,6 +59,31 @@ describe("the composer request (ONB-016)", () => {
       ...hands,
       wait: async () => {
         r.reset(); // the guide was closed and opened again while the request waited
+      },
+    });
+    expect(await r.open({ kind: "project", project: proj("a") })).toBe("stale");
+    expect(clicks).toEqual([]);
+  });
+  it("the Create a workspace step closing the guide does not void its own request, so a retry still opens the composer (FIX-1)", async () => {
+    let looks = 0;
+    const { clicks, hands } = fake({ click: (s) => (looks++ >= 1 ? (clicks.push(s), true) : false) });
+    const r = composerRequests({
+      ...hands,
+      wait: async () => {
+        guideOpenChanged(r, false); // the guide has now finished closing: its effect runs between the tries
+      },
+    });
+    // what the step does: void the older requests, close the guide, ask for the composer
+    r.reset();
+    expect(await r.open({ kind: "project", project: proj("a") })).toBe("opened");
+    expect(clicks).toEqual([plusFor(proj("a"))]);
+  });
+  it("the guide opening does void a request left from before a close and reopen", async () => {
+    const { clicks, hands } = fake({ onScreen: () => false });
+    const r = composerRequests({
+      ...hands,
+      wait: async () => {
+        guideOpenChanged(r, true);
       },
     });
     expect(await r.open({ kind: "project", project: proj("a") })).toBe("stale");

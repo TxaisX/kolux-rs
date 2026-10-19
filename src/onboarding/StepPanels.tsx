@@ -14,10 +14,10 @@ import {
 } from "./actions";
 import { markGuide, type GuideRecord, type Place } from "./guide";
 import { replayTour } from "./tour";
-import { awakeToggle, stopCard } from "./stopCards";
-import { AWAKE_KEY } from "../launch/KeepAwakeCard";
+import { awakeToggle, stopCard, writerBack } from "./stopCards";
+import { AWAKE_KEY, HOOKS_OFF_HELP } from "../launch/KeepAwakeCard";
 import { WRITER_INSTRUCTIONS_KEY, WRITER_KEY } from "../scm/generate";
-import { integrationSteps, readSeen, restale, taskSummary, UNSEEN, type Seen } from "./integrations";
+import { integrationSteps, readSeenCached, restale, taskSummary, UNSEEN, type Seen } from "./integrations";
 
 /** The first copy of `sel` that is really on screen. */
 function shown(sel: string): HTMLElement | null {
@@ -227,7 +227,8 @@ export function IntegrationsPanel({ onCheck }: { onCheck: () => void }) {
   const check = (again: boolean) => {
     const mine = ++turn.current;
     if (again) setSeen(restale);
-    readSeen(invoke).then((x) => {
+    // Opening the step is answered from the one-minute memory; Re-check asks gh again.
+    readSeenCached(invoke, { force: again }).then((x) => {
       if (mine !== turn.current) return; // a newer check began: this answer is stale
       setSeen(x);
       setLooked(true);
@@ -264,37 +265,66 @@ export function IntegrationsPanel({ onCheck }: { onCheck: () => void }) {
 
 /** ONB-024: the setup an Explore Kolux stop carries, right on the stop. The skill command cards
  *  (orchestration, browser) show without a terminal; the inline terminal is T-244-b's. */
-export function StopSetup({ stop, taskSource }: { stop: string; taskSource: boolean }) {
+export function StopSetup({ stop, taskSource }: { stop: string; taskSource: boolean | null }) {
   const { settings, save } = useSettings();
+  // The writer mode the switch had before it was turned off, so turning it on again puts that back.
+  const before = useRef<"claude" | "custom" | null>(null);
+  // The settings cards draw nothing until the saved settings have arrived (stopCard), so a switch or box
+  // is never built from a guessed default and written back over what is saved.
   const card = stopCard(stop, { taskSource, settings });
   if (!card) return null;
   if (card.kind === "provider") {
     return (
       <p className="guide-note" data-card="provider" data-connected={card.connected}>
-        {card.label}: {card.connected ? "GitHub is connected." : "GitHub is not connected. Open Getting Started > Connect integrations to connect it."}
+        {card.label}:{" "}
+        {card.connected === null
+          ? "Checking the GitHub sign-in..."
+          : card.connected
+            ? "GitHub is connected."
+            : "GitHub is not connected. Open Getting Started > Connect integrations to connect it."}
       </p>
     );
   }
   if (card.kind === "awake") {
     return (
-      <label className="conn-switch" data-card="awake">
-        <input type="checkbox" role="switch" checked={card.on} onChange={() => void save({ [AWAKE_KEY]: awakeToggle(card.mode) })} />
-        Keep this computer awake while an agent is working
-      </label>
+      <div data-card="awake">
+        <label className="conn-switch">
+          <input type="checkbox" role="switch" checked={card.on} onChange={() => void save({ [AWAKE_KEY]: awakeToggle(card.mode) })} />
+          Keep this computer awake while an agent is working
+        </label>
+        {card.hooksOff && (
+          <p className="guide-note warn" data-warn="hooks-off" role="note">
+            {HOOKS_OFF_HELP}
+          </p>
+        )}
+      </div>
     );
   }
+  const saved = settings?.[WRITER_INSTRUCTIONS_KEY];
+  const stored = typeof saved === "string" ? saved : "";
   return (
     <div data-card="writer">
       <label className="conn-switch">
-        <input type="checkbox" role="switch" checked={card.writer.mode !== "off"} onChange={(e) => void save({ [WRITER_KEY]: e.target.checked ? "claude" : "off" })} />
+        <input
+          type="checkbox"
+          role="switch"
+          checked={card.writer.mode !== "off"}
+          onChange={(e) => {
+            if (!e.target.checked && card.writer.mode !== "off") before.current = card.writer.mode;
+            void save({ [WRITER_KEY]: e.target.checked ? writerBack(before.current, card.hasCommand) : "off" });
+          }}
+        />
         Write the commit message and pull request text with an AI
       </label>
       <textarea
+        key={stored}
         className="field"
         aria-label="Instructions for the writer"
-        defaultValue={card.writer.instructions}
+        defaultValue={stored}
         placeholder="Optional: how commit messages should read"
-        onBlur={(e) => void save({ [WRITER_INSTRUCTIONS_KEY]: e.target.value })}
+        onBlur={(e) => {
+          if (e.target.value !== stored) void save({ [WRITER_INSTRUCTIONS_KEY]: e.target.value });
+        }}
       />
     </div>
   );

@@ -56,6 +56,13 @@ export function composerRequests(hands: Hands) {
   };
 }
 
+/** FIX-1: the Setup Guide's open state changed. Only opening voids the waiting composer requests (one left
+ *  from before a close and reopen). Closing must not: the Create a workspace step closes the guide itself and
+ *  then asks for the composer, and the close finishing would otherwise void that request's retries. */
+export function guideOpenChanged(queue: { reset: () => void }, open: boolean): void {
+  if (open) queue.reset();
+}
+
 // ---- Notifications ----
 
 /** ONB-016: the sound choices, and whether a volume slider is drawn: non-system sounds get none.

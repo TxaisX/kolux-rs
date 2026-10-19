@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { integrationSteps, readSeen, restale, taskSummary, UNSEEN, type Seen } from "./integrations";
+import { createSeenReader, integrationSteps, readSeen, restale, SEEN_FRESH_MS, taskSourceOf, taskSummary, UNSEEN, type Row, type Seen } from "./integrations";
 
 const seen = (o: Partial<Seen>): Seen => ({ account: "octo", token: "ok", tracker: "ok", ...o });
 
@@ -52,7 +52,11 @@ const SCRIPT = [
   '  console.log("octo");',
   '} else if (args[0] === "api") {',
   '  if (mode === "badtoken") { process.stderr.write("HTTP 401: Bad credentials"); process.exit(1); }',
-  '  console.log(JSON.stringify({ resources: { core: {}, search: {}, graphql: {} } }));',
+  '  if (mode === "offline") { process.stderr.write("error connecting to api.github.com"); process.exit(1); }',
+  '  if (mode === "empty") { console.log(JSON.stringify({ resources: { core: {}, search: {}, graphql: {} } })); process.exit(0); }',
+  // The shape gh prints for `gh api rate_limit`: a numeric limit, remaining and reset per budget.
+  '  const b = (limit, remaining) => ({ limit, remaining, used: limit - remaining, reset: 1900000000 });',
+  '  console.log(JSON.stringify({ resources: { core: b(5000, 4990), graphql: b(5000, 5000), search: b(30, 30) }, rate: b(5000, 4990) }));',
   '} else process.exit(2);',
   "",
 ].join("\n");
@@ -69,24 +73,30 @@ beforeAll(async () => {
 });
 afterAll(async () => (await load("node:fs")).rmSync(dir, { recursive: true, force: true }));
 
-const standIn = (mode: "in" | "out" | "badtoken") => {
+const standIn = (mode: "in" | "out" | "badtoken" | "offline" | "empty") => {
   const run = (args: string[]) => {
     try {
-      return { ok: true as const, out: cp.execFileSync(proc.execPath, [script, mode, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim() };
-    } catch {
-      return { ok: false as const, out: "" };
+      return { ok: true as const, out: cp.execFileSync(proc.execPath, [script, mode, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim(), err: "" };
+    } catch (e) {
+      return { ok: false as const, out: "", err: String((e as { stderr?: unknown }).stderr ?? "") };
     }
   };
-  // The commands answer as Kolux's Rust side does: scm_gh_account = the config user when gh exits 0, else null;
-  // scm_gh_budget = one row per API budget when `gh api` exits 0, else an error.
+  // The commands answer as Kolux's Rust side does (scm.rs gh_budget): scm_gh_account = the config user when gh
+  // exits 0, else null; scm_gh_budget = a row ("REST", "Search", "GraphQL") for each budget that has a numeric
+  // limit, remaining and reset, a budget missing any of them dropped, or gh's own words as the error.
   return async <T>(cmd: string): Promise<T> => {
     if (cmd === "scm_gh_account") {
       const r = run(["config", "get", "-h", "github.com", "user"]);
       return (r.ok && r.out ? r.out : null) as T;
     }
     const r = run(["api", "rate_limit"]);
-    if (!r.ok) throw new Error("gh api failed");
-    return Object.keys(JSON.parse(r.out).resources).map((name) => ({ name })) as T;
+    if (!r.ok) throw new Error(r.err);
+    const res = JSON.parse(r.out).resources as Record<string, Record<string, unknown>>;
+    const rows = ([["core", "REST"], ["search", "Search"], ["graphql", "GraphQL"]] as const).flatMap(([key, name]) => {
+      const b = res[key] ?? {};
+      return ["limit", "remaining", "reset"].every((f) => Number.isInteger(b[f])) ? [{ name, limit: b.limit, remaining: b.remaining, reset: b.reset }] : [];
+    });
+    return rows as T;
   };
 };
 
@@ -106,5 +116,93 @@ describe("Connect integrations against a stand-in gh (ONB-018)", () => {
     const s = await readSeen(standIn("badtoken"));
     expect(s).toEqual({ account: "octo", token: "failed", tracker: "failed" });
     expect(integrationSteps(s).review).toBe("active");
+  });
+  it("a gh whose answer carries no numeric budgets reads as failed, as the real Rust side would drop them (FIX-1)", async () => {
+    const s = await readSeen(standIn("empty"));
+    expect(s).toEqual({ account: "octo", token: "failed", tracker: "failed" });
+  });
+  it("the Explore tasks and PR stops follow the same rule: a revoked token is not connected, an unread answer is null (FIX-1)", async () => {
+    expect(taskSourceOf(await readSeen(standIn("badtoken")))).toBe(false);
+    expect(taskSourceOf(await readSeen(standIn("out")))).toBe(false);
+    expect(taskSourceOf(await readSeen(standIn("in")))).toBe(true);
+    expect(taskSourceOf(null)).toBeNull();
+    // a cached sign-in alone, or an answer from before a Re-check, is not connected
+    expect(taskSourceOf({ account: "octo", token: "pending", tracker: "pending" })).toBe(false);
+    expect(taskSourceOf(restale(seen({})))).toBe(false);
+  });
+});
+
+describe("the sign-in check is remembered for about a minute (FIX-1)", () => {
+  const rows: Row[] = [{ name: "REST" }, { name: "Search" }, { name: "GraphQL" }];
+  // A counting stand-in for the two commands; `budget` decides each budget call's answer.
+  const host = (budget: () => Row[] | string) => {
+    const n = { account: 0, budget: 0 };
+    const call = async <T>(cmd: string): Promise<T> => {
+      if (cmd === "scm_gh_account") return (n.account++, "octo") as T;
+      n.budget++;
+      const a = budget();
+      if (typeof a === "string") throw new Error(a);
+      return a as T;
+    };
+    return { n, call };
+  };
+  const clock = (t = 1_000_000) => ({ now: () => t, tick: (ms: number) => void (t += ms) });
+  const good: Seen = { account: "octo", token: "ok", tracker: "ok" };
+
+  it("reads within the minute answer from memory and do not run gh again", async () => {
+    const t = clock();
+    const read = createSeenReader(t.now);
+    const gh = host(() => rows);
+    expect(await read(gh.call)).toEqual(good);
+    t.tick(SEEN_FRESH_MS - 1);
+    expect(await read(gh.call)).toEqual(good);
+    expect(gh.n).toEqual({ account: 1, budget: 1 });
+    t.tick(2);
+    expect(await read(gh.call)).toEqual(good);
+    expect(gh.n).toEqual({ account: 2, budget: 2 });
+  });
+  it("Re-check (force) always asks again", async () => {
+    const read = createSeenReader(clock().now);
+    const gh = host(() => rows);
+    await read(gh.call);
+    await read(gh.call, { force: true });
+    expect(gh.n.budget).toBe(2);
+  });
+  it("a re-read that fails on the network keeps the last good answer", async () => {
+    const t = clock();
+    const read = createSeenReader(t.now);
+    let said: Row[] | string = rows;
+    const gh = host(() => said);
+    expect(await read(gh.call)).toEqual(good);
+    said = "error connecting to api.github.com";
+    t.tick(SEEN_FRESH_MS + 1);
+    expect(await read(gh.call)).toEqual(good);
+    // with no good answer to fall back on, a network failure reads as not connected and is not remembered
+    const cold = createSeenReader(t.now);
+    expect(await cold(gh.call)).toEqual({ account: "octo", token: "failed", tracker: "failed" });
+    said = rows;
+    expect(await cold(gh.call)).toEqual(good);
+  });
+  it("a token gh rejects is not kept: the sign-in reads as failed at once, and signing out is seen on the next read", async () => {
+    const t = clock();
+    const read = createSeenReader(t.now);
+    let said: Row[] | string = rows;
+    const gh = host(() => said);
+    await read(gh.call);
+    said = "HTTP 401: Bad credentials";
+    t.tick(SEEN_FRESH_MS + 1);
+    expect(await read(gh.call)).toEqual({ account: "octo", token: "failed", tracker: "failed" });
+    const out = async <T>(cmd: string): Promise<T> => (cmd === "scm_gh_account" ? (null as T) : Promise.reject(new Error("never asked")));
+    t.tick(SEEN_FRESH_MS + 1);
+    expect(await read(out)).toEqual({ account: null, token: "pending", tracker: "pending" });
+  });
+  it("a Re-check that fails on the network says so rather than hiding it behind the last good answer", async () => {
+    const t = clock();
+    const read = createSeenReader(t.now);
+    let said: Row[] | string = rows;
+    const gh = host(() => said);
+    await read(gh.call);
+    said = "error connecting to api.github.com";
+    expect(await read(gh.call, { force: true })).toEqual({ account: "octo", token: "failed", tracker: "failed" });
   });
 });

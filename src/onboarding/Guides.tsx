@@ -9,7 +9,8 @@ import "./onboarding.css";
 import { useSettings } from "../settings/useSettings";
 import Tours from "./Tours";
 import { AgentPanel, AutomatePanel, composer, IntegrationsPanel, MultitaskPanel, NotificationsPanel, StopSetup } from "./StepPanels";
-import { integrationSteps, readSeen } from "./integrations";
+import { integrationSteps, readSeenCached, taskSourceOf } from "./integrations";
+import { guideOpenChanged } from "./actions";
 import { defaultAgentId } from "../launch/agents";
 import {
   caps, demoFrames, doneFrom, paletteKeys, doneId, firstOpen, forward, latest, markGuide, moveOn, nextTip, OPEN_EXPLORE, OPEN_GUIDE, guideClosed, PAGE_SHOWN, railKey, ring, startTicked, STEPS, stopDone, stopOf, TWO_REPOS, withRecord, words, workflowDone, WORKFLOWS,
@@ -31,7 +32,7 @@ async function readFacts(check: ReturnType<typeof latest<boolean>>, put: (f: Par
   put({ notifications: settings ? settings.notifyOnFinish !== false : null, agent: settings ? defaultAgentId(settings) : null, pageShown: !!g?.tried.includes(PAGE_SHOWN), legacy: legacyProfile(settings, g?.tried ?? null) });
   put({ integrations: "checking" });
   // ONB-018: connected means signed in and the token accepted, not only a cached sign-in.
-  const gh = readSeen(invoke).then(
+  const gh = readSeenCached(invoke).then(
     (x) => void (alive() && put({ integrations: integrationSteps(x).review === "done" ? "connected" : "none" })),
     () => void (alive() && put({ integrations: null })),
   );
@@ -159,7 +160,7 @@ function SetupGuide({ ask, open, onClose }: { ask: StepId | null; open: boolean;
     if (open) setAt(firstOpen(g.done, ask));
   }, [open, ask]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => setAt((a) => moveOn(a, g.done)), [doneKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => composer.reset(), [open]); // ONB-016: a composer request from before a close and reopen is void
+  useEffect(() => guideOpenChanged(composer, open), [open]); // ONB-016: a composer request from before a close and reopen is void (FIX-1: closing does not void it)
   const shown = useClosing(open);
   if (!shown) return null;
   const r = ring(g.done);
@@ -219,12 +220,15 @@ function Explore({ onClose }: { onClose: () => void }) {
   const [seen, setSeen] = useState<Set<string>>(new Set());
   const [kept, setKept] = useState<Set<string>>(new Set());
   const [setup, setSetup] = useState<Setup>({ taskSource: false, skills: [] });
+  const [gh, setGh] = useState<boolean | null>(null);
   const rail = useRef<HTMLDivElement>(null);
   useEffect(() => {
     // Merged, not replaced: a stop visited before the record arrived stays seen (FIX-1).
     invoke<GuideRecord>("guide_get").then((g) => (setSeen((s) => withRecord(s, new Set(), g).seen), setKept((k) => withRecord(new Set(), k, g).kept)), () => {});
     // ONB-023: the setup a stop carries, read when the tour opens.
-    invoke<string | null>("scm_gh_account", { host: "github.com" }).then((l) => setSetup((s) => ({ ...s, taskSource: !!l })), () => {});
+    // FIX-1: GitHub counts as connected by the Connect integrations rule (sign-in accepted, task search answered),
+    // not by a cached sign-in alone; null until the read lands, so the stop says it is checking.
+    readSeenCached(invoke).then((x) => (setGh(taskSourceOf(x)), setSetup((s) => ({ ...s, taskSource: taskSourceOf(x) === true }))));
     invoke<Scan>("skills_scan", { workspace: null, refresh: false }).then((r) => setSetup((s) => ({ ...s, skills: r.skills.filter((k) => k.source === "home").map((k) => k.name) })), () => {});
   }, []);
   const stop = stopOf(at);
@@ -304,7 +308,7 @@ function Explore({ onClose }: { onClose: () => void }) {
           )}
           <h3>{stop.title}</h3>
           <p>{stop.caption}</p>
-          <StopSetup stop={stop.id} taskSource={setup.taskSource} />
+          <StopSetup stop={stop.id} taskSource={gh} />
           <div className="btn-row">
             <span className="spacer" />
             <span className="hint">
