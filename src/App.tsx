@@ -38,6 +38,7 @@ import SignInNotice from "./settings/SignInNotice";
 import KeyLostNotice from "./settings/KeyLostNotice";
 import { LAST_SCREEN_FIELD, lastWriter, OPEN_PAGE_FIELD, openPageAt, saveLayout, startScreen, stripOn } from "./settings/general";
 import { cacheDue, cacheMinutes } from "./projects/cache";
+import { sessionEnv, startTail } from "./projects/startArgs";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
 import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./projects/WorktreePalette";
 import { navTarget, travel, visit, type Place } from "./projects/nav";
@@ -1096,7 +1097,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     await pretrust(agent.id, [dir]);
     const line = await invoke<StartLine>("agent_start_line", { id: agent.id, extra, prompt });
     const key = nextKey.current++;
-    const pane: Pane = { key, cwd: dir, branch, agent: markFor(agent.id), agentId: agent.id, program: line.program ?? agent.program, args: line.args, env: dispatch ? [...line.env, ["KOLUX_DISPATCH_ID", dispatch]] : line.env, title, typed: line.typed ?? undefined };
+    const pane: Pane = { key, cwd: dir, branch, agent: markFor(agent.id), agentId: agent.id, program: line.program ?? agent.program, args: line.args, env: sessionEnv(line.env, dispatch), title, typed: line.typed ?? undefined };
     // TERM-007: an empty pane in that workspace takes the session; else it gets a cell of its own.
     setPanes((ps) => {
       const free = freeCell(cellsOf(panesIn(ps, dir)));
@@ -1301,7 +1302,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       if (p.kind === "start") {
         const a = agents.find((x) => x.id === p.agent);
         if (a)
-          void cli.current.startIn(a, p.path, p.branch, p.prompt, false, p.extra, p.title ?? undefined, p.dispatch).then((key) => {
+          void cli.current.startIn(a, p.path, p.branch, ...startTail(p)).then((key) => {
             // AUTO-013: an automation run remembers its pane, so View run opens that terminal.
             if (key !== null && p.runId) runPanes.current[p.runId] = key;
           });
