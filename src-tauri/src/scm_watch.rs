@@ -11,7 +11,10 @@
 //! is gone ends its watch instead of reading a missing folder for the rest of the session; a
 //! workspace removal ends the watch and waits for the folder handles to close before git deletes
 //! the folder; the window closing ends every watch; the shared `packed-refs` is watched too; and a
-//! caller joining a watch that has already fallen back is told so.
+//! caller joining a watch that has already fallen back is told so. FIX-1 (the T-033-e review): a
+//! watch that ends on its own, or whose workspace removal then failed, tells the page so it watches
+//! again; an overflow forgets the remembered ignore answers; and a removal only ever ends the watch
+//! of that very folder.
 //!
 //! The watcher is Windows' own folder-change reader (ReadDirectoryChangesW); the `notify` crate is
 //! CC0-1.0 in every version, which the licence list refuses (T-033-b decision).
@@ -404,6 +407,8 @@ struct Watch {
     /// The reader threads; joined only where the folder must be free of handles (`unwatch_root`).
     #[cfg_attr(not(test), allow(dead_code))] // read by unwatch_root, see there
     readers: Vec<std::thread::JoinHandle<()>>,
+    /// FIX-1: tells the page the watch ended on its own, so it watches again.
+    ended: Ended,
 }
 
 impl Watch {
@@ -442,9 +447,23 @@ pub struct WatchStart {
 /// What the worker does with a fresh status.
 type Sink = Arc<dyn Fn(&crate::scm::Status) + Send + Sync>;
 type Log = Arc<dyn Fn(&str) + Send + Sync>;
+/// FIX-1: told the id of a watch that ended on its own (its folder went, or its removal failed
+/// after the watch was ended for it); the page hears it as `scm-watch-ended-<id>` and subscribes
+/// again. Never called for the page's own `unwatch` or for the window going.
+pub type Ended = Arc<dyn Fn(u64) + Send + Sync>;
 
-/// Starts (or joins) the watch of the worktree holding `path`.
+/// The change-read buffer, in DWORDs: 256 KB, the most Windows passes over the network and plenty
+/// for a local build's burst (a test passes a smaller one to force a real overflow).
+const BUF_WORDS: usize = 64 * 1024;
+
+/// Starts (or joins) the watch of the worktree holding `path`; nobody is told when it ends.
 pub fn watch(path: &Path, sink: impl Fn(u64) -> Sink, log: Log) -> Result<WatchStart, String> {
+    watch_with(path, sink, Arc::new(|_| {}), log)
+}
+
+/// Starts (or joins) the watch of the worktree holding `path`; `ended` is told its id if it ends
+/// on its own (FIX-1).
+pub fn watch_with(path: &Path, sink: impl Fn(u64) -> Sink, ended: Ended, log: Log) -> Result<WatchStart, String> {
     let p = places(path)?;
     let k = key(&p.root.to_string_lossy());
     let worktree = p.root.to_string_lossy().to_string();
@@ -461,7 +480,7 @@ pub fn watch(path: &Path, sink: impl Fn(u64) -> Sink, log: Log) -> Result<WatchS
     let mut why = unwatchable(&p.root);
     if why.is_none() {
         for (dir, recursive, spot) in p.watches() {
-            match start_reader(&dir, recursive, spot, tx.clone(), stop.clone(), wake.clone()) {
+            match start_reader(&dir, recursive, spot, tx.clone(), stop.clone(), wake.clone(), BUF_WORDS) {
                 Ok(h) => readers.push(h),
                 Err(e) => {
                     why = Some(format!("{} could not be watched: {e}", dir.display()));
@@ -484,13 +503,38 @@ pub fn watch(path: &Path, sink: impl Fn(u64) -> Sink, log: Log) -> Result<WatchS
     let wlog = log.clone();
     let watching = Arc::new(AtomicBool::new(mode == Mode::Watching));
     let live = watching.clone();
-    std::thread::Builder::new()
-        .name(format!("scm-watch-{id}"))
-        .spawn(move || worker(id, &root, mode, rx, send, wlog, live))
-        .map_err(|e| e.to_string())?;
+    let tell = ended.clone();
+    if let Err(e) = std::thread::Builder::new().name(format!("scm-watch-{id}")).spawn(move || worker(id, &root, mode, rx, send, wlog, live, tell)) {
+        // FIX-1 (review AFTER 12): the readers already started would otherwise stay alive holding
+        // the folders open; they end on the flag and the wake event like any stopped watch.
+        stop.store(true, Ordering::Relaxed);
+        wake.set();
+        return Err(e.to_string());
+    }
     let start = WatchStart { id, worktree, watching: mode == Mode::Watching };
-    all.insert(k, Watch { id, refs: 1, tx, stop, wake, watching, readers });
+    all.insert(k, Watch { id, refs: 1, tx, stop, wake, watching, readers, ended });
     Ok(start)
+}
+
+/// FIX-1: a watch `unwatch_root` ended for a removal. If the removal then fails (a lock held on
+/// the folder, say), `tell_page` has the page watch the folder again; after a removal that
+/// succeeded it is dropped unused, since the workspace and its panel are gone.
+#[must_use = "a removal that failed must call tell_page, or the panel stays silent"]
+#[cfg_attr(not(test), allow(dead_code))] // used by projects.rs once evidence/watch-T-033-e-projects.rs.patch lands
+pub struct Stopped {
+    id: u64,
+    ended: Ended,
+}
+
+#[cfg_attr(not(test), allow(dead_code))] // see Stopped
+impl Stopped {
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+    /// The folder stays after all: the page is told its watch ended, so it watches again.
+    pub fn tell_page(self) {
+        (self.ended)(self.id);
+    }
 }
 
 /// One caller is done with watch `id`; the last one stops it (nobody is waited for).
@@ -512,20 +556,30 @@ pub fn unwatch(id: u64) {
 
 /// T-033-e: a workspace is being removed: its watch ends whatever the callers' count, and the
 /// readers are waited for, so no folder handle of ours stands in the way of git deleting the
-/// folder. `root` is the worktree as the caller has it (any slashes or case); true when there was
-/// a watch. Runs on the caller's thread, never the window's.
-/// Its caller is `workspace_remove` in projects.rs, a coordinator hunk
-/// (`evidence/watch-T-033-e-projects.rs.patch`); until that lands nothing in the app calls it.
+/// folder. `root` is the worktree as the caller has it (any slashes or case); the handle to tell
+/// the page with when there was a watch (FIX-1). It joins threads, so it runs on a background
+/// command's thread (the caller, `workspace_remove`, is an `async` command once the coordinator
+/// hunk `evidence/watch-T-033-e-projects.rs.patch` lands; until then nothing in the app calls it).
+/// Only the watch of that very folder is ended (FIX-1): when the key misses, git is asked from the
+/// folder, and its answer counts only if it is the same folder (a gone workspace, or a plain folder
+/// inside the project, would otherwise end the project's own watch).
 #[cfg_attr(not(test), allow(dead_code))]
-pub fn unwatch_root(root: &Path) -> bool {
+pub fn unwatch_root(root: &Path) -> Option<Stopped> {
     let k = key(&root.to_string_lossy());
-    let w = take(&k).or_else(|| places(root).ok().and_then(|p| take(&key(&p.root.to_string_lossy()))));
-    let Some(w) = w else { return false };
+    let w = take(&k).or_else(|| {
+        if !root.is_dir() {
+            return None;
+        }
+        let p = places(root).ok()?;
+        let same = std::fs::canonicalize(&p.root).ok()? == std::fs::canonicalize(root).ok()?;
+        same.then(|| take(&key(&p.root.to_string_lossy()))).flatten()
+    });
+    let w = w?;
     w.halt();
     for h in w.readers {
         let _ = h.join();
     }
-    true
+    Some(Stopped { id: w.id, ended: w.ended })
 }
 
 /// T-033-e: the window is gone (closed, or its page torn down): every watch ends at once, none is
@@ -629,7 +683,8 @@ impl Schedule {
 }
 
 /// Waits on the signals, reads the status when a change has settled or a tick is due, and sends it.
-fn worker(id: u64, root: &Path, mut mode: Mode, rx: std::sync::mpsc::Receiver<Signal>, send: Sink, log: Log, watching: Arc<AtomicBool>) {
+#[allow(clippy::too_many_arguments)]
+fn worker(id: u64, root: &Path, mut mode: Mode, rx: std::sync::mpsc::Receiver<Signal>, send: Sink, log: Log, watching: Arc<AtomicBool>, ended: Ended) {
     let mut sched = Schedule::new(Instant::now(), GAP);
     let mut said_overflow = false;
     loop {
@@ -644,11 +699,14 @@ fn worker(id: u64, root: &Path, mut mode: Mode, rx: std::sync::mpsc::Receiver<Si
                     said_overflow = true;
                     log(&format!("source control: too many changes at once under {}; read again, still watching", root.display()));
                 }
+                // FIX-1: a rule-file edit may be among the dropped records, so the remembered
+                // ignore answers are forgotten (asked again from the next change on).
+                ignores_of(root).lock().unwrap_or_else(|e| e.into_inner()).forget();
                 sched.change(Instant::now());
             }
             Ok(Signal::Broken(why)) => {
                 if !root.is_dir() {
-                    return gone(id, root, &log);
+                    return gone(id, root, &log, &ended);
                 }
                 let (next, first) = mode.broken();
                 if first {
@@ -664,7 +722,7 @@ fn worker(id: u64, root: &Path, mut mode: Mode, rx: std::sync::mpsc::Receiver<Si
         let now = Instant::now();
         if sched.due(now, mode.tick()) {
             if !root.is_dir() {
-                return gone(id, root, &log);
+                return gone(id, root, &log, &ended);
             }
             #[cfg(test)]
             STARTS.lock().unwrap_or_else(|e| e.into_inner()).push((root.to_path_buf(), now));
@@ -676,8 +734,9 @@ fn worker(id: u64, root: &Path, mut mode: Mode, rx: std::sync::mpsc::Receiver<Si
 }
 
 /// T-033-e: the worktree folder is gone (removed from outside, or by git): the watch ends instead
-/// of reading a missing folder every 4 s for the rest of the session. Said once in the log.
-fn gone(id: u64, root: &Path, log: &Log) {
+/// of reading a missing folder every 4 s for the rest of the session. Said once in the log, and
+/// the page is told (FIX-1): a folder that is only briefly unreadable gets watched again.
+fn gone(id: u64, root: &Path, log: &Log, ended: &Ended) {
     let w = {
         let mut all = WATCHES.lock().unwrap_or_else(|e| e.into_inner());
         let k = all.iter().find(|(_, w)| w.id == id).map(|(k, _)| k.clone());
@@ -686,6 +745,7 @@ fn gone(id: u64, root: &Path, log: &Log) {
     if let Some(w) = w {
         w.halt();
         log(&format!("source control: {} is gone; its watch stopped", root.display()));
+        ended(id);
     }
 }
 
@@ -698,7 +758,7 @@ fn injected_break() -> bool {
 /// Starts the reader thread of one folder; the handle is the thread's, and the thread ends when the
 /// stop flag is set (at once through `wake`, else within its 500 ms wait slice).
 #[cfg(windows)]
-fn start_reader(dir: &Path, recursive: bool, spot: Spot, tx: Sender<Signal>, stop: Arc<AtomicBool>, wake: Arc<Wake>) -> Result<std::thread::JoinHandle<()>, String> {
+fn start_reader(dir: &Path, recursive: bool, spot: Spot, tx: Sender<Signal>, stop: Arc<AtomicBool>, wake: Arc<Wake>, buf_words: usize) -> Result<std::thread::JoinHandle<()>, String> {
     use windows_sys::Win32::Foundation::{GetLastError, ERROR_NOTIFY_ENUM_DIR, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT};
     use windows_sys::Win32::Storage::FileSystem::*;
     use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, WaitForMultipleObjects, WaitForSingleObject};
@@ -725,7 +785,7 @@ fn start_reader(dir: &Path, recursive: bool, spot: Spot, tx: Sender<Signal>, sto
         .name("scm-watch-reader".into())
         .spawn(move || {
             let (h, ev) = (h, ev);
-            let mut buf = vec![0u32; 64 * 1024]; // 256 KB, DWORD-aligned as the call needs
+            let mut buf = vec![0u32; buf_words]; // DWORD-aligned as the call needs
             let bytes = buf.len() * 4;
             let broke = |why: String| drop(tx.send(Signal::Broken(why)));
             loop {
@@ -739,6 +799,13 @@ fn start_reader(dir: &Path, recursive: bool, spot: Spot, tx: Sender<Signal>, sto
                     return broke(format!("{label}: the change read failed (error {})", unsafe { GetLastError() }));
                 }
                 let mut n = 0u32;
+                // FIX-1 (review AFTER 11): while a read is outstanding the kernel may still write
+                // into `buf`, so every return first cancels the read and waits for it to end.
+                let settle = |n: &mut u32| unsafe {
+                    // SAFETY: cancels our pending read, then waits for it to finish with the buffer.
+                    CancelIoEx(h.0, &ov);
+                    GetOverlappedResult(h.0, &ov, n, 1);
+                };
                 loop {
                     // SAFETY: waits on our own read event and, when there is one, the watch's stop event.
                     let r = match &wake.ev {
@@ -747,15 +814,17 @@ fn start_reader(dir: &Path, recursive: bool, spot: Spot, tx: Sender<Signal>, sto
                     };
                     let stopped = r == WAIT_OBJECT_0 + 1 || (r == WAIT_TIMEOUT && stop.load(Ordering::Relaxed));
                     if stopped {
-                        // SAFETY: cancels our pending read, then waits for it to finish with the buffer.
-                        unsafe {
-                            CancelIoEx(h.0, &ov);
-                            GetOverlappedResult(h.0, &ov, &mut n, 1);
-                        }
+                        settle(&mut n);
                         return;
                     }
+                    if r == WAIT_OBJECT_0 {
+                        break; // the read signalled
+                    }
                     if r != WAIT_TIMEOUT {
-                        break; // the read signalled (or the wait failed: the result call says which)
+                        // The wait itself failed; the read is still outstanding.
+                        let e = unsafe { GetLastError() };
+                        settle(&mut n);
+                        return broke(format!("{label}: the wait failed (error {e})"));
                     }
                 }
                 // SAFETY: the read has signalled; collects its byte count.
@@ -797,7 +866,7 @@ fn start_reader(dir: &Path, recursive: bool, spot: Spot, tx: Sender<Signal>, sto
 }
 
 #[cfg(not(windows))]
-fn start_reader(_dir: &Path, _recursive: bool, _spot: Spot, _tx: Sender<Signal>, _stop: Arc<AtomicBool>, _wake: Arc<Wake>) -> Result<std::thread::JoinHandle<()>, String> {
+fn start_reader(_dir: &Path, _recursive: bool, _spot: Spot, _tx: Sender<Signal>, _stop: Arc<AtomicBool>, _wake: Arc<Wake>, _buf_words: usize) -> Result<std::thread::JoinHandle<()>, String> {
     Err("folder watching is only built for Windows".into())
 }
 
@@ -1091,14 +1160,15 @@ mod tests {
         assert!(a_minute <= 180, "{a_minute} git processes a minute is more than the raw log's burst allows: {argvs:?}");
     }
 
-    /// T-033-e: the 120 reads a minute in T-033-b's raw churn line, when the 1 s cap was thought to
-    /// bound reads at 60. The cap bounds one unbroken burst; the churn loop (86 `cargo clean` +
-    /// `cargo build` cycles a minute) paused for longer than the 250 ms quiet time at every process
-    /// start, and every pause ended a burst and read. So the count was the number of pauses (one or
-    /// two a cycle: 120 lies between 86 and 172), not the cap. The 4 s gap of T-033-c bounds the
-    /// read starts themselves, pauses or not: 15 a minute.
+    /// T-033-e: what the 1 s cap bounds and what the gap bounds, replayed on a churn that pauses.
+    /// The cap bounds one unbroken burst; a churn loop that pauses for longer than the 250 ms quiet
+    /// time at every process start (a `cargo clean` + `cargo build` cycle does) reads at every
+    /// pause, more than the cap's 60 a minute. The 4 s gap of T-033-c bounds the read starts
+    /// themselves, pauses or not: 15 a minute. (That the raw log of T-033-b counted 120 reads this
+    /// way is the hypothesis in evidence/T-033-e.txt; this replay proves the two bounds, not the
+    /// history: review AFTER 9.)
     #[test]
-    fn t033e_the_raw_logs_120_reads_a_minute_were_a_churn_that_paused_which_the_cap_never_bounded_and_the_gap_does() {
+    fn t033e_a_pausing_churn_reads_at_every_pause_without_the_gap_and_at_most_15_a_minute_with_it() {
         let t0 = Instant::now();
         let tick = Duration::from_secs(30);
         // One cycle, 700 ms: the clean's rename, a 300 ms pause while the build starts, 150 ms of
@@ -1234,7 +1304,7 @@ mod tests {
         std::fs::create_dir_all(&sub).unwrap();
         let (tx, rx) = channel();
         let stop = Arc::new(AtomicBool::new(false));
-        start_reader(&sub, true, Spot::Refs, tx, stop.clone(), Wake::new()).unwrap();
+        start_reader(&sub, true, Spot::Refs, tx, stop.clone(), Wake::new(), BUF_WORDS).unwrap();
         std::thread::sleep(Duration::from_millis(200));
         assert!(until(Duration::from_secs(5), || std::fs::remove_dir_all(&sub).is_ok() || !sub.exists()));
         let mut broke = false;
@@ -1304,11 +1374,18 @@ mod tests {
         let w = watch(&dir, |_| Arc::new(|_: &crate::scm::Status| {}) as Sink, Arc::new(move |m: &str| l.lock().unwrap().push(m.to_string()))).unwrap();
         assert!(w.watching);
         std::thread::sleep(Duration::from_millis(300));
+        // FIX-1 (review FIX-SOON 6): a `.gitignore` edit lost inside the dropped records would leave
+        // the remembered answers stale, so an overflow forgets them. A planted wrong answer stands
+        // in for the stale one: `src` is "ignored" until the overflow.
+        let root = places(&dir).unwrap().root;
+        ignores_of(&root).lock().unwrap().known.insert("src".into(), true);
+        assert!(!matters(&root, Spot::Tree, "src/x.rs"), "remembered as ignored");
         let at = Instant::now();
         assert!(overflow_watch(w.id));
         assert!(overflow_watch(w.id), "two overflows close together");
         let starts = || STARTS.lock().unwrap().iter().filter(|(r, t)| *t >= at && same_dir(r, &dir)).count();
         assert!(until(Duration::from_secs(10), || starts() >= 1), "one catch-up read");
+        assert!(until(Duration::from_secs(5), || matters(&root, Spot::Tree, "src/x.rs")), "the overflow forgot the remembered ignore answers (git is asked again: src is not ignored)");
         // Still watching: a joiner is told so, and no 4 s reads follow (one read, then quiet).
         let join = watch(&dir, |_| Arc::new(|_: &crate::scm::Status| {}) as Sink, Arc::new(|_: &str| {})).unwrap();
         assert!(join.watching, "an overflow is not a break");
@@ -1338,8 +1415,11 @@ mod tests {
         assert!(Arc::strong_count(&sink) >= 2);
         let t = Instant::now();
         unwatch(w.id);
-        let took = t.elapsed();
-        assert!(took < Duration::from_millis(200), "unwatch waits for nobody: {took:?}");
+        let took_unwatch = t.elapsed();
+        assert!(took_unwatch < Duration::from_millis(200), "unwatch waits for nobody: {took_unwatch:?}");
+        // Non-regression (review FIX-SOON 8): the reader ends on the stop flag within its 500 ms wait
+        // slice even without the wake event, so 3 s is the allowance, not the claim; the under-100 ms
+        // claim is made by `fix1_unwatch_root_joins_five_readers...`.
         assert!(until(Duration::from_secs(3), || Arc::strong_count(&stop) == 1), "the reader thread ended (count {})", Arc::strong_count(&stop));
         assert!(until(Duration::from_secs(10), || Arc::strong_count(&sink) == 1), "the worker thread ended");
         assert!(stop_of(w.id).is_none());
@@ -1359,7 +1439,109 @@ mod tests {
         assert!(until(Duration::from_secs(3), || Arc::strong_count(&sa) == 1 && Arc::strong_count(&sb) == 1), "every reader thread ended ({}, {})", Arc::strong_count(&sa), Arc::strong_count(&sb));
         unwatch(a.id); // a late caller of a gone id is a no-op
         assert_eq!(open_count(), 0);
-        println!("T-033-e: unwatch took {took:?}; readers ended within 3 s of it");
+        println!("T-033-e: unwatch took {took_unwatch:?}, unwatch_all of two took {took:?}; readers ended within 3 s of each");
+    }
+
+    /// FIX-1 (review FIX-SOON 8): `unwatch_root` joins every reader, so its cost is what the Wake
+    /// event makes it: a linked worktree's five readers end together, well under 100 ms, not the
+    /// 500 ms wait slice each. And the page is told only when the caller says the removal failed.
+    #[cfg(windows)]
+    #[test]
+    fn fix1_unwatch_root_joins_five_readers_in_under_100_ms_and_tells_the_page_only_when_asked() {
+        let _live = live();
+        let dir = repo("join5");
+        let git = |args: &[&str], cwd: &Path| crate::git::command(args, Some(cwd)).output().unwrap();
+        std::fs::create_dir_all(dir.join(".git/info")).unwrap();
+        let linked = dir.parent().unwrap().join(format!("scm-watch-join5-wt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&linked);
+        assert!(git(&["worktree", "add", "-q", &linked.to_string_lossy(), "-b", "fix1-join5"], &dir).status.success());
+        let ended = Arc::new(Mutex::new(Vec::<u64>::new()));
+        let e = ended.clone();
+        let w = watch_with(&linked, |_| Arc::new(|_: &crate::scm::Status| {}) as Sink, Arc::new(move |id| e.lock().unwrap().push(id)), Arc::new(|_: &str| {})).unwrap();
+        assert!(w.watching);
+        let stop = stop_of(w.id).unwrap();
+        assert_eq!(Arc::strong_count(&stop) - 2, 5, "tree, git folder, refs, info and common readers");
+        std::thread::sleep(Duration::from_millis(300)); // every reader is inside its wait
+        let t = Instant::now();
+        let stopped = unwatch_root(&linked).expect("there was a watch");
+        let took = t.elapsed();
+        assert_eq!(Arc::strong_count(&stop), 1, "every reader was joined before unwatch_root returned");
+        assert!(took < Duration::from_millis(100), "five readers joined in {took:?}");
+        println!("FIX-1: unwatch_root joined 5 readers in {took:?}");
+        assert_eq!(stopped.id(), w.id);
+        assert!(ended.lock().unwrap().is_empty(), "the page is not told before the removal is known to have failed");
+        stopped.tell_page();
+        assert_eq!(*ended.lock().unwrap(), vec![w.id], "the removal failed: the page is told to watch again");
+        unwatch(w.id); // the page's old release is a no-op
+        assert!(git(&["worktree", "remove", "--force", &linked.to_string_lossy()], &dir).status.success());
+        let _ = std::fs::remove_dir_all(&linked);
+    }
+
+    /// FIX-1 (review FIX-BEFORE 3): a workspace removal ends the watch of that folder and no other.
+    /// Its folder may already be gone, or be a plain folder inside the project (its `.git` file
+    /// lost): asked from there, git answers with the project's own root, which is not this watch.
+    #[cfg(windows)]
+    #[test]
+    fn fix1_removing_a_gone_or_plain_workspace_inside_the_project_leaves_the_projects_watch_alive() {
+        let _live = live();
+        let dir = repo("fallback-root");
+        let w = watch(&dir, |_| Arc::new(|_: &crate::scm::Status| {}) as Sink, Arc::new(|_: &str| {})).unwrap();
+        let count = open_count();
+        // The per-project workspaces folder lives inside the repo (PROJ-028); this workspace is gone.
+        let gone = dir.join("workspaces/feature-x");
+        assert!(unwatch_root(&gone).is_none(), "a missing folder is nobody's watch");
+        assert!(stop_of(w.id).is_some(), "the project's watch is still alive after a gone workspace's removal");
+        // A folder that exists but is no worktree of its own.
+        let plain = dir.join("workspaces/plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        assert!(unwatch_root(&plain).is_none(), "a folder that is not a worktree of its own is nobody's watch");
+        assert!(stop_of(w.id).is_some(), "the project's watch is still alive after a plain folder's removal");
+        assert_eq!(open_count(), count);
+        // The fallback still finds the project's own watch by a spelling the key does not fold.
+        let spelled = format!("{}\\.", dir.to_string_lossy().replace('/', "\\"));
+        let s = unwatch_root(Path::new(&spelled)).expect("found by its canonical folder");
+        assert_eq!(s.id(), w.id);
+        assert_eq!(open_count(), count - 1);
+        drop(s);
+        unwatch(w.id);
+    }
+
+    /// FIX-1 (review FIX-SOON 5): a real change-buffer overflow (not the test seam): with a buffer
+    /// too small for a storm, Windows drops the records and the reader must send Overflow, issue
+    /// the next read and go on, so the same reader still reports a later change.
+    #[cfg(windows)]
+    #[test]
+    fn fix1_a_real_buffer_overflow_sends_overflow_and_the_same_reader_still_reports_a_later_change() {
+        let dir = repo("real-overflow");
+        let sub = dir.join("storm");
+        std::fs::create_dir_all(&sub).unwrap();
+        let (tx, rx) = channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        // 64 DWORDs = 256 bytes: room for a handful of records, none for a storm.
+        start_reader(&sub, true, Spot::Refs, tx, stop.clone(), Wake::new(), 64).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        for i in 0..3000 {
+            std::fs::write(sub.join(format!("f{i}")), "x").unwrap();
+        }
+        let mut seen = Vec::new();
+        let end = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < end && !seen.iter().any(|s| matches!(s, Signal::Overflow)) {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(s) => seen.push(s),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        assert!(seen.iter().any(|s| matches!(s, Signal::Overflow)), "a storm into a 256-byte buffer must overflow: {seen:?}");
+        assert!(!seen.iter().any(|s| matches!(s, Signal::Broken(_))), "an overflow is not a break: {seen:?}");
+        // The storm's tail: quiet means no signal for a second.
+        while rx.recv_timeout(Duration::from_secs(1)).is_ok() {}
+        let n_overflows = seen.iter().filter(|s| matches!(s, Signal::Overflow)).count();
+        std::fs::write(sub.join("later"), "y").unwrap();
+        let later = rx.recv_timeout(Duration::from_secs(5));
+        assert!(matches!(later, Ok(Signal::Change)), "the same reader reports a later change after its overflow: {later:?}");
+        println!("FIX-1: a 3000-file storm into a 256-byte buffer: {} signals before the first overflow was seen, {n_overflows} overflow(s), then a later change", seen.len());
+        stop.store(true, Ordering::Relaxed);
     }
 
     #[cfg(windows)]
@@ -1377,7 +1559,9 @@ mod tests {
         let s = seen.clone();
         let logs = Arc::new(Mutex::new(Vec::<String>::new()));
         let l = logs.clone();
-        let w = watch(&linked, move |_| { let s = s.clone(); Arc::new(move |st: &crate::scm::Status| s.lock().unwrap().push(st.clone())) as Sink }, Arc::new(move |m: &str| l.lock().unwrap().push(m.to_string()))).unwrap();
+        let ended = Arc::new(Mutex::new(Vec::<u64>::new()));
+        let e = ended.clone();
+        let w = watch_with(&linked, move |_| { let s = s.clone(); Arc::new(move |st: &crate::scm::Status| s.lock().unwrap().push(st.clone())) as Sink }, Arc::new(move |id| e.lock().unwrap().push(id)), Arc::new(move |m: &str| l.lock().unwrap().push(m.to_string()))).unwrap();
         assert!(w.watching);
         let p = places(&linked).unwrap();
         assert!(p.watches().iter().any(|(d, r, s)| *s == Spot::Common && !r && d == &p.common), "{:?}", p.watches());
@@ -1408,13 +1592,16 @@ mod tests {
         let out = git(&["worktree", "remove", "--force", &linked.to_string_lossy()], &dir);
         println!("T-033-e: git worktree remove under a live watch: exit {:?}, stderr {:?}", out.status.code(), String::from_utf8_lossy(&out.stderr).trim());
         assert!(until(Duration::from_secs(20), || stop_of(w.id).is_none()), "the watch ends when its folder is gone");
+        // FIX-1 (review FIX-SOON 7): a watch that ends on its own tells the page, which watches again.
+        assert!(until(Duration::from_secs(5), || *ended.lock().unwrap() == vec![w.id]), "the page is told the watch ended: {:?}", ended.lock().unwrap());
+        // Non-regression: the readers end on the stop flag (5 s is the allowance, not the claim).
         assert!(until(Duration::from_secs(5), || Arc::strong_count(&stop) == 1), "its readers ended ({})", Arc::strong_count(&stop));
         assert!(until(Duration::from_secs(10), || !linked.exists()), "the folder is gone once the handles are closed");
         let l = logs.lock().unwrap().clone();
         assert_eq!(l.iter().filter(|m| m.contains("is gone; its watch stopped")).count(), 1, "{l:?}");
         unwatch(w.id); // the page's late unwatch is a no-op
         // Kolux's own removal (workspace remove): unwatch_root first, by the path as the project has
-        // it (backslashes, any case), joined, so git deletes the folder at the first try.
+        // it (backslashes, any case), joined, so no handle of ours is open when git deletes the folder.
         let linked2 = base.join(format!("scm-watch-linked-wt2-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&linked2);
         ok(&["worktree", "add", "-q", &linked2.to_string_lossy(), "-b", "t033e-linked2"], &dir);
@@ -1424,13 +1611,18 @@ mod tests {
         let stop2 = stop_of(w2.id).unwrap();
         let spelled = linked2.to_string_lossy().replace('/', "\\").to_uppercase();
         let count = open_count();
-        assert!(unwatch_root(Path::new(&spelled)), "found by the project's spelling");
+        let stopped = unwatch_root(Path::new(&spelled)).expect("found by the project's spelling");
+        assert_eq!(stopped.id(), w2.id);
         assert_eq!(Arc::strong_count(&stop2), 1, "every reader was joined before unwatch_root returned");
         assert_eq!(open_count(), count - 1);
         let out = git(&["worktree", "remove", "--force", &linked2.to_string_lossy()], &dir);
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-        assert!(!linked2.exists(), "gone at the first try");
-        assert!(!unwatch_root(&linked2), "nothing left to end");
+        // Non-regression (review FIX-SOON 8): git removes the folder with live readers too (the first
+        // half above, share-delete handles); what unwatch_root adds is proven by the joined count.
+        assert!(!linked2.exists(), "the folder is gone");
+        drop(stopped); // the removal succeeded: the page is not told
+        assert!(unwatch_root(&linked2).is_none(), "nothing left to end");
+        assert_eq!(*ended.lock().unwrap(), vec![w.id], "only the watch that ended on its own told the page");
         unwatch(w2.id);
         unwatch(w2_again.id);
         let _ = std::fs::remove_dir_all(&linked);
