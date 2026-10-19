@@ -51,27 +51,35 @@ describe("the Agents screen's Send result to wiring (FIX-5)", () => {
 
   it("a long reply on a typed draft shows the note beside the menu, keeps the draft and does not move the screen", () => {
     const { log, hand } = wire("check this:");
-    hand().onHand(2, long);
+    hand().onHand(2, long, "m1");
     expect(log.kept).toEqual([]);
     expect(log.picked).toEqual([]);
     expect(log.note?.text).toBe(handTooLongText("docs"));
-    const head = renderToStaticMarkup(createElement(ChatHead, { result: long, hand: hand() }));
+    const head = renderToStaticMarkup(createElement(ChatHead, { result: long, resultId: "m1", hand: hand() }));
     expect(head).toContain(esc(handTooLongText("docs")));
     expect(head).toContain('role="status"');
   });
 
   it("a reply that fits goes after the draft, moves the screen and leaves no note", () => {
     const { log, hand } = wire("check this:");
-    hand().onHand(2, "the result");
+    hand().onHand(2, "the result", "m1");
     expect(log.kept).toEqual([[2, "check this:\n\nthe result"]]);
     expect(log.picked).toEqual([2]);
     expect(log.note).toBeNull();
   });
 
+  it("a newer reply with the very same words does not inherit the note (FIX-6, AFTER 2)", () => {
+    const { log, hand } = wire("check this:");
+    hand().onHand(2, long, "m1");
+    expect(log.note).toEqual({ text: handTooLongText("docs"), forResult: "m1" });
+    expect(renderToStaticMarkup(createElement(ChatHead, { result: long, resultId: "m1", hand: hand() }))).toContain(esc(handTooLongText("docs")));
+    expect(renderToStaticMarkup(createElement(ChatHead, { result: long, resultId: "m2", hand: hand() }))).not.toContain(esc(handTooLongText("docs")));
+  });
+
   it("the refusal note goes when a newer reply is shown (stand-in review AFTER 2)", () => {
     const { hand } = wire("check this:");
-    hand().onHand(2, long);
-    expect(renderToStaticMarkup(createElement(ChatHead, { result: long, hand: hand() }))).toContain(esc(handTooLongText("docs")));
-    expect(renderToStaticMarkup(createElement(ChatHead, { result: "a newer reply", hand: hand() }))).not.toContain(esc(handTooLongText("docs")));
+    hand().onHand(2, long, "m1");
+    expect(renderToStaticMarkup(createElement(ChatHead, { result: long, resultId: "m1", hand: hand() }))).toContain(esc(handTooLongText("docs")));
+    expect(renderToStaticMarkup(createElement(ChatHead, { result: "a newer reply", resultId: "m2", hand: hand() }))).not.toContain(esc(handTooLongText("docs")));
   });
 });

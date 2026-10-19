@@ -222,9 +222,13 @@ export function previewToShow(preview: Preview | null, turnOpen: boolean, lastRe
 
 /** The last thing the agent said, for the preview comparison. */
 export function lastReply(items: ChatItem[]): string | undefined {
+  return lastReplyItem(items)?.text;
+}
+/** The item behind `lastReply`: its id tells two replies with the same words apart (FIX-6, review of 64abfea0 AFTER 2). */
+export function lastReplyItem(items: ChatItem[]): ChatItem | undefined {
   for (let i = items.length - 1; i >= 0; i--) {
     if (items[i].role === "user") return undefined;
-    if (items[i].role === "assistant" && items[i].kind === "text") return items[i].text;
+    if (items[i].role === "assistant" && items[i].kind === "text") return items[i];
   }
   return undefined;
 }
