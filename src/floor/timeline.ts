@@ -3,7 +3,8 @@
 // clamped to the chosen range.
 
 export type Mark = { at: number; state: string };
-export type Track = { pane: number; marks: Mark[]; ended: number | null; terminal: number | null; live: boolean };
+/** `parent` (T-260-b) is the pane of the session this one was started under, when there is one. */
+export type Track = { pane: number; marks: Mark[]; ended: number | null; terminal: number | null; live: boolean; parent?: number | null };
 export type Kind = "working" | "needs" | "idle" | "unverifiable";
 export type Segment = { kind: Kind; from: number; to: number };
 export type Range = "15m" | "60m" | "today";
@@ -51,10 +52,33 @@ export function segments(t: Track, from: number, to: number): Segment[] {
 /** Six evenly spaced ticks along the axis, both ends included. */
 export const ticks = (from: number, to: number) => Array.from({ length: 6 }, (_, i) => from + ((to - from) * i) / 5);
 
-/** Lanes in pane order; a lane with nothing inside the range is left off. */
+/** Lanes with something inside the range, in pane order, each child session right under its
+ * parent and one step in (T-260-b). A child whose parent has no lane in the range, or whose parent
+ * chain loops back on itself, stays on top; no lane is shown twice. */
 export function lanes(tracks: Track[], from: number, to: number) {
-  return [...tracks]
+  const shown = [...tracks]
     .sort((a, b) => a.pane - b.pane)
     .map((t) => ({ track: t, segs: segments(t, from, to) }))
     .filter((l) => l.segs.length > 0);
+  const panes = new Set(shown.map((l) => l.track.pane));
+  const link = new Map(shown.map((l) => [l.track.pane, l.track.parent != null && l.track.parent !== l.track.pane && panes.has(l.track.parent) ? l.track.parent : null]));
+  const onLoop = (pane: number) => {
+    let at = link.get(pane) ?? null;
+    for (let i = 0; at !== null && i <= shown.length; i++) {
+      if (at === pane) return true;
+      at = link.get(at) ?? null;
+    }
+    return false;
+  };
+  const parentOf = (l: (typeof shown)[number]) => (onLoop(l.track.pane) ? null : (link.get(l.track.pane) ?? null));
+  const out: Array<(typeof shown)[number] & { depth: number }> = [];
+  const seen = new Set<number>();
+  const place = (l: (typeof shown)[number], depth: number) => {
+    if (seen.has(l.track.pane)) return;
+    seen.add(l.track.pane);
+    out.push({ ...l, depth });
+    shown.filter((c) => parentOf(c) === l.track.pane).forEach((c) => place(c, depth + 1));
+  };
+  shown.filter((l) => parentOf(l) === null).forEach((l) => place(l, 0));
+  return out;
 }

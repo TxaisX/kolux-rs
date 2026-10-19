@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { kindOf, lanes, rangeStart, segments, ticks, type Track } from "./timeline";
 
 const at = (h: number, m = 0) => new Date(2026, 9, 13, h, m).getTime();
-const track = (o: Partial<Track>): Track => ({ pane: 1, marks: [], ended: null, terminal: 7, live: true, ...o });
+const track = (o: Partial<Track>): Track => ({ pane: 1, marks: [], ended: null, terminal: 7, live: true, parent: null, ...o });
 
 describe("VIEW-013 Floor timeline", () => {
   it("range today at 09:00 starts the axis at local midnight, with six ticks", () => {
@@ -45,5 +45,38 @@ describe("VIEW-013 Floor timeline", () => {
     expect(html.match(/class="floor-lane"/g)).toHaveLength(1);
     expect(html).toContain('data-ms="300000"');
     expect(html.match(/class="floor-tick"/g)).toHaveLength(6);
+  });
+
+  it("T-260-b: a child session nests right under its parent, grandchildren one step further, and a child whose parent has no lane stays on top", () => {
+    const m = [{ at: at(8, 59), state: "working" }];
+    const tracks = [
+      track({ pane: 2, terminal: 12, parent: 1, marks: m }),
+      track({ pane: 6, terminal: 16, marks: m }),
+      track({ pane: 1, terminal: 11, marks: m }),
+      track({ pane: 4, terminal: 14, parent: 2, marks: m }),
+      track({ pane: 3, terminal: 13, parent: 1, marks: m }),
+      track({ pane: 8, terminal: 18, parent: 99, marks: m }),
+      track({ pane: 5, terminal: 15, parent: 7, marks: [{ at: at(6), state: "working" }], ended: at(7) }),
+      track({ pane: 7, terminal: 17, ended: at(7), marks: [{ at: at(6), state: "working" }] }),
+    ];
+    const rows = lanes(tracks, at(8), at(9));
+    expect(rows.map((r) => [r.track.pane, r.depth])).toEqual([[1, 0], [2, 1], [4, 2], [3, 1], [6, 0], [8, 0]]);
+  });
+
+  it("T-260-b: lanes that name each other as parent still all show, once, on top", () => {
+    const m = [{ at: at(8, 59), state: "working" }];
+    const rows = lanes([track({ pane: 1, parent: 2, marks: m }), track({ pane: 2, parent: 1, marks: m }), track({ pane: 3, parent: 3, marks: m })], at(8), at(9));
+    expect(rows.map((r) => [r.track.pane, r.depth])).toEqual([[1, 0], [2, 0], [3, 0]]);
+  });
+
+  it("T-260-b: the page indents a child lane under its parent, parent first", async () => {
+    const { createElement } = await import("react");
+    const { renderToString } = await import("react-dom/server");
+    const { default: FloorView } = await import("./FloorView");
+    const m = [{ at: at(8, 52), state: "working" }];
+    const html = renderToString(createElement(FloorView, { now: at(9), initial: [track({ pane: 2, terminal: 12, parent: 1, marks: m }), track({ pane: 1, terminal: 11, marks: m })] }));
+    expect(html.match(/class="floor-lane"/g)).toHaveLength(2);
+    expect([...html.matchAll(/data-depth="([0-9])"/g)].map((x) => x[1])).toEqual(["0", "1"]);
+    expect(html.indexOf("Terminal 11")).toBeLessThan(html.indexOf("Terminal 12"));
   });
 });

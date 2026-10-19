@@ -53,9 +53,10 @@ export default function FloorView({ initial, now: fixed, load = () => invoke<Tra
       </div>
       {error && <p className="muted">The Floor could not be read: {error}</p>}
       {!error && shown.length === 0 && <p className="muted">No agent reported any activity in this range.</p>}
-      {shown.map(({ track, segs }) => (
-        <div key={track.pane} className="floor-lane" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-          <span style={{ width: 110, flexShrink: 0, fontSize: 12 }}>
+      {shown.map(({ track, segs, depth }) => (
+        <div key={track.pane} className="floor-lane" data-depth={depth} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+          <span style={{ width: 110, boxSizing: "border-box", paddingLeft: depth * 14, flexShrink: 0, fontSize: 12 }}>
+            {depth > 0 ? "↳ " : ""}
             {track.terminal === null ? `Pane ${track.pane}` : `Terminal ${track.terminal}`}
             {track.live ? "" : " (closed)"}
           </span>
