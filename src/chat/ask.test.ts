@@ -2,7 +2,8 @@
 // shows while a named tool's prompt is open and not answered; Allow / Deny type the program's keys only while
 // that prompt is still the one showing; a dismissed prompt stays dismissed until the next one.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { askOf, askTitle, answerCard, cardOf, dismissAsk, forgetAsks, hearAsks, subscribeAsk, takeAsk } from "./ask";
+import { answeredElsewhere, askOf, askTitle, answerCard, cardOf, dismissAsk, forgetAsks, hearAsks, subscribeAsk, takeAsk } from "./ask";
+import { enqueue } from "./composer";
 import { forgetHearing, hearStates, setClock } from "./send";
 
 type Handler = (e: { payload: Record<string, unknown> }) => void;
@@ -123,5 +124,110 @@ describe("Allow and Deny", () => {
     ask();
     expect(await answerCard(1, "claude", "approve", askOf(1)!.count, deps(null))).toBe("no-terminal");
     expect(writes).toEqual([]);
+  });
+});
+
+// FIX-1 (stand-in review of f1ad80d5, items 1, 3, 4): the card must follow what the terminal and the hook say.
+describe("FIX-1: answered in the terminal", () => {
+  it("a terminal-side answer hides the card, and a click already on its way types nothing", async () => {
+    ask();
+    const drawn = cardOf("claude", askOf(1), 70)!.drawnAt;
+    let pokes = 0;
+    const off = subscribeAsk(() => void pokes++);
+    answeredElsewhere(1);
+    expect(pokes).toBe(1);
+    expect(cardOf("claude", askOf(1), 70)).toBeNull();
+    expect(await answerCard(1, "claude", "approve", drawn, deps())).toBe("gone");
+    expect(await answerCard(1, "claude", "deny", drawn, deps())).toBe("gone");
+    expect(writes).toEqual([]);
+    off();
+  });
+  it("the hook repeating the same prompt does not bring the card back, the next prompt does", () => {
+    ask();
+    answeredElsewhere(1);
+    ask();
+    expect(cardOf("claude", askOf(1), 70)).toBeNull();
+    emit({ paneKey: 1, state: "working", tool: "Bash", terminal: 70 });
+    ask({ tool: "Write", detail: "a.txt" });
+    expect(cardOf("claude", askOf(1), 70)?.tool).toBe("Write");
+  });
+  it("a pane with no prompt record is left alone", () => {
+    expect(() => answeredElsewhere(9)).not.toThrow();
+    expect(askOf(9)).toBeUndefined();
+  });
+  it("a click waiting behind another write types nothing when the prompt is answered in the terminal meanwhile", async () => {
+    ask();
+    const drawn = askOf(1)!.count;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    void enqueue(70, () => gate); // something already in the terminal's queue
+    const click = answerCard(1, "claude", "deny", drawn, deps());
+    await new Promise((r) => setTimeout(r, 0));
+    answeredElsewhere(1);
+    release();
+    expect(await click).toBe("gone");
+    expect(writes).toEqual([]);
+  });
+  it("a click waiting behind another write types nothing when the agent moved on meanwhile", async () => {
+    ask();
+    const drawn = askOf(1)!.count;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    void enqueue(70, () => gate);
+    const click = answerCard(1, "claude", "approve", drawn, deps());
+    await new Promise((r) => setTimeout(r, 0));
+    emit({ paneKey: 1, state: "working", tool: "Bash", terminal: 70 });
+    release();
+    expect(await click).toBe("gone");
+    expect(writes).toEqual([]);
+  });
+  it("a click that is still the live prompt after the wait types its key", async () => {
+    ask();
+    const drawn = askOf(1)!.count;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    void enqueue(70, () => gate);
+    const click = answerCard(1, "claude", "approve", drawn, deps());
+    await new Promise((r) => setTimeout(r, 0));
+    release();
+    expect(await click).toBe("sent");
+    expect(writes).toEqual([{ id: 70, data: "\r" }]);
+  });
+});
+
+describe("FIX-1: a different tool or detail is a new prompt", () => {
+  it("a permission event naming another tool counts a new prompt and starts clean", () => {
+    const a = takeAsk(undefined, { paneKey: 1, state: "permission", tool: "Bash", detail: "rm -rf build", terminal: 70 });
+    const b = takeAsk(a, { paneKey: 1, state: "permission", tool: "Edit", terminal: 70 });
+    expect(b.count).toBe(a.count + 1);
+    expect(b.tool).toBe("Edit");
+    expect(b.detail).toBeUndefined();
+  });
+  it("another detail for the same tool is a new prompt too, and the plan and cut flag do not carry over", () => {
+    const a = takeAsk(undefined, { paneKey: 1, state: "permission", tool: "Bash", detail: "ls", plan: "p", planCut: true, terminal: 70 });
+    const b = takeAsk(a, { paneKey: 1, state: "permission", tool: "Bash", detail: "rm x", terminal: 70 });
+    expect(b).toMatchObject({ count: a.count + 1, tool: "Bash", detail: "rm x" });
+    expect(b.plan).toBeUndefined();
+    expect(b.planCut).toBeUndefined();
+  });
+  it("naming the tool for the first time, or repeating the same one, is still the same prompt", () => {
+    const a = takeAsk(undefined, { paneKey: 1, state: "permission", terminal: 70 });
+    const b = takeAsk(a, { paneKey: 1, state: "permission", tool: "Bash", detail: "ls", terminal: 70 });
+    const c = takeAsk(b, { paneKey: 1, state: "permission", tool: "Bash", detail: "ls", terminal: 70 });
+    expect([a.count, b.count, c.count]).toEqual([1, 1, 1]);
+  });
+  it("a card drawn for the old tool is gone, and a click on it types nothing into the new prompt; the new prompt shows its own card", async () => {
+    ask();
+    const old = askOf(1)!.count;
+    ask({ tool: "Edit", detail: undefined });
+    expect(cardOf("claude", askOf(1), 70)).toMatchObject({ tool: "Edit", detail: undefined, drawnAt: old + 1 });
+    expect(await answerCard(1, "claude", "approve", old, deps())).toBe("gone");
+    expect(writes).toEqual([]);
+  });
+  it("a prompt answered in the terminal comes back as a card when the tool changes", () => {
+    ask();
+    answeredElsewhere(1);
+    ask({ tool: "Edit", detail: "a.ts" });
+    expect(cardOf("claude", askOf(1), 70)).toMatchObject({ tool: "Edit" });
   });
 });

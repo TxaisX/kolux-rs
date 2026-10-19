@@ -106,3 +106,74 @@ describe("a cancelled box send", () => {
     expect(notes[notes.length - 1]).toBe(CANCELLED_NOTE);
   });
 });
+
+// FIX-1 (stand-in review of f1ad80d5, item 2): the "asking" check is repeated inside the queued job, and a send that is
+// waiting out a tool gives up as soon as Stop is pressed.
+describe("FIX-1: Stop while a send waits out a tool", () => {
+  it("a prompt that appears during the wait gets no Escape: Stop says the agent is asking", async () => {
+    emit({ paneKey: 1, state: "working", tool: "Bash", terminal: 70 });
+    let state = "working";
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const d = { terminalOf: () => 70, stateOf: () => state, write, sleep: async (ms: number) => void (ms > 0 && (await gate)) };
+    const first = sendToPane(1, "claude", "first", d);
+    await flush(); // the send is in its tool wait
+    const stopped = stopPane(1, d); // the check before the queue passes: the agent is working
+    await flush();
+    state = "permission";
+    emit({ paneKey: 1, state: "permission", tool: "Bash", terminal: 70 });
+    release();
+    expect(await first).toBe("cancelled");
+    expect(await stopped).toBe("asking");
+    expect(writes).toEqual([]);
+  });
+  it("the same when only the window's own reading flips, not the chat's", async () => {
+    emit({ paneKey: 1, state: "working", tool: "Bash", terminal: 70 });
+    let state = "working";
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const d = { terminalOf: () => 70, stateOf: () => state, write, sleep: async (ms: number) => void (ms > 0 && (await gate)) };
+    const first = sendToPane(1, "claude", "first", d);
+    await flush();
+    const stopped = stopPane(1, d);
+    await flush();
+    state = "waiting";
+    release();
+    await first;
+    expect(await stopped).toBe("asking");
+    expect(writes).toEqual([]);
+  });
+  it("a send in its tool wait gives up when Stop is pressed instead of sleeping through the whole limit", async () => {
+    emit({ paneKey: 1, state: "working", tool: "Bash", terminal: 70 }); // clock stays at 0: the tool is always "just started"
+    let sleeps = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const sleep = async (ms: number) => {
+      sleeps++;
+      if (sleeps === 1 && ms > 0) await gate;
+    };
+    const d = { terminalOf: () => 70, stateOf: () => "working", write, sleep };
+    const first = sendToPane(1, "claude", "first", d);
+    await flush();
+    const stopped = stopPane(1, d);
+    await flush();
+    release();
+    expect(await first).toBe("cancelled");
+    expect(await stopped).toBe("stopped");
+    expect(sleeps).toBe(1);
+    expect(writes).toEqual([{ id: 70, data: INTERRUPT_KEY }]);
+  });
+  it("with no prompt anywhere Stop still types Escape after a send that was waiting", async () => {
+    emit({ paneKey: 1, state: "working", tool: "Bash", terminal: 70 });
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const d = { terminalOf: () => 70, stateOf: () => "working", write, sleep: async (ms: number) => void (ms > 0 && (await gate)) };
+    const first = sendToPane(1, "claude", "first", d);
+    await flush();
+    const stopped = stopPane(1, d);
+    release();
+    await first;
+    expect(await stopped).toBe("stopped");
+    expect(writes).toEqual([{ id: 70, data: INTERRUPT_KEY }]);
+  });
+});

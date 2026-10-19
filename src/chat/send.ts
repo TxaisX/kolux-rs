@@ -169,6 +169,7 @@ async function typeInto(key: number, text: string, steps: Step[], deps: SendDeps
   const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
   const pause = async () => {
     for (let i = 0, ms = toolWait(key, terminal); ms > 0; i++, ms = toolWait(key, terminal)) {
+      if (cancelled()) return; // FIX-1: Stop ends the wait; the held() check right after drops the send
       if (i === TOOL_WAIT_LIMIT) return void (busy = true);
       deps.onWait?.(TOOL_WAIT_NOTE);
       await sleep(ms);
@@ -251,6 +252,10 @@ export async function stopPane(key: number, deps: Pick<SendDeps, "terminalOf" | 
   if (terminal === undefined) return "no-terminal";
   if (asksInTerminal(deps.stateOf?.(key)) || asksInTerminal(heardOf(key))) return "asking";
   cancelQueued(terminal);
-  await enqueue(terminal, () => deps.write(terminal, INTERRUPT_KEY));
-  return "stopped";
+  // FIX-1: the interrupt waits behind any write already in flight, and a prompt can open meanwhile; look again at its turn.
+  return enqueue<StopOutcome>(terminal, async () => {
+    if (asksInTerminal(deps.stateOf?.(key)) || asksInTerminal(heardOf(key))) return "asking";
+    await deps.write(terminal, INTERRUPT_KEY);
+    return "stopped";
+  });
 }

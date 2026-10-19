@@ -28,16 +28,26 @@ const web = (url: string): LinkTarget | null => {
   }
 };
 
+/** FIX-1: a mailto link keeps its address and only the subject and body parameters; cc, bcc, to, attach and the rest are
+ * dropped (some mail programs have honoured attach= for local files). Null when the address part is not an address. */
+const mail = (t: string): LinkTarget | null => {
+  const [base, query = ""] = t.split("?", 2);
+  if (!/^mailto:[^\s@]+@[^\s@]+$/i.test(base)) return null;
+  const kept = query.split("&").filter((pair) => /^(subject|body)=/i.test(pair));
+  return { kind: "mail", href: kept.length ? base + "?" + kept.join("&") : base };
+};
+
 /** CHAT-025: what the target of a written link opens, or null when it cannot be clicked: an empty link, a page anchor
  * (#heading), a scheme that is not a web, mail or file link, or a file link that does not decode. */
 export function classify(raw: string): LinkTarget | null {
   const t = raw.trim();
   if (!t || t.startsWith("#") || CONTROL.test(t)) return null;
   if (/^https?:/i.test(t)) return web(t);
-  if (/^mailto:/i.test(t)) return /^mailto:[^\s@]+@[^\s@]+$/i.test(t.split("?")[0]) ? { kind: "mail", href: t } : null;
+  if (/^mailto:/i.test(t)) return mail(t);
   if (/^file:/i.test(t)) {
     const path = fromFileUrl(t);
-    return path === null || !path.trim() ? null : { kind: "file", path };
+    // FIX-1: the path is checked again after the % escapes are decoded (%00 is a NUL only now).
+    return path === null || !path.trim() || CONTROL.test(path) ? null : { kind: "file", path };
   }
   if (SCHEME.test(t) && !DRIVE.test(t)) return null;
   const m = FILE_AT.exec(t);

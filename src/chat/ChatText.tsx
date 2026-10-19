@@ -1,7 +1,7 @@
 // Native chat, the text of the agent's replies with clickable links (CHAT-025; T-329). The rules
 // (what is a link, which files may open, which browser a click picks) are in chatLinks.ts; this
 // draws them and does the opening. A file opens only when the agent printed it recently.
-import { createContext, useContext, type MouseEvent } from "react";
+import { createContext, useContext, type KeyboardEvent, type MouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openablePath, partsOf, webClick, type LinkTarget } from "./chatLinks";
 
@@ -52,11 +52,20 @@ export function ChatText({ text }: { text: string }) {
           <a
             key={i}
             className="chat-link"
-            href={link.kind === "web" ? link.url : link.kind === "mail" ? link.href : "#"}
+            // FIX-1: no href, so a middle-click or "open in new window" has no address to open behind the browser choice.
+            role="link"
+            tabIndex={0}
             title={where}
             onClick={(e: MouseEvent) => {
               e.preventDefault();
               openLink(link, e, host);
+            }}
+            onAuxClick={(e: MouseEvent) => e.preventDefault()}
+            onKeyDown={(e: KeyboardEvent<HTMLAnchorElement>) => {
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              const at = e.currentTarget.getBoundingClientRect();
+              openLink(link, { ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey, clientX: at.left, clientY: at.bottom }, host);
             }}
           >
             {p.text}

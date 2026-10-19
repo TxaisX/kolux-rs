@@ -100,3 +100,21 @@ describe("which browser a web click chooses", () => {
     expect(webClick(e({ ctrlKey: true }), false, true, false)).toBe("system");
   });
 });
+
+// FIX-1 (stand-in review of f1ad80d5, item 5): what a link may carry.
+describe("FIX-1: what a written link may carry", () => {
+  it("a file: link whose decoded path holds a control character cannot be clicked", () => {
+    for (const bad of ["file:///C:/run.bat%00.txt", "file:///C:/a%0Ab.txt", "file:///tmp/x%1b[0m.txt", "file:///tmp/x%7f.txt"]) expect(classify(bad), bad).toBeNull();
+    expect(classify("file:///C:/proj/a%20b.ts")).toEqual({ kind: "file", path: "C:/proj/a b.ts" });
+  });
+  it("a mailto link keeps only its subject and body", () => {
+    expect(classify("mailto:a@b.co?cc=x@y.zz&subject=Hi%20there&attach=C:/secret.txt&body=Yo")).toEqual({ kind: "mail", href: "mailto:a@b.co?subject=Hi%20there&body=Yo" });
+    expect(classify("mailto:a@b.co?bcc=x@y.zz&attach=C:/secret.txt")).toEqual({ kind: "mail", href: "mailto:a@b.co" });
+    expect(classify("mailto:a@b.co?SUBJECT=Hi")).toEqual({ kind: "mail", href: "mailto:a@b.co?SUBJECT=Hi" });
+    expect(classify("mailto:a@b.co?to=evil@x.yy&subject=Hi")).toEqual({ kind: "mail", href: "mailto:a@b.co?subject=Hi" });
+    expect(classify("mailto:a@b.co")).toEqual({ kind: "mail", href: "mailto:a@b.co" });
+  });
+  it("a written mailto link goes through the same filter", () => {
+    expect(links("[write](mailto:a@b.co?attach=C:/s.txt&subject=Hi)")).toEqual<LinkTarget[]>([{ kind: "mail", href: "mailto:a@b.co?subject=Hi" }]);
+  });
+});

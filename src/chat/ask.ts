@@ -16,6 +16,9 @@ export type Ask = {
   count: number;
   /** The prompt count the user answered or dismissed; a card shows only while this is behind count. */
   answered: number;
+  /** FIX-1: the highest prompt count answered in the terminal itself (a key or its own buttons): a click on a card
+   * for that prompt, even one already waiting in the terminal's queue, types nothing. */
+  elsewhere?: number;
   state?: string;
   tool?: string;
   detail?: string;
@@ -35,13 +38,18 @@ const BLANK: Ask = { count: 0, answered: 0 };
 export function takeAsk(prev: Ask | undefined, e: Payload): Ask {
   const was = prev ?? BLANK;
   if (e.state === undefined) return was;
-  const count = nextPrompt(was.count, was.state as H, e.state as H);
-  if (e.state !== "permission") return { count, answered: was.answered, state: e.state, terminal: e.terminal ?? was.terminal };
+  let count = nextPrompt(was.count, was.state as H, e.state as H);
+  if (e.state !== "permission") return { count, answered: was.answered, elsewhere: was.elsewhere, state: e.state, terminal: e.terminal ?? was.terminal };
+  // FIX-1: a permission event that names another tool or detail than the prompt showing is a new prompt (the card and any
+  // click on it were for the old one); naming what an unnamed prompt left out is the same prompt.
+  const changed = was.state === "permission" && ((e.tool !== undefined && was.tool !== undefined && e.tool !== was.tool) || (e.detail !== undefined && was.detail !== undefined && e.detail !== was.detail));
+  if (changed) count += 1;
   // The same prompt reported again keeps what it already told; a new one starts clean.
-  const fresh = was.state !== "permission";
+  const fresh = was.state !== "permission" || changed;
   return {
     count,
     answered: was.answered,
+    elsewhere: was.elsewhere,
     state: "permission",
     tool: e.tool ?? (fresh ? undefined : was.tool),
     detail: e.detail ?? (fresh ? undefined : was.detail),
@@ -104,6 +112,16 @@ export function dismissAsk(key: number, drawnAt: number) {
   poke();
 }
 
+/** FIX-1: the user answered the pane's open prompt in the terminal itself (a key into the program, or the terminal pane's own
+ * Approve / Deny). The terminal pane calls this at both of its answer points. The card goes, and a click on it that is
+ * already on its way types nothing. Harmless when the pane has no prompt record. */
+export function answeredElsewhere(key: number) {
+  const a = asks.get(key);
+  if (!a || (a.answered >= a.count && (a.elsewhere ?? 0) >= a.count)) return;
+  asks.set(key, { ...a, answered: Math.max(a.answered, a.count), elsewhere: a.count });
+  poke();
+}
+
 export type AnswerDeps = { terminalOf: (key: number) => number | undefined; write: (terminal: number, data: string) => Promise<unknown> };
 /** What came of a click: the keys went in, the prompt had already gone (nothing typed), or the pane has no terminal. */
 export type AnswerOutcome = "sent" | "gone" | "no-terminal";
@@ -121,7 +139,16 @@ export async function answerCard(key: number, agent: string, answer: Answer, dra
   const stale = ask?.terminal !== undefined && ask.terminal !== terminal;
   if (!ask || already || keys === null || stale || !canAnswer(agent, ask.state as H, drawnAt, ask.count, ask.tool)) return "gone";
   const since = hearingNow();
-  await enqueue(terminal, () => deps.write(terminal, keys));
+  // FIX-1: the queue may hold earlier writes; the prompt is checked again when this one's turn comes.
+  const typed = await enqueue(terminal, async () => {
+    const now = asks.get(key);
+    if (!now || (now.elsewhere ?? 0) >= drawnAt || deps.terminalOf(key) !== terminal) return false;
+    if (now.terminal !== undefined && now.terminal !== terminal) return false;
+    if (!canAnswer(agent, now.state as H, drawnAt, now.count, now.tool)) return false;
+    await deps.write(terminal, keys);
+    return true;
+  });
+  if (!typed) return "gone";
   // The chat's own reading moves on at once (the next hook event says the real thing); the window's does at that event.
   answered(key, answer === "approve" ? "working" : "interrupted", since);
   return "sent";

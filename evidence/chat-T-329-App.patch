@@ -1,5 +1,5 @@
 diff --git a/src/App.tsx b/src/App.tsx
-index d77f6321..fadb211e 100644
+index d77f6321..e31ece8d 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
 @@ -43,7 +43,7 @@ import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId }
@@ -37,7 +37,7 @@ index d77f6321..fadb211e 100644
            {screen === "skills" && <SkillsPage workspace={activeDir} onClose={() => closeSkills(setScreen)} />}
            {inbox && <InboxView items={inboxItems(sources, now)} now={now} onOpen={openPane} />}
 -          {screen === "agents" && <AgentsChat taskOf={(k) => workerNames[`term-${ptys.current[k]}`]} panes={panes.filter((p) => !p.kind && !p.seats).map((p) => ({ key: p.key, cwd: p.cwd, title: p.title, program: p.program }))} focused={selected ?? focused} ptyOf={(k) => ptys.current[k]} hook={hook} stateOf={(k) => hookRef.current[k]} onPick={(key) => {
-+          {screen === "agents" && <AgentsChat open={{ onOpenFile: (path, line) => openFile(path, line), onOpenLink: openInBrowser, onReview: (k, plan, cut) => setReviewing({ key: k, plan, cut }) }} taskOf={(k) => workerNames[`term-${ptys.current[k]}`]} panes={panes.filter((p) => !p.kind && !p.seats).map((p) => ({ key: p.key, cwd: p.cwd, title: p.title, program: p.program }))} focused={selected ?? focused} ptyOf={(k) => ptys.current[k]} hook={hook} stateOf={(k) => hookRef.current[k]} onPick={(key) => {
++          {screen === "agents" && <AgentsChat open={{ onOpenFile: (path, line) => openFile(path, line), onOpenLink: openInBrowser, inKolux: settings.linksOpenInKolux === true, onReview: (k, plan, cut) => setReviewing({ key: k, plan, cut }) }} taskOf={(k) => workerNames[`term-${ptys.current[k]}`]} panes={panes.filter((p) => !p.kind && !p.seats).map((p) => ({ key: p.key, cwd: p.cwd, title: p.title, program: p.program }))} focused={selected ?? focused} ptyOf={(k) => ptys.current[k]} hook={hook} stateOf={(k) => hookRef.current[k]} onPick={(key) => {
                  setAgentSel(key);
                  setFocused(key);
                }} />}

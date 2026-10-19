@@ -1,0 +1,32 @@
+diff --git a/src/terminal/TerminalPane.tsx b/src/terminal/TerminalPane.tsx
+index 171736ae..92f7250c 100644
+--- a/src/terminal/TerminalPane.tsx
++++ b/src/terminal/TerminalPane.tsx
+@@ -41,6 +41,7 @@ import { labelOf } from "../keys/keymap";
+ import { attachPaste } from "./paste";
+ import { answersPrompt, newlineAgent, routeKey } from "./shellKeys";
+ import { heldByTerminal } from "../keys/terminalPolicy";
++import { answeredElsewhere } from "../chat/ask";
+ import { clickTarget, findLinks, hintFor, linkFor, rangeOf, resolvePath, spanOf, type Found } from "./links";
+ import { dropSummary, dropText, overRect, shellKind } from "./drop";
+ import { decideOsc52, parseOsc52, sayOnce } from "./osc52";
+@@ -575,7 +576,10 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
+       const route = routeKey(keys.current, e, term.hasSelection(), newlineAgent(startedRef.current, agentRef.current), (id) => heldByTerminal(id, keySettingsRef.current));
+       // T-151-b (council D2 MERGE 47 S2): a real key that goes to the program answers the permission prompt as
+       // far as the buttons are concerned; xterm's own focus / mouse / cursor replies (onData) no longer do.
+-      if (answersPrompt(route, e.key)) setAnswered(prompt.current.count);
++      if (answersPrompt(route, e.key)) {
++        setAnswered(prompt.current.count);
++        if (number !== undefined) answeredElsewhere(number); // FIX-1: the chat card for this prompt goes too
++      }
+       if (route.kind === "ime" || route.kind === "shell") return true;
+       if (route.kind === "send") {
+         e.preventDefault(); // Alt+Left is the webview's own "back" otherwise
+@@ -1120,6 +1124,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
+                   onClick={() => {
+                     const keys = answerKeys(shown, answer);
+                     setAnswered(drawnAt); // T-151-b: the first click answers; the buttons go until the next prompt
++                    if (number !== undefined) answeredElsewhere(number); // FIX-1: the chat card for this prompt goes too
+                     if (keys !== null && canAnswer(shown, hook, drawnAt, prompt.current.count, pendingTool)) typeIn.current(keys);
+                     else setFlash("The prompt has gone; nothing was sent");
+                   }}
