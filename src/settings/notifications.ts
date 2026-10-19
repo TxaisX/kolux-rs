@@ -61,8 +61,12 @@ export function readNotifications(s: Record<string, unknown>) {
   const sound = SOUNDS.some((o) => o.id === s[SOUND_FIELD]) ? (s[SOUND_FIELD] as Sound) : "system";
   const f = s[CUSTOM_FIELD];
   const customFile = typeof f === "string" && f.trim() !== "" && audioTypeAllowed(f) ? f : null;
-  return { kinds, suppressFocused: s[SUPPRESS_FOCUSED_FIELD] !== false, sound, volume, customFile };
+  return { kinds, suppressFocused: s[SUPPRESS_FOCUSED_FIELD] !== false, sound, volume, customFile, closeToTray: s[CLOSE_TO_TRAY_FIELD] === true };
 }
+
+/** APP-007: the close button hides the window to the tray instead of quitting (Windows; off by
+ * default). The Rust side (tray.rs close_hides) reads the same key. */
+export const CLOSE_TO_TRAY_FIELD = "closeToTray";
 
 /** What a notification plays: Kolux's tone or custom file over a silent toast, or the system's own
  * sound; only ever one of them, and nothing at volume 0. A custom choice with no usable file is the

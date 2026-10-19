@@ -11,6 +11,7 @@
 
 use crate::menu::Os;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 /// The tray icon's id, for the lookups that swap its icon.
@@ -48,6 +49,8 @@ pub fn tooltip(dev: bool, branch: Option<&str>) -> String {
 pub enum Ping {
     Bell,
     AgentFinished,
+    /// USAGE-009: a usage alert, sent or held back, lights the dot while the window is hidden.
+    UsageAlert,
 }
 
 /// The attention dot: set by a ping while the window is hidden, cleared when it is shown.
@@ -306,9 +309,66 @@ pub fn open_window(app: &tauri::AppHandle) {
 }
 
 /// Quit from the tray: the app's ordinary exit, whose Exit step stops every pane and child process
-/// (the same path as File > Exit), never the close button's path.
+/// (the same path as File > Exit), never the close button's path. The flag keeps the close handler
+/// from hiding the window while the quit is under way.
 pub fn quit(app: &tauri::AppHandle) {
+    QUITTING.store(true, Ordering::SeqCst);
     app.exit(0);
+}
+
+/// APP-007: the setting for "closing the window hides Kolux to the tray" (Windows; off by default).
+/// The Notifications page saves the same key (src/settings/notifications.ts CLOSE_TO_TRAY_FIELD).
+pub const CLOSE_TO_TRAY_FIELD: &str = "closeToTray";
+/// The store key that remembers the once-only explanation was shown.
+pub const CLOSE_EXPLAINED_KEY: &str = "tray.closeExplained";
+/// Set by `quit`; a real quit is never intercepted by the close handler.
+static QUITTING: AtomicBool = AtomicBool::new(false);
+
+/// Does this close click hide the window instead of closing it? Only on Windows, only with the option
+/// saved as a real `true`, and never while a quit is under way.
+pub fn close_hides(os: Os, settings: &serde_json::Value, quitting: bool) -> bool {
+    matches!(os, Os::Windows) && settings.get(CLOSE_TO_TRAY_FIELD) == Some(&serde_json::Value::Bool(true)) && !quitting
+}
+
+/// Is the first-time explanation still owed? `stored` is the CLOSE_EXPLAINED_KEY value.
+pub fn explain_due(stored: Option<&str>) -> bool {
+    matches!(stored, None | Some(""))
+}
+
+/// The main window's close button (lib.rs CloseRequested, `evidence/tray-T-324-lib.rs.patch`): true
+/// when the close was intercepted and the caller must `prevent_close`. The window hides, the dot
+/// model learns it is hidden, and the first time a notification says where Kolux went. A real quit
+/// (File > Exit, tray Quit, the system ending the session) passes through untouched.
+pub fn on_close_requested(app: &tauri::AppHandle) -> bool {
+    use tauri::Manager;
+    let Some(store) = app.try_state::<Mutex<crate::state::Store>>() else { return false };
+    let Ok(settings) = store.lock().map(|s| s.settings()) else { return false };
+    if !close_hides(Os::current(), &settings, QUITTING.load(Ordering::SeqCst)) {
+        return false;
+    }
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+    }
+    if let Some(state) = app.try_state::<TrayState>() {
+        if let Ok(mut d) = state.dot.lock() {
+            d.window_hidden();
+        }
+    }
+    let due = store
+        .lock()
+        .map(|s| {
+            let stored = s.get(CLOSE_EXPLAINED_KEY).ok().flatten();
+            let due = explain_due(stored.as_deref());
+            if due {
+                let _ = s.set(CLOSE_EXPLAINED_KEY, "1");
+            }
+            due
+        })
+        .unwrap_or(false);
+    if due {
+        let _ = crate::notifications::show_plain(app, "Kolux is still running".into(), "The window went to the tray. Open Kolux or Quit from the tray icon.".into(), false);
+    }
+    true
 }
 
 #[cfg(feature = "tray")]
@@ -482,6 +542,25 @@ mod tests {
         let (three, ..) = paint_badge("99+");
         assert!(three.chunks(4).any(|p| p == WHITE), "three glyphs still fit the disc");
         assert_eq!(three.len(), px.len());
+    }
+
+    #[test]
+    fn app_007_close_hides_only_on_windows_with_the_option_on_and_never_while_quitting() {
+        use serde_json::json;
+        assert!(!close_hides(Os::Windows, &json!({}), false), "off by default");
+        assert!(close_hides(Os::Windows, &json!({ CLOSE_TO_TRAY_FIELD: true }), false));
+        assert!(!close_hides(Os::Windows, &json!({ CLOSE_TO_TRAY_FIELD: "yes" }), false), "only a real true");
+        assert!(!close_hides(Os::Mac, &json!({ CLOSE_TO_TRAY_FIELD: true }), false), "a Windows option");
+        assert!(!close_hides(Os::Linux, &json!({ CLOSE_TO_TRAY_FIELD: true }), false));
+        assert!(!close_hides(Os::Windows, &json!({ CLOSE_TO_TRAY_FIELD: true }), true), "a real quit is never intercepted");
+    }
+
+    #[test]
+    fn app_007_the_explanation_shows_once() {
+        assert!(explain_due(None));
+        assert!(explain_due(Some("")));
+        assert!(!explain_due(Some("1")));
+        assert!(!explain_due(Some("2026-10-19")));
     }
 
     #[test]

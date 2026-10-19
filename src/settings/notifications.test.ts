@@ -1,5 +1,12 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { audioTypeAllowed, AUDIO_TYPES, raiseNotification, readNotifications, resetPacer, SOUNDS, TONES, testPlan } from "./notifications";
+import { audioTypeAllowed, AUDIO_TYPES, CLOSE_TO_TRAY_FIELD, raiseNotification, readNotifications, resetPacer, SOUNDS, TONES, testPlan } from "./notifications";
+
+test("APP-007: close to tray is off by default and on only when saved as true", () => {
+  expect(CLOSE_TO_TRAY_FIELD).toBe("closeToTray");
+  expect(readNotifications({}).closeToTray).toBe(false);
+  expect(readNotifications({ closeToTray: "yes" }).closeToTray).toBe(false);
+  expect(readNotifications({ closeToTray: true }).closeToTray).toBe(true);
+});
 
 const calls: Array<[string, Record<string, unknown>]> = [];
 let loadFails = false;

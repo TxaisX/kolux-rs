@@ -1,0 +1,64 @@
+T-324 · APP-007 · USAGE 009 tray-dot rule — lane/tray from main 4de08e1c, 2026-10-19
+APP-014, APP-019, APP-022, APP-032 and APP-038 moved to the new open line T-324-b, with APP-007's
+Windows session-end record (sign-out / shutdown recorded so the next launch knows it was not a crash).
+
+WHAT WAS BUILT
+- src-tauri/src/tray.rs: CLOSE_TO_TRAY_FIELD = "closeToTray" (off by default), CLOSE_EXPLAINED_KEY =
+  "tray.closeExplained"; close_hides(os, settings, quitting): Windows only, only a real `true`, never
+  while a quit is under way; explain_due(stored): the first-time explanation is owed until the key is
+  set; on_close_requested(app) -> bool: with the option on it hides the main window, tells the dot model
+  the window is hidden (so the next agent event lights the dot), shows the once-only explanation
+  ("Kolux is still running — the window went to the tray...") and answers true so lib.rs calls
+  prevent_close; otherwise false and the close goes through. quit() now sets a QUITTING flag before
+  app.exit(0), so Quit from the tray is never intercepted and still reaches the RunEvent::Exit step that
+  kills every pane and child process (Terminals::kill_all). Ping::UsageAlert added.
+- src/settings/notifications.ts: CLOSE_TO_TRAY_FIELD and readNotifications().closeToTray (true only when
+  saved as true). src/settings/NotificationsPage.tsx: the switch "Closing the window keeps Kolux in the
+  tray" (Windows only; the agents keep running; Quit from the tray icon stops everything).
+- src-tauri/src/notifications.rs: show_plain is pub(crate) for the explanation toast.
+- USAGE 009 rule: usage_alert_send pings the tray (Ping::UsageAlert) before showing its toasts, so a
+  hidden window gets the dot even when the system holds the toast back (patch, below). Judgment call:
+  an alert the user switched off (usage-alerts preference or master switch off) is not "held back" and
+  puts no dot; src/usage/alerts.ts is untouched.
+
+PATCHES FOR THE COORDINATOR (unified diffs against main 4de08e1c; each passes `git apply --cached --check`
+on a `git read-tree 4de08e1c` index)
+- evidence/tray-T-324-lib.rs.patch: WindowEvent::CloseRequested on "main" -> tray::on_close_requested
+  (window.app_handle()) -> api.prevent_close() when true. Applies together with T-248-b's and T-125's
+  lib.rs patches (all three were applied at once for the wired gate).
+- evidence/tray-T-324-usage_alerts.rs.patch: the one-line tray ping in usage_alert_send.
+
+TESTS
+- src-tauri/src/tray.rs (+2, written red first: cargo test --no-run exit 101 with close_hides /
+  explain_due / CLOSE_TO_TRAY_FIELD missing):
+  app_007_close_hides_only_on_windows_with_the_option_on_and_never_while_quitting,
+  app_007_the_explanation_shows_once.
+- src/settings/notifications.test.ts (+1): "APP-007: close to tray is off by default and on only when
+  saved as true" (written with the one-line readNotifications change, so not observed red).
+
+GATES (logs under G:/Temp/tray-w16-logs/T-324-*.log; every run under a build slot, scratch
+CLAUDE_CONFIG_DIR / CODEX_HOME / HOME / USERPROFILE / TEMP)
+- committed tree: pnpm exec vitest run src/settings src/notify -> 34 files, 168 tests passed;
+  pnpm exec tsc --noEmit exit 0; cargo build exit 0; cargo clippy --all-targets -- -D warnings exit 0;
+  cargo test --lib tray -> 11 passed; cargo test --lib notifications -> 5 passed.
+- wired tree (all seven lane patches applied: T-248-b x2, T-125 x3, T-324 x2; then reverted):
+  cargo build exit 0; cargo clippy -D warnings exit 0; cargo test --lib tray 11 passed; tsc exit 0;
+  Cargo.lock unchanged.
+
+LIVE PROOF PENDING (batched) — steps for the proof lane, once the patches are in main (Windows)
+1. Settings > Notifications: the new switch is off. Click the window's close button: the app exits as
+   before (process gone).
+2. Switch it on, click close: the window disappears, the process stays alive, the tray icon is present,
+   and a notification "Kolux is still running" appears. Close again later: no second notification.
+3. While hidden, let an agent finish: the tray dot lights. Tray > Open Kolux: the window and the dot clear.
+4. Tray > Quit with the option on: the app exits and every pane's child process is gone (check with
+   Task Manager / `tasklist` for the shells that were running).
+5. While hidden, drive an account over 80% (or hold a usage alert back in the system's notification
+   settings): the tray dot lights.
+
+SEEN, NOT FIXED
+- The Windows session-end record (APP-007's last rule) needs a WM_ENDSESSION / RunEvent hook in lib.rs
+  and a store key the launch path reads: T-324-b.
+- The switch sits on the Notifications page (the lane's file); a General/Window page may be its home
+  once one exists.
+- macOS has no close-to-tray (close_hides is Windows only, as the card says).

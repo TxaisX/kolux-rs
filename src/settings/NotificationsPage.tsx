@@ -5,7 +5,7 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { AUDIO_TYPES, audioTypeAllowed, CUSTOM_FIELD, KINDS, loadSound, preparePlan, readNotifications, SOUND_FIELD, SOUNDS, SUPPRESS_FOCUSED_FIELD, VOLUME_FIELD, type Sound } from "./notifications";
+import { AUDIO_TYPES, audioTypeAllowed, CLOSE_TO_TRAY_FIELD, CUSTOM_FIELD, KINDS, loadSound, preparePlan, readNotifications, SOUND_FIELD, SOUNDS, SUPPRESS_FOCUSED_FIELD, VOLUME_FIELD, type Sound } from "./notifications";
 import { ALERTS_FIELD, alertsOn } from "../usage/alerts";
 import { useSettings } from "./useSettings";
 
@@ -60,6 +60,13 @@ export function NotificationsView({ settings, onSave }: { settings: Record<strin
           <span>
             Stay quiet about the worktree you are looking at
             <small>Events in the worktree that has focus are not announced.</small>
+          </span>
+        </label>
+        <label className="conn-switch">
+          <input type="checkbox" role="switch" checked={n.closeToTray} onChange={(e) => onSave({ [CLOSE_TO_TRAY_FIELD]: e.target.checked })} />
+          <span>
+            Closing the window keeps Kolux in the tray
+            <small>Windows only. The agents keep running; Quit from the tray icon stops everything.</small>
           </span>
         </label>
       </section>

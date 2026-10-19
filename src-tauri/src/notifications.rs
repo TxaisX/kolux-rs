@@ -130,7 +130,7 @@ pub fn badge_set(app: tauri::AppHandle, count: u32) -> Result<(), String> {
 }
 
 /// The toast alone, for the Notifications page's test button: no tray dot.
-fn show_plain(app: &tauri::AppHandle, title: String, body: String, sound: bool) -> Result<(), String> {
+pub(crate) fn show_plain(app: &tauri::AppHandle, title: String, body: String, sound: bool) -> Result<(), String> {
     use tauri_plugin_notification::NotificationExt;
     let mut n = app.notification().builder().title(title).body(body);
     if sound {
