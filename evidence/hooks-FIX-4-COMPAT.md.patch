@@ -1,0 +1,14 @@
+diff --git a/COMPAT.md b/COMPAT.md
+index 4342314..be52788 100644
+--- a/COMPAT.md
++++ b/COMPAT.md
+@@ -530,6 +530,9 @@ Kolux learns what an agent is doing (working, blocked, waiting for Txais, done)
+ - The hook always exits 0 and never blocks the agent. Its stdout is empty unless the agent needs an answer: Gemini gets an empty JSON object; Cursor gets "continue" on `beforeSubmitPrompt`, "allow" on `preToolUse`, `beforeShellExecution` and `beforeMCPExecution`, and an empty object otherwise; the Antigravity ask tools get a decision of "ask" so the agent shows its own prompt; Amp's plugin returns "allow" on tool calls. Codex's `PermissionRequest` hook returns no decision, so Codex still shows its own approval screen.
+ - A small endpoint file in Kolux's data folder holds the current port and token. Hooks read it on each run, so a terminal that outlives a Kolux restart still reaches the current server.
+ - On macOS and Linux, a hook that cannot reach Kolux spools the payload to a per-pane file under the endpoint folder (folder mode 700, file mode 600, 5 MB cap, cleared after 7 days; tool events are not spooled). On Windows the hook holds every event, tool events included, with names only: event, tool and session names and the few flags the status rules read, never the tool input, output, prompt or reply (the holding line in hooks.rs). Kolux replays the spool when it comes back.
++- On Windows, an event that Windows PowerShell cannot parse (keys that differ only in case, for one) is held with its event and session names only, read from the top-level keys that come before the first nested object; when a nested object such as the tool's input comes first, the event is dropped rather than risk a word of it. The held append waits out another hook that holds the file (up to two seconds); any other failure, a missing holding folder for one, gives up at once. A held event costs the agent about half a second to a second of PowerShell start-up on top of the hook's own short timeouts; an event that reaches Kolux pays none of it.
++- Replay is weaker for STAT-029: the prompt text is never held, so a machine-written continuation prompt sent after a compaction, held while Kolux was closed, replays as a new turn; the state after its Stop is the same.
++- A record saying Kolux created an agent's hooks file that was written by a build before hooks FIX-3 (it reads as missing rather than created) is not honoured, failing closed: the file counts as the user's own and the next start refuses it once as already holding Kolux's entries; hooks off then on clears that. For Codex such a build may leave an empty hooks file and its record in the Codex home; neither is read.
+ 
+ ### 3.2 Windows wrapper behaviour
+ 
