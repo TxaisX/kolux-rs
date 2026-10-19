@@ -816,11 +816,41 @@ pub fn names_in_use(git: &Git, projects: &[Project]) -> Vec<String> {
                 names.push(folder.to_string_lossy().to_string());
             }
             if let Some(branch) = w.branch {
+                // A branch under a prefix (`kolux/amber-otter`) uses its last part as a name too.
+                if let Some((_, tail)) = branch.rsplit_once('/') {
+                    names.push(tail.to_string());
+                }
                 names.push(branch);
             }
         }
     }
     names
+}
+
+/// PROJ-023: the names workspaces were given by hand (the shown name can differ from the folder).
+fn typed_names(store: &Store) -> Vec<String> {
+    load_names(store).values().filter_map(|v| v.as_str().map(String::from)).collect()
+}
+
+/// PROJ-023: a creature name for the create flow's name field, free in every registered project
+/// (case ignored) and never a retired one. Nothing is recorded: a suggestion nobody uses costs no
+/// name. `lock` hands over the store only for the store work (T-442-b).
+pub fn suggest_name<S: std::ops::Deref<Target = Store>>(git: &Git, lock: impl Fn() -> Result<S, String>, project_id: &str, seed: u64) -> Result<String, String> {
+    let projects = {
+        let store = lock()?;
+        find_project(&store, project_id)?;
+        load_projects(&store)
+    };
+    let taken = names_in_use(git, &projects);
+    let store = lock()?;
+    Ok(pick_name(&store, taken, seed))
+}
+
+#[allow(dead_code)] // T-212: registered by the lib.rs hunk the coordinator applies
+#[tauri::command(async)]
+pub fn workspace_suggest_name(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<String, String> {
+    let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    suggest_name(&git, || store.lock().map_err(|e| e.to_string()), &project_id, seed)
 }
 
 /// Every creature name ever handed out (SESS-023): a retired worktree's name is never reused.
@@ -848,6 +878,7 @@ pub fn fresh_name(git: &Git, store: &Store, projects: &[Project], seed: u64) -> 
 /// A creature name outside `taken` (the names Git has in use) and every retired one.
 fn pick_name(store: &Store, mut taken: Vec<String>, seed: u64) -> String {
     taken.extend(retired_names(store));
+    taken.extend(typed_names(store));
     creature_name(&taken, seed)
 }
 
@@ -2269,6 +2300,46 @@ mod tests {
         assert!(nested_ok.warnings.is_empty());
         drop(store);
         for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj023_a_suggestion_skips_every_name_in_use_in_any_project_whatever_its_case() {
+        let git = Git::detect().unwrap();
+        let profile = temp("suggest-profile");
+        let store = Store::open(&profile).unwrap();
+        let (repo_a, repo_b) = (temp_repo("suggest-a"), temp_repo("suggest-b"));
+        let (root_a, root_b) = (temp("suggest-root-a"), temp("suggest-root-b"));
+        let a = add_project(&git, &store, &repo_a).unwrap();
+        let b = add_project(&git, &store, &repo_b).unwrap();
+        let ask = |seed: u64| suggest_name(&git, || Ok(&store), &a.id, seed).unwrap();
+
+        let first = ask(11);
+        assert_eq!(first, first.to_lowercase(), "lowercase");
+        assert_eq!(ask(11), first, "asking records nothing: the same name is offered again");
+        assert!(retired_names(&store).is_empty(), "a suggestion nobody uses costs no name");
+
+        // The name is in use by a workspace of the OTHER project: never offered to this one.
+        create_workspace(&git, &nested(&root_b), &b, &first, None).unwrap();
+        let second = ask(11);
+        assert_ne!(second, first);
+
+        // Under a branch prefix the folder differs, but the last part of the branch still counts.
+        let third_dir = root_a.join("wt3");
+        git_in(&repo_a, &["worktree", "add", "-q", "-b", &format!("kolux/{second}"), &third_dir.to_string_lossy()]);
+        let third = ask(11);
+        assert!(![&first, &second].contains(&&third), "{third}");
+
+        // A shown name typed by hand counts too, whatever its case.
+        let made = create_workspace(&git, &nested(&root_a), &a, "plain", None).unwrap().worktree;
+        set_name(&store, &made.path, Some(&third.to_uppercase())).unwrap();
+        let fourth = ask(11);
+        assert!(![&first, &second, &third].contains(&&fourth), "{fourth}");
+
+        assert!(suggest_name(&git, || Ok(&store), "no-such-project", 1).is_err());
+        drop(store);
+        for d in [profile, repo_a, repo_b, root_a, root_b] {
             let _ = fs::remove_dir_all(d);
         }
     }

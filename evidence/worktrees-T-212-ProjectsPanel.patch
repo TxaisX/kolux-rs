@@ -1,0 +1,39 @@
+diff --git a/src/projects/ProjectsPanel.tsx b/src/projects/ProjectsPanel.tsx
+index 50d8d42..cf5c8e0 100644
+--- a/src/projects/ProjectsPanel.tsx
++++ b/src/projects/ProjectsPanel.tsx
+@@ -27,6 +27,7 @@ import { mergePoll, nextDelay, pollItems, STALE_MS, type PrPoll } from "../scm/p
+ import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
+ import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
+ import AddProject from "./AddProject";
++import { takeSuggestion } from "./suggest";
+ import Picker, { type PickItem } from "./Picker";
+ import StartGit, { type FirstFile } from "./StartGit";
+ import { openKits } from "../kits/Kits";
+@@ -435,6 +436,26 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+     };
+   }, [name, creating, linked, existing, prList]);
+ 
++  // PROJ-023: the name field opens with a creature name nobody uses; one the user has changed stays.
++  const shownSuggestion = useRef<string | null>(null);
++  useEffect(() => {
++    if (!creating) {
++      shownSuggestion.current = null;
++      return;
++    }
++    let live = true;
++    invoke<string>("workspace_suggest_name", { projectId: creating })
++      .then((s) => {
++        if (!live) return;
++        setName((cur) => takeSuggestion(cur, shownSuggestion.current, s));
++        shownSuggestion.current = s;
++      })
++      .catch(() => {});
++    return () => {
++      live = false;
++    };
++  }, [creating]);
++
+   useEffect(() => {
+     // SESS-036: the name field suggests the project's branches too.
+     if (!creating) return;

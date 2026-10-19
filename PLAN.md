@@ -219,7 +219,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P1 · theme 10 · Identity and originality (2 cards)
 
-- [ ] T-212 · PROJ-023 New workspaces are offered a unique sea-creature name
+- [x] T-212 · PROJ-023 New workspaces are offered a unique sea-creature name · done 2026-10-19 (lane/worktrees from d823b3f8; evidence/T-212.txt: the create flow's name field opens with a creature name free in every project, a name the user changed stays; cargo test projects:: 33, vitest suggest 5; lib.rs hunk in evidence/worktrees-T-212-lib.patch, panel hunk in evidence/worktrees-T-212-ProjectsPanel.patch; live proof pending (batched))
 - [ ] T-213 · APP-004 [compat] Settings and data from the app's former name carry over on first launch
 
 ### P1 · theme none · No theme (171 cards)
