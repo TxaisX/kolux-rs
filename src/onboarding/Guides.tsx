@@ -8,7 +8,8 @@ import { defaultsOnly, labelOf } from "../keys/keymap";
 import "./onboarding.css";
 import { useSettings } from "../settings/useSettings";
 import Tours from "./Tours";
-import { AgentPanel, AutomatePanel, composer, MultitaskPanel, NotificationsPanel } from "./StepPanels";
+import { AgentPanel, AutomatePanel, composer, IntegrationsPanel, MultitaskPanel, NotificationsPanel } from "./StepPanels";
+import { integrationSteps, readSeen } from "./integrations";
 import { defaultAgentId } from "../launch/agents";
 import {
   caps, demoFrames, doneFrom, paletteKeys, doneId, firstOpen, forward, latest, markGuide, moveOn, nextTip, OPEN_EXPLORE, OPEN_GUIDE, guideClosed, PAGE_SHOWN, railKey, ring, startTicked, STEPS, stopDone, stopOf, TWO_REPOS, withRecord, words, workflowDone, WORKFLOWS,
@@ -29,8 +30,9 @@ async function readFacts(check: ReturnType<typeof latest<boolean>>, put: (f: Par
   if (!alive()) return null;
   put({ notifications: settings ? settings.notifyOnFinish !== false : null, agent: settings ? defaultAgentId(settings) : null, pageShown: !!g?.tried.includes(PAGE_SHOWN) });
   put({ integrations: "checking" });
-  const gh = invoke<string | null>("scm_gh_account", { host: "github.com" }).then(
-    (login) => void (alive() && put({ integrations: login ? "connected" : "none" })),
+  // ONB-018: connected means signed in and the token accepted, not only a cached sign-in.
+  const gh = readSeen(invoke).then(
+    (x) => void (alive() && put({ integrations: integrationSteps(x).review === "done" ? "connected" : "none" })),
     () => void (alive() && put({ integrations: null })),
   );
   const projects = await invoke<{ path: string; id: string }[]>("project_list").catch(() => null);
@@ -203,6 +205,7 @@ function SetupGuide({ ask, open, onClose }: { ask: StepId | null; open: boolean;
           {step.id === "multitask" && <MultitaskPanel close={onClose} />}
           {step.id === "notifications" && <NotificationsPanel />}
           {step.id === "agent" && <AgentPanel />}
+          {step.id === "integrations" && <IntegrationsPanel onCheck={g.refresh} />}
           {step.id === "automate" && <AutomatePanel onCheck={g.refresh} />}
           {g.done.has(step.id) && <p className="guide-done">Done</p>}
         </section>
