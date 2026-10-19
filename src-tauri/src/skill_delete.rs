@@ -2474,14 +2474,18 @@ mod tests {
         rec.left.push(later.clone());
         rec.roots.push(old2.clone());
         write(&app, &rec).unwrap();
+        let before = log_of(&app);
         assert_eq!(startup_recover_as(&app, &Trust::startup(live)), Startup::Recovered);
         let log = log_of(&app);
-        assert!(log.contains(&format!("dropped {} from the record", first.display())), "the older one is retired: {log}");
-        assert!(!log.contains(&format!("dropped {} from the record", later.display())), "the newer one is not: {log}");
+        // Only what this last start wrote counts: the older leftover's first start already said "(start 1 of".
+        let new = log.strip_prefix(&before).unwrap_or(&log);
+        assert!(new.contains(&format!("dropped {} from the record", first.display())), "the older one is retired: {new}");
+        assert!(!new.contains(&format!("dropped {} from the record", later.display())), "the newer one is not: {new}");
         assert!(first.is_dir() && later.is_dir(), "nothing is deleted");
         let rec = read(&app).expect("the newer one stays on the record");
         assert!(rec.left == [later.clone()], "{:?}", rec.left);
-        assert!(log.contains(&format!("kept {} on the record", later.display())) && log.contains("(start 1 of"), "{log}");
+        assert!(new.contains(&format!("kept {} on the record", later.display())) && new.contains("(start 1 of"), "{new}");
+        assert!(rec.stale_counts == [(later.clone(), 1)], "the newer one is on its own first start: {:?}", rec.stale_counts);
     }
 
     /// FIX-9 AFTER 5: `run_hook` takes its hook out of the list under one lock, so threads that each
