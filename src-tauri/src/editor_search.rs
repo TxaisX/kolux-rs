@@ -9,7 +9,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -230,24 +230,55 @@ fn git_command(root: &Path, a: &Ask) -> Command {
 /// FIX-3 (council P4): the search running for each folder. A new search of the same folder raises
 /// the old one's flag, and the old one kills its ripgrep or git child at once instead of reading on
 /// to the cap or the time limit while the user types.
-static RUNNING: Mutex<Option<HashMap<PathBuf, Arc<AtomicBool>>>> = Mutex::new(None);
+/// FIX-4 (council d2 AFTER 1): each search takes a generation number when its command is called,
+/// before the fence step, which can take a while and lets calls reach their folder out of order.
+/// A folder remembers the generation of the search that holds it; a search with a lower number than
+/// the holder's stops at once instead of stopping the newer one.
+static GEN: AtomicU64 = AtomicU64::new(0);
 
-/// This search's flag for `root`, replacing (and raising) the one of the search it supersedes.
-fn claim(root: &Path) -> Arc<AtomicBool> {
+pub fn next_gen() -> u64 {
+    GEN.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+type Held = (u64, Arc<AtomicBool>);
+static RUNNING: Mutex<Option<HashMap<PathBuf, Held>>> = Mutex::new(None);
+
+/// This search's flag for `root`. It takes the folder from a lower generation and raises that one's
+/// flag; when the folder is held by a higher generation (a newer search, or a cancel), the flag comes
+/// back already raised and the folder is left alone.
+fn claim(root: &Path, gen: u64) -> Arc<AtomicBool> {
     let flag = Arc::new(AtomicBool::new(false));
     if let Ok(mut m) = RUNNING.lock() {
-        if let Some(old) = m.get_or_insert_with(HashMap::new).insert(root.to_path_buf(), flag.clone()) {
-            old.store(true, Ordering::SeqCst);
+        let map = m.get_or_insert_with(HashMap::new);
+        match map.get(root) {
+            Some((held, _)) if *held > gen => flag.store(true, Ordering::SeqCst),
+            _ => {
+                if let Some((_, old)) = map.insert(root.to_path_buf(), (gen, flag.clone())) {
+                    old.store(true, Ordering::SeqCst);
+                }
+            }
         }
     }
     flag
+}
+
+/// FIX-4 (council d2 AFTER 7): no view wants `root`'s search any more (its explorer was closed or
+/// moved to another folder). The running search stops, and one still on its way through the fence
+/// (a lower generation) stops when it arrives.
+pub fn cancel(root: &Path) {
+    if let Ok(mut m) = RUNNING.lock() {
+        let held = (next_gen(), Arc::new(AtomicBool::new(true)));
+        if let Some((_, old)) = m.get_or_insert_with(HashMap::new).insert(root.to_path_buf(), held) {
+            old.store(true, Ordering::SeqCst);
+        }
+    }
 }
 
 /// The search behind `flag` is over: forget it unless a newer one already took its place.
 fn release(root: &Path, flag: &Arc<AtomicBool>) {
     if let Ok(mut m) = RUNNING.lock() {
         if let Some(map) = m.as_mut() {
-            if map.get(root).is_some_and(|f| Arc::ptr_eq(f, flag)) {
+            if map.get(root).is_some_and(|(_, f)| Arc::ptr_eq(f, flag)) {
                 map.remove(root);
             }
         }
@@ -330,14 +361,24 @@ fn run(mut cmd: Command, parse: impl Fn(&str, usize) -> Option<(String, Vec<Hit>
     Ok(Found { files, total, capped, source })
 }
 
+#[cfg(test)]
 pub fn search(root: &Path, a: &Ask) -> Result<Found, String> {
+    search_gen(root, a, next_gen())
+}
+
+/// `search` for a call that took its generation number earlier (at command entry).
+pub fn search_gen(root: &Path, a: &Ask, gen: u64) -> Result<Found, String> {
     if a.query.is_empty() {
         return Ok(Found { files: vec![], total: 0, capped: false, source: "none" });
     }
     if a.query.chars().count() > MAX_QUERY {
         return Err(format!("The search text is longer than {MAX_QUERY} characters."));
     }
-    let stop = claim(root);
+    let stop = claim(root, gen);
+    if stop.load(Ordering::SeqCst) {
+        // a newer search (or a cancel) already holds this folder: nothing to start
+        return Err(SUPERSEDED.into());
+    }
     let found = match run(rg_command(root, a), parse_rg, "rg", &stop) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             if !root.join(".git").exists() {
@@ -355,8 +396,19 @@ pub fn search(root: &Path, a: &Ask) -> Result<Found, String> {
 
 #[tauri::command]
 pub async fn editor_search(root: String, ask: Ask, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Found, String> {
+    let gen = next_gen();
     let root = fence.allow(&root, &store, &git, false)?;
-    tauri::async_runtime::spawn_blocking(move || search(&root, &ask)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || search_gen(&root, &ask, gen)).await.map_err(|e| e.to_string())?
+}
+
+/// FIX-4: the explorer that asked for searches of `root` is gone; stop its search. Needs a line in
+/// lib.rs's handler list (evidence/look-FIX-4-lib.patch).
+#[allow(dead_code)] // until that line is in
+#[tauri::command]
+pub async fn editor_search_cancel(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
+    let root = fence.allow(&root, &store, &git, false)?;
+    cancel(&root);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -458,14 +510,14 @@ mod tests {
     #[test]
     fn a_newer_search_of_the_same_folder_stops_the_older_one() {
         let (a, b) = (Path::new("C:/krs-claim-a"), Path::new("C:/krs-claim-b"));
-        let first = claim(a);
-        let other = claim(b);
+        let first = claim(a, next_gen());
+        let other = claim(b, next_gen());
         assert!(!first.load(Ordering::SeqCst));
-        let second = claim(a);
+        let second = claim(a, next_gen());
         assert!(first.load(Ordering::SeqCst), "the older search of the folder is told to stop");
         assert!(!second.load(Ordering::SeqCst) && !other.load(Ordering::SeqCst));
         release(a, &first);
-        assert!(RUNNING.lock().unwrap().as_ref().unwrap().get(a).is_some_and(|f| Arc::ptr_eq(f, &second)), "a finished older search does not drop the newer one's entry");
+        assert!(RUNNING.lock().unwrap().as_ref().unwrap().get(a).is_some_and(|(_, f)| Arc::ptr_eq(f, &second)), "a finished older search does not drop the newer one's entry");
         release(a, &second);
         release(b, &other);
         assert!(RUNNING.lock().unwrap().as_ref().unwrap().get(a).is_none());
@@ -486,6 +538,49 @@ mod tests {
         let err = run(slow, |_, _| None, "rg", &stop).err().unwrap();
         assert_eq!(err.to_string(), SUPERSEDED);
         assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", t0.elapsed());
+    }
+
+    // FIX-4 (council d2 AFTER 1): the fence step can let an older search reach its folder after a
+    // newer one. The older one stops at once and the newer one keeps running.
+    #[test]
+    fn fix4_a_search_reaching_its_folder_after_a_newer_one_stops_and_the_newer_runs_on() {
+        let a = Path::new("C:/krs-gen-a");
+        let (g_old, g_new) = (next_gen(), next_gen());
+        let newer = claim(a, g_new);
+        let older = claim(a, g_old);
+        assert!(!newer.load(Ordering::SeqCst), "the newer search is not stopped by the late older one");
+        assert!(older.load(Ordering::SeqCst), "the late older search stops at once");
+        release(a, &older);
+        assert!(RUNNING.lock().unwrap().as_ref().unwrap().get(a).is_some_and(|(_, f)| Arc::ptr_eq(f, &newer)), "the late one never takes the newer one's entry");
+        release(a, &newer);
+    }
+
+    // FIX-4: a late older search starts no ripgrep at all, and says the superseded error.
+    #[test]
+    fn fix4_a_late_older_search_starts_nothing_and_says_superseded() {
+        let a = Path::new("C:/krs-gen-late");
+        let (g_old, g_new) = (next_gen(), next_gen());
+        let newer = claim(a, g_new);
+        let err = search_gen(a, &ask("needle"), g_old).err().unwrap();
+        assert_eq!(err, SUPERSEDED);
+        assert!(!newer.load(Ordering::SeqCst));
+        release(a, &newer);
+    }
+
+    // FIX-4 (council d2 AFTER 7): a cancel stops the folder's running search, and one still on its
+    // way through the fence (lower generation) stops on arrival; a search asked afterwards runs.
+    #[test]
+    fn fix4_cancel_stops_the_running_search_and_one_still_in_the_fence_but_not_a_later_one() {
+        let a = Path::new("C:/krs-gen-cancel");
+        let running = claim(a, next_gen());
+        let in_the_fence = next_gen();
+        cancel(a);
+        assert!(running.load(Ordering::SeqCst), "the running search is stopped");
+        assert!(claim(a, in_the_fence).load(Ordering::SeqCst), "a search that was asked before the cancel stops on arrival");
+        let later = claim(a, next_gen());
+        assert!(!later.load(Ordering::SeqCst), "a search asked after the cancel runs");
+        release(a, &later);
+        cancel(Path::new("C:/krs-gen-never-searched")); // nothing running: no harm
     }
 
     #[test]
