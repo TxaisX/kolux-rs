@@ -1874,4 +1874,24 @@ mod tests {
             let _ = std::fs::remove_dir_all(d);
         }
     }
+
+    #[test]
+    fn proj035_removing_the_saved_setup_from_the_page_lets_the_card_offer_one_again() {
+        let profile = tree(&[]);
+        let root = tree(&[("package.json", br#"{"packageManager":"pnpm@9.1.0"}"#)]);
+        let store = crate::state::Store::open(&profile).unwrap();
+        let offer = |store: &crate::state::Store| suggest(&root, local_setup(store, &root).as_deref(), policy_for(store, None, &root).as_deref());
+        assert!(matches!(offer(&store), SetupSuggestion::Install { .. }));
+        save_suggestion(&store, &root, "install", "pnpm install", None).unwrap();
+        assert_eq!(offer(&store), SetupSuggestion::None, "the card Save ended the suggestion");
+        assert_eq!(remove_local(&store, &root), Ok(true));
+        assert!(matches!(offer(&store), SetupSuggestion::Install { .. }), "the way back from a card Save: the card offers again");
+        // a repository that takes only kolux.yaml's script is not offered a local one that would never run
+        set_repo_policy(&store, &root, Some("shared")).unwrap();
+        assert_eq!(offer(&store), SetupSuggestion::None);
+        drop(store);
+        for d in [profile, root] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
 }
