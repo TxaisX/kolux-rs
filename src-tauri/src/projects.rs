@@ -1674,11 +1674,17 @@ fn kolux_made(origins: &serde_json::Map<String, serde_json::Value>, all: Vec<Wor
 
 /// The sweep over one project's worktrees: `forget_gone`, and what Kolux remembers about each one
 /// it forgets goes too, the same as when the user removes the workspace. The store is locked only
-/// for each forgotten path, never while Git works.
-fn sweep_gone(store: &Mutex<Store>, repo: &Path, all: &[Worktree], busy: &[String]) -> Vec<String> {
+/// for each forgotten path, never while Git works. When what Kolux remembers cannot be cleared (the
+/// store is locked up or a write failed) the line goes to the diagnostics log in `diag_dir`, so the
+/// leftover note or origin that a later worktree at the same path would inherit can be traced.
+fn sweep_gone(store: &Mutex<Store>, repo: &Path, all: &[Worktree], busy: &[String], diag_dir: Option<&Path>) -> Vec<String> {
     forget_gone(repo, all, busy, |path| {
-        if let Ok(store) = store.lock() {
-            let _ = forget_workspace(&store, path);
+        let cleared = match store.lock() {
+            Ok(store) => forget_workspace(&store, path),
+            Err(_) => Err("the store is locked up by a failed task".to_string()),
+        };
+        if let (Err(why), Some(dir)) = (cleared, diag_dir) {
+            crate::diag::write(dir, &format!("forgot the worktree {path} from Git but could not clear what Kolux remembers about it: {why}"));
         }
     })
 }
@@ -1694,12 +1700,13 @@ pub fn forget_gone_at_start(app: tauri::AppHandle) {
         };
         let busy: Vec<String> = app.state::<crate::terminal::Terminals>().list().into_iter().filter_map(|(_, _, dir)| dir).collect();
         let git = app.state::<Git>();
+        let dir = app.path().app_data_dir().ok();
         for p in projects {
             let repo = Path::new(&p.path);
             if let Ok(all) = git.worktrees(repo) {
-                for path in sweep_gone(&app.state::<Mutex<Store>>(), repo, &kolux_made(&origins, all), &busy) {
-                    if let Ok(dir) = app.path().app_data_dir() {
-                        crate::diag::write(&dir, &format!("forgot the worktree {path}: its folder is gone and no session uses it"));
+                for path in sweep_gone(&app.state::<Mutex<Store>>(), repo, &kolux_made(&origins, all), &busy, dir.as_deref()) {
+                    if let Some(dir) = dir.as_deref() {
+                        crate::diag::write(dir, &format!("forgot the worktree {path}: its folder is gone and no session uses it"));
                     }
                 }
             }
@@ -2726,7 +2733,7 @@ mod tests {
         }
         fs::remove_dir_all(&gone).unwrap();
         let all = git.worktrees(&repo).unwrap();
-        assert_eq!(sweep_gone(&store, &repo, &all, &[]), vec![gone_p.clone()]);
+        assert_eq!(sweep_gone(&store, &repo, &all, &[], None), vec![gone_p.clone()]);
         let s = store.lock().unwrap();
         // the swept workspace leaves no record, so a new one made at the same path starts clean
         assert!(!load_names(&s).contains_key(&name_key(&gone_p)), "typed name");
@@ -2743,6 +2750,115 @@ mod tests {
         assert!(load_origins(&s).contains_key(&name_key(&kept_p)));
         drop(s);
         drop(store);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Every key a workspace record can live under, for one path, read back as text.
+    fn record_of(store: &Store, path: &str) -> Vec<(String, Option<String>)> {
+        let note = format!("{NOTE_PREFIX}{}", name_key(path));
+        [NAMES_KEY, PARENTS_KEY, ORIGINS_KEY, RETIRED_KEY, LEGACY_KEY, note.as_str()]
+            .iter()
+            .map(|k| (k.to_string(), store.get(k).unwrap()))
+            .collect()
+    }
+
+    fn full_record(store: &Store, path: &str) {
+        set_name(store, path, Some("typed name")).unwrap();
+        set_parent(store, path, Some("C:/ws/parent")).unwrap();
+        save_workspace_note(store, path, "handoff text").unwrap();
+        set_origin(store, path, Some(&serde_json::json!({"issue": 7}))).unwrap();
+    }
+
+    #[test]
+    fn fix3_the_sweep_leaves_the_same_store_as_a_removal_by_the_user_on_a_twin_worktree() {
+        let base = temp("fix3-twin");
+        let repo = base.join("r");
+        init_repo(&repo);
+        let git = Git::detect().unwrap();
+        let creature = creature_name(&[], 5);
+        let folder = base.join("ws").join(&creature);
+        git_in(&repo, &["worktree", "add", "-q", &folder.to_string_lossy(), "-b", &creature]);
+        let path = folder.to_string_lossy().to_string();
+        // two stores hold the identical record for the same worktree; one is swept, one is removed by hand
+        let swept = Mutex::new(Store::open(&base.join("db-swept")).unwrap());
+        let removed = Store::open(&base.join("db-removed")).unwrap();
+        full_record(&swept.lock().unwrap(), &path);
+        full_record(&removed, &path);
+        // (the note carries its save time, so the twins differ there until the record is cleared)
+        let start = record_of(&swept.lock().unwrap(), &path);
+        assert_eq!(start[..3], record_of(&removed, &path)[..3], "names, parents and origins start equal");
+        assert!(start.iter().filter(|(k, _)| k != RETIRED_KEY && k != LEGACY_KEY).all(|(_, v)| v.is_some()), "{start:?}");
+        fs::remove_dir_all(&folder).unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        assert_eq!(sweep_gone(&swept, &repo, &all, &[], None), vec![path.clone()]);
+        forget_workspace(&removed, &path).unwrap();
+        let (a, b) = (record_of(&swept.lock().unwrap(), &path), record_of(&removed, &path));
+        assert_eq!(a, b, "the sweep and a removal leave the same keys behind");
+        assert!(a.iter().any(|(k, v)| k == RETIRED_KEY && v.is_some()), "and the comparison saw a retired name: {a:?}");
+        drop(swept);
+        drop(removed);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn fix3_a_busy_worktree_with_a_full_record_survives_the_sweep_though_its_folder_is_gone() {
+        let base = temp("fix3-busy");
+        let repo = base.join("r");
+        init_repo(&repo);
+        let git = Git::detect().unwrap();
+        let folder = base.join("ws").join("in-use");
+        git_in(&repo, &["worktree", "add", "-q", &folder.to_string_lossy(), "-b", "in-use"]);
+        let path = folder.to_string_lossy().to_string();
+        let store = Mutex::new(Store::open(&base.join("db")).unwrap());
+        full_record(&store.lock().unwrap(), &path);
+        let before = record_of(&store.lock().unwrap(), &path);
+        fs::remove_dir_all(&folder).unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        // a session still runs in a folder inside it, so the sweep must leave Git's record and ours alone
+        let busy = [folder.join("src").to_string_lossy().to_string()];
+        assert!(sweep_gone(&store, &repo, &all, &busy, None).is_empty());
+        assert_eq!(record_of(&store.lock().unwrap(), &path), before, "typed name, parent, note, origin and retired names untouched");
+        assert_eq!(git.worktrees(&repo).unwrap().len(), 2, "Git still lists it");
+        drop(store);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn fix3_a_record_that_cannot_be_cleared_is_written_to_the_diag_file() {
+        let base = temp("fix3-diag");
+        let repo = base.join("r");
+        init_repo(&repo);
+        let git = Git::detect().unwrap();
+        let folder = base.join("ws").join("gone-one");
+        git_in(&repo, &["worktree", "add", "-q", &folder.to_string_lossy(), "-b", "gone-one"]);
+        let path = folder.to_string_lossy().to_string();
+        let profile = base.join("profile");
+        let store = std::sync::Arc::new(Mutex::new(Store::open(&base.join("db")).unwrap()));
+        full_record(&store.lock().unwrap(), &path);
+        // a task that panicked holding the store leaves it poisoned: the record cannot be cleared
+        let held = store.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = held.lock().unwrap();
+            panic!("a task that died holding the store");
+        })
+        .join();
+        assert!(store.lock().is_err(), "the store is poisoned");
+        fs::remove_dir_all(&folder).unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        // Git's record still goes; the failure is not dropped
+        assert_eq!(sweep_gone(&store, &repo, &all, &[], Some(&profile)), vec![path.clone()]);
+        let log = fs::read_to_string(profile.join("logs").join("kolux.log")).unwrap();
+        assert!(log.contains("could not clear what Kolux remembers") && log.contains("gone-one"), "{log}");
+        // and a sweep with nothing wrong writes nothing of the kind
+        let fine = Mutex::new(Store::open(&base.join("db2")).unwrap());
+        let folder2 = base.join("ws").join("gone-two");
+        git_in(&repo, &["worktree", "add", "-q", &folder2.to_string_lossy(), "-b", "gone-two"]);
+        fs::remove_dir_all(&folder2).unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        let profile2 = base.join("profile2");
+        assert_eq!(sweep_gone(&fine, &repo, &all, &[], Some(&profile2)).len(), 1);
+        assert!(!profile2.join("logs").join("kolux.log").exists());
+        drop(fine);
         let _ = fs::remove_dir_all(&base);
     }
 
