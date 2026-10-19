@@ -20,9 +20,9 @@ export const dayString = (n: number) => new Date(n * DAY).toISOString().slice(0,
 
 export const timelineFields = (fields: ProjectField[]) => fields.filter((f) => f.kind === "date" || f.kind === "iteration");
 
-/** The fields a timeline opens with: a saved choice that still exists, else an iteration field for
- * both ends, else a date field named like a start and one named like an end (either may stand
- * alone: an item with one date is one day long). */
+/** The fields a timeline opens with: a saved choice that still exists, else a date field named like
+ * a start and one named like an end (either may stand alone: an item with one date is one day
+ * long), else an iteration field for both ends, else the first two date fields. */
 export function defaultTimeline(fields: ProjectField[], saved?: unknown): { start: string; end: string } | null {
   const usable = timelineFields(fields);
   const has = (id: unknown) => typeof id === "string" && usable.some((f) => f.id === id);

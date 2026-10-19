@@ -76,7 +76,11 @@ fn refused(p: &Path) -> String {
 /// FIX-5 (council P2 P11): a `\\?\Volume{GUID}\` path is a local volume, not another computer, so the
 /// refusal says to use the drive letter instead of blaming a share.
 fn is_volume_guid(p: &Path) -> bool {
-    p.to_string_lossy().get(..11).is_some_and(|h| h.replace('/', "\\").eq_ignore_ascii_case(r"\\?\Volume{"))
+    // FIX-6 (council d2 AFTER 4): the device spelling `\\.\Volume{` is the same volume.
+    p.to_string_lossy().get(..11).is_some_and(|h| {
+        let h = h.replace('/', "\\");
+        h.eq_ignore_ascii_case(r"\\?\Volume{") || h.eq_ignore_ascii_case(r"\\.\Volume{")
+    })
 }
 
 fn share(p: &Path) -> String {
@@ -244,6 +248,9 @@ mod tests {
         }
         // FIX-5: a local volume GUID path is refused too, but the words say drive letter, not share.
         let err = check(Path::new(r"\\?\Volume{00000000-0000-0000-0000-000000000000}\p.txt"), &roots, &[], true).unwrap_err();
+        assert!(err.contains("drive letter") && !err.contains("shares"), "{err}");
+        // FIX-6: and so is the device spelling of it.
+        let err = check(Path::new(r"\\.\Volume{00000000-0000-0000-0000-000000000000}\p.txt"), &roots, &[], true).unwrap_err();
         assert!(err.contains("drive letter") && !err.contains("shares"), "{err}");
         let verbatim = t.0.join("project/src/a.txt").canonicalize().unwrap();
         assert!(verbatim.to_string_lossy().starts_with(r"\\?\"), "{}", verbatim.display());

@@ -11,7 +11,7 @@ import { Refresh, Search } from "../chrome/icons";
 import { useSettings } from "../settings/useSettings";
 import { beyondWindow, defaultPreset, FILTERS, type FilterKey, filterValue, issueSource, pageButtons, pageCount, PER_PAGE, PRESETS, setFilter, type Task, type TaskLabel, type TaskPage, taskKind, taskQueries } from "./model";
 import NewIssueDialog from "./NewIssueDialog";
-import { issueTargets } from "./newIssue";
+import { createdHere, issueTargets } from "./newIssue";
 import { type GhRepo, loadRepoFacts, type ParentRead, type Person, resetFacts } from "./repoFacts";
 import ProjectsView from "./ProjectsView";
 import TaskDialog from "./TaskDialog";
@@ -72,6 +72,10 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<Task | null>(null);
   const [newIssue, setNewIssue] = useState(false);
+  // FIX-3: an issue created for another workspace than the one on screen (the user switched while
+  // gh was slow) is reported here, never added to this list.
+  const [elsewhere, setElsewhere] = useState<string | null>(null);
+  const here = useRef<{ host: string; repos: string[] } | null>(null);
   // T-314-c: Issues and pull requests, or GitHub Projects (GIT-056).
   const [tab, setTab] = useState(kept.tab);
   const list = useRef<HTMLUListElement>(null);
@@ -85,6 +89,7 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
   useEffect(() => {
     const set = { gh: setGh, login: setLogin, parent: setParent, people: setPeople, labels: setLabels };
     resetFacts(set);
+    setElsewhere(null);
     if (!repo) return;
     let live = true;
     void loadRepoFacts(invoke, repo.dir, () => live, set);
@@ -96,6 +101,7 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
   const own = gh ? `${gh.owner}/${gh.name}` : "";
   const sourceKey = gh ? `${gh.host}/${own}` : "";
   const source = issueSource(settings, sourceKey, own, parent, parentFailed);
+  here.current = gh ? { host: gh.host, repos: [own, source.repo] } : null;
   const savedSources = (settings?.tasksIssueSource ?? {}) as Record<string, unknown>;
   const chosenSource = savedSources[sourceKey] === "upstream" ? "upstream" : "fork";
   const load = () => {
@@ -225,6 +231,11 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
           ))}
         </div>
       )}
+      {elsewhere && (
+        <div className="note warn" role="status" data-created-elsewhere>
+          {elsewhere}
+        </div>
+      )}
       {source.warning && (
         <div className="note warn" role="status" data-source-warning>
           {source.warning}
@@ -290,8 +301,12 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
           labels={labels}
           people={people.map((x) => x.login)}
           onClose={() => setNewIssue(false)}
-          onCreated={(t: Task) => {
+          onCreated={(t: Task, host: string) => {
             setNewIssue(false);
+            if (!createdHere(here.current, host, t.repo)) {
+              setElsewhere(`Issue #${t.number} was created in ${t.repo} on ${host} (${t.url}). This workspace is somewhere else now, so it is not added to this list.`);
+              return;
+            }
             setResult((r) => r && { ...r, items: [t, ...r.items.filter((x) => x.url !== t.url)] });
             setOpen(t);
           }}

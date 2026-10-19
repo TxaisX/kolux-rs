@@ -50,11 +50,8 @@ test("USAGE-034: the hover keeps the gauge's line and adds one per window", () =
   expect(html).toMatch(/title="Context used: 78% of the agent&#x27;s context window\n5-hour: 34% used, resets [^\n]*\nWeekly: 91% used, resets [^"]*"/);
 });
 
-test("USAGE-034: no cost report yet is no chip; no plan windows leaves the ring and tokens", () => {
+test("USAGE-034: no cost report yet is no chip", () => {
   expect(view({ readout: { ...readout, costUsd: null } })).not.toContain("usage-cost");
-  const bare = view({ windows: [] });
-  expect(bare).not.toContain("usage-win");
-  expect(bare).toContain("155k/200k");
 });
 
 test("USAGE-034: a window with no reset time shows its figure without a countdown", () => {
@@ -112,4 +109,14 @@ test("USAGE-034: the wrapper reads the account's plan windows from the shared st
   expect(b).toContain("5h 50%");
   // A shell pane has no windows.
   expect(renderToStaticMarkup(createElement(HeaderUsage, { context: null, agent: "shell", readout: { ...readout, tokens: null, costUsd: null } }))).not.toContain("usage-win");
+});
+
+// Stand-in review of lane/marks b08c624c, FIX-SOON 1: the card (spec 06, USAGE-034) says a pane with
+// no plan figures shows only the gauge. Decision recorded in STATE-history.md; the revert is the guard in piecesFor plus this test and headerUsage.test.ts's, not one line.
+test("USAGE-034: a pane with no plan windows shows only the gauge, no tokens and no cost", () => {
+  const bare = view({ windows: [] });
+  expect(bare).toContain(">78%<");
+  expect(bare).not.toContain("usage-tokens");
+  expect(bare).not.toContain("usage-cost");
+  expect(bare).not.toContain("usage-win");
 });

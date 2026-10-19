@@ -266,3 +266,34 @@ test("the cost rides on the listener's reading and a clear takes it away with th
   bus["claude-usage"]({ payload: { paneKey: 1, contextTokens: 5_000, contextWindow: 200_000, session: "s9@2", at: 100 } });
   expect(context[1]?.costUsd).toBeUndefined();
 });
+
+// Stand-in review of lane/marks b08c624c, FIX-SOON 2: a limits-only report (no context) must not
+// wipe the candidate a real first report left.
+test("a held report with no context leaves the candidate in place (USAGE-001)", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000_000);
+  render([1]);
+  resume(1);
+  vi.setSystemTime(1_000_800);
+  usage(1, 91_000, "s1@2", 2_400_900);
+  vi.setSystemTime(1_002_000);
+  bus["claude-usage"]({ payload: { paneKey: 1, contextTokens: null, contextWindow: null, session: "s1@2", at: 2_500_000 } });
+  expect(context[1]).toBeUndefined();
+  vi.advanceTimersByTime(30_000);
+  expect(context[1]).toEqual({ tokens: 91_000, window: 200_000 });
+});
+
+// Stand-in review of lane/marks b08c624c, AFTER 1: the hook going away takes the candidate's timer with it.
+test("unmounting the window clears the candidate's timer (USAGE-001)", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000_000);
+  render([1]);
+  resume(1);
+  vi.setSystemTime(1_000_800);
+  usage(1, 91_000, "s1@2", 2_400_900);
+  expect(vi.getTimerCount()).toBe(1);
+  effs.forEach((e) => e?.clean?.());
+  expect(vi.getTimerCount()).toBe(0);
+  vi.advanceTimersByTime(60_000);
+  expect(context[1]).toBeUndefined();
+});

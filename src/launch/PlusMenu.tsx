@@ -16,10 +16,21 @@ import { openIn, openLabel, openTitle, useEditors, type Editor } from "./editors
 
 export type AgentInfo = { id: string; name: string; program: string; args: string[]; installed: boolean; path: string | null; docs?: boolean };
 
-/** Which vendor mark an agent id draws; anything unknown gets the plain-shell glyph. */
-export function markFor(id: string): Agent {
+/** FIX-2: the mark a program name earns: Claude or Codex by the file's stem (folder, case and .exe/.cmd/.bat/.ps1/.com ignored), else the plain shell. */
+function programMark(program: string | null | undefined): Agent {
+  const stem = ((program ?? "").split(/[\\/]/).pop() ?? "").replace(/\.(exe|cmd|bat|ps1|com)$/i, "").toLowerCase();
+  return stem === "claude" || stem === "codex" ? stem : "shell";
+}
+
+/**
+ * Which vendor mark an agent draws. The built-in ids keep their marks; a saved agent (any other id)
+ * takes the mark of the program it runs, so one that runs Claude is a Claude pane (FIX-2). Without
+ * a program, or for any other program, it is the plain-shell glyph.
+ */
+export function markFor(id: string, program?: string | null): Agent {
   if (id === "claude-agent-teams") return "claude";
-  return id === "claude" || id === "codex" ? id : "shell";
+  if (id === "claude" || id === "codex") return id;
+  return programMark(program);
 }
 
 /** ACCT-046: the pane-header word for the shell an automatic pane actually started. */
@@ -110,7 +121,7 @@ export default function PlusMenu({ agents, defaultId = "", onPick, onSetDefault,
           <div className="menu-row" key={a.id}>
             <button role="menuitem" className="menu-item" disabled={busy || !!pass?.error} onClick={() => onPick(a)} title={`Start ${a.name} (${a.path}) in a new pane inside a fresh workspace`}>
               <span className="agent-mark">
-                <VendorMark agent={markFor(a.id)} size={13} />
+                <VendorMark agent={markFor(a.id, a.program)} size={13} />
               </span>
               <span className="name">{a.name}</span>
               {a.id === defaultId && <span className="menu-chip">Default</span>}
