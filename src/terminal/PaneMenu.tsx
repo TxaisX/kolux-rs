@@ -72,6 +72,12 @@ export function paneMenuItems(c: MenuContext): MenuItem[] {
   return out;
 }
 
+/** What clicking a menu item does: the menu goes first, then the action runs (so Close Pane's own question opens over a closed menu). */
+export const chooseItem = (item: Pick<MenuItem, "run">, onDismiss: () => void): void => {
+  onDismiss();
+  item.run();
+};
+
 /** The click or right-click that opened the menu must not close it; anything after this long may. */
 export const OPEN_GUARD_MS = 150;
 export const outsideDismisses = (openedAt: number, now: number): boolean => now - openedAt >= OPEN_GUARD_MS;
@@ -129,10 +135,7 @@ export default function PaneMenu({ style, items, onDismiss }: Props) {
               className={`menu-item${it.danger ? " danger" : ""}`}
               style={it.danger ? { color: "#f0a07a" } : undefined}
               title={it.title}
-              onClick={() => {
-                onDismiss();
-                it.run();
-              }}
+              onClick={() => chooseItem(it, onDismiss)}
             >
               <span className="name">{it.name}</span>
               {it.key && <Chord id={it.key} />}

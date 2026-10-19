@@ -49,6 +49,7 @@ import FindBar from "./FindBar";
 import { stopLine, type StopInfo } from "./notify";
 import NameField from "./NameField";
 import { handlesIn } from "./tabs";
+import { shellInAgentPane } from "./remove";
 
 // TERM-036: the pane menu's copy items; Copy Session ID shows only once the session is known.
 const COPY_IDS = [["session", "Copy Session ID"], ["terminal", "Copy Terminal ID"], ["pane", "Copy Pane ID"]] as const;
@@ -81,7 +82,8 @@ type Props = {
   args?: string[];
   /** SET-027: the user's environment variables for this agent. */
   env?: [string, string][];
-  onRunning?: (running: boolean) => void;
+  /** T-151-c: undefined while the program is still starting, true while it runs, false once it ended or failed. */
+  onRunning?: (running: boolean | undefined) => void;
   /** TERM-030: true while this pane waits on the user, so the window can cycle to it. */
   onNeedsYou?: (needs: boolean) => void;
   /** STAT-001: the pane's last hook-fed state; wins over the title guess while the program runs. */
@@ -327,9 +329,11 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
   failed.current = onFailed;
 
   useEffect(() => {
-    report.current?.(status.kind === "running");
+    report.current?.(status.kind === "starting" ? undefined : status.kind === "running");
     if (status.kind === "running") pty.current?.(status.id, status.account);
   }, [status.kind]);
+  // FIX-1: the pane key leaves the "agent pane running a shell" set when the pane goes (restart.current sets it).
+  useEffect(() => () => void (number !== undefined && shellInAgentPane.delete(number)), [number]);
   // ACCT-064: the question takes the keyboard only in the active, visible pane.
   const noticeButton = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -694,6 +698,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
         idRef.current = null;
         early = [];
         setDied(null);
+        // FIX-1: an agent pane that got a shell on Enter is asked about as a shell (terminal/remove.ts classify).
+        if (number !== undefined) (shell && agent !== "shell" ? shellInAgentPane.add(number) : shellInAgentPane.delete(number));
         setStatus({ kind: "starting" });
         void start(shell ? null : program, shell ? [] : args, false);
       };

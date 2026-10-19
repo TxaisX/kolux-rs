@@ -324,12 +324,19 @@ pub struct Read {
 
 /// T-151-d: what a line shows after its last redraw. A repaint starts over at the line's first column
 /// with a carriage return or its cursor-movement twin (CSI n G, CSI row;col H / f with the column
-/// left out, 0 or 1); a shell that repaints what is typed that way would otherwise have every
-/// drawing run together and read as the command twice. A move to any other column keeps the text.
-/// ponytail: the row of an H / f move is ignored, a full-screen program's lines are loose anyway.
+/// left out, 0 or 1, zero-padded forms included); a shell that repaints what is typed that way would
+/// otherwise have every drawing run together and read as the command twice. A move to any other
+/// column keeps the text. A column-1 H / f move starts over only on the row the last such move named
+/// (or with no row, or for the first one in the line); a move to a different row is a new line of
+/// the screen, so the earlier drawing stays (it runs on in this one log line).
+/// ponytail: no column-aware buffer. A repaint that moves to a column above 1 and overwrites in place
+/// would still read joined; unproven against real PSReadLine bytes (T-151-d live step 2).
 fn last_drawing(s: &str) -> &str {
+    // A CSI parameter as a number: empty is "left out" (None), zero-padded forms read as their value.
+    let num = |p: &str| if p.is_empty() { None } else { Some(p.bytes().fold(0u32, |n, d| n.saturating_mul(10).saturating_add(u32::from(d - b'0')))) };
     let b = s.as_bytes();
     let (mut start, mut i) = (0, 0);
+    let mut row: Option<u32> = None;
     while i < b.len() {
         if b[i] == b'\r' {
             start = i + 1;
@@ -340,12 +347,25 @@ fn last_drawing(s: &str) -> &str {
             }
             if j < b.len() && matches!(b[j], b'G' | b'H' | b'f') {
                 let params = &s[i + 2..j];
-                let col = if b[j] == b'G' { Some(params) } else { params.split(';').nth(1) };
-                if matches!(col, None | Some("" | "0" | "1")) {
-                    start = j + 1;
+                if b[j] == b'G' {
+                    if matches!(num(params), None | Some(0 | 1)) {
+                        start = j + 1;
+                    }
+                } else {
+                    let mut it = params.split(';');
+                    let (r, c) = (num(it.next().unwrap_or("")).map(|r| r.max(1)), num(it.next().unwrap_or("")));
+                    if matches!(c, None | Some(0 | 1)) && (r.is_none() || row.is_none() || r == row) {
+                        start = j + 1;
+                    }
+                    if r.is_some() {
+                        row = r;
+                    }
                 }
+                i = j;
+            } else {
+                // Not a move: the byte that stopped the run is read again, a carriage return right after ESC[ included.
+                i = j - 1;
             }
-            i = j;
         }
         i += 1;
     }
@@ -1427,12 +1447,22 @@ mod tests {
         log.push(b"PS> d\x1b[1GPS> dir");
         assert_eq!(log.read(None, None).pending, "PS> dir");
         log.push(b"\n");
-        // A move to another column is not a repaint: the text before it stays.
-        log.push(b"ab\x1b[1;5Hcd\x1b[3Gef\x1b[;12Hgh\n");
-        assert_eq!(log.read(Some(5), None).lines[0].text, "abcdefgh");
+        // FIX-1: a move to a different row keeps the rows drawn before it; only the same row (or no row) starts over.
+        log.push(b"\x1b[1;1Hrow one\x1b[2;1Hrow two\x1b[3;1Hrow three\n");
+        assert_eq!(log.read(Some(5), None).lines[0].text, "row onerow tworow three");
+        log.push(b"\x1b[2;1Hold\x1b[2;1Hnew\x1b[3;1Hnext\n");
+        assert_eq!(log.read(Some(6), None).lines[0].text, "newnext");
+        // Not column-aware: a move to another column keeps the text drawn before it (not claimed to match a screen).
+        log.push(b"ab\x1b[1;5Hcd\n");
+        let l = log.read(Some(7), None).lines[0].text.clone();
+        assert!(l.starts_with("ab") && l.ends_with("cd"), "{l}");
+        // A carriage return right after ESC[ still starts over, and zero-padded column 1 is column 1.
+        log.push(b"old\x1b[\rnew\nold\x1b[01Gnew\nold\x1b[1;01Hnew\nold\x1b[2;001Hnew\n");
+        let texts: Vec<String> = log.read(Some(8), None).lines.into_iter().map(|l| l.text).collect();
+        assert_eq!(texts, ["new"; 4]);
         // The 1-second progress line still keeps its last drawing.
         log.push(b"10%\r\x1b[K50%\r100%\n");
-        assert_eq!(log.read(Some(6), None).lines[0].text, "100%");
+        assert_eq!(log.read(Some(12), None).lines[0].text, "100%");
     }
 
     #[test]

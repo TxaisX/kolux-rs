@@ -1,13 +1,34 @@
 diff --git a/src/App.tsx b/src/App.tsx
-index 0c7daab6..8220d4af 100644
+index 0c7daab6..82d1ebf5 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
+@@ -31,7 +31,7 @@ import TrustPrompt, { trustedSetup } from "./setup/TrustPrompt";
+ import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
+ import { returnTab, type Which } from "./terminal/tabClose";
+ import { bulkCloseSet, closeOne, middleClickCloses, orderPinnedFirst, pinMenu, pinQuestion } from "./terminal/pin";
+-import { classify, removePlan, removeQuestion } from "./terminal/remove";
++import { classify, removePlan, removeQuestion, shellInAgentPane } from "./terminal/remove";
+ import { applyAppearance, readAppearance, showScreen, zoomTerm } from "./theme";
+ import { useEscapeLeaves } from "./chrome/fullPage";
+ import SignInNotice from "./settings/SignInNotice";
 @@ -794,7 +794,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
      // TERM-003: a started session asks first (Cancel focused) unless the setting says stop; an unstarted pane or an idle shell goes at once (terminal/remove.ts).
      const id = ptys.current[t.key];
      const busy = id === undefined ? false : ((await invoke<boolean[]>("terminal_busy", { ids: [id] }).catch(() => [false]))[0] ?? false);
 -    const kind = classify(pane, busy);
-+    const kind = classify(pane, busy, running[t.key]); // T-151-c: an agent pane whose program has ended is not asked about
++    const kind = classify(pane, busy, running[t.key], shellInAgentPane.has(t.key)); // T-151-c: an ended agent pane is not asked about; a still-starting one (undefined) is; an agent pane running a shell is a shell
      switch (removePlan(settings, kind)) {
        case "remove":
          dropPane(t.key);
+@@ -2499,6 +2499,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                     focused={p.key === focused}
+                     onFocus={() => setFocused(p.key)}
+                     onRunning={(on) => {
++                      // T-151-c: a program still starting reports undefined: no entry yet, so it never reads as ended
++                      if (on === undefined) {
++                        setRunning((r) => (p.key in r ? Object.fromEntries(Object.entries(r).filter(([k]) => Number(k) !== p.key)) : r));
++                        return;
++                      }
+                       if (runRef.current[p.key] && !on && p.agent !== "shell") {
+                         noticed(p, "finished");
+                         setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));

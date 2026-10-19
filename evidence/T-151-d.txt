@@ -31,3 +31,12 @@ LIVE PROOF PENDING (batched; no app launched in this lane)
    the same as the screen does.
 3. Run something with a progress line (a download or a build): the stream keeps one line per progress line, its last
    drawing.
+
+4. (FIX-1, added 2026-10-19, council review of 16ff8b54) CAPTURE a real repainted line. In a scratch session (scratch
+   CLAUDE_CONFIG_DIR / CODEX_HOME / HOME under G:\Temp), type a short command slowly in a PowerShell pane. Record the
+   raw bytes the pane's output carries for one repainted line (the output log's raw chunk, escapes visible). Check them
+   against last_drawing: if the repaint starts at column 1 (CR, CSI G, CSI row;1H on one row) the stream shows the command
+   once; if it moves to a column above 1 and overwrites in place (CSI row;colH with col > 1), the stream still joins the
+   drawings ("PS> d" + "dir" reads "PS> ddir") and last_drawing must become a column-aware line buffer (CR and G/H set
+   the column, characters overwrite at that column). Add the captured line as a fixture test either way.
+   Status until then: the fix is UNPROVEN against real PSReadLine / ConPTY bytes.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classify, readRemove, removePlan, removeQuestion } from "./remove";
+import { classify, readRemove, removePlan, removeQuestion, shellInAgentPane } from "./remove";
 import { askKey } from "../chrome/Ask";
 
 describe("TERM-003 remove a started session", () => {
@@ -14,12 +14,31 @@ describe("TERM-003 remove a started session", () => {
     expect(classify({ agent: "claude" }, false, false)).toBe("ended");
     expect(classify({ agent: "codex" }, true, false)).toBe("ended"); // busy is about a shell's children: an ended agent has none to stop
     expect(classify({ agent: "claude" }, false, true)).toBe("agent");
-    expect(classify({ agent: "claude" }, false, undefined)).toBe("agent"); // not reported yet: still asks
+    expect(classify({ agent: "claude" }, false, undefined)).toBe("agent");
     expect(classify({ agent: "claude", seats: [{}] }, false, false)).toBe("unstarted");
     expect(classify({ agent: "shell" }, false, false)).toBe("idle");
     expect(classify({ agent: "shell" }, true, false)).toBe("shell");
     expect(removePlan({}, "ended")).toBe("remove");
     expect(removePlan({ removeStartedSession: "stop" }, "ended")).toBe("remove");
+  });
+
+  it("FIX-1: an agent pane still starting (running not reported yet) is asked about, never dropped as ended", () => {
+    for (const agent of ["claude", "codex"]) {
+      const kind = classify({ agent }, false, undefined);
+      expect(kind).toBe("agent");
+      expect(removePlan({}, kind)).toBe("ask");
+      expect(removePlan({ removeStartedSession: "stop" }, kind)).toBe("stop");
+    }
+  });
+
+  it("FIX-1: an ended agent pane that started a shell is classified by that shell, with the shell's question", () => {
+    expect(classify({ agent: "claude" }, false, true, true)).toBe("idle"); // nothing running in the shell: goes at once
+    const kind = classify({ agent: "claude" }, true, true, true);
+    expect(kind).toBe("shell");
+    expect(removePlan({}, kind)).toBe("ask");
+    expect(removeQuestion("claude 1", kind).body).toMatch(/still running in this shell/);
+    expect(classify({ agent: "claude" }, true, false, true)).toBe("shell"); // a busy shell is never dropped as ended
+    expect(shellInAgentPane.has(7)).toBe(false);
   });
 
   it("removes unstarted panes and idle shells without a prompt, asks for started sessions by default", () => {

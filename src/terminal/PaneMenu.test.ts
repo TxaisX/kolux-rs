@@ -4,7 +4,7 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
-import PaneMenu, { fitIn, OPEN_GUARD_MS, outsideDismisses, paneMenuItems, type MenuContext } from "./PaneMenu";
+import PaneMenu, { chooseItem, fitIn, OPEN_GUARD_MS, outsideDismisses, paneMenuItems, type MenuContext } from "./PaneMenu";
 
 const noop = () => {};
 /** A pane that can do everything and is split, expandable, selected, titled, with an agent action. */
@@ -81,11 +81,21 @@ test("TERM-035: Close Pane is styled destructive and no other item is; shortcuts
   expect(out).toContain('role="separator"');
 });
 
-test("TERM-035: choosing an item runs its action", () => {
+test("TERM-035: an item's action is what the menu offers for it", () => {
   const ran: string[] = [];
   const items = paneMenuItems({ ...full, onSplit: (d) => ran.push(`split ${d}`), onEqualize: () => ran.push("equalize"), onClose: () => ran.push("close") });
   for (const n of ["Split Right", "Split Down", "Equalize", "Close Pane"]) items.find((i) => i.name === n)!.run();
   expect(ran).toEqual(["split right", "split down", "equalize", "close"]);
+});
+
+test("FIX-1: clicking an item (the button's onClick path) closes the menu first, then runs the action; Close Pane included", () => {
+  const order: string[] = [];
+  const items = paneMenuItems({ ...full, onSplit: (d) => order.push(`split ${d}`), onEqualize: () => order.push("equalize"), onClose: () => order.push("close") });
+  for (const n of ["Split Right", "Equalize", "Close Pane"]) chooseItem(items.find((i) => i.name === n)!, () => order.push("dismiss"));
+  expect(order).toEqual(["dismiss", "split right", "dismiss", "equalize", "dismiss", "close"]);
+  // The rendered button is wired to it: the menu markup holds one button per item.
+  const out = renderToString(createElement(PaneMenu, { style: {}, items, onDismiss: noop }));
+  expect(out.split("<button").length - 1).toBe(items.length);
 });
 
 test("TERM-035: the click that opened the menu does not close it; a later click does", () => {
