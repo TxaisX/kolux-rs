@@ -59,6 +59,14 @@ test("PROJ-062: CardLine draws the line indented under the name, or nothing", ()
   expect(renderToString(createElement(CardLine, { shown: ["status"], facts: facts({ agents: 1, state: "working" }), depth: 0 }))).toBe("");
 });
 
+test("FIX-2: an explicit indent wins over depth, and 0 is an indent too", () => {
+  const line = (extra: object) => renderToString(createElement(CardLine, { shown: ["status", "agents"], facts: facts({ agents: 1, state: "working" }), ...extra }));
+  expect(line({ depth: 2, indent: 10 })).toContain("padding-left:10px");
+  expect(line({ depth: 2, indent: 10 })).not.toContain("padding-left:72px");
+  expect(line({ depth: 3, indent: 0 }), "indent 0 is given, so it wins").toContain("padding-left:0");
+  expect(line({ depth: 2 })).toContain("padding-left:72px");
+});
+
 // FIX-1: the sidebar's chooser writes ONE setting per tick (the sidebar saves one key per call), so a
 // set that equals a preset is saved as that preset's marker, not as a literal list: the card keeps
 // following the preset when a later version adds a detail to it.

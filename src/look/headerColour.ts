@@ -44,3 +44,18 @@ export function forgetHeaderColours(settings: Record<string, unknown>, gone: Rea
   const drop = new Set(gone.map((g) => keyOf(g.kind, g.id)));
   return Object.fromEntries(Object.entries(readHeaderColours(settings)).filter(([k]) => !drop.has(k)));
 }
+
+/** The headers that disappear with a deleted group: the group's own, plus (when its projects are removed
+ *  too, `remove`) each project that was in it. `members` maps project id to group id and must be the
+ *  map from BEFORE the delete: the answer to the delete no longer lists them. */
+export function headersGoneWithGroup(members: Readonly<Record<string, string>>, groupId: string, remove: boolean): Array<{ kind: HeaderKind; id: string }> {
+  const projects = remove ? Object.entries(members).filter(([, gid]) => gid === groupId).map(([pid]) => ({ kind: "p" as const, id: pid })) : [];
+  return [{ kind: "g", id: groupId }, ...projects];
+}
+
+/** The new `headerColours` value after those headers are gone, or null when none of them had a colour (so
+ *  the caller saves nothing). Give it the settings as they are when the delete finishes, not from before. */
+export function colourSaveAfterDelete(settings: Record<string, unknown>, gone: ReadonlyArray<{ kind: HeaderKind; id: string }>): Record<string, string> | null {
+  const had = readHeaderColours(settings);
+  return gone.some((g) => keyOf(g.kind, g.id) in had) ? forgetHeaderColours(settings, gone) : null;
+}

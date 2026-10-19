@@ -1,5 +1,5 @@
 diff --git a/src/projects/ProjectsPanel.tsx b/src/projects/ProjectsPanel.tsx
-index 23bd880a..1fbd4e2e 100644
+index fa7f3e0..48ce75b 100644
 --- a/src/projects/ProjectsPanel.tsx
 +++ b/src/projects/ProjectsPanel.tsx
 @@ -28,9 +28,10 @@ import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoice
@@ -11,22 +11,32 @@ index 23bd880a..1fbd4e2e 100644
 -import { CARD_DETAILS, CARD_DETAILS_FIELD, cardTitle, detailsAfter, readCardDetails, type CardFacts } from "../look/cards";
 +import { HeaderBadge, HeaderColourPicker } from "../look/HeaderBadge";
 +import { CardDetailsChooser } from "../look/CardDetailsChooser";
-+import { HEADER_COLOURS_SETTING, forgetHeaderColours, headerColourOf } from "../look/headerColour";
++import { HEADER_COLOURS_SETTING, colourSaveAfterDelete, headerColourOf, headersGoneWithGroup } from "../look/headerColour";
 +import { cardTitle, readCardDetails, type CardFacts } from "../look/cards";
- import Picker, { type PickItem } from "./Picker";
- import StartGit, { type FirstFile } from "./StartGit";
- import { openKits } from "../kits/Kits";
-@@ -585,7 +586,9 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+ import { takeSuggestion } from "./suggest";
+ import { IconPicker } from "./IconPicker";
+ import { ProjectIcon } from "./IconView";
+@@ -171,6 +172,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+   const [plusOpen, setPlusOpen] = useState(false);
+   const index = useRef(onIndex);
+   index.current = onIndex;
++  const live = useRef({ settings, onSetting }); // the settings as of the latest render, for steps that finish after an await
++  live.current = { settings, onSetting };
+   const [listed, setWorktrees] = useState<Record<string, Worktree[]>>({}); // the ones not hidden by hand
+   // AUTO-024: the switch that leaves out worktrees made by automation runs; moving to one turns it off.
+   const hideAuto = settings[HIDE_AUTOMATION_SETTING] === true;
+@@ -624,7 +627,10 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
    };
    const deleteGroup = async (g: Group, remove: boolean) => {
      try {
-+      const members = Object.entries(groups.members).filter(([, gid]) => gid === g.id).map(([pid]) => pid);
++      const gone = headersGoneWithGroup(groups.members, g.id, remove); // read before the delete: the answer no longer lists the members
        takeGroups(await invoke<Groups>("group_delete", { id: g.id, removeProjects: remove }));
-+      onSetting(HEADER_COLOURS_SETTING, forgetHeaderColours(settings, [{ kind: "g", id: g.id }, ...(remove ? members.map((id) => ({ kind: "p" as const, id })) : [])]));
++      const colours = colourSaveAfterDelete(live.current.settings, gone); // null when none of them had a colour: nothing is saved
++      if (colours) live.current.onSetting(HEADER_COLOURS_SETTING, colours);
        setGroupFor(null);
        setDropGroup(null);
        say("ok", remove ? `Deleted the group ${g.name} and took its projects out of Kolux; their folders are still on disk` : `Deleted the group ${g.name}; its projects are at the top level now`);
-@@ -1324,7 +1327,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+@@ -1396,7 +1402,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
              </button>
            )}
          </div>
@@ -35,16 +45,16 @@ index 23bd880a..1fbd4e2e 100644
          {paneRows(w, depth)}
          {moving === w.path && !asking && (
            <div className="sb-form" data-moving={worktreeLabel(w)}>
-@@ -1437,7 +1440,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+@@ -1510,7 +1516,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                  ))}
                </select>
                <label>Header colour</label>
 -              <HeaderSwatches value={headerColourOf(settings, "p", p.id).id} onPick={(c) => onSetting(HEADER_COLOURS_SETTING, pickHeaderColour(settings, "p", p.id, c))} />
 +              <HeaderColourPicker settings={settings} kind="p" id={p.id} onSetting={onSetting} />
+               <IconPicker value={icons[p.id]} name={p.name} onSet={(icon) => setIcon(p, icon)} onProblem={(text) => say("warn", text)} />
                <div className="btn-row">
                  <button className="btn" onClick={() => saveProject(p)}>
-                   Save
-@@ -1491,7 +1494,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+@@ -1565,7 +1571,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
          ))}
        </select>
        <label>Header colour</label>
@@ -53,7 +63,7 @@ index 23bd880a..1fbd4e2e 100644
        {dropGroup ? (
          <>
            <div className="sb-hint">
-@@ -1692,13 +1695,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+@@ -1766,13 +1772,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                  <input type="checkbox" aria-label="show sleeping workspaces" checked={showSleeping} onChange={(e) => onSetting(SHOW_SLEEPING_SETTING, e.target.checked)} />
                  Show sleeping workspaces
                </label>

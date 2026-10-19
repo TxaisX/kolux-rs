@@ -1,6 +1,11 @@
 // A click-through for tests, with no browser: the project has no DOM test environment, so this walks
 // the element tree a component returns (calling function components down to plain elements) and fires
 // the handlers the user's click or edit would reach. It is a test helper only (T-266 FIX-1).
+// LIMITS (FIX-2): it calls function components directly, so it breaks on any component that uses a hook;
+// click and change do not bubble (only the control hit runs its handler); the event it passes is just
+// { target, currentTarget } with no preventDefault or stopPropagation, so a handler that calls them throws.
+// "Fires the handlers a click would reach" therefore holds for leaf controls only, and a panel with state
+// (ProjectsPanel) is still proven live, not here.
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
