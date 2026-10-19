@@ -139,6 +139,14 @@ input { font: inherit; }
 .branch { display: flex; align-items: center; height: 32px; padding: 0 12px 0 8px; gap: 8px; border-radius: 6px; font-size: 14px; font-weight: 500; color: var(--fg-row); width: 100%; text-align: left; white-space: nowrap; }
 .branch .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .branch .count, .sess .count { font-size: 11px; color: var(--fg); }
+/* PROJ-062: the second line of a workspace card (Default and Detailed). */
+.hdr-badge { flex: none; width: 10px; height: 10px; margin-right: 8px; border-radius: 3px; }
+.sb-group .hdr-badge { margin-right: 6px; }
+.hdr-swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.hdr-swatch { width: 18px; height: 18px; padding: 0; border: 2px solid transparent; border-radius: 50%; cursor: pointer; }
+.hdr-swatch.on { border-color: var(--fg); }
+.hdr-swatch:focus-visible { outline: 2px solid var(--line-focus); outline-offset: 2px; }
+.sess-line { margin-top: -6px; padding: 0 8px 6px 44px; font-size: 11px; line-height: 14px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sess.pane-row { height: 26px; gap: 8px; font-size: 12px; }
 .sess.pane-row .name { overflow: hidden; text-overflow: ellipsis; }
 .branch .dot { margin-right: 2px; }
@@ -245,6 +253,8 @@ input { font: inherit; }
 /* ---- Source Control card on the right (spec 11; GIT-002 / GIT-004) ---- */
 .sidebar-wrap.right { padding: 8px 8px 8px 0; }
 .sidebar.scm { width: 320px; }
+/* VIEW-052 / SET-021: only the left sidebar takes the tint or the terminal's ground (--sidebar-bg is set by theme.ts). */
+.sidebar-wrap:not(.right) > .sidebar:not(.scm) { background: var(--sidebar-bg, var(--surface)); }
 .scm-head { margin-top: 8px; }
 .scm-head .count { margin-left: 8px; font-size: 11px; color: var(--fg); }
 .scm-commit { display: flex; flex-direction: column; gap: 6px; margin: 8px 8px 0; }

@@ -27,6 +27,10 @@ import { mergePoll, nextDelay, pollItems, STALE_MS, type PrPoll } from "../scm/p
 import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
 import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
 import AddProject from "./AddProject";
+import CardLine from "../look/CardLine";
+import { HeaderBadge, HeaderSwatches } from "../look/HeaderBadge";
+import { HEADER_COLOURS_SETTING, headerColourOf, pickHeaderColour } from "../look/headerColour";
+import { CARD_DETAILS, CARD_DETAILS_FIELD, cardTitle, detailsAfter, readCardDetails, type CardFacts } from "../look/cards";
 import Picker, { type PickItem } from "./Picker";
 import StartGit, { type FirstFile } from "./StartGit";
 import { openKits } from "../kits/Kits";
@@ -260,6 +264,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const [dropGroup, setDropGroup] = useState<{ remove: boolean } | null>(null); // PROJ-015: the delete question
   const seen = useRef<Record<string, AgentState>>({});
   const groupBy = groupFromSetting(settings[GROUP_SETTING]);
+  const cardDetails = readCardDetails(settings); // PROJ-062, SET-021: Compact, Default, Detailed or a chosen set
+
   const sortBy = sortFromSetting(settings[SORT_SETTING]);
   // PROJ-050: an old "Recent" choice is moved to Smart once and saved that way.
   useEffect(() => {
@@ -1178,12 +1184,15 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const row = ({ p, w }: Entry, depth = 0, kids = false) => {
     const asking = confirm?.path === w.path;
     const info = infoOf(w);
+    // PROJ-062: what the card shows under its name, and what a hover adds for the rest.
+    const facts: CardFacts = { agents: liveIn(w).length, state: info.state, pr: info.pr, changed: info.changed, note: w.comment ?? null };
+    const hoverTitle = cardTitle(worktreeLabel(w), w.branch, cardDetails.shown, facts, `Show ${w.path}${isAsleep(w) ? " (asleep: showing it wakes it)" : ""}`);
     const un = isUnread(w);
     const shut = shutKids.has(w.path);
     const up = w.parent ? (worktrees[p.id] ?? []).find((x) => !x.isMain && same(x.path, w.parent as string)) : undefined;
     return (
       <div key={w.path} data-worktree={worktreeLabel(w)} data-depth={depth} data-path={w.path}>
-        <div className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onClick={() => show(w)} onKeyDown={(e) => (e.key === "Enter" ? show(w) : e.key === "F2" && startRename(w))} title={`Show ${w.path}${isAsleep(w) ? " (asleep: showing it wakes it)" : ""}`} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
+        <div className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onClick={() => show(w)} onKeyDown={(e) => (e.key === "Enter" ? show(w) : e.key === "F2" && startRename(w))} title={hoverTitle} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
           {kids && (
             <button
               className={`fold${shut ? " shut" : ""}`}
@@ -1216,7 +1225,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
           ) : (
             <span
               className="name"
-              title="Double-click (or F2) to rename"
+              title={hoverTitle + "\nDouble-click (or F2) to rename"}
               onDoubleClick={(e) => {
                 e.stopPropagation();
                 startRename(w);
@@ -1315,6 +1324,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
             </button>
           )}
         </div>
+        <CardLine shown={cardDetails.shown} facts={facts} indent={44 + depth * 14} />
         {paneRows(w, depth)}
         {moving === w.path && !asking && (
           <div className="sb-form" data-moving={worktreeLabel(w)}>
@@ -1388,6 +1398,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       return (
         <div key={p.id}>
           <div className="proj" title={p.path}>
+            <HeaderBadge colour={headerColourOf(settings, "p", p.id)} />
             <span className="name">{p.name}</span>
             <button className={`ib${settingsFor === p.id ? " on" : ""}`} title="Project settings: its workspaces folder and base ref" aria-pressed={settingsFor === p.id} onClick={() => (settingsFor === p.id ? setSettingsFor(null) : openSettings(p))}>
               <Gear />
@@ -1425,6 +1436,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                   </option>
                 ))}
               </select>
+              <label>Header colour</label>
+              <HeaderSwatches value={headerColourOf(settings, "p", p.id).id} onPick={(c) => onSetting(HEADER_COLOURS_SETTING, pickHeaderColour(settings, "p", p.id, c))} />
               <div className="btn-row">
                 <button className="btn" onClick={() => saveProject(p)}>
                   Save
@@ -1477,6 +1490,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
           </option>
         ))}
       </select>
+      <label>Header colour</label>
+      <HeaderSwatches value={headerColourOf(settings, "g", g.id).id} onPick={(c) => onSetting(HEADER_COLOURS_SETTING, pickHeaderColour(settings, "g", g.id, c))} />
       {dropGroup ? (
         <>
           <div className="sb-hint">
@@ -1518,6 +1533,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       <div key={n.group.id} className="proj-group" data-project-group={n.group.id}>
         <div className="sb-group-row">
           <button className="sb-group" aria-expanded={!folded.has(n.group.id)} onClick={() => toggleFold(n.group.id)}>
+            <HeaderBadge colour={headerColourOf(settings, "g", n.group.id)} />
             {n.group.name}
             <span className="count">{n.count}</span>
             <span className="chev">
@@ -1676,6 +1692,13 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                 <input type="checkbox" aria-label="show sleeping workspaces" checked={showSleeping} onChange={(e) => onSetting(SHOW_SLEEPING_SETTING, e.target.checked)} />
                 Show sleeping workspaces
               </label>
+              <label>Card details</label>
+              {CARD_DETAILS.map((d) => (
+                <label key={d.id} className="check">
+                  <input type="checkbox" aria-label={`card shows ${d.label.toLowerCase()}`} checked={cardDetails.shown.includes(d.id)} disabled={d.locked} onChange={(e) => onSetting(CARD_DETAILS_FIELD, detailsAfter(settings, d.id, e.target.checked))} />
+                  {d.label}
+                </label>
+              ))}
             </div>
           )}
           {creating === "" && nameField(null)}
