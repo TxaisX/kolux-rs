@@ -112,7 +112,7 @@ test("USAGE-034: the wrapper reads the account's plan windows from the shared st
 });
 
 // Stand-in review of lane/marks b08c624c, FIX-SOON 1: the card (spec 06, USAGE-034) says a pane with
-// no plan figures shows only the gauge. Decision recorded in STATE-history.md; revert is one line.
+// no plan figures shows only the gauge. Decision recorded in STATE-history.md; the revert is the guard in piecesFor plus this test and headerUsage.test.ts's, not one line.
 test("USAGE-034: a pane with no plan windows shows only the gauge, no tokens and no cost", () => {
   const bare = view({ windows: [] });
   expect(bare).toContain(">78%<");
