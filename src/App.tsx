@@ -31,7 +31,7 @@ import TrustPrompt, { trustedSetup } from "./setup/TrustPrompt";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { returnTab, type Which } from "./terminal/tabClose";
 import { bulkCloseSet, closeOne, middleClickCloses, orderPinnedFirst, pinMenu, pinQuestion } from "./terminal/pin";
-import { classify, removePlan, removeQuestion } from "./terminal/remove";
+import { classify, removePlan, removeQuestion, shellInAgentPane } from "./terminal/remove";
 import { applyAppearance, readAppearance, showScreen, zoomTerm } from "./theme";
 import { useEscapeLeaves } from "./chrome/fullPage";
 import SignInNotice from "./settings/SignInNotice";
@@ -748,6 +748,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           if (!inFront) return;
           splitPane(focused, hit.id === "terminal.splitRight" ? "right" : "down");
           break;
+        case "terminal.equalizePaneSizes":
+          if (!inFront) return;
+          equalizePanes();
+          break;
         default: {
           // TERM-041: one unbound command per installed agent, `tab.newAgent.<id>`.
           const id = hit.id.startsWith("tab.newAgent.") ? hit.id.slice("tab.newAgent.".length) : null;
@@ -795,7 +799,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     // TERM-003: a started session asks first (Cancel focused) unless the setting says stop; an unstarted pane or an idle shell goes at once (terminal/remove.ts).
     const id = ptys.current[t.key];
     const busy = id === undefined ? false : ((await invoke<boolean[]>("terminal_busy", { ids: [id] }).catch(() => [false]))[0] ?? false);
-    const kind = classify(pane, busy);
+    const kind = classify(pane, busy, running[t.key], shellInAgentPane.has(t.key)); // T-151-c: an ended agent pane is not asked about; a still-starting one (undefined) is; an agent pane running a shell is a shell
     switch (removePlan(settings, kind)) {
       case "remove":
         dropPane(t.key);
@@ -1677,6 +1681,14 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const gridRows = rowsFor(gridCount, stacked[activeDir ?? ""]);
   const weightKey = (axis: "col" | "row") => `${activeDir ?? ""}|${axis}|${axis === "col" ? gridCols : gridRows}`;
   const weightsOf = (axis: "col" | "row") => weights[weightKey(axis)] ?? Array<number>(axis === "col" ? gridCols : gridRows).fill(1);
+  // TERM-035: Equalize drops the dragged weights of this folder's grid, so every column and row is the same size again.
+  const equalizePanes = () =>
+    setWeights((w) => {
+      const next = { ...w };
+      delete next[weightKey("col")];
+      delete next[weightKey("row")];
+      return next;
+    });
   const gapUnder = (g: HTMLElement, x: number, y: number) => {
     const rects = [...g.querySelectorAll<HTMLElement>(":scope > .cell:not([hidden])")].map((c) => c.getBoundingClientRect());
     const cols = tracks(rects, "x");
@@ -2501,6 +2513,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
                     onRunning={(on) => {
+                      // T-151-c: a program still starting reports undefined: no entry yet, so it never reads as ended
+                      if (on === undefined) {
+                        setRunning((r) => (p.key in r ? Object.fromEntries(Object.entries(r).filter(([k]) => Number(k) !== p.key)) : r));
+                        return;
+                      }
                       if (runRef.current[p.key] && !on && p.agent !== "shell") {
                         noticed(p, "finished");
                         setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
@@ -2539,6 +2556,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                       then?.();
                     }}
                     onSplit={(dir) => splitPane(p.key, dir)}
+                    onEqualize={terminals && gridCount > 1 ? equalizePanes : undefined}
                     expand={board ? undefined : { on: zoomed === groupOf(p), can: canExpand(shown.length, classic), toggle: () => expandPane(p.key) }}
                     title={p.title || nameOf(names, p.cwd)}
                     custom={!!p.title}
