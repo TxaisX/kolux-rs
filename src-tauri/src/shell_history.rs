@@ -600,7 +600,7 @@ mod tests {
         assert_eq!(sweep_at(&data, Some(&fish), T0, GRACE_SECS), 0);
         assert!(session.is_file(), "a history folder that cannot be read as ours must not cost a fish session");
         // With a real history folder that lacks the worktree's folder, the session is a leftover.
-        std::fs::remove_dir(data.join(DIR)).unwrap();
+        unlink_dir(&data.join(DIR));
         std::fs::create_dir_all(data.join(DIR)).unwrap();
         assert_eq!(sweep_at(&data, Some(&fish), T0, GRACE_SECS), 1);
         assert!(!session.exists());
@@ -616,6 +616,31 @@ mod tests {
         {
             std::process::Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(link).arg(target).output().map(|o| o.status.success()).unwrap_or(false)
         }
+    }
+
+    /// Removes a folder link made by `link_dir` without touching what it points at: `remove_file`
+    /// on Unix (a symbolic link is not a folder there), `remove_dir` on Windows (a junction is).
+    fn unlink_dir(link: &Path) {
+        #[cfg(unix)]
+        std::fs::remove_file(link).unwrap();
+        #[cfg(windows)]
+        std::fs::remove_dir(link).unwrap();
+    }
+
+    #[test]
+    fn term119_a_folder_link_is_removed_on_either_platform_and_its_target_is_left_alone() {
+        let t = temp("term119-unlink");
+        let target = t.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("keep"), "x").unwrap();
+        let link = t.join("link");
+        if !link_dir(&target, &link) {
+            eprintln!("term119: SKIPPED the unlink check, no folder link could be made here");
+            return;
+        }
+        unlink_dir(&link);
+        assert!(std::fs::symlink_metadata(&link).is_err(), "the link is gone");
+        assert!(target.join("keep").is_file(), "what it pointed at is untouched");
     }
 
     #[test]
