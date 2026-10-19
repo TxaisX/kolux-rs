@@ -594,11 +594,19 @@ fn gh_account(program: &Path, host: &str) -> Option<String> {
 /// FIX-R2: `gh_account` with a time limit: Ok(None) when gh says it is signed out on `host`, Err
 /// when gh cannot run or has not answered by `limit` (it is stopped then).
 fn gh_account_within(program: &Path, host: &str, limit: std::time::Duration) -> Result<Option<String>, String> {
+    gh_config_within(program, &["config", "get", "-h", host, "user"], limit)
+}
+
+/// FIX-3 (tasks): one `gh config get ...` answer through the bounded runner (the whole process
+/// tree ends at the limit): Ok(Some(value)) when gh printed one, Ok(None) when gh answered with
+/// nothing or a failure, Err when it cannot run or has not answered by `limit`. The host gate in
+/// github.rs reads gh's config through this and refuses the host on an Err.
+pub(crate) fn gh_config_within(program: &Path, args: &[&str], limit: std::time::Duration) -> Result<Option<String>, String> {
     let mut cmd = quiet(program);
-    cmd.args(["config", "get", "-h", host, "user"]).envs(crate::git::NO_PROMPT).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
+    cmd.args(args).current_dir(std::env::temp_dir()).envs(crate::git::NO_PROMPT).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
     let (ok, out, _) = run_within(cmd, None, limit)?;
-    let login = out.trim().to_string();
-    Ok((ok && !login.is_empty()).then_some(login))
+    let value = out.trim().to_string();
+    Ok((ok && !value.is_empty()).then_some(value))
 }
 
 /// FIX-2 / FIX-3: a pull request request goes only to a host Kolux may talk to (github.com, the host

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closingDraft, createBusy, createOnce, DRAFT_MAX, draftFrom, draftToSave, emptyDraft, issueTargets, openDraft, watchCreate, withRepo } from "./newIssue";
+import { closingDraft, createBusy, createdHere, createOnce, DRAFT_MAX, pickableLabels, TITLE_MAX, draftFrom, draftToSave, emptyDraft, issueTargets, openDraft, watchCreate, withRepo } from "./newIssue";
 
 const d = (over = {}) => ({ ...emptyDraft("github.com", "acme/app"), title: "Crash on start", body: "Steps", labels: ["bug"], assignees: ["ana"], ...over });
 
@@ -76,5 +76,30 @@ describe("FIX-2 FS 1: one New issue create at a time across close and reopen", (
     expect(createBusy()).toBe(false);
     off();
     expect(seen).toEqual(["busy", "created", "busy", "failed"]);
+  });
+});
+
+describe("FIX-3: what a New issue create reports after the user has moved on", () => {
+  it("a failed create tells every watcher the error, so a dialog opened later can show it", async () => {
+    const seen: [string, string | undefined][] = [];
+    const off = watchCreate((e, err) => seen.push([e, err]));
+    expect(await createOnce(() => Promise.reject("gh: HTTP 504 timeout"))).toEqual({ ok: false, error: "gh: HTTP 504 timeout" });
+    off();
+    expect(seen).toEqual([["busy", undefined], ["failed", "gh: HTTP 504 timeout"]]);
+  });
+
+  it("an issue lands in the list only when its host and repository are the ones on screen", () => {
+    const here = { host: "ghe.corp", repos: ["acme/app", "up/stream"] };
+    expect(createdHere(here, "ghe.corp", "acme/app")).toBe(true);
+    expect(createdHere(here, "GHE.corp", "Up/Stream")).toBe(true);
+    // The user switched to a github.com workspace of the same name while gh was slow.
+    expect(createdHere({ host: "github.com", repos: ["acme/app"] }, "ghe.corp", "acme/app")).toBe(false);
+    expect(createdHere(here, "ghe.corp", "acme/other")).toBe(false);
+    expect(createdHere(null, "ghe.corp", "acme/app")).toBe(false);
+  });
+
+  it("label suggestions with a comma are left out (the field splits on commas) and titles stop at 256", () => {
+    expect(pickableLabels(["bug", "a, b", "ui"])).toEqual(["bug", "ui"]);
+    expect(TITLE_MAX).toBe(256);
   });
 });

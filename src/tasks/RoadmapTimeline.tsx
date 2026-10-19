@@ -76,7 +76,7 @@ export default function Timeline({ fields, items, saved, onPick }: { fields: Pro
                   </span>
                   <span className="timeline-lane">
                     {item.url ? (
-                      <a className={`timeline-bar ${item.kind} ${item.state}`} href={item.url} target="_blank" rel="noreferrer" title={`${item.title}: ${when}`} style={{ left: `${at.left}%`, width: `${at.width}%` }} />
+                      <a className={`timeline-bar ${item.kind} ${item.state}`} href={item.url} target="_blank" rel="noreferrer" aria-label={`${item.title}, ${when}`} title={`${item.title}: ${when}`} style={{ left: `${at.left}%`, width: `${at.width}%` }} />
                     ) : (
                       <span className={`timeline-bar ${item.kind}`} title={`${item.title}: ${when}`} style={{ left: `${at.left}%`, width: `${at.width}%` }} />
                     )}
