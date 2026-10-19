@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseCall, entryKey, estimate, sidesCall, statusGate, tagOf, WAIT_OVER, type Entry } from "./AllChangesPane";
+import { baseCall, entryKey, estimate, openStatus, sidesCall, statusGate, tagOf, WAIT_OVER, type Entry } from "./AllChangesPane";
 import { AC_SPLIT_KEY, AC_TREE_KEY, AC_WHITESPACE_KEY, AC_WRAP_KEY, acLayoutOf, emptyStatus } from "../scm/model";
 
 const e = (over: Partial<Entry>): Entry => ({ path: "C:/r/a.ts", staged: false, code: "M", lines: 10, binary: false, stamp: "x", ...over });
@@ -62,5 +62,36 @@ describe("FIX-2: the status read as the tab opens", () => {
     gate.first({ ...emptyStatus, branch: "open" });
     gate.watched({ ...emptyStatus, branch: "tick" });
     expect(seen).toEqual(["open", "tick"]);
+  });
+});
+
+describe("FIX-3: the tab's status wiring", () => {
+  const status = (branch: string) => ({ ...emptyStatus, branch });
+  it("a watcher status that lands before the slow opening read is kept, and the read is dropped", async () => {
+    let answer: (s: ReturnType<typeof status>) => void = () => undefined;
+    const read = () => new Promise<ReturnType<typeof status>>((resolve) => (answer = resolve));
+    let tick: (s: ReturnType<typeof status>) => void = () => undefined;
+    const seen: (string | null)[] = [];
+    const watched: (string | null)[] = [];
+    const { first, stop } = openStatus(read, (on) => ((tick = on), () => seen.push("stopped")), (s) => seen.push(s.branch), (s) => watched.push(s.branch));
+    tick(status("after-commit"));
+    answer(status("before-commit"));
+    await first;
+    expect(seen).toEqual(["after-commit"]);
+    expect(watched).toEqual(["after-commit"]);
+    stop();
+    expect(seen).toEqual(["after-commit", "stopped"]);
+  });
+  it("the opening read is used when it lands first, and a failed read leaves the watcher in charge", async () => {
+    const seen: (string | null)[] = [];
+    let tick: (s: ReturnType<typeof status>) => void = () => undefined;
+    const a = openStatus(() => Promise.resolve(status("open")), (on) => ((tick = on), () => undefined), (s) => seen.push(s.branch), () => undefined);
+    await a.first;
+    tick(status("tick"));
+    expect(seen).toEqual(["open", "tick"]);
+    const b = openStatus(() => Promise.reject(new Error("gone")), (on) => ((tick = on), () => undefined), (s) => seen.push(s.branch), () => undefined);
+    await expect(b.first).resolves.toBeUndefined();
+    tick(status("only-watcher"));
+    expect(seen).toEqual(["open", "tick", "only-watcher"]);
   });
 });

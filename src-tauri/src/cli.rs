@@ -2677,8 +2677,13 @@ fn now_ms() -> u64 {
 
 /// The pane a call came from, when the runtime can vouch for it.
 fn caller(ctx: &Ctx, req: &Request) -> Result<Option<String>, Fail> {
+    caller_with(req, &|k| ctx.terminals.by_key(k))
+}
+
+/// `caller` with the terminal behind a pane key given, so a test can stand a pane in.
+fn caller_with(req: &Request, by_key: &dyn Fn(&str) -> Option<String>) -> Result<Option<String>, Fail> {
     let pane = req.pane.as_ref().map(|p| (p.handle.as_str(), p.key.as_str()));
-    crate::orchestration::caller_of(req.args["from"].as_str(), pane, &|k| ctx.terminals.by_key(k))
+    crate::orchestration::caller_of(req.args["from"].as_str(), pane, by_key)
 }
 
 fn unbound() -> Fail {
@@ -3450,28 +3455,110 @@ fn model_args(agent: &str, model: Option<&str>, effort: Option<&str>) -> Result<
     Ok(extra)
 }
 
-/// Waits for the worker's terminal in `dir`: ready once it has written and is still there
-/// `SETTLE` later; gives up at `timeout`. Returns the terminal seen (if any) and readiness.
-/// FIX-1 S1: only a session that was not open before the start (`before`) and sits in `dir` counts,
-/// picked by worker_tab (a marked session running `agent`, or one running the start's own command
-/// `own`: cli FIX-3, FIX-5). A tab the user opens there during the wait is recorded, and so closed
-/// by a stop or release, only when the worker's own never shows and it is the one tab running that
-/// agent or that command (T-172-e stamps the start's own session).
-fn wait_ready(terminals: &Terminals, dir: &Path, before: &std::collections::HashSet<u32>, agent: &str, own: &str, since: Instant, timeout: Duration) -> (Option<u32>, bool) {
+/// T-172-e: the environment variable the window puts in the worker's very first session, so the
+/// session carries the dispatch it was started for. `terminal_spawn` reports it to `stamp_session`
+/// when it starts a session with it; nothing else sets it.
+pub(crate) const DISPATCH_ENV: &str = "KOLUX_DISPATCH_ID";
+/// How long a start waits for its stamp before it falls back to matching sessions by what they
+/// run (a window that does not stamp, an older build): a third of the wait, at most this.
+const STAMP_GRACE: Duration = Duration::from_secs(10);
+
+/// The starts waiting for their session's stamp: dispatch id, and the session once it is stamped.
+static STAMPS: Mutex<Vec<(String, Option<u32>)>> = Mutex::new(Vec::new());
+
+fn stamps() -> std::sync::MutexGuard<'static, Vec<(String, Option<u32>)>> {
+    STAMPS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// A start is about to ask the window for its session: only a dispatch registered here can be stamped.
+pub(crate) fn expect_stamp(dispatch: &str) {
+    let mut s = stamps();
+    s.retain(|(d, _)| d != dispatch);
+    s.push((dispatch.to_string(), None));
+    if s.len() > 64 {
+        s.remove(0);
+    }
+}
+
+/// The window started session `id` with `dispatch` in its environment (`terminal_spawn`). Only the
+/// first session of a start that is still waiting is stamped; any other call changes nothing.
+pub(crate) fn stamp_session(dispatch: &str, id: u32) -> bool {
+    let mut s = stamps();
+    match s.iter_mut().find(|(d, t)| d == dispatch && t.is_none()) {
+        Some((_, t)) => {
+            *t = Some(id);
+            true
+        }
+        None => false,
+    }
+}
+
+fn stamped(dispatch: &str) -> Option<u32> {
+    stamps().iter().find(|(d, _)| d == dispatch).and_then(|(_, t)| *t)
+}
+
+fn forget_stamp(dispatch: &str) {
+    stamps().retain(|(d, _)| d != dispatch);
+}
+
+/// One open session as a start sees it: its id, the folder it started in, the program Kolux was
+/// asked to start in it (its mark; none for a shell), the agent it is credited to, and how long
+/// it has been quiet.
+struct Tab {
+    id: u32,
+    dir: String,
+    mark: Option<String>,
+    credit: Option<String>,
+    quiet: Option<Duration>,
+}
+
+/// Every session in the terminals, from `sessions()` (the mark's program, never argv[0]).
+fn tabs(terminals: &Terminals) -> Vec<Tab> {
+    terminals
+        .sessions()
+        .into_iter()
+        .filter_map(|(h, dir, mark)| {
+            let id = h.strip_prefix("term-")?.parse::<u32>().ok()?;
+            Some(Tab { id, dir, mark, credit: terminals.program(id).flatten().map(str::to_string), quiet: terminals.quiet_for(id) })
+        })
+        .collect()
+}
+
+/// Waits for the worker's terminal: ready once it has written and is still there `SETTLE` later;
+/// gives up at `timeout`. Returns the terminal seen (if any) and readiness.
+/// T-172-e: the session carrying the dispatch's stamp is the worker's, whatever else opens in the
+/// folder. Until the stamp is seen the wait takes no tab at all, so a tab the user opens there is
+/// never read as ready before the window's own has shown. Only when no stamp arrives within
+/// `STAMP_GRACE` (a window that does not stamp) does it fall back to FIX-1 S1's match: a session
+/// that was not open before the start (`before`) and sits in `dir`, picked by worker_tab (a marked
+/// session running `agent`, or one running the start's own command `own`: cli FIX-3, FIX-5). That
+/// fallback records a tab the user opened there when the worker's own has not shown by the time
+/// the user's tab reads ready, so a stop or release can end it; the stamp is what closes that.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn wait_ready(terminals: &Terminals, dir: &Path, before: &std::collections::HashSet<u32>, dispatch: &str, agent: &str, own: &str, since: Instant, timeout: Duration) -> (Option<u32>, bool) {
+    wait_ready_over(&|| tabs(terminals), dir, before, dispatch, agent, own, since, timeout)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn wait_ready_over(open: &dyn Fn() -> Vec<Tab>, dir: &Path, before: &std::collections::HashSet<u32>, dispatch: &str, agent: &str, own: &str, since: Instant, timeout: Duration) -> (Option<u32>, bool) {
     let here = dir.canonicalize().ok();
+    let grace = (timeout / 3).min(STAMP_GRACE);
     let mut seen = None;
     while since.elapsed() < timeout {
-        let fresh: Vec<(u32, Option<String>, Option<String>)> = terminals
-            .sessions()
-            .into_iter()
-            .filter_map(|(h, d, mark)| {
-                let id = h.strip_prefix("term-")?.parse::<u32>().ok()?;
-                let there = here.is_some() && Path::new(&d).canonicalize().ok() == here;
-                (!before.contains(&id) && there).then(|| (id, mark, terminals.program(id).flatten().map(str::to_string)))
-            })
-            .collect();
-        seen = worker_tab(&fresh, agent, own);
-        if seen.is_some_and(|id| terminals.quiet_for(id).is_some_and(|q| q >= SETTLE)) {
+        let all = open();
+        seen = match stamped(dispatch) {
+            Some(id) => all.iter().any(|t| t.id == id).then_some(id),
+            None if since.elapsed() >= grace => {
+                let fresh: Vec<(u32, Option<String>, Option<String>)> = all
+                    .iter()
+                    .filter(|t| !before.contains(&t.id) && here.is_some() && Path::new(&t.dir).canonicalize().ok() == here)
+                    .map(|t| (t.id, t.mark.clone(), t.credit.clone()))
+                    .collect();
+                worker_tab(&fresh, agent, own)
+            }
+            None => None,
+        };
+        if seen.is_some_and(|id| all.iter().find(|t| t.id == id).and_then(|t| t.quiet).is_some_and(|q| q >= SETTLE)) {
             return (seen, true);
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -3511,14 +3598,15 @@ fn session_now(terminals: &Terminals, t: u32) -> (Option<Option<String>>, Option
 /// cli FIX-3 (c), FIX-4: a failed start's offered commands run as printed. The retry names the
 /// agent the start used and its tier when it had one (so the retry is routed and recorded the same
 /// way), else its model and effort, since worker-start refuses a line that says nothing of who
-/// runs it; a value with a space in it is quoted. Every orchestration line names the dispatch's
+/// runs it; a value with a space in it, or with `@` (PowerShell splats it), `,` (it builds an
+/// array) or `=`, is quoted (cli FIX-6: `"..."` is literal for these in PowerShell and cmd). Every orchestration line names the dispatch's
 /// Run, so it reaches the dispatch from the coordinator's own pane and from a shell Kolux did not
 /// start; a pane that acts in another Run is turned away by each of them (ORCH-033: it may read
 /// that Run, never change it).
 fn start_failed_run(receipt: &mut Value, run: Option<&str>) {
     let lead = format!("{} orchestration worker-", crate::orchestration::CLI);
     let retry = format!("{lead}start ");
-    let word = |v: &str| if v.chars().any(char::is_whitespace) { format!("\"{v}\"") } else { v.to_string() };
+    let word = |v: &str| if v.chars().any(|c| c.is_whitespace() || "@,=".contains(c)) { format!("\"{v}\"") } else { v.to_string() };
     let tiered = receipt["tier"].as_str().is_some_and(|t| !t.trim().is_empty());
     let mut who = String::new();
     let flags: &[&str] = if tiered { &["agent", "tier"] } else { &["agent", "model", "effort"] };
@@ -3785,12 +3873,16 @@ fn worker_row(mut row: Value) -> Value {
 }
 
 fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
+    worker_start_with(ctx, req, &|k| ctx.terminals.by_key(k))
+}
+
+fn worker_start_with(ctx: &Ctx, req: &Request, by_key: &dyn Fn(&str) -> Option<String>) -> Result<Value, Fail> {
     if req.args["terminal"].as_str().is_some_and(|t| !t.trim().is_empty()) {
         return reuse(ctx, req, req.args["terminal"].as_str().unwrap_or_default().trim());
     }
     // cli FIX-5 (council FIX-SOON 1 on c5fb49c): a --from that cannot be proven fails the start,
     // as it fails worker-stop and worker-release, rather than making the call an outside one.
-    let coordinator = caller(ctx, req)?;
+    let coordinator = caller_with(req, by_key)?;
     worker_start_as(ctx, req, coordinator)
 }
 
@@ -3949,8 +4041,11 @@ fn worker_start_as(ctx: &Ctx, req: &Request, coordinator: Option<String>) -> Res
     if created {
         (ctx.notify)(json!({ "kind": "created", "projectId": project.id, "worktree": { "path": worktree.path, "branch": worktree.branch, "name": worktree.name, "isMain": false, "parent": worktree.parent }, "agent": Value::Null, "prompt": "", "activate": false, "setup": setup }));
     }
-    (ctx.notify)(json!({ "kind": "start", "path": worktree.path, "branch": worktree.branch, "agent": agent_id, "prompt": brief, "extra": extra, "title": task["title"] }));
-    let (terminal, ready) = wait_ready(ctx.terminals, Path::new(&worktree.path), &before, &agent_id, &own, since, timeout);
+    // T-172-e: the window starts the agent with the dispatch id in its environment (DISPATCH_ENV).
+    expect_stamp(&dispatch_id);
+    (ctx.notify)(json!({ "kind": "start", "path": worktree.path, "branch": worktree.branch, "agent": agent_id, "prompt": brief, "extra": extra, "title": task["title"], "dispatch": dispatch_id }));
+    let (terminal, ready) = wait_ready(ctx.terminals, Path::new(&worktree.path), &before, &dispatch_id, &agent_id, &own, since, timeout);
+    forget_stamp(&dispatch_id);
     let status = if ready { "ready" } else { "unknown" };
 
     let mut receipt = json!({
@@ -5336,6 +5431,7 @@ mod tests {
             assert_eq!(ev[n - 2]["kind"], "created");
             assert_eq!(ev[n - 2]["setup"], "inherit", "cli FIX-4: --setup reaches the window");
             assert_eq!(ev[n - 1]["kind"], "start");
+            assert_eq!(ev[n - 1]["dispatch"], "dispatch-1", "cli FIX-6: the window is told which dispatch it starts");
             // ORCH-014: the worker gets its brief, the task text last.
             let prompt = ev[n - 1]["prompt"].as_str().unwrap();
             assert!(prompt.contains("--type worker_done") && prompt.contains("--dispatch-id dispatch-1") && prompt.ends_with(&format!("{}\nadd a test", crate::orchestration::DIVIDER)), "{prompt}");
@@ -6266,6 +6362,150 @@ mod tests {
         assert_eq!(e.code, "unbound_caller", "{}", e.message);
         // Without --from the same start from no pane passes the Run and task checks, to the agent.
         assert!(start(None).message.contains("Kolux knows no agent `no-such-agent`"));
+        drop(ctx);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cli FIX-6 (council AFTER 1 on 152e581): PowerShell acts on a leading `@` (splatting) and on
+    /// `,` (an array); a value with `=` is easy to misread. An offered line quotes such a value, so
+    /// the pasted line means what was printed, and still parses back to the same value.
+    #[test]
+    fn fix6_c_offered_lines_quote_at_comma_and_equals() {
+        let cli = crate::orchestration::CLI;
+        for (v, shown) in [("@x", "\"@x\""), ("a,b", "\"a,b\""), ("m=1", "\"m=1\""), ("two words", "\"two words\""), ("plain-1.5", "plain-1.5")] {
+            let mut r = json!({ "dispatchId": "dispatch-4", "taskId": "task-2", "agent": "codex", "model": v, "effort": null, "terminals": [{ "id": 7, "role": "worker" }], "worktree": { "path": "C:/Temp/wt-1", "created": true } });
+            crate::orchestration::start_failed(&mut r, "worker", json!("not_configured"));
+            start_failed_run(&mut r, Some("run-2"));
+            let retry = r["next"][1].as_str().unwrap().to_string();
+            assert!(retry.contains(&format!(" --model {shown}")), "{v}: {retry}");
+            let p = parse(&crate::agents::split_args(retry.strip_prefix(&format!("{cli} ")).unwrap())).1.unwrap_or_else(|e| panic!("{retry}: {}", e.message)).unwrap();
+            assert_eq!(p.args.get("model").and_then(Value::as_str), Some(v), "{retry}");
+        }
+    }
+
+    fn tab(id: u32, dir: &Path, mark: Option<&str>, credit: Option<&str>, quiet_ms: u64) -> Tab {
+        Tab { id, dir: dir.display().to_string(), mark: mark.map(str::to_string), credit: credit.map(str::to_string), quiet: Some(Duration::from_millis(quiet_ms)) }
+    }
+
+    /// cli FIX-6 item 2 (T-172-e, council FIX-SOON 1 on 152e581): the session the window starts
+    /// with the dispatch id in its environment is the worker's, even when the user opens the same
+    /// agent in the folder first and its banner has settled. Only a dispatch whose start is waiting
+    /// can be stamped, and only once.
+    #[test]
+    fn fix6_a_the_stamped_session_is_the_workers_not_the_users_tab() {
+        let dir = std::env::temp_dir();
+        let before = std::collections::HashSet::new();
+        // The user's Claude tab (5) is open and quiet when the first poll runs; the window's own
+        // session (6) is stamped and appears a poll later. Taking "the one fresh Claude tab" would
+        // return 5 at once; the stamp makes it 6.
+        let d = "dispatch-fix6-a1";
+        expect_stamp(d);
+        let polls = std::cell::Cell::new(0);
+        let open = || {
+            polls.set(polls.get() + 1);
+            let mut v = vec![tab(5, &dir, Some("claude"), Some("claude"), 5000)];
+            if polls.get() >= 2 {
+                assert!(stamp_session(d, 6));
+                v.push(tab(6, &dir, Some("claude"), Some("claude"), 5000));
+            }
+            v
+        };
+        let got = wait_ready_over(&open, &dir, &before, d, "claude", "claude", Instant::now(), Duration::from_secs(30));
+        assert_eq!(got, (Some(6), true));
+        assert!(polls.get() >= 2, "the first poll took no tab");
+        forget_stamp(d);
+        // A stamp for a session that has since gone is no one's.
+        let d2 = "dispatch-fix6-a2";
+        expect_stamp(d2);
+        assert!(stamp_session(d2, 9));
+        assert_eq!(wait_ready_over(&|| vec![tab(5, &dir, Some("claude"), Some("claude"), 5000)], &dir, &before, d2, "claude", "claude", Instant::now(), Duration::from_millis(300)), (None, false));
+        forget_stamp(d2);
+        // Only a waiting start can be stamped, and once: a user's own variable cannot claim a session.
+        assert!(!stamp_session("dispatch-fix6-a3", 1), "never expected");
+        expect_stamp("dispatch-fix6-a3");
+        assert!(stamp_session("dispatch-fix6-a3", 1));
+        assert!(!stamp_session("dispatch-fix6-a3", 2), "stamped once");
+        assert_eq!(stamped("dispatch-fix6-a3"), Some(1));
+        forget_stamp("dispatch-fix6-a3");
+        assert!(!stamp_session("dispatch-fix6-a3", 3), "a finished start is not stamped");
+    }
+
+    /// cli FIX-6 item 4 (council AFTER 2 on 152e581): wait_ready as a whole, not only worker_tab.
+    /// With no stamp it falls back, after the grace, to the marked session in the worktree: found
+    /// by its mark's program (a .cmd or .bat launcher shows as cmd.exe in argv[0], so that is what a
+    /// session with no mark looks like here), never one that was open before the start, one in
+    /// another folder, or a shell; ready only once it has been quiet for SETTLE.
+    #[test]
+    fn fix6_b_wait_ready_finds_the_marked_session_in_the_worktree() {
+        let dir = std::env::temp_dir();
+        let elsewhere = dir.join("fix6-elsewhere-folder");
+        let none = std::collections::HashSet::new();
+        let run = |tabs: Vec<Tab>, before: &std::collections::HashSet<u32>, own: &str, ms: u64| {
+            let d = "dispatch-fix6-b";
+            wait_ready_over(&|| tabs.iter().map(|t| Tab { id: t.id, dir: t.dir.clone(), mark: t.mark.clone(), credit: t.credit.clone(), quiet: t.quiet }).collect(), &dir, before, d, "codex", own, Instant::now(), Duration::from_millis(ms))
+        };
+        // npx: marked "npx", credited to none, the start's own command.
+        assert_eq!(run(vec![tab(7, &dir, Some("npx"), None, 5000)], &none, "npx", 600), (Some(7), true));
+        // The same session still inside SETTLE: found, not ready.
+        assert_eq!(run(vec![tab(7, &dir, Some("npx"), None, 100)], &none, "npx", 600), (Some(7), false));
+        // What reading argv[0] instead of the mark would show for a .cmd launcher: a shell program.
+        // Only the mark counts, so a "cmd.exe" mark is some other command, not the start's.
+        assert_eq!(run(vec![tab(7, &dir, Some("cmd.exe"), None, 5000)], &none, "npx", 600), (None, false));
+        // A plain shell (no mark, whatever its argv[0]) is never the worker.
+        assert_eq!(run(vec![tab(7, &dir, None, Some("codex"), 5000)], &none, "codex", 600), (None, false));
+        // Open before the start, or in another folder: not the worker.
+        let open_already: std::collections::HashSet<u32> = [7].into();
+        assert_eq!(run(vec![tab(7, &dir, Some("codex"), Some("codex"), 5000)], &open_already, "codex", 600), (None, false));
+        assert_eq!(run(vec![tab(7, &elsewhere, Some("codex"), Some("codex"), 5000)], &none, "codex", 600), (None, false));
+        // Two sessions running the agent are ambiguous: none is recorded.
+        assert_eq!(run(vec![tab(7, &dir, Some("codex"), Some("codex"), 5000), tab(8, &dir, Some("codex"), Some("codex"), 5000)], &none, "codex", 600), (None, false));
+        // Nothing is taken before the grace (a third of the wait): a stamp can still arrive.
+        let t = Instant::now();
+        let got = wait_ready_over(&|| vec![tab(7, &dir, Some("codex"), Some("codex"), 5000)], &dir, &none, "dispatch-fix6-b2", "codex", "codex", t, Duration::from_millis(900));
+        assert_eq!(got, (Some(7), true));
+        assert!(t.elapsed() >= Duration::from_millis(300), "waited the grace first: {:?}", t.elapsed());
+    }
+
+    /// cli FIX-6 item 5 (council AFTER 3 on 152e581): a pane that names another terminal with
+    /// --from, while naming another Run with --run, is turned away as a caller mismatch before
+    /// anything is made; naming itself, it is still held to its own Run.
+    #[test]
+    fn fix6_d_worker_start_from_a_pane_naming_another_terminal_is_a_mismatch() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-clifix6-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let (run_a, run_b) = {
+            let mut m = crate::orchestration::Mail::default();
+            let a = m.run_create("term-1", "run a", 1)["binding"]["runId"].as_str().unwrap().to_string();
+            let b = m.run_create("term-2", "run b", 2)["binding"]["runId"].as_str().unwrap().to_string();
+            m.save(&store.lock().unwrap()).unwrap();
+            save_list(&store.lock().unwrap(), TASKS_KEY, &[json!({ "id": "task-2", "runId": a, "status": "pending" })]).unwrap();
+            (a, b)
+        };
+        assert_ne!(run_a, run_b);
+        // term-2 is the pane that runs this command; its secret is "key-b".
+        let by_key = |k: &str| (k == "key-b").then(|| "term-2".to_string());
+        let start = |from: Option<&str>, run: &str| {
+            let mut args = json!({ "run": run, "task": "task-2", "agent": "no-such-agent" });
+            if let Some(f) = from {
+                args["from"] = json!(f);
+            }
+            let req = Request { id: "r".into(), token: String::new(), command: WORKER_START.into(), cwd: dir.display().to_string(), args, pane: Some(Pane { handle: "term-2".into(), key: "key-b".into() }), cli: String::new(), arrived: None };
+            worker_start_with(&ctx, &req, &by_key).unwrap_err()
+        };
+        let e = start(Some("term-1"), &run_a);
+        assert_eq!(e.code, "caller_mismatch", "{}", e.message);
+        assert!(e.message.contains("term-2") && e.message.contains("term-1"), "{}", e.message);
+        // Naming itself is a fine caller; Run A is not its Run, so the Run check turns it away.
+        let e = start(Some("term-2"), &run_a);
+        assert_ne!(e.code, "caller_mismatch", "{}", e.message);
+        assert!(!e.message.contains("Kolux knows no agent"), "turned away before the agent is looked up: {}", e.message);
         drop(ctx);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);

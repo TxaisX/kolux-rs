@@ -184,11 +184,9 @@ pub fn run() {
             #[cfg(debug_assertions)]
             dev_inject()?;
             let store = Store::open(&dir)?;
-            // SKILL-023: an interrupted skill delete is undone or completed, under the skill lock, so a
-            // second instance never puts back a delete the first one is still running.
-            if let Ok(_one) = skill_delete::lock(&dir) {
-                skill_delete::recover(&dir);
-            }
+            // SKILL-023: an interrupted skill delete is undone or completed under the skill lock (a busy
+            // lock or a lock that cannot be opened is logged; the latter still recovers).
+            skill_delete::startup_recover(&dir);
             let starts: u64 = store.get("start_count")?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
             store.set("start_count", &starts.to_string())?;
             onboarding::first_start(&store, starts)?;
@@ -542,6 +540,7 @@ pub fn run() {
             files::file_pick,
             files::md_list,
             editor_search::editor_search,
+            editor_search::editor_search_cancel,
             skills::skills_scan,
             skill_delete::skills_delete_plan,
             skill_delete::skills_delete,

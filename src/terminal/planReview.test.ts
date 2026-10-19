@@ -208,3 +208,16 @@ test("SAFE-004: the pane re-asks while the paste goes in → Enter is held back"
   expect(await startFeedback("x", s).done).toEqual({ outcome: "still-asking", answered: true, typed: true });
   expect(log).toEqual(["no", "type:x", "wait:300"]);
 });
+
+test("SAFE-004: a paste that did not reach the pane is never followed by Enter; a failed Enter is not a send", async () => {
+  // Stand-in review of lane/marks 243736d, AFTER 11: the window swallowed a failed write, so the job
+  // took the text as typed and pressed Enter on an empty prompt. A write now says false when it failed.
+  let log: Log = [];
+  const failedPaste = { ...steps(log), type: async (t: string) => (log.push(`type:${t}`), false) };
+  expect(await startFeedback("x", failedPaste).done).toEqual({ outcome: "write-failed", answered: true, typed: false });
+  expect(log).toEqual(["no", "type:x"]);
+  log = [];
+  const failedEnter = { ...steps(log), enter: async () => (log.push("enter"), false) };
+  expect(await startFeedback("x", failedEnter).done).toEqual({ outcome: "write-failed", answered: true, typed: true });
+  expect(log).toEqual(["no", "type:x", "wait:300", "enter"]);
+});

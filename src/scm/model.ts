@@ -331,25 +331,46 @@ export type Drawn = { filter?: string; tree?: Set<string> | null };
  * (conflicts at CONFLICT_CAP), and the tree view runs folders first and skips closed folders' files,
  * so a Shift-click span never takes in a row the user cannot see. Without `drawn`, every row counts
  * (the review prompt). A file with staged and unstaged parts sits in two sections and is one selection. */
-export const rowOrder = (s: Status, order?: unknown, drawn?: Drawn): string[] => {
-  const paths: string[] = [];
+export const rowOrder = (s: Status, order?: unknown, drawn?: Drawn): string[] => [...new Set(rowKeys(s, order, drawn).map((k) => k.path))];
+
+/** FIX-3 (review FIX-SOON 2): one drawn row. A file with staged and unstaged parts is drawn twice,
+ * once in each section, and the two rows are different places in the list. */
+export type RowKey = { section: "Conflicts" | Section; path: string };
+
+/** FIX-3: every drawn row in drawing order, one key per row, so a file listed in two sections keeps
+ * both positions. `rowOrder` is this list's paths, each once. */
+export const rowKeys = (s: Status, order?: unknown, drawn?: Drawn): RowKey[] => {
+  const keys: RowKey[] = [];
   for (const g of scmGroups(order)) {
     if (g === "conflicts") {
-      paths.push(...(drawn ? capped(s.conflicts, CONFLICT_CAP).shown : s.conflicts).map((c) => c.path));
+      keys.push(...(drawn ? capped(s.conflicts, CONFLICT_CAP).shown : s.conflicts).map((c) => ({ section: "Conflicts" as const, path: c.path })));
       continue;
     }
-    const [name, all] = g === "staged" ? ["Staged", s.staged] : g === "changes" ? ["Changes", s.changed] : ["Untracked", s.untracked];
+    const [name, all] = g === "staged" ? (["Staged", s.staged] as const) : g === "changes" ? (["Changes", s.changed] as const) : (["Untracked", s.untracked] as const);
     if (!drawn) {
-      paths.push(...all.map((c) => c.path));
+      keys.push(...all.map((c) => ({ section: name, path: c.path })));
       continue;
     }
     const shown = capped(filterRows(all, drawn.filter ?? ""), SECTION_CAP).shown;
     if (drawn.tree) {
       const closed = new Set([...drawn.tree].filter((k) => k.startsWith(name + "/")).map((k) => k.slice(name.length + 1)));
-      paths.push(...fileTree(shown, closed).flatMap((i) => (i.kind === "file" ? [i.change.path] : [])));
-    } else paths.push(...shown.map((c) => c.path));
+      keys.push(...fileTree(shown, closed).flatMap((i) => (i.kind === "file" ? [{ section: name, path: i.change.path }] : [])));
+    } else keys.push(...shown.map((c) => ({ section: name, path: c.path })));
   }
-  return [...new Set(paths)];
+  return keys;
+};
+
+/** FIX-3: `select` for clicks on drawn rows. A Shift span runs between the two clicked ROWS (their
+ * own sections, so a partly staged file does not pull in rows outside the two clicks) and takes
+ * those rows' paths; every other mode is `select` on paths. */
+export const selectRows = (selected: string[], keys: RowKey[], target: RowKey, mode: SelectMode, anchor: RowKey | null): string[] => {
+  const at = (k: RowKey) => keys.findIndex((x) => x.section === k.section && x.path === k.path);
+  const paths = [...new Set(keys.map((k) => k.path))];
+  if (mode === "span" && anchor !== null && at(anchor) >= 0 && at(target) >= 0) {
+    const [a, b] = [at(anchor), at(target)].sort((x, y) => x - y);
+    return [...new Set(keys.slice(a, b + 1).map((k) => k.path))];
+  }
+  return select(selected, paths, target.path, mode, anchor?.path ?? null);
 };
 
 export type SelectMode = "one" | "toggle" | "span";

@@ -18,8 +18,9 @@ WHAT THE USER CAN NOW DO
   hidden copy that no record names. The not-done record stays, so the next start (or the next delete,
   which runs recover first) puts it back. The message says so: "...what was already moved is put back
   at the next start".
-- (4) src-tauri/Cargo.toml says rust-version = "1.89", the first Rust with File::try_lock. An older
-  toolchain now gets a clear "requires rustc 1.89" message instead of an unstable-feature error.
+- (4) src-tauri/Cargo.toml says rust-version = "1.90". (Corrected in FIX-3: this text first said 1.89,
+  where File::try_lock became stable, but the locked tauri crates need 1.90, so 1.90 is the real floor.)
+  An older toolchain gets a clear "requires rustc 1.90" message instead of an unstable-feature error.
 - (5) Startup recovery runs only while holding the skill lock, so a second instance cannot put back a
   delete the first is still running. This is lib.rs, so it is in the same coordinator patch.
 - (7, AFTER) The lock test that only shows exclusivity between two handles is renamed

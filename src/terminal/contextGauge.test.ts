@@ -42,3 +42,11 @@ test("a Codex pane's gauge says Codex does not report its context, not that a fi
   expect(html).not.toContain("first status report");
   expect(html).not.toContain("nothing received yet");
 });
+
+test("the tint follows the real figure, not the rounded one (USAGE-001)", () => {
+  // Stand-in review of lane/marks 243736d, AFTER 9: 90.4% is beyond 90 and 69.6% is below 70.
+  expect(gauge(90.4)).toContain('class="gauge danger"');
+  expect(gauge(90.4)).toContain(">90%<");
+  expect(gauge(69.6)).toContain('class="gauge"');
+  expect(gauge(69.6)).toContain(">70%<");
+});

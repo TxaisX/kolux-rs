@@ -134,7 +134,7 @@ import ToolNotices from "./launch/ToolNotices";
 import { AgentsChat } from "./chat/ChatView";
 import { useTeamsHost, withTeams } from "./launch/teams";
 import { answered as cardAnswered, hearStates, hearingNow, holdFor, outcomeNote, pasteToPane, setHooksOn, writeTerminal } from "./chat/send";
-import { copyPrompt, hooksAbsent, kitTickEntry, kitWait, sendPrompt } from "./chat/kitPrompt";
+import { copyPrompt, hooksAbsent, kitTickEntry, kitWait, noticeSeen, sendPrompt } from "./chat/kitPrompt";
 import { KitPromptNotices } from "./chat/KitNotice";
 import PlanSheet from "./terminal/PlanSheet";
 import { draftKey, feedbackMessage, keepDraft, showsReview, startFeedback, stillPending, type PendingSend, type PlanDraft } from "./terminal/planReview";
@@ -1080,9 +1080,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
 
   // PROJ-038: the agent is the new workspace's first tab, started with its prompt; nothing else
   // opens there. Shown only when the sidebar says the user has not moved on.
-  const startIn = async (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean, extra: string[] = [], title?: string): Promise<number | null> => {
+  const startIn = async (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean, extra: string[] = [], title?: string, dispatch?: string): Promise<number | null> => {
     try {
-      return await openIn(agent, dir, branch, prompt, show, extra, title);
+      return await openIn(agent, dir, branch, prompt, show, extra, title, dispatch);
     } catch (err) {
       setNotice(String(err));
       return null;
@@ -1090,11 +1090,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   };
   // The start itself; it throws when the start line or the folder's trust cannot be set up, so a
   // caller that reports its own failure (VIEW-069) can say what did not start.
-  const openIn = async (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean, extra: string[] = [], title?: string) => {
+  // T-172-e: `dispatch` (a worker start) goes into the session's environment, so Kolux can tell the
+  // worker's own session from a tab the user opens in the same folder.
+  const openIn = async (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean, extra: string[] = [], title?: string, dispatch?: string) => {
     await pretrust(agent.id, [dir]);
     const line = await invoke<StartLine>("agent_start_line", { id: agent.id, extra, prompt });
     const key = nextKey.current++;
-    const pane: Pane = { key, cwd: dir, branch, agent: markFor(agent.id), agentId: agent.id, program: line.program ?? agent.program, args: line.args, env: line.env, title, typed: line.typed ?? undefined };
+    const pane: Pane = { key, cwd: dir, branch, agent: markFor(agent.id), agentId: agent.id, program: line.program ?? agent.program, args: line.args, env: dispatch ? [...line.env, ["KOLUX_DISPATCH_ID", dispatch]] : line.env, title, typed: line.typed ?? undefined };
     // TERM-007: an empty pane in that workspace takes the session; else it gets a cell of its own.
     setPanes((ps) => {
       const free = freeCell(cellsOf(panesIn(ps, dir)));
@@ -1299,7 +1301,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       if (p.kind === "start") {
         const a = agents.find((x) => x.id === p.agent);
         if (a)
-          void cli.current.startIn(a, p.path, p.branch, p.prompt, false, p.extra, p.title ?? undefined).then((key) => {
+          void cli.current.startIn(a, p.path, p.branch, p.prompt, false, p.extra, p.title ?? undefined, p.dispatch).then((key) => {
             // AUTO-013: an automation run remembers its pane, so View run opens that terminal.
             if (key !== null && p.runId) runPanes.current[p.runId] = key;
           });
@@ -1442,6 +1444,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // Stand-in review of 1e9613e, FIX-SOON 2: hooks off in Settings drop the chat's readings.
   useEffect(() => setHooksOn(hooksOn(settings)), [settings]);
   const sending = useRef(false);
+  // Stand-in review of 38be105, FIX-SOON 3: a kit notice is seen in place only on the terminals screen with no page open.
+  const kitScreenRef = useRef(false);
+  kitScreenRef.current = screen === "terminals" && page === null;
   const pendingKits = Object.values(kitRuns.current).some((r) => r.waiting.length > 0);
   useEffect(() => {
     if (!pendingKits) return;
@@ -1464,8 +1469,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             await kitTickEntry(run, w, {
               now: Date.now(),
               why: () => holdFor(w.key, toPane.stateOf, id),
-              absent: hooksAbsent(panesRef.current.find((x) => x.key === w.key)?.agent, hooksOn(settings)),
-              here: sameDir(dir, activeRef.current),
+              absent: hooksAbsent(panesRef.current.find((x) => x.key === w.key)?.agent, hooksOn(settings), panesRef.current.find((x) => x.key === w.key)?.agentId),
+              here: noticeSeen(sameDir(dir, activeRef.current), kitScreenRef.current, false),
               paste: () =>
                 pasteToPane(w.key, w.prompt, toPane, true).catch((err) => {
                   console.warn(`kit: ${String(err)}`);
@@ -1483,7 +1488,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     void tick();
     const t = window.setInterval(() => void tick(), 10_000);
     return () => window.clearInterval(t);
-  }, [pendingKits, kitTick, running, needs, settings]);
+  }, [pendingKits, kitTick, running, needs, settings, screen, page]);
 
   // TERM-014: closing a pane ends its program (the pane's own cleanup kills it); the next tab of
   // its cell takes over, else the neighbouring cells take the space; closing the last pane leaves
@@ -1772,9 +1777,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     if (!planLive(p, plan)) return;
     const key = draftKey(p.key, plan);
     const d = planDrafts[key] ?? { comments: [], note: "" };
+    // A write that did not reach the pane says false, so a failed paste is never followed by Enter.
     const write = (data: string) => {
       const id = ptys.current[p.key];
-      return id === undefined ? Promise.resolve() : invoke("terminal_write", { id, data }).then(() => {}, () => {});
+      return id === undefined ? Promise.resolve(false) : invoke("terminal_write", { id, data }).then(() => true, () => false);
     };
     // SAFE-004 / T-032-b: the send runs as a job (planReview) that the sheet can cancel until Enter.
     const job = startFeedback(feedbackMessage(d.comments, d.note), {
@@ -1807,6 +1813,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       setHook((h) => ({ ...h, [p.key]: "working" }));
       setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
     } else if (outcome === "no-answer") setToast("Kolux could not answer the agent. Answer it in its terminal; your feedback was not typed.");
+    else if (outcome === "write-failed") setToast(typed ? "Kolux could not press Enter in the agent's terminal: your feedback is typed but was not sent." : "Kolux could not type into the agent's terminal: Claude's plan prompt was dismissed and your feedback was not typed.");
     else if (outcome === "still-asking") setToast(`The agent is still asking. Answer it in its terminal; your feedback was not ${typed ? "sent" : "typed"}.`);
     else if (outcome === "cancelled" && answered) setToast(typed ? "Cancelled before sending: your feedback is typed in the agent's prompt but was not sent." : "Cancelled: Claude's plan prompt was dismissed and your feedback was not typed.");
   };
@@ -2300,7 +2307,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           )}
           {screen === "skills" && <SkillsPage workspace={activeDir} onClose={() => closeSkills(setScreen)} />}
           {inbox && <InboxView items={inboxItems(sources, now)} now={now} onOpen={openPane} />}
-          {screen === "agents" && <AgentsChat panes={panes.filter((p) => !p.kind && !p.seats).map((p) => ({ key: p.key, cwd: p.cwd, title: p.title, program: p.program }))} focused={selected ?? focused} ptyOf={(k) => ptys.current[k]} hook={hook} stateOf={(k) => hookRef.current[k]} onPick={(key) => {
+          {screen === "agents" && <AgentsChat taskOf={(k) => workerNames[`term-${ptys.current[k]}`]} panes={panes.filter((p) => !p.kind && !p.seats).map((p) => ({ key: p.key, cwd: p.cwd, title: p.title, program: p.program }))} focused={selected ?? focused} ptyOf={(k) => ptys.current[k]} hook={hook} stateOf={(k) => hookRef.current[k]} onPick={(key) => {
                 setAgentSel(key);
                 setFocused(key);
               }} />}
