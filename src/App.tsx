@@ -43,7 +43,7 @@ import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } 
 import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./projects/WorktreePalette";
 import { navTarget, travel, visit, type Place } from "./projects/nav";
 import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
-import BrowserPane, { OPEN_IN_BROWSER } from "./browser/BrowserPane";
+import BrowserPane, { OPEN_IN_BROWSER, openInBrowser } from "./browser/BrowserPane";
 import { chordPlan } from "./browser/chord";
 import { writerOf } from "./scm/generate";
 import EditorPane, { editors } from "./editor/EditorPane";
@@ -135,6 +135,7 @@ import { useWizard } from "./onboarding/useWizard";
 import { hooksOn } from "./settings/AgentsPage";
 import ToolNotices from "./launch/ToolNotices";
 import { AgentsChat } from "./chat/ChatView";
+import { answeredElsewhere } from "./chat/ask";
 import { useTeamsHost, withTeams } from "./launch/teams";
 import { answered as cardAnswered, hearStates, hearingNow, holdFor, outcomeNote, pasteToPane, setHooksOn, writeTerminal } from "./chat/send";
 import { copyPrompt, hooksAbsent, kitTickEntry, kitWait, noticeSeen, sendPrompt } from "./chat/kitPrompt";
@@ -886,12 +887,17 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
 
   // EDIT-001: a file opens as a tab beside the focused pane; a file already open in that cell
   // comes to the front instead of opening twice.
-  const openFile = (path: string) => {
+  const openFile = (path: string, line?: number) => {
     const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
     const same = here && panes.find((p) => p.kind === "editor" && groupOf(p) === groupOf(here) && keyOf(p.path ?? "") === keyOf(path));
-    if (same) return setFocused(same.key);
+    // CHAT-025: a file link names a line; the pane keeps it as `jump` (the editor pane reads it once it takes that prop).
+    const jump = typeof line === "number" ? { line, at: Date.now() } : undefined;
+    if (same) {
+      if (jump) setPanes((ps) => ps.map((p) => (p.key === same.key ? { ...p, jump } : p)));
+      return setFocused(same.key);
+    }
     const key = nextKey.current++;
-    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "editor", path }]);
+    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "editor", path, jump }]);
     setFocused(key);
   };
 
@@ -1774,6 +1780,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // Council FIX-3 (FS2): the pane takes the state Kolux resolved after the answer (still "permission"
   // while a second sub-agent asks), unless a newer hook event came in meanwhile.
   const answer = (p: Pane, approve: boolean) => {
+    answeredElsewhere(p.key); // chat review FIX-BEFORE 1: the chat card must not answer the same prompt again
     const since = hearingNow();
     return invoke<AgentState | null>("agent_answer", { paneKey: p.key, agent: p.agent, approve })
       .then((now) => {
@@ -1810,6 +1817,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       // Council FIX-3 (FS2): the pane takes the state Kolux resolved after the deny, unless a newer hook event came in.
       deny: () => {
         const since = hearingNow();
+        answeredElsewhere(p.key); // chat review FIX-BEFORE 1
         return invoke<AgentState | null>("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).then(
           (now) => {
             const state = typeof now === "string" ? now : "working";
@@ -2330,7 +2338,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           )}
           {screen === "skills" && <SkillsPage workspace={activeDir} onClose={() => closeSkills(setScreen)} />}
           {inbox && <InboxView items={inboxItems(sources, now)} now={now} onOpen={openPane} />}
-          {screen === "agents" && <AgentsChat taskOf={(k) => workerNames[`term-${ptys.current[k]}`]} panes={panes.filter((p) => !p.kind && !p.seats).map((p) => ({ key: p.key, cwd: p.cwd, title: p.title, program: p.program }))} focused={selected ?? focused} ptyOf={(k) => ptys.current[k]} hook={hook} stateOf={(k) => hookRef.current[k]} onPick={(key) => {
+          {screen === "agents" && <AgentsChat open={{ onOpenFile: (path, line) => openFile(path, line), onOpenLink: openInBrowser, inKolux: settings.linksOpenInKolux === true, onReview: (k, plan, cut) => setReviewing({ key: k, plan, cut }) }} taskOf={(k) => workerNames[`term-${ptys.current[k]}`]} panes={panes.filter((p) => !p.kind && !p.seats).map((p) => ({ key: p.key, cwd: p.cwd, title: p.title, program: p.program }))} focused={selected ?? focused} ptyOf={(k) => ptys.current[k]} hook={hook} stateOf={(k) => hookRef.current[k]} onPick={(key) => {
                 setAgentSel(key);
                 setFocused(key);
               }} />}
