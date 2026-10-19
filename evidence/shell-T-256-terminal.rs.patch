@@ -1,24 +1,95 @@
 diff --git a/src-tauri/src/terminal.rs b/src-tauri/src/terminal.rs
-index 8081ef95..b163b887 100644
+index 8081ef95..c688f05c 100644
 --- a/src-tauri/src/terminal.rs
 +++ b/src-tauri/src/terminal.rs
-@@ -577,6 +577,8 @@ impl Terminals {
-         // APP-041: each session's start and end go to the app's own log (no arguments: they may carry secrets).
-         let log_dir = app.path().app_data_dir().ok();
-         let exit_dir = log_dir.clone();
+@@ -550,7 +550,7 @@ impl Terminals {
+     /// Starts a pane. With no `program` it runs the user's shell; with one (an agent such as
+     /// `claude`) it runs that program directly with `args`, in `cwd`.
+     #[allow(clippy::too_many_arguments)]
+-    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>, own_env: Vec<(String, String)>, env: Vec<(String, String)>, pane_key: Option<u32>, shell: Option<(String, Vec<String>)>) -> Result<u32, String> {
++    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>, own_env: Vec<(String, String)>, env: Vec<(String, String)>, pane_key: Option<u32>, shell: Option<(String, Vec<String>)>, per_worktree_history: bool) -> Result<u32, String> {
+         // TERM-115: a pane's Ctrl+C must reach its program. Windows hands "ignore Ctrl+C" down to
+         // every child a process starts, and this app is itself started with CREATE_NEW_PROCESS_GROUP
+         // (by `kolux-dev`, and by the dev runner), so its shells never saw the interrupt: the pty got
+@@ -570,12 +570,24 @@ impl Terminals {
+         if let Some(dir) = cwd.as_deref() {
+             check_start_dir(dir, program.as_deref().map(str::trim).is_some_and(|p| !p.is_empty() && !is_shell_program(p)))?;
+         }
++        // ACCT-046: a program runs as asked; a shell pane has a line of fallbacks behind the
++        // chosen default shell (SET-026), when there is one.
++        let mut commands = match program.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
++            Some(p) => vec![program_command(p, &args, cwd.as_deref())],
++            None => shell_commands(cwd.as_deref(), shell),
++        };
++        // APP-041: each session's start and end go to the app's own log (no arguments: they may carry secrets).
++        let log_dir = app.path().app_data_dir().ok();
 +        // TERM-119: a bash, zsh or fish shell keeps its history per worktree unless the user turned that off.
-+        let per_worktree_history = app.state::<Mutex<crate::state::Store>>().lock().map_or(true, |s| crate::shell_history::enabled(&s.settings()));
++        // The disk work is done here, before the lock, so a slow folder holds up only this pane.
++        let history_vars = match log_dir.as_deref().filter(|_| per_worktree_history) {
++            Some(dir) => crate::shell_history::plan(&commands, dir, crate::shell_history::system_fish_dir(), &|name| own_env.iter().chain(env.iter()).any(|(k, _)| k == name)),
++            None => vec![None; commands.len()],
++        };
+         let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
+         inner.next_id += 1;
+         let id = inner.next_id;
+         let out_app = app.clone();
+-        // APP-041: each session's start and end go to the app's own log (no arguments: they may carry secrets).
+-        let log_dir = app.path().app_data_dir().ok();
+         let exit_dir = log_dir.clone();
          let history = pane_key.and_then(|k| log_dir.as_deref().and_then(|d| History::open(d, k)));
          let label = program.clone().unwrap_or_else(|| "shell".to_string());
-         let exit_app = app;
-@@ -644,6 +646,10 @@ impl Terminals {
+@@ -587,15 +599,9 @@ impl Terminals {
+         // GIT-026: a pull-request link printed in any pane, hidden or parked ones too, attaches to its workspace.
+         let mut prs = crate::scm::PrScan::default();
+         let link_dir = cwd.clone();
+-        // ACCT-046: a program runs as asked; a shell pane has a line of fallbacks behind the
+-        // chosen default shell (SET-026), when there is one.
+-        let mut commands = match program.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+-            Some(p) => vec![program_command(p, &args, cwd.as_deref())],
+-            None => shell_commands(cwd.as_deref(), shell),
+-        };
+         let key = crate::cli::secret();
+         let strip_key = crate::claude_key::strip_inherited(program.as_deref(), &env);
+-        for command in commands.iter_mut() {
++        for (command, history_var) in commands.iter_mut().zip(history_vars) {
+             // ACCT-048: an ordinary terminal's environment: none of Kolux's own runtime or build
+             // variables, no conda activation that came along only in part, no prompt-theme wizard.
+             for (k, _) in std::env::vars_os() {
+@@ -644,6 +650,10 @@ impl Terminals {
              for (k, v) in &env {
                  command.env(k, v);
              }
-+            // TERM-119: after the user's own variables, so a history file they set is kept.
-+            if let Some(dir) = log_dir.as_deref().filter(|_| per_worktree_history) {
-+                crate::shell_history::apply(command, dir);
++            // TERM-119: after the user's own variables, so a history they chose is kept.
++            if let Some((k, v)) = history_var {
++                command.env(k, v);
 +            }
          }
          let flow = Arc::new(Flow::default());
          let out_flow = flow.clone();
+@@ -1061,7 +1071,7 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
+     let env_own = env.unwrap_or_default();
+     let pinned = resumed.is_some();
+     #[allow(clippy::type_complexity)]
+-    let (env, cap, account, hooks_on, plain): (Vec<(String, String)>, bool, Option<String>, bool, Option<serde_json::Value>) = {
++    let (env, cap, account, hooks_on, plain, per_worktree_history): (Vec<(String, String)>, bool, Option<String>, bool, Option<serde_json::Value>, bool) = {
+         let store = store.lock().map_err(|e| e.to_string())?;
+         let settings = store.settings();
+         // SET-026: a plain new terminal opens in the chosen default shell; the search for it on
+@@ -1080,7 +1090,7 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
+             .map(|(k, v)| (k.to_string(), v))
+             .into_iter()
+             .collect();
+-        (env, crate::cap::on(&settings), used, crate::hooks::agent_hooks::switch::on(&settings), plain)
++        (env, crate::cap::on(&settings), used, crate::hooks::agent_hooks::switch::on(&settings), plain, crate::shell_history::enabled(&settings))
+     };
+     let shell = plain.and_then(|s| crate::pty::default_shell(&s));
+     // ACCT-024: on a managed Claude account, the user's own settings may not sign the pane in.
+@@ -1128,7 +1138,7 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
+     // cli FIX-7: the last such entry in the environment names the dispatch (the window appends its own).
+     // cli FIX-8: spawn_stamped reads it before the environment is handed over and stamps the new
+     // session once the spawn succeeded (cli.rs fix8_d).
+-    let id = crate::cli::spawn_stamped(crate::cli::dispatch_in(&env_own), || terminals.spawn(app.clone(), cols, rows, cwd, program, args, env_own, env, pane_key, shell))?;
++    let id = crate::cli::spawn_stamped(crate::cli::dispatch_in(&env_own), || terminals.spawn(app.clone(), cols, rows, cwd, program, args, env_own, env, pane_key, shell, per_worktree_history))?;
+     // AUTO-012: an automation run dispatched to this worktree for this agent is followed here.
+     if let Some(dir) = dir {
+         crate::automations::follow(&app, |s| crate::automations::claim(s, id, pane_key, &dir, agent));

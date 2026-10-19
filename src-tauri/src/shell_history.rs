@@ -112,9 +112,18 @@ pub fn fish_dir(xdg_data_home: Option<OsString>, home: Option<PathBuf>) -> Optio
     xdg_data_home.filter(|d| !d.is_empty()).map(|d| PathBuf::from(d).join("fish")).or_else(|| home.map(|h| h.join(".local/share/fish")))
 }
 
+/// The fish session for a worktree key. Fish takes only letters, digits and underscores in a session
+/// name (anything else makes it print an error and use the shared history), so the key's `-` becomes
+/// `_`; the key's parts are alphanumeric, which keeps `sweep` able to undo that.
+fn fish_session(data: &Path, key: &str) -> String {
+    format!("{FISH_PREFIX}{}_{}", build_tag(data), key.replace('-', "_"))
+}
+
 /// The variable a pane's shell gets, when it is one of the three and nothing has chosen its history
-/// already: `(name, value)`. The worktree's folder and its record are made as a side effect.
-fn history_var(command: &CommandBuilder, data: &Path) -> Option<(&'static str, OsString)> {
+/// already: `(name, value)`. `chosen` says whether a variable of that name is set somewhere the command
+/// does not show yet (the pane's own variables). The worktree's folder and its record are made as a
+/// side effect: this is the disk work, so it is done before anything is locked.
+fn history_var(command: &CommandBuilder, data: &Path, chosen: &dyn Fn(&str) -> bool) -> Option<(&'static str, OsString)> {
     let argv0 = command.get_argv().first()?;
     let kind = kind_of(Path::new(argv0))?;
     let name = match kind {
@@ -122,7 +131,7 @@ fn history_var(command: &CommandBuilder, data: &Path) -> Option<(&'static str, O
         Kind::Fish => "fish_history",
     };
     // A history the user set is respected. An empty value is a choice too (bash keeps no file then).
-    if command.get_env(name).is_some() {
+    if command.get_env(name).is_some() || chosen(name) {
         return None;
     }
     let cwd = command.get_cwd().map(PathBuf::from)?;
@@ -137,7 +146,7 @@ fn history_var(command: &CommandBuilder, data: &Path) -> Option<(&'static str, O
     Some(match kind {
         Kind::Bash => (name, shell_path(&dir.join("bash_history"))),
         Kind::Zsh => (name, shell_path(&dir.join("zsh_history"))),
-        Kind::Fish => (name, format!("{FISH_PREFIX}{}_{key}", build_tag(data)).into()),
+        Kind::Fish => (name, fish_session(data, &key).into()),
     })
 }
 
@@ -146,14 +155,20 @@ fn normal_record(root: &Path) -> String {
     root.to_string_lossy().trim_start_matches(r"\\?\").to_string()
 }
 
-/// Scopes this pane's history to its worktree. Call it on each shell command before it starts, after
-/// the pane's own variables are on the command; does nothing for another shell, when the user chose a
-/// history, or when the folder cannot be made. The first call in a run also starts the sweep.
-pub fn apply(command: &mut CommandBuilder, data: &Path) {
-    sweep_once(data);
-    if let Some((name, value)) = history_var(command, data) {
-        command.env(name, value);
-    }
+/// The history variable for each command a pane may start, in order (`None` for another shell, when
+/// the user chose a history, or when the folder cannot be made). `chosen` says whether the user's own
+/// variables for the pane set a name. All the disk work is here, so call it before the registry of
+/// panes is locked; the caller then only sets the variable (`command.env(name, value)`) on its command,
+/// after the pane's own variables. The first call in a run also starts the sweep over `data` and the
+/// fish folder `fish`.
+pub fn plan(commands: &[CommandBuilder], data: &Path, fish: Option<PathBuf>, chosen: &dyn Fn(&str) -> bool) -> Vec<Option<(&'static str, OsString)>> {
+    sweep_once(data, fish);
+    commands.iter().map(|c| history_var(c, data, chosen)).collect()
+}
+
+/// The folder where this machine's fish keeps its sessions, from the process's own environment.
+pub fn system_fish_dir() -> Option<PathBuf> {
+    fish_dir(std::env::var_os("XDG_DATA_HOME"), crate::pty::home_dir())
 }
 
 /// Removes what a deleted worktree left: its history folder in `data`, and the fish session of any
@@ -179,8 +194,9 @@ pub fn sweep(data: &Path, fish: Option<&Path>) -> usize {
     if let Some(fish) = fish {
         for e in std::fs::read_dir(fish).into_iter().flatten().flatten() {
             let name = e.file_name().to_string_lossy().to_string();
-            let Some(key) = name.strip_prefix(&prefix).and_then(|n| n.strip_suffix("_history")) else { continue };
-            if !base.join(key).is_dir() && std::fs::remove_file(e.path()).is_ok() {
+            // `<tail>_<hex>` back to the folder's `<tail>-<hex>`; both parts are alphanumeric.
+            let Some((tail, hex)) = name.strip_prefix(&prefix).and_then(|n| n.strip_suffix("_history")).and_then(|n| n.rsplit_once('_')) else { continue };
+            if !base.join(format!("{tail}-{hex}")).is_dir() && std::fs::remove_file(e.path()).is_ok() {
                 removed += 1;
             }
         }
@@ -189,11 +205,10 @@ pub fn sweep(data: &Path, fish: Option<&Path>) -> usize {
 }
 
 /// The start-up sweep: once per run, off the thread that opens the pane.
-fn sweep_once(data: &Path) {
+fn sweep_once(data: &Path, fish: Option<PathBuf>) {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
         let data = data.to_path_buf();
-        let fish = fish_dir(std::env::var_os("XDG_DATA_HOME"), crate::pty::home_dir());
         std::thread::spawn(move || {
             sweep(&data, fish.as_deref());
         });
@@ -212,6 +227,11 @@ mod tests {
         c.env_remove("fish_history");
         c.cwd(cwd);
         c
+    }
+
+    /// Nothing is chosen by the pane's own variables.
+    fn none(_: &str) -> bool {
+        false
     }
 
     fn worktree(parent: &Path, name: &str) -> PathBuf {
@@ -254,7 +274,7 @@ mod tests {
         let data = t.join("data");
         let a = worktree(&t, "a");
         let b = worktree(&t, "b");
-        let var = |prog: &str, wt: &Path| history_var(&shell(prog, wt), &data).unwrap();
+        let var = |prog: &str, wt: &Path| history_var(&shell(prog, wt), &data, &none).unwrap();
         let (name, bash_a) = var("bash", &a);
         let (_, bash_b) = var("bash.exe", &b);
         assert_eq!(name, "HISTFILE");
@@ -270,7 +290,10 @@ mod tests {
         assert_eq!(name, "fish_history");
         assert_ne!(fish_a, fish_b);
         let fish_a = fish_a.to_string_lossy().to_string();
-        assert!(fish_a.starts_with("kolux_") && fish_a.ends_with(&key(&a)), "{fish_a}");
+        // Fish takes a session name only when it is letters, digits and underscores; any other name
+        // makes it print an error and fall back to the shared history.
+        assert!(fish_a.starts_with("kolux_") && !fish_a.is_empty() && fish_a.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'), "{fish_a}");
+        assert!(fish_a.ends_with(&key(&a).replace('-', "_")), "{fish_a}");
         // The folder and its record are there, and the record names the worktree.
         let dir = data.join(DIR).join(key(&a));
         assert_eq!(normal(Path::new(std::fs::read_to_string(dir.join(RECORD)).unwrap().trim())), normal(&a));
@@ -282,7 +305,7 @@ mod tests {
         let data = t.join("data");
         let a = worktree(&t, "a");
         for prog in ["cmd.exe", "powershell.exe", "pwsh", "sh", "nu", "wsl.exe", r"C:\Windows\System32\bash.exe", "claude"] {
-            assert!(history_var(&shell(prog, &a), &data).is_none(), "{prog}");
+            assert!(history_var(&shell(prog, &a), &data, &none).is_none(), "{prog}");
         }
         assert!(!data.exists(), "nothing is made for a shell that is left alone");
     }
@@ -292,24 +315,37 @@ mod tests {
         let t = temp("term119-user");
         let data = t.join("data");
         let a = worktree(&t, "a");
-        let mut bash = shell("bash", &a);
-        bash.env("HISTFILE", "/home/me/.my_history");
-        apply(&mut bash, &data);
-        assert_eq!(bash.get_env("HISTFILE").unwrap(), "/home/me/.my_history");
-        let mut fish = shell("fish", &a);
-        fish.env("fish_history", "mine");
-        apply(&mut fish, &data);
-        assert_eq!(fish.get_env("fish_history").unwrap(), "mine");
-        // Left empty on purpose is a choice as well.
-        let mut zsh = shell("zsh", &a);
-        zsh.env("HISTFILE", "");
-        apply(&mut zsh, &data);
-        assert_eq!(zsh.get_env("HISTFILE").unwrap(), "");
-        assert!(!data.join(DIR).exists());
-        // Without a choice, apply sets it.
-        let mut plain = shell("bash", &a);
-        apply(&mut plain, &data);
-        assert!(plain.get_env("HISTFILE").unwrap().to_string_lossy().contains(&key(&a)));
+        // Set on the command itself (the environment the pane starts from).
+        for (prog, name) in [("bash", "HISTFILE"), ("fish", "fish_history"), ("zsh", "HISTFILE")] {
+            let mut c = shell(prog, &a);
+            // An empty value is a choice as well.
+            c.env(name, "");
+            assert!(history_var(&c, &data, &none).is_none(), "{prog}");
+        }
+        // Set in the pane's own variables, which are put on the command later.
+        let own = |k: &str| k == "HISTFILE";
+        assert!(history_var(&shell("bash", &a), &data, &own).is_none());
+        assert!(!data.join(DIR).exists(), "no folder is made when the user chose");
+        assert!(history_var(&shell("fish", &a), &data, &own).is_some(), "fish has its own variable");
+        // Without a choice, the variable names this worktree.
+        let (name, v) = history_var(&shell("bash", &a), &data, &none).unwrap();
+        assert!(name == "HISTFILE" && v.to_string_lossy().contains(&key(&a)));
+    }
+
+    #[test]
+    fn term119_plan_gives_each_command_its_own_answer_and_reads_no_home_folder() {
+        let t = temp("term119-plan");
+        let data = t.join("data");
+        let a = worktree(&t, "a");
+        let cmds = [shell("bash", &a), shell("cmd.exe", &a), shell("fish", &a)];
+        // No fish folder is passed, so the start-up sweep reads nothing outside the temp folder.
+        let got = plan(&cmds, &data, None, &none);
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0].as_ref().map(|v| v.0), Some("HISTFILE"));
+        assert!(got[1].is_none());
+        assert_eq!(got[2].as_ref().map(|v| v.0), Some("fish_history"));
+        let own = |k: &str| k == "HISTFILE" || k == "fish_history";
+        assert!(plan(&cmds, &data, None, &own).iter().all(Option::is_none));
     }
 
     #[cfg(unix)]
@@ -319,7 +355,7 @@ mod tests {
         let t = temp("term119-private");
         let data = t.join("data");
         let a = worktree(&t, "a");
-        history_var(&shell("bash", &a), &data).unwrap();
+        history_var(&shell("bash", &a), &data, &none).unwrap();
         let mode = std::fs::metadata(data.join(DIR).join(key(&a))).unwrap().permissions().mode();
         assert_eq!(mode & 0o077, 0, "{mode:o}");
     }
@@ -334,7 +370,7 @@ mod tests {
         let dead = worktree(&t, "dead");
         for wt in [&live, &dead] {
             for prog in ["bash", "fish"] {
-                let (_, v) = history_var(&shell(prog, wt), &data).unwrap();
+                let (_, v) = history_var(&shell(prog, wt), &data, &none).unwrap();
                 if prog == "bash" {
                     std::fs::write(Path::new(&v), "echo hi").unwrap();
                 } else {
@@ -343,7 +379,7 @@ mod tests {
             }
         }
         // Another build's session and the user's own sessions are not ours to touch.
-        std::fs::write(fish.join("kolux_ffffff_other-0000000000000000_history"), "x").unwrap();
+        std::fs::write(fish.join("kolux_ffffff_other_0000000000000000_history"), "x").unwrap();
         std::fs::write(fish.join("fish_history"), "x").unwrap();
         std::fs::remove_dir_all(&dead).unwrap();
         // A worktree on a place that is not there at all (an unplugged drive) is kept.
@@ -356,8 +392,8 @@ mod tests {
         assert!(away.is_dir());
         let left: Vec<String> = std::fs::read_dir(&fish).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
         assert_eq!(left.len(), 3, "{left:?}");
-        assert!(left.iter().any(|n| n.ends_with(&format!("{}_history", key(&live)))));
-        assert!(left.contains(&"fish_history".to_string()) && left.contains(&"kolux_ffffff_other-0000000000000000_history".to_string()));
+        assert!(left.iter().any(|n| n.ends_with(&format!("{}_history", key(&live).replace('-', "_")))));
+        assert!(left.contains(&"fish_history".to_string()) && left.contains(&"kolux_ffffff_other_0000000000000000_history".to_string()));
         // Nothing to sweep is not an error.
         assert_eq!(sweep(&t.join("nowhere"), None), 0);
     }
@@ -382,7 +418,7 @@ mod tests {
         if let Some((k, v)) = extra {
             pane.env(k, v);
         }
-        if let Some((k, v)) = history_var(&pane, data) {
+        if let Some((k, v)) = history_var(&pane, data, &none) {
             pane.env(k, v);
         }
         let mut cmd = std::process::Command::new(bash);
