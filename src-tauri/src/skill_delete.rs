@@ -34,9 +34,10 @@ pub const MAX_PICKS: usize = 512;
 /// An install receipt sits next to the skill folder it belongs to, named after it.
 const RECEIPT: &str = ".receipt.json";
 
-/// FIX-8 AFTER 1: a leftover kept because its skills folder is not scanned right now (`Stale`) is
-/// kept through this many start-ups, then dropped from the record and left on disk with the hint
-/// how to clear it by hand, so it neither sits on the record nor fills the log for good.
+/// FIX-8 AFTER 1, FIX-9: a leftover kept because its skills folder is not scanned right now (`Stale`)
+/// is kept through this many start-ups (counted for each leftover), then dropped from the record and
+/// left on disk with the hint how to clear it by hand, so it neither sits on the record nor fills
+/// the log for good.
 const STALE_STARTS: u32 = 5;
 
 #[derive(Serialize, Deserialize, Default)]
@@ -60,10 +61,11 @@ struct Journal {
     /// one puts back only under a live or workspace-shaped folder.
     #[serde(default)]
     roots: Vec<PathBuf>,
-    /// FIX-8 AFTER 1: how many start-ups have seen a kept `Stale` leftover on this record; at
-    /// `STALE_STARTS` such leftovers are dropped. A delete carries it unchanged.
+    /// FIX-8 AFTER 1, FIX-9: for each kept `Stale` leftover (its set-aside path), how many start-ups
+    /// have seen it so; at `STALE_STARTS` it is dropped. A leftover with no entry has been seen 0
+    /// times. A delete carries the counts unchanged; only leftovers still `Stale` keep one.
     #[serde(default)]
-    stale_starts: u32,
+    stale_counts: Vec<(PathBuf, u32)>,
 }
 
 /// Why the record could not be read.
@@ -90,8 +92,8 @@ struct Settled {
     dropped: Vec<(PathBuf, String)>,
     /// Log lines for the entries carried but left alone by this delete; written with `dropped`.
     kept: Vec<String>,
-    /// The record's count of start-ups that saw a kept `Stale` leftover; carried on unchanged.
-    stale_starts: u32,
+    /// The record's per-leftover counts of start-ups that saw it kept as `Stale`; carried on unchanged.
+    stale_counts: Vec<(PathBuf, u32)>,
 }
 
 /// FIX-6 (4), FIX-7: which of the skill folders a record names a recovery may act on.
@@ -238,7 +240,7 @@ pub fn lock(app_dir: &Path) -> Result<OpLock, LockError> {
 /// delete does not scan is carried but left alone, so the next start (which acts on such folders)
 /// clears it. A not-done record that could not be put back is never written over.
 fn settle(app_dir: &Path, live: &[PathBuf]) -> Result<Settled, String> {
-    let mut settled = Settled { carry: vec![], roots: live.to_vec(), live: live.to_vec(), dropped: vec![], kept: vec![], stale_starts: 0 };
+    let mut settled = Settled { carry: vec![], roots: live.to_vec(), live: live.to_vec(), dropped: vec![], kept: vec![], stale_counts: vec![] };
     let trust = Trust::delete(live);
     let path = app_dir.join(JOURNAL);
     if !path.exists() {
@@ -267,7 +269,7 @@ fn settle(app_dir: &Path, live: &[PathBuf]) -> Result<Settled, String> {
                     Verdict::Act => settled.carry.push(aside.clone()),
                 }
             }
-            settled.stale_starts = old.stale_starts;
+            settled.stale_counts = old.stale_counts;
             if !settled.carry.is_empty() {
                 // The carried copies stay under the folders their own delete scanned, as far as
                 // those are skill folders at all (FIX-6 (4)).
@@ -318,17 +320,15 @@ fn in_scanned(trust: &Trust, dir: &Path) -> bool {
 /// Deletes `items` together for a caller that holds the lock and settled the record. Err means
 /// nothing changed.
 fn delete_held(app_dir: &Path, settled: Settled, items: &[PathBuf]) -> Result<Outcome, String> {
-    let Settled { carry, roots, live, dropped, kept, stale_starts } = settled;
+    let Settled { carry, roots, live, dropped, kept, stale_counts } = settled;
     let trust = Trust::delete(&live);
     // FIX-8 AFTER 2: what settling decided is logged on every way out. When the delete stops before
-    // the record is rewritten, the kept lines are still true; the dropped ones are said as pending,
-    // since the record still holds them and the next delete or start drops them.
+    // the record is rewritten, the kept lines are still true and are said here. A refused entry
+    // (`dropped`) is there only because settle's own rewrite of the record failed, and that rewrite
+    // already logged it as "refused to remove ..." (FIX-9 AFTER 2), so it gets no second line.
     let say_pending = || {
         for line in &kept {
             crate::diag::write(app_dir, line);
-        }
-        for (aside, why) in &dropped {
-            crate::diag::write(app_dir, &format!("skill delete: {} stays on the record for now, this delete stopped before rewriting it; the next delete or start takes it off the record and leaves it alone, {why}", aside.display()));
         }
     };
     let stamp = format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
@@ -352,7 +352,7 @@ fn delete_held(app_dir: &Path, settled: Settled, items: &[PathBuf]) -> Result<Ou
         moves.push((item.clone(), parent.join(format!("{ASIDE}{stamp}-{}", name.to_string_lossy()))));
     }
     let fail = |e: std::io::Error| format!("Nothing was deleted: the delete record could not be written ({e})");
-    let mut journal = Journal { done: false, moves, left: carry, roots, stale_starts };
+    let mut journal = Journal { done: false, moves, left: carry, roots, stale_counts };
     if let Err(e) = write(app_dir, &journal) {
         say_pending();
         return Err(fail(e));
@@ -364,11 +364,17 @@ fn delete_held(app_dir: &Path, settled: Settled, items: &[PathBuf]) -> Result<Ou
     for line in &kept {
         crate::diag::write(app_dir, line);
     }
-    #[cfg(test)]
-    run_hook(&BEFORE_RENAMES, app_dir);
     for (i, (from, aside)) in journal.moves.iter().enumerate() {
-        // FIX-8 AFTER 3: immediately before the rename, the folder the item sits in is judged again.
-        let moved = if from.parent().is_some_and(|p| in_scanned(&trust, p)) { rename(from, aside) } else { Err(std::io::Error::other("it no longer sits in a skill folder this delete scanned")) };
+        // FIX-8 AFTER 3, FIX-9: before every attempt of the rename (the first and each retry), the
+        // folder the item sits in is judged again. A swap between that check and the system call
+        // itself is still possible.
+        let moved = rename_checked(from, aside, || {
+            if from.parent().is_some_and(|p| in_scanned(&trust, p)) {
+                Ok(())
+            } else {
+                Err(std::io::Error::other("it no longer sits in a skill folder this delete scanned"))
+            }
+        });
         if let Err(e) = moved {
             let mut stuck = false;
             for (back, held) in journal.moves[..i].iter().rev() {
@@ -382,10 +388,12 @@ fn delete_held(app_dir: &Path, settled: Settled, items: &[PathBuf]) -> Result<Ou
             if journal.left.is_empty() {
                 let _ = std::fs::remove_file(app_dir.join(JOURNAL));
             } else {
-                let _ = write(app_dir, &Journal { done: true, moves: vec![], left: journal.left.clone(), roots: journal.roots.clone(), stale_starts });
+                let _ = write(app_dir, &Journal { done: true, moves: vec![], left: journal.left.clone(), roots: journal.roots.clone(), stale_counts: journal.stale_counts.clone() });
             }
             return Err(format!("Nothing was deleted: {} could not be moved ({e})", from.display()));
         }
+        #[cfg(test)]
+        run_hook(&AFTER_RENAME, from);
     }
     #[cfg(test)]
     if DIE_AFTER_ASIDE.load(std::sync::atomic::Ordering::SeqCst) {
@@ -422,15 +430,24 @@ type Hook = Box<dyn FnOnce() + Send>;
 /// Tests: run once, for that app folder, right before start-up recovery tries the lock again.
 #[cfg(test)]
 static ON_RETRY: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
-/// Tests: run once, for that app folder, after a delete wrote its record and before it renames the first item.
+/// Tests: run once, keyed by an item's original path, right after a delete renamed that item (so
+/// before it renames the next one).
 #[cfg(test)]
-static BEFORE_RENAMES: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
+static AFTER_RENAME: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
+/// Tests: run once, keyed by the path being renamed, after a rename attempt failed and before the next.
+#[cfg(test)]
+static BETWEEN_ATTEMPTS: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
 
+/// Takes the hook registered for `key` out of `list` and runs it. The position is looked up and the
+/// hook removed under one lock (FIX-9 AFTER 5), so tests running in parallel cannot shift the index
+/// in between; the lock is let go before the hook runs, so a hook may use the list itself.
 #[cfg(test)]
-fn run_hook(list: &Mutex<Vec<(PathBuf, Hook)>>, app_dir: &Path) {
-    let at = list.lock().unwrap().iter().position(|(dir, _)| dir == app_dir);
-    if let Some(i) = at {
-        let (_, hook) = list.lock().unwrap().remove(i);
+fn run_hook(list: &Mutex<Vec<(PathBuf, Hook)>>, key: &Path) {
+    let hook = {
+        let mut hooks = list.lock().unwrap();
+        hooks.iter().position(|(k, _)| k == key).map(|i| hooks.remove(i).1)
+    };
+    if let Some(hook) = hook {
         hook();
     }
 }
@@ -466,13 +483,7 @@ fn startup_recover_as(app_dir: &Path, trust: &Trust) -> Startup {
                 tried = true;
                 crate::diag::write(app_dir, &format!("skill delete: {why}; retrying the skill lock once"));
                 #[cfg(test)]
-                {
-                    let at = ON_RETRY.lock().unwrap().iter().position(|(dir, _)| dir == app_dir);
-                    if let Some(i) = at {
-                        let (_, hook) = ON_RETRY.lock().unwrap().remove(i);
-                        hook();
-                    }
-                }
+                run_hook(&ON_RETRY, app_dir);
                 std::thread::sleep(PAUSE);
             }
             Err(LockError::Failed(why)) => {
@@ -676,7 +687,7 @@ fn recover_with(app_dir: &Path, trust: &Trust, say_kept: bool) -> Vec<String> {
         std::fs::remove_file(&path).map_err(|e| format!("its record {} could not be removed ({e}); try again", path.display()))
     } else {
         // Copies carried from an earlier finished delete are never put back, only removed.
-        let rest = Journal { done: true, moves: vec![], left: journal.left, roots: journal.roots, stale_starts: journal.stale_starts };
+        let rest = Journal { done: true, moves: vec![], left: journal.left, roots: journal.roots, stale_counts: journal.stale_counts };
         write(app_dir, &rest).map_err(|e| format!("its record {} could not be rewritten ({e}); try again", path.display())).map(|()| {
             finish(app_dir, &rest, trust, say_kept);
         })
@@ -739,26 +750,27 @@ fn finish(app_dir: &Path, journal: &Journal, trust: &Trust, say_kept: bool) -> V
             }
         }
     }
-    // FIX-8 AFTER 1: a start-up counts the `Stale` leftovers it sees; the `STALE_STARTS`th retires them
-    // from the record (they stay on disk, with the hint how to clear them), and a delete only carries
-    // them, silently and uncounted.
-    let retire = say_kept && !stale.is_empty() && journal.stale_starts + 1 >= STALE_STARTS;
-    let mut stale_starts = if stale.is_empty() || retire { 0 } else { journal.stale_starts };
-    let counted = say_kept && !stale.is_empty() && !retire;
-    if counted {
-        stale_starts += 1;
-    }
+    // FIX-8 AFTER 1, FIX-9: a start-up counts each `Stale` leftover it sees, on its own count; the
+    // `STALE_STARTS`th start retires that leftover from the record (it stays on disk, with the hint
+    // how to clear it), so one that only just became `Stale` is not retired with an older one. A
+    // delete only carries them, silently and with their counts unchanged. Counts of anything no
+    // longer `Stale` are not carried.
+    let (mut stale_counts, mut counted) = (vec![], false);
     for (from, a, why) in stale {
-        if retire {
+        let seen = journal.stale_counts.iter().find(|(p, _)| *p == a).map_or(0, |(_, n)| *n);
+        let n = if say_kept { seen + 1 } else { seen };
+        if say_kept && n >= STALE_STARTS {
             dropped.push((a, format!("{why}; it has stayed so through {STALE_STARTS} starts, so it is left on disk and taken off the record: {RENAME_ADVICE}")));
-        } else {
-            if say_kept {
-                kept.push(kept_line(&a, &format!("{why} (start {stale_starts} of {STALE_STARTS})")));
-            }
-            match from {
-                Some(f) => moves.push((f, a)),
-                None => left.push(a),
-            }
+            continue;
+        }
+        if say_kept {
+            counted = true;
+            kept.push(kept_line(&a, &format!("{why} (start {n} of {STALE_STARTS})")));
+        }
+        stale_counts.push((a.clone(), n));
+        match from {
+            Some(f) => moves.push((f, a)),
+            None => left.push(a),
         }
     }
     let still: Vec<PathBuf> = moves.iter().map(|(_, a)| a.clone()).chain(left.iter().cloned()).collect();
@@ -767,7 +779,7 @@ fn finish(app_dir: &Path, journal: &Journal, trust: &Trust, say_kept: bool) -> V
     } else if dropped.is_empty() && !removed && !counted {
         Ok(()) // nothing changed on disk, so the record is right as it is
     } else {
-        write(app_dir, &Journal { done: true, moves, left, roots: journal.roots.clone(), stale_starts })
+        write(app_dir, &Journal { done: true, moves, left, roots: journal.roots.clone(), stale_counts })
     };
     match cleared {
         Ok(()) => {
@@ -803,11 +815,21 @@ fn remove(path: &Path) -> std::io::Result<()> {
 }
 
 fn rename(from: &Path, to: &Path) -> std::io::Result<()> {
+    rename_checked(from, to, || Ok(()))
+}
+
+/// `rename`, but `check` runs before every attempt, the first and each retry; an Err from it ends the
+/// rename at once (it is not retried). The check and the system call are still two steps: a swap that
+/// lands between them is not caught (FIX-9 FIX-SOON 1).
+fn rename_checked(from: &Path, to: &Path, check: impl Fn() -> std::io::Result<()>) -> std::io::Result<()> {
     let mut tries = 0;
     loop {
+        check()?;
         match std::fs::rename(from, to) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound && tries + 1 < TRIES => {
                 tries += 1;
+                #[cfg(test)]
+                run_hook(&BETWEEN_ATTEMPTS, from);
                 std::thread::sleep(PAUSE);
             }
             r => return r,
@@ -1921,6 +1943,11 @@ mod tests {
         let log = log_of(&app);
         assert!(!log.contains("dropped"), "the record still holds the entry, so nothing was dropped yet: {log}");
         assert!(log.contains(&format!("refused to remove {}", plain.display())) && log.contains("could not be rewritten"), "{log}");
+        // FIX-9 AFTER 2: the failed record write is a way out of the delete too: the kept entry is
+        // said, and the refused one is said once (by the rewrite that failed), not twice.
+        assert!(log.contains(&format!("kept {} on the record and left it alone for now", idle.display())), "{log}");
+        assert_eq!(log.matches(&plain.display().to_string()).count(), 1, "one line for the refused entry: {log}");
+        assert!(!log.contains("stays on the record for now"), "{log}");
         assert!(beta.is_dir() && plain.is_dir() && idle.is_dir() && app.join(JOURNAL).exists());
         std::fs::remove_dir(app.join(JOURNAL).with_extension("json.tmp")).unwrap();
         assert_eq!(delete(&app, &[beta]), Ok(Outcome::Deleted));
@@ -2305,14 +2332,14 @@ mod tests {
         write(&app, &Journal { done: true, moves: vec![(old.join("alpha"), hidden.clone())], left: vec![], roots: vec![old.clone()], ..Default::default() }).unwrap();
         for n in 1..STALE_STARTS {
             assert_eq!(startup_recover_as(&app, &Trust::startup(live.clone())), Startup::Recovered);
-            assert_eq!(read(&app).expect("still on the record").stale_starts, n);
+            assert_eq!(read(&app).expect("still on the record").stale_counts, [(hidden.clone(), n)]);
             assert_eq!(log_of(&app).matches("kept").count(), n as usize, "one kept line per start: {}", log_of(&app));
             if n == 2 {
                 // A delete elsewhere carries it, says nothing about it and does not count it.
                 let beta = skill(&root, "beta");
                 assert_eq!(delete(&app, &[beta]), Ok(Outcome::Deleted));
                 let kept = read(&app).expect("still on the record after a delete");
-                assert!(kept.left == [hidden.clone()] && kept.stale_starts == 2, "{:?} {}", kept.left, kept.stale_starts);
+                assert!(kept.left == [hidden.clone()] && kept.stale_counts == [(hidden.clone(), 2)], "{:?} {:?}", kept.left, kept.stale_counts);
                 assert_eq!(log_of(&app).matches("kept").count(), 2, "{}", log_of(&app));
             }
         }
@@ -2348,7 +2375,9 @@ mod tests {
             let log = log_of(&app);
             let new = log.strip_prefix(&before).unwrap_or(&log);
             assert!(new.contains(&format!("kept {} on the record and left it alone for now", idle.display())), "{new}");
-            assert!(new.contains(&format!("{} stays on the record for now", stray.display())), "{new}");
+            // The refused entry is said once, by the rewrite of the record that failed (FIX-9 AFTER 2).
+            assert_eq!(new.matches(&format!("refused to remove {}", stray.display())).count(), 1, "{new}");
+            assert_eq!(new.matches(&stray.display().to_string()).count(), 1, "{new}");
             assert!(!new.contains("dropped"), "the record was not rewritten, so nothing was dropped: {new}");
             let rec = read(&app).expect("the record is as it was");
             assert!(rec.left == [idle.clone(), stray.clone()], "{:?}", rec.left);
@@ -2356,11 +2385,12 @@ mod tests {
         assert!(theirs.is_dir());
     }
 
-    /// FIX-8 AFTER 3: a link in an item's path swapped after the delete wrote its record, before the
-    /// renames: the folder is judged again right before each rename, so the swapped item is not
-    /// renamed, what was already moved is put back and nothing is deleted.
+    /// FIX-8 AFTER 3, FIX-9 AFTER 3: a link in an item's path swapped after the first item was
+    /// renamed, before the second: the folder is judged again right before each rename, so the
+    /// swapped item is not renamed, what was already moved is put back and nothing is deleted. (The
+    /// swap lands between two renames, so one check made once before the renames would not catch it.)
     #[test]
-    fn fix8_d_a_link_swapped_before_the_renames_leaves_everything_in_place() {
+    fn fix8_d_a_link_swapped_between_two_renames_leaves_everything_in_place() {
         let t = temp("fix8-d");
         let (app, root, elsewhere, link) = (t.join("app"), t.join("skills"), t.join("elsewhere"), t.join("lnk"));
         let alpha = skill(&root, "alpha");
@@ -2368,8 +2398,8 @@ mod tests {
         let outside_beta = skill(&elsewhere, "beta");
         link_dir(&link, &root);
         let (swap_link, swap_to) = (link.clone(), elsewhere.clone());
-        BEFORE_RENAMES.lock().unwrap().push((
-            app.clone(),
+        AFTER_RENAME.lock().unwrap().push((
+            alpha.clone(),
             Box::new(move || {
                 std::fs::remove_dir(&swap_link).unwrap();
                 link_dir(&swap_link, &swap_to);
@@ -2383,6 +2413,102 @@ mod tests {
         assert_eq!(names(&elsewhere), ["beta"], "nothing was renamed through the swapped link");
         assert_eq!(names(&root), ["alpha", "beta"], "the first item was put back");
         assert!(!app.join(JOURNAL).exists(), "the record is back to nothing");
+        assert!(AFTER_RENAME.lock().unwrap().iter().all(|(k, _)| k != &alpha), "the swap ran after the first rename");
+    }
+
+    /// FIX-9 FIX-SOON 1: the check also runs before every retry of a rename. The first attempt fails
+    /// because another program holds a file in the item; before the second the link is swapped to
+    /// another folder (and the holder lets go, so a retry that did not look again would go through).
+    /// Nothing is renamed in the other folder and nothing is deleted.
+    #[cfg(windows)]
+    #[test]
+    fn fix9_a_a_link_swapped_between_the_attempts_of_one_rename_stops_it() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let t = temp("fix9-a");
+        let (app, root, elsewhere, link) = (t.join("app"), t.join("skills"), t.join("elsewhere"), t.join("lnk"));
+        let inside_beta = skill(&root, "beta");
+        let outside_beta = skill(&elsewhere, "beta");
+        link_dir(&link, &root);
+        let item = link.join("beta");
+        let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(inside_beta.join("SKILL.md")).unwrap();
+        assert!(std::fs::rename(&inside_beta, root.join("probe")).is_err(), "the held file must block a rename");
+        let (swap_link, swap_to) = (link.clone(), elsewhere.clone());
+        BETWEEN_ATTEMPTS.lock().unwrap().push((
+            item.clone(),
+            Box::new(move || {
+                std::fs::remove_dir(&swap_link).unwrap();
+                link_dir(&swap_link, &swap_to);
+                drop(held);
+            }),
+        ));
+        let _one = lock(&app).unwrap();
+        let settled = settle(&app, std::slice::from_ref(&root)).unwrap();
+        let err = delete_held(&app, settled, std::slice::from_ref(&item)).unwrap_err();
+        assert!(err.starts_with("Nothing was deleted") && err.contains("could not be moved") && err.contains("no longer sits in a skill folder"), "{err}");
+        assert!(BETWEEN_ATTEMPTS.lock().unwrap().iter().all(|(k, _)| k != &item), "the swap ran between two attempts");
+        assert!(inside_beta.is_dir() && outside_beta.is_dir(), "nothing was deleted");
+        assert_eq!(names(&elsewhere), ["beta"], "nothing was renamed through the swapped link");
+        assert_eq!(names(&root), ["beta"]);
+        assert!(!app.join(JOURNAL).exists(), "the record is back to nothing");
+    }
+
+    /// FIX-9 AFTER 1: the count of start-ups belongs to each leftover, not to the record: a leftover
+    /// that only now sits under a skills folder that is not scanned starts at 1, while an older one
+    /// next to it is retired at its own 5th start.
+    #[test]
+    fn fix9_b_a_newly_stale_leftover_is_not_retired_with_an_older_one() {
+        let t = temp("fix9-b");
+        let (app, home) = (t.join("app"), t.join("home"));
+        let (old1, old2) = (home.join(".hermes").join("skills"), home.join(".other").join("skills"));
+        let first = skill(&old1, ".kolux-deleting-1-2-alpha");
+        let later = skill(&old2, ".kolux-deleting-1-2-beta");
+        std::fs::create_dir_all(env(&home).local_app_data.unwrap().join("hermes")).unwrap();
+        let live = skills::home_roots(&env(&home));
+        assert!(!live.iter().any(|l| same(l, &old1) || same(l, &old2)), "{live:?}");
+        write(&app, &Journal { done: true, moves: vec![(old1.join("alpha"), first.clone())], left: vec![], roots: vec![old1.clone()], ..Default::default() }).unwrap();
+        for _ in 1..STALE_STARTS {
+            assert_eq!(startup_recover_as(&app, &Trust::startup(live.clone())), Startup::Recovered);
+        }
+        // Only now does a second leftover join the record (as if its skills folder had just moved away).
+        let mut rec = read(&app).expect("the first is still on the record");
+        rec.left.push(later.clone());
+        rec.roots.push(old2.clone());
+        write(&app, &rec).unwrap();
+        assert_eq!(startup_recover_as(&app, &Trust::startup(live)), Startup::Recovered);
+        let log = log_of(&app);
+        assert!(log.contains(&format!("dropped {} from the record", first.display())), "the older one is retired: {log}");
+        assert!(!log.contains(&format!("dropped {} from the record", later.display())), "the newer one is not: {log}");
+        assert!(first.is_dir() && later.is_dir(), "nothing is deleted");
+        let rec = read(&app).expect("the newer one stays on the record");
+        assert!(rec.left == [later.clone()], "{:?}", rec.left);
+        assert!(log.contains(&format!("kept {} on the record", later.display())) && log.contains("(start 1 of"), "{log}");
+    }
+
+    /// FIX-9 AFTER 5: `run_hook` takes its hook out of the list under one lock, so threads that each
+    /// register and run their own hook never run another's or miss their own.
+    #[test]
+    fn fix9_c_run_hook_takes_its_own_hook_even_when_other_threads_use_the_list() {
+        static LIST: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
+        static RAN: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+        let threads: Vec<_> = (0..16usize)
+            .map(|n| {
+                std::thread::spawn(move || {
+                    for round in 0..300usize {
+                        let (key, id) = (PathBuf::from(format!("key-{n}")), n * 1000 + round);
+                        LIST.lock().unwrap().push((key.clone(), Box::new(move || RAN.lock().unwrap().push(id))));
+                        run_hook(&LIST, &key);
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().expect("no thread panicked");
+        }
+        let mut ran = RAN.lock().unwrap().clone();
+        ran.sort_unstable();
+        ran.dedup();
+        assert_eq!(ran.len(), 16 * 300, "every hook ran exactly once");
+        assert!(LIST.lock().unwrap().is_empty());
     }
 
     /// AFTER 1: a passing holder of the lock file (a backup or antivirus tool) gets one retry before
