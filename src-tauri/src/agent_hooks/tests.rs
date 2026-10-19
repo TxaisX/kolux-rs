@@ -303,10 +303,26 @@ mod script_runs {
             }
             v
         };
+        // hooks FIX-6 (stand-in review FIX-SOON 3): the bound follows how long this PC takes to
+        // start a Windows PowerShell right now (0.4 s idle, over 2 s with other builds running),
+        // measured the same way just before: twice that start, the script's own retry window (20
+        // tries 100 ms apart, 2 s) and 1 s of slack. A hard 30 s ceiling still catches a true hang.
+        let baseline = {
+            let exe = PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into())).join("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe");
+            let mut cmd = Command::new(exe);
+            cmd.args(["-NoProfile", "-NonInteractive", "-Command", "exit"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+            let t = Instant::now();
+            assert!(cmd.status().unwrap().success(), "a plain PowerShell starts");
+            t.elapsed()
+        };
         let started = Instant::now();
         let out = run(&dir, &env(false), r#"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","session_id":"s1"}"#);
+        let elapsed = started.elapsed();
         assert!(out.status.success() && out.stdout.is_empty(), "{out:?}");
-        assert!(started.elapsed() < Duration::from_secs(5), "a closed Kolux never holds the agent up: {:?}", started.elapsed());
+        let bound = baseline * 2 + Duration::from_secs(3);
+        println!("PowerShell start baseline {baseline:?}; the held run took {elapsed:?}; bound {bound:?} (the fixed bound before hooks FIX-6 was 5 s)");
+        assert!(elapsed < Duration::from_secs(30), "a closed Kolux never holds the agent up (hang ceiling): {elapsed:?}");
+        assert!(elapsed < bound, "a closed Kolux never holds the agent up: {elapsed:?} against a {baseline:?} PowerShell start");
         // Kolux took its endpoint file away as it quit: the pane's own variables name the address.
         fs::remove_file(&endpoint).unwrap();
         let out = run(&dir, &env(true), STOP);
@@ -453,8 +469,11 @@ mod script_runs {
             let spooled_at = ev(line.splitn(4, '|').nth(3).unwrap())["spooled_at"].as_i64().unwrap();
             let lead = released_ms - spooled_at;
             println!("attempt {attempt}: PowerShell seen after {seen:?}, held {hold} ms, first try {lead} ms before the release, took {:?}", started.elapsed());
-            // 100 ms clear of the release: the first try, a few ms after the stamp, met the lock.
-            if lead >= 100 {
+            // hooks FIX-6 (stand-in review FIX-SOON 2): 400 ms clear of the release. The first
+            // try comes a few ms after the stamp (ConvertTo-Json and the line between them), so a
+            // script with no retry at all could pass only if that gap stretched past 400 ms; the
+            // hold aims 600 ms past the stamp, so a real retry keeps its margin.
+            if lead >= 400 {
                 met = Some(attempt);
                 break;
             }
@@ -1392,8 +1411,8 @@ fn fix_4_codex_a_created_file_rolled_back_goes_before_its_record() {
 /// hooks FIX-5 (stand-in review AFTER 1): while Codex is asked to list the hooks, the user (or
 /// another tool) saves `hooks.json`. The rollback after a failed listing then leaves that save
 /// alone, whether Kolux had created the file or rewritten the user's, and says the file changed.
-/// The rewrite path goes through the same atomic write as every other, so a change that lands
-/// between its re-read and its rename is kept too.
+/// The rewrite path goes through the same atomic write as every other, so a save just before
+/// that write's re-read is kept too.
 #[test]
 fn fix_5_codex_a_rollback_never_overwrites_or_removes_a_file_saved_meanwhile() {
     use super::super::{BEFORE_REREAD, CHANGED};
@@ -1425,8 +1444,8 @@ fn fix_5_codex_a_rollback_never_overwrites_or_removes_a_file_saved_meanwhile() {
     println!("rewritten, saved meanwhile: {err}");
     assert!(err.contains("could not list") && err.ends_with(CHANGED), "{err}");
     assert_eq!(fs::read_to_string(&file).unwrap(), users(3), "the user's later save is not overwritten");
-    // The rewrite is atomic: a save between its re-read and its rename is kept as well. The
-    // install's own write pops the first closure (nothing); the rollback's pops the save.
+    // The rewrite re-reads before it renames: a save just before that re-read is kept as well.
+    // The install's own write pops the first closure (nothing); the rollback's pops the save.
     fs::write(&file, users(4)).unwrap();
     let f = file.clone();
     BEFORE_REREAD.with(|c| c.borrow_mut().extend([Box::new(move || fs::write(&f, users(5)).unwrap()) as Box<dyn FnOnce()>, Box::new(|| {})]));
@@ -1434,7 +1453,33 @@ fn fix_5_codex_a_rollback_never_overwrites_or_removes_a_file_saved_meanwhile() {
     println!("rewritten, saved at the rename: {err}");
     assert!(BEFORE_REREAD.with(|c| c.borrow().is_empty()), "the rollback wrote through the atomic write");
     assert!(err.ends_with(CHANGED), "{err}");
-    assert_eq!(fs::read_to_string(&file).unwrap(), users(5), "the save at the worst moment is kept");
+    assert_eq!(fs::read_to_string(&file).unwrap(), users(5), "the save just before the re-read is kept");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// hooks FIX-6 (stand-in review AFTER 2): Kolux created the file, and while Codex was asked to
+/// list the hooks the user deleted it. The rollback finds nothing to read back: the file is gone,
+/// which is what the rollback wanted, so the record saying Kolux created it goes too, instead of
+/// staying behind as a stray the next start would look at.
+#[test]
+fn fix_6_codex_a_file_deleted_in_the_window_leaves_no_record_behind() {
+    use super::super::CHANGED;
+    let dir = temp("fix6-codex-deleted");
+    let home = dir.join("codex");
+    fs::create_dir_all(&home).unwrap();
+    let file = home.join("hooks.json");
+    let record = codex_record(&file);
+    let command = "\"C:\\Users\\me\\.kolux-rs\\agent-hooks\\codex.cmd\"";
+    let err = install_codex_with(&home, command, |_| {
+        assert!(record.exists(), "the record is there while Codex is asked");
+        fs::remove_file(&file).unwrap();
+        None
+    })
+    .unwrap_err();
+    println!("created, deleted meanwhile: {err}");
+    assert!(err.contains("could not list") && !err.contains("could not be read back") && !err.ends_with(CHANGED), "{err}");
+    assert!(!file.exists(), "the file stays gone");
+    assert!(!record.exists(), "no stray record for a file that is gone");
     let _ = fs::remove_dir_all(&dir);
 }
 
