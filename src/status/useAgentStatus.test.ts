@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { forgetGone, takeReading, type Reading } from "./useAgentStatus";
+import { FRESH_WINDOW_MS, forgetGone, heldByFresh, sameRun, takeReading, type Reading } from "./useAgentStatus";
 
 const ev = (tokens: number | null, extra: { session?: string | null; at?: number | null } = {}) => ({ paneKey: 1, contextTokens: tokens, contextWindow: tokens === null ? null : 200_000, ...extra });
 
@@ -49,4 +49,42 @@ test("just after a fresh start, a report whose running time the new process cann
   expect(takeReading(undefined, undefined, stale, 40_000)).toEqual({ tokens: 90_000, window: 200_000, session: "s1@2", at: 2_400_000 });
   // A report with no running time cannot be placed, so the window leaves it alone.
   expect(takeReading(undefined, undefined, ev(10_000), 800)).toEqual({ tokens: 10_000, window: 200_000 });
+});
+
+test("the session's cost rides on the reading, and a report without one keeps the cost on screen (USAGE-034)", () => {
+  const first = takeReading(undefined, undefined, { ...ev(50_000), costUsd: 3.15 });
+  expect(first).toEqual({ tokens: 50_000, window: 200_000, costUsd: 3.15 });
+  // The next report has no cost field: the chip stays at the last figure rather than blinking out.
+  expect(takeReading(first ?? undefined, undefined, ev(60_000))).toEqual({ tokens: 60_000, window: 200_000, costUsd: 3.15 });
+  // A newer cost replaces it, even a smaller one (a new session's total starts over).
+  expect(takeReading(first ?? undefined, undefined, { ...ev(60_000), costUsd: 0.4 })?.costUsd).toBe(0.4);
+  // No report yet is no cost; a broken figure is no cost.
+  expect(takeReading(undefined, undefined, ev(60_000))?.costUsd).toBeUndefined();
+  expect(takeReading(undefined, undefined, { ...ev(60_000), costUsd: Number.NaN })?.costUsd).toBeUndefined();
+  expect(takeReading(undefined, undefined, { ...ev(60_000), costUsd: -2 })?.costUsd).toBeUndefined();
+  expect(takeReading(undefined, undefined, { ...ev(60_000), costUsd: null })?.costUsd).toBeUndefined();
+});
+
+test("a report that is late by the ordering rules does not move the cost either (USAGE-034)", () => {
+  const shown: Reading = { tokens: 90_000, window: 200_000, session: "s1", at: 60_000, costUsd: 5 };
+  expect(takeReading(shown, undefined, { ...ev(40_000, { session: "s1", at: 30_000 }), costUsd: 2 })).toBeNull();
+});
+
+test("heldByFresh names the in-window report with more running time than the new process can have (USAGE-001)", () => {
+  expect(heldByFresh({ ...ev(1, { at: 2_400_900 }) }, 800)).toBe(true);
+  expect(heldByFresh({ ...ev(1, { at: 1_200 }) }, 800)).toBe(false);
+  expect(heldByFresh({ ...ev(1, { at: 2_400_900 }) }, undefined)).toBe(false);
+  expect(heldByFresh({ ...ev(1, { at: 2_400_900 }) }, FRESH_WINDOW_MS)).toBe(false);
+  expect(heldByFresh({ ...ev(1) }, 800)).toBe(false);
+});
+
+test("two held reports on one clock whose running times rise by the elapsed time are one live process (USAGE-001)", () => {
+  const held = { e: ev(1, { session: "s1@2", at: 15_000 }), heldAt: 1_003_000 };
+  expect(sameRun(held, ev(2, { session: "s1@2", at: 25_000 }), 1_013_000)).toBe(true);
+  expect(sameRun(held, ev(2, { session: "s1@2", at: 25_000 + 4_000 }), 1_013_000)).toBe(true);
+  // Not the same run: another clock, running time that went down, or rising far faster than time passes.
+  expect(sameRun(held, ev(2, { session: "s1@5", at: 25_000 }), 1_013_000)).toBe(false);
+  expect(sameRun(held, ev(2, { session: "s1@2", at: 14_000 }), 1_013_000)).toBe(false);
+  expect(sameRun(held, ev(2, { session: "s1@2", at: 600_000 }), 1_013_000)).toBe(false);
+  expect(sameRun(held, ev(2), 1_013_000)).toBe(false);
 });

@@ -400,6 +400,9 @@ pub struct Usage {
     /// milliseconds. Both are none when either part is missing.
     pub session: Option<String>,
     pub at: Option<u64>,
+    /// USAGE-034: the session's cost so far in US dollars (the report's cost.total_cost_usd); none
+    /// when the report has none or a figure that is not a number of at least zero.
+    pub cost_usd: Option<f64>,
     /// The config folder the report came from (USAGE-021); none for the default sign-in.
     #[serde(skip)]
     pub config_dir: Option<String>,
@@ -415,6 +418,7 @@ pub fn usage(req: &Request, token: &str) -> Result<Usage, u16> {
     // At most 200 characters of the id, like the other fields this route passes on (marks FIX-2).
     let session = v["session_id"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(|s| trim(s, 200)).zip(terminal).map(|(s, t)| format!("{s}@{t}"));
     let at = session.as_ref().and(v["cost"]["total_duration_ms"].as_u64());
+    let cost_usd = v["cost"]["total_cost_usd"].as_f64().filter(|c| c.is_finite() && *c >= 0.0);
     let cw = &v["context_window"];
     let context_window = cw.get("context_window_size").and_then(Value::as_u64);
     // USAGE-005: the total it states, else input plus cache writes plus cache reads, else its
@@ -442,7 +446,7 @@ pub fn usage(req: &Request, token: &str) -> Result<Usage, u16> {
         })
         .collect();
     let config_dir = req.headers.get(CONFIG_HEADER).map(|h| h.trim().to_string()).filter(|h| !h.is_empty());
-    Ok(Usage { pane_key, context_tokens, context_window, limits, session, at, config_dir })
+    Ok(Usage { pane_key, context_tokens, context_window, limits, session, at, cost_usd, config_dir })
 }
 
 /// USAGE-021: a report counts only when it comes from the folder the active account runs under;
@@ -1511,6 +1515,26 @@ mod tests {
         assert_eq!(install_claude_status(&mut none, &st), (true, None));
         assert_eq!(none["statusLine"]["type"], "command");
         assert_eq!(none["env"], json!({}));
+    }
+
+    #[test]
+    fn a_status_line_report_carries_the_sessions_cost() {
+        // USAGE-034: the status line's cost.total_cost_usd is the session's total so far, in US dollars.
+        let u = |body: &str| {
+            let id = base64::engine::general_purpose::STANDARD.encode(r#"{"paneKey":4,"terminal":2,"hookVersion":1}"#);
+            let raw = format!("POST /claude-status HTTP/1.1\r\nX-Kolux-Token: tok\r\nX-Kolux-Pane: {id}\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+            usage(&parse_request(&mut raw.as_bytes()).unwrap(), "tok").unwrap()
+        };
+        assert_eq!(u(r#"{"cost":{"total_cost_usd":3.1475},"context_window":{"context_window_size":200000,"total_input_tokens":5000}}"#).cost_usd, Some(3.1475));
+        assert_eq!(u(r#"{"cost":{"total_cost_usd":0}}"#).cost_usd, Some(0.0));
+        // Missing, not a number, or a broken figure: no cost, so the window keeps its last one.
+        assert_eq!(u(r#"{"context_window":{"context_window_size":200000}}"#).cost_usd, None);
+        assert_eq!(u(r#"{"cost":{"total_cost_usd":"3.15"}}"#).cost_usd, None);
+        assert_eq!(u(r#"{"cost":{"total_cost_usd":-1.5}}"#).cost_usd, None);
+        // It rides in the event the window listens to, under the name the window reads.
+        let v = json!(u(r#"{"cost":{"total_cost_usd":2.5}}"#));
+        assert_eq!(v["costUsd"], json!(2.5));
+        assert!(json!(u(r#"{}"#))["costUsd"].is_null());
     }
 
     #[test]
