@@ -7,6 +7,9 @@
 import { t } from "./i18n/lookup";
 import type { TextKey } from "./i18n/en";
 
+/** The ids that have both a plain word and a hover line in English, read off the English keys so a typo is a compile error. */
+export type GlossaryId = { [K in TextKey]: K extends `glossary.${infer I}.plain` ? (`glossary.${I}.hover` extends TextKey ? I : never) : never }[TextKey];
+
 /** The words a newcomer screen may not show (hover and explanation text may). */
 export const BANNED = /\b(repos?|repositor(?:y|ies)|clon(?:e|es|ed|ing)|check-?outs?|worktrees?|shells?|CLIs?|PTYs?)\b/gi;
 
@@ -17,20 +20,20 @@ export function jargon(text: string): string[] {
 
 type Entry = { term: string; plain: string; hover: string };
 /** A glossary entry whose plain word and hover line come from the lookup each time they are read. */
-const entry = (id: string, term: string): Entry => ({
+export const glossaryEntry = (id: GlossaryId, term: string): Entry => ({
   term,
-  get plain() { return t(`glossary.${id}.plain` as TextKey); },
-  get hover() { return t(`glossary.${id}.hover` as TextKey); },
+  get plain() { return t(`glossary.${id}.plain`); },
+  get hover() { return t(`glossary.${id}.hover`); },
 });
 
 export const GLOSSARY = {
-  repository: entry("repository", "Git repository"),
-  clone: entry("clone", "git clone"),
-  worktree: entry("worktree", "Git worktree"),
-  checkout: entry("checkout", "main checkout"),
-  shell: entry("shell", "shell"),
-  cli: entry("cli", "CLI"),
-  pty: entry("pty", "PTY"),
+  repository: glossaryEntry("repository", "Git repository"),
+  clone: glossaryEntry("clone", "git clone"),
+  worktree: glossaryEntry("worktree", "Git worktree"),
+  checkout: glossaryEntry("checkout", "main checkout"),
+  shell: glossaryEntry("shell", "shell"),
+  cli: glossaryEntry("cli", "CLI"),
+  pty: glossaryEntry("pty", "PTY"),
 } satisfies Record<string, Entry>;
 
 /** The Connect cards' line saying what Connect does, per provider. */

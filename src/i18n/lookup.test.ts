@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "vitest";
 import { applyLanguage } from "../language";
-import { CONNECT, GLOSSARY } from "../glossary";
-import { EN } from "./en";
+import { CONNECT, GLOSSARY, glossaryEntry } from "../glossary";
+import { EN, type TextKey } from "./en";
 import { loadPack, missing, onPackLoaded, packJargon, registerPack, t, type Pack } from "./lookup";
 
 afterEach(() => void applyLanguage("en"));
@@ -63,4 +63,40 @@ test("T-210-b ONB-036: the plain-words guard holds in every language", async () 
   registerPack("fr", async () => ({ "glossary.repository.plain": "le repo" }));
   const fr = await loadPack("fr");
   expect(packJargon(fr)).toEqual(['glossary.repository.plain: "repo"']);
+});
+
+test("FIX-1 SET-017: a text a pack lacks, or holds as something other than text, reads in English", async () => {
+  // A pack file is plain data: a value that is not text (null, a number, a nested object) is as good as missing.
+  registerPack("ko", async () => ({ "glossary.clone.plain": null, "glossary.cli.plain": 7, "glossary.pty.plain": { x: 1 }, "glossary.shell.plain": "터미널" }) as unknown as Pack);
+  applyLanguage("ko");
+  const ko = await loadPack("ko");
+  expect(Object.keys(ko)).toContain("glossary.clone.plain");
+  expect(t("glossary.clone.plain")).toBe(EN["glossary.clone.plain"]);
+  expect(t("glossary.cli.plain", { x: 1 })).toBe(EN["glossary.cli.plain"]); // no .replace on a number
+  expect(t("glossary.pty.plain")).toBe(EN["glossary.pty.plain"]);
+  expect(t("glossary.shell.plain")).toBe("터미널");
+  expect(t("glossary.worktree.plain")).toBe(EN["glossary.worktree.plain"]); // key absent from the pack
+  expect(missing("ko")).toEqual(expect.arrayContaining(["glossary.clone.plain", "glossary.cli.plain", "glossary.pty.plain", "glossary.worktree.plain"]));
+  expect(missing("ko")).not.toContain("glossary.shell.plain");
+  // a pack that came back as nothing at all
+  registerPack("fr", async () => null as unknown as Pack);
+  applyLanguage("fr");
+  await loadPack("fr");
+  expect(t("connect.claude")).toBe(EN["connect.claude"]);
+});
+
+test("FIX-1 SET-017: a key English does not have reads as empty text and never throws", () => {
+  const stray = "no.such.text" as TextKey;
+  expect(t(stray)).toBe("");
+  expect(t(stray, { name: "x" })).toBe("");
+  applyLanguage("system", ["ja"]);
+  expect(t(stray, { name: "x" })).toBe("");
+});
+
+test("FIX-1 ONB-036: a glossary id that does not exist fails the type check instead of being cast", () => {
+  // @ts-expect-error a typo in a glossary id is a compile error (tsc fails if this line type-checks)
+  const typo = glossaryEntry("reposatory", "x");
+  expect(typo).toBeDefined();
+  expect(glossaryEntry("clone", "git clone").plain).toBe(EN["glossary.clone.plain"]);
+  expect(Object.keys(GLOSSARY).sort()).toEqual(["checkout", "cli", "clone", "pty", "repository", "shell", "worktree"]);
 });

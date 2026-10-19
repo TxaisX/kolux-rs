@@ -55,14 +55,16 @@ export function onPackLoaded(f: (lang: Language) => void): () => void {
 export function t(key: TextKey, values?: Record<string, string | number>, lang: Language = locale()): string {
   const pack = packs.get(lang);
   if (!pack && lang !== "en" && loaders.has(lang)) void loadPack(lang);
-  const text = pack?.[key] ?? EN[key];
+  // A pack is plain data from a file: only real text counts; a gap, null or a number reads in English.
+  const p: unknown = pack?.[key];
+  const text = typeof p === "string" ? p : ((EN as Record<string, string>)[key] ?? "");
   return values ? text.replace(/\{(\w+)\}/g, (all, name: string) => (name in values ? String(values[name]) : all)) : text;
 }
 
 /** The keys a loaded pack lacks (shown in English). */
 export function missing(lang: Language): TextKey[] {
-  const pack = packs.get(lang) ?? {};
-  return (Object.keys(EN) as TextKey[]).filter((k) => pack[k] === undefined);
+  const pack: Record<string, unknown> = packs.get(lang) ?? {};
+  return (Object.keys(EN) as TextKey[]).filter((k) => typeof pack[k] !== "string");
 }
 
 /** ONB-036 in every language: the banned technical words found in a pack's on-screen texts (hover texts may carry them). */

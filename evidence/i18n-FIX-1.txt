@@ -1,0 +1,24 @@
+i18n FIX-1 (pre-merge fixes from the i18n-f914eb3 review) · lane/i18n from f914eb30 · 2026-10-19
+Fixture folders and unit tests only. No app launched. No real profile or old-app folder opened.
+
+== FIX-SOON 2: lookup.ts text-only pack values, English fallback, typed glossary ids ==
+RED (before the code change; log G:/Temp/i18n-w1-logs/vitest-fix2-red.log):
+   ❯ src/i18n/lookup.test.ts (8 tests | 3 failed) 23ms
+     × FIX-1 SET-017: a text a pack lacks, or holds as something other than text, reads in English 7ms
+     × FIX-1 SET-017: a key English does not have reads as empty text and never throws 3ms
+     × FIX-1 ONB-036: a glossary id that does not exist fails the type check instead of being cast 1ms
+  ⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+  TypeError: text.replace is not a function
+   ❯ t src/i18n/lookup.ts:59:24
+   ❯ src/i18n/lookup.test.ts:75:10
+  AssertionError: expected undefined to be '' // Object.is equality
+   ❯ src/i18n/lookup.test.ts:90:20
+  TypeError: glossaryEntry is not a function
+   ❯ src/i18n/lookup.test.ts:98:16
+   Test Files  1 failed | 1 passed (2)
+        Tests  3 failed | 10 passed (13)
+GREEN (after; log G:/Temp/i18n-w1-logs/vitest-fix2-green.log):
+   Test Files  3 passed (3)
+        Tests  17 passed (17)
+pnpm exec tsc --noEmit (log G:/Temp/i18n-w1-logs/tsc-fix2.log): exit 0, no output; the @ts-expect-error line in lookup.test.ts proves a mistyped glossary id is a compile error.
+Added tests: 'FIX-1 SET-017: a text a pack lacks, or holds as something other than text, reads in English', 'FIX-1 SET-017: a key English does not have reads as empty text and never throws', 'FIX-1 ONB-036: a glossary id that does not exist fails the type check instead of being cast'.
