@@ -36,11 +36,13 @@ describe("T-248-a menu bar state (APP-009, SET-020, SET-009)", () => {
   });
 
   it("ticks agree with each Settings switch, defaults included", () => {
-    const chords: Record<string, string[]> = { "app.settings": ["Mod+Comma"], "zoom.in": ["Mod+Equal", "Mod+NumpadAdd"] };
+    const chords: Record<string, string[]> = { "app.settings": ["Mod+Comma"], "zoom.in": ["Mod+Equal", "Mod+NumpadAdd"], "ui.zoomIn": ["Mod+Alt+Equal"] };
     const st = menuBarState({ statusBarVisible: false, automationsButton: false }, "board", (id) => chords[id]);
     expect(st).toMatchObject({ screen: "board", statusBarVisible: false, tasksButton: true, automationsButton: false, titleBarAppName: false });
     expect(st.accelerators["app.settings"]).toBe("CmdOrCtrl+Comma");
-    expect(st.accelerators["zoom.in"]).toBeUndefined();
+    // The menu zoom is the interface zoom (SET-019): it shows ui.zoom* keys, never the terminal zoom ones (TERM-078).
+    expect(st.accelerators["zoom.in"]).toBe("CmdOrCtrl+Alt+Equal");
+    expect(st.accelerators["zoom.out"]).toBe("");
     expect(st.classic).toBe(false);
     expect(st.accelerators["sidebar.left.toggle"]).toBe("");
     expect(Object.keys(st.accelerators)).toEqual([...MENU_SHORTCUT_IDS]);
