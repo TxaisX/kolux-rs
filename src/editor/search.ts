@@ -20,16 +20,20 @@ export function searchSession(root: string, call: (root: string, ask: Ask) => Pr
   let n = 0;
   let sent = false;
   let closed = false;
+  let asked = 0;
   let out = false; // the newest search has not answered yet
   const stop = () => void Promise.resolve(cancel(root)).catch(() => {});
   return {
     run(ask: Ask, done: (f: Found) => void, failed: (e: unknown) => void) {
       const mine = ++n;
+      const latest = ++asked;
       sent = true;
       out = true;
+      // FIX-6 (council d2 AFTER 1): the newest search answering clears `out` even when the answer is
+      // dropped (the query moved on), so a later empty() does not send a cancel to an idle folder.
       call(root, ask).then(
-        (f) => mine === n && ((out = false), !closed && done(f)),
-        (e) => mine === n && ((out = false), !closed && failed(e)),
+        (f) => (latest === asked && (out = false), mine === n && !closed && done(f)),
+        (e) => (latest === asked && (out = false), mine === n && !closed && failed(e)),
       );
     },
     /** The query changed: an older answer is dropped when it comes. The backend is left alone, because

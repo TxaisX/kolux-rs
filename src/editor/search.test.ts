@@ -107,6 +107,20 @@ describe("FIX-4 the search session of one explorer view", () => {
     expect(cancelled).toEqual(["C:/r"]);
   });
 
+  // FIX-6 (council d2 AFTER 1): an answer that comes after the query moved on is dropped, but the
+  // search is over all the same, so emptying afterwards has nothing to stop.
+  it("emptying the query tells the backend nothing when the search it dropped has answered since", async () => {
+    const one = deferred();
+    const cancelled: string[] = [];
+    const s = searchSession("C:/r", () => one.p, (r) => void cancelled.push(r));
+    s.run(ask("a"), () => {}, () => {});
+    s.drop();
+    one.ok(found(1, 1));
+    await new Promise((r) => setTimeout(r, 0));
+    s.empty();
+    expect(cancelled).toEqual([]);
+  });
+
   it("emptying the query tells the backend nothing when the last search already answered or none was asked", async () => {
     const cancelled: string[] = [];
     const s = searchSession("C:/r", () => Promise.resolve(found(1, 1)), (r) => void cancelled.push(r));

@@ -65,15 +65,14 @@ COMBINED RUN (scratch worktree = 5f3b287 + lane files + FIX-2 status + FIX-2 wir
   lane, not this lane's file).
 - Status patch alone on 5f3b287: clippy clean, cargo test status:: 26 passed (fix2-status-only-*.log).
 
-LIVE PROOF PENDING (batched; no app launched this pass)
-- Settings > Agents > Keep the computer awake: pick On; the help under the choice ends "...this drains
-  the battery even with the lid closed." Pick Agent; the help mentions "at most 30 minutes after its
-  last word".
-- Agent mode, a shell pane that prints ESC]9999;{"state":"working"}BEL: the status bar shows no Awake
-  item within 5 s (before: Awake for up to 30 minutes).
-- Agent mode, a Claude pane working: Awake shows; close the tab: Awake goes within 5 s.
+LIVE PROOF PENDING (batched; corrected at MERGE 117 per launch-b26fdad3-standin-review.md FIX-BEFORE 1)
+There is no "saved agent with its own id": agent_list returns only the catalogue. The change is reachable only through
+a catalogue agent whose Settings > Agents "Command" names claude or codex. The plus menu, chooser and layout strip pass the
+catalogue program name, so their rows do not change; do not expect them to.
+1. Settings > Agents > OpenClaude > Command = claude; start it: the pane header and its Agents rail row show the Claude mark.
+2. The status word leaves "Ready" for the agent words; with hooks on, the chat/ready notice ("ready, can't see") does not appear.
+3. Shift+Enter in that pane types a newline, not a submit.
+4. Quit and reopen: the pane comes back at its prompt (no old prompt text) with the same agent.
+5. A Command of pwsh keeps the shell glyph.
 
-OPEN (not fixed this pass)
-- Earlier AFTER 1 (settings read under the Store lock each 5 s tick), AFTER 2 (a watcher panic in a
-  debug build leaves HELD true), lid-switch inhibitor on older systemd (UNKNOWN), no PowerCreateRequest
-  reason string; NeoVim blank console under a debug build (batched proof should use a release build).
+AFTER items of the review: both are chat files (ChatView.tsx tests, note keyed by reply text), none inside this lane's OWNS; left to the chat lane.

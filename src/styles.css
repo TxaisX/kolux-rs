@@ -473,7 +473,7 @@ input { font: inherit; }
 .usage-fig { font-weight: 500; color: var(--gauge-text); }
 .usage-fig.warn { color: var(--working-icon); }
 .usage-fig.danger { color: var(--meter-danger); }
-.usage-cost { padding: 0 6px; border-radius: 8px; font-weight: 500; color: var(--cost-fg, #1f9db0); background: color-mix(in srgb, var(--cost-fg, #1f9db0) 16%, transparent); }
+.usage-cost { padding: 0 6px; border-radius: 8px; font-weight: 500; color: var(--cost-fg); background: color-mix(in srgb, var(--cost-fg) 16%, transparent); }
 .tab .ring { flex: none; color: var(--gauge); }
 /* USAGE-002: the card's compact meter under the chip row. */
 .meter { display: flex; align-items: center; gap: 8px; padding: 0 10px 6px; font-size: 11px; color: var(--fg-muted); white-space: nowrap; }

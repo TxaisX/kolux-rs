@@ -42,3 +42,8 @@ GATES (G:/Temp/rel-w1-logs/w11final*):
   proj003_cancel_removes_only run alone: exit 0.   clippy --all-targets -D warnings: exit 0.   tsc --noEmit: exit 0.
   vitest: 205 files, 1364 tests passed.   plan-check: OK; '## Last 10 passes' count 1; duplicate T-id grep empty.
   firewall -Baseline: 53 hits, 0 new.
+
+FIX-6 WORDING CORRECTION (stand-in review reliability-60b23bb9, FIX-SOON 1): the group-only signal "greatly narrows the
+window for a stray kill"; it does not remove it. If the leftover moved into its own session the group is empty, and its id
+could have been taken by a new group leader inside the grace. Any earlier line here or in the FIX-5 commit body that reads
+as "no stray kill" is to be read as "greatly narrows". See evidence/reliability-FIX-6.txt.

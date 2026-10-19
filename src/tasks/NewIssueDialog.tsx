@@ -7,7 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { actionError } from "./issueActions";
 import type { Task } from "./model";
-import { closingDraft, createBusy, createOnce, draftFrom, draftToSave, emptyDraft, type IssueDraft, names, openDraft, watchCreate, withRepo } from "./newIssue";
+import { closingDraft, createBusy, createOnce, draftFrom, draftToSave, emptyDraft, type IssueDraft, names, openDraft, pickableLabels, TITLE_MAX, watchCreate, withRepo } from "./newIssue";
 
 /** The draft kept for this run (also one too long for settings); null after an issue is created.
  * The one-create-at-a-time flag lives next to it, in newIssue.ts (createOnce). */
@@ -22,7 +22,7 @@ export default function NewIssueDialog(p: {
   labels: string[];
   people: string[];
   onClose: () => void;
-  onCreated: (t: Task) => void;
+  onCreated: (t: Task, host: string) => void;
 }) {
   const [start] = useState(() => openDraft(held ?? draftFrom(p.saved), p.targets, p.host));
   const [d, setD] = useState<IssueDraft>(start.draft);
@@ -44,13 +44,24 @@ export default function NewIssueDialog(p: {
     pending.current = undefined;
     if (v !== "too-long") void save.current({ tasksIssueDraft: v });
   };
+  // FIX-3 (review A4): closing the dialog returns focus to what had it before (declared before the
+  // effect that moves focus into the dialog, so it reads the opener first).
+  useEffect(() => {
+    const before = document.activeElement as HTMLElement | null;
+    return () => {
+      if (before?.isConnected) before.focus?.();
+    };
+  }, []);
   useEffect(() => box.current?.focus(), []);
   // A create still out from an earlier opening of this dialog: wait for it, and start a fresh
   // draft when it went through.
   useEffect(
     () =>
-      watchCreate((e) => {
+      watchCreate((e, err) => {
         setBusy(e === "busy");
+        // A create started by an earlier opening of this dialog failed (or timed out): say so here
+        // too, or the user would click Create again on a gh that may have opened the issue.
+        if (e === "failed" && err) setError(actionError(err, "create"));
         if (e === "created") {
           touched.current = false;
           setD((x) => emptyDraft(p.host, x.repo));
@@ -103,7 +114,7 @@ export default function NewIssueDialog(p: {
       pending.current = undefined;
       void save.current({ tasksIssueDraft: null });
       const c = r.value;
-      p.onCreated({ kind: "issue", number: c.number, title: c.title || f.title.trim(), url: c.url, repo: f.repo, state: "open", draft: false, labels: f.labels.map((name) => ({ name, color: "" })), assignees: f.assignees, updated: new Date().toISOString(), checks: null });
+      p.onCreated({ kind: "issue", number: c.number, title: c.title || f.title.trim(), url: c.url, repo: f.repo, state: "open", draft: false, labels: f.labels.map((name) => ({ name, color: "" })), assignees: f.assignees, updated: new Date().toISOString(), checks: null }, p.host);
     });
   };
   const facts = d.repo === p.factsRepo;
@@ -139,8 +150,13 @@ export default function NewIssueDialog(p: {
         <textarea className="field" aria-label="Description" placeholder="Description (Markdown)" rows={8} disabled={busy} value={d.body} onChange={(e) => edit({ ...d, body: e.target.value })} />
         <input className="field" aria-label="Labels" placeholder="Labels, comma separated" list="new-issue-labels" disabled={busy} value={labelText} onChange={(e) => setLabelText(e.target.value)} onBlur={() => edit({ ...d, labels: names(labelText) })} />
         <input className="field" aria-label="Assignees" placeholder="Assignees (logins), comma separated" list="new-issue-people" disabled={busy} value={peopleText} onChange={(e) => setPeopleText(e.target.value)} onBlur={() => edit({ ...d, assignees: names(peopleText) })} />
-        <datalist id="new-issue-labels">{facts && p.labels.map((l) => <option key={l} value={l} />)}</datalist>
+        <datalist id="new-issue-labels">{facts && pickableLabels(p.labels).map((l) => <option key={l} value={l} />)}</datalist>
         <datalist id="new-issue-people">{facts && p.people.map((l) => <option key={l} value={l} />)}</datalist>
+        {d.title.trim().length > TITLE_MAX && (
+          <div className="tasks-warn" role="alert" data-title-long>
+            GitHub titles can be at most {TITLE_MAX} characters; this one has {d.title.trim().length}.
+          </div>
+        )}
         {out === "too-long" && (
           <div className="tasks-count" data-draft-memory>
             This draft is too long to keep after Kolux closes; it is kept until then, and creating the issue still works.
@@ -151,7 +167,7 @@ export default function NewIssueDialog(p: {
             {error}
           </div>
         )}
-        <button className="btn primary" disabled={busy || !d.title.trim() || !d.repo} onClick={create}>
+        <button className="btn primary" disabled={busy || !d.title.trim() || d.title.trim().length > TITLE_MAX || !d.repo} onClick={create}>
           {busy ? "Creating…" : "Create issue"}
         </button>
       </div>
