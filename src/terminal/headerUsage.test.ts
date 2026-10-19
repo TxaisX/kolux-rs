@@ -127,3 +127,9 @@ test("USAGE-034: the ticker moves the clock at least every 30 seconds and stops 
   vi.advanceTimersByTime(120_000);
   expect(seen).toHaveLength(3);
 });
+
+test("USAGE-034: with no plan windows nothing but the ring is drawn, at any width", () => {
+  const none = { tokens: false, plan: false, countdowns: false, cost: false };
+  expect(piecesFor(FULL_WIDTH, { tokens: true, windows: 0, cost: true })).toEqual(none);
+  expect(piecesFor(undefined, { tokens: true, windows: 0, cost: true })).toEqual(none);
+});

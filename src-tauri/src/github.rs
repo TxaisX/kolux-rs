@@ -135,7 +135,19 @@ pub(crate) fn host_allowed(gh: &Path, host: &str) -> Result<(), String> {
     host_allowed_with(gh, host, std::env::var("GH_HOST").ok().as_deref())
 }
 
+/// How long one `gh config get` may take (it reads gh's own config files and goes nowhere).
+const GH_CONFIG_LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
+
 fn host_allowed_with(gh: &Path, host: &str, gh_host: Option<&str>) -> Result<(), String> {
+    host_allowed_within(gh, host, gh_host, GH_CONFIG_LIMIT)
+}
+
+fn host_allowed_within(gh: &Path, host: &str, gh_host: Option<&str>, limit: std::time::Duration) -> Result<(), String> {
+    host_allowed_reading(gh, host, gh_host, &|args| gh_config(gh, args, limit))
+}
+
+/// The gate with the `gh config get` reader handed in, so a test can make a read fail.
+fn host_allowed_reading(gh: &Path, host: &str, gh_host: Option<&str>, read: &dyn Fn(&[&str]) -> ConfigRead) -> Result<(), String> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
@@ -158,12 +170,23 @@ fn host_allowed_with(gh: &Path, host: &str, gh_host: Option<&str>) -> Result<(),
     // FIX-2 (council FS 3): gh answers `config get -h <host> user` with the top-level user when
     // the host has none of its own, so an answer equal to plain `config get user` is no sign-in.
     // A host whose own user is the same login as the top-level one is refused too (safe side).
-    let signed = match gh_config(gh, &["config", "get", "-h", &h, "user"]) {
-        Some(user) => gh_config(gh, &["config", "get", "user"]).is_none_or(|top| top != user),
-        None => false,
-    };
-    if !signed {
-        return Err(format!("Kolux only talks to GitHub hosts gh is signed in to, and {h} is not one of them (gh auth login --hostname {h} signs in)."));
+    // FIX-3 (reliability review FIX-SOON 6): a read that fails or times out is no answer, and no
+    // answer refuses the host (it is never taken for "gh has no top-level user", which would sign
+    // in a host that has none of its own). Only a refusal that gh really gave is the plain one.
+    let cannot_check = || Err(format!("Kolux only talks to GitHub hosts gh is signed in to, and {h} is not one of them (gh did not answer its config read; try again in a moment)."));
+    match read(&["config", "get", "-h", &h, "user"]) {
+        ConfigRead::Value(user) => match read(&["config", "get", "user"]) {
+            ConfigRead::Value(top) if top == user => {
+                // FIX-3 (review AFTER 2): name the real reason; gh gives every host the top-level user.
+                return Err(format!("Kolux only talks to GitHub hosts gh is signed in to, and {h} is not one of them: the user gh reports for it is gh's top-level `user` setting, which every host falls back to (gh auth login --hostname {h} signs in)."));
+            }
+            ConfigRead::Value(_) | ConfigRead::Unset => {}
+            ConfigRead::Failed => return cannot_check(),
+        },
+        ConfigRead::Unset => {
+            return Err(format!("Kolux only talks to GitHub hosts gh is signed in to, and {h} is not one of them (gh auth login --hostname {h} signs in)."));
+        }
+        ConfigRead::Failed => return cannot_check(),
     }
     if let Ok(mut k) = known.lock() {
         k.insert(key, Instant::now());
@@ -171,34 +194,22 @@ fn host_allowed_with(gh: &Path, host: &str, gh_host: Option<&str>) -> Result<(),
     Ok(())
 }
 
-/// FIX-2 (council AFTER 4): one `gh config get` answer, trimmed; None when gh has none, fails or
-/// takes more than five seconds (it reads gh's own config files and goes nowhere).
-fn gh_config(gh: &Path, args: &[&str]) -> Option<String> {
-    use std::time::{Duration, Instant};
-    let mut cmd = std::process::Command::new(gh);
-    cmd.args(args).current_dir(std::env::temp_dir()).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
-    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000);
+/// What one `gh config get` came to.
+enum ConfigRead {
+    Value(String),
+    Unset,
+    Failed,
+}
+
+/// FIX-3: one `gh config get` through the bounded runner in scm.rs, which ends the whole process
+/// tree gh started at the limit (never only gh itself). A read that cannot run or does not answer
+/// in time is `Failed`; gh answering with nothing, or with an error, is `Unset`.
+fn gh_config(gh: &Path, args: &[&str], limit: std::time::Duration) -> ConfigRead {
+    match crate::scm::gh_config_within(gh, args, limit) {
+        Ok(Some(v)) => ConfigRead::Value(v),
+        Ok(None) => ConfigRead::Unset,
+        Err(_) => ConfigRead::Failed,
     }
-    let mut child = cmd.spawn().ok()?;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(15)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
-    }
-    let out = child.wait_with_output().ok()?;
-    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (out.status.success() && !text.is_empty()).then_some(text)
 }
 
 /// A GraphQL node id as GitHub gives them (letters, digits, `_`, `-`, `=`), so an id from the page
@@ -966,7 +977,8 @@ mod tests {
         let api_calls = || fs::read_to_string(dir.join("calls.txt")).unwrap_or_default().lines().filter(|l| l.starts_with("api")).count();
         // gh config get -h evil.example user falls back to the top-level user, the same answer as
         // gh config get user: that is no sign-in, so nothing goes to evil.example, create included.
-        assert!(host_allowed_with(&gh, "evil.example", None).unwrap_err().contains("signed in to"));
+        let why = host_allowed_with(&gh, "evil.example", None).unwrap_err();
+        assert!(why.contains("signed in to") && why.contains("top-level `user` setting"), "the refusal names the top-level setting: {why}");
         assert!(read_project(&gh, "evil.example", "acme", 3).is_err());
         assert!(create_issue(&gh, "evil.example", "acme/app", "Leak", "internal text", &[], &[]).unwrap_err().contains("signed in to"));
         assert!(repo_parent(&gh, "evil.example", "acme/app").is_err());
@@ -975,6 +987,64 @@ mod tests {
         assert!(host_allowed_with(&gh, "ghe.corp", None).is_ok());
         assert_eq!(repo_parent(&gh, "ghe.corp", "acme/app").unwrap(), None);
         assert_eq!(api_calls(), 1);
+    }
+
+    /// FIX-3 (reliability review FIX-SOON 6): a gh_config read that fails or times out is no answer,
+    /// and no answer refuses the host; it never reads as "no top-level user" (which would sign in
+    /// a host that has none of its own).
+    #[test]
+    fn a_failed_gh_config_read_refuses_the_host_instead_of_allowing_it() {
+        use std::cell::RefCell;
+        let gh = Path::new("fix3-failed-read-gh");
+        let host = |args: &[&str]| args.contains(&"-h");
+        // The host's own user reads fine; the top-level read fails: refused, with its own wording.
+        let err = host_allowed_reading(gh, "ghe.corp", None, &|a| if host(a) { ConfigRead::Value("ana".into()) } else { ConfigRead::Failed }).unwrap_err();
+        assert!(err.contains("did not answer its config read"), "{err}");
+        // The host's own read fails: refused too.
+        assert!(host_allowed_reading(gh, "ghe.corp", None, &|_| ConfigRead::Failed).unwrap_err().contains("did not answer its config read"));
+        // A host gh answers "no user" for is the plain not-signed-in refusal.
+        let plain = host_allowed_reading(gh, "ghe.corp", None, &|_| ConfigRead::Unset).unwrap_err();
+        assert!(plain.contains("signed in to") && !plain.contains("did not answer"), "{plain}");
+        // gh saying it has no top-level user is an answer: the host's own user stands.
+        let seen = RefCell::new(0);
+        let ok = host_allowed_reading(gh, "ghe.corp", None, &|a| {
+            *seen.borrow_mut() += 1;
+            if host(a) { ConfigRead::Value("ana".into()) } else { ConfigRead::Unset }
+        });
+        assert!(ok.is_ok() && *seen.borrow() == 2, "{ok:?}");
+    }
+
+    /// The gh_config read that hangs: the gate answers inside its limit, refuses, and the whole
+    /// tree gh started ends with it (a program gh left running would leave a mark seconds later).
+    #[cfg(windows)]
+    #[test]
+    fn a_gh_config_read_that_times_out_refuses_the_host_and_ends_the_whole_tree() {
+        let dir = crate::test_dir::temp("github-config-timeout");
+        fs::write(dir.join("late.cmd"), "@echo off\r\nping -n 4 127.0.0.1 >nul\r\necho late>\"%~dp0late.txt\"\r\n").unwrap();
+        let gh = dir.join("gh.cmd");
+        fs::write(&gh, "@echo off\r\nif /i \"%3\"==\"-h\" (echo ana& exit /b 0)\r\nstart \"\" /b cmd /c \"%~dp0late.cmd\"\r\nping -n 30 127.0.0.1 >nul\r\n").unwrap();
+        timed_out_read_refuses_and_leaves_no_mark(&gh, &dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_gh_config_read_that_times_out_refuses_the_host_and_ends_the_whole_tree() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::test_dir::temp("github-config-timeout");
+        let gh = dir.join("gh");
+        fs::write(&gh, "#!/bin/sh\nd=\"$(dirname \"$0\")\"\nif [ \"$3\" = -h ]; then echo ana; exit 0; fi\n( sleep 3; echo late > \"$d/late.txt\" ) &\nsleep 30\n").unwrap();
+        fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+        timed_out_read_refuses_and_leaves_no_mark(&gh, &dir);
+    }
+
+    fn timed_out_read_refuses_and_leaves_no_mark(gh: &Path, dir: &Path) {
+        let limit = std::time::Duration::from_secs(1);
+        let started = std::time::Instant::now();
+        let err = host_allowed_within(gh, "ghe.corp", None, limit).unwrap_err();
+        assert!(err.contains("did not answer its config read"), "{err}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(4), "took {:?}", started.elapsed());
+        std::thread::sleep(std::time::Duration::from_millis(4500));
+        assert!(!dir.join("late.txt").exists(), "a program gh started outlived the timed-out read");
     }
 
     #[test]

@@ -54,6 +54,8 @@ export const classic = {
   /** Not measured (nothing in the capture was past 90%): the meter's red, USAGE-002. Its own name, as
    *  `danger` above is the error-text colour. */
   "meter-danger": "#e5484d",
+  /** USAGE-034: the pane header's session-cost chip. A status colour, so light mode darkens it with the rest. */
+  "cost-fg": "#1f9db0",
 } as const;
 
 export type Theme = Record<keyof typeof classic, string>;

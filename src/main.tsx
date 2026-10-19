@@ -29,6 +29,8 @@ async function start() {
   // FIX-4 (council d2 AFTER 8): the App module (and everything it imports) is loaded for the main
   // window only; the Tower window never evaluates it. The load starts now and runs beside the settings read.
   const loadApp = import("./App");
+  // FIX-6 (council d2 AFTER 3): the load is awaited much later; a fast failure is already handled by then (the await below still throws).
+  loadApp.catch(() => {});
   const saved = await Promise.race([
     invoke<Record<string, unknown>>("get_settings").catch(() => null),
     new Promise<null>((r) => setTimeout(() => r(null), 1500)),

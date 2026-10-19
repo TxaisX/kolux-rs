@@ -42,6 +42,31 @@ struct Journal {
     /// the next delete's record so that delete can start, and are only ever removed, never put back.
     #[serde(default)]
     left: Vec<PathBuf>,
+    /// FIX-5 (2): the skill folders the delete scanned. A set-aside copy is removed only when it sits
+    /// under one of them, so a damaged or hand-edited record can never make the app remove a folder
+    /// elsewhere. A record without them (an older one) removes nothing; its entries are dropped.
+    #[serde(default)]
+    roots: Vec<PathBuf>,
+}
+
+/// Why the record could not be read.
+#[derive(Debug)]
+enum ReadError {
+    /// The file could not be read (held by another program, a disk error); the next try may work.
+    Io(std::io::Error),
+    /// The file was read but is not a record; it stays as it is, and a hidden skill it may have
+    /// named must be renamed back by hand.
+    Parse(serde_json::Error),
+}
+
+/// What an earlier delete left behind, settled so a new delete can start.
+struct Settled {
+    /// Set-aside copies a finished delete could not remove yet; this delete takes them on.
+    carry: Vec<PathBuf>,
+    /// The skill folders this delete and the carried copies belong to.
+    roots: Vec<PathBuf>,
+    /// Log lines for the entries the record is rewritten without; written once that happened.
+    dropped: Vec<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -127,40 +152,74 @@ pub fn lock(app_dir: &Path) -> Result<OpLock, LockError> {
     Ok(guard)
 }
 
-/// Deletes `items` together for a caller that holds the lock. Err means nothing changed.
-fn delete_held(app_dir: &Path, items: &[PathBuf]) -> Result<Outcome, String> {
-    // A record left by an earlier delete is finished first. If it was done and only its set-aside
-    // copies are left (a file another program still holds), they are carried into this delete's
-    // record, so they are never forgotten and never stop this delete. A record that was not done
-    // and could not be put back is never written over.
-    let mut carry = vec![];
-    if app_dir.join(JOURNAL).exists() {
-        let stuck = recover(app_dir);
-        if app_dir.join(JOURNAL).exists() {
-            match read(app_dir) {
-                Some(old) if old.done => {
-                    // FIX-4 (1): only entries that are what a delete here writes are carried. A refused
-                    // entry (a copy that is not next to its original, or not named as a set-aside copy)
-                    // would otherwise become a carried copy, which is checked by name alone, and be
-                    // removed by this delete. It is dropped from the record and left on disk.
-                    let (kept, refused): (Vec<_>, Vec<_>) = old.moves.into_iter().partition(|(from, aside)| aside_of(from, aside));
-                    for (from, aside) in refused {
-                        crate::diag::write(app_dir, &format!("skill delete: dropped {} from the record and left it alone, it is not a copy set aside from {}", aside.display(), from.display()));
-                    }
-                    let (kept_left, refused_left): (Vec<_>, Vec<_>) = old.left.into_iter().partition(|a| set_aside_name(a));
-                    for a in refused_left {
-                        crate::diag::write(app_dir, &format!("skill delete: dropped {} from the record and left it alone, it is not a copy this app set aside", a.display()));
-                    }
-                    carry = kept.into_iter().map(|(_, aside)| aside).chain(kept_left).filter(|a| std::fs::symlink_metadata(a).is_ok()).collect();
-                }
-                _ => {
-                    // FIX-4 (2): the error names what is in the way and where, so the user can clear it.
-                    let why = if stuck.is_empty() { format!("its record {} cannot be read; move that file away", app_dir.join(JOURNAL).display()) } else { stuck.join("; ") };
-                    return Err(format!("Nothing was deleted: an earlier delete could not be cleared up: {why}"));
+/// Settles the record an earlier delete may have left, for a caller that holds the lock. Err means
+/// no delete can start and says why; Ok carries what the next delete takes on.
+///
+/// A done record whose set-aside copies are still there (a file another program holds) hands them
+/// on, so they are never forgotten and never stop a delete; an entry the record cannot vouch for
+/// (FIX-4 (1), FIX-5 (2): not next to its original, not named as a set-aside copy, or not under a
+/// skill folder) is dropped from the record and left on disk, and logged once the new record is
+/// written without it (AFTER 3). A not-done record that could not be put back is never written over.
+fn settle(app_dir: &Path, roots: &[PathBuf]) -> Result<Settled, String> {
+    let mut settled = Settled { carry: vec![], roots: roots.to_vec(), dropped: vec![] };
+    let path = app_dir.join(JOURNAL);
+    if !path.exists() {
+        return Ok(settled);
+    }
+    let mut stuck = recover(app_dir);
+    if !path.exists() {
+        return Ok(settled);
+    }
+    let prefix = "Nothing was deleted: an earlier delete could not be cleared up";
+    match read(app_dir) {
+        Ok(old) if old.done => {
+            let entries = old.moves.iter().map(|(from, aside)| (aside, Some(from.as_path()))).chain(old.left.iter().map(|a| (a, None)));
+            for (aside, from) in entries {
+                match refusal(&old.roots, from, aside) {
+                    Some(why) => settled.dropped.push(format!("skill delete: dropped {} from the record and left it alone, {why}", aside.display())),
+                    None if std::fs::symlink_metadata(aside).is_ok() => settled.carry.push(aside.clone()),
+                    None => {}
                 }
             }
+            if !settled.carry.is_empty() {
+                // The carried copies stay under the folders their own delete scanned.
+                for r in old.roots {
+                    if !settled.roots.iter().any(|known| same(known, &r)) {
+                        settled.roots.push(r);
+                    }
+                }
+            }
+            Ok(settled)
         }
+        Ok(_) => {
+            // FIX-5 (3): every copy was put back but the record itself could not be cleared (the
+            // only lines are about the record): one more try before it is reported as in the way.
+            if stuck.iter().all(|line| line.starts_with("its record")) {
+                stuck = recover(app_dir);
+                if !path.exists() {
+                    return Ok(settled);
+                }
+                if stuck.is_empty() {
+                    stuck.push(format!("its record {} could not be cleared; try again", path.display()));
+                }
+            }
+            // FIX-4 (2): the error names what is in the way and where, so the user can clear it.
+            Err(format!("{prefix}: {}", stuck.join("; ")))
+        }
+        // FIX-5 (3): a record another program holds is not a file to move away; moving it would
+        // strand the hidden skills it names.
+        Err(ReadError::Io(e)) => Err(format!("{prefix}: its record {} could not be read ({e}); try again", path.display())),
+        Err(ReadError::Parse(e)) => Err(format!(
+            "{prefix}: its record {} is damaged ({e}); move that file away, then look in the skill folders for folders named {ASIDE}*: they are hidden skills, rename each back to its own name",
+            path.display()
+        )),
     }
+}
+
+/// Deletes `items` together for a caller that holds the lock and settled the record. Err means
+/// nothing changed.
+fn delete_held(app_dir: &Path, settled: Settled, items: &[PathBuf]) -> Result<Outcome, String> {
+    let Settled { carry, roots, dropped } = settled;
     let stamp = format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
     let mut moves = Vec::new();
     for item in items {
@@ -172,8 +231,13 @@ fn delete_held(app_dir: &Path, items: &[PathBuf]) -> Result<Outcome, String> {
         }
         moves.push((item.clone(), parent.join(format!("{ASIDE}{stamp}-{}", name.to_string_lossy()))));
     }
-    let mut journal = Journal { done: false, moves, left: carry };
-    write(app_dir, &journal)?;
+    let fail = |e: std::io::Error| format!("Nothing was deleted: the delete record could not be written ({e})");
+    let mut journal = Journal { done: false, moves, left: carry, roots };
+    write(app_dir, &journal).map_err(fail)?;
+    // AFTER 3: the record now really is without the refused entries.
+    for line in &dropped {
+        crate::diag::write(app_dir, line);
+    }
     for (i, (from, aside)) in journal.moves.iter().enumerate() {
         if let Err(e) = rename(from, aside) {
             let mut stuck = false;
@@ -188,7 +252,7 @@ fn delete_held(app_dir: &Path, items: &[PathBuf]) -> Result<Outcome, String> {
             if journal.left.is_empty() {
                 let _ = std::fs::remove_file(app_dir.join(JOURNAL));
             } else {
-                let _ = write(app_dir, &Journal { done: true, moves: vec![], left: journal.left.clone() });
+                let _ = write(app_dir, &Journal { done: true, moves: vec![], left: journal.left.clone(), roots: journal.roots.clone() });
             }
             return Err(format!("Nothing was deleted: {} could not be moved ({e})", from.display()));
         }
@@ -198,14 +262,15 @@ fn delete_held(app_dir: &Path, items: &[PathBuf]) -> Result<Outcome, String> {
         std::process::exit(9);
     }
     journal.done = true;
-    write(app_dir, &journal)?;
+    write(app_dir, &journal).map_err(fail)?;
     // Only this delete's own copies decide its outcome; carried ones wait for the next try.
     let mine: Vec<PathBuf> = finish(app_dir, &journal).into_iter().filter(|a| journal.moves.iter().any(|(_, m)| m == a)).collect();
     Ok(if mine.is_empty() { Outcome::Deleted } else { Outcome::Partly(mine) })
 }
 
-fn read(app_dir: &Path) -> Option<Journal> {
-    serde_json::from_str(&std::fs::read_to_string(app_dir.join(JOURNAL)).ok()?).ok()
+fn read(app_dir: &Path) -> Result<Journal, ReadError> {
+    let text = std::fs::read_to_string(app_dir.join(JOURNAL)).map_err(ReadError::Io)?;
+    serde_json::from_str(&text).map_err(ReadError::Parse)
 }
 
 /// What the start-up recovery did.
@@ -216,10 +281,17 @@ pub enum Startup {
     /// Another running instance holds the lock; its delete may be under way, so nothing was touched.
     /// The next delete and the next start recover.
     Skipped,
-    /// The lock file could not be opened at all, so no instance can be mid-delete: logged, and
-    /// recovered anyway, or a hidden skill would stay hidden at every start.
+    /// The lock file could not be opened, twice: logged, and recovered without the lock, because
+    /// leaving the record would hide a skill at every start. Another instance mid-delete cannot be
+    /// ruled out (see `startup_recover`).
     RecoveredUnlocked,
 }
+
+#[cfg(test)]
+type Hook = Box<dyn FnOnce() + Send>;
+/// Tests: run once, for that app folder, right before start-up recovery tries the lock again.
+#[cfg(test)]
+static ON_RETRY: Mutex<Vec<(PathBuf, Hook)>> = Mutex::new(Vec::new());
 
 /// SKILL-023: what the app runs at start. An interrupted delete is undone or completed under the
 /// skill lock, so a second instance never puts back a delete the first one is still running.
@@ -242,8 +314,17 @@ pub fn startup_recover(app_dir: &Path) -> Startup {
             // recovery runs without the lock, because leaving the record would hide a skill at every
             // start. The only data that could then be put back or half-removed is what the other
             // instance's user chose to delete.
-            Err(LockError::Failed(_)) if !tried => {
+            Err(LockError::Failed(why)) if !tried => {
                 tried = true;
+                crate::diag::write(app_dir, &format!("skill delete: {why}; retrying the skill lock once"));
+                #[cfg(test)]
+                {
+                    let at = ON_RETRY.lock().unwrap().iter().position(|(dir, _)| dir == app_dir);
+                    if let Some(i) = at {
+                        let (_, hook) = ON_RETRY.lock().unwrap().remove(i);
+                        hook();
+                    }
+                }
                 std::thread::sleep(PAUSE);
             }
             Err(LockError::Failed(why)) => {
@@ -283,22 +364,60 @@ fn aside_of(from: &Path, aside: &Path) -> bool {
     same_parent && a.strip_prefix(ASIDE).and_then(|r| r.strip_suffix(f)).and_then(|r| r.strip_suffix('-')).is_some_and(stamped)
 }
 
+/// FIX-5 (2): the copy sits in one of the skill folders the record names (or below one).
+fn under_root(aside: &Path, roots: &[PathBuf]) -> bool {
+    aside.parent().is_some_and(|parent| roots.iter().any(|root| inside(parent, root)))
+}
+
+/// Why a record entry may not be removed, or None when it is exactly what a delete here writes:
+/// named `.kolux-deleting-<pid>-<nanos>-<name>`, next to its original when one is on record
+/// (`aside_of`), and under one of the skill folders the record names (`under_root`). A record
+/// without skill folders (an older one) vouches for nothing.
+fn refusal(roots: &[PathBuf], from: Option<&Path>, aside: &Path) -> Option<String> {
+    match from {
+        Some(f) if !aside_of(f, aside) => return Some(format!("it is not a copy set aside from {}", f.display())),
+        None if !set_aside_name(aside) => return Some("it is not a copy this app set aside".into()),
+        _ => {}
+    }
+    (!under_root(aside, roots)).then(|| "it is not under a skill folder this app scanned".to_string())
+}
+
 /// At startup: an unfinished delete is undone (not yet done) or completed (done). Returns one line
-/// per entry that is in the way (also written to the log); empty when the record is cleared or done.
+/// per entry that is in the way, or about the record itself when it could not be cleared (also
+/// written to the log); empty when the record is cleared or done.
 pub fn recover(app_dir: &Path) -> Vec<String> {
     let mut stuck = vec![];
-    let Some(journal) = read(app_dir) else { return stuck };
+    let path = app_dir.join(JOURNAL);
+    let journal = match read(app_dir) {
+        Ok(j) => j,
+        Err(ReadError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => return stuck,
+        // FIX-5 (3): an unreadable record is left as it is and said so; the next start or delete tries again.
+        Err(ReadError::Io(e)) => {
+            crate::diag::write(app_dir, &format!("skill delete: the record {} could not be read ({e}); tried again at the next start or delete", path.display()));
+            return stuck;
+        }
+        Err(ReadError::Parse(e)) => {
+            crate::diag::write(app_dir, &format!("skill delete: the record {} is damaged ({e}) and is left in place; folders named {ASIDE}* in the skill folders are hidden skills to rename back by hand", path.display()));
+            return stuck;
+        }
+    };
     if journal.done {
         finish(app_dir, &journal);
         return stuck;
     }
+    let mut dropped = vec![];
     for (from, aside) in journal.moves.iter().rev() {
         if std::fs::symlink_metadata(aside).is_err() {
             continue; // never moved, or already put back
         }
-        let why = if !aside_of(from, aside) {
-            format!("{} is not a copy set aside from {}, so it is not put back; move or remove it", aside.display(), from.display())
-        } else if std::fs::symlink_metadata(from).is_err() {
+        if !aside_of(from, aside) {
+            // FIX-5 (1): an entry that is not a copy set aside from its original can never be put
+            // back, so keeping it would only stop every later delete. It is left on disk as it is and
+            // dropped from the record, which is said once the record is really without it.
+            dropped.push(format!("skill delete: dropped {} from the record and left it alone, it is not a copy set aside from {}", aside.display(), from.display()));
+            continue;
+        }
+        let why = if std::fs::symlink_metadata(from).is_err() {
             match rename(aside, from) {
                 Ok(()) => continue,
                 Err(e) => format!("{} could not be put back as {} ({e}); close what holds it or move it by hand", aside.display(), from.display()),
@@ -306,7 +425,7 @@ pub fn recover(app_dir: &Path) -> Vec<String> {
         } else {
             // Both are there: the original came back after the delete set the copy aside. Neither is
             // overwritten or removed; the record stays so this is looked into, not forgotten.
-            format!("{} and its set-aside copy {} both exist; move or remove one of them", from.display(), aside.display())
+            format!("{} and its set-aside copy {} both exist; move one of them out of the way", from.display(), aside.display())
         };
         crate::diag::write(app_dir, &format!("skill delete: {why}"));
         stuck.push(why);
@@ -314,13 +433,26 @@ pub fn recover(app_dir: &Path) -> Vec<String> {
     if !stuck.is_empty() {
         return stuck;
     }
-    if journal.left.is_empty() {
-        let _ = std::fs::remove_file(app_dir.join(JOURNAL));
+    // FIX-5 (3): a record that was put back but could not be cleared is reported as such, never as
+    // unreadable; its line starts with "its record" so the next delete knows to try once more.
+    let cleared = if journal.left.is_empty() {
+        std::fs::remove_file(&path).map_err(|e| format!("its record {} could not be removed ({e}); try again", path.display()))
     } else {
         // Copies carried from an earlier finished delete are never put back, only removed.
-        let rest = Journal { done: true, moves: vec![], left: journal.left };
-        if write(app_dir, &rest).is_ok() {
+        let rest = Journal { done: true, moves: vec![], left: journal.left, roots: journal.roots };
+        write(app_dir, &rest).map_err(|e| format!("its record {} could not be rewritten ({e}); try again", path.display())).map(|()| {
             finish(app_dir, &rest);
+        })
+    };
+    match cleared {
+        Ok(()) => {
+            for line in dropped {
+                crate::diag::write(app_dir, &line);
+            }
+        }
+        Err(why) => {
+            crate::diag::write(app_dir, &format!("skill delete: {why}"));
+            stuck.push(why);
         }
     }
     stuck
@@ -331,14 +463,17 @@ pub fn recover(app_dir: &Path) -> Vec<String> {
 fn finish(app_dir: &Path, journal: &Journal) -> Vec<PathBuf> {
     // T-441-c: only a path Kolux set aside itself is ever removed. The journal is read back at every
     // launch, so an entry naming anything else (a damaged or hand-edited file) is refused, logged and
-    // left on disk; the journal stays so the refusal can be looked into.
-    // A move's copy must also sit next to its original and carry its name; a carried copy has no
-    // original on record, so only its name's exact form can be checked.
-    let candidates = journal.moves.iter().map(|(from, aside)| (aside, aside_of(from, aside))).chain(journal.left.iter().map(|a| (a, set_aside_name(a))));
-    let left: Vec<PathBuf> = candidates
-        .filter(|(a, ok)| {
-            if !ok {
-                crate::diag::write(app_dir, &format!("skill delete: refused to remove {}, it is not a copy this app set aside", a.display()));
+    // left on disk; the journal stays so the refusal can be looked into. What "set aside itself"
+    // means is `refusal`: the exact name form, next to its original when one is on record, and under
+    // a skill folder the record names (FIX-5 (2)).
+    let entries = journal.moves.iter().map(|(from, aside)| (aside, Some(from.as_path()))).chain(journal.left.iter().map(|a| (a, None)));
+    let left: Vec<PathBuf> = entries
+        .filter(|(a, from)| {
+            if std::fs::symlink_metadata(a).is_err() {
+                return false; // already gone
+            }
+            if let Some(why) = refusal(&journal.roots, *from, a) {
+                crate::diag::write(app_dir, &format!("skill delete: refused to remove {}, {why}", a.display()));
                 return true;
             }
             remove(a).is_err()
@@ -389,13 +524,12 @@ fn put_back(held: &Path, back: &Path) -> std::io::Result<()> {
     rename(held, back)
 }
 
-fn write(app_dir: &Path, journal: &Journal) -> Result<(), String> {
+fn write(app_dir: &Path, journal: &Journal) -> std::io::Result<()> {
     let path = app_dir.join(JOURNAL);
     let tmp = path.with_extension("json.tmp");
-    let fail = |e: std::io::Error| format!("Nothing was deleted: the delete record could not be written ({e})");
-    std::fs::create_dir_all(app_dir).map_err(fail)?;
-    std::fs::write(&tmp, serde_json::to_vec(journal).map_err(|e| e.to_string())?).map_err(fail)?;
-    std::fs::rename(&tmp, &path).map_err(fail)
+    std::fs::create_dir_all(app_dir)?;
+    std::fs::write(&tmp, serde_json::to_vec(journal).map_err(std::io::Error::other)?)?;
+    std::fs::rename(&tmp, &path)
 }
 
 /// SKILL-022: one skill the user chose, by the path and change time the list showed.
@@ -591,13 +725,25 @@ pub fn run(app_dir: &Path, places: &Places, picks: &[Pick]) -> Result<Vec<Done>,
     };
     let planned = plan(places, picks)?;
     let mut out = vec![];
+    // AFTER 5: the record an earlier delete left is settled once per request, not once per skill. A
+    // stuck one gives every skill the same answer, logged once, with the put-back retries paid once;
+    // after a failed delete it is settled once more for the skills still to come.
+    let mut next = Some(settle(app_dir, &places.deletable));
     for p in planned {
         if let Some(why) = p.blocked {
             out.push(Done { path: p.path, outcome: "skipped", note: Some(why.into()) });
             continue;
         }
+        let settled = match next.take().unwrap_or_else(|| settle(app_dir, &places.deletable)) {
+            Ok(s) => s,
+            Err(e) => {
+                out.push(Done { path: p.path, outcome: "failed", note: Some(e.clone()) });
+                next = Some(Err(e));
+                continue;
+            }
+        };
         let items: Vec<PathBuf> = p.items.iter().map(|i| PathBuf::from(&i.path)).collect();
-        out.push(match delete_held(app_dir, &items) {
+        out.push(match delete_held(app_dir, settled, &items) {
             Ok(Outcome::Deleted) => Done { path: p.path, outcome: "deleted", note: None },
             Ok(Outcome::Partly(left)) => {
                 let n = left.len();
@@ -629,10 +775,13 @@ mod tests {
     use super::*;
     use crate::test_dir::temp;
 
-    /// The journal's own tests take the lock and delete a hand-picked set, as `run` does per skill.
+    /// The journal's own tests take the lock and delete a hand-picked set, as `run` does per skill,
+    /// with the items' own folders as the scanned skill folders.
     fn delete(app_dir: &Path, items: &[PathBuf]) -> Result<Outcome, String> {
         let _one = lock(app_dir).map_err(|e| format!("{e:?}"))?;
-        delete_held(app_dir, items)
+        let mut roots: Vec<PathBuf> = items.iter().filter_map(|i| i.parent().map(Path::to_path_buf)).collect();
+        roots.dedup();
+        delete_held(app_dir, settle(app_dir, &roots)?, items)
     }
 
     fn skill(root: &Path, name: &str) -> PathBuf {
@@ -714,7 +863,7 @@ mod tests {
         let t = temp("skill023-d");
         let (app, root) = (t.join("app"), t.join("skills"));
         let aside = skill(&root, ".kolux-deleting-1-2-alpha");
-        write(&app, &Journal { done: true, moves: vec![(root.join("alpha"), aside)], left: vec![] }).unwrap();
+        write(&app, &Journal { done: true, moves: vec![(root.join("alpha"), aside)], left: vec![], roots: vec![root.clone()] }).unwrap();
         recover(&app);
         assert!(names(&root).is_empty());
         assert!(!app.join(JOURNAL).exists());
@@ -726,7 +875,7 @@ mod tests {
         let (app, root) = (t.join("app"), t.join("skills"));
         let plain = skill(&root, "alpha");
         let aside = skill(&root, ".kolux-deleting-1-2-beta");
-        write(&app, &Journal { done: true, moves: vec![(root.join("x"), plain.clone()), (root.join("beta"), aside)], left: vec![] }).unwrap();
+        write(&app, &Journal { done: true, moves: vec![(root.join("x"), plain.clone()), (root.join("beta"), aside)], left: vec![], roots: vec![root.clone()] }).unwrap();
         recover(&app);
         assert_eq!(names(&root), vec!["alpha".to_string()], "the plain folder is kept, the set-aside one goes");
         assert!(plain.join("SKILL.md").exists());
@@ -970,7 +1119,7 @@ mod tests {
         let alpha = skill(&root, "alpha");
         let beta = skill(&root, "beta");
         let old = skill(&root, ".kolux-deleting-1-2-old");
-        write(&app, &Journal { done: true, moves: vec![(root.join("old"), old.clone())], left: vec![] }).unwrap();
+        write(&app, &Journal { done: true, moves: vec![(root.join("old"), old.clone())], left: vec![], roots: vec![root.clone()] }).unwrap();
         // Another program holds a file in the leftover, so it cannot be removed for now.
         let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(old.join(SKILL_FILE)).unwrap();
         let at = places(&[&root], &[]);
@@ -991,21 +1140,29 @@ mod tests {
         let (app, root) = (t.join("app"), t.join("skills"));
         let aside = skill(&root, ".kolux-deleting-3-4-alpha");
         let old = skill(&root, ".kolux-deleting-1-2-old");
-        write(&app, &Journal { done: false, moves: vec![(root.join("alpha"), aside)], left: vec![old] }).unwrap();
+        write(&app, &Journal { done: false, moves: vec![(root.join("alpha"), aside)], left: vec![old], roots: vec![root.clone()] }).unwrap();
         recover(&app);
         assert_eq!(names(&root), ["alpha"], "alpha is back, the carried copy is gone");
         assert!(!app.join(JOURNAL).exists());
     }
 
     #[test]
-    fn fixsoon3_a_record_written_before_carried_copies_existed_is_still_finished() {
+    /// A record from before carried copies existed still reads. FIX-5 (2): one from before the
+    /// skill folders were on record names none, so it vouches for nothing: its copy is refused and
+    /// left on disk, and the next delete drops it from the record instead of removing it.
+    fn fixsoon3_a_record_written_before_carried_copies_existed_is_still_read_and_removes_nothing() {
         let t = temp("fixsoon3-d");
         let (app, root) = (t.join("app"), t.join("skills"));
         let aside = skill(&root, ".kolux-deleting-1-2-alpha");
         std::fs::create_dir_all(&app).unwrap();
         std::fs::write(app.join(JOURNAL), serde_json::json!({ "done": true, "moves": [[root.join("alpha"), aside]] }).to_string()).unwrap();
         recover(&app);
-        assert!(names(&root).is_empty());
+        assert_eq!(names(&root), [".kolux-deleting-1-2-alpha"], "left on disk");
+        assert!(app.join(JOURNAL).exists());
+        assert!(log_of(&app).contains("not under a skill folder"), "{}", log_of(&app));
+        let beta = skill(&root, "beta");
+        assert_eq!(delete(&app, &[beta]), Ok(Outcome::Deleted));
+        assert_eq!(names(&root), [".kolux-deleting-1-2-alpha"]);
         assert!(!app.join(JOURNAL).exists());
     }
 
@@ -1017,7 +1174,7 @@ mod tests {
         let (app, root) = (t.join("app"), t.join("skills"));
         let a = skill(&root, "alpha");
         let old = skill(&root, ".kolux-deleting-1-2-old");
-        write(&app, &Journal { done: true, moves: vec![], left: vec![old.clone()] }).unwrap();
+        write(&app, &Journal { done: true, moves: vec![], left: vec![old.clone()], roots: vec![root.clone()] }).unwrap();
         let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(old.join(SKILL_FILE)).unwrap();
         // The same item twice: the second move finds nothing, so the first is put back.
         let err = delete(&app, &[a.clone(), a]).unwrap_err();
@@ -1185,7 +1342,7 @@ mod tests {
     // Fix round 3 (stand-in review of 87d34ec).
     fn not_done_record(app: &Path, root: &Path) -> PathBuf {
         let aside = skill(root, ".kolux-deleting-1-2-alpha");
-        write(app, &Journal { done: false, moves: vec![(root.join("alpha"), aside.clone())], left: vec![] }).unwrap();
+        write(app, &Journal { done: false, moves: vec![(root.join("alpha"), aside.clone())], left: vec![], roots: vec![] }).unwrap();
         aside
     }
 
@@ -1214,7 +1371,7 @@ mod tests {
         std::fs::create_dir_all(&app).unwrap();
         let other = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(app.join(LOCK)).unwrap();
         other.lock().unwrap();
-        assert!(HELD.lock().unwrap().is_empty() || !HELD.lock().unwrap().contains(&app), "nothing in this process holds it");
+        assert!(!HELD.lock().unwrap().contains(&app), "nothing in this process holds it");
         assert_eq!(startup_recover(&app), Startup::Skipped);
         assert_eq!(names(&root), [aside.file_name().unwrap().to_string_lossy().into_owned()], "nothing moved");
         assert!(app.join(JOURNAL).exists());
@@ -1267,12 +1424,13 @@ mod tests {
         let (app, root, other) = (t.join("app"), t.join("skills"), t.join("elsewhere"));
         let stray = skill(&other, ".kolux-deleting-1-2-alpha");
         // Not done: putting it back would move a folder from outside the skill folders into one.
-        write(&app, &Journal { done: false, moves: vec![(root.join("alpha"), stray.clone())], left: vec![] }).unwrap();
-        recover(&app);
+        write(&app, &Journal { done: false, moves: vec![(root.join("alpha"), stray.clone())], left: vec![], roots: vec![] }).unwrap();
+        assert!(recover(&app).is_empty(), "FIX-5 (1): not stuck, the entry is dropped");
         assert!(stray.is_dir() && !root.join("alpha").exists());
-        assert!(app.join(JOURNAL).exists());
+        assert!(!app.join(JOURNAL).exists(), "the refused entry is dropped with the record, so later deletes go through");
+        assert!(log_of(&app).contains("dropped"), "{}", log_of(&app));
         // Done: removing it would delete a folder that is not the original's neighbour.
-        write(&app, &Journal { done: true, moves: vec![(root.join("alpha"), stray.clone())], left: vec![] }).unwrap();
+        write(&app, &Journal { done: true, moves: vec![(root.join("alpha"), stray.clone())], left: vec![], roots: vec![] }).unwrap();
         recover(&app);
         assert!(stray.is_dir(), "kept");
         assert!(app.join(JOURNAL).exists());
@@ -1284,35 +1442,175 @@ mod tests {
     /// FIX-SOON 1: the fix3_e fixture, then a delete. The refused entry used to be carried into the
     /// new record's `left` list, which is checked by name alone, and removed from `elsewhere`.
     #[test]
-    fn fix4_a_refused_record_entry_is_dropped_by_the_next_delete_and_nothing_outside_the_skill_folder_goes() {
+    fn fix4_a_refused_record_entry_is_dropped_by_the_next_delete_and_only_exact_set_aside_copies_next_to_their_originals_go() {
         let t = temp("fix4-a");
         let (app, root, other) = (t.join("app"), t.join("skills"), t.join("elsewhere"));
         let stray = skill(&other, ".kolux-deleting-1-2-alpha");
         let plain = skill(&other, "plain");
         let beta = skill(&root, "beta");
-        write(&app, &Journal { done: true, moves: vec![(root.join("alpha"), stray.clone())], left: vec![plain.clone()] }).unwrap();
+        write(&app, &Journal { done: true, moves: vec![(root.join("alpha"), stray.clone())], left: vec![plain.clone()], roots: vec![] }).unwrap();
         recover(&app);
         assert!(app.join(JOURNAL).exists(), "start-up refuses both entries and keeps the record");
         assert_eq!(delete(&app, &[beta]).unwrap(), Outcome::Deleted);
-        assert_eq!(names(&other), [".kolux-deleting-1-2-alpha", "plain"], "nothing outside the skill folder was removed");
+        assert_eq!(names(&other), [".kolux-deleting-1-2-alpha", "plain"], "neither refused entry was removed");
         assert!(names(&root).is_empty(), "the chosen skill is gone");
         assert!(!app.join(JOURNAL).exists(), "the refused entries are dropped, not carried");
         let log = log_of(&app);
         assert!(log.contains(&format!("dropped {} from the record", stray.display())) && log.contains(&format!("dropped {} from the record", plain.display())), "{log}");
     }
 
-    /// FIX-SOON 2 (refused-entry case): the delete error names the entry and both paths.
+    /// FIX-4 FIX-SOON 2, then FIX-5 FIX-SOON 1: a refused entry in a NOT-done record can never be put
+    /// back, so it is dropped from the record (logged, left on disk) and a later delete goes through,
+    /// instead of every delete failing until the user acts on a folder outside the skill folders.
     #[test]
-    fn fix4_a_delete_behind_a_refused_not_done_record_names_the_paths() {
+    fn fix5_a_refused_entry_in_a_not_done_record_is_dropped_and_a_later_delete_goes_through() {
         let t = temp("fix4-b");
         let (app, root, other) = (t.join("app"), t.join("skills"), t.join("elsewhere"));
         let stray = skill(&other, ".kolux-deleting-1-2-alpha");
         let from = root.join("alpha");
-        write(&app, &Journal { done: false, moves: vec![(from.clone(), stray.clone())], left: vec![] }).unwrap();
+        write(&app, &Journal { done: false, moves: vec![(from.clone(), stray.clone())], left: vec![], roots: vec![] }).unwrap();
         let beta = skill(&root, "beta");
-        let err = delete(&app, &[beta]).unwrap_err();
-        assert!(err.starts_with("Nothing was deleted") && err.contains("not a copy set aside") && err.contains(&stray.display().to_string()) && err.contains(&from.display().to_string()), "{err}");
-        assert!(root.join("beta").is_dir() && stray.is_dir());
+        assert_eq!(delete(&app, &[beta]), Ok(Outcome::Deleted));
+        assert!(names(&root).is_empty(), "the chosen skill is gone");
+        assert!(stray.is_dir() && !from.exists(), "the refused entry is neither put back nor removed");
+        assert!(!app.join(JOURNAL).exists(), "the refused entry is dropped with the record");
+        let log = log_of(&app);
+        assert!(log.contains(&format!("dropped {} from the record", stray.display())) && log.contains(&from.display().to_string()), "{log}");
+        assert!(!log.contains("remove"), "no line tells the user to remove a folder the app does not vouch for: {log}");
+    }
+
+    // Fix round 5 (stand-in review of ed8df8ed).
+
+    /// FIX-SOON 3 (I/O): a record another program holds is reported with the OS error and "try
+    /// again", never as a file to move away (moving it would strand the hidden skills it names).
+    #[cfg(windows)]
+    #[test]
+    fn fix5_c_a_record_that_cannot_be_read_names_the_os_error_and_says_try_again() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let t = temp("fix5-c1");
+        let (app, root) = (t.join("app"), t.join("skills"));
+        not_done_record(&app, &root);
+        let beta = skill(&root, "beta");
+        let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(app.join(JOURNAL)).unwrap();
+        let err = delete(&app, std::slice::from_ref(&beta)).unwrap_err();
+        assert!(err.starts_with("Nothing was deleted") && err.contains("could not be read") && err.contains("try again") && err.contains(&app.join(JOURNAL).display().to_string()), "{err}");
+        assert!(!err.contains("move that file away") && !err.contains("damaged"), "{err}");
+        assert_eq!(names(&root), [".kolux-deleting-1-2-alpha", "beta"], "nothing moved");
+        drop(held);
+        assert_eq!(delete(&app, &[beta]), Ok(Outcome::Deleted), "the same request goes through once the file is free");
+        assert_eq!(names(&root), ["alpha"], "the hidden skill came back first");
+    }
+
+    /// FIX-SOON 3 (parse): a damaged record is named as such, and the message says that folders
+    /// named `.kolux-deleting-*` in the skill folders are hidden skills to rename back by hand.
+    #[test]
+    fn fix5_c_a_damaged_record_says_so_and_names_the_hidden_folders_to_rename_back() {
+        let t = temp("fix5-c2");
+        let (app, root) = (t.join("app"), t.join("skills"));
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(app.join(JOURNAL), "{not json").unwrap();
+        let beta = skill(&root, "beta");
+        let err = delete(&app, std::slice::from_ref(&beta)).unwrap_err();
+        assert!(err.starts_with("Nothing was deleted") && err.contains("damaged") && err.contains(&app.join(JOURNAL).display().to_string()), "{err}");
+        assert!(err.contains(ASIDE) && err.contains("rename"), "{err}");
+        assert!(!err.contains("could not be read") && !err.contains("try again"), "{err}");
+        assert!(root.join("beta").is_dir() && app.join(JOURNAL).exists());
+        assert_eq!(startup_recover(&app), Startup::Recovered, "start-up logs the damaged record and goes on");
+        assert!(log_of(&app).contains("damaged"), "{}", log_of(&app));
+    }
+
+    /// FIX-SOON 3 (rewrite): a not-done record whose copies were all put back but which could not be
+    /// removed is retried and reported as such; it is never called unreadable (it reads fine).
+    #[cfg(windows)]
+    #[test]
+    fn fix5_c_a_record_cleared_but_not_rewritten_is_retried_and_never_called_unreadable() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let t = temp("fix5-c3");
+        let (app, root) = (t.join("app"), t.join("skills"));
+        not_done_record(&app, &root);
+        let beta = skill(&root, "beta");
+        // Readable, but not removable or replaceable: the holder shares reads only.
+        let held = std::fs::OpenOptions::new().read(true).share_mode(1).open(app.join(JOURNAL)).unwrap();
+        let err = delete(&app, std::slice::from_ref(&beta)).unwrap_err();
+        assert!(err.starts_with("Nothing was deleted") && err.contains("could not be removed") && err.contains("try again"), "{err}");
+        assert!(!err.contains("cannot be read") && !err.contains("could not be read") && !err.contains("damaged"), "{err}");
+        assert_eq!(names(&root), ["alpha", "beta"], "the hidden skill was put back, only the record is in the way");
+        assert!(app.join(JOURNAL).exists());
+        drop(held);
+        assert_eq!(delete(&app, &[beta]), Ok(Outcome::Deleted));
+        assert_eq!(names(&root), ["alpha"]);
+        assert!(!app.join(JOURNAL).exists());
+    }
+
+    /// FIX-SOON 2: a copy with the exact set-aside form, next to its original, is still never removed
+    /// when it does not sit under a skill folder the record names; a record naming no skill folders
+    /// (an older one) removes nothing; one under the named folder is removed.
+    #[test]
+    fn fix5_b_a_set_aside_copy_outside_every_skill_folder_on_record_is_never_removed() {
+        let t = temp("fix5-b");
+        let (app, root, work) = (t.join("app"), t.join("skills"), t.join("work"));
+        let src_copy = skill(&work, ".kolux-deleting-1-2-src");
+        let doc_copy = skill(&work, ".kolux-deleting-1-2-doc");
+        // A damaged or hand-edited done record: both entries pass the name and sibling checks.
+        write(&app, &Journal { done: true, moves: vec![(work.join("doc"), doc_copy.clone())], left: vec![src_copy.clone()], roots: vec![root.clone()] }).unwrap();
+        recover(&app);
+        assert!(src_copy.is_dir() && doc_copy.is_dir(), "start-up removes neither");
+        assert!(app.join(JOURNAL).exists());
+        let log = log_of(&app);
+        assert_eq!(log.matches("refused to remove").count(), 2, "{log}");
+        assert!(log.contains("not under a skill folder"), "{log}");
+        // The next delete drops them (they are not carried) and still removes nothing in `work`.
+        let beta = skill(&root, "beta");
+        assert_eq!(delete(&app, &[beta]), Ok(Outcome::Deleted));
+        assert!(src_copy.is_dir() && doc_copy.is_dir() && names(&root).is_empty());
+        assert!(!app.join(JOURNAL).exists());
+        assert_eq!(log_of(&app).matches("dropped").count(), 2, "{}", log_of(&app));
+        // The same form under the named skill folder is removed.
+        let mine = skill(&root, ".kolux-deleting-1-2-old");
+        write(&app, &Journal { done: true, moves: vec![], left: vec![mine.clone()], roots: vec![root.clone()] }).unwrap();
+        recover(&app);
+        assert!(!mine.exists() && !app.join(JOURNAL).exists());
+        // An older record names no skill folders and so vouches for nothing.
+        let older = skill(&root, ".kolux-deleting-1-2-older");
+        write(&app, &Journal { done: true, moves: vec![], left: vec![older.clone()], roots: vec![] }).unwrap();
+        recover(&app);
+        assert!(older.is_dir() && app.join(JOURNAL).exists());
+        // What `run` writes names the scanned folders, so its own copies are removed (see every
+        // other delete test); a copy carried from an earlier record keeps that record's folders.
+        assert!(under_root(&mine, std::slice::from_ref(&root)) && !under_root(&src_copy, std::slice::from_ref(&root)) && !under_root(&mine, &[]));
+    }
+
+    /// AFTER 3: "dropped ... from the record" is logged only once the record was really rewritten
+    /// without the entry, so a delete that fails before writing does not claim a drop it did not do.
+    #[test]
+    fn fix5_d_a_drop_is_logged_only_after_the_record_was_rewritten() {
+        let t = temp("fix5-d");
+        let (app, root, other) = (t.join("app"), t.join("skills"), t.join("elsewhere"));
+        let plain = skill(&other, "plain");
+        write(&app, &Journal { done: true, moves: vec![], left: vec![plain.clone()], roots: vec![] }).unwrap();
+        let beta = skill(&root, "beta");
+        let err = delete(&app, &[root.join("gone")]).unwrap_err();
+        assert!(err.contains("no longer on disk"), "{err}");
+        assert!(!log_of(&app).contains("dropped"), "the record still holds the entry, so nothing was dropped yet: {}", log_of(&app));
+        assert_eq!(delete(&app, &[beta]), Ok(Outcome::Deleted));
+        assert_eq!(log_of(&app).matches("dropped").count(), 1, "{}", log_of(&app));
+        assert!(plain.is_dir() && !app.join(JOURNAL).exists());
+    }
+
+    /// AFTER 5: a stuck record is checked once per request, not once per chosen skill: every skill
+    /// gets the same answer, the log says it once, and the put-back retries are paid once.
+    #[test]
+    fn fix5_e_a_stuck_record_is_checked_once_per_request_not_once_per_skill() {
+        let t = temp("fix5-e");
+        let (app, root) = (t.join("app"), t.join("skills"));
+        not_done_record(&app, &root);
+        skill(&root, "alpha"); // the original came back: both exist, so the record is stuck
+        let (beta, gamma) = (skill(&root, "beta"), skill(&root, "gamma"));
+        let done = run(&app, &places(&[&root], &[]), &[pick(&beta), pick(&gamma)]).unwrap();
+        assert_eq!(done.iter().map(|d| d.outcome).collect::<Vec<_>>(), ["failed", "failed"]);
+        assert!(done[0].note.as_deref().is_some_and(|n| n.contains("both exist")) && done[0].note == done[1].note, "{done:?}");
+        assert_eq!(log_of(&app).matches("both exist").count(), 1, "{}", log_of(&app));
+        assert!(beta.is_dir() && gamma.is_dir());
     }
 
     /// FIX-SOON 2 (put-back case): the error says what could not be put back, and where.
@@ -1357,12 +1655,12 @@ mod tests {
         let t = temp("fix4-d");
         let (app, skills) = (t.join("app"), t.join("skills"));
         let copy = skill(&skills, ".kolux-deleting-1-2-xalpha");
-        write(&app, &Journal { done: false, moves: vec![(skills.join("alpha"), copy.clone())], left: vec![] }).unwrap();
-        assert_eq!(recover(&app).len(), 1);
+        write(&app, &Journal { done: false, moves: vec![(skills.join("alpha"), copy.clone())], left: vec![], roots: vec![] }).unwrap();
+        assert!(recover(&app).is_empty(), "FIX-5 (1): dropped, not stuck");
         assert_eq!(names(&skills), [".kolux-deleting-1-2-xalpha"], "not moved");
-        assert!(app.join(JOURNAL).exists());
+        assert!(!app.join(JOURNAL).exists() && log_of(&app).contains("dropped"), "{}", log_of(&app));
         // Done: not removed either.
-        write(&app, &Journal { done: true, moves: vec![(skills.join("alpha"), copy.clone())], left: vec![] }).unwrap();
+        write(&app, &Journal { done: true, moves: vec![(skills.join("alpha"), copy.clone())], left: vec![], roots: vec![] }).unwrap();
         recover(&app);
         assert!(copy.is_dir() && app.join(JOURNAL).exists());
     }
@@ -1378,12 +1676,14 @@ mod tests {
         not_done_record(&app, &root);
         let held = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).share_mode(0).open(app.join(LOCK)).unwrap();
         assert!(matches!(lock(&app), Err(LockError::Failed(_))), "the file cannot be opened while it is held without sharing");
-        let gone = std::thread::spawn(move || {
-            std::thread::sleep(PAUSE / 2);
-            drop(held);
-        });
+        // FIX-5 AFTER 2: the holder lets go only once the first try has failed and the retry is
+        // about to happen, so the test proves the retry ran (and not a release that beat the first try).
+        ON_RETRY.lock().unwrap().push((app.clone(), Box::new(move || drop(held))));
+        let start = std::time::Instant::now();
         assert_eq!(startup_recover(&app), Startup::Recovered, "the second try gets the lock");
-        gone.join().unwrap();
+        assert!(start.elapsed() >= PAUSE, "the retry waited {:?}", start.elapsed());
+        assert!(log_of(&app).contains("retrying the skill lock"), "{}", log_of(&app));
+        assert!(ON_RETRY.lock().unwrap().iter().all(|(dir, _)| dir != &app), "the hook ran");
         assert_eq!(names(&root), ["alpha"]);
         assert!(!log_of(&app).contains("recovering without it"), "{}", log_of(&app));
     }

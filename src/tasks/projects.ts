@@ -188,4 +188,27 @@ export const startSave = (s: Saving[], id: number, cell: string): Saving[] => [.
 export const endSave = (s: Saving[], id: number): Saving[] => s.filter((x) => x.id !== id);
 export const isSaving = (s: Saving[], cell: string) => s.some((x) => x.cell === cell);
 /** True when `id` is the last edit sent for `cell` (`newest` maps each cell to its last edit id). */
+/** FIX-3 (review FIX-SOON 4): the edits sent for each cell. The cell shows the value of the last
+ * edit that succeeded, once no edit for it is still out; so a newer edit that fails leaves the cell
+ * on the older value GitHub really holds, and an older edit that comes back late is never put over
+ * a newer success. */
+export type CellBook = { pending: Map<string, Set<number>>; best: Map<string, { id: number; apply: () => void }> };
+export const newBook = (): CellBook => ({ pending: new Map(), best: new Map() });
+export function sendEdit(b: CellBook, cell: string, id: number): void {
+  const set = b.pending.get(cell) ?? new Set<number>();
+  set.add(id);
+  b.pending.set(cell, set);
+}
+/** An edit came back. `apply` shows its value; it runs (for the highest-numbered success) when the last edit for the cell settles. */
+export function settleEdit(b: CellBook, cell: string, id: number, ok: boolean, apply: () => void): void {
+  const set = b.pending.get(cell);
+  set?.delete(id);
+  const cur = b.best.get(cell);
+  if (ok && (!cur || cur.id < id)) b.best.set(cell, { id, apply });
+  if (set && set.size > 0) return;
+  b.pending.delete(cell);
+  const best = b.best.get(cell);
+  b.best.delete(cell);
+  best?.apply();
+}
 export const isNewest = (newest: Map<string, number>, cell: string, id: number) => newest.get(cell) === id;

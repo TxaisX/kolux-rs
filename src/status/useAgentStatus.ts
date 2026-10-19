@@ -253,8 +253,9 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
           // The new process's first word or the old one's straggler: keep it as the candidate. If
           // nothing else comes before the window ends it is shown, without its clock so whatever
           // the new process reports next is taken (it cannot freeze the gauge).
-          dropHeld(paneKey);
+          // A limits-only report (no context) says nothing about the gauge: it leaves the candidate be.
           if (e.payload.contextTokens === null || e.payload.contextWindow === null) return;
+          dropHeld(paneKey);
           const timer = setTimeout(() => {
             const h = heldRef.current[paneKey];
             if (!h || !panesRef.current.some((p) => p.key === paneKey)) return;
@@ -279,6 +280,8 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
     // STAT-032: a working reading with no hook signal for 30 minutes reads No recent update, quietly.
     const offUnverified = listen<{ paneKey: number; minutes: number }>("agent-unverified", (e) => setStale((m) => ({ ...m, [e.payload.paneKey]: true })));
     return () => {
+      // The window going away takes the candidates' timers with it.
+      for (const k of Object.keys(heldRef.current)) dropHeld(Number(k));
       off.then((f) => f());
       offQuiet.then((f) => f());
       offUnverified.then((f) => f());

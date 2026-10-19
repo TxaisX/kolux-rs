@@ -1,10 +1,12 @@
 skills FIX-4 · stand-in review of lane/skills 0a444d4 (d2/skills-0a444d4-standin-review.md), FIX-SOON 1-2, AFTER 1-4, deletion safety first
 Lane: skills · branch lane/skills · STEP 0: fast-forward of lane 0a444d4 to main a01cdc0b (0a444d4 was already an ancestor, MERGE 100) · BEFORE = a01cdc0b · 2026-10-19
-Files changed: src-tauri/src/skill_delete.rs, src/skills/skills.test.ts, evidence/skills-FIX-3.txt (one sentence corrected), evidence/skills-FIX-4.txt, PROVENANCE.md (one line), STATE.md (plan-check --write-state only)
+Files changed: src-tauri/src/skill_delete.rs, src/skills/skills.test.ts, evidence/skills-FIX-3.txt (one sentence corrected), evidence/skills-FIX-4.txt, PROVENANCE.md (one line). (Corrected in FIX-5, AFTER 4: STATE.md and PLAN.md were not changed by this round.)
 No hunk for the coordinator: main already calls skill_delete::startup_recover from lib.rs (MERGE 100 applied skills-FIX-3-lib.patch).
 
 WHAT THE USER CAN NOW DO
-- (1, FIX-SOON 1, deletion safety) A delete can never remove a folder the app did not set aside itself. Before: a record entry that
+- (1, FIX-SOON 1, deletion safety) [Reworded in FIX-5, FIX-SOON 2: as of FIX-4 a delete removes only record entries whose path has the
+  exact set-aside name form and, for moves, sits next to its original; FIX-5 adds that the copy must sit under a skill folder the record
+  names. "Never a folder the app did not set aside itself" was more than FIX-4 proved.] Before: a record entry that
   start-up had refused (a copy not next to its original, or not named like a set-aside copy) was still carried into the NEXT delete's
   record as a "carried copy", and carried copies were removed by name prefix alone, so the next delete ran remove_dir_all on it, wherever
   it was. Now delete_held carries only entries that pass the same check start-up uses (aside_of for moves, the exact set-aside name form
