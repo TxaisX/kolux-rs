@@ -6,13 +6,14 @@ import { milestone, type Milestone } from "../onboarding/firstRun";
 export const TOUR_ANCHOR = "kit-results";
 export const KIT_RESULTS_TARGET = `[data-tour-anchor="${TOUR_ANCHOR}"]`;
 
-type Record = (name: Milestone) => Promise<void>;
+// The recorder may report whether the record was kept (firstRun.milestone gives a boolean); kits ignore it.
+type Record = (name: Milestone) => Promise<unknown>;
 
 /** A launch counts once at least one of the kit's AIs started; a kit where none started is no launch. */
-export const noteKitLaunch = (started: number, record: Record = milestone): Promise<void> => (started > 0 ? record("kitLaunched") : Promise.resolve());
+export const noteKitLaunch = (started: number, record: Record = milestone): Promise<void> => (started > 0 ? record("kitLaunched").then(() => undefined) : Promise.resolve());
 
 /** Open results or Collect results: the first-results milestone. */
-export const noteResults = (record: Record = milestone): Promise<void> => record("resultsOpened");
+export const noteResults = (record: Record = milestone): Promise<void> => record("resultsOpened").then(() => undefined);
 
 /** Open results: does what the strip's owner asked, then records the milestone. */
 export const openResults =
