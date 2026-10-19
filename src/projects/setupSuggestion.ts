@@ -34,5 +34,9 @@ export function cardView(s: SetupSuggestion, project: string): CardView | null {
   }
 }
 
-/** The line shown after a save when something was left out; links to the project's settings. */
+/** What `setup_suggestion_save` is called with: the folder, what the card offers, and the script it showed
+ * (the save refuses when the project's file no longer gives that script). Null when there is nothing to save. */
+export const saveArgs = (path: string, v: CardView): { path: string; from: string; shown: string } | null => (v.saveFrom && v.script !== undefined ? { path, from: v.saveFrom, shown: v.script } : null);
+
+/** The line shown when something was left out of an import (shown on the card, before the save). */
 export const skippedLine = (skipped: string[]): string | null => (skipped.length ? `Not supported, so left out: ${skipped.join(", ")}.` : null);

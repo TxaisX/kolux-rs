@@ -10,14 +10,14 @@ What changed
   replaced by a newer suggestion, an untouched one is.
 - Hunks for others: evidence/worktrees-T-212-lib.patch (register the command), and
   evidence/worktrees-T-212-ProjectsPanel.patch (look lane's file; fills the name field on open; apply with
-  `git apply --ignore-whitespace`, the working file is CRLF). tsc was clean with the panel patch applied
-  (applied, checked, reverted in this tree).
+  `git apply --ignore-whitespace`, the working file is CRLF). Re-cut in FIX-1 against the look lane's
+  ProjectsPanel.tsx (87f3fd67); see evidence/worktrees-FIX-1.txt for the apply and type-check readings.
 
 Tests (real output)
 - cargo test --lib projects::  -> test result: ok. 33 passed; 0 failed (log G:/Temp/worktrees-w1-logs/t212-cargo.log)
   new: projects::tests::proj023_a_suggestion_skips_every_name_in_use_in_any_project_whatever_its_case
   (name in use by a workspace of ANOTHER project, a branch under a prefix, a hand-typed shown name in capitals;
-  asking twice offers the same name and retires nothing; an unknown project is an error)
+  asking twice offers the same name and retires nothing; FIX-1: the sentence "an unknown project is an error" that stood here was false, the test has no such assertion, and it is deleted)
 - vitest src/projects/suggest.test.ts -> 5 passed (fills empty, replaces untouched, keeps edited, keeps cleared,
   ignores empty suggestion)
 - cargo clippy --all-targets -- -D warnings -> exit 0

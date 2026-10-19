@@ -1,7 +1,7 @@
 // PROJ-035: the small card above the sidebar toolbar that offers to set up a setup script.
 import { cardView, skippedLine, type SetupSuggestion } from "./setupSuggestion";
 
-export function SetupCard({ project, suggestion, busy, onSave, onDismiss, onRetry }: { project: string; suggestion: SetupSuggestion; busy: boolean; onSave: (from: string) => void; onDismiss: () => void; onRetry: () => void }) {
+export function SetupCard({ project, suggestion, busy, onSave, onDismiss, onRetry }: { project: string; suggestion: SetupSuggestion; busy: boolean; onSave: () => void; onDismiss: () => void; onRetry: () => void }) {
   const v = cardView(suggestion, project);
   if (!v) return null;
   return (
@@ -12,7 +12,7 @@ export function SetupCard({ project, suggestion, busy, onSave, onDismiss, onRetr
       {skippedLine(v.skipped) && <div className="hint">{skippedLine(v.skipped)}</div>}
       <div className="btn-row">
         {v.saveFrom && (
-          <button className="btn primary" disabled={busy} onClick={() => onSave(v.saveFrom!)}>
+          <button className="btn primary" disabled={busy} onClick={onSave}>
             {v.saveLabel}
           </button>
         )}

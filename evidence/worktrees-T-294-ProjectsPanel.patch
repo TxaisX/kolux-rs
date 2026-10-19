@@ -1,31 +1,38 @@
 diff --git a/src/projects/ProjectsPanel.tsx b/src/projects/ProjectsPanel.tsx
-index 9b77b6f..f000b70 100644
+index 3d1f09b..fa7f3e0 100644
 --- a/src/projects/ProjectsPanel.tsx
 +++ b/src/projects/ProjectsPanel.tsx
-@@ -30,6 +30,8 @@ import AddProject from "./AddProject";
+@@ -34,6 +34,9 @@ import { CARD_DETAILS, CARD_DETAILS_FIELD, cardTitle, detailsAfter, readCardDeta
  import { takeSuggestion } from "./suggest";
  import { IconPicker } from "./IconPicker";
  import { ProjectIcon } from "./IconView";
 +import { SetupCard } from "./SetupCard";
-+import type { SetupSuggestion } from "./setupSuggestion";
++import { cardView, saveArgs, type SetupSuggestion } from "./setupSuggestion";
++import { cardProjectOf, newestOnly } from "./cardAsk";
  import Picker, { type PickItem } from "./Picker";
  import StartGit, { type FirstFile } from "./StartGit";
  import { openKits } from "../kits/Kits";
-@@ -288,6 +290,33 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
-     invoke("activity_touch", { path }).catch(() => {});
-   }
-   const say = (kind: "ok" | "warn" | "error", text: string) => setMessage({ kind, text });
-+  // PROJ-035: the setup-script card for the project of the active workspace; asked again when the
-+  // window is focused or another workspace becomes active.
-+  const [card, setCard] = useState<{ project: Project; s: SetupSuggestion } | null>(null);
+@@ -1138,6 +1141,39 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+   };
+ 
+   const same = (a: string, b: string) => a.replace(/[\\/]+$/, "").toLowerCase() === b.replace(/[\\/]+$/, "").toLowerCase();
++  // PROJ-035: the setup-script card for the project of the active workspace. It is asked again when the
++  // window is focused or the project or the active folder changes (not on every worktrees update),
++  // and an older answer never replaces a newer one. The setup policy is the app's one stored setting,
++  // read on the Rust side by the card, the save and the runner alike.
++  const [card, setCard] = useState<{ id: string; s: SetupSuggestion } | null>(null);
 +  const [cardBusy, setCardBusy] = useState(false);
++  const cardProject = cardProjectOf(projects, worktrees, activeDir, same);
++  const cardId = cardProject?.id ?? null;
++  const cardPath = cardProject?.path ?? null;
++  const cardAsks = useRef(newestOnly());
 +  const askCard = useCallback(async () => {
-+    const project = projects.find((p) => (worktrees[p.id] ?? []).some((w) => activeDir !== null && same(w.path, activeDir)));
-+    if (!project) return setCard(null);
-+    const s = await invoke<SetupSuggestion>("setup_suggestion", { projectId: project.id, path: project.path }).catch((err) => ({ kind: "error", message: String(err) }) as SetupSuggestion);
-+    setCard(s.kind === "none" ? null : { project, s });
++    const current = cardAsks.current.begin();
++    if (!cardId || !cardPath) return setCard(null);
++    const s = await invoke<SetupSuggestion>("setup_suggestion", { projectId: cardId, path: cardPath }).catch((err) => ({ kind: "error", message: String(err) }) as SetupSuggestion);
++    if (current()) setCard(s.kind === "none" ? null : { id: cardId, s });
 +    // eslint-disable-next-line react-hooks/exhaustive-deps
-+  }, [projects, worktrees, activeDir]);
++  }, [cardId, cardPath, activeDir]);
 +  useEffect(() => {
 +    void askCard();
 +    window.addEventListener("focus", askCard);
@@ -35,27 +42,31 @@ index 9b77b6f..f000b70 100644
 +    setCardBusy(true);
 +    try {
 +      await invoke(cmd, args);
-+      await askCard();
 +    } catch (err) {
-+      say("error", String(err));
++      say("error", String(err)); // a refused save ("That suggestion changed") is followed by the card's new offer
 +    } finally {
 +      setCardBusy(false);
 +    }
++    await askCard();
 +  };
-   const [icons, setIcons] = useState<Record<string, string>>({}); // PROJ-019: icons chosen by hand, by project id
-   const setIcon = async (p: Project, icon: string) => {
-     try {
-@@ -1758,6 +1787,16 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+   const openCount = (w: Worktree) => openDirs.filter((d) => same(d, w.path)).length;
+   const isActive = (w: Worktree) => openCount(w) > 0;
+   // VIEW-051: only running panes count, so an exited tab drops out; none shows no count.
+@@ -1781,6 +1817,20 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                </div>
              ))}
  
-+          {card && (
++          {card && cardProject && card.id === cardProject.id && (
 +            <SetupCard
-+              project={card.project.name}
++              project={cardProject.name}
 +              suggestion={card.s}
 +              busy={cardBusy}
-+              onSave={(from) => cardDo("setup_suggestion_save", { path: card.project.path, from })}
-+              onDismiss={() => cardDo("setup_suggestion_dismiss", { projectId: card.project.id })}
++              onSave={() => {
++                const v = cardView(card.s, cardProject.name);
++                const a = v && saveArgs(cardProject.path, v);
++                if (a) void cardDo("setup_suggestion_save", a);
++              }}
++              onDismiss={() => cardDo("setup_suggestion_dismiss", { projectId: cardProject.id })}
 +              onRetry={() => void askCard()}
 +            />
 +          )}

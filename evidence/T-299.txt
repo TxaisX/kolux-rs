@@ -7,12 +7,12 @@ What changed
   record is kept per scope (the workspace's parent folder: flat layout = one shared scope, nested layout =
   one scope per project), ignoring case and spaces, bounded (400 names per scope, 100 scopes), and a damaged
   record retires nothing. Typed-by-hand names are never retired. Handing a name out no longer remembers it
-  (so a suggestion nobody uses costs nothing). The old global "creatureNamesUsed" list is no longer written.
+  (so a suggestion nobody uses costs nothing). The old global "creatureNamesUsed" list is no longer written; FIX-1: it is still READ, as a global scope, until the first retirement writes "retiredNames", so names it held stay retired. forget_gone (a worktree deleted outside Kolux) retires its name too.
 - src-tauri/src/projects.rs, PROJ-019: clean_icon / project_icons / set_icon and two commands,
   project_icons_list and project_icon_set. Choices live under the store key "projectIcons" (by project id,
   not inside Project, so the other lanes' Project literals are untouched). Three kinds: emoji:<emoji>,
   icon:<built-in name>, image:<data URL, png/jpeg/gif/webp/svg, 64 KB at most as the whole value>. Empty
-  resets to the automatic icon. forget_projects drops the icon entry of a forgotten project.
+  resets to the automatic icon. forget_projects drops the icon entry of a forgotten project (FIX-1: and its dismissed setup card and saved local setup).
 - src/projects/projectIcon.ts (+ test): the catalogue of built-in names, iconView (the automatic icon is the
   first letter of the name when nothing valid is saved; an unknown built-in name is kept and drawn as a
   folder), pictureProblem (type and size check before reading a file), value builders.
@@ -23,17 +23,17 @@ What changed
   stacks after worktrees-T-212-lib.patch) and evidence/worktrees-T-299-ProjectsPanel.patch (look lane's
   file: loads icons in reload, draws the icon before the project name, adds the chooser to the project
   settings form; stacks after worktrees-T-212-ProjectsPanel.patch; apply with `git apply --ignore-whitespace`).
-  With T-212 + T-299 panel patches applied: tsc clean, pnpm test 211 files / 1436 tests passed, then reverted.
+  Re-cut in FIX-1 against the look lane's file (87f3fd67); readings in evidence/worktrees-FIX-1.txt.
 
 Tests (real output)
 - cargo test --lib projects::  -> test result: ok. 37 passed; 0 failed (log G:/Temp/worktrees-w1-logs/t299-cargo.log)
   new/changed: proj024_only_suggested_names_are_retired_per_scope_ignoring_case_and_spaces,
   proj024_the_record_is_bounded_and_a_damaged_one_retires_nothing,
-  proj019_an_icon_is_an_emoji_a_built_in_icon_or_a_small_picture (kinds, rejects, size limit at its edge),
+  proj019_an_icon_is_an_emoji_a_built_in_icon_or_a_small_picture (kinds, rejects incl. several emoji, size limit at its edge),
   proj019_a_chosen_icon_stays_after_a_restart_and_reset_brings_the_automatic_one_back (store re-opened,
   damaged record, reset, forget_projects), and the fresh-workspace test now deletes via forget_workspace.
-- vitest src/projects/projectIcon.test.ts -> 8 passed (kinds, fallbacks to the letter, unknown name kept,
-  picture type/size limit, value builders)
+- vitest src/projects/projectIcon.test.ts -> 6 tests (FIX-1 correction: this line said 8; the file has 6 (kinds, fallbacks to the letter, unknown name kept,
+  picture type/size limit, an over-long data URL, value builders))
 - cargo clippy --all-targets -- -D warnings -> exit 0
 
 LIVE PROOF PENDING (after the lib.rs and panel hunks are merged)

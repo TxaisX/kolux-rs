@@ -1,16 +1,16 @@
 diff --git a/src/projects/ProjectsPanel.tsx b/src/projects/ProjectsPanel.tsx
-index 50d8d42..cf5c8e0 100644
+index 23bd880..4dbc032 100644
 --- a/src/projects/ProjectsPanel.tsx
 +++ b/src/projects/ProjectsPanel.tsx
-@@ -27,6 +27,7 @@ import { mergePoll, nextDelay, pollItems, STALE_MS, type PrPoll } from "../scm/p
- import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
- import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
- import AddProject from "./AddProject";
+@@ -31,6 +31,7 @@ import CardLine from "../look/CardLine";
+ import { HeaderBadge, HeaderSwatches } from "../look/HeaderBadge";
+ import { HEADER_COLOURS_SETTING, headerColourOf, pickHeaderColour } from "../look/headerColour";
+ import { CARD_DETAILS, CARD_DETAILS_FIELD, cardTitle, detailsAfter, readCardDetails, type CardFacts } from "../look/cards";
 +import { takeSuggestion } from "./suggest";
  import Picker, { type PickItem } from "./Picker";
  import StartGit, { type FirstFile } from "./StartGit";
  import { openKits } from "../kits/Kits";
-@@ -435,6 +436,26 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+@@ -441,6 +442,26 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
      };
    }, [name, creating, linked, existing, prList]);
  

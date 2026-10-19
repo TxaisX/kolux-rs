@@ -110,6 +110,7 @@ pub(crate) fn forget_projects(store: &Store, ids: &[String]) -> Result<(), Strin
         return Ok(());
     }
     let mut projects = load_projects(store);
+    let gone: Vec<String> = projects.iter().filter(|p| ids.contains(&p.id)).map(|p| p.path.clone()).collect();
     projects.retain(|p| !ids.contains(&p.id));
     save_projects(store, &projects)?;
     // PROJ-019: a forgotten project's icon choice goes with it.
@@ -119,7 +120,8 @@ pub(crate) fn forget_projects(store: &Store, ids: &[String]) -> Result<(), Strin
     if icons.len() != before {
         save_icons(store, &icons)?;
     }
-    Ok(())
+    // PROJ-035: and so do its dismissed setup card and its saved local setup.
+    crate::setup::prune_setup(store, ids, &gone)
 }
 
 fn load_names(store: &Store) -> serde_json::Map<String, serde_json::Value> {
@@ -153,18 +155,25 @@ pub fn set_parent(store: &Store, path: &str, parent: Option<&str>) -> Result<(),
 /// Drops what Kolux remembers about a removed workspace, so a later one in the same folder starts
 /// clean: its typed name, its parent and its origin.
 pub fn forget_workspace(store: &Store, path: &str) -> Result<(), String> {
-    // PROJ-024: the folder it lived in is the scope; a suggested name, folder or typed, is not offered again.
+    retire_workspace_names(store, path)?;
+    set_name(store, path, None)?;
+    set_parent(store, path, None)?;
+    // EDIT-040: a later workspace in the same folder starts with an empty note.
+    store.set(&format!("{NOTE_PREFIX}{}", name_key(path)), "").map_err(|e| e.to_string())?;
+    set_origin(store, path, None)
+}
+
+/// PROJ-024: the folder the workspace at `path` lived in is the scope; a suggested name, folder or
+/// typed, is not offered again there. Used by every way a workspace goes: removed by the user
+/// (`forget_workspace`) and found gone from disk (`forget_gone`).
+pub fn retire_workspace_names(store: &Store, path: &str) -> Result<(), String> {
     let folder = Path::new(path);
     let scope = name_key(&folder.parent().unwrap_or(folder).to_string_lossy());
     let typed = load_names(store).get(&name_key(path)).and_then(|v| v.as_str().map(String::from));
     for name in folder.file_name().map(|n| n.to_string_lossy().to_string()).into_iter().chain(typed) {
         retire_name(store, &scope, &name)?;
     }
-    set_name(store, path, None)?;
-    set_parent(store, path, None)?;
-    // EDIT-040: a later workspace in the same folder starts with an empty note.
-    store.set(&format!("{NOTE_PREFIX}{}", name_key(path)), "").map_err(|e| e.to_string())?;
-    set_origin(store, path, None)
+    Ok(())
 }
 
 /// EDIT-040: the handoff note of one workspace, stored under its own key (one write each, so a
@@ -881,8 +890,38 @@ struct Retired {
     names: Vec<String>,
 }
 
+/// SESS-023's record: one flat list of every name handed out, kept under this key before PROJ-024.
+const LEGACY_KEY: &str = "creatureNamesUsed";
+/// The scope the old names are kept under: a name there is retired in every scope. (No folder is
+/// ever named this, so it cannot meet a real scope.)
+const GLOBAL_SCOPE: &str = "*";
+/// The most old names carried over.
+const LEGACY_MAX: usize = 4000;
+
+/// The record. Until the first retirement writes "retiredNames", the old flat list stands in for it
+/// as a global scope, so a name already handed out stays out of the suggestions without a separate
+/// migration step; once the new key exists the old one is no longer read.
 fn retired_all(store: &Store) -> Vec<Retired> {
-    store.get(RETIRED_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+    match store.get(RETIRED_KEY).ok().flatten() {
+        Some(v) => serde_json::from_str(&v).unwrap_or_default(),
+        None => {
+            let old: Vec<String> = store.get(LEGACY_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+            let mut names: Vec<String> = Vec::new();
+            for n in old {
+                let form = name_form(&n);
+                if !form.is_empty() && !names.contains(&form) {
+                    names.push(form);
+                }
+            }
+            let extra = names.len().saturating_sub(LEGACY_MAX);
+            names.drain(..extra);
+            if names.is_empty() {
+                Vec::new()
+            } else {
+                vec![Retired { scope: GLOBAL_SCOPE.to_string(), names }]
+            }
+        }
+    }
 }
 
 /// Case and spaces do not tell two names apart.
@@ -897,7 +936,17 @@ pub fn retired_scope(place: &Place, project: &Project) -> String {
 }
 
 pub fn retired_names(store: &Store, scope: &str) -> Vec<String> {
-    retired_all(store).into_iter().find(|r| r.scope == scope).map(|r| r.names).unwrap_or_default()
+    let mut out = Vec::new();
+    for r in retired_all(store) {
+        if r.scope == scope || r.scope == GLOBAL_SCOPE {
+            for n in r.names {
+                if !out.contains(&n) {
+                    out.push(n);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Every name the suggestion list can make, read back through the public picker (one pair per seed).
@@ -936,8 +985,15 @@ pub fn retire_name(store: &Store, scope: &str, name: &str) -> Result<(), String>
     all[at].names.push(form);
     let extra = all[at].names.len().saturating_sub(RETIRED_PER_SCOPE);
     all[at].names.drain(..extra);
-    let extra = all.len().saturating_sub(RETIRED_SCOPES);
-    all.drain(..extra);
+    // the oldest scopes go first; the old global names are never one of them
+    while all.iter().filter(|r| r.scope != GLOBAL_SCOPE).count() > RETIRED_SCOPES {
+        match all.iter().position(|r| r.scope != GLOBAL_SCOPE) {
+            Some(i) => {
+                all.remove(i);
+            }
+            None => break,
+        }
+    }
     store.set(RETIRED_KEY, &serde_json::to_string(&all).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
@@ -1570,8 +1626,9 @@ pub fn handoff_note_prepare(root: String, name: String) -> Result<String, String
 /// folders sessions run in) uses are dropped from Git's list. Only Git's own record goes, never a
 /// folder or a branch. A folder counts as gone only when its drive or share is there and the
 /// folder is not: storage that cannot be reached (a drive unplugged, a share offline) keeps it.
-/// The paths forgotten.
-pub fn forget_gone(repo: &Path, all: &[Worktree], busy: &[String]) -> Vec<String> {
+/// The paths forgotten; `on_forgotten` hears each one (the caller retires its suggested name, which
+/// only the caller can do without holding the store through the git work).
+pub fn forget_gone(repo: &Path, all: &[Worktree], busy: &[String], on_forgotten: impl Fn(&str)) -> Vec<String> {
     let used = |w: &Worktree| {
         let k = name_key(&w.path);
         busy.iter().map(|b| name_key(b)).any(|b| b == k || b.starts_with(&format!("{k}\\")))
@@ -1584,7 +1641,10 @@ pub fn forget_gone(repo: &Path, all: &[Worktree], busy: &[String]) -> Vec<String
     all.iter()
         .filter(|w| !w.is_main && !used(w) && gone(Path::new(&w.path)))
         .filter(|w| forget_record(repo, &w.path).is_ok())
-        .map(|w| w.path.clone())
+        .map(|w| {
+            on_forgotten(&w.path);
+            w.path.clone()
+        })
         .collect()
 }
 
@@ -1626,7 +1686,12 @@ pub fn forget_gone_at_start(app: tauri::AppHandle) {
         for p in projects {
             let repo = Path::new(&p.path);
             if let Ok(all) = git.worktrees(repo) {
-                for path in forget_gone(repo, &kolux_made(&origins, all), &busy) {
+                let retire = |path: &str| {
+                    if let Ok(store) = app.state::<Mutex<Store>>().lock() {
+                        let _ = retire_workspace_names(&store, path);
+                    }
+                };
+                for path in forget_gone(repo, &kolux_made(&origins, all), &busy, retire) {
                     if let Ok(dir) = app.path().app_data_dir() {
                         crate::diag::write(&dir, &format!("forgot the worktree {path}: its folder is gone and no session uses it"));
                     }
@@ -1747,7 +1812,7 @@ mod tests {
             away.path = format!("{letter}:/unplugged/wt");
             all.push(away);
         }
-        let forgot = forget_gone(&repo, &all, &busy);
+        let forgot = forget_gone(&repo, &all, &busy, |_| {});
         assert_eq!(forgot.len(), 1, "{forgot:?}");
         assert!(name_key(&forgot[0]).ends_with("gone"));
         let left: Vec<String> = git.worktrees(&repo).unwrap().iter().map(|w| name_key(&w.path)).collect();
@@ -1772,7 +1837,7 @@ mod tests {
         fs::remove_dir_all(base.join("theirs")).unwrap();
         let git = Git::detect().unwrap();
         let all = git.worktrees(&repo).unwrap();
-        let forgot = forget_gone(&repo, &kolux_made(&load_origins(&store), all), &[]);
+        let forgot = forget_gone(&repo, &kolux_made(&load_origins(&store), all), &[], |_| {});
         assert_eq!(forgot.len(), 1, "{forgot:?}");
         assert!(name_key(&forgot[0]).ends_with("ours"));
         let left: Vec<String> = git.worktrees(&repo).unwrap().iter().map(|w| name_key(&w.path)).collect();
@@ -1794,7 +1859,7 @@ mod tests {
         fs::remove_dir_all(&wt).unwrap();
         let git = Git::detect().unwrap();
         let all = git.worktrees(&repo).unwrap();
-        assert_eq!(forget_gone(&repo, &all, &[]), Vec::<String>::new());
+        assert_eq!(forget_gone(&repo, &all, &[], |_| {}), Vec::<String>::new());
         let admin = repo.join(".git").join("worktrees");
         let kept: Vec<_> = fs::read_dir(&admin).unwrap().flatten().filter(|e| e.path().join("locked").exists()).collect();
         assert_eq!(kept.len(), 1, "the locked record under {} is still there", admin.display());
@@ -2602,6 +2667,99 @@ mod tests {
     }
 
     #[test]
+    fn fix1_a_worktree_deleted_outside_kolux_retires_its_name_when_the_sweep_forgets_it() {
+        let base = temp("fix1-gone");
+        let repo = base.join("r");
+        init_repo(&repo);
+        let name = creature_name(&[], 3);
+        let folder = base.join("ws").join(&name);
+        git_in(&repo, &["worktree", "add", "-q", &folder.to_string_lossy(), "-b", &name]);
+        fs::remove_dir_all(&folder).unwrap();
+        let store = Store::open(&base.join("db")).unwrap();
+        let git = Git::detect().unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        let forgot = forget_gone(&repo, &all, &[], |p| retire_workspace_names(&store, p).unwrap());
+        assert_eq!(forgot.len(), 1, "{forgot:?}");
+        let scope = name_key(&base.join("ws").to_string_lossy());
+        assert_eq!(retired_names(&store, &scope), vec![name_form(&name)], "the name is retired in the folder it lived in");
+        assert_ne!(pick_name(&store, &scope, vec![], 3), name, "and is not suggested again");
+        // a typed name that is not from the list, and a worktree left alone, retire nothing
+        let busy = base.join("ws").join("kept");
+        git_in(&repo, &["worktree", "add", "-q", &busy.to_string_lossy(), "-b", "kept"]);
+        fs::remove_dir_all(&busy).unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        let forgot = forget_gone(&repo, &all, &[busy.to_string_lossy().into_owned()], |p| retire_workspace_names(&store, p).unwrap());
+        assert!(forgot.is_empty());
+        assert_eq!(retired_names(&store, &scope).len(), 1);
+        drop(store);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn fix1_names_the_old_list_held_stay_retired_without_a_migration_step() {
+        let profile = temp("fix1-legacy");
+        let store = Store::open(&profile).unwrap();
+        let (old_a, old_b) = (creature_name(&[], 1), creature_name(&[], 2));
+        store.set("creatureNamesUsed", &serde_json::to_string(&[old_a.to_uppercase(), old_b.clone(), old_a.clone()]).unwrap()).unwrap();
+        assert!(store.get(RETIRED_KEY).unwrap().is_none());
+        for scope in ["any-scope", "another"] {
+            let got = retired_names(&store, scope);
+            assert!(got.contains(&name_form(&old_a)) && got.contains(&name_form(&old_b)), "{scope}: {got:?}");
+            assert_eq!(got.len(), 2, "the same name once: {got:?}");
+            assert_ne!(pick_name(&store, scope, vec![], 1), old_a, "{scope}: not suggested again");
+        }
+        // the first new retirement writes the record; the old names go with it into the new key
+        let fresh = creature_name(&[old_a.clone(), old_b.clone()], 9);
+        retire_name(&store, "any-scope", &fresh).unwrap();
+        assert!(store.get(RETIRED_KEY).unwrap().is_some());
+        let got = retired_names(&store, "any-scope");
+        assert_eq!(got.len(), 3, "{got:?}");
+        assert!(retired_names(&store, "another").contains(&name_form(&old_a)), "old names count in every scope");
+        assert!(!retired_names(&store, "another").contains(&name_form(&fresh)), "a new one only in its own");
+        // once the new key exists the old list is not read again
+        store.set("creatureNamesUsed", "[\"zebra-moth\"]").unwrap();
+        assert!(!retired_names(&store, "another").contains(&"zebra-moth".to_string()));
+        // a damaged old list is no list
+        let profile2 = temp("fix1-legacy2");
+        let store2 = Store::open(&profile2).unwrap();
+        store2.set("creatureNamesUsed", "{oops").unwrap();
+        assert!(retired_names(&store2, "x").is_empty());
+        // the scope cap never drops the old names
+        for i in 0..(RETIRED_SCOPES + 5) {
+            retire_name(&store, &format!("s{i}"), &creature_name(&[], 1)).unwrap();
+        }
+        assert!(retired_names(&store, "another").contains(&name_form(&old_a)), "the oldest scope goes, not the old names");
+        drop((store, store2));
+        for d in [profile, profile2] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn fix1_forgetting_a_project_also_forgets_its_setup_card_state() {
+        let git = Git::detect().unwrap();
+        let profile = temp("fix1-forget");
+        let store = Store::open(&profile).unwrap();
+        let (a, b) = (temp_repo("fix1-forget-a"), temp_repo("fix1-forget-b"));
+        for r in [&a, &b] {
+            fs::write(r.join("package.json"), r#"{"packageManager":"pnpm@9"}"#).unwrap();
+        }
+        let (pa, pb) = (add_project(&git, &store, &a).unwrap(), add_project(&git, &store, &b).unwrap());
+        for p in [&pa, &pb] {
+            crate::setup::dismiss_card(&store, &p.id).unwrap();
+            crate::setup::save_suggestion(&store, Path::new(&p.path), "install", "pnpm install", None).unwrap();
+        }
+        forget_projects(&store, std::slice::from_ref(&pa.id)).unwrap();
+        assert!(!crate::setup::card_dismissed(&store, &pa.id) && crate::setup::card_dismissed(&store, &pb.id));
+        assert_eq!(crate::setup::local_setup(&store, Path::new(&pa.path)), None, "the forgotten project's saved setup goes");
+        assert_eq!(crate::setup::local_setup(&store, Path::new(&pb.path)).as_deref(), Some("pnpm install"), "the other stays");
+        drop(store);
+        for d in [profile, a, b] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
     fn proj024_the_record_is_bounded_and_a_damaged_one_retires_nothing() {
         let profile = temp("retire-bound");
         let store = Store::open(&profile).unwrap();
@@ -2615,7 +2773,7 @@ mod tests {
         let kept = retired_names(&store, "scope");
         assert_eq!(kept.len(), RETIRED_PER_SCOPE);
         assert_eq!(kept.last(), used.last());
-        // Many scopes: the oldest go.
+        // Many-scopes: the oldest go.
         for i in 0..(RETIRED_SCOPES + 20) {
             retire_name(&store, &format!("s{i}"), &creature_name(&[], 1)).unwrap();
         }
