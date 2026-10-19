@@ -1117,15 +1117,27 @@ pub(crate) fn install_codex_with(home: &Path, command: &str, listing: impl FnOnc
     // record stays in the Codex home. hooks FIX-4: the file first, the record only once the file
     // is gone, so a file that cannot be removed (held open, say) keeps the record that names it as
     // Kolux's, and the next start does not refuse it as someone else's file with Kolux's entries.
-    let restore = || match &text {
-        Some(t) => std::fs::write(&file, t).map_err(|e| e.to_string()),
-        None => {
-            std::fs::remove_file(&file).map_err(|e| format!("{} could not be removed ({e}); its record stays, so the next start still knows it as Kolux's", file.display()))?;
-            let record = agent_hooks::codex_record(&file);
-            if agent_hooks::was_created(&record, &file) {
-                let _ = std::fs::remove_file(record);
+    // hooks FIX-5 (stand-in review AFTER 1): only while the file still holds what Kolux wrote. A
+    // save by the user or another tool while Codex was asked is kept, and the error says so; the
+    // rewrite goes through the same atomic write as the install, so it never leaves half a file.
+    // Nothing written (the entries were already in): nothing to put back.
+    let wrote = if changed { Some(String::from_utf8(render(&hooks, text.as_deref())?).map_err(|e| e.to_string())?) } else { None };
+    let restore = || -> Result<(), String> {
+        let Some(wrote) = wrote.as_deref() else { return Ok(()) };
+        match &text {
+            Some(t) => write_atomic(&file, t.as_bytes(), Some(wrote)),
+            None => {
+                let now = std::fs::read(&file).map_err(|e| format!("{} could not be read back ({e}); its record stays, so the next start still knows it as Kolux's", file.display()))?;
+                if now != wrote.as_bytes() {
+                    return Err(format!("{} {CHANGED}", file.display()));
+                }
+                std::fs::remove_file(&file).map_err(|e| format!("{} could not be removed ({e}); its record stays, so the next start still knows it as Kolux's", file.display()))?;
+                let record = agent_hooks::codex_record(&file);
+                if agent_hooks::was_created(&record, &file) {
+                    let _ = std::fs::remove_file(record);
+                }
+                Ok(())
             }
-            Ok(())
         }
     };
     let listing = listing(home);
@@ -1141,8 +1153,11 @@ pub(crate) fn install_codex_with(home: &Path, command: &str, listing: impl FnOnc
         });
     }
     if let Err(e) = crate::trust::write_whole(&config, &doc.to_string()) {
-        restore()?;
-        return Err(e);
+        // hooks FIX-5 (stand-in review AFTER 2): a rollback that fails too never hides the trust error.
+        return Err(match restore() {
+            Ok(()) => e,
+            Err(r) => format!("{e}; {r}"),
+        });
     }
     Ok(true)
 }
