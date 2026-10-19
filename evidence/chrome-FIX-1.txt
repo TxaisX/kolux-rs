@@ -27,6 +27,6 @@ WHAT CHANGED (user-visible)
    - evidence/chrome-T-246-c-keymap.test.ts.patch removed: keymap.test.ts is in the lane (count 132).
 
 LIVE PROOF PENDING (batched), after the coordinator lands the two patches
-- On a German-layout Windows keyboard (or a layout with AltGr), press AltGr+0 in a terminal pane: a } is typed and the interface zoom does not reset. Ctrl+Alt+0 still resets the interface zoom.
+- On a German-layout Windows keyboard (or a layout with AltGr), press AltGr+0 in a terminal pane: a } is typed and the interface zoom does not reset. (FIX-2 correction: on Windows left Ctrl+Alt is the same as AltGr, so Ctrl+Alt+0 types } there too and the guard blocks it on purpose; the "Ctrl+Alt+0 still resets the interface zoom" step is a US-layout check only. On an AltGr layout only zoom in, whose key is a dead key, still fires; zoom out and reset need a rebind.)
 - Click a web link in the app (or a target=_blank link): it opens in the default browser and the app window stays where it is.
 - Help menu lists Explore Kolux, Getting Started, About, Check for Updates; no Report Crash.

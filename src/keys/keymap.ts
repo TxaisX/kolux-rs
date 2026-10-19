@@ -233,13 +233,20 @@ function ownChars(key: string): string | null {
  * so AltGr+0 (a closing brace on a German keyboard) would look like the chord Ctrl+Alt+0 and its
  * character would be lost. A Ctrl+Alt press that types one character other than the chord's own key is a
  * typed symbol, never a command; so is anything the browser flags as AltGraph. macOS Option is a real
- * modifier and is left alone. Shift chords are checked by the AltGraph flag only (their typed character
+ * modifier and is left alone before anything else is read (FIX-2: not even AltGraph is consulted there).
+ * A non-Latin letter in key is a layout without an AltGr layer, so it counts only with the AltGraph flag.
+ * Limit: on an AltGr layout (German, Polish) the zoom chords that need AltGr to type can not be pressed;
+ * rebind the interface zoom keys. Shift chords are checked by the AltGraph flag only (their typed character
  * depends on the layout).
  */
 function typesCharacter(c: Chord, e: KeyLike, platform: Platform, index: boolean): boolean {
+  if (platform === "darwin") return false;
   if (e.getModifierState?.("AltGraph")) return true;
-  if (platform === "darwin" || !e.ctrlKey || !e.altKey || e.shiftKey) return false;
+  if (!e.ctrlKey || !e.altKey || e.shiftKey) return false;
   if ([...e.key].length !== 1) return false;
+  // Layouts without an AltGr layer (Russian, Greek, Hebrew, Arabic) report their own letter in key while
+  // the physical key still decides the chord, so a non-Latin letter is not typed text unless AltGraph is set.
+  if (/\p{L}/u.test(e.key) && !/\p{Script=Latin}/u.test(e.key)) return false;
   const own = index && c.key === "1" ? "123456789" : ownChars(c.key);
   return own !== null && !own.includes(e.key);
 }

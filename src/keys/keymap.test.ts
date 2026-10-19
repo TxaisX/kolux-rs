@@ -167,3 +167,19 @@ test("FIX-1 AltGr: a real Ctrl+Alt chord still fires, and so does Option on a Ma
   // macOS: Option+0 types a degree-like symbol, and the chord is still the zoom reset
   expect(chordMatches("Mod+Alt+0", key({ metaKey: true, altKey: true, code: "Digit0", key: "º" }), "darwin")).toEqual({});
 });
+
+test("FIX-2 AltGr: Ctrl+Alt+letter still fires on a non-Latin layout (no AltGr layer), and darwin never reads AltGraph", () => {
+  const ctrlAlt = { ctrlKey: true, altKey: true };
+  const gr = (m: string) => m === "AltGraph";
+  // Russian, Greek, Hebrew, Arabic layouts report the layout letter in key; the physical key still decides
+  for (const k of ["ф", "α", "ש", "ش"]) {
+    expect(chordMatches("Mod+Alt+A", key({ ...ctrlAlt, code: "KeyA", key: k }), "win32"), k).toEqual({});
+    expect(chordMatches("Mod+Alt+A", key({ ...ctrlAlt, code: "KeyA", key: k }), "linux"), k).toEqual({});
+  }
+  expect(matchEvent(resolve(null, "win32"), key({ ...ctrlAlt, code: "KeyA", key: "ф" }), ["global", "tabs"])?.id).toBe("floatingTerminal.toggle");
+  // the AltGraph flag still wins on a non-Latin layout, and a Latin letter that is not the chord's own is still typed text
+  expect(chordMatches("Mod+Alt+A", { ...key({ ...ctrlAlt, code: "KeyA", key: "ф" }), getModifierState: gr }, "win32")).toBeNull();
+  expect(chordMatches("Mod+Alt+A", key({ ...ctrlAlt, code: "KeyA", key: "ą" }), "win32")).toBeNull();
+  // macOS: even if the engine reports AltGraph while Option is held, the chord still fires
+  expect(chordMatches("Mod+Alt+0", { ...key({ metaKey: true, altKey: true, code: "Digit0", key: "º" }), getModifierState: gr }, "darwin")).toEqual({});
+});
