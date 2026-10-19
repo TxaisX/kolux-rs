@@ -1,9 +1,11 @@
 // SKILL-009 / SKILL-010: the kit strip above the session grid, and the polling behind it.
+// SKILL-016: the strip carries the tour anchor, and Open results records the first-results milestone.
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown } from "../chrome/icons";
 import { KITS, VENDOR_NAME, type Vendor } from "./catalog";
 import { KitIcon } from "./Kits";
+import { TOUR_ANCHOR, openResults } from "./milestones";
 import { moveTargets, roleDone, roleRow, type RoleRow, type RunCheck, type SeatInfo } from "./run";
 
 export const POLL_MS = 10_000;
@@ -73,7 +75,7 @@ export default function KitStrip({ check, seats, sent, now, folded, onFold, onOp
   const done = roles.filter((r) => roleDone(check, r.id)).length;
   const rows = kitRows(check, seats, sent, now);
   return (
-    <section className="kit-strip" aria-label="Kit results">
+    <section className="kit-strip" aria-label="Kit results" data-tour-anchor={TOUR_ANCHOR}>
       <div className="kit-strip-head">
         <span className="kit-icon">
           <KitIcon id={check.record.kit} size={16} />
@@ -83,7 +85,7 @@ export default function KitStrip({ check, seats, sent, now, folded, onFold, onOp
           {done} of {roles.length} done
         </span>
         <span className="kit-gap" />
-        <button className="btn" onClick={onOpen}>
+        <button className="btn" onClick={openResults(onOpen)}>
           Open results
         </button>
         <button className="btn" onClick={onCollect}>

@@ -1,11 +1,18 @@
 // SKILL-017: the Skills page. Every skill the AIs on this computer can see, with search, a Filter
 // by agent menu, source chips with counts, Refresh, Clear filters and a Skill folders popover.
 // Close (or Escape outside a text field) goes back to whichever view was open before.
+// SKILL-022: More actions > Delete skills chooses rows (bundled and plugin rows cannot be chosen),
+// confirms with what goes and where linked content stays, then shows each skill's outcome.
+// SKILL-020: each row's actions (View details, Reveal file, Copy path, Delete) and a details dialog
+// with the AIs that see the skill, when it was updated and its path; Delete goes through SKILL-022.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Close, Dots, Funnel, Refresh } from "../chrome/icons";
 import { locale } from "../language";
-import { AGENT_FILTERS, NO_DESCRIPTION, NO_FILTERS, QUERY_LIMIT, SOURCES, dateText, escapeCloses, filtersOn, rootState, shortPath, sourceCounts, viewOf, visible, type Filters, type Scan } from "./skills";
+import Ask from "../chrome/Ask";
+import { AGENT_FILTERS, COPIED, COPY_FAILED, MAX_DELETE, ROW_ACTIONS, actionBlocked, seenBy, NO_DESCRIPTION, NO_FILTERS, QUERY_LIMIT, SOURCES, dateText, eligible, escapeCloses, filtersOn, keepChosen, outcomeText, pickOf, rootState, shortPath, sourceCounts, sumUp, viewOf, visible, whyNot, type Done, type Filters, type Planned, type RowAction, type Scan, type Skill } from "./skills";
+
+type Asking = { kind: "confirm"; plan: Planned[] } | { kind: "done"; done: Done[] } | { kind: "error"; text: string };
 
 type Props = { workspace: string | null; onClose: () => void };
 
@@ -17,6 +24,21 @@ export default function SkillsPage({ workspace, onClose }: Props) {
   const [tooLong, setTooLong] = useState(false);
   const [open, setOpen] = useState<"agent" | "folders" | "more" | null>(null);
   const run = useRef(0);
+  /** SKILL-022: the chosen rows' paths while choosing skills to delete; null otherwise. */
+  const [picking, setPicking] = useState<string[] | null>(null);
+  const [asking, setAsking] = useState<Asking | null>(null);
+  const [working, setWorking] = useState(false);
+  /** SKILL-020: the row whose actions menu is open, the skill whose details show, and the toast. */
+  const [rowMenu, setRowMenu] = useState<string | null>(null);
+  const [details, setDetails] = useState<Skill | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const flash = (text: string) => {
+    setToast(text);
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 2000);
+  };
+  useEffect(() => () => clearTimeout(toastTimer.current), []);
 
   const load = (refresh: boolean) => {
     const n = ++run.current;
@@ -36,11 +58,19 @@ export default function SkillsPage({ workspace, onClose }: Props) {
         setOpen(null);
         return;
       }
+      if (rowMenu) {
+        setRowMenu(null);
+        return;
+      }
+      if (picking) {
+        setPicking(null);
+        return;
+      }
       if (escapeCloses(e.target)) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, rowMenu, picking, onClose]);
 
   const skills = scan?.skills ?? [];
   const shown = useMemo(() => visible(skills, f), [skills, f]);
@@ -48,6 +78,50 @@ export default function SkillsPage({ workspace, onClose }: Props) {
   const view = viewOf(scan, failed, scanning, shown.length);
   const errors = scan?.roots.filter((r) => r.state === "error") ?? [];
   const agentLabel = AGENT_FILTERS.find((a) => a.id === f.agent)!.label;
+  // A rescan drops choices that vanished or can no longer be chosen.
+  useEffect(() => setPicking((p) => p && keepChosen(p, skills)), [scan]);
+  const nameOf = (path: string) => skills.find((s) => s.path === path)?.name ?? shortPath(path, 40);
+  const picksOf = (paths: string[]) => skills.filter((s) => paths.includes(s.path)).map(pickOf);
+
+  /** SKILL-022: plans the delete of `paths` and opens its confirmation (T-320's row Delete too). */
+  const askDelete = (paths: string[]) => {
+    if (paths.length === 0 || paths.length > MAX_DELETE || working) return;
+    setWorking(true);
+    invoke<Planned[]>("skills_delete_plan", { workspace, picks: picksOf(paths) })
+      .then((plan) => setAsking({ kind: "confirm", plan }), (e) => setAsking({ kind: "error", text: String(e) }))
+      .finally(() => setWorking(false));
+  };
+  const confirmDelete = (paths: string[]) => {
+    setAsking(null);
+    setWorking(true);
+    invoke<Done[]>("skills_delete", { workspace, picks: picksOf(paths) })
+      .then((done) => setAsking({ kind: "done", done: done.map((d) => ({ ...d, path: nameOf(d.path) })) }), // named before the rescan drops them
+       (e) => setAsking({ kind: "error", text: String(e) }))
+      .finally(() => {
+        setWorking(false);
+        setPicking(null);
+        load(true);
+      });
+  };
+  /** SKILL-020: one row action. Copy runs inside the click, so the clipboard accepts it. */
+  const act = (s: Skill, a: RowAction) => {
+    setRowMenu(null);
+    if (actionBlocked(s, a)) return;
+    if (a === "details") setDetails(s);
+    else if (a === "reveal") invoke("skills_reveal", { workspace, path: s.path }).catch((e) => flash(String(e)));
+    else if (a === "delete") {
+      setDetails(null);
+      askDelete([s.path]);
+    } else {
+      try {
+        navigator.clipboard.writeText(s.path).then(() => flash(COPIED), () => flash(COPY_FAILED));
+      } catch {
+        flash(COPY_FAILED);
+      }
+    }
+  };
+  const toggle = (path: string) => setPicking((p) => p && (p.includes(path) ? p.filter((x) => x !== path) : [...p, path]));
+
   const clear = () => {
     setF(NO_FILTERS);
     setTooLong(false);
@@ -69,8 +143,16 @@ export default function SkillsPage({ workspace, onClose }: Props) {
           <>
             <div className="menu-backdrop" onClick={() => setOpen(null)} />
             <div className="menu skills-pop right" role="menu">
-              {/* SKILL-022's safe delete (T-180) opens from here. */}
-              <button className="menu-item" role="menuitem" disabled title="Safe delete comes with a later update (T-180)">
+              <button
+                className="menu-item"
+                role="menuitem"
+                disabled={!scan || eligible(skills).length === 0}
+                title={scan && eligible(skills).length === 0 ? "Only your own and project skills can be deleted" : undefined}
+                onClick={() => {
+                  setPicking([]);
+                  setOpen(null);
+                }}
+              >
                 <span className="name">Delete skills</span>
               </button>
             </div>
@@ -168,6 +250,30 @@ export default function SkillsPage({ workspace, onClose }: Props) {
           <Refresh size={12} /> Refresh
         </button>
       </div>
+      {picking && (
+        <div className="skills-bar skills-picking" role="toolbar" aria-label="Choose skills to delete">
+          <span role="status">{picking.length} selected</span>
+          <button className="btn" onClick={() => setPicking(eligible(shown))}>
+            Select all eligible
+          </button>
+          <button className="btn" onClick={() => setPicking([])} disabled={picking.length === 0}>
+            Clear
+          </button>
+          <span className="spacer" />
+          {picking.length > MAX_DELETE && <span className="skills-note">At most {MAX_DELETE} skills at a time</span>}
+          <button className="btn danger" disabled={picking.length === 0 || picking.length > MAX_DELETE || working} onClick={() => askDelete(picking)}>
+            Delete…
+          </button>
+          <button className="btn" onClick={() => setPicking(null)}>
+            Exit selection
+          </button>
+        </div>
+      )}
+      {toast && (
+        <div className="toast" role="status">
+          {toast}
+        </div>
+      )}
       {tooLong && <div className="skills-note" role="status">That search is too long; searches are at most {QUERY_LIMIT} characters.</div>}
 
       <div className="skills-body">
@@ -210,10 +316,37 @@ export default function SkillsPage({ workspace, onClose }: Props) {
             {shown.map((s) => (
               <div key={s.path} className="skills-row" role="listitem">
                 <div className="top">
+                  {picking && (
+                    <input
+                      type="checkbox"
+                      aria-label={`Choose ${s.name}`}
+                      checked={picking.includes(s.path)}
+                      disabled={whyNot(s) != null}
+                      title={whyNot(s) ?? undefined}
+                      onChange={() => toggle(s.path)}
+                    />
+                  )}
                   <span className="name">{s.name}</span>
                   <span className={`skills-tag ${s.source}`}>{s.plugin ? `Plugin: ${s.plugin}` : SOURCES.find((x) => x.id === s.source)!.label}</span>
                   <span className="spacer" />
                   <span className={`date${s.updated == null ? " none" : ""}`}>{s.source === "bundled" ? "Built into Kolux" : dateText(s.updated, locale())}</span>
+                  <div className="skills-anchor">
+                    <button className="ib" title="Skill actions" aria-label={`Actions for ${s.name}`} aria-haspopup="menu" aria-expanded={rowMenu === s.path} onClick={() => setRowMenu(rowMenu === s.path ? null : s.path)}>
+                      <Dots size={12} />
+                    </button>
+                    {rowMenu === s.path && (
+                      <>
+                        <div className="menu-backdrop" onClick={() => setRowMenu(null)} />
+                        <div className="menu skills-pop right" role="menu" aria-label={`Actions for ${s.name}`}>
+                          {ROW_ACTIONS.map((a) => (
+                            <button key={a.id} className="menu-item" role="menuitem" disabled={actionBlocked(s, a.id) != null} title={actionBlocked(s, a.id) ?? undefined} onClick={() => act(s, a.id)}>
+                              <span className="name">{a.label}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
                 <div className={`desc${s.description ? "" : " none"}`}>{s.description ?? NO_DESCRIPTION}</div>
                 {s.source !== "bundled" && (
@@ -226,6 +359,86 @@ export default function SkillsPage({ workspace, onClose }: Props) {
           </div>
         )}
       </div>
+      {details && (
+        <Ask
+          title={details.name}
+          confirm={null}
+          body={
+            <>
+              <p>Used by: {seenBy(details).join(", ") || "No AI reads this folder"}</p>
+              <p>Last updated: {details.source === "bundled" ? "Built into Kolux" : dateText(details.updated, locale())}</p>
+              {details.source !== "bundled" && (
+                <>
+                  <p title={details.path} style={{ userSelect: "text", wordBreak: "break-all", fontFamily: "var(--mono-font)" }}>
+                    {details.path}
+                  </p>
+                  <p>
+                    <button className="btn" onClick={() => act(details, "copy")}>
+                      Copy path
+                    </button>{" "}
+                    <button className="btn" onClick={() => act(details, "reveal")}>
+                      Reveal file
+                    </button>{" "}
+                    <button className="btn danger" disabled={actionBlocked(details, "delete") != null} title={actionBlocked(details, "delete") ?? undefined} onClick={() => act(details, "delete")}>
+                      Delete
+                    </button>
+                  </p>
+                </>
+              )}
+            </>
+          }
+          onConfirm={() => setDetails(null)}
+          onCancel={() => setDetails(null)}
+        />
+      )}
+      {asking?.kind === "confirm" && (() => {
+        const sum = sumUp(asking.plan, nameOf);
+        return (
+          <Ask
+            title={sum.count === 0 ? "Nothing to delete" : `Delete ${sum.count} skill${sum.count === 1 ? "" : "s"}?`}
+            confirm={sum.count === 0 ? null : "Delete"}
+            body={
+              <>
+                <p>{sum.headline}</p>
+                {sum.remains.map((r, i) => (
+                  <p key={i}>{r}</p>
+                ))}
+                {sum.blocked.length > 0 && (
+                  <>
+                    <p>Left alone:</p>
+                    <ul className="ask-list">
+                      {sum.blocked.map((b, i) => (
+                        <li key={i}>{b}</li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {sum.count > 0 && <p>This cannot be undone.</p>}
+              </>
+            }
+            onConfirm={() => confirmDelete(asking.plan.filter((p) => !p.blocked).map((p) => p.path))}
+            onCancel={() => setAsking(null)}
+          />
+        );
+      })()}
+      {asking?.kind === "done" && (
+        <Ask
+          title="Delete finished"
+          confirm={null}
+          body={
+            <ul className="ask-list">
+              {asking.done.map((d, i) => (
+                <li key={i}>
+                  {d.path}: {outcomeText(d)}
+                </li>
+              ))}
+            </ul>
+          }
+          onConfirm={() => setAsking(null)}
+          onCancel={() => setAsking(null)}
+        />
+      )}
+      {asking?.kind === "error" && <Ask title="Delete did not run" confirm={null} body={<p>{asking.text}</p>} onConfirm={() => setAsking(null)} onCancel={() => setAsking(null)} />}
     </section>
   );
 }

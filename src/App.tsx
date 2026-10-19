@@ -66,6 +66,7 @@ import { startGridTour } from "./onboarding/tour";
 import { KITS, RECALL_KEY, remember, type Kit, type Vendor } from "./kits/catalog";
 import KitStrip from "./kits/KitStrip";
 import { datedName, roleDone, rolePrompt, seatTitle, type RunCheck } from "./kits/run";
+import { noteKitLaunch } from "./kits/milestones";
 import DiffPane, { diffNav } from "./editor/DiffPane";
 import AllChangesPane from "./editor/AllChangesPane";
 import { DIFF_SPLIT_KEY, diffSplitOf, targetCell } from "./scm/split";
@@ -1412,6 +1413,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       setToast("Not one AI started for the kit, so nothing is running.");
       return false;
     }
+    void noteKitLaunch(started); // SKILL-016: the first-kit milestone
     // The role-to-session mapping is kept only when every seat started.
     kitRuns.current[dir] = { started: prep.started, seats: started === keys.length ? keys : null, waiting, sent: {}, prompts };
     setKitTick((n) => n + 1);
