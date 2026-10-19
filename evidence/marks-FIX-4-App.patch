@@ -1,0 +1,20 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index dd7df24a..575924d7 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -113,6 +113,7 @@ import { useTowerBridge } from "./tower/TowerWindow";
+ import { LANES, chipOf } from "./board/chip";
+ import Ring from "./usage/Ring";
+ import { capOn, contextFill, meterOf, meterText, planOf, readsLeft, usageLine } from "./usage/meter";
++import { readoutOf } from "./terminal/headerUsage";
+ import { usePlan } from "./usage/plan";
+ import ChooserPane from "./launch/ChooserPane";
+ import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, sheetStart, type Lineup } from "./launch/seats";
+@@ -2493,6 +2494,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                     env={p.env}
+                     stop={turn[p.key]?.stop}
+                     context={context[p.key] ? contextFill(context[p.key], capOn(settings)) : null}
++                    usage={p.agent === "shell" ? undefined : readoutOf(context[p.key], capOn(settings), readsLeft(settings))}
+                     focused={p.key === focused}
+                     onFocus={() => setFocused(p.key)}
+                     onRunning={(on) => {

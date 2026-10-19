@@ -1,0 +1,23 @@
+diff --git a/src/styles.css b/src/styles.css
+index 6ea2437f..9c88bc9f 100644
+--- a/src/styles.css
++++ b/src/styles.css
+@@ -462,6 +462,18 @@ input { font: inherit; }
+ .gauge.danger, .gauge.danger .ring, .tab .ring.danger, .meter-fill.danger { color: var(--meter-danger); }
+ /* USAGE-001: no reading yet: a greyed 0%. */
+ .gauge.none, .gauge.none .ring { color: var(--fg-muted); opacity: 0.6; }
++/* USAGE-034: the full usage readout in an agent pane's header: ring and percentage, tokens, the two plan
++   figures with countdowns, the session's cost in a cyan chip. One row, never wrapping; which pieces show is
++   decided in script from the header's measured width. */
++.usage-slot { display: contents; }
++.usage-readout { display: inline-flex; align-items: center; gap: 8px; flex: none; margin-right: 6px; white-space: nowrap; font-size: 11px; }
++.usage-readout .gauge { margin-right: 0; }
++.usage-tokens, .usage-count { color: var(--fg-muted); }
++.usage-win { display: inline-flex; align-items: center; gap: 4px; }
++.usage-fig { font-weight: 500; color: var(--gauge-text); }
++.usage-fig.warn { color: var(--working-icon); }
++.usage-fig.danger { color: var(--meter-danger); }
++.usage-cost { padding: 0 6px; border-radius: 8px; font-weight: 500; color: var(--cost-fg, #1f9db0); background: color-mix(in srgb, var(--cost-fg, #1f9db0) 16%, transparent); }
+ .tab .ring { flex: none; color: var(--gauge); }
+ /* USAGE-002: the card's compact meter under the chip row. */
+ .meter { display: flex; align-items: center; gap: 8px; padding: 0 10px 6px; font-size: 11px; color: var(--fg-muted); white-space: nowrap; }
