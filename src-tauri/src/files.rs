@@ -965,6 +965,11 @@ mod tests {
         }
         println!("edit055 link skip exercised with: {made:?}");
         let names: Vec<String> = list_templates(&d).into_iter().map(|t| t.name).collect();
+        // Take the links away again (remove_dir on a junction or folder link leaves its target alone) before asserting.
+        for name in &made {
+            let at = t.join(name);
+            fs::remove_dir(&at).or_else(|_| fs::remove_file(&at)).unwrap();
+        }
         assert_eq!(names, ["Bug report", "File2", "File10", "Meeting notes"]);
     }
 
