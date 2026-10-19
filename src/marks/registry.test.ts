@@ -127,12 +127,17 @@ describe("T-335 the light/dark switch", () => {
 });
 
 describe("T-335 cut features get no mark", () => {
-  const CUT = /(^|[-_.])(gitlab|jira|atlassian|linear|ios|android)([-_.]|$)/i;
-  test("no file in the vendors folder is named for a cut feature (GitLab, Jira, Atlassian, Linear, iOS, Android)", () => {
+  const CUT = /(^|[-_.])(gitlab|jira|linear|ios|android)([-_.]|$)/i;
+  test("no file in the vendors folder is named for a cut feature (GitLab, Jira, Linear, iOS, Android)", () => {
     const files = vendorFiles();
     expect(files.length).toBeGreaterThanOrEqual(8);
     expect(files.filter((f) => CUT.test(f))).toEqual([]);
     expect([...noticeRows().keys()].filter((f) => CUT.test(f))).toEqual([]);
+  });
+  test("Jira is cut but Atlassian is not: a Rovo Dev file under Atlassian's name is allowed, a Jira one is not", () => {
+    expect("atlassian-rovo-dev.svg").not.toMatch(CUT);
+    expect("rovo-dev-atlassian.svg").not.toMatch(CUT);
+    expect("jira-logo.svg").toMatch(CUT);
   });
   test("the registry has no entry for a cut feature", () => {
     for (const m of VENDOR_MARKS) {
