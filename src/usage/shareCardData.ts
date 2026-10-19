@@ -18,8 +18,10 @@ export type CardData = {
   dates: string;
   /** Total tokens, compact (4.5M). */
   tokens: string;
-  /** Estimated cost: two decimals, four below one cent, or n/a when no price is known. */
+  /** Estimated cost: two decimals, four below one cent, or n/a when no price is known. A trailing + means some models had no price and are left out. */
   cost: string;
+  /** True when the cost leaves out models with no known price (the figure is a floor). */
+  partial: boolean;
   topModel: string | null;
   /** Tokens for each day of the range (weekly past a year), oldest first. */
   bars: number[];
@@ -41,6 +43,7 @@ export function cardOf(provider: Provider, rows: Row[], range: Range, today: Dat
   const first = range === "all" ? rows.reduce((m, r) => (r.day < m ? r.day : m), localDay(today)) : rangeStart(range, today);
   const est = estimate(provider, rows);
   const priced = rows.length > 0 && !(est.usd === 0 && est.unpriced.length > 0);
+  const partial = priced && est.unpriced.length > 0;
   const total = rows.reduce((t, r) => t + tokensOf(r), 0);
   return {
     provider,
@@ -48,7 +51,8 @@ export function cardOf(provider: Provider, rows: Row[], range: Range, today: Dat
     rangeLabel: RANGE_WORDS[range],
     dates: `${dayText(first, loc)} – ${dayText(localDay(today), loc)}`,
     tokens: new Intl.NumberFormat(loc, { notation: "compact", maximumFractionDigits: 1 }).format(total),
-    cost: costText(est.usd, priced, loc),
+    cost: costText(est.usd, priced, loc) + (partial ? "+" : ""),
+    partial,
     topModel: byModel(provider, rows)[0]?.model ?? null,
     bars: daily(rows, range, today).map((b) => b.tokens),
   };
@@ -56,7 +60,7 @@ export function cardOf(provider: Provider, rows: Row[], range: Range, today: Dat
 
 /** The ready-written post: provider, range, total tokens and cost. */
 export function postText(c: CardData): string {
-  const spend = c.cost === "n/a" ? "cost n/a" : `about ${c.cost}`;
+  const spend = c.cost === "n/a" ? "cost n/a" : c.partial ? `at least ${c.cost.slice(0, -1)}` : `about ${c.cost}`;
   return `${c.providerName} usage, ${c.rangeLabel.toLowerCase()}: ${c.tokens} tokens, ${spend}. Tracked with Kolux.`;
 }
 
@@ -135,7 +139,7 @@ export function drawCard(ctx: CanvasRenderingContext2D, c: CardData, mark: Canva
   ctx.fillStyle = DIM;
   ctx.font = `400 22px ${FONT}`;
   ctx.fillText("tokens", 64, 354);
-  ctx.fillText("estimated cost", 640, 354);
+  ctx.fillText(c.partial ? "estimated cost, unpriced models left out" : "estimated cost", 640, 354);
   if (c.topModel) {
     ctx.fillStyle = FAINT;
     ctx.fillText("Most used", 64, 408);
@@ -170,9 +174,10 @@ type ClipLike = { write: (items: ClipboardItem[]) => Promise<void> };
 /** Puts the canvas on the clipboard as a PNG. True when it did; false when the picture could not be made or the clipboard refused. */
 export async function copyPng(canvas: HTMLCanvasElement, clip: ClipLike | undefined, Item: typeof ClipboardItem | undefined): Promise<boolean> {
   if (!clip || !Item) return false;
-  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
-  if (!blob) return false;
   try {
+    // toBlob can throw (a tainted canvas raises SecurityError), so it sits inside the try with the clipboard write
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+    if (!blob) return false;
     await clip.write([new Item({ "image/png": blob })]);
     return true;
   } catch {

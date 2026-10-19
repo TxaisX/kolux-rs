@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test, vi } from "vitest";
 import ShareCard from "./ShareCard";
-import { CARD_H, CARD_W, cardOf, copyPng, costText, drawCard, postText, xUrl } from "./shareCardData";
+import { CARD_W, cardOf, copyPng, costText, drawCard, postText, xUrl } from "./shareCardData";
 import type { Row } from "./tokens";
 
 const row = (day: string, p: Partial<Row> = {}): Row => ({ day, session: "s1", model: "claude-opus-4-8", cwd: "", band: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, reasoning: 0, last: 0, ...p });
@@ -65,10 +65,15 @@ test("USAGE-019: the picture draws Kolux's name, the figures, the range and ever
   const c = cardOf("claude", [row("2026-10-19", { input: 1_000_000 }), row("2026-10-18", { input: 500_000 })], "7", today, "en-US");
   const texts: string[] = [];
   const rects: number[][] = [];
+  const fills: string[] = [];
   const ctx = new Proxy({} as Record<string, unknown>, {
     get: (t, k: string) => {
       if (k === "fillText") return (s: string) => texts.push(s);
-      if (k === "fillRect" || k === "roundRect") return (...a: number[]) => rects.push(a);
+      if (k === "fillRect" || k === "roundRect")
+        return (...a: number[]) => {
+          rects.push(a);
+          fills.push(String(t.fillStyle));
+        };
       if (k === "measureText") return (s: string) => ({ width: s.length * 10 });
       if (k === "createLinearGradient") return () => ({ addColorStop() {} });
       return k in t ? t[k] : () => {};
@@ -83,9 +88,12 @@ test("USAGE-019: the picture draws Kolux's name, the figures, the range and ever
   expect(texts).toContain(c.dates);
   expect(texts).toContain("Claude");
   expect(texts).toContain("claude-opus-4-8");
-  // a bar for each of the seven days is drawn inside the card
-  const bars = rects.filter((r) => r.length >= 4 && r[0] >= 0 && r[0] + r[2] <= CARD_W && r[1] + r[3] <= CARD_H && r[3] > 0 && r[2] < 200);
-  expect(bars.length).toBeGreaterThanOrEqual(7);
+  // exactly one bar per day is drawn: bar colour, inside the strip (y 450-570), inside the card
+  const bars = rects.filter((r, i) => fills[i] === "#8beeb0" && r[1] >= 450 && r[1] + r[3] <= 570 && r[0] >= 0 && r[0] + r[2] <= CARD_W && r[3] > 0);
+  expect(c.bars).toHaveLength(7);
+  expect(bars).toHaveLength(c.bars.length);
+  // the ground fill and the border are not counted as bars
+  expect(rects.length).toBe(1 + c.bars.length);
 });
 
 test("USAGE-019: Copy image puts a PNG on the clipboard and says Copied; a failure says so", async () => {
@@ -103,6 +111,49 @@ test("USAGE-019: Copy image puts a PNG on the clipboard and says Copied; a failu
   const denied = { write: async () => { throw new Error("denied"); } };
   await expect(copyPng(canvas, denied, Item as unknown as typeof ClipboardItem)).resolves.toBe(false);
   await expect(copyPng(canvas, undefined, undefined)).resolves.toBe(false);
+});
+
+test("USAGE-019 FIX-1: a toBlob that throws (a tainted canvas) answers false instead of rejecting", async () => {
+  const write = vi.fn(async (_items: unknown[]) => {});
+  class Item {
+    constructor(public data: Record<string, Blob>) {}
+  }
+  const tainted = {
+    toBlob: () => {
+      throw new DOMException("tainted", "SecurityError");
+    },
+  } as unknown as HTMLCanvasElement;
+  await expect(copyPng(tainted, { write }, Item as unknown as typeof ClipboardItem)).resolves.toBe(false);
+  expect(write).not.toHaveBeenCalled();
+});
+
+test("USAGE-019 FIX-1: a cost that leaves out unpriced models is marked partial on the card and in the post", () => {
+  const priced = [row("2026-10-19", { input: 1_000_000 })];
+  const mixed = [...priced, row("2026-10-18", { model: "no-such-model", input: 500 })];
+  const full = cardOf("claude", priced, "7", today, "en-US");
+  const part = cardOf("claude", mixed, "7", today, "en-US");
+  expect(full.partial).toBe(false);
+  expect(full.cost).toBe("$5.00");
+  expect(part.partial).toBe(true);
+  expect(part.cost).toBe(`${full.cost}+`);
+  expect(postText(part)).toContain(`at least ${full.cost}`);
+  expect(postText(full)).toContain(`about ${full.cost}`);
+  // nothing priced at all stays n/a, not "n/a+"
+  const none = cardOf("claude", [row("2026-10-19", { model: "no-such-model", input: 100 })], "7", today, "en-US");
+  expect(none.cost).toBe("n/a");
+  expect(none.partial).toBe(false);
+  // the picture says which models are left out
+  const texts: string[] = [];
+  const ctx = new Proxy({} as Record<string, unknown>, {
+    get: (t, k: string) => (k === "fillText" ? (s: string) => texts.push(s) : k === "measureText" ? (s: string) => ({ width: s.length * 10 }) : k in t ? t[k] : () => {}),
+    set: (t, k: string, v) => ((t[k] = v), true),
+  }) as unknown as CanvasRenderingContext2D;
+  drawCard(ctx, part, null);
+  expect(texts).toContain(part.cost);
+  expect(texts.some((x) => /unpriced models left out/i.test(x))).toBe(true);
+  texts.length = 0;
+  drawCard(ctx, full, null);
+  expect(texts.some((x) => /unpriced/i.test(x))).toBe(false);
 });
 
 test("USAGE-019: the dialog shows the card, Copy image, the one shared Share on X button and Close", () => {
