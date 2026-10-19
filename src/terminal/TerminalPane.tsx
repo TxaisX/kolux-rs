@@ -4,7 +4,7 @@
 // branch chip, program, status word; then gauge, more, expand, split, close on the right.
 import { useEffect, useRef, useState } from "react";
 import { branchChip, crewLabel, crewLine, foundAgent, headerOf, takesInband, titleState, type Crew } from "./status";
-import PaneMenu from "./PaneMenu";
+import PaneMenu, { paneMenuItems } from "./PaneMenu";
 import type { Chip } from "../board/chip";
 import type { AgentState } from "../projects/rows";
 import { invoke } from "@tauri-apps/api/core";
@@ -49,7 +49,6 @@ import FindBar from "./FindBar";
 import { stopLine, type StopInfo } from "./notify";
 import NameField from "./NameField";
 import { handlesIn } from "./tabs";
-import { Kbd, useLabel } from "../keys/KeymapContext";
 
 // TERM-036: the pane menu's copy items; Copy Session ID shows only once the session is known.
 const COPY_IDS = [["session", "Copy Session ID"], ["terminal", "Copy Terminal ID"], ["pane", "Copy Pane ID"]] as const;
@@ -165,6 +164,8 @@ type Props = {
   onChoose?: () => void;
   /** TERM-006: the header split button opens a shell beside this pane, in the same folder. */
   onSplit?: (dir: "right" | "down") => void;
+  /** TERM-035: Equalize in the pane menu; given only while the grid holds more than one pane. */
+  onEqualize?: () => void;
   /** TERM-013: the grid's expand: `on` while this pane's cell fills the grid; `can` is false for a lone classic pane. */
   expand?: { on: boolean; can: boolean; toggle: () => void };
   /** VIEW-026: on the Board this pane is a card; expanded shows the live terminal inside it. */
@@ -194,7 +195,7 @@ const stagger = () =>
     }, 150 + 60 * waiting++),
   );
 
-export default function TerminalPane({ hidden = false, gpu = true, name, plan, usage, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
+export default function TerminalPane({ hidden = false, gpu = true, name, plan, usage, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, onEqualize, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const keySettingsRef = useRef(keySettings);
   keySettingsRef.current = keySettings;
@@ -286,11 +287,11 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
   const inbandRef = useRef(false);
   inbandRef.current = takesInband(agent, program, found);
   // TERM-025 / TERM-027: the pane menu, opened by "..." or a right-click on the header, and the inline name field.
-  const [menuAt, setMenuAt] = useState<{ top: number; left: number } | null>(null);
+  const [menuAt, setMenuAt] = useState<{ top: number; left: number; selected: boolean } | null>(null);
+  /** TERM-035: the menu also opens from a right-click inside the pane (set with the terminal). */
+  const menuRef = useRef<(x: number, y: number) => void>(() => {});
+  const pasteRef = useRef<() => void>(() => {});
   const [naming, setNaming] = useState(false);
-  // The menu shows a shortcut only once one is assigned (both start with none).
-  const setKey = useLabel("terminal.setTitle").length > 0;
-  const clearKey = useLabel("terminal.clearPaneTitle").length > 0;
   useEffect(() => {
     if (renameAsk > 0 && onRename) setNaming(true);
   }, [renameAsk]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -770,9 +771,15 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     const selected = term.onSelectionChange(() => {
       if (currentText().copyOnSelect && term.hasSelection()) void navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
     });
+    pasteRef.current = () => void navigator.clipboard?.readText().then((t) => t && pasting.paste(t), (e) => sayOnce("paste-refused", `The clipboard could not be read (${e instanceof Error ? e.message : String(e)})`, setFlash));
     const rightClick = (e: MouseEvent) => {
-      if (!currentText().rightClickPaste) return;
       e.preventDefault();
+      if (!currentText().rightClickPaste) {
+        // TERM-035: a program that tracks the mouse keeps its right-click (Shift takes it back for the menu).
+        if (term.modes.mouseTrackingMode !== "none" && !e.shiftKey) return;
+        menuRef.current(e.clientX, e.clientY);
+        return;
+      }
       if (term.hasSelection()) {
         void navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
         term.clearSelection();
@@ -1057,7 +1064,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
   const expanded = card ? card.expanded : !!expand?.on;
   const canExpand = card ? true : !!expand?.can;
   const expandKey = labelOf(keymap, "terminal.expandPane").join("+") || "no shortcut";
-  const openMenu = (x: number, y: number) => setMenuAt({ top: Math.min(y, window.innerHeight - 160), left: Math.min(x, window.innerWidth - 240) });
+  // PaneMenu moves itself back inside the window once it knows its own size.
+  const openMenu = (x: number, y: number) => setMenuAt({ top: y, left: x, selected: !!termRef.current?.hasSelection() });
+  menuRef.current = openMenu;
 
   return (
     <section ref={box} className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={shown} data-dropping={dropping || undefined} style={{ ...(card?.column ? { gridColumn: card.column } : {}), ...(dropping ? { outline: "2px solid var(--line-focus)", outlineOffset: -2 } : {}) }}>
@@ -1212,85 +1221,42 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
         </span>
       </header>
       {menuAt && (
-        <PaneMenu style={menuAt} expanded={expanded} canExpand={canExpand} onExpand={onExpand} onSplit={onSplit} onClose={close} onDismiss={() => setMenuAt(null)}>
-          {onRename && (
-            <button
-              role="menuitem"
-              className="menu-item"
-              onClick={() => {
-                setMenuAt(null);
-                setNaming(true);
-              }}
-            >
-              <span className="name">Set Title…</span>
-              {setKey && <Kbd id="terminal.setTitle" />}
-            </button>
-          )}
-          {onRename && custom && (
-            <button
-              role="menuitem"
-              className="menu-item"
-              onClick={() => {
-                setMenuAt(null);
-                onRename(undefined);
-              }}
-            >
-              <span className="name">Clear Pane Title</span>
-              {clearKey && <Kbd id="terminal.clearPaneTitle" />}
-            </button>
-          )}
-          {onCopyId &&
-            COPY_IDS.filter(([what]) => sessionKnown || what !== "session").map(([what, label]) => (
-              <button
-                key={what}
-                role="menuitem"
-                className="menu-item"
-                onClick={() => {
-                  setMenuAt(null);
-                  onCopyId(what);
-                }}
-              >
-                <span className="name">{label}</span>
-              </button>
-            ))}
-          <button
-            role="menuitem"
-            className="menu-item"
-            title="Clears the screen and the scrollback of this pane"
-            onClick={() => {
-              setMenuAt(null);
+        <PaneMenu
+          style={{ top: menuAt.top, left: menuAt.left }}
+          onDismiss={() => setMenuAt(null)}
+          items={paneMenuItems({
+            selected: menuAt.selected,
+            expanded,
+            canExpand,
+            onCopy: () => {
+              const term = termRef.current;
+              if (term) void copySelection(term, (text) => navigator.clipboard.writeText(text), setFlash);
+            },
+            onSelectAll: () => {
+              termRef.current?.selectAll();
+              termRef.current?.focus();
+            },
+            onPaste: () => {
+              pasteRef.current();
+              termRef.current?.focus();
+            },
+            agentActions: onReviewPlan ? [{ id: "reviewPlan", name: "Review plan", title: "Read the plan, comment on it, then approve or ask for changes", run: onReviewPlan }] : [],
+            onSplit,
+            onEqualize,
+            onExpand,
+            onSetTitle: onRename && (() => setNaming(true)),
+            hasTitle: custom,
+            onClearTitle: onRename && (() => onRename(undefined)),
+            copyIds: onCopyId ? COPY_IDS.filter(([what]) => sessionKnown || what !== "session").map(([what, label]) => ({ id: what, name: label, run: () => onCopyId(what) })) : [],
+            onDiagnostics: () => void copyDiagnostics(),
+            onClose: onClose && close,
+            onClear: () => {
               clearRef.current();
               termRef.current?.focus();
-            }}
-          >
-            <span className="name">Clear Screen</span>
-            <Kbd id="terminal.clear" />
-          </button>
-          <button
-            role="menuitem"
-            className="menu-item"
-            title="Find text in this pane's screen and scrollback"
-            onClick={() => {
-              setMenuAt(null);
-              findRef.current();
-            }}
-          >
-            <span className="name">Find…</span>
-            <Kbd id="terminal.search" />
-          </button>
-          <button
-            role="menuitem"
-            className="menu-item"
-            title="A scrubbed snapshot of this pane for a bug report, to the clipboard"
-            onClick={() => {
-              setMenuAt(null);
-              void copyDiagnostics();
-            }}
-          >
-            <span className="agent-mark" />
-            <span className="name">Copy terminal diagnostics</span>
-          </button>
-        </PaneMenu>
+            },
+            onFind: () => findRef.current(),
+          })}
+        />
       )}
       {plusAt && (
         <PlusMenu
