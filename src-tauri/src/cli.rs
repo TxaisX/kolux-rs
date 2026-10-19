@@ -2961,7 +2961,7 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
                 // FIX-1 S2: what each terminal runs now, so one that is not the worker's own stays open;
                 // cli FIX-4: a custom-command worker's recorded session is its own.
                 let own = own_program(&dispatches, &id, run.as_deref());
-                let now = |t: u32| (ctx.terminals.program(t).map(|a| a.map(str::to_string)), ctx.terminals.silence(t).is_some(), ctx.terminals.started(t));
+                let now = |t: u32| session_now(ctx.terminals, t);
                 let agent_of = |h: &str| runs_now(h, own.as_ref(), &now);
                 let (mut receipt, kill) = o::stop_with(&mut tasks, &mut dispatches, &id, run.as_deref(), now_ms(), &agent_of)?;
                 // ORCH-022: the agent terminal ends while the store is held, so its exit is never
@@ -3006,7 +3006,7 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
             // FIX-1 S1: a terminal that now runs another agent, or a plain shell, is left open;
             // cli FIX-4: a custom-command worker's recorded session is its own.
             let own = own_program(&dispatches, &id, run.as_deref());
-            let now = |t: u32| (ctx.terminals.program(t).map(|a| a.map(str::to_string)), ctx.terminals.silence(t).is_some(), ctx.terminals.started(t));
+            let now = |t: u32| session_now(ctx.terminals, t);
             let agent_of = |h: &str| runs_now(h, own.as_ref(), &now);
             m.once(retry, |_| release_worker(&mut dispatches, &id, run.as_deref(), &live, &agent_of, &dir, &save, &read, &kill))?
         }
@@ -3453,22 +3453,24 @@ fn model_args(agent: &str, model: Option<&str>, effort: Option<&str>) -> Result<
 /// Waits for the worker's terminal in `dir`: ready once it has written and is still there
 /// `SETTLE` later; gives up at `timeout`. Returns the terminal seen (if any) and readiness.
 /// FIX-1 S1: only a session that was not open before the start (`before`) and sits in `dir` counts,
-/// picked by worker_tab (a marked session running `agent`, or the one uncredited mark: cli FIX-3),
-/// so a tab the user opens there during the wait is never recorded and so never closed by a stop
-/// or release.
-fn wait_ready(terminals: &Terminals, dir: &Path, before: &std::collections::HashSet<u32>, agent: &str, since: Instant, timeout: Duration) -> (Option<u32>, bool) {
+/// picked by worker_tab (a marked session running `agent`, or one running the start's own command
+/// `own`: cli FIX-3, FIX-5). A tab the user opens there during the wait is recorded, and so closed
+/// by a stop or release, only when the worker's own never shows and it is the one tab running that
+/// agent or that command (T-172-e stamps the start's own session).
+fn wait_ready(terminals: &Terminals, dir: &Path, before: &std::collections::HashSet<u32>, agent: &str, own: &str, since: Instant, timeout: Duration) -> (Option<u32>, bool) {
     let here = dir.canonicalize().ok();
     let mut seen = None;
     while since.elapsed() < timeout {
-        let fresh: Vec<(u32, bool, Option<String>)> = terminals
-            .list()
+        let fresh: Vec<(u32, Option<String>, Option<String>)> = terminals
+            .sessions()
             .into_iter()
-            .filter(|(id, _, d)| !before.contains(id) && d.as_deref().is_some_and(|d| Path::new(d).canonicalize().ok() == here))
-            // cli FIX-4 (council AFTER 4): a Setup tab whose shell the shell list does not name is
-            // marked too; it is never taken for the worker.
-            .map(|(id, _, _)| (id, terminals.silence(id).is_some() && !terminals.started(id).is_some_and(|p| setup_shell(&p)), terminals.program(id).flatten().map(str::to_string)))
+            .filter_map(|(h, d, mark)| {
+                let id = h.strip_prefix("term-")?.parse::<u32>().ok()?;
+                let there = here.is_some() && Path::new(&d).canonicalize().ok() == here;
+                (!before.contains(&id) && there).then(|| (id, mark, terminals.program(id).flatten().map(str::to_string)))
+            })
             .collect();
-        seen = worker_tab(&fresh, agent);
+        seen = worker_tab(&fresh, agent, own);
         if seen.is_some_and(|id| terminals.quiet_for(id).is_some_and(|q| q >= SETTLE)) {
             return (seen, true);
         }
@@ -3477,26 +3479,33 @@ fn wait_ready(terminals: &Terminals, dir: &Path, before: &std::collections::Hash
     (seen, false)
 }
 
-/// cli FIX-4 (council AFTER 4): a program that is a shell, by its name: the terminal's own shell
-/// list plus the POSIX shells a setup script may name on its first line (and nu), which Kolux
-/// marks like any other program. A Setup tab running one is never the worker's terminal.
-fn setup_shell(program: &str) -> bool {
-    let stem = Path::new(program).file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
-    crate::pty::is_shell_program(program) || ["dash", "ksh", "ash", "mksh", "nu"].contains(&stem.as_str())
-}
-
-/// cli FIX-3 (a): which fresh session in the worktree is the worker's. `fresh` lists each with
-/// whether Kolux started a program in it (a mark; a plain shell has none, even one credited by
-/// hand) and the agent it is credited to. Only marked sessions count: the one running `agent`
-/// when exactly one does (orchestration::worker_terminal), else the single marked session when
-/// it is credited to no agent, which is how a worker started through a custom command (a wrapper
-/// or `npx`) shows. Stamping the start's own session is T-172-e.
-fn worker_tab(fresh: &[(u32, bool, Option<String>)], agent: &str) -> Option<u32> {
-    let marked: Vec<(u32, Option<String>)> = fresh.iter().filter(|(_, mark, _)| *mark).map(|(id, _, a)| (*id, a.clone())).collect();
-    crate::orchestration::worker_terminal(&marked, agent).or(match marked.as_slice() {
-        [(id, None)] => Some(*id),
+/// cli FIX-3 (a), FIX-5: which fresh session in the worktree is the worker's. `fresh` lists each
+/// with the program Kolux was asked to start in it (its mark; a plain shell has none, even one
+/// credited by hand) and the agent it is credited to. Only marked sessions count: the one running
+/// `agent` when exactly one does (orchestration::worker_terminal), else the one uncredited session
+/// whose program is the start's own command `own`, which is how a worker started through a custom
+/// command (a wrapper or `npx`) shows. The mark's program decides, never the session's argv[0],
+/// which is cmd.exe for every .cmd or .bat launcher (council BLOCKER 1 on c5fb49c); a Setup tab
+/// or a program tab the user opens runs another command and is never taken.
+fn worker_tab(fresh: &[(u32, Option<String>, Option<String>)], agent: &str, own: &str) -> Option<u32> {
+    let marked: Vec<(u32, Option<String>)> = fresh.iter().filter(|(_, mark, _)| mark.is_some()).map(|(id, _, a)| (*id, a.clone())).collect();
+    let mut by_command = fresh.iter().filter(|(_, mark, a)| a.is_none() && mark.as_deref() == Some(own.trim())).map(|(id, _, _)| *id);
+    crate::orchestration::worker_terminal(&marked, agent).or(match (by_command.next(), by_command.next()) {
+        (Some(id), None) => Some(id),
         _ => None,
     })
+}
+
+/// The program Kolux was asked to start in session `t` (its mark); none for a shell or a gone session.
+fn mark_program(terminals: &Terminals, t: u32) -> Option<String> {
+    let h = crate::terminal::handle_of(t);
+    terminals.sessions().into_iter().find(|(s, _, _)| *s == h)?.2
+}
+
+/// What session `t` runs now, as worker-stop and worker-release read it (runs_now's `now`):
+/// the agent it is credited to (None when it is gone) and the program Kolux started in it.
+fn session_now(terminals: &Terminals, t: u32) -> (Option<Option<String>>, Option<String>) {
+    (terminals.program(t).map(|a| a.map(str::to_string)), mark_program(terminals, t))
 }
 
 /// cli FIX-3 (c), FIX-4: a failed start's offered commands run as printed. The retry names the
@@ -3518,8 +3527,18 @@ fn start_failed_run(receipt: &mut Value, run: Option<&str>) {
             who.push_str(&format!(" --{k} {}", word(v)));
         }
     }
+    // cli FIX-5 (council AFTER 1 on c5fb49c): a value with a character PowerShell or cmd would act
+    // on (a quote, `;`, `&`, `|`, `$`, a redirect...) is never pasted into an offered line; the
+    // retry that would carry it is left out of `next` rather than offered unsafe.
+    let safe = |v: &str| v.chars().all(|c| c.is_alphanumeric() || c == ' ' || "-_.:/@+=,".contains(c));
+    let unsafe_who = flags.iter().any(|k| receipt[*k].as_str().is_some_and(|v| !safe(v.trim())));
+    let unsafe_run = run.is_some_and(|r| !safe(r));
     let run = run.map(|r| format!(" --run {}", word(r))).unwrap_or_default();
     let Some(next) = receipt["next"].as_array_mut() else { return };
+    next.retain(|l| !(unsafe_who || unsafe_run) || !l.as_str().is_some_and(|l| l.starts_with(&retry)));
+    if unsafe_run {
+        next.retain(|l| !l.as_str().is_some_and(|l| l.starts_with(&lead)));
+    }
     for line in next.iter_mut() {
         if let Some(l) = line.as_str().filter(|l| l.starts_with(&lead)) {
             let who = if l.starts_with(&retry) { who.as_str() } else { "" };
@@ -3732,22 +3751,22 @@ fn release_worker(dispatches: &mut [Value], id: &str, run: Option<&str>, live: &
 /// (its terminal handle means nothing to a later run) and the wall-clock time it was made, so a
 /// worker that never reports can be told stale like any other.
 /// cli FIX-4 (council FIX-SOON 1 on b4b1600): what terminal `h` runs now, as worker-stop and
-/// worker-release ask it (keep_open's `agent_of`). `now` reads a session: what it is credited to
-/// (None when it is gone), whether Kolux started a program in it (a mark), and the program it
-/// started. A worker started through a custom command (a wrapper or `npx`) is credited to no
-/// agent; its session still counts as the worker's own while it is the dispatch's recorded
-/// terminal (`own`: handle, program, agent), is marked, and runs the very program recorded when
-/// the start found it. Every other session reads as before, so a shell stays open.
-fn runs_now(h: &str, own: Option<&(String, String, String)>, now: &dyn Fn(u32) -> (Option<Option<String>>, bool, Option<String>)) -> Option<Option<String>> {
+/// worker-release ask it (keep_open's `agent_of`). `now` reads a session (session_now): what it
+/// is credited to (None when it is gone) and the program Kolux was asked to start in it (its mark;
+/// none for a shell). A worker started through a custom command (a wrapper or `npx`) is credited
+/// to no agent; its session still counts as the worker's own while it is the dispatch's recorded
+/// terminal (`own`: handle, program, agent) and its mark is the very program recorded when the
+/// start found it. Every other session reads as before, so a shell stays open.
+fn runs_now(h: &str, own: Option<&(String, String, String)>, now: &dyn Fn(u32) -> (Option<Option<String>>, Option<String>)) -> Option<Option<String>> {
     let t = h.strip_prefix("term-")?.parse::<u32>().ok()?;
-    let (credit, marked, started) = now(t);
+    let (credit, mark) = now(t);
     match (credit, own) {
-        (Some(None), Some((mine, program, agent))) if mine == h && marked && started.as_deref() == Some(program.as_str()) => Some(Some(agent.clone())),
+        (Some(None), Some((mine, program, agent))) if mine == h && mark.as_deref() == Some(program.as_str()) => Some(Some(agent.clone())),
         (credit, _) => credit,
     }
 }
 
-/// cli FIX-4: dispatch `id`'s recorded terminal, the program its session started and its agent,
+/// cli FIX-4: dispatch `id`'s recorded terminal, the program Kolux started in it and its agent,
 /// while that terminal can still be the one this run of Kolux recorded (none for a row stamped by
 /// an earlier run, or one recorded before FIX-4 with no program).
 fn own_program(dispatches: &[Value], id: &str, run: Option<&str>) -> Option<(String, String, String)> {
@@ -3769,7 +3788,9 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     if req.args["terminal"].as_str().is_some_and(|t| !t.trim().is_empty()) {
         return reuse(ctx, req, req.args["terminal"].as_str().unwrap_or_default().trim());
     }
-    let coordinator = caller(ctx, req).ok().flatten();
+    // cli FIX-5 (council FIX-SOON 1 on c5fb49c): a --from that cannot be proven fails the start,
+    // as it fails worker-stop and worker-release, rather than making the call an outside one.
+    let coordinator = caller(ctx, req)?;
     worker_start_as(ctx, req, coordinator)
 }
 
@@ -3829,6 +3850,11 @@ fn worker_start_as(ctx: &Ctx, req: &Request, coordinator: Option<String>) -> Res
         None => (text("model"), text("effort")),
     };
     let extra = model_args(&agent_id, model.as_deref(), effort.as_deref())?;
+    // cli FIX-5: the command the window will start for the agent (App's `line.program ?? agent.program`).
+    let own = {
+        let settings = ctx.store.lock().map_err(|e| e.to_string())?.settings();
+        crate::agents::start_line_as(&settings, &agent_id, &[], "", true, crate::agents::Start::Fresh).ok().and_then(|l| l.program).unwrap_or_else(|| agent.program.clone())
+    };
     let timeout = text("timeoutMs").and_then(|ms| ms.parse().ok()).map(Duration::from_millis).unwrap_or(DEFAULT_TIMEOUT);
 
     // The task: found by id, or made from the brief (ORCH-016's text form creates it).
@@ -3924,7 +3950,7 @@ fn worker_start_as(ctx: &Ctx, req: &Request, coordinator: Option<String>) -> Res
         (ctx.notify)(json!({ "kind": "created", "projectId": project.id, "worktree": { "path": worktree.path, "branch": worktree.branch, "name": worktree.name, "isMain": false, "parent": worktree.parent }, "agent": Value::Null, "prompt": "", "activate": false, "setup": setup }));
     }
     (ctx.notify)(json!({ "kind": "start", "path": worktree.path, "branch": worktree.branch, "agent": agent_id, "prompt": brief, "extra": extra, "title": task["title"] }));
-    let (terminal, ready) = wait_ready(ctx.terminals, Path::new(&worktree.path), &before, &agent_id, since, timeout);
+    let (terminal, ready) = wait_ready(ctx.terminals, Path::new(&worktree.path), &before, &agent_id, &own, since, timeout);
     let status = if ready { "ready" } else { "unknown" };
 
     let mut receipt = json!({
@@ -3942,7 +3968,7 @@ fn worker_start_as(ctx: &Ctx, req: &Request, coordinator: Option<String>) -> Res
     {
         let store = ctx.store.lock().map_err(|e| e.to_string())?;
         let mut dispatches = load_list(&store, DISPATCHES_KEY);
-        dispatches.push(worker_row(json!({ "id": dispatch_id, "runId": run_id, "taskId": task_id, "status": status, "worktree": worktree.path, "agent": agent_id, "model": model, "effort": effort, "tier": tier, "terminal": terminal, "terminalProgram": terminal.and_then(|t| ctx.terminals.started(t)), "depth": depth, "maxDepth": cap, "brief": brief, "retryOf": text("retryOf") })));
+        dispatches.push(worker_row(json!({ "id": dispatch_id, "runId": run_id, "taskId": task_id, "status": status, "worktree": worktree.path, "agent": agent_id, "model": model, "effort": effort, "tier": tier, "terminal": terminal, "terminalProgram": terminal.and_then(|t| mark_program(ctx.terminals, t)), "depth": depth, "maxDepth": cap, "brief": brief, "retryOf": text("retryOf") })));
         save_list(&store, DISPATCHES_KEY, &dispatches)?;
     }
     if ready {
@@ -5952,22 +5978,46 @@ mod tests {
     #[test]
     fn fix3_a_custom_command_worker_still_reads_ready() {
         let c = |a: &str| Some(a.to_string());
-        // The custom-command worker: one fresh marked session, credited to no agent.
-        assert_eq!(worker_tab(&[(7, true, None)], "claude"), Some(7));
+        let npx = c("npx @openai/codex");
+        let tab = |fresh: &[(u32, Option<String>, Option<String>)]| worker_tab(fresh, "claude", "npx @openai/codex");
+        // The custom-command worker: one fresh marked session running the start's command, credited to no agent.
+        assert_eq!(tab(&[(7, npx.clone(), None)]), Some(7));
         // A shell the user typed claude into by hand is credited, but Kolux did not start it.
-        assert_eq!(worker_tab(&[(8, false, c("claude"))], "claude"), None);
-        assert_eq!(worker_tab(&[(8, false, c("claude")), (7, true, None)], "claude"), Some(7));
-        // An agent match wins over an uncredited mark; two matches, or two uncredited marks, are ambiguous.
-        assert_eq!(worker_tab(&[(7, true, None), (9, true, c("claude"))], "claude"), Some(9));
-        assert_eq!(worker_tab(&[(7, true, c("claude")), (9, true, c("claude"))], "claude"), None);
-        assert_eq!(worker_tab(&[(7, true, None), (9, true, None)], "claude"), None);
-        // Another agent's marked session is never the worker's, nor is an uncredited mark beside it.
-        assert_eq!(worker_tab(&[(5, true, c("codex"))], "claude"), None);
-        assert_eq!(worker_tab(&[(5, true, c("codex")), (7, true, None)], "claude"), None);
-        assert_eq!(worker_tab(&[], "claude"), None);
-        // cli FIX-4: a Setup tab running a shell the shell list lacks is not a candidate mark.
-        assert!(["dash", "/usr/bin/mksh", "C:\\tools\\nu.exe", "bash", "pwsh.exe"].iter().all(|p| setup_shell(p)));
-        assert!(["npx", "node.exe", "claude", "C:\\bin\\wrapper.cmd"].iter().all(|p| !setup_shell(p)));
+        assert_eq!(tab(&[(8, None, c("claude"))]), None);
+        assert_eq!(tab(&[(8, None, c("claude")), (7, npx.clone(), None)]), Some(7));
+        // An agent match wins over an uncredited mark; two matches, or two of the start's command, are ambiguous.
+        assert_eq!(tab(&[(7, npx.clone(), None), (9, c("claude"), c("claude"))]), Some(9));
+        assert_eq!(tab(&[(7, c("claude"), c("claude")), (9, c("claude"), c("claude"))]), None);
+        assert_eq!(tab(&[(7, npx.clone(), None), (9, npx.clone(), None)]), None);
+        // Another agent's marked session is never the worker's; the start's command beside it still is.
+        assert_eq!(tab(&[(5, c("codex"), c("codex"))]), None);
+        assert_eq!(tab(&[(5, c("codex"), c("codex")), (7, npx.clone(), None)]), Some(7));
+        assert_eq!(tab(&[]), None);
+    }
+
+    /// cli FIX-5 (council BLOCKER 1 and FIX-SOON 2 on c5fb49c): the mark's program decides whether
+    /// a fresh session is the worker's, never the session's argv[0]. A worker started through a
+    /// .cmd or .bat launcher (npx, an npm-installed Codex or Claude Code) has argv[0] cmd.exe, which
+    /// is a shell name, yet it is still the worker's tab. An uncredited mark is taken only when it
+    /// runs the start's own command: a Setup tab (a shell) or a program tab the user opened there
+    /// during the wait is never recorded, so a stop or release can never end it.
+    #[test]
+    fn fix5_a_launcher_script_worker_is_found_by_its_mark() {
+        let c = |a: &str| Some(a.to_string());
+        // What c5fb49c tested for the same session: argv[0] cmd.exe reads as a shell.
+        assert!(crate::pty::is_shell_program("cmd.exe"));
+        // npx: credited to no agent, found by the start's own command.
+        assert_eq!(worker_tab(&[(7, c("npx"), None)], "codex", "npx"), Some(7));
+        // An npm-installed Codex: credited by its mark's program, found as the agent.
+        assert_eq!(crate::agents::credited_agent("codex"), Some("codex"));
+        assert_eq!(worker_tab(&[(7, c("codex"), c("codex"))], "codex", "codex"), Some(7));
+        // A Setup tab, or a program tab the user opened, runs another command: never taken.
+        for other in ["sh", "cmd.exe", "dash", "htop", "node server.js"] {
+            assert_eq!(worker_tab(&[(8, c(other), None)], "codex", "npx"), None, "{other}");
+            assert_eq!(worker_tab(&[(8, c(other), None), (7, c("npx"), None)], "codex", "npx"), Some(7), "{other}");
+        }
+        // With no custom command the own command is the agent's program; an uncredited stranger is not it.
+        assert_eq!(worker_tab(&[(8, c("node"), None)], "claude", "claude"), None);
     }
 
     /// cli FIX-3 (b), council FIX-SOON 2: a release that leaves the worker's terminal open (it runs
@@ -6027,12 +6077,12 @@ mod tests {
     #[test]
     fn fix4_a_custom_command_worker_is_its_own_for_stop_and_release() {
         use crate::orchestration as o;
-        type Now<'a> = &'a dyn Fn(u32) -> (Option<Option<String>>, bool, Option<String>);
+        type Now<'a> = &'a dyn Fn(u32) -> (Option<Option<String>>, Option<String>);
         let me = u64::from(std::process::id());
         let row = |status: &str, program: Value, runtime: u64| vec![json!({ "id": "dispatch-1", "runId": null, "taskId": "task-1", "status": status, "terminal": 7, "agent": "claude", "terminalProgram": program, "runtime": runtime, "worktree": "w" })];
         let tasks = || vec![json!({ "id": "task-1", "status": "dispatched", "dispatchId": "dispatch-1" })];
-        // The session: credited to no agent; marked or not; the program it started.
-        let session = |marked: bool, started: &'static str| move |t: u32| if t == 7 { (Some(None), marked, Some(started.to_string())) } else { (None, false, None) };
+        // The session: credited to no agent; the program Kolux started in it (none for a shell).
+        let session = |mark: Option<&'static str>| move |t: u32| if t == 7 { (Some(None), mark.map(str::to_string)) } else { (None, None) };
         let stop = |ds: &mut Vec<Value>, now: Now| {
             let own = own_program(ds, "dispatch-1", None);
             let mut ts = tasks();
@@ -6044,10 +6094,10 @@ mod tests {
         };
         // The custom-command worker: stop ends its terminal, release closes it.
         let mut ds = row("ready", json!("npx"), me);
-        let (r, kill) = stop(&mut ds, &session(true, "npx"));
+        let (r, kill) = stop(&mut ds, &session(Some("npx")));
         assert_eq!((kill, r["process"].as_str(), r["terminalLeftOpen"].is_null()), (Some(7), Some("ended"), true), "{r}");
         let mut ds = row("stopped", json!("npx"), me);
-        let (r, handle) = release(&mut ds, &session(true, "npx"));
+        let (r, handle) = release(&mut ds, &session(Some("npx")));
         assert_eq!((handle.as_deref(), r["terminalState"].as_str()), (Some("term-7"), Some("release_pending")), "{r}");
         // What the old reading said of the same worker: a shell, left open.
         let mut ts = tasks();
@@ -6057,16 +6107,16 @@ mod tests {
         assert!(r["terminalLeftOpen"].as_str().unwrap_or_default().contains("runs no agent"), "{r}");
         // Not the worker's own: an unmarked shell, another program on the number, no recorded
         // program, a row from an earlier run of Kolux.
-        for (marked, started, program, runtime) in [(false, "npx", json!("npx"), me), (true, "pwsh", json!("npx"), me), (true, "npx", Value::Null, me), (true, "npx", json!("npx"), me + 1)] {
+        for (mark, program, runtime) in [(None, json!("npx"), me), (Some("pwsh"), json!("npx"), me), (Some("npx"), Value::Null, me), (Some("npx"), json!("npx"), me + 1)] {
             let mut ds = row("ready", program.clone(), runtime);
-            let (r, kill) = stop(&mut ds, &session(marked, started));
-            assert_eq!(kill, None, "{marked} {started} {program} {runtime}: {r}");
+            let (r, kill) = stop(&mut ds, &session(mark));
+            assert_eq!(kill, None, "{mark:?} {program} {runtime}: {r}");
             let mut ds = row("stopped", program.clone(), runtime);
-            let (_, handle) = release(&mut ds, &session(marked, started));
-            assert_eq!(handle, None, "{marked} {started} {program} {runtime}");
+            let (_, handle) = release(&mut ds, &session(mark));
+            assert_eq!(handle, None, "{mark:?} {program} {runtime}");
         }
         // A session credited to an agent reads as before, whatever was recorded.
-        let codex = |t: u32| ((t == 7).then(|| Some("codex".to_string())), true, Some("npx".to_string()));
+        let codex = |t: u32| ((t == 7).then(|| Some("codex".to_string())), Some("npx".to_string()));
         let mut ds = row("ready", json!("npx"), me);
         let (r, kill) = stop(&mut ds, &codex);
         assert_eq!(kill, None);
@@ -6167,6 +6217,55 @@ mod tests {
         let line = r["next"][1].as_str().unwrap().to_string();
         assert!(line.contains("--model \"my model\" --effort high --run run-1"), "{line}");
         assert_eq!(request(&line).args["model"], "my model");
+        // cli FIX-5 (council AFTER 1): a value a shell would act on is never offered; the stop and
+        // release lines still are.
+        for bad in ["m\"x", "m;rm", "a&b", "a|b", "$env:X", "a`b", "a>b"] {
+            let mut r = json!({ "dispatchId": "dispatch-4", "taskId": "task-2", "agent": "claude", "model": bad, "effort": "high", "tier": null, "terminals": [], "worktree": { "path": "C:\\w", "created": false } });
+            crate::orchestration::start_failed(&mut r, "worker", json!("not_configured"));
+            let before = r["next"].as_array().map_or(0, Vec::len);
+            start_failed_run(&mut r, Some("run-1"));
+            let next: Vec<String> = r["next"].as_array().unwrap().iter().filter_map(|l| l.as_str().map(str::to_string)).collect();
+            assert_eq!(next.len() + 1, before, "{bad}: {next:?}");
+            assert!(next.iter().all(|l| !l.contains(bad) && !l.contains("worker-start")), "{bad}: {next:?}");
+            assert!(next.iter().any(|l| l.contains("worker-stop") && l.ends_with("--run run-1")), "{bad}: {next:?}");
+        }
+        drop(ctx);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// cli FIX-5 (council FIX-SOON 1 on c5fb49c): worker-start checks --from as worker-stop and
+    /// worker-release do. A --from that cannot be proven (here: no Kolux pane; from a pane, one
+    /// that names another terminal) fails the start, instead of making it an outside caller that
+    /// may name any Run.
+    #[test]
+    fn fix5_b_worker_start_with_a_from_it_cannot_prove_fails() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-clifix5-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let run = {
+            let mut m = crate::orchestration::Mail::default();
+            let run = m.run_create("term-1", "ship it", 1)["binding"]["runId"].as_str().unwrap().to_string();
+            m.save(&store.lock().unwrap()).unwrap();
+            save_list(&store.lock().unwrap(), TASKS_KEY, &[json!({ "id": "task-2", "runId": run, "status": "pending" })]).unwrap();
+            run
+        };
+        let start = |from: Option<&str>| {
+            let mut args = json!({ "run": run, "task": "task-2", "agent": "no-such-agent" });
+            if let Some(f) = from {
+                args["from"] = json!(f);
+            }
+            let req = Request { id: "r".into(), token: String::new(), command: WORKER_START.into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
+            worker_start(&ctx, &req).unwrap_err()
+        };
+        let e = start(Some("term-1"));
+        assert_eq!(e.code, "unbound_caller", "{}", e.message);
+        // Without --from the same start from no pane passes the Run and task checks, to the agent.
+        assert!(start(None).message.contains("Kolux knows no agent `no-such-agent`"));
         drop(ctx);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
