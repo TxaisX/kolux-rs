@@ -1,0 +1,20 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index ee1b58d7..64e08c05 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -84,6 +84,7 @@ import { FileCode } from "./chrome/icons";
+ import AgentsRail from "./agents/AgentsRail";
+ import { cardPanes, pickSession, railGroups, rowStatus } from "./agents/rail";
+ import UpdateCenter from "./update/UpdateCenter";
++import FeedbackDialog from "./feedback/FeedbackDialog";
+ import { FIELDS as STATUS_FIELDS, readStatusBar, toggleItem } from "./chrome/statusItems";
+ import { chromeShown, menuBarState, menuEdit, menuScreen, menuSettingFlip } from "./chrome/chromeItems";
+ import VendorMark, { type Agent } from "./chrome/VendorMark";
+@@ -2695,6 +2696,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+         />
+       )}
+       <UpdateCenter />
++      <FeedbackDialog />
+       {reviewOn(settings) && (
+         <ReviewNotes
+           picked={picked}

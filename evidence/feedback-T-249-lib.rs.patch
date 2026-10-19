@@ -1,0 +1,22 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 89856f51..7998260c 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -6,6 +6,7 @@ mod awake;
+ mod capture;
+ mod chat;
+ mod chat_tools;
++mod clipboard;
+ mod browser;
+ mod cap;
+ pub mod cli;
+@@ -578,6 +579,9 @@ pub fn run() {
+             fsops::fs_copy,
+             fsops::fs_move,
+             fsops::clip_write,
++            clipboard::clip_copy_text,
++            clipboard::clip_copy_files,
++            clipboard::feedback_facts,
+             diag::diag_bundle,
+             diag::diag_review,
+             diag::diag_review_discard,

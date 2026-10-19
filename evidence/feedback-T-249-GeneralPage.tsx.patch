@@ -1,0 +1,43 @@
+diff --git a/src/settings/GeneralPage.tsx b/src/settings/GeneralPage.tsx
+index a72b9ca2..898b2101 100644
+--- a/src/settings/GeneralPage.tsx
++++ b/src/settings/GeneralPage.tsx
+@@ -1,14 +1,14 @@
+ // Settings > General: the Classic or New look and the screen that opens first (SET-037).
+ import { invoke } from "@tauri-apps/api/core";
+ import { useEffect, useState } from "react";
+-import type { AppInfo } from "../app-info";
+ import { screens } from "../chrome/TopBar";
+ import { useSettings } from "./useSettings";
+ import { FIRST_FIELD, LAST_SCREEN_FIELD, LOOK_FIELD, NEEDS_STRIP_FIELD, readLook, savedFirst, stripOn, type Look } from "./general";
+ import { REVIEW_FIELD, reviewOn } from "../editor/notes";
+ import { CONFIRM_DELETE_KEY, confirmDelete } from "../automations/model";
+ import { CONFIRM_CLOSE_FIELD } from "../terminal/closing";
+-import { feedbackUrl, OUTBOUND } from "./privacy";
++import { OUTBOUND } from "./privacy";
++import { requestFeedback } from "../feedback/FeedbackDialog";
+ import { DELAY, prefPatch, readEditorPrefs, type DiffView } from "./editorPrefs";
+ import { addApp, addCustom, draftReady, moveApp, OPEN_IN_FIELD, presetsLeft, readOpenIn, removeApp, type OpenInApp } from "./openIn";
+ import { applyDraft, PROXY_FIELD, readProxyRest, type ProxyDraft } from "./proxy";
+@@ -87,12 +87,7 @@ export function DiagnosticsCard() {
+ 
+ /** APP-070: what leaves this computer (the whole list), and the feedback link that opens in the browser instead. */
+ export function PrivacyCard() {
+-  const [note, setNote] = useState("");
+-  const send = () =>
+-    void invoke<AppInfo>("app_info")
+-      .then((i) => invoke("open_external", { url: feedbackUrl(i.version, navigator.platform) }))
+-      .then(() => setNote("A new-issue page opened in your browser; the app sent nothing. Read it over there, then submit it or close it."))
+-      .catch((e: unknown) => setNote(`Could not open the browser: ${String(e)}`));
++  const send = () => requestFeedback(); // APP-037: the message box opens; its own note says what happened
+   return (
+     <section className="conn-card" data-section="privacy">
+       <h2 className="conn-name">Privacy</h2>
+@@ -111,7 +106,6 @@ export function PrivacyCard() {
+           Send feedback
+         </button>
+       </div>
+-      {note && <p className="conn-detail">{note}</p>}
+     </section>
+   );
+ }

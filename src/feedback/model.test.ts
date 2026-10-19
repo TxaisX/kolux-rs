@@ -1,0 +1,125 @@
+// APP-037 (the Send Feedback message box) and PROJ-089 (feedback opens already filled in; text typed
+// above the pre-filled block is kept). The model has no network client: every test runs with fetch and
+// XMLHttpRequest made to throw.
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { URL_CAP, type FeedbackFacts } from "../settings/privacy";
+import { block, closed, issue, MARK, reduce, typedText, withBlock } from "./model";
+
+const facts: FeedbackFacts = { version: "0.1.0", platform: "Win32", release: "Windows 10.0.26200", arch: "x86_64", login: "octo-fake" };
+
+beforeEach(() => {
+  vi.stubGlobal("fetch", () => {
+    throw new Error("the feedback box made a network request");
+  });
+  vi.stubGlobal("XMLHttpRequest", function () {
+    throw new Error("the feedback box made a network request");
+  });
+});
+afterEach(() => vi.unstubAllGlobals());
+
+const params = (url: string) => new URL(url).searchParams;
+const ok = (r: ReturnType<typeof issue>) => {
+  expect(r.ok, r.ok ? "" : `refused: ${r.error}`).toBe(true);
+  return r as Extract<ReturnType<typeof issue>, { ok: true }>;
+};
+
+test("app037: empty text is refused with an error, whether blank, only spaces or only the pre-filled block", () => {
+  for (const draft of ["", "   \n  ", `${MARK}${block(facts, false)}`, withBlock("  ", facts, false)]) {
+    const r = issue(draft, facts, false);
+    expect(r.ok, JSON.stringify(draft)).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/write|empty|something/i);
+  }
+});
+
+test("app037: the title is [Feedback] plus the first line, never past 80 characters", () => {
+  const r = ok(issue(withBlock("The pane froze\nafter a resize", facts, false), facts, false));
+  expect(params(r.url).get("title")).toBe("[Feedback] The pane froze");
+  expect(params(r.url).get("body")).toContain("The pane froze\nafter a resize");
+  const long = ok(issue(withBlock("y".repeat(200), facts, false), facts, false));
+  expect(params(long.url).get("title")).toHaveLength(80);
+  expect(params(long.url).get("title")?.startsWith("[Feedback] ")).toBe(true);
+});
+
+test("app037: the body names the version, platform, system release and architecture, plus the GitHub login", () => {
+  const body = params(ok(issue(withBlock("it broke", facts, false), facts, false)).url).get("body") ?? "";
+  for (const want of ["0.1.0", "Win32", "Windows 10.0.26200", "x86_64", "octo-fake"]) expect(body, want).toContain(want);
+});
+
+test("app037: Submit anonymously leaves the login out of the whole address", () => {
+  const url = ok(issue(withBlock("it broke", facts, true), facts, true)).url;
+  expect(decodeURIComponent(url)).not.toContain("octo-fake");
+  const body = params(url).get("body") ?? "";
+  for (const want of ["0.1.0", "Win32", "Windows 10.0.26200", "x86_64"]) expect(body, want).toContain(want);
+  // no login known at all: nothing is invented
+  const none = params(ok(issue("it broke", { ...facts, login: null }, false)).url).get("body") ?? "";
+  expect(none).not.toMatch(/GitHub/i);
+});
+
+test("app037: paths and secrets never reach the address, not even in the title", () => {
+  const text = "password: hunter2 broke C:\\Users\\me\\proj\\a.ts\nsecond line ghp_FAKEFAKEFAKEFAKE1234567890 in /home/me/x/y";
+  const url = ok(issue(withBlock(text, facts, false), facts, false)).url;
+  const all = decodeURIComponent(url);
+  for (const gone of ["hunter2", "C:\\Users", "a.ts", "ghp_FAKE", "/home/me"]) expect(all, gone).not.toContain(gone);
+  expect(params(url).get("title")).toBe("[Feedback] password: [masked] broke [path]");
+});
+
+test("app037: a very long report is trimmed to fit the address, says so, and keeps the facts", () => {
+  const r = ok(issue(withBlock("x".repeat(20000), facts, false), facts, false));
+  expect(r.url.length).toBeLessThanOrEqual(URL_CAP);
+  expect(r.trimmed).toBe(true);
+  const body = params(r.url).get("body") ?? "";
+  expect(body).toContain("trimmed to fit in a browser address");
+  for (const want of ["0.1.0", "Windows 10.0.26200", "x86_64", "octo-fake"]) expect(body, want).toContain(want);
+  expect(ok(issue(withBlock("short", facts, false), facts, false)).trimmed).toBe(false);
+});
+
+test("proj089: opening feedback already has the version and operating system in it", () => {
+  const s = reduce(closed, { t: "open", facts });
+  expect(s.open).toBe(true);
+  for (const want of ["0.1.0", "Windows 10.0.26200", "Win32", "x86_64", "octo-fake"]) expect(s.draft, want).toContain(want);
+  expect(typedText(s.draft)).toBe("");
+});
+
+test("proj089: text typed above the block is kept when the block is rewritten", () => {
+  let s = reduce(closed, { t: "open", facts });
+  s = reduce(s, { t: "type", draft: `The pane froze\r\nafter a resize${s.draft}` });
+  expect(typedText(s.draft)).toBe("The pane froze\r\nafter a resize");
+  s = reduce(s, { t: "anon", on: true });
+  expect(s.anonymous).toBe(true);
+  expect(typedText(s.draft)).toBe("The pane froze\r\nafter a resize");
+  expect(s.draft).not.toContain("octo-fake");
+  s = reduce(s, { t: "anon", on: false });
+  expect(s.draft).toContain("octo-fake");
+  s = reduce(s, { t: "facts", facts: { ...facts, version: "0.2.0" } });
+  expect(typedText(s.draft)).toBe("The pane froze\r\nafter a resize");
+  expect(s.draft).toContain("0.2.0");
+  expect(s.draft).not.toContain("0.1.0");
+});
+
+test("proj089: a block the user edited or deleted is rebuilt from the real facts, never trusted", () => {
+  const edited = `my note${MARK}Kolux RS 9.9.9 on Plan9\nGitHub: somebody-else`;
+  const fixed = withBlock(edited, facts, false);
+  expect(typedText(fixed)).toBe("my note");
+  expect(fixed).not.toContain("9.9.9");
+  expect(fixed).not.toContain("somebody-else");
+  const url = ok(issue(edited, facts, false)).url;
+  expect(decodeURIComponent(url)).not.toContain("9.9.9");
+  expect(decodeURIComponent(url)).toContain("0.1.0");
+  const gone = ok(issue("no block at all", facts, false)).url;
+  expect(decodeURIComponent(gone)).toContain("0.1.0");
+});
+
+test("app037: a refused send keeps the dialog open with the text and the error; a sent one closes it with a note", () => {
+  let s = reduce(closed, { t: "open", facts, text: "hello" });
+  expect(typedText(s.draft)).toBe("hello");
+  s = reduce(s, { t: "fail", error: "Write something first." });
+  expect(s.open).toBe(true);
+  expect(s.error).toBe("Write something first.");
+  expect(typedText(s.draft)).toBe("hello");
+  s = reduce(s, { t: "type", draft: `hello again${MARK}x` });
+  expect(s.error).toBe("");
+  s = reduce(s, { t: "sent", trimmed: true });
+  expect(s.open).toBe(false);
+  expect(s.note).toMatch(/trimmed/i);
+  expect(reduce(s, { t: "open", facts }).note).toBe("");
+});
