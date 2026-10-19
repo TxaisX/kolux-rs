@@ -1,0 +1,56 @@
+diff --git a/src/projects/ProjectsPanel.tsx b/src/projects/ProjectsPanel.tsx
+index cf5c8e0..9b77b6f 100644
+--- a/src/projects/ProjectsPanel.tsx
++++ b/src/projects/ProjectsPanel.tsx
+@@ -28,6 +28,8 @@ import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoice
+ import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
+ import AddProject from "./AddProject";
+ import { takeSuggestion } from "./suggest";
++import { IconPicker } from "./IconPicker";
++import { ProjectIcon } from "./IconView";
+ import Picker, { type PickItem } from "./Picker";
+ import StartGit, { type FirstFile } from "./StartGit";
+ import { openKits } from "../kits/Kits";
+@@ -286,6 +288,18 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+     invoke("activity_touch", { path }).catch(() => {});
+   }
+   const say = (kind: "ok" | "warn" | "error", text: string) => setMessage({ kind, text });
++  const [icons, setIcons] = useState<Record<string, string>>({}); // PROJ-019: icons chosen by hand, by project id
++  const setIcon = async (p: Project, icon: string) => {
++    try {
++      const kept = await invoke<string | null>("project_icon_set", { projectId: p.id, icon });
++      setIcons((o) => {
++        const { [p.id]: _gone, ...rest } = o;
++        return kept ? { ...rest, [p.id]: kept } : rest;
++      });
++    } catch (err) {
++      say("error", String(err));
++    }
++  };
+   const fail = (err: unknown) => say("error", String(err));
+ 
+   const scanned = useRef<Record<string, Worktree[]>>({}); // ACCT-056: the last list each scan gave
+@@ -380,6 +394,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+     setProjects(list);
+     const g = await invoke<Groups>("groups_get");
+     setGroups((o) => keepNewer(o, g));
++    setIcons(await invoke<Record<string, string>>("project_icons_list").catch(() => ({}))); // PROJ-019
+     const a = await invoke<Record<string, number>>("activity_get");
+     setActivity((o) => ({ ...a, ...Object.fromEntries(Object.entries(o).filter(([k, t]) => t > (a[k] ?? 0))) }));
+     await refreshWorktrees(list);
+@@ -1409,6 +1424,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+       return (
+         <div key={p.id}>
+           <div className="proj" title={p.path}>
++            <ProjectIcon value={icons[p.id]} name={p.name} />
+             <span className="name">{p.name}</span>
+             <button className={`ib${settingsFor === p.id ? " on" : ""}`} title="Project settings: its workspaces folder and base ref" aria-pressed={settingsFor === p.id} onClick={() => (settingsFor === p.id ? setSettingsFor(null) : openSettings(p))}>
+               <Gear />
+@@ -1446,6 +1462,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+                   </option>
+                 ))}
+               </select>
++              <IconPicker value={icons[p.id]} name={p.name} onSet={(icon) => setIcon(p, icon)} onProblem={(text) => say("warn", text)} />
+               <div className="btn-row">
+                 <button className="btn" onClick={() => saveProject(p)}>
+                   Save

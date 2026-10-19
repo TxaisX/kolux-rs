@@ -339,7 +339,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P2 · theme 10 · Identity and originality (4 cards)
 
-- [ ] T-299 · PROJ-019 Choose a project icon or emoji by hand · PROJ-024 Names of deleted workspaces are not suggested again
+- [x] T-299 · PROJ-019 Choose a project icon or emoji by hand · PROJ-024 Names of deleted workspaces are not suggested again · done 2026-10-19 (lane/worktrees from d823b3f8; evidence/T-299.txt: a project's icon is chosen by hand (built-in, emoji or small picture) and reset to the automatic one; a suggested name whose workspace is deleted is not suggested again in that folder; cargo test projects:: 37, vitest projectIcon 8; lib.rs hunk in evidence/worktrees-T-299-lib.patch, panel hunk in evidence/worktrees-T-299-ProjectsPanel.patch)
 - [ ] T-300 · SET-041 Window, tray and app icon choices; also SET 016 rule: the app icon chooser sits at the bottom of Settings > Appearance (after Window & Sidebar) Blocked (lane/chrome 2026-10-13): needs the three owner icon files, the chooser in Settings > Appearance (the shell lane’s file) and a real tray icon (the tray-icon feature, open on T-248-b).
 - [ ] T-301 · APP-012 App icon choice and window look options
 

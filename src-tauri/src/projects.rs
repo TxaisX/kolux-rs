@@ -111,7 +111,15 @@ pub(crate) fn forget_projects(store: &Store, ids: &[String]) -> Result<(), Strin
     }
     let mut projects = load_projects(store);
     projects.retain(|p| !ids.contains(&p.id));
-    save_projects(store, &projects)
+    save_projects(store, &projects)?;
+    // PROJ-019: a forgotten project's icon choice goes with it.
+    let mut icons = project_icons(store);
+    let before = icons.len();
+    icons.retain(|id, _| !ids.contains(id));
+    if icons.len() != before {
+        save_icons(store, &icons)?;
+    }
+    Ok(())
 }
 
 fn load_names(store: &Store) -> serde_json::Map<String, serde_json::Value> {
@@ -145,6 +153,13 @@ pub fn set_parent(store: &Store, path: &str, parent: Option<&str>) -> Result<(),
 /// Drops what Kolux remembers about a removed workspace, so a later one in the same folder starts
 /// clean: its typed name, its parent and its origin.
 pub fn forget_workspace(store: &Store, path: &str) -> Result<(), String> {
+    // PROJ-024: the folder it lived in is the scope; a suggested name, folder or typed, is not offered again.
+    let folder = Path::new(path);
+    let scope = name_key(&folder.parent().unwrap_or(folder).to_string_lossy());
+    let typed = load_names(store).get(&name_key(path)).and_then(|v| v.as_str().map(String::from));
+    for name in folder.file_name().map(|n| n.to_string_lossy().to_string()).into_iter().chain(typed) {
+        retire_name(store, &scope, &name)?;
+    }
     set_name(store, path, None)?;
     set_parent(store, path, None)?;
     // EDIT-040: a later workspace in the same folder starts with an empty note.
@@ -835,49 +850,107 @@ fn typed_names(store: &Store) -> Vec<String> {
 /// PROJ-023: a creature name for the create flow's name field, free in every registered project
 /// (case ignored) and never a retired one. Nothing is recorded: a suggestion nobody uses costs no
 /// name. `lock` hands over the store only for the store work (T-442-b).
-pub fn suggest_name<S: std::ops::Deref<Target = Store>>(git: &Git, lock: impl Fn() -> Result<S, String>, project_id: &str, seed: u64) -> Result<String, String> {
-    let projects = {
-        let store = lock()?;
-        find_project(&store, project_id)?;
-        load_projects(&store)
-    };
+pub fn suggest_name<S: std::ops::Deref<Target = Store>>(git: &Git, lock: impl Fn() -> Result<S, String>, place: &Place, project: &Project, seed: u64) -> Result<String, String> {
+    let projects = load_projects(&*lock()?);
     let taken = names_in_use(git, &projects);
     let store = lock()?;
-    Ok(pick_name(&store, taken, seed))
+    Ok(pick_name(&store, &retired_scope(place, project), taken, seed))
 }
 
 #[allow(dead_code)] // T-212: registered by the lib.rs hunk the coordinator applies
 #[tauri::command(async)]
 pub fn workspace_suggest_name(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<String, String> {
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-    suggest_name(&git, || store.lock().map_err(|e| e.to_string()), &project_id, seed)
+    let (project, place) = locked_place(&store, &project_id)?;
+    suggest_name(&git, || store.lock().map_err(|e| e.to_string()), &place, &project, seed)
 }
 
-/// Every creature name ever handed out (SESS-023): a retired worktree's name is never reused.
-const RETIRED_KEY: &str = "creatureNamesUsed";
+/// PROJ-024: the suggested names of workspaces that were deleted, kept so they are not suggested
+/// again, restarts included. The record is per scope: the folder the workspace lived in, so with the
+/// flat layout every project sharing the workspaces folder shares it, and with the nested layout each
+/// project's own subfolder keeps its own. Names compare ignoring case and spaces; only names from the
+/// suggestion list are kept, never ones typed freely; the record is bounded (oldest names, then
+/// oldest scopes, go first) and a damaged one counts as empty.
+const RETIRED_KEY: &str = "retiredNames";
+const RETIRED_PER_SCOPE: usize = 400;
+const RETIRED_SCOPES: usize = 100;
 
-pub fn retired_names(store: &Store) -> Vec<String> {
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Retired {
+    scope: String,
+    names: Vec<String>,
+}
+
+fn retired_all(store: &Store) -> Vec<Retired> {
     store.get(RETIRED_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
 }
 
-pub fn remember_retired(store: &Store, name: &str) -> Result<(), String> {
-    let mut names = retired_names(store);
-    if !names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
-        names.push(name.to_string());
-        store.set(RETIRED_KEY, &serde_json::to_string(&names).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+/// Case and spaces do not tell two names apart.
+fn name_form(name: &str) -> String {
+    name.chars().filter(|c| !c.is_whitespace()).flat_map(char::to_lowercase).collect()
+}
+
+/// Where a workspace of `project` would be kept under `place`, as the record's scope.
+pub fn retired_scope(place: &Place, project: &Project) -> String {
+    let folder = workspace_path(place, project, "x");
+    name_key(&folder.parent().unwrap_or(&folder).to_string_lossy())
+}
+
+pub fn retired_names(store: &Store, scope: &str) -> Vec<String> {
+    retired_all(store).into_iter().find(|r| r.scope == scope).map(|r| r.names).unwrap_or_default()
+}
+
+/// Every name the suggestion list can make, read back through the public picker (one pair per seed).
+fn suggestion_list() -> &'static std::collections::HashSet<String> {
+    static LIST: OnceLock<std::collections::HashSet<String>> = OnceLock::new();
+    LIST.get_or_init(|| (0..4096u64).map(|seed| creature_name(&[], seed)).collect())
+}
+
+/// Is `name` one the suggestion list made (a numbered round, `amber-otter-2`, included)?
+fn from_suggestions(name: &str) -> bool {
+    let form = name_form(name);
+    let base = match form.rsplit_once('-') {
+        Some((b, n)) if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) => b,
+        _ => form.as_str(),
+    };
+    suggestion_list().contains(base)
+}
+
+/// Keeps `name` as retired in `scope` when the suggestion list made it; any other name is left alone.
+pub fn retire_name(store: &Store, scope: &str, name: &str) -> Result<(), String> {
+    if !from_suggestions(name) {
+        return Ok(());
     }
-    Ok(())
+    let form = name_form(name);
+    let mut all = retired_all(store);
+    let at = match all.iter().position(|r| r.scope == scope) {
+        Some(i) => i,
+        None => {
+            all.push(Retired { scope: scope.to_string(), names: Vec::new() });
+            all.len() - 1
+        }
+    };
+    if all[at].names.contains(&form) {
+        return Ok(());
+    }
+    all[at].names.push(form);
+    let extra = all[at].names.len().saturating_sub(RETIRED_PER_SCOPE);
+    all[at].names.drain(..extra);
+    let extra = all.len().saturating_sub(RETIRED_SCOPES);
+    all.drain(..extra);
+    store.set(RETIRED_KEY, &serde_json::to_string(&all).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
 /// A creature name in use nowhere, now or before (SESS-023).
 #[cfg(test)]
-pub fn fresh_name(git: &Git, store: &Store, projects: &[Project], seed: u64) -> String {
-    pick_name(store, names_in_use(git, projects), seed)
+pub fn fresh_name(git: &Git, store: &Store, projects: &[Project], scope: &str, seed: u64) -> String {
+    pick_name(store, scope, names_in_use(git, projects), seed)
 }
 
-/// A creature name outside `taken` (the names Git has in use) and every retired one.
-fn pick_name(store: &Store, mut taken: Vec<String>, seed: u64) -> String {
-    taken.extend(retired_names(store));
+/// A creature name outside `taken` (the names Git has in use), the hand-typed ones and every name
+/// retired in `scope`.
+fn pick_name(store: &Store, scope: &str, mut taken: Vec<String>, seed: u64) -> String {
+    taken.extend(retired_names(store, scope));
     taken.extend(typed_names(store));
     creature_name(&taken, seed)
 }
@@ -892,9 +965,7 @@ pub fn create_fresh_workspace<S: std::ops::Deref<Target = Store>>(git: &Git, loc
     let taken = names_in_use(git, projects);
     let name = {
         let store = lock()?;
-        let name = pick_name(&store, taken, seed);
-        remember_retired(&store, &name)?;
-        name
+        pick_name(&store, &retired_scope(place, project), taken, seed)
     };
     let made = create_workspace(git, place, project, &name, base)?.worktree;
     note_seen(&*lock()?, project, &made.path)?;
@@ -1563,6 +1634,93 @@ pub fn forget_gone_at_start(app: tauri::AppHandle) {
             }
         }
     });
+}
+
+// ---- PROJ-019: a project's icon, chosen by hand
+//
+// The choice is kept beside the project list (not in it), by project id. Three kinds are accepted:
+// "emoji:<emoji>", "icon:<built-in icon name>" and "image:<data URL of a small picture>". Reset
+// removes the entry, which brings the automatic icon back. An icon name nobody knows is kept as it
+// is (the drawing side shows a folder for it); anything that is none of the three is refused.
+
+const ICONS_KEY: &str = "projectIcons";
+/// The most an image icon may take, as the whole value.
+pub const ICON_IMAGE_MAX: usize = 64 * 1024;
+const ICON_IMAGE_TYPES: &[&str] = &["png", "jpeg", "gif", "webp", "svg+xml"];
+
+/// What a typed or picked icon becomes: `None` for empty (reset), the cleaned value, or why not.
+pub fn clean_icon(raw: &str) -> Result<Option<String>, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let refuse = || "An icon is an emoji, a built-in icon or a small picture.".to_string();
+    let (kind, rest) = raw.split_once(':').ok_or_else(refuse)?;
+    match kind {
+        "emoji" => {
+            let one = !rest.is_empty() && rest.len() <= 32 && rest.chars().all(|c| !c.is_ascii() && !c.is_alphanumeric() && !c.is_whitespace() && !c.is_control());
+            if one { Ok(Some(raw.to_string())) } else { Err("That is not an emoji.".to_string()) }
+        }
+        "icon" => {
+            let name = rest.trim().to_lowercase();
+            if !name.is_empty() && name.len() <= 32 && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+                Ok(Some(format!("icon:{name}")))
+            } else {
+                Err("That is not a built-in icon name.".to_string())
+            }
+        }
+        "image" => {
+            let bad = || "A picture icon has to be a PNG, JPEG, GIF, WebP or SVG image.".to_string();
+            let body = rest.strip_prefix("data:image/").ok_or_else(bad)?;
+            let (mime, data) = body.split_once(";base64,").ok_or_else(bad)?;
+            if !ICON_IMAGE_TYPES.contains(&mime) || data.is_empty() || !data.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=')) {
+                return Err(bad());
+            }
+            if raw.len() > ICON_IMAGE_MAX {
+                return Err(format!("That picture is too large; an icon may take {} KB at most.", ICON_IMAGE_MAX / 1024));
+            }
+            Ok(Some(raw.to_string()))
+        }
+        _ => Err(refuse()),
+    }
+}
+
+type Icons = std::collections::BTreeMap<String, String>;
+
+/// Every project's chosen icon by project id. A damaged record, or an entry that no longer passes
+/// `clean_icon`, simply gives nothing, so that project shows its automatic icon.
+pub fn project_icons(store: &Store) -> Icons {
+    let all: Icons = store.get(ICONS_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+    all.into_iter().filter(|(_, v)| matches!(clean_icon(v), Ok(Some(c)) if &c == v)).collect()
+}
+
+fn save_icons(store: &Store, icons: &Icons) -> Result<(), String> {
+    store.set(ICONS_KEY, &serde_json::to_string(icons).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+/// Saves (or with an empty `raw`, resets) the icon of project `id`; returns what is now kept.
+pub fn set_icon(store: &Store, id: &str, raw: &str) -> Result<Option<String>, String> {
+    find_project(store, id)?;
+    let icon = clean_icon(raw)?;
+    let mut icons = project_icons(store);
+    match &icon {
+        Some(i) => icons.insert(id.to_string(), i.clone()),
+        None => icons.remove(id),
+    };
+    save_icons(store, &icons)?;
+    Ok(icon)
+}
+
+#[tauri::command]
+#[allow(dead_code)] // T-299: registered by the lib.rs hunk the coordinator applies
+pub fn project_icons_list(store: StoreState<'_>) -> Result<Icons, String> {
+    Ok(project_icons(&*store.lock().map_err(|e| e.to_string())?))
+}
+
+#[tauri::command]
+#[allow(dead_code)] // T-299: registered by the lib.rs hunk the coordinator applies
+pub fn project_icon_set(store: StoreState<'_>, project_id: String, icon: String) -> Result<Option<String>, String> {
+    set_icon(&*store.lock().map_err(|e| e.to_string())?, &project_id, &icon)
 }
 
 #[cfg(test)]
@@ -2313,12 +2471,13 @@ mod tests {
         let (root_a, root_b) = (temp("suggest-root-a"), temp("suggest-root-b"));
         let a = add_project(&git, &store, &repo_a).unwrap();
         let b = add_project(&git, &store, &repo_b).unwrap();
-        let ask = |seed: u64| suggest_name(&git, || Ok(&store), &a.id, seed).unwrap();
+        let place_a = nested(&root_a);
+        let ask = |seed: u64| suggest_name(&git, || Ok(&store), &place_a, &a, seed).unwrap();
 
         let first = ask(11);
         assert_eq!(first, first.to_lowercase(), "lowercase");
         assert_eq!(ask(11), first, "asking records nothing: the same name is offered again");
-        assert!(retired_names(&store).is_empty(), "a suggestion nobody uses costs no name");
+        assert!(retired_names(&store, &retired_scope(&place_a, &a)).is_empty(), "a suggestion nobody uses costs no name");
 
         // The name is in use by a workspace of the OTHER project: never offered to this one.
         create_workspace(&git, &nested(&root_b), &b, &first, None).unwrap();
@@ -2337,11 +2496,143 @@ mod tests {
         let fourth = ask(11);
         assert!(![&first, &second, &third].contains(&&fourth), "{fourth}");
 
-        assert!(suggest_name(&git, || Ok(&store), "no-such-project", 1).is_err());
         drop(store);
         for d in [profile, repo_a, repo_b, root_a, root_b] {
             let _ = fs::remove_dir_all(d);
         }
+    }
+
+    #[test]
+    fn proj024_only_suggested_names_are_retired_per_scope_ignoring_case_and_spaces() {
+        let profile = temp("retire-profile");
+        let store = Store::open(&profile).unwrap();
+        let (flat_a, flat_b) = (Project { id: "a".into(), name: "alpha".into(), path: "C:/alpha".into(), workspaces_dir: None, base: None }, Project { id: "b".into(), name: "beta".into(), path: "C:/beta".into(), workspaces_dir: None, base: None });
+        let flat = Place { root: PathBuf::from("C:/ws"), flat: true, prefix: String::new(), prefix_warning: None, refresh: false };
+        let nest = Place { root: PathBuf::from("C:/ws"), flat: false, prefix: String::new(), prefix_warning: None, refresh: false };
+        let (fa, fb) = (retired_scope(&flat, &flat_a), retired_scope(&flat, &flat_b));
+        assert_eq!(fa, fb, "flat layout: projects sharing the workspaces folder share their retired names");
+        let (na, nb) = (retired_scope(&nest, &flat_a), retired_scope(&nest, &flat_b));
+        assert_ne!(na, nb, "nested layout: each project keeps its own");
+
+        // Delete a suggested name, a numbered one, and a freely typed one.
+        let first = creature_name(&[], 3);
+        forget_workspace(&store, &format!("C:/ws/alpha/{first}")).unwrap();
+        forget_workspace(&store, "C:/ws/alpha/login-fix").unwrap();
+        let numbered = creature_name(&(0..676).map(|s| creature_name(&[], s)).collect::<Vec<_>>(), 3);
+        assert!(numbered.ends_with("-2"));
+        forget_workspace(&store, &format!("C:/ws/alpha/{numbered}")).unwrap();
+        assert_eq!(retired_names(&store, &na), vec![first.clone(), numbered.clone()], "login-fix was typed freely: not kept");
+        assert!(retired_names(&store, &nb).is_empty(), "another project's nested folder is untouched");
+
+        // Retired names survive a restart and are skipped for any seed, case and spaces ignored.
+        drop(store);
+        let store = Store::open(&profile).unwrap();
+        retire_name(&store, &na, &first.to_uppercase().replace('-', " - ")).unwrap();
+        assert_eq!(retired_names(&store, &na).len(), 2, "same name once: spaces differ, hyphen is the name");
+        for seed in 0..700u64 {
+            let pick = pick_name(&store, &na, vec![], seed);
+            assert_ne!(pick, first, "seed {seed}");
+        }
+        // The shown (typed) name of the deleted workspace counts too when it is a suggested one.
+        let other = creature_name(std::slice::from_ref(&first), 3);
+        set_name(&store, "C:/ws/alpha/folder-x", Some(&other.to_uppercase())).unwrap();
+        forget_workspace(&store, "C:/ws/alpha/folder-x").unwrap();
+        assert!(retired_names(&store, &na).contains(&other));
+
+        // Flat layout: both projects see the one record.
+        forget_workspace(&store, &format!("C:/ws/{first}")).unwrap();
+        assert_eq!(retired_names(&store, &fa), vec![first.clone()]);
+        assert_eq!(retired_names(&store, &fb), retired_names(&store, &fa));
+        drop(store);
+        let _ = fs::remove_dir_all(profile);
+    }
+
+    #[test]
+    fn proj019_an_icon_is_an_emoji_a_built_in_icon_or_a_small_picture() {
+        assert_eq!(clean_icon("  ").unwrap(), None, "empty resets");
+        assert_eq!(clean_icon("emoji:\u{1F680}").unwrap().as_deref(), Some("emoji:\u{1F680}"));
+        assert_eq!(clean_icon("emoji:\u{1F9D1}\u{200D}\u{1F4BB}").unwrap().as_deref(), Some("emoji:\u{1F9D1}\u{200D}\u{1F4BB}"), "a joined emoji is one emoji");
+        let long = format!("emoji:{}", "\u{1F680}".repeat(9));
+        for bad in ["emoji:", "emoji:rocket", "emoji:\u{e9}", "emoji:\u{1F680} \u{1F680}", long.as_str(), "rocket", "html:<b>", "icon:", "icon:Rock et", "icon:../x"] {
+            assert!(clean_icon(bad).is_err(), "{bad}");
+        }
+        assert_eq!(clean_icon("icon:Rocket").unwrap().as_deref(), Some("icon:rocket"));
+        assert_eq!(clean_icon("icon:no-such-icon-9").unwrap().as_deref(), Some("icon:no-such-icon-9"), "an unknown name is kept: the drawing side shows a folder");
+        assert!(clean_icon("image:data:image/png;base64,iVBORw0KGgo=").unwrap().is_some());
+        for bad in ["image:https://example.com/a.png", "image:data:text/html;base64,PGI+", "image:data:image/png;base64,", "image:data:image/png;base64,<script>", "image:data:image/bmp;base64,AAAA"] {
+            assert!(clean_icon(bad).is_err(), "{bad}");
+        }
+        // The size limit is about the whole value, at its edge.
+        let head = "image:data:image/png;base64,";
+        let fits = format!("{head}{}", "A".repeat(ICON_IMAGE_MAX - head.len()));
+        let over = format!("{fits}A");
+        assert!(clean_icon(&fits).is_ok());
+        assert!(clean_icon(&over).unwrap_err().contains("too large"));
+    }
+
+    #[test]
+    fn proj019_a_chosen_icon_stays_after_a_restart_and_reset_brings_the_automatic_one_back() {
+        let git = Git::detect().unwrap();
+        let profile = temp("icon-profile");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("icon-repo");
+        let project = add_project(&git, &store, &repo).unwrap();
+        assert!(project_icons(&store).is_empty(), "no choice yet: the automatic icon");
+        assert_eq!(set_icon(&store, &project.id, "icon:rocket").unwrap().as_deref(), Some("icon:rocket"));
+        assert!(set_icon(&store, &project.id, "emoji:abc").is_err());
+        assert!(set_icon(&store, "no-such", "icon:rocket").is_err());
+        drop(store);
+        let store = Store::open(&profile).unwrap();
+        assert_eq!(project_icons(&store).get(&project.id).map(String::as_str), Some("icon:rocket"), "still there after a restart");
+        // A damaged record, or an entry that no longer passes, gives the automatic icon.
+        store.set(ICONS_KEY, "[1,2").unwrap();
+        assert!(project_icons(&store).is_empty());
+        store.set(ICONS_KEY, &format!("{{\"{}\": \"emoji:x\", \"keep\": \"icon:bug\"}}", project.id)).unwrap();
+        assert_eq!(project_icons(&store).len(), 1);
+        set_icon(&store, &project.id, "icon:rocket").unwrap();
+        assert_eq!(set_icon(&store, &project.id, "").unwrap(), None);
+        assert!(!project_icons(&store).contains_key(&project.id), "reset removes the choice");
+        set_icon(&store, &project.id, "emoji:\u{1F680}").unwrap();
+        forget_projects(&store, std::slice::from_ref(&project.id)).unwrap();
+        assert!(!project_icons(&store).contains_key(&project.id), "a forgotten project's choice goes with it");
+        drop(store);
+        for d in [profile, repo] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj024_the_record_is_bounded_and_a_damaged_one_retires_nothing() {
+        let profile = temp("retire-bound");
+        let store = Store::open(&profile).unwrap();
+        // More numbered rounds than the record holds: it stops growing at its limit, newest kept.
+        let mut used: Vec<String> = Vec::new();
+        for _ in 0..(RETIRED_PER_SCOPE + 300) {
+            let n = creature_name(&used, 0);
+            retire_name(&store, "scope", &n).unwrap();
+            used.push(n);
+        }
+        let kept = retired_names(&store, "scope");
+        assert_eq!(kept.len(), RETIRED_PER_SCOPE);
+        assert_eq!(kept.last(), used.last());
+        // Many scopes: the oldest go.
+        for i in 0..(RETIRED_SCOPES + 20) {
+            retire_name(&store, &format!("s{i}"), &creature_name(&[], 1)).unwrap();
+        }
+        assert!(retired_names(&store, "s0").is_empty() && !retired_names(&store, &format!("s{}", RETIRED_SCOPES + 19)).is_empty());
+        assert!(retired_all(&store).len() <= RETIRED_SCOPES);
+
+        // A damaged record: nothing counts as retired and suggestions carry on; the next retire repairs it.
+        store.set(RETIRED_KEY, "{not json").unwrap();
+        assert!(retired_names(&store, "scope").is_empty());
+        let pick = pick_name(&store, "scope", vec![], 5);
+        assert_eq!(pick, creature_name(&[], 5));
+        store.set(RETIRED_KEY, "[{\"scope\": 4}]").unwrap();
+        assert!(retired_names(&store, "scope").is_empty());
+        retire_name(&store, "scope", &pick).unwrap();
+        assert_eq!(retired_names(&store, "scope"), vec![pick]);
+        drop(store);
+        let _ = fs::remove_dir_all(profile);
     }
 
     #[test]
@@ -2366,15 +2657,17 @@ mod tests {
         }
         let in_use = names_in_use(&git, &projects);
         assert!(in_use.contains(&name_of(&first)) && in_use.contains(&name_of(&second)));
-        // SESS-023: a retired name never comes back, even from the same seed.
+        // SESS-023 / PROJ-024: a deleted workspace's name never comes back, even from the same seed.
+        let scope = retired_scope(&nested(&root), &project);
         remove_workspace(&git, &project, &first.path, false).unwrap();
+        forget_workspace(&store, &first.path).unwrap();
         assert!(!names_in_use(&git, &projects).contains(&name_of(&first)));
         for seed in [0u64, 7, 4242] {
-            assert_ne!(fresh_name(&git, &store, &projects, seed), name_of(&first), "seed {seed}");
+            assert_ne!(fresh_name(&git, &store, &projects, &scope, seed), name_of(&first), "seed {seed}");
         }
-        let x = fresh_name(&git, &store, &projects, 0);
-        remember_retired(&store, &x).unwrap();
-        assert_ne!(fresh_name(&git, &store, &projects, 0), x);
+        let x = fresh_name(&git, &store, &projects, &scope, 0);
+        retire_name(&store, &scope, &x).unwrap();
+        assert_ne!(fresh_name(&git, &store, &projects, &scope, 0), x);
 
         drop(store);
         for d in [profile, repo, root] {
