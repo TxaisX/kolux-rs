@@ -1,0 +1,28 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index dd7df24a..feaf331d 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1744,10 +1744,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   const chipFor = (p: Pane) => chipOf({ agent: p.agent, state: hook[p.key], running: running[p.key], stale: stale[p.key] ?? false, ...turn[p.key], since: stamp[p.key]?.at ?? 0 }, now);
+   const laneOf = (p: Pane) => (p.seats || p.kind || p.agent === "shell" ? "idle" : (chipFor(p)?.lane ?? "idle"));
+   // T-546: the control tower reads the same chip and meter per agent pane as the Board.
+-  const towerSeats = () => panes.filter((p) => !p.kind && !p.seats && p.agent !== "shell").map((p) => ({ key: p.key, agent: p.agent, title: tabName(p, titles), branch: p.branch, cwd: p.cwd, account: p.account ?? null, chip: chipFor(p), meter: meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)), since: stamp[p.key]?.at ?? 0 }));
++  // FIX-6 (council d2 carry-over): built only when one of the things it reads changed, not on every render; `now` moves the chips on its 30 s tick.
++  const towerNow = useMemo(() => panes.filter((p) => !p.kind && !p.seats && p.agent !== "shell").map((p) => ({ key: p.key, agent: p.agent, title: tabName(p, titles), branch: p.branch, cwd: p.cwd, account: p.account ?? null, chip: chipFor(p), meter: meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)), since: stamp[p.key]?.at ?? 0 })), [panes, titles, context, plan, settings, hook, running, stale, turn, stamp, now]);
+   // T-546-c: the Tower's own window shows the same seats and usage; a row clicked there opens the pane here.
+-  const towerNow = towerSeats();
+-  useTowerBridge({ seats: towerNow, usage: usageByAccount(towerNow, plan) }, openPane);
++  const towerUsage = useMemo(() => usageByAccount(towerNow, plan), [towerNow, plan]);
++  useTowerBridge({ seats: towerNow, usage: towerUsage }, openPane);
+   const lanes = board ? LANES.filter((l) => cardPanes(panes).some((p) => laneOf(p) === l.id)) : [];
+   const columnOf = (p: Pane) => lanes.findIndex((l) => l.id === laneOf(p)) + 1;
+   // Council FIX-3 (FS2): the pane takes the state Kolux resolved after the answer (still "permission"
+@@ -2312,7 +2313,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                 setAgentSel(key);
+                 setFocused(key);
+               }} />}
+-          {tower && <TowerView rows={towerRows(towerNow)} usage={usageByAccount(towerNow, plan)} now={now} onOpen={openPane} />}
++          {tower && <TowerView rows={towerRows(towerNow)} usage={towerUsage} now={now} onOpen={openPane} />}
+           {floor && <FloorView />}
+           {agentsScreen && selected === null && (
+             <div className="empty">

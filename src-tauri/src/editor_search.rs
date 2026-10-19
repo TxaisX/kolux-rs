@@ -287,6 +287,24 @@ pub fn cancel(root: &Path, gen: u64) {
         if let Some((_, old)) = map.insert(root.to_path_buf(), (gen, Arc::new(AtomicBool::new(true)))) {
             old.store(true, Ordering::SeqCst);
         }
+        prune_markers(map, MAX_MARKERS);
+    }
+}
+
+/// FIX-6 (council d2 AFTER 2): a cancel leaves a raised marker on its folder, so an older search
+/// still in the fence stops on arrival. A folder nobody searches again would keep its marker for the
+/// whole run; past `keep` entries the oldest raised ones go (a search still in the fence is seconds
+/// old, never hundreds of folders old). A search that is still running is never dropped.
+const MAX_MARKERS: usize = 256;
+
+fn prune_markers(map: &mut HashMap<PathBuf, Held>, keep: usize) {
+    if map.len() <= keep {
+        return;
+    }
+    let mut done: Vec<(u64, PathBuf)> = map.iter().filter(|(_, (_, f))| f.load(Ordering::SeqCst)).map(|(k, (g, _))| (*g, k.clone())).collect();
+    done.sort();
+    for (_, k) in done.into_iter().take(map.len() - keep) {
+        map.remove(&k);
     }
 }
 
@@ -626,6 +644,25 @@ mod tests {
         cancel(a, next_gen());
         assert!(running.load(Ordering::SeqCst));
         assert!(claim(a, older_in_fence).load(Ordering::SeqCst));
+    }
+
+    // FIX-6 (council d2 AFTER 2): the markers a cancel leaves are bounded; a running search is kept.
+    #[test]
+    fn fix6_cancel_markers_are_bounded_and_a_running_search_is_never_dropped() {
+        let mut map: HashMap<PathBuf, Held> = HashMap::new();
+        let running = Arc::new(AtomicBool::new(false));
+        map.insert(PathBuf::from("C:/running"), (1, running.clone()));
+        for g in 2..=20u64 {
+            map.insert(PathBuf::from(format!("C:/done-{g}")), (g, Arc::new(AtomicBool::new(true))));
+        }
+        prune_markers(&mut map, 30);
+        assert_eq!(map.len(), 20, "under the bound nothing goes");
+        prune_markers(&mut map, 10);
+        assert_eq!(map.len(), 10, "over the bound it comes down to it");
+        assert!(map.contains_key(Path::new("C:/running")), "the running search stays although it is the oldest");
+        assert!(!map.contains_key(Path::new("C:/done-2")) && map.contains_key(Path::new("C:/done-20")), "the oldest markers go first");
+        prune_markers(&mut map, 0);
+        assert_eq!(map.len(), 1, "only the running search is left when nothing else can go");
     }
 
     #[test]

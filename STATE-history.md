@@ -2464,6 +2464,7 @@ you picked with Open a file stays readable after Kolux restarts, so a reopened t
 
 ## Older passes (beyond the last 10)
 
+- 2026-10-19 · [look] FIX-6 · done (council d2 look-7ce0c6c5 review): startFailed never wipes a drawn root; cancel markers in editor_search.rs bounded (256); a dropped stale answer clears the empty-query cancel; patches for main.tsx (loadApp catch), App.tsx (useMemo seats), fence.rs (device-spelling volume GUID) · evidence/look-FIX-6.txt
 - 2026-10-13 · [accounts] T-043-e · done: keychain.rs rule table (before, pick, after_login, undo, current) over an injected Keychain, 7 tests on an invented keychain; T-043-f split (Mac: entry names, security-backed keychain, wiring, live proof); DT-C18 · evidence/T-043-e.txt (no live check: no Mac)
 - 2026-10-13 · [accounts] T-140 · not started, left open: AUTO 014 saves a finished run's output and usage, but no run finishes yet: a dispatched run is not linked to its pane and never completes (T-072-b, which needs the hook status of T-025); build it after T-072-b
 - 2026-10-13 · [accounts] T-210-b · not started, left open: the packs have no source of translations; DT-A5 ties them to SKILL-040's plugin runtime, which is cut; asked under Needs Txais (bundled machine-translated packs, the lookup only, or cut)
