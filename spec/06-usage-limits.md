@@ -736,7 +736,7 @@ Source: D-06-033
 Tier: P1 · Source: Txais 2026-10-19
 User does: looks at the header of any Claude agent pane (every screen, not just Agents).
 User sees, right of the title, left of the pane buttons, in one row:
-  `◯ 78%  155k/200k   5h 34% · 2h 10m   wk 61% · 3d 4h   $3.15`
+  "◯ 78%  155k/200k   5h 34% · 2h 10m   wk 61% · 3d 4h   $3.15"
   - the ring and percentage as today (USAGE-001), then the context in tokens, used / window;
   - the 5-hour and weekly plan figures, each followed by a live countdown to its reset;
   - the session's cost so far, in a cyan chip.
@@ -744,8 +744,8 @@ Rules:
   - Tints follow USAGE-001: plain or green below 70%, yellow 70-90%, red beyond 90%, applied to the
     context figure and to each plan figure separately; countdowns and the token count are muted.
   - Plan figures follow the used-or-left choice (USAGE-025); the countdown format follows USAGE-024
-    (`2h 10m`, `3d 4h`, `12m`; `now` once past) and ticks at least every 30 s.
-  - Cost is the status-line report's `cost.total_cost_usd` for that pane's session, two decimals;
+    ("2h 10m", "3d 4h", "12m"; "now" once past) and ticks at least every 30 s.
+  - Cost is the status-line report's session total cost in US dollars for that pane's session, two decimals;
     a new session in the pane starts it over (same boundary as the gauge, T-052 FIX-2). No report
     yet = no chip.
   - Codex panes show their own provider's windows; panes with no plan figures show only the gauge.
@@ -753,13 +753,13 @@ Rules:
     chip first, then the countdowns, then the plan figures, then the token count, so at the
     narrowest only the ring and percentage remain. Thresholds by measured header width, not window
     width, so split panes behave.
-  - The hover from USAGE-001 stays and gains one line per window: `5-hour: 34% used, resets 3:40 PM`.
+  - The hover from USAGE-001 stays and gains one line per window: "5-hour: 34% used, resets 3:40 PM".
 Acceptance:
   - [ ] Wide Claude pane after a turn → all five pieces show, tinted per the rules.
   - [ ] Shrink the pane step by step → pieces drop in the stated order; the title stays readable
         before the plan figures go (title truncation must not be worse than today at each step).
   - [ ] Leave it open 2 minutes → the countdowns move without a new turn.
-  - [ ] `/clear` or a new session in the pane → cost and context reset; plan figures stay
+  - [ ] "/clear" or a new session in the pane → cost and context reset; plan figures stay
         (they are the account's, not the session's).
   - [ ] Two split panes → each shows its own context and cost, the same plan figures.
 Compat: —
