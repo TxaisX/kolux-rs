@@ -731,7 +731,7 @@ fn revealable(scan: &Scan, path: &str) -> Result<PathBuf, String> {
     Ok(p)
 }
 
-#[allow(dead_code)] // registered by the coordinator's lib.rs hunk (evidence/skills-T-320-lib.patch)
+#[allow(dead_code)] // registered by the coordinator's lib.rs hunk (evidence/skills-FIX-2-lib.patch)
 #[tauri::command]
 pub async fn skills_reveal(workspace: Option<String>, path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || revealable(&scan_cached(workspace, false), &path).and_then(|p| crate::links::reveal(&p))).await.map_err(|e| e.to_string())?

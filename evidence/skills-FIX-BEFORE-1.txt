@@ -27,7 +27,7 @@ GATES (KOLUX_* unset, HOME/USERPROFILE/CLAUDE_CONFIG_DIR/CODEX_HOME/TEMP under G
 - cargo clippy --all-targets -- -D warnings: exit 0, no warnings (b1-clippy.log)
 - No TS touched for this card.
 
-LIVE PROOF PENDING (batched; needs the coordinator's evidence/skills-T-320-lib.patch on main first)
+LIVE PROOF PENDING (batched; needs the coordinator's evidence/skills-FIX-2-lib.patch on main first)
 1. Scratch profile; open the scratch home folder itself as a project/workspace; put one skill in
    <home>/.claude/skills/alpha.
 2. Skills page > more actions > Delete skills > tick alpha > Delete...: the confirmation says 1 folder.

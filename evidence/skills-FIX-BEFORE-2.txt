@@ -28,7 +28,7 @@ GATES (KOLUX_* unset, HOME/USERPROFILE/CLAUDE_CONFIG_DIR/CODEX_HOME/TEMP under G
 - cargo clippy --all-targets -- -D warnings: Finished, no warnings (b2-green.log)
 - No TS touched for this card.
 
-LIVE PROOF PENDING (batched; needs evidence/skills-T-320-lib.patch on main first)
+LIVE PROOF PENDING (batched; needs evidence/skills-FIX-2-lib.patch on main first)
 1. Scratch home; G:/Temp/<x>/team-repo/skills/alpha a junction to G:/Temp/<x>/shared/alpha (with SKILL.md);
    <home>/.claude/skills/team a junction to G:/Temp/<x>/team-repo/skills.
 2. Skills page > Delete skills > tick alpha > Delete...: alpha is listed under blocked, "Outside Kolux's

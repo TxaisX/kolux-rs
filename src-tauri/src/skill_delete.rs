@@ -155,8 +155,13 @@ fn delete_held(app_dir: &Path, items: &[PathBuf]) -> Result<Outcome, String> {
     write(app_dir, &journal)?;
     for (i, (from, aside)) in journal.moves.iter().enumerate() {
         if let Err(e) = rename(from, aside) {
+            let mut stuck = false;
             for (back, held) in journal.moves[..i].iter().rev() {
-                let _ = rename(held, back);
+                stuck |= put_back(held, back).is_err();
+            }
+            if stuck {
+                // The not-done record stays, so the next start puts the rest back.
+                return Err(format!("Nothing was deleted: {} could not be moved ({e}); what was already moved is put back at the next start", from.display()));
             }
             // The record goes back to what it was before: nothing, or only the carried copies.
             if journal.left.is_empty() {
@@ -257,6 +262,21 @@ fn rename(from: &Path, to: &Path) -> std::io::Result<()> {
             r => return r,
         }
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: every put-back on this thread fails, as when another program holds the moved item.
+    static FAIL_PUT_BACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Puts a set-aside item back where it was, after a later move in the same delete failed.
+fn put_back(held: &Path, back: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if FAIL_PUT_BACK.with(std::cell::Cell::get) {
+        return Err(std::io::Error::other("held by a test"));
+    }
+    rename(held, back)
 }
 
 fn write(app_dir: &Path, journal: &Journal) -> Result<(), String> {
@@ -426,7 +446,10 @@ pub fn plan(places: &Places, picks: &[Pick]) -> Result<Vec<Planned>, String> {
             out.push(Planned { remains, ..blocked("outside") });
             continue;
         }
-        if !items.iter().any(|i| i.kind == "folder") {
+        if items.iter().any(|i| i.kind == "folder") {
+            // The content goes with the folder, even when an outside link pointed at it.
+            remains = None;
+        } else {
             remains = remains.or_else(|| Some(real(me)));
         }
         out.push(Planned { path: pick.path.clone(), blocked: None, items, remains });
@@ -465,14 +488,14 @@ pub fn run(app_dir: &Path, places: &Places, picks: &[Pick]) -> Result<Vec<Done>,
 }
 
 /// SKILL-022: the confirmation's facts for the chosen skills; changes nothing.
-#[allow(dead_code)] // registered by the coordinator's lib.rs hunk (evidence/skills-T-180-lib.patch)
+#[allow(dead_code)] // registered by the coordinator's lib.rs hunk (evidence/skills-FIX-2-lib.patch)
 #[tauri::command]
 pub async fn skills_delete_plan(workspace: Option<String>, picks: Vec<Pick>) -> Result<Vec<Planned>, String> {
     tauri::async_runtime::spawn_blocking(move || plan(&skills::places(&skills::Env::current(), workspace.as_deref().map(Path::new)), &picks)).await.map_err(|e| e.to_string())?
 }
 
 /// SKILL-022: deletes the chosen skills once the user confirmed; one outcome per skill.
-#[allow(dead_code)] // registered by the coordinator's lib.rs hunk (evidence/skills-T-180-lib.patch)
+#[allow(dead_code)] // registered by the coordinator's lib.rs hunk (evidence/skills-FIX-2-lib.patch)
 #[tauri::command]
 pub async fn skills_delete(app: tauri::AppHandle, workspace: Option<String>, picks: Vec<Pick>) -> Result<Vec<Done>, String> {
     use tauri::Manager;
@@ -788,25 +811,26 @@ mod tests {
     fn fixsoon4_a_lock_whose_holder_crashed_is_free_at_once() {
         let t = temp("fixsoon4");
         let app = t.join("app");
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "skill_delete::tests::fixsoon4_child_dies_holding_the_lock", "--ignored", "--nocapture"])
             .env("KOLUX_FIXSOON4_DIR", &app)
-            .status()
+            .spawn()
             .unwrap();
-        assert_eq!(status.code(), Some(9), "the child must die holding the lock");
+        let pid = child.id();
+        assert_eq!(child.wait().unwrap().code(), Some(9), "the child must die holding the lock");
         let text = std::fs::read_to_string(app.join(LOCK)).unwrap();
-        assert!(!text.starts_with(&format!("{} ", std::process::id())), "the file names the dead child: {text}");
+        assert!(text.starts_with(&format!("{pid} ")), "the file names the dead child {pid}: {text}");
         let began = std::time::Instant::now();
         drop(lock(&app).expect("a crashed holder's lock is taken back"));
         assert!(began.elapsed() < Duration::from_secs(1), "no waiting out a timeout: {:?}", began.elapsed());
     }
 
     #[test]
-    fn fixsoon4_two_takers_at_once_never_both_win() {
+    fn fixsoon4_the_system_lock_admits_one_handle_at_a_time() {
         let t = temp("fixsoon4-race");
         let app = t.join("app");
         std::fs::create_dir_all(&app).unwrap();
-        // Two handles race for the system lock on the one file, as two processes would.
+        // Two handles on the one file, as two processes would hold: only one gets the system lock.
         let open = || std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(app.join(LOCK)).unwrap();
         let (a, b) = (open(), open());
         let wins = [a.try_lock().is_ok(), b.try_lock().is_ok()];
@@ -996,5 +1020,42 @@ mod tests {
         assert_eq!(run(&app, &at, &[pick(&link)]).unwrap()[0].outcome, "deleted");
         assert!(std::fs::symlink_metadata(&link).is_err());
         assert!(target.join(SKILL_FILE).is_file());
+    }
+
+    // Stand-in review of 921b6c7, FIX-BEFORE 2: a folder that is deleted is never called "stays".
+    #[test]
+    fn fix2_an_outside_link_back_into_a_root_never_says_the_deleted_folder_stays() {
+        let t = temp("fix2-a");
+        let (app, root, repo) = (t.join("app"), t.join("skills"), t.join("team-repo").join("skills"));
+        let alpha = skill(&root, "alpha");
+        std::fs::create_dir_all(&repo).unwrap();
+        // root/team is a junction to a folder outside every root, and its alpha links back to root/alpha.
+        link_dir(&repo.join("alpha"), &alpha);
+        link_dir(&root.join("team"), &repo);
+        let at = places(&[&root], &[]);
+        let plan_of = plan(&at, &[pick(&alpha)]).unwrap();
+        assert_eq!(kinds(&plan_of[0]), ["folder"], "{:?}", plan_of[0].items);
+        assert_eq!(plan_of[0].remains, None, "the folder is deleted, so nothing stays");
+        assert_eq!(run(&app, &at, &[pick(&alpha)]).unwrap()[0].outcome, "deleted");
+        assert!(std::fs::symlink_metadata(&alpha).is_err());
+        assert!(is_link(&repo.join("alpha")), "the link outside the roots is never removed");
+    }
+
+    // Stand-in review of 921b6c7, FIX-SOON 3: a failed put-back keeps the record that can undo it.
+    #[test]
+    fn fix2_a_put_back_that_fails_keeps_the_not_done_record_and_the_next_start_restores_it() {
+        let t = temp("fix2-b");
+        let (app, root) = (t.join("app"), t.join("skills"));
+        let a = skill(&root, "alpha");
+        // The same item twice: the second move finds nothing, and putting the first back fails.
+        FAIL_PUT_BACK.with(|f| f.set(true));
+        let err = delete(&app, &[a.clone(), a.clone()]).unwrap_err();
+        FAIL_PUT_BACK.with(|f| f.set(false));
+        assert!(err.starts_with("Nothing was deleted") && err.contains("next start"), "{err}");
+        let kept = read(&app).expect("the record that can put alpha back stays");
+        assert!(!kept.done && kept.moves.len() == 2, "{:?} {:?}", kept.moves, kept.left);
+        recover(&app);
+        assert_eq!(names(&root), ["alpha"], "alpha is back");
+        assert!(!app.join(JOURNAL).exists());
     }
 }

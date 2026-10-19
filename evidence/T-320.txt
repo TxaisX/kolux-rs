@@ -29,10 +29,12 @@ pnpm exec vitest run src/skills  -> Test Files 1 passed (1), Tests 14 passed (14
        "SKILL-020: details list the AIs that can use the skill by name"
 pnpm exec tsc --noEmit  -> exit 0
 
-COORDINATOR HUNK: evidence/skills-T-320-lib.patch, made with git diff against 950ba36, git apply --check OK.
-It is CUMULATIVE: it holds T-180's two lines plus skills::skills_reveal, so apply it INSTEAD of
-evidence/skills-T-180-lib.patch (not both). After it lands, the #[allow(dead_code)] lines above
-skills_reveal (skills.rs) and the two delete commands (skill_delete.rs) can go.
+COORDINATOR HUNK: evidence/skills-FIX-2-lib.patch (2026-10-14; replaces skills-T-320-lib.patch and
+skills-T-180-lib.patch, both retired: main 136bb62 moved their context and they no longer applied). It
+puts skill_delete::skills_delete_plan, skill_delete::skills_delete and skills::skills_reveal after
+skills::skills_scan, before files::open_in, and takes the skill lock around the startup recover;
+git apply --check exit 0 against main dc7cee0's lib.rs. After it lands, the #[allow(dead_code)] lines
+above skills_reveal (skills.rs) and the two delete commands (skill_delete.rs) can go.
 
 LIVE PROOF PENDING (batched; scratch HOME with .claude/skills/alpha/SKILL.md, never real folders)
 1. Open Skills. alpha's row ends with a three-dots "Skill actions" button after its date. Click it.

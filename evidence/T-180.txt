@@ -52,8 +52,8 @@ ACCEPTANCE MAPPING
 - Changed on disk before confirming -> reported changed, left alone: skill022_a_skill_changed_on_disk...
 - Link to another folder -> link gone, target remains: skill022_deleting_a_link_removes_the_link...
 
-COORDINATOR HUNK (not applied here; lib.rs is out of scope): evidence/skills-T-180-lib.patch, made with
-git diff against 950ba36 and checked with git apply --check. It registers skill_delete::skills_delete_plan
+COORDINATOR HUNK (not applied here; lib.rs is out of scope): now evidence/skills-FIX-2-lib.patch (the
+first patch, skills-T-180-lib.patch, is retired; see evidence/T-320.txt). It registers skill_delete::skills_delete_plan
 and skill_delete::skills_delete after skills::skills_scan. Once applied, the two
 #[allow(dead_code)] lines above those commands in skill_delete.rs can go.
 
