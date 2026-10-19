@@ -1,0 +1,31 @@
+diff --git a/src-tauri/src/terminal.rs b/src-tauri/src/terminal.rs
+index e8f08bf6..f2ff7f7c 100644
+--- a/src-tauri/src/terminal.rs
++++ b/src-tauri/src/terminal.rs
+@@ -1126,11 +1126,9 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
+     // T-172-e: a worker start puts its dispatch id in the first session's environment; the start that is
+     // waiting for it learns which session that is (only a start still waiting is told).
+     // cli FIX-7: the last such entry in the environment names the dispatch (the window appends its own).
+-    let dispatch = crate::cli::dispatch_in(&env_own);
+-    let id = terminals.spawn(app.clone(), cols, rows, cwd, program, args, env_own, env, pane_key, shell)?;
+-    if let Some(d) = dispatch {
+-        crate::cli::stamp_session(&d, id);
+-    }
++    // cli FIX-8: spawn_stamped reads it before the environment is handed over and stamps the new
++    // session once the spawn succeeded (cli.rs fix8_d).
++    let id = crate::cli::spawn_stamped(crate::cli::dispatch_in(&env_own), || terminals.spawn(app.clone(), cols, rows, cwd, program, args, env_own, env, pane_key, shell))?;
+     // AUTO-012: an automation run dispatched to this worktree for this agent is followed here.
+     if let Some(dir) = dir {
+         crate::automations::follow(&app, |s| crate::automations::claim(s, id, pane_key, &dir, agent));
+@@ -1513,8 +1511,9 @@ mod tests {
+             (crate::cli::DISPATCH_ENV.to_string(), "dispatch-term-user".to_string()),
+             (crate::cli::DISPATCH_ENV.to_string(), "dispatch-term-test".to_string()),
+         ];
+-        let named = crate::cli::dispatch_in(&env_own).unwrap();
+-        assert!(crate::cli::stamp_session(&named, 8));
++        // cli FIX-8: terminal_spawn runs the spawn through spawn_stamped, so the new session (8) is stamped by it.
++        let stamped_id: Result<u32, String> = crate::cli::spawn_stamped(crate::cli::dispatch_in(&env_own), || Ok(8));
++        assert_eq!(stamped_id, Ok(8));
+         let got = crate::cli::wait_ready(&t, "dispatch-term-test", Instant::now(), Duration::from_millis(600));
+         assert_eq!(got, (Some(8), true));
+         for id in [7, 8] {
