@@ -22,6 +22,7 @@ export function RepoSetupView({ setup, notice, actions }: { setup: RepoSetup; no
     const s = scriptSave(setup.local, draft);
     if (s.kind === "save") actions.onSave(s.script);
     setHint(s.kind === "empty" ? "To take the saved setup away, use Remove." : "");
+    if (s.kind === "empty") setDraft(setup.local ?? ""); // the box shows what is still saved, not an empty box
   };
   const trust = trustNote(setup);
   return (
@@ -63,7 +64,11 @@ export function RepoSetupView({ setup, notice, actions }: { setup: RepoSetup; no
         </div>
       )}
       {setup.shared && <pre className="conn-detail" data-shared>{setup.shared}</pre>}
-      {setup.shared && <p className="conn-detail">That is the setup script in this repository's kolux.yaml.</p>}
+      {setup.shared && (
+        <p className="conn-detail">
+          That is the setup script in kolux.yaml in the main folder of this repository. A branch can change it, and you are asked again if it does.
+        </p>
+      )}
       {setup.sharedError && (
         <p className="conn-detail warn" role="alert">
           {setup.sharedError}
@@ -79,6 +84,11 @@ export function RepoSetupView({ setup, notice, actions }: { setup: RepoSetup; no
           ))}
         </select>
       </div>
+      {setup.runError && (
+        <p className="conn-detail warn" role="alert" data-run-error="true">
+          {setup.runError}
+        </p>
+      )}
       {setup.suggestBoth && (
         <p className="conn-detail" data-suggest="both">
           This repository has both a saved setup and one in kolux.yaml; only yours runs now.{" "}

@@ -16,7 +16,8 @@ export function ProjectIcon({ value, name, size = 14, auto }: { value: string | 
   const v = iconView(value, name, auto);
   const box = { display: "inline-flex", alignItems: "center", justifyContent: "center", width: size + 2, height: size + 2, marginRight: 6, flex: "none", fontSize: size - 1, lineHeight: 1 } as const;
   if (v.kind === "emoji") return <span style={box} data-project-icon="emoji" aria-hidden="true">{v.emoji}</span>;
-  if (v.kind === "image") return <img src={v.src} alt="" width={size + 2} height={size + 2} style={{ ...box, objectFit: "contain", borderRadius: 3 }} data-project-icon="image" />;
+  // no-referrer: an avatar request must not tell the hosting site which page asked (as MentionField does)
+  if (v.kind === "image") return <img src={v.src} alt="" width={size + 2} height={size + 2} referrerPolicy="no-referrer" style={{ ...box, objectFit: "contain", borderRadius: 3 }} data-project-icon="image" />;
   if (v.kind === "icon") {
     const Glyph = GLYPHS[v.name] ?? Folder;
     return <span style={box} data-project-icon={GLYPHS[v.name] ? v.name : "folder"} aria-hidden="true"><Glyph size={size} /></span>;
