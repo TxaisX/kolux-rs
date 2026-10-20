@@ -92,3 +92,19 @@ LIVE PROOF PENDING (batched)
    Droid stop -> done (not interrupted).
 4. Kimi: prompt -> working; approval -> needs you; finish -> done; Kimi's context never shows Kolux's output.
 5. Switch the hooks off on Settings > Agents: the three files read byte for byte as before.
+
+== BATCH 5 RECHECK (2026-10-20, Opus 5.5): nothing built ==
+- STAT-013 Droid PermissionRequest: https://docs.factory.com/reference/hooks-reference lists PreToolUse,
+  PostToolUse, UserPromptSubmit, Notification, Stop, SubagentStop, PreCompact, SessionStart, SessionEnd; no
+  PermissionRequest. Waiting for permission arrives as Notification with notification_type "permission_prompt"
+  (already handled). Blocker unchanged.
+- STAT-014 Command Code: a web search found no public hook or transcript reference. Blocker unchanged.
+- STAT-015 Kimi limit fields: not rechecked further; blocker unchanged (StopFailure error fields not named).
+- STAT-016 Hermes: https://hermes-agent.nousresearch.com/docs/user-guide/features/hooks now documents plugin hooks
+  (ctx.register_hook; on_session_start, pre_llm_call, pre_tool_call, post_tool_call, agent_loop_stopped,
+  pre_approval_request, on_human_input_request kind sudo/clarify/approval) and config.yaml shell hooks (top-level
+  hooks: event -> [{command, matcher, timeout}], stdin JSON hook_event_name, tool_name, tool_input, session_id, cwd,
+  profile, extra; first-use consent per (event, command) saved in ~/.hermes/shell-hooks-allowlist.json, or
+  --accept-hooks / HERMES_ACCEPT_HOOKS=1 / hooks_auto_accept). It names plugins.enabled but not its format, so the
+  spec's "switched-on plugin" route is still not buildable from public docs. The shell-hook route is a spec change
+  (after-list design call) and needs a marked YAML block writer; not started this batch (budget).
