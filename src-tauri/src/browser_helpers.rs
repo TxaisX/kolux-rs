@@ -152,7 +152,6 @@ pub fn record(pid: u32) {
 }
 
 /// At quit: stops this run's helpers that still run as recorded, and clears the record.
-#[allow(dead_code)] // called at quit through evidence/browser-T-283-lib.rs.patch
 pub fn stop_all() {
     super::crash::quitting(); // T-286-b: engine exits from here on are the app's own shutdown
     let mine = MINE.lock().map(|mut m| std::mem::take(&mut *m)).unwrap_or_default();

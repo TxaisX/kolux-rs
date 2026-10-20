@@ -3,6 +3,7 @@
 // listen and rank them; a server already open in this workspace is focused instead of opened twice.
 import { findLinks } from "../terminal/links";
 import type { PageInfo } from "./pages";
+import { resolveAddress } from "./address";
 
 /** A dev server the button may open, as `browser_dev_ports` ranks them. */
 export type Candidate = { host: string; port: number; url: string; printed: boolean; web: boolean };
@@ -83,4 +84,16 @@ export function previewHint(list: readonly Candidate[]): string {
   if (!list.length) return "Preview: no dev server found for this workspace (start one; its printed address is picked up)";
   if (list.length === 1) return `Preview ${list[0].host}:${list[0].port} in a browser tab`;
   return `Preview ${list[0].host}:${list[0].port} (${list.length} servers: open the menu for the others)`;
+}
+
+/** T-319-b (BROW-041): Enter in a document preview's chip. A web address turns the same tab into
+ *  that page (Back returns to the preview); another document's path swaps the preview; the same
+ *  document, or nothing typed, does nothing; anything unusable is said and the chip stays open. */
+export type ChipCommit = { kind: "same" } | { kind: "document"; path: string } | { kind: "web"; url: string } | { kind: "error"; error: string };
+export function chipCommit(text: string, current: string): ChipCommit {
+  const t = text.trim().replace(/^"(.*)"$/, "$1");
+  if (!t || dirKey(t) === dirKey(current)) return { kind: "same" };
+  if (/^([a-z]:[\\/]|\\\\|\/)/i.test(t)) return { kind: "document", path: t };
+  const r = resolveAddress(t);
+  return "error" in r ? { kind: "error", error: r.error } : { kind: "web", url: r.url };
 }

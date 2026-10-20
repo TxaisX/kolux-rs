@@ -142,9 +142,101 @@ pub fn root() -> Result<PathBuf, String> {
     std::env::var_os(crate::cli::APP_DIR_ENV).map(PathBuf::from).ok_or_else(|| "the app's data folder is not known yet; open a browser tab first".to_string())
 }
 
+/// BROW-025: the sign-in hosts where a profile in its normal mode shows desktop Firefox, with no
+/// client hints, so Google's embedded-browser block lets the sign-in through. Exact hosts only:
+/// Google's app subdomains (mail.google.com) and lookalikes (accounts.google.com.example.net) keep
+/// the pane's own identity.
+pub const SIGN_IN_HOSTS: &[&str] = &["accounts.google.com", "accounts.youtube.com"];
+
+/// The Firefox release the sign-in hosts are shown. ponytail: a fixed ESR number; bump it when
+/// Google starts calling it outdated.
+const FIREFOX: u32 = 140;
+
+/// The request headers that carry client hints; the Firefox identity sends none of them.
+pub const CLIENT_HINTS: &[&str] = &["sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "sec-ch-ua-platform-version", "sec-ch-ua-full-version", "sec-ch-ua-full-version-list", "sec-ch-ua-arch", "sec-ch-ua-bitness", "sec-ch-ua-model", "sec-ch-ua-wow64", "sec-ch-ua-form-factors"];
+
+/// Desktop Firefox on this platform, as its own user agent reads.
+pub fn firefox_identity() -> String {
+    let platform = if cfg!(windows) {
+        "Windows NT 10.0; Win64; x64"
+    } else if cfg!(target_os = "macos") {
+        "Macintosh; Intel Mac OS X 10.15"
+    } else {
+        "X11; Linux x86_64"
+    };
+    format!("Mozilla/5.0 ({platform}; rv:{FIREFOX}.0) Gecko/20100101 Firefox/{FIREFOX}.0")
+}
+
+/// Whether an address is on one of the sign-in hosts (web addresses only, any letter case, a
+/// trailing dot ignored).
+pub fn sign_in_host(url: &str) -> bool {
+    let Ok(u) = tauri::Url::parse(url.trim()) else { return false };
+    matches!(u.scheme(), "https" | "http") && u.host_str().map(|h| h.trim_end_matches('.').to_ascii_lowercase()).is_some_and(|h| SIGN_IN_HOSTS.contains(&h.as_str()))
+}
+
+/// Whether a page at `url` shows the Firefox identity: only on a sign-in host, and only in a
+/// profile that is not in native mode. Asked again at every navigation, redirects included.
+pub fn firefox_at(url: &str, ua_spoof: bool) -> bool {
+    ua_spoof && sign_in_host(url)
+}
+
+/// Whether a profile is in its normal mode (Firefox on the sign-in hosts); an unknown profile is.
+pub fn spoofs(store: &Store, id: &str) -> bool {
+    get(store, id).is_none_or(|p| p.ua_spoof)
+}
+
+/// The page script that hides the client hints from the sign-in hosts' own script (Firefox has no
+/// `navigator.userAgentData`); every other page keeps them.
+pub fn no_hints_script() -> String {
+    let hosts = serde_json::to_string(SIGN_IN_HOSTS).unwrap_or_default();
+    format!("(() => {{ if (!{hosts}.includes(location.hostname.toLowerCase().replace(/\\.$/, \"\"))) return; try {{ Object.defineProperty(Navigator.prototype, \"userAgentData\", {{ get: () => undefined, configurable: true }}); }} catch (_) {{}} }})();")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn brow025_only_the_sign_in_hosts_get_the_firefox_identity() {
+        for u in ["https://accounts.google.com/v3/signin/identifier?x=1", "https://ACCOUNTS.Google.com./ServiceLogin", "https://accounts.youtube.com/accounts/SetSID", "http://accounts.google.com/"] {
+            assert!(firefox_at(u, true), "{u}");
+            // Native mode: the stock identity everywhere, sign-in hosts included.
+            assert!(!firefox_at(u, false), "{u}");
+        }
+        // App subdomains, lookalikes, other schemes and plain text keep the pane's own identity.
+        for u in ["https://mail.google.com/", "https://www.google.com/", "https://www.youtube.com/", "https://accounts.google.com.example.net/", "https://evil-accounts.google.com/", "https://accounts.google.co.uk/", "https://example.net/?next=https://accounts.google.com/", "file://accounts.google.com/x", "accounts.google.com"] {
+            assert!(!firefox_at(u, true), "{u}");
+        }
+        // A redirect chain is asked hop by hop: in at the sign-in host, out again at the app.
+        let hops = ["https://www.youtube.com/signin", "https://accounts.google.com/ServiceLogin", "https://accounts.youtube.com/accounts/SetSID", "https://www.youtube.com/"];
+        assert_eq!(hops.map(|u| firefox_at(u, true)), [false, true, true, false]);
+    }
+
+    #[test]
+    fn brow025_the_identity_is_desktop_firefox_for_this_platform_and_hints_go() {
+        let ua = firefox_identity();
+        assert!(ua.starts_with("Mozilla/5.0 (") && ua.ends_with(&format!("Gecko/20100101 Firefox/{FIREFOX}.0")), "{ua}");
+        assert!(!ua.contains("Chrome") && !ua.contains("Edg") && !ua.contains("Mobile"), "{ua}");
+        #[cfg(windows)]
+        assert!(ua.contains("(Windows NT 10.0; Win64; x64; rv:"), "{ua}");
+        assert!(CLIENT_HINTS.contains(&"sec-ch-ua") && CLIENT_HINTS.iter().all(|h| h.starts_with("sec-ch-ua")));
+        let script = no_hints_script();
+        assert!(SIGN_IN_HOSTS.iter().all(|h| script.contains(&format!("\"{h}\""))) && script.contains("userAgentData"), "{script}");
+    }
+
+    #[test]
+    fn brow025_native_mode_is_the_profile_s_choice_and_the_default_spoofs() {
+        let mut s = Store::default();
+        create(&mut s, "Plain", None, false).unwrap();
+        create(&mut s, "Work", None, true).unwrap();
+        assert!(spoofs(&s, DEFAULT));
+        assert!(!spoofs(&s, "plain"));
+        assert!(spoofs(&s, "work"));
+        assert!(spoofs(&s, "gone"));
+        // A copy keeps the mode it was copied from.
+        let c = clone_profile(&mut s, "plain", None).unwrap();
+        assert!(!spoofs(&s, &c.id));
+    }
 
     #[test]
     fn brow045_the_default_leads_the_list_and_cannot_go() {
