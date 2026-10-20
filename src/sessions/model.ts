@@ -92,7 +92,8 @@ export function groupSessions(list: Session[], by: GroupBy, projects: Project[])
   const groups = new Map<string, Group>();
   for (const s of list) {
     const key = by === "agent" ? s.agent : by === "folder" ? (s.dir === null ? "" : normPath(s.dir)) : (projectOf(s.dir, projects) ?? "");
-    const label = by === "agent" ? s.agent : by === "folder" ? shortLabel(s.dir) : shortLabel(key === "" ? null : key);
+    const root = by === "project" ? projects.find((p) => normPath(p.path) === key) : undefined;
+    const label = by === "agent" ? s.agent : by === "project" && root ? shortLabel(root.path) : shortLabel(s.dir);
     const g = groups.get(key) ?? { key, label, sessions: [] };
     g.sessions.push(s);
     groups.set(key, g);

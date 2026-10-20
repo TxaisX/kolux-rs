@@ -6,8 +6,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./sessions.css";
-import { ago, type Session } from "./model";
-import { effectiveScope, readScope, readView, SCOPE_KEY, VIEW_KEY, type Scope } from "./prefs";
+import { ago, filterSessions, groupSessions, MAX_QUERY, parseQuery, shortLabel, sortSessions, type GroupBy, type Project, type Session, type SortBy } from "./model";
+import { chooseScope, DEFAULT_VIEW, DEPTHS, differing, effectiveScope, readScope, readView, SCOPE_KEY, VIEW_KEY, type Scope, type ViewPrefs } from "./prefs";
 import { AFTER_START_MS, publishDelay, recall, remember, RescanLimiter } from "./refresh";
 import { dragPayload, planFor, resumeBlock, SESSION_DRAG, type ResumePlan } from "./resume";
 
@@ -18,6 +18,8 @@ export type PanelProps = {
   /** The workspace in front, and every workspace folder of its project (worktrees and the root). */
   activeDir: string | null;
   projectDirs: string[];
+  /** Every project (its root folder), so "repo:" and grouping by project know what a repo is. */
+  projects?: Project[];
   /** Changes whenever an agent starts in Kolux; the list rescans a moment later, at most every few seconds. */
   rescanKey: number;
   visible: boolean;
@@ -33,6 +35,11 @@ export function request(settings: Record<string, unknown>, activeDir: string | n
   return { dirs, all: scope === "all", depth: readView(settings[VIEW_KEY]).depth, scope };
 }
 
+const NO_PROJECTS: Project[] = [];
+const SORT_LABELS: [SortBy, string][] = [["recent", "Newest first"], ["oldest", "Oldest first"], ["title", "By title"]];
+const GROUP_LABELS: [GroupBy, string][] = [["none", "No grouping"], ["folder", "By folder"], ["agent", "By agent"], ["project", "By project"]];
+const SCOPE_LABELS: [Scope, string][] = [["workspace", "This workspace"], ["project", "This project"], ["all", "All sessions"]];
+
 const scopeKey = (p: { dirs: string[]; all: boolean; depth: number | null }) => JSON.stringify([p.all, p.all ? [] : p.dirs, p.depth]);
 
 /** The time of the last key pressed anywhere in the window (terminal typing included). */
@@ -47,8 +54,13 @@ function useLastKey() {
 }
 
 export default function AgentsPanel(props: PanelProps) {
-  const { settings, activeDir, projectDirs, rescanKey, visible, shell, onResume } = props;
-  const { dirs, all, depth } = request(settings, activeDir, projectDirs);
+  const { settings, onSave, activeDir, projectDirs, rescanKey, visible, shell, onResume } = props;
+  const projects = props.projects ?? NO_PROJECTS;
+  const { dirs, all, depth, scope } = request(settings, activeDir, projectDirs);
+  const view = readView(settings[VIEW_KEY]);
+  const scopePref = readScope(settings[SCOPE_KEY]);
+  const [query, setQuery] = useState("");
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const key = scopeKey({ dirs, all, depth });
   const [list, setList] = useState<Session[] | null>(() => recall<Session[]>(key) ?? null);
   const [error, setError] = useState<string | null>(null);
@@ -127,16 +139,98 @@ export default function AgentsPanel(props: PanelProps) {
     );
   };
   const now = Date.now();
-  const rows = useMemo(() => list ?? [], [list]);
+  const parsed = useMemo(() => parseQuery(query), [query]);
+  const shown = useMemo(() => sortSessions(filterSessions(list ?? [], { query, hiddenAgents: view.hiddenAgents, hideEmpty: view.hideEmpty }, projects), view.sort), [list, query, settings[VIEW_KEY], projects]);
+  const groups = useMemo(() => groupSessions(shown, view.group, projects), [shown, view.group, projects]);
+  const agentsSeen = [...new Set([...(list ?? []).map((s) => s.agent), ...view.hiddenAgents])].sort();
+  const changed = differing(view);
+  const total = list?.length ?? 0;
+  const setView = (patch: Partial<ViewPrefs>) => onSave(VIEW_KEY, { ...view, ...patch });
+  const count = list === null ? (error === null ? "Looking for past sessions…" : "") : shown.length === total ? `${total} past session${total === 1 ? "" : "s"}` : `${shown.length} of ${total} past sessions`;
 
   return (
     <div className="agents-panel" aria-label="Agents">
       <div className="agents-bar">
-        <span className="agents-count">{list === null ? (error === null ? "Looking for past sessions…" : "") : `${rows.length} past session${rows.length === 1 ? "" : "s"}`}</span>
+        <span className="agents-count">{count}</span>
         <button type="button" className="btn" title="Rescan every session folder" disabled={busy} onClick={() => load(true)}>
           {busy ? "Scanning…" : "Refresh"}
         </button>
       </div>
+      <div className="agents-tools">
+        <input
+          type="search"
+          className="agents-search"
+          placeholder="Search: words, &quot;a phrase&quot;, repo:name, path:folder"
+          aria-label="Search past sessions"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <select className="agents-select" aria-label="Which sessions to list" value={scopePref.scope} onChange={(e) => onSave(SCOPE_KEY, chooseScope(e.target.value as Scope))}>
+          {SCOPE_LABELS.map(([v, l]) => (
+            <option key={v} value={v}>
+              {l}
+            </option>
+          ))}
+        </select>
+        <button type="button" className="btn" aria-expanded={optionsOpen} title="Sort, group, hide agents, how many to list" onClick={() => setOptionsOpen(!optionsOpen)}>
+          {changed > 0 ? `Options (${changed})` : "Options"}
+        </button>
+      </div>
+      {scope !== scopePref.scope && <div className="sb-hint">{scopePref.scope === "workspace" ? "No workspace is open, so every session is listed." : "This folder is in no project, so every session is listed."}</div>}
+      {parsed.tooLong && (
+        <div className="sb-hint warn" role="status">
+          That search is longer than {MAX_QUERY} characters, so nothing matches. Shorten it.
+        </div>
+      )}
+      {optionsOpen && (
+        <div className="agents-options" aria-label="View options">
+          <label>
+            Order
+            <select className="agents-select" value={view.sort} onChange={(e) => setView({ sort: e.target.value as SortBy })}>
+              {SORT_LABELS.map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Group
+            <select className="agents-select" value={view.group} onChange={(e) => setView({ group: e.target.value as GroupBy })}>
+              {GROUP_LABELS.map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            List at most
+            <select className="agents-select" value={view.depth === null ? "all" : String(view.depth)} onChange={(e) => setView({ depth: e.target.value === "all" ? null : Number(e.target.value) })}>
+              {DEPTHS.map((d) => (
+                <option key={d === null ? "all" : d} value={d === null ? "all" : String(d)}>
+                  {d === null ? "Unlimited" : `${d} per agent`}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <input type="checkbox" checked={view.hideEmpty} onChange={(e) => setView({ hideEmpty: e.target.checked })} />
+            Hide empty sessions
+          </label>
+          {agentsSeen.map((a) => (
+            <label key={a}>
+              <input type="checkbox" checked={!view.hiddenAgents.includes(a)} onChange={(e) => setView({ hiddenAgents: e.target.checked ? view.hiddenAgents.filter((h) => h !== a) : [...view.hiddenAgents, a] })} />
+              Show {a}
+            </label>
+          ))}
+          <div className="btn-row">
+            <button type="button" className="btn" disabled={changed === 0} title="Back to the defaults for every option above" onClick={() => onSave(VIEW_KEY, DEFAULT_VIEW)}>
+              Reset
+            </button>
+          </div>
+        </div>
+      )}
       {error !== null && (
         <div className="sb-hint warn" role="alert">
           Past sessions could not be read: {error}
@@ -147,9 +241,16 @@ export default function AgentsPanel(props: PanelProps) {
           {note}
         </div>
       )}
-      {list !== null && rows.length === 0 && error === null && <div className="sb-hint">No past sessions here yet. Sessions of Claude and Codex show up once they have run.</div>}
+      {list !== null && total === 0 && error === null && <div className="sb-hint">No past sessions here yet. Sessions of Claude and Codex show up once they have run.</div>}
+      {list !== null && total > 0 && shown.length === 0 && !parsed.tooLong && <div className="sb-hint">No session matches the search and options.</div>}
       <ul className="agents-list">
-        {rows.map((s) => {
+        {groups.map((g) => [
+          view.group !== "none" && (
+            <li key={`g:${g.key}`} className="agents-group" role="presentation" title={g.key}>
+              {g.label === "" ? shortLabel(null) : g.label} ({g.sessions.length})
+            </li>
+          ),
+          ...g.sessions.map((s) => {
           const block = resumeBlock(s);
           return (
             <li key={`${s.agent}:${s.id}`} className="agents-row" draggable onDragStart={(e) => e.dataTransfer.setData(SESSION_DRAG, dragPayload(s))}>
@@ -169,7 +270,8 @@ export default function AgentsPanel(props: PanelProps) {
               </div>
             </li>
           );
-        })}
+          }),
+        ])}
       </ul>
     </div>
   );

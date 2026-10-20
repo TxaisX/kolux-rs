@@ -1,0 +1,128 @@
+diff --git a/src/scm/SourceControlPanel.tsx b/src/scm/SourceControlPanel.tsx
+index 77381a53..f89d5fb8 100644
+--- a/src/scm/SourceControlPanel.tsx
++++ b/src/scm/SourceControlPanel.tsx
+@@ -39,6 +39,8 @@ type Props = {
+   onClose: () => void;
+   /** GIT-004: starts an agent primed with what git and its hooks printed. */
+   onFix: (output: string) => void;
++  /** VIEW-066: false when Source Control AI actions are hidden; the agent fix after a failed push goes with them. */
++  aiShown?: boolean;
+   /** VIEW-068: the base pinned for the workspace's project, which the summary measures against. */
+   pinnedBase: string | null;
+   /** GIT-011: Change Base Ref pins a new base for the workspace's project (blank goes back to the default). */
+@@ -92,12 +94,12 @@ function GraphCell({ row }: { row: GraphRow }) {
+   );
+ }
+ 
+-type Failure = { title: string; output: string; fix?: string | null; policy?: boolean };
++type Failure = { title: string; output: string; fix?: string | null; policy?: boolean; behind?: boolean };
+ 
+ type Composer = { title: string; body: string; base: string; draft: boolean; error: string | null; busy: boolean };
+ 
+ // VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
+-export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft, onDraft, onClose, onFix, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr, view = "list", onView, onOpenDiff, diffSplit = "here", onDiffSplit, onAllChanges, notesSection }: Props) {
++export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft, onDraft, onClose, onFix, aiShown = true, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr, view = "list", onView, onOpenDiff, diffSplit = "here", onDiffSplit, onAllChanges, notesSection }: Props) {
+   const [asking, setAsking] = useState<Asking | null>(null);
+   // GIT-003: the rows waiting for a yes before their work is thrown away.
+   const [discardingRows, setDiscardingRows] = useState<Change[] | null>(null);
+@@ -310,7 +312,7 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
+       setFailure(null);
+       setInfo(`${label}: done`);
+     } else {
+-      setFailure({ title: failureTitle(label, out), output: out.output, fix: out.kind === "hook" ? (out.detail ?? out.output) : !out.kind || out.kind === "other" ? out.output : null, policy: out.kind === "no-policy" });
++      setFailure({ title: failureTitle(label, out), output: out.output, fix: out.kind === "hook" ? (out.detail ?? out.output) : !out.kind || out.kind === "other" ? out.output : null, policy: out.kind === "no-policy", behind: out.kind === "non-fast-forward" });
+     }
+   };
+   const remote = (action: RemoteAction, label: string) => guarded(() => runRemote(action, label));
+@@ -1003,11 +1005,19 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
+                     ))}
+                   </div>
+                 )}
+-                {failure.fix !== null && !failure.policy && (
++                {failure.behind && (
++                  <button className="btn" disabled={busy} title="The remote has commits this copy lacks; bring them in, then push again" data-pull-first onClick={() => remote("pull", "Pull")}>
++                    Pull first
++                  </button>
++                )}
++                {aiShown && failure.fix !== null && !failure.policy && (
+                   <button className="btn" onClick={() => onFix(failure.fix ?? failure.output)}>
+                     Fix with AI
+                   </button>
+                 )}
++                <button className="btn ghost" data-dismiss-failure onClick={() => setFailure(null)}>
++                  Dismiss
++                </button>
+               </div>
+             )}
+             {error && <div className="note error">{error}</div>}
+diff --git a/src/scm/model.test.ts b/src/scm/model.test.ts
+index 65fa4b1c..2db72e0c 100644
+--- a/src/scm/model.test.ts
++++ b/src/scm/model.test.ts
+@@ -1,6 +1,6 @@
+ // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
+ import { describe, expect, it, test } from "vitest";
+-import { LINES_SKIPPED_NOTE, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, select, discardAsk, type Section, budgetLine, budgetLow, mergeActions, mergeLabel, type MergeInfo, graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, commitUrl, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine } from "./model";
++import { LINES_SKIPPED_NOTE, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, pushTarget, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, select, discardAsk, type Section, budgetLine, budgetLow, mergeActions, mergeLabel, type MergeInfo, graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, commitUrl, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine } from "./model";
+ 
+ const commit = (hash: string, parents: string[], subject = hash): Commit => ({ hash, short: hash, parents, author: "a", time: 0, subject, message: subject, labels: [], outgoing: false, incoming: false });
+ 
+@@ -166,6 +166,16 @@ test("the main button follows the branch through its states", () => {
+   expect(nextStep(pushed, "")).toMatchObject({ label: "Create pull request", action: "pr" });
+ });
+ 
++test("VIEW-066: a push to a fork names the fork remote, whatever form its address takes; origin stays unnamed", () => {
++  expect(pushTarget("fork/feat")).toBe("fork");
++  expect(pushTarget("origin/feat")).toBeNull();
++  expect(pushTarget(null)).toBeNull();
++  const onFork: Status = { ...emptyStatus, branch: "feat", upstream: "fork/feat", ahead: 2, base: "origin/main" };
++  expect(nextStep(onFork, "").label).toBe("Push 2 to fork");
++  expect(remoteItems(onFork).find((i) => i.id === "push")?.label).toBe("Push 2 commits to fork");
++  expect(nextStep({ ...onFork, upstream: "origin/feat" }, "").label).toBe("Push 2");
++});
++
+ test("the remote menu carries counts and gives every disabled item its reason", () => {
+   const pushed: Status = { ...emptyStatus, branch: "feat", upstream: "origin/feat", base: "origin/main" };
+   const by = (s: Status | null) => Object.fromEntries(remoteItems(s).map((i) => [i.id, i]));
+diff --git a/src/scm/model.ts b/src/scm/model.ts
+index 1f951df6..5bd108d5 100644
+--- a/src/scm/model.ts
++++ b/src/scm/model.ts
+@@ -99,6 +99,18 @@ export type RemoteAction = "push" | "pull" | "sync" | "fetch" | "ff" | "force" |
+ /** What the main button offers; `reason` is why it waits, null when it can go. */
+ export type Step = { label: string; action: "stage" | "commit" | "pr" | RemoteAction; reason: string | null };
+ 
++/** VIEW-066: a push to a fork says so. The remote is named from the branch's upstream ("fork/feat"), so
++ * it reads the same whatever form its address takes (https, ssh, scp-style). origin is the usual case and stays unnamed. */
++// ponytail: the first path segment is the remote; a remote name containing a slash would be cut short.
++export const pushTarget = (upstream: string | null): string | null => {
++  const remote = upstream?.split("/")[0] ?? "";
++  return remote !== "" && remote !== "origin" ? remote : null;
++};
++const toRemote = (upstream: string | null): string => {
++  const t = pushTarget(upstream);
++  return t === null ? "" : ` to ${t}`;
++};
++
+ /** GIT-006: the next step for the branch's state, in the card's own order. */
+ export const nextStep = (s: Status | null, message: string): Step => {
+   if (s === null) return { label: "Commit", action: "commit", reason: "Loading" };
+@@ -110,7 +122,7 @@ export const nextStep = (s: Status | null, message: string): Step => {
+   if (s.rewritten) return { label: "Force push with lease", action: "force", reason: null };
+   if (s.ahead > 0 && s.behind > 0) return { label: `Sync \u2193${s.behind} \u2191${s.ahead}`, action: "sync", reason: null };
+   if (s.behind > 0) return { label: `Pull ${s.behind}`, action: "pull", reason: null };
+-  if (s.ahead > 0) return { label: `Push ${s.ahead}`, action: "push", reason: null };
++  if (s.ahead > 0) return { label: `Push ${s.ahead}${toRemote(s.upstream)}`, action: "push", reason: null };
+   return { label: "Create pull request", action: "pr", reason: null };
+ };
+ 
+@@ -240,7 +252,7 @@ export const remoteItems = (s: Status | null): RemoteItem[] => {
+   const unpublished = noBranch ?? (st.upstream === null ? "Branch unpublished" : null);
+   const onBase = st.base !== null && (st.base === st.branch || st.base === `origin/${st.branch}`);
+   return [
+-    { id: "push", label: st.ahead > 0 ? `Push ${plural(st.ahead, "commit")}` : "Push", reason: unpublished ?? (st.ahead === 0 ? "Nothing to push" : null) },
++    { id: "push", label: st.ahead > 0 ? `Push ${plural(st.ahead, "commit")}${toRemote(st.upstream)}` : "Push", reason: unpublished ?? (st.ahead === 0 ? "Nothing to push" : null) },
+     { id: "pull", label: st.behind > 0 ? `Pull ${plural(st.behind, "commit")}` : "Pull", reason: unpublished ?? (st.behind === 0 ? "Nothing to pull" : null) },
+     { id: "sync", label: `Sync \u2193${st.behind} \u2191${st.ahead}`, reason: unpublished ?? (st.ahead + st.behind === 0 ? "Already current" : null) },
+     { id: "fetch", label: "Fetch", reason: noBranch },
