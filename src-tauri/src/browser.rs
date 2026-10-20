@@ -42,6 +42,11 @@ pub mod session;
 // T-272-d: which page holds the keyboard, from the system's focus (keyboard chord provenance).
 #[path = "browser_holder.rs"]
 pub mod holder;
+// T-283: pages are checked again after a wake (BROW-010), leftover helpers are closed (BROW-043).
+#[path = "browser_wake.rs"]
+pub mod wake;
+#[path = "browser_helpers.rs"]
+pub mod helpers;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
@@ -953,7 +958,9 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     let url = parse(&url)?;
     families().join(id, url.as_str(), Instant::now()); // T-272-c
     let _ = APP.set(app.clone()); // T-195: the command line's browser commands need the app
+    wake::watch(&app); // T-283 (BROW-010)
     if let Ok(dir) = app.path().app_data_dir() {
+        helpers::sweep_at_start(&dir); // T-283 (BROW-043); the app's start-up normally ran it already
         profiles::set_root(dir); // T-241
     }
     // T-179 (BROW-020): a tab that was open at the last quit comes back on its trail; one that is
@@ -1143,6 +1150,14 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         // SAFETY: ParentWindow only writes the controller's parent window handle into `container`.
         if unsafe { pw.controller().ParentWindow(&mut container) }.is_ok() {
             holder::record(id, container.0 as isize);
+        }
+        // T-283 (BROW-043): the engine's browser process behind this page is recorded for clean-up.
+        // SAFETY: CoreWebView2 hands back the page's engine; BrowserProcessId only writes the id.
+        if let Ok(core) = unsafe { pw.controller().CoreWebView2() } {
+            let mut pid = 0u32;
+            if unsafe { core.BrowserProcessId(&mut pid) }.is_ok() && pid != 0 {
+                helpers::record(pid);
+            }
         }
     });
     #[cfg(not(windows))]

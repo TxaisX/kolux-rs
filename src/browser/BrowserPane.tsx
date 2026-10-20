@@ -201,6 +201,8 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     let alive = true;
     const unlisteners: UnlistenFn[] = [];
     (async () => {
+      // T-283 (BROW-010): one wake signal for every pane; each rechecks its own page.
+      unlisteners.push(await listen("browser-wake", () => feed({ t: "woke" })));
       unlisteners.push(
         await listen<{ id: number; event: string; url: string }>("browser-load", (e) => {
           if (e.payload.id !== id) return;
