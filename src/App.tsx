@@ -147,6 +147,8 @@ import { matchEvent } from "./keys/keymap";
 import { tapHit, windowTaps } from "./keys/tapHit";
 import { heldByTerminal } from "./keys/terminalPolicy";
 import { useAgentEvents, useAgentStatusState } from "./status/useAgentStatus";
+import { useGone } from "./status/gone";
+import { workingByDir } from "./status/working";
 import { useAppSettings } from "./settings/useAppSettings";
 import { useWorkspaceActions, useWorkspaces } from "./projects/useWorkspaces";
 import { useChrome, useMenuBar } from "./chrome/useChrome";
@@ -1872,12 +1874,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // STAT-001: a hook-fed state wins over the guess from the program's state.
   for (const p of panes) if (p.cwd !== null && p.kind !== "browser" && !p.seats) (byDir[p.cwd] ??= []).push(hook[p.key] ?? paneState(p.agent, running[p.key]));
   const rowStates: Record<string, RowInfo> = {};
+  const workingIn = workingByDir(panes, hook, running); // STAT-036: working agents per workspace
   const cacheFor = cacheMinutes(settings); // SET-059
   for (const [dir, states] of Object.entries(byDir)) {
     const state = strongest(states);
     const prev = rowRef.current[dir];
     const cache = cacheDue(panes.filter((p) => p.cwd === dir).map((p) => ({ agent: p.agent, state: hook[p.key], since: stamp[p.key]?.at ?? 0 })), cacheFor);
-    rowStates[dir] = { ...(prev && prev.state === state ? prev : { state, changed: Date.now(), pr: null }), cache };
+    rowStates[dir] = { ...(prev && prev.state === state ? prev : { state, changed: Date.now(), pr: null }), cache, working: workingIn[dir] ?? 0 };
   }
   rowRef.current = rowStates;
   const cells = cellsOf(panes);
@@ -2127,6 +2130,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   report.current = reportLayout;
   useEffect(() => report.current());
   const { noticed, panesRef } = useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, stamp, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir });
+  useGone({ panes, running, hook, setHook, setTurn, setCrew }); // STAT-031 / T-275: gone agents stop reporting
   // The chooser, in a grid cell (SESS-007) or as the New session page (SESS-018).
   const renderChooser = (p: Pane & { seats: Seat[] }, hidden: boolean, focused: boolean, onFocus: () => void, onClose: () => void, sheetOf: { project: string; path: string } | null = null) => (
     <ChooserPane

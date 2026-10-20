@@ -53,6 +53,8 @@ import AutomationsRow from "./AutomationsRow";
 import SkillsRow from "./SkillsRow";
 import { chromeShown } from "../chrome/chromeItems";
 import { VOCAB } from "../terminal/status";
+import { workingWord } from "../status/working";
+import { onFinish, REFRESH_AFTER_MS, wantsRefresh } from "../status/finished";
 import type { AgentPass } from "../launch/agents";
 import { KeyText } from "../keys/KeymapContext";
 import { requestUpdateCheck } from "../update/UpdateCenter";
@@ -426,9 +428,12 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       if (Date.now() - st.at > STALE_MS && st.limited * 1000 < Date.now()) later(0);
     };
     window.addEventListener("focus", focus);
+    // STAT-038: an agent finishing in a listed workspace brings the next round forward, once per finish.
+    const off = onFinish((cwd) => wantsRefresh({ hidden: document.hidden, paths: pollPaths, cwd, limitedUntil: st.limited, now: Date.now() }) && later(REFRESH_AFTER_MS));
     return () => {
       dead = true;
       clearTimeout(timer);
+      off();
       window.removeEventListener("focus", focus);
     };
   }, [pollKey]);
@@ -1362,6 +1367,9 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const liveIn = (w: Worktree) => sessions.filter((s) => s.running && s.cwd !== null && same(s.cwd, w.path));
   const liveCount = (w: Worktree) => {
     const n = liveIn(w).length;
+    // STAT-036: the agents working here come first ("2 working"); a sleeping workspace shows none and says sleeping beside its name.
+    const word = isAsleep(w) ? "" : workingWord(infoOf(w).working);
+    if (word) return <span className="count working" title={`${word}; split panes are counted apart`}>{word}</span>;
     return n > 0 ? <span className="count">{n}</span> : null;
   };
   const paneRows = (w: Worktree, depth = 0) =>
