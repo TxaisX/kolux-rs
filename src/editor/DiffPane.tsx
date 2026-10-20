@@ -11,6 +11,8 @@
 // Review Note command's chord (Mod+Shift+A unless the user rebinds it) on a selection opens the
 // note popover.
 import { useEffect, useRef, useState } from "react";
+import { useSettings } from "../settings/useSettings";
+import { readEditorPrefs, type EditorPrefs } from "../settings/editorPrefs";
 import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
 import { Decoration, EditorView, GutterMarker, WidgetType, gutter, type DecorationSet } from "@codemirror/view";
@@ -33,6 +35,9 @@ import { bannerUp } from "./diskChange";
 import { covers, createAutosave, movingNow, prefsReader } from "./autosave";
 
 /** Next (1) or previous (-1) change, by pane key; App's F7 and Shift+F7 call the focused one. */
+/** SET-038 (T-323-b): how a new diff tab starts, from the Settings > General choices. */
+export const diffStart = (p: EditorPrefs) => ({ split: p.diffView === "split", wrap: p.diffWordWrap, spaces: p.diffWhitespace });
+
 export const diffNav = new Map<number, (dir: 1 | -1) => void>();
 
 type Sides = { original: string; modified: string };
@@ -141,6 +146,16 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
   const [split, setSplit] = useState(false);
   const [spaces, setSpaces] = useState(false);
   const [wrap, setWrap] = useState(false);
+  // The settings only choose how the tab starts: a choice made in this tab's menu is never overridden.
+  const { settings } = useSettings();
+  const touched = useRef(false);
+  useEffect(() => {
+    if (!settings || touched.current) return;
+    const s = diffStart(readEditorPrefs(settings));
+    setSplit(s.split);
+    setWrap(s.wrap);
+    setSpaces(s.spaces);
+  }, [settings === null]);
   const [menu, setMenu] = useState(false);
   const [changes, setChanges] = useState(0);
   const [dirty, setDirty] = useState(false);
@@ -382,10 +397,10 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
           {path}
         </span>
         <span className="view-switch" role="group" aria-label="Layout">
-          <button aria-pressed={!split} onClick={() => setSplit(false)} title="Inline">
+          <button aria-pressed={!split} onClick={() => ((touched.current = true), setSplit(false))} title="Inline">
             Inline
           </button>
-          <button aria-pressed={split} onClick={() => setSplit(true)} title="Side by side">
+          <button aria-pressed={split} onClick={() => ((touched.current = true), setSplit(true))} title="Side by side">
             Side by side
           </button>
         </span>
@@ -404,11 +419,11 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
               <>
                 <div className="menu-backdrop" onMouseDown={() => setMenu(false)} />
                 <div className="menu diff-menu" role="menu">
-                  <button role="menuitemcheckbox" aria-checked={spaces} className="menu-item" onClick={() => setSpaces((v) => !v)}>
+                  <button role="menuitemcheckbox" aria-checked={spaces} className="menu-item" onClick={() => ((touched.current = true), setSpaces((v) => !v))}>
                     <span className="check">{spaces ? "✓" : ""}</span>
                     <span className="name">Show whitespace changes</span>
                   </button>
-                  <button role="menuitemcheckbox" aria-checked={wrap} className="menu-item" onClick={() => setWrap((v) => !v)}>
+                  <button role="menuitemcheckbox" aria-checked={wrap} className="menu-item" onClick={() => ((touched.current = true), setWrap((v) => !v))}>
                     <span className="check">{wrap ? "✓" : ""}</span>
                     <span className="name">Wrap lines</span>
                   </button>

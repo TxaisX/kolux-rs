@@ -1,0 +1,23 @@
+
+T-323-b piece 1 (2026-10-19, lane/editor from 27a86891): the editor-lane consumers of the editor preferences. T-323-b
+stays open (other lanes' parts, and the minimap waits for T-316-b).
+
+BUILT
+- src/editor/DiffPane.tsx: diffStart(prefs) and a settings read at mount. A new diff tab starts split or inline
+  (diffView), word-wrapped or not (diffWordWrap, separate from the editor's wrap) and with whitespace-only hunks shown
+  or hidden (diffShowWhitespace). Once the person uses the tab's own Inline / Side by side button or its menu, the
+  settings no longer move that tab.
+- src/editor/EditorPane.tsx: the rich view's spellCheck attribute follows Settings > General > markdown spellcheck
+  (default on); word wrap was already read from the same file.
+- Already wired before this piece: auto-save through the settings (autosave.ts reads editorAutoSave and the delay) and
+  the editor's word wrap.
+TESTS: src/editor/DiffPane.test.ts, one new test (defaults inline / unwrapped / hidden; each field read; the editor's wrap
+  does not move the diff's).
+READINGS: vitest src/editor src/settings: 83 files, 480 tests passed (v3-t323-a.log); tsc --noEmit 0 (v3-t323-tsc.log).
+  No Rust, no shared file, no patch.
+LIVE PROOF PENDING (batched)
+1. Settings > General: diff view = Side by side, diff word wrap on, show whitespace changes on. Open a diff tab: it opens
+   in two columns, wrapped, whitespace-only changes shown. Click Inline in the tab: it switches and stays.
+2. Turn markdown spelling off: a misspelt word in a note's rich view has no red underline; back on, it has.
+STILL OPEN IN T-323-b: minimap (see T-316-b), combined diff's file tree, Open in menus, proxy settings (Rust), Warp and
+  Ghostty folder scan.

@@ -2026,6 +2026,7 @@ dependencies = [
  "jiff",
  "portable-pty",
  "pulldown-cmark",
+ "regex",
  "reqwest",
  "rusqlite",
  "serde",

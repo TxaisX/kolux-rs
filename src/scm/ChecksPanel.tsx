@@ -10,6 +10,7 @@ import { openInBrowser } from "../browser/BrowserPane";
 import { useSettings } from "../settings/useSettings";
 import CommentsPanel from "./CommentsPanel";
 import ConflictPanel from "./ConflictPanel";
+import GhBanner, { classify } from "../tasks/GhBanner";
 import PrStart from "./PrStart";
 import { reviewHint, reviewWhere } from "./startPr";
 import { CHECKS_POLL_MS, checksSummary, reuseNoPr, stillRunning, type PrChecks } from "./checks";
@@ -96,7 +97,11 @@ export default function ChecksPanel({ dir, linked, visible }: Props) {
         {dir === null ? (
           <div className="sb-hint">Open a workspace to see its pull request's checks.</div>
         ) : shown?.error ? (
-          <div className="note error">The checks could not be read: {shown.error}</div>
+          classify(shown.error) !== "other" ? (
+            <GhBanner error={shown.error} onRetry={() => load(true)} />
+          ) : (
+            <div className="note error">The checks could not be read: {shown.error}</div>
+          )
         ) : !data ? (
           <div className="sb-hint">Looking for this branch's pull request…</div>
         ) : !pr ? (

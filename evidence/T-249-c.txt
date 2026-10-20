@@ -1,0 +1,21 @@
+T-249-c  lane/cli from ece31cd1  2026-10-19  (left OPEN: the crash screen Report button belongs to T-183)
+
+1. Pasting a picture into a terminal: already on main. TERM-070 (T-220) reads an image off the clipboard
+   (src/terminal/screenshotPaste.ts: attachScreenshotPaste, clipboardImage, pasteImage), saves it through the
+   paste_image_save command (registered in lib.rs) and pastes the path; TerminalPane.tsx calls it for the paste
+   event, the menu paste and the middle-click paste. Nothing to build.
+2. Crash screen Report button: not built. APP-039 ("after a crash the app offers to report it as a GitHub
+   issue") and APP-042 (crash screen / screen fails to load) are T-183 (Reliability), whose CrashReportDialog
+   in src/recovery/ is queued; a second dialog from this lane would duplicate it. T-183 should call
+   requestFeedback(crashText) from src/feedback/FeedbackDialog.tsx for the Report button (already exported).
+3. Caller for clip_copy_files in the explorer: built as a patch (Explorer.tsx is the editor lane's).
+   evidence/cli-T-249-c-explorer.patch: Mod+C on selected rows also places the files on the system clipboard
+   (clip_copy_files), the note then reads "ready to paste with Ctrl+V here or in another program"; a refusal
+   keeps the in-panel paste working and the note names the reason.
+   The earlier evidence/cli-T-249-b-callers.patch is already applied on main (Explorer uses clip_copy_text).
+   Gates with the patch applied (then reverted): git apply --check ok; tsc --noEmit 0;
+   vitest run src/editor: 41 files, 252 tests passed.
+
+LIVE PROOF PENDING (batched)
+  In the Explorer select a file, Ctrl+C: the note says "ready to paste ... here or in another program";
+  Ctrl+V into Windows Explorer or a mail window pastes the file; Ctrl+V in the Explorer panel still copies it.
