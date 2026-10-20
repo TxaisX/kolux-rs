@@ -528,9 +528,9 @@ function TextEditorPane({ id, path, root = null, readOnly = false, follow = fals
     if (why) return fallBack({ text: `Showing source: the rich view cannot show this file because ${why}.` });
     let pushed = text;
     try {
-      rich.current = mountRich(richHost.current, splitFront(text).body, (out) => {
+      rich.current = mountRich(richHost.current, splitFront(text).body, (out, prev) => {
         const now = cm.state.doc.toString();
-        const change = richChange(now, out);
+        const change = richChange(now, out, prev);
         if (change) {
           pushed = now.slice(0, change.from) + change.insert + now.slice(change.to);
           cm.dispatch({ changes: change, userEvent: "input" });
