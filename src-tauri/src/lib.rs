@@ -67,6 +67,7 @@ mod prompt_scan;
 mod scm;
 mod pr_review;
 mod skills;
+mod star;
 mod pasted_image;
 mod pr_checkout;
 mod pty;
@@ -695,6 +696,8 @@ pub fn run() {
             onboarding::tours_get,
             onboarding::onboarding_reopen,
             onboarding::onboarding_milestone,
+            star::star_info,
+            star::star_put,
             files::file_read,
             files::file_write,
             files::file_stamps,

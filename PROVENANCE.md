@@ -923,3 +923,7 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · T-546-b · this tree's own TopBar, actions and tower files; no outside source
 > 2026-10-20 · T-550 · this tree's UsagePill, SettingsPage and the user guide; no outside source
 > 2026-10-20 · T-546-c · this tree's tower files and capabilities; no outside source
+> 2026-10-20 · onboarding T-244-b · spec/16 ONB-017/ONB-028 as given in the brief; this tree's own cli_register.rs, skills installer and TerminalPane; no outside source
+> 2026-10-20 · onboarding T-245-b · spec/16 ONB-032/ONB-033 as given in the brief; this tree's own tour.ts, Tours.tsx, FloatingLayer.tsx, BrowserPane.tsx and App.tsx board markup; no outside source
+> 2026-10-20 · onboarding T-322-b · ONB-025/037/038 and ONB 029 rest are designed from the spec and the repo's own keymap; gh api user/starred/{owner}/{name} (GitHub REST docs, public: PUT to star, 204 starred, 404 not)
+> 2026-10-20 · onboarding T-298-b · ONB 011 rest: the three milestone times already kept in the onboarding record; ISO 8601 UTC dates

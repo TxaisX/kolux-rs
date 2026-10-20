@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { autoStarts, CREATE_AGENT, CREATE_NAME, CREATE_NOTE, GRID_PANE, GRID_RESULTS, GRID_STATUS, gridStarts, nextShown, place, prevShown, stepLabel, tourFeature, TOURS } from "./tour";
+import { autoStarts, CREATE_AGENT, CREATE_PROJECT, CREATE_NAME, CREATE_NOTE, GRID_PANE, GRID_RESULTS, GRID_STATUS, gridStarts, nextShown, place, prevShown, stepLabel, tourFeature, TOURS } from "./tour";
 
 const base = { id: "tasks" as const, auto: true, seen: [], slotUsed: false, blocked: false, tried: [] };
 
@@ -41,7 +41,7 @@ describe("when tours start by themselves (ONB-032)", () => {
     expect(autoStarts({ ...base, id: "parallel", tried: ["split"] })).toBe(false);
   });
   it("has the catalogue the store keeps, translated", () => {
-    expect(TOURS.map((t) => t.id)).toEqual(["tasks", "automations", "parallel", "grid", "create"]);
+    expect(TOURS.map((t) => t.id)).toEqual(["tasks", "automations", "parallel", "grid", "create", "board", "browser", "floating"]);
     expect(TOURS.every((t) => t.steps.every((s) => s.ko.title && s.en.title))).toBe(true);
   });
 });
@@ -61,9 +61,9 @@ describe("the grid tour when the first run ends (ONB-012)", () => {
 });
 
 describe("the new-workspace tour (ONB-016)", () => {
-  it("points at the composer's name, agent and note, and only the Setup Guide starts it", () => {
+  it("points at the composer's project, name, agent and note, and only the Setup Guide starts it", () => {
     const t = TOURS.find((x) => x.id === "create")!;
-    expect(t.steps.map((s) => s.target)).toEqual([CREATE_NAME, CREATE_AGENT, CREATE_NOTE]);
+    expect(t.steps.map((s) => s.target)).toEqual([CREATE_PROJECT, CREATE_NAME, CREATE_AGENT, CREATE_NOTE]);
     expect(autoStarts({ ...base, id: "create" })).toBe(false);
     expect(tourFeature("create")).toBe(false);
   });
@@ -71,6 +71,6 @@ describe("the new-workspace tour (ONB-016)", () => {
 
 describe("tours and the feature memory (ONB-042, FIX-1)", () => {
   it("tourFeature names a kept feature for every tour but the grid tour (the predicate only; the Tours.tsx call is not covered here)", () => {
-    expect(TOURS.filter((t) => tourFeature(t.id)).map((t) => t.id)).toEqual(["tasks", "automations", "parallel"]);
+    expect(TOURS.filter((t) => tourFeature(t.id)).map((t) => t.id)).toEqual(["tasks", "automations", "parallel", "board", "browser", "floating"]);
   });
 });
