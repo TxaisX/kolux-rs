@@ -1,10 +1,10 @@
 diff --git a/src-tauri/src/update.rs b/src-tauri/src/update.rs
-index 2317ae95..16bbb24e 100644
+index 381216c5..f81c14c9 100644
 --- a/src-tauri/src/update.rs
 +++ b/src-tauri/src/update.rs
-@@ -228,6 +228,8 @@ pub fn update_restart(app: AppHandle) -> Result<(), String> {
-     let ready = app.state::<Updates>().ready.lock().map_err(|e| e.to_string())?.take();
-     let Some((update, bytes)) = ready else { return Err("No update is ready.".into()) };
+@@ -234,6 +234,8 @@ pub fn update_restart(app: AppHandle) -> Result<(), String> {
+         return Err(e);
+     }
      app.state::<Terminals>().kill_all();
 +    // T-286-b (APP-040): Kolux ending itself here is not a crash at the next start.
 +    crate::resources::recovery::note_self_end(&app, "restart to update (APP-029)");
