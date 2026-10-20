@@ -9,6 +9,8 @@ use std::collections::BTreeMap;
 
 /// ORCH-055 (T-174-b): prompts typed into agents land exactly once.
 pub mod sendonce;
+/// ORCH-034 (T-173-c): the orchestration store upgrades in place from every earlier layout of its own.
+pub mod upgrade;
 
 const KEY: &str = "orchestration.mail";
 pub const KINDS: &[&str] = &["status", "dispatch", "worker_done", "merge_ready", "escalation", "handoff", "decision_gate", "question", "heartbeat"];
