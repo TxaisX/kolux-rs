@@ -43,7 +43,7 @@ export type TerminalText = {
   lineHeight: number;
   cursor: Cursor;
   blink: boolean;
-  /** Minimum contrast on: text is kept at least 4.5:1 against its background. */
+  /** Minimum contrast on (the default, TERM-102): text is kept at least 4.5:1 against its background. */
   contrast: boolean;
   scrollback: number;
   scroll: number;
@@ -73,7 +73,7 @@ export function readText(s: Record<string, unknown>, onWindows = windows()): Ter
     lineHeight: clampNumber(s[FIELDS.lineHeight], LINE_HEIGHT.min, LINE_HEIGHT.max, LINE_HEIGHT.start, 0.05),
     cursor: pick(s[FIELDS.cursor], CURSORS, "block"),
     blink: s[FIELDS.blink] !== false,
-    contrast: s[FIELDS.contrast] === true,
+    contrast: s[FIELDS.contrast] !== false, // TERM-102: on unless switched off
     // An older setting saved as a string of rows is read as rows.
     scrollback: clampNumber(s[FIELDS.scrollback], SCROLLBACK.min, SCROLLBACK.max, SCROLLBACK.start),
     scroll: clampNumber(s[FIELDS.scroll], 0.1, 5, 1, 0.1),

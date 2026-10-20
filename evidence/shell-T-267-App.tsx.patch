@@ -1,0 +1,22 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 81dbaa77..d55fbafb 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -153,6 +153,7 @@ import { useAgentEvents, useAgentStatusState } from "./status/useAgentStatus";
+ import { useGone } from "./status/gone";
+ import { workingByDir } from "./status/working";
+ import { useAppSettings } from "./settings/useAppSettings";
++import { applyDensity, installTabWheel } from "./shell/paneChrome";
+ import { useWorkspaceActions, useWorkspaces } from "./projects/useWorkspaces";
+ import { useChrome, useMenuBar } from "./chrome/useChrome";
+ import { stepZoom, zoomFactor, type ZoomStep } from "./settings/zoom";
+@@ -305,6 +306,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   const [agentPass, setAgentPass] = useState<AgentPass>(FIRST_PASS); // SESS-002
+   const [shells, setShells] = useState<ShellInfo[]>([]); // SESS-006
+   const { settings, setSettings, settingsRead, setSettingsRead, classic } = useAppSettings(initial);
++  // TERM-026 pane header density from the saved setting; TERM-057 the wheel over the tab strip scrolls it sideways.
++  useEffect(() => void applyDensity(settings), [settings]);
++  useEffect(() => installTabWheel(), []);
+   // SESS-018: on the New look a new session is chosen on a full-page sheet over the workspace,
+   // held here rather than in the grid; Classic keeps the chooser pane (SESS-019).
+   const [sheet, setSheet] = useState<Pane | null>(null);

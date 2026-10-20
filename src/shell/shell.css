@@ -1,0 +1,10 @@
+/* TERM-026: compact pane headers; comfortable (the default) leaves the shipped height alone. */
+html[data-pane-density="compact"] .pane-head { height: 22px; font-size: 11px; gap: 5px; }
+html[data-pane-density="compact"] .pane-head .title { font-weight: 500; }
+
+/* TERM-057: a thin bar under overflowing tabs (2px, 3px on hover). Nothing shows when the tabs fit. */
+.tabs[role="tablist"] { height: auto; min-height: 26px; align-items: flex-start; overflow-y: hidden; }
+.tabs[role="tablist"]::-webkit-scrollbar { height: 2px; }
+.tabs[role="tablist"]:hover::-webkit-scrollbar { height: 3px; }
+.tabs[role="tablist"]::-webkit-scrollbar-thumb { background: var(--line-focus); border-radius: 2px; }
+.tabs[role="tablist"]::-webkit-scrollbar-track { background: transparent; }
