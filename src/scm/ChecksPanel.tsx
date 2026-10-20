@@ -8,10 +8,9 @@ import { useEffect, useRef, useState } from "react";
 import { Refresh } from "../chrome/icons";
 import { openInBrowser } from "../browser/BrowserPane";
 import { useSettings } from "../settings/useSettings";
-import CommentsPanel from "./CommentsPanel";
-import StackMap from "./StackMap";
-import ConflictPanel from "./ConflictPanel";
 import GhBanner, { classify } from "../tasks/GhBanner";
+import CommentsPanel from "./CommentsPanel";
+import ConflictPanel from "./ConflictPanel";
 import PrStart from "./PrStart";
 import { reviewHint, reviewWhere } from "./startPr";
 import { CHECKS_POLL_MS, checksSummary, reuseNoPr, stillRunning, type PrChecks } from "./checks";
@@ -183,7 +182,6 @@ ${reviewHint(inKolux)}`.trim()}
                 </div>
               );
             })()}
-            <StackMap dir={dir} pr={pr} />
             <CommentsPanel dir={dir} url={pr.url} visible={visible} />
           </>
         )}
