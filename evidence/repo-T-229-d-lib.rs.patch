@@ -1,0 +1,21 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 4d39a6bb..973d3752 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -48,6 +48,7 @@ mod protected;
+ mod resources;
+ mod projects;
+ mod scm;
++mod pr_review;
+ mod skills;
+ mod pr_checkout;
+ mod pty;
+@@ -484,6 +485,8 @@ pub fn run() {
+             scm::scm_discard,
+             scm::scm_commit, scm::scm_remote,
+             scm::scm_pr, scm::scm_pr_checks, scm::scm_pr_create, scm::scm_open_pr,
++            pr_review::scm_pr_find, pr_review::scm_check_rerun, pr_review::scm_check_log, pr_review::scm_pr_text,
++            pr_review::scm_review_read, pr_review::scm_review_act,
+             scm::scm_history, scm::scm_commit_files, scm::scm_github_repo,
+             keybindings::keybindings_read,
+             menu::menu_sync, menu::menu_popup,

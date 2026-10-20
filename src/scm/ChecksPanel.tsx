@@ -8,15 +8,31 @@ import { useEffect, useRef, useState } from "react";
 import { Refresh } from "../chrome/icons";
 import { CHECKS_POLL_MS, checksSummary, reuseNoPr, stillRunning, type PrChecks } from "./checks";
 import { prStateWord } from "./model";
+import { CHECK_CAP, capped, checkGroups } from "./review";
+import type { Check } from "./checks";
 
 type Props = { dir: string | null; linked: string | null; visible: boolean };
 
 /** When each worktree last answered "no pull request", kept across tab switches. */
 const noPrSeen = new Map<string, number>();
 
+const GROUPS = [
+  ["failing", "Failing"],
+  ["pending", "Pending"],
+  ["passing", "Passing"],
+  ["other", "Not counted"],
+] as const;
+
 const when = (t?: string | null) => (t ? new Date(t).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : null);
 
 export default function ChecksPanel({ dir, linked, visible }: Props) {
+  const [note, setNote] = useState<string | null>(null);
+  const rerun = (c: Check) => {
+    setNote(null);
+    invoke("scm_check_rerun", { worktree: dir, link: c.link, failedOnly: true })
+      .then(() => setNote(`Asked GitHub to rerun ${c.name}`))
+      .catch((err) => setNote(String(err)));
+  };
   const key = dir === null ? null : `${dir}|${linked ?? ""}`;
   const [got, setGot] = useState<{ key: string; data: PrChecks | null; error: string | null; loading: boolean } | null>(null);
   const asking = useRef<string | null>(null);
@@ -85,31 +101,58 @@ export default function ChecksPanel({ dir, linked, visible }: Props) {
             </div>
             {data.conflict && <div className="note warn">This pull request has merge conflicts with its base branch; it cannot merge until they are resolved.</div>}
             <div className="sb-hint checks-sum">{checksSummary(data.checks)}</div>
-            <div className="checks-list">
-              {data.checks.map((c, i) => (
-                <details key={`${c.name}-${i}`} className="check-row" data-outcome={c.outcome}>
-                  <summary>
-                    <span className={`check-dot ${c.outcome}`} aria-hidden="true" />
-                    <span className="name" title={c.name}>
-                      {c.name}
-                    </span>
-                    {c.workflow && <span className="wf">{c.workflow}</span>}
-                    <span className={`word ${c.outcome}`}>{c.outcome}</span>
-                  </summary>
-                  <div className="check-detail">
-                    {c.description && <div>{c.description}</div>}
-                    {when(c.started) && <div>Started {when(c.started)}</div>}
-                    {when(c.finished) && <div>Finished {when(c.finished)}</div>}
-                    {c.outcome === "unresolved" && <div>It finished without reporting an outcome.</div>}
-                    {c.link && (
-                      <button className="btn" onClick={() => void invoke("open_external", { url: c.link })}>
-                        Open the check's page
-                      </button>
-                    )}
-                  </div>
-                </details>
-              ))}
-            </div>
+            {note && <div className="note">{note}</div>}
+            {(() => {
+              const groups = checkGroups(data.checks);
+              const cap = capped(data.checks, CHECK_CAP, "checks");
+              // GIT-029: only the first 100 checks are drawn, in their groups, with a note for the rest.
+              const drawn = new Set(cap.shown);
+              return (
+                <div className="checks-list">
+                  {GROUPS.map(([key, label]) => {
+                    const rows = groups[key].filter((c) => drawn.has(c));
+                    if (rows.length === 0) return null;
+                    return (
+                      <section key={key} className={`check-group ${key}`} data-group={key}>
+                        <h4 className="check-group-title">
+                          {label} <span className="count">{groups[key].length}</span>
+                        </h4>
+                        {rows.map((c, i) => (
+                          <details key={`${c.name}-${i}`} className="check-row" data-outcome={c.outcome}>
+                            <summary>
+                              <span className={`check-dot ${c.outcome}`} aria-hidden="true" />
+                              <span className="name" title={c.name}>
+                                {c.name}
+                              </span>
+                              {c.workflow && <span className="wf">{c.workflow}</span>}
+                              <span className={`word ${c.outcome}`}>{c.outcome}</span>
+                            </summary>
+                            <div className="check-detail">
+                              {c.description && <div>{c.description}</div>}
+                              {when(c.started) && <div>Started {when(c.started)}</div>}
+                              {when(c.finished) && <div>Finished {when(c.finished)}</div>}
+                              {c.outcome === "unresolved" && <div>It finished without reporting an outcome.</div>}
+                              {c.outcome === "neutral" && <div>It finished neutral, which is not counted as passed.</div>}
+                              {c.link && (
+                                <button className="btn" onClick={() => void invoke("open_external", { url: c.link })}>
+                                  Open the check's page
+                                </button>
+                              )}
+                              {c.outcome === "failed" && c.link && (
+                                <button className="btn" onClick={() => rerun(c)}>
+                                  Rerun failed jobs
+                                </button>
+                              )}
+                            </div>
+                          </details>
+                        ))}
+                      </section>
+                    );
+                  })}
+                  {cap.note && <div className="sb-hint">{cap.note}</div>}
+                </div>
+              );
+            })()}
           </>
         )}
       </div>
