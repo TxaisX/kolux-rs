@@ -1,0 +1,10 @@
+/* T-548: the top-bar account switcher: a pill like the usage pill, and its menu rows (the shared .menu look). */
+.acct-switch { display: inline-flex; align-items: center; gap: 6px; height: 23px; max-width: 260px; padding: 0 10px; margin-right: 8px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--fg-muted); font-size: 12px; white-space: nowrap; }
+.acct-switch:hover { color: var(--fg); border-color: var(--fg-muted); }
+.acct-switch:focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: 2px; }
+.acct-switch-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.acct-menu { min-width: 260px; max-width: min(360px, calc(100vw - 16px)); }
+.acct-menu .menu-item .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-trouble { color: var(--working-icon); font-size: 11px; }
+.acct-check { width: 14px; text-align: center; color: var(--fg); }
+.acct-error { color: var(--meter-danger); }

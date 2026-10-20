@@ -123,11 +123,13 @@ import { inboxOverlay, onClose, onRunning, type Kept } from "./inbox/exitedPromp
 import { inboxItems, type Source } from "./inbox/inbox";
 import TowerView from "./tower/TowerView";
 import FloorView from "./floor/FloorView";
-import { towerRows, usageByAccount } from "./tower/tower";
+import { nameSeats, nameUsage, towerRows, usageByAccount } from "./tower/tower";
 import { useTowerBridge } from "./tower/TowerWindow";
 import { LANES, chipOf } from "./board/chip";
 import Ring from "./usage/Ring";
-import { capOn, contextFill, meterOf, meterText, planOf, readsLeft, usageLine } from "./usage/meter";
+import { capOn, codexOf, contextFill, meterOf, meterText, planOf, readsLeft, usageLine } from "./usage/meter";
+import { useAccountSwitcher } from "./switcher/AccountSwitcher";
+import { cycleTarget, paletteRows, pickWithNotice, switcherLabel } from "./switcher/accounts";
 import { readoutOf } from "./terminal/headerUsage";
 import { usePlan } from "./usage/plan";
 import ChooserPane from "./launch/ChooserPane";
@@ -262,6 +264,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const [reviewing, setReviewing] = useState<{ key: number; plan: string; cut: boolean; send?: PendingSend } | null>(null);
   const [planDrafts, setPlanDrafts] = useState<Record<string, PlanDraft>>({});
   const plan = usePlan(); // USAGE-002: the plan figures the pills read
+  const accountSwitcher = useAccountSwitcher(); // T-548: the account new panes use, for the palette rows and the Board and Tower figures
   const { needs, setNeeds, hook, setHook, stamp, setStamp, turn, setTurn, stale, setStale, context, setContext, crew, setCrew, hookRef, runRef, unreadPanes, setUnreadPanes, unreadDirs, winFocused, markDir } = useAgentStatusState(running);
   const rowRef = useRef<Record<string, RowInfo>>({}); // PROJ-063: each folder's last row state, to keep its `changed` time
   const ptys = useRef<Record<number, number>>({}); // TERM-045: each pane's session id
@@ -302,6 +305,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const { projects, setProjects, owner, setOwner, names, setNames, refresh, setRefresh, deleteRequest, setDeleteRequest, recentDirs, activeRef, createRequest, setCreateRequest, standIns, setStandIns, createName, setCreateName, hist, setHist } = useWorkspaces(activeDir);
   const [stacked, setStacked] = useState<Record<string, boolean>>(layout?.stacked ?? {}); // TERM-006: a single pane split down makes a stacked pair
   const { palette, setPalette, notice, setNotice, toast, setToast } = useChrome();
+  const switchAccount = useMemo(() => pickWithNotice(accountSwitcher.pick, setNotice), [accountSwitcher.pick, setNotice]); // T-548 FIX-1 (memoised at merge, FIX-3 note): a switch from a key or the palette that fails says why in the notice bar
   const [weights, setWeights] = useState<Record<string, number[]>>({}); // TERM-010: dragged column / row weights, per folder and pane count
   const dragRef = useRef<{ gap: Gap; at: number; start: number[]; px: number } | null>(null);
   const [launching, setLaunching] = useState(false);
@@ -648,6 +652,15 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         case "view.tower":
           setScreen((s) => (s === "tower" ? "terminals" : "tower"));
           break;
+        case "account.switchClaude":
+        case "account.switchCodex": {
+          // T-548: one key moves new panes to the provider's next account (wrapping through System default).
+          const group = accountSwitcher.groups.find((g) => g.provider === (hit.id === "account.switchClaude" ? "claude" : "codex"));
+          const to = group ? cycleTarget(group) : undefined;
+          if (!group || to === undefined) return;
+          switchAccount(group.provider, to);
+          break;
+        }
         case "view.floor":
           setScreen((s) => (s === "floor" ? "terminals" : "floor"));
           break;
@@ -1332,6 +1345,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         },
       })),
     ...(Object.keys(PAGES) as PageId[]).map((id) => ({ section: "Settings", label: PAGES[id], hint: "Settings page", run: () => openSettings(id) })),
+    ...paletteRows(accountSwitcher.groups, switchAccount), // T-548: Switch Claude to ...
     { section: "Quick actions", label: "New terminal tab", run: () => void newTab(null) },
     { section: "Quick actions", label: "New session", run: () => addChooser() },
     // VIEW-042: actions on the worktree in front, not runnable while none is open
@@ -1944,10 +1958,12 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const laneOf = (p: Pane) => (p.seats || p.kind || p.agent === "shell" ? "idle" : (chipFor(p)?.lane ?? "idle"));
   // T-546: the control tower reads the same chip and meter per agent pane as the Board.
   // FIX-6 (council d2 carry-over): built only when one of the things it reads changed, not on every render; `now` moves the chips on its 30 s tick.
-  const towerNow = useMemo(() => panes.filter((p) => !p.kind && !p.seats && p.agent !== "shell").map((p) => ({ key: p.key, agent: p.agent, title: tabName(p, titles), branch: p.branch, cwd: p.cwd, account: p.account ?? null, chip: chipFor(p), meter: meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)), since: stamp[p.key]?.at ?? 0 })), [panes, titles, context, plan, settings, hook, running, stale, turn, stamp, now]);
+  const towerNow = useMemo(() => panes.filter((p) => !p.kind && !p.seats && p.agent !== "shell").map((p) => ({ key: p.key, agent: p.agent, title: tabName(p, titles), branch: p.branch, cwd: p.cwd, account: p.account ?? null, chip: chipFor(p), meter: meterOf(context[p.key], p.agent, plan.claude, codexOf(p.agent, p.account, accountSwitcher.active.codex, plan.codex), capOn(settings)), since: stamp[p.key]?.at ?? 0 })), [panes, titles, context, plan, settings, hook, running, stale, turn, stamp, now, accountSwitcher.active.codex]);
   // T-546-c: the Tower's own window shows the same seats and usage; a row clicked there opens the pane here.
-  const towerUsage = useMemo(() => usageByAccount(towerNow, plan), [towerNow, plan]);
-  useTowerBridge({ seats: towerNow, usage: towerUsage }, openPane);
+  // T-548 FIX-1: the figures are worked out on account ids, then the Tower is shown the names the switcher shows.
+  const towerUsage = useMemo(() => nameUsage(usageByAccount(towerNow, plan, accountSwitcher.active), (agent, id) => switcherLabel(accountSwitcher.groups, agent, id)), [towerNow, plan, accountSwitcher.active, accountSwitcher.groups]);
+  const towerSeats = useMemo(() => nameSeats(towerNow, (agent, id) => switcherLabel(accountSwitcher.groups, agent, id)), [towerNow, accountSwitcher.groups]);
+  useTowerBridge({ seats: towerSeats, usage: towerUsage }, openPane);
   const lanes = board ? LANES.filter((l) => cardPanes(panes).some((p) => laneOf(p) === l.id)) : [];
   const columnOf = (p: Pane) => lanes.findIndex((l) => l.id === laneOf(p)) + 1;
   // Council FIX-3 (FS2): the pane takes the state Kolux resolved after the answer (still "permission"
@@ -2559,7 +2575,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                 setAgentSel(key);
                 setFocused(key);
               }} />}
-          {tower && <TowerView rows={towerRows(towerNow)} usage={towerUsage} now={now} onOpen={openPane} />}
+          {tower && <TowerView rows={towerRows(towerSeats)} usage={towerUsage} now={now} onOpen={openPane} />}
           {floor && <FloorView onOpen={openPane} />}
           {agentsScreen && selected === null && (
             <div className="empty">
@@ -2800,7 +2816,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     onOpenLink={openInBrowser}
                     linksOpenInKolux={settings.linksOpenInKolux === true}
                     gpu={gpuOn(settings)}
-                    card={board ? { expanded: expanded === p.key, onToggle: () => setExpanded((x) => toggleCard(x, p.key)), chip: chipFor(p), column: columnOf(p), onAnswer: (ok) => void answer(p, ok), meter: p.seats || p.kind ? null : meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) } : undefined}
+                    card={board ? { expanded: expanded === p.key, onToggle: () => setExpanded((x) => toggleCard(x, p.key)), chip: chipFor(p), column: columnOf(p), onAnswer: (ok) => void answer(p, ok), meter: p.seats || p.kind ? null : meterOf(context[p.key], p.agent, plan.claude, codexOf(p.agent, p.account, accountSwitcher.active.codex, plan.codex), capOn(settings)) } : undefined}
                     cwd={p.cwd}
                     branch={p.branch}
                     agent={p.agent}

@@ -37,6 +37,7 @@ mod import;
 // T-043-e: the macOS keychain rule table; the Mac wiring that calls it is T-043-f.
 #[cfg_attr(not(test), allow(dead_code))]
 mod keychain;
+mod agent_creds;
 mod grok;
 mod grok_status;
 mod install;
@@ -570,6 +571,12 @@ pub fn run() {
             grok::grok_sign_in,
             grok::grok_cancel,
             grok::grok_key_set,
+            agent_creds::agent_creds_view,
+            agent_creds::codex_sessions_home_set,
+            agent_creds::minimax_credential_set,
+            agent_creds::minimax_credential_forget,
+            agent_creds::minimax_options_set,
+            agent_creds::gemini_cli_credentials_set,
             codex_accounts::codex_accounts,
             codex_accounts::codex_account_sign_in,
             codex_accounts::codex_account_cancel,
