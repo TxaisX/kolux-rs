@@ -26,3 +26,21 @@ test("EDIT-056 (T-237-b): an unchanged file says so instead of showing an empty 
   expect(viewEditable("a.csv", "source")).toBe(true);
   expect(viewEditable("a.mmd", "rendered")).toBe(true);
 });
+
+import { drawn, headSides, underRoot, VIEW_LABEL } from "./viewSwitch";
+
+test("EDIT-056 (T-237-b): Changes sets the last commit beside the working file, staged edits included", () => {
+  expect(headSides({ original: "head" }, { modified: "work" })).toEqual({ original: "head", modified: "work" });
+});
+
+test("EDIT-056 (T-237-b): a file outside the worktree has no Changes; the switch draws only what can be shown", () => {
+  expect(underRoot("C:\\w\\p\\a.ts", "C:/w/p")).toBe(true);
+  expect(underRoot("C:/w/pp/a.ts", "C:/w/p")).toBe(false);
+  expect(underRoot("C:/w/p/a.ts", null)).toBe(false);
+  expect(drawn(viewsFor({ path: "a.ts" }), false)).toEqual(["edit", "changes"]);
+  expect(drawn(viewsFor({ path: "a.md" }), false)).toEqual(["source", "rich", "changes"]);
+  expect(drawn(viewsFor({ path: "a.csv" }), true)).toEqual(["source", "rendered", "changes"]);
+  expect(drawn(viewsFor({ path: "a.mmd" }), false)).toEqual(["source", "changes"]);
+  expect(drawn(viewsFor({ path: "a.ipynb" }), false)).toEqual(["source"]);
+  expect(VIEW_LABEL.changes).toBe("Changes");
+});

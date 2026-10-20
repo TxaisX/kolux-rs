@@ -641,7 +641,7 @@ impl Terminals {
             });
         }
         // CHAT-007: the agent home folders the program really got; Kolux's account variable (applied last) wins.
-        let home_env: Vec<(String, String)> = own_env.iter().chain(env.iter()).filter(|(k, _)| k == crate::claude_accounts::CONFIG_ENV || k == crate::codex_accounts::HOME_ENV).cloned().collect();
+        let home_env: Vec<(String, String)> = own_env.iter().chain(env.iter()).filter(|(k, _)| crate::chat::HOME_KEYS.contains(&k.as_str())).cloned().collect();
         let chat_cwd = cwd.clone();
         // ACCT-049: checked before the lock, so a drive that does not answer holds up only this pane.
         if let Some(dir) = cwd.as_deref() {
@@ -713,7 +713,9 @@ impl Terminals {
             if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(std::path::Path::to_path_buf)) {
                 let bin = dir.join("bin");
                 let dir = if bin.join(if cfg!(windows) { "kolux.exe" } else { "kolux" }).is_file() { bin } else { dir };
-                let path = cli_first(&dir, command.get_env("PATH").map(std::ffi::OsStr::to_os_string));
+                // T-182 (APP-020): a tool installed after the app started is on the stored Path, not
+                // the process's; the pane gets both, the process's entries first.
+                let path = cli_first(&dir, Some(crate::lifecycle::fresh_path(command.get_env("PATH").map(std::ffi::OsStr::to_os_string))));
                 command.env("PATH", path);
             }
             if let Ok(dir) = tauri::Manager::path(&out_app).app_data_dir() {

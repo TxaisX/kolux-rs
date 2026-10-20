@@ -44,6 +44,7 @@ mod install;
 mod keybindings;
 mod kits;
 mod links;
+mod lifecycle;
 mod menu;
 mod bulk;
 mod names;
@@ -54,13 +55,19 @@ mod orchestration;
 mod foreground;
 mod procs;
 mod protected;
+// T-156-b: listen() and its helpers are reached from hooks.rs only once evidence/hooks-T-156-b-hooks.rs.patch
+// lands (gated by PLAN T-156-b acceptance; after-list row). Drop this allow with that patch.
+#[allow(dead_code)]
+mod protected_custom;
 mod ports;
 mod resources;
 mod projects;
+mod prompt_answer;
 mod prompt_scan;
 mod scm;
 mod pr_review;
 mod skills;
+mod star;
 mod pasted_image;
 mod pr_checkout;
 mod pty;
@@ -75,6 +82,7 @@ mod shell_history;
 mod skill_delete;
 mod state;
 mod status;
+mod term_import;
 mod sysmem;
 mod terminal;
 #[cfg(test)]
@@ -194,12 +202,19 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        .setup(move |app| tools::guarded_setup(app, &windows, |app| {
+        .setup(move |app| {
+            // T-182 (APP-001): one copy at a time. A second launch hands its request to the running
+            // copy, brings its window forward and exits before any window (or WebView2 profile) is touched.
+            lifecycle::claim_or_forward(app);
+            tools::guarded_setup(app, &windows, |app| {
             // APP-053: everything the app starts from here on ends with it; outside its own job (a job the
             // launcher owns without breakaway, say) the children would outlive a crash, so that is logged.
             let job_ok = procs::app_job_start();
             let dir = app.path().app_data_dir()?;
             diag::set_dir(&dir);
+            // T-283 (BROW-043): an earlier run's leftover browser helpers are closed, on a thread of
+            // its own so a hanging listing never holds up start-up.
+            browser::helpers::sweep_at_start(&dir);
             if !job_ok {
                 diag::write(&dir, "kolux-rs: the app could not be put in its own job object; child processes would survive a crash (APP-053)");
             }
@@ -364,7 +379,8 @@ pub fn run() {
                 }
             });
             Ok(())
-        }))
+        })
+        })
         // The Artifacts viewer (SKILL-036) loads stored pages through this scheme, one entry at a time.
         // T-500: only the app's own web view may read artifacts; a Browser pane page gets nothing.
         .register_uri_scheme_protocol(artifacts::SCHEME, |ctx, req| {
@@ -385,8 +401,18 @@ pub fn run() {
             // The window is gone: no shell may outlive it.
             // T-546-c: only the main window holds shells, so the Tower's own window closing changes nothing;
             // the Tower window goes with the main one, so it never keeps the app running on its own.
+            // T-182 (APP-006): the page decides whether closing needs a question; a page that never
+            // answers (frozen or crashed) is closed for after lifecycle::ASK_LIMIT.
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if window.label() == "main" {
+                    lifecycle::close_requested(window);
+                }
+            }
             if let tauri::WindowEvent::Destroyed = event {
                 if window.label() == "main" {
+                    // T-182 (APP-006): quitting always finishes; a final save or exit wait that hangs
+                    // past lifecycle::quit_deadline() is cut short.
+                    lifecycle::quit_watchdog(window.app_handle());
                     window.state::<Terminals>().kill_all();
                     // T-033-e: no git watch outlives the window either (nothing is waited for here).
                     scm::watch::unwatch_all();
@@ -414,9 +440,15 @@ pub fn run() {
             hooks::agent_hooks::saved::agent_status_saved,
             hooks::agent_hooks::saved::agent_resumable,
             protected::protected_rules,
+            protected_custom::protected_rule_check,
+            protected_custom::protected_attempts,
+            protected_custom::protected_attempts_clear,
             hooks::claude_usage,
             sysmem::process_memory,
             fonts::list_fonts,
+            term_import::term_import_ghostty,
+            term_import::term_import_ghostty_theme,
+            term_import::term_import_warp,
             resources::resources,
             sessions::claude_workspace_sessions,
             terminal::terminal_spawn,
@@ -513,6 +545,8 @@ pub fn run() {
             agents::inventory::session_tabs,
             orchestration::task_reset,
             orchestration::worker_labels,
+            prompt_answer::prompt_read,
+            prompt_answer::prompt_answer,
             prompt_scan::prompt_scan,
             prompt_scan::prompt_scan_restored,
             prompt_scan::prompt_scan_pruned,
@@ -550,6 +584,8 @@ pub fn run() {
             github::github_issue_state,
             github::github_issue_comment,
             github::github_issue_create,
+            github::github_issue_types,
+            github::github_issue_type_set,
             github::pull_requests::pr_page,
             github::pull_requests::pr_files,
             github::pull_requests::pr_file_patch,
@@ -569,7 +605,7 @@ pub fn run() {
             scm::scm_commit, scm::scm_remote,
             scm::scm_pr, scm::scm_pr_checks, scm::scm_pr_create, scm::scm_open_pr,
             pr_review::scm_pr_find, pr_review::scm_check_rerun, pr_review::scm_check_log, pr_review::scm_pr_text,
-            pr_review::scm_review_read, pr_review::scm_review_act,
+            pr_review::scm_review_read, pr_review::scm_review_act, pr_review::scm_review_send, pr_review::scm_pr_conflicts,
             scm::scm_history, scm::scm_commit_files, scm::scm_github_repo,
             bulk::workspace_remove_many, bulk::workspace_kept_branch_delete, bulk::workspace_forget,
             bulk::workspace_statuses, bulk::workspace_statuses_set, bulk::workspace_status_set,
@@ -581,10 +617,14 @@ pub fn run() {
             keybindings::keybindings_reload,
             keybindings::keybindings_show,
             browser::browser_open,
+            browser::preview::browser_preview_grant,
             browser::browser_bounds,
             browser::browser_navigate,
             browser::browser_go,
+            browser::history::browser_suggest,
             browser::browser_close,
+            browser::browser_viewport,
+            browser::browser_cookies_import,
             browser::browser_probe,
             browser::browser_diagnose,
             browser::browser_tab,
@@ -665,6 +705,8 @@ pub fn run() {
             onboarding::tours_get,
             onboarding::onboarding_reopen,
             onboarding::onboarding_milestone,
+            star::star_info,
+            star::star_put,
             files::file_read,
             files::file_write,
             files::file_stamps,
@@ -716,6 +758,8 @@ pub fn run() {
             cli::cli_register::cli_register_state,
             cli::cli_register::cli_register,
             cli::cli_register::cli_unregister,
+            cli::file_cli::cli_file_window,
+            cli::file_cli::cli_file_result,
             diag::diag_bundle,
             resources::recovery::ui_heartbeat,
             resources::recovery::graphics_crash_noted,
@@ -734,6 +778,8 @@ pub fn run() {
             update::update_check,
             update::update_download,
             update::update_restart,
+            lifecycle::close_alive,
+            lifecycle::app_restart,
             usage_alerts::usage_alerts_fired,
             usage_alerts::usage_alert_send
         ])
@@ -746,36 +792,10 @@ pub fn run() {
                 // the deadline leaves, so a stalled profile drive caps the wait and never freezes the
                 // quit. Settings need no step: every change is already on disk (APP-048).
                 final_save::begin();
-                let seal = |app: tauri::AppHandle, files: fn(&Store, &std::path::Path) -> Vec<(std::path::PathBuf, std::path::PathBuf)>| {
-                    move || {
-                        if let (Ok(profile), Ok(store)) = (app.path().app_data_dir(), app.state::<Mutex<Store>>().lock()) {
-                            let pairs = files(&store, &profile);
-                            drop(store);
-                            let _ = secrets::save_changed(&pairs, &profile);
-                        }
-                    }
-                };
-                let (a1, a2) = (app.clone(), app.clone());
-                let report = final_save::run(
-                    final_save::QUIT_DEADLINE,
-                    vec![
-                        // USAGE-011: open turns end and the counts are written; no batched save follows.
-                        final_save::step("activity counts", move || activity::save(&a1.state::<Mutex<Store>>(), true)),
-                        // STAT-037: the agents still mid-task are recorded before their terminals end.
-                        final_save::step("agent status", move || {
-                            if let Ok(store) = a2.state::<Mutex<Store>>().lock() {
-                                hooks::agent_hooks::saved::at_quit(&store);
-                            }
-                        }),
-                        // ACCT-015: no sign-in or install keeps running after Kolux quits.
-                        final_save::step("sign-ins cancelled", || {
-                            claude_key::cancel_all(std::time::Duration::from_secs(2));
-                        }),
-                        // ACCT-025: sign-ins the agents renewed are sealed again, Codex's then Claude's.
-                        final_save::step("codex sign-in sealed", seal(app.clone(), codex_accounts::sign_in_files)),
-                        final_save::step("claude sign-in sealed", seal(app.clone(), claude_accounts::sign_in_files)),
-                    ],
-                );
+                // T-283 (BROW-043): this run's browser helpers end with it.
+                browser::helpers::stop_all();
+                // T-182 (APP-011): the same steps make the save point a restart waits for.
+                let report = final_save::run(final_save::QUIT_DEADLINE, lifecycle::quit_steps(app));
                 if let Ok(dir) = app.path().app_data_dir() {
                     diag::write(&dir, &report.line());
                 }

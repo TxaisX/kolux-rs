@@ -26,6 +26,9 @@ export function unreachable(p: string, cwd: string | null): boolean {
 
 export type DiffLine = { sign: "+" | "-" | " " | "@"; old?: number; new?: number; text: string };
 export type FileDiff = { path: string; change: "added" | "deleted" | "renamed" | "edited"; from?: string; lines: DiffLine[]; hidden: number };
+/** CHAT-022: one option of an ask-the-user question, and the question itself. */
+export type Choice = { label: string; description: string };
+export type Question = { question: string; header: string; multi: boolean; options: Choice[] };
 export type Tool = {
   call: string;
   name: string;
@@ -38,6 +41,8 @@ export type Tool = {
   background: boolean;
   diffs?: FileDiff[];
   endedAt?: number;
+  /** CHAT-022: the questions of an ask-the-user call. */
+  questions?: Question[];
 };
 
 /** CHAT-028: a file the agent wrote in a turn. */

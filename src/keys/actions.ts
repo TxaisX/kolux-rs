@@ -99,6 +99,7 @@ export const actions: Action[] = [
   a("account.switchCodex", "Switch Codex account", "global", [], { keywords: ["account", "sign in", "login"] }),
   a("sidebar.sleeping.toggle", "Show or Hide Sleeping Workspaces", "global", [], { keywords: ["sleep", "asleep", "wake"] }),
   a("view.floor", "Show Floor", "global", []),
+  a("view.space", "Show Space", "global", [], { keywords: ["disk", "worktrees", "size", "reclaim"] }),
   a("view.code", "Show Code", "global", ["Mod+Shift+3"]),
   a("floatingWorkspace.minimize", "Minimize Floating Workspace Panel", "global", []),
   a("zoom.in", "Zoom In", "global", ["Mod+Equal", "Mod+Shift+Plus", "Mod+NumpadAdd"], { terminalSafe: true }),
