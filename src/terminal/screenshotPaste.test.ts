@@ -1,6 +1,6 @@
 // TERM-070: a screenshot on the clipboard is saved and its path pasted, bracketed; text skips the image step.
 import { expect, test, vi } from "vitest";
-import { attachScreenshotPaste, bracketedPath, decide, imageOf, pasteImage, textOf, type Clip } from "./screenshotPaste";
+import { attachScreenshotPaste, bracketedPath, decide, imageOf, pasteImage, textOf, typedPath, type Clip } from "./screenshotPaste";
 import { BRACKET_CLOSE, BRACKET_OPEN } from "./paste";
 
 const png = () => new File([new Uint8Array([137, 80, 78, 71])], "shot.png", { type: "image/png" });
@@ -17,6 +17,15 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 
 test("TERM-070: the path is bracketed even though the program never asked for bracketed paste", () => {
   expect(bracketedPath("C:\\p\\a b.png")).toBe(BRACKET_OPEN + "C:\\p\\a b.png" + BRACKET_CLOSE);
+});
+
+test("T-249-c: the saved image's path is typed quoted when it holds a space or a splitting character, plain otherwise", async () => {
+  expect(typedPath("C:\\Users\\Ann Lee\\AppData\\shot.png")).toBe('"C:\\Users\\Ann Lee\\AppData\\shot.png"');
+  expect(typedPath("C:\\p\\a&b.png")).toBe('"C:\\p\\a&b.png"');
+  expect(typedPath("C:\\p\\shot.png")).toBe("C:\\p\\shot.png");
+  const sent: string[] = [];
+  await pasteImage(png(), { save: async () => "C:\\x y\\s.png", send: (d) => sent.push(d), report: () => {} });
+  expect(sent).toEqual([BRACKET_OPEN + '"C:\\x y\\s.png"' + BRACKET_CLOSE]);
 });
 
 test("TERM-070: a text clipboard skips the image check entirely, even with an image beside the text", () => {

@@ -1,0 +1,23 @@
+diff --git a/src/recovery/ScreenBoundary.tsx b/src/recovery/ScreenBoundary.tsx
+index 8f41d399..2d4dc606 100644
+--- a/src/recovery/ScreenBoundary.tsx
++++ b/src/recovery/ScreenBoundary.tsx
+@@ -4,6 +4,7 @@
+ // is also caught by the watch in recovery.rs (one reload, one retry, then the native prompt).
+ import React from "react";
+ import { boundaryMessage } from "./model";
++import { CrashFeedback, ReportButton } from "../crash";
+ 
+ type Props = { children: React.ReactNode };
+ type State = { error: unknown; tries: number };
+@@ -29,7 +30,10 @@ export default class ScreenBoundary extends React.Component<Props, State> {
+           <button className="btn" onClick={() => window.location.reload()}>
+             Reload
+           </button>
++          {/* T-249-c (PROJ-089): Send Feedback with the crash text above the block */}
++          <ReportButton error={this.state.error} />
+         </div>
++        <CrashFeedback />
+       </div>
+     );
+   }
