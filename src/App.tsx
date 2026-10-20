@@ -1993,6 +1993,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         }
         screen={screen}
         classic={classic}
+        sidebarWidth={leftWidth}
         appMenu
         uiZoom={zoomFactor()}
         onScreen={setScreen} installed={installedIds} codexAccount={codex.accounts.length > 0} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} onZoom={(how) => zoomTerm(focused, how)} fullPage={fullPage} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />

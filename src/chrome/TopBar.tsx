@@ -11,6 +11,7 @@ import UsagePill from "../usage/UsagePill";
 import { weeklyOf } from "../usage/claude";
 import { usePlan } from "../usage/plan";
 import { popAppMenu } from "./useChrome";
+import { chromeLayout } from "./titleHeader";
 
 /** Artifacts is reached from the sidebar only, so it is not in the top bar's cycle. */
 /** The three switcher screens, and the Inbox behind the bell (STAT-050: its own top-level view). */
@@ -22,9 +23,10 @@ export const screens: Array<{ id: Screen; label: string }> = [
   { id: "tower", label: "Tower" },
 ];
 
-/** `classic` (SET-037): the Classic look has no screen switcher; the window stays on Terminals. */
+/** `classic` (SET-037): the Classic look has no screen switcher; the window stays on Terminals.
+ * `sidebarWidth` (T-049-c): Classic draws a title header exactly as wide as the left sidebar card, so it follows the card. */
 /** `automations` (VIEW-011): the Automations page button, present only when it is turned on in Settings > Appearance. */
-export type TopBarProps = { screen: Screen; classic?: boolean; onScreen: (s: Screen) => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void; appName?: boolean; automations?: { open: boolean; onToggle: () => void }; installed?: string[]; onSearch?: () => void; onBack?: () => void; onForward?: () => void; onZoom?: (how: "in" | "out" | "reset") => void; fullPage?: boolean; codexAccount?: boolean; appMenu?: boolean; uiZoom?: number };
+export type TopBarProps = { screen: Screen; classic?: boolean; sidebarWidth?: number; onScreen: (s: Screen) => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void; appName?: boolean; automations?: { open: boolean; onToggle: () => void }; installed?: string[]; onSearch?: () => void; onBack?: () => void; onForward?: () => void; onZoom?: (how: "in" | "out" | "reset") => void; fullPage?: boolean; codexAccount?: boolean; appMenu?: boolean; uiZoom?: number };
 
 /** TERM-078: the overflow menu's View section; each item names its keybinding id. */
 export const VIEW_ITEMS = [
@@ -34,7 +36,7 @@ export const VIEW_ITEMS = [
 ] as const;
 
 /** `appName` (SET-020): the app name beside the mark, off by default (DT-A6). */
-export default function TopBar({ screen, classic = false, onScreen, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight, appName = false, automations, installed = [], onSearch, onBack, onForward, onZoom, fullPage = false, codexAccount = false, appMenu = false, uiZoom = 1 }: TopBarProps) {
+export default function TopBar({ screen, classic = false, sidebarWidth, onScreen, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight, appName = false, automations, installed = [], onSearch, onBack, onForward, onZoom, fullPage = false, codexAccount = false, appMenu = false, uiZoom = 1 }: TopBarProps) {
   const [maximized, setMaximized] = useState(false);
   const [menuAt, setMenuAt] = useState<{ top: number; left: number } | null>(null);
   // USAGE-008 / VIEW-008: a pill per provider, only with a weekly figure (or Codex's refused
@@ -58,10 +60,12 @@ export default function TopBar({ screen, classic = false, onScreen, sidebarOpen,
     return () => stop();
   }, []);
   const win = () => getCurrentWindow();
+  // T-049-c / VIEW-003: Classic wears a sidebar-width title header and no top bar.
+  const layout = chromeLayout(classic, sidebarOpen, sidebarWidth);
 
   return (
-    <header className="topbar" data-tauri-drag-region>
-      <div className="topbar-left">
+    <header className={layout.bar} data-tauri-drag-region>
+      <div className="topbar-left" style={layout.headerWidth === null ? undefined : { width: layout.headerWidth }}>
         {/* APP-009 / T-248-a: the Kolux mark opens the app menu (File, Edit, View, Window, Help). */}
         <button
           className="ib mark"
@@ -119,7 +123,7 @@ export default function TopBar({ screen, classic = false, onScreen, sidebarOpen,
         </button>
       </div>
 
-      {!classic && (
+      {layout.switcher && (
         <nav className="switcher" aria-label="Screen">
           {screens.map((s) => (
             <button key={s.id} aria-pressed={screen === s.id} onClick={() => onScreen(s.id)}>

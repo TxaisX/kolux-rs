@@ -56,7 +56,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P0 · theme 7 · Redesign and the new look (24 cards)
 
-- [ ] T-049-c · the rest of T-049-b's cards: Classic chrome: a sidebar-width title header in place of the full-width top bar. Blocked (lane/chrome 2026-10-13): the layout lives in App.tsx and styles.css (the window controls and the sidebar width are outside the chrome files).
+- [x] T-049-c · the rest of T-049-b's cards: Classic chrome: a sidebar-width title header in place of the full-width top bar. done 2026-10-19 (lane/chrome from 6339eca2; evidence/T-049-c.txt: chromeLayout maps Classic to a title header exactly as wide as the sidebar card (+8 px, min 168) with no top bar and no switcher, the New look keeps the top bar unchanged, the look persists through the existing uiLook settings path; titleHeader.test.ts 6 tests, src/chrome + src/settings 223 passed, tsc 0; App.tsx and styles.css hunks left as evidence/chrome-T-049-c-App.tsx.patch (apply first) and evidence/chrome-T-049-c-styles.css.patch for the merge resolver; live proof pending (batched))
 - [ ] T-050-c · the Agents chat body, remainder of T-050-b: a live agent detected in the pane decides chat or terminal over what the session was launched as (a shell where claude was started by hand, a launch whose program changed, and orchestrator and typed-command sessions, whose panes have no program and so always get the shell offer today) · needs a pane-to-shell-session lookup, foreground detection for program sessions and a follower for transcripts Kolux did not start (terminal.rs, foreground.rs, chat.rs; coordinator files first)
 
 ### P0 · theme 5 · Safety and trust (20 cards)
