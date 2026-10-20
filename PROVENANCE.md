@@ -1028,3 +1028,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · repo T-224-b (second piece) · spec/05 VIEW-059, VIEW-060, VIEW-061 cards as given in the brief; this tree's own Explorer.tsx, explorerView.ts, ContentSearch.tsx, desktopDrops.ts; no outside code
 > 2026-10-20 · core T-075-b · APP-052, TERM-105, CLI-011, ACCT-051 cards and Txais's DT-C27 reversal as relayed by the coordinator; this tree's own pty.rs, terminal.rs (Snap, generation), lifecycle.rs (claim_named), cli.rs (secret, open); no outside source
 > 2026-10-20 · core T-184-b · cards TERM-105, APP-052, ACCT-051 and DT-C27 (Txais 2026-10-20); this tree's own pty::service (T-075-b), terminal.rs and reattach.ts; no outside source
+> 2026-10-20 · core T-153-f · card VIEW-099 (and VIEW-116 for the question); this tree's own pty::service, pty::link, terminal.rs, src/status/manage.tsx and ResourceManager.tsx; no outside source

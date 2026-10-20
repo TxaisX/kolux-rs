@@ -16,7 +16,7 @@ use super::service::{Client, Endpoint};
 use base64::Engine as _;
 use portable_pty::CommandBuilder;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -215,6 +215,84 @@ impl Link {
         let row = client.request(json!({ "op": "spawn", "commands": list, "cols": cols, "rows": rows, "meta": meta }), &mut Vec::new())?;
         Remote::from_row(self, &row, Some(client)).ok_or_else(|| "the terminal service answered a start without a terminal".to_string())
     }
+
+    /// T-153-f (VIEW-099): one request on a connection of its own.
+    fn control(&self, req: Value) -> Result<Value, String> {
+        Client::connect(&self.ep, HOST_WAIT)?.request(req, &mut Vec::new())
+    }
+
+    /// T-153-f (VIEW-099): the terminals the service holds that no window owns: every one whose
+    /// service id is not in `owned` (the window's own terminals), each with what Manage Sessions
+    /// needs to decide whether it may offer it.
+    pub fn unowned(&self, owned: &HashSet<u32>) -> Result<Vec<HostSession>, String> {
+        let list = self.control(json!({ "op": "list" }))?;
+        let rows = list["terminals"].as_array().cloned().unwrap_or_default();
+        Ok(host_sessions(&rows, owned, &|pid| pid.and_then(crate::procs::has_children).unwrap_or(true)))
+    }
+
+    /// T-153-f (VIEW-099): ends terminal `id` that the service holds and no window owns, after a
+    /// fresh read. `Ok(false)`: it had already ended (the count just updates). A window's own
+    /// terminal, an agent's, or one with a program running in it is never ended from here.
+    pub fn end_unowned(&self, id: u32, owned: &HashSet<u32>) -> Result<bool, String> {
+        if owned.contains(&id) {
+            return Err(format!("background session {id} belongs to a pane; close the pane instead"));
+        }
+        let now = self.unowned(owned)?;
+        let Some(row) = now.iter().find(|r| r.id == id) else { return Ok(false) };
+        if row.agent {
+            return Err(format!("background session {id} runs an agent ({}); agent sessions are never ended from here", row.program));
+        }
+        if row.busy {
+            return Err(format!("background session {id} has a program running in it; it was left alone"));
+        }
+        match self.control(json!({ "op": "kill", "id": id })) {
+            Ok(_) => Ok(true),
+            Err(e) if e.starts_with("no terminal") => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+/// T-153-f: how long a list or end request waits on the service.
+const HOST_WAIT: Duration = Duration::from_secs(5);
+
+/// T-153-f (VIEW-099): one terminal the background service holds that no window owns.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct HostSession {
+    /// Its id in the service.
+    pub id: u32,
+    pub pid: Option<u32>,
+    /// The program the window that started it asked for, else the one the service runs.
+    pub program: String,
+    pub dir: Option<String>,
+    /// An agent runs in it: never offered for cleanup.
+    pub agent: bool,
+    /// A program other than the shell runs in it, or that could not be checked: not offered either.
+    pub busy: bool,
+}
+
+/// T-153-f: the service's `rows` that are not in `owned`, by id. `children` says whether a process
+/// has programs running under it (true when it cannot tell).
+pub fn host_sessions(rows: &[Value], owned: &HashSet<u32>, children: &dyn Fn(Option<u32>) -> bool) -> Vec<HostSession> {
+    let text = |v: &Value| v.as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let mut out: Vec<HostSession> = rows
+        .iter()
+        .filter_map(|row| {
+            let id = row["id"].as_u64().and_then(|i| u32::try_from(i).ok())?;
+            if owned.contains(&id) {
+                return None;
+            }
+            let pid = row["pid"].as_u64().and_then(|p| u32::try_from(p).ok());
+            let names: Vec<String> = [&row["meta"]["program"], &row["requested"], &row["program"]].into_iter().filter_map(text).collect();
+            let agent = names.iter().any(|p| crate::tools::credited_program(p).is_some());
+            let program = names.first().cloned().unwrap_or_default();
+            let shell = names.iter().all(|p| crate::pty::is_shell_program(p));
+            let dir = text(&row["meta"]["cwd"]).or_else(|| text(&row["cwd"]));
+            Some(HostSession { id, pid, busy: agent || !shell || children(pid), agent, program, dir })
+        })
+        .collect();
+    out.sort_by_key(|h| h.id);
+    out
 }
 
 /// A command the window built, as the service reads it back (`command_from`).
@@ -596,6 +674,61 @@ pub(crate) mod tests {
         write_seen(&dir, 77, &[(4, 1200), (9, 5)]);
         assert_eq!(read_seen(&dir, 77), HashMap::from([(4, 1200), (9, 5)]));
         assert!(read_seen(&dir, 78).is_empty(), "another run of the service: nothing carries over");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn t153f_only_terminals_no_window_owns_are_listed_and_agents_and_busy_shells_are_marked() {
+        let rows = vec![
+            json!({ "id": 3, "pid": 30, "program": "C:\\Windows\\System32\\cmd.exe", "requested": "", "cwd": "C:\\a", "meta": null }),
+            json!({ "id": 1, "pid": 10, "program": "pwsh.exe", "requested": "", "cwd": "", "meta": { "program": null, "cwd": "C:\\p" } }),
+            json!({ "id": 2, "pid": 20, "program": "pwsh.exe", "requested": "", "cwd": "", "meta": { "program": "claude --permission-mode auto" } }),
+            json!({ "id": 4, "pid": 40, "program": "vim.exe", "requested": "vim", "cwd": "", "meta": null }),
+            json!({ "id": 5, "pid": null, "program": "pwsh.exe", "requested": "", "cwd": "", "meta": null }),
+            json!({ "id": 6, "pid": 60, "program": "pwsh.exe", "requested": "", "cwd": "", "meta": null }),
+        ];
+        let owned = HashSet::from([6]);
+        // pid 30 has a program running under it; an unknown pid cannot be checked (counts as busy).
+        let children = |pid: Option<u32>| pid.is_none_or(|p| p == 30);
+        let got = host_sessions(&rows, &owned, &children);
+        assert_eq!(got.iter().map(|h| h.id).collect::<Vec<_>>(), vec![1, 2, 3, 4, 5], "sorted, the window's own terminal left out");
+        let by = |id: u32| got.iter().find(|h| h.id == id).unwrap().clone();
+        assert_eq!(by(1), HostSession { id: 1, pid: Some(10), program: "pwsh.exe".into(), dir: Some("C:\\p".into()), agent: false, busy: false });
+        assert!(by(2).agent && by(2).busy, "an agent's terminal is never offered");
+        assert_eq!(by(2).program, "claude --permission-mode auto", "named by what the window asked for");
+        assert!(!by(3).agent && by(3).busy, "a shell with a program under it");
+        assert_eq!(by(3).dir.as_deref(), Some("C:\\a"));
+        assert!(!by(4).agent && by(4).busy, "a program that is not a shell");
+        assert!(by(5).busy, "no process id: cannot check, left alone");
+        assert!(host_sessions(&rows, &HashSet::from([1, 2, 3, 4, 5, 6]), &children).is_empty());
+    }
+
+    #[test]
+    fn t153f_manage_sessions_lists_and_ends_a_terminal_the_service_holds_that_no_window_owns() {
+        let (r, dir) = start("host");
+        let (window, _) = link(&r);
+        let mine = window.spawn(&shell(), 80, 24, json!({ "id": 1, "pane": 9 })).unwrap();
+        // A terminal the service holds that no window owns (left by a window that is gone).
+        let commands: Vec<Value> = shell().iter().map(command_json).collect();
+        let foreign = r.service.spawn(&json!({ "commands": commands })).unwrap()["id"].as_u64().unwrap() as u32;
+        let owned = HashSet::from([mine.id]);
+        let listed = window.unowned(&owned).unwrap();
+        assert_eq!(listed.iter().map(|h| h.id).collect::<Vec<_>>(), vec![foreign], "only the terminal no window owns");
+        assert!(!listed[0].agent);
+        assert!(window.end_unowned(mine.id, &owned).is_err(), "a pane's own terminal is never ended from here");
+        // The shell may still be starting its children; wait until the busy check sees it idle.
+        let until = std::time::Instant::now() + Duration::from_secs(30);
+        while window.unowned(&owned).unwrap().first().is_some_and(|h| h.busy) {
+            assert!(std::time::Instant::now() < until, "the fresh shell never looked idle");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert_eq!(r.service.counts().0, 2);
+        assert_eq!(window.end_unowned(foreign, &owned), Ok(true));
+        wait("the ended terminal to leave the service", 30, || r.service.counts().0 == 1);
+        assert!(window.unowned(&owned).unwrap().is_empty(), "the count drops by one");
+        assert_eq!(window.end_unowned(foreign, &owned), Ok(false), "already gone: nothing to ask, nothing failed");
+        mine.kill();
+        drop(r);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

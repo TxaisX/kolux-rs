@@ -1453,6 +1453,18 @@ impl Terminals {
         }
     }
 
+    /// T-153-f (VIEW-099): the service link and the service ids of the terminals this window owns;
+    /// None when panes run in the window or the window has not finished taking its terminals back.
+    fn host(&self) -> Option<(Arc<crate::pty::link::Link>, HashSet<u32>)> {
+        self.wait_linked(Duration::from_secs(3));
+        let link = match &*self.service.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner) {
+            Linking::Linked(l) => l.clone(),
+            _ => return None,
+        };
+        let owned = self.inner.lock().ok()?.sessions.values().filter_map(|s| if let Session::Remote(r) = s { Some(r.id) } else { None }).collect();
+        Some((link, owned))
+    }
+
     /// Ends every session the window runs: the window is closing. T-184-b: the ones the background
     /// service runs go on (DT-C27 reversed); the window lets go of them and records how much of
     /// each one's output it drew, so the next window adds only what it missed.
@@ -1641,6 +1653,33 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
         crate::automations::follow(&app, |s| crate::automations::claim(s, id, pane_key, &dir, agent));
     }
     Ok(Spawned { id, program: terminals.started(id), account })
+}
+
+/// T-153-f (VIEW-099): the terminals the background service holds that this window does not own,
+/// for Manage Sessions. Empty when panes run in the window or the window is still taking its
+/// terminals back (none of them is offered before it has).
+#[tauri::command]
+pub async fn terminal_host_sessions(terminals: tauri::State<'_, Terminals>) -> Result<Vec<crate::pty::link::HostSession>, String> {
+    let me = terminals.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || match me.host() {
+        Some((link, owned)) => link.unowned(&owned),
+        None => Ok(Vec::new()),
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// T-153-f (VIEW-099): ends background session `id` (its id in the service) that no window owns.
+/// False when it had already ended; a pane's own, an agent's or a busy one is refused.
+#[tauri::command]
+pub async fn terminal_host_end(terminals: tauri::State<'_, Terminals>, id: u32) -> Result<bool, String> {
+    let me = terminals.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || match me.host() {
+        Some((link, owned)) => link.end_unowned(id, &owned),
+        None => Ok(false),
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// TERM-045: for each id, whether closing it would stop a live program.
