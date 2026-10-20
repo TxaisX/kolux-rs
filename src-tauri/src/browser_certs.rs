@@ -5,11 +5,15 @@
 //! never the page), and an approved address that later shows a different bad certificate is
 //! refused again until approved again. Approvals are revocable and last for the run.
 //!
-//! The engine side (answering WebView2's server-certificate-error event) needs that event's COM
-//! interface, reachable only through the webview2-com crate as a direct dependency; until then the
-//! failure overlay offers no approval and every address keeps strict checks (PLAN T-158 note).
+//! The engine side: WebView2's server-certificate-error event (browser_engine.rs) asks
+//! [`on_engine`] about every bad certificate. Anything but an approved local site is cancelled,
+//! never left to the engine's default error page (which has its own click-through), so a public
+//! site has no bypass at all. The failure overlay asks [`Trust::state`] whether to show Trust, and
+//! the page's right-click menu offers Stop Trusting for an approved site (`browser_cert`).
 use super::popup::loopback;
+use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 use tauri::Url;
 
 /// One host and port, as approved.
@@ -95,6 +99,101 @@ impl Trust {
     pub fn approved(&self) -> Vec<Site> {
         self.approved.keys().cloned().collect()
     }
+
+    /// What the overlay and the menu show for `url` in `tab`.
+    pub fn state(&self, tab: u32, url: &Url) -> CertState {
+        let site = Site::local(url);
+        let offer = site.as_ref().is_some_and(|s| self.pending.get(&tab).is_some_and(|(p, _)| p == s));
+        let trusted = site.as_ref().is_some_and(|s| self.approved.contains_key(s));
+        CertState { offer, trusted, site: site.map(|s| format!("{}:{}", s.host, s.port)) }
+    }
+}
+
+/// The overlay's Trust button and the menu's Stop Trusting entry (`browser_cert`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CertState {
+    /// A challenge for this local site is waiting in this tab: Trust may show.
+    pub offer: bool,
+    /// The site is approved for this run: Stop Trusting may show.
+    pub trusted: bool,
+    /// `host:port` when the address is a local https site.
+    pub site: Option<String>,
+}
+
+/// What the engine is told: allow (the engine then keeps that for this host and certificate for
+/// the session) or cancel. Never the engine's default, whose error page has its own click-through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineAction {
+    AlwaysAllow,
+    Cancel,
+}
+
+pub fn engine_action(a: Answer) -> EngineAction {
+    match a {
+        Answer::Allow => EngineAction::AlwaysAllow,
+        Answer::Refuse { .. } => EngineAction::Cancel,
+    }
+}
+
+/// The run's certificate rules, shared by the engine event and the app command.
+pub static TRUST: LazyLock<Mutex<Trust>> = LazyLock::new(Mutex::default);
+
+/// The certificate's identity: SHA-256 of its PEM text without whitespace, as hex.
+pub fn fingerprint(pem: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let body: String = pem.chars().filter(|c| !c.is_whitespace()).collect();
+    Sha256::digest(body.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The engine reports a bad certificate for `uri` in `tab` (WebView2 ServerCertificateErrorDetected):
+/// what to tell it. An address that does not parse, or a certificate the engine could not show
+/// (no fingerprint to approve), is refused with no offer.
+pub fn on_engine(trust: &mut Trust, tab: u32, uri: &str, fingerprint: &str) -> EngineAction {
+    let answer = match Url::parse(uri) {
+        Ok(url) if !fingerprint.is_empty() => trust.challenge(tab, &url, fingerprint),
+        _ => {
+            trust.forget(tab);
+            Answer::Refuse { offer: false }
+        }
+    };
+    engine_action(answer)
+}
+
+/// `browser_cert` actions: `state`, `trust` (approve the waiting challenge) or `revoke`.
+pub fn act(trust: &mut Trust, tab: u32, url: &str, action: &str) -> Result<CertState, String> {
+    let url = Url::parse(url).map_err(|_| format!("{url} is not an address"))?;
+    match action {
+        "state" => {}
+        "trust" => trust.approve(tab, &url)?,
+        "revoke" => {
+            trust.revoke(&url);
+        }
+        other => return Err(format!("unknown certificate action {other}")),
+    }
+    Ok(trust.state(tab, &url))
+}
+
+/// The app's command (never the page's): the overlay's Trust, the menu's Stop Trusting, and the
+/// state both read. A revoke also clears the engine's remembered allowances, so the next visit is
+/// asked again (other approved sites are then simply allowed again by these rules).
+#[allow(dead_code)] // registered by evidence/browser-T-158-b-lib.rs.patch
+#[tauri::command]
+pub async fn browser_cert(app: tauri::AppHandle, id: u32, url: String, action: String) -> Result<CertState, String> {
+    let state = {
+        let mut t = TRUST.lock().map_err(|_| "the certificate rules are not available".to_string())?;
+        act(&mut t, id, &url, &action)?
+    };
+    if action == "revoke" {
+        super::engine::clear_certificate_allowances(&app);
+    }
+    Ok(state)
+}
+
+/// A tab closed: its waiting challenge can no longer be answered.
+pub fn closed(tab: u32) {
+    if let Ok(mut t) = TRUST.lock() {
+        t.forget(tab);
+    }
 }
 
 #[cfg(test)]
@@ -153,5 +252,47 @@ mod tests {
         assert!(t.revoke(&u("https://localhost:8443/x")));
         assert!(!t.revoke(&u("https://localhost:8443/x")));
         assert_eq!(t.challenge(1, &u("https://localhost:8443/"), "AA"), Answer::Refuse { offer: true });
+    }
+
+    #[test]
+    fn brow024_the_engine_is_told_allow_only_for_an_approved_local_certificate_and_cancel_otherwise() {
+        let mut t = Trust::default();
+        // a public site: cancelled, never the engine's default page with its own click-through
+        assert_eq!(on_engine(&mut t, 1, "https://expired.example.com/", "AA"), EngineAction::Cancel);
+        assert!(!t.state(1, &u("https://expired.example.com/")).offer);
+        assert_eq!(on_engine(&mut t, 1, "not an address", "AA"), EngineAction::Cancel);
+        assert_eq!(on_engine(&mut t, 1, "https://localhost:5173/", ""), EngineAction::Cancel);
+        assert!(!t.state(1, &u("https://localhost:5173/")).offer, "an unreadable certificate is never offered");
+        // a local dev server: cancelled until the user approves, then allowed
+        assert_eq!(on_engine(&mut t, 1, "https://localhost:5173/", "AA"), EngineAction::Cancel);
+        assert_eq!(t.state(1, &u("https://localhost:5173/x")), CertState { offer: true, trusted: false, site: Some("localhost:5173".into()) });
+        act(&mut t, 1, "https://localhost:5173/", "trust").unwrap();
+        assert_eq!(on_engine(&mut t, 1, "https://localhost:5173/", "AA"), EngineAction::AlwaysAllow);
+        assert_eq!(engine_action(Answer::Refuse { offer: true }), EngineAction::Cancel);
+    }
+
+    #[test]
+    fn brow024_the_app_command_trusts_only_a_waiting_challenge_and_revokes_per_origin() {
+        let mut t = Trust::default();
+        assert!(act(&mut t, 1, "https://localhost:8443/", "trust").is_err(), "nothing waiting");
+        assert!(act(&mut t, 1, "https://example.com/", "trust").is_err(), "public: never");
+        on_engine(&mut t, 1, "https://localhost:8443/", "AA");
+        on_engine(&mut t, 2, "https://127.0.0.1:3000/", "BB");
+        assert!(act(&mut t, 1, "https://localhost:8443/", "trust").unwrap().trusted);
+        assert!(act(&mut t, 2, "https://127.0.0.1:3000/", "trust").unwrap().trusted);
+        let after = act(&mut t, 1, "https://localhost:8443/", "revoke").unwrap();
+        assert_eq!((after.offer, after.trusted), (false, false));
+        assert!(act(&mut t, 2, "https://127.0.0.1:3000/", "state").unwrap().trusted, "another origin keeps its trust");
+        assert!(act(&mut t, 1, "https://localhost:8443/", "drop").is_err());
+        assert!(act(&mut t, 1, "nope", "state").is_err());
+    }
+
+    #[test]
+    fn brow024_fingerprint_ignores_line_breaks_and_tells_certificates_apart() {
+        let a = "-----BEGIN CERTIFICATE-----\r\nMIIB\r\nAAAA\r\n-----END CERTIFICATE-----\r\n";
+        let b = "-----BEGIN CERTIFICATE-----\nMIIBAAAA\n-----END CERTIFICATE-----";
+        assert_eq!(fingerprint(a), fingerprint(b));
+        assert_eq!(fingerprint(a).len(), 64);
+        assert_ne!(fingerprint(a), fingerprint("-----BEGIN CERTIFICATE-----\nMIIBAAAB\n-----END CERTIFICATE-----"));
     }
 }

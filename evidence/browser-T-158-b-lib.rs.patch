@@ -1,0 +1,12 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 7f5e1789..f9161b93 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -625,6 +625,7 @@ pub fn run() {
+             browser::browser_cookies_import,
+             browser::browser_probe,
+             browser::browser_diagnose,
++            browser::certs::browser_cert,
+             browser::browser_tab,
+             browser::browser_annotate,
+             browser::preview::browser_preview,

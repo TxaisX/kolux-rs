@@ -48,12 +48,15 @@ pub mod wake;
 #[path = "browser_helpers.rs"]
 pub mod helpers;
 // T-158: BROW-015 sized popups open in a small linked window whose title bar is the origin strip;
-// BROW-024 the local dev-server certificate rules (the engine hook waits for the WebView2 event).
+// BROW-024 the local dev-server certificate rules, answered from the engine's certificate event.
 #[path = "browser_popup.rs"]
 pub mod popup;
-#[allow(dead_code)] // T-158: answered by the engine's certificate event once that is reachable.
+#[allow(dead_code)] // T-158: `browser_cert` is registered by evidence/browser-T-158-b-lib.rs.patch.
 #[path = "browser_certs.rs"]
 pub mod certs;
+// T-158 / T-251 / T-272-d: the glue to WebView2's own events and calls (webview2-com).
+#[path = "browser_engine.rs"]
+pub mod engine;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
@@ -1183,6 +1186,8 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
                 helpers::record(pid);
             }
         }
+        // T-158 (BROW-024): the engine's certificate errors are answered by the certificate rules.
+        engine::attach(id, &pw);
     });
     #[cfg(not(windows))]
     let _ = page;
@@ -1355,6 +1360,7 @@ pub async fn browser_close(app: AppHandle, id: u32) -> Result<(), String> {
     set_shown(id, false);
     families().leave(id); // T-272-c
     holder::forget(id); // T-272-d
+    certs::closed(id); // T-158: a closed tab's waiting certificate challenge goes with it
     forget_tab(id);
     if let Ok(mut i) = ICONS.lock() {
         i.forget(id);

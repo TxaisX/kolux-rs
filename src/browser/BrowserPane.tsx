@@ -20,7 +20,7 @@ import "./browser.css";
 import { can as canGo, fresh, started, type Pending } from "./history";
 import { arrived, closed as menuClosed, fresh as freshMenu, type Hit, lines as suggestionLines, type Menu, move as menuMove, pick as menuPick, shown as menuShown, typed as menuTyped } from "./suggest";
 import { busy as downloading, dismiss, type Download, fraction, prune, reduce as reduceDownloads, type Row as DownloadRow, status as downloadStatus } from "./downloads";
-import { type Diagnosis, type Event as LoadEvent, fresh as freshHealth, type Health, type Overlay, overlayModel, overlayOf, PROBE_MS, type Probe, step } from "./loadState";
+import { type CertState, type Diagnosis, type Event as LoadEvent, fresh as freshHealth, type Health, type Overlay, overlayModel, overlayOf, PROBE_MS, type Probe, step, trustLabel } from "./loadState";
 import { nextZoom, zoomPercent } from "./zoom";
 import { iconAt, iconFound, type SiteIcon } from "./site";
 import { zoomFactor } from "../settings/zoom";
@@ -62,10 +62,10 @@ function startBridge() {
   });
 }
 
-type OverlayProps = { overlay: NonNullable<Overlay>; diag: Diagnosis | null; busy: boolean; connecting: boolean; onRetry: () => void; onHttps: (url: string) => void; onOpen: (url: string) => void };
+type OverlayProps = { overlay: NonNullable<Overlay>; diag: Diagnosis | null; trust: string | null; busy: boolean; connecting: boolean; onRetry: () => void; onTrust: () => void; onHttps: (url: string) => void; onOpen: (url: string) => void };
 
 /** T-074 (BROW-008, BROW-009): what the user sees over a page that failed or crashed. */
-function LoadOverlay({ overlay, diag, busy, connecting, onRetry, onHttps, onOpen }: OverlayProps) {
+function LoadOverlay({ overlay, diag, trust, busy, connecting, onRetry, onTrust, onHttps, onOpen }: OverlayProps) {
   const m = overlayModel(overlay, diag);
   return (
     <div className="load-overlay" role="alert" data-kind={overlay.kind}>
@@ -76,6 +76,11 @@ function LoadOverlay({ overlay, diag, busy, connecting, onRetry, onHttps, onOpen
         <button className="btn" data-go="retry" disabled={busy} onClick={onRetry}>
           Retry
         </button>
+        {trust && (
+          <button className="btn" data-go="trust" disabled={busy} onClick={onTrust}>
+            {trust}
+          </button>
+        )}
         {m.switchHttps && (
           <button className="btn" data-go="https" disabled={busy} onClick={() => onHttps(m.switchHttps!)}>
             Switch to HTTPS
@@ -164,6 +169,8 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const health = useRef<Health>(freshHealth());
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [diag, setDiag] = useState<Diagnosis | null>(null);
+  // T-158 (BROW-024): whether the engine's certificate challenge for this local site waits here.
+  const [cert, setCert] = useState<CertState | null>(null);
   // While an overlay action runs all its buttons are disabled together; the connecting indicator
   // waits a moment so a quick retry does not flicker.
   const [busy, setBusy] = useState(false);
@@ -175,6 +182,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     if (e.t === "started") {
       setBusy(false);
       setDiag(null);
+      setCert(null);
     }
     if (action === "reload") invoke("browser_go", { id, what: "reload" }).catch(() => {});
     if (action === "overlay") {
@@ -184,12 +192,27 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         invoke<Diagnosis>("browser_diagnose", { url })
           .then((d) => health.current.url === url && setDiag(d))
           .catch(() => {});
+        invoke<CertState>("browser_cert", { id, url, action: "state" })
+          .then((c) => health.current.url === url && setCert(c))
+          .catch(() => {});
       }
     }
   };
   const retry = () => {
     setBusy(true);
     feed({ t: "retry" });
+  };
+  // The overlay's Trust: the back end approves only the challenge waiting in this tab, then the
+  // page is tried again and the engine is told to allow that one certificate.
+  const trustCert = () => {
+    const { url } = health.current;
+    setBusy(true);
+    invoke<CertState>("browser_cert", { id, url, action: "trust" })
+      .then(() => feed({ t: "retry" }))
+      .catch((err) => {
+        setBusy(false);
+        setNote(String(err));
+      });
   };
   useEffect(() => {
     if (!busy) return setConnecting(false);
@@ -561,7 +584,8 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     if (!plan.run) return;
     if (plan.focusPane) focusMe.current?.();
     if (p.kind === "menu") {
-      const spec = menuSpec(menuContext(p), canRef.current, at.current, menuAt(p), menuColours(host.current));
+      const cs = await invoke<CertState>("browser_cert", { id, url: at.current, action: "state" }).catch(() => null);
+      const spec = menuSpec(menuContext(p), canRef.current, at.current, menuAt(p), menuColours(host.current), !!cs?.trusted);
       void invoke("browser_go", { id, what: "menu", text: JSON.stringify(spec) }).catch(() => {});
       return;
     }
@@ -569,6 +593,13 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     if (p.what === "back" || p.what === "forward") act(p.what);
     else if (p.what === "open-kolux" && u) openInBrowser(u);
     else if (p.what === "open-default" && u) invoke("open_external", { url: u }).catch((err) => setNote(String(err)));
+    else if (p.what === "cert-revoke" && u)
+      invoke<CertState>("browser_cert", { id, url: u, action: "revoke" })
+        .then((c) => {
+          setNote(`${c.site ?? "This site"}: its certificate is no longer trusted`);
+          act("reload");
+        })
+        .catch((err) => setNote(String(err)));
   };
   // T-239 (BROW-018): an app shortcut the page handed over is pressed again on the window, after
   // this split has taken focus (flushSync, so the app's key handler already sees it focused), and
@@ -868,7 +899,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         </div>
       )}
       <div ref={host} className="pane-body">
-        {overlay && <LoadOverlay overlay={overlay} diag={diag} busy={busy} connecting={connecting} onRetry={retry} onHttps={switchHttps} onOpen={openExternally} />}
+        {overlay && <LoadOverlay overlay={overlay} diag={diag} trust={trustLabel(cert)} busy={busy} connecting={connecting} onRetry={retry} onTrust={trustCert} onHttps={switchHttps} onOpen={openExternally} />}
       </div>
     </section>
   );

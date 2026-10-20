@@ -19,6 +19,15 @@ describe("BROW-017 right-click menu", () => {
     expect(blank[blank.length - 1]).toMatchObject({ off: true });
   });
 
+  it("BROW-024: Stop Trusting shows only for a site whose certificate the user trusted", () => {
+    const plain = menuEntries({ link: "", selection: false }, can, "https://localhost:5173/");
+    expect(plain.some((i) => !("sep" in i) && i.id === "cert-revoke")).toBe(false);
+    const trusted = menuEntries({ link: "", selection: false }, can, "https://localhost:5173/", true);
+    expect(trusted[trusted.length - 1]).toMatchObject({ id: "cert-revoke", label: "Stop Trusting This Certificate", url: "https://localhost:5173/" });
+    const spec = menuSpec({ link: "", selection: false }, can, "https://localhost:5173/", { x: 1, y: 1, vw: 800, vh: 600 }, colours, true);
+    expect(spec.items.some((i) => !("sep" in i) && i.id === "cert-revoke")).toBe(true);
+  });
+
   it("the menu opens at the pointer and flips to stay inside the pane near its edges", () => {
     const h = menuHeight(menuEntries({ link: "https://e.com/", selection: false }, can, ""));
     expect(h).toBe(8 + 5 * 26 + 9);

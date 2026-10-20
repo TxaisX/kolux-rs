@@ -50,3 +50,46 @@ LIVE PROOF PENDING (batched)
    and the address without its query. Grab a paragraph of prose: nothing is masked.
 6. Import a cookie file holding google.com rows: the toast names them and says to sign in to Google in the pane;
    a file with no Google rows: no Google words.
+
+== 2026-10-20 second pass (lane/browser from 406e41da): the certificate engine hook ==
+WHAT CHANGED
+- Coordinator decision 2026-10-20: webview2-com =0.39.1 is a direct dependency, Windows only, plus windows =0.62.2
+  (the Interface trait for cast; webview2-com does not re-export it), both exact pins of the versions wry already
+  builds and only features wry already turns on. Shared file, so it is a patch:
+  evidence/browser-T-158-b-Cargo.toml.patch (Cargo.toml + Cargo.lock). Cargo.lock diff with it applied: 2 lines
+  added (the two dependency edges of kolux-rs), 0 new [[package]] (G:/Temp/browser-v3-logs/cargo-lock-diff.log).
+- src-tauri/src/browser_engine.rs (new, glue only): every page made by browser_open answers WebView2's
+  ServerCertificateErrorDetected event through certs::on_engine: ALWAYS_ALLOW only for a certificate the user
+  approved for that local origin in that tab, CANCEL for everything else (never DEFAULT, so the engine's own error
+  page and its click-through never appear). Stop Trusting calls ClearServerCertificateErrorActions on every page.
+- src-tauri/src/browser_certs.rs: on_engine (records the challenge, fingerprint = SHA-256 of the certificate PEM),
+  act() for state / trust / revoke, the app command browser_cert, closed() when a tab closes, a shared TRUST store.
+- browser.rs: the engine hook is attached as each page is made; a closed tab's challenges and approvals are dropped.
+- src/browser/loadState.ts + BrowserPane.tsx: when a page fails to load and the failure is a local dev server's
+  certificate, the overlay shows "Trust This Certificate On <host:port> For This Run"; clicking it approves and
+  retries. Public hosts and lookalikes never get the button.
+- src/browser/menu.ts + BrowserPane.tsx: on a trusted page the right-click menu has "Stop Trusting This
+  Certificate"; it revokes the origin's approval and reloads (the overlay is back).
+- evidence/browser-T-158-b-lib.rs.patch registers browser::certs::browser_cert (lib.rs is shared).
+- Still not built: the passkey account chooser. No platform passkey API is reachable through tauri 2.12 / wry 0.57
+  (WebView2 shows its own system passkey dialog; there is no account-selection event to answer).
+
+READINGS (logs under G:/Temp/browser-v3-logs/; Cargo patch applied for every cargo run, then reverted)
+- cargo build: build exit 0 (t158a-build.log); clippy --all-targets -D warnings: clippy exit 0 (t158a-clippy.log)
+- cargo test browser: 133 passed; 0 failed (t158a-cargo-test.log), new: brow024_the_engine_is_told_allow_only_for_an_
+  approved_local_certificate_and_cancel_otherwise, brow024_the_app_command_trusts_only_a_waiting_challenge_and_
+  revokes_per_origin, brow024_fingerprint_ignores_line_breaks_and_tells_certificates_apart
+- with the lib.rs patch and both browser-T-251 cli patches applied: build exit 0, clippy exit 0, cargo test cli:
+  171 passed; 0 failed (t158p-*.log); then reverted
+- tsc --noEmit: exit 0; vitest src/browser: 19 files, 95 tests passed (t158-vitest.log), new: the Stop Trusting menu
+  case and the trustLabel cases
+- privacy-audit app070 x2 red: the same pre-existing reqwest/TcpStream counts in browser.rs, browser_downloads.rs,
+  browser_ports.rs (known red; browser_engine.rs not flagged)
+
+LIVE PROOF PENDING (batched)
+7. Run a dev server on https://localhost:<port> with a self-signed certificate and open it in a browser pane: the
+   overlay shows "Trust This Certificate On localhost:<port> For This Run"; click it: the page loads.
+8. Right-click the page: "Stop Trusting This Certificate"; pick it: the page reloads and the overlay is back.
+9. Open a public site with a bad certificate (for example an expired-certificate test page): the overlay shows the
+   failure with no Trust button and no engine click-through.
+10. Close the tab, reopen the dev server in a new tab: the overlay asks again.

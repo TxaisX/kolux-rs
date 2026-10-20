@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEAD_AFTER, type Event, fresh, type Health, MAX_RECOVERIES, overlayModel, overlayOf, step } from "./loadState";
+import { DEAD_AFTER, type Event, fresh, type Health, MAX_RECOVERIES, overlayModel, overlayOf, step, trustLabel } from "./loadState";
 
 // T-074 (BROW-008, BROW-009): the load-state machine, fed the events the back end can give
 // (started, finished, and the answer of a location.href probe) and the user's own actions.
@@ -178,5 +178,15 @@ describe("BROW-010: pages after the computer wakes", () => {
 
   it("leaves a blank tab blank", () => {
     expect(step(fresh(), { t: "woke" })).toEqual([fresh(), "none"]);
+  });
+});
+
+describe("BROW-024 trusting a local dev server's certificate", () => {
+  it("the overlay offers Trust only while the back end has this tab's local challenge waiting", () => {
+    expect(trustLabel(null)).toBeNull();
+    expect(trustLabel({ offer: false, trusted: false, site: null })).toBeNull();
+    expect(trustLabel({ offer: false, trusted: true, site: "localhost:8443" })).toBeNull();
+    expect(trustLabel({ offer: true, trusted: false, site: null })).toBeNull();
+    expect(trustLabel({ offer: true, trusted: false, site: "localhost:8443" })).toBe("Trust This Certificate On localhost:8443 For This Run");
   });
 });

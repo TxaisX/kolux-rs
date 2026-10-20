@@ -17,7 +17,7 @@ export const PAD_H = 8;
 
 /** Back and forward always; Copy when text is selected; the link entries for a link, else the
  * page's own Open Page In Default Browser. Entries the page cannot do yet are shown greyed. */
-export function menuEntries(ctx: MenuContext, can: { back: boolean; forward: boolean }, page: string): MenuItem[] {
+export function menuEntries(ctx: MenuContext, can: { back: boolean; forward: boolean }, page: string, trusted = false): MenuItem[] {
   const items: MenuItem[] = [
     { id: "back", label: "Back", off: !can.back },
     { id: "forward", label: "Forward", off: !can.forward },
@@ -28,6 +28,9 @@ export function menuEntries(ctx: MenuContext, can: { back: boolean; forward: boo
   } else {
     items.push({ sep: true }, { id: "open-default", label: "Open Page In Default Browser", url: page, off: !/^https?:/i.test(page) });
   }
+  // T-158 (BROW-024): a local dev server whose certificate the user trusted for this run; the trust
+  // is taken back from here (the back end clears the engine's remembered allowance too).
+  if (trusted) items.push({ sep: true }, { id: "cert-revoke", label: "Stop Trusting This Certificate", url: page });
   return items;
 }
 
@@ -45,8 +48,8 @@ export function placeMenu(at: MenuAt, w: number, h: number): { x: number; y: num
 }
 
 /** The whole spec the page draws from. */
-export function menuSpec(ctx: MenuContext, can: { back: boolean; forward: boolean }, page: string, at: MenuAt, colours: MenuColours): MenuSpec {
-  const items = menuEntries(ctx, can, page);
+export function menuSpec(ctx: MenuContext, can: { back: boolean; forward: boolean }, page: string, at: MenuAt, colours: MenuColours, trusted = false): MenuSpec {
+  const items = menuEntries(ctx, can, page, trusted);
   const { x, y } = placeMenu(at, MENU_W, menuHeight(items));
   return { ...colours, x, y, w: MENU_W, items };
 }
