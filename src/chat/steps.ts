@@ -9,6 +9,21 @@ import { resolvePath } from "../terminal/links";
 /** FIX-2: whether a path names one file whatever folder it is read from (a drive, a UNC share or a leading slash). */
 export const isFullPath = (p: string) => /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(p);
 
+/** FIX-3: whether a relative path names no file the pane's folder can reach: a home-relative one (`~/x`, `~\x`, `~`), or one
+ * whose `..` segments climb above the root of `cwd` (a drive or `/`), which resolving would silently clamp to the wrong file. */
+export function unreachable(p: string, cwd: string | null): boolean {
+  if (/^~(?:[\\/]|$)/.test(p)) return true;
+  if (!cwd) return false;
+  const root = /^[\\/]{2}/.test(cwd) ? 4 : 1; // segments the root takes: "C:", "" (for /), or "", "", server, share (for a UNC share)
+  let depth = cwd.replace(/[\\/]+$/, "").split(/[\\/]/).length - root; // folders below the root
+  for (const seg of p.split(/[\\/]/)) {
+    if (seg === "" || seg === ".") continue;
+    if (seg !== "..") depth++;
+    else if (--depth < 0) return true;
+  }
+  return false;
+}
+
 export type DiffLine = { sign: "+" | "-" | " " | "@"; old?: number; new?: number; text: string };
 export type FileDiff = { path: string; change: "added" | "deleted" | "renamed" | "edited"; from?: string; lines: DiffLine[]; hidden: number };
 export type Tool = {
@@ -42,6 +57,7 @@ export function writtenFiles(tools: readonly ChatItem[], limit = WRITTEN_LIMIT, 
     for (let j = diffs.length - 1; j >= 0 && out.length < limit; j--) {
       const d = diffs[j];
       if (d.change === "deleted" || !d.path) continue;
+      if (!isFullPath(d.path) && unreachable(d.path, cwd)) continue; // FIX-3: skipped, never listed under a wrong full path
       const path = isFullPath(d.path) ? d.path : (resolvePath(d.path, cwd) ?? d.path);
       const k = pathKey(path);
       if (seen.has(k)) continue;
