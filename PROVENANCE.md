@@ -870,3 +870,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · repo T-227-d (rest) · spec/11 GIT-017 as given in the brief; git documentation for pathspec exclude (git-scm.com/docs/gitglossary); this tree's own scm.rs; no outside code
 > 2026-10-19 · cli T-250-c · rules from spec CLI-008/CLI-022 cards; macOS osascript administrator-prompt form from Apple's public Terminal/AppleScript documentation (developer.apple.com); this tree's own cli_register.rs and file_cli.rs; no outside code
 > 2026-10-19 · cli T-262-b · this tree's own cli.rs and agents/inventory.rs; no outside code
+> 2026-10-19 · cli T-279-d · this tree's own orchestration.rs (breaker_reset) and cli.rs; no outside code
