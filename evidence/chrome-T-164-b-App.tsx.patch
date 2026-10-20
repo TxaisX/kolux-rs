@@ -1,0 +1,47 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 81dbaa77..0234b1a6 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -54,6 +54,7 @@ import BrowserPane, { OPEN_IN_BROWSER, openDetail, openInBrowser, type OpenInBro
+ import PreviewButton from "./browser/PreviewButton";
+ import { chordPlan } from "./browser/chord";
+ import { livePages, pageRows, rememberClosed, takeClosed } from "./browser/pages";
++import { closedPanes, paneFor, placement } from "./chrome/reopenTab";
+ import { writerOf } from "./scm/generate";
+ import EditorPane, { editors } from "./editor/EditorPane";
+ import FloatingLayer, { floatingKeys } from "./floating/FloatingLayer";
+@@ -801,10 +802,21 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+           closePane(focused);
+           break;
+         case "tab.reopenClosed": {
+-          // T-239 (BROW-019): the browser tab closed last comes back at the address it had.
+-          const page = takeClosed();
+-          if (!page) return;
+-          openInBrowser(page.url);
++          // TERM-047 / T-239 (BROW-019): the tab closed last, terminal or browser, comes back: a terminal in
++          // its folder (or the shown workspace when that is gone), a browser page at the address it had.
++          void closedPanes.take((path) => invoke<string>("path_kind", { path }), activeDir).then((r) => {
++            if (r.kind === "browser") {
++              const page = takeClosed();
++              if (page) openInBrowser(page.url);
++            } else if (r.kind === "terminal") {
++              const key = nextKey.current++;
++              const dir = r.pane.cwd || null;
++              setPanes((ps) => [...ps, paneFor(r.pane, key, placement(ps, focused, dir))]);
++              setScreen("terminals");
++              if (!sameDir(dir, activeDir)) setActiveDir(dir);
++              setFocused(key);
++            }
++          });
+           break;
+         }
+         case "tab.closeAll":
+@@ -1768,7 +1780,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     // TERM-106: a tab closed on purpose is not brought back after a restart.
+     keys.forEach((k) => void invoke("terminal_forget_history", { paneKey: k }).catch(() => {}));
+     // T-239 (BROW-019): a browser page closed on purpose can be reopened (Reopen Closed Tab).
+-    keys.forEach((k) => rememberClosed(k));
++    closedPanes.remember(panes, keys, rememberClosed); // TERM-047: terminal tabs too, in close order with the pages
+     setPanes((ps) => ps.filter((p) => !gone.has(p.key)));
+     setRunning((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !gone.has(Number(k)))));
+     setDirty((d) => Object.fromEntries(Object.entries(d).filter(([k]) => !gone.has(Number(k)))));
