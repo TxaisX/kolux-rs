@@ -257,6 +257,10 @@ pub fn save_automation(store: &Store, input: &Value, now: i64) -> Result<Value, 
         true => all[i]["precheck"].as_str().unwrap_or_default().to_string(),
         false => text("precheck"),
     };
+    let reuse = input["reuseSession"].as_bool().unwrap_or(mode == "existing" && all[i]["reuseSession"] == true);
+    if reuse && mode != "existing" {
+        return Err("a session can only be kept across runs in an existing worktree".into());
+    }
     let row = &mut all[i];
     let enabled = input["enabled"].as_bool().unwrap_or(row["enabled"].as_bool().unwrap_or(true));
     for (k, v) in [
@@ -270,6 +274,9 @@ pub fn save_automation(store: &Store, input: &Value, now: i64) -> Result<Value, 
         ("baseBranch", json!(text("baseBranch"))),
         // AUTO-010: only a new worktree runs the project setup, and only when chosen.
         ("runSetup", json!(mode == "new-per-run" && input["runSetup"].as_bool().unwrap_or(false))),
+        // AUTO-009: continuing in the last run's session is only for an existing worktree; left out
+        // on an edit keeps the old choice.
+        ("reuseSession", json!(reuse)),
         ("trigger", timing["trigger"].clone()),
         ("nextRunAt", timing["nextRunAt"].clone()),
         ("missedRunGraceMinutes", json!(grace)),
@@ -1059,6 +1066,65 @@ pub struct Launch<'a> {
     pub notify: &'a dyn Fn(&str, Value),
 }
 
+/// What a run needs from the open terminals to continue in a session an earlier run left behind.
+pub trait Panes {
+    /// Is `terminal` open, still the very same pane `pane_key`, with its agent idle as its hooks tell?
+    fn idle(&self, terminal: u32, pane_key: Option<u32>) -> bool;
+    /// Types `text` into the agent in `terminal` and presses Enter.
+    fn send(&self, terminal: u32, text: &str) -> Result<(), String>;
+}
+
+/// The terminals the app runs, set when the clock starts; a run that cannot reach them (a test, or
+/// the app not up yet) opens its own session.
+static PANES: Mutex<Option<std::sync::Arc<dyn Panes + Send + Sync>>> = Mutex::new(None);
+
+pub fn use_panes(p: std::sync::Arc<dyn Panes + Send + Sync>) {
+    if let Ok(mut g) = PANES.lock() {
+        *g = Some(p);
+    }
+}
+
+fn panes() -> Option<std::sync::Arc<dyn Panes + Send + Sync>> {
+    PANES.lock().ok().and_then(|g| g.clone())
+}
+
+impl Panes for tauri::AppHandle {
+    fn idle(&self, terminal: u32, pane_key: Option<u32>) -> bool {
+        tauri::Manager::try_state::<crate::terminal::Terminals>(self).is_some_and(|t| t.idle(terminal, pane_key))
+    }
+    fn send(&self, terminal: u32, text: &str) -> Result<(), String> {
+        tauri::Manager::try_state::<crate::terminal::Terminals>(self).ok_or("no terminals")?.send(terminal, text)
+    }
+}
+
+impl Panes for crate::terminal::Terminals {
+    fn idle(&self, terminal: u32, pane_key: Option<u32>) -> bool {
+        pane_key.is_some_and(|p| self.attached(p) == Some(terminal)) && crate::status::state_of(terminal) == Some("done")
+    }
+    // ponytail: the pause between the pasted prompt and Enter blocks the caller for a quarter of a
+    // second; a thread if sends ever come in bunches.
+    fn send(&self, terminal: u32, text: &str) -> Result<(), String> {
+        self.write(terminal, &format!("\u{1b}[200~{}\u{1b}[201~", text.replace("\r\n", "\n")))?;
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        self.write(terminal, "\r")
+    }
+}
+
+/// AUTO-009: the session this run may continue in: the automation asks for reuse (existing
+/// worktree only), its newest run that had a pane was in this same worktree with this same agent,
+/// is over, no live run holds that pane, and the pane is still open, still the same pane and idle.
+fn reusable(store: &Store, auto: &Value, folder: &str, panes: &dyn Panes) -> Option<(u32, u32)> {
+    if auto["reuseSession"] != true || auto["workspaceMode"] != "existing" {
+        return None;
+    }
+    let runs = load(store, RUNS_KEY).ok()?;
+    let last = runs.iter().filter(|r| r["automationId"] == auto["id"] && r["terminal"].is_u64()).max_by_key(|r| r["at"].as_u64().unwrap_or(0))?;
+    let (terminal, pane) = (u32::try_from(last["terminal"].as_u64()?).ok()?, u32::try_from(last["paneKey"].as_u64()?).ok()?);
+    let same = !in_progress(last) && last["provider"] == auto["provider"] && last["worktree"].as_str().is_some_and(|w| same_dir(w, folder));
+    let held = runs.iter().any(|r| in_progress(r) && r["terminal"] == terminal);
+    (same && !held && panes.idle(terminal, Some(pane))).then_some((terminal, pane))
+}
+
 /// AUTO-019 Run now: begins a run at once whatever the timetable or the switch says (a paused
 /// automation runs too) and logs it as a manual run. The run is queued (`pending`) first, then
 /// placed and handed to the window as a background tab (`dispatched`, AUTO-011), or ends as
@@ -1125,7 +1191,16 @@ fn run_with(l: &Launch, id: &str, trigger: &str, event: Option<&str>) -> Result<
     (l.notify)(EVENT, json!({ "runId": run_id }));
     let outcome = place_and_start(l, &auto, &run_id);
     let fields = match outcome {
-        Ok((wt, project_id)) => json!({ "status": "dispatched", "provider": auto["provider"], "dispatchedAt": now_ms(), "worktree": wt.path, "worktreeName": wt.name.clone().or(wt.branch.clone()).unwrap_or_else(|| folder_name(&wt.path)), "projectId": project_id }),
+        Ok((wt, project_id, session)) => {
+            let mut fields = json!({ "status": "dispatched", "provider": auto["provider"], "dispatchedAt": now_ms(), "worktree": wt.path, "worktreeName": wt.name.clone().or(wt.branch.clone()).unwrap_or_else(|| folder_name(&wt.path)), "projectId": project_id });
+            // AUTO-009: a run that went into the earlier session holds that pane from the start.
+            if let Some((terminal, pane)) = session {
+                fields["terminal"] = json!(terminal);
+                fields["paneKey"] = json!(pane);
+                fields["reused"] = json!(true);
+            }
+            fields
+        }
         Err(Stop::Skipped(why)) => json!({ "status": "skipped", "cause": "unavailable", "detail": why }),
         Err(Stop::Failed(why)) => json!({ "status": "failed", "detail": why }),
     };
@@ -1228,8 +1303,13 @@ fn created_event(project_id: &str, wt: &Worktree, auto: &Value) -> Value {
     json!({ "kind": "created", "projectId": project_id, "worktree": { "path": wt.path, "branch": wt.branch, "name": wt.name, "isMain": false }, "agent": Value::Null, "prompt": "", "activate": false, "setup": setup })
 }
 
+/// Where a run was placed: its worktree, its project, and the open session (terminal, pane) it went into, if any.
+type Placed = (Worktree, String, Option<(u32, u32)>);
+
 /// Finds or makes the run's workspace and asks the window to start the agent there.
-fn place_and_start(l: &Launch, auto: &Value, run_id: &str) -> Result<(Worktree, String), Stop> {
+/// AUTO-009: when the automation keeps one session and the last run's is free, the prompt is typed
+/// into it instead.
+fn place_and_start(l: &Launch, auto: &Value, run_id: &str) -> Result<Placed, Stop> {
     let agent = auto["provider"].as_str().unwrap_or_default().to_string();
     if !(l.installed)(&agent) {
         return Err(Stop::Failed(format!("{agent} is not installed")));
@@ -1263,8 +1343,14 @@ fn place_and_start(l: &Launch, auto: &Value, run_id: &str) -> Result<(Worktree, 
     if new_per_run {
         (l.notify)(crate::cli::EVENT, created_event(&project.id, &wt, auto));
     }
-    (l.notify)(crate::cli::EVENT, json!({ "kind": "start", "path": wt.path, "branch": wt.branch, "agent": agent, "prompt": auto["prompt"], "extra": [], "title": auto["name"], "runId": run_id }));
-    Ok((wt, project.id))
+    // AUTO-009: the last run's session, when it is free, takes the prompt instead of a new tab.
+    let prompt = auto["prompt"].as_str().unwrap_or_default();
+    let panes = panes();
+    let session = panes.as_deref().and_then(|ps| l.store.lock().ok().and_then(|store| reusable(&store, auto, &wt.path, ps)).filter(|(t, _)| ps.send(*t, prompt).is_ok()));
+    if session.is_none() {
+        (l.notify)(crate::cli::EVENT, json!({ "kind": "start", "path": wt.path, "branch": wt.branch, "agent": agent, "prompt": auto["prompt"], "extra": [], "title": auto["name"], "runId": run_id }));
+    }
+    Ok((wt, project.id, session))
 }
 
 // ---------------------------------------------------------------- the window's commands
@@ -1311,6 +1397,7 @@ fn launch_for<R>(app: &tauri::AppHandle, f: impl FnOnce(&Launch) -> R) -> R {
 /// Starts the clock: it looks for due automations about once a minute (every 30 seconds, so a run
 /// begins within its minute) for as long as the app runs.
 pub fn start_clock(app: tauri::AppHandle) {
+    use_panes(std::sync::Arc::new(app.clone()));
     std::thread::spawn(move || {
         // AUTO-021: a history saved too large is cut down as Kolux loads it.
         if let Err(e) = launch_for(&app, |l| tidy(&*l.store.lock().map_err(|e| e.to_string())?, now_ms())) {
@@ -2181,6 +2268,122 @@ mod tests {
         let r = list(&store).unwrap()["runs"][0].clone();
         assert_eq!((r["output"].as_str(), r["outputFrom"].as_str(), r["outputCut"].as_bool()), (Some("Done: 3 files changed"), Some("screen"), Some(false)));
         drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct FakePanes {
+        /// The only terminal that is open, the same pane and idle.
+        idle: Mutex<Option<(u32, u32)>>,
+        sent: Mutex<Vec<(u32, String)>>,
+    }
+
+    impl Panes for FakePanes {
+        fn idle(&self, terminal: u32, pane_key: Option<u32>) -> bool {
+            *self.idle.lock().unwrap() == pane_key.map(|p| (terminal, p))
+        }
+        fn send(&self, terminal: u32, text: &str) -> Result<(), String> {
+            self.sent.lock().unwrap().push((terminal, text.to_string()));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn t192c_reuse_is_for_an_existing_worktree_and_an_edit_that_leaves_it_out_keeps_it() {
+        let dir = temp("t192s");
+        let store = Store::open(&dir.join("db")).unwrap();
+        seed(&store, &dir);
+        let base = json!({ "name": "Review", "prompt": "look", "provider": "claude", "projectId": "p1", "workspaceMode": "existing", "workspace": dir.to_string_lossy(), "schedule": { "preset": "hourly", "time": "00:15", "timezone": "UTC" } });
+        let plain = save_automation(&store, &base, FRI_NOON).unwrap();
+        assert_eq!(plain["reuseSession"], json!(false));
+        let mut on = base.clone();
+        on["reuseSession"] = json!(true);
+        on["id"] = plain["id"].clone();
+        assert_eq!(save_automation(&store, &on, FRI_NOON).unwrap()["reuseSession"], json!(true));
+        // An edit that does not mention it keeps it; saying false (--fresh-session) turns it off.
+        let mut quiet = base.clone();
+        quiet["id"] = plain["id"].clone();
+        assert_eq!(save_automation(&store, &quiet, FRI_NOON).unwrap()["reuseSession"], json!(true));
+        quiet["reuseSession"] = json!(false);
+        assert_eq!(save_automation(&store, &quiet, FRI_NOON).unwrap()["reuseSession"], json!(false));
+        // A new worktree for every run always opens a new session: asking to reuse is refused, and an
+        // edit into that mode that says nothing drops a reuse it held.
+        let mut fresh = base.clone();
+        fresh["workspaceMode"] = json!("new-per-run");
+        fresh["workspace"] = Value::Null;
+        fresh["reuseSession"] = json!(true);
+        assert!(save_automation(&store, &fresh, FRI_NOON).unwrap_err().contains("existing worktree"));
+        fresh["id"] = plain["id"].clone();
+        fresh["reuseSession"] = Value::Null;
+        on["reuseSession"] = json!(true);
+        save_automation(&store, &on, FRI_NOON).unwrap();
+        assert_eq!(save_automation(&store, &fresh, FRI_NOON).unwrap()["reuseSession"], json!(false));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn t192c_a_run_continues_in_the_last_runs_session_only_while_it_is_open_idle_and_the_same_pane() {
+        let dir = temp("t192r");
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let store = Mutex::new(Store::open(&dir.join("db")).unwrap());
+        seed(&store.lock().unwrap(), &ws);
+        let panes = std::sync::Arc::new(FakePanes { idle: Mutex::new(None), sent: Mutex::new(Vec::new()) });
+        use_panes(panes.clone());
+        let git = Git::detect().unwrap();
+        let said = RefCell::new(Vec::<(String, Value)>::new());
+        let notify = |e: &str, v: Value| said.borrow_mut().push((e.to_string(), v));
+        let yes = |_: &str| true;
+        let l = Launch { git: &git, store: &store, claude_config: dir.join("claude.json"), installed: &yes, notify: &notify };
+        let starts = || said.borrow().iter().filter(|(e, v)| e == crate::cli::EVENT && v["kind"] == "start").count();
+        let finish = |terminal: u32, pane: u32| {
+            let s = store.lock().unwrap();
+            claim(&s, terminal, Some(pane), &ws.to_string_lossy(), Some("claude")).unwrap();
+            on_status(&s, Some(terminal), pane, "working", false, false, 10).unwrap();
+            assert!(on_status(&s, Some(terminal), pane, "done", false, false, 11).unwrap().is_some());
+        };
+        let reuse = |on: bool| {
+            let s = store.lock().unwrap();
+            let mut autos = load(&s, KEY).unwrap();
+            autos[0]["reuseSession"] = json!(on);
+            save(&s, KEY, &autos).unwrap();
+        };
+
+        // Reuse off: every run opens a tab, even with an idle session around.
+        let first = run(&l, "auto-1", "manual").unwrap();
+        assert_eq!((starts(), first["reused"].is_null()), (1, true));
+        finish(6, 60);
+        *panes.idle.lock().unwrap() = Some((6, 60));
+        assert_eq!(run(&l, "auto-1", "manual").unwrap()["status"], "dispatched");
+        assert_eq!((starts(), panes.sent.lock().unwrap().len()), (2, 0));
+        finish(7, 70);
+
+        // Reuse on, the newest run's session (7) idle: the prompt goes into it, no new tab, and the new
+        // run holds that pane from the start, so the hooks' next finish completes it.
+        reuse(true);
+        *panes.idle.lock().unwrap() = Some((7, 70));
+        let third = run(&l, "auto-1", "manual").unwrap();
+        assert_eq!((third["terminal"].as_u64(), third["paneKey"].as_u64(), third["reused"].as_bool(), third["status"].as_str()), (Some(7), Some(70), Some(true), Some("dispatched")));
+        assert_eq!((starts(), panes.sent.lock().unwrap().clone()), (2, vec![(7, "check".to_string())]));
+        {
+            let s = store.lock().unwrap();
+            assert_eq!(on_status(&s, Some(7), 70, "done", false, false, 20).unwrap(), None, "the earlier done does not count before the agent worked");
+            on_status(&s, Some(7), 70, "working", false, false, 21).unwrap();
+            assert_eq!(on_status(&s, Some(7), 70, "done", false, false, 22).unwrap().as_deref(), third["id"].as_str());
+        }
+
+        // The agent is busy (or the tab was closed or is another pane): a new session opens.
+        *panes.idle.lock().unwrap() = None;
+        let fourth = run(&l, "auto-1", "manual").unwrap();
+        assert_eq!((starts(), fourth["reused"].is_null(), fourth["terminal"].is_null()), (3, true, true));
+        // A run still going holds the pane: even an idle report does not hand it to a second run.
+        finish(8, 80);
+        *panes.idle.lock().unwrap() = Some((8, 80));
+        let fifth = run(&l, "auto-1", "manual").unwrap();
+        assert_eq!(fifth["reused"], json!(true));
+        let sixth = run(&l, "auto-1", "manual").unwrap();
+        assert!(sixth["reused"].is_null() && starts() == 4, "{sixth}");
+        *panes.idle.lock().unwrap() = None;
+        drop(l);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

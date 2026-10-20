@@ -101,6 +101,7 @@ export default function AutomationDialog({ projects, agents, editing, template, 
   const [workspace, setWorkspace] = useState(editing?.workspace ?? "");
   const [base, setBase] = useState(editing?.baseBranch ?? "");
   const [runSetup, setRunSetup] = useState(editing?.runSetup ?? false);
+  const [reuse, setReuse] = useState(editing?.reuseSession ?? false);
   const [hasSetup, setHasSetup] = useState<boolean | null>(null);
   const [grace, setGrace] = useState(editing?.missedRunGraceMinutes ?? start?.graceMinutes ?? 0);
   const [precheck, setPrecheck] = useState(editing?.precheck ?? "");
@@ -207,7 +208,7 @@ export default function AutomationDialog({ projects, agents, editing, template, 
     if (saving || !ready) return;
     setSaving(true);
     setSaveError(null);
-    const input = { id: editing?.id, requestId, name, prompt, provider, projectId, workspaceMode: mode, workspace: mode === "existing" ? workspace : null, baseBranch: mode === "new-per-run" ? base : "", runSetup: setupShown === true, missedRunGraceMinutes: grace, precheck, precheckTimeoutSeconds: limit, schedule, trigger: timed ? undefined : { kind: "event", event: starts } };
+    const input = { id: editing?.id, requestId, name, prompt, provider, projectId, workspaceMode: mode, workspace: mode === "existing" ? workspace : null, baseBranch: mode === "new-per-run" ? base : "", runSetup: setupShown === true, reuseSession: mode === "existing" && reuse, missedRunGraceMinutes: grace, precheck, precheckTimeoutSeconds: limit, schedule, trigger: timed ? undefined : { kind: "event", event: starts } };
     invoke<Automation>("automation_save", { input })
       .then((a) => {
         onSaved(a);
@@ -301,6 +302,11 @@ export default function AutomationDialog({ projects, agents, editing, template, 
               <label className="auto-radio">
                 <input type="radio" checked={mode === "existing"} onChange={() => setMode("existing")} /> An existing worktree
               </label>
+              {mode === "existing" && (
+                <label className="auto-radio">
+                  <input type="checkbox" checked={reuse} onChange={(e) => setReuse(e.target.checked)} /> Continue in the session the last run left open, when the agent is idle there
+                </label>
+              )}
               {mode === "existing" && (
                 <select className="field" aria-label="Worktree" value={workspace} disabled={!worktrees} onChange={(e) => setWorkspace(e.target.value)}>
                   {(worktrees ?? []).map((w) => (

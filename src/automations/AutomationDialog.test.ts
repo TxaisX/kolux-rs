@@ -97,6 +97,15 @@ test("AUTO-010: the setup choice shows only for a new worktree per run in a proj
   expect(render(null)).not.toContain("Run the project setup");
 });
 
+test("T-192-c: the keep-one-session choice shows for an existing worktree only and reopens as saved", () => {
+  const saved = (reuseSession: boolean, workspaceMode: "existing" | "new-per-run"): Automation => ({ id: "auto-1", name: "Leap", prompt: "go", provider: "claude", projectId: "p1", enabled: true, workspaceMode, reuseSession });
+  const say = "Continue in the session the last run left open";
+  expect(render(null)).toContain(say);
+  expect(render(null)).not.toMatch(/type="checkbox" checked=""[^>]*\/> Continue/);
+  expect(render(saved(true, "existing"))).toMatch(/type="checkbox" checked=""[^>]*\/> Continue/);
+  expect(render(saved(true, "new-per-run")), "a new worktree for every run always opens a new session").not.toContain(say);
+});
+
 test("T-085-f: the dialog offers pull request opens, checks fail and an agent finishes, each with its own note", () => {
   const fresh = render(null);
   for (const [value, label] of [["pr-opened", "When a pull request opens"], ["checks-failed", "When checks fail"], ["agent-finished", "When an agent finishes"]]) {

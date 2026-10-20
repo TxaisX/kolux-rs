@@ -20,6 +20,8 @@ export type Automation = {
   baseBranch?: string;
   /** AUTO-010: whether each new-per-run worktree runs the project setup; missing means skip. */
   runSetup?: boolean;
+  /** AUTO-009: an existing-worktree automation continues in the session its last run left open, when that is free. */
+  reuseSession?: boolean;
   /** AUTO-007: how many minutes late a missed run may still start; 0 skips it. */
   missedRunGraceMinutes?: number;
   precheck?: string;
@@ -41,7 +43,7 @@ export const defaultForm: ScheduleForm = { preset: "weekdays", time: "09:00", da
 
 /** AUTO-012's states; `cause` says why a run was skipped. */
 export type RunStatus = "pending" | "dispatching" | "dispatched" | "completed" | "skipped" | "failed";
-export type Run = { id: string; automationId: string; number: number; trigger: "manual" | "schedule" | "event"; status: RunStatus; at: number; cause?: string; detail?: string; exitCode?: number | null; timedOut?: boolean; output?: string; worktree?: string; worktreeName?: string; repeats?: number; lastAt?: number; eventDetail?: string; worktreeGone?: boolean; dispatchedAt?: number; finishedAt?: number; provider?: string; outputFrom?: "screen" | "transcript" | "replay"; outputCut?: boolean; sessionId?: string; paneEnded?: boolean; reconnected?: boolean };
+export type Run = { id: string; reused?: boolean; automationId: string; number: number; trigger: "manual" | "schedule" | "event"; status: RunStatus; at: number; cause?: string; detail?: string; exitCode?: number | null; timedOut?: boolean; output?: string; worktree?: string; worktreeName?: string; repeats?: number; lastAt?: number; eventDetail?: string; worktreeGone?: boolean; dispatchedAt?: number; finishedAt?: number; provider?: string; outputFrom?: "screen" | "transcript" | "replay"; outputCut?: boolean; sessionId?: string; paneEnded?: boolean; reconnected?: boolean };
 
 export type SortKey = "name" | "trigger" | "agent" | "project" | "lastRun" | "nextRun";
 export type Filters = { state: "all" | "on" | "paused"; result: "all" | "never" | RunStatus; agents: string[] };

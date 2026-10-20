@@ -866,3 +866,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · automations T-085-d · spec/09 AUTO-004 as named in the brief; this tree own automations.rs and scm.rs (checks_of, prs_poll) read; gh pr list --json fields from the GitHub CLI manual (public docs); no outside source
 > 2026-10-19 · automations T-085-f · spec/09 AUTO-004 as named in the brief; this tree own AutomationDialog.tsx and model.ts; no outside source
 > 2026-10-19 · automations T-140-b · spec/09 AUTO-014 as named in the brief; this tree's own chat.rs (transcript finder and tail reader) and status.rs (transcript_of) read, and the shapes of the Claude and Codex transcript lines as that chat.rs already reads them; no outside source
+> 2026-10-19 · automations T-192-c · spec/09 AUTO-009 as named in the brief; this tree's own terminal.rs (attached, write), status.rs (state_of) and automations.rs read; bracketed paste is the terminal standard, no outside source
