@@ -23,6 +23,7 @@ import { dismissGenerate, generate, genState, genSubscribe, genVersion, stopGene
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
 import { watchStatus } from "./watch";
+import { afterRefresh, commitBox, failureSummary, mainStep, statusGuard } from "./rules";
 import { DIFF_SPLITS, type DiffSplit } from "./split";
 import { openInBrowser } from "../browser/BrowserPane";
 import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, type RowKey, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine, PULL_POLICIES, filterRows, fullPath } from "./model";
@@ -155,6 +156,8 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
     void runAgent(a, asking.prompt);
   };
   const [status, setStatus] = useState<Status | null>(null);
+  const statusRef = useRef<Status | null>(null);
+  statusRef.current = status;
   const [error, setError] = useState<string | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -166,18 +169,24 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
   const remoteButton = useRef<HTMLButtonElement>(null);
   const [discarding, setDiscarding] = useState<(DiscardAsk & { section: Section }) | null>(null);
 
-  const load = useCallback(async () => {
+  // VIEW-062: an older answer never overwrites a newer one; a failed refresh keeps the last good status.
+  const guard = useRef(statusGuard());
+  const load = useCallback(async (auto = false) => {
     if (dir === null) {
       setStatus(null);
       return;
     }
+    const ticket = guard.current.begin();
+    let got: Status | { error: string };
     try {
-      setStatus(await invoke<Status>("scm_status", { worktree: dir }));
-      setError(null);
+      got = await invoke<Status>("scm_status", { worktree: dir });
     } catch (err) {
-      setStatus(null);
-      setError(String(err));
+      got = { error: String(err) };
     }
+    if (!guard.current.accept(ticket)) return;
+    const shown = afterRefresh(statusRef.current, got, auto);
+    setStatus(shown.status);
+    setError(shown.error);
   }, [dir]);
   useEffect(() => {
     setFailure(null);
@@ -186,9 +195,11 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
     setSelected([]);
     setAnchor(null);
     setDiscarding(null);
+    statusRef.current = null;
     void load();
     if (dir === null) return;
     return watchStatus(dir, (s) => {
+      if (!guard.current.accept(guard.current.begin())) return;
       setStatus(s);
       setError(null);
     });
@@ -224,7 +235,7 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
       setError(String(err));
     } finally {
       setBusy(false);
-      await load();
+      await load(true);
     }
   };
   const abortOp = (op: string) =>
@@ -418,7 +429,9 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
     lookUp();
   };
 
-  const step = withPr(nextStep(status, draft), status, look);
+  const main = mainStep(withPr(nextStep(status, draft), status, look), status, look);
+  const step = main.step;
+  const box = commitBox(status);
 
   // GIT-035: the history section loads while it is open, again when HEAD moves or on refresh.
   const [histOpen, setHistOpen] = useState(false);
@@ -723,7 +736,7 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
             )}
             <div className="scm-commit">
               <div className="scm-msg">
-                <textarea className="field multi" placeholder={status?.branch ? `Message (Ctrl+Enter to commit on ${status.branch})` : "Message (Ctrl+Enter to commit)"} value={draft} onChange={(e) => onDraft(e.target.value)} />
+                <textarea className="field multi" placeholder={status?.branch ? `Message (Ctrl+Enter to commit on ${status.branch})` : "Message (Ctrl+Enter to commit)"} value={draft} disabled={box.boxDisabled} title={box.why ?? undefined} onChange={(e) => onDraft(e.target.value)} />
                 {gen === "running" ? (
                   <button className="ib scm-gen" title="Stop writing the message" aria-label="Stop writing the message" onClick={() => dir !== null && void stopGenerate(dir)}>
                     <Stop />
@@ -745,7 +758,7 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
                   </button>
                 </div>
               )}
-              <div className="scm-main">
+              <div className="scm-main" hidden={box.controlsHidden}>
                 <button className="btn primary" title={step.reason ?? step.label} disabled={busy || step.reason !== null} onClick={() => void mainAction()}>
                   <span>{step.label}</span>
                 </button>
@@ -960,7 +973,8 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
               <div className="scm-out" role="alert">
                 <details>
                   <summary>{failure.title}</summary>
-                  <pre>{failure.output || "git gave no reason"}</pre>
+                  <p data-failure-summary>{failureSummary(failure.output).summary}</p>
+                  {failureSummary(failure.output).details && <pre>{failure.output || "git gave no reason"}</pre>}
                 </details>
                 {failure.policy && (
                   <div className="scm-policy" data-pull-policy style={{ display: "flex", flexDirection: "column", gap: 4 }}>
