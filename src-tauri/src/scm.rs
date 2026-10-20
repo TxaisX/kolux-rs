@@ -1194,22 +1194,65 @@ pub fn write_message(program: &Path, args: &[&str], dir: &Path, input: Option<&s
     Ok(message)
 }
 
+/// GIT-017 (T-227-d): files with an unresolved conflict, by path. Their staged text is clash markers, so it never goes into a message prompt.
+pub fn conflicted_files(dir: &Path) -> Vec<String> {
+    run(&["diff", "--name-only", "--diff-filter=U", "-z"], Some(dir)).map(|t| t.split(' ').filter(|n| !n.is_empty()).map(String::from).collect()).unwrap_or_default()
+}
+
+/// GIT-017 (T-227-d): the note that opens the diff when conflicted files were left out of it.
+pub fn conflict_note(files: &[String]) -> String {
+    if files.is_empty() {
+        return String::new();
+    }
+    let shown: Vec<&str> = files.iter().take(20).map(String::as_str).collect();
+    let more = if files.len() > shown.len() { format!(" and {} more", files.len() - shown.len()) } else { String::new() };
+    format!("Note: {} with unresolved conflicts left out of this diff, so do not describe them: {}{more}
+
+", if files.len() == 1 { "1 file".to_string() } else { format!("{} files", files.len()) }, shown.join(", "))
+}
+
+/// GIT-017 (T-227-d): the staged diff for a message, conflicted files excluded, with the note about them (empty when none).
+pub fn message_diff(dir: &Path) -> Result<(String, String), String> {
+    let left_out = conflicted_files(dir);
+    let mut args: Vec<String> = ["diff", "--cached", "--no-color", "--no-ext-diff"].iter().map(|a| a.to_string()).collect();
+    if !left_out.is_empty() {
+        args.push("--".into());
+        args.push(".".into());
+        args.extend(left_out.iter().map(|f| format!(":(exclude,literal){f}")));
+    }
+    let diff = run(&args.iter().map(String::as_str).collect::<Vec<_>>(), Some(dir))?;
+    if diff.trim().is_empty() {
+        return Err(if left_out.is_empty() { "Nothing is staged to describe".into() } else { "Only files with unresolved conflicts are staged: resolve them first".into() });
+    }
+    Ok((conflict_note(&left_out), diff))
+}
+
+/// GIT-017 (T-227-d): the whole prompt for `diff` (after `note`) kept within `room` bytes, for a writer that takes it on the command line; `None` room keeps the usual budget.
+pub fn fit_prompt(note: &str, diff: &str, instructions: &str, room: Option<usize>) -> String {
+    let build = |budget: usize| message_prompt(&format!("{note}{}", trim_diff(diff, budget)), instructions);
+    let Some(room) = room else { return build(MESSAGE_BUDGET) };
+    let mut budget = MESSAGE_BUDGET.min(room.saturating_sub(message_prompt(note, instructions).len()));
+    let mut text = build(budget);
+    while text.len() > room && budget > 200 {
+        budget = budget * 4 / 5;
+        text = build(budget);
+    }
+    text
+}
+
 /// GIT-017 / GIT-018: a commit message for what is staged in `worktree`, written by Claude Code, or
 /// by the user's own `command` when one is set, following their `instructions`.
 #[tauri::command]
 pub async fn scm_commit_message(worktree: String, command: Option<String>, instructions: Option<String>, agent: Option<String>, model: Option<String>, effort: Option<String>) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = Path::new(&worktree);
-        let diff = run(&["diff", "--cached", "--no-color", "--no-ext-diff"], Some(dir))?;
-        if diff.is_empty() {
-            return Err("Nothing is staged to describe".into());
-        }
+        let (note, diff) = message_diff(dir)?;
         // Development builds only: KOLUX_DEV_WRITER names a stand-in agent for live proofs (as KOLUX_DEV_GH).
         #[cfg(debug_assertions)]
         let stand_in = std::env::var_os("KOLUX_DEV_WRITER").map(std::path::PathBuf::from);
         #[cfg(not(debug_assertions))]
         let stand_in: Option<std::path::PathBuf> = None;
-        let prompt = message_prompt(&trim_diff(&diff, MESSAGE_BUDGET), instructions.as_deref().unwrap_or(""));
+        let prompt = fit_prompt(&note, &diff, instructions.as_deref().unwrap_or(""), None);
         let limit = std::time::Duration::from_secs(180);
         if let Some(line) = command.filter(|c| !c.trim().is_empty()) {
             let words = split_command(&line);
@@ -1228,14 +1271,7 @@ pub async fn scm_commit_message(worktree: String, command: Option<String>, instr
         let program = writers::program_of(spec).ok_or_else(|| format!("{} was not found on this computer", spec.name))?;
         // An agent that takes the prompt as an argument gets a diff cut to fit the command line.
         let prompt = if spec.prompt_in_args {
-            let room = writers::arg_limit(&program);
-            let mut budget = MESSAGE_BUDGET.min(room.saturating_sub(message_prompt("", instructions.as_deref().unwrap_or("")).len()));
-            let mut text = message_prompt(&trim_diff(&diff, budget), instructions.as_deref().unwrap_or(""));
-            while text.len() > room && budget > 200 {
-                budget = budget * 4 / 5;
-                text = message_prompt(&trim_diff(&diff, budget), instructions.as_deref().unwrap_or(""));
-            }
-            text
+            fit_prompt(&note, &diff, instructions.as_deref().unwrap_or(""), Some(writers::arg_limit(&program)))
         } else {
             prompt
         };
@@ -3589,6 +3625,47 @@ mod tests {
         names.sort();
         assert_eq!(names, ["README.md", "a.txt"]);
         let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn git017_d_conflicted_files_stay_out_of_the_message_diff_with_a_note() {
+        let repo = temp_repo("git017d");
+        run(&["checkout", "-q", "-b", "other"], Some(&repo)).unwrap();
+        commit_file(&repo, "README.md", "theirs
+");
+        run(&["checkout", "-q", "main"], Some(&repo)).unwrap();
+        commit_file(&repo, "README.md", "ours
+");
+        assert!(run(&["merge", "other"], Some(&repo)).is_err());
+        assert_eq!(conflicted_files(&repo), ["README.md"]);
+        // Only the conflicted file is staged: nothing to describe, and it says why.
+        assert!(message_diff(&repo).unwrap_err().contains("unresolved conflicts"));
+        fs::write(repo.join("fresh.txt"), "new work
+").unwrap();
+        run(&["add", "fresh.txt"], Some(&repo)).unwrap();
+        let (note, diff) = message_diff(&repo).unwrap();
+        assert!(note.starts_with("Note: 1 file with unresolved conflicts left out") && note.contains("README.md"));
+        assert!(diff.contains("fresh.txt") && !diff.contains("README.md") && !diff.contains("<<<<<<<"));
+        // Without a conflict there is no note.
+        run(&["merge", "--abort"], Some(&repo)).unwrap();
+        fs::write(repo.join("fresh.txt"), "new work
+").unwrap();
+        run(&["add", "fresh.txt"], Some(&repo)).unwrap();
+        let (note, _) = message_diff(&repo).unwrap();
+        assert_eq!(note, "");
+        assert!(conflict_note(&(0..25).map(|n| format!("f{n}")).collect::<Vec<_>>()).contains("and 5 more"));
+    }
+
+    #[test]
+    fn git017_d_a_command_line_writer_gets_a_prompt_that_fits_and_keeps_the_note() {
+        let diff = format!("diff --git a/a b/a
+{}", "+line of change
+".repeat(3000));
+        let note = conflict_note(&["x.txt".to_string()]);
+        let fits = fit_prompt(&note, &diff, "use the imperative", Some(6_500));
+        assert!(fits.len() <= 6_500 && fits.contains("x.txt") && fits.contains("use the imperative"));
+        let roomy = fit_prompt(&note, &diff, "", None);
+        assert!(roomy.len() > 20_000 && roomy.len() < 40_000);
     }
 
     #[test]
