@@ -28,7 +28,10 @@ import { useSettings } from "../settings/useSettings";
 import { prefPatch, readEditorPrefs } from "../settings/editorPrefs";
 import { undo } from "@codemirror/commands";
 import { clampView, keepView, takeView } from "../terminal/viewKeep";
-import { attach, baseName, detach, hashOf, isDirty, isStale, loadText, relay, replaceAll, save, subscribe, takeCarried, textOf } from "./buffers";
+import { attach, baseName, detach, diskOf, hashOf, isDirty, isStale, loadText, relay, replaceAll, save, subscribe, takeCarried, textOf } from "./buffers";
+import NamePrompt from "./NamePrompt";
+import { announceMoves } from "./fileMoved";
+import { needsName } from "./untitled";
 import { createAutosave, covers, movingNow, prefsReader, type Autosave } from "./autosave";
 import { drafts, restoreFrom, worktreeOf } from "./drafts";
 import { confirmed } from "./fileMoved";
@@ -94,6 +97,18 @@ export async function saveFile(path: string, onStale: (stale: boolean) => void, 
   } catch (err) {
     if (isStale(err)) return onStale(true);
     onToast?.(`${baseName(path)} was not saved: ${String(err)}`);
+  }
+}
+
+/** EDIT-031 (T-236-b): saves in place for the close prompt; true only when the file was written. A refusal is a toast, so the
+ *  tab stays open with its text. */
+export async function saveQuiet(path: string, onToast?: (text: string) => void): Promise<boolean> {
+  try {
+    await writeRemembering(path, false);
+    return true;
+  } catch (err) {
+    onToast?.(isStale(err) ? `${baseName(path)} changed on disk since you opened it, so it was not saved.` : `${baseName(path)} was not saved: ${String(err)}`);
+    return false;
   }
 }
 
@@ -167,6 +182,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   const [error, setError] = useState<string | null>(null);
   const [tries, setTries] = useState(0);
   const [dirty, setDirty] = useState(false);
+  const [naming, setNaming] = useState(false); // EDIT-054: the first save of an untitled note is asking for its name
   const [stale, setStale] = useState(false); // the last save was refused: the disk copy moved on
   // T-073: the disk copy changed under unsaved edits (with the stamp Keep my edits keeps), the
   // Compare view, and the Undo toast after a Reload.
@@ -241,7 +257,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     // EDIT-002: autosave; EDIT-032: it stands down while the file is being moved.
     const auto = createAutosave({
       prefs: prefs.get,
-      covered: () => covers({ readOnly, conflict: conflictsRef.current > 0 }),
+      covered: () => covers({ readOnly, conflict: conflictsRef.current > 0 }) && !needsName(path, root, diskOf(path)), // an untitled note waits for its name
       dirty: () => isDirty(path),
       held: () => bannerUp(path) || movingNow(path),
       write: () => saveFile(path, setStale, report.current.onToast),
@@ -323,7 +339,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
       },
       (err) => alive && setError(String(err)),
     );
-    editors.set(id, () => saveFile(path, setStale, report.current.onToast));
+    editors.set(id, () => (needsName(path, root, diskOf(path)) ? (setNaming(true), Promise.resolve()) : saveFile(path, setStale, report.current.onToast)));
     return () => {
       alive = false;
       auto.cancel();
@@ -595,6 +611,19 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
         <span className="path" title={path}>
           {path}
         </span>
+        <button
+          className="ib"
+          title="Copy the full path"
+          aria-label="Copy the full path"
+          onClick={() =>
+            void navigator.clipboard.writeText(path).then(
+              () => report.current.onToast?.("Path copied"),
+              () => report.current.onToast?.("The path could not be copied; select it in the header instead."),
+            )
+          }
+        >
+          Copy
+        </button>
         {md && (
           <span className="view-switch" role="group" aria-label="View">
             <button aria-pressed={mode === "rich"} onClick={() => setMode("rich")} title="Rich view">
@@ -639,7 +668,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
           </span>
         )}
         <span className="right">
-          <button className="ib" onClick={() => (void drafts.discard(worktreeOf(root, path), path), onClose?.())} title="Close tab (Ctrl+W)">
+          <button className="ib" onClick={() => onClose?.()} title="Close tab (Ctrl+W)">
             <Close size={12} />
           </button>
         </span>
@@ -656,6 +685,21 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
             </button>
           )}
         </div>
+      )}
+      {naming && root && (
+        <NamePrompt
+          path={path}
+          root={root}
+          text={() => textOf(path) ?? ""}
+          onCancel={() => setNaming(false)}
+          onSaved={(r) => {
+            setNaming(false);
+            if (r.note) report.current.onToast?.(r.note);
+            // The suggested name saves in place; a new name was written already and the tab follows the file (EDIT-032).
+            if (r.same) void saveFile(path, setStale, report.current.onToast);
+            else announceMoves([[path, r.path]]);
+          }}
+        />
       )}
       {stale && <StaleNotice path={path} onDone={() => setStale(false)} onToast={report.current.onToast} />}
       {moved && !stale && !comparing && <DiskBanner path={path} onReload={reload} onKeep={keepMine} onCompare={() => setComparing(true)} />}

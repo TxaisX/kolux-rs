@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { checkName, isUntitled, suggestedName } from "./untitled";
+import { checkName, isUntitled, needsName, suggestedName } from "./untitled";
 
 const root = "C:\\w\\proj";
 const none = () => false;
@@ -26,4 +26,13 @@ test("EDIT-054 (T-237-b): a name that exists, or is not a name inside the worktr
   for (const bad of ["", "  ", "dir/", "C:/x.md", "/etc/x", "../x", "a//b/../c", "a?.md", "con.md", "x."]) {
     expect(checkName(bad, "C:/w/proj/untitled.md", "C:/w/proj", none).ok, bad).toBe(false);
   }
+});
+
+test("EDIT-054 (T-236-b): only an untitled note whose file is still the empty one asks for its name", () => {
+  expect(needsName("C:/w/proj/untitled.md", "C:/w/proj", "")).toBe(true);
+  expect(needsName("C:/w/proj/untitled-2.md", "C:/w/proj", "")).toBe(true);
+  expect(needsName("C:/w/proj/untitled.md", "C:/w/proj", "# saved once\n")).toBe(false);
+  expect(needsName("C:/w/proj/untitled.md", "C:/w/proj", null)).toBe(false);
+  expect(needsName("C:/w/proj/sub/untitled.md", "C:/w/proj", "")).toBe(false);
+  expect(needsName("C:/w/proj/untitled.md", null, "")).toBe(false);
 });
