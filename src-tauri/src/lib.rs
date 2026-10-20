@@ -588,6 +588,7 @@ pub fn run() {
             agents::inventory::session_tabs,
             orchestration::task_reset,
             orchestration::worker_labels,
+            orchestration::setup_gate::worker_setup_settled,
             prompt_answer::prompt_read,
             prompt_answer::prompt_answer,
             prompt_scan::prompt_scan,
