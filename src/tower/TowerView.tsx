@@ -12,7 +12,7 @@ import { StatusGlyph, type GlyphName } from "../chrome/icons";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import { programWord } from "../launch/PlusMenu";
 import { folderName } from "../projects/model";
-import { tone } from "../usage/meter";
+import { meterText, tone } from "../usage/meter";
 import { refreshAll } from "../usage/refresh";
 import { OWN_WINDOW_WIRED, openTowerWindow } from "./ownWindow";
 import Ring from "../usage/Ring";
@@ -112,6 +112,10 @@ export default function TowerView({ rows, usage, now, onOpen, detached = false, 
               )}
               {/* T-548: whose figures these are, and the panes that are on another account (their figures are not read yet). */}
               {u.forAccount !== undefined && u.figures && <div className="none">{`Figures for ${u.forAccount ?? "the system default"}`}</div>}
+              {/* T-548-b: the accounts other than the one above whose own figures have been read */}
+              {u.accounts.filter((x) => x.figures).map((x) => (
+                <div key={x.account ?? ""} className="none" data-account-figures>{`${x.account ?? "The system default"}: ${meterText({ plan: x.figures })}`}</div>
+              ))}
               {!!u.elsewhere && <div className="none">{`${u.elsewhere} ${u.elsewhere === 1 ? "pane" : "panes"} on other accounts: not read yet`}</div>}
             </div>
           );

@@ -170,3 +170,33 @@ describe("FIX-5 the Tower list keys", () => {
     expect(selectionForKey("Enter", keys, 4)).toBeNull();
   });
 });
+
+// T-548-b: figures read for a Codex account other than the active one show on its own line.
+describe("usageByAccount with per-account Codex figures", () => {
+  const ok = (five: number) => ({ state: "ok" as const, fiveHour: { usedPercent: five, resetsAt: null, windowMins: 300 }, weekly: null, resetCredits: null, plan: null, message: null });
+  const plan = { claude: [], codex: ok(5), codexBy: { b: ok(70), "": ok(33) } };
+  const active = { claude: null, codex: "a" };
+
+  it("gives an account whose figures were read its own, and counts only the unread ones as elsewhere", () => {
+    const seats = [{ agent: "codex", account: "a" }, { agent: "codex", account: "b" }, { agent: "codex", account: null }, { agent: "codex", account: "c" }];
+    const [card] = usageByAccount(seats, plan, active);
+    expect(card.figures).toEqual({ fiveHour: 5, weekly: null });
+    expect(card.accounts.find((a) => a.account === "b")?.figures).toEqual({ fiveHour: 70, weekly: null });
+    expect(card.accounts.find((a) => a.account === null)?.figures).toEqual({ fiveHour: 33, weekly: null });
+    expect(card.accounts.find((a) => a.account === "a")?.figures).toBeUndefined();
+    expect(card.accounts.find((a) => a.account === "c")?.figures).toBeUndefined();
+    expect(card.elsewhere).toBe(1);
+  });
+
+  it("still drops the card's own figures when no pane runs on the active account, but keeps each account's", () => {
+    const [card] = usageByAccount([{ agent: "codex", account: "b" }], plan, active);
+    expect(card.figures).toBeNull();
+    expect(card.accounts[0].figures).toEqual({ fiveHour: 70, weekly: null });
+    expect(card.elsewhere).toBe(0);
+  });
+
+  it("leaves a Claude card alone", () => {
+    const [card] = usageByAccount([{ agent: "claude", account: "x" }], plan, active);
+    expect(card.accounts[0].figures).toBeUndefined();
+  });
+});

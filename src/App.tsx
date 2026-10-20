@@ -45,6 +45,7 @@ import { applyAppearance, readAppearance, showScreen, zoomTerm } from "./theme";
 import { applyWindowBlur } from "./chrome/appLook";
 import { useEscapeLeaves } from "./chrome/fullPage";
 import SignInNotice from "./settings/SignInNotice";
+import { watchCodexSignIn } from "./settings/codexSignInScan";
 import KeyLostNotice from "./settings/KeyLostNotice";
 import RecoveryMount from "./recovery/RecoveryMount";
 import { LAST_SCREEN_FIELD, lastWriter, OPEN_PAGE_FIELD, openPageAt, saveLayout, startScreen, stripOn } from "./settings/general";
@@ -134,7 +135,7 @@ import { FIELDS as STATUS_FIELDS, readStatusBar, toggleItem } from "./chrome/sta
 import { chromeShown, menuBarState, menuEdit, menuScreen, menuSettingFlip } from "./chrome/chromeItems";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
 import TerminalPane, { focusedTerminalEdit, type PaneNotice } from "./terminal/TerminalPane";
-import { accountLabel, accountPrompt, type CodexAccount } from "./terminal/accountChange";
+import { accountLabel, accountPrompt, codexSetup, setupChanged, type CodexAccount } from "./terminal/accountChange";
 import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
 import AutomationsPage from "./automations/AutomationsPage";
 import { forgetRunTab, openRunTab, paneOfTerminal, runPaneKey, runTabEnded, touchRunTab, typedInRunTab, type RunTabs } from "./automations/runTab";
@@ -170,6 +171,7 @@ import { useAccountSwitcher } from "./switcher/AccountSwitcher";
 import { cycleTarget, paletteRows, pickWithNotice, switcherLabel } from "./switcher/accounts";
 import { readoutOf } from "./terminal/headerUsage";
 import { usePlan } from "./usage/plan";
+import { useCodexPaneFigures } from "./usage/paneFigures";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, sheetStart, type Lineup } from "./launch/seats";
 import { folderName, NESTING_KEY, projectLabel, workItem, type Created, type WorkItem, type CliWorkspace, type CliFile, type Project, type Worktree } from "./projects/model";
@@ -210,7 +212,7 @@ import { draftKey, feedbackMessage, keepDraft, showsReview, startFeedback, still
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-export type Pane = { /** EDIT-026: an editor tab that follows a growing log (read-only). */ follow?: boolean; key: number; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; forkOf?: string; resumed?: boolean; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number; col?: number; side?: "old" } };
+export type Pane = { /** EDIT-026: an editor tab that follows a growing log (read-only). */ follow?: boolean; key: number; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; forkOf?: string; resumed?: boolean; env?: [string, string][]; account?: string | null; /** T-139-d: the Codex setup (command, arguments, variables, permissions) it started with. */ setup?: string; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number; col?: number; side?: "old" } };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 /** TERM-058: a terminal tab follows the running program's title (`live`) unless the user named it; a worker's task label (ORCH-066) comes first. */
@@ -304,6 +306,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const [codex, setCodex] = useState<{ active: string | null; accounts: CodexAccount[] }>({ active: null, accounts: [] });
   // ACCT-064: per pane, the active account the user chose to keep away from (asked once per change).
   const [kept, setKept] = useState<Record<number, string | null>>({});
+  // T-139-d: per pane, the Codex setup the user chose to keep it on (asked once per change).
+  const [keptSetup, setKeptSetup] = useState<Record<number, string>>({});
   useEffect(() => {
     const read = () => void invoke<{ active: string | null; accounts: CodexAccount[] }>("codex_accounts").then((v) => setCodex({ active: v.active, accounts: v.accounts })).catch(() => {});
     read();
@@ -1926,7 +1930,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const restartPane = (key: number) => {
     const fresh = nextKey.current++;
     delete ptys.current[key];
-    setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, key: fresh, account: undefined, typed: undefined } : p)));
+    setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, key: fresh, account: undefined, setup: undefined, typed: undefined } : p)));
     setRunning((r) => {
       const { [key]: _gone, ...rest } = r;
       return rest;
@@ -1935,7 +1939,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   };
   const noticeFor = (p: Pane): PaneNotice | null => {
     const prompt = accountPrompt(p, !!running[p.key], codex.active, codex.accounts, kept[p.key]);
-    if (!prompt) return null;
+    if (!prompt) {
+      // T-139-d: the Codex command, arguments, variables or permissions changed in Settings since this pane started.
+      const now = codexSetup(settings);
+      return setupChanged(p, !!running[p.key], now, keptSetup[p.key])
+        ? { title: "The Codex setup changed", body: "This pane still runs on the old setup. Restart to use the new one, or keep it here.", primary: "Restart", onPrimary: () => restartPane(p.key), secondary: "Keep this setup", onSecondary: () => setKeptSetup((k) => ({ ...k, [p.key]: now })) }
+        : null;
+    }
     if (prompt.kind === "removed")
       return prompt.to === null
         ? { title: "This pane's Codex account was removed", body: "Add or pick a Codex account in Settings, then restart this pane.", primary: "Open Settings", onPrimary: () => openSettings("accounts", "codex") }
@@ -2214,11 +2224,12 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   }, [agentsScreen, selected, agentSel]);
   const savedName = (p: Pane) => saved.find((a) => a.id === p.agentId)?.name;
   // USAGE-004 / VIEW-018: the rail's rings are the tab rings; the footer is the picked session's 5-hour window.
-  const ringOf = (p: Pane) => (context[p.key] ? { percent: contextFill(context[p.key], capOn(settings)), title: meterText(meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) ?? {}) } : null);
+  const ringOf = (p: Pane) => (context[p.key] ? { percent: contextFill(context[p.key], capOn(settings)), title: meterText(meterOf(context[p.key], p.agent, plan.claude, codexOf(p.agent, p.account, accountSwitcher.active.codex, plan.codex, plan.codexBy), capOn(settings)) ?? {}) } : null);
+  useCodexPaneFigures(panes, accountSwitcher.active.codex); // T-548-b: the figures of the other accounts the Codex panes run on
   const railPick = panes.find((p) => p.key === selected);
-  const footer = railPick ? usageLine(railPick.seats ? markFor(railPick.agentId ?? "") : railPick.agent, plan.claude, plan.codex, readsLeft(settings)) : "";
+  const footer = railPick ? usageLine(railPick.seats ? markFor(railPick.agentId ?? "") : railPick.agent, plan.claude, codexOf(railPick.agent, railPick.account, accountSwitcher.active.codex, plan.codex, plan.codexBy), readsLeft(settings)) : "";
   const planLine = (p: Pane) => {
-    const f = planOf(p.agent, plan.claude, plan.codex);
+    const f = planOf(p.agent, plan.claude, codexOf(p.agent, p.account, accountSwitcher.active.codex, plan.codex, plan.codexBy));
     return f ? meterText({ plan: f }) : undefined;
   };
   const addPreset = (id: string) => {
@@ -2232,7 +2243,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const laneOf = (p: Pane) => (p.seats || p.kind || p.agent === "shell" ? "idle" : (chipFor(p)?.lane ?? "idle"));
   // T-546: the control tower reads the same chip and meter per agent pane as the Board.
   // FIX-6 (council d2 carry-over): built only when one of the things it reads changed, not on every render; `now` moves the chips on its 30 s tick.
-  const towerNow = useMemo(() => panes.filter((p) => !p.kind && !p.seats && p.agent !== "shell").map((p) => ({ key: p.key, agent: p.agent, title: tabName(p, titles), branch: p.branch, cwd: p.cwd, account: p.account ?? null, chip: chipFor(p), meter: meterOf(context[p.key], p.agent, plan.claude, codexOf(p.agent, p.account, accountSwitcher.active.codex, plan.codex), capOn(settings)), since: stamp[p.key]?.at ?? 0 })), [panes, titles, context, plan, settings, hook, running, stale, turn, stamp, now, accountSwitcher.active.codex]);
+  const towerNow = useMemo(() => panes.filter((p) => !p.kind && !p.seats && p.agent !== "shell").map((p) => ({ key: p.key, agent: p.agent, title: tabName(p, titles), branch: p.branch, cwd: p.cwd, account: p.account ?? null, chip: chipFor(p), meter: meterOf(context[p.key], p.agent, plan.claude, codexOf(p.agent, p.account, accountSwitcher.active.codex, plan.codex, plan.codexBy), capOn(settings)), since: stamp[p.key]?.at ?? 0 })), [panes, titles, context, plan, settings, hook, running, stale, turn, stamp, now, accountSwitcher.active.codex]);
   // T-546-c: the Tower's own window shows the same seats and usage; a row clicked there opens the pane here.
   // T-548 FIX-1: the figures are worked out on account ids, then the Tower is shown the names the switcher shows.
   const towerUsage = useMemo(() => nameUsage(usageByAccount(towerNow, plan, accountSwitcher.active), (agent, id) => switcherLabel(accountSwitcher.groups, agent, id)), [towerNow, plan, accountSwitcher.active, accountSwitcher.groups]);
@@ -3026,7 +3037,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                             )}
                             {p.kind === "editor" || p.kind === "preview" || p.kind === "diff" || p.kind === "changes" ? <FileCode size={12} /> : p.kind === "browser" ? <Globe size={12} /> : <VendorMark agent={shownAgent(p.agent, creditedLive(launchedAgent(p), liveIds[p.key] ?? IDLE))} size={12} />}
                             {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key), hook[p.key])} />}
-                            {context[p.key] && <Ring percent={contextFill(context[p.key], capOn(settings))} size={10} title={meterText(meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) ?? {})} />}
+                            {context[p.key] && <Ring percent={contextFill(context[p.key], capOn(settings))} size={10} title={meterText(meterOf(context[p.key], p.agent, plan.claude, codexOf(p.agent, p.account, accountSwitcher.active.codex, plan.codex, plan.codexBy), capOn(settings)) ?? {})} />}
                             {renamingTab === p.key ? (
                               <NameField value={tabName(p, titles, labelOf(p), liveIds)} label="Tab name" onSave={(name) => (setRenamingTab(null), renamePane(p.key, name))} onCancel={() => setRenamingTab(null)} />
                             ) : (
@@ -3109,7 +3120,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     onOpenLink={openInBrowser}
                     linksOpenInKolux={settings.linksOpenInKolux === true}
                     gpu={gpuOn(settings)}
-                    card={board ? { expanded: expanded === p.key, onToggle: () => setExpanded((x) => toggleCard(x, p.key)), chip: chipFor(p), column: columnOf(p), onAnswer: (ok) => void answer(p, ok), meter: p.seats || p.kind ? null : meterOf(context[p.key], p.agent, plan.claude, codexOf(p.agent, p.account, accountSwitcher.active.codex, plan.codex), capOn(settings)) } : undefined}
+                    card={board ? { expanded: expanded === p.key, onToggle: () => setExpanded((x) => toggleCard(x, p.key)), chip: chipFor(p), column: columnOf(p), onAnswer: (ok) => void answer(p, ok), meter: p.seats || p.kind ? null : meterOf(context[p.key], p.agent, plan.claude, codexOf(p.agent, p.account, accountSwitcher.active.codex, plan.codex, plan.codexBy), capOn(settings)) } : undefined}
                     cwd={p.cwd}
                     branch={p.branch}
                     agent={p.agent}
@@ -3165,8 +3176,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                       if (p.typed && p.agent !== "shell") void deliverPrompt(invoke, id, p.typed, agents.find((a) => a.id === p.agentId)?.name ?? p.agent).then((lost) => lost && setToast(lost));
                       report.current();
                       if (p.batch !== undefined && p.agent !== "shell") rememberLineup(p.batch);
+                      // T-139-d: a Codex pane on a managed account is watched for printed sign-in errors.
+                      watchCodexSignIn(id, p.agent === "codex" ? account : null);
                       // ACCT-023: a Codex pane remembers the account it began on.
-                      if (p.agent === "codex" && p.account !== account) setPanes((ps) => ps.map((x) => (x.key === p.key ? { ...x, account } : x)));
+                      if (p.agent === "codex") {
+                        const setup = codexSetup(settings); // T-139-d: and the setup it began on
+                        if (p.account !== account || p.setup !== setup) setPanes((ps) => ps.map((x) => (x.key === p.key ? { ...x, account, setup } : x)));
+                      }
                     }}
                     account={p.account}
                     notice={noticeFor(p)}

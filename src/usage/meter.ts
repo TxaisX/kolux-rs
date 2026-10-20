@@ -56,11 +56,19 @@ export function planOf(agent: string, claude: ClaudeLimit[], codex: CodexUsage |
 /** T-548: the Codex figures a pane may carry. src/usage holds the figures of the ACTIVE Codex account
  *  only, so a Codex pane begun on another account (`paneAccount` a different id, or null = Codex's own
  *  sign-in while a managed one is active) gets none rather than the active account's under its name.
- *  A pane with no recorded account yet (undefined) is unknown, so nothing is hidden; other agents pass through. */
-export function codexOf(agent: string, paneAccount: string | null | undefined, active: string | null, codex: CodexUsage | null): CodexUsage | null {
+ *  A pane with no recorded account yet (undefined) is unknown, so nothing is hidden; other agents pass through.
+ *  T-548-b: `by` holds the figures read for the other accounts; a pane on one of them gets its own. */
+export function codexOf(agent: string, paneAccount: string | null | undefined, active: string | null, codex: CodexUsage | null, by?: CodexByAccount): CodexUsage | null {
   if (agent !== "codex" || paneAccount === undefined) return codex;
-  return paneAccount === active ? codex : null;
+  if (paneAccount === active) return codex;
+  // T-548-b: the figures read for the pane's own account, when there are any
+  return by?.[accountKey(paneAccount)] ?? null;
 }
+
+/** T-548-b: Codex figures read per account, keyed by `accountKey`. */
+export type CodexByAccount = Record<string, CodexUsage>;
+/** The key of an account in a `CodexByAccount` map: its id, or "" for the system default sign-in. */
+export const accountKey = (id: string | null): string => id ?? "";
 
 /** The card's meter, or null when there is neither a context reading nor plan figures (USAGE-002). */
 export function meterOf(ctx: ContextReading | undefined, agent: string, claude: ClaudeLimit[], codex: CodexUsage | null, capped = true): Meter | null {

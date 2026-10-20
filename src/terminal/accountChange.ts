@@ -27,3 +27,22 @@ export function accountPrompt(pane: { agent: string; account?: string | null }, 
   if (pane.account === active || kept === active) return null;
   return { kind: "changed", from: accountLabel(pane.account, accounts), to: accountLabel(active, accounts) };
 }
+
+// T-139-d (ACCT-064): the Codex setup-change version of the restart prompt. A pane remembers the
+// setup it started with (`setup`, a string from codexSetup); when the settings now give another one
+// (the Codex command, arguments, variables, or the permissions mode) the pane is asked, once per
+// change, the same way as for an account change.
+
+/** The parts of the settings that decide how Codex is started, as one comparable string. */
+export function codexSetup(settings: object): string {
+  const s = settings as { agentPermissions?: unknown; agentOptions?: { codex?: { command?: unknown; args?: unknown; env?: unknown } } };
+  const o = s.agentOptions?.codex ?? {};
+  const text = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  return JSON.stringify([s.agentPermissions === "manual" ? "manual" : "yolo", text(o.command), text(o.args), text(o.env)]);
+}
+
+/** Whether a running Codex pane that started on another setup should be asked; `kept` is the setup the
+ *  user chose to keep this pane away from. A pane that never recorded its setup is not asked. */
+export function setupChanged(pane: { agent: string; setup?: string }, running: boolean, now: string, kept: string | undefined): boolean {
+  return pane.agent === "codex" && running && pane.setup !== undefined && pane.setup !== now && kept !== now;
+}
