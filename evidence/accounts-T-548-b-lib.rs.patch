@@ -1,0 +1,12 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 525a44d3..c0c09417 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -704,6 +704,7 @@ pub fn run() {
+             secrets::secret_set,
+             secrets::secret_clear,
+             codex_usage::codex_usage,
++            codex_usage::codex_usage_of,
+             claude_key::claude_key_status,
+             claude_key::claude_key_connect,
+             claude_key::claude_key_cancel,

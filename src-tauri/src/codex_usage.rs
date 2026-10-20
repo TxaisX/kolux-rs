@@ -328,27 +328,68 @@ pub fn read(account_home: Option<&Path>) -> CodexUsage {
     read_with(&program, &home)
 }
 
+/// T-548-b: the plan figures of ONE managed account's own Codex home, never falling back to
+/// another sign-in (the fall-back in `read` would show the system default's figures under the
+/// account's name). `program` is `None` when Codex is not installed.
+pub fn read_account(home: &Path, program: Option<&Path>) -> CodexUsage {
+    match sign_in_kind(&home.join("auth.json")) {
+        None => CodexUsage::state("signed-out", None),
+        Some(SignIn::ApiKey) => CodexUsage::state("api-key", None),
+        Some(SignIn::ChatGpt) => match program {
+            Some(p) => read_with(p, home),
+            None => CodexUsage::state("error", Some("Codex is not installed".into())),
+        },
+    }
+}
+
+/// ACCT-012: a sign-in error from a managed account's own sign-in flags that account; the
+/// system default's never does (when the account home holds no sign-in, it was not read).
+fn flag_sign_in(app: &tauri::AppHandle, account: &crate::codex_accounts::Account, usage: &CodexUsage) {
+    use tauri::{Emitter, Manager};
+    if sign_in_kind(&Path::new(&account.home).join("auth.json")).is_none() {
+        return;
+    }
+    let error = match usage.state.as_str() {
+        "sign-in-again" => Some(true),
+        "ok" => Some(false),
+        _ => None,
+    };
+    let store = app.state::<Mutex<crate::state::Store>>();
+    let changed = error.and_then(|e| store.lock().ok().and_then(|s| crate::codex_accounts::mark_sign_in_error(&s, &account.id, e).ok())).unwrap_or(false);
+    if changed {
+        let _ = app.emit(crate::codex_accounts::EVENT, ());
+    }
+}
+
 #[tauri::command]
 pub async fn codex_usage(app: tauri::AppHandle) -> Result<CodexUsage, String> {
-    use tauri::{Emitter, Manager};
+    use tauri::Manager;
     // ACCT-007: the active managed Codex account's home is read first.
     let account = app.state::<Mutex<crate::state::Store>>().lock().ok().and_then(|s| crate::codex_accounts::active_account(&s));
     let home = account.as_ref().map(|a| PathBuf::from(&a.home));
     let usage = tauri::async_runtime::spawn_blocking(move || read(home.as_deref())).await.map_err(|e| e.to_string())?;
-    // ACCT-012: a sign-in error from a managed account's own sign-in flags that account; the
-    // system default's never does (when the account home holds no sign-in, it was not read).
-    if let Some(a) = account.filter(|a| sign_in_kind(&Path::new(&a.home).join("auth.json")).is_some()) {
-        let error = match usage.state.as_str() {
-            "sign-in-again" => Some(true),
-            "ok" => Some(false),
-            _ => None,
-        };
-        let store = app.state::<Mutex<crate::state::Store>>();
-        let changed = error.and_then(|e| store.lock().ok().and_then(|s| crate::codex_accounts::mark_sign_in_error(&s, &a.id, e).ok())).unwrap_or(false);
-        if changed {
-            let _ = app.emit(crate::codex_accounts::EVENT, ());
-        }
+    if let Some(a) = &account {
+        flag_sign_in(&app, a, &usage);
     }
+    Ok(usage)
+}
+
+/// T-548-b: the plan figures of one account, for a pane that runs on an account other than the
+/// active one. `account` is a managed account's id; `None` is the system default sign-in
+/// (`CODEX_HOME`, then `~/.codex`). An id that is no longer listed reads as signed out.
+#[tauri::command]
+pub async fn codex_usage_of(app: tauri::AppHandle, account: Option<String>) -> Result<CodexUsage, String> {
+    use tauri::Manager;
+    let Some(id) = account else {
+        return tauri::async_runtime::spawn_blocking(|| read(None)).await.map_err(|e| e.to_string());
+    };
+    let listed = app.state::<Mutex<crate::state::Store>>().lock().ok().map(|s| crate::codex_accounts::load(&s)).unwrap_or_default();
+    let Some(entry) = listed.into_iter().find(|a| a.id == id) else {
+        return Ok(CodexUsage::state("signed-out", None));
+    };
+    let home = PathBuf::from(&entry.home);
+    let usage = tauri::async_runtime::spawn_blocking(move || read_account(&home, crate::agents::find_program("codex").as_deref())).await.map_err(|e| e.to_string())?;
+    flag_sign_in(&app, &entry, &usage);
     Ok(usage)
 }
 
@@ -383,6 +424,32 @@ mod tests {
         std::fs::write(acct.join("auth.json"), r#"{"tokens":null,"OPENAI_API_KEY":null}"#).unwrap();
         assert_eq!(signed_in_home(Some(&acct), None, None), None);
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    // T-548-b: one account's own read never borrows another sign-in.
+    #[test]
+    fn an_accounts_own_read_never_falls_back_to_another_sign_in() {
+        let root = std::env::temp_dir().join(format!("kolux-rs-codexacct-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (empty, key, chat) = (root.join("empty"), root.join("key"), root.join("chat"));
+        for d in [&empty, &key, &chat] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(key.join("auth.json"), r#"{"OPENAI_API_KEY":"k","tokens":null}"#).unwrap();
+        std::fs::write(chat.join("auth.json"), r#"{"tokens":{"x":1}}"#).unwrap();
+        let quitter = root.join("codex.cmd");
+        std::fs::write(&quitter, "@exit /b 2\r\n").unwrap();
+        // no sign-in in the account's home: signed out, and nothing is launched (no program needed)
+        assert_eq!(read_account(&empty, Some(&quitter)).state, "signed-out");
+        assert_eq!(read_account(&root.join("gone"), None).state, "signed-out");
+        // a key sign-in has no plan figures
+        assert_eq!(read_account(&key, Some(&quitter)).state, "api-key");
+        // a ChatGPT sign-in with Codex missing is an error; with Codex present it reads that home
+        let missing = read_account(&chat, None);
+        assert_eq!((missing.state.as_str(), missing.message.as_deref()), ("error", Some("Codex is not installed")));
+        let ran = read_account(&chat, Some(&quitter));
+        assert!(ran.message.as_deref().unwrap_or("").contains("quit before answering"), "{:?}", ran.message);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

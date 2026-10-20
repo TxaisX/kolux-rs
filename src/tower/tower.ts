@@ -5,7 +5,7 @@
 
 import type { Chip, Lane } from "../board/chip";
 import type { Meter, PlanFigures } from "../usage/meter";
-import { planOf } from "../usage/meter";
+import { accountKey, planOf } from "../usage/meter";
 import { moveSelection } from "../inbox/inbox";
 import type { Plan } from "../usage/plan";
 
@@ -47,11 +47,11 @@ export type AccountUsage = {
   agent: string;
   figures: PlanFigures | null;
   panes: number;
-  accounts: Array<{ account: string | null; panes: number }>;
+  accounts: Array<{ account: string | null; panes: number; /** T-548-b: this account's own figures (Codex accounts other than the one the card's figures are for), when they have been read. */ figures?: PlanFigures }>;
   /** T-548, only when the active accounts were passed, and FIX-1 only on a Codex card: the account the figures are read for (null = the system default). */
   forAccount?: string | null;
-  /** T-548: panes of this provider on an account other than the one the figures are read for (Codex only;
-   *  a Claude pane does not record its account yet, T-548-b). */
+  /** T-548: panes of this provider on an account other than the one the figures are read for, whose own
+   *  figures have not been read (Codex only; a Claude pane does not record its account yet, T-548-b). */
   elsewhere?: number;
 };
 /** T-548: the account new panes use, per provider (null = the system default). */
@@ -87,8 +87,14 @@ export function usageByAccount(seats: Pick<Seat, "agent" | "account">[], plan: P
       continue;
     }
     card.forAccount = active.codex;
-    card.elsewhere = card.accounts.filter((a) => a.account !== active.codex).reduce((n, a) => n + a.panes, 0);
-    if (card.elsewhere === card.panes) card.figures = null;
+    const others = card.accounts.filter((a) => a.account !== active.codex);
+    // T-548-b: an account the window has read figures for shows its own
+    for (const a of others) {
+      const own = planOf("codex", [], plan.codexBy?.[accountKey(a.account)] ?? null);
+      if (own) a.figures = own;
+    }
+    card.elsewhere = others.filter((a) => !a.figures).reduce((n, a) => n + a.panes, 0);
+    if (others.reduce((n, a) => n + a.panes, 0) === card.panes) card.figures = null;
   }
   return out;
 }

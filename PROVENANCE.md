@@ -1017,3 +1017,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · look T-301 (APP-012 app icon variants and window blur) · Tauri 2 public API documentation (tauri crate 2.12: Window::set_icon, Window::set_effects, EffectsBuilder, image::Image); no other sources
 > 2026-10-20 · look T-302-c (web places of the project icon card) · no new outside sources: the guarded icon client, address rules and lookup are Kolux RS code already in browser.rs; URL host parsing per the url crate behaviour already used there
 > 2026-10-20 · look T-266-b (PROJ-062 ports and task on the workspace card hover) · no new outside sources: Kolux RS own ports.rs scan and Worktree.number
+> 2026-10-20 · accounts T-548-b (OD-11 per-account Codex plan figures) · no new outside sources: Kolux RS own codex_usage.rs, codex_accounts.rs, src/usage and src/tower code

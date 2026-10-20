@@ -1,0 +1,39 @@
+diff --git a/src/terminal/TerminalPane.tsx b/src/terminal/TerminalPane.tsx
+index cfbc2a02..7df55d75 100644
+--- a/src/terminal/TerminalPane.tsx
++++ b/src/terminal/TerminalPane.tsx
+@@ -1562,7 +1562,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
+               Review plan
+             </button>
+           )}
+-          {usage ? <HeaderUsage context={context} agent={agent} readout={usage} /> : <ContextGauge context={context} agent={agent} />}
++          {usage ? <HeaderUsage context={context} agent={agent} readout={usage} account={account} /> : <ContextGauge context={context} agent={agent} />}
+           <button
+             className="ib"
+             title="Pane menu"
+diff --git a/src/terminal/UsageReadout.tsx b/src/terminal/UsageReadout.tsx
+index 1825c92f..3c5073b0 100644
+--- a/src/terminal/UsageReadout.tsx
++++ b/src/terminal/UsageReadout.tsx
+@@ -4,7 +4,7 @@
+ // cost in a cyan chip. What fits is decided by the header's measured width (headerUsage.ts).
+ import { useEffect, useRef, useState } from "react";
+ import Ring from "../usage/Ring";
+-import { tone as toneOf } from "../usage/meter";
++import { codexOf, tone as toneOf } from "../usage/meter";
+ import { countdown } from "../usage/claude";
+ import { usePlan } from "../usage/plan";
+ import { costText, hoverLines, piecesFor, planFigure, startTicker, tokensText, windowsOf, type PlanWindow, type Readout } from "./headerUsage";
+@@ -64,8 +64,10 @@ export function UsageReadoutView({ context, agent, readout, windows, width, now
+ 
+ /** The readout in a pane header: measures the header it sits in (not the window, so a split pane
+  * behaves), reads the account's plan windows, and ticks every 30 s so the countdowns move. */
+-export function HeaderUsage({ context, agent, readout }: { context?: number | null; agent: string; readout: Readout }) {
+-  const { claude, codex } = usePlan();
++export function HeaderUsage({ context, agent, readout, account }: { context?: number | null; agent: string; readout: Readout; account?: string | null }) {
++  const { claude, codex: active, codexBy, codexActive } = usePlan();
++  // T-548-b: a Codex pane on another account shows that account's own figures (none until they are read)
++  const codex = codexActive === undefined ? active : codexOf(agent, account, codexActive, active, codexBy);
+   const ref = useRef<HTMLSpanElement>(null);
+   const [width, setWidth] = useState<number | undefined>(undefined);
+   const [now, setNow] = useState(() => Date.now());
