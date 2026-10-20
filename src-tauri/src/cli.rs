@@ -145,7 +145,7 @@ const MAIL: &[(&str, &str, &[&str])] = &[
     ("orchestration check", CHECK, &["terminal", "run", "ack", "unread", "peek", "all", "types", "format", "wait", "timeout-ms", "retry-request"]),
     ("orchestration reply", "orchestration.reply", &["id", "body", "run", "from", "retry-request"]),
     ("orchestration inbox", "orchestration.inbox", &["limit", "terminal", "full"]),
-    ("orchestration ask", ASK, &["question", "resume", "options", "timeout-ms", "to", "run", "from", "retry-request"]),
+    ("orchestration ask", ASK, &["question", "resume", "options", "timeout-ms", "to", "run", "from", "retry-request", "dispatch-capability"]),
     ("orchestration gate-create", "orchestration.gate-create", &["task", "question", "options", "run", "from", "retry-request"]),
     ("orchestration gate-resolve", "orchestration.gate-resolve", &["id", "resolution", "run", "from", "retry-request"]),
     ("orchestration gate-list", "orchestration.gate-list", &["task", "status", "run", "from"]),
@@ -3022,6 +3022,8 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
             let task = text("task").ok_or_else(|| Fail::args("--task is required"))?;
             let mut v = dispatches.iter().rev().find(|d| d["taskId"] == task && d["runId"].as_str() == run.as_deref()).cloned().ok_or_else(|| Fail::new("not_found", format!("{task} has not been dispatched")))?;
             let brief = v.as_object_mut().and_then(|o| o.remove("brief"));
+            // ORCH-067: the pass lives only inside the brief's commands, never as a field.
+            v.as_object_mut().and_then(|o| o.remove("pass"));
             v["handle"] = json!(v["terminal"].as_u64().map(|t| crate::terminal::handle_of(t as u32)));
             if a["preamble"] == true {
                 v["preamble"] = brief.unwrap_or_default();
@@ -3310,14 +3312,14 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 crate::terminal::screen_open(&request);
                 (ctx.notify)(json!({ "emit": crate::terminal::SCREEN_EVENT, "payload": { "id": id, "request": request } }));
                 if let Some(rows) = crate::terminal::screen_wait(&request) {
-                    return Ok(json!({ "terminal": handle, "screen": true, "rows": rows }));
+                    return Ok(hidden(ctx, json!({ "terminal": handle, "screen": true, "rows": rows })));
                 }
                 let r = ctx.terminals.read(id, None, limit).ok_or_else(gone)?;
                 let mut out = serde_json::to_value(r).unwrap_or_default();
                 out["terminal"] = json!(handle);
                 out["screen"] = json!(false);
                 out["warnings"] = json!([format!("the window did not supply {handle}'s screen; this is its output stream, not a screen")]);
-                return Ok(out);
+                return Ok(hidden(ctx, out));
             }
             let r = ctx.terminals.read(id, cursor, limit).ok_or_else(gone)?;
             let mut warnings = Vec::new();
@@ -3334,7 +3336,7 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             out["terminal"] = json!(handle);
             out["screen"] = json!(false);
             out["warnings"] = json!(warnings);
-            Ok(out)
+            Ok(hidden(ctx, out))
         }
         "terminal.send" => {
             let body = text("text");
@@ -4152,6 +4154,14 @@ fn claim_task(tasks: &[Value], dispatches: &mut [Value], i: usize, retry_of: Opt
 /// ORCH-024 (cli FIX-2): the lines a released worker's archive holds. The terminal keeps only its
 /// latest lines; when earlier ones were dropped, the archive opens with a line that says how many
 /// are missing, so a cut-short archive is never taken for the whole output.
+/// ORCH-067 (T-155-b): a read of a terminal never shows a dispatch pass, echoed in a command line
+/// or sitting typed but unsubmitted in the input box; a warning says when one was hidden.
+fn hidden(ctx: &Ctx, mut out: Value) -> Value {
+    let passes = ctx.store.lock().map(|s| crate::orchestration::passes(&load_list(&s, DISPATCHES_KEY))).unwrap_or_default();
+    crate::orchestration::redact_read(&mut out, &passes);
+    out
+}
+
 fn archive_lines(r: crate::terminal::Read) -> Vec<String> {
     let mut lines = Vec::with_capacity(r.lines.len() + 2);
     if r.oldest > 1 {
@@ -4217,7 +4227,7 @@ fn release_worker(dispatches: &mut [Value], id: &str, run: Option<&str>, live: &
     save(dispatches)?;
     let tid = h.trim_start_matches("term-").parse::<u32>().ok();
     let saved = match tid.and_then(read) {
-        Some(r) => o::write_archive(dir, id, &archive_lines(r)),
+        Some(r) => o::write_archive(dir, id, &o::redact_lines(archive_lines(r), &o::passes(dispatches))),
         None => Err(format!("{h}'s output could not be read")),
     };
     let closed = saved.is_ok() && tid.is_some_and(kill);
@@ -4419,7 +4429,9 @@ fn worker_start_as(ctx: &Ctx, req: &Request, coordinator: Option<String>) -> Res
 
     // ORCH-014: the worker's brief: how to report, beat and ask, any base drift, then the task.
     let behind = drift(ctx.git, &project, &worktree.path);
-    let brief = crate::orchestration::brief(&task, &crate::orchestration::Brief { dispatch: &dispatch_id, run: run_id.as_deref(), coordinator: coordinator.as_deref(), behind, levels_left: cap - depth });
+    // ORCH-067 (T-155-b): a fresh pass for this dispatch, carried only inside the brief's ready-made commands.
+    let pass = secret();
+    let brief = crate::orchestration::brief_tied(&task, &crate::orchestration::Brief { dispatch: &dispatch_id, run: run_id.as_deref(), coordinator: coordinator.as_deref(), behind, levels_left: cap - depth }, Some(&pass));
 
     // SAFE-023: a worktree Kolux made is trusted before the agent starts (never the main checkout or
     // a folder made elsewhere, T-443); best effort, a failure never stops the worker.
@@ -4460,7 +4472,7 @@ fn worker_start_as(ctx: &Ctx, req: &Request, coordinator: Option<String>) -> Res
     {
         let store = ctx.store.lock().map_err(|e| e.to_string())?;
         let mut dispatches = load_list(&store, DISPATCHES_KEY);
-        dispatches.push(worker_row(json!({ "id": dispatch_id, "runId": run_id, "taskId": task_id, "status": status, "worktree": worktree.path, "agent": agent_id, "model": model, "effort": effort, "tier": tier, "terminal": terminal, "terminalProgram": terminal.and_then(|t| mark_program(ctx.terminals, t)), "depth": depth, "maxDepth": cap, "brief": brief, "retryOf": text("retryOf") })));
+        dispatches.push(worker_row(json!({ "id": dispatch_id, "runId": run_id, "taskId": task_id, "status": status, "worktree": worktree.path, "agent": agent_id, "model": model, "effort": effort, "tier": tier, "terminal": terminal, "terminalProgram": terminal.and_then(|t| mark_program(ctx.terminals, t)), "depth": depth, "maxDepth": cap, "brief": brief, "pass": pass, "retryOf": text("retryOf") })));
         save_list(&store, DISPATCHES_KEY, &dispatches)?;
     }
     if ready {

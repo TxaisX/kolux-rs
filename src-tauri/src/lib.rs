@@ -289,6 +289,10 @@ pub fn run() {
             let fence = fence::Fence::load(&app.state::<Mutex<Store>>());
             app.manage(fence);
             app.manage(token_usage::Flights::default());
+            // ORCH-034: the orchestration store is brought up to today's layout before anything reads it.
+            if let Ok(store) = app.state::<Mutex<Store>>().lock() {
+                orchestration::upgrade::at_start(&store);
+            }
             // The command line reaches the app through a loopback port (PROJ-077).
             cli::serve(app.handle().clone(), &dir)?;
             // AUTO-001: the automations clock.

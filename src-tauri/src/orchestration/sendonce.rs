@@ -129,6 +129,8 @@ pub fn claim(id: u32) -> Ticket {
 
 /// Another writer (the user's own typing) wrote `data` into terminal `id`; Ctrl+C or Escape on its
 /// own is also a cancel, so a prompt whose text is being checked gets no Enter.
+/// ORCH-036 (T-155-b): the same typing takes the terminal over: `TAKEN` remembers when the user
+/// last wrote into it, so a worker dispatched to it before then is no longer its owner.
 pub fn other_writer(id: u32, data: &str) {
     let mut w = WRITERS.lock().unwrap_or_else(|p| p.into_inner());
     let t = w.entry(id).or_insert(Ticket { writer: 0, cancel: 0 });
@@ -136,6 +138,22 @@ pub fn other_writer(id: u32, data: &str) {
     if data == "\u{3}" || data == "\u{1b}" {
         t.cancel += 1;
     }
+    drop(w);
+    TAKEN.lock().unwrap_or_else(|p| p.into_inner()).insert(id, wall_ms());
+}
+
+/// ORCH-036: when the user last typed into each terminal (wall-clock ms), this run of Kolux only.
+static TAKEN: Mutex<BTreeMap<u32, u64>> = Mutex::new(BTreeMap::new());
+
+/// ORCH-036: whether the user has typed into terminal `id` since `created_ms` (a dispatch's wall
+/// time), so the terminal is the user's now and not the worker's to close. Ownership moves on the
+/// user's input only: Kolux's own sends go through `claim`, and a click never writes.
+pub fn taken_over_since(id: u32, created_ms: u64) -> bool {
+    TAKEN.lock().unwrap_or_else(|p| p.into_inner()).get(&id).is_some_and(|&at| at >= created_ms)
+}
+
+fn wall_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 /// The terminal's counts now, to compare with a `Ticket`.

@@ -107,7 +107,7 @@ import TerminalPane, { focusedTerminalEdit, type PaneNotice } from "./terminal/T
 import { accountLabel, accountPrompt, type CodexAccount } from "./terminal/accountChange";
 import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
 import AutomationsPage from "./automations/AutomationsPage";
-import { forgetRunTab, openRunTab, paneOfTerminal, runTabEnded, touchRunTab, typedInRunTab, type RunTabs } from "./automations/runTab";
+import { forgetRunTab, openRunTab, paneOfTerminal, runPaneKey, runTabEnded, touchRunTab, typedInRunTab, type RunTabs } from "./automations/runTab";
 import RoutingPage from "./settings/RoutingPage";
 import TasksPage from "./tasks/TasksPage";
 import { tasksRepo } from "./tasks/model";
@@ -1862,9 +1862,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const inboxSeen = inboxOverlay(sources, exitedPrompt.current, hook);
   exitedPrompt.current = inboxSeen.kept;
   // AUTO-013: a run's terminal counts as live only while its pane is still open in the run's worktree.
-  const runPane = (id: string, worktree?: string) => {
-    const key = runPanes.current[id];
-    return panes.find((x) => x.key === key && !!worktree && sameDir(x.cwd, worktree));
+  // T-031-b: after a restart the window remembers no pane, so the run row's re-attached terminal finds it.
+  const runPane = (r: { id: string; worktree?: string; terminal?: number | null }) => {
+    const key = runPaneKey(runPanes.current, r, ptys.current);
+    return panes.find((x) => x.key === key && !!r.worktree && sameDir(x.cwd, r.worktree));
   };
   // EDIT-041: Open in Code goes to the Code view, the pane's workspace (its sidebar row scrolled
   // into sight by ProjectsPanel) and the pane itself, its tab brought to the top.
@@ -2491,9 +2492,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           {terminals && page === "automations" && (
             <AutomationsPage
               onClose={() => setPage(null)}
-              liveRun={(r) => !!runPane(r.id, r.worktree)}
+              liveRun={(r) => !!runPane(r)}
               onViewRun={(r) => {
-                const p = runPane(r.id, r.worktree);
+                const p = runPane(r);
                 if (!p) return;
                 setPage(null);
                 openPane(p.key);
