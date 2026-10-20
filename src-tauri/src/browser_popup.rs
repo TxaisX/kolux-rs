@@ -188,6 +188,8 @@ pub fn open(
                 }
             });
             super::engine::popup_identity(&w, spoof);
+            // after-list 718: no engine prompt in a popup; the opener tab's permission rules answer.
+            super::engine::popup_permissions(&w, tab, app.clone());
             Some(w)
         }
         Err(_) => {
@@ -242,6 +244,17 @@ pub fn fedcm_off(args: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn brow032_a_popup_is_answered_by_its_opener_tabs_permission_rules() {
+        // The engine hook cannot run in a unit test (no web view); the regression guard is that the
+        // popup's build path wires it with the opener's tab id, after the identity hook.
+        let src = include_str!("browser_popup.rs");
+        let open = &src[src.find("pub fn open(").unwrap()..src.find("pub fn close_for(").unwrap()];
+        let ident = open.find("engine::popup_identity(&w, spoof)").unwrap();
+        let perms = open.find(["engine::popup_permissions(&w, tab, ", "app.clone())"].concat().as_str()).expect("popup permissions hook");
+        assert!(perms > ident);
+    }
 
     #[test]
     fn brow026_fedcm_joins_the_one_disable_features_list_once() {

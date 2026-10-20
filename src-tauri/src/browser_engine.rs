@@ -295,6 +295,15 @@ pub fn permissions(id: u32, pw: &tauri::webview::PlatformWebview, app: AppHandle
     imp::permissions(id, &pw.controller(), app);
 }
 
+/// T-272-b (BROW-032, after-list 718): a popup's permission requests are answered by the same
+/// rules as its opener tab's page, and a refusal's notice goes to the opener's pane (`tab`).
+pub fn popup_permissions(w: &tauri::WebviewWindow, tab: u32, app: AppHandle) {
+    #[cfg(windows)]
+    let _ = w.with_webview(move |pw| imp::permissions(tab, &pw.controller(), app));
+    #[cfg(not(windows))]
+    let _ = (w, tab, app);
+}
+
 /// T-239-b (BROW-025): a popup follows the mode of its tab's profile. A popup opened straight onto
 /// a sign-in host already starts as Firefox (its builder sets that); this keeps every later hop
 /// right.
@@ -316,7 +325,6 @@ pub fn watch_page_failures(id: u32, pw: &tauri::webview::PlatformWebview, dir: O
 
 /// T-286-b (APP-040): the app's own view reports its engine's process failures (an interface
 /// process crash is a crash). Called once at startup.
-#[allow(dead_code)] // wired by evidence/browser-T-286-b-lib.rs.patch
 pub fn watch_app_failures(w: &tauri::WebviewWindow, dir: PathBuf) {
     #[cfg(windows)]
     let _ = w.with_webview(move |pw| imp::watch_failures(super::crash::Source::App, &pw.controller(), dir));
