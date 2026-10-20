@@ -88,6 +88,7 @@ import SkillsPage from "./skills/SkillsPage";
 import { generatedOn, generatedTitle, tabText, tabTip } from "./shell/tabTitle";
 import { needsBeat, statusTitle, useBeatFrame } from "./status/tabNameRule";
 import { closeSkills, toggleSkills } from "./skills/nav";
+import { BringSkillsUp } from "./skills/SkillBarItem";
 import { KitGallery, KitSetup } from "./kits/Kits";
 import Wizard from "./onboarding/Wizard";
 import Guides from "./onboarding/Guides";
@@ -3268,6 +3269,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         />
       )}
       <UpdateCenter />
+      <BringSkillsUp onShow={() => screen !== "skills" && toggleSkills(screen, setScreen)} />
       <FeedbackDialog />
       {reviewOn(settings) && (
         <ReviewNotes
