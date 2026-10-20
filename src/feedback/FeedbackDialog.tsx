@@ -55,12 +55,17 @@ export default function FeedbackDialog() {
 
   const send = () => {
     if (!s.facts) return;
-    const r = issue(s.draft, s.facts, s.anonymous);
-    if (!r.ok) return dispatch({ t: "fail", error: r.error });
-    invoke("open_external", { url: r.url }).then(
-      () => dispatch({ t: "sent", trimmed: r.trimmed }),
-      (e: unknown) => dispatch({ t: "fail", error: `Could not open the browser: ${String(e)}` }),
-    );
+    // FIX-1: whatever goes wrong while the address is built shows in the box; the button never does nothing
+    try {
+      const r = issue(s.draft, s.facts, s.anonymous);
+      if (!r.ok) return dispatch({ t: "fail", error: r.error });
+      invoke("open_external", { url: r.url }).then(
+        () => dispatch({ t: "sent", trimmed: r.trimmed }),
+        (e: unknown) => dispatch({ t: "fail", error: `Could not open the browser: ${String(e)}` }),
+      );
+    } catch (e) {
+      dispatch({ t: "fail", error: `Could not build the report: ${String(e)}` });
+    }
   };
 
   if (!s.open) {

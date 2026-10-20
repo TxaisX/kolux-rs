@@ -50,19 +50,28 @@ export function withBlock(draft: string, f: FeedbackFacts, anonymous: boolean): 
 /** The new-issue address for a draft, or why there is none. The block under the text is always
  *  rebuilt from the real facts, and the text is scrubbed of paths and secrets first. */
 export function issue(draft: string, f: FeedbackFacts, anonymous: boolean): Issue {
-  const typed = typedText(draft);
-  if (typed.trim() === "") return { ok: false, error: "Write something first: an empty report is not opened on GitHub." };
-  const url = feedbackUrl(f.version, f.platform, scrub(typed), extra(f, anonymous));
-  const trimmed = (new URL(url).searchParams.get("body") ?? "").includes(TRIM_NOTE);
-  return { ok: true, url, trimmed };
+  try {
+    const typed = typedText(draft);
+    if (typed.trim() === "") return { ok: false, error: "Write something first: an empty report is not opened on GitHub." };
+    const url = feedbackUrl(f.version, f.platform, scrub(typed), extra(f, anonymous));
+    const trimmed = (new URL(url).searchParams.get("body") ?? "").includes(TRIM_NOTE);
+    return { ok: true, url, trimmed };
+  } catch (e) {
+    // FIX-1: a failure here must show in the box, never leave the button doing nothing
+    return { ok: false, error: `Could not build the report: ${e instanceof Error ? e.message : String(e)}` };
+  }
 }
 
 export const SENT = "A new-issue page opened in your browser; the app sent nothing. Read it over there, then submit it or close it.";
 
 export function reduce(s: State, a: Act): State {
   switch (a.t) {
-    case "open":
-      return { open: true, draft: withBlock(a.text ?? "", a.facts, false), anonymous: false, facts: a.facts, error: "", note: "" };
+    case "open": {
+      // FIX-1: a report closed unsent (Cancel, Escape, a stray click on the background) is still there
+      // at the next open; text handed in on purpose, such as a crash report, replaces it
+      const keep = !a.text && typedText(s.draft).trim() !== "";
+      return { open: true, draft: withBlock(keep ? typedText(s.draft) : (a.text ?? ""), a.facts, keep && s.anonymous), anonymous: keep && s.anonymous, facts: a.facts, error: "", note: "" };
+    }
     case "facts":
       return { ...s, facts: a.facts, draft: withBlock(s.draft, a.facts, s.anonymous) };
     case "type":
@@ -70,7 +79,7 @@ export function reduce(s: State, a: Act): State {
     case "anon":
       return { ...s, anonymous: a.on, draft: s.facts ? withBlock(s.draft, s.facts, a.on) : s.draft };
     case "sent":
-      return { ...s, open: false, error: "", note: a.trimmed ? `${SENT} Your report was long, so it was ${TRIM_NOTE}.` : SENT };
+      return { ...s, open: false, draft: "", error: "", note: a.trimmed ? `${SENT} Your report was long, so it was ${TRIM_NOTE}.` : SENT };
     case "fail":
       return { ...s, error: a.error };
     case "close":

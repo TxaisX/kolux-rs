@@ -332,6 +332,47 @@ mod tests {
         crate::test_dir::temp(tag)
     }
 
+    /// Runs a closure when dropped, also while a panic unwinds: how the real-clipboard tests put the
+    /// user's clipboard back even when their body fails.
+    struct OnDrop<F: FnMut()>(F);
+    impl<F: FnMut()> Drop for OnDrop<F> {
+        fn drop(&mut self) {
+            (self.0)();
+        }
+    }
+
+    #[test]
+    fn fix1_the_restore_guard_runs_when_a_test_body_ends_and_when_it_panics() {
+        let ran = std::cell::Cell::new(0);
+        {
+            let _guard = OnDrop(|| ran.set(ran.get() + 1));
+        }
+        assert_eq!(ran.get(), 1, "it runs at the end of a normal body");
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = OnDrop(|| ran.set(ran.get() + 1));
+            panic!("the body failed on purpose");
+        }));
+        assert!(outcome.is_err());
+        assert_eq!(ran.get(), 2, "it runs while a panic unwinds");
+    }
+
+    #[test]
+    fn fix1_every_test_that_touches_the_real_desktop_clipboard_is_opt_in() {
+        // A default `cargo test` on any lane must never write to the person's clipboard: the tests in
+        // the real module run only with `-- --ignored --test-threads=1`.
+        let src = include_str!("clipboard.rs");
+        let at = src.rfind(concat!("mod re", "al {")).expect("the real-clipboard module is there");
+        let lines: Vec<&str> = src[at..].lines().map(str::trim).collect();
+        let mut tests = 0;
+        for (i, line) in lines.iter().enumerate() {
+            if *line == "#[test]" {
+                tests += 1;
+                assert!(lines[i + 1].starts_with("#[ignore"), "not opted in: {}", lines[i + 2]);
+            }
+        }
+        assert_eq!(tests, 2, "both real-clipboard tests are counted");
+    }
+
     fn utf16z(s: &str) -> Vec<u8> {
         s.encode_utf16().chain([0]).flat_map(|u| u.to_le_bytes()).collect()
     }
@@ -427,9 +468,14 @@ mod tests {
         /// One test at a time on the one real clipboard.
         static ONE: Mutex<()> = Mutex::new(());
 
-        /// Runs `body` with the real clipboard, then puts its earlier text back. SKIPPED (printed)
-        /// when the clipboard cannot be opened here or holds something other than text, which could
-        /// not be put back.
+        /// Runs `body` with the real clipboard, then puts its earlier text back, also when `body`
+        /// panics (a guard restores it on the way out). SKIPPED (printed) when the clipboard cannot
+        /// be opened here or holds something other than text, which could not be put back.
+        ///
+        /// Both tests below are `#[ignore]`: a default `cargo test` on any lane never touches the
+        /// desktop clipboard, because two test processes at once would each snapshot the other's text
+        /// as the earlier one (an in-process lock cannot stop that). Run them by hand, one at a time:
+        /// `cargo test --lib clipboard -- --ignored --test-threads=1`.
         fn guarded(name: &str, body: impl FnOnce()) {
             let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
             let Some(formats) = os::formats() else {
@@ -442,14 +488,20 @@ mod tests {
                 return;
             }
             let prior = if formats.contains(&13) { os::get_text() } else { None };
-            body();
-            match prior {
-                Some(t) => os::put_text(std::ptr::null_mut(), &t).expect("put the earlier clipboard text back"),
+            let _restore = OnDrop(move || match &prior {
+                // no panic in here: a second panic while one unwinds would abort the whole test run
+                Some(t) => {
+                    if let Err(e) = os::put_text(std::ptr::null_mut(), t) {
+                        eprintln!("COULD NOT PUT THE EARLIER CLIPBOARD TEXT BACK: {e}");
+                    }
+                }
                 None => os::empty(),
-            }
+            });
+            body();
         }
 
         #[test]
+        #[ignore = "touches the real desktop clipboard: cargo test --lib clipboard -- --ignored --test-threads=1"]
         fn app016_windows_line_endings_survive_a_real_clipboard_round_trip_byte_for_byte() {
             guarded("app016 text round trip", || {
                 let text = "line one\r\nline two\r\n\r\nlast line \u{e9}\u{1f600}\r\n";
@@ -460,6 +512,7 @@ mod tests {
         }
 
         #[test]
+        #[ignore = "touches the real desktop clipboard: cargo test --lib clipboard -- --ignored --test-threads=1"]
         fn app016_a_real_file_list_reads_back_as_the_same_files_with_the_copy_hint() {
             guarded("app016 file list round trip", || {
                 let t = temp("clip-files");

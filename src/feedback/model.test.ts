@@ -123,3 +123,52 @@ test("app037: a refused send keeps the dialog open with the text and the error; 
   expect(s.note).toMatch(/trimmed/i);
   expect(reduce(s, { t: "open", facts }).note).toBe("");
 });
+
+// FIX-1 (council review of 9b6e5841)
+const LONE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+test("fix1: a report with an emoji at the 80-character title cut still opens", () => {
+  const r = ok(issue(withBlock("a".repeat(68) + "\u{1F600}\u{1F600} and more", facts, false), facts, false));
+  const title = params(r.url).get("title") ?? "";
+  expect(LONE.test(title)).toBe(false);
+  expect(Array.from(title).length).toBeLessThanOrEqual(80);
+});
+
+test("fix1: a very long report of emoji opens, trimmed, with no half emoji in it", () => {
+  const r = ok(issue(withBlock("short\n" + "\u{1F600}".repeat(3000), facts, false), facts, false));
+  expect(r.url.length).toBeLessThanOrEqual(URL_CAP);
+  expect(r.trimmed).toBe(true);
+  expect(LONE.test(params(r.url).get("body") ?? "")).toBe(false);
+});
+
+test("fix1: building the address can never throw: any failure comes back as a refusal the dialog shows", () => {
+  const broken = {
+    ...facts,
+    get login(): string | null {
+      throw new Error("boom");
+    },
+  };
+  let r: ReturnType<typeof issue> | undefined;
+  expect(() => {
+    r = issue(withBlock("hello", facts, false), broken, false);
+  }).not.toThrow();
+  expect(r?.ok).toBe(false);
+  if (r && !r.ok) expect(r.error).toMatch(/boom/);
+});
+
+test("fix1: closing the box with a report typed keeps it for the next open, a sent report does not", () => {
+  let s = reduce(closed, { t: "open", facts });
+  s = reduce(s, { t: "type", draft: `half a report${s.draft}` });
+  s = reduce(s, { t: "close" }); // a stray click on the dark background
+  expect(s.open).toBe(false);
+  const again = reduce(s, { t: "open", facts });
+  expect(typedText(again.draft)).toBe("half a report");
+  expect(again.draft).toContain("0.1.0"); // the block is rebuilt, not trusted
+  // text handed in on purpose (the crash report) replaces the old draft
+  expect(typedText(reduce(s, { t: "open", facts, text: "crash text" }).draft)).toBe("crash text");
+  // once sent, the next open is empty
+  const sent = reduce(again, { t: "sent", trimmed: false });
+  expect(typedText(reduce(sent, { t: "open", facts }).draft)).toBe("");
+  // an empty box stays empty
+  expect(typedText(reduce(reduce(reduce(closed, { t: "open", facts }), { t: "close" }), { t: "open", facts }).draft)).toBe("");
+});
