@@ -992,6 +992,9 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     };
     let builder = builder
         .focused(false)
+        // T-286-b (APP-017): the same browser arguments as the window (throttling exemption, safe
+        // graphics), or the engine refuses a second set on the same data folder.
+        .additional_browser_args(&crate::resources::recovery::browser_args_now())
         // BROW-012: zoom is the app's, in its own steps, so the engine's own zoom keys are off.
         .zoom_hotkeys_enabled(false)
         .initialization_script(CHORD_SCRIPT)

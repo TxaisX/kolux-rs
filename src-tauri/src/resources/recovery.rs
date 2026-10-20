@@ -533,8 +533,26 @@ fn ask_reload_or_quit(_title: &str, text: &str) -> bool {
 pub fn watch_start(app: tauri::AppHandle, perm: Option<String>) {
     app.manage(Watch(Mutex::new(Interface::new(Instant::now(), STALL))));
     let install = install_dir().unwrap_or_default();
+    let mut wake = Wake::new(std::time::SystemTime::now());
+    let mut sampled: Option<Instant> = None;
     let spawned = std::thread::Builder::new().name("interface-watch".into()).spawn(move || loop {
         std::thread::sleep(Duration::from_secs(1));
+        // T-286-b (APP-040): a memory reading for the next crash report, and new crash dumps.
+        if sampled.is_none_or(|t| t.elapsed() >= SAMPLE_EVERY) {
+            sampled = Some(Instant::now());
+            if let Ok(d) = app.path().app_data_dir() {
+                sample_step(&d);
+            }
+        }
+        // T-286-b (APP-017): after sleep every window repaints.
+        if wake.tick(std::time::SystemTime::now()) {
+            if let Ok(d) = app.path().app_data_dir() {
+                crate::diag::write(&d, "the computer woke: every window repaints (APP-017)");
+            }
+            for (_, w) in app.webview_windows() {
+                repaint(&w);
+            }
+        }
         let Some(win) = app.get_webview_window("main") else {
             // The window is gone: closing, or not up yet. Nothing is reloaded or asked.
             continue;
@@ -570,6 +588,87 @@ pub fn watch_start(app: tauri::AppHandle, perm: Option<String>) {
     if spawned.is_err() {
         eprintln!("kolux-rs: the interface watch could not start (APP-042)");
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// T-286-b (APP-017): repaint after sleep, and no background throttling
+// ---------------------------------------------------------------------------------------------
+
+/// The page's cue to repaint (src/recovery/hidden.ts) after the computer woke.
+pub const WOKE_EVENT: &str = "app-woke";
+
+/// Notices the computer slept: the wall clock jumped past WAKE_GAP between two one-second ticks
+/// (the wall clock, unlike the monotonic one, keeps counting while the computer sleeps).
+pub struct Wake {
+    last: std::time::SystemTime,
+}
+
+impl Wake {
+    pub fn new(now: std::time::SystemTime) -> Self {
+        Wake { last: now }
+    }
+
+    pub fn tick(&mut self, now: std::time::SystemTime) -> bool {
+        let gap = now.duration_since(self.last).unwrap_or_default();
+        self.last = now;
+        gap >= WAKE_GAP
+    }
+}
+
+/// Whether a window may take the one-pixel nudge: shown, and neither minimised, maximised nor full
+/// screen (a size change there would undo the user's choice).
+pub fn nudge_ok(visible: bool, minimized: bool, maximized: bool, fullscreen: bool) -> bool {
+    visible && !minimized && !maximized && !fullscreen
+}
+
+/// One window repaints: the page is told (it redraws itself and replays held updates), and a plain
+/// window grows by one pixel and back, which makes the engine lay out and draw the whole surface again.
+pub fn repaint(win: &tauri::WebviewWindow) {
+    use tauri::Emitter;
+    let _ = win.emit(WOKE_EVENT, ());
+    let ok = nudge_ok(win.is_visible().unwrap_or(false), win.is_minimized().unwrap_or(true), win.is_maximized().unwrap_or(true), win.is_fullscreen().unwrap_or(true));
+    if !ok {
+        return;
+    }
+    if let Ok(s) = win.inner_size() {
+        let _ = win.set_size(tauri::PhysicalSize::new(s.width, s.height + 1));
+        let _ = win.set_size(s);
+    }
+}
+
+/// APP-017: hidden windows are excused from the engine's background throttling, so status keeps
+/// arriving while minimised. WebView2 has no per-view switch (Tauri's backgroundThrottling covers
+/// macOS only), so these are Chromium switches passed as browser arguments.
+pub const UNTHROTTLED: [&str; 3] = ["--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows"];
+
+/// The browser arguments every window gets: the config's own (or wry's defaults), the throttling
+/// exemption, and safe graphics when it is on; each switch once.
+pub fn browser_args(current: Option<&str>, safe: bool) -> String {
+    let mut s = if safe { safe_args(current) } else { current.filter(|c| !c.trim().is_empty()).unwrap_or(WRY_DEFAULT_ARGS).to_string() };
+    for a in UNTHROTTLED {
+        if !s.split_whitespace().any(|x| x == a) {
+            s.push(' ');
+            s.push_str(a);
+        }
+    }
+    s
+}
+
+/// The arguments the windows were given at launch: every webview Kolux opens later on the same data
+/// folder must pass the same string, or the engine refuses to create it.
+static LAUNCH_ARGS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// In `run`, once per window config before the builder starts: the window's arguments, remembered
+/// for later webviews.
+pub fn launch_browser_args(current: Option<&str>, safe: bool) -> String {
+    let s = browser_args(current, safe);
+    let _ = LAUNCH_ARGS.set(s.clone());
+    s
+}
+
+/// What a webview opened later (a browser tab on the default profile) passes.
+pub fn browser_args_now() -> String {
+    LAUNCH_ARGS.get().cloned().unwrap_or_else(|| browser_args(None, false))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -699,6 +798,7 @@ pub fn graphics_restart_safe(app: tauri::AppHandle) -> Result<(), String> {
         flag_write(&dir, &SafeFlag { version: version_of(&app), chosen: false })?;
     }
     crate::diag::write(&dir, "restarting in safe graphics (APP-043)");
+    note_self_end(&app, "restart in safe graphics (APP-043)");
     app.restart()
 }
 
@@ -721,6 +821,7 @@ pub fn graphics_choose(app: tauri::AppHandle, stay: bool) -> Result<(), String> 
     }
     flag_clear(&dir);
     crate::diag::write(&dir, "trying hardware acceleration again: flag removed, restarting (APP-043)");
+    note_self_end(&app, "restart with hardware graphics (APP-043)");
     app.restart()
 }
 
@@ -731,10 +832,41 @@ pub fn graphics_choose(app: tauri::AppHandle, stay: bool) -> Result<(), String> 
 pub const CRASHES: &str = "crashes.json";
 /// The line every start writes (lib.rs setup), which splits the log into runs.
 pub const START_MARK: &str = "kolux-rs: config:";
-/// A run that logged one of these ended on purpose.
-const CLEAN_ENDS: [&str; 2] = ["app exit", "could not start:"];
-const KEEP: usize = 20;
+/// T-286-b (APP-040): written just before Kolux ends or restarts itself (a restart, an update
+/// install), so the next start never mistakes that for a crash.
+pub const SELF_END: &str = "kolux ended itself:";
+/// The final save's report line (lib.rs): the quit was under way.
+pub const QUIT_BEGAN: &str = "final save:";
+/// A run that logged one of these ended on purpose: a clean exit, a start that gave up, a quit
+/// that was under way, or Kolux ending itself.
+const CLEAN_ENDS: [&str; 4] = ["app exit", "could not start:", SELF_END, QUIT_BEGAN];
+/// APP-040: only the newest five reports are kept.
+pub const KEEP: usize = 5;
+/// Reports this close together (seconds) come from one crash: they merge into one report.
+pub const SAME_CRASH: u64 = 30;
+/// A crash dump written up to this long (seconds) after a report still joins it.
+pub const LATE_DUMP: u64 = 600;
+/// A quit's final save may take this long (seconds) before its report line is written.
+const QUIT_LEAD: u64 = 15;
+/// Engine processes may go on exiting this long (seconds) after the quit's last line.
+const QUIT_TAIL: u64 = 30;
 pub const NO_CLEAN_EXIT: &str = "Kolux ended without a clean exit (no shutdown record in the log)";
+pub const INTERFACE_CRASHED: &str = "a Kolux interface process crashed";
+
+/// What crashed: Kolux itself, an interface (browser engine) process, its graphics, or another child.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    #[default]
+    App,
+    Interface,
+    Graphics,
+    Child,
+}
+
+fn one() -> u32 {
+    1
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Crash {
@@ -742,6 +874,159 @@ pub struct Crash {
     pub when: u64,
     pub summary: String,
     pub dismissed: bool,
+    /// T-286-b: the fields below were added after T-183; older files read with their defaults.
+    #[serde(default)]
+    pub kind: Kind,
+    /// How many processes' reports this one crash merged.
+    #[serde(default = "one")]
+    pub count: u32,
+    /// The last host memory reading before the crash, in words.
+    #[serde(default)]
+    pub memory: Option<String>,
+    /// The module that faulted, when a crash dump named one.
+    #[serde(default)]
+    pub module: Option<String>,
+    /// The merged siblings' own summaries (at most five).
+    #[serde(default)]
+    pub siblings: Vec<String>,
+    /// The crash dump files already merged in, so a dump is never counted twice.
+    #[serde(default)]
+    pub dumps: Vec<String>,
+}
+
+impl Crash {
+    /// A new, pending report of one process.
+    pub fn new(kind: Kind, when: u64, summary: &str) -> Self {
+        Crash { id: String::new(), when, summary: scrub_report(summary), dismissed: false, kind, count: 1, memory: None, module: None, siblings: Vec::new(), dumps: Vec::new() }
+    }
+}
+
+/// How a process ended, as far as Kolux can tell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ending {
+    pub kind: Kind,
+    /// It reported a clean end.
+    pub clean: bool,
+    /// Kolux was quitting at the time (graphics and engine processes exit then too).
+    pub during_quit: bool,
+    /// Kolux ended it itself (a restart, an update install, an ended session).
+    pub ours: bool,
+}
+
+/// APP-040: exits during an expected shutdown, graphics exits at quit time and kills Kolux issued
+/// itself are not crashes; interface process crashes and unknown child crashes still are.
+pub fn is_crash(e: &Ending) -> bool {
+    !(e.clean || e.ours || e.during_quit)
+}
+
+/// APP-040: merges `inc` into the store and returns the id of the report it landed in. A dump
+/// already merged changes nothing; a dump arriving late joins the report it belongs to (the
+/// nearest one within LATE_DUMP that has no module yet); a report within SAME_CRASH of the newest
+/// one is its sibling and merges into it (one prompt, the sibling's own summary kept); anything
+/// else is a new report, and only the newest KEEP stay.
+pub fn add(all: &mut Vec<Crash>, mut inc: Crash) -> String {
+    if let Some(d) = inc.dumps.first() {
+        if let Some(c) = all.iter().find(|c| c.dumps.contains(d)) {
+            return c.id.clone();
+        }
+        let late = all.iter_mut().filter(|c| c.module.is_none() && inc.when.abs_diff(c.when) <= LATE_DUMP).min_by_key(|c| inc.when.abs_diff(c.when));
+        if let Some(c) = late {
+            c.dumps.push(d.clone());
+            c.module = inc.module.take();
+            if c.memory.is_none() {
+                c.memory = inc.memory.take();
+            }
+            return c.id.clone();
+        }
+    }
+    if let Some(c) = all.last_mut().filter(|c| inc.when.abs_diff(c.when) <= SAME_CRASH) {
+        c.count += 1;
+        if c.siblings.len() < 5 {
+            c.siblings.push(inc.summary.clone());
+        }
+        if c.module.is_none() {
+            c.module = inc.module.take();
+        }
+        if c.memory.is_none() {
+            c.memory = inc.memory.take();
+        }
+        c.dumps.append(&mut inc.dumps);
+        // an interface process makes a more useful headline than a sibling's "no clean exit"
+        if c.kind == Kind::App && inc.kind != Kind::App && c.summary == NO_CLEAN_EXIT {
+            c.kind = inc.kind;
+            c.summary = inc.summary;
+        }
+        return c.id.clone();
+    }
+    let n = all.iter().filter_map(|c| c.id.rsplit_once('-').and_then(|(_, n)| n.parse::<u64>().ok())).max().map(|n| n + 1).unwrap_or(0);
+    inc.id = format!("{}-{n}", inc.when);
+    let id = inc.id.clone();
+    all.push(inc);
+    if all.len() > KEEP {
+        let extra = all.len() - KEEP;
+        all.drain(..extra);
+    }
+    id
+}
+
+/// Reads the store, merges `inc` and saves it (retrying a briefly locked file); the report it landed in.
+pub fn record(dir: &Path, inc: Crash) -> Crash {
+    let mut all = crashes_read(dir);
+    let fallback = inc.clone();
+    let id = add(&mut all, inc);
+    let _ = crashes_write(dir, &all);
+    all.into_iter().find(|c| c.id == id).unwrap_or(fallback)
+}
+
+// ---- APP-040: the last host memory reading ----
+
+pub const MEMORY_FILE: &str = "memory-last.json";
+/// How often the watch thread takes a memory reading and looks for new crash dumps.
+pub const SAMPLE_EVERY: Duration = Duration::from_secs(30);
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemReading {
+    pub when: u64,
+    pub free: Option<u64>,
+    pub total: Option<u64>,
+    /// Kolux's own working set.
+    pub app: Option<u64>,
+}
+
+pub fn memory_sample() -> MemReading {
+    let (free, total) = super::imp::memory();
+    MemReading { when: now_secs(), free, total, app: crate::sysmem::working_set_bytes() }
+}
+
+pub fn memory_save(dir: &Path, r: &MemReading) {
+    if let Ok(b) = serde_json::to_vec(r) {
+        let _ = write_retry(&dir.join(MEMORY_FILE), &b, &mut |p, b| fs::write(p, b));
+    }
+}
+
+pub fn memory_last(dir: &Path) -> Option<MemReading> {
+    serde_json::from_slice(&fs::read(dir.join(MEMORY_FILE)).ok()?).ok()
+}
+
+fn gb(b: u64) -> String {
+    format!("{:.1} GB", b as f64 / 1_073_741_824.0)
+}
+
+/// The reading in words for the report. Only memory: free disk space is never offered as proof
+/// that swap could have grown.
+pub fn memory_text(r: &MemReading, crash_when: u64) -> Option<String> {
+    let (Some(free), Some(total)) = (r.free, r.total) else { return None };
+    if total == 0 {
+        return None;
+    }
+    let used = 100 - (free.min(total) * 100 / total);
+    let mut s = format!("{} free of {} ({used}% in use)", gb(free), gb(total));
+    if let Some(app) = r.app {
+        s.push_str(&format!(", Kolux itself {} MB", app / 1_048_576));
+    }
+    let age = crash_when.saturating_sub(r.when);
+    s.push_str(&format!("; read {age} s before the crash"));
+    Some(s)
 }
 
 /// The previous run, read out of the log as the text between the last two start lines: one that
@@ -767,9 +1052,37 @@ pub fn crashes_read(dir: &Path) -> Vec<Crash> {
     fs::read(dir.join(CRASHES)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
 }
 
+/// APP-040: the store survives damaged files (crashes_read starts empty) and a save retries when
+/// Windows briefly locks the file (a scanner or a backup tool holding it).
 pub fn crashes_write(dir: &Path, all: &[Crash]) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    fs::write(dir.join(CRASHES), serde_json::to_vec_pretty(all).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+    let bytes = serde_json::to_vec_pretty(all).map_err(|e| e.to_string())?;
+    write_retry(&dir.join(CRASHES), &bytes, &mut |p, b| fs::write(p, b))
+}
+
+/// How many times a locked file is tried, and the pause between tries.
+pub const SAVE_TRIES: usize = 5;
+pub const SAVE_PAUSE: Duration = Duration::from_millis(100);
+
+/// Writes with retries on errors a briefly held file gives (access denied, sharing violation).
+pub fn write_retry(path: &Path, bytes: &[u8], write: &mut dyn FnMut(&Path, &[u8]) -> std::io::Result<()>) -> Result<(), String> {
+    let mut last = String::new();
+    for attempt in 0..SAVE_TRIES {
+        match write(path, bytes) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                let locked = e.kind() == std::io::ErrorKind::PermissionDenied || e.raw_os_error() == Some(32) || e.raw_os_error() == Some(33);
+                last = e.to_string();
+                if !locked {
+                    break;
+                }
+                if attempt + 1 < SAVE_TRIES {
+                    std::thread::sleep(SAVE_PAUSE);
+                }
+            }
+        }
+    }
+    Err(last)
 }
 
 /// Secrets masked (diag::scrub) and the user's folder name taken out of paths: `C:\Users\name`,
@@ -793,18 +1106,126 @@ pub fn scrub_report(text: &str) -> String {
     }
 }
 
-/// Adds one record (summary scrubbed of paths and secrets); the file keeps the newest KEEP.
+/// Adds one report of Kolux itself, now, with a fresh memory reading (summary scrubbed of paths
+/// and secrets); it merges like any other (`add`).
 pub fn note_crash(dir: &Path, summary: &str) -> Crash {
-    let mut all = crashes_read(dir);
     let when = now_secs();
-    let c = Crash { id: format!("{when}-{}", all.len()), when, summary: scrub_report(summary), dismissed: false };
-    all.push(c.clone());
-    if all.len() > KEEP {
-        let extra = all.len() - KEEP;
-        all.drain(..extra);
+    let mut c = Crash::new(Kind::App, when, summary);
+    c.memory = memory_text(&memory_sample(), when);
+    record(dir, c)
+}
+
+/// APP-040: written to the log just before Kolux ends or restarts itself, so the next start does
+/// not record a crash.
+pub fn note_self_end(app: &tauri::AppHandle, why: &str) {
+    if let Ok(dir) = app.path().app_data_dir() {
+        crate::diag::write(&dir, &format!("{SELF_END} {why}"));
     }
-    let _ = crashes_write(dir, &all);
-    c
+}
+
+/// The time stamp a log line starts with.
+fn stamp(line: &str) -> Option<u64> {
+    line.split_whitespace().next()?.parse().ok()
+}
+
+/// The last time stamp of the run before the current start (when the previous run was last heard of).
+pub fn previous_run_end(log: &str) -> Option<u64> {
+    let starts: Vec<usize> = log.match_indices(START_MARK).map(|(i, _)| i).collect();
+    if starts.len() < 2 {
+        return None;
+    }
+    let run = &log[starts[starts.len() - 2]..starts[starts.len() - 1]];
+    // the slice ends inside the next start's line (its time stamp): that fragment is not this run's
+    let run = &run[..run.rfind('\n').unwrap_or(0)];
+    run.lines().rev().find_map(stamp)
+}
+
+/// The spans (seconds) when Kolux was quitting or ending itself: from shortly before the final
+/// save's line or the self-end line to the next start (or shortly after, when none followed). A
+/// crash dump written inside one is a quit-time exit, not a crash.
+pub fn quit_spans(log: &str) -> Vec<(u64, u64)> {
+    let mut spans = Vec::new();
+    // (when the quit began, its last line so far)
+    let mut open: Option<(u64, u64)> = None;
+    for line in log.lines() {
+        let Some(t) = stamp(line) else { continue };
+        if line.contains(START_MARK) {
+            if let Some((s, _)) = open.take() {
+                spans.push((s.saturating_sub(QUIT_LEAD), t));
+            }
+            continue;
+        }
+        if let Some(o) = open.as_mut() {
+            o.1 = t;
+        } else if line.contains(QUIT_BEGAN) || line.contains(SELF_END) || line.contains("app exit") {
+            open = Some((t, t));
+        }
+    }
+    // a quit with no start after it (the current run's own, or the newest) ends QUIT_TAIL after its last line
+    if let Some((s, last)) = open {
+        spans.push((s.saturating_sub(QUIT_LEAD), last + QUIT_TAIL));
+    }
+    spans
+}
+
+/// Whether `when` falls inside a quit span.
+pub fn in_quit(spans: &[(u64, u64)], when: u64) -> bool {
+    spans.iter().any(|&(a, b)| when >= a && when <= b)
+}
+
+pub const DUMPS_SEEN: &str = "crash-dumps-seen.json";
+
+/// APP-040: every crash dump not seen before becomes an interface crash report naming its
+/// faulting module, unless it was written while Kolux was quitting; a dump of a crash already
+/// reported merges into that report. Returns the reports touched.
+pub fn scan_dumps(dir: &Path, dumps_root: &Path, log: &str, mem: Option<MemReading>) -> Vec<Crash> {
+    // the first look ever takes the dumps already there as seen: they predate this store
+    let first = !dir.join(DUMPS_SEEN).exists();
+    let mut seen: Vec<String> = fs::read(dir.join(DUMPS_SEEN)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    let spans = quit_spans(log);
+    let mut touched = Vec::new();
+    for d in super::crashdump::dumps(dumps_root) {
+        if seen.contains(&d.name) {
+            continue;
+        }
+        seen.push(d.name.clone());
+        if first {
+            continue;
+        }
+        let ending = Ending { kind: Kind::Interface, clean: false, during_quit: in_quit(&spans, d.when), ours: false };
+        if !is_crash(&ending) {
+            crate::diag::write(dir, &format!("crash dump {} was written while Kolux was quitting: not a crash (APP-040)", d.name));
+            continue;
+        }
+        let fault = super::crashdump::fault_of(&d.path);
+        let summary = match &fault {
+            Some(f) => format!("{INTERFACE_CRASHED}: {}", super::crashdump::code_text(f.code)),
+            None => INTERFACE_CRASHED.to_string(),
+        };
+        let mut c = Crash::new(Kind::Interface, d.when, &summary);
+        c.module = fault.and_then(|f| f.module);
+        c.memory = mem.and_then(|m| memory_text(&m, d.when));
+        c.dumps.push(d.name.clone());
+        touched.push(record(dir, c));
+    }
+    if seen.len() > 200 {
+        let extra = seen.len() - 200;
+        seen.drain(..extra);
+    }
+    if let Ok(b) = serde_json::to_vec(&seen) {
+        let _ = write_retry(&dir.join(DUMPS_SEEN), &b, &mut |p, b| fs::write(p, b));
+    }
+    touched
+}
+
+/// Where the browser engine writes its crash dumps: its data folder is the local app data folder
+/// plus the identifier on Windows (the profile folder's own name). None elsewhere.
+pub fn dumps_root(dir: &Path) -> Option<PathBuf> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let local = std::env::var_os("LOCALAPPDATA")?;
+    Some(PathBuf::from(local).join(dir.file_name()?).join(super::crashdump::DUMP_FOLDER))
 }
 
 /// The newest record that has not prompted yet.
@@ -828,7 +1249,20 @@ pub fn dismiss(all: &mut [Crash], id: &str) -> bool {
 
 /// The plain-text details for the clipboard and the issue body.
 pub fn details(c: &Crash, version: &str, os: &str) -> String {
-    format!("Kolux crash report\nVersion: {version}\nSystem: {os}\nRecorded: {} (seconds since the epoch)\nWhat was recorded: {}\n", c.when, c.summary)
+    let mut s = format!("Kolux crash report\nVersion: {version}\nSystem: {os}\nRecorded: {} (seconds since the epoch)\nWhat was recorded: {}\n", c.when, c.summary);
+    if let Some(m) = &c.module {
+        s.push_str(&format!("Faulting module: {m}\n"));
+    }
+    if let Some(m) = &c.memory {
+        s.push_str(&format!("Memory before the crash: {m}\n"));
+    }
+    if c.count > 1 {
+        s.push_str(&format!("Processes in this crash: {}\n", c.count));
+        for sib in &c.siblings {
+            s.push_str(&format!("  also: {sib}\n"));
+        }
+    }
+    s
 }
 
 /// Where the newest rotated log file is, if any (its name carries the time).
@@ -854,10 +1288,35 @@ pub fn startup_scan(dir: &Path) -> Option<Crash> {
         text.push_str(&fs::read_to_string(older).unwrap_or_default());
     }
     text.push_str(&fs::read_to_string(logs.join("kolux.log")).unwrap_or_default());
-    let summary = previous_run_crash(&text)?;
-    let c = note_crash(dir, &summary);
-    crate::diag::write(dir, &format!("crash record {} added: the previous run left no clean exit (APP-039)", c.id));
-    Some(c)
+    // T-286-b (APP-040): the previous run's last memory reading, read before this run takes its own.
+    let mem = memory_last(dir);
+    let run = previous_run_crash(&text).map(|summary| {
+        let when = previous_run_end(&text).unwrap_or_else(now_secs);
+        let mut c = Crash::new(Kind::App, when, &summary);
+        c.memory = mem.and_then(|m| memory_text(&m, when));
+        let c = record(dir, c);
+        crate::diag::write(dir, &format!("crash record {} added: the previous run left no clean exit (APP-039)", c.id));
+        c
+    });
+    // dumps the engine wrote since the last look join their report or make their own
+    let dumps = dumps_root(dir).map(|root| scan_dumps(dir, &root, &text, mem)).unwrap_or_default();
+    run.or_else(|| dumps.into_iter().last())
+}
+
+/// T-286-b (APP-040): the watch thread's periodic step: a fresh memory reading is saved for the
+/// next crash report, and dumps written while Kolux runs become reports straight away (none while
+/// it quits).
+pub fn sample_step(dir: &Path) {
+    memory_save(dir, &memory_sample());
+    if crate::final_save::quitting() {
+        return;
+    }
+    if let Some(root) = dumps_root(dir) {
+        let log = fs::read_to_string(dir.join("logs").join("kolux.log")).unwrap_or_default();
+        for c in scan_dumps(dir, &root, &log, memory_last(dir)) {
+            crate::diag::write(dir, &format!("crash record {} now covers an interface crash dump (APP-040)", c.id));
+        }
+    }
 }
 
 fn os_line() -> String {
@@ -1239,8 +1698,9 @@ mod tests {
         assert_eq!(latest(&all), Some(&all[0]), "Help > Report Crash still finds it");
         assert!(latest(&all).unwrap().dismissed);
         // an older pending record never prompts once a newer one was dismissed
-        let older = note_crash(&dir, "older, left pending");
-        let newer = note_crash(&dir, "newer");
+        // (T-286-b: two crashes, far enough apart not to merge)
+        let older = record(&dir, Crash::new(Kind::App, 1_000_000, "older, left pending"));
+        let newer = record(&dir, Crash::new(Kind::App, 1_000_100, "newer"));
         let mut all = crashes_read(&dir);
         assert_eq!(pending(&all).map(|c| c.id.clone()), Some(newer.id.clone()), "the newest pending one");
         assert!(dismiss(&mut all, &newer.id));
@@ -1250,13 +1710,189 @@ mod tests {
         let d = details(&newer, "0.1.0", "windows x86_64");
         assert!(d.starts_with("Kolux crash report\nVersion: 0.1.0\nSystem: windows x86_64\n"), "{d}");
         assert!(d.contains("What was recorded: newer"));
-        // the file keeps the newest 20
+        // the file keeps the newest KEEP (five since T-286-b)
         for n in 0..25 {
-            note_crash(&dir, &format!("flood {n}"));
+            record(&dir, Crash::new(Kind::App, 2_000_000 + n * 100, &format!("flood {n}")));
         }
         let all = crashes_read(&dir);
         assert_eq!(all.len(), KEEP);
         assert_eq!(all.last().unwrap().summary, "flood 24");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // T-286-b (APP-040)
+
+    #[test]
+    fn t286b_only_real_crashes_count() {
+        let e = |kind, clean, during_quit, ours| Ending { kind, clean, during_quit, ours };
+        assert!(!is_crash(&e(Kind::App, true, false, false)), "a clean end");
+        assert!(!is_crash(&e(Kind::App, false, true, false)), "an exit during an expected shutdown");
+        assert!(!is_crash(&e(Kind::Graphics, false, true, false)), "a graphics exit at quit time");
+        assert!(!is_crash(&e(Kind::Interface, false, false, true)), "a kill Kolux issued itself");
+        assert!(is_crash(&e(Kind::Interface, false, false, false)), "an interface process crash");
+        assert!(is_crash(&e(Kind::Child, false, false, false)), "an unknown child crash");
+        assert!(is_crash(&e(Kind::App, false, false, false)), "Kolux itself ending badly");
+        // in the log: a quit under way, or Kolux ending itself, is no crash ten times over
+        for n in 0..10 {
+            let quit = format!("{n}0 kolux-rs: config: a\n{n}1 final save: 5 finished in 20 ms\n{n}2 kolux-rs: config: a\n");
+            assert_eq!(previous_run_crash(&quit), None);
+        }
+        let restart = format!("1 kolux-rs: config: a\n2 {SELF_END} restart to update\n3 kolux-rs: config: a\n");
+        assert_eq!(previous_run_crash(&restart), None);
+        let gone = "1 kolux-rs: config: a\n7 terminal 1 started\n9 kolux-rs: config: a\n";
+        assert_eq!(previous_run_crash(gone).as_deref(), Some(NO_CLEAN_EXIT));
+        assert_eq!(previous_run_end(gone), Some(7), "the last line the run wrote");
+    }
+
+    #[test]
+    fn t286b_seven_interface_crashes_leave_five_reports_and_siblings_merge() {
+        let mut all = Vec::new();
+        for n in 0..7u64 {
+            add(&mut all, Crash::new(Kind::Interface, 10_000 + n * 1000, INTERFACE_CRASHED));
+        }
+        assert_eq!(all.len(), 5, "only the newest five");
+        assert_eq!(all[0].when, 12_000);
+        assert_eq!(all.iter().map(|c| c.id.clone()).collect::<std::collections::HashSet<_>>().len(), 5, "ids stay unique");
+        // the same crash seen from three processes is one report
+        let mut all = Vec::new();
+        let id = add(&mut all, Crash::new(Kind::App, 500, NO_CLEAN_EXIT));
+        assert_eq!(add(&mut all, Crash::new(Kind::Interface, 510, INTERFACE_CRASHED)), id);
+        assert_eq!(add(&mut all, Crash::new(Kind::Graphics, 520, "graphics process gone")), id);
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].count, 3);
+        assert_eq!(all[0].kind, Kind::Interface, "the interface headline replaces the bare no-clean-exit line");
+        assert_eq!(all[0].summary, INTERFACE_CRASHED);
+        assert_eq!(all[0].siblings.len(), 2);
+        assert!(!all[0].dismissed, "one pending prompt for the lot");
+        // a later crash is its own report
+        assert_ne!(add(&mut all, Crash::new(Kind::Interface, 900, INTERFACE_CRASHED)), id);
+    }
+
+    #[test]
+    fn t286b_a_late_dump_merges_and_names_the_module_once() {
+        let mut all = Vec::new();
+        let id = add(&mut all, Crash::new(Kind::App, 1_000, NO_CLEAN_EXIT));
+        let mut dump = Crash::new(Kind::Interface, 1_400, INTERFACE_CRASHED);
+        dump.module = Some("libGLESv2.dll".into());
+        dump.dumps.push("abc.dmp".into());
+        assert_eq!(add(&mut all, dump.clone()), id, "arrived late, still the same report");
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].module.as_deref(), Some("libGLESv2.dll"));
+        assert_eq!(add(&mut all, dump), id, "the same dump again changes nothing");
+        assert_eq!(all[0].dumps, vec!["abc.dmp".to_string()]);
+        assert_eq!(all[0].count, 1);
+        let d = details(&all[0], "0.1.0", "windows x86_64");
+        assert!(d.contains("Faulting module: libGLESv2.dll"), "{d}");
+    }
+
+    #[test]
+    fn t286b_the_store_survives_damage_and_retries_a_locked_file() {
+        let dir = temp("store");
+        fs::write(dir.join(CRASHES), b"{ not json").unwrap();
+        assert!(crashes_read(&dir).is_empty(), "a damaged file starts empty");
+        let c = record(&dir, Crash::new(Kind::App, 5, "boom"));
+        assert_eq!(crashes_read(&dir), vec![c], "and takes new reports");
+        // two sharing violations, then the save goes through
+        let mut calls = 0;
+        let r = write_retry(&dir.join("x.json"), b"1", &mut |p, b| {
+            calls += 1;
+            if calls < 3 { Err(std::io::Error::from_raw_os_error(32)) } else { fs::write(p, b) }
+        });
+        assert_eq!(r, Ok(()));
+        assert_eq!(calls, 3);
+        // an error that is not a lock is not retried
+        let mut calls = 0;
+        let r = write_retry(&dir.join("y.json"), b"1", &mut |_, _| {
+            calls += 1;
+            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "gone"))
+        });
+        assert!(r.is_err());
+        assert_eq!(calls, 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn t286b_the_report_carries_the_last_memory_reading_and_never_disk_space() {
+        let r = MemReading { when: 100, free: Some(2 * 1_073_741_824), total: Some(16 * 1_073_741_824), app: Some(400 * 1_048_576) };
+        let t = memory_text(&r, 130).unwrap();
+        assert_eq!(t, "2.0 GB free of 16.0 GB (88% in use), Kolux itself 400 MB; read 30 s before the crash");
+        assert!(!t.to_lowercase().contains("disk") && !t.to_lowercase().contains("swap"));
+        assert_eq!(memory_text(&MemReading { when: 1, free: None, total: None, app: None }, 2), None);
+        // the previous run's reading goes into the report the next start writes
+        let dir = temp("memory");
+        memory_save(&dir, &r);
+        fs::create_dir_all(dir.join("logs")).unwrap();
+        fs::write(dir.join("logs").join("kolux.log"), "90 kolux-rs: config: a\n130 terminal 1 started\n200 kolux-rs: config: a\n").unwrap();
+        let c = startup_scan(&dir).expect("a report");
+        assert_eq!(c.memory.as_deref(), Some("2.0 GB free of 16.0 GB (88% in use), Kolux itself 400 MB; read 30 s before the crash"));
+        assert!(details(&c, "0.1.0", "x").contains("Memory before the crash: 2.0 GB free"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn t286b_dumps_become_interface_reports_unless_written_while_quitting() {
+        use super::super::crashdump::tests::minidump;
+        let dir = temp("dumps");
+        let root = dir.join("Crashpad");
+        fs::create_dir_all(root.join("reports")).unwrap();
+        fs::write(root.join("reports").join("old.dmp"), minidump(5, 0x1008, &[(0x1000, 0x100, "C:\\x\\old.dll")])).unwrap();
+        // the first look takes what is already there as seen
+        assert!(scan_dumps(&dir, &root, "", None).is_empty());
+        fs::write(root.join("reports").join("new.dmp"), minidump(0xC000_0005, 0x2010, &[(0x2000, 0x100, "C:\\Users\\me\\nvwgf2umx.dll")])).unwrap();
+        let got = scan_dumps(&dir, &root, "", None);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].kind, Kind::Interface);
+        assert_eq!(got[0].module.as_deref(), Some("nvwgf2umx.dll"));
+        assert_eq!(got[0].summary, format!("{INTERFACE_CRASHED}: 0xC0000005 (access violation)"));
+        assert!(scan_dumps(&dir, &root, "", None).is_empty(), "a dump is looked at once");
+        // a dump written inside a quit span is no crash
+        let now = now_secs();
+        let log = format!("{} kolux-rs: config: a\n{} final save: 4 finished in 10 ms\n{} app exit\n", now - 100, now - 2, now - 1);
+        assert!(in_quit(&quit_spans(&log), now));
+        fs::write(root.join("reports").join("quit.dmp"), minidump(5, 0x1008, &[])).unwrap();
+        assert!(scan_dumps(&dir, &root, &log, None).is_empty(), "graphics exit at quit time");
+        assert_eq!(crashes_read(&dir).len(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn t286b_quit_spans_cover_the_quit_and_end_at_the_next_start() {
+        let log = "100 kolux-rs: config: a\n150 final save: 4 finished in 10 ms\n151 app exit\n400 kolux-rs: config: a\n500 terminal\n";
+        let spans = quit_spans(log);
+        assert_eq!(spans, vec![(135, 400)]);
+        assert!(in_quit(&spans, 140) && !in_quit(&spans, 120) && !in_quit(&spans, 450));
+        let open = "100 kolux-rs: config: a\n150 kolux ended itself: restart to update\n";
+        assert_eq!(quit_spans(open), vec![(135, 180)]);
+    }
+
+    // T-286-b (APP-017)
+
+    #[test]
+    fn t286b_a_jump_in_the_wall_clock_is_a_wake_and_only_plain_windows_are_nudged() {
+        let t0 = std::time::UNIX_EPOCH + Duration::from_secs(1_000);
+        let mut w = Wake::new(t0);
+        assert!(!w.tick(t0 + Duration::from_secs(1)));
+        assert!(!w.tick(t0 + Duration::from_secs(3)), "a slow tick is not sleep");
+        assert!(w.tick(t0 + Duration::from_secs(3 + 3600)), "an hour asleep");
+        assert!(!w.tick(t0 + Duration::from_secs(3602)), "the clock going back is not a wake");
+        assert!(nudge_ok(true, false, false, false));
+        assert!(!nudge_ok(false, false, false, false), "hidden");
+        assert!(!nudge_ok(true, true, false, false), "minimised");
+        assert!(!nudge_ok(true, false, true, false), "maximised keeps its size");
+        assert!(!nudge_ok(true, false, false, true), "full screen keeps its size");
+    }
+
+    #[test]
+    fn t286b_every_window_is_excused_from_background_throttling_once() {
+        let a = browser_args(None, false);
+        assert!(a.starts_with(WRY_DEFAULT_ARGS), "wry's defaults stay: {a}");
+        for s in UNTHROTTLED {
+            assert_eq!(a.split_whitespace().filter(|x| *x == s).count(), 1, "{s} once");
+        }
+        let safe = browser_args(None, true);
+        assert!(safe.contains(SAFE_ARG) && safe.contains(UNTHROTTLED[0]));
+        assert_eq!(browser_args(Some(&a), false), a, "applying twice adds nothing");
+        assert_eq!(browser_args(Some("--x"), false), format!("--x {}", UNTHROTTLED.join(" ")));
+        assert_eq!(browser_args_now(), LAUNCH_ARGS.get().cloned().unwrap_or_else(|| browser_args(None, false)));
     }
 }

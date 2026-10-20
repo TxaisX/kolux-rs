@@ -15,7 +15,7 @@ export type Phase =
   | { kind: "available"; info: UpdateInfo }
   | { kind: "downloading"; info: UpdateInfo; received: number; total: number | null }
   | { kind: "ready"; info: UpdateInfo }
-  | { kind: "error"; message: string; next: string; info: UpdateInfo | null; retry: "check" | "download" };
+  | { kind: "error"; message: string; next: string; info: UpdateInfo | null; retry: "check" | "download" | "none" | "compat" | "restart"; security?: boolean; calm?: boolean };
 
 export interface CardState {
   phase: Phase;
@@ -45,6 +45,7 @@ export type Action =
   | { type: "ready"; info: UpdateInfo }
   | { type: "downloadFailed"; info: UpdateInfo; message: string; offline: boolean }
   | { type: "notReady" }
+  | { type: "restartFailed"; message: string }
   | { type: "faded" }
   | { type: "collapse" }
   | { type: "expand" }
@@ -63,6 +64,29 @@ export function nextStep(offline: boolean, stage: "check" | "download"): string 
   return stage === "check"
     ? "Press Try again in a minute. If it keeps failing, get the newest version from the releases page."
     : "Press Try again to download it once more; your work is not affected.";
+}
+
+/** T-293 (APP-030): the marker update_download puts before a refused installer's reason. */
+export const REFUSED_MARK = "update:refused|";
+/** T-199 (APP-031): markers update_check / update_download put before their words. */
+export const QUIET_MARK = "update:quiet|";
+export const COMPAT_MARK = "update:compat|";
+export const STALE_MARK = "update:stale";
+/** A half-published release or a missing platform entry is looked at again this soon. */
+export const SHORT_RECHECK_MS = 10 * 60 * 1000;
+export const isQuiet = (m: string) => m.startsWith(QUIET_MARK) || m === STALE_MARK;
+
+/** The card for a calm "not yet" or a compatibility-mode offer, or null for any other error. */
+export function problemPhase(raw: string, info: UpdateInfo | null): Phase | null {
+  if (raw.startsWith(QUIET_MARK)) {
+    const message = raw.slice(QUIET_MARK.length) || "There is no complete update to install yet.";
+    return { kind: "error", message, next: "Nothing is wrong with your copy; it keeps working. No need to press anything.", info, retry: "none", calm: true };
+  }
+  if (raw.startsWith(COMPAT_MARK)) {
+    const message = "The connection to the update server broke off in a way that compatibility mode usually gets past.";
+    return { kind: "error", message, next: "Use compatibility mode to check again over an older, sturdier kind of connection.", info, retry: "compat" };
+  }
+  return null;
 }
 
 /** The updater's own words, turned into a sentence a user can act on. */
@@ -110,6 +134,9 @@ export function cardReducer(s: CardState, a: Action): CardState {
     }
     case "checkFailed": {
       if (!(s.requested || a.requested)) return s;
+      // T-199 (APP-031): a half-published feed is explained calmly; a protocol error offers compatibility mode.
+      const special = problemPhase(a.message, null);
+      if (special) return { ...s, requested: true, shown: true, collapsed: false, phase: special };
       return {
         ...s,
         requested: true,
@@ -135,6 +162,16 @@ export function cardReducer(s: CardState, a: Action): CardState {
       return { ...next, popup: v, popupSeen: [...s.popupSeen, v] };
     }
     case "downloadFailed": {
+      // T-293 (APP-030): a refused installer is a security stop: no Try again, no install anyway.
+      if (a.message.startsWith(REFUSED_MARK)) {
+        const message = a.message.slice(REFUSED_MARK.length);
+        const next = "There is no way to install this download. If you did not expect this, get Kolux RS from its releases page.";
+        return { ...s, requested: true, shown: true, collapsed: false, popup: null, phase: { kind: "error", message, next, info: a.info, retry: "none", security: true } };
+      }
+      // T-199 (APP-031): an installer not uploaded yet says nothing after a quiet check.
+      const special = problemPhase(a.message, a.info);
+      if (special?.kind === "error" && special.calm && !s.requested) return { ...s, phase: { kind: "idle" } };
+      if (special) return { ...s, requested: true, shown: true, collapsed: false, phase: special };
       // Download errors bring the card up even after a quiet check.
       return {
         ...s,
@@ -146,6 +183,14 @@ export function cardReducer(s: CardState, a: Action): CardState {
     }
     case "notReady":
       return { ...s, popup: null, phase: s.phase.kind === "ready" ? { kind: "idle" } : s.phase };
+    case "restartFailed": {
+      // T-199 (APP-029): the installer could not start; the app stays open with the real reason and
+      // the downloaded update stays ready for another try.
+      const info = s.phase.kind === "ready" || (s.phase.kind === "error" && s.phase.retry === "restart") ? s.phase.info : null;
+      if (!info) return { ...s, popup: null, phase: s.phase.kind === "ready" ? { kind: "idle" } : s.phase };
+      const next = "Kolux RS stayed open; your terminals were ended for the install and can be reopened. Fix the cause, then press Restart to update again.";
+      return { ...s, popup: null, requested: true, shown: true, collapsed: false, phase: { kind: "error", message: a.message, next, info, retry: "restart" } };
+    }
     case "faded":
       return s.phase.kind === "upToDate" ? { ...s, shown: false, requested: false, phase: { kind: "idle" } } : s;
     case "collapse":
@@ -182,7 +227,7 @@ export function tipVisible(s: CardState): boolean {
 }
 
 /** The card's main action, run by Enter. */
-export function mainAction(p: Phase): "close" | "download" | "restart" | "retryCheck" | "retryDownload" | null {
+export function mainAction(p: Phase): "close" | "download" | "restart" | "retryCheck" | "retryDownload" | "compat" | null {
   switch (p.kind) {
     case "upToDate":
       return "close";
@@ -191,7 +236,7 @@ export function mainAction(p: Phase): "close" | "download" | "restart" | "retryC
     case "ready":
       return "restart";
     case "error":
-      return p.retry === "check" ? "retryCheck" : "retryDownload";
+      return ({ none: null, check: "retryCheck", download: "retryDownload", compat: "compat", restart: "restart" } as const)[p.retry];
     default:
       return null;
   }
@@ -216,7 +261,8 @@ export function barItem(p: Phase): BarItem | null {
     case "ready":
       return { tone: "ready", text: "Restart to update", title: `Kolux RS ${p.info.version} is ready to install. ${title}` };
     case "error":
-      return { tone: "error", text: "Update failed", title: `${p.message} ${title}` };
+      if (p.calm) return null;
+      return { tone: "error", text: p.security ? "Update refused" : "Update failed", title: `${p.message} ${title}` };
     default:
       return null;
   }

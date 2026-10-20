@@ -3,20 +3,35 @@
 // script sends none, so the watch reloads it. APP-043: every lost graphics context is reported;
 // when the burst fires the flag is already saved and the page offers Restart in safe graphics or
 // Keep Running; a launch that is already in safe graphics asks whether to stay (stay preselected).
-// APP-039: the crash report dialog.
+// APP-039: the crash report dialog. T-199 (APP-028): an update that did not install is reported at
+// the next launch with Try again and the installer page.
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import CrashReportDialog from "./CrashReportDialog";
-import { afterBurst, HEARTBEAT_MS, launchPrompt, type GraphicsPrompt } from "./model";
+import { repaint, WOKE_EVENT } from "./hidden";
+import { requestUpdateCheck } from "../update/UpdateCenter";
+import { afterBurst, HEARTBEAT_MS, launchPrompt, updateNotice, type GraphicsPrompt, type LastAttempt } from "./model";
 
 export default function RecoveryMount() {
   const [g, setG] = useState<GraphicsPrompt>(null);
+  const [upd, setUpd] = useState<ReturnType<typeof updateNotice>>(null);
+
+  useEffect(() => {
+    invoke<LastAttempt>("update_last_attempt").then((a) => setUpd(updateNotice(a)), () => {});
+  }, []);
 
   useEffect(() => {
     const beat = () => void invoke("ui_heartbeat").catch(() => {});
     beat();
     const t = setInterval(beat, HEARTBEAT_MS);
     return () => clearInterval(t);
+  }, []);
+
+  // T-286-b (APP-017): after the computer wakes the page replays held updates and repaints.
+  useEffect(() => {
+    const off = listen(WOKE_EVENT, () => repaint());
+    return () => void off.then((u) => u()).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -28,11 +43,31 @@ export default function RecoveryMount() {
     return () => window.removeEventListener("webglcontextlost", lost, true);
   }, []);
 
-  if (!g) return <CrashReportDialog />;
+  const updNotice = upd && (
+    <div className="notice" role="alert" aria-label="Update" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      <span>{upd.text}</span>
+      <button className="btn" onClick={() => (setUpd(null), requestUpdateCheck())}>
+        Try again
+      </button>
+      <a className="btn" href={upd.releasesPage} target="_blank" rel="noreferrer">
+        Download installer
+      </a>
+      <button className="btn" onClick={() => setUpd(null)}>
+        Dismiss
+      </button>
+    </div>
+  );
+  if (!g) return (
+    <>
+      <CrashReportDialog />
+      {updNotice}
+    </>
+  );
   const stay = g.kind === "launch" && g.stay;
   return (
     <>
       <CrashReportDialog />
+      {updNotice}
       <div className="notice" role="alertdialog" aria-label="Graphics" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {g.kind === "burst" ? (
           <>

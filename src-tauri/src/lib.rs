@@ -193,12 +193,12 @@ pub fn run() {
     let mut context = tauri::generate_context!();
     let windows: Vec<String> = context.config().app.windows.iter().filter(|w| w.create).map(|w| w.label.clone()).collect();
     // T-183 (APP-043): after repeated graphics crashes a saved flag puts every window in safe graphics.
+    // T-286-b (APP-017): every window is excused from background throttling (WebView2 browser
+    // arguments; later webviews on the same data folder reuse the same string).
     let safe = resources::recovery::safe_graphics_on(&context.config().identifier, &context.package_info().version.to_string());
     for w in &mut context.config_mut().app.windows {
         w.create = false;
-        if safe {
-            w.additional_browser_args = Some(resources::recovery::safe_args(w.additional_browser_args.as_deref()));
-        }
+        w.additional_browser_args = Some(resources::recovery::launch_browser_args(w.additional_browser_args.as_deref(), safe));
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -807,6 +807,8 @@ pub fn run() {
             update::update_check,
             update::update_download,
             update::update_restart,
+            update::update_last_attempt,
+            update::update_compat,
             lifecycle::close_alive,
             lifecycle::app_restart,
             usage_alerts::usage_alerts_fired,

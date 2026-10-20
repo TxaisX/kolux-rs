@@ -73,3 +73,19 @@ export function boundaryMessage(err: unknown): string {
   const text = err instanceof Error ? err.message : String(err ?? "");
   return text ? `Part of the interface stopped working: ${text}` : "Part of the interface stopped working.";
 }
+
+/** T-199 (APP-028): what update_last_attempt hands the page once, at the launch after an install. */
+export type LastAttempt =
+  | { kind: "failed"; from: string; to: string; holder: string | null; releasesPage: string }
+  | { kind: "updated"; version: string; notes: string[] }
+  | null;
+
+/** The notice for an install that did not take: still on the old version, with Try again and the installer page. */
+export function updateNotice(a: LastAttempt): { text: string; releasesPage: string } | null {
+  if (!a || a.kind !== "failed") return null;
+  const why = a.holder ? ` ${a.holder} was holding Kolux RS's files.` : "";
+  return {
+    text: `The update to Kolux RS ${a.to} did not install, so this is still ${a.from}.${why} Try again, or download the installer and run it yourself.`,
+    releasesPage: a.releasesPage,
+  };
+}
