@@ -122,3 +122,41 @@ LIVE PROOF PENDING (batched)
 3. Devin: with a commented %APPDATA%\devin\config.json, start Kolux: the comments stay, the marked blocks appear;
    prompt -> working, permission -> needs you, finish -> done; switch the hooks off -> the file is byte for byte
    what it was.
+
+== BATCH 5 (2026-10-20, Opus 5.5, lane/hooks from d942ac47): STAT-021 Pi part ==
+SOURCE: Pi's public extension docs, badlogic/pi-mono packages/coding-agent/docs/extensions.md and
+src/core/extensions/types.ts (cited in PROVENANCE.md). Extensions are .ts/.js files in ~/.pi/agent/extensions/,
+default export function (pi), pi.on(event, handler). No permission, approval or dialog event is documented.
+
+BUILT
+- agent_hooks/pi.rs: Kolux owns one file, ~/.pi/agent/extensions/kolux-rs.ts, first line a Kolux mark. Install
+  writes it atomically (skipped when unchanged) and writes pi.cmd beside the other hook scripts; a kolux-rs.ts
+  without the mark is refused and never touched; remove deletes only Kolux's file; the user's own extensions in
+  the same folder are never read or changed. The extension acts only inside a Kolux pane (KOLUX_PANE_KEY /
+  KOLUX_HOOK_IDENTITY set) and hands each event to pi.cmd, which posts it to /pi/<event>.
+- more.rs: "pi" joins AGENTS, the named-event routes, normalize, write_scripts, apply and the status rows.
+  agent_start -> working, tool_execution_start/end -> working (tool name kept), agent_settled -> done;
+  session_start / session_shutdown / anything else change nothing.
+- Patches for the resolver (after the 20 earlier ones): hooks-T-122-3-mod.rs (MANAGED gains "pi", apply arm),
+  hooks-T-122-3-tests.rs (plan() test covers Pi).
+- Tests (more_tests.rs): stat_021_pi_events_drive_the_dot, stat_021_pi_extension_is_koluxs_own_file; rows test
+  lists and installs pi.
+
+GATES (logs G:\Temp\hooks-v3-logs\b5-t122-*)
+- Patched (22 patches): cargo build 0, clippy -D warnings 0, agent_hooks 97 passed / 4 known reds, hooks 116 passed
+  / 4 known reds, status 57 passed.
+- Reverted: cargo build 0, clippy 0, agent_hooks 97 passed / the same 4 known reds (t_152_1, t_152_b_2, t_134_b,
+  vendors fix1_apply). All 22 patches apply in order on a clean tree.
+- Scratch HOME / USERPROFILE / CLAUDE_CONFIG_DIR / CODEX_HOME under G:\Temp\hooks-v3\; no Pi run, no --help run.
+
+LEFT OPEN (STAT-021)
+- Pi needs-you: the extension API documents no permission or dialog event, so a waiting Pi shows working.
+- Pi titles from the extension: not built here; the front-end tab-name rule (T-124-b) already gives Pi
+  "ready" / "action required" titles and the spinner.
+- OMP: no public source for its extension or hook API found.
+- STAT-020 MiMo: unchanged, no public source.
+
+LIVE PROOF PENDING (batched)
+4. Pi: start Kolux with Pi installed: ~/.pi/agent/extensions/kolux-rs.ts appears beside any own extension; in a
+   Kolux pane a prompt -> working, a tool call -> working, the turn ends -> done; Pi outside Kolux posts nothing;
+   switch the hooks off -> only kolux-rs.ts goes. Check Pi loads a .ts extension through jiti on Windows.

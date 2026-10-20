@@ -276,7 +276,7 @@ fn stat_015_kimi_file_kolux_created_goes_and_its_script_prints_nothing() {
 fn t_121_rows_name_each_agent() {
     let home = scratch("rows");
     let rows = rows(&home);
-    assert_eq!(rows.iter().map(|r| r["agent"].as_str().unwrap()).collect::<Vec<_>>(), ["cursor", "droid", "kimi", "copilot", "grok", "devin"]);
+    assert_eq!(rows.iter().map(|r| r["agent"].as_str().unwrap()).collect::<Vec<_>>(), ["cursor", "droid", "kimi", "copilot", "grok", "devin", "pi"]);
     assert!(rows.iter().all(|r| r["state"] == "not installed"));
     install_cursor(&home, &cursor_file(&home)).unwrap();
     install_droid(&home, &droid_file(&home)).unwrap();
@@ -284,6 +284,7 @@ fn t_121_rows_name_each_agent() {
     install_copilot(&home, &copilot_file(&home)).unwrap();
     super::grok::install(&home, &super::grok::file(&home)).unwrap();
     super::devin::install(&home, &super::devin::file(&home)).unwrap();
+    super::pi::install(&home, &super::pi::file(&home)).unwrap();
     assert!(super::rows(&home).iter().all(|r| r["state"] == "installed"), "{:?}", super::rows(&home));
 }
 
@@ -353,3 +354,48 @@ fn stat_017_copilot_hook_file_is_kolux_own_and_goes_whole() {
 }
 
 const SCRIPT_DIR_FOR_TESTS: &str = super::super::super::SCRIPT_DIR;
+
+#[test]
+fn stat_021_pi_events_drive_the_dot() {
+    let (mut s, mut m) = (Session::default(), Memory::default());
+    assert_eq!(agent_of("pi/agent_start"), Some("pi"));
+    assert!(is_route("/pi/agent_settled") && !is_route("/pi/") && !is_route("/pi/a/b") && !is_route("/pix"));
+    for quiet in ["session_start", "session_shutdown", "turn_end"] {
+        assert_eq!(normalize_with(&mut m, &format!("/pi/{quiet}"), &json!({"hook_event_name": quiet, "reason": "startup"})), None, "{quiet} changes nothing");
+    }
+    assert_eq!(state(&mut s, &mut m, "/pi/agent_start", json!({"hook_event_name":"agent_start"})), Some("working"));
+    assert_eq!(state(&mut s, &mut m, "/pi/tool_execution_start", json!({"hook_event_name":"tool_execution_start","tool_name":"bash"})), Some("working"));
+    assert_eq!(state(&mut s, &mut m, "/pi/tool_execution_end", json!({"hook_event_name":"tool_execution_end","tool_name":"bash","is_error":true})), Some("working"));
+    assert_eq!(state(&mut s, &mut m, "/pi/agent_settled", json!({"hook_event_name":"agent_settled","aborted":false})), Some("done"));
+    let e = normalize_with(&mut m, "/pi/tool_execution_start", &json!({"tool_name":"read"})).unwrap();
+    assert_eq!((e["hook_event_name"].as_str(), e[MARK].as_str(), e["tool_name"].as_str()), (Some("PreToolUse"), Some("pi"), Some("read")));
+}
+
+#[test]
+fn stat_021_pi_extension_is_koluxs_own_file() {
+    let home = scratch("pi");
+    let file = super::pi::file(&home);
+    assert!(file.ends_with(".pi/agent/extensions/kolux-rs.ts"));
+    let dir = file.parent().unwrap().to_path_buf();
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("hello.ts"), "export default function (pi) {}\n").unwrap();
+    assert!(super::pi::install(&home, &file).unwrap());
+    let text = read(&file);
+    assert!(super::pi::mine(&text) && text.contains("export default function (pi)") && text.contains("KOLUX_PANE_KEY"));
+    assert!(text.contains(SCRIPT_DIR_FOR_TESTS.split('/').next_back().unwrap()) && text.contains(super::pi::SCRIPT));
+    for e in super::pi::EVENTS {
+        assert!(text.contains(&format!("\"{e}\"")), "{e} is observed");
+    }
+    assert!(home.join(SCRIPT_DIR_FOR_TESTS).join(super::pi::SCRIPT).is_file(), "the script the extension runs is written");
+    assert!(!super::pi::install(&home, &file).unwrap(), "unchanged: not rewritten");
+    assert_eq!(super::pi::inspect(&home, &file).0, "installed");
+    assert!(super::pi::remove(&file).unwrap());
+    assert!(!file.exists() && dir.join("hello.ts").is_file(), "only Kolux's extension goes");
+    assert_eq!(super::pi::inspect(&home, &file).0, "not installed");
+    let user = "// my own kolux-rs.ts\nexport default function (pi) {}\n";
+    fs::write(&file, user).unwrap();
+    assert!(super::pi::install(&home, &file).is_err());
+    assert!(!super::pi::remove(&file).unwrap());
+    assert_eq!(read(&file), user, "a file Kolux did not write is never touched");
+    assert_eq!(super::pi::inspect(&home, &file).0, "error");
+}

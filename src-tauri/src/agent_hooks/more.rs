@@ -11,6 +11,7 @@
 //! - Copilot CLI: Kolux's own `kolux-rs.json` in `hooks` under Copilot's home (`COPILOT_HOME`).
 //! - Grok (STAT-018, `grok`): Kolux's own `kolux-rs.json` in `hooks` under Grok's home, taken away at quit.
 //! - Devin CLI (STAT-019, `devin`): marked blocks in its commented user config (`jsonc`).
+//! - Pi (STAT-021, `pi`): Kolux's own extension file, `kolux-rs.ts`, in Pi's user extensions folder.
 
 use super::super::{codex_change, install_groups, script, write_atomic, write_json, write_script, Change};
 use super::{back_up, backup_of, drop_created, fenced, kept, names_mine, read_opt, remove_groups, scratch_only, target_dir, was_created, Plan, BACKUP_RECORD};
@@ -23,7 +24,7 @@ pub const CURSOR_SCRIPT: &str = "cursor.cmd";
 pub const DROID_SCRIPT: &str = "droid.cmd";
 pub const KIMI_SCRIPT: &str = "kimi.cmd";
 /// The agents this module manages, by catalogue id.
-pub const AGENTS: [&str; 6] = ["cursor", "droid", "kimi", "copilot", "grok", "devin"];
+pub const AGENTS: [&str; 7] = ["cursor", "droid", "kimi", "copilot", "grok", "devin", "pi"];
 pub const COPILOT_SCRIPT: &str = "copilot.cmd";
 /// STAT-017: Copilot CLI's 13 events, under the names its compat list gives (the PascalCase ones,
 /// whose payloads carry snake_case fields; subagentStart has no PascalCase form).
@@ -59,9 +60,9 @@ pub fn is_route(path: &str) -> bool {
 /// The agent id a route reports for.
 pub fn agent_of(path: &str) -> Option<&'static str> {
     let p = path.trim_start_matches('/');
-    // Copilot's and Grok's routes name the event (`copilot/<event>`), as Antigravity's does.
+    // Copilot's, Grok's and Pi's routes name the event (`copilot/<event>`), as Antigravity's does.
     let named = |a: &str| p.strip_prefix(a).and_then(|r| r.strip_prefix('/')).is_some_and(|e| !e.is_empty() && !e.contains('/'));
-    AGENTS.iter().copied().find(|a| p == *a || (matches!(*a, "copilot" | "grok") && named(a)))
+    AGENTS.iter().copied().find(|a| p == *a || (matches!(*a, "copilot" | "grok" | "pi") && named(a)))
 }
 
 /// What these agents' events need remembered between events, per session.
@@ -227,6 +228,8 @@ pub fn normalize_with(memory: &mut Memory, path: &str, event: &Value) -> Option<
         // T-122: Grok (STAT-018) and Devin (STAT-019).
         "grok" => grok::event(memory, name, event)?,
         "devin" => devin::event(name, event)?,
+        // T-122: Pi (STAT-021), through Kolux's own extension.
+        "pi" => pi::event(name, event)?,
         _ => return None,
     };
     let o = out.as_object_mut()?;
@@ -306,6 +309,7 @@ pub fn write_scripts(home: &Path) -> Result<String, String> {
     write_script(home, KIMI_SCRIPT, &script("kimi", "kimi", false))?;
     write_copilot_script(home)?;
     grok::write_script(home)?;
+    pi::write_script(home)?;
     devin::write_script(home)
 }
 
@@ -717,6 +721,10 @@ pub fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'stat
             let file = target(profile, devin::file(home))?;
             if install { devin::install(home, &file) } else { devin::remove(home, &file) }
         }
+        "pi" => {
+            let file = target(profile, pi::file(home))?;
+            if install { pi::install(home, &file) } else { pi::remove(&file) }
+        }
         _ => return Ok("left as it was"),
     }
     .map(|_| if install { "installed" } else { "removed" })
@@ -791,6 +799,7 @@ pub fn rows(home: &Path) -> Vec<Value> {
         row("copilot", "GitHub Copilot CLI", copilot_file(home), inspect_copilot(&copilot_file(home))),
         row("grok", "Grok", grok::file(home), grok::inspect(home, &grok::file(home))),
         row("devin", "Devin", devin::file(home), devin::inspect(&devin::file(home))),
+        row("pi", "Pi", pi::file(home), pi::inspect(home, &pi::file(home))),
     ]
 }
 
@@ -800,6 +809,8 @@ pub mod jsonc;
 pub mod grok;
 #[path = "devin.rs"]
 pub mod devin;
+#[path = "pi.rs"]
+pub mod pi;
 
 #[cfg(test)]
 #[path = "more_tests.rs"]
