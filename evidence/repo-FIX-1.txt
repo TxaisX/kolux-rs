@@ -50,7 +50,7 @@ No load-sensitive test flaked in this run.
 
 LIVE PROOF PENDING (batched)
 1. Settings > a repository that has a saved setup and a kolux.yaml setup with different first lines (#!/bin/bash vs #!/bin/sh): choose "Run both". Expect a red/amber alert under Which runs naming both interpreters and "Give them the same #! line, or pick just one of them on this page.", and the note "Nothing runs until that is fixed." Make a workspace: no trust question appears.
-2. On Windows with no POSIX shell configured, a repository whose saved setup is two lines and whose kolux.yaml has a setup: choose "Run both". Expect the cmd refusal text in the alert. Pick "Mine only": the alert goes away.
+2. On Windows with no POSIX shell configured, a repository whose saved setup is two lines and whose kolux.yaml has a setup: choose "Run both". Expect the cmd refusal text in the alert. Make a workspace anyway: no trust question appears, the workspace reports the same cmd refusal (FIX-2, LIVE PROOF PENDING (batched)). Pick "Mine only": the alert goes away.
 3. Same repository with the same #! line in both and an untrusted kolux.yaml: no alert; making a workspace asks the trust question over the kolux.yaml text only.
 4. The page shows the kolux.yaml text with the sentence about the main folder of this repository.
 5. Guides (with the Guides patch applied): a repository with "both" and an untrusted kolux.yaml still counts as having a setup, with no trust question while the page opens. The New automation dialog: the setup choice is offered for that repository.

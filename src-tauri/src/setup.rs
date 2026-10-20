@@ -177,25 +177,30 @@ pub struct Picked {
 
 /// SET-033: the own script and the shared one as one script that runs the first, then the second.
 /// Two plain one-line commands join with `&&` (cmd runs that too, and a failed first stops the
-/// second); anything longer joins by lines, for a POSIX shell, and a failed first part ends the
-/// script before the second runs. The two must agree on the interpreter: the same `#!` line, or one
-/// `#!` line that names a POSIX shell beside a script that names none. Otherwise one of the two
-/// would run under an interpreter it was not written for, and the join is refused with the reason.
+/// second) when neither holds a `#` and the own one does not start with whitespace: on one line a
+/// POSIX shell would read everything after a `#` as a comment, and kolux.yaml's part would silently
+/// not run. Anything else joins by lines, for a POSIX shell, and a failed first part ends the script
+/// before the second runs. The two must agree on the interpreter: the same `#!` line, or one `#!`
+/// line beside a script that names none, and that line must name a POSIX shell, since a setup
+/// script runs through a shell (or cmd), never through node or python. Otherwise the join is
+/// refused with the reason.
 fn join_both(local: &str, shared: &str) -> Result<String, String> {
     let (local, shared) = (local.trim_end_matches('\n'), shared.trim_end_matches('\n'));
-    let plain = |s: &str| !s.contains('\n') && !s.starts_with("#!");
-    if plain(local) && plain(shared) {
+    let plain = |s: &str| !s.contains('\n') && !s.contains('#');
+    if plain(local) && plain(shared) && !local.starts_with(char::is_whitespace) {
         return Ok(format!("{} && {}", local.trim(), shared.trim()));
     }
     fn hashbang(s: &str) -> Option<&str> {
         s.lines().next().map(str::trim).filter(|l| l.starts_with("#!"))
     }
     let (own_line, shared_line) = (hashbang(local), hashbang(shared));
-    let pick_one = "Give them the same #! line, or pick just one of them on this page.";
+    let pick_one = "Pick just one of them on this page.";
+    let not_posix = |l: &str| hashbang(l).is_some() && shebang(l.trim_start()).is_none();
     match (own_line, shared_line) {
-        (Some(a), Some(b)) if a != b => return Err(format!("Your setup script starts with `{a}` and kolux.yaml's with `{b}`, so one script cannot run both. {pick_one}")),
-        (Some(a), None) if shebang(local).is_none() => return Err(format!("Your setup script starts with `{a}`, which would also run kolux.yaml's setup script. {pick_one}")),
-        (None, Some(b)) if shebang(shared).is_none() => return Err(format!("kolux.yaml's setup script starts with `{b}`, which would also run your setup script. {pick_one}")),
+        (Some(a), Some(b)) if a != b => return Err(format!("Your setup script starts with `{a}` and kolux.yaml's with `{b}`, so one script cannot run both. Give them the same #! line, or pick just one of them on this page.")),
+        (Some(a), Some(_)) if not_posix(local) => return Err(format!("Both setup scripts start with `{a}`, which is not a POSIX shell, so Kolux cannot run them as one script. {pick_one}")),
+        (Some(a), None) if not_posix(local) => return Err(format!("Your setup script starts with `{a}`, which is not a POSIX shell, so one script cannot run it and kolux.yaml's setup script together. {pick_one}")),
+        (None, Some(b)) if not_posix(shared) => return Err(format!("kolux.yaml's setup script starts with `{b}`, which is not a POSIX shell, so one script cannot run it and your setup script together. {pick_one}")),
         _ => {}
     }
     let body = |s: &str, line: Option<&str>| if line.is_some() { s.split_once('\n').map_or("", |(_, rest)| rest).to_string() } else { s.to_string() };
@@ -302,6 +307,11 @@ pub fn workspace_setup(store: StoreState<'_>, path: String, local: Option<String
 
 /// STAT-055: workspace_setup's line, with `trust` asked before a shared script is used.
 fn setup_for(path: &str, local: Option<String>, policy: Option<String>, trust: Gate<'_>) -> Result<Option<SetupLine>, String> {
+    setup_for_on(path, local, policy, trust, cfg!(windows), configured_shell().as_deref(), find_posix)
+}
+
+/// setup_for on the platform given: `windows`, the `configured` shell and the POSIX shell finder.
+fn setup_for_on(path: &str, local: Option<String>, policy: Option<String>, trust: Gate<'_>, windows: bool, configured: Option<&Path>, find: impl Fn(&str) -> Option<PathBuf>) -> Result<Option<SetupLine>, String> {
     let wt = Path::new(path);
     let shared = std::fs::read_to_string(wt.join(crate::include::CONFIG_FILE)).ok().and_then(|t| setup_script(&t));
     let Some(Picked { script, shared, refused }) = pick_parts(local.as_deref(), shared, policy.as_deref()) else { return Ok(None) };
@@ -309,10 +319,12 @@ fn setup_for(path: &str, local: Option<String>, policy: Option<String>, trust: G
     if let Some(why) = refused {
         return Err(why);
     }
+    // FIX-2: the same for a script this PC cannot run (a join cmd would misread, a #! shell it lacks):
+    // the line is built, and refused, before the question
+    let line = setup_line(&script, windows, configured, find)?;
     if let Some(theirs) = shared {
         trust(&main_folder(wt), "setup", &theirs)?;
     }
-    let line = setup_line(&script, cfg!(windows), configured_shell().as_deref(), find_posix)?;
     let unset: &[&str] = if conda_now() { &CONDA_VARS } else { &[] };
     Ok(Some(with_env(line, &script_vars(&main_folder(wt), wt), unset)))
 }
@@ -507,9 +519,17 @@ fn require_trust(store: &std::sync::Mutex<crate::state::Store>, root: &Path, kin
 /// SAFE-025: the shared kolux.yaml script of `kind` that would run for the worktree at `wt` of the
 /// repository at `root`; None when the one that would run is the user's own, or there is none.
 fn shared_script(kind: &str, root: &Path, wt: &Path, local: Option<&str>, policy: Option<&str>) -> Option<String> {
+    shared_script_on(kind, root, wt, local, policy, cfg!(windows), configured_shell().as_deref(), find_posix)
+}
+
+/// shared_script on the platform given (see setup_for_on).
+#[allow(clippy::too_many_arguments)]
+fn shared_script_on(kind: &str, root: &Path, wt: &Path, local: Option<&str>, policy: Option<&str>, windows: bool, configured: Option<&Path>, find: impl Fn(&str) -> Option<PathBuf>) -> Option<String> {
     let yaml = || std::fs::read_to_string(wt.join(crate::include::CONFIG_FILE)).ok();
     match kind {
-        "setup" => pick_parts(local, yaml().and_then(|t| setup_script(&t)), policy).and_then(|p| p.shared),
+        // FIX-2: the question is asked only over a script that would run here; a refused join, a join
+        // cmd would misread or a #! shell this PC lacks runs nothing, so nothing is asked (setup_for_on agrees)
+        "setup" => pick_parts(local, yaml().and_then(|t| setup_script(&t)), policy).filter(|p| p.refused.is_none() && setup_line(&p.script, windows, configured, find).is_ok()).and_then(|p| p.shared),
         "archive" => yaml().and_then(|y| scripts_entry(&y, "archive")),
         "issue" => issue_command(root, wt).filter(|(_, s)| *s).map(|(c, _)| c),
         _ => None,
@@ -519,9 +539,6 @@ fn shared_script(kind: &str, root: &Path, wt: &Path, local: Option<&str>, policy
 /// SAFE-025 / STAT-056: what the trust prompt must ask before the `kind` script runs for the
 /// worktree at `path` (`root` is the repository's main folder for the issue command; `local` and
 /// `policy` as workspace_setup takes them); None when nothing shared would run or it is trusted.
-// ponytail: registered in lib.rs by the coordinator (hunk evidence/T-156-a-lib.patch); until then only the
-// tests call it, and an untrusted shared script fails closed in the runners.
-#[allow(dead_code)]
 #[tauri::command(async)]
 pub fn script_trust_needed(store: StoreState<'_>, path: String, kind: String, root: Option<String>, local: Option<String>, policy: Option<String>) -> Result<Option<TrustAsk>, String> {
     kind_ok(&kind)?;
@@ -535,9 +552,6 @@ pub fn script_trust_needed(store: StoreState<'_>, path: String, kind: String, ro
 }
 
 /// SAFE-025: the user chose Run hooks on the prompt for `script` (the text it showed).
-// ponytail: registered in lib.rs by the coordinator (hunk evidence/T-156-a-lib.patch); until then only the
-// tests call it, and an untrusted shared script fails closed in the runners.
-#[allow(dead_code)]
 #[tauri::command(async)]
 pub fn script_trust_grant(store: StoreState<'_>, path: String, kind: String, script: String, always: bool, root: Option<String>) -> Result<(), String> {
     let root = root.map(PathBuf::from).unwrap_or_else(|| main_folder(Path::new(&path)));
@@ -932,6 +946,11 @@ fn read_shared(root: &Path) -> (Option<String>, Option<String>) {
 }
 
 pub fn repo_setup(store: &crate::state::Store, root: &Path, shared: (Option<String>, Option<String>)) -> RepoSetup {
+    repo_setup_on(store, root, shared, cfg!(windows), configured_shell().as_deref(), find_posix)
+}
+
+/// repo_setup on the platform given (see setup_for_on), so `run_error` can be checked anywhere.
+fn repo_setup_on(store: &crate::state::Store, root: &Path, shared: (Option<String>, Option<String>), windows: bool, configured: Option<&Path>, find: impl Fn(&str) -> Option<PathBuf>) -> RepoSetup {
     let local = local_setup(store, root);
     let policy = repo_policy(store, root);
     let inherited = match effective_policy(store, None).as_deref() {
@@ -943,14 +962,13 @@ pub fn repo_setup(store: &crate::state::Store, root: &Path, shared: (Option<Stri
     // SET-033: the page says when the choice in force is `both` and the joined script would be refused here
     let in_force = policy.as_deref().unwrap_or(inherited);
     let run_error = match (in_force, local.as_deref(), shared.0.as_deref()) {
-        ("both", Some(own), Some(theirs)) => both_trouble(own, theirs, cfg!(windows), configured_shell().as_deref(), find_posix),
+        ("both", Some(own), Some(theirs)) => both_trouble(own, theirs, windows, configured, find),
         _ => None,
     };
     RepoSetup { local, shared: shared.0, shared_error: shared.1, policy, inherited: inherited.to_string(), wait: repo_wait(store, root), suggest_both, run_error }
 }
 
 #[tauri::command(async)]
-#[allow(dead_code)] // T-116-c-b: registered by the lib.rs hunk the coordinator applies
 pub fn repo_setup_get(store: StoreState<'_>, path: String) -> Result<RepoSetup, String> {
     let root = main_folder(Path::new(&path));
     let shared = read_shared(&root);
@@ -960,25 +978,21 @@ pub fn repo_setup_get(store: StoreState<'_>, path: String) -> Result<RepoSetup, 
 
 /// Saves the repository's local setup. It is the user's own text, so it runs without the trust prompt.
 #[tauri::command]
-#[allow(dead_code)] // T-116-c-b: registered by the lib.rs hunk the coordinator applies
 pub fn repo_setup_save(store: StoreState<'_>, path: String, script: String) -> Result<(), String> {
     save_local(&*store.lock().map_err(|e| e.to_string())?, &main_folder(Path::new(&path)), &script)
 }
 
 #[tauri::command]
-#[allow(dead_code)] // T-116-c-b: registered by the lib.rs hunk the coordinator applies
 pub fn repo_setup_remove(store: StoreState<'_>, path: String) -> Result<bool, String> {
     remove_local(&*store.lock().map_err(|e| e.to_string())?, &main_folder(Path::new(&path)))
 }
 
 #[tauri::command]
-#[allow(dead_code)] // T-116-c-b: registered by the lib.rs hunk the coordinator applies
 pub fn repo_setup_policy_set(store: StoreState<'_>, path: String, policy: Option<String>) -> Result<(), String> {
     set_repo_policy(&*store.lock().map_err(|e| e.to_string())?, &main_folder(Path::new(&path)), policy.as_deref())
 }
 
 #[tauri::command]
-#[allow(dead_code)] // T-116-c-b: registered by the lib.rs hunk the coordinator applies
 pub fn repo_setup_wait_set(store: StoreState<'_>, path: String, wait: bool) -> Result<(), String> {
     set_repo_wait(&*store.lock().map_err(|e| e.to_string())?, &main_folder(Path::new(&path)), wait)
 }
@@ -1141,7 +1155,6 @@ pub fn save_suggestion(store: &crate::state::Store, root: &Path, from: &str, sho
 /// PROJ-035: what the sidebar card should offer for the project at `path`, re-asked when the window
 /// is focused or another workspace is made active. A dismissed project gets nothing.
 #[tauri::command(async)]
-#[allow(dead_code)] // T-294: registered by the lib.rs hunk the coordinator applies
 pub fn setup_suggestion(store: StoreState<'_>, project_id: String, path: String, policy: Option<String>) -> Result<SetupSuggestion, String> {
     let root = main_folder(Path::new(&path));
     let (local, policy) = {
@@ -1155,7 +1168,6 @@ pub fn setup_suggestion(store: StoreState<'_>, project_id: String, path: String,
 }
 
 #[tauri::command(async)]
-#[allow(dead_code)] // T-294: registered by the lib.rs hunk the coordinator applies
 pub fn setup_suggestion_save(store: StoreState<'_>, path: String, from: String, shown: String, policy: Option<String>) -> Result<(), String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     let root = main_folder(Path::new(&path));
@@ -1164,7 +1176,6 @@ pub fn setup_suggestion_save(store: StoreState<'_>, path: String, from: String, 
 }
 
 #[tauri::command]
-#[allow(dead_code)] // T-294: registered by the lib.rs hunk the coordinator applies
 pub fn setup_suggestion_dismiss(store: StoreState<'_>, project_id: String) -> Result<(), String> {
     dismiss_card(&*store.lock().map_err(|e| e.to_string())?, &project_id)
 }
@@ -1883,9 +1894,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// A real POSIX sh for tests that run a joined script, or None (the test then says it skipped;
+    /// run with --nocapture to see it).
+    fn test_sh(test: &str) -> Option<PathBuf> {
+        let sh = if cfg!(windows) { find_posix("sh") } else { Some(PathBuf::from("sh")) };
+        if sh.is_none() {
+            eprintln!("SKIPPED {test}: no POSIX sh on this PC (install Git for Windows); the joined script was not run");
+        }
+        sh
+    }
+
     #[test]
     fn fix1_a_failed_own_setup_stops_the_shared_one_in_the_joined_script() {
-        let Some(sh) = (if cfg!(windows) { find_posix("sh") } else { Some(PathBuf::from("sh")) }) else { return };
+        let Some(sh) = test_sh("fix1_a_failed_own_setup_stops_the_shared_one_in_the_joined_script") else { return };
         let dir = tree(&[]);
         let run = |own: &str| -> bool {
             let _ = std::fs::remove_file(dir.join("shared-ran"));
@@ -1917,11 +1938,13 @@ mod tests {
         assert!(both_trouble("#!/bin/sh\nmake", "#!/bin/bash\npnpm i", false, None, none).unwrap().contains("/bin/bash"));
 
         // and the repository's page carries it next to "Which runs", only when `both` is in force
+        // (as on Windows with Git's shells, whatever this PC has: the finder is a stub)
         let profile = tree(&[]);
         let root = tree(&[("kolux.yaml", b"scripts:\n  setup: |\n    #!/bin/bash\n    pnpm i\n")]);
         let store = crate::state::Store::open(&profile).unwrap();
         save_local(&store, &root, "#!/bin/sh\nmake").unwrap();
-        let shown = |store: &crate::state::Store| repo_setup(store, &root, read_shared(&root));
+        let git = |name: &str| Some(PathBuf::from(format!("C:/Program Files/Git/bin/{name}.exe")));
+        let shown = |store: &crate::state::Store| repo_setup_on(store, &root, read_shared(&root), true, None, git);
         assert_eq!(shown(&store).run_error, None, "yours alone runs under the default choice");
         set_repo_policy(&store, &root, Some("both")).unwrap();
         let why = shown(&store).run_error.expect("both with two interpreters is refused");
@@ -1937,6 +1960,84 @@ mod tests {
         for d in [profile, root] {
             let _ = std::fs::remove_dir_all(d);
         }
+    }
+
+    #[test]
+    fn fix2_a_hash_in_the_own_one_liner_does_not_swallow_the_shared_setup() {
+        // two plain one-liners still join on one line, which cmd runs too
+        assert_eq!(join_both("make", "pnpm i").unwrap(), "make && pnpm i");
+        // a # in either part, or an own part that starts with whitespace, joins by lines instead:
+        // on one line a POSIX shell would read everything after the # as a comment
+        for (own, theirs) in [("pnpm i # deps", "pnpm i"), ("  # TODO", "pnpm i"), ("# TODO", "pnpm i"), ("  make", "pnpm i"), ("make", "pnpm i # deps")] {
+            let joined = join_both(own, theirs).unwrap();
+            assert!(!joined.contains(" && "), "{own:?} + {theirs:?} must not share a line: {joined:?}");
+            assert!(joined.contains("kolux_setup_status") && joined.ends_with(theirs), "the status stop then the shared part: {joined:?}");
+        }
+        // through a real sh, the shared part runs after a commented own line
+        let Some(sh) = test_sh("fix2_a_hash_in_the_own_one_liner_does_not_swallow_the_shared_setup") else { return };
+        let dir = tree(&[]);
+        for own in ["echo own # deps", "  # TODO", "# TODO"] {
+            let _ = std::fs::remove_file(dir.join("shared-ran"));
+            let script = join_both(own, "echo b > shared-ran").unwrap();
+            let status = std::process::Command::new(&sh).arg("-c").arg(&script).current_dir(&dir).status().unwrap();
+            assert!(status.success() && dir.join("shared-ran").is_file(), "kolux.yaml's setup ran after {own:?}: {script:?}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn fix2_a_join_cmd_cannot_run_is_refused_before_the_trust_question() {
+        let none = |_: &str| None::<PathBuf>;
+        let (store, dir, root) = trust_store();
+        std::fs::write(root.join("kolux.yaml"), "scripts:\n  setup: pnpm i\n").unwrap();
+        let store = std::sync::Mutex::new(store);
+        let asked = std::cell::RefCell::new(0);
+        let gate = |r: &Path, kind: &str, script: &str| {
+            *asked.borrow_mut() += 1;
+            require_trust(&store, r, kind, script)
+        };
+        let p = root.to_string_lossy().into_owned();
+        // Windows with no POSIX shell: a two-line own setup joins by lines, which cmd cannot run
+        let err = setup_for_on(&p, Some("make\nmake test".into()), Some("both".into()), &gate, true, None, none).unwrap_err();
+        assert!(err.contains("cmd") && err.contains("more than one line"), "the runner says why: {err}");
+        assert_eq!(*asked.borrow(), 0, "nothing runs, so nothing is asked about trust");
+        assert_eq!(shared_script_on("setup", &root, &root, Some("make\nmake test"), Some("both"), true, None, none), None, "and the trust prompt does not appear either");
+        // a # in the own one-liner takes the line join, so cmd refuses that too, before any question
+        let err = setup_for_on(&p, Some("pnpm i # deps".into()), Some("both".into()), &gate, true, None, none).unwrap_err();
+        assert!(err.contains("more than one line"), "{err}");
+        assert_eq!(*asked.borrow(), 0);
+        // a #! shell this PC does not have: refused before the question as well
+        std::fs::write(root.join("kolux.yaml"), "scripts:\n  setup: |\n    #!/bin/bash\n    pnpm i\n").unwrap();
+        let err = setup_for_on(&p, None, Some("shared".into()), &gate, true, None, none).unwrap_err();
+        assert!(err.contains("bash") && err.contains("not found"), "{err}");
+        assert_eq!(*asked.borrow(), 0);
+        assert_eq!(shared_script_on("setup", &root, &root, None, Some("shared"), true, None, none), None);
+        // where the joined script can run, the question is asked, over kolux.yaml's text alone
+        std::fs::write(root.join("kolux.yaml"), "scripts:\n  setup: pnpm i\n").unwrap();
+        let err = setup_for_on(&p, Some("make\nmake test".into()), Some("both".into()), &gate, false, None, none).unwrap_err();
+        assert!(err.ends_with("this repository's scripts are not trusted yet"), "{err}");
+        assert_eq!(*asked.borrow(), 1);
+        assert_eq!(shared_script_on("setup", &root, &root, Some("make\nmake test"), Some("both"), false, None, none).as_deref(), Some("pnpm i"));
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fix2_both_refuses_a_hashbang_that_names_no_posix_shell_with_one_accurate_message() {
+        let node = "#!/usr/bin/env node\nbuild()";
+        // two identical node lines no longer go to sh together
+        let why = join_both(node, node).expect_err("two identical non-POSIX #! lines must not join");
+        assert!(why.contains("/usr/bin/env node") && why.contains("not a POSIX shell"), "{why}");
+        for (own, theirs) in [(node, node), (node, "pnpm i"), ("make", node), ("#!/usr/bin/env python3\nprint(1)", "#!/bin/sh\nmake")] {
+            let why = join_both(own, theirs).unwrap_err();
+            assert!(why.contains("not a POSIX shell") || why.contains("one script cannot run both"), "{why}");
+            assert!(!why.contains("would also run"), "the old wording described a run that never happens: {why}");
+            if why.contains("not a POSIX shell") {
+                assert!(!why.contains("same #! line"), "the same line would not help: {why}");
+            }
+        }
+        // a POSIX #! line still joins with a plain script, or with the same line
+        assert!(join_both("#!/bin/bash -e\nmake", "pnpm i").is_ok() && join_both("make", "#!/bin/sh\npnpm i").is_ok() && join_both("#!/bin/sh\nmake", "#!/bin/sh\npnpm i").is_ok());
     }
 
     #[test]

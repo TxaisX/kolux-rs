@@ -78,7 +78,11 @@ function running(s: RepoSetup): { own: boolean; theirs: boolean } {
 /** Whether the repository has a setup script that would run for the choice in force: a read that
  *  asks no trust question and starts nothing (the Guides and Automation probes use it). */
 export function hasSetup(s: RepoSetup): boolean {
-  // a kolux.yaml that cannot be read is still there to be chosen, as it was for the old probes
+  // A kolux.yaml the page could not read counts as a setup script: the runner reads the file with no
+  // size cap and would ask trust over it, so the probe must not say "no setup" for an oversized one.
+  // (The old Guides probe said "no setup" for every unreadable file; for a permission error the
+  // runner sees nothing either, so that one case now over-counts. The error kind is not sent to the
+  // page yet; deciding per kind is open.)
   const r = running({ ...s, shared: s.shared ?? (s.sharedError ? s.sharedError : null) });
   return r.own || r.theirs;
 }
