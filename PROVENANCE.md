@@ -835,3 +835,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · repo T-215-b · spec/01 PROJ-012, PROJ-013 as given in the brief; this tree's own groups.rs and projects.rs; no outside code
 > 2026-10-19 · repo T-216-b · spec/01 PROJ-016, PROJ-049, PROJ-052 as given in the brief; HTML drag-and-drop events (MDN public docs); this tree's own rows.ts, groups.ts; no outside code
 > 2026-10-19 · repo T-217-b · spec/01 PROJ-056, PROJ-060, PROJ-065, T-055 as given in the brief; this tree's own openIn.ts, nav.ts, deleting.ts, projects.rs; no outside code
+> 2026-10-19 · repo T-227-d (part) · spec/11 GIT-011 as given in the brief; this tree's own scm.rs summary(); no outside code

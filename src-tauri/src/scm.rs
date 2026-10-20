@@ -244,10 +244,16 @@ pub struct Summary {
     pub files: u32,
     /// GIT-011: those files, the first `COMMITTED_CAP` of them.
     pub committed: Vec<Change>,
+    /// GIT-011: the branch touched more files than `LINES_FILE_CAP`, so its lines were not counted
+    /// (the totals read zero and the window says so).
+    pub lines_skipped: bool,
 }
 
 /// GIT-011: the most committed files sent to the window; the count stays whole.
 const COMMITTED_CAP: usize = 1000;
+
+/// GIT-011: a branch touching more files than this gets no line totals; counting them would stall the panel.
+pub const LINES_FILE_CAP: u32 = 20_000;
 
 #[derive(Debug, PartialEq, Eq)]
 enum Kind {
@@ -323,6 +329,11 @@ fn clash_of(code: Option<i32>, out: &str, err: &str) -> Clash {
 /// `upstream` is on and there is one, else the default branch. Lines count the commits since the
 /// branch parted from that ref, so the ref's own new commits show only as "behind".
 pub fn summary(worktree: &Path, pinned: Option<&str>, upstream: bool) -> Result<Summary, String> {
+    summary_capped(worktree, pinned, upstream, LINES_FILE_CAP)
+}
+
+/// `summary` with the file count past which line totals are given up on.
+pub fn summary_capped(worktree: &Path, pinned: Option<&str>, upstream: bool, lines_cap: u32) -> Result<Summary, String> {
     let st = status(worktree)?;
     let pinned = pinned.map(str::trim).filter(|p| !p.is_empty() && run(&["rev-parse", "--verify", "-q", &format!("{p}^{{commit}}")], Some(worktree)).is_ok());
     let against = pinned.map(String::from).or(if upstream { st.upstream.clone() } else { None }).or(st.base.clone()).ok_or("no base branch to compare with")?;
@@ -336,6 +347,10 @@ pub fn summary(worktree: &Path, pinned: Option<&str>, upstream: bool) -> Result<
     s.committed = name_status(&run(&["diff", "--name-status", "-M", "-z", &range], Some(worktree))?);
     s.files = s.committed.len() as u32;
     s.committed.truncate(COMMITTED_CAP);
+    if s.files > lines_cap {
+        s.lines_skipped = true;
+        return Ok(s);
+    }
     for line in run(&["diff", "--numstat", "--no-renames", "-z", &range], Some(worktree))?.split('\0').filter(|l| !l.is_empty()) {
         let mut f = line.splitn(3, '\t');
         let (Some(a), Some(r), Some(path)) = (f.next(), f.next(), f.next()) else { continue };
@@ -3509,6 +3524,20 @@ mod tests {
         assert_eq!((s.against.as_str(), s.ahead, s.behind, s.source), ("origin/feat", 1, 0, Lines { added: 1, removed: 3 }));
         assert_eq!(status(&repo).unwrap().head, Some(run(&["rev-parse", "HEAD"], Some(&repo)).unwrap().trim().to_string()));
         let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn git011_an_enormous_branch_gives_up_on_line_totals_but_still_counts_its_files() {
+        let repo = temp_repo("summary-huge");
+        run(&["checkout", "-q", "-b", "feat"], Some(&repo)).unwrap();
+        for n in 0..3 {
+            commit_file(&repo, &format!("f{n}.txt"), "a\nb\n");
+        }
+        let all = summary_capped(&repo, None, false, 3).unwrap();
+        assert_eq!((all.files, all.lines_skipped, all.source.added), (3, false, 6));
+        let big = summary_capped(&repo, None, false, 2).unwrap();
+        assert_eq!((big.files, big.lines_skipped, big.source.added), (3, true, 0), "past the cap the files are counted and the lines are not");
+        assert_eq!(big.committed.len(), 3);
     }
 
     #[test]

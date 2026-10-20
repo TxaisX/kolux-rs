@@ -3415,3 +3415,4 @@ you picked with Open a file stays readable after Kolux restarts, so a reopened t
 - 2026-10-19 [repo] T-215-b DONE: scan a folder for repositories (level order, ignore files, no dependency folders or links, stop keeps results) and import the ticked ones as one mirrored group or separate projects; live proof pending
 - 2026-10-19 [repo] T-216-b DONE: drag project/group headers within their siblings, drag workspaces into a Manual order, filter the list (hide default-branch row, only some projects, clear all; retired active-only filter ignored); live proof pending
 - 2026-10-19 [repo] T-217-b DONE: right-click menu on workspace rows (delete, sleep, status, parent, open in), details form (name, linked issue or pull request, formatted comment), delete a parent with its children, back/forward guard; live proof pending
+- 2026-10-19 [repo] T-227-d PARTLY: line totals give up past 20,000 files (still open: other writer agents, conflicted-file note); live proof pending
