@@ -748,6 +748,10 @@ pub fn zoom_level(level: f64) -> f64 {
 pub async fn browser_go(app: AppHandle, id: u32, what: String, text: Option<String>, level: Option<f64>) -> Result<(), String> {
     if what == "focusApp" {
         // A focusAddressBar chord pressed in the page: the bar lives in the app's own web view.
+        // Council FIX-5: the label "main" is hard-coded here (both lines below), while browser_open
+        // adds a page to whichever window called it. That holds today because tauri.conf.json
+        // defines one app window with the default label; if a second app window ever hosts a
+        // browser pane, pass the calling window in instead.
         focus_app_ok(app.get_window("main").ok_or("no app window")?.is_focused().map_err(err)?)?;
         return app.get_webview("main").ok_or("no app view")?.set_focus().map_err(err);
     }
@@ -1339,10 +1343,12 @@ mod tests {
         server.join().unwrap();
     }
 
-    // Council FIX-4, item 3: a page cannot pull the keyboard while the app's window is not the
-    // one the user is typing in.
+    // Council FIX-4, item 3; renamed in FIX-5: this checks only how focus_app_ok maps the window's
+    // focus reading to allow or refuse. The wiring in browser_go and Tauri's cached focus state (true
+    // while any web view of the window holds the keyboard) are proven by the batched live proof
+    // (evidence/browser-FIX-4.txt steps 2-3), not by this test.
     #[test]
-    fn fix4_1_focus_app_only_while_the_apps_window_holds_the_keyboard() {
+    fn fix4_1_focus_app_ok_allows_a_focused_window_and_refuses_an_unfocused_one() {
         assert_eq!(focus_app_ok(true), Ok(()));
         assert!(focus_app_ok(false).is_err());
     }
