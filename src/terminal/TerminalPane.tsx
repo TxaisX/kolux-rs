@@ -64,6 +64,7 @@ import { stopLine, type StopInfo } from "./notify";
 import NameField from "./NameField";
 import { handlesIn } from "./tabs";
 import { markShell, runningOf, shellInAgentPane } from "./remove";
+import { registerTurnSource, xtermSource } from "./turnRead";
 
 // TERM-036: the pane menu's copy items; Copy Session ID shows only once the session is known.
 const COPY_IDS = [["session", "Copy Session ID"], ["terminal", "Copy Terminal ID"], ["pane", "Copy Pane ID"]] as const;
@@ -429,6 +430,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     term.loadAddon(fit);
     term.open(el);
     termRef.current = term;
+    // T-325-c (CHAT-010/011): the chat reads the running turn's reply off this terminal.
+    const unturn = number !== undefined ? registerTurnSource(number, xtermSource(term)) : () => {};
     // STAT-033: the title the program sets stands in for its state while no hook reports.
     term.onTitleChange((t) => setGuess((g) => titleState(t) ?? g));
     // STAT-034: a status printed in band (OSC 9999) goes to Rust; xterm never draws the sequence.
@@ -1123,6 +1126,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       scale.dispose();
       window.removeEventListener("focus", refocus);
       termRef.current = null;
+      unturn();
       clearTimeout(quiet);
       observer.disconnect();
       unlisteners.forEach((u) => u());
