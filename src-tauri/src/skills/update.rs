@@ -386,6 +386,17 @@ pub fn dismissed(app_dir: &Path) -> Vec<String> {
 }
 
 pub fn dismiss(app_dir: &Path, keys: &[String]) -> Result<(), String> {
+    // Row 193 sweep: a list that cannot be read is never saved over; one that does not parse is
+    // kept aside as <name>.corrupt-<ms> before a fresh list is written.
+    let path = app_dir.join(DISMISSED);
+    match std::fs::read_to_string(&path) {
+        Ok(t) if serde_json::from_str::<Vec<String>>(&t).is_err() => {
+            let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+            std::fs::rename(&path, app_dir.join(format!("{DISMISSED}.corrupt-{ms}"))).map_err(|e| format!("{DISMISSED} could not be kept aside ({e}); nothing was changed"))?;
+        }
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(format!("{DISMISSED} could not be read ({e}); nothing was changed")),
+        _ => {}
+    }
     let mut all = dismissed(app_dir);
     for k in keys {
         if !all.contains(k) {
@@ -741,6 +752,18 @@ mod tests {
         dismiss(&t, &many).unwrap();
         assert_eq!(dismissed(&t).len(), 500);
         assert!(dismissed(&t).contains(&"k599|1".to_string()));
+    }
+
+    #[test]
+    fn row193_an_unreadable_dismiss_list_is_kept_aside_not_saved_over() {
+        let t = temp("upd-dismiss-aside");
+        std::fs::create_dir_all(&*t).unwrap();
+        std::fs::write(t.join(DISMISSED), b"[\"a|1\", \"b|").unwrap();
+        dismiss(&t, &["c|2".into()]).unwrap();
+        assert_eq!(dismissed(&t), vec!["c|2".to_string()]);
+        let kept: Vec<_> = std::fs::read_dir(&*t).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with(&format!("{DISMISSED}.corrupt-"))).collect();
+        assert_eq!(kept.len(), 1, "one corrupt copy is kept beside the fresh list");
+        assert_eq!(std::fs::read(kept[0].path()).unwrap(), b"[\"a|1\", \"b|", "byte for byte");
     }
 
     #[test]

@@ -31,7 +31,7 @@ const KEY: &str = "projectGroups";
 pub const DEFAULT_NAME: &str = "New group";
 
 pub fn load(store: &Store) -> Groups {
-    store.get(KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    crate::orchestration::kept::or_default(store, KEY)
 }
 
 fn named(name: &str) -> String {
@@ -178,6 +178,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         (Store::open(&dir).unwrap(), dir)
+    }
+
+    #[test]
+    fn row193_unreadable_groups_survive_the_next_change() {
+        let (s, dir) = store("aside");
+        let broken = "{\"groups\": [{\"id\": \"g-1\", \"name\": \"Work\"";
+        s.set(KEY, broken).unwrap();
+        change(&s, |g| g.create("Fresh", None)).unwrap();
+        assert_eq!(crate::orchestration::kept::asides(&s, KEY), vec![broken.to_string()], "the original bytes are kept aside");
+        assert_eq!(load(&s).groups.len(), 1);
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

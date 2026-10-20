@@ -72,7 +72,7 @@ pub struct Receipts {
 
 impl Receipts {
     pub fn load(store: &crate::state::Store) -> Receipts {
-        let items = store.get(KEY).ok().flatten().and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok()).unwrap_or_default();
+        let items = crate::orchestration::kept::or_default::<Vec<Value>>(store, KEY);
         Receipts { items: items.into_iter().filter_map(|v| Some((v["key"].as_str()?.to_string(), v["at"].as_u64()?, v["receipt"].clone()))).collect() }
     }
 

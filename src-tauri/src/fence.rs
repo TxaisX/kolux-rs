@@ -120,8 +120,7 @@ impl Fence {
     /// The grants an earlier run saved, each checked again (a file since deleted drops out); a
     /// damaged list grants nothing.
     pub fn load(store: &Mutex<Store>) -> Fence {
-        let saved = store.lock().ok().and_then(|s| s.get(KEY_GRANTS).ok().flatten());
-        let list: Vec<PathBuf> = saved.and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let list: Vec<PathBuf> = store.lock().ok().map(|s| crate::orchestration::kept::or_default(&s, KEY_GRANTS)).unwrap_or_default();
         let mut grants: VecDeque<PathBuf> = list.into_iter().filter(|p| !is_share(p) && on_a_drive(p)).filter_map(|p| p.canonicalize().ok()).filter(|p| grantable(p)).collect();
         while grants.len() > GRANT_CAP {
             grants.pop_front();

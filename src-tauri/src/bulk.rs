@@ -174,7 +174,7 @@ pub fn default_statuses() -> Vec<Status> {
 
 /// The user's statuses in their order, or the default set when none were saved.
 pub fn statuses(store: &Store) -> Vec<Status> {
-    store.get(STATUS_LIST_KEY).ok().flatten().and_then(|s| serde_json::from_str::<Vec<Status>>(&s).ok()).filter(|l| !l.is_empty()).unwrap_or_else(default_statuses)
+    Some(crate::orchestration::kept::or_default::<Vec<Status>>(store, STATUS_LIST_KEY)).filter(|l| !l.is_empty()).unwrap_or_else(default_statuses)
 }
 
 fn slug(label: &str) -> String {
@@ -203,7 +203,7 @@ pub fn set_statuses(store: &Store, list: &[(Option<String>, String)]) -> Result<
 }
 
 fn status_map(store: &Store) -> HashMap<String, String> {
-    store.get(STATUS_OF_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    crate::orchestration::kept::or_default(store, STATUS_OF_KEY)
 }
 
 /// The status id of the workspace at \`path\`; one with none, or whose status was deleted, is in the first.

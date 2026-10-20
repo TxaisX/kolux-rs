@@ -493,7 +493,7 @@ pub fn trust_grant(store: &crate::state::Store, root: &Path, kind: &str, script:
     kind_ok(kind)?;
     let project = trust_project(store, root)?;
     let key = format!("{TRUST_PREFIX}{}", project.id);
-    let mut trust: Trust = store.get(&key).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let mut trust: Trust = crate::orchestration::kept::or_default(store, &key);
     trust.scripts.insert(kind.into(), fingerprint(script));
     trust.all |= always;
     store.set(&key, &serde_json::to_string(&trust).map_err(|e| e.to_string())?).map_err(|e| format!("Kolux could not save the trust ({e})"))
@@ -841,7 +841,7 @@ fn ignores_local(policy: Option<&str>) -> bool {
 
 /// The local setup kept for the repository whose main folder is `root`.
 pub fn local_setup(store: &crate::state::Store, root: &Path) -> Option<String> {
-    let all: std::collections::BTreeMap<String, String> = store.get(LOCAL_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+    let all: std::collections::BTreeMap<String, String> = crate::orchestration::kept::or_default(store, LOCAL_KEY);
     all.get(&crate::projects::name_key(&root.to_string_lossy())).filter(|s| !s.trim().is_empty()).cloned()
 }
 
@@ -851,7 +851,7 @@ fn save_local(store: &crate::state::Store, root: &Path, script: &str) -> Result<
     if script.trim().is_empty() || script.len() > LOCAL_MAX {
         return Err(format!("A setup script has to be between 1 character and {} KB.", LOCAL_MAX / 1024));
     }
-    let mut all: std::collections::BTreeMap<String, String> = store.get(LOCAL_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+    let mut all: std::collections::BTreeMap<String, String> = crate::orchestration::kept::or_default(store, LOCAL_KEY);
     all.insert(crate::projects::name_key(&root.to_string_lossy()), script.to_string());
     store.set(LOCAL_KEY, &serde_json::to_string(&all).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
@@ -869,8 +869,8 @@ const MODES_KEY: &str = "setupModes";
 pub const DEFAULT_MODE: &str = "tab";
 const REPO_MODES: [&str; 4] = ["tab", "right", "down", "ask"];
 
-fn repo_map<T: serde::de::DeserializeOwned>(store: &crate::state::Store, key: &str) -> std::collections::BTreeMap<String, T> {
-    store.get(key).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+fn repo_map<T: serde::de::DeserializeOwned + serde::Serialize>(store: &crate::state::Store, key: &str) -> std::collections::BTreeMap<String, T> {
+    crate::orchestration::kept::or_default(store, key)
 }
 
 fn put_repo_map<T: serde::Serialize>(store: &crate::state::Store, key: &str, map: &std::collections::BTreeMap<String, T>) -> Result<(), String> {
@@ -1030,7 +1030,7 @@ pub fn repo_setup_mode_set(store: StoreState<'_>, path: String, mode: Option<Str
 }
 
 fn dismissed_ids(store: &crate::state::Store) -> Vec<String> {
-    store.get(DISMISSED_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+    crate::orchestration::kept::or_default(store, DISMISSED_KEY)
 }
 
 /// A forgotten project's card state goes with it: its dismissal (by id) and its saved local setup
@@ -1041,7 +1041,7 @@ pub fn prune_setup(store: &crate::state::Store, ids: &[String], roots: &[String]
     if kept.len() != before.len() {
         store.set(DISMISSED_KEY, &serde_json::to_string(&kept).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     }
-    let mut all: std::collections::BTreeMap<String, String> = store.get(LOCAL_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+    let mut all: std::collections::BTreeMap<String, String> = crate::orchestration::kept::or_default(store, LOCAL_KEY);
     let count = all.len();
     for r in roots {
         all.remove(&crate::projects::name_key(r));

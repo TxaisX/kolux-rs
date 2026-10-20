@@ -16,7 +16,7 @@ use tauri::State;
 const FOLDERS_KEY: &str = "folderProjects";
 
 fn folder_ids(store: &Store) -> Vec<String> {
-    store.get(FOLDERS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    crate::orchestration::kept::or_default(store, FOLDERS_KEY)
 }
 
 fn put_ids(store: &Store, ids: &[String]) -> Result<(), String> {

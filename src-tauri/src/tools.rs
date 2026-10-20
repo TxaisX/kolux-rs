@@ -146,7 +146,7 @@ fn hosted(store: &Store) -> (Vec<String>, Vec<String>) {
 }
 
 fn dismissed(store: &Store) -> serde_json::Map<String, serde_json::Value> {
-    store.get(KEY_DISMISSED).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    crate::orchestration::kept::or_default(store, KEY_DISMISSED)
 }
 
 #[tauri::command]

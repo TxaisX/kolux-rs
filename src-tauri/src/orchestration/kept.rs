@@ -50,6 +50,24 @@ fn set_aside<T: Serialize>(store: &Store, key: &str, text: &str, fresh: &T) -> R
 }
 
 #[cfg(test)]
+/// Test aid: every value kept aside for `key` in the last few seconds.
+pub(crate) fn asides(store: &Store, key: &str) -> Vec<String> {
+    let base = |ms: u128| format!("{key}.corrupt-{ms}");
+    // The aside name carries the time it was made; look back over the last few seconds.
+    let now = now_ms();
+    let mut out = Vec::new();
+    for ms in now.saturating_sub(5_000)..=now {
+        for n in 1..4 {
+            let k = if n == 1 { base(ms) } else { format!("{}-{n}", base(ms)) };
+            if let Some(v) = store.get(&k).unwrap() {
+                out.push(v);
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::Value;
@@ -58,22 +76,6 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kolux-rs-kept-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         (Store::open(&dir).unwrap(), dir)
-    }
-
-    fn asides(store: &Store, key: &str) -> Vec<String> {
-        let base = |ms: u128| format!("{key}.corrupt-{ms}");
-        // The aside name carries the time it was made; look back over the last few seconds.
-        let now = now_ms();
-        let mut out = Vec::new();
-        for ms in now.saturating_sub(5_000)..=now {
-            for n in 1..4 {
-                let k = if n == 1 { base(ms) } else { format!("{}-{n}", base(ms)) };
-                if let Some(v) = store.get(&k).unwrap() {
-                    out.push(v);
-                }
-            }
-        }
-        out
     }
 
     #[test]

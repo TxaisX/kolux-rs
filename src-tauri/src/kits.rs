@@ -308,7 +308,7 @@ fn mark_collected(list: &mut [Past], run: &Past, folder: &str) {
 }
 
 pub fn load_history(store: &Store) -> Vec<Past> {
-    store.get(HISTORY_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    crate::orchestration::kept::or_default(store, HISTORY_KEY)
 }
 
 fn save_history(store: &Store, list: &[Past]) -> Result<(), String> {
