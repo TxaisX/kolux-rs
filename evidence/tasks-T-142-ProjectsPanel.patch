@@ -1,0 +1,12 @@
+diff --git a/src/projects/ProjectsPanel.tsx b/src/projects/ProjectsPanel.tsx
+index 462eb3d6..161a98fd 100644
+--- a/src/projects/ProjectsPanel.tsx
++++ b/src/projects/ProjectsPanel.tsx
+@@ -1472,6 +1472,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+     draggable: true,
+     onDragStart: (e: DragEvent) => {
+       dragged.current = { kind: "row", id: pathKey(w.path) };
++      e.dataTransfer.setData("application/x-kolux-workspace", JSON.stringify([w.path])); // T-142: droppable on a workspace board lane
+       e.dataTransfer.effectAllowed = "move";
+     },
+     onDragOver: (e: DragEvent) => {
