@@ -1,8 +1,8 @@
 diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
-index 890df35c..d4e2cef1 100644
+index a55e0b8f..c86e0756 100644
 --- a/src-tauri/src/lib.rs
 +++ b/src-tauri/src/lib.rs
-@@ -205,6 +205,9 @@ pub fn run() {
+@@ -211,6 +211,9 @@ pub fn run() {
              let job_ok = procs::app_job_start();
              let dir = app.path().app_data_dir()?;
              diag::set_dir(&dir);
@@ -12,12 +12,12 @@ index 890df35c..d4e2cef1 100644
              if !job_ok {
                  diag::write(&dir, "kolux-rs: the app could not be put in its own job object; child processes would survive a crash (APP-053)");
              }
-@@ -758,6 +761,8 @@ pub fn run() {
+@@ -784,6 +787,8 @@ pub fn run() {
                  // the deadline leaves, so a stalled profile drive caps the wait and never freezes the
                  // quit. Settings need no step: every change is already on disk (APP-048).
                  final_save::begin();
 +                // T-283 (BROW-043): this run's browser helpers end with it.
 +                browser::helpers::stop_all();
-                 let seal = |app: tauri::AppHandle, files: fn(&Store, &std::path::Path) -> Vec<(std::path::PathBuf, std::path::PathBuf)>| {
-                     move || {
-                         if let (Ok(profile), Ok(store)) = (app.path().app_data_dir(), app.state::<Mutex<Store>>().lock()) {
+                 // T-182 (APP-011): the same steps make the save point a restart waits for.
+                 let report = final_save::run(final_save::QUIT_DEADLINE, lifecycle::quit_steps(app));
+                 if let Ok(dir) = app.path().app_data_dir() {
