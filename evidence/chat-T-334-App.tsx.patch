@@ -1,0 +1,13 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 81dbaa77..cd5c407d 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -689,6 +689,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+         case "zoom.in":
+         case "zoom.out":
+         case "zoom.reset":
++          // CHAT-026 (T-334): inside a chat the same chords zoom the chat text; the chat hears them itself.
++          if (document.activeElement?.closest(".chat")) return;
+           // BROW-012: a browser tab zooms its own page in its own steps.
+           if (kind === "browser") {
+             browserAction(focused, hit.id === "zoom.in" ? "zoomIn" : hit.id === "zoom.out" ? "zoomOut" : "zoomReset");

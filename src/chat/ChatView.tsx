@@ -4,7 +4,7 @@
 // (T-326). Thin on purpose: the Agents screen (T-050) mounts it in its body; AgentsChat (T-050-b)
 // decides chat or terminal and carries the Show terminal switch; a finished turn's reply can be
 // handed to another session's box (T-080).
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { locale } from "../language";
@@ -13,6 +13,9 @@ import { fold, isFullPath, thoughtIds as idsOf, toggled, type View } from "./ste
 import { NoticeRow, PlanRow, StepRow, ThoughtRow } from "./StepRows";
 import { SHELL_OFFER, agentsView, handOver, handTargets, viewedFirst, capPending, chatCovers, combine, liveOffer, pickChat, typingInto, lastReply, lastReplyItem, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row, type Support } from "./model";
 import { Composer, type ComposerHandle } from "./MessageBox";
+import { readModel } from "./controls";
+import { keepPosition, loadLabel, visibleRows } from "./page";
+import { chatZoom, setChatZoom, stepZoom, zoomChord } from "./zoom";
 import { draftOf, forwardsToBox, keepDraft, nearBottom } from "./composer";
 import { sessionLabel } from "../agents/rail";
 import { NO_TERMINAL_NOTE, boxSend, hearStates, holdReading, stopPane, writeTerminal } from "./send";
@@ -47,7 +50,7 @@ export type ChatOpen = { onOpenLink?: (url: string) => void; onOpenFile?: (path:
 export const GONE_NOTE = "That question was already answered. Look at the terminal.";
 /** The refusal of a hand-over and the id of the reply it was refused for. */
 export type HandNote = { text: string; forResult: string };
-export default function ChatView({ pane, agent, preview = null, pending = [], hookState, stateOf, ptyOf, target = null, aside, hand, open: opener, hidden: hiddenProp }: { pane: ChatPane; agent?: string; preview?: Preview | null; pending?: Pending[]; hookState?: string; stateOf?: (key: number) => string | undefined; ptyOf?: (key: number) => number | undefined; target?: string | null; aside?: ReactNode; hand?: Hand; open?: ChatOpen; /** CHAT-009: true while the screen hides the chat; it reads nothing then. */ hidden?: boolean }) {
+export default function ChatView({ pane, agent, preview = null, pending = [], hookState, stateOf, ptyOf, target = null, aside, hand, open: opener, hidden: hiddenProp, onTerminal }: { pane: ChatPane; agent?: string; preview?: Preview | null; pending?: Pending[]; hookState?: string; stateOf?: (key: number) => string | undefined; ptyOf?: (key: number) => number | undefined; target?: string | null; aside?: ReactNode; hand?: Hand; open?: ChatOpen; /** CHAT-009: true while the screen hides the chat; it reads nothing then. */ hidden?: boolean; /** CHAT-024: shows the session's own terminal (Codex's model picker lives there). */ onTerminal?: () => void }) {
   // CHAT-009 (T-330): what the transcript last said, kept per pane while the chat is hidden (reading.ts).
   const [seen, setSeen] = useState<Seen>(NOTHING);
   const { items, state, error, open } = seen;
@@ -209,16 +212,43 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
     if (covers && document.activeElement?.closest(".grid.agents")) box.current?.focus();
   }, [covers]);
   // CHAT-017: typing anywhere in the chat pane goes to the box; Backspace or Delete moves focus there.
+  // CHAT-026: Ctrl or Cmd with plus, minus or zero zooms the chat text, whichever part of the chat has focus.
+  const [zoom, setZoom] = useState(chatZoom);
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const how = zoomChord({ key: e.key, code: e.code, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, isComposing: e.nativeEvent.isComposing });
+    if (how) {
+      e.preventDefault();
+      e.stopPropagation();
+      setChatZoom(stepZoom(chatZoom(), how));
+      return setZoom(chatZoom());
+    }
     const t = e.target as HTMLElement;
     if (t.closest("textarea, input, select, [contenteditable]")) return;
     if (t.closest("button, a") && (e.key === " " || e.key === "Enter")) return;
     if (forwardsToBox({ key: e.key, ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey, isComposing: e.nativeEvent.isComposing })) box.current?.focus();
   };
-  const views = useMemo(() => fold(rows, open, pane.cwd), [rows, open, pane.cwd]);
+  // CHAT-008: the newest 300 messages show first; each press of Load earlier messages adds 200 older ones.
+  const [pages, setPages] = useState(0);
+  const shownRows = useMemo(() => visibleRows(rows, pages), [rows, pages]);
+  const views = useMemo(() => fold(shownRows, open, pane.cwd), [shownRows, open, pane.cwd]);
+  const loadEarlier = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+  const earlierLabel = loadLabel(rows.length, pages);
+  const more = () => {
+    const el = list.current;
+    if (el) loadEarlier.current = { scrollHeight: el.scrollHeight, scrollTop: el.scrollTop };
+    stick.current = false;
+    setPages((p) => p + 1);
+  };
   useLayoutEffect(() => {
-    if (stick.current && list.current) list.current.scrollTop = list.current.scrollHeight;
+    const el = list.current;
+    if (!el) return;
+    if (loadEarlier.current) {
+      // The same message stays where it was while older ones appear above it.
+      el.scrollTop = keepPosition(loadEarlier.current, el.scrollHeight);
+      loadEarlier.current = null;
+    } else if (stick.current) el.scrollTop = el.scrollHeight;
   }, [views]);
+  const shownModel = useMemo(() => (agent ? readModel(agent, items) : null), [agent, items]);
   const [full, setFull] = useState<string | null>(null);
   // STAT-053: Thought rows start folded; the toolbar opens or folds them all.
   const [thoughts, setThoughts] = useState<Set<string>>(() => new Set());
@@ -227,7 +257,7 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
 
   return (
     <LinkContext.Provider value={host}>
-    <div className={`chat${covers ? " cover" : ""}`} aria-label="Chat" onKeyDown={onKeyDown}>
+    <div className={`chat${covers ? " cover" : ""}`} aria-label="Chat" onKeyDown={onKeyDown} style={{ "--chat-zoom": zoom } as CSSProperties}>
       {(aside || head.result) && (
         <div className="chat-head">
           <ChatHead {...head} hand={hand} aside={aside} />
@@ -243,6 +273,11 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
         </div>
       )}
       <div className="chat-list" ref={list} onScroll={onScroll}>
+        {earlierLabel && (
+          <button type="button" className="chat-load-earlier" onClick={more}>
+            {earlierLabel}
+          </button>
+        )}
         {views.map((v) => (
           <ViewRow key={`${v.row}-${v.id}`} view={v} onImage={setFull} thoughts={thoughts} onToggle={toggle} hand={hand} />
         ))}
@@ -265,7 +300,7 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
         />
       )}
       {menu && <BrowserChoice url={menu.url} at={menu.at} onPick={pickBrowser} onClose={() => setMenu(null)} />}
-      <Composer ref={box} paneKey={pane.key} live={terminalOf(key) !== undefined} blocked={held} note={note ?? undefined} onSend={send} working={open} onStop={stop} />
+      <Composer ref={box} paneKey={pane.key} live={terminalOf(key) !== undefined} blocked={held} note={note ?? undefined} onSend={send} working={open} onStop={stop} agent={agent} cwd={pane.cwd} shownModel={shownModel} onTerminal={onTerminal} />
       {full && (
         <button type="button" className="chat-full" aria-label="Close image" onClick={() => setFull(null)}>
           <img src={full} alt="Attached" />
@@ -439,7 +474,7 @@ export function AgentsChat({ panes, focused, ptyOf, hook, stateOf, onPick, taskO
   // VIEW-020: the result goes into the target's kept draft after what is typed there, then the
   // screen moves to the target, whose box opens with it.
   const hand = makeHand({ panes, key, offers, viewed, taskOf, note: handNote, setNote: setHandNote, onPick, draftOf, keepDraft });
-  return <ChatView key={key} pane={shown} agent={offers[key]?.agent} hookState={hook?.[key]} stateOf={stateOf} ptyOf={ptyOf} target={typingInto(focused, shown)} aside={<TerminalSwitch on={false} onFlip={(on) => flip(key, on)} />} hand={hand} open={open} />;
+  return <ChatView key={key} pane={shown} agent={offers[key]?.agent} hookState={hook?.[key]} stateOf={stateOf} ptyOf={ptyOf} target={typingInto(focused, shown)} aside={<TerminalSwitch on={false} onFlip={(on) => flip(key, on)} />} hand={hand} open={open} onTerminal={() => flip(key, true)} />;
 }
 
 /** VIEW-019: the Show terminal switch: on, the session's raw terminal shows in place of its chat. */
