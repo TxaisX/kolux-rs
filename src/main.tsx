@@ -1,6 +1,7 @@
 import React from "react";
 import { saveChanged } from "./settings/saveChanged";
 import ReactDOM from "react-dom/client";
+import ScreenBoundary from "./recovery/ScreenBoundary";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { applyAppearance, cachedAppearance, followSystemMode, readAppearance } from "./theme";
@@ -69,7 +70,9 @@ async function start() {
   const { default: App } = await loadApp;
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
-      <App initial={stamped || saved || {}} layout={layout} read={saved !== null} />
+      <ScreenBoundary>
+        <App initial={stamped || saved || {}} layout={layout} read={saved !== null} />
+      </ScreenBoundary>
     </React.StrictMode>,
   );
   requestAnimationFrame(() => requestAnimationFrame(() => void getCurrentWindow().show().catch(() => {})));

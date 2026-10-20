@@ -16,7 +16,7 @@ import { chromeLayout } from "./titleHeader";
 
 /** Artifacts is reached from the sidebar only, so it is not in the top bar's cycle. */
 /** The three switcher screens, and the Inbox behind the bell (STAT-050: its own top-level view). */
-export type Screen = "agents" | "board" | "terminals" | "artifacts" | "inbox" | "tower" | "floor" | "skills";
+export type Screen = "agents" | "board" | "terminals" | "artifacts" | "inbox" | "tower" | "floor" | "skills" | "space";
 export const screens: Array<{ id: Screen; label: string }> = [
   { id: "agents", label: "Agents" },
   { id: "board", label: "Board" },

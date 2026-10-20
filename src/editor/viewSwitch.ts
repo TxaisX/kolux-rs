@@ -26,3 +26,20 @@ export const changesBanner = (committed: string | null, working: string) => (com
 
 /** The rendered CSV or TSV table is read-only; every other view the switch offers can be typed in. */
 export const viewEditable = (path: string, v: View) => !(v === "rendered" && TABLE.has(ext(path)));
+
+/** The Changes view's two sides: the last commit (the staged diff's old side is HEAD) beside the working file (the
+ * unstaged diff's new side), so staged and unstaged edits both show as uncommitted work. */
+export const headSides = (staged: { original: string }, unstaged: { modified: string }): { original: string; modified: string } => ({ original: staged.original, modified: unstaged.modified });
+
+/** Whether a file is inside the worktree (either slash, any letter case). */
+export function underRoot(path: string, root: string | null): boolean {
+  if (!root) return false;
+  const n = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  return n(path).startsWith(n(root) + "/");
+}
+
+/** The switch buttons a tab draws: what the file offers that the pane can show (a rendered diagram or notebook is
+ * not built, so those files show no rendered button). */
+export const drawn = (offer: Offer, canRender: boolean): View[] => offer.views.filter((v) => v !== "rendered" || canRender);
+
+export const VIEW_LABEL: Record<View, string> = { edit: "Edit", source: "Source", rich: "Rich", rendered: "Table", changes: "Changes" };

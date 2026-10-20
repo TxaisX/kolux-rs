@@ -25,6 +25,9 @@ pub struct Prompt {
     /// "question" (a multiple-choice question).
     pub kind: &'static str,
     pub text: String,
+    /// The menu's option lines as they stand on screen, top to bottom (T-035-c reads the answer
+    /// keys off them).
+    pub options: Vec<String>,
 }
 
 impl Prompt {
@@ -128,7 +131,12 @@ pub fn find_prompt(rows: &[String]) -> Option<Prompt> {
     let above: Vec<&String> = lines[top.saturating_sub(QUESTION_REACH)..top].iter().rev().filter(|l| !l.is_empty() && !is_hint(l)).collect();
     let asking = options.iter().find(|o| o.contains('?')).or_else(|| above.iter().find(|l| l.ends_with('?')).or(above.first()).copied()).or(options.last()).map(String::as_str).unwrap_or_default();
     let text: String = asking.chars().take(TEXT_MAX).collect();
-    Some(Prompt { kind: kind_of(&format!("{asking} {}", options.join(" "))), text })
+    let kind = kind_of(&format!("{asking} {}", options.join(" ")));
+    // Options were collected upward with the bottom one appended last: put them top to bottom.
+    let bottom = options.pop();
+    options.reverse();
+    options.extend(bottom);
+    Some(Prompt { kind, text, options })
 }
 
 #[derive(Default, Debug)]
@@ -190,6 +198,12 @@ fn with_scanner<T>(f: impl FnOnce(&mut Scanner) -> T) -> T {
     f(&mut s)
 }
 
+/// The prompt open on `terminal` as `read` shows it, through the shared scan memory (restored
+/// scrollback skipped, result memoised). T-035-c answers from this same reading.
+pub fn live_prompt(terminal: u32, read: &Read) -> Option<Prompt> {
+    with_scanner(|s| s.scan(terminal, read))
+}
+
 /// ORCH-037 for worker-show: what the pane on `terminal` waits on, as its hooks say it, else as its
 /// screen shows it. A hook state belongs to the terminal that reported it, so one left from the
 /// pane's earlier process (its terminal ended) is never read here; `read` gives the terminal's
@@ -221,11 +235,8 @@ pub struct Scan {
 #[tauri::command]
 pub fn prompt_scan(app: tauri::AppHandle, terminals: tauri::State<'_, crate::terminal::Terminals>, pane_key: u32, terminal: u32) -> Scan {
     let read = terminals.read(terminal, None, Some(FRAME_LINES));
-    let (before, prompt) = with_scanner(|s| {
-        let before = s.last(terminal).cloned();
-        let found = read.as_ref().and_then(|r| s.scan(terminal, r));
-        (before, found)
-    });
+    let before = with_scanner(|s| s.last(terminal).cloned());
+    let prompt = read.as_ref().and_then(|r| live_prompt(terminal, r));
     let hooked = crate::status::state_of(terminal).is_some();
     let changed = match (&before, &prompt) {
         (_, Some(p)) if !hooked => crate::status::status_inband(app, pane_key, Some(terminal), format!(r#"{{"state":"{}"}}"#, p.state())),

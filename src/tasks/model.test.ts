@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { beyondWindow, duplicateQuery, eventLine, issueNumber, pageButtons, pageCount, PRESETS, taskKind, taskQueries, tasksRepo } from "./model";
+import { beyondWindow, duplicateQuery, eventLine, issueNumber, issueSource, listState, pageButtons, pageCount, PRESETS, taskKind, taskQueries, tasksRepo } from "./model";
 
 const projects = [
   { id: "a", name: "Alpha", path: "G:/r/alpha" },
@@ -62,4 +62,18 @@ test("GIT-047: a duplicate number is a plain or #-prefixed positive number, and 
   expect(["", "0", "#", "1.5", "-2", "12a", "acme#3"].map(issueNumber)).toEqual([null, null, null, null, null, null, null]);
   expect(duplicateQuery("acme/app", 'Crash when "saving" (is:open) a [big] file')).toBe("repo:acme/app is:issue Crash when saving big file");
   expect(duplicateQuery("acme/app", "a b")).toBeNull();
+});
+
+test("GIT-048 (T-281-b): the list's state filter comes from the typed words first, then the preset", () => {
+  expect(listState(PRESETS[0].id, "")).toBe(PRESETS[0].q.match(/(?:is|state):(open|closed|merged)/i)?.[1] ?? null);
+  expect(listState(PRESETS[0].id, "is:closed bug")).toBe("closed");
+  expect(listState(PRESETS[0].id, "state:merged")).toBe("merged");
+});
+
+test("GIT-045 (T-281-b): a remembered upstream issue source that is gone is named with the fork it was chosen for", () => {
+  const s = issueSource({ tasksIssueSource: { "github.com/me/app": "upstream" } }, "github.com/me/app", "me/app", null);
+  expect(s.repo).toBe("me/app");
+  expect(s.warning).toContain("me/app");
+  expect(s.warning).toContain("no longer set up");
+  expect(issueSource({}, "github.com/me/app", "me/app", null).warning).toBeNull();
 });

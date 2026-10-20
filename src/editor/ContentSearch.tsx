@@ -7,13 +7,13 @@ import { joinPath, revealAt, searchSession, summary, type Found } from "./search
 import "./editor-extras.css";
 
 // It stays mounted while the tree is shown, so going back to it keeps the search and its results.
-type Props = { root: string; hidden: boolean; focusAsk: number; onOpen: (path: string) => void };
+type Props = { root: string; hidden: boolean; focusAsk: number; onOpen: (path: string) => void; /** EDIT-038: the text to search for, set each time a search is started from an editor. */ seed?: { text: string; at: number } };
 
 // The panel is narrow, so only the words just before a hit are shown and the hit stays in sight.
 const LEAD = 20;
 const lead = (s: string) => (s.length > LEAD ? "…" + s.slice(-LEAD) : s);
 
-export default function ContentSearch({ root, hidden, focusAsk, onOpen }: Props) {
+export default function ContentSearch({ root, hidden, focusAsk, onOpen, seed }: Props) {
   const [query, setQuery] = useState("");
   const [matchCase, setMatchCase] = useState(false);
   const [wholeWord, setWholeWord] = useState(false);
@@ -34,6 +34,10 @@ export default function ContentSearch({ root, hidden, focusAsk, onOpen }: Props)
     session.current = s;
     return () => s.close();
   }, [root]);
+
+  useEffect(() => {
+    if (seed) setQuery(seed.text);
+  }, [seed?.at]);
 
   useEffect(() => {
     if (!focusAsk || hidden) return;

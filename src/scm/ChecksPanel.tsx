@@ -8,10 +8,14 @@ import { useEffect, useRef, useState } from "react";
 import { Refresh } from "../chrome/icons";
 import { openInBrowser } from "../browser/BrowserPane";
 import { useSettings } from "../settings/useSettings";
+import GhBanner, { classify } from "../tasks/GhBanner";
+import CommentsPanel from "./CommentsPanel";
+import ConflictPanel from "./ConflictPanel";
 import PrStart from "./PrStart";
 import { reviewHint, reviewWhere } from "./startPr";
 import { CHECKS_POLL_MS, checksSummary, reuseNoPr, stillRunning, type PrChecks } from "./checks";
 import { prStateWord } from "./model";
+import { recordChecks } from "./prSearch";
 import { CHECK_CAP, capped, checkGroups } from "./review";
 import type { Check } from "./checks";
 
@@ -52,6 +56,7 @@ export default function ChecksPanel({ dir, linked, visible }: Props) {
     setGot((g) => (g && g.key === key ? { ...g, loading: true } : { key, data: null, error: null, loading: true }));
     invoke<PrChecks>("scm_pr_checks", { worktree: dir, linked })
       .then((data) => {
+        recordChecks(dir, data); // VIEW-043: the palette reads the same answer
         if (asking.current !== key) return;
         if (data.pr) noPrSeen.delete(key);
         else noPrSeen.set(key, Date.now());
@@ -92,7 +97,11 @@ export default function ChecksPanel({ dir, linked, visible }: Props) {
         {dir === null ? (
           <div className="sb-hint">Open a workspace to see its pull request's checks.</div>
         ) : shown?.error ? (
-          <div className="note error">The checks could not be read: {shown.error}</div>
+          classify(shown.error) !== "other" ? (
+            <GhBanner error={shown.error} onRetry={() => load(true)} />
+          ) : (
+            <div className="note error">The checks could not be read: {shown.error}</div>
+          )
         ) : !data ? (
           <div className="sb-hint">Looking for this branch's pull request…</div>
         ) : !pr ? (
@@ -119,7 +128,7 @@ ${reviewHint(inKolux)}`.trim()}
                 {reviewHint(inKolux)}
               </span>
             </div>
-            {data.conflict && <div className="note warn">This pull request has merge conflicts with its base branch; it cannot merge until they are resolved.</div>}
+            {data.conflict && <ConflictPanel dir={dir} url={pr.url} />}
             <div className="sb-hint checks-sum">{checksSummary(data.checks)}</div>
             {note && <div className="note">{note}</div>}
             {(() => {
@@ -173,6 +182,7 @@ ${reviewHint(inKolux)}`.trim()}
                 </div>
               );
             })()}
+            <CommentsPanel dir={dir} url={pr.url} visible={visible} />
           </>
         )}
       </div>

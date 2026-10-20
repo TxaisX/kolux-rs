@@ -44,6 +44,7 @@ mod install;
 mod keybindings;
 mod kits;
 mod links;
+mod lifecycle;
 mod menu;
 mod bulk;
 mod names;
@@ -54,9 +55,14 @@ mod orchestration;
 mod foreground;
 mod procs;
 mod protected;
+// T-156-b: listen() and its helpers are reached from hooks.rs only once evidence/hooks-T-156-b-hooks.rs.patch
+// lands (gated by PLAN T-156-b acceptance; after-list row). Drop this allow with that patch.
+#[allow(dead_code)]
+mod protected_custom;
 mod ports;
 mod resources;
 mod projects;
+mod prompt_answer;
 mod prompt_scan;
 mod scm;
 mod pr_review;
@@ -70,6 +76,7 @@ mod schedule;
 mod resume;
 mod secrets;
 mod sessions;
+mod shell_marks;
 mod shell_history;
 mod skill_delete;
 mod state;
@@ -181,14 +188,23 @@ pub fn run() {
     // failure into a plain native message instead of a panic.
     let mut context = tauri::generate_context!();
     let windows: Vec<String> = context.config().app.windows.iter().filter(|w| w.create).map(|w| w.label.clone()).collect();
+    // T-183 (APP-043): after repeated graphics crashes a saved flag puts every window in safe graphics.
+    let safe = resources::recovery::safe_graphics_on(&context.config().identifier, &context.package_info().version.to_string());
     for w in &mut context.config_mut().app.windows {
         w.create = false;
+        if safe {
+            w.additional_browser_args = Some(resources::recovery::safe_args(w.additional_browser_args.as_deref()));
+        }
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        .setup(move |app| tools::guarded_setup(app, &windows, |app| {
+        .setup(move |app| {
+            // T-182 (APP-001): one copy at a time. A second launch hands its request to the running
+            // copy, brings its window forward and exits before any window (or WebView2 profile) is touched.
+            lifecycle::claim_or_forward(app);
+            tools::guarded_setup(app, &windows, |app| {
             // APP-053: everything the app starts from here on ends with it; outside its own job (a job the
             // launcher owns without breakaway, say) the children would outlive a crash, so that is logged.
             let job_ok = procs::app_job_start();
@@ -200,9 +216,34 @@ pub fn run() {
             // The config homes this process resolved (defaults included), so a launch that inherited another
             // app's environment shows up in the log.
             diag::write(&dir, &format!("kolux-rs: config: CLAUDE_CONFIG_DIR={} CODEX_HOME={}", hooks::claude_settings_file().parent().map(|d| d.display().to_string()).unwrap_or_default(), trust::codex_config_file().parent().map(|d| d.display().to_string()).unwrap_or_default()));
+            // T-183 (APP-039): a previous run that left no clean exit becomes a crash record.
+            resources::recovery::startup_scan(&dir);
+            // T-183 (APP-021): the profile folder must take a write and every install file must read; a
+            // per-user install is repaired with icacls, anything else is only named.
+            let perms = resources::recovery::startup_check_here(&dir);
+            for p in &perms.repaired {
+                diag::write(&dir, &format!("permissions repaired: {} (APP-021)", p.display()));
+            }
+            let perm_problem = perms.problem();
+            if let Some(p) = &perm_problem {
+                diag::write(&dir, &format!("{p} (APP-021)"));
+            }
+            app.manage(resources::recovery::Perms(perms));
+            app.manage(resources::recovery::Graphics(Mutex::new(resources::recovery::Burst::default())));
+            // T-183 (APP-049): a damaged state.db is set aside and the last good copy restored before the
+            // store opens; one that cannot be set aside leaves saving frozen on a scratch store.
+            let prep = resources::recovery::prepare_state(&dir, &resources::recovery::frozen_dir());
+            for n in &prep.notes {
+                diag::write(&dir, n);
+            }
+            if prep.backup_worthwhile() {
+                if let Err(e) = resources::recovery::backup_state(&dir) {
+                    diag::write(&dir, &format!("the last good copy of state.db could not be refreshed: {e} (APP-049)"));
+                }
+            }
             #[cfg(debug_assertions)]
             dev_inject()?;
-            let store = Store::open(&dir)?;
+            let store = Store::open(&prep.open_dir)?;
             // SKILL-023: an interrupted skill delete is undone or completed under the skill lock (a busy
             // lock or a lock that cannot be opened is logged; the latter still recovers).
             skill_delete::startup_recover(&dir);
@@ -214,6 +255,8 @@ pub fn run() {
             // ACCT-010: a key this computer can no longer open is cleared before the window asks.
             secrets::drop_unreadable(&store, &dir);
             app.manage(Mutex::new(store));
+            // T-183 (APP-042): the interface watch; RecoveryMount's heartbeat feeds it.
+            resources::recovery::watch_start(app.handle().clone(), perm_problem);
             // TERM-122: the keep-awake watcher reads the saved choice every tick, and counts a
             // working pane only while its terminal is still running.
             {
@@ -256,6 +299,10 @@ pub fn run() {
             let fence = fence::Fence::load(&app.state::<Mutex<Store>>());
             app.manage(fence);
             app.manage(token_usage::Flights::default());
+            // ORCH-034: the orchestration store is brought up to today's layout before anything reads it.
+            if let Ok(store) = app.state::<Mutex<Store>>().lock() {
+                orchestration::upgrade::at_start(&store);
+            }
             // The command line reaches the app through a loopback port (PROJ-077).
             cli::serve(app.handle().clone(), &dir)?;
             // AUTO-001: the automations clock.
@@ -327,7 +374,8 @@ pub fn run() {
                 }
             });
             Ok(())
-        }))
+        })
+        })
         // The Artifacts viewer (SKILL-036) loads stored pages through this scheme, one entry at a time.
         // T-500: only the app's own web view may read artifacts; a Browser pane page gets nothing.
         .register_uri_scheme_protocol(artifacts::SCHEME, |ctx, req| {
@@ -348,8 +396,18 @@ pub fn run() {
             // The window is gone: no shell may outlive it.
             // T-546-c: only the main window holds shells, so the Tower's own window closing changes nothing;
             // the Tower window goes with the main one, so it never keeps the app running on its own.
+            // T-182 (APP-006): the page decides whether closing needs a question; a page that never
+            // answers (frozen or crashed) is closed for after lifecycle::ASK_LIMIT.
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if window.label() == "main" {
+                    lifecycle::close_requested(window);
+                }
+            }
             if let tauri::WindowEvent::Destroyed = event {
                 if window.label() == "main" {
+                    // T-182 (APP-006): quitting always finishes; a final save or exit wait that hangs
+                    // past lifecycle::quit_deadline() is cut short.
+                    lifecycle::quit_watchdog(window.app_handle());
                     window.state::<Terminals>().kill_all();
                     // T-033-e: no git watch outlives the window either (nothing is waited for here).
                     scm::watch::unwatch_all();
@@ -377,6 +435,9 @@ pub fn run() {
             hooks::agent_hooks::saved::agent_status_saved,
             hooks::agent_hooks::saved::agent_resumable,
             protected::protected_rules,
+            protected_custom::protected_rule_check,
+            protected_custom::protected_attempts,
+            protected_custom::protected_attempts_clear,
             hooks::claude_usage,
             sysmem::process_memory,
             fonts::list_fonts,
@@ -458,6 +519,8 @@ pub fn run() {
             projects::workspace_remove_check,
             projects::project_set,
             projects::project_display_name_set,
+            projects::workspace_rename_after_work,
+            projects::workspace_mark_suggested,
             projects::workspaces_place_get,
             projects::workspaces_place_set,
             projects::git_first_commit_preview,
@@ -474,6 +537,8 @@ pub fn run() {
             agents::inventory::session_tabs,
             orchestration::task_reset,
             orchestration::worker_labels,
+            prompt_answer::prompt_read,
+            prompt_answer::prompt_answer,
             prompt_scan::prompt_scan,
             prompt_scan::prompt_scan_restored,
             prompt_scan::prompt_scan_pruned,
@@ -511,6 +576,18 @@ pub fn run() {
             github::github_issue_state,
             github::github_issue_comment,
             github::github_issue_create,
+            github::pull_requests::pr_page,
+            github::pull_requests::pr_files,
+            github::pull_requests::pr_file_patch,
+            github::pull_requests::pr_checks,
+            github::pull_requests::pr_threads,
+            github::pull_requests::pr_set_state,
+            github::pull_requests::pr_rerun,
+            github::pull_requests::pr_reviewers,
+            github::pull_requests::pr_assignees,
+            github::pull_requests::pr_react,
+            github::pull_requests::pr_reply,
+            github::pull_requests::pr_merge,
             scm::scm_task_labels,
             scm::scm_task_body,
             scm::scm_stage,
@@ -518,7 +595,7 @@ pub fn run() {
             scm::scm_commit, scm::scm_remote,
             scm::scm_pr, scm::scm_pr_checks, scm::scm_pr_create, scm::scm_open_pr,
             pr_review::scm_pr_find, pr_review::scm_check_rerun, pr_review::scm_check_log, pr_review::scm_pr_text,
-            pr_review::scm_review_read, pr_review::scm_review_act,
+            pr_review::scm_review_read, pr_review::scm_review_act, pr_review::scm_review_send, pr_review::scm_pr_conflicts,
             scm::scm_history, scm::scm_commit_files, scm::scm_github_repo,
             bulk::workspace_remove_many, bulk::workspace_kept_branch_delete, bulk::workspace_forget,
             bulk::workspace_statuses, bulk::workspace_statuses_set, bulk::workspace_status_set,
@@ -540,6 +617,7 @@ pub fn run() {
             browser::browser_annotate,
             browser::preview::browser_preview,
             browser::preview::browser_preview_of,
+            browser::ports::browser_dev_ports,
             automations::automations_list,
             automations::automation_set_enabled,
             automations::automation_delete,
@@ -664,7 +742,19 @@ pub fn run() {
             cli::cli_register::cli_register_state,
             cli::cli_register::cli_register,
             cli::cli_register::cli_unregister,
+            cli::file_cli::cli_file_window,
+            cli::file_cli::cli_file_result,
             diag::diag_bundle,
+            resources::recovery::ui_heartbeat,
+            resources::recovery::graphics_crash_noted,
+            resources::recovery::graphics_keep_running,
+            resources::recovery::graphics_restart_safe,
+            resources::recovery::graphics_launch_choice,
+            resources::recovery::graphics_choose,
+            resources::recovery::crash_pending,
+            resources::recovery::crash_latest,
+            resources::recovery::crash_dismiss,
+            resources::recovery::crash_details,
             diag::diag_review,
             diag::diag_review_discard,
             update::update_status,
@@ -672,6 +762,8 @@ pub fn run() {
             update::update_check,
             update::update_download,
             update::update_restart,
+            lifecycle::close_alive,
+            lifecycle::app_restart,
             usage_alerts::usage_alerts_fired,
             usage_alerts::usage_alert_send
         ])
@@ -684,36 +776,8 @@ pub fn run() {
                 // the deadline leaves, so a stalled profile drive caps the wait and never freezes the
                 // quit. Settings need no step: every change is already on disk (APP-048).
                 final_save::begin();
-                let seal = |app: tauri::AppHandle, files: fn(&Store, &std::path::Path) -> Vec<(std::path::PathBuf, std::path::PathBuf)>| {
-                    move || {
-                        if let (Ok(profile), Ok(store)) = (app.path().app_data_dir(), app.state::<Mutex<Store>>().lock()) {
-                            let pairs = files(&store, &profile);
-                            drop(store);
-                            let _ = secrets::save_changed(&pairs, &profile);
-                        }
-                    }
-                };
-                let (a1, a2) = (app.clone(), app.clone());
-                let report = final_save::run(
-                    final_save::QUIT_DEADLINE,
-                    vec![
-                        // USAGE-011: open turns end and the counts are written; no batched save follows.
-                        final_save::step("activity counts", move || activity::save(&a1.state::<Mutex<Store>>(), true)),
-                        // STAT-037: the agents still mid-task are recorded before their terminals end.
-                        final_save::step("agent status", move || {
-                            if let Ok(store) = a2.state::<Mutex<Store>>().lock() {
-                                hooks::agent_hooks::saved::at_quit(&store);
-                            }
-                        }),
-                        // ACCT-015: no sign-in or install keeps running after Kolux quits.
-                        final_save::step("sign-ins cancelled", || {
-                            claude_key::cancel_all(std::time::Duration::from_secs(2));
-                        }),
-                        // ACCT-025: sign-ins the agents renewed are sealed again, Codex's then Claude's.
-                        final_save::step("codex sign-in sealed", seal(app.clone(), codex_accounts::sign_in_files)),
-                        final_save::step("claude sign-in sealed", seal(app.clone(), claude_accounts::sign_in_files)),
-                    ],
-                );
+                // T-182 (APP-011): the same steps make the save point a restart waits for.
+                let report = final_save::run(final_save::QUIT_DEADLINE, lifecycle::quit_steps(app));
                 if let Ok(dir) = app.path().app_data_dir() {
                     diag::write(&dir, &report.line());
                 }

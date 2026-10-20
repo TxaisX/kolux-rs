@@ -655,6 +655,15 @@ impl Terminals {
         };
         // APP-041: each session's start and end go to the app's own log (no arguments: they may carry secrets).
         let log_dir = app.path().app_data_dir().ok();
+        // ACCT-047: a shell pane's shell prints prompt marks (its own files still run first), so the pane
+        // can hold its output until the prompt and type a startup command once, when the shell is ready.
+        if program.as_deref().map(str::trim).is_none_or(str::is_empty) {
+            if let Some(shim_dir) = log_dir.as_deref().map(|d| d.join("shell")) {
+                for c in commands.iter_mut() {
+                    crate::shell_marks::apply(c, &shim_dir);
+                }
+            }
+        }
         // TERM-119: a bash, zsh or fish shell keeps its history per worktree unless the user turned that off.
         // The disk work is done here, before the lock, so a slow folder holds up only this pane.
         let history_vars = match log_dir.as_deref().filter(|_| per_worktree_history) {
@@ -704,7 +713,9 @@ impl Terminals {
             if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(std::path::Path::to_path_buf)) {
                 let bin = dir.join("bin");
                 let dir = if bin.join(if cfg!(windows) { "kolux.exe" } else { "kolux" }).is_file() { bin } else { dir };
-                let path = cli_first(&dir, command.get_env("PATH").map(std::ffi::OsStr::to_os_string));
+                // T-182 (APP-020): a tool installed after the app started is on the stored Path, not
+                // the process's; the pane gets both, the process's entries first.
+                let path = cli_first(&dir, Some(crate::lifecycle::fresh_path(command.get_env("PATH").map(std::ffi::OsStr::to_os_string))));
                 command.env("PATH", path);
             }
             if let Ok(dir) = tauri::Manager::path(&out_app).app_data_dir() {

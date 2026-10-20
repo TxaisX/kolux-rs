@@ -121,3 +121,30 @@ LIVE PROOF PENDING (batched), for the coordinator on the merged app with all thr
   7. Burst: write 2000 files in 100 ms under the tree (not an ignored folder): the diag log gains at most one "too many changes
      at once ...; read again, still watching" line, the panel shows the files, and the next edit is still seen within a few
      seconds (no 4 s cadence). Paste the diag-log tail (last 20 lines) here.
+
+BATCH 2 RERUN (lane/watch, 2026-10-19, Claude Sonnet 5.5; logs G:/Temp/watch-v3-logs/b2-t033e-*.log)
+Finding: the three coordinator patches listed above are all in the merged tree now (lib.rs on_page_load + Destroyed unwatch_all,
+projects.rs unwatch_root in workspace_remove, scm.rs scm-watch-ended emit), so every edge of the card is built and unit-proven:
+  - buffer overflow re-issues the read, no 4 s fallback .... t033e_an_overflow_reads_once_more_and_keeps_watching and
+    fix1_a_real_buffer_overflow_sends_overflow_and_the_same_reader_still_reports_a_later_change (real 256-byte buffer)
+  - removed worktree drops its watch .... t033e_a_linked_worktree_commit_is_seen_and_its_removal_ends_the_watch,
+    the fix1_ removal tests (unwatch_root by path, gone folder, plain folder)
+  - reader threads end / window destroyed .... t033e_unwatch_ends_the_reader_and_worker_threads_and_the_window_going_waits_for_nobody
+  - packed-refs .... t033e_packed_refs_count_in_the_git_folder_and_in_the_shared_common_folder
+  - watching flag true to life .... a_broken_watch_falls_back_to_reading_every_4_s_and_says_so_once (+ joiner told false),
+    the overflow test (+ joiner told true)
+  - page side (re-subscribe, backoff) .... src/scm/watch.test.ts
+One defect found and fixed in the test, not the product: fix1_a_real_buffer_overflow_... failed 3 of 3 alone (and in the merge
+resolver's MERGE 199 gates) because one writer creating short-named files never outran the reader on this machine, so no
+overflow was produced ("a storm into a 256-byte buffer must overflow: [Change, Change, ...]"). It now uses four writer threads and
+100-character names (one record is about 212 bytes, two never fit in 256). Fresh output, 3 runs alone:
+  "FIX-1: a 4000-file storm from 4 writers into a 256-byte buffer: 2 signals before the first overflow was seen, 1 overflow(s), then a later change"
+  test result: ok. 1 passed (2.85 s, 3.20 s, 2.76 s)
+Gates (fresh):
+  cargo test --lib scm:: -> test result: ok. 87 passed; 0 failed (67.64 s); includes the five LIVE tests and
+    "T-033-e: unwatch took 11.2µs, unwatch_all of two took 36.1µs; readers ended within 3 s of each",
+    "T-033-e: git worktree remove under a live watch: exit Some(0), stderr \"\"",
+    "T-033-e: the T-033-b churn shape: 170 reads a minute without the gap, 14 with it"
+  cargo clippy --all-targets -- -D warnings -> exit 0
+  pnpm exec vitest run src/scm -> 9 files, 100 tests passed;  pnpm exec tsc --noEmit -> exit 0
+LIVE PROOF PENDING (batched): steps 1-7 above, on the merged app (nobody runs them now, Routing v3).

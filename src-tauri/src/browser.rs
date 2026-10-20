@@ -26,12 +26,20 @@ pub mod cli;
 pub mod profiles;
 #[path = "browser_preview.rs"]
 pub mod preview;
+#[path = "browser_ports.rs"]
+pub mod ports;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
 pub const CHORD_EVENT: &str = "browser-chord";
 pub const LINK_EVENT: &str = "browser-link";
 pub const ICON_EVENT: &str = "browser-icon";
+/// T-239 (BROW-017): a right-click inside a page (`kind: "menu"`, with the pointer, the page's
+/// size, the link under it and whether text is selected) or an entry picked in the menu it opened
+/// (`kind: "pick"`, with the entry and its address).
+pub const MENU_EVENT: &str = "browser-menu";
+/// T-239 (BROW-018): an app shortcut pressed while the keyboard is inside a page (`k`, `c`, `m`).
+pub const KEY_EVENT: &str = "browser-key";
 
 /// Asks a finished page where its icon is (BROW-023): the first `<link rel~=icon>`, else the
 /// site's /favicon.ico. Runs as the page's own script; the answer is only ever fetched by the app.
@@ -101,7 +109,172 @@ pub const CHORD_SCRIPT: &str = r#"(() => {
   };
   addEventListener("click", link);
   addEventListener("auxclick", link);
+  // T-239 (BROW-018): the app's own shortcuts pressed while the keyboard is inside the page go to
+  // the app, never to the page. The app hands in the chords it binds (`__kxKeys`, from its keymap,
+  // so customised bindings count); until then the defaults below hold. The matching mirrors the
+  // app's (a letter by code or key, a digit by code or key, Plus, Space, else code or key; `i`
+  // takes any digit 1-9). A held-down key is taken once: repeats are swallowed, not sent.
+  let keys = [{ c: 1, k: "Tab" }, { c: 1, s: 1, k: "Tab" }, { c: 1, k: "W" }, { c: 1, s: 1, k: "T" }, { c: 1, k: "T" }, { c: 1, s: 1, k: "B" }, { c: 1, k: "PageDown" }, { c: 1, k: "PageUp" }, { a: 1, k: "1", i: 1 }];
+  window.__kxKeys = (list) => { if (Array.isArray(list)) keys = list; };
+  const keyHit = (d, e) => {
+    if (!!d.c !== e.ctrlKey || !!d.m !== e.metaKey || !!d.a !== e.altKey || !!d.s !== e.shiftKey) return false;
+    const k = d.k;
+    if (d.i) return /^Digit[1-9]$/.test(e.code) || /^[1-9]$/.test(e.key);
+    if (/^[A-Z]$/.test(k)) return e.code === "Key" + k || e.key.toUpperCase() === k;
+    if (/^[0-9]$/.test(k)) return e.code === "Digit" + k || e.key === k;
+    if (k === "Plus") return e.key === "+" || e.code === "NumpadAdd";
+    if (k === "Space") return e.code === "Space" || e.key === " ";
+    return e.code === k || e.key === k;
+  };
+  addEventListener("keydown", (e) => {
+    if (e.defaultPrevented || !(e.ctrlKey || e.metaKey || e.altKey)) return;
+    if (!keys.some((d) => keyHit(d, e))) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.repeat) return;
+    const m = (e.ctrlKey ? "c" : "") + (e.metaKey ? "m" : "") + (e.altKey ? "a" : "") + (e.shiftKey ? "s" : "") + (e.getModifierState("AltGraph") ? "g" : "");
+    send("key?k=" + encodeURIComponent(e.key) + "&c=" + encodeURIComponent(e.code) + "&m=" + m);
+  }, true);
+  // T-239 (BROW-017): a right-click opens Kolux's own menu in place of the engine's. The app
+  // decides the entries and where the menu sits (flipped to stay inside the pane near its edges)
+  // and hands them back through `__kxMenu`. A left or middle click elsewhere, or Escape, closes
+  // it; a right click elsewhere moves it. Copy and Copy Link Address run here, where the
+  // selection and the clipboard are; every other entry is the app's (`pick`).
+  let menu = null;
+  const closeMenu = () => { if (menu) { menu.remove(); menu = null; } };
+  addEventListener("contextmenu", (e) => {
+    if (!e.isTrusted) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const a = e.target instanceof Element ? e.target.closest("a[href]") : null;
+    const link = a && /^https?:/i.test(a.href) ? a.href : "";
+    const s = String(getSelection()) !== "" ? "1" : "0";
+    send("menu?x=" + Math.round(e.clientX) + "&y=" + Math.round(e.clientY) + "&vw=" + innerWidth + "&vh=" + innerHeight + "&s=" + s + "&l=" + encodeURIComponent(link));
+  }, true);
+  addEventListener("mousedown", (e) => { if (menu && e.button !== 2 && !menu.contains(e.target)) closeMenu(); }, true);
+  addEventListener("keydown", (e) => { if (menu && e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); closeMenu(); } }, true);
+  window.__kxMenu = (spec) => {
+    closeMenu();
+    const m = document.createElement("div");
+    m.setAttribute("role", "menu");
+    m.style.cssText = "position:fixed;z-index:2147483647;left:" + spec.x + "px;top:" + spec.y + "px;min-width:" + spec.w + "px;box-sizing:border-box;padding:4px 0;background:" + spec.bg + ";color:" + spec.fg + ";border:1px solid " + spec.line + ";border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.35);font:12px system-ui,sans-serif;line-height:16px;user-select:none;";
+    for (const it of spec.items) {
+      if (it.sep) { const d = document.createElement("div"); d.style.cssText = "height:1px;margin:4px 0;background:" + spec.line; m.append(d); continue; }
+      const b = document.createElement("div");
+      b.setAttribute("role", "menuitem");
+      b.textContent = it.label;
+      b.style.cssText = "padding:5px 12px;cursor:default;white-space:nowrap;" + (it.off ? "opacity:.45;" : "");
+      if (!it.off) {
+        b.onmouseenter = () => { b.style.background = spec.hover; };
+        b.onmouseleave = () => { b.style.background = ""; };
+        b.onclick = () => {
+          const u = it.url || "";
+          closeMenu();
+          if (it.id === "copy") document.execCommand("copy");
+          else if (it.id === "copy-link") { if (navigator.clipboard) navigator.clipboard.writeText(u).catch(() => {}); }
+          else send("pick?what=" + encodeURIComponent(it.id) + "&u=" + encodeURIComponent(u));
+        };
+      }
+      m.append(b);
+    }
+    (document.body || document.documentElement).append(m);
+    menu = m;
+  };
+  // T-242 (BROW-049 / BROW-050): the command line's recorder and emulation. Console messages are
+  // kept from the first script on (a bounded ring), so `kolux console` sees what the page logged;
+  // fetch and XMLHttpRequest go through one wrapper that holds requests matching the intercept
+  // patterns (released when interception is disabled), fails them while offline and adds the extra
+  // headers and credentials; geolocation, matchMedia and the dialogs answer as emulated. The app
+  // hands the state in with `__kxEmu` on every load (so it stays in force), arms one dialog answer
+  // with `__kxDialog` and reads the logs with `__kxLog`.
+  const E = { intercept: null, offline: false, headers: {}, auth: null, geo: null, media: {}, mobile: false };
+  const L = { console: [], net: [], held: [], dialogs: [], armed: [], seq: 0 };
+  const keep = (list, item) => { item.seq = ++L.seq; item.t = Date.now(); list.push(item); if (list.length > 500) list.shift(); };
+  const shown = (a) => { try { return typeof a === "string" ? a : JSON.stringify(a); } catch (_) { return String(a); } };
+  for (const level of ["log", "info", "warn", "error", "debug"]) {
+    const real = console[level];
+    console[level] = function (...args) { keep(L.console, { level, text: args.map(shown).join(" ").slice(0, 2000) }); return real.apply(this, args); };
+  }
+  addEventListener("error", (e) => keep(L.console, { level: "error", text: String(e.message || e) }));
+  addEventListener("unhandledrejection", (e) => keep(L.console, { level: "error", text: "Unhandled rejection: " + String((e.reason && e.reason.message) || e.reason) }));
+  const glob = (p, s) => new RegExp("^" + p.split("*").map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$").test(s);
+  const hit = (u) => Array.isArray(E.intercept) && E.intercept.some((p) => (p.includes("*") ? glob(p, u) : u.includes(p)));
+  const absolute = (u) => { try { return new URL(u, location.href).href; } catch (_) { return String(u); } };
+  const extra = (set) => { for (const k in E.headers) set(k, E.headers[k]); if (E.auth) set("Authorization", E.auth); };
+  const realFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    const url = absolute(input instanceof Request ? input.url : input);
+    if (E.offline) { keep(L.net, { url, kind: "fetch", failed: "offline" }); return Promise.reject(new TypeError("Failed to fetch (Kolux emulates offline)")); }
+    const go = () => {
+      const h = new Headers((init && init.headers) || (input instanceof Request ? input.headers : undefined));
+      extra((k, v) => h.set(k, v));
+      const r = realFetch(input, Object.assign({}, init, { headers: h }));
+      r.then((res) => keep(L.net, { url, kind: "fetch", status: res.status }), () => keep(L.net, { url, kind: "fetch", failed: "error" }));
+      return r;
+    };
+    if (hit(url)) return new Promise((res, rej) => { L.held.push({ url, kind: "fetch", go: () => go().then(res, rej) }); });
+    return go();
+  };
+  const X = XMLHttpRequest.prototype, realOpen = X.open, realSend = X.send;
+  X.open = function (m, u, ...rest) { this.__kxUrl = absolute(u); this.__kxMethod = m; return realOpen.call(this, m, u, ...rest); };
+  X.send = function (body) {
+    const url = this.__kxUrl || "";
+    if (E.offline) { keep(L.net, { url, kind: "xhr", failed: "offline" }); this.dispatchEvent(new Event("error")); return; }
+    const go = () => { try { extra((k, v) => this.setRequestHeader(k, v)); } catch (_) {} this.addEventListener("loadend", () => keep(L.net, { url, kind: "xhr", method: this.__kxMethod, status: this.status }), { once: true }); return realSend.call(this, body); };
+    if (hit(url)) { L.held.push({ url, kind: "xhr", go }); return; }
+    go();
+  };
+  const realOnLine = Object.getOwnPropertyDescriptor(Navigator.prototype, "onLine");
+  if (realOnLine && realOnLine.get) Object.defineProperty(navigator, "onLine", { get: () => !E.offline && realOnLine.get.call(navigator), configurable: true });
+  const G = navigator.geolocation;
+  if (G) {
+    const realGet = G.getCurrentPosition.bind(G), realWatch = G.watchPosition.bind(G);
+    const pos = () => ({ coords: { latitude: E.geo.latitude, longitude: E.geo.longitude, accuracy: E.geo.accuracy || 1, altitude: null, altitudeAccuracy: null, heading: null, speed: null }, timestamp: Date.now() });
+    G.getCurrentPosition = (ok, bad, o) => (E.geo ? setTimeout(() => ok(pos()), 0) : realGet(ok, bad, o));
+    G.watchPosition = (ok, bad, o) => (E.geo ? setTimeout(() => ok(pos()), 0) : realWatch(ok, bad, o));
+  }
+  const realMatch = window.matchMedia.bind(window);
+  window.matchMedia = (q) => {
+    const scheme = /prefers-color-scheme:\s*(dark|light)/.exec(q), motion = /prefers-reduced-motion:\s*(reduce|no-preference)/.exec(q);
+    const want = scheme && E.media.colorScheme ? scheme[1] === E.media.colorScheme : motion && E.media.reducedMotion ? motion[1] === E.media.reducedMotion : null;
+    if (want === null) return realMatch(q);
+    return { matches: want, media: q, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent() { return false; } };
+  };
+  const realDialog = { alert: window.alert.bind(window), confirm: window.confirm.bind(window), prompt: window.prompt.bind(window) };
+  const dialog = (type, message, def) => {
+    const a = L.armed.shift();
+    const answer = !a ? realDialog[type](message, def) : type === "alert" ? undefined : type === "confirm" ? !!a.accept : a.accept ? (a.text != null ? String(a.text) : def == null ? "" : String(def)) : null;
+    keep(L.dialogs, { type, message: String(message == null ? "" : message), answered: a ? (a.accept ? "accepted" : "dismissed") : "shown", answer: answer === undefined ? null : answer });
+    return answer;
+  };
+  window.alert = (m) => { dialog("alert", m); };
+  window.confirm = (m) => dialog("confirm", m);
+  window.prompt = (m, d) => dialog("prompt", m, d);
+  window.__kxDialog = (a) => { if (a && typeof a === "object") L.armed.push(a); return L.armed.length; };
+  window.__kxEmu = (s) => {
+    if (!s || typeof s !== "object") return;
+    const was = E.offline;
+    Object.assign(E, s);
+    if (E.media.colorScheme) document.documentElement.style.colorScheme = E.media.colorScheme;
+    if (E.mobile) Object.defineProperty(navigator, "maxTouchPoints", { get: () => 5, configurable: true });
+    if (!Array.isArray(E.intercept)) for (const h of L.held.splice(0)) { try { h.go(); } catch (_) {} }
+    if (was !== E.offline) dispatchEvent(new Event(E.offline ? "offline" : "online"));
+  };
+  window.__kxLog = (what, n) => {
+    const last = (list) => list.slice(-(n || 100));
+    if (what === "held") return L.held.map((h) => ({ url: h.url, kind: h.kind }));
+    if (what === "network") {
+      const perf = performance.getEntriesByType("resource").map((e) => ({ url: e.name, kind: e.initiatorType, ms: Math.round(e.duration), bytes: e.transferSize || 0 }));
+      return last(perf.concat(L.net.map((e) => ({ url: e.url, kind: e.kind, method: e.method, status: e.status, failed: e.failed, t: e.t }))));
+    }
+    return last(what === "dialogs" ? L.dialogs : L.console);
+  };
 })();"#;
+
+/// T-242: the script that hands a tab's emulation state to its page (`state` is its JSON object).
+pub fn emu_script(state: &str) -> String {
+    format!("window.__kxEmu && window.__kxEmu(JSON.parse({}))", serde_json::Value::from(state))
+}
 
 /// The chord a navigation carries, if it is one of ours and names a browser action.
 pub fn chord_of(url: &str) -> Option<&'static str> {
@@ -173,6 +346,54 @@ pub enum Nav {
     Link(String, bool),
     /// A browser chord pressed inside the page (BROW-003, BROW-005).
     Chord(&'static str),
+    /// T-239 (BROW-017): a right-click in the page, or an entry picked in the menu it opened.
+    Menu(serde_json::Value),
+    /// T-239 (BROW-018): an app shortcut pressed inside the page.
+    Key(serde_json::Value),
+}
+
+/// The fields of one of our `kolux-chord:<kind>?...` navigations as a JSON object (`kind` plus
+/// each query field as a string); `None` unless `kind` is one of `kinds`.
+fn fields_of(url: &str, kinds: &[&str]) -> Option<serde_json::Value> {
+    let (kind, query) = url.strip_prefix(CHORD_SCHEME)?.split_once('?')?;
+    if !kinds.contains(&kind) {
+        return None;
+    }
+    let full = Url::parse(&format!("{CHORD_SCHEME}x?{query}")).ok()?;
+    let mut m = serde_json::Map::new();
+    m.insert("kind".to_string(), kind.into());
+    for (k, v) in full.query_pairs() {
+        m.insert(k.into_owned(), serde_json::Value::String(v.into_owned()));
+    }
+    Some(serde_json::Value::Object(m))
+}
+
+/// T-239 (BROW-017): a right-click (`menu`: x, y, vw, vh, s, l) or a picked entry (`pick`: what, u).
+pub fn menu_of(url: &str) -> Option<serde_json::Value> {
+    fields_of(url, &["menu", "pick"])
+}
+
+/// T-239 (BROW-018): an app shortcut pressed in the page (`key`: k, c, m).
+pub fn key_of(url: &str) -> Option<serde_json::Value> {
+    fields_of(url, &["key"])
+}
+
+/// The event payload for a page's navigation: its fields plus the tab's id.
+fn with_id(id: u32, mut v: serde_json::Value) -> serde_json::Value {
+    if let Some(m) = v.as_object_mut() {
+        m.insert("id".to_string(), id.into());
+    }
+    v
+}
+
+/// T-239: the page's menu renderer and shortcut list take their data as one JSON text, embedded
+/// as a string and parsed in the page, so nothing from the app ever runs there as code.
+pub fn menu_script(spec: &str) -> String {
+    format!("window.__kxMenu && window.__kxMenu(JSON.parse({}))", serde_json::Value::from(spec))
+}
+
+pub fn keys_script(list: &str) -> String {
+    format!("window.__kxKeys && window.__kxKeys(JSON.parse({}))", serde_json::Value::from(list))
 }
 
 /// Decides one navigation of a tab's page. `on_screen` is whether that tab is shown now: a tab
@@ -185,6 +406,14 @@ pub fn navigation(url: &Url, dev: Option<&Url>, tabs: &Mutex<Allowance>, on_scre
             Ok(t) if on_screen && may_open(&t, dev, tabs, now) => Nav::Link(target, front),
             _ => Nav::Load(false),
         };
+    }
+    // T-239: a right-click, a menu pick or an app shortcut from a page that is not on screen is
+    // dropped like a chord (FS1: no user is behind it).
+    if let Some(v) = menu_of(url.as_str()) {
+        return if on_screen { Nav::Menu(v) } else { Nav::Load(false) };
+    }
+    if let Some(v) = key_of(url.as_str()) {
+        return if on_screen { Nav::Key(v) } else { Nav::Load(false) };
     }
     match chord_of(url.as_str()) {
         Some(_) if !on_screen => Nav::Load(false),
@@ -656,7 +885,8 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
             NewWindowResponse::Deny
         })
         .on_navigation(move |url| match navigation(url, dev.as_ref(), &PAGE_TABS, is_shown(id), Instant::now()) {
-            Nav::Load(go) => go,
+            // T-242 (BROW-050): a tab emulating offline loads nothing new, as a cut cable would.
+            Nav::Load(go) => go && !cli::offline(id),
             Nav::Link(url, front) => {
                 let _ = chord_app.emit(LINK_EVENT, LinkPayload { id, url, front });
                 false
@@ -668,6 +898,15 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
                 let _ = chord_app.emit(CHORD_EVENT, ChordPayload { id, what: what.to_string() });
                 false
             }
+            // T-239: the pane decides the menu (BROW-017) and replays the shortcut (BROW-018).
+            Nav::Menu(v) => {
+                let _ = chord_app.emit(MENU_EVENT, with_id(id, v));
+                false
+            }
+            Nav::Key(v) => {
+                let _ = chord_app.emit(KEY_EVENT, with_id(id, v));
+                false
+            }
         })
         .on_page_load(move |page, payload| {
             let event = match payload.event() {
@@ -676,6 +915,11 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
             };
             // BROW-023: every finished load asks for the site's icon again, so an icon that failed
             // is tried again after a reload; the pane keeps the old one while the site is the same.
+            // T-242 (BROW-050): what the command line emulates for this tab stays in force across
+            // loads; a new document starts from the script's defaults, so the state goes in again.
+            if let Some(state) = cli::emu_state(id) {
+                let _ = page.eval(emu_script(&state));
+            }
             if event == "finished" {
                 let (icon_app, icon_dev, at) = (load_app.clone(), icon_dev.clone(), payload.url().to_string());
                 let _ = page.eval_with_callback(ICON_QUERY, move |answer| {
@@ -720,8 +964,21 @@ pub async fn browser_bounds(app: AppHandle, id: u32, spot: Spot, shown: bool, ba
     if !shown {
         return v.hide().map_err(err);
     }
-    v.set_bounds(Rect { position: LogicalPosition::new(spot.x, spot.y).into(), size: LogicalSize::new(spot.w, spot.h).into() }).map_err(err)?;
+    if let Ok(mut s) = SPOTS.lock() {
+        s.insert(id, spot);
+    }
+    place(&v, id, &spot)?;
     v.show().map_err(err)
+}
+
+/// The pane spot each tab was last laid out in, so an emulated viewport (BROW-050) can lay the page
+/// out again without waiting for the pane.
+static SPOTS: LazyLock<Mutex<HashMap<u32, Spot>>> = LazyLock::new(Mutex::default);
+
+/// Puts a page where its pane body is, cut down to the viewport the command line emulates, if any.
+fn place(v: &Webview, id: u32, spot: &Spot) -> Result<(), String> {
+    let (w, h) = cli::fit(id, spot.w, spot.h);
+    v.set_bounds(Rect { position: LogicalPosition::new(spot.x, spot.y).into(), size: LogicalSize::new(w, h).into() }).map_err(err)
 }
 
 #[tauri::command]
@@ -776,6 +1033,9 @@ pub async fn browser_go(app: AppHandle, id: u32, what: String, text: Option<Stri
         "reload" => v.reload().map_err(err),
         "zoom" => v.set_zoom(zoom_level(level.unwrap_or(1.0))).map_err(err),
         "find" | "findBack" => v.eval(find_script(text.as_deref().unwrap_or_default(), what == "findBack")).map_err(err),
+        // T-239: `text` is the menu's JSON spec (BROW-017) or the JSON list of chords the page forwards (BROW-018).
+        "menu" => v.eval(menu_script(text.as_deref().unwrap_or("{}"))).map_err(err),
+        "keys" => v.eval(keys_script(text.as_deref().unwrap_or("[]"))).map_err(err),
         _ => v.eval(script(&what).ok_or_else(|| format!("unknown browser action {what}"))?).map_err(err),
     }
 }
@@ -787,6 +1047,11 @@ pub async fn browser_close(app: AppHandle, id: u32) -> Result<(), String> {
     if let Ok(mut i) = ICONS.lock() {
         i.forget(id);
     }
+    if let Ok(mut s) = SPOTS.lock() {
+        s.remove(&id);
+    }
+    // BROW-049: a closed tab's interception, capture and emulation go with it.
+    cli::forget(id);
     view(&app, id)?.close().map_err(err)
 }
 
@@ -950,6 +1215,9 @@ pub enum Act<'a> {
     Go(u32, &'a str),
     /// T-241 (BROW-044): a word to the front end, which owns the tabs (open, show, close).
     Emit(&'a str, serde_json::Value),
+    /// T-242 (BROW-050): lay the page out again in its last pane spot (an emulated viewport came
+    /// or went) and set its zoom (the emulated scale).
+    Relayout(u32, Option<f64>),
 }
 type Driver = dyn Fn(Act) -> Result<serde_json::Value, String> + Send + Sync;
 static DRIVER: OnceLock<Box<Driver>> = OnceLock::new();
@@ -1017,7 +1285,22 @@ fn drive(act: Act) -> Result<serde_json::Value, String> {
             app.emit(event, payload).map_err(err)?;
             Ok(serde_json::Value::Null)
         }
+        Act::Relayout(id, zoom) => {
+            let v = view(app, id)?;
+            if let Some(spot) = SPOTS.lock().ok().and_then(|s| s.get(&id).copied()) {
+                place(&v, id, &spot)?;
+            }
+            if let Some(z) = zoom {
+                v.set_zoom(zoom_level(z)).map_err(err)?;
+            }
+            Ok(serde_json::Value::Null)
+        }
     }
+}
+
+/// `kolux viewport` / `kolux set device`: the page is laid out again at the emulated size and scale.
+pub fn relayout(id: u32, zoom: Option<f64>) -> Result<(), String> {
+    driver()?(Act::Relayout(id, zoom)).map(|_| ())
 }
 
 /// `kolux tab switch|create|close`, `tab profile ...`: the front end is told and acts.
@@ -1263,6 +1546,56 @@ pub async fn browser_diagnose(app: AppHandle, url: String) -> Result<Diagnosis, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn brow017_a_right_click_and_a_menu_pick_arrive_as_menu_navigations() {
+        // T-239: the page reports the pointer, its size, the link under it and whether text is selected.
+        let v = menu_of("kolux-chord:menu?x=12&y=34&vw=800&vh=600&s=1&l=https%3A%2F%2Fexample.com%2Fa%3Fb%3D1%26c%3D2").unwrap();
+        assert_eq!(v["kind"], "menu");
+        assert_eq!(v["x"], "12");
+        assert_eq!(v["vh"], "600");
+        assert_eq!(v["s"], "1");
+        assert_eq!(v["l"], "https://example.com/a?b=1&c=2");
+        let p = menu_of("kolux-chord:pick?what=open-kolux&u=https%3A%2F%2Fexample.com%2F").unwrap();
+        assert_eq!(p["kind"], "pick");
+        assert_eq!(p["what"], "open-kolux");
+        assert_eq!(p["u"], "https://example.com/");
+        assert_eq!(with_id(7, p)["id"], 7);
+        assert_eq!(menu_of("kolux-chord:back"), None);
+        assert_eq!(menu_of("kolux-chord:key?k=w"), None);
+        assert_eq!(menu_of("https://example.com/kolux-chord:menu?x=1"), None);
+        // Only a page on screen gets a menu (FS1); a hidden page's request is dropped, not loaded.
+        let tabs = Mutex::new(Allowance::default());
+        let menu = Url::parse("kolux-chord:menu?x=1&y=2&vw=3&vh=4&s=0&l=").unwrap();
+        assert!(matches!(navigation(&menu, None, &tabs, true, Instant::now()), Nav::Menu(_)));
+        assert!(matches!(navigation(&menu, None, &tabs, false, Instant::now()), Nav::Load(false)));
+        // The menu's data goes into the page as a string, never as code.
+        assert_eq!(menu_script(r#"{"x":1,"items":[]}"#), r#"window.__kxMenu && window.__kxMenu(JSON.parse("{\"x\":1,\"items\":[]}"))"#);
+        for needle in ["contextmenu", "__kxMenu", "execCommand(\"copy\")", "e.button !== 2", "\"Escape\""] {
+            assert!(CHORD_SCRIPT.contains(needle), "{needle}");
+        }
+    }
+
+    #[test]
+    fn brow018_an_app_shortcut_pressed_in_the_page_arrives_as_a_key_navigation() {
+        // T-239: the key, its code and the modifiers held (c, m, a, s, and g for AltGraph).
+        let v = key_of("kolux-chord:key?k=Tab&c=Tab&m=c").unwrap();
+        assert_eq!(v["kind"], "key");
+        assert_eq!(v["k"], "Tab");
+        assert_eq!(v["c"], "Tab");
+        assert_eq!(v["m"], "c");
+        assert_eq!(key_of("kolux-chord:menu?x=1"), None);
+        assert_eq!(key_of("kolux-chord:key"), None);
+        let tabs = Mutex::new(Allowance::default());
+        let url = Url::parse("kolux-chord:key?k=w&c=KeyW&m=c").unwrap();
+        assert!(matches!(navigation(&url, None, &tabs, true, Instant::now()), Nav::Key(_)));
+        assert!(matches!(navigation(&url, None, &tabs, false, Instant::now()), Nav::Load(false)));
+        assert_eq!(keys_script("[]"), r#"window.__kxKeys && window.__kxKeys(JSON.parse("[]"))"#);
+        // The page takes a held key once, honours the app's list, and mirrors the app's key matching.
+        for needle in ["__kxKeys", "if (e.repeat) return;", "AltGraph", "\"Key\" + k", "\"Digit\" + k", "k === \"Plus\""] {
+            assert!(CHORD_SCRIPT.contains(needle), "{needle}");
+        }
+    }
 
     #[test]
     fn brow001_tab_labels_and_addresses() {
@@ -1942,5 +2275,15 @@ mod t074_tests {
     fn t074_the_diagnosis_serialises_for_the_pane() {
         let d = Diagnosis { kind: "refused", local: true, https: None };
         assert_eq!(serde_json::to_string(&d).unwrap(), r#"{"kind":"refused","local":true,"https":null}"#);
+    }
+
+    #[test]
+    fn brow049_050_the_page_script_records_logs_holds_requests_and_answers_dialogs() {
+        // BROW-049: console and network recorders live in the always-injected script so page-load
+        // traffic is seen; BROW-050: offline, headers, credentials, geolocation, media, dialogs.
+        for needle in ["window.__kxEmu", "window.__kxLog", "window.__kxDialog", "Kolux emulates offline", "navigator.geolocation", "matchMedia", "prefers-color-scheme", "Authorization", "L.held", "getEntriesByType", "unhandledrejection", "window.alert", "window.confirm", "window.prompt", "maxTouchPoints"] {
+            assert!(CHORD_SCRIPT.contains(needle), "{needle}");
+        }
+        assert_eq!(emu_script(r#"{"offline":true}"#), r#"window.__kxEmu && window.__kxEmu(JSON.parse("{\"offline\":true}"))"#);
     }
 }
