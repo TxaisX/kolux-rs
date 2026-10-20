@@ -1,0 +1,20 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 1616b030..4d8ad6be 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -707,6 +707,7 @@ pub fn run() {
+             files::change_entries,
+             files::diff_image,
+             files::dir_list,
++            files::dir_ignored,
+             files::path_kind,
+             artifacts::artifacts_list,
+             artifacts::artifact_add,
+@@ -718,6 +719,7 @@ pub fn run() {
+             fsops::fs_trash,
+             fsops::fs_restore,
+             fsops::fs_copy,
++            fsops::fs_bytes,
+             fsops::fs_move,
+             clipboard::clip_copy_text,
+             clipboard::clip_copy_files,

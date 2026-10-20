@@ -1,0 +1,30 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 42095a48..9dd2c90c 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -943,6 +943,16 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   // TERM-040 / TERM-041: a new tab joins the focused pane's cell (or opens its own cell) and
+   // starts in the workspace folder; an agent tab runs the agent's start line there. Outside any
+   // workspace an agent has no folder to work in, so it gets a fresh worktree instead (SESS-004).
++  // EDIT-035: the explorer's "Open in terminal": a shell tab beside the focused pane. A pane belongs to its worktree by its folder, so a
++  // folder inside the worktree opens the shell at the worktree with a `cd` into that folder typed ahead (the quoted relative path).
++  const openTerminalIn = (dir: string) => {
++    if (!activeDir) return;
++    const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
++    const key = nextKey.current++;
++    const rel = sameDir(dir, activeDir) ? "" : dir.slice(activeDir.length).replace(/^[\\/]+/, "");
++    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], typed: rel ? `cd "${rel}"` : undefined }]);
++    setFocused(key);
++  };
+   const newTab = async (what: NewTab) => {
+     if (what === "diff") {
+       if (!activeDir) setToast("Open a workspace to pick one of its changed files.");
+@@ -2992,7 +3002,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+         )}
+         {/* VIEW-073: the Checks tab follows the workspace of the focused terminal. */}
+         {right.open && right.tab === "checks" && <ChecksPanel dir={activeDir} linked={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} visible={terminals} />}
+-        {activeDir ? <Explorer key={activeDir} root={activeDir} hidden={!explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => saveRight({ open: false })} /> : explorerOpen && <div className="sb-hint">Open a workspace to browse its files.</div>}
++        {activeDir ? <Explorer key={activeDir} root={activeDir} hidden={!explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => saveRight({ open: false })} onOpenTerminal={openTerminalIn} onWake={() => showRight("explorer")} /> : explorerOpen && <div className="sb-hint">Open a workspace to browse its files.</div>}
+         </RightSidebar>
+       </div>
+       {kits && kits.kit === null && (

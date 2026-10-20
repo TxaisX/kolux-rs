@@ -42,7 +42,7 @@ import { drafts, restoreFrom, worktreeOf } from "./drafts";
 import { confirmed } from "./fileMoved";
 import { richChange, splitFront } from "./frontMatter";
 import { bannerUp, beginSave, canUndo, checkOnce, endSave, forget, holdRestored, keep, POLL_MS, readFresh, reloadNow, remember, setBanner as markBanner, UNDO_TOAST_MS, type Io, type Stamp, type UndoEntry } from "./diskChange";
-import { CompareView, DiskBanner, UndoToast } from "./DiskBanner";
+import { CompareView, DiskBanner, GoneNotice, UndoToast } from "./DiskBanner";
 import { isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
 import { minimap } from "./minimap";
 import { SlashMenu, TableMenu } from "./SlashPanel";
@@ -192,6 +192,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   // T-073: the disk copy changed under unsaved edits (with the stamp Keep my edits keeps), the
   // Compare view, and the Undo toast after a Reload.
   const [moved, setMoved] = useState<{ stamp: Stamp | null } | null>(null);
+  const [gone, setGone] = useState(false); // EDIT-032: the file was deleted or moved away while this tab is open
   const [comparing, setComparing] = useState(false);
   const [undoable, setUndoable] = useState<UndoEntry | null>(null);
   const report = useRef({ onDirty, onToast });
@@ -281,6 +282,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
     setError(null);
     setStale(false);
     setMoved(null);
+    setGone(false);
     setComparing(false);
     let loaded: Stamp | null = null;
     // T-073: the stamp is taken before the text, so a write landing in between shows at the next check.
@@ -369,7 +371,13 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   // and whenever the window gets focus.
   const io = useRef<Io>(null!);
   io.current = {
-    stamp: () => stampOne(path),
+    stamp: () =>
+      stampOne(path).then((s) => {
+        // EDIT-032: a file that is gone is said so (a failed look at a file that is still there is not).
+        if (s) setGone(false);
+        else void invoke<string>("path_kind", { path }).then((k) => setGone(k === "missing"), () => undefined);
+        return s;
+      }),
     read: () => invoke<string>("file_read", { path }),
     dirty: () => isDirty(path),
     current: () => textOf(path),
@@ -773,6 +781,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
         />
       )}
       {stale && <StaleNotice path={path} onDone={() => setStale(false)} onToast={report.current.onToast} />}
+      {gone && <GoneNotice path={path} />}
       {moved && !stale && !comparing && !follow && <DiskBanner path={path} onReload={reload} onKeep={keepMine} onCompare={() => setComparing(true)} />}
       {undoable && !moved && <UndoToast path={path} onUndo={undoReload} onClose={() => setUndoable(null)} />}
       {banner && (
