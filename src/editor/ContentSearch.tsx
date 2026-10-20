@@ -3,7 +3,7 @@
 // at the hit when one is clicked.
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "../chrome/icons";
-import { joinPath, revealAt, searchFiles, summary, type Found } from "./search";
+import { joinPath, revealAt, searchSession, summary, type Found } from "./search";
 import "./editor-extras.css";
 
 // It stays mounted while the tree is shown, so going back to it keeps the search and its results.
@@ -25,7 +25,15 @@ export default function ContentSearch({ root, hidden, focusAsk, onOpen }: Props)
   const [busy, setBusy] = useState(false);
   const [shut, setShut] = useState<Set<string>>(new Set());
   const input = useRef<HTMLInputElement>(null);
-  const seq = useRef(0);
+  const session = useRef<ReturnType<typeof searchSession> | null>(null);
+
+  // FIX-4: one session per view and folder. Closing the view (a workspace switch remounts it) stops
+  // the folder's search that is still running.
+  useEffect(() => {
+    const s = searchSession(root);
+    session.current = s;
+    return () => s.close();
+  }, [root]);
 
   useEffect(() => {
     if (!focusAsk || hidden) return;
@@ -35,18 +43,22 @@ export default function ContentSearch({ root, hidden, focusAsk, onOpen }: Props)
 
   // Typing searches after a short pause; a slower earlier answer never replaces a newer one.
   useEffect(() => {
-    const n = ++seq.current;
+    const s = session.current;
+    if (!s) return;
     if (!query) {
+      s.empty();
       setFound(null);
       setError(null);
       setBusy(false);
       return;
     }
+    s.drop();
     const t = window.setTimeout(() => {
       setBusy(true);
-      searchFiles(root, { query, matchCase, wholeWord, regex, include, exclude }).then(
-        (f) => n === seq.current && (setFound(f), setError(null), setBusy(false), setShut(new Set())),
-        (e) => n === seq.current && (setFound(null), setError(String(e)), setBusy(false)),
+      s.run(
+        { query, matchCase, wholeWord, regex, include, exclude },
+        (f) => (setFound(f), setError(null), setBusy(false), setShut(new Set())),
+        (e) => (setFound(null), setError(String(e)), setBusy(false)),
       );
     }, 250);
     return () => clearTimeout(t);

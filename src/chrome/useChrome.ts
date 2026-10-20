@@ -1,9 +1,11 @@
 // T-543: the window's passing chrome state, moved out of App.tsx as it was: the worktree palette's
 // open flag, the notice line and the toast that clears itself.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { MenuBarState } from "./chromeItems";
+import { helpAction, readSynced, REPORT_CRASH_EVENT, type HelpAction, type MenuBarState, type NativeChord } from "./chromeItems";
+import { openExplore, openGuide } from "../onboarding/guide";
+import { requestUpdateCheck } from "../update/UpdateCenter";
 
 export function useChrome() {
   const [palette, setPalette] = useState(false); // PROJ-057 / VIEW-037: the worktree palette is open
@@ -19,17 +21,52 @@ export function useChrome() {
   return { palette, setPalette, notice, setNotice, toast, setToast };
 }
 
+// SET-010 / T-248-b: the chords the system menu owns, as menu_sync last reported them. The Shortcuts page reads
+// them here, so no other file has to carry them.
+let native: NativeChord[] = [];
+const nativeWatchers = new Set<() => void>();
+function setNative(next: NativeChord[]) {
+  if (JSON.stringify(next) === JSON.stringify(native)) return;
+  native = next;
+  nativeWatchers.forEach((w) => w());
+}
+export function useNativeChords(): NativeChord[] {
+  return useSyncExternalStore(
+    (w) => {
+      nativeWatchers.add(w);
+      return () => void nativeWatchers.delete(w);
+    },
+    () => native,
+    () => native,
+  );
+}
+
+/** APP-009 Help: opens what a help.* menu click names. */
+export function runHelp(what: HelpAction) {
+  if (what === "guide") openGuide();
+  else if (what === "explore") openExplore();
+  else if (what === "updates") requestUpdateCheck();
+  else window.dispatchEvent(new Event(REPORT_CRASH_EVENT));
+}
+
 /** APP-009 / T-248-a: keeps the native menu bar a picture of `state` (rebuilt only when it changes)
- *  and hands every menu click the page carries out to `onAction` with the item id. */
+ *  and hands every menu click the page carries out to `onAction` with the item id (help.* clicks are
+ *  carried out here). */
 export function useMenuBar(state: MenuBarState, onAction: (id: string) => void) {
   const act = useRef(onAction);
   act.current = onAction;
   const key = JSON.stringify(state);
   useEffect(() => {
-    invoke("menu_sync", { state: JSON.parse(key) }).catch(() => {}); // a menu that fails to build leaves the last one
+    invoke<unknown>("menu_sync", { state: JSON.parse(key) })
+      .then((v) => setNative(readSynced(v).native))
+      .catch(() => {}); // a menu that fails to build leaves the last one
   }, [key]);
   useEffect(() => {
-    const off = listen<{ id: string }>("menu-action", (e) => act.current(e.payload.id));
+    const off = listen<{ id: string }>("menu-action", (e) => {
+      const help = helpAction(e.payload.id);
+      if (help) runHelp(help);
+      else act.current(e.payload.id);
+    });
     return () => void off.then((f) => f());
   }, []);
 }

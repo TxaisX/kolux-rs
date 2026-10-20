@@ -1,0 +1,137 @@
+// SET-033 / PROJ-035: the setup part of a repository's page: the setup script kept in Kolux (shown,
+// edited, removed), the repository's kolux.yaml script, which of them run, and whether the agent waits.
+import { useCallback, useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { choiceOptions, choiceSave, runsNote, scriptSave, trustNote, type RepoSetup } from "./setupChoice";
+
+export interface SetupActions {
+  onSave: (script: string) => void;
+  onRemove: () => void;
+  onChoice: (value: string) => void;
+  onWait: (wait: boolean) => void;
+}
+
+export function RepoSetupView({ setup, notice, actions }: { setup: RepoSetup; notice?: string | null; actions: SetupActions }) {
+  const [draft, setDraft] = useState(setup.local ?? "");
+  const [composing, setComposing] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const [hint, setHint] = useState("");
+  useEffect(() => setDraft(setup.local ?? ""), [setup.local]);
+  const commit = () => {
+    if (composing) return;
+    const s = scriptSave(setup.local, draft);
+    if (s.kind === "save") actions.onSave(s.script);
+    setHint(s.kind === "empty" ? "To take the saved setup away, use Remove." : "");
+  };
+  const trust = trustNote(setup);
+  return (
+    <section className="conn-card" data-section="repo-setup">
+      <h2 className="conn-name">Setup script</h2>
+      <p className="conn-detail">Runs in a new tab when a workspace is made.</p>
+      <div className="look-select">
+        <span>Saved in Kolux</span>
+        <textarea
+          aria-label="Saved setup script"
+          className="field"
+          rows={3}
+          placeholder="e.g. pnpm install"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onCompositionStart={() => setComposing(true)}
+          onCompositionEnd={() => setComposing(false)}
+          onBlur={commit}
+        />
+      </div>
+      {hint && <p className="conn-detail">{hint}</p>}
+      {setup.local && (
+        <div className="look-select" data-row="saved-setup">
+          <span>Saved setup</span>
+          {asking ? (
+            <span>
+              <button className="btn danger" onClick={() => (setAsking(false), actions.onRemove())}>
+                Remove it
+              </button>{" "}
+              <button className="btn" onClick={() => setAsking(false)}>
+                Keep it
+              </button>
+            </span>
+          ) : (
+            <button className="btn" onClick={() => setAsking(true)}>
+              Remove
+            </button>
+          )}
+        </div>
+      )}
+      {setup.shared && <pre className="conn-detail" data-shared>{setup.shared}</pre>}
+      {setup.shared && <p className="conn-detail">That is the setup script in this repository's kolux.yaml.</p>}
+      {setup.sharedError && (
+        <p className="conn-detail warn" role="alert">
+          {setup.sharedError}
+        </p>
+      )}
+      <div className="look-select">
+        <span>Which runs</span>
+        <select aria-label="Which setup script runs" className="field" value={setup.policy ?? ""} onChange={(e) => actions.onChoice(e.target.value)}>
+          {choiceOptions(setup).map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      {setup.suggestBoth && (
+        <p className="conn-detail" data-suggest="both">
+          This repository has both a saved setup and one in kolux.yaml; only yours runs now.{" "}
+          <button className="btn" onClick={() => actions.onChoice("both")}>
+            Run both
+          </button>
+        </p>
+      )}
+      <p className="conn-detail">
+        {runsNote(setup)} {trust}
+      </p>
+      <label className="check">
+        <input type="checkbox" aria-label="Wait for setup" checked={setup.wait} onChange={(e) => actions.onWait(e.target.checked)} />
+        The agent waits for setup to finish before it starts
+      </label>
+      <p className="conn-detail">The New workspace dialog can still send setup to a split instead of a tab.</p>
+      {notice && (
+        <p className="conn-detail warn" role="alert">
+          {notice}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** The section for the repository at `path`: reads it, and every change writes through at once and reads back. */
+export default function RepoSetupSection({ path }: { path: string }) {
+  const [setup, setSetup] = useState<RepoSetup | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const load = useCallback(() => {
+    invoke<RepoSetup>("repo_setup_get", { path })
+      .then((s) => (setSetup(s), setNotice(null)))
+      .catch((e) => setNotice(String(e)));
+  }, [path]);
+  useEffect(load, [load]);
+  const write = (cmd: string, args: Record<string, unknown>) =>
+    invoke(cmd, { path, ...args })
+      .then(load)
+      .catch((e) => setNotice(String(e)));
+  if (!setup) return notice ? <p className="conn-detail warn" role="alert">{notice}</p> : null;
+  return (
+    <RepoSetupView
+      setup={setup}
+      notice={notice}
+      actions={{
+        onSave: (script) => void write("repo_setup_save", { script }),
+        onRemove: () => void write("repo_setup_remove", {}),
+        onChoice: (value) => {
+          const c = choiceSave(setup, value);
+          if (c) void write("repo_setup_policy_set", { policy: c.policy });
+        },
+        onWait: (wait) => void write("repo_setup_wait_set", { wait }),
+      }}
+    />
+  );
+}

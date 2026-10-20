@@ -9,7 +9,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -127,7 +127,16 @@ fn hit(line_no: u64, line: &str, start: usize, end: usize) -> Hit {
     hit_at(line_no, line, start, end, col)
 }
 
+// FIX-5 (council d2 AFTER 5): how many hits this thread built, so a test can prove the cap bounds
+// the work and not only the result.
+#[cfg(test)]
+thread_local! {
+    static HITS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn hit_at(line_no: u64, line: &str, start: usize, end: usize, col: usize) -> Hit {
+    #[cfg(test)]
+    HITS_BUILT.with(|c| c.set(c.get() + 1));
     let s = floor(line, start.min(line.len()));
     let len = line[s..floor(line, end.clamp(s, line.len()))].encode_utf16().count();
     let (before, text, after) = trim_around(line, start, end);
@@ -230,24 +239,95 @@ fn git_command(root: &Path, a: &Ask) -> Command {
 /// FIX-3 (council P4): the search running for each folder. A new search of the same folder raises
 /// the old one's flag, and the old one kills its ripgrep or git child at once instead of reading on
 /// to the cap or the time limit while the user types.
-static RUNNING: Mutex<Option<HashMap<PathBuf, Arc<AtomicBool>>>> = Mutex::new(None);
+/// FIX-4 (council d2 AFTER 1): each search takes a generation number when its command is called,
+/// before the fence step, which can take a while and lets calls reach their folder out of order.
+/// A folder remembers the generation of the search that holds it; a search with a lower number than
+/// the holder's stops at once instead of stopping the newer one.
+static GEN: AtomicU64 = AtomicU64::new(0);
 
-/// This search's flag for `root`, replacing (and raising) the one of the search it supersedes.
-fn claim(root: &Path) -> Arc<AtomicBool> {
+pub fn next_gen() -> u64 {
+    GEN.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+type Held = (u64, Arc<AtomicBool>);
+static RUNNING: Mutex<Option<HashMap<PathBuf, Held>>> = Mutex::new(None);
+
+/// This search's flag for `root`. It takes the folder from a lower generation and raises that one's
+/// flag; when the folder is held by a higher generation (a newer search, or a cancel), the flag comes
+/// back already raised and the folder is left alone.
+fn claim(root: &Path, gen: u64) -> Arc<AtomicBool> {
+    match RUNNING.lock() {
+        Ok(mut m) => claim_in(m.get_or_insert_with(HashMap::new), root, gen),
+        Err(_) => Arc::new(AtomicBool::new(false)),
+    }
+}
+
+/// `claim` on a map of its own, so a test can fill hundreds of folders without touching `RUNNING`.
+fn claim_in(map: &mut HashMap<PathBuf, Held>, root: &Path, gen: u64) -> Arc<AtomicBool> {
     let flag = Arc::new(AtomicBool::new(false));
-    if let Ok(mut m) = RUNNING.lock() {
-        if let Some(old) = m.get_or_insert_with(HashMap::new).insert(root.to_path_buf(), flag.clone()) {
-            old.store(true, Ordering::SeqCst);
+    match map.get(root) {
+        Some((held, _)) if *held > gen => flag.store(true, Ordering::SeqCst),
+        _ => {
+            if let Some((_, old)) = map.insert(root.to_path_buf(), (gen, flag.clone())) {
+                old.store(true, Ordering::SeqCst);
+            }
         }
     }
     flag
+}
+
+/// FIX-4 (council d2 AFTER 7): no view wants `root`'s search any more (its explorer was closed or
+/// moved to another folder). The running search stops, and one still on its way through the fence
+/// (a lower generation) stops when it arrives.
+/// FIX-5 (council d2 AFTER 1): `gen` is the cancel's own number, taken when its command was called,
+/// before the fence step, the way a search takes its. A folder held by a higher number (a search
+/// asked after this cancel that got through the fence first) is left alone, so a late cancel never
+/// stops a newer search.
+pub fn cancel(root: &Path, gen: u64) {
+    if let Ok(mut m) = RUNNING.lock() {
+        cancel_in(m.get_or_insert_with(HashMap::new), root, gen);
+    }
+}
+
+/// FIX-7 (council d2 FIX-SOON 1): `cancel` on a map of its own, so a test can run many cancels and
+/// see that the map stays at `MAX_MARKERS`. `cancel` is only the lock around this.
+fn cancel_in(map: &mut HashMap<PathBuf, Held>, root: &Path, gen: u64) {
+    if map.get(root).is_some_and(|(held, _)| *held > gen) {
+        return;
+    }
+    if let Some((_, old)) = map.insert(root.to_path_buf(), (gen, Arc::new(AtomicBool::new(true)))) {
+        old.store(true, Ordering::SeqCst);
+    }
+    prune_markers(map, MAX_MARKERS);
+}
+
+/// FIX-6 (council d2 AFTER 2): a cancel leaves a raised marker on its folder, so an older search
+/// still in the fence stops on arrival. A folder nobody searches again would keep its marker for the
+/// whole run; past `keep` entries the oldest raised ones go (a search still in the fence is seconds
+/// old, never hundreds of folders old). A search that is still running is never dropped.
+/// FIX-7 (council d2 AFTER 1): in this map "flag raised" means "this entry is a marker". That holds
+/// because only `cancel_in` inserts an already-raised flag; a search whose flag was raised by a newer
+/// claim has been replaced in the map, and a search `claim_in` refused (a higher number holds the
+/// folder) was never inserted. Keep both true, or give `Held` an explicit marker field, before any
+/// change that leaves a raised flag on a still-running search in the map: it would become prunable.
+const MAX_MARKERS: usize = 256;
+
+fn prune_markers(map: &mut HashMap<PathBuf, Held>, keep: usize) {
+    if map.len() <= keep {
+        return;
+    }
+    let mut done: Vec<(u64, PathBuf)> = map.iter().filter(|(_, (_, f))| f.load(Ordering::SeqCst)).map(|(k, (g, _))| (*g, k.clone())).collect();
+    done.sort();
+    for (_, k) in done.into_iter().take(map.len() - keep) {
+        map.remove(&k);
+    }
 }
 
 /// The search behind `flag` is over: forget it unless a newer one already took its place.
 fn release(root: &Path, flag: &Arc<AtomicBool>) {
     if let Ok(mut m) = RUNNING.lock() {
         if let Some(map) = m.as_mut() {
-            if map.get(root).is_some_and(|f| Arc::ptr_eq(f, flag)) {
+            if map.get(root).is_some_and(|(_, f)| Arc::ptr_eq(f, flag)) {
                 map.remove(root);
             }
         }
@@ -330,14 +410,24 @@ fn run(mut cmd: Command, parse: impl Fn(&str, usize) -> Option<(String, Vec<Hit>
     Ok(Found { files, total, capped, source })
 }
 
+#[cfg(test)]
 pub fn search(root: &Path, a: &Ask) -> Result<Found, String> {
+    search_gen(root, a, next_gen())
+}
+
+/// `search` for a call that took its generation number earlier (at command entry).
+pub fn search_gen(root: &Path, a: &Ask, gen: u64) -> Result<Found, String> {
     if a.query.is_empty() {
         return Ok(Found { files: vec![], total: 0, capped: false, source: "none" });
     }
     if a.query.chars().count() > MAX_QUERY {
         return Err(format!("The search text is longer than {MAX_QUERY} characters."));
     }
-    let stop = claim(root);
+    let stop = claim(root, gen);
+    if stop.load(Ordering::SeqCst) {
+        // a newer search (or a cancel) already holds this folder: nothing to start
+        return Err(SUPERSEDED.into());
+    }
     let found = match run(rg_command(root, a), parse_rg, "rg", &stop) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             if !root.join(".git").exists() {
@@ -355,8 +445,18 @@ pub fn search(root: &Path, a: &Ask) -> Result<Found, String> {
 
 #[tauri::command]
 pub async fn editor_search(root: String, ask: Ask, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Found, String> {
+    let gen = next_gen();
     let root = fence.allow(&root, &store, &git, false)?;
-    tauri::async_runtime::spawn_blocking(move || search(&root, &ask)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || search_gen(&root, &ask, gen)).await.map_err(|e| e.to_string())?
+}
+
+/// FIX-4: the explorer that asked for searches of `root` is gone; stop its search.
+#[tauri::command]
+pub async fn editor_search_cancel(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
+    let gen = next_gen(); // before the fence step, like editor_search (FIX-5)
+    let root = fence.allow(&root, &store, &git, false)?;
+    cancel(&root, gen);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -405,8 +505,11 @@ mod tests {
         let line = format!("é{}", "e".repeat(60_000));
         let subs: Vec<String> = (0..60_000).map(|i| format!(r#"{{"match":{{"text":"e"}},"start":{},"end":{}}}"#, i + 2, i + 3)).collect();
         let json = format!(r#"{{"type":"match","data":{{"path":{{"text":"min.js"}},"lines":{{"text":{}}},"line_number":1,"submatches":[{}]}}}}"#, serde_json::to_string(&line).unwrap(), subs.join(","));
+        HITS_BUILT.with(|c| c.set(0));
         let (_, hits) = parse_rg(&json, 3).unwrap();
         assert_eq!(hits.len(), 3);
+        // FIX-5: the work is bounded too: 3 hits built out of 60 000 submatches, not 60 000 built and 3 kept
+        assert_eq!(HITS_BUILT.with(|c| c.get()), 3);
         assert_eq!(hits.iter().map(|h| h.col).collect::<Vec<_>>(), vec![1, 2, 3]);
         let (_, hits) = parse_rg(&json, MAX_HITS).unwrap();
         assert_eq!(hits.len(), MAX_HITS);
@@ -458,14 +561,14 @@ mod tests {
     #[test]
     fn a_newer_search_of_the_same_folder_stops_the_older_one() {
         let (a, b) = (Path::new("C:/krs-claim-a"), Path::new("C:/krs-claim-b"));
-        let first = claim(a);
-        let other = claim(b);
+        let first = claim(a, next_gen());
+        let other = claim(b, next_gen());
         assert!(!first.load(Ordering::SeqCst));
-        let second = claim(a);
+        let second = claim(a, next_gen());
         assert!(first.load(Ordering::SeqCst), "the older search of the folder is told to stop");
         assert!(!second.load(Ordering::SeqCst) && !other.load(Ordering::SeqCst));
         release(a, &first);
-        assert!(RUNNING.lock().unwrap().as_ref().unwrap().get(a).is_some_and(|f| Arc::ptr_eq(f, &second)), "a finished older search does not drop the newer one's entry");
+        assert!(RUNNING.lock().unwrap().as_ref().unwrap().get(a).is_some_and(|(_, f)| Arc::ptr_eq(f, &second)), "a finished older search does not drop the newer one's entry");
         release(a, &second);
         release(b, &other);
         assert!(RUNNING.lock().unwrap().as_ref().unwrap().get(a).is_none());
@@ -486,6 +589,128 @@ mod tests {
         let err = run(slow, |_, _| None, "rg", &stop).err().unwrap();
         assert_eq!(err.to_string(), SUPERSEDED);
         assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", t0.elapsed());
+    }
+
+    // FIX-4 (council d2 AFTER 1): the fence step can let an older search reach its folder after a
+    // newer one. The older one stops at once and the newer one keeps running.
+    #[test]
+    fn fix4_a_search_reaching_its_folder_after_a_newer_one_stops_and_the_newer_runs_on() {
+        let a = Path::new("C:/krs-gen-a");
+        let (g_old, g_new) = (next_gen(), next_gen());
+        let newer = claim(a, g_new);
+        let older = claim(a, g_old);
+        assert!(!newer.load(Ordering::SeqCst), "the newer search is not stopped by the late older one");
+        assert!(older.load(Ordering::SeqCst), "the late older search stops at once");
+        release(a, &older);
+        assert!(RUNNING.lock().unwrap().as_ref().unwrap().get(a).is_some_and(|(_, f)| Arc::ptr_eq(f, &newer)), "the late one never takes the newer one's entry");
+        release(a, &newer);
+    }
+
+    // FIX-4: a late older search starts no ripgrep at all, and says the superseded error.
+    #[test]
+    fn fix4_a_late_older_search_starts_nothing_and_says_superseded() {
+        let a = Path::new("C:/krs-gen-late");
+        let (g_old, g_new) = (next_gen(), next_gen());
+        let newer = claim(a, g_new);
+        let err = search_gen(a, &ask("needle"), g_old).err().unwrap();
+        assert_eq!(err, SUPERSEDED);
+        assert!(!newer.load(Ordering::SeqCst));
+        release(a, &newer);
+    }
+
+    // FIX-4 (council d2 AFTER 7): a cancel stops the folder's running search, and one still on its
+    // way through the fence (lower generation) stops on arrival; a search asked afterwards runs.
+    #[test]
+    fn fix4_cancel_stops_the_running_search_and_one_still_in_the_fence_but_not_a_later_one() {
+        let a = Path::new("C:/krs-gen-cancel");
+        let running = claim(a, next_gen());
+        let in_the_fence = next_gen();
+        cancel(a, next_gen());
+        assert!(running.load(Ordering::SeqCst), "the running search is stopped");
+        assert!(claim(a, in_the_fence).load(Ordering::SeqCst), "a search that was asked before the cancel stops on arrival");
+        let later = claim(a, next_gen());
+        assert!(!later.load(Ordering::SeqCst), "a search asked after the cancel runs");
+        release(a, &later);
+        cancel(Path::new("C:/krs-gen-never-searched"), next_gen()); // nothing running: no harm
+    }
+
+    // FIX-5 (council d2 AFTER 1): a cancel numbers itself when its command is called, before the
+    // fence step, like a search does. A cancel called before a search must not stop that search
+    // when the fence lets the search reach its folder first.
+    #[test]
+    fn fix5_a_cancel_called_before_a_search_does_not_stop_it_when_the_search_reaches_the_folder_first() {
+        let a = Path::new("C:/krs-gen-cancel-late");
+        let cancel_gen = next_gen(); // the old view's cancel entered its command first ...
+        let newer = claim(a, next_gen()); // ... the new view's search got through the fence first ...
+        cancel(a, cancel_gen); // ... and the cancel arrives late
+        assert!(!newer.load(Ordering::SeqCst), "the newer search keeps running");
+        assert!(RUNNING.lock().unwrap().as_ref().unwrap().get(a).is_some_and(|(_, f)| Arc::ptr_eq(f, &newer)), "the late cancel leaves the newer search's entry alone");
+        release(a, &newer);
+    }
+
+    // FIX-5: a cancel that reached the folder first still stops a search that was asked earlier and
+    // is still running (the ordinary workspace switch), and leaves a marker so an even older search
+    // arriving afterwards stops too.
+    #[test]
+    fn fix5_a_cancel_stops_an_older_running_search_and_marks_the_folder_for_older_late_ones() {
+        let a = Path::new("C:/krs-gen-cancel-marker");
+        let older_in_fence = next_gen();
+        let running = claim(a, next_gen());
+        cancel(a, next_gen());
+        assert!(running.load(Ordering::SeqCst));
+        assert!(claim(a, older_in_fence).load(Ordering::SeqCst));
+    }
+
+    // FIX-6 (council d2 AFTER 2): the markers a cancel leaves are bounded; a running search is kept.
+    #[test]
+    fn fix6_cancel_markers_are_bounded_and_a_running_search_is_never_dropped() {
+        let mut map: HashMap<PathBuf, Held> = HashMap::new();
+        let running = Arc::new(AtomicBool::new(false));
+        map.insert(PathBuf::from("C:/running"), (1, running.clone()));
+        for g in 2..=20u64 {
+            map.insert(PathBuf::from(format!("C:/done-{g}")), (g, Arc::new(AtomicBool::new(true))));
+        }
+        prune_markers(&mut map, 30);
+        assert_eq!(map.len(), 20, "under the bound nothing goes");
+        prune_markers(&mut map, 10);
+        assert_eq!(map.len(), 10, "over the bound it comes down to it");
+        assert!(map.contains_key(Path::new("C:/running")), "the running search stays although it is the oldest");
+        assert!(!map.contains_key(Path::new("C:/done-2")) && map.contains_key(Path::new("C:/done-20")), "the oldest markers go first");
+        prune_markers(&mut map, 0);
+        assert_eq!(map.len(), 1, "only the running search is left when nothing else can go");
+    }
+
+    // FIX-7 (council d2 FIX-SOON 1): the bound holds through the cancel itself, not only through
+    // prune_markers. Red when the prune call is taken out of cancel_in (verified, see evidence).
+    #[test]
+    fn fix7_cancel_itself_bounds_the_map_and_keeps_a_running_search() {
+        let mut map: HashMap<PathBuf, Held> = HashMap::new();
+        let running = claim_in(&mut map, Path::new("C:/fix7-running"), 1);
+        for g in 2..(MAX_MARKERS as u64 * 2) {
+            cancel_in(&mut map, Path::new(&format!("C:/fix7-cancelled-{g}")), g);
+            assert!(map.len() <= MAX_MARKERS, "the map never grows past the bound (at cancel {g})");
+        }
+        assert_eq!(map.len(), MAX_MARKERS, "it settles at the bound, not below it");
+        assert!(!running.load(Ordering::SeqCst), "a running search is not stopped by other folders' cancels");
+        assert!(map.get(Path::new("C:/fix7-running")).is_some_and(|(_, f)| Arc::ptr_eq(f, &running)), "and it stays in the map");
+        assert!(map.contains_key(Path::new(&format!("C:/fix7-cancelled-{}", MAX_MARKERS as u64 * 2 - 1))), "the newest marker stays");
+        assert!(!map.contains_key(Path::new("C:/fix7-cancelled-2")), "the oldest marker went");
+    }
+
+    // FIX-7 (council d2 AFTER 3): the accepted limit, written down. A marker that fell off the bound
+    // no longer stops an older search arriving from the fence; a marker inside the bound still does.
+    #[test]
+    fn fix7_a_pruned_marker_no_longer_stops_an_older_search_but_a_kept_one_does() {
+        let mut map: HashMap<PathBuf, Held> = HashMap::new();
+        let first_old = 1u64;
+        let last_old = 2u64;
+        cancel_in(&mut map, Path::new("C:/fix7-first"), 10);
+        for g in 11..(11 + MAX_MARKERS as u64) {
+            cancel_in(&mut map, Path::new(&format!("C:/fix7-more-{g}")), g);
+        }
+        assert!(!claim_in(&mut map, Path::new("C:/fix7-first"), first_old).load(Ordering::SeqCst), "past the bound the first marker is gone");
+        let newest = 10 + MAX_MARKERS as u64;
+        assert!(claim_in(&mut map, Path::new(&format!("C:/fix7-more-{newest}")), last_old).load(Ordering::SeqCst), "a marker inside the bound still stops it");
     }
 
     #[test]

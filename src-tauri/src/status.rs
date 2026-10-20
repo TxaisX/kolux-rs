@@ -41,17 +41,35 @@ pub static SESSIONS: Mutex<Option<HashMap<u32, Session>>> = Mutex::new(None);
 /// T-563: per pane key, the terminals whose exit took that pane's session, newest last. A hook
 /// still in flight from one of them is dropped, so it never points the session back at a dead
 /// terminal. Terminal ids are never reused within a run, so a few per pane are enough.
-static RETIRED: Mutex<Option<HashMap<u32, VecDeque<u32>>>> = Mutex::new(None);
+static RETIRED: Mutex<Option<Retired>> = Mutex::new(None);
 const RETIRED_KEEP: usize = 16;
+/// hooks FIX-5: how many ended terminals are remembered on their own, whatever pane they had.
+const ENDED_KEEP: usize = 256;
+/// hooks FIX-6 (stand-in review FIX-SOON 1): the tests that lean on `ended` alone (a terminal
+/// ended, then its hook expected to be dropped) take this before anything else, so the race
+/// test's two thousand ends never flush the ring under them on a loaded PC.
+#[cfg(test)]
+static ENDED_TESTS: Mutex<()> = Mutex::new(());
 
-fn with_retired<T>(f: impl FnOnce(&mut HashMap<u32, VecDeque<u32>>) -> T) -> T {
-    let mut guard = RETIRED.lock().unwrap_or_else(|p| p.into_inner());
-    f(guard.get_or_insert_with(HashMap::new))
+/// T-563's per-pane retirements and, hooks FIX-5 (stand-in review AFTER 3), the last ended
+/// terminals on their own: an agent that crashes right after its first hook left its pane no
+/// session to retire from, so that hook, handled after the exit, would otherwise create one on
+/// the dead terminal. A terminal that ended can never send a hook that counts.
+#[derive(Default)]
+struct Retired {
+    by_pane: HashMap<u32, VecDeque<u32>>,
+    ended: VecDeque<u32>,
 }
 
-/// T-563: `terminal`'s exit already took `pane_key`'s session.
+fn with_retired<T>(f: impl FnOnce(&mut Retired) -> T) -> T {
+    let mut guard = RETIRED.lock().unwrap_or_else(|p| p.into_inner());
+    f(guard.get_or_insert_with(Retired::default))
+}
+
+/// T-563: `terminal`'s exit already took `pane_key`'s session; hooks FIX-5: or it ended lately,
+/// session or not.
 fn retired(pane_key: u32, terminal: u32) -> bool {
-    with_retired(|r| r.get(&pane_key).is_some_and(|t| t.contains(&terminal)))
+    with_retired(|r| r.ended.contains(&terminal) || r.by_pane.get(&pane_key).is_some_and(|t| t.contains(&terminal)))
 }
 /// When the usage window the status line last saw used up lifts (ms), 0 for none (STAT-040); a
 /// limit stop carries it (STAT-022).
@@ -226,6 +244,8 @@ impl Session {
         self.signal();
         let before = self.resolved();
         let mut announce = None;
+        // Council FIX-3 (chat e5412ff, FS1): the tool a sub-agent just started, named on the change.
+        let mut started = None;
         match (name, str_of(event, "agent_id")) {
             ("SubagentStart", id) => {
                 let id = id.unwrap_or_default().to_string();
@@ -282,6 +302,9 @@ impl Session {
                         }
                         c.pending = None;
                         c.state = change.state;
+                        if name == "PreToolUse" {
+                            started = tool;
+                        }
                     }
                     _ => return None,
                 }
@@ -293,7 +316,13 @@ impl Session {
             self.remember(after);
         }
         // T-124-c: a child's hook permission names its pending tool, which is what lets the card answer it.
-        let tool = (after == "permission").then(|| self.children.iter().find(|c| c.state == "permission").and_then(|c| c.pending.clone())).flatten();
+        // Council FIX-3 (FS1): a child's tool start names its tool, as the lead's does, so the window
+        // holds its keys for the moment a permission menu may take to be reported.
+        let tool = if after == "permission" {
+            self.children.iter().find(|c| c.state == "permission").and_then(|c| c.pending.clone())
+        } else {
+            started.filter(|_| after == "working")
+        };
         Some((Change { state: after, tool, ..Change::default() }, announce))
     }
 
@@ -523,22 +552,45 @@ impl Session {
             self.remember(now);
         }
     }
+
+    /// Council FIX-3 (chat e5412ff, FS2): answers from a card and says what the pane is after it:
+    /// still "permission" while another sub-agent asks, so the window keeps holding its keys.
+    /// Stand-in review of 1e9613e, FIX-BEFORE 1: the card answers the first sub-agent asking with a
+    /// pending tool (the one a Change names), which is working again with nothing pending; with no
+    /// such sub-agent it answers the lead.
+    pub fn answer_state(&mut self) -> &'static str {
+        let before = self.resolved();
+        match self.children.iter_mut().find(|c| c.state == "permission" && c.pending.is_some()) {
+            Some(c) => {
+                c.state = "working";
+                c.pending = None;
+                let now = self.resolved();
+                if now != before {
+                    self.remember(now);
+                }
+            }
+            None => self.answered(),
+        }
+        self.resolved()
+    }
 }
 
 /// VIEW-025: the keys that answer an approval at the agent's own prompt. Claude Code's dialog
 /// takes Enter for its first option (Yes) and Esc for No; Codex's approval modal takes y and n.
-pub fn answer_keys(agent: Agent, approve: bool) -> &'static str {
+/// T-151-c: no other agent's keys are guessed; a vendor agent has none.
+pub fn answer_keys(agent: Agent, approve: bool) -> Option<&'static str> {
     match (agent, approve) {
-        (Agent::Claude, true) => "\r",
-        (Agent::Claude, false) => "\x1b",
-        (Agent::Codex | Agent::Vendor, true) => "y",
-        (Agent::Codex | Agent::Vendor, false) => "n",
+        (Agent::Claude, true) => Some("\r"),
+        (Agent::Claude, false) => Some("\x1b"),
+        (Agent::Codex, true) => Some("y"),
+        (Agent::Codex, false) => Some("n"),
+        (Agent::Vendor, _) => None,
     }
 }
 
 /// VIEW-025: approve or deny what `pane_key`'s agent is asking by typing the answer into its terminal.
 #[tauri::command]
-pub fn agent_answer(terminals: tauri::State<'_, crate::terminal::Terminals>, pane_key: u32, agent: String, approve: bool) -> Result<(), String> {
+pub fn agent_answer(terminals: tauri::State<'_, crate::terminal::Terminals>, pane_key: u32, agent: String, approve: bool) -> Result<String, String> {
     let agent = match agent.as_str() {
         "claude" => Agent::Claude,
         "codex" => Agent::Codex,
@@ -550,13 +602,9 @@ pub fn agent_answer(terminals: tauri::State<'_, crate::terminal::Terminals>, pan
     if !answerable {
         return Err("no hook permission to answer".into());
     }
-    terminals.write(terminal, answer_keys(agent, approve))?;
-    with_sessions(|s| {
-        if let Some(x) = s.get_mut(&pane_key) {
-            x.answered();
-        }
-    });
-    Ok(())
+    terminals.write(terminal, answer_keys(agent, approve).ok_or("not an agent pane")?)?;
+    // Council FIX-3 (FS2): the window takes the resolved state, never a blanket "working".
+    Ok(with_sessions(|s| s.get_mut(&pane_key).map(Session::answer_state)).unwrap_or("working").to_string())
 }
 
 /// STAT-025: Unicode line and paragraph separators become line breaks, and a run of blank lines
@@ -626,11 +674,14 @@ pub fn fit_plan(mut s: Status) -> Status {
 
 /// Folds an event into the pane's session and builds what the window is told. T-563: a hook from
 /// a terminal whose exit already took this pane's session is dropped before it touches anything.
+/// hooks FIX-4: that check runs under the sessions lock, the same lock `terminal_ended` retires
+/// under, so a hook racing its terminal's exit can never pass the check and then recreate the
+/// session on the dead terminal. Lock order everywhere: SESSIONS, then RETIRED.
 pub fn report(pane_key: u32, terminal: Option<u32>, agent: Agent, event: &Value) -> Option<Status> {
-    if terminal.is_some_and(|t| retired(pane_key, t)) {
-        return None;
-    }
     with_sessions(|s| {
+        if terminal.is_some_and(|t| retired(pane_key, t)) {
+            return None;
+        }
         let session = s.entry(pane_key).or_default();
         session.terminal = terminal.or(session.terminal);
         let path = str_of(event, "transcript_path").map(str::to_string);
@@ -692,21 +743,28 @@ pub fn working_now(live: impl Fn(u32) -> bool) -> usize {
 
 /// A terminal ended (its program exited or crashed, or its pane closed): the panes its hooks
 /// reported for are forgotten, so a dead agent never reads working again (TERM-122). T-563: each
-/// such pane retires the terminal, so a late hook from it is dropped by `report`.
+/// such pane retires the terminal, so a late hook from it is dropped by `report`. hooks FIX-4:
+/// the sessions go and the terminal is retired under the one sessions lock (SESSIONS, then
+/// RETIRED), so no hook can slip in between and take the pane back to the ended terminal.
+/// hooks FIX-5: the terminal is also remembered as ended on its own, so a pane that had no
+/// session yet (its first hook still in flight) drops that hook too.
 pub fn terminal_ended(terminal: u32) {
-    let panes: Vec<u32> = with_sessions(|s| {
+    with_sessions(|s| {
         let gone: Vec<u32> = s.iter().filter(|(_, x)| x.terminal == Some(terminal)).map(|(k, _)| *k).collect();
         gone.iter().for_each(|k| drop(s.remove(k)));
-        gone
-    });
-    with_retired(|r| {
-        for pane in panes {
-            let list = r.entry(pane).or_default();
-            list.push_back(terminal);
-            while list.len() > RETIRED_KEEP {
-                list.pop_front();
+        with_retired(|r| {
+            for pane in gone {
+                let list = r.by_pane.entry(pane).or_default();
+                list.push_back(terminal);
+                while list.len() > RETIRED_KEEP {
+                    list.pop_front();
+                }
             }
-        }
+            r.ended.push_back(terminal);
+            while r.ended.len() > ENDED_KEEP {
+                r.ended.pop_front();
+            }
+        });
     });
 }
 
@@ -872,8 +930,10 @@ mod tests {
         // Another tool carrying on is no longer refused as "a different tool than the pending one".
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash"}"#), Some("working"));
         assert_eq!(s.history.back().map(|e| e.state), Some("working"));
-        assert_eq!((answer_keys(Agent::Claude, true), answer_keys(Agent::Claude, false)), ("\r", "\x1b"));
-        assert_eq!((answer_keys(Agent::Codex, true), answer_keys(Agent::Codex, false)), ("y", "n"));
+        assert_eq!((answer_keys(Agent::Claude, true), answer_keys(Agent::Claude, false)), (Some("\r"), Some("\x1b")));
+        assert_eq!((answer_keys(Agent::Codex, true), answer_keys(Agent::Codex, false)), (Some("y"), Some("n")));
+        // T-151-c: a vendor agent's keys are never guessed.
+        assert_eq!((answer_keys(Agent::Vendor, true), answer_keys(Agent::Vendor, false)), (None, None));
     }
 
     #[test]
@@ -1322,9 +1382,12 @@ mod tests {
     }
 
     /// TERM-122: only a session tied to a live terminal keeps the computer awake. A hook report that
-    /// carries no terminal id and a straggler hook arriving after its terminal ended both read
-    /// working, but neither holds the computer awake. (This drives the hook path, report(); the
-    /// in-band path, status_inband, leaves the terminal None unless a hook named one, and is not run here.)
+    /// carries no terminal id and a session on a terminal that is no longer running (its exit not
+    /// yet handled, so not yet retired) both read working, but neither holds the computer awake.
+    /// (This drives the hook path, report(); the in-band path, status_inband, leaves the terminal
+    /// None unless a hook named one, and is not run here. hooks FIX-5: a straggler hook from a
+    /// terminal already handled as ended makes no session at all; see
+    /// fix_5_a_panes_first_hook_handled_after_its_terminals_exit_is_dropped.)
     #[test]
     fn term122_a_session_without_a_live_terminal_never_keeps_the_computer_awake() {
         const NO_TERM: u32 = 922_301;
@@ -1336,9 +1399,8 @@ mod tests {
         let live = |t: u32| t == LIVE_T;
         let go = ev(r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
         report(NO_TERM, None, Agent::Claude, &go);
-        terminal_ended(DEAD_T);
         report(STRAY, Some(DEAD_T), Agent::Claude, &go);
-        assert_eq!(state_of(DEAD_T), Some("working"), "the straggler does read working");
+        assert_eq!(state_of(DEAD_T), Some("working"), "the session on the terminal that stopped running does read working");
         assert_eq!(working_now(live), 0, "but no session without a live terminal counts");
         assert_eq!(working_now(|t| t == DEAD_T), 1, "the same reading on a running terminal would count");
         report(LIVE, Some(LIVE_T), Agent::Claude, &go);
@@ -1374,6 +1436,7 @@ mod tests {
     /// terminal and that terminal's exit ends it (and, through panes_of, the activity lane).
     #[test]
     fn t563_a_late_hook_from_a_retired_terminal_never_takes_the_pane_back() {
+        let _serial = ENDED_TESTS.lock().unwrap_or_else(|p| p.into_inner());
         const PANE: u32 = 956_301;
         const OLD: u32 = 956_303;
         const NEW: u32 = 956_304;
@@ -1396,8 +1459,76 @@ mod tests {
         assert!(report(PANE + 1, Some(NEW + 10), Agent::Claude, &stop).is_none(), "retired for the pane it ended");
         assert!(report(PANE, None, Agent::Claude, &go).is_some(), "no terminal given: not dropped");
         assert!(report(PANE, Some(NEW), Agent::Claude, &stop).is_none(), "the new terminal is retired too now");
-        assert!(report(PANE, Some(NEW + 10), Agent::Claude, &stop).is_some(), "another pane's ended terminal is not this pane's");
+        // hooks FIX-5: an ended terminal is ended for every pane; no hook from it counts anywhere.
+        assert!(report(PANE, Some(NEW + 10), Agent::Claude, &stop).is_none(), "another pane's ended terminal is ended here too");
         with_sessions(|s| s.remove(&PANE));
+    }
+
+    /// hooks FIX-5 (stand-in review AFTER 3): an agent crashes right after its first hook, and that
+    /// hook is handled after the exit. The pane had no session to retire from, so the terminal's
+    /// end is remembered on its own and the hook is dropped instead of making a session on the
+    /// dead terminal. No session is seeded here.
+    #[test]
+    fn fix_5_a_panes_first_hook_handled_after_its_terminals_exit_is_dropped() {
+        let _serial = ENDED_TESTS.lock().unwrap_or_else(|p| p.into_inner());
+        const PANE: u32 = 958_101;
+        const DEAD: u32 = 958_103;
+        let go = ev(r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        assert_eq!(terminal_of(PANE), None, "no session before");
+        terminal_ended(DEAD);
+        // hooks FIX-6: HOOKS_TEST_GAP_MS widens the window between the end and the hook, so a run
+        // without ENDED_TESTS shows the race test's burst evicting DEAD from the ring:
+        // `HOOKS_TEST_GAP_MS=1000 cargo test status::tests::fix_ -- --test-threads=2`.
+        if let Some(ms) = std::env::var("HOOKS_TEST_GAP_MS").ok().and_then(|v| v.parse().ok()) {
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+        }
+        assert!(report(PANE, Some(DEAD), Agent::Claude, &go).is_none(), "the first hook of a terminal that already ended is dropped");
+        assert!(with_sessions(|s| !s.contains_key(&PANE)), "and makes no session");
+        assert!(report(PANE, Some(DEAD + 1), Agent::Claude, &go).is_some(), "the pane's next terminal reports as usual");
+        assert_eq!(terminal_of(PANE), Some(DEAD + 1));
+        with_sessions(|s| s.remove(&PANE));
+        with_retired(|r| r.ended.retain(|t| *t != DEAD));
+    }
+
+    /// hooks FIX-4 (stand-in review FIX-SOON 2): the agent's last hook and its exit handled on two
+    /// threads at the same moment. Whichever runs first, no session is left on the ended terminal:
+    /// the retired check and the retiring happen under the one sessions lock.
+    #[test]
+    fn fix_4_a_hook_racing_its_terminals_exit_never_keeps_the_dead_terminal() {
+        let _serial = ENDED_TESTS.lock().unwrap_or_else(|p| p.into_inner());
+        use std::sync::{Arc, Barrier};
+        const BASE: u32 = 957_100_000;
+        // Before the fix about half the rounds kept the dead terminal (10008 of 20000 in the red
+        // run), so this many rounds meets the race hundreds of times in a few seconds.
+        const ROUNDS: u32 = 2_000;
+        let go = ev(r#"{"hook_event_name":"PreToolUse","tool_name":"Bash"}"#);
+        for i in 0..ROUNDS {
+            assert!(report(BASE + i, Some(BASE + ROUNDS + i), Agent::Claude, &go).is_some());
+        }
+        let gate = Arc::new(Barrier::new(2));
+        let (g, e) = (gate.clone(), go.clone());
+        let hooks = std::thread::spawn(move || {
+            for i in 0..ROUNDS {
+                g.wait();
+                report(BASE + i, Some(BASE + ROUNDS + i), Agent::Claude, &e);
+            }
+        });
+        for i in 0..ROUNDS {
+            gate.wait();
+            terminal_ended(BASE + ROUNDS + i);
+        }
+        hooks.join().unwrap();
+        let stuck: Vec<u32> = with_sessions(|s| {
+            let stuck = (0..ROUNDS).filter(|i| s.get(&(BASE + i)).is_some_and(|x| x.terminal.is_some())).collect();
+            (0..ROUNDS).for_each(|i| drop(s.remove(&(BASE + i))));
+            stuck
+        });
+        // hooks FIX-5 (stand-in review AFTER 5): the retirements this test made go too.
+        with_retired(|r| {
+            (0..ROUNDS).for_each(|i| drop(r.by_pane.remove(&(BASE + i))));
+            r.ended.retain(|t| !(BASE + ROUNDS..BASE + 2 * ROUNDS).contains(t));
+        });
+        assert!(stuck.is_empty(), "{} of {ROUNDS} panes kept a session on their ended terminal", stuck.len());
     }
 
     /// T-563: an in-band status names the pane's live terminal for the activity lane without
@@ -1475,5 +1606,63 @@ mod tests {
         let mut x = Session::default();
         let codex = x.apply(Agent::Codex, &ev(r#"{"hook_event_name":"UserPromptSubmit","prompt":"This session is being continued from a previous conversation"}"#));
         assert_eq!(codex.map(|(c, _)| c.state), Some("working"));
+    }
+
+    #[test]
+    fn fix3_a_sub_agents_tool_start_names_its_tool_and_its_end_names_none() {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"k","agent_type":"w"}"#);
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PreToolUse","agent_id":"k","tool_name":"Bash"}"#)).unwrap();
+        assert_eq!((c.state, c.tool.as_deref()), ("working", Some("Bash")));
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PostToolUse","agent_id":"k","tool_name":"Bash"}"#)).unwrap();
+        assert_eq!((c.state, c.tool.as_deref()), ("working", None));
+    }
+
+    #[test]
+    fn fix3_a_card_answer_reports_permission_while_a_second_sub_agent_still_asks() {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"a","agent_type":"w"}"#);
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"b","agent_type":"w"}"#);
+        state(&mut s, r#"{"hook_event_name":"PermissionRequest","agent_id":"a","tool_name":"Bash"}"#);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PermissionRequest","agent_id":"b","tool_name":"Write"}"#), Some("permission"));
+        assert_eq!(s.answer_state(), "permission");
+        // The lead's own menu, answered, leaves it working.
+        let mut lead = Session::default();
+        state(&mut lead, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        assert_eq!(state(&mut lead, r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash"}"#), Some("permission"));
+        assert_eq!(lead.answer_state(), "working");
+    }
+
+    #[test]
+    fn fix_before1_one_child_asks_answer_state_is_working() {
+        // Stand-in review of chat 1e9613e, FIX-BEFORE 1: the card answered the only asking sub-agent,
+        // so the pane is working, nothing is left to answer, and that child's next tool is heard.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"a","agent_type":"w"}"#);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PermissionRequest","agent_id":"a","tool_name":"Bash"}"#), Some("permission"));
+        assert_eq!(s.answer_state(), "working");
+        assert!(!s.answerable());
+        assert_eq!(s.resolved(), "working");
+        // After a Deny the child moves on to another tool; that event is no longer dropped.
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PreToolUse","agent_id":"a","tool_name":"Write"}"#)).unwrap();
+        assert_eq!((c.state, c.tool.as_deref()), ("working", Some("Write")));
+    }
+
+    #[test]
+    fn fix_before1_answering_a_sub_agent_leaves_the_leads_own_menu_standing() {
+        // The card answers the sub-agent it names; the lead's own menu still asks, so the pane stays
+        // "permission" and keeps holding its keys (fails closed). The next answer is the lead's.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        state(&mut s, r#"{"hook_event_name":"PermissionRequest","tool_name":"Edit"}"#);
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"a","agent_type":"w"}"#);
+        state(&mut s, r#"{"hook_event_name":"PermissionRequest","agent_id":"a","tool_name":"Bash"}"#);
+        assert_eq!(s.answer_state(), "permission");
+        assert!(s.answerable());
+        assert_eq!(s.answer_state(), "working");
+        assert!(!s.answerable());
     }
 }

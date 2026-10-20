@@ -29,7 +29,10 @@ export function windowSummary(s: Record<string, unknown>): string {
 // state to the menu on every change (screen, chrome switches, shortcuts), so the menu's ticks agree
 // with each Settings switch (SET-020) and its accelerators follow the Shortcuts page (SET-009).
 /** Menu items that carry the in-app shortcut of the keymap action with the same id. */
-export const MENU_SHORTCUT_IDS = ["app.settings", "app.forceReload", "sidebar.left.toggle", "sidebar.right.toggle"] as const;
+export const MENU_SHORTCUT_IDS = ["app.settings", "app.forceReload", "sidebar.left.toggle", "sidebar.right.toggle", "zoom.in", "zoom.out", "zoom.reset"] as const;
+/** Menu items whose hint is the chord of a keymap action with another id: the menu zoom is the saved
+ *  interface zoom (SET-019), which has its own keys, while zoom.* in the keymap is the terminal zoom (TERM-078). */
+const HINT_FROM: Record<string, string> = { "zoom.in": "ui.zoomIn", "zoom.out": "ui.zoomOut", "zoom.reset": "ui.zoomReset" };
 
 const MENU_KEY = /^([A-Z]|[0-9]|F([1-9]|1[0-9]|2[0-4])|Comma|Equal|Minus|Period|Slash|Backslash|BracketLeft|BracketRight|Semicolon|Quote|Backquote|Tab|Enter|Space|Arrow(Up|Down|Left|Right)|Numpad(Add|Subtract|Multiply|Divide|[0-9]))$/;
 const MENU_MOD: Record<string, string> = { Mod: "CmdOrCtrl", Ctrl: "Ctrl", Cmd: "Super", Meta: "Super", Alt: "Alt", Shift: "Shift" };
@@ -47,8 +50,8 @@ export function toAccelerator(chord: string | undefined): string {
 export type MenuBarState = { screen: string; statusBarVisible: boolean; tasksButton: boolean; automationsButton: boolean; titleBarAppName: boolean; classic: boolean; accelerators: Record<string, string> };
 
 /** `chords(id)`: the keymap's chords for an action, first one shown (empty when unbound). `classic`:
- * the Classic look, whose View menu has no Workspace View (T-049-b). Zoom has no hint: Ctrl+= is the
- * terminal font zoom (TERM-078), while the menu's zoom is the saved interface zoom (SET-019). */
+ * the Classic look, whose View menu has no Workspace View (T-049-b). Zoom shows the interface zoom keys
+ * (ui.zoomIn, ui.zoomOut, ui.zoomReset), not the terminal zoom ones (TERM-078). */
 export function menuBarState(s: Record<string, unknown>, screen: string, chords: (id: string) => readonly string[] | undefined, classic = false): MenuBarState {
   return {
     screen,
@@ -57,7 +60,7 @@ export function menuBarState(s: Record<string, unknown>, screen: string, chords:
     automationsButton: chromeShown(s, "automationsButton"),
     titleBarAppName: chromeShown(s, "titleBarAppName"),
     classic,
-    accelerators: Object.fromEntries(MENU_SHORTCUT_IDS.map((id) => [id, toAccelerator(chords(id)?.[0])])),
+    accelerators: Object.fromEntries(MENU_SHORTCUT_IDS.map((id) => [id, toAccelerator(chords(HINT_FROM[id] ?? id)?.[0])])),
   };
 }
 
@@ -84,4 +87,23 @@ export function menuSettingFlip(s: Record<string, unknown>, id: string): [string
 /** A Workspace View pick: the screen it shows, or null for any other item. */
 export function menuScreen(id: string): "agents" | "board" | "terminals" | null {
   return id === "screen.agents" ? "agents" : id === "screen.board" ? "board" : id === "screen.terminals" ? "terminals" : null;
+}
+
+// APP-009 Help / T-248-b: what a help.* menu click does. The page owns these (the guide, the tour and
+// the update card all live in the page), so the click never needs the app shell.
+export type HelpAction = "guide" | "explore" | "updates" | "crash";
+const HELP: Record<string, HelpAction> = { "help.gettingStarted": "guide", "help.explore": "explore", "help.checkUpdates": "updates", "help.reportCrash": "crash" };
+export const helpAction = (id: string): HelpAction | null => (Object.prototype.hasOwnProperty.call(HELP, id) ? HELP[id] : null);
+/** Help > Report Crash asks the crash report card (APP-039, T-183) to open the newest report. */
+export const REPORT_CRASH_EVENT = "kolux-report-crash";
+
+// SET-010 / T-248-b: chords the system menu owns (macOS stock items such as Quit). A command bound to
+// one counts as a clash on the Shortcuts page, the same as two commands sharing a chord.
+export type NativeChord = { chord: string; name: string };
+export type MenuSynced = { accelerators: string[]; native: NativeChord[] };
+/** The answer menu_sync gave, or an empty one when it was malformed. */
+export function readSynced(v: unknown): MenuSynced {
+  const o = (typeof v === "object" && v !== null ? v : {}) as Record<string, unknown>;
+  const native = Array.isArray(o.native) ? o.native.filter((n): n is NativeChord => typeof n?.chord === "string" && typeof n?.name === "string") : [];
+  return { accelerators: Array.isArray(o.accelerators) ? o.accelerators.filter((a): a is string => typeof a === "string") : [], native };
 }

@@ -73,3 +73,17 @@ export function saveFolded(path: string, folded: Set<string>) {
     // A blocked store only means the folds are not remembered.
   }
 }
+
+const squash = (s: string) => s.replace(/\s+/g, " ").trim();
+
+/** FIX-5 (council P2 P8): which of the headings the page draws (`drawn`, in page order) is entry `i`
+ * of `list`: the one with its level and words, counting repeats in order. -1 when the page does not
+ * draw it as a heading (the rich view draws a heading inside a quote as plain text); the caller then
+ * does not jump, rather than jumping to the heading at the same position in the list. */
+export function headingIndex(list: Entry[], i: number, drawn: Entry[]): number {
+  const same = (a: Entry, b: Entry) => a.level === b.level && squash(a.text) === squash(b.text);
+  let nth = 0;
+  for (let k = 0; k < i; k++) if (same(list[k], list[i])) nth++;
+  for (let d = 0; d < drawn.length; d++) if (same(drawn[d], list[i]) && nth-- === 0) return d;
+  return -1;
+}

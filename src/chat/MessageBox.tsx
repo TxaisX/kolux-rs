@@ -3,6 +3,7 @@
 // and the unsent draft is kept per pane. The rules live in composer.ts.
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent } from "react";
 import { addHistory, draftOf, historyOf, keepDraft, keyAction, linesFor, stepHistory } from "./composer";
+import { buttonMode, stopArmed } from "./stop";
 
 export type ComposerHandle = { focus: () => void };
 
@@ -16,14 +17,19 @@ type Props = {
   note?: string;
   /** False when nothing was sent: the box keeps the text. */
   onSend: (text: string) => boolean;
+  /** CHAT-018: a turn is under way, so the button beside the box reads Stop and `onStop` interrupts the agent. */
+  working?: boolean;
+  onStop?: () => void;
 };
 
-export const Composer = forwardRef<ComposerHandle, Props>(function Composer({ paneKey, live, blocked, note, onSend }, ref) {
+export const Composer = forwardRef<ComposerHandle, Props>(function Composer({ paneKey, live, blocked, note, onSend, working = false, onStop }, ref) {
   const [text, setText] = useState(() => draftOf(paneKey));
   // The history index shown; history.length means the draft itself.
   const [at, setAt] = useState(() => historyOf(paneKey).length);
   const draft = useRef(text);
   const box = useRef<HTMLTextAreaElement>(null);
+  // CHAT-018: when this box last sent, so a quick second click on Send is never taken as Stop.
+  const sentAt = useRef<number | null>(null);
   useImperativeHandle(ref, () => ({ focus: () => box.current?.focus() }), []);
 
   useEffect(() => {
@@ -40,6 +46,23 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer({ pa
     setAt(historyOf(paneKey).length);
   };
 
+  const submit = () => {
+    if (!live || blocked || !text.trim()) return;
+    sentAt.current = Date.now();
+    if (!onSend(text)) return;
+    addHistory(paneKey, text);
+    setText("");
+    draft.current = "";
+    keepDraft(paneKey, "");
+    setAt(historyOf(paneKey).length);
+    box.current?.focus();
+  };
+  const mode = buttonMode(working, !!blocked);
+  const click = () => {
+    if (mode === "send") return submit();
+    if (stopArmed(sentAt.current, Date.now())) onStop?.();
+  };
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     const el = e.currentTarget;
     const before = el.value.slice(0, el.selectionStart);
@@ -47,13 +70,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer({ pa
     const act = keyAction({ key: e.key, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey, isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode }, !before.includes("\n"), !after.includes("\n"));
     if (act === "send") {
       e.preventDefault();
-      if (!live || blocked || !text.trim()) return;
-      if (!onSend(text)) return;
-      addHistory(paneKey, text);
-      setText("");
-      draft.current = "";
-      keepDraft(paneKey, "");
-      setAt(historyOf(paneKey).length);
+      submit();
     } else if (act === "older" || act === "newer") {
       const history = historyOf(paneKey);
       if (history.length === 0) return;
@@ -84,6 +101,9 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer({ pa
         onChange={(e) => change(e.target.value)}
         onKeyDown={onKeyDown}
       />
+      <button type="button" className={`chat-send${mode === "stop" ? " stop" : ""}`} aria-label={mode === "stop" ? "Stop" : "Send"} disabled={mode === "send" ? !live || !!blocked || !text.trim() : !onStop} onClick={click}>
+        {mode === "stop" ? "Stop" : "Send"}
+      </button>
     </div>
   );
 });

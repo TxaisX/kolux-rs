@@ -10,6 +10,7 @@ import type { AgentInfo } from "../launch/PlusMenu";
 import type { AgentState } from "../projects/rows";
 import type { TurnInfo } from "../status/useAgentStatus";
 import { OPEN_KITS } from "./Kits";
+import { noteResults } from "./milestones";
 import { KITS, readyVendors, type Vendor } from "./catalog";
 import { useKitCheck } from "./KitStrip";
 import { datedName, matchSeats, previewKind, roleDone, seatTitle, type Past } from "./run";
@@ -99,6 +100,7 @@ export function useKitRun({ activeDir, kitFolded, kitTick, setKitTick, kitRuns, 
     try {
       const got = await invoke<{ folder: string; copied: string[]; missing: string[] }>("kit_collect", { dir: activeDir, roles, name: datedName(kit.title, Date.now()) });
       const miss = got.missing.length ? ` ${got.missing.length} ${got.missing.length === 1 ? "file was" : "files were"} not there: ${got.missing.join(", ")}.` : "";
+      void noteResults(); // SKILL-016: collected results count as the first results seen.
       setToast(`Collected ${got.copied.length} ${got.copied.length === 1 ? "file" : "files"} into kit-results\\${got.folder}, with a README and a Results page.${miss}`);
     } catch (err) {
       setToast(`Kolux could not collect the results this time: ${String(err)}`);
@@ -123,10 +125,15 @@ export function useKitRun({ activeDir, kitFolded, kitTick, setKitTick, kitRuns, 
       setPanes(insertBefore(panes, shown[at]?.panes[0], pane));
     }
     setFocused(pane.key);
+    void noteResults(); // SKILL-016: a previewed result counts as results opened.
   };
   const kitOpenFile = (i: number, file: string) => {
     const role = kitCheck?.record.roles[i];
-    if (activeDir && role) invoke("kit_open_file", { dir: activeDir, role: role.id, file }).catch((err) => setToast(`Kolux could not open ${file}: ${String(err)}`));
+    if (activeDir && role)
+      invoke("kit_open_file", { dir: activeDir, role: role.id, file }).then(
+        () => void noteResults(), // SKILL-016: an opened result file counts as results opened.
+        (err) => setToast(`Kolux could not open ${file}: ${String(err)}`),
+      );
   };
   // SKILL-011: Restart and Move to start one seat for the role on the chosen AI and make it the
   // role's session; with the settings unreadable nothing starts.

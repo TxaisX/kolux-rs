@@ -36,6 +36,11 @@ FILES
   #[allow(dead_code)] until the lib.rs hunk lands.
 - evidence/T-552-lib.patch (coordinator: src-tauri/src/lib.rs, git diff against 243736d).
 - evidence/T-552-smoke.patch (council/scripts: scripts/evidence/smoke.mjs, git diff against 243736d).
+- PATCHES APPLIED AND DELETED (launch FIX-4, 2026-10-19, main 8c856676): both patches are on main (git apply -R --check
+  of each, taken from git history at 75e39584^, exits 0 on the 8c856676 tree), lib.rs calls tools::guarded_setup, the
+  two allow(dead_code) lines are gone from tools.rs, and the patch files were deleted at 75e39584 (they stay in git
+  history). The "git apply" steps in FOR THE COORDINATOR below are therefore done; T-552 stays unticked only for
+  smoke flow 5 with the stress part.
 
 TESTS (tools::tests, injected create closure and injected sleep)
 - t552_a_busy_profile_folder_is_waited_out_and_the_window_opens: busy twice then ok -> Ok, 3 tries, waits [250 ms, 500 ms]; free at once -> 1 try, no wait.

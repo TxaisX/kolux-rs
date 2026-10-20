@@ -1,6 +1,6 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { describe, expect, it, test } from "vitest";
-import { canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, select, discardAsk, type Section, budgetLine, budgetLow, mergeActions, mergeLabel, type MergeInfo, graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, commitUrl, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine } from "./model";
+import { canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, select, discardAsk, type Section, budgetLine, budgetLow, mergeActions, mergeLabel, type MergeInfo, graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, commitUrl, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine } from "./model";
 
 const commit = (hash: string, parents: string[], subject = hash): Commit => ({ hash, short: hash, parents, author: "a", time: 0, subject, message: subject, labels: [], outgoing: false, incoming: false });
 
@@ -487,4 +487,71 @@ test("VIEW-062: a very large change set lists the first rows and says plainly ho
   expect(shown).toHaveLength(SECTION_CAP);
   expect(tooManyLine(more)).toBe("1,234 more files are not listed here, so the panel stays quick. Type part of a path in the filter, or open All Changes, to see them.");
   expect(tooManyLine(1)).toBe("1 more file is not listed here, so the panel stays quick. Type part of a path in the filter, or open All Changes, to see it.");
+});
+
+test("FIX-4: a Shift-click whose anchor row is no longer drawn is a plain click, never a span by path", () => {
+  // d/p is partly staged: in Changes (a folder is listed first) and in Staged (before c). Staged/d is closed in the tree view,
+  // so the Staged copy of d/p is not drawn; the anchor was clicked before the folder closed.
+  const s: Status = { ...emptyStatus, changed: [row("a"), row("d/p"), row("b")], staged: [row("d/p"), row("c")] };
+  const keys = rowKeys(s, undefined, { filter: "", tree: new Set(["Staged/d"]) });
+  expect(keys.map((k) => k.section + ":" + k.path)).toEqual(["Changes:d/p", "Changes:a", "Changes:b", "Staged:c"]);
+  const anchor = { section: "Staged" as const, path: "d/p" };
+  // The path span would run from the Changes copy of d/p and take in a and b; a hidden anchor selects just the clicked row.
+  expect(selectRows(["d/p"], keys, { section: "Staged", path: "c" }, "span", anchor)).toEqual(["c"]);
+  // With the anchor still drawn the span is unchanged.
+  expect(selectRows(["d/p"], keys, { section: "Staged", path: "c" }, "span", { section: "Changes", path: "d/p" })).toEqual(["d/p", "a", "b", "c"]);
+  // The same when the section cap hides the anchor's row.
+  const many = Array.from({ length: SECTION_CAP + 3 }, (_, i) => row("f" + i));
+  const capped2: Status = { ...emptyStatus, changed: [row("z0"), row("f" + (SECTION_CAP + 1)), row("z1")], staged: many };
+  const keys2 = rowKeys(capped2, undefined, { filter: "" });
+  const hidden = { section: "Staged" as const, path: "f" + (SECTION_CAP + 1) };
+  expect(keys2.some((k) => k.section === hidden.section && k.path === hidden.path)).toBe(false);
+  expect(selectRows(["z0"], keys2, { section: "Staged", path: "f1" }, "span", hidden)).toEqual(["f1"]);
+});
+
+test("FIX-5: a Shift-click that falls back selects the clicked row (never clears it) and becomes the new anchor", () => {
+  const s: Status = { ...emptyStatus, changed: [row("a"), row("d/p"), row("b")], staged: [row("d/p"), row("c")] };
+  const keys = rowKeys(s, undefined, { filter: "", tree: new Set(["Staged/d"]) });
+  const hidden = { section: "Staged" as const, path: "d/p" };
+  const c = { section: "Staged" as const, path: "c" };
+  // c is already the only selection: a plain click would clear it, a fallen-back Shift-click keeps it.
+  expect(selectRows(["c"], keys, c, "span", hidden)).toEqual(["c"]);
+  // No anchor at all (nothing clicked yet): Shift-click selects the row too.
+  expect(selectRows(["c"], keys, c, "span", null)).toEqual(["c"]);
+  // The panel moves the anchor to the clicked row exactly when the span could not run.
+  expect(spanRuns(keys, c, hidden)).toBe(false);
+  expect(spanRuns(keys, c, null)).toBe(false);
+  expect(spanRuns(keys, hidden, c)).toBe(false);
+  expect(spanRuns(keys, c, { section: "Changes", path: "a" })).toBe(true);
+});
+
+test("FIX-3: a file drawn in two sections is two rows, and a Shift span covers exactly the rows between the two clicks", () => {
+  // p is partly staged: it sits in Changes (a folder is listed first) and in Staged (between nothing and c).
+  const s: Status = { ...emptyStatus, changed: [row("a"), row("p"), row("b")], staged: [row("p"), row("c")] };
+  const keys = rowKeys(s);
+  expect(keys).toEqual([
+    { section: "Changes", path: "a" },
+    { section: "Changes", path: "p" },
+    { section: "Changes", path: "b" },
+    { section: "Staged", path: "p" },
+    { section: "Staged", path: "c" },
+  ]);
+  expect(rowOrder(s)).toEqual(["a", "p", "b", "c"]);
+  // Why paths alone are not enough: p's first position is its Changes row, so the same two clicks
+  // on a path-only list wrongly take in b (the Changes row outside the clicks).
+  expect(select(["c"], rowOrder(s), "p", "span", "c")).toEqual(["p", "b", "c"]);
+  // Click c in Staged, Shift-click p in Staged (the row right above it): just p and c, never b.
+  expect(selectRows(["c"], keys, { section: "Staged", path: "p" }, "span", { section: "Staged", path: "c" })).toEqual(["p", "c"]);
+  // The same span the other way round, and from the Changes copy of p down to b.
+  expect(selectRows(["p"], keys, { section: "Staged", path: "c" }, "span", { section: "Staged", path: "p" })).toEqual(["p", "c"]);
+  expect(selectRows(["p"], keys, { section: "Changes", path: "b" }, "span", { section: "Changes", path: "p" })).toEqual(["p", "b"]);
+  // Across the sections the span takes every row between the two clicks, each path once.
+  expect(selectRows(["a"], keys, { section: "Staged", path: "c" }, "span", { section: "Changes", path: "a" })).toEqual(["a", "p", "b", "c"]);
+  // Every other mode behaves as `select` does on paths; a span with no anchor is one row.
+  expect(selectRows([], keys, { section: "Staged", path: "p" }, "one", null)).toEqual(["p"]);
+  expect(selectRows(["a"], keys, { section: "Staged", path: "c" }, "toggle", null)).toEqual(["a", "c"]);
+  expect(selectRows([], keys, { section: "Staged", path: "c" }, "span", null)).toEqual(["c"]);
+  // The drawn view keys rows the same way: the tree view and the group order carry the sections along.
+  expect(rowKeys(s, "staged-first").map((k) => k.section + ":" + k.path)).toEqual(["Staged:p", "Staged:c", "Changes:a", "Changes:p", "Changes:b"]);
+  expect(rowKeys({ ...s, conflicts: [row("x")] }, undefined, {})[0]).toEqual({ section: "Conflicts", path: "x" });
 });

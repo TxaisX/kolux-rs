@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
-import { applyRead, chatOffer, combine, pickChat, typingInto, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type OfferInput } from "./model";
+import { DRAFT_LIMIT } from "./composer";
+import { HAND_CAP, SHELL_OFFER, agentsView, handInto, handOver, handTargets, handText, handTooLongText, viewedFirst, applyRead, chatCovers, chatOffer, combine, pickChat, typingInto, lastReply, lastReplyItem, previewToShow, stamp, type ChatItem, type ChatRead, type OfferInput } from "./model";
 
 const base: OfferInput = { credited: "claude", screen: "agents", switchOn: false, showingChat: false, launching: false, readable: true };
 const item = (id: string, role: ChatItem["role"], text: string, at: number): ChatItem => ({ id, role, kind: "text", text, at });
@@ -65,6 +66,15 @@ test("CHAT-011: when the turn ends exactly one reply remains", () => {
   expect(lastReply([item("m1", "assistant", "old", 1), item("u2", "user", "new question", 2)])).toBeUndefined();
 });
 
+test("FIX-7 (review of e20000d6, FIX-SOON 1): lastReplyItem hands back the item, so two replies with the same words are told apart by id", () => {
+  const items = [item("u1", "user", "Run it", 1), item("m1", "assistant", "Done.", 2), item("u2", "user", "Again", 3), item("m2", "assistant", "Done.", 4)];
+  expect(lastReplyItem(items)?.id).toBe("m2");
+  expect(lastReplyItem(items.slice(0, 2))?.id).toBe("m1");
+  expect(lastReplyItem(items)?.text).toBe(lastReply(items));
+  expect(lastReplyItem([...items, item("u3", "user", "And now", 5)])).toBeUndefined();
+  expect(lastReplyItem([item("m1", "assistant", "Done.", 2), { id: "t1", role: "assistant", kind: "thought", text: "hmm", at: 3 }])?.id).toBe("m1");
+});
+
 test("CHAT-010: timestamps follow the app's language", () => {
   const at = Date.UTC(2026, 2, 1, 15, 4);
   expect(stamp(at, "en-US").full).not.toEqual(stamp(at, "de-DE").full);
@@ -95,4 +105,84 @@ test("with nothing picked the box names the pane it types into (council FIX-1, m
   expect(typingInto(null, { title: "  " })).toBe("Typing into the first agent that can chat");
   expect(typingInto(null, {})).toBe("Typing into the first agent that can chat");
   expect(typingInto(4, { title: "api tests" })).toBeNull();
+});
+
+test("T-050-b (VIEW-019): a plain shell shows its terminal with no switch, never a Starting line", () => {
+  expect(pickChat([{ key: 1 }], 1, { 1: SHELL_OFFER })).toBeNull();
+  expect(agentsView(pickChat([{ key: 1 }], 1, { 1: SHELL_OFFER }), new Set())).toBe("none");
+  // Nothing picked: a shell is never the chat the screen falls back to.
+  expect(pickChat([{ key: 1 }, { key: 2 }], null, { 1: SHELL_OFFER, 2: { chat: true, back: false, chooser: false } })).toEqual({ key: 2 });
+});
+
+test("T-050-b (VIEW-019): Show terminal flips only the session it was flipped for", () => {
+  const forced = new Set([1]);
+  expect(agentsView({ key: 1 }, forced)).toBe("terminal");
+  expect(agentsView({ key: 2 }, forced)).toBe("chat");
+  expect(agentsView({ key: 1 }, new Set())).toBe("chat");
+  expect(agentsView("starting", forced)).toBe("starting");
+});
+
+test("T-050-b: the chat covers the terminal only once the transcript is found", () => {
+  expect(chatCovers("ready")).toBe(true);
+  expect(chatCovers("empty")).toBe(true);
+  // Not found yet (the agent may be showing a launch prompt in its terminal) or unreadable.
+  expect(chatCovers("loading")).toBe(false);
+  expect(chatCovers("error")).toBe(false);
+});
+
+const yes = { chat: true, back: false, chooser: false };
+test("T-080 (VIEW-020): the targets are the other chat sessions, the last viewed first, capped", () => {
+  const panes = [{ key: 1 }, { key: 2 }, { key: 3 }, { key: 4 }];
+  const offers = { 1: yes, 2: yes, 3: yes, 4: SHELL_OFFER };
+  // Two other chat sessions exist, 3 viewed last: it is listed first; the source and the shell are not.
+  expect(handTargets(panes, 1, offers, [3, 1, 2]).map((p) => p.key)).toEqual([3, 2]);
+  // A session never viewed comes after the viewed ones, in pane order.
+  expect(handTargets(panes, 1, offers, [2]).map((p) => p.key)).toEqual([2, 3]);
+  const many = Array.from({ length: HAND_CAP + 3 }, (_, i) => ({ key: i + 10 }));
+  expect(handTargets(many, 1, Object.fromEntries(many.map((p) => [p.key, yes])), [])).toHaveLength(HAND_CAP);
+  expect(viewedFirst([3, 1, 2], 2)).toEqual([2, 3, 1]);
+});
+
+test("T-080 (VIEW-020): a result path with a space arrives quoted, and the typed draft is kept", () => {
+  expect(handText("C:\\Users\\me\\My Docs\\report.md")).toBe('"C:\\Users\\me\\My Docs\\report.md"');
+  expect(handText("Wrote it to:\n/home/me/my notes/a.md\ndone")).toBe('Wrote it to:\n"/home/me/my notes/a.md"\ndone');
+  // No space, already quoted, or a sentence: untouched.
+  expect(handText("/home/me/a.md")).toBe("/home/me/a.md");
+  expect(handText('"C:\\a b\\c.md"')).toBe('"C:\\a b\\c.md"');
+  expect(handText("All tests pass now.")).toBe("All tests pass now.");
+  expect(handText("/compact keeps the context small")).toBe("/compact keeps the context small");
+  expect(handInto("check this:  ", "the result")).toBe("check this:\n\nthe result");
+  expect(handInto("", "the result")).toBe("the result");
+});
+
+test("FIX-SOON 2 of the 38be105 review: a $ in a quoted path arrives as typed", () => {
+  expect(handText("C:/My Docs/a$&b.md")).toBe('"C:/My Docs/a$&b.md"');
+  expect(handText("C:/My Docs/$$x.md")).toBe('"C:/My Docs/$$x.md"');
+  expect(handText("Saved:\n~/my notes/$`a$'b.md\nok")).toBe("Saved:\n\"~/my notes/$`a$'b.md\"\nok");
+});
+
+test("FIX-SOON 1 of the 38be105 review: a hand-over longer than a draft can be refuses and keeps the typed draft", () => {
+  const drafts = new Map<number, string>([[2, "check this:"]]);
+  const said: string[] = [];
+  const picked: number[] = [];
+  const io = {
+    draftOf: (k: number) => drafts.get(k) ?? "",
+    // The real keepDraft deletes a draft over DRAFT_LIMIT; the fix must never call it with one.
+    keepDraft: (k: number, t: string) => (t.length > DRAFT_LIMIT ? drafts.delete(k) : void drafts.set(k, t)),
+    pick: (k: number) => void picked.push(k),
+    say: (t: string) => void said.push(t),
+  };
+  // A result near the limit with a draft already there: refused, draft kept, screen stays, note says so.
+  expect(handOver(2, "docs", "x".repeat(DRAFT_LIMIT - 5), io)).toBe(false);
+  expect(drafts.get(2)).toBe("check this:");
+  expect(picked).toEqual([]);
+  expect(said).toEqual([handTooLongText("docs")]);
+  // A result that fits goes after the draft and the screen moves.
+  expect(handOver(2, "docs", "the result", io)).toBe(true);
+  expect(drafts.get(2)).toBe("check this:\n\nthe result");
+  expect(picked).toEqual([2]);
+  expect(said).toHaveLength(1);
+  // A result over the limit on an empty box is refused too, and the box stays empty.
+  expect(handOver(5, "api", "y".repeat(DRAFT_LIMIT + 1), io)).toBe(false);
+  expect(drafts.has(5)).toBe(false);
 });

@@ -5,6 +5,7 @@
 import type { ITheme } from "@xterm/xterm";
 import { fontStack } from "./settings/fonts";
 import { CATALOGUE, tidySchemes, type CustomScheme } from "./terminal/schemes";
+import { DEFAULT_TINT, STRENGTH_SPAN, sidebarBackground, sidebarLookOf, type SidebarLook } from "./look/sidebar";
 
 export const classic = {
   // surfaces and lines
@@ -54,6 +55,8 @@ export const classic = {
   /** Not measured (nothing in the capture was past 90%): the meter's red, USAGE-002. Its own name, as
    *  `danger` above is the error-text colour. */
   "meter-danger": "#e5484d",
+  /** USAGE-034: the pane header's session-cost chip. A status colour, so light mode darkens it with the rest. */
+  "cost-fg": "#1f9db0",
 } as const;
 
 export type Theme = Record<keyof typeof classic, string>;
@@ -100,7 +103,7 @@ export type TerminalScheme = string;
 export type Mode = "system" | "light" | "dark";
 export const MODES: Mode[] = ["system", "light", "dark"];
 /** `lightTerminal`: in light mode terminals use `lightScheme`; off keeps `terminal` for both. */
-export type Appearance = { theme: ThemeName; tint: number; saturation: number; depth: number; terminal: TerminalScheme; mode: Mode; lightTerminal: boolean; lightScheme: TerminalScheme; custom: CustomScheme[]; appFont: string; editorFont: string; dividerWidth: number; dividerDark: string; dividerLight: string; paneDim: number; termFont: string; termSize: number; termLineHeight: number; termWeight: FontWeight; termWeightBold: FontWeight; screens: ScreenModes };
+export type Appearance = { theme: ThemeName; tint: number; saturation: number; depth: number; terminal: TerminalScheme; mode: Mode; lightTerminal: boolean; lightScheme: TerminalScheme; custom: CustomScheme[]; appFont: string; editorFont: string; dividerWidth: number; dividerDark: string; dividerLight: string; paneDim: number; termFont: string; termSize: number; termLineHeight: number; termWeight: FontWeight; termWeightBold: FontWeight; screens: ScreenModes; sidebarLook: SidebarLook; sidebarTint: string; sidebarStrength: number };
 /** VIEW-006: a mode of its own for one of the three workspace screens; a screen not listed follows `mode`. */
 export type ScreenModes = Partial<Record<"agents" | "board" | "terminals", Mode>>;
 export const THEMED_SCREENS = ["agents", "board", "terminals"] as const;
@@ -111,8 +114,8 @@ export const WEIGHTS = ["normal", "bold", "100", "200", "300", "400", "500", "60
 export type FontWeight = (typeof WEIGHTS)[number];
 const weightOr = (v: unknown, dflt: FontWeight): FontWeight => (typeof v === "string" && (WEIGHTS as readonly string[]).includes(v) ? (v as FontWeight) : typeof v === "number" && (WEIGHTS as readonly string[]).includes(String(v)) ? (String(v) as FontWeight) : dflt);
 /** The settings fields the appearance lives in. */
-export const FIELD = { theme: "appTheme", tint: "themeTint", saturation: "themeSaturation", depth: "themeDepth", terminal: "terminalScheme", mode: "appearanceMode", lightTerminal: "terminalLightScheme", lightScheme: "terminalSchemeLight", custom: "terminalCustomSchemes", appFont: "appFont", editorFont: "editorFont", dividerWidth: "paneDividerWidth", dividerDark: "paneDividerDark", dividerLight: "paneDividerLight", paneDim: "paneDim", termFont: "terminalFont", termSize: "terminalFontSize", termLineHeight: "terminalLineHeight", termWeight: "terminalFontWeight", termWeightBold: "terminalFontWeightBold", screens: "screenThemes" } as const;
-export const SPAN = { tint: [-180, 180, 0], saturation: [0, 160, 100], depth: [-3, 6, 0], dividerWidth: [2, 12, 6], paneDim: [30, 100, 100], termSize: [8, 32, 13], termLineHeight: [1, 2, 1] } as const;
+export const FIELD = { theme: "appTheme", tint: "themeTint", saturation: "themeSaturation", depth: "themeDepth", terminal: "terminalScheme", mode: "appearanceMode", lightTerminal: "terminalLightScheme", lightScheme: "terminalSchemeLight", custom: "terminalCustomSchemes", appFont: "appFont", editorFont: "editorFont", dividerWidth: "paneDividerWidth", dividerDark: "paneDividerDark", dividerLight: "paneDividerLight", paneDim: "paneDim", termFont: "terminalFont", termSize: "terminalFontSize", termLineHeight: "terminalLineHeight", termWeight: "terminalFontWeight", termWeightBold: "terminalFontWeightBold", screens: "screenThemes", sidebarLook: "sidebarLook", sidebarTint: "sidebarTint", sidebarStrength: "sidebarTintStrength" } as const;
+export const SPAN = { tint: [-180, 180, 0], saturation: [0, 160, 100], depth: [-3, 6, 0], dividerWidth: [2, 12, 6], paneDim: [30, 100, 100], termSize: [8, 32, 13], termLineHeight: [1, 2, 1], sidebarStrength: STRENGTH_SPAN } as const;
 /** A divider colour is #rrggbb or empty (the window shows through, as DESIGN.md measured). */
 const hexOrEmpty = (v: unknown) => (typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v.trim()) ? v.trim().toLowerCase() : "");
 
@@ -158,6 +161,10 @@ export function readAppearance(s: Record<string, unknown>): Appearance {
     termWeight: weightOr(s[FIELD.termWeight], "normal"),
     termWeightBold: weightOr(s[FIELD.termWeightBold], "bold"),
     screens: screenModesOf(s[FIELD.screens]),
+    // VIEW-052: the sidebar stays untinted until a look is picked; a tint is #rrggbb or the default blue.
+    sidebarLook: sidebarLookOf(s[FIELD.sidebarLook]),
+    sidebarTint: hexOrEmpty(s[FIELD.sidebarTint]) || DEFAULT_TINT,
+    sidebarStrength: Math.round(clampNum(s[FIELD.sidebarStrength], SPAN.sidebarStrength)),
   };
 }
 
@@ -298,6 +305,8 @@ export function zoomTerm(key: number, how: "in" | "out" | "reset"): number {
 /** SET-018: the chosen fonts with a safe fallback after each; an empty editor font is the terminal font.
  *  SET-023: the gap between panes, its colour in this mode, and how far panes not in focus fade. */
 export const appearanceVars = (a: Appearance, dark = isDark(a)) => ({
+  // VIEW-052 / SET-021: the left sidebar's ground (T-268).
+  "--sidebar-bg": sidebarBackground(a.sidebarLook, a.sidebarTint, a.sidebarStrength, buildTheme(a, dark).surface, a.sidebarLook === "terminal" ? terminalFor(a, dark).background : undefined),
   "--ui-font": fontStack(a.appFont, uiFont),
   "--editor-font": fontStack(a.editorFont, fontStack(a.termFont, monoFont)),
   "--term-font": fontStack(a.termFont, monoFont),

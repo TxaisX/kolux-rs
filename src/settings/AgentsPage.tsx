@@ -11,6 +11,7 @@ import KeepAwakeCard from "../launch/KeepAwakeCard";
 import { useTeamsHost } from "../launch/teams";
 import { CAP_FIELD, capOn } from "../usage/meter";
 import { CACHE_LENGTH, CACHE_ON, cacheMinutes } from "../projects/cache";
+import { HOOKS_FIELD, hooksOn } from "../onboarding/hooksOn";
 
 const OPTIONS_FIELD = "agentOptions";
 const PERMISSIONS_FIELD = "agentPermissions";
@@ -53,9 +54,9 @@ export function AgentsPageView({ cap, onCap }: { cap: boolean; onCap: (on: boole
 
 // STAT-002: one switch for every agent's status hooks, on unless saved off. Rust takes Kolux's
 // entries out (or puts them back) when `agent_hooks_sync` runs after the save.
-export const HOOKS_FIELD = "agentStatusHooks";
-// T-152-gate: off until the user turns it on; that choice is the recorded approval to write hooks.
-export const hooksOn = (s: Record<string, unknown>) => s[HOOKS_FIELD] === true;
+// FIX-2: the key and the rule live in src/onboarding/hooksOn.ts (T-152-gate: off until the user turns it on;
+// that choice is the recorded approval to write hooks); re-exported so existing importers keep working.
+export { HOOKS_FIELD, hooksOn };
 
 // T-152-c (3): `agent_hooks_sync` answers with one {agent, done, error} per agent; the errors are
 // shown beside the switch so a refused install or a failed removal never stays silent.

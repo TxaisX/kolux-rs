@@ -187,5 +187,62 @@ export const cellKey = (item: string, field: string) => `${item} ${field}`;
 export const startSave = (s: Saving[], id: number, cell: string): Saving[] => [...s, { id, cell }];
 export const endSave = (s: Saving[], id: number): Saving[] => s.filter((x) => x.id !== id);
 export const isSaving = (s: Saving[], cell: string) => s.some((x) => x.cell === cell);
-/** True when `id` is the last edit sent for `cell` (`newest` maps each cell to its last edit id). */
-export const isNewest = (newest: Map<string, number>, cell: string, id: number) => newest.get(cell) === id;
+/** FIX-3 (review FIX-SOON 4): the edits sent for each cell. The cell shows the value of the last
+ * edit that succeeded, once no edit for it is still out; so a newer edit that fails leaves the cell
+ * on the older value GitHub really holds, and an older edit that comes back late is never put over
+ * a newer success. */
+export type CellBook = { pending: Map<string, Set<number>>; best: Map<string, { id: number; apply: () => void }>; wins: Map<string, number>; sent: number; due: boolean };
+export const newBook = (): CellBook => ({ pending: new Map(), best: new Map(), wins: new Map(), sent: 0, due: false });
+export function sendEdit(b: CellBook, cell: string, id: number): void {
+  b.sent++;
+  const set = b.pending.get(cell) ?? new Set<number>();
+  set.add(id);
+  b.pending.set(cell, set);
+}
+/** FIX-5 (review AFTER 4): the burst re-read replaces the whole project with what GitHub held when
+ * the read was answered, so it must never run over an edit of another cell that is out, or was sent
+ * after the read. `readBackStart` gives a token to send the read with, or null (no read) while any
+ * edit is still out; `readBackFresh` says whether the answer may still be shown (no edit has been
+ * sent since the token was given, and none is out now).
+ * FIX-6 (council FIX-SOON 1): a read that is skipped or dropped is not forgotten: `due` stays set
+ * until a read is sent, `settleEdit` reports "read now" when the last pending edit settles, and
+ * `readBackLost` says whether a dropped answer should be read again at once. */
+export const editsOut = (b: CellBook): boolean => [...b.pending.values()].some((s) => s.size > 0);
+export function readBackStart(b: CellBook): number | null {
+  if (editsOut(b)) {
+    b.due = true;
+    return null;
+  }
+  b.due = false;
+  return b.sent;
+}
+export const readBackFresh = (b: CellBook, token: number): boolean => b.sent === token && !editsOut(b);
+/** The answer to a read was dropped (an edit went out since): true when no edit is out now, so the
+ * caller reads again at once; false when one is, and that edit's settle will ask for the read. */
+export function readBackLost(b: CellBook): boolean {
+  b.due = true;
+  return !editsOut(b);
+}
+/** An edit came back. `apply` shows its value; it runs (for the highest-numbered success) when the last edit for the cell settles.
+ * FIX-4 (review AFTER 6): returns true when that was a burst (two or more edits went through): the
+ * highest id wins on screen only on the assumption that GitHub applied them in the order sent, so
+ * the caller reads the item back to show what GitHub really holds. FIX-6: a burst whose read has to
+ * wait for another edit that is out sets `due`; the settle that leaves no edit out returns true. */
+export function settleEdit(b: CellBook, cell: string, id: number, ok: boolean, apply: () => void): boolean {
+  const set = b.pending.get(cell);
+  set?.delete(id);
+  const cur = b.best.get(cell);
+  if (ok && (!cur || cur.id < id)) b.best.set(cell, { id, apply });
+  if (ok) b.wins.set(cell, (b.wins.get(cell) ?? 0) + 1);
+  if (set && set.size > 0) return false;
+  b.pending.delete(cell);
+  const best = b.best.get(cell);
+  b.best.delete(cell);
+  const burst = (b.wins.get(cell) ?? 0) >= 2;
+  b.wins.delete(cell);
+  best?.apply();
+  if (burst) b.due = true;
+  if (!b.due || editsOut(b)) return false;
+  b.due = false;
+  return true;
+}

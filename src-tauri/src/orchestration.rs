@@ -207,20 +207,6 @@ pub fn start_check(tasks: &[Value], id: &str, run: Option<&str>) -> Result<usize
     }
 }
 
-/// ORCH-016 (council FIX-1 S1): which of the terminals that appeared in the worker's worktree
-/// during the wait is the worker's: `fresh` lists each with the agent Kolux credits it to (none for
-/// a shell or another program). Only a terminal running the worker's own agent counts, and only
-/// when exactly one does: a tab the user opened there during the wait makes it ambiguous, and then
-/// none is recorded, so a release or a stop can never close the user's tab. Stamping the start's
-/// own session is T-172-e.
-pub fn worker_terminal(fresh: &[(u32, Option<String>)], agent: &str) -> Option<u32> {
-    let mut mine = fresh.iter().filter(|(_, a)| a.as_deref() == Some(agent)).map(|(id, _)| *id);
-    match (mine.next(), mine.next()) {
-        (Some(id), None) => Some(id),
-        _ => None,
-    }
-}
-
 /// ORCH-023: fences dispatch `id` off. Its worker can no longer report on it, and its task can be
 /// handed on again; no process is stopped, no pane closes and nothing on disk changes. A dispatch
 /// of another Run reads as missing. Abandoning twice answers the same.
@@ -2830,19 +2816,6 @@ mod tests {
         // Kolux cannot tell what runs there: it goes by its records, as before.
         let (_, h) = release_with(&mut d, &live, "dispatch-4", Some("run-1"), 4, &agent_of).unwrap();
         assert_eq!(h.as_deref(), Some("term-8"));
-    }
-
-    #[test]
-    fn orch016_a_tab_the_user_opens_during_the_wait_is_never_recorded() {
-        let s = |a: &str| Some(a.to_string());
-        assert_eq!(worker_terminal(&[(3, s("claude"))], "claude"), Some(3));
-        // The user opened the same agent in the same worktree during the wait: which one is the
-        // worker's cannot be told, so none is recorded.
-        assert_eq!(worker_terminal(&[(3, s("claude")), (4, s("claude"))], "claude"), None);
-        // A shell or another agent opened there does not count.
-        assert_eq!(worker_terminal(&[(4, None), (3, s("claude")), (5, s("codex"))], "claude"), Some(3));
-        assert_eq!(worker_terminal(&[(5, s("codex"))], "claude"), None);
-        assert_eq!(worker_terminal(&[], "claude"), None);
     }
 
     #[test]

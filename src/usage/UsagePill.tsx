@@ -14,7 +14,11 @@ export const openAccounts = () => openSettings("accounts");
 
 export function UsagePillView({ hidden, onOpen, children }: { hidden: boolean; onOpen: () => void; children?: ReactNode }) {
   return (
-    <button type="button" className="usage" hidden={hidden} title={PILL_TITLE} onClick={onOpen}>
+    <button type="button" className="usage" hidden={hidden} title={PILL_TITLE} aria-describedby="usage-pill-hint" onClick={onOpen}>
+      {/* FIX-5 (council P2 P12): the title shows on hover only; the same words are the button's description. */}
+      <span id="usage-pill-hint" style={{ display: "none" }}>
+        {PILL_TITLE}
+      </span>
       {children}
     </button>
   );

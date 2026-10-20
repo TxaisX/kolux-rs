@@ -32,8 +32,10 @@ export function pickSession<S extends Session>(groups: Group<S>[], current: numb
   return first ? first.sessions[first.sessions.length - 1].key : null;
 }
 
-/** A row's text: the task's display name or title the launcher gave it, else the folder it works in, else its number. */
-export const sessionLabel = (p: Pick<Session, "key" | "title" | "cwd">): string => p.title || (p.cwd ? folderName(p.cwd) : "") || `Session ${p.key}`;
+/** A row's text: the display name or title the launcher gave it; else, for an orchestrator-started
+ * session (T-050-b), its worker label (orchestration's worker_labels: the task's display name, title
+ * or text, else the brief's task text, never the wrapper); else the folder it works in, else its number. */
+export const sessionLabel = (p: Pick<Session, "key" | "title" | "cwd">, task?: string): string => p.title || task?.trim() || (p.cwd ? folderName(p.cwd) : "") || `Session ${p.key}`;
 
 /** VIEW-024: the Board's cards, one per terminal pane in tab-group order; editor and browser tabs get none. */
 export const cardPanes = <P extends { key: number; kind?: string }>(panes: P[]): P[] => panes.filter((p) => !p.kind);

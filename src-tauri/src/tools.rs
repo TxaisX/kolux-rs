@@ -381,7 +381,34 @@ pub fn guarded_setup<R: tauri::Runtime>(
     let configs: Vec<_> = app.config().app.windows.iter().filter(|w| labels.contains(&w.label)).cloned().collect();
     for config in &configs {
         let handle = app.handle().clone();
-        let open = || tauri::WebviewWindowBuilder::from_config(&handle, config).and_then(|b| b.build()).map(|_| ());
+        // APP-015: the window never navigates away from the app; an outside web address opens in the
+        // default browser instead, and anything else is dropped (menu::navigation decides). A new-window
+        // request (target=_blank, window.open) takes the same road: web and mail addresses go to the
+        // browser, the rest is denied (menu::new_window).
+        let dev = if cfg!(debug_assertions) { handle.config().build.dev_url.clone() } else { None };
+        let own = crate::menu::Own::for_platform(crate::menu::Os::current(), config.use_https_scheme);
+        let open = || {
+            let (dev_nav, dev_win) = (dev.clone(), dev.clone());
+            tauri::WebviewWindowBuilder::from_config(&handle, config)
+                .map(|b| {
+                    b.on_navigation(move |url| match crate::menu::navigation(url, own, dev_nav.as_ref()) {
+                        crate::menu::Nav::Allow => true,
+                        crate::menu::Nav::External => {
+                            let _ = crate::artifacts::system_open(url.as_str());
+                            false
+                        }
+                        crate::menu::Nav::Block => false,
+                    })
+                    .on_new_window(move |url, _features| {
+                        if crate::menu::new_window(&url, own, dev_win.as_ref()) == crate::menu::Nav::External {
+                            let _ = crate::artifacts::system_open(url.as_str());
+                        }
+                        tauri::webview::NewWindowResponse::Deny
+                    })
+                })
+                .and_then(|b| b.build())
+                .map(|_| ())
+        };
         if let Err(e) = open_retrying(open, std::thread::sleep) {
             startup_failed(&e);
         }
@@ -461,9 +488,104 @@ fn process_table() -> Vec<(u32, u32, String)> {
     Vec::new()
 }
 
+/// FIX-4: the ONE way to credit the program Kolux starts in a pane to a catalogue agent. The program
+/// is a single path to run (`program_command` takes the whole text). A line is read as a command line
+/// only when it is quoted or its first word is a bare name (`claude --x`, `node <entry script>`);
+/// otherwise it is a path and is read whole, quoted, which keeps a path with spaces together
+/// (`C:\Program Files\Claude\claude.exe`) and never credits it by a folder name (`C:\Users\Grok Fan\...`).
+/// An unquoted path followed by arguments is ambiguous and is credited to nobody. The window's `creditedProgram`
+/// (src/launch/paneMark.ts) is this function, pinned by the asserts below, so the mark a pane draws
+/// and the account or key it is handed cannot disagree. Callers: every place that credits a spawn
+/// program (terminal start, the Claude and Codex account variables, the key variables, the peers
+/// list, the inventory, the context cap), which all call it instead of `agents::credited_agent`.
+// ponytail: the better end state is Rust returning the credited agent in Spawned/StartLine so the
+// window keeps no copy of the rule; that needs terminal.rs and App.tsx state, outside this lane.
+pub fn credited_program(program: &str) -> Option<&'static str> {
+    let p = program.trim();
+    if p.is_empty() {
+        return None;
+    }
+    // A quoted program, or a bare name with arguments (`claude --x`, `node <script>`), is a command line.
+    // Anything else is a path to run whole: its folder names (`C:\Users\Grok Fan\...`) are not the program.
+    let bare_first = p.split_whitespace().next().is_some_and(|w| !w.contains(['\\', '/']));
+    if p.starts_with('"') || bare_first {
+        crate::agents::credited_agent(p)
+    } else {
+        crate::agents::credited_agent(&format!("\"{p}\""))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // FIX-4: src/launch/paneMark.test.ts parses these asserts and replays every one through
+    // creditedProgram, and fails if a credited_program( call here is not a literal assert_eq! it can read.
+    #[test]
+    fn fix4_credited_program_reads_a_spawn_program_quoted_first_then_as_a_line() {
+        assert_eq!(credited_program("claude"), Some("claude"));
+        assert_eq!(credited_program("  codex  "), Some("codex"), "trimmed");
+        assert_eq!(credited_program("claude --permission-mode auto"), Some("claude"), "a line with arguments");
+        assert_eq!(credited_program("\"claude\""), Some("claude"));
+        assert_eq!(credited_program(r#""C:\Program Files\Claude\claude.exe" --x"#), Some("claude"), "quoted path, arguments");
+        assert_eq!(credited_program(r"C:\Program Files\Claude\claude.exe"), Some("claude"), "a bare path with a space");
+        assert_eq!(credited_program(r"C:\Program Files\nodejs\codex.cmd"), Some("codex"));
+        assert_eq!(credited_program(r"node C:\Users\t\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\cli.js"), Some("claude"));
+        assert_eq!(credited_program("node /usr/lib/node_modules/@openai/codex/bin/codex.js"), Some("codex"));
+        assert_eq!(credited_program(r"C:\Program Files\Claude\claude.exe --x"), None, "unquoted path plus arguments: the cut is ambiguous");
+        assert_eq!(credited_program(r"C:\Users\Grok Fan\bin\tool.exe"), None, "a folder name with a space is not the program");
+        assert_eq!(credited_program(r"C:\Users\Codex Fan\tools\x.exe"), None);
+        assert_eq!(credited_program(r"D:\Apps\Claude Code\launcher.exe"), None);
+        assert_eq!(credited_program(r"codex --cd C:\work\claude"), Some("codex"), "a bare name plus arguments: the first word is the program");
+        assert_eq!(credited_program(r"claude C:\tools\codex.cmd"), Some("claude"));
+        assert_eq!(credited_program("/opt/Grok Tools/grok"), Some("grok"), "a path with a space, read whole");
+        assert_eq!(credited_program(r"C:\Program Files\Tools\notclaude.exe"), None);
+        assert_eq!(credited_program(r"C:\Program Files\Kiro\kiro.exe"), None, "plain kiro is not Kiro");
+        assert_eq!(credited_program("claude-teams"), None);
+        assert_eq!(credited_program("pwsh"), None);
+        assert_eq!(credited_program("   "), None);
+        assert_eq!(credited_program(""), None);
+    }
+
+    /// The text of a Rust source with whole-line comments dropped.
+    fn code_only(src: &str) -> String {
+        src.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n")
+    }
+
+    /// Whether `name` appears in `text` as a whole word (a call, a path segment or a function pointer).
+    fn uses_word(text: &str, name: &str) -> bool {
+        let word = |c: char| c.is_alphanumeric() || c == '_';
+        text.match_indices(name).any(|(at, _)| {
+            !text[..at].chars().next_back().is_some_and(word) && !text[at + name.len()..].chars().next().is_some_and(word)
+        })
+    }
+
+    #[test]
+    fn fix5_only_agents_tools_and_foreground_name_credited_agent() {
+        // A spawn program is credited through credited_program; credited_agent stays for the three files that read a command line.
+        assert!(uses_word("a(credited_agent(x)) b", "credited_agent") && uses_word(".map(credited_agent)", "credited_agent"));
+        assert!(!uses_word("fix4_credited_agent_x credited_agent2", "credited_agent"));
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![dir.clone()];
+        let (mut seen, mut users) = (0, Vec::new());
+        while let Some(d) = stack.pop() {
+            for entry in std::fs::read_dir(&d).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    seen += 1;
+                    let text = code_only(&std::fs::read_to_string(&path).unwrap());
+                    if uses_word(&text, "credited_agent") {
+                        users.push(path.strip_prefix(&dir).unwrap().to_string_lossy().replace('\\', "/"));
+                    }
+                }
+            }
+        }
+        users.sort();
+        assert!(seen > 20, "read {seen} source files");
+        assert_eq!(users, ["agents.rs", "foreground.rs", "tools.rs"], "a spawn program is credited through the tools reader, not the agents one");
+    }
 
     #[test]
     fn t191b_agent_teams_is_offered_only_off_windows_and_wsl_with_the_command_line_found() {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { caps, completed, doneFrom, doneId, firstOpen, forward, latest, milestonesShown, moveOn, nextTip, notePage, PAGE_SHOWN, pageNoter, pageCounts, railKey, ring, startTicked, stopDone, STEPS, stopOf, visits, withRecord, workflowDone, WORKFLOWS, type Facts, type Place, type Setup, type StepId } from "./guide";
+import { caps, completed, doneFrom, doneId, firstOpen, forward, latest, legacyProfile, LEGACY_DONE, milestonesShown, moveOn, nextTip, notePage, PAGE_SHOWN, pageNoter, pageCounts, railKey, ring, startTicked, stopDone, STEPS, stopOf, visits, withRecord, workflowDone, WORKFLOWS, type Facts, type Place, type Setup, type StepId } from "./guide";
 
 const set = (...ids: StepId[]) => new Set<StepId>(ids);
 
@@ -130,6 +130,10 @@ describe("Setup Guide steps tick from real state (ONB-015)", () => {
   it("the default agent, notifications, CLI and setup-script steps tick from their own state", () => {
     expect(doneFrom({ ...none, agent: "" }).has("agent")).toBe(false);
     expect(doneFrom({ ...none, agent: "claude" }).has("agent")).toBe(true);
+    // FIX-4: a plain terminal is not an AI agent, so a saved "terminal" default does not tick the step.
+    expect(doneFrom({ ...none, agent: "terminal" }).has("agent")).toBe(false);
+    expect(doneFrom({ ...none, agent: " Terminal " }).has("agent")).toBe(false);
+    expect(doneFrom({ ...none, agent: "   " }).has("agent")).toBe(false);
     expect(doneFrom({ ...none, notifications: false }).has("notifications")).toBe(false);
     expect(doneFrom({ ...none, notifications: true }).has("notifications")).toBe(true);
     expect(doneFrom({ ...none, cli: true }).has("cli")).toBe(true);
@@ -194,7 +198,8 @@ describe("the browser pane's page note (ONB-015)", () => {
     const kept: string[] = [];
     let fail = true;
     const mark = (list: string, id: string) => (kept.push(`${list}:${id}`), fail ? Promise.reject(new Error("locked")) : Promise.resolve({ tipsSeen: [], visited: [], tried: [], toursSeen: [], toursAuto: null }));
-    const note = pageNoter(mark, () => {});
+    const used: string[] = [];
+    const note = pageNoter(mark, (id) => used.push(id));
     const flush = () => new Promise((r) => setTimeout(r, 0));
     note("https://example.com/");
     await flush();
@@ -204,6 +209,8 @@ describe("the browser pane's page note (ONB-015)", () => {
     note("https://example.org/");
     await flush();
     expect(kept).toEqual([`tried:${PAGE_SHOWN}`, `tried:${PAGE_SHOWN}`]);
+    // FIX-4: the retry writes the mark again but the use is counted once (the same first page).
+    expect(used).toEqual(["browser-page"]);
   });
 
   it("the saved record merges into what this window already saw; an early visit is never lost (FIX-1)", () => {
@@ -211,5 +218,25 @@ describe("the browser pane's page note (ONB-015)", () => {
     const r = withRecord(new Set(["workspaces"]), new Set(["explore-usage"]), { visited: ["tasks", "nope"], tried: ["explore-agents"] });
     expect([...r.seen].sort()).toEqual(["explore-agents", "tasks", "workspaces"]);
     expect([...r.kept].sort()).toEqual(["explore-agents", "explore-usage"]);
+  });
+});
+
+describe("the legacy-profile rule (ONB-015)", () => {
+  it("an old profile that hid the sidebar checklist, or finished the earlier steps, counts every step as complete", () => {
+    expect(legacyProfile({ setupChecklist: false }, [])).toBe(true);
+    expect(legacyProfile({}, [LEGACY_DONE])).toBe(true);
+    expect([...doneFrom({ ...none, legacy: true })].sort()).toEqual(STEPS.map((s) => s.id).sort());
+  });
+  it("a profile that never hid the checklist is not legacy, and a failed read is never taken as completion", () => {
+    expect(legacyProfile({ setupChecklist: true }, [])).toBe(false);
+    expect(legacyProfile({}, ["browser-page"])).toBe(false);
+    expect(legacyProfile(null, null)).toBeNull();
+    expect(legacyProfile(null, [])).toBe(false);
+    expect([...doneFrom({ ...none, legacy: null })]).toEqual([]);
+    expect([...doneFrom({ ...none, legacy: false })]).toEqual([]);
+  });
+  it("a retired step id (the old split-terminal step) no longer counts toward progress", () => {
+    const stale = new Set(["split-terminal", "browser"]) as unknown as Set<StepId>;
+    expect(ring(stale).done).toBe(ring(set("browser")).done);
   });
 });

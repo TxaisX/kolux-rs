@@ -9,6 +9,7 @@ import { Book, Box, Close, Funnel, Megaphone, Merge, Pulse, Table } from "../chr
 import { CATEGORY_NAME, KITS, RESULTS_FOLDER, VENDOR_NAME, assignRoles, extOf, fillEmpty, firstDropped, isWorkbook, recalled, sampleValues, unquote, type Kit, type Vendor } from "./catalog";
 import { sameDir } from "../workspaces";
 import type { Past } from "./run";
+import { noteOwnFile, noteResults } from "./milestones";
 
 export const OPEN_KITS = "kolux-open-kits";
 /** The gallery, or with `kit` that kit's setup; `chooser` is the chooser pane it came from (SESS-019), closed once the kit starts. */
@@ -52,7 +53,13 @@ export function RecentRuns({ runs, onResults, onProject }: { runs: Past[]; onRes
                 {r.dir}
               </span>
             </span>
-            <button className="btn small" onClick={() => onResults(r)}>
+            <button
+              className="btn small"
+              onClick={() => {
+                onResults(r);
+                void noteResults(); // SKILL-016
+              }}
+            >
               Open results
             </button>
             <button className="btn small" onClick={() => onProject(r)}>
@@ -129,7 +136,8 @@ export type SetupProps = {
   settings: Record<string, unknown>;
   onSamples: () => void;
   samplesBusy: boolean;
-  onStart: (values: Record<string, string>, assigned: (Vendor | null)[]) => void;
+  /** ONB-013: may hand back whether the kit really started, so a run on the user's own file can tick the checklist. */
+  onStart: (values: Record<string, string>, assigned: (Vendor | null)[]) => Promise<boolean | void> | void;
   /** SKILL-006: the folder holds another kit's run; Start kit becomes Start anyway. */
   conflict?: string | null;
   onBack: () => void;
@@ -281,7 +289,14 @@ export function KitSetup({ kit, connected, dir, sampleDir, settings, onSamples, 
           <button className="btn" onClick={onSamples} disabled={samplesBusy}>
             {samplesBusy ? "Copying samples…" : "Try with sample data"}
           </button>
-          <button className="btn primary" disabled={!ready} onClick={() => onStart(Object.fromEntries(Object.entries(values).map(([k, x]) => [k, x.trim()])), assigned)}>
+          <button
+            className="btn primary"
+            disabled={!ready}
+            onClick={() => {
+              const given = Object.fromEntries(Object.entries(values).map(([k, x]) => [k, x.trim()]));
+              void noteOwnFile(kit, given, sampleDir, onStart(given, assigned)); // ONB-013
+            }}
+          >
             {conflict ? "Start anyway" : "Start kit"}
           </button>
         </div>

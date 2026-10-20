@@ -7,7 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { actionError } from "./issueActions";
 import type { Task } from "./model";
-import { closingDraft, createBusy, createOnce, draftFrom, draftToSave, emptyDraft, type IssueDraft, names, openDraft, watchCreate, withRepo } from "./newIssue";
+import { closingDraft, createBusy, createOnce, draftFrom, draftToSave, emptyDraft, type IssueDraft, names, openDraft, pickableLabels, TITLE_MAX, titleLength, lastCreateFailure, createResetsDialog, watchCreate, withRepo } from "./newIssue";
 
 /** The draft kept for this run (also one too long for settings); null after an issue is created.
  * The one-create-at-a-time flag lives next to it, in newIssue.ts (createOnce). */
@@ -22,18 +22,25 @@ export default function NewIssueDialog(p: {
   labels: string[];
   people: string[];
   onClose: () => void;
-  onCreated: (t: Task) => void;
+  onCreated: (t: Task, host: string) => void;
 }) {
   const [start] = useState(() => openDraft(held ?? draftFrom(p.saved), p.targets, p.host));
   const [d, setD] = useState<IssueDraft>(start.draft);
   const [labelText, setLabelText] = useState(d.labels.join(", "));
   const [peopleText, setPeopleText] = useState(d.assignees.join(", "));
   const [busy, setBusy] = useState(createBusy);
-  const [error, setError] = useState<string | null>(null);
+  // FIX-4: a create that failed while no dialog was open (the user had left Tasks) still shows here.
+  // FIX-5: only a failure sent to this host and repository (scoped in newIssue.ts).
+  // FIX-6 (council AFTER 3): read for the repository selected now (not the one the dialog opened
+  // on) each time the dialog draws; `failedTick` makes it draw when a create settles.
+  const [, failedTick] = useState(0);
   const box = useRef<HTMLDivElement>(null);
   // Nothing is saved until the user changes something, so opening the dialog in a workspace on
   // another host never overwrites the draft kept for the first host.
   const touched = useRef(false);
+  // The repository the dialog is aimed at now, for the failure watcher below.
+  const repoNow = useRef(d.repo);
+  repoNow.current = d.repo;
   const pending = useRef<IssueDraft | null | undefined>(undefined);
   const save = useRef(p.save);
   save.current = p.save;
@@ -44,14 +51,27 @@ export default function NewIssueDialog(p: {
     pending.current = undefined;
     if (v !== "too-long") void save.current({ tasksIssueDraft: v });
   };
+  // FIX-3 (review A4): closing the dialog returns focus to what had it before (declared before the
+  // effect that moves focus into the dialog, so it reads the opener first).
+  useEffect(() => {
+    const before = document.activeElement as HTMLElement | null;
+    return () => {
+      if (before?.isConnected) before.focus?.();
+    };
+  }, []);
   useEffect(() => box.current?.focus(), []);
   // A create still out from an earlier opening of this dialog: wait for it, and start a fresh
   // draft when it went through.
   useEffect(
     () =>
-      watchCreate((e) => {
+      watchCreate((e, _err, scope) => {
         setBusy(e === "busy");
-        if (e === "created") {
+        // A create started by an earlier opening of this dialog failed (or timed out): say so here
+        // too, or the user would click Create again on a gh that may have opened the issue.
+        // FIX-5: and only when it was sent to this dialog's own host and repository.
+        if (e === "failed") failedTick((n) => n + 1);
+        // FIX-6 (council AFTER 2): and a create that went through resets only the dialog it was sent to.
+        if (e === "created" && createResetsDialog(scope, p.host, repoNow.current)) {
           touched.current = false;
           setD((x) => emptyDraft(p.host, x.repo));
           setLabelText("");
@@ -95,17 +115,18 @@ export default function NewIssueDialog(p: {
   };
   const create = () => {
     const f = closingDraft(d, labelText, peopleText);
-    setError(null);
-    void createOnce(() => invoke<{ number: number; url: string; title: string }>("github_issue_create", { host: p.host, repo: f.repo, title: f.title, body: f.body, labels: f.labels, assignees: f.assignees })).then((r) => {
+    void createOnce(() => invoke<{ number: number; url: string; title: string }>("github_issue_create", { host: p.host, repo: f.repo, title: f.title, body: f.body, labels: f.labels, assignees: f.assignees }), { host: p.host, repo: f.repo }).then((r) => {
       if (!r) return;
-      if (!r.ok) return setError(actionError(r.error, "create"));
+      if (!r.ok) return failedTick((n) => n + 1);
       held = null;
       pending.current = undefined;
       void save.current({ tasksIssueDraft: null });
       const c = r.value;
-      p.onCreated({ kind: "issue", number: c.number, title: c.title || f.title.trim(), url: c.url, repo: f.repo, state: "open", draft: false, labels: f.labels.map((name) => ({ name, color: "" })), assignees: f.assignees, updated: new Date().toISOString(), checks: null });
+      p.onCreated({ kind: "issue", number: c.number, title: c.title || f.title.trim(), url: c.url, repo: f.repo, state: "open", draft: false, labels: f.labels.map((name) => ({ name, color: "" })), assignees: f.assignees, updated: new Date().toISOString(), checks: null }, p.host);
     });
   };
+  const gone = lastCreateFailure(p.host, d.repo);
+  const error = gone ? actionError(gone, "create") : null;
   const facts = d.repo === p.factsRepo;
   const other = start.elsewhere;
   return (
@@ -139,8 +160,13 @@ export default function NewIssueDialog(p: {
         <textarea className="field" aria-label="Description" placeholder="Description (Markdown)" rows={8} disabled={busy} value={d.body} onChange={(e) => edit({ ...d, body: e.target.value })} />
         <input className="field" aria-label="Labels" placeholder="Labels, comma separated" list="new-issue-labels" disabled={busy} value={labelText} onChange={(e) => setLabelText(e.target.value)} onBlur={() => edit({ ...d, labels: names(labelText) })} />
         <input className="field" aria-label="Assignees" placeholder="Assignees (logins), comma separated" list="new-issue-people" disabled={busy} value={peopleText} onChange={(e) => setPeopleText(e.target.value)} onBlur={() => edit({ ...d, assignees: names(peopleText) })} />
-        <datalist id="new-issue-labels">{facts && p.labels.map((l) => <option key={l} value={l} />)}</datalist>
+        <datalist id="new-issue-labels">{facts && pickableLabels(p.labels).map((l) => <option key={l} value={l} />)}</datalist>
         <datalist id="new-issue-people">{facts && p.people.map((l) => <option key={l} value={l} />)}</datalist>
+        {titleLength(d.title) > TITLE_MAX && (
+          <div className="tasks-warn" role="alert" data-title-long>
+            GitHub titles can be at most {TITLE_MAX} characters; this one has {titleLength(d.title)}.
+          </div>
+        )}
         {out === "too-long" && (
           <div className="tasks-count" data-draft-memory>
             This draft is too long to keep after Kolux closes; it is kept until then, and creating the issue still works.
@@ -151,7 +177,7 @@ export default function NewIssueDialog(p: {
             {error}
           </div>
         )}
-        <button className="btn primary" disabled={busy || !d.title.trim() || !d.repo} onClick={create}>
+        <button className="btn primary" disabled={busy || !d.title.trim() || titleLength(d.title) > TITLE_MAX || !d.repo} onClick={create}>
           {busy ? "Creating…" : "Create issue"}
         </button>
       </div>

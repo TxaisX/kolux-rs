@@ -1129,8 +1129,17 @@ fn request_id() -> String {
     format!("{:x}-{:x}", std::process::id(), t)
 }
 
-/// What a success looks like without `--json`.
+/// What a success looks like without `--json`. cli FIX-9: a late worker note (`lateWorker`) is
+/// printed under any answer that carries one, with the command that closes it.
 fn text_of(command: &str, r: &Value) -> String {
+    let mut text = text_core(command, r);
+    for n in r["lateWorker"].as_array().into_iter().flatten() {
+        text.push_str(&format!("\nwarning: {}; next: {}", n["note"].as_str().unwrap_or_default(), n["next"].as_str().unwrap_or_default()));
+    }
+    text
+}
+
+fn text_core(command: &str, r: &Value) -> String {
     if let Some(t) = local_cli::text(command, r) {
         return t;
     }
@@ -1310,7 +1319,18 @@ fn text_of(command: &str, r: &Value) -> String {
             for w in &rows {
                 let g = |k: &str| w[k].as_str().unwrap_or("-").to_string();
                 let next = w["next"].as_str().map(|n| format!("; next: {n}")).unwrap_or_default();
-                out.push(format!("{} {} (task {}) terminal {} {}{next}", g("dispatchId"), g("terminalState"), g("taskStatus"), g("terminal"), g("worktree")));
+                // cli FIX-12 (council FIX-SOON 3 on 28f3eb7a): a left-open terminal is closed with terminal close
+                // (a release would leave it open again); any other pending row is closed by worker-release.
+                // worker-show only ends the alarm, on a later show, and never names the way out.
+                let left_open = w["terminalLeftOpen"].as_str().filter(|why| !why.is_empty());
+                let late = match (w["latePending"] == true, w["lateAfter"].as_str(), left_open) {
+                    (true, Some(status), Some(why)) => format!("; its agent came up late, after the dispatch was {status}, and its terminal is left open ({why}): close it with {} terminal close --terminal {}", crate::orchestration::CLI, g("terminal")),
+                    (true, Some(status), None) => format!("; its agent came up late, after the dispatch was {status}: close it with {} orchestration worker-release --dispatch {}", crate::orchestration::CLI, g("dispatchId")),
+                    (false, Some(status), _) => format!("; its agent came up late, after the dispatch was {status}"),
+                    _ if w["lateStamp"] == true => "; its agent came up late".to_string(),
+                    _ => String::new(),
+                };
+                out.push(format!("{} {} (task {}) terminal {} {}{late}{next}", g("dispatchId"), g("terminalState"), g("taskStatus"), g("terminal"), g("worktree")));
             }
             if let Some(c) = r["nextCursor"].as_str() {
                 out.push(format!("more: --cursor {c}"));
@@ -1325,7 +1345,15 @@ fn text_of(command: &str, r: &Value) -> String {
             Some("released") => format!("{} released: its terminal was already gone; the worktree {} stays", s("dispatchId"), s("worktree")),
             _ => format!("{} release unknown: {}; next: {}", s("dispatchId"), s("error"), s("next")),
         },
-        WORKER_SHOW => format!("{} {} (task {}) terminal {} {}; waiting on a person: {} ({})", s("dispatchId"), s("terminalState"), s("taskStatus"), s("terminal"), s("worktree"), s("waiting"), s("waitingWhy")),
+        WORKER_SHOW => {
+            // cli FIX-9: a session recorded after the start gave up, and the status the row had when it came.
+            let late = match (r["lateStamp"] == true, r["lateAfter"].as_str()) {
+                (_, Some(status)) => format!("; its agent came up late, after the dispatch was {status}"),
+                (true, None) => "; its agent came up late".to_string(),
+                _ => String::new(),
+            };
+            format!("{} {} (task {}) terminal {} {}; waiting on a person: {} ({}){late}", s("dispatchId"), s("terminalState"), s("taskStatus"), s("terminal"), s("worktree"), s("waiting"), s("waitingWhy"))
+        }
         RETAIN => match r["alreadyRetained"] == true {
             true => format!("{} was already kept", s("dispatchId")),
             false => format!("{} kept: its terminal {} stays open until it is released", s("dispatchId"), s("terminal")),
@@ -2677,8 +2705,13 @@ fn now_ms() -> u64 {
 
 /// The pane a call came from, when the runtime can vouch for it.
 fn caller(ctx: &Ctx, req: &Request) -> Result<Option<String>, Fail> {
+    caller_with(req, &|k| ctx.terminals.by_key(k))
+}
+
+/// `caller` with the terminal behind a pane key given, so a test can stand a pane in.
+fn caller_with(req: &Request, by_key: &dyn Fn(&str) -> Option<String>) -> Result<Option<String>, Fail> {
     let pane = req.pane.as_ref().map(|p| (p.handle.as_str(), p.key.as_str()));
-    crate::orchestration::caller_of(req.args["from"].as_str(), pane, &|k| ctx.terminals.by_key(k))
+    crate::orchestration::caller_of(req.args["from"].as_str(), pane, by_key)
 }
 
 fn unbound() -> Fail {
@@ -2861,10 +2894,19 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
     let mut tasks = load_list(store, TASKS_KEY);
     o::promote(&mut tasks);
     let mut dispatches = load_list(store, DISPATCHES_KEY);
+    // cli FIX-8: a session the window started after its start gave up is recorded on its row first, so
+    // worker-show, worker-stop and worker-release see (and can end) it.
+    reconcile_late(&mut dispatches, &|t| ctx.terminals.live(&crate::terminal::handle_of(t)).then(|| mark_program(ctx.terminals, t)));
+    // cli FIX-12: and one whose late terminal is gone (closed by hand) is spent before any arm reads it.
+    spend_gone_late(&mut dispatches, &|h| ctx.terminals.live(h));
     // ORCH-033: a pane acts in its own Run; another Run can be named to read it, never to change it.
     let own = pane.and_then(|p| m.run_of(p, &dispatches));
     let run = named.clone().or_else(|| own.clone());
     let caps = caps(store, a);
+    // cli FIX-10: the dispatch worker-show reads, kept before the arms use up `run`.
+    let shown_row = (req.command == WORKER_SHOW).then(|| (text("dispatch"), run.clone()));
+    // cli FIX-11: the Run this answer speaks for, kept for the late notes (the arms use `run` up).
+    let scope = run.clone();
     let changes = !READS.contains(&req.command.as_str()) && a["dryRun"] != true;
     if let (true, Some(n), Some(p)) = (changes, &named, pane) {
         in_run(m, p, n, &dispatches)?;
@@ -2958,8 +3000,11 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
         STOP => {
             let id = text("dispatch").ok_or_else(|| Fail::args("--dispatch is required"))?;
             m.once(retry, |_| {
-                // FIX-1 S2: what each terminal runs now, so one that is not the worker's own stays open.
-                let agent_of = |h: &str| h.strip_prefix("term-").and_then(|n| n.parse::<u32>().ok()).and_then(|t| ctx.terminals.program(t)).map(|a| a.map(str::to_string));
+                // FIX-1 S2: what each terminal runs now, so one that is not the worker's own stays open;
+                // cli FIX-4: a custom-command worker's recorded session is its own.
+                let own = own_program(&dispatches, &id, run.as_deref());
+                let now = |t: u32| session_now(ctx.terminals, t);
+                let agent_of = |h: &str| runs_now(h, own.as_ref(), &now);
                 let (mut receipt, kill) = o::stop_with(&mut tasks, &mut dispatches, &id, run.as_deref(), now_ms(), &agent_of)?;
                 // ORCH-022: the agent terminal ends while the store is held, so its exit is never
                 // taken for a worker that died by itself.
@@ -2981,7 +3026,7 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
             let from = if named.is_some() { "named" } else if own.is_some() { "tied" } else { "all" };
             let limit = text("limit").and_then(|v| v.parse::<usize>().ok()).unwrap_or(50);
             let live = |h: &str| ctx.terminals.live(h);
-            o::worker_list(&tasks, &dispatches, run.as_deref(), from, text("terminalState").as_deref(), text("cursor").as_deref(), limit, &live)?
+            late_rows(o::worker_list(&tasks, &dispatches, run.as_deref(), from, text("terminalState").as_deref(), text("cursor").as_deref(), limit, &live)?, &dispatches)
         }
         RETAIN => {
             let id = text("dispatch").ok_or_else(|| Fail::args("--dispatch is required"))?;
@@ -3000,34 +3045,53 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
             };
             let read = |t: u32| ctx.terminals.read(t, None, None);
             let kill = |t: u32| ctx.terminals.kill(t).is_ok();
-            // FIX-1 S1: a terminal that now runs another agent, or a plain shell, is left open.
-            let agent_of = |h: &str| h.strip_prefix("term-").and_then(|n| n.parse::<u32>().ok()).and_then(|t| ctx.terminals.program(t)).map(|a| a.map(str::to_string));
+            // FIX-1 S1: a terminal that now runs another agent, or a plain shell, is left open;
+            // cli FIX-4: a custom-command worker's recorded session is its own.
+            let own = own_program(&dispatches, &id, run.as_deref());
+            let now = |t: u32| session_now(ctx.terminals, t);
+            let agent_of = |h: &str| runs_now(h, own.as_ref(), &now);
             m.once(retry, |_| release_worker(&mut dispatches, &id, run.as_deref(), &live, &agent_of, &dir, &save, &read, &kill))?
         }
         WORKER_SHOW => {
             // CLI-036: no pane hook state reaches this path yet, so a live pane reads unknown.
             let id = text("dispatch").ok_or_else(|| Fail::args("--dispatch is required"))?;
             let live = |h: &str| ctx.terminals.live(h);
-            o::worker_show(&tasks, &dispatches, &id, run.as_deref(), &live, None)?
+            let mut shown = o::worker_show(&tasks, &dispatches, &id, run.as_deref(), &live, None)?;
+            // cli FIX-9: a session recorded after the start gave up, and the status the row already had then.
+            if let Some(d) = dispatches.iter().find(|d| d["id"] == id.as_str() && d["runId"].as_str() == run.as_deref()) {
+                for k in ["lateStamp", "lateAfter"] {
+                    if !d[k].is_null() {
+                        shown[k] = d[k].clone();
+                    }
+                }
+            }
+            shown
         }
         "orchestration.gate-create" => m.once(retry, |m| m.gate_create(run.as_deref(), &mut tasks, &dispatches, a, now_ms()))?,
         "orchestration.gate-resolve" => m.once(retry, |m| m.gate_resolve(run.as_deref(), &mut tasks, a, now_ms()))?,
         "orchestration.gate-list" => m.gate_list(run.as_deref(), a)?,
         other => return Err(Fail::args(format!("unknown command {other}"))),
     };
+    // cli FIX-10: every late note not yet read goes with this answer; worker-show on a dispatch reads its own.
+    // cli FIX-12: an arm may have closed one (a stop): spent again before the notes are made.
+    spend_gone_late(&mut dispatches, &|h| ctx.terminals.live(h));
+    let late = pending_late_notes(&dispatches, scope.as_deref());
+    if let Some((Some(id), shown_run)) = shown_row {
+        if let Some(d) = dispatches.iter_mut().find(|d| d["id"] == id.as_str() && d["runId"].as_str() == shown_run.as_deref()) {
+            let open = d["terminal"].as_u64().and_then(|t| u32::try_from(t).ok()).is_some_and(|t| ctx.terminals.live(&crate::terminal::handle_of(t)));
+            read_late(d, open);
+        }
+    }
     // ORCH-012: a task and its dispatch change together or not at all.
     let (t, d) = (Value::Array(tasks).to_string(), Value::Array(dispatches).to_string());
     store.set_all(&[(TASKS_KEY, &t), (DISPATCHES_KEY, &d)]).map_err(|e| Fail::new("failed", e.to_string()))?;
-    Ok(out)
+    Ok(with_late_notes(out, late))
 }
 
 /// ORCH-004: every open terminal with the agent Kolux started in it (none for a shell; a pane title
 /// plays no part) and whether it has been quiet for `IDLE`.
 fn peers(ctx: &Ctx) -> Vec<crate::orchestration::Peer> {
-    let credited = |p: &str| match p.starts_with('"') {
-        true => crate::agents::credited_agent(p),
-        false => crate::agents::credited_agent(&format!("\"{p}\"")),
-    };
+    let credited = crate::tools::credited_program;
     ctx.terminals
         .sessions()
         .into_iter()
@@ -3444,24 +3508,308 @@ fn model_args(agent: &str, model: Option<&str>, effort: Option<&str>) -> Result<
     Ok(extra)
 }
 
-/// Waits for the worker's terminal in `dir`: ready once it has written and is still there
-/// `SETTLE` later; gives up at `timeout`. Returns the terminal seen (if any) and readiness.
-/// FIX-1 S1: only a session that was not open before the start (`before`) and sits in `dir` counts,
-/// picked by worker_tab (a marked session running `agent`, or the one uncredited mark: cli FIX-3),
-/// so a tab the user opens there during the wait is never recorded and so never closed by a stop
-/// or release.
-fn wait_ready(terminals: &Terminals, dir: &Path, before: &std::collections::HashSet<u32>, agent: &str, since: Instant, timeout: Duration) -> (Option<u32>, bool) {
-    let here = dir.canonicalize().ok();
+/// T-172-e: the environment variable the window puts in the worker's very first session, so the
+/// session carries the dispatch it was started for. `terminal_spawn` reports it to `stamp_session`
+/// when it starts a session with it; nothing else sets it.
+pub(crate) const DISPATCH_ENV: &str = "KOLUX_DISPATCH_ID";
+
+/// cli FIX-7: the dispatch id in a spawn's own environment, if it carries one. The window appends
+/// its own entry last, so when the list already holds one (an agent environment the user set) the
+/// last value wins and the user's can never take the place of the real dispatch's.
+pub(crate) fn dispatch_in(env: &[(String, String)]) -> Option<String> {
+    env.iter().rfind(|(k, _)| k == DISPATCH_ENV).map(|(_, v)| v.clone())
+}
+
+/// A start waiting for its session's stamp: the dispatch id, the session once it is stamped, and
+/// (cli FIX-8) the moment a start that gave up waiting stops being told about a late session.
+struct Stamp {
+    dispatch: String,
+    session: Option<u32>,
+    late_until: Option<Instant>,
+}
+
+/// The starts waiting for their session's stamp, and those that timed out and still may be told.
+/// Lock order (cli FIX-9): STAMPS is always taken BEFORE the terminals lock, never while holding it
+/// (`reconcile_late` reads a session with STAMPS held; `tabs` and `spawn_stamped` never hold both).
+static STAMPS: Mutex<Vec<Stamp>> = Mutex::new(Vec::new());
+
+fn stamps() -> std::sync::MutexGuard<'static, Vec<Stamp>> {
+    STAMPS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// A start is about to ask the window for its session: only a dispatch registered here can be stamped.
+pub(crate) fn expect_stamp(dispatch: &str) {
+    let mut s = stamps();
+    s.retain(|e| e.dispatch != dispatch);
+    s.push(Stamp { dispatch: dispatch.to_string(), session: None, late_until: None });
+    if s.len() > 64 {
+        s.remove(0);
+    }
+}
+
+/// The window started session `id` with `dispatch` in its environment (`terminal_spawn`). Only the
+/// first session of a start that is still waiting (or timed out less than `LATE_WINDOW` ago) is
+/// stamped; any other call changes nothing.
+pub(crate) fn stamp_session(dispatch: &str, id: u32) -> bool {
+    let mut s = stamps();
+    let now = Instant::now();
+    match s.iter_mut().find(|e| e.dispatch == dispatch && e.session.is_none() && e.late_until.is_none_or(|u| now < u)) {
+        Some(e) => {
+            e.session = Some(id);
+            true
+        }
+        None => false,
+    }
+}
+
+/// cli FIX-8: spawns a session and stamps it. `dispatch` is the id read from the spawn's own
+/// environment (`dispatch_in`) before the environment is handed to the spawn; a spawn that fails
+/// stamps nothing. `terminal_spawn` runs every session through this.
+pub(crate) fn spawn_stamped<E>(dispatch: Option<String>, spawn: impl FnOnce() -> Result<u32, E>) -> Result<u32, E> {
+    let id = spawn()?;
+    if let Some(d) = dispatch {
+        stamp_session(&d, id);
+    }
+    Ok(id)
+}
+
+fn stamped(dispatch: &str) -> Option<u32> {
+    stamps().iter().find(|e| e.dispatch == dispatch).and_then(|e| e.session)
+}
+
+fn forget_stamp(dispatch: &str) {
+    stamps().retain(|e| e.dispatch != dispatch);
+}
+
+/// cli FIX-8 (council FIX-SOON 2 on 800b8a94): how long after a start gave up waiting its session,
+/// if the window starts it after all (a loaded PC), is still tied to the dispatch.
+const LATE_WINDOW: Duration = Duration::from_secs(600);
+
+/// A start that ended `unknown` with no session stamped keeps its place for `window`, so a session
+/// the window starts later is stamped to it and `reconcile_late` can record it on the row.
+fn keep_late(dispatch: &str, window: Duration) {
+    let mut s = stamps();
+    if let Some(e) = s.iter_mut().find(|e| e.dispatch == dispatch) {
+        e.late_until = Some(Instant::now() + window);
+    }
+}
+
+/// cli FIX-8: what a start does with its stamp entry once its wait is over: a session was found, so
+/// the entry is done; none was, so it stays for `window` and a late session can still be tied to it.
+fn finish_stamp(dispatch: &str, found: Option<u32>, window: Duration) {
+    if found.is_some() {
+        forget_stamp(dispatch);
+    } else {
+        keep_late(dispatch, window);
+    }
+}
+
+/// cli FIX-8: records the late sessions on their rows. A row of this run whose terminal was never
+/// recorded and whose dispatch was stamped after the start gave up gets the session (and the
+/// program Kolux started in it, `mark`) while that session is still open; the row's status is left
+/// as the start reported it. Entries past their window are dropped; one is kept until then (a
+/// refused call may not save the row), and a row that has its terminal is never changed again.
+/// `session(t)` is None when `t` is gone, else its mark. Returns how many rows changed and, for the
+/// rows that were already stopped, abandoned or released when the session came (cli FIX-9, council
+/// FIX-SOON 1 on 529c53e2; completed and failed rows too, cli FIX-10), the row is marked `latePending`:
+/// that agent is running on a task already handed back, and worker-release closes it. The row keeps
+/// the status it had in `lateAfter`; `pending_late_notes` makes the notes, on every answer until a later worker-show
+/// reads the row or a release closes the terminal (cli FIX-11).
+/// Lock order: STAMPS is taken here before the terminals lock (`session` reads a session); nothing
+/// takes the two the other way round (`tabs` lets go of STAMPS before it reads a session), so keep it so.
+fn reconcile_late(dispatches: &mut [Value], session: &dyn Fn(u32) -> Option<Option<String>>) -> usize {
+    let now = Instant::now();
+    let me = u64::from(std::process::id());
+    let mut changed = 0;
+    let mut s = stamps();
+    s.retain(|e| e.late_until.is_none_or(|u| now < u));
+    for d in dispatches.iter_mut() {
+        if !d["terminal"].is_null() || d["runtime"].as_u64() != Some(me) {
+            continue;
+        }
+        let Some(i) = s.iter().position(|e| e.late_until.is_some() && d["id"].as_str() == Some(e.dispatch.as_str()) && e.session.is_some()) else { continue };
+        let t = s[i].session.unwrap_or_default();
+        if let Some(mark) = session(t) {
+            d["terminal"] = json!(t);
+            d["terminalProgram"] = json!(mark);
+            d["lateStamp"] = json!(true);
+            if let Some(status) = ended_status(d) {
+                // cli FIX-10: the note is kept pending on the row until worker-show or worker-release reads it.
+                d["lateAfter"] = json!(status);
+                d["latePending"] = json!(true);
+            }
+            changed += 1;
+        }
+    }
+    changed
+}
+
+/// cli FIX-9: the status a row had when the coordinator already ended it (stopped, abandoned or
+/// released, completed or failed), else None.
+fn ended_status(d: &Value) -> Option<&'static str> {
+    match (d["released"] == true, d["status"].as_str()) {
+        (true, _) | (_, Some("released")) => Some("released"),
+        (_, Some("stopped")) => Some("stopped"),
+        (_, Some("abandoned")) => Some("abandoned"),
+        (_, Some("completed")) => Some("completed"),
+        (_, Some("failed")) => Some("failed"),
+        _ => None,
+    }
+}
+
+/// cli FIX-9: what a late session on an ended row tells the caller, and how to close it.
+fn late_note(d: &Value, status: &str) -> Value {
+    let id = d["id"].as_str().unwrap_or_default();
+    let handle = d["terminal"].as_u64().and_then(|t| u32::try_from(t).ok()).map(crate::terminal::handle_of);
+    let place = handle.as_deref().unwrap_or("a terminal");
+    // cli FIX-10: a finished row (completed, failed) is a second agent on a done task, the others a task handed back.
+    let note = match status {
+        "completed" | "failed" => format!("{id} had already {status} when its agent came up late; the agent in {place} is a second agent on a finished task, and it is recorded on the row"),
+        _ => format!("{id} was already {status} when its agent came up late; the agent in {place} is running on a task that was handed back, and it is recorded on the row"),
+    };
+    json!({ "dispatchId": id, "terminal": handle, "status": status, "note": note, "next": format!("{} orchestration worker-release --dispatch {id}", crate::orchestration::CLI) })
+}
+
+/// cli FIX-10: the receipt of a release that left the late agent's terminal open says so, and names
+/// the command that closes a terminal, instead of a release that promises a close.
+fn left_open(mut note: Value, why: &str) -> Value {
+    let id = note["dispatchId"].as_str().unwrap_or_default().to_string();
+    let handle = note["terminal"].as_str().unwrap_or("its terminal").to_string();
+    note["note"] = json!(format!("{id}: the late agent's terminal {handle} is left open ({why}), so that agent is still running on a task that was handed back"));
+    note["next"] = json!(format!("{} terminal close --terminal {handle}", crate::orchestration::CLI));
+    note
+}
+
+/// cli FIX-10 (council FIX-SOON 1 on 081bbfab): the late notes of every row not yet read, so an
+/// answer that was lost or went to another agent does not hide a second agent on a handed-back task.
+/// cli FIX-11 (council FIX-SOON 3 on 9afdd308, decision): the notes follow ORCH-033. An answer for a
+/// Run carries that Run's notes and those of rows with no Run; an answer for no Run (a caller tied to
+/// none, who sees every Run's workers in worker-list too) carries all. A row whose release left the
+/// late terminal open is told as that (terminal close), not as a release that would leave it open again.
+fn pending_late_notes(dispatches: &[Value], run: Option<&str>) -> Vec<Value> {
+    dispatches
+        .iter()
+        .filter(|d| d["latePending"] == true && (run.is_none() || d["runId"].is_null() || d["runId"].as_str() == run))
+        .filter_map(|d| {
+            let note = late_note(d, d["lateAfter"].as_str()?);
+            Some(match d["terminalLeftOpen"].as_str().filter(|w| !w.is_empty() && d["released"] == true) {
+                Some(why) => left_open(note, why),
+                None => note,
+            })
+        })
+        .collect()
+}
+
+/// cli FIX-10: the late fields on each worker-list row, so a listing shows the fact and the open alarm.
+fn late_rows(mut listed: Value, dispatches: &[Value]) -> Value {
+    for w in listed["workers"].as_array_mut().into_iter().flatten() {
+        let Some(d) = dispatches.iter().find(|d| d["id"] == w["dispatchId"] && d["runId"] == w["runId"]) else { continue };
+        // cli FIX-12: terminalLeftOpen too, so the row text can name terminal close for a left-open terminal.
+        for k in ["lateStamp", "lateAfter", "latePending", "terminalLeftOpen"] {
+            if !d[k].is_null() {
+                w[k] = d[k].clone();
+            }
+        }
+    }
+    listed
+}
+
+/// cli FIX-11 (council FIX-BEFORE 1 on 9afdd308): worker-show does not clear the alarm on the first
+/// read, because that answer may be the one that is lost. The first show marks the row `lateShown`
+/// (and the alarm stays on every answer); a later show, whose caller has asked again, clears it.
+/// cli FIX-12 (council FIX-SOON 1 on 28f3eb7a, decision): not while the row's release left the late
+/// terminal open and that terminal (`terminal_live`) is still running; that agent is still on a task
+/// handed back, so showing the row twice does not silence it. It ends when the terminal is closed.
+fn read_late(d: &mut Value, terminal_live: bool) {
+    if d["latePending"] != true {
+        return;
+    }
+    let held = terminal_live && d["released"] == true && d["terminalLeftOpen"].as_str().is_some_and(|w| !w.is_empty());
+    if d["lateShown"] == true && !held {
+        if let Some(o) = d.as_object_mut() {
+            o.remove("latePending");
+            o.remove("lateShown");
+        }
+    } else {
+        d["lateShown"] = json!(true);
+    }
+}
+
+/// cli FIX-11 (council FIX-BEFORE 1 on 9afdd308): the late agent is gone (its terminal is closed), so
+/// the alarm stops; until then a release keeps it on the row.
+/// cli FIX-12 (council AFTER 1 on 28f3eb7a, decision): the fact (`lateAfter`, what the dispatch was
+/// when the agent came up) stays for worker-show on every path that spends the alarm.
+fn spend_late(d: &mut Value) {
+    if let Some(o) = d.as_object_mut() {
+        o.remove("latePending");
+        o.remove("lateShown");
+    }
+}
+
+/// cli FIX-12 (council FIX-SOON 2 on 28f3eb7a): a row whose late terminal is already gone (closed by
+/// hand, or by anything else) has nothing running to warn about; the alarm is spent, `lateAfter` stays.
+/// `live(h)` says whether terminal `h` is open. A row with no recorded terminal is left alone.
+fn spend_gone_late(dispatches: &mut [Value], live: &dyn Fn(&str) -> bool) {
+    for d in dispatches.iter_mut().filter(|d| d["latePending"] == true) {
+        let open = d["terminal"].as_u64().and_then(|t| u32::try_from(t).ok()).is_some_and(|t| live(&crate::terminal::handle_of(t)));
+        if d["terminal"].as_u64().is_some() && !open {
+            spend_late(d);
+        }
+    }
+}
+
+/// cli FIX-11: a release receipt that says the terminal is gone (released, and nothing left open).
+fn terminal_closed(receipt: &Value) -> bool {
+    receipt["terminalState"] == "released" && receipt["terminalLeftOpen"].as_str().is_none_or(str::is_empty)
+}
+
+/// cli FIX-9: puts the late worker notes in an answer, once per dispatch. An answer that is not an
+/// object is handed back as it was (the notes stay pending on their rows, cli FIX-10).
+fn with_late_notes(mut out: Value, notes: Vec<Value>) -> Value {
+    if notes.is_empty() {
+        return out;
+    }
+    if let Some(o) = out.as_object_mut() {
+        let mut all = o.get("lateWorker").and_then(Value::as_array).cloned().unwrap_or_default();
+        for n in notes {
+            if !all.iter().any(|a| a["dispatchId"] == n["dispatchId"]) {
+                all.push(n);
+            }
+        }
+        o.insert("lateWorker".into(), Value::Array(all));
+    }
+    out
+}
+
+/// One open session as a start sees it: its id, and how long it has been quiet.
+struct Tab {
+    id: u32,
+    quiet: Option<Duration>,
+}
+
+/// cli FIX-8: the dispatch's stamped session when it is still open, and nothing else. The wait polls
+/// every 100 ms and only ever reads that one, so no other session is looked at or locked.
+fn tabs(terminals: &Terminals, dispatch: &str) -> Vec<Tab> {
+    stamped(dispatch).filter(|id| terminals.live(&crate::terminal::handle_of(*id))).map(|id| Tab { id, quiet: terminals.quiet_for(id) }).into_iter().collect()
+}
+
+/// Waits for the worker's terminal: ready once it has written and is still there `SETTLE` later;
+/// gives up at `timeout`. Returns the terminal seen (if any) and readiness.
+/// T-172-e, cli FIX-7: the worker's session is the one carrying the dispatch's stamp and no other.
+/// With no stamp the wait takes no tab at all, however long it lasts: a tab the user opens in the
+/// same folder is never read as the worker's, so a stop or release can never end it. A start whose
+/// stamp never arrives (the window did not start the session) ends `unknown` with the terminal
+/// unrecorded, and the offered commands clean up from there.
+pub(crate) fn wait_ready(terminals: &Terminals, dispatch: &str, since: Instant, timeout: Duration) -> (Option<u32>, bool) {
+    wait_ready_over(&|| tabs(terminals, dispatch), dispatch, since, timeout)
+}
+
+fn wait_ready_over(open: &dyn Fn() -> Vec<Tab>, dispatch: &str, since: Instant, timeout: Duration) -> (Option<u32>, bool) {
     let mut seen = None;
     while since.elapsed() < timeout {
-        let fresh: Vec<(u32, bool, Option<String>)> = terminals
-            .list()
-            .into_iter()
-            .filter(|(id, _, d)| !before.contains(id) && d.as_deref().is_some_and(|d| Path::new(d).canonicalize().ok() == here))
-            .map(|(id, _, _)| (id, terminals.silence(id).is_some(), terminals.program(id).flatten().map(str::to_string)))
-            .collect();
-        seen = worker_tab(&fresh, agent);
-        if seen.is_some_and(|id| terminals.quiet_for(id).is_some_and(|q| q >= SETTLE)) {
+        let all = open();
+        seen = stamped(dispatch).filter(|id| all.iter().any(|t| t.id == *id));
+        if seen.is_some_and(|id| all.iter().find(|t| t.id == id).and_then(|t| t.quiet).is_some_and(|q| q >= SETTLE)) {
             return (seen, true);
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -3469,41 +3817,62 @@ fn wait_ready(terminals: &Terminals, dir: &Path, before: &std::collections::Hash
     (seen, false)
 }
 
-/// cli FIX-3 (a): which fresh session in the worktree is the worker's. `fresh` lists each with
-/// whether Kolux started a program in it (a mark; a plain shell has none, even one credited by
-/// hand) and the agent it is credited to. Only marked sessions count: the one running `agent`
-/// when exactly one does (orchestration::worker_terminal), else the single marked session when
-/// it is credited to no agent, which is how a worker started through a custom command (a wrapper
-/// or `npx`) shows. Stamping the start's own session is T-172-e.
-fn worker_tab(fresh: &[(u32, bool, Option<String>)], agent: &str) -> Option<u32> {
-    let marked: Vec<(u32, Option<String>)> = fresh.iter().filter(|(_, mark, _)| *mark).map(|(id, _, a)| (*id, a.clone())).collect();
-    crate::orchestration::worker_terminal(&marked, agent).or(match marked.as_slice() {
-        [(id, None)] => Some(*id),
-        _ => None,
-    })
+/// The program Kolux was asked to start in session `t` (its mark); none for a shell or a gone session.
+fn mark_program(terminals: &Terminals, t: u32) -> Option<String> {
+    let h = crate::terminal::handle_of(t);
+    terminals.sessions().into_iter().find(|(s, _, _)| *s == h)?.2
 }
 
-/// cli FIX-3 (c): a failed start's offered commands run as printed. The retry names the agent (and
-/// the model and effort) the start used, since worker-start refuses a line that says nothing of
-/// who runs it; and every orchestration line names the dispatch's Run, so it reaches the dispatch
-/// from a pane tied to another Run or to none (worker-stop and worker-release look a dispatch up
-/// in the caller's Run otherwise).
+/// What session `t` runs now, as worker-stop and worker-release read it (runs_now's `now`):
+/// the agent it is credited to (None when it is gone) and the program Kolux started in it.
+fn session_now(terminals: &Terminals, t: u32) -> (Option<Option<String>>, Option<String>) {
+    (terminals.program(t).map(|a| a.map(str::to_string)), mark_program(terminals, t))
+}
+
+/// cli FIX-3 (c), FIX-4: a failed start's offered commands run as printed. The retry names the
+/// agent the start used and its tier when it had one (so the retry is routed and recorded the same
+/// way), else its model and effort, since worker-start refuses a line that says nothing of who
+/// runs it; a value with a space in it, or with `@` (PowerShell splats it), `,` (it builds an
+/// array) or `=`, is quoted (cli FIX-6: `"..."` is literal for these in PowerShell and cmd). Every orchestration line names the dispatch's
+/// Run, so it reaches the dispatch from the coordinator's own pane and from a shell Kolux did not
+/// start; a pane that acts in another Run is turned away by each of them (ORCH-033: it may read
+/// that Run, never change it).
 fn start_failed_run(receipt: &mut Value, run: Option<&str>) {
     let lead = format!("{} orchestration worker-", crate::orchestration::CLI);
     let retry = format!("{lead}start ");
+    let word = |v: &str| if v.chars().any(|c| c.is_whitespace() || "@,=".contains(c)) { format!("\"{v}\"") } else { v.to_string() };
+    let tiered = receipt["tier"].as_str().is_some_and(|t| !t.trim().is_empty());
     let mut who = String::new();
-    for (k, flag) in [("agent", "agent"), ("model", "model"), ("effort", "effort")] {
-        if let Some(v) = receipt[k].as_str().map(str::trim).filter(|v| !v.is_empty()) {
-            who.push_str(&format!(" --{flag} {v}"));
+    let flags: &[&str] = if tiered { &["agent", "tier"] } else { &["agent", "model", "effort"] };
+    for k in flags {
+        if let Some(v) = receipt[*k].as_str().map(str::trim).filter(|v| !v.is_empty()) {
+            who.push_str(&format!(" --{k} {}", word(v)));
         }
     }
-    let run = run.map(|r| format!(" --run {r}")).unwrap_or_default();
+    // cli FIX-5 (council AFTER 1 on c5fb49c): a value with a character PowerShell or cmd would act
+    // on (a quote, `;`, `&`, `|`, `$`, a redirect...) is never pasted into an offered line; the
+    // retry that would carry it is left out of `next` rather than offered unsafe.
+    let safe = |v: &str| v.chars().all(|c| c.is_alphanumeric() || c == ' ' || "-_.:/@+=,".contains(c));
+    let unsafe_who = flags.iter().any(|k| receipt[*k].as_str().is_some_and(|v| !safe(v.trim())));
+    let unsafe_run = run.is_some_and(|r| !safe(r));
+    let run = run.map(|r| format!(" --run {}", word(r))).unwrap_or_default();
     let Some(next) = receipt["next"].as_array_mut() else { return };
+    next.retain(|l| !(unsafe_who || unsafe_run) || !l.as_str().is_some_and(|l| l.starts_with(&retry)));
+    if unsafe_run {
+        next.retain(|l| !l.as_str().is_some_and(|l| l.starts_with(&lead)));
+    }
     for line in next.iter_mut() {
         if let Some(l) = line.as_str().filter(|l| l.starts_with(&lead)) {
             let who = if l.starts_with(&retry) { who.as_str() } else { "" };
             *line = json!(format!("{l}{who}{run}"));
         }
+    }
+    // cli FIX-7 (council AFTER on c5fb49c): a tier runs on the coordinator's own agent, so the
+    // offered `--agent X --tier T` is turned away from a pane whose own agent is not X.
+    let offered = next.iter().any(|l| l.as_str().is_some_and(|l| l.starts_with(&retry)));
+    let agent = receipt["agent"].as_str().map(str::trim).filter(|a| !a.is_empty()).map(str::to_string);
+    if let (true, true, Some(a)) = (tiered, offered, agent) {
+        receipt["retryNote"] = json!(format!("the retry names --agent {a} with a tier; a tier runs on the coordinator's own agent, so a pane running another agent is turned away: there drop --agent {a}, or name a model instead of the tier"));
     }
 }
 
@@ -3695,8 +4064,48 @@ fn archive_lines(r: crate::terminal::Read) -> Vec<String> {
 #[allow(clippy::too_many_arguments)]
 fn release_worker(dispatches: &mut [Value], id: &str, run: Option<&str>, live: &dyn Fn(&str) -> bool, agent_of: &dyn Fn(&str) -> Option<Option<String>>, dir: &Path, save: &dyn Fn(&[Value]) -> Result<(), Fail>, read: &dyn Fn(u32) -> Option<crate::terminal::Read>, kill: &dyn Fn(u32) -> bool) -> Result<Value, Fail> {
     use crate::orchestration as o;
+    // cli FIX-9: a session that came up after the dispatch was stopped or released is closed by the
+    // release; a row released before it came is opened again for that, once, and the receipt says so.
+    // cli FIX-11: the alarm (latePending) and the fact (lateAfter) stay on the row through the reopen and
+    // are spent only once the receipt says the terminal is closed, so a release that leaves it open or
+    // ends release_unknown, and a receipt that is lost, still leave the running agent on record.
+    let late = dispatches.iter_mut().find(|d| d["id"] == id && d["runId"].as_str() == run).and_then(|d| {
+        let status = d["lateAfter"].as_str()?.to_string();
+        let open = d["terminal"].as_u64().and_then(|t| u32::try_from(t).ok()).is_some_and(|t| live(&crate::terminal::handle_of(t)));
+        if !open {
+            // Nothing is running any more: the alarm is spent, the fact stays for worker-show (cli FIX-12:
+            // released or not, a late terminal that is gone is not told as a running agent).
+            spend_late(d);
+            return None;
+        }
+        let note = late_note(d, &status);
+        d["released"] = Value::Null;
+        // The reopen asks keep_open again; a left-open reason from an earlier release must not outlive it.
+        if let Some(o) = d.as_object_mut() {
+            o.remove("terminalLeftOpen");
+        }
+        Some(note)
+    });
+    // cli FIX-10: a release that leaves the terminal open (terminalLeftOpen) says so in the note.
+    let noted = |r: Value| {
+        let note = late.clone().map(|n| match r["terminalLeftOpen"].as_str() {
+            Some(why) if !why.is_empty() => left_open(n, why),
+            _ => n,
+        });
+        with_late_notes(r, note.into_iter().collect())
+    };
+    let spent = |dispatches: &mut [Value], r: &Value| {
+        if late.is_some() && terminal_closed(r) {
+            if let Some(d) = dispatches.iter_mut().find(|d| d["id"] == id && d["runId"].as_str() == run) {
+                spend_late(d);
+            }
+        }
+    };
     let (receipt, handle) = o::release_with(dispatches, live, id, run, now_ms(), agent_of)?;
-    let Some(h) = handle else { return Ok(receipt) };
+    let Some(h) = handle else {
+        spent(dispatches, &receipt);
+        return Ok(noted(receipt));
+    };
     save(dispatches)?;
     let tid = h.trim_start_matches("term-").parse::<u32>().ok();
     let saved = match tid.and_then(read) {
@@ -3704,12 +4113,53 @@ fn release_worker(dispatches: &mut [Value], id: &str, run: Option<&str>, live: &
         None => Err(format!("{h}'s output could not be read")),
     };
     let closed = saved.is_ok() && tid.is_some_and(kill);
-    o::release_done(dispatches, id, run, saved, closed, now_ms())
+    let receipt = o::release_done(dispatches, id, run, saved, closed, now_ms())?;
+    spent(dispatches, &receipt);
+    Ok(noted(receipt))
 }
 
 /// ORCH-026 (cli FIX-2, council S3): a worker-start dispatch row, stamped with this app's process
 /// (its terminal handle means nothing to a later run) and the wall-clock time it was made, so a
 /// worker that never reports can be told stale like any other.
+/// cli FIX-4 (council FIX-SOON 1 on b4b1600): what terminal `h` runs now, as worker-stop and
+/// worker-release ask it (keep_open's `agent_of`). `now` reads a session (session_now): what it
+/// is credited to (None when it is gone) and the program Kolux was asked to start in it (its mark;
+/// none for a shell). A worker started through a custom command (a wrapper or `npx`) is credited
+/// to no agent; its session still counts as the worker's own while it is the dispatch's recorded
+/// terminal (`own`: handle, program, agent) and its mark is the very program recorded when the
+/// start found it. Every other session reads as before, so a shell stays open.
+fn runs_now(h: &str, own: Option<&(String, String, String)>, now: &dyn Fn(u32) -> (Option<Option<String>>, Option<String>)) -> Option<Option<String>> {
+    let t = h.strip_prefix("term-")?.parse::<u32>().ok()?;
+    let (credit, mark) = now(t);
+    match (credit, own) {
+        (Some(None), Some((mine, program, agent))) if mine == h && mark.as_deref() == Some(program.as_str()) => Some(Some(agent.clone())),
+        (credit, _) => credit,
+    }
+}
+
+/// cli FIX-4: dispatch `id`'s recorded terminal, the program Kolux started in it and its agent,
+/// while that terminal can still be the one this run of Kolux recorded (none for a row stamped by
+/// an earlier run, or one recorded before FIX-4 with no program).
+fn own_program(dispatches: &[Value], id: &str, run: Option<&str>) -> Option<(String, String, String)> {
+    let d = dispatches.iter().find(|d| d["id"] == id && d["runId"].as_str() == run)?;
+    if d["runtime"].as_u64().is_some_and(|r| r != u64::from(std::process::id())) {
+        return None;
+    }
+    let t = u32::try_from(d["terminal"].as_u64()?).ok()?;
+    Some((crate::terminal::handle_of(t), d["terminalProgram"].as_str()?.to_string(), d["agent"].as_str()?.to_string()))
+}
+
+/// cli FIX-7 (council AFTER on c5fb49c): `setup` in a worker-start receipt says `not_configured`
+/// for both `run` and `inherit`, though the window then runs the new worktree's setup script when
+/// the project has one. This says what happens, so the receipt is not read as "no setup runs".
+fn setup_note(setup: &str, created: bool) -> Option<&'static str> {
+    match (setup, created) {
+        ("skip", _) => None,
+        (_, false) => Some("no new worktree was made, so no setup script runs"),
+        _ => Some("the window runs the project's setup script in the new worktree, if it has one; the start does not wait for it"),
+    }
+}
+
 fn worker_row(mut row: Value) -> Value {
     row["runtime"] = json!(std::process::id());
     row["created"] = json!(now_ms());
@@ -3717,20 +4167,54 @@ fn worker_row(mut row: Value) -> Value {
 }
 
 fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
+    worker_start_with(ctx, req, &|k| ctx.terminals.by_key(k))
+}
+
+fn worker_start_with(ctx: &Ctx, req: &Request, by_key: &dyn Fn(&str) -> Option<String>) -> Result<Value, Fail> {
+    if req.args["terminal"].as_str().is_some_and(|t| !t.trim().is_empty()) {
+        return reuse(ctx, req, req.args["terminal"].as_str().unwrap_or_default().trim());
+    }
+    // cli FIX-5 (council FIX-SOON 1 on c5fb49c): a --from that cannot be proven fails the start,
+    // as it fails worker-stop and worker-release, rather than making the call an outside one.
+    let coordinator = caller_with(req, by_key)?;
+    worker_start_as(ctx, req, coordinator)
+}
+
+/// cli FIX-4 (council FIX-SOON 2 on b4b1600): the Run a worker start acts in. A Run named with
+/// `--run` must exist, and a pane may name only the Run it acts in itself (ORCH-033: another Run
+/// may be read, never changed); a call from no Kolux pane may name any Run, as worker-stop and
+/// worker-release allow. With no `--run` the start acts in the caller's own Run, if any.
+fn start_run(m: &crate::orchestration::Mail, coordinator: Option<&str>, named: Option<&str>, dispatches: &[Value]) -> Result<Option<String>, Fail> {
+    let Some(n) = named else { return Ok(coordinator.and_then(|p| m.run_of(p, dispatches))) };
+    m.run_show(n)?;
+    if let Some(p) = coordinator {
+        in_run(m, p, n, dispatches)?;
+    }
+    Ok(Some(n.to_string()))
+}
+
+/// worker-start as `coordinator` (the caller's pane, if Kolux knows it).
+fn worker_start_as(ctx: &Ctx, req: &Request, coordinator: Option<String>) -> Result<Value, Fail> {
     let a = &req.args;
     let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
-    if let Some(to) = text("terminal") {
-        return reuse(ctx, req, &to);
-    }
     let default = default_agent(ctx)?;
-    let coordinator = caller(ctx, req).ok().flatten();
     // ORCH-032: a worker may start another only inside the nesting cap; ORCH-033: in its own Run.
     let (depth, cap, run_id) = {
         let store = ctx.store.lock().map_err(|e| e.to_string())?;
         let dispatches = load_list(&store, DISPATCHES_KEY);
         let (asked, configured) = caps(&store, a);
         let (depth, cap) = crate::orchestration::nest(coordinator.as_deref(), &dispatches, asked, configured)?;
-        (depth, cap, coordinator.as_deref().and_then(|p| crate::orchestration::Mail::load(&store).run_of(p, &dispatches)))
+        let run_id = start_run(&crate::orchestration::Mail::load(&store), coordinator.as_deref(), text("run").as_deref(), &dispatches)?;
+        // cli FIX-4: a task that is not in that Run, or cannot take a worker, is turned away
+        // before the agent is looked up (checked again when the task is claimed below).
+        if let Some(id) = text("task") {
+            let tasks = load_list(&store, TASKS_KEY);
+            match text("retryOf") {
+                None => crate::orchestration::start_check(&tasks, &id, run_id.as_deref()).map(drop)?,
+                Some(_) => crate::orchestration::task_in(&tasks, &id, run_id.as_deref()).map(drop)?,
+            }
+        }
+        (depth, cap, run_id)
     };
     let tier = text("tier");
     // ORCH-018: a tier runs on the coordinator's own agent, when Kolux started one in its pane.
@@ -3837,21 +4321,27 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         Ok(_) => json!(true),
         Err(e) => json!(format!("not trusted: {e}")),
     };
-    // FIX-1 S1: the terminals open before the start, so none of them can be taken for the worker's.
-    let before: std::collections::HashSet<u32> = ctx.terminals.list().into_iter().map(|(id, _, _)| id).collect();
     let since = Instant::now();
+    // cli FIX-4 (council AFTER 4): the window runs the new worktree's setup script unless the
+    // notice says skip, so --setup reaches it as worktree create's does (PROJ-033).
+    let setup = text("setup").unwrap_or_else(|| "inherit".into());
     if created {
-        (ctx.notify)(json!({ "kind": "created", "projectId": project.id, "worktree": { "path": worktree.path, "branch": worktree.branch, "name": worktree.name, "isMain": false, "parent": worktree.parent }, "agent": Value::Null, "prompt": "", "activate": false }));
+        (ctx.notify)(json!({ "kind": "created", "projectId": project.id, "worktree": { "path": worktree.path, "branch": worktree.branch, "name": worktree.name, "isMain": false, "parent": worktree.parent }, "agent": Value::Null, "prompt": "", "activate": false, "setup": setup }));
     }
-    (ctx.notify)(json!({ "kind": "start", "path": worktree.path, "branch": worktree.branch, "agent": agent_id, "prompt": brief, "extra": extra, "title": task["title"] }));
-    let (terminal, ready) = wait_ready(ctx.terminals, Path::new(&worktree.path), &before, &agent_id, since, timeout);
+    // T-172-e: the window starts the agent with the dispatch id in its environment (DISPATCH_ENV).
+    expect_stamp(&dispatch_id);
+    (ctx.notify)(json!({ "kind": "start", "path": worktree.path, "branch": worktree.branch, "agent": agent_id, "prompt": brief, "extra": extra, "title": task["title"], "dispatch": dispatch_id }));
+    let (terminal, ready) = wait_ready(ctx.terminals, &dispatch_id, since, timeout);
+    // cli FIX-8: a start that found no session keeps its place, so a session the window starts after
+    // the timeout is still tied to this dispatch (reconcile_late records it on the row).
+    finish_stamp(&dispatch_id, terminal, LATE_WINDOW);
     let status = if ready { "ready" } else { "unknown" };
 
     let mut receipt = json!({
         "dispatchId": dispatch_id, "taskId": task_id, "status": status, "stage": "worker",
         "worktree": { "path": worktree.path, "branch": worktree.branch, "name": worktree.name, "projectId": project.id, "created": created, "parent": worktree.parent },
         "placement": placement, "agent": agent_id, "program": agent.program, "model": model, "effort": effort, "tier": tier,
-        "setup": "not_configured", "trust": trusted,
+        "setup": if setup == "skip" { "skipped" } else { "not_configured" }, "setupNote": setup_note(&setup, created), "trust": trusted,
         "terminals": terminal.map(|id| vec![json!({ "id": id, "role": "worker" })]).unwrap_or_default(),
         "waitedMs": since.elapsed().as_millis() as u64,
         "launch": "new_terminal",
@@ -3862,7 +4352,7 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     {
         let store = ctx.store.lock().map_err(|e| e.to_string())?;
         let mut dispatches = load_list(&store, DISPATCHES_KEY);
-        dispatches.push(worker_row(json!({ "id": dispatch_id, "runId": run_id, "taskId": task_id, "status": status, "worktree": worktree.path, "agent": agent_id, "model": model, "effort": effort, "tier": tier, "terminal": terminal, "depth": depth, "maxDepth": cap, "brief": brief, "retryOf": text("retryOf") })));
+        dispatches.push(worker_row(json!({ "id": dispatch_id, "runId": run_id, "taskId": task_id, "status": status, "worktree": worktree.path, "agent": agent_id, "model": model, "effort": effort, "tier": tier, "terminal": terminal, "terminalProgram": terminal.and_then(|t| mark_program(ctx.terminals, t)), "depth": depth, "maxDepth": cap, "brief": brief, "retryOf": text("retryOf") })));
         save_list(&store, DISPATCHES_KEY, &dispatches)?;
     }
     if ready {
@@ -3870,9 +4360,10 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     } else {
         // ORCH-017 (T-172-c): the stage reached, the setup result, what is left over (never closed)
         // and the commands to clean up or try again.
-        crate::orchestration::start_failed(&mut receipt, "worker", json!("not_configured"));
+        let setup = receipt["setup"].clone();
+        crate::orchestration::start_failed(&mut receipt, "worker", setup);
         start_failed_run(&mut receipt, run_id.as_deref());
-        Err(Fail { code: "timeout", message: format!("the worker did not come up within {} ms; it may still be starting in the background ({dispatch_id} in {})", timeout.as_millis(), worktree.path), data: receipt })
+        Err(Fail { code: "timeout", message: format!("the worker did not come up within {} ms; it may still be starting in the background ({dispatch_id} in {}); if it does, worker-show and worker-stop find its session", timeout.as_millis(), worktree.path), data: receipt })
     }
 }
 
@@ -5217,6 +5708,7 @@ mod tests {
             assert_eq!(out.data["model"], "sonnet");
             assert_eq!(out.data["effort"], "low");
             assert_eq!(out.data["setup"], "not_configured");
+            assert!(out.data["setupNote"].as_str().is_some_and(|n| n.contains("setup script")), "cli FIX-7: the receipt says what the window does about setup");
             let wt = PathBuf::from(out.data["worktree"]["path"].as_str().unwrap());
             assert!(wt.join(".git").exists());
             // SAFE-023: the new worktree is trusted before the start; the main checkout is not (T-443).
@@ -5227,7 +5719,9 @@ mod tests {
             let ev = events.lock().unwrap();
             let n = ev.len();
             assert_eq!(ev[n - 2]["kind"], "created");
+            assert_eq!(ev[n - 2]["setup"], "inherit", "cli FIX-4: --setup reaches the window");
             assert_eq!(ev[n - 1]["kind"], "start");
+            assert_eq!(ev[n - 1]["dispatch"], "dispatch-1", "cli FIX-6: the window is told which dispatch it starts");
             // ORCH-014: the worker gets its brief, the task text last.
             let prompt = ev[n - 1]["prompt"].as_str().unwrap();
             assert!(prompt.contains("--type worker_done") && prompt.contains("--dispatch-id dispatch-1") && prompt.ends_with(&format!("{}\nadd a test", crate::orchestration::DIVIDER)), "{prompt}");
@@ -5237,8 +5731,14 @@ mod tests {
             let tasks = store.lock().unwrap().get("orchestration.tasks").unwrap().unwrap();
             assert!(tasks.contains("\"dispatched\""), "{tasks}");
             // PROJ-047: a new-child worker called from inside that worktree is listed under it.
-            let child = dispatch(&ctx, &req("orchestration.worker-start", &wt, json!({ "spec": "a child", "agent": "claude", "worktree": "new-child", "setup": "inherit", "timeoutMs": "1" }))).unwrap_err();
+            let child = dispatch(&ctx, &req("orchestration.worker-start", &wt, json!({ "spec": "a child", "agent": "claude", "worktree": "new-child", "setup": "skip", "timeoutMs": "1" }))).unwrap_err();
             assert_eq!(child.code, "timeout", "{}", child.message);
+            // cli FIX-4 (council AFTER 4): --setup skip reaches the window, which then runs no setup.
+            let ev = events.lock().unwrap();
+            let n = ev.len();
+            assert_eq!((ev[n - 2]["kind"].as_str(), ev[n - 2]["setup"].as_str(), child.data["setup"].as_str()), (Some("created"), Some("skip"), Some("skipped")));
+            assert!(child.data["setupNote"].is_null(), "--setup skip has nothing to note");
+            drop(ev);
             let child_path = child.data["worktree"]["path"].as_str().unwrap().to_string();
             assert_eq!(child.data["worktree"]["parent"], out.data["worktree"]["path"]);
             let project = projects::load_projects(&store.lock().unwrap()).remove(0);
@@ -5857,29 +6357,6 @@ mod tests {
         assert!(refused.unwrap_err().message.contains(&format!("{cli} terminal close")));
     }
 
-    /// cli FIX-3 (a), council FIX-SOON 1 on 4873f7f: a worker started with a custom command (a
-    /// wrapper or `npx`) is not credited to its agent, so its fresh marked session alone must still
-    /// read as the worker's. Only sessions Kolux started a program in count (a plain shell never
-    /// does, even when it is credited by hand), an agent match is preferred, and two candidates
-    /// with nothing to tell them apart record none.
-    #[test]
-    fn fix3_a_custom_command_worker_still_reads_ready() {
-        let c = |a: &str| Some(a.to_string());
-        // The custom-command worker: one fresh marked session, credited to no agent.
-        assert_eq!(worker_tab(&[(7, true, None)], "claude"), Some(7));
-        // A shell the user typed claude into by hand is credited, but Kolux did not start it.
-        assert_eq!(worker_tab(&[(8, false, c("claude"))], "claude"), None);
-        assert_eq!(worker_tab(&[(8, false, c("claude")), (7, true, None)], "claude"), Some(7));
-        // An agent match wins over an uncredited mark; two matches, or two uncredited marks, are ambiguous.
-        assert_eq!(worker_tab(&[(7, true, None), (9, true, c("claude"))], "claude"), Some(9));
-        assert_eq!(worker_tab(&[(7, true, c("claude")), (9, true, c("claude"))], "claude"), None);
-        assert_eq!(worker_tab(&[(7, true, None), (9, true, None)], "claude"), None);
-        // Another agent's marked session is never the worker's, nor is an uncredited mark beside it.
-        assert_eq!(worker_tab(&[(5, true, c("codex"))], "claude"), None);
-        assert_eq!(worker_tab(&[(5, true, c("codex")), (7, true, None)], "claude"), None);
-        assert_eq!(worker_tab(&[], "claude"), None);
-    }
-
     /// cli FIX-3 (b), council FIX-SOON 2: a release that leaves the worker's terminal open (it runs
     /// another agent, a shell, or another dispatch still claims it) says so and why, never that the
     /// terminal was already gone.
@@ -5927,5 +6404,1108 @@ mod tests {
                 assert_eq!((retry.args.get("agent").and_then(Value::as_str), retry.args.get("model").and_then(Value::as_str)), (Some("codex"), Some("gpt-5")), "{}", lines[1]);
             }
         }
+    }
+
+    /// cli FIX-4 (council FIX-SOON 1 on b4b1600): a worker started through a custom command is
+    /// credited to no agent, but its recorded session (marked, still running the program recorded
+    /// when the start found it) is its own: worker-stop ends it and worker-release closes it. A
+    /// plain shell, a session running another program, a row stamped by an earlier run of Kolux,
+    /// or a row recorded with no program all stay open, as before.
+    #[test]
+    fn fix4_a_custom_command_worker_is_its_own_for_stop_and_release() {
+        use crate::orchestration as o;
+        type Now<'a> = &'a dyn Fn(u32) -> (Option<Option<String>>, Option<String>);
+        let me = u64::from(std::process::id());
+        let row = |status: &str, program: Value, runtime: u64| vec![json!({ "id": "dispatch-1", "runId": null, "taskId": "task-1", "status": status, "terminal": 7, "agent": "claude", "terminalProgram": program, "runtime": runtime, "worktree": "w" })];
+        let tasks = || vec![json!({ "id": "task-1", "status": "dispatched", "dispatchId": "dispatch-1" })];
+        // The session: credited to no agent; the program Kolux started in it (none for a shell).
+        let session = |mark: Option<&'static str>| move |t: u32| if t == 7 { (Some(None), mark.map(str::to_string)) } else { (None, None) };
+        let stop = |ds: &mut Vec<Value>, now: Now| {
+            let own = own_program(ds, "dispatch-1", None);
+            let mut ts = tasks();
+            o::stop_with(&mut ts, ds, "dispatch-1", None, 1, &|h: &str| runs_now(h, own.as_ref(), now)).unwrap()
+        };
+        let release = |ds: &mut Vec<Value>, now: Now| {
+            let own = own_program(ds, "dispatch-1", None);
+            o::release_with(ds, &|h: &str| h == "term-7", "dispatch-1", None, 1, &|h: &str| runs_now(h, own.as_ref(), now)).unwrap()
+        };
+        // The custom-command worker: stop ends its terminal, release closes it.
+        let mut ds = row("ready", json!("npx"), me);
+        let (r, kill) = stop(&mut ds, &session(Some("npx")));
+        assert_eq!((kill, r["process"].as_str(), r["terminalLeftOpen"].is_null()), (Some(7), Some("ended"), true), "{r}");
+        let mut ds = row("stopped", json!("npx"), me);
+        let (r, handle) = release(&mut ds, &session(Some("npx")));
+        assert_eq!((handle.as_deref(), r["terminalState"].as_str()), (Some("term-7"), Some("release_pending")), "{r}");
+        // What the old reading said of the same worker: a shell, left open.
+        let mut ts = tasks();
+        let mut ds = row("ready", json!("npx"), me);
+        let (r, kill) = o::stop_with(&mut ts, &mut ds, "dispatch-1", None, 1, &|_| Some(None)).unwrap();
+        assert_eq!(kill, None);
+        assert!(r["terminalLeftOpen"].as_str().unwrap_or_default().contains("runs no agent"), "{r}");
+        // Not the worker's own: an unmarked shell, another program on the number, no recorded
+        // program, a row from an earlier run of Kolux.
+        for (mark, program, runtime) in [(None, json!("npx"), me), (Some("pwsh"), json!("npx"), me), (Some("npx"), Value::Null, me), (Some("npx"), json!("npx"), me + 1)] {
+            let mut ds = row("ready", program.clone(), runtime);
+            let (r, kill) = stop(&mut ds, &session(mark));
+            assert_eq!(kill, None, "{mark:?} {program} {runtime}: {r}");
+            let mut ds = row("stopped", program.clone(), runtime);
+            let (_, handle) = release(&mut ds, &session(mark));
+            assert_eq!(handle, None, "{mark:?} {program} {runtime}");
+        }
+        // A session credited to an agent reads as before, whatever was recorded.
+        let codex = |t: u32| ((t == 7).then(|| Some("codex".to_string())), Some("npx".to_string()));
+        let mut ds = row("ready", json!("npx"), me);
+        let (r, kill) = stop(&mut ds, &codex);
+        assert_eq!(kill, None);
+        assert!(r["terminalLeftOpen"].as_str().unwrap_or_default().contains("now runs codex"), "{r}");
+    }
+
+    /// cli FIX-4 (council FIX-SOON 2 and AFTER 1 on b4b1600): each command a failed worker start
+    /// offers runs as printed from the coordinator's own pane and from a shell Kolux did not start
+    /// (no pane): worker-stop stops the dispatch, the retry's worker-start finds the task in that
+    /// Run (it honours --run) and goes on to the agent, worker-release releases it. A pane that
+    /// acts in another Run is turned away by every one of them. The retry carries the start's tier
+    /// when it had one, and quotes a value with a space in it.
+    #[test]
+    fn fix4_b_offered_lines_run_from_the_coordinator_pane_and_from_no_pane() {
+        let cli = crate::orchestration::CLI;
+        let dir = std::env::temp_dir().join(format!("kolux-rs-clifix4-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let me = u64::from(std::process::id());
+        let (run, other) = {
+            let mut m = crate::orchestration::Mail::default();
+            let run = m.run_create("term-1", "ship it", 1)["binding"]["runId"].as_str().unwrap().to_string();
+            let other = m.run_create("term-5", "something else", 2)["binding"]["runId"].as_str().unwrap().to_string();
+            m.save(&store.lock().unwrap()).unwrap();
+            (run, other)
+        };
+        let reset = || {
+            let s = store.lock().unwrap();
+            save_list(&s, TASKS_KEY, &[json!({ "id": "task-2", "runId": run, "status": "dispatched", "dispatchId": "dispatch-4" })]).unwrap();
+            save_list(&s, DISPATCHES_KEY, &[json!({ "id": "dispatch-4", "runId": run, "taskId": "task-2", "status": "unknown", "terminal": null, "agent": "codex", "model": "gpt-5", "runtime": me, "worktree": "w" })]).unwrap();
+        };
+        let offered = |stage: &str, tier: Option<&str>| {
+            let mut r = json!({ "dispatchId": "dispatch-4", "taskId": "task-2", "agent": "codex", "model": "gpt-5", "effort": null, "tier": tier, "terminals": [{ "id": 9, "role": "worker" }], "worktree": { "path": "C:\\w", "created": false } });
+            crate::orchestration::start_failed(&mut r, stage, json!("not_configured"));
+            start_failed_run(&mut r, Some(run.as_str()));
+            r["next"].as_array().unwrap().iter().map(|l| l.as_str().unwrap().to_string()).collect::<Vec<_>>()
+        };
+        let request = |line: &str| {
+            let p = parse(&crate::agents::split_args(line.strip_prefix(&format!("{cli} ")).unwrap())).1.unwrap().unwrap();
+            Request { id: "r".into(), token: String::new(), command: p.command, cwd: dir.display().to_string(), args: Value::Object(p.args), pane: None, cli: String::new(), arrived: None }
+        };
+        let run_line = |line: &str, pane: Option<&str>| {
+            let req = request(line);
+            if req.command == WORKER_START {
+                return worker_start_as(&ctx, &req, pane.map(str::to_string));
+            }
+            let s = store.lock().unwrap();
+            let mut m = crate::orchestration::Mail::load(&s);
+            tasks(&ctx, &s, &mut m, &req, pane, None)
+        };
+        let worker = offered("worker", None);
+        let setup = offered("setup", None);
+        assert!(worker[0].contains("worker-stop") && worker[1].contains("worker-start --task task-2") && setup[0].contains("worker-release"), "{worker:?} {setup:?}");
+        let no_agent = |l: &str| l.replace("--agent codex", "--agent no-such-agent").replace(" --model gpt-5", "");
+        for pane in [Some("term-1"), None] {
+            reset();
+            let stopped = run_line(&worker[0], pane).unwrap_or_else(|e| panic!("{pane:?} {}: {}", worker[0], e.message));
+            assert_eq!(stopped["status"], "stopped", "{pane:?}");
+            // The retry as printed: the Run and task checks never refuse it (an installed codex goes
+            // on to placement, which this folder has no project for).
+            if let Err(e) = run_line(&worker[1], pane) {
+                let refused = ["not_bound", "unbound_caller"].contains(&e.code) || e.message.starts_with("no task") || e.message.starts_with("no Run");
+                assert!(!refused, "{pane:?} {}: {} {}", worker[1], e.code, e.message);
+            }
+            // The same retry with an unknown agent: it got past the task lookup to the agent.
+            reset();
+            run_line(&worker[0], pane).unwrap();
+            let e = run_line(&no_agent(&worker[1]), pane).unwrap_err();
+            assert!(e.message.contains("Kolux knows no agent `no-such-agent`"), "{pane:?}: {}", e.message);
+            let released = run_line(&setup[0], pane).unwrap_or_else(|e| panic!("{pane:?} {}: {}", setup[0], e.message));
+            assert_eq!(released["terminalState"], "released", "{pane:?}");
+        }
+        // Without --run a line from no pane names no Run, so the task is not found there.
+        reset();
+        let bare = no_agent(&worker[1]).replace(&format!(" --run {run}"), "");
+        assert_eq!(run_line(&bare, None).unwrap_err().code, "not_found");
+        // A pane acting in another Run may not change this one.
+        reset();
+        for line in [&worker[0], &worker[1], &setup[0]] {
+            let e = run_line(line, Some("term-5")).unwrap_err();
+            assert_eq!(e.code, "not_bound", "{line}: {}", e.message);
+        }
+        let m = crate::orchestration::Mail::load(&store.lock().unwrap());
+        assert_eq!(start_run(&m, Some("term-5"), None, &[]).unwrap().as_deref(), Some(other.as_str()));
+        assert_eq!(start_run(&m, None, Some("run-99"), &[]).unwrap_err().code, "not_found");
+        // A tiered start's retry carries the tier, not the model it routed to; spaces are quoted.
+        let tiered = offered("worker", Some("light"));
+        let p = request(&tiered[1]);
+        assert_eq!((p.args["tier"].as_str(), p.args.get("model"), p.args["agent"].as_str()), (Some("light"), None, Some("codex")), "{}", tiered[1]);
+        let mut r = json!({ "dispatchId": "dispatch-4", "taskId": "task-2", "agent": "claude", "model": "my model", "effort": "high", "tier": null, "terminals": [], "worktree": { "path": "C:\\w", "created": false } });
+        crate::orchestration::start_failed(&mut r, "worker", json!("not_configured"));
+        start_failed_run(&mut r, Some("run-1"));
+        let line = r["next"][1].as_str().unwrap().to_string();
+        assert!(line.contains("--model \"my model\" --effort high --run run-1"), "{line}");
+        assert_eq!(request(&line).args["model"], "my model");
+        // cli FIX-5 (council AFTER 1): a value a shell would act on is never offered; the stop and
+        // release lines still are.
+        for bad in ["m\"x", "m;rm", "a&b", "a|b", "$env:X", "a`b", "a>b"] {
+            let mut r = json!({ "dispatchId": "dispatch-4", "taskId": "task-2", "agent": "claude", "model": bad, "effort": "high", "tier": null, "terminals": [], "worktree": { "path": "C:\\w", "created": false } });
+            crate::orchestration::start_failed(&mut r, "worker", json!("not_configured"));
+            let before = r["next"].as_array().map_or(0, Vec::len);
+            start_failed_run(&mut r, Some("run-1"));
+            let next: Vec<String> = r["next"].as_array().unwrap().iter().filter_map(|l| l.as_str().map(str::to_string)).collect();
+            assert_eq!(next.len() + 1, before, "{bad}: {next:?}");
+            assert!(next.iter().all(|l| !l.contains(bad) && !l.contains("worker-start")), "{bad}: {next:?}");
+            assert!(next.iter().any(|l| l.contains("worker-stop") && l.ends_with("--run run-1")), "{bad}: {next:?}");
+        }
+        drop(ctx);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// cli FIX-5 (council FIX-SOON 1 on c5fb49c): worker-start checks --from as worker-stop and
+    /// worker-release do. A --from that cannot be proven (here: no Kolux pane; from a pane, one
+    /// that names another terminal) fails the start, instead of making it an outside caller that
+    /// may name any Run.
+    #[test]
+    fn fix5_b_worker_start_with_a_from_it_cannot_prove_fails() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-clifix5-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let run = {
+            let mut m = crate::orchestration::Mail::default();
+            let run = m.run_create("term-1", "ship it", 1)["binding"]["runId"].as_str().unwrap().to_string();
+            m.save(&store.lock().unwrap()).unwrap();
+            save_list(&store.lock().unwrap(), TASKS_KEY, &[json!({ "id": "task-2", "runId": run, "status": "pending" })]).unwrap();
+            run
+        };
+        let start = |from: Option<&str>| {
+            let mut args = json!({ "run": run, "task": "task-2", "agent": "no-such-agent" });
+            if let Some(f) = from {
+                args["from"] = json!(f);
+            }
+            let req = Request { id: "r".into(), token: String::new(), command: WORKER_START.into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
+            worker_start(&ctx, &req).unwrap_err()
+        };
+        let e = start(Some("term-1"));
+        assert_eq!(e.code, "unbound_caller", "{}", e.message);
+        // Without --from the same start from no pane passes the Run and task checks, to the agent.
+        assert!(start(None).message.contains("Kolux knows no agent `no-such-agent`"));
+        drop(ctx);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cli FIX-6 (council AFTER 1 on 152e581): PowerShell acts on a leading `@` (splatting) and on
+    /// `,` (an array); a value with `=` is easy to misread. An offered line quotes such a value, so
+    /// the pasted line means what was printed, and still parses back to the same value.
+    #[test]
+    fn fix6_c_offered_lines_quote_at_comma_and_equals() {
+        let cli = crate::orchestration::CLI;
+        for (v, shown) in [("@x", "\"@x\""), ("a,b", "\"a,b\""), ("m=1", "\"m=1\""), ("two words", "\"two words\""), ("plain-1.5", "plain-1.5")] {
+            let mut r = json!({ "dispatchId": "dispatch-4", "taskId": "task-2", "agent": "codex", "model": v, "effort": null, "terminals": [{ "id": 7, "role": "worker" }], "worktree": { "path": "C:/Temp/wt-1", "created": true } });
+            crate::orchestration::start_failed(&mut r, "worker", json!("not_configured"));
+            start_failed_run(&mut r, Some("run-2"));
+            let retry = r["next"][1].as_str().unwrap().to_string();
+            assert!(retry.contains(&format!(" --model {shown}")), "{v}: {retry}");
+            let p = parse(&crate::agents::split_args(retry.strip_prefix(&format!("{cli} ")).unwrap())).1.unwrap_or_else(|e| panic!("{retry}: {}", e.message)).unwrap();
+            assert_eq!(p.args.get("model").and_then(Value::as_str), Some(v), "{retry}");
+        }
+    }
+
+    fn tab(id: u32, quiet_ms: u64) -> Tab {
+        Tab { id, quiet: Some(Duration::from_millis(quiet_ms)) }
+    }
+
+    /// cli FIX-6 item 2 (T-172-e, council FIX-SOON 1 on 152e581): the session the window starts
+    /// with the dispatch id in its environment is the worker's, even when the user opens the same
+    /// agent in the folder first and its banner has settled. Only a dispatch whose start is waiting
+    /// can be stamped, and only once.
+    #[test]
+    fn fix6_a_the_stamped_session_is_the_workers_not_the_users_tab() {
+        // The user's Claude tab (5) is open and quiet when the first poll runs; the window's own
+        // session (6) is stamped and appears a poll later. Taking "the one fresh Claude tab" would
+        // return 5 at once; the stamp makes it 6.
+        let d = "dispatch-fix6-a1";
+        expect_stamp(d);
+        let polls = std::cell::Cell::new(0);
+        let open = || {
+            polls.set(polls.get() + 1);
+            let mut v = vec![tab(5, 5000)];
+            if polls.get() >= 2 {
+                assert!(stamp_session(d, 6));
+                v.push(tab(6, 5000));
+            }
+            v
+        };
+        let got = wait_ready_over(&open, d, Instant::now(), Duration::from_secs(30));
+        assert_eq!(got, (Some(6), true));
+        assert!(polls.get() >= 2, "the first poll took no tab");
+        forget_stamp(d);
+        // A stamp for a session that has since gone is no one's.
+        let d2 = "dispatch-fix6-a2";
+        expect_stamp(d2);
+        assert!(stamp_session(d2, 9));
+        assert_eq!(wait_ready_over(&|| vec![tab(5, 5000)], d2, Instant::now(), Duration::from_millis(300)), (None, false));
+        forget_stamp(d2);
+        // Only a waiting start can be stamped, and once: a user's own variable cannot claim a session.
+        assert!(!stamp_session("dispatch-fix6-a3", 1), "never expected");
+        expect_stamp("dispatch-fix6-a3");
+        assert!(stamp_session("dispatch-fix6-a3", 1));
+        assert!(!stamp_session("dispatch-fix6-a3", 2), "stamped once");
+        assert_eq!(stamped("dispatch-fix6-a3"), Some(1));
+        forget_stamp("dispatch-fix6-a3");
+        assert!(!stamp_session("dispatch-fix6-a3", 3), "a finished start is not stamped");
+    }
+
+    /// cli FIX-7 item 1 (council FIX-SOON 1 on 4dce90d5): with no stamp the start takes no tab at
+    /// all. A Claude tab the user opened in the worktree that has settled is never read as the
+    /// worker's, however long the start waits, so a stop or release can never end it; the start
+    /// reports `unknown` and leaves the terminal unrecorded.
+    #[test]
+    fn fix7_a_no_stamp_takes_no_tab() {
+        let t = Instant::now();
+        let got = wait_ready_over(&|| vec![tab(5, 5000)], "dispatch-fix7-a", t, Duration::from_millis(900));
+        assert_eq!(got, (None, false));
+        assert!(t.elapsed() >= Duration::from_millis(900), "waited the whole timeout: {:?}", t.elapsed());
+        // Registered but never stamped: the same.
+        expect_stamp("dispatch-fix7-a");
+        assert_eq!(wait_ready_over(&|| vec![tab(5, 5000)], "dispatch-fix7-a", Instant::now(), Duration::from_millis(400)), (None, false));
+        forget_stamp("dispatch-fix7-a");
+    }
+
+    /// cli FIX-7 item 1: the stamped session is the worker's whatever else is open; ready only once
+    /// it has been quiet for SETTLE (found, not ready, until then).
+    #[test]
+    fn fix7_b_the_stamped_session_is_ready_once_it_settles() {
+        let d = "dispatch-fix7-b";
+        expect_stamp(d);
+        assert!(stamp_session(d, 7));
+        // Inside SETTLE: found, not ready.
+        assert_eq!(wait_ready_over(&|| vec![tab(5, 5000), tab(7, 100)], d, Instant::now(), Duration::from_millis(500)), (Some(7), false));
+        // Settled, with a settled neighbour that was never stamped: the stamped one.
+        assert_eq!(wait_ready_over(&|| vec![tab(5, 5000), tab(7, 5000)], d, Instant::now(), Duration::from_millis(500)), (Some(7), true));
+        // Still starting (never written): not ready.
+        assert_eq!(wait_ready_over(&|| vec![Tab { id: 7, quiet: None }], d, Instant::now(), Duration::from_millis(300)), (Some(7), false));
+        forget_stamp(d);
+    }
+
+    /// cli FIX-7 items 2 and 3 (council FIX-SOON 2, AFTER 1): the step terminal_spawn runs on its
+    /// own environment before it starts the session. The last KOLUX_DISPATCH_ID wins, so a value
+    /// the user's agent environment already holds cannot stand in for the window's; and only the
+    /// dispatch a start registered can be stamped, so the user's value stamps nothing.
+    #[test]
+    fn fix7_c_the_spawn_env_names_the_dispatch_to_stamp() {
+        let e = |k: &str, v: &str| (k.to_string(), v.to_string());
+        assert_eq!(dispatch_in(&[]), None);
+        assert_eq!(dispatch_in(&[e("PATH", "x")]), None);
+        assert_eq!(dispatch_in(&[e(DISPATCH_ENV, "dispatch-7")]), Some("dispatch-7".to_string()));
+        // The user's own entry first, the window's last: the window's wins.
+        let env = [e("A", "1"), e(DISPATCH_ENV, "dispatch-fix7-user"), e("B", "2"), e(DISPATCH_ENV, "dispatch-fix7-c")];
+        assert_eq!(dispatch_in(&env).as_deref(), Some("dispatch-fix7-c"));
+        // End to end: the start registers its dispatch, the spawn reads it from the env and stamps
+        // the new session, and the wait returns that session.
+        expect_stamp("dispatch-fix7-c");
+        let named = dispatch_in(&env).unwrap();
+        assert!(stamp_session(&named, 12));
+        assert_eq!(wait_ready_over(&|| vec![tab(12, 5000)], "dispatch-fix7-c", Instant::now(), Duration::from_millis(500)), (Some(12), true));
+        forget_stamp("dispatch-fix7-c");
+        // The user's value alone names a dispatch no start is waiting on: nothing is stamped.
+        let only_user = [e(DISPATCH_ENV, "dispatch-fix7-user")];
+        assert!(!stamp_session(&dispatch_in(&only_user).unwrap(), 13));
+    }
+
+    /// cli FIX-7 (earlier AFTER on c5fb49c): worker-stop and worker-release as the command line
+    /// reaches them (dispatch, not the helpers). A custom-command worker's marked session is ended
+    /// and closed; a shell the row happens to name, and a tab the user opened running the same
+    /// command, stay open. A wrong tuple order in `session_now`/`runs_now` would show here.
+    #[test]
+    fn fix7_d_stop_and_release_through_dispatch_end_only_the_workers_marked_session() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-clifix7-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = dir.display().to_string();
+        // 7: the worker (npx, a custom command); 8: a shell; 9: the user's own tab running npx too; 10: a settled worker.
+        terminals.fake_session(7, &wd, Some("npx"));
+        terminals.fake_session(8, &wd, None);
+        terminals.fake_session(9, &wd, Some("npx"));
+        terminals.fake_session(10, &wd, Some("npx"));
+        // 11: a tab the user opened that a row names, but marked with another program than the row recorded.
+        terminals.fake_session(11, &wd, Some("node"));
+        let row = |n: u32, status: &str, term: u32| worker_row(json!({ "id": format!("dispatch-{n}"), "runId": null, "taskId": format!("task-{n}"), "status": status, "worktree": wd, "agent": "claude", "terminal": term, "terminalProgram": "npx" }));
+        let task = |n: u32| json!({ "id": format!("task-{n}"), "status": "dispatched", "dispatchId": format!("dispatch-{n}") });
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[row(1, "ready", 7), row(2, "ready", 8), row(3, "stopped", 10), row(4, "stopped", 8), row(5, "ready", 11), row(6, "stopped", 11)]).unwrap();
+        save_list(&store.lock().unwrap(), TASKS_KEY, &[task(1), task(2), task(3), task(4), task(5), task(6)]).unwrap();
+        let call = |command: &str, id: &str| {
+            let req = Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args: json!({ "dispatch": id }), pane: None, cli: String::new(), arrived: None };
+            dispatch(&ctx, &req)
+        };
+        // A shell that the row names is not the worker's: stop leaves it open and says why.
+        let r = call(STOP, "dispatch-2").unwrap();
+        assert!(r["terminalLeftOpen"].is_string(), "{r}");
+        assert!(terminals.live("term-8"), "the shell stays");
+        // The marked custom-command session is the worker's: stop ends it, and nothing else.
+        let r = call(STOP, "dispatch-1").unwrap();
+        assert_eq!(r["process"], "ended", "{r}");
+        assert!(!terminals.live("term-7"), "the worker's session ended");
+        assert!(terminals.live("term-9") && terminals.live("term-10"), "the user's tab and the other worker stay");
+        // Release closes a settled worker's marked session; a shell it names stays.
+        let r = call(RELEASE, "dispatch-3").unwrap();
+        assert_eq!(r["terminalState"], "released", "{r}");
+        assert!(!terminals.live("term-10"), "release closed the worker's session");
+        let r = call(RELEASE, "dispatch-4").unwrap();
+        assert!(r["terminalLeftOpen"].is_string(), "{r}");
+        assert!(terminals.live("term-8") && terminals.live("term-9"), "a shell and the user's tab stay open");
+        // cli FIX-8: a session a row names whose mark is not the row's recorded program is the user's, not the
+        // worker's (runs_now's mark check): stop and release both leave it open and say why.
+        let r = call(STOP, "dispatch-5").unwrap();
+        assert!(r["terminalLeftOpen"].is_string(), "{r}");
+        assert!(terminals.live("term-11"), "stop left the differently-marked session open");
+        let r = call(RELEASE, "dispatch-6").unwrap();
+        assert!(r["terminalLeftOpen"].is_string(), "{r}");
+        assert!(terminals.live("term-11"), "release left it open");
+        for t in [8, 9, 11] {
+            let _ = terminals.kill(t);
+        }
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The Ctx pieces a dispatch-level test needs: a scratch folder, its store and the git runner.
+    fn fix8_world(tag: &str) -> (std::path::PathBuf, Git, Mutex<Store>) {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-clifix8-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        (dir, Git::detect().unwrap(), store)
+    }
+
+    /// cli FIX-8 item 2 (council FIX-SOON 2 on 800b8a94): a worker the window starts after the start
+    /// gave up (a loaded PC) is not lost. Its session is stamped to the dispatch inside the late
+    /// window, the next worker-show / stop / release call records it on the row, and a stop then
+    /// ends it, and only it. Without this a stop freed the task but killed nothing and the retry made
+    /// a second agent on the same task.
+    #[test]
+    fn fix8_a_a_late_stamp_lands_on_the_row_and_a_stop_ends_it() {
+        let (dir, git_, store) = fix8_world("a");
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = dir.display().to_string();
+        let row = |n: u32, status: &str| worker_row(json!({ "id": format!("dispatch-fix8-a{n}"), "runId": null, "taskId": format!("task-fix8-a{n}"), "status": status, "worktree": wd, "agent": "claude", "terminal": null, "terminalProgram": null }));
+        let task = |n: u32| json!({ "id": format!("task-fix8-a{n}"), "status": "dispatched", "dispatchId": format!("dispatch-fix8-a{n}") });
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[row(1, "unknown"), row(2, "unknown"), row(3, "unknown")]).unwrap();
+        save_list(&store.lock().unwrap(), TASKS_KEY, &[task(1), task(2), task(3)]).unwrap();
+        let call = |command: &str, id: &str| {
+            let req = Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args: json!({ "dispatch": id }), pane: None, cli: String::new(), arrived: None };
+            dispatch(&ctx, &req)
+        };
+        let saved = |id: &str| load_list(&store.lock().unwrap(), DISPATCHES_KEY).into_iter().find(|d| d["id"] == id).unwrap();
+        // Both starts ended `unknown` without a session; they keep their place for the window.
+        for n in [1, 2] {
+            let d = format!("dispatch-fix8-a{n}");
+            expect_stamp(&d);
+            finish_stamp(&d, None, LATE_WINDOW);
+        }
+        // Nothing has arrived yet: a call changes nothing.
+        call(WORKER_SHOW, "dispatch-fix8-a1").unwrap();
+        assert!(saved("dispatch-fix8-a1")["terminal"].is_null());
+        // The window starts both agents late (7 and 8) and the user opens a tab (9) with the same program.
+        terminals.fake_session(7, &wd, Some("npx"));
+        terminals.fake_session(8, &wd, Some("npx"));
+        terminals.fake_session(9, &wd, Some("npx"));
+        assert!(stamp_session("dispatch-fix8-a1", 7), "a start that timed out can still be stamped");
+        assert!(!stamp_session("dispatch-fix8-a1", 9), "once");
+        // worker-show records it on the row.
+        call(WORKER_SHOW, "dispatch-fix8-a1").unwrap();
+        let d1 = saved("dispatch-fix8-a1");
+        assert_eq!((d1["terminal"].as_u64(), d1["terminalProgram"].as_str(), d1["lateStamp"].as_bool()), (Some(7), Some("npx"), Some(true)), "{d1}");
+        assert_eq!(d1["status"], "unknown", "the status stays as the start reported it");
+        // A stop now ends that session, not the user's tab or the other worker's.
+        let r = call(STOP, "dispatch-fix8-a1").unwrap();
+        assert_eq!(r["process"], "ended", "{r}");
+        assert!(!terminals.live("term-7"), "the late worker ended");
+        assert!(terminals.live("term-8") && terminals.live("term-9"), "the other worker and the user's tab stay");
+        // The stop came first for the second dispatch (nothing recorded, so it kills nothing and says so).
+        let r = call(STOP, "dispatch-fix8-a2").unwrap();
+        assert_eq!(r["process"], "unverifiable", "{r}");
+        assert!(terminals.live("term-8"));
+        // Its session arrives after the stop: it is recorded, so the offered release can close it.
+        assert!(stamp_session("dispatch-fix8-a2", 8));
+        call(WORKER_SHOW, "dispatch-fix8-a2").unwrap();
+        assert_eq!(saved("dispatch-fix8-a2")["terminal"].as_u64(), Some(8));
+        let r = call(RELEASE, "dispatch-fix8-a2").unwrap();
+        assert_eq!(r["terminalState"], "released", "{r}");
+        assert!(!terminals.live("term-8"), "release closed the late worker");
+        assert!(terminals.live("term-9"), "the user's tab stays");
+        // A third start whose session is gone before anything reads it records nothing.
+        let d3 = "dispatch-fix8-a3";
+        expect_stamp(d3);
+        finish_stamp(d3, None, LATE_WINDOW);
+        terminals.fake_session(11, &wd, Some("npx"));
+        assert!(stamp_session(d3, 11));
+        terminals.kill(11).unwrap();
+        call(WORKER_SHOW, d3).unwrap();
+        assert!(saved(d3)["terminal"].is_null());
+        forget_stamp(d3);
+        let _ = terminals.kill(9);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cli FIX-8 item 2: the late window is bounded and a found session ends the entry. A start that
+    /// found its session forgets the entry; one that found none keeps it for the window only; and a
+    /// row of an earlier run, or one that already has a terminal, is never changed.
+    #[test]
+    fn fix8_b_the_late_window_is_bounded() {
+        let d = "dispatch-fix8-b";
+        expect_stamp(d);
+        finish_stamp(d, Some(4), LATE_WINDOW);
+        assert!(!stamp_session(d, 5), "a start that found its session is done");
+        // Kept for a window that has already passed: nothing can be stamped any more.
+        expect_stamp(d);
+        finish_stamp(d, None, Duration::ZERO);
+        assert!(!stamp_session(d, 5), "past the window");
+        // A late session is recorded once, on this run's row without a terminal only.
+        let me = u64::from(std::process::id());
+        expect_stamp(d);
+        finish_stamp(d, None, LATE_WINDOW);
+        assert!(stamp_session(d, 6));
+        let open = |t: u32| (t == 6).then(|| Some("npx".to_string()));
+        let mut rows = vec![
+            json!({ "id": d, "runtime": me + 1, "terminal": null }),
+            json!({ "id": d, "runtime": me, "terminal": 3 }),
+            json!({ "id": "dispatch-fix8-b-other", "runtime": me, "terminal": null }),
+        ];
+        assert_eq!(reconcile_late(&mut rows, &open), 0, "an earlier run's row, a recorded row and another dispatch stay: {rows:?}");
+        rows.push(json!({ "id": d, "runtime": me, "terminal": null }));
+        assert_eq!(reconcile_late(&mut rows, &open), 1);
+        assert_eq!(rows[3]["terminal"], 6);
+        assert_eq!(reconcile_late(&mut rows, &open), 0, "recorded once");
+        forget_stamp(d);
+    }
+
+    /// cli FIX-8 AFTER 4: the wait reads only the stamped session. With no stamp, or a stamped
+    /// session that has gone, it sees nothing; with one it sees that session and no other.
+    #[test]
+    fn fix8_c_tabs_reads_only_the_stamped_session() {
+        let terminals = Terminals::default();
+        terminals.fake_session(5, "C:/w", Some("npx"));
+        terminals.fake_session(6, "C:/w", Some("npx"));
+        let d = "dispatch-fix8-c";
+        assert!(tabs(&terminals, d).is_empty(), "no entry");
+        expect_stamp(d);
+        assert!(tabs(&terminals, d).is_empty(), "no stamp yet");
+        assert!(stamp_session(d, 6));
+        let seen = tabs(&terminals, d);
+        assert_eq!(seen.iter().map(|t| t.id).collect::<Vec<_>>(), vec![6]);
+        assert!(seen[0].quiet.is_some_and(|q| q >= SETTLE));
+        terminals.kill(6).unwrap();
+        assert!(tabs(&terminals, d).is_empty(), "the stamped session is gone");
+        let _ = terminals.kill(5);
+        forget_stamp(d);
+    }
+
+    /// cli FIX-8 AFTER 1: the step terminal_spawn runs around a spawn. The id comes from the
+    /// environment before it is handed over, the new session is stamped only once the spawn
+    /// succeeded, and the user's own value (an entry no start registered) stamps nothing.
+    #[test]
+    fn fix8_d_spawn_stamped_stamps_the_new_session_on_success_only() {
+        let e = |k: &str, v: &str| (k.to_string(), v.to_string());
+        let env = [e(DISPATCH_ENV, "dispatch-fix8-user"), e("A", "1"), e(DISPATCH_ENV, "dispatch-fix8-d")];
+        expect_stamp("dispatch-fix8-d");
+        let id: Result<u32, String> = spawn_stamped(dispatch_in(&env), || Ok(21));
+        assert_eq!(id, Ok(21));
+        assert_eq!(stamped("dispatch-fix8-d"), Some(21));
+        forget_stamp("dispatch-fix8-d");
+        // A spawn that fails stamps nothing and its error comes back.
+        expect_stamp("dispatch-fix8-d2");
+        let id: Result<u32, String> = spawn_stamped(Some("dispatch-fix8-d2".into()), || Err("no pty".into()));
+        assert_eq!(id, Err("no pty".to_string()));
+        assert_eq!(stamped("dispatch-fix8-d2"), None);
+        assert!(stamp_session("dispatch-fix8-d2", 1), "still waiting: the failed spawn used no stamp");
+        forget_stamp("dispatch-fix8-d2");
+        // No dispatch in the environment, or the user's alone: nothing to stamp, the id still comes back.
+        assert_eq!(spawn_stamped::<String>(dispatch_in(&[e("A", "1")]), || Ok(22)), Ok(22));
+        assert_eq!(spawn_stamped::<String>(dispatch_in(&[e(DISPATCH_ENV, "dispatch-fix8-user")]), || Ok(23)), Ok(23));
+        assert_eq!(stamped("dispatch-fix8-user"), None);
+    }
+
+    /// cli FIX-9 item 1 (council FIX-SOON 1 on 529c53e2): a session that arrives late for a dispatch
+    /// the coordinator already stopped (or released) is not attached in silence. The call that
+    /// records it says so (`lateWorker`: the dispatch, the session, its status, and worker-release as
+    /// the next step), worker-show keeps saying it (`lateStamp`, `lateAfter`), and worker-release
+    /// closes that session, also on a row released before it came, with the same note in its receipt.
+    /// A row still running takes the session as before and says nothing.
+    #[test]
+    fn fix9_a_a_late_session_on_a_stopped_or_released_row_is_said_so() {
+        let (dir, git_, store) = fix8_world("fix9a");
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = dir.display().to_string();
+        let row = |n: u32, status: &str, released: bool| worker_row(json!({ "id": format!("dispatch-fix9-a{n}"), "runId": null, "taskId": format!("task-fix9-a{n}"), "status": status, "released": released, "worktree": wd, "agent": "claude", "terminal": null, "terminalProgram": null }));
+        let task = |n: u32| json!({ "id": format!("task-fix9-a{n}"), "status": "dispatched", "dispatchId": format!("dispatch-fix9-a{n}") });
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[row(1, "stopped", false), row(2, "stopped", true), row(3, "unknown", false)]).unwrap();
+        save_list(&store.lock().unwrap(), TASKS_KEY, &[task(1), task(2), task(3)]).unwrap();
+        let call = |command: &str, n: u32| {
+            let req = Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args: json!({ "dispatch": format!("dispatch-fix9-a{n}") }), pane: None, cli: String::new(), arrived: None };
+            dispatch(&ctx, &req).unwrap()
+        };
+        let late = |n: u32, session: u32| {
+            let d = format!("dispatch-fix9-a{n}");
+            expect_stamp(&d);
+            finish_stamp(&d, None, LATE_WINDOW);
+            terminals.fake_session(session, &wd, Some("npx"));
+            assert!(stamp_session(&d, session));
+        };
+        // 1: stopped first, then its agent comes up.
+        late(1, 7);
+        let r = call(WORKER_SHOW, 1);
+        let note = &r["lateWorker"][0];
+        assert_eq!((note["dispatchId"].as_str(), note["terminal"].as_str(), note["status"].as_str()), (Some("dispatch-fix9-a1"), Some("term-7"), Some("stopped")), "{r}");
+        assert!(note["next"].as_str().is_some_and(|n| n.contains("worker-release --dispatch dispatch-fix9-a1")), "{r}");
+        assert!(r["lateWorker"].as_array().is_some_and(|a| a.len() == 1), "only the row the session came for: {r}");
+        // worker-show keeps saying it on later calls; the note goes with the show that clears the alarm (cli FIX-11), then stops.
+        let r = call(WORKER_SHOW, 1);
+        assert_eq!((r["lateStamp"].as_bool(), r["lateAfter"].as_str()), (Some(true), Some("stopped")), "{r}");
+        assert_eq!(r["lateWorker"][0]["dispatchId"], "dispatch-fix9-a1", "the second show still tells it, then clears: {r}");
+        let r = call(WORKER_SHOW, 1);
+        assert!(r["lateWorker"].is_null(), "said until a later show cleared it: {r}");
+        let r = call(RELEASE, 1);
+        assert_eq!(r["terminalState"], "released", "{r}");
+        assert_eq!(r["lateWorker"][0]["terminal"], "term-7", "{r}");
+        assert!(!terminals.live("term-7"), "release closed the late worker");
+        // 2: released before its agent came up; the release is opened again and closes it.
+        late(2, 8);
+        let r = call(WORKER_SHOW, 2);
+        assert_eq!(r["lateWorker"][0]["status"], "released", "{r}");
+        let r = call(RELEASE, 2);
+        assert_eq!((r["terminalState"].as_str(), r["alreadyReleased"].as_bool()), (Some("released"), Some(false)), "{r}");
+        assert_eq!(r["lateWorker"][0]["terminal"], "term-8", "{r}");
+        assert!(!terminals.live("term-8"), "release closed the session that came after the release");
+        let r = call(RELEASE, 2);
+        assert_eq!(r["alreadyReleased"], true, "closed once, then it stays released: {r}");
+        // 3: still running; the session is recorded as before and nothing is said.
+        late(3, 9);
+        let r = call(WORKER_SHOW, 3);
+        assert!(r["lateWorker"].is_null(), "{r}");
+        assert_eq!((r["lateStamp"].as_bool(), r["lateAfter"].is_null()), (Some(true), true), "{r}");
+        let _ = terminals.kill(9);
+        for n in 1..=3 {
+            forget_stamp(&format!("dispatch-fix9-a{n}"));
+        }
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cli FIX-9 item 4: worker-show says a late agent in words, and any answer prints its late worker
+    /// notes with the way to close them.
+    #[test]
+    fn fix9_b_the_text_says_a_late_agent_and_prints_late_worker_notes() {
+        let base = json!({ "dispatchId": "dispatch-1", "terminalState": "reclaimable", "taskStatus": "dispatched", "terminal": "term-3", "worktree": "C:/w", "waiting": "unknown", "waitingWhy": "x" });
+        assert!(!text_of(WORKER_SHOW, &base).contains("late"));
+        let mut shown = base.clone();
+        shown["lateStamp"] = json!(true);
+        assert!(text_of(WORKER_SHOW, &shown).ends_with("; its agent came up late"));
+        shown["lateAfter"] = json!("stopped");
+        assert!(text_of(WORKER_SHOW, &shown).ends_with("; its agent came up late, after the dispatch was stopped"));
+        let warned = json!({ "dispatchId": "dispatch-1", "terminalState": "released", "lateWorker": [{ "note": "dispatch-1 was already stopped when its agent came up late", "next": "kolux orchestration worker-release --dispatch dispatch-1" }] });
+        assert!(text_of(RELEASE, &warned).ends_with("\nwarning: dispatch-1 was already stopped when its agent came up late; next: kolux orchestration worker-release --dispatch dispatch-1"));
+    }
+
+    /// cli FIX-10 item 1 and 3 (council FIX-SOON 1 and 3 on 081bbfab): a late-worker note is not one
+    /// answer's luck. It stays on every answer (the list rows too: lateStamp, lateAfter, latePending)
+    /// until worker-show or worker-release reads that dispatch; completed and failed rows get it too.
+    #[test]
+    fn fix10_a_the_late_note_stays_until_the_dispatch_is_read_and_covers_finished_rows() {
+        let (dir, git_, store) = fix8_world("fix10a");
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = dir.display().to_string();
+        let row = |n: u32, status: &str| worker_row(json!({ "id": format!("dispatch-fix10-a{n}"), "runId": null, "taskId": format!("task-fix10-a{n}"), "status": status, "released": false, "worktree": wd, "agent": "claude", "terminal": null, "terminalProgram": null }));
+        // cli FIX-11 (council FIX-SOON 2 on 9afdd308): the tasks of the completed and failed rows are finished and hold a result.
+        let task = |n: u32| match n {
+            2 => json!({ "id": "task-fix10-a2", "status": "completed", "result": "built it", "dispatchId": "dispatch-fix10-a2" }),
+            3 => json!({ "id": "task-fix10-a3", "status": "failed", "result": "broke", "dispatchId": "dispatch-fix10-a3" }),
+            _ => json!({ "id": format!("task-fix10-a{n}"), "status": "dispatched", "dispatchId": format!("dispatch-fix10-a{n}") }),
+        };
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[row(1, "stopped"), row(2, "completed"), row(3, "failed")]).unwrap();
+        save_list(&store.lock().unwrap(), TASKS_KEY, &[task(1), task(2), task(3)]).unwrap();
+        let call = |command: &str, n: u32| {
+            let req = Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args: json!({ "dispatch": format!("dispatch-fix10-a{n}") }), pane: None, cli: String::new(), arrived: None };
+            dispatch(&ctx, &req).unwrap()
+        };
+        let late = |n: u32, session: u32| {
+            let d = format!("dispatch-fix10-a{n}");
+            expect_stamp(&d);
+            finish_stamp(&d, None, LATE_WINDOW);
+            terminals.fake_session(session, &wd, Some("npx"));
+            assert!(stamp_session(&d, session));
+        };
+        late(1, 17);
+        late(2, 18);
+        late(3, 19);
+        let notes = |r: &Value| {
+            let mut ids: Vec<String> = r["lateWorker"].as_array().into_iter().flatten().filter_map(|n| n["dispatchId"].as_str()).map(str::to_string).collect();
+            ids.sort();
+            ids
+        };
+        let all = vec!["dispatch-fix10-a1".to_string(), "dispatch-fix10-a2".to_string(), "dispatch-fix10-a3".to_string()];
+        // A list is the first call to see them, and says it for stopped, completed and failed alike.
+        let r = call(WORKER_LIST, 1);
+        assert_eq!(notes(&r), all, "{r}");
+        let row_of = |r: &Value, n: u32| r["workers"].as_array().unwrap().iter().find(|w| w["dispatchId"] == format!("dispatch-fix10-a{n}")).cloned().unwrap();
+        for (n, status) in [(1, "stopped"), (2, "completed"), (3, "failed")] {
+            let w = row_of(&r, n);
+            assert_eq!((w["lateStamp"].as_bool(), w["lateAfter"].as_str(), w["latePending"].as_bool()), (Some(true), Some(status), Some(true)), "{w}");
+        }
+        assert!(text_of(WORKER_LIST, &r).contains("its agent came up late"), "{}", text_of(WORKER_LIST, &r));
+        // It is not said once: the next answer, a list or any other, says it again.
+        let r = call(WORKER_LIST, 1);
+        assert_eq!(notes(&r), all, "durable: {r}");
+        // worker-show on one dispatch reads it: told in the show, and (cli FIX-11) dropped by a later show.
+        let r = call(WORKER_SHOW, 1);
+        assert_eq!(r["lateAfter"], "stopped", "{r}");
+        let r = call(WORKER_SHOW, 1);
+        assert_eq!(r["lateWorker"][0]["dispatchId"], "dispatch-fix10-a1", "{r}");
+        let r = call(WORKER_LIST, 1);
+        assert_eq!(notes(&r), vec!["dispatch-fix10-a2".to_string(), "dispatch-fix10-a3".to_string()], "{r}");
+        let w = row_of(&r, 1);
+        assert_eq!((w["lateAfter"].as_str(), w["latePending"].as_bool().unwrap_or(false)), (Some("stopped"), false), "the list keeps the fact, not the alarm: {w}");
+        // A release of a completed row closes the late agent and reads it.
+        let tasks_before = load_list(&store.lock().unwrap(), TASKS_KEY);
+        let r = call(RELEASE, 2);
+        assert_eq!(r["terminalState"], "released", "{r}");
+        assert!(!terminals.live("term-18"), "release closed the late agent on the completed row");
+        let r = call(WORKER_LIST, 1);
+        assert_eq!(notes(&r), vec!["dispatch-fix10-a3".to_string()], "{r}");
+        // cli FIX-11: and the failed row's; neither release touches a finished task or its result.
+        call(RELEASE, 3);
+        assert!(!terminals.live("term-19"), "release closed the late agent on the failed row");
+        let tasks_after = load_list(&store.lock().unwrap(), TASKS_KEY);
+        assert_eq!(tasks_after, tasks_before, "a release changes no task");
+        assert_eq!((tasks_after[1]["status"].as_str(), tasks_after[1]["result"].as_str()), (Some("completed"), Some("built it")));
+        assert_eq!((tasks_after[2]["status"].as_str(), tasks_after[2]["result"].as_str()), (Some("failed"), Some("broke")));
+        let _ = terminals.kill(17);
+        for n in 1..=3 {
+            forget_stamp(&format!("dispatch-fix10-a{n}"));
+        }
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cli FIX-10 item 2 (council FIX-SOON 2 on 081bbfab): when a release leaves the late agent's
+    /// terminal open (it was handed to the worker already open), the note says it is still open and
+    /// names the command that closes a terminal, not a release that promises a close.
+    #[test]
+    fn fix10_b_a_release_that_leaves_the_late_terminal_open_says_so() {
+        let (dir, git_, store) = fix8_world("fix10b");
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = dir.display().to_string();
+        let row = worker_row(json!({ "id": "dispatch-fix10-b1", "runId": null, "taskId": "task-fix10-b1", "status": "stopped", "released": false, "mode": "existing", "worktree": wd, "agent": "claude", "terminal": null, "terminalProgram": null }));
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[row]).unwrap();
+        save_list(&store.lock().unwrap(), TASKS_KEY, &[json!({ "id": "task-fix10-b1", "status": "dispatched", "dispatchId": "dispatch-fix10-b1" })]).unwrap();
+        expect_stamp("dispatch-fix10-b1");
+        finish_stamp("dispatch-fix10-b1", None, LATE_WINDOW);
+        terminals.fake_session(21, &wd, Some("npx"));
+        assert!(stamp_session("dispatch-fix10-b1", 21));
+        let req = Request { id: "r".into(), token: String::new(), command: RELEASE.into(), cwd: wd.clone(), args: json!({ "dispatch": "dispatch-fix10-b1" }), pane: None, cli: String::new(), arrived: None };
+        let r = dispatch(&ctx, &req).unwrap();
+        assert!(r["terminalLeftOpen"].is_string(), "{r}");
+        assert!(terminals.live("term-21"), "the release did not close it");
+        let note = &r["lateWorker"][0];
+        assert!(note["note"].as_str().is_some_and(|n| n.contains("left open") && n.contains("term-21")), "{r}");
+        let next = note["next"].as_str().unwrap_or_default();
+        assert!(next.contains("terminal close --terminal term-21") && !next.contains("worker-release"), "{next}");
+        let _ = terminals.kill(21);
+        forget_stamp("dispatch-fix10-b1");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cli FIX-10 item 4 (council AFTER 2 on 081bbfab): a release that reopens a released row for a
+    /// late agent and then cannot close the terminal leaves an unknown release, and the retry takes
+    /// the ordinary path and closes it. An answer that is not an object keeps its shape.
+    #[test]
+    fn fix10_c_a_reopen_whose_kill_fails_is_retried_the_ordinary_way() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-clifix10c-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut rows = vec![json!({ "id": "dispatch-1", "runId": null, "taskId": "task-1", "status": "stopped", "released": true, "lateStamp": true, "lateAfter": "released", "latePending": true, "terminal": 7, "agent": "claude", "worktree": "w" })];
+        let live = |h: &str| h == "term-7";
+        let agent_of = |_: &str| None;
+        let save = |_: &[Value]| Ok(());
+        let read = |_: u32| Some(crate::terminal::Read::default());
+        let kills = std::cell::Cell::new(0);
+        let failing = |_: u32| {
+            kills.set(kills.get() + 1);
+            false
+        };
+        let r = release_worker(&mut rows, "dispatch-1", None, &live, &agent_of, &dir, &save, &read, &failing).unwrap();
+        assert_eq!(r["terminalState"], "release_unknown", "{r}");
+        assert_eq!(r["lateWorker"][0]["terminal"], "term-7", "{r}");
+        assert_eq!((rows[0]["lateAfter"].as_str(), rows[0]["latePending"].as_bool()), (Some("released"), Some(true)), "cli FIX-11: the agent is still running, so the alarm and the fact stay: {}", rows[0]);
+        let closing = |_: u32| {
+            kills.set(kills.get() + 1);
+            true
+        };
+        let r = release_worker(&mut rows, "dispatch-1", None, &live, &agent_of, &dir, &save, &read, &closing).unwrap();
+        assert_eq!((r["terminalState"].as_str(), r["alreadyReleased"].as_bool()), (Some("released"), Some(false)), "{r}");
+        assert_eq!(r["lateWorker"][0]["terminal"], "term-7", "cli FIX-11: the retry still tells it, the agent runs until it closes: {r}");
+        // cli FIX-12 (council AFTER 1 on 28f3eb7a): the alarm is spent, the fact stays, as on the found-gone path.
+        assert!(rows[0]["latePending"].is_null() && rows[0]["lateAfter"] == "released", "closed: the alarm is spent, the fact stays: {}", rows[0]);
+        assert_eq!(kills.get(), 2);
+        // A non-object answer is handed back as it was.
+        let note = json!({ "dispatchId": "dispatch-1" });
+        assert_eq!(with_late_notes(json!([1, 2]), vec![note.clone()]), json!([1, 2]));
+        assert_eq!(with_late_notes(json!("x"), vec![note]), json!("x"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cli FIX-11 item 1 (council FIX-BEFORE 1 on 9afdd308): a release that leaves the late agent's
+    /// terminal open keeps the alarm and the fact on the row, so a receipt that is lost still leaves the
+    /// running agent on record; the list and every answer say it, and name terminal close. Once the
+    /// terminal is closed another release spends the alarm.
+    #[test]
+    fn fix11_a_a_left_open_release_keeps_the_alarm_until_the_terminal_is_closed() {
+        let (dir, git_, store) = fix8_world("fix11a");
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = dir.display().to_string();
+        let row = worker_row(json!({ "id": "dispatch-fix11-a1", "runId": null, "taskId": "task-fix11-a1", "status": "stopped", "released": false, "mode": "existing", "worktree": wd, "agent": "claude", "terminal": null, "terminalProgram": null }));
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[row]).unwrap();
+        save_list(&store.lock().unwrap(), TASKS_KEY, &[json!({ "id": "task-fix11-a1", "status": "dispatched", "dispatchId": "dispatch-fix11-a1" })]).unwrap();
+        expect_stamp("dispatch-fix11-a1");
+        finish_stamp("dispatch-fix11-a1", None, LATE_WINDOW);
+        terminals.fake_session(31, &wd, Some("npx"));
+        assert!(stamp_session("dispatch-fix11-a1", 31));
+        let call = |command: &str| {
+            let req = Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args: json!({ "dispatch": "dispatch-fix11-a1" }), pane: None, cli: String::new(), arrived: None };
+            dispatch(&ctx, &req).unwrap()
+        };
+        let r = call(RELEASE);
+        assert!(r["terminalLeftOpen"].is_string() && terminals.live("term-31"), "{r}");
+        // The receipt could be lost: the row still says the agent runs, in the list and on the next answer.
+        let r = call(WORKER_LIST);
+        let w = &r["workers"][0];
+        assert_eq!((w["lateAfter"].as_str(), w["latePending"].as_bool()), (Some("stopped"), Some(true)), "{w}");
+        let next = r["lateWorker"][0]["next"].as_str().unwrap_or_default();
+        assert!(next.contains("terminal close --terminal term-31") && !next.contains("worker-release"), "{r}");
+        // Releasing again leaves it open the same way and says the same.
+        let r = call(RELEASE);
+        assert!(r["lateWorker"][0]["next"].as_str().is_some_and(|n| n.contains("terminal close")), "{r}");
+        // Closed by the person: the next release finds nothing running and spends the alarm.
+        terminals.kill(31).unwrap();
+        let r = call(RELEASE);
+        assert_eq!(r["terminalState"], "released", "{r}");
+        assert!(r["lateWorker"].is_null(), "{r}");
+        let r = call(WORKER_LIST);
+        assert!(r["lateWorker"].is_null() && r["workers"][0]["latePending"].is_null(), "{r}");
+        forget_stamp("dispatch-fix11-a1");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cli FIX-11 item 2 (council FIX-BEFORE 1, worker-show half): the first worker-show of a late row
+    /// does not clear the alarm, because that answer may be the one that is lost; the show after it does.
+    #[test]
+    fn fix11_b_worker_show_clears_the_alarm_on_a_later_show() {
+        let mut d = json!({ "id": "dispatch-1", "latePending": true, "lateAfter": "stopped", "lateStamp": true });
+        read_late(&mut d, true);
+        assert_eq!((d["latePending"].as_bool(), d["lateShown"].as_bool()), (Some(true), Some(true)), "the first read leaves the alarm: {d}");
+        assert_eq!(pending_late_notes(&[d.clone()], None).len(), 1, "and every answer still tells it");
+        read_late(&mut d, true);
+        assert!(d["latePending"].is_null() && d["lateShown"].is_null(), "a later show clears it: {d}");
+        assert_eq!(d["lateAfter"], "stopped", "the fact stays");
+        assert!(pending_late_notes(&[d.clone()], None).is_empty());
+        let mut quiet = json!({ "id": "dispatch-2" });
+        read_late(&mut quiet, true);
+        assert_eq!(quiet, json!({ "id": "dispatch-2" }), "a row with no alarm is left alone");
+    }
+
+    /// cli FIX-11 items 4 and 5 (council FIX-SOON 3 and AFTER 1 on 9afdd308): pending notes follow
+    /// ORCH-033: an answer for a Run carries that Run's notes and those of rows with no Run, an answer
+    /// for no Run carries all; a worker-show of another Run's row is not found and clears nothing.
+    #[test]
+    fn fix11_c_late_notes_stay_in_their_run_and_a_show_from_another_run_is_not_found() {
+        let (dir, git_, store) = fix8_world("fix11c");
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = dir.display().to_string();
+        let (run_a, run_b) = {
+            let mut m = crate::orchestration::Mail::default();
+            let a = m.run_create("term-1", "run a", 1)["binding"]["runId"].as_str().unwrap().to_string();
+            let b = m.run_create("term-2", "run b", 2)["binding"]["runId"].as_str().unwrap().to_string();
+            m.save(&store.lock().unwrap()).unwrap();
+            (a, b)
+        };
+        let row = |n: u32, run: Value| worker_row(json!({ "id": format!("dispatch-fix11-c{n}"), "runId": run, "taskId": format!("task-fix11-c{n}"), "status": "stopped", "released": false, "worktree": wd, "agent": "claude", "terminal": null, "terminalProgram": null }));
+        let task = |n: u32, run: Value| json!({ "id": format!("task-fix11-c{n}"), "runId": run, "status": "dispatched", "dispatchId": format!("dispatch-fix11-c{n}") });
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[row(1, json!(run_a)), row(2, json!(run_b)), row(3, Value::Null)]).unwrap();
+        save_list(&store.lock().unwrap(), TASKS_KEY, &[task(1, json!(run_a)), task(2, json!(run_b)), task(3, Value::Null)]).unwrap();
+        for (n, session) in [(1, 41), (2, 42), (3, 43)] {
+            let d = format!("dispatch-fix11-c{n}");
+            expect_stamp(&d);
+            finish_stamp(&d, None, LATE_WINDOW);
+            terminals.fake_session(session, &wd, Some("npx"));
+            assert!(stamp_session(&d, session));
+        }
+        let call = |command: &str, run: Option<&str>, dispatch_id: Option<&str>| {
+            let mut args = json!({});
+            if let Some(r) = run {
+                args["run"] = json!(r);
+            }
+            if let Some(d) = dispatch_id {
+                args["dispatch"] = json!(d);
+            }
+            dispatch(&ctx, &Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args, pane: None, cli: String::new(), arrived: None })
+        };
+        let notes = |r: &Value| {
+            let mut ids: Vec<String> = r["lateWorker"].as_array().into_iter().flatten().filter_map(|n| n["dispatchId"].as_str()).map(|d| d.trim_start_matches("dispatch-fix11-").to_string()).collect();
+            ids.sort();
+            ids
+        };
+        // The first call records the late sessions; each Run hears its own and the Run-less row's.
+        assert_eq!(notes(&call(WORKER_LIST, Some(&run_a), None).unwrap()), ["c1", "c3"]);
+        assert_eq!(notes(&call(WORKER_LIST, Some(&run_b), None).unwrap()), ["c2", "c3"]);
+        assert_eq!(notes(&call(WORKER_LIST, None, None).unwrap()), ["c1", "c2", "c3"], "a caller tied to no Run hears all");
+        // A show of Run A's row from Run B is not found, and clears nothing, however often.
+        for _ in 0..3 {
+            let e = call(WORKER_SHOW, Some(&run_b), Some("dispatch-fix11-c1")).unwrap_err();
+            assert_eq!(e.code, "not_found", "{e:?}");
+        }
+        assert_eq!(notes(&call(WORKER_LIST, Some(&run_a), None).unwrap()), ["c1", "c3"], "Run A's alarm is still up");
+        // cli FIX-12 (council AFTER 2 on 28f3eb7a): the other answers of Run B never carry Run A's note either.
+        assert_eq!(notes(&call(WORKER_SHOW, Some(&run_b), Some("dispatch-fix11-c2")).unwrap()), ["c2", "c3"], "a worker-show of Run B");
+        let r = call(RELEASE, Some(&run_b), Some("dispatch-fix11-c2")).unwrap();
+        assert_eq!(notes(&r), ["c2", "c3"], "a worker-release of Run B: {r}");
+        assert_eq!(notes(&call(WORKER_LIST, Some(&run_a), None).unwrap()), ["c1", "c3"], "Run A's alarm is still up after Run B's release");
+        // Shows in the right Run clear that row only.
+        call(WORKER_SHOW, Some(&run_a), Some("dispatch-fix11-c1")).unwrap();
+        call(WORKER_SHOW, Some(&run_a), Some("dispatch-fix11-c1")).unwrap();
+        assert_eq!(notes(&call(WORKER_LIST, Some(&run_a), None).unwrap()), ["c3"]);
+        assert_eq!(notes(&call(WORKER_LIST, Some(&run_b), None).unwrap()), ["c3"], "Run B's own row was released above; the Run-less row stays");
+        for t in [41, 42, 43] {
+            let _ = terminals.kill(t);
+        }
+        for n in 1..=3 {
+            forget_stamp(&format!("dispatch-fix11-c{n}"));
+        }
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A world with late-agent rows `dispatch-<tag><n>` (n = 1..=sessions.len()), each stopped, its late
+    /// session `sessions[n-1]` stamped to it and (when `existing`) started on an existing worktree, so a
+    /// release leaves that terminal open.
+    fn fix12_late_world(tag: &str, sessions: &[u32], existing: bool) -> (std::path::PathBuf, Git, Mutex<Store>, Terminals) {
+        let (dir, git_, store) = fix8_world(tag);
+        let terminals = Terminals::default();
+        let wd = dir.display().to_string();
+        let mut rows = vec![];
+        let mut tasks = vec![];
+        for (i, session) in sessions.iter().enumerate() {
+            let n = i + 1;
+            let (d, t) = (format!("dispatch-{tag}{n}"), format!("task-{tag}{n}"));
+            let mut row = worker_row(json!({ "id": d, "runId": null, "taskId": t, "status": "stopped", "released": false, "worktree": wd, "agent": "claude", "terminal": null, "terminalProgram": null }));
+            if existing {
+                row["mode"] = json!("existing");
+            }
+            rows.push(row);
+            tasks.push(json!({ "id": t, "status": "dispatched", "dispatchId": d }));
+            expect_stamp(&d);
+            finish_stamp(&d, None, LATE_WINDOW);
+            terminals.fake_session(*session, &wd, Some("npx"));
+            assert!(stamp_session(&d, *session));
+        }
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &rows).unwrap();
+        save_list(&store.lock().unwrap(), TASKS_KEY, &tasks).unwrap();
+        (dir, git_, store, terminals)
+    }
+
+    /// cli FIX-12 item 1 (council FIX-SOON 1 on 28f3eb7a, decision): showing a row twice, or ten times,
+    /// does not silence the alarm while its release left the late terminal open and that terminal still
+    /// runs; the alarm ends when the terminal is closed (item 2: by hand too), and the fact stays.
+    #[test]
+    fn fix12_a_shows_do_not_silence_a_live_left_open_terminal_and_closing_it_spends_the_alarm() {
+        let mut held = json!({ "id": "dispatch-1", "released": true, "terminalLeftOpen": "x", "latePending": true, "lateAfter": "stopped", "lateShown": true });
+        read_late(&mut held, true);
+        assert_eq!(held["latePending"], true, "a live left-open terminal keeps it: {held}");
+        read_late(&mut held, false);
+        assert!(held["latePending"].is_null(), "a terminal that is gone does not: {held}");
+        let mut plain = json!({ "id": "dispatch-1", "released": false, "latePending": true, "lateAfter": "stopped", "lateShown": true });
+        read_late(&mut plain, true);
+        assert!(plain["latePending"].is_null(), "a row that was not left open clears on the later show as before: {plain}");
+
+        let (dir, git_, store, terminals) = fix12_late_world("fix12a", &[51], true);
+        let notify = |_: Value| {};
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = dir.display().to_string();
+        let call = |command: &str| {
+            let req = Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args: json!({ "dispatch": "dispatch-fix12a1" }), pane: None, cli: String::new(), arrived: None };
+            dispatch(&ctx, &req).unwrap()
+        };
+        let r = call(RELEASE);
+        assert!(r["terminalLeftOpen"].is_string() && terminals.live("term-51"), "{r}");
+        for i in 0..4 {
+            let r = call(WORKER_SHOW);
+            assert_eq!(r["lateWorker"][0]["dispatchId"], "dispatch-fix12a1", "show {i} still tells the running agent: {r}");
+        }
+        let r = call(WORKER_LIST);
+        assert_eq!((r["workers"][0]["latePending"].as_bool(), r["workers"][0]["terminalLeftOpen"].is_string()), (Some(true), true), "{r}");
+        // Closed by the person: the next answer spends the alarm and keeps the fact.
+        terminals.kill(51).unwrap();
+        let r = call(WORKER_LIST);
+        assert!(r["lateWorker"].is_null() && r["workers"][0]["latePending"].is_null(), "{r}");
+        assert_eq!(r["workers"][0]["lateAfter"], "stopped", "the fact stays: {r}");
+        let rows = load_list(&store.lock().unwrap(), DISPATCHES_KEY);
+        assert!(rows[0]["latePending"].is_null() && rows[0]["lateShown"].is_null() && rows[0]["lateAfter"] == "stopped", "{}", rows[0]);
+        forget_stamp("dispatch-fix12a1");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cli FIX-12 item 2 (council FIX-SOON 2 on 28f3eb7a): a late terminal closed by hand spends the
+    /// alarm on any row, whether or not it was ever released; a release of such a row tells no running
+    /// agent. The fact (lateAfter) stays for worker-show.
+    #[test]
+    fn fix12_b_a_late_terminal_that_is_gone_spends_the_alarm_and_keeps_the_fact() {
+        let (dir, git_, store, terminals) = fix12_late_world("fix12b", &[52, 53], false);
+        let notify = |_: Value| {};
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = dir.display().to_string();
+        let call = |command: &str, n: u32| {
+            let req = Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args: json!({ "dispatch": format!("dispatch-fix12b{n}") }), pane: None, cli: String::new(), arrived: None };
+            dispatch(&ctx, &req).unwrap()
+        };
+        let r = call(WORKER_LIST, 1);
+        assert_eq!(r["lateWorker"].as_array().map(Vec::len), Some(2), "{r}");
+        terminals.kill(52).unwrap();
+        terminals.kill(53).unwrap();
+        // Releasing a row whose agent is already gone does not say an agent is running.
+        let r = call(RELEASE, 1);
+        assert!(r["lateWorker"].is_null(), "{r}");
+        let r = call(WORKER_LIST, 1);
+        assert!(r["lateWorker"].is_null(), "the other row's alarm is spent by the list: {r}");
+        for w in r["workers"].as_array().unwrap() {
+            assert!(w["latePending"].is_null() && w["lateAfter"] == "stopped", "{w}");
+        }
+        forget_stamp("dispatch-fix12b1");
+        forget_stamp("dispatch-fix12b2");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cli FIX-12 item 3 (council FIX-SOON 3 on 28f3eb7a): the worker-list line of a pending row names
+    /// the way out that works: terminal close for a left-open terminal, worker-release otherwise, and
+    /// never worker-show, which only ends the alarm. late_rows carries terminalLeftOpen.
+    #[test]
+    fn fix12_c_the_worker_list_text_names_the_way_out_that_works() {
+        let row = |left_open: Option<&str>| {
+            let mut w = json!({ "dispatchId": "dispatch-1", "terminalState": "released", "taskStatus": "dispatched", "terminal": "term-3", "worktree": "C:/w", "latePending": true, "lateAfter": "stopped", "lateStamp": true });
+            if let Some(why) = left_open {
+                w["terminalLeftOpen"] = json!(why);
+            }
+            text_of(WORKER_LIST, &json!({ "workers": [w], "scope": { "run": null, "from": "all" } }))
+        };
+        let plain = row(None);
+        assert!(plain.contains("after the dispatch was stopped") && plain.contains("worker-release --dispatch dispatch-1"), "{plain}");
+        assert!(!plain.contains("worker-show") && !plain.contains("left open"), "{plain}");
+        let open = row(Some("term-3 was already open when it was handed to the worker"));
+        assert!(open.contains("terminal is left open (term-3 was already open when it was handed to the worker)") && open.contains("terminal close --terminal term-3"), "{open}");
+        assert!(!open.contains("worker-show") && !open.contains("worker-release"), "{open}");
+        // The late fields on a listed row include the left-open reason.
+        let d = json!({ "id": "dispatch-1", "runId": null, "released": true, "terminalLeftOpen": "why", "latePending": true, "lateAfter": "stopped" });
+        let out = late_rows(json!({ "workers": [{ "dispatchId": "dispatch-1", "runId": null }] }), &[d]);
+        assert_eq!(out["workers"][0]["terminalLeftOpen"], "why", "{out}");
+    }
+
+    /// cli FIX-7 (earlier AFTER on c5fb49c): the receipt says what the window does about setup, and
+    /// a failed tiered start says its offered retry can be turned away from another agent's pane.
+    #[test]
+    fn fix7_e_receipt_notes_setup_and_the_tier_retry() {
+        assert_eq!(setup_note("skip", true), None);
+        assert!(setup_note("inherit", true).unwrap().contains("setup script"));
+        assert!(setup_note("run", true).unwrap().contains("does not wait"));
+        assert!(setup_note("inherit", false).unwrap().contains("no new worktree"));
+        let failed = |tier: Value, run: Option<&str>| {
+            let mut r = json!({ "dispatchId": "dispatch-4", "taskId": "task-2", "agent": "codex", "model": null, "effort": null, "tier": tier, "terminals": [{ "id": 7, "role": "worker" }], "worktree": { "path": "C:/Temp/wt-1", "created": true } });
+            crate::orchestration::start_failed(&mut r, "worker", json!("not_configured"));
+            start_failed_run(&mut r, run);
+            r
+        };
+        let r = failed(json!("build"), Some("run-2"));
+        let note = r["retryNote"].as_str().unwrap_or_default();
+        assert!(note.contains("--agent codex") && note.contains("coordinator's own agent"), "{r}");
+        // No tier, no note; an unsafe value drops the retry line, and with it the note.
+        assert!(failed(Value::Null, Some("run-2"))["retryNote"].is_null());
+        assert!(failed(json!("build"), Some("r;x"))["retryNote"].is_null());
+    }
+
+    /// cli FIX-6 item 5 (council AFTER 3 on 152e581): a pane that names another terminal with
+    /// --from, while naming another Run with --run, is turned away as a caller mismatch before
+    /// anything is made; naming itself, it is still held to its own Run.
+    #[test]
+    fn fix6_d_worker_start_from_a_pane_naming_another_terminal_is_a_mismatch() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-clifix6-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let (run_a, run_b) = {
+            let mut m = crate::orchestration::Mail::default();
+            let a = m.run_create("term-1", "run a", 1)["binding"]["runId"].as_str().unwrap().to_string();
+            let b = m.run_create("term-2", "run b", 2)["binding"]["runId"].as_str().unwrap().to_string();
+            m.save(&store.lock().unwrap()).unwrap();
+            save_list(&store.lock().unwrap(), TASKS_KEY, &[json!({ "id": "task-2", "runId": a, "status": "pending" })]).unwrap();
+            (a, b)
+        };
+        assert_ne!(run_a, run_b);
+        // term-2 is the pane that runs this command; its secret is "key-b".
+        let by_key = |k: &str| (k == "key-b").then(|| "term-2".to_string());
+        let start = |from: Option<&str>, run: &str| {
+            let mut args = json!({ "run": run, "task": "task-2", "agent": "no-such-agent" });
+            if let Some(f) = from {
+                args["from"] = json!(f);
+            }
+            let req = Request { id: "r".into(), token: String::new(), command: WORKER_START.into(), cwd: dir.display().to_string(), args, pane: Some(Pane { handle: "term-2".into(), key: "key-b".into() }), cli: String::new(), arrived: None };
+            worker_start_with(&ctx, &req, &by_key).unwrap_err()
+        };
+        let e = start(Some("term-1"), &run_a);
+        assert_eq!(e.code, "caller_mismatch", "{}", e.message);
+        assert!(e.message.contains("term-2") && e.message.contains("term-1"), "{}", e.message);
+        // Naming itself is a fine caller; Run A is not its Run, so the Run check turns it away.
+        let e = start(Some("term-2"), &run_a);
+        assert_ne!(e.code, "caller_mismatch", "{}", e.message);
+        assert!(!e.message.contains("Kolux knows no agent"), "turned away before the agent is looked up: {}", e.message);
+        drop(ctx);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

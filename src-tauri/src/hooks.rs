@@ -76,6 +76,11 @@ pub struct Change {
     pub prompt: Option<String>,
     /// A session boundary: the agent started, resumed or cleared; earlier state is forgotten.
     pub boundary: bool,
+    /// USAGE-001: the boundary is a new agent process (Claude's start or resume), not a clear or a
+    /// compact inside the running one. Its running time may start over, so the window's gauge
+    /// forgets its reading without keeping a floor against late reports (marks FIX-2).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub fresh: bool,
     /// The file a write tool just finished with (VIEW-023: the card links to the newest one).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wrote: Option<String>,
@@ -180,7 +185,8 @@ pub fn claude_change(event: &Value) -> Option<Change> {
     let tool = str_of("tool_name").map(|t| trim(t, 60));
     let plain = |state: &'static str| Some(Change { state, ..Change::default() });
     let change = match name {
-        "SessionStart" => matches!(str_of("source"), Some("startup" | "resume" | "clear")).then_some(Change { state: "done", boundary: true, ..Change::default() }),
+        "SessionStart" => matches!(str_of("source"), Some("startup" | "resume" | "clear"))
+            .then_some(Change { state: "done", boundary: true, fresh: matches!(str_of("source"), Some("startup" | "resume")), ..Change::default() }),
         "UserPromptSubmit" => Some(Change {
             state: "working",
             prompt: str_of("prompt").or_else(|| str_of("user_prompt")).map(|p| trim(&fold(p), 16000)),
@@ -386,6 +392,17 @@ pub struct Usage {
     pub context_tokens: Option<u64>,
     pub context_window: Option<u64>,
     pub limits: Vec<Limit>,
+    /// USAGE-001: the report's clock, so the window can throw away a report that turns up after a
+    /// newer one. `session` is the session id with the terminal that ran it: a resume in a new
+    /// terminal keeps the id but starts the running time over, so it is a new clock. A resume in
+    /// the same terminal keeps the clock; its SessionStart is a `fresh` boundary, which the window
+    /// answers by forgetting the reading without a floor. `at` is the session's running time in
+    /// milliseconds. Both are none when either part is missing.
+    pub session: Option<String>,
+    pub at: Option<u64>,
+    /// USAGE-034: the session's cost so far in US dollars (the report's cost.total_cost_usd); none
+    /// when the report has none or a figure that is not a number of at least zero.
+    pub cost_usd: Option<f64>,
     /// The config folder the report came from (USAGE-021); none for the default sign-in.
     #[serde(skip)]
     pub config_dir: Option<String>,
@@ -396,8 +413,12 @@ pub fn usage(req: &Request, token: &str) -> Result<Usage, u16> {
     if req.headers.get(TOKEN_HEADER).map(String::as_str) != Some(token) {
         return Err(403);
     }
-    let (pane_key, _) = req.headers.get(IDENTITY_HEADER).and_then(|h| identity(h)).ok_or(400u16)?;
+    let (pane_key, terminal) = req.headers.get(IDENTITY_HEADER).and_then(|h| identity(h)).ok_or(400u16)?;
     let v: Value = serde_json::from_slice(&req.body).map_err(|_| 400u16)?;
+    // At most 200 characters of the id, like the other fields this route passes on (marks FIX-2).
+    let session = v["session_id"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(|s| trim(s, 200)).zip(terminal).map(|(s, t)| format!("{s}@{t}"));
+    let at = session.as_ref().and(v["cost"]["total_duration_ms"].as_u64());
+    let cost_usd = v["cost"]["total_cost_usd"].as_f64().filter(|c| c.is_finite() && *c >= 0.0);
     let cw = &v["context_window"];
     let context_window = cw.get("context_window_size").and_then(Value::as_u64);
     // USAGE-005: the total it states, else input plus cache writes plus cache reads, else its
@@ -425,7 +446,7 @@ pub fn usage(req: &Request, token: &str) -> Result<Usage, u16> {
         })
         .collect();
     let config_dir = req.headers.get(CONFIG_HEADER).map(|h| h.trim().to_string()).filter(|h| !h.is_empty());
-    Ok(Usage { pane_key, context_tokens, context_window, limits, config_dir })
+    Ok(Usage { pane_key, context_tokens, context_window, limits, session, at, cost_usd, config_dir })
 }
 
 /// USAGE-021: a report counts only when it comes from the folder the active account runs under;
@@ -648,8 +669,14 @@ pub fn status_command(script: &str, prev: &str) -> String {
 ///
 /// hooks FIX-3: an event PowerShell 5.1 cannot parse (keys that differ only in case, for one) is
 /// still held as a minimal pick, the event and session names found by a pattern that takes only
-/// name characters, so no input text can come along; one with no event name is dropped. The
-/// append is tried again (up to 20 times, 100 ms apart) while another hook holds the file.
+/// name characters; one with no event name is dropped. The append is tried again (up to 20 times,
+/// 100 ms apart) while another hook holds the file.
+///
+/// hooks FIX-4: the pattern looks only at top-level keys before the first nested `{` (the key
+/// must follow the opening brace or a comma, so it is never text inside a string), so a word from
+/// the tool's input never becomes the held event or session name: an event whose nested object
+/// comes first is dropped. Only a sharing violation (another writer holds the file) is tried
+/// again; any other failure, a missing holding folder for one, gives up at once.
 pub(crate) const SPOOL_LINE: &str = concat!(
     r#"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -Command ""#,
     r#"$ErrorActionPreference='Stop'; try { $t=[IO.File]::ReadAllText($env:KF,[Text.Encoding]::UTF8); $o=[ordered]@{}; $ok=$true; "#,
@@ -659,10 +686,11 @@ pub(crate) const SPOOL_LINE: &str = concat!(
     r#"$n=$e.toolCall.name; if ($n -is [string]) { $o['toolCall']=@{name=$n.Substring(0,[Math]::Min($n.Length,300))} }; "#,
     r#"foreach ($k in 'background_tasks','session_crons') { if ($null -ne $e.$k -and @($e.$k).Count -gt 0) { $o[$k]=@(1) } } } "#,
     r#"catch { $o.Clear(); $q=[char]34; foreach ($k in 'hook_event_name','session_id') "#,
-    r#"{ $m=[regex]::Match($t,$q+$k+$q+'\s*:\s*'+$q+'([\w.:-]{1,200})'+$q); if ($m.Success) { $o[$k]=$m.Groups[1].Value } }; $ok=$o.Contains('hook_event_name') }; "#,
+    r#"{ $m=[regex]::Match($t,'^\s*\{(?:[^{]*?,)?\s*'+$q+$k+$q+'\s*:\s*'+$q+'([\w.:-]{1,200})'+$q); if ($m.Success) { $o[$k]=$m.Groups[1].Value } }; $ok=$o.Contains('hook_event_name') }; "#,
     r#"if ($ok) { $o['spooled_at']=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); "#,
     r#"$l=$env:KR + (ConvertTo-Json -InputObject $o -Compress -Depth 3) + [char]13 + [char]10; "#,
-    r#"for ($i=0; $i -lt 20; $i++) { try { [IO.File]::AppendAllText($env:KS, $l, (New-Object Text.UTF8Encoding $false)); break } catch { Start-Sleep -Milliseconds 100 } } } } catch { }""#,
+    r#"for ($i=0; $i -lt 20; $i++) { try { [IO.File]::AppendAllText($env:KS, $l, (New-Object Text.UTF8Encoding $false)); break } "#,
+    r#"catch { $x=$_.Exception; if ($x.InnerException) { $x=$x.InnerException }; if ($x.HResult -ne -2147024864) { break }; Start-Sleep -Milliseconds 100 } } } } catch { }""#,
     r#" <NUL >NUL 2>&1"#
 );
 
@@ -1060,6 +1088,12 @@ pub(crate) fn write_codex_groups(file: &Path, text: Option<&str>, hooks: &mut Va
 /// unparsable file is left alone. When trust cannot be set, `hooks.json` goes back exactly as it
 /// was (or away, when Kolux created it). True when something was written.
 pub fn install_codex(home: &Path, command: &str) -> Result<bool, String> {
+    install_codex_with(home, command, codex_listing)
+}
+
+/// `install_codex` with Codex's own listing passed in, so a test can make it fail without
+/// starting Codex (hooks FIX-4).
+pub(crate) fn install_codex_with(home: &Path, command: &str, listing: impl FnOnce(&Path) -> Option<Vec<Value>>) -> Result<bool, String> {
     let _one = CODEX_INSTALL.lock().map_err(|e| e.to_string())?;
     let file = home.join("hooks.json");
     let config = home.join("config.toml");
@@ -1084,29 +1118,58 @@ pub fn install_codex(home: &Path, command: &str) -> Result<bool, String> {
         return Ok(false);
     }
     // hooks FIX-3: a file Kolux had just created goes with its `created` record, so no stray
-    // record stays in the Codex home.
-    let restore = || match &text {
-        Some(t) => std::fs::write(&file, t).map_err(|e| e.to_string()),
-        None => {
-            let record = agent_hooks::codex_record(&file);
-            if agent_hooks::was_created(&record, &file) {
-                let _ = std::fs::remove_file(record);
+    // record stays in the Codex home. hooks FIX-4: the file first, the record only once the file
+    // is gone, so a file that cannot be removed (held open, say) keeps the record that names it as
+    // Kolux's, and the next start does not refuse it as someone else's file with Kolux's entries.
+    // hooks FIX-5 (stand-in review AFTER 1): only while the file still holds what Kolux wrote. A
+    // save by the user or another tool while Codex was asked is kept, and the error says so; the
+    // rewrite goes through the same atomic write as the install, so it never leaves half a file.
+    // Nothing written (the entries were already in): nothing to put back.
+    let wrote = if changed { Some(String::from_utf8(render(&hooks, text.as_deref())?).map_err(|e| e.to_string())?) } else { None };
+    let restore = || -> Result<(), String> {
+        let Some(wrote) = wrote.as_deref() else { return Ok(()) };
+        match &text {
+            Some(t) => write_atomic(&file, t.as_bytes(), Some(wrote)),
+            None => {
+                // hooks FIX-6 (stand-in review AFTER 2): a file the user deleted in the window is
+                // what the rollback wanted; only the record saying Kolux created it is left to drop.
+                let now = match std::fs::read(&file) {
+                    Ok(now) => Some(now),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(e) => return Err(format!("{} could not be read back ({e}); its record stays, so the next start still knows it as Kolux's", file.display())),
+                };
+                if let Some(now) = now {
+                    if now != wrote.as_bytes() {
+                        return Err(format!("{} {CHANGED}", file.display()));
+                    }
+                    std::fs::remove_file(&file).map_err(|e| format!("{} could not be removed ({e}); its record stays, so the next start still knows it as Kolux's", file.display()))?;
+                }
+                let record = agent_hooks::codex_record(&file);
+                if agent_hooks::was_created(&record, &file) {
+                    let _ = std::fs::remove_file(record);
+                }
+                Ok(())
             }
-            std::fs::remove_file(&file).map_err(|e| e.to_string())
         }
     };
-    let listing = codex_listing(home);
+    let listing = listing(home);
     let n = listing.as_deref().map(|l| apply_trust(&mut doc, l, &real)).unwrap_or(0);
     if n < CODEX_EVENTS.len() {
-        restore()?;
-        return Err(match listing {
-            Some(_) => format!("Codex listed {n} of {} Kolux hooks in {}; the file is back as it was", CODEX_EVENTS.len(), file.display()),
-            None => format!("Codex could not list the hooks of {}; the file is back as it was", home.display()),
+        let why = match listing {
+            Some(_) => format!("Codex listed {n} of {} Kolux hooks in {}", CODEX_EVENTS.len(), file.display()),
+            None => format!("Codex could not list the hooks of {}", home.display()),
+        };
+        return Err(match restore() {
+            Ok(()) => format!("{why}; the file is back as it was"),
+            Err(e) => format!("{why}; {e}"),
         });
     }
     if let Err(e) = crate::trust::write_whole(&config, &doc.to_string()) {
-        restore()?;
-        return Err(e);
+        // hooks FIX-5 (stand-in review AFTER 2): a rollback that fails too never hides the trust error.
+        return Err(match restore() {
+            Ok(()) => e,
+            Err(r) => format!("{e}; {r}"),
+        });
     }
     Ok(true)
 }
@@ -1158,6 +1221,26 @@ mod tests {
         let codex = codex_change(&ev(r#"{"hook_event_name":"SessionStart","session_id":"019a-c"}"#)).unwrap();
         assert_eq!(codex.session.as_deref(), Some("019a-c"));
         assert!(serde_json::to_string(&stop).unwrap().contains(r#""session":"0b3c-9f""#));
+    }
+
+    #[test]
+    fn a_start_or_resume_is_a_fresh_boundary_a_clear_is_not() {
+        // USAGE-001 (marks FIX-2): a start or a resume is a new agent process, whose running time
+        // may start over on the same clock, so the window forgets the reading without a floor; a
+        // clear keeps the process, so its floor stays.
+        let c = |j: &str| claude_change(&ev(j)).unwrap();
+        let from = |source: &str| c(&format!(r#"{{"hook_event_name":"SessionStart","source":"{source}"}}"#));
+        let flags = |source: &str| {
+            let ch = from(source);
+            (ch.boundary, ch.fresh)
+        };
+        assert_eq!(flags("startup"), (true, true));
+        assert_eq!(flags("resume"), (true, true));
+        assert_eq!(flags("clear"), (true, false));
+        let manual = c(r#"{"hook_event_name":"PostCompact","trigger":"manual"}"#);
+        assert_eq!((manual.boundary, manual.fresh), (true, false));
+        assert!(!serde_json::to_value(from("clear")).unwrap().as_object().unwrap().contains_key("fresh"));
+        assert_eq!(serde_json::to_value(from("resume")).unwrap()["fresh"], true);
     }
 
     #[test]
@@ -1432,6 +1515,64 @@ mod tests {
         assert_eq!(install_claude_status(&mut none, &st), (true, None));
         assert_eq!(none["statusLine"]["type"], "command");
         assert_eq!(none["env"], json!({}));
+    }
+
+    #[test]
+    fn a_status_line_report_carries_the_sessions_cost() {
+        // USAGE-034: the status line's cost.total_cost_usd is the session's total so far, in US dollars.
+        let u = |body: &str| {
+            let id = base64::engine::general_purpose::STANDARD.encode(r#"{"paneKey":4,"terminal":2,"hookVersion":1}"#);
+            let raw = format!("POST /claude-status HTTP/1.1\r\nX-Kolux-Token: tok\r\nX-Kolux-Pane: {id}\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+            usage(&parse_request(&mut raw.as_bytes()).unwrap(), "tok").unwrap()
+        };
+        assert_eq!(u(r#"{"cost":{"total_cost_usd":3.1475},"context_window":{"context_window_size":200000,"total_input_tokens":5000}}"#).cost_usd, Some(3.1475));
+        assert_eq!(u(r#"{"cost":{"total_cost_usd":0}}"#).cost_usd, Some(0.0));
+        // Missing, not a number, or a broken figure: no cost, so the window keeps its last one.
+        assert_eq!(u(r#"{"context_window":{"context_window_size":200000}}"#).cost_usd, None);
+        assert_eq!(u(r#"{"cost":{"total_cost_usd":"3.15"}}"#).cost_usd, None);
+        assert_eq!(u(r#"{"cost":{"total_cost_usd":-1.5}}"#).cost_usd, None);
+        // It rides in the event the window listens to, under the name the window reads.
+        let v = json!(u(r#"{"cost":{"total_cost_usd":2.5}}"#));
+        assert_eq!(v["costUsd"], json!(2.5));
+        assert!(json!(u(r#"{}"#))["costUsd"].is_null());
+    }
+
+    #[test]
+    fn a_status_line_report_carries_its_clock() {
+        // USAGE-001 (marks FIX-1): the report's clock is its session id with the terminal that ran
+        // it, and `at` is the session's running time. A resume in a new terminal keeps the session
+        // id but starts the running time over, so it must read as a new clock, never as a late
+        // report of the old one (stand-in review of lane/marks ee2bfbc, FIX-SOON 5).
+        let id = |j: &str| base64::engine::general_purpose::STANDARD.encode(j);
+        let post = |pane: &str, body: &str| {
+            let raw = format!("POST /claude-status HTTP/1.1\r\nX-Kolux-Token: tok\r\nX-Kolux-Pane: {pane}\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+            usage(&parse_request(&mut raw.as_bytes()).unwrap(), "tok").unwrap()
+        };
+        let t2 = id(r#"{"paneKey":4,"terminal":2,"hookVersion":1}"#);
+        let t5 = id(r#"{"paneKey":4,"terminal":5,"hookVersion":1}"#);
+        let body = r#"{"session_id":"0b3c-9f","cost":{"total_duration_ms":61000},"context_window":{"context_window_size":200000,"total_input_tokens":5000}}"#;
+        let u = post(&t2, body);
+        assert_eq!((u.session.as_deref(), u.at), (Some("0b3c-9f@2"), Some(61_000)));
+        let resumed = post(&t5, r#"{"session_id":"0b3c-9f","cost":{"total_duration_ms":900}}"#);
+        assert_eq!((resumed.session.as_deref(), resumed.at), (Some("0b3c-9f@5"), Some(900)));
+        assert_ne!(resumed.session, u.session, "the resumed process is a new clock");
+        // No terminal in the identity, or no usable session id: no clock, so arrival order rules.
+        let bare = post(&id(r#"{"paneKey":4,"hookVersion":1}"#), body);
+        assert_eq!((bare.session, bare.at), (None, None));
+        let blank = post(&t2, r#"{"session_id":"  ","cost":{"total_duration_ms":5}}"#);
+        assert_eq!((blank.session, blank.at), (None, None));
+        // An over-long session id is cut at 200 characters plus the ellipsis `trim` adds, and the
+        // terminal still follows (stand-in review of lane/marks 54b27f5e, AFTER 2).
+        let long = "x".repeat(250);
+        let cut = post(&t2, &format!(r#"{{"session_id":"{long}","cost":{{"total_duration_ms":7}}}}"#));
+        let want = format!("{}…@2", "x".repeat(200));
+        assert_eq!((cut.session.as_deref(), cut.at), (Some(want.as_str()), Some(7)));
+        // Exactly 200 is kept whole.
+        let kept = post(&t2, &format!(r#"{{"session_id":"{}","cost":{{"total_duration_ms":8}}}}"#, "y".repeat(200)));
+        assert_eq!(kept.session, Some(format!("{}@2", "y".repeat(200))));
+        // The names the window's listener reads.
+        let j = serde_json::to_value(&u).unwrap();
+        assert_eq!((j["session"].as_str(), j["at"].as_u64(), j["paneKey"].as_u64()), (Some("0b3c-9f@2"), Some(61_000), Some(4)));
     }
 
     #[test]
