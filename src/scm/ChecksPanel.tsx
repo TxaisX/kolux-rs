@@ -12,6 +12,7 @@ import PrStart from "./PrStart";
 import { reviewHint, reviewWhere } from "./startPr";
 import { CHECKS_POLL_MS, checksSummary, reuseNoPr, stillRunning, type PrChecks } from "./checks";
 import { prStateWord } from "./model";
+import { recordChecks } from "./prSearch";
 import { CHECK_CAP, capped, checkGroups } from "./review";
 import type { Check } from "./checks";
 
@@ -52,6 +53,7 @@ export default function ChecksPanel({ dir, linked, visible }: Props) {
     setGot((g) => (g && g.key === key ? { ...g, loading: true } : { key, data: null, error: null, loading: true }));
     invoke<PrChecks>("scm_pr_checks", { worktree: dir, linked })
       .then((data) => {
+        recordChecks(dir, data); // VIEW-043: the palette reads the same answer
         if (asking.current !== key) return;
         if (data.pr) noPrSeen.delete(key);
         else noPrSeen.set(key, Date.now());
