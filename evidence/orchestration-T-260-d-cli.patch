@@ -1,0 +1,14 @@
+diff --git a/src-tauri/src/cli.rs b/src-tauri/src/cli.rs
+--- a/src-tauri/src/cli.rs
++++ b/src-tauri/src/cli.rs
+@@ -3083,7 +3083,9 @@
+                 if let (Some(tid), "inject") = (tid, mode) {
+                     type_brief(ctx, tid, &brief)?;
+                 }
+-                dispatches.push(json!({ "id": id, "runtime": std::process::id(), "runId": run, "taskId": task, "status": "running", "terminal": tid, "agent": agent, "mode": mode, "depth": depth, "maxDepth": cap, "brief": brief, "created": now_ms() }));
++                // T-260-d: the starting pane's terminal, so the Floor nests a worker with no parent task under it.
++                let from = pane.and_then(|h| h.strip_prefix("term-")?.parse::<u32>().ok());
++                dispatches.push(json!({ "id": id, "runtime": std::process::id(), "runId": run, "taskId": task, "status": "running", "terminal": tid, "fromTerminal": from, "agent": agent, "mode": mode, "depth": depth, "maxDepth": cap, "brief": brief, "created": now_ms() }));
+                 tasks[i]["status"] = json!("dispatched");
+                 tasks[i]["dispatchId"] = json!(id);
+                 Ok(plan.clone())
