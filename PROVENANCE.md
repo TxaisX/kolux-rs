@@ -924,3 +924,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · shell T-258 · spec/03 TERM-056, spec/04 STAT-035 rules; React docs (react.dev); this tree's own App.tsx tabName, chrome/Tip.tsx; no outside code
 > 2026-10-20 · shell T-285 · spec/17 SET-042/SET-060/SET-062, spec/19 APP-054 rules; React docs (react.dev); this tree's own src/status/manage.tsx, ResourceManager.tsx, terminal.rs kill; no outside code
 > 2026-10-20 · onboarding T-208-c · spec/16 ONB-007/ONB-008/ONB-010 rules as given in the brief; this tree's own onboarding.rs; no outside source
+> 2026-10-20 · onboarding T-322-c · spec/16 ONB-042/ONB-015 rules and spec/05 VIEW-102 as given in the brief; this tree's own features.ts, guide.ts, Guides.tsx, App.tsx, board, tasks, automations, skills; no outside source

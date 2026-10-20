@@ -1,0 +1,30 @@
+diff --git a/src/skills/SkillInstall.tsx b/src/skills/SkillInstall.tsx
+index 3664d652..3c3669fb 100644
+--- a/src/skills/SkillInstall.tsx
++++ b/src/skills/SkillInstall.tsx
+@@ -4,6 +4,7 @@
+ import { useEffect, useState } from "react";
+ import { invoke } from "@tauri-apps/api/core";
+ import { COPIED, COPY_FAILED } from "./skills";
++import { noteUse } from "../onboarding/features";
+ 
+ type Props = { names: string[]; onType?: (line: string) => void };
+ 
+@@ -16,7 +17,7 @@ export default function SkillInstall({ names, onType }: Props) {
+     if (!picked.length) return setLine("");
+     invoke<string>("skills_install_command", { names: picked }).then(setLine, (e) => (setLine(""), setNote(String(e))));
+   }, [picked.join("|")]);
+-  const copy = () => navigator.clipboard.writeText(line).then(() => setNote(COPIED), () => setNote(COPY_FAILED));
++  const copy = () => navigator.clipboard.writeText(line).then(() => (noteUse("skill-setup"), setNote(COPIED)), () => setNote(COPY_FAILED));
+   return (
+     <div className="skills-install" role="group" aria-label="Install Kolux skills">
+       <p>Install or reinstall Kolux skills with the community skills installer.</p>
+@@ -31,7 +32,7 @@ export default function SkillInstall({ names, onType }: Props) {
+           Copy command
+         </button>
+         {onType && (
+-          <button className="btn primary" disabled={!line} onClick={() => onType(line)}>
++          <button className="btn primary" disabled={!line} onClick={() => (noteUse("skill-setup"), onType(line))}>
+             Type in terminal
+           </button>
+         )}

@@ -185,7 +185,7 @@ pub fn onboarding_close(store: State<'_, Mutex<Store>>, outcome: String) -> Resu
 /// seen tips are data an importer brings across, so they keep their own plain list.
 const GUIDE: &str = "guide";
 /// The startup tips this build knows, newest first (ONB-027: newer tips come first).
-pub const TIPS: &[&str] = &["cli", "palette"];
+pub const TIPS: &[&str] = &["moved-usage", "cli", "palette"];
 /// No list grows past this; an id past it is ignored.
 const MAX_IDS: usize = 64;
 
@@ -535,6 +535,7 @@ mod tests {
         let g = marked(g, "tipsSeen", "palette").unwrap();
         let g = marked(g, "tipsSeen", "palette").unwrap();
         assert_eq!(g.tips_seen, ["cli", "palette"]);
+        assert_eq!(marked(g.clone(), "tipsSeen", "moved-usage").unwrap().tips_seen, ["cli", "palette", "moved-usage"], "ONB-042: the moved-control hint is a tip that counts once");
         assert!(marked(g.clone(), "tipsSeen", "nope").is_err());
         assert!(marked(g.clone(), "other", "x").is_err());
         assert!(marked(g.clone(), "tried", "../x").is_err());
