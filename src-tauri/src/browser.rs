@@ -51,7 +51,6 @@ pub mod helpers;
 // BROW-024 the local dev-server certificate rules, answered from the engine's certificate event.
 #[path = "browser_popup.rs"]
 pub mod popup;
-#[allow(dead_code)] // T-158: `browser_cert` is registered by evidence/browser-T-158-b-lib.rs.patch.
 #[path = "browser_certs.rs"]
 pub mod certs;
 // T-158 / T-251 / T-272-d: the glue to WebView2's own events and calls (webview2-com).
@@ -964,12 +963,12 @@ fn app_origin(app: &AppHandle) -> Option<Url> {
 fn view(app: &AppHandle, id: u32) -> Result<Webview, String> {
     app.get_webview(&label(id)).ok_or_else(|| format!("browser tab {id} is not open"))
 }
+
 /// after-list 91: does page `id` exist in the engine (opened, whether or not its pane has reported
 /// it yet)? False before the app is known.
 pub fn page_exists(id: u32) -> bool {
     driver().ok().and_then(|d| d(Act::Exists(id)).ok()).and_then(|v| v.as_bool()).unwrap_or(false)
 }
-
 
 fn err(e: tauri::Error) -> String {
     e.to_string()
@@ -1349,7 +1348,6 @@ fn step_history(v: &Webview, id: u32, what: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-#[allow(dead_code)] // registered by evidence/browser-T-240-lib.rs.patch
 pub async fn browser_viewport(id: u32, name: Option<String>) -> Result<String, String> {
     // T-240 (BROW-034): the toolbar's Viewport Size. Async: the page's answer comes on the main
     // thread, so the wait must not happen there.
@@ -1357,7 +1355,6 @@ pub async fn browser_viewport(id: u32, name: Option<String>) -> Result<String, S
 }
 
 #[tauri::command]
-#[allow(dead_code)] // registered by evidence/browser-T-240-lib.rs.patch
 pub async fn browser_cookies_import(app: AppHandle, id: u32, path: String) -> Result<cookies::Report, String> {
     // T-240 (BROW-028): a cookie file the user picked goes into this tab's engine (its profile's
     // cookie store), one site at a time; a site that fails gets its old cookies back.
@@ -1592,13 +1589,13 @@ pub enum Act<'a> {
     /// T-251 (CLI-047): a cookie the page itself cannot set (HTTP-only) goes to the engine's store.
     SetCookie(u32, tauri::webview::cookie::Cookie<'static>),
     /// T-251 (CLI-047): one DevTools call on the page's engine (a picture of the page).
+    DevTools(u32, &'a str, String),
+    /// T-251 (CLI-047): the engine prints the page to a PDF file at this path.
+    Pdf(u32, &'a str),
     /// after-list 91: does this page exist in the engine (opened, reported or not)?
     Exists(u32),
     /// after-list 732: is this handle an open Kolux terminal?
     TerminalLive(&'a str),
-    DevTools(u32, &'a str, String),
-    /// T-251 (CLI-047): the engine prints the page to a PDF file at this path.
-    Pdf(u32, &'a str),
 }
 type Driver = dyn Fn(Act) -> Result<serde_json::Value, String> + Send + Sync;
 static DRIVER: OnceLock<Box<Driver>> = OnceLock::new();
@@ -1689,14 +1686,14 @@ fn drive(act: Act) -> Result<serde_json::Value, String> {
         }
         Act::DevTools(id, method, params) => {
             let text = engine::devtools(&view(app, id)?, method, params, CAPTURE_WAIT)?;
+            serde_json::from_str(&text).map_err(|_| "the page's engine answered with something that is not JSON".to_string())
+        }
+        Act::Pdf(id, path) => engine::print_pdf(&view(app, id)?, path, CAPTURE_WAIT).map(serde_json::Value::Bool),
         Act::Exists(id) => Ok(serde_json::Value::Bool(view(app, id).is_ok())),
         Act::TerminalLive(handle) => {
             use tauri::Manager;
             Ok(serde_json::Value::Bool(app.try_state::<crate::terminal::Terminals>().is_none_or(|t| t.live(handle))))
         }
-            serde_json::from_str(&text).map_err(|_| "the page's engine answered with something that is not JSON".to_string())
-        }
-        Act::Pdf(id, path) => engine::print_pdf(&view(app, id)?, path, CAPTURE_WAIT).map(serde_json::Value::Bool),
     }
 }
 
@@ -1726,14 +1723,14 @@ pub fn relayout(id: u32, zoom: Option<f64>) -> Result<(), String> {
 
 /// `kolux tab switch|create|close`, `tab profile ...`: the front end is told and acts.
 pub fn tell(event: &str, payload: serde_json::Value) -> Result<(), String> {
+    driver()?(Act::Emit(event, payload)).map(|_| ())
+}
+
 /// after-list 732: is `handle` an open Kolux terminal? Before the app is known (no tab opened
 /// yet) every holder counts as live, so nothing is freed on a guess.
 pub fn terminal_live(handle: &str) -> bool {
     // Through the driver, so the command line's code never links the window toolkit itself.
     driver().ok().and_then(|d| d(Act::TerminalLive(handle)).ok()).and_then(|v| v.as_bool()).unwrap_or(true)
-}
-
-    driver()?(Act::Emit(event, payload)).map(|_| ())
 }
 
 /// BROW-045: the profile the next `browser_open` runs in, left by `kolux tab create --profile`
