@@ -41,6 +41,7 @@ import { applyAppearance, readAppearance, showScreen, zoomTerm } from "./theme";
 import { useEscapeLeaves } from "./chrome/fullPage";
 import SignInNotice from "./settings/SignInNotice";
 import KeyLostNotice from "./settings/KeyLostNotice";
+import RecoveryMount from "./recovery/RecoveryMount";
 import { LAST_SCREEN_FIELD, lastWriter, OPEN_PAGE_FIELD, openPageAt, saveLayout, startScreen, stripOn } from "./settings/general";
 import { cacheDue, cacheMinutes } from "./projects/cache";
 import { startFields, startTail } from "./projects/startArgs";
@@ -2437,6 +2438,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           )}
           <SignInNotice />
           <KeyLostNotice />
+          <RecoveryMount />
           {terminals && page === null && <ToolNotices projects={projects.map((p) => p.id).join(",")} />}
           {terminals && reviewPane && reviewing && (
             <PlanSheet

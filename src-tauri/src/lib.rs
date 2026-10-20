@@ -182,8 +182,13 @@ pub fn run() {
     // failure into a plain native message instead of a panic.
     let mut context = tauri::generate_context!();
     let windows: Vec<String> = context.config().app.windows.iter().filter(|w| w.create).map(|w| w.label.clone()).collect();
+    // T-183 (APP-043): after repeated graphics crashes a saved flag puts every window in safe graphics.
+    let safe = resources::recovery::safe_graphics_on(&context.config().identifier, &context.package_info().version.to_string());
     for w in &mut context.config_mut().app.windows {
         w.create = false;
+        if safe {
+            w.additional_browser_args = Some(resources::recovery::safe_args(w.additional_browser_args.as_deref()));
+        }
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -201,9 +206,34 @@ pub fn run() {
             // The config homes this process resolved (defaults included), so a launch that inherited another
             // app's environment shows up in the log.
             diag::write(&dir, &format!("kolux-rs: config: CLAUDE_CONFIG_DIR={} CODEX_HOME={}", hooks::claude_settings_file().parent().map(|d| d.display().to_string()).unwrap_or_default(), trust::codex_config_file().parent().map(|d| d.display().to_string()).unwrap_or_default()));
+            // T-183 (APP-039): a previous run that left no clean exit becomes a crash record.
+            resources::recovery::startup_scan(&dir);
+            // T-183 (APP-021): the profile folder must take a write and every install file must read; a
+            // per-user install is repaired with icacls, anything else is only named.
+            let perms = resources::recovery::startup_check_here(&dir);
+            for p in &perms.repaired {
+                diag::write(&dir, &format!("permissions repaired: {} (APP-021)", p.display()));
+            }
+            let perm_problem = perms.problem();
+            if let Some(p) = &perm_problem {
+                diag::write(&dir, &format!("{p} (APP-021)"));
+            }
+            app.manage(resources::recovery::Perms(perms));
+            app.manage(resources::recovery::Graphics(Mutex::new(resources::recovery::Burst::default())));
+            // T-183 (APP-049): a damaged state.db is set aside and the last good copy restored before the
+            // store opens; one that cannot be set aside leaves saving frozen on a scratch store.
+            let prep = resources::recovery::prepare_state(&dir, &resources::recovery::frozen_dir());
+            for n in &prep.notes {
+                diag::write(&dir, n);
+            }
+            if prep.backup_worthwhile() {
+                if let Err(e) = resources::recovery::backup_state(&dir) {
+                    diag::write(&dir, &format!("the last good copy of state.db could not be refreshed: {e} (APP-049)"));
+                }
+            }
             #[cfg(debug_assertions)]
             dev_inject()?;
-            let store = Store::open(&dir)?;
+            let store = Store::open(&prep.open_dir)?;
             // SKILL-023: an interrupted skill delete is undone or completed under the skill lock (a busy
             // lock or a lock that cannot be opened is logged; the latter still recovers).
             skill_delete::startup_recover(&dir);
@@ -215,6 +245,8 @@ pub fn run() {
             // ACCT-010: a key this computer can no longer open is cleared before the window asks.
             secrets::drop_unreadable(&store, &dir);
             app.manage(Mutex::new(store));
+            // T-183 (APP-042): the interface watch; RecoveryMount's heartbeat feeds it.
+            resources::recovery::watch_start(app.handle().clone(), perm_problem);
             // TERM-122: the keep-awake watcher reads the saved choice every tick, and counts a
             // working pane only while its terminal is still running.
             {
@@ -666,6 +698,16 @@ pub fn run() {
             cli::cli_register::cli_register,
             cli::cli_register::cli_unregister,
             diag::diag_bundle,
+            resources::recovery::ui_heartbeat,
+            resources::recovery::graphics_crash_noted,
+            resources::recovery::graphics_keep_running,
+            resources::recovery::graphics_restart_safe,
+            resources::recovery::graphics_launch_choice,
+            resources::recovery::graphics_choose,
+            resources::recovery::crash_pending,
+            resources::recovery::crash_latest,
+            resources::recovery::crash_dismiss,
+            resources::recovery::crash_details,
             diag::diag_review,
             diag::diag_review_discard,
             update::update_status,
