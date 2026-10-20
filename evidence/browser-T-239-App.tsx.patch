@@ -1,0 +1,68 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index e3ec6191..1571c672 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -45,6 +45,7 @@ import { navTarget, travel, visit, type Place } from "./projects/nav";
+ import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
+ import BrowserPane, { OPEN_IN_BROWSER, openInBrowser } from "./browser/BrowserPane";
+ import { chordPlan } from "./browser/chord";
++import { livePages, pageRows, rememberClosed, takeClosed } from "./browser/pages";
+ import { writerOf } from "./scm/generate";
+ import EditorPane, { editors } from "./editor/EditorPane";
+ import { baseName, keyOf } from "./editor/buffers";
+@@ -710,6 +711,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+           if (!inFront) return;
+           closePane(focused);
+           break;
++        case "tab.reopenClosed": {
++          // T-239 (BROW-019): the browser tab closed last comes back at the address it had.
++          const page = takeClosed();
++          if (!page) return;
++          openInBrowser(page.url);
++          break;
++        }
+         case "tab.closeAll":
+           // TERM-044: every tab of the focused pane's strip, through one close question.
+           if (!inFront) return;
+@@ -1221,7 +1229,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   // PROJ-057 / VIEW-037: the palette's rows besides worktrees and projects.
+   const paletteItems = (): PaletteItem[] => [
+     ...panes
+-      .filter((p) => !p.seats)
++      .filter((p) => !p.seats && p.kind !== "browser")
+       .map((p) => ({
+         section: "Open tabs",
+         label: tabName(p, titles),
+@@ -1238,6 +1246,23 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+           setFocused(p.key);
+         },
+       })),
++    // T-239 (BROW-022): browser pages, by title and site, the current worktree's first (browser/pages.ts).
++    ...pageRows(
++      livePages(),
++      activeDir,
++      (id) => {
++        const p = panes.find((x) => x.key === id);
++        if (!p) return false;
++        setScreen("terminals");
++        if (!sameDir(p.cwd, activeDir)) {
++          setPage(null);
++          setActiveDir(p.cwd);
++        }
++        setFocused(id);
++        return true;
++      },
++      () => setToast("That page has closed"),
++    ),
+     ...(Object.keys(PAGES) as PageId[]).map((id) => ({ section: "Settings", label: PAGES[id], hint: "Settings page", run: () => openSettings(id) })),
+     { section: "Quick actions", label: "New terminal tab", run: () => void newTab(null) },
+     { section: "Quick actions", label: "New session", run: () => addChooser() },
+@@ -1568,6 +1593,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     keys.forEach((k) => delete ptys.current[k]);
+     // TERM-106: a tab closed on purpose is not brought back after a restart.
+     keys.forEach((k) => void invoke("terminal_forget_history", { paneKey: k }).catch(() => {}));
++    // T-239 (BROW-019): a browser page closed on purpose can be reopened (Reopen Closed Tab).
++    keys.forEach((k) => rememberClosed(k));
+     setPanes((ps) => ps.filter((p) => !gone.has(p.key)));
+     setRunning((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !gone.has(Number(k)))));
+     setDirty((d) => Object.fromEntries(Object.entries(d).filter(([k]) => !gone.has(Number(k)))));

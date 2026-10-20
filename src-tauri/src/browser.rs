@@ -32,6 +32,12 @@ pub const TITLE_EVENT: &str = "browser-title";
 pub const CHORD_EVENT: &str = "browser-chord";
 pub const LINK_EVENT: &str = "browser-link";
 pub const ICON_EVENT: &str = "browser-icon";
+/// T-239 (BROW-017): a right-click inside a page (`kind: "menu"`, with the pointer, the page's
+/// size, the link under it and whether text is selected) or an entry picked in the menu it opened
+/// (`kind: "pick"`, with the entry and its address).
+pub const MENU_EVENT: &str = "browser-menu";
+/// T-239 (BROW-018): an app shortcut pressed while the keyboard is inside a page (`k`, `c`, `m`).
+pub const KEY_EVENT: &str = "browser-key";
 
 /// Asks a finished page where its icon is (BROW-023): the first `<link rel~=icon>`, else the
 /// site's /favicon.ico. Runs as the page's own script; the answer is only ever fetched by the app.
@@ -101,6 +107,77 @@ pub const CHORD_SCRIPT: &str = r#"(() => {
   };
   addEventListener("click", link);
   addEventListener("auxclick", link);
+  // T-239 (BROW-018): the app's own shortcuts pressed while the keyboard is inside the page go to
+  // the app, never to the page. The app hands in the chords it binds (`__kxKeys`, from its keymap,
+  // so customised bindings count); until then the defaults below hold. The matching mirrors the
+  // app's (a letter by code or key, a digit by code or key, Plus, Space, else code or key; `i`
+  // takes any digit 1-9). A held-down key is taken once: repeats are swallowed, not sent.
+  let keys = [{ c: 1, k: "Tab" }, { c: 1, s: 1, k: "Tab" }, { c: 1, k: "W" }, { c: 1, s: 1, k: "T" }, { c: 1, k: "T" }, { c: 1, s: 1, k: "B" }, { c: 1, k: "PageDown" }, { c: 1, k: "PageUp" }, { a: 1, k: "1", i: 1 }];
+  window.__kxKeys = (list) => { if (Array.isArray(list)) keys = list; };
+  const keyHit = (d, e) => {
+    if (!!d.c !== e.ctrlKey || !!d.m !== e.metaKey || !!d.a !== e.altKey || !!d.s !== e.shiftKey) return false;
+    const k = d.k;
+    if (d.i) return /^Digit[1-9]$/.test(e.code) || /^[1-9]$/.test(e.key);
+    if (/^[A-Z]$/.test(k)) return e.code === "Key" + k || e.key.toUpperCase() === k;
+    if (/^[0-9]$/.test(k)) return e.code === "Digit" + k || e.key === k;
+    if (k === "Plus") return e.key === "+" || e.code === "NumpadAdd";
+    if (k === "Space") return e.code === "Space" || e.key === " ";
+    return e.code === k || e.key === k;
+  };
+  addEventListener("keydown", (e) => {
+    if (e.defaultPrevented || !(e.ctrlKey || e.metaKey || e.altKey)) return;
+    if (!keys.some((d) => keyHit(d, e))) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.repeat) return;
+    const m = (e.ctrlKey ? "c" : "") + (e.metaKey ? "m" : "") + (e.altKey ? "a" : "") + (e.shiftKey ? "s" : "") + (e.getModifierState("AltGraph") ? "g" : "");
+    send("key?k=" + encodeURIComponent(e.key) + "&c=" + encodeURIComponent(e.code) + "&m=" + m);
+  }, true);
+  // T-239 (BROW-017): a right-click opens Kolux's own menu in place of the engine's. The app
+  // decides the entries and where the menu sits (flipped to stay inside the pane near its edges)
+  // and hands them back through `__kxMenu`. A left or middle click elsewhere, or Escape, closes
+  // it; a right click elsewhere moves it. Copy and Copy Link Address run here, where the
+  // selection and the clipboard are; every other entry is the app's (`pick`).
+  let menu = null;
+  const closeMenu = () => { if (menu) { menu.remove(); menu = null; } };
+  addEventListener("contextmenu", (e) => {
+    if (!e.isTrusted) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const a = e.target instanceof Element ? e.target.closest("a[href]") : null;
+    const link = a && /^https?:/i.test(a.href) ? a.href : "";
+    const s = String(getSelection()) !== "" ? "1" : "0";
+    send("menu?x=" + Math.round(e.clientX) + "&y=" + Math.round(e.clientY) + "&vw=" + innerWidth + "&vh=" + innerHeight + "&s=" + s + "&l=" + encodeURIComponent(link));
+  }, true);
+  addEventListener("mousedown", (e) => { if (menu && e.button !== 2 && !menu.contains(e.target)) closeMenu(); }, true);
+  addEventListener("keydown", (e) => { if (menu && e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); closeMenu(); } }, true);
+  window.__kxMenu = (spec) => {
+    closeMenu();
+    const m = document.createElement("div");
+    m.setAttribute("role", "menu");
+    m.style.cssText = "position:fixed;z-index:2147483647;left:" + spec.x + "px;top:" + spec.y + "px;min-width:" + spec.w + "px;box-sizing:border-box;padding:4px 0;background:" + spec.bg + ";color:" + spec.fg + ";border:1px solid " + spec.line + ";border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.35);font:12px system-ui,sans-serif;line-height:16px;user-select:none;";
+    for (const it of spec.items) {
+      if (it.sep) { const d = document.createElement("div"); d.style.cssText = "height:1px;margin:4px 0;background:" + spec.line; m.append(d); continue; }
+      const b = document.createElement("div");
+      b.setAttribute("role", "menuitem");
+      b.textContent = it.label;
+      b.style.cssText = "padding:5px 12px;cursor:default;white-space:nowrap;" + (it.off ? "opacity:.45;" : "");
+      if (!it.off) {
+        b.onmouseenter = () => { b.style.background = spec.hover; };
+        b.onmouseleave = () => { b.style.background = ""; };
+        b.onclick = () => {
+          const u = it.url || "";
+          closeMenu();
+          if (it.id === "copy") document.execCommand("copy");
+          else if (it.id === "copy-link") { if (navigator.clipboard) navigator.clipboard.writeText(u).catch(() => {}); }
+          else send("pick?what=" + encodeURIComponent(it.id) + "&u=" + encodeURIComponent(u));
+        };
+      }
+      m.append(b);
+    }
+    (document.body || document.documentElement).append(m);
+    menu = m;
+  };
 })();"#;
 
 /// The chord a navigation carries, if it is one of ours and names a browser action.
@@ -173,6 +250,54 @@ pub enum Nav {
     Link(String, bool),
     /// A browser chord pressed inside the page (BROW-003, BROW-005).
     Chord(&'static str),
+    /// T-239 (BROW-017): a right-click in the page, or an entry picked in the menu it opened.
+    Menu(serde_json::Value),
+    /// T-239 (BROW-018): an app shortcut pressed inside the page.
+    Key(serde_json::Value),
+}
+
+/// The fields of one of our `kolux-chord:<kind>?...` navigations as a JSON object (`kind` plus
+/// each query field as a string); `None` unless `kind` is one of `kinds`.
+fn fields_of(url: &str, kinds: &[&str]) -> Option<serde_json::Value> {
+    let (kind, query) = url.strip_prefix(CHORD_SCHEME)?.split_once('?')?;
+    if !kinds.contains(&kind) {
+        return None;
+    }
+    let full = Url::parse(&format!("{CHORD_SCHEME}x?{query}")).ok()?;
+    let mut m = serde_json::Map::new();
+    m.insert("kind".to_string(), kind.into());
+    for (k, v) in full.query_pairs() {
+        m.insert(k.into_owned(), serde_json::Value::String(v.into_owned()));
+    }
+    Some(serde_json::Value::Object(m))
+}
+
+/// T-239 (BROW-017): a right-click (`menu`: x, y, vw, vh, s, l) or a picked entry (`pick`: what, u).
+pub fn menu_of(url: &str) -> Option<serde_json::Value> {
+    fields_of(url, &["menu", "pick"])
+}
+
+/// T-239 (BROW-018): an app shortcut pressed in the page (`key`: k, c, m).
+pub fn key_of(url: &str) -> Option<serde_json::Value> {
+    fields_of(url, &["key"])
+}
+
+/// The event payload for a page's navigation: its fields plus the tab's id.
+fn with_id(id: u32, mut v: serde_json::Value) -> serde_json::Value {
+    if let Some(m) = v.as_object_mut() {
+        m.insert("id".to_string(), id.into());
+    }
+    v
+}
+
+/// T-239: the page's menu renderer and shortcut list take their data as one JSON text, embedded
+/// as a string and parsed in the page, so nothing from the app ever runs there as code.
+pub fn menu_script(spec: &str) -> String {
+    format!("window.__kxMenu && window.__kxMenu(JSON.parse({}))", serde_json::Value::from(spec))
+}
+
+pub fn keys_script(list: &str) -> String {
+    format!("window.__kxKeys && window.__kxKeys(JSON.parse({}))", serde_json::Value::from(list))
 }
 
 /// Decides one navigation of a tab's page. `on_screen` is whether that tab is shown now: a tab
@@ -185,6 +310,14 @@ pub fn navigation(url: &Url, dev: Option<&Url>, tabs: &Mutex<Allowance>, on_scre
             Ok(t) if on_screen && may_open(&t, dev, tabs, now) => Nav::Link(target, front),
             _ => Nav::Load(false),
         };
+    }
+    // T-239: a right-click, a menu pick or an app shortcut from a page that is not on screen is
+    // dropped like a chord (FS1: no user is behind it).
+    if let Some(v) = menu_of(url.as_str()) {
+        return if on_screen { Nav::Menu(v) } else { Nav::Load(false) };
+    }
+    if let Some(v) = key_of(url.as_str()) {
+        return if on_screen { Nav::Key(v) } else { Nav::Load(false) };
     }
     match chord_of(url.as_str()) {
         Some(_) if !on_screen => Nav::Load(false),
@@ -668,6 +801,15 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
                 let _ = chord_app.emit(CHORD_EVENT, ChordPayload { id, what: what.to_string() });
                 false
             }
+            // T-239: the pane decides the menu (BROW-017) and replays the shortcut (BROW-018).
+            Nav::Menu(v) => {
+                let _ = chord_app.emit(MENU_EVENT, with_id(id, v));
+                false
+            }
+            Nav::Key(v) => {
+                let _ = chord_app.emit(KEY_EVENT, with_id(id, v));
+                false
+            }
         })
         .on_page_load(move |page, payload| {
             let event = match payload.event() {
@@ -776,6 +918,9 @@ pub async fn browser_go(app: AppHandle, id: u32, what: String, text: Option<Stri
         "reload" => v.reload().map_err(err),
         "zoom" => v.set_zoom(zoom_level(level.unwrap_or(1.0))).map_err(err),
         "find" | "findBack" => v.eval(find_script(text.as_deref().unwrap_or_default(), what == "findBack")).map_err(err),
+        // T-239: `text` is the menu's JSON spec (BROW-017) or the JSON list of chords the page forwards (BROW-018).
+        "menu" => v.eval(menu_script(text.as_deref().unwrap_or("{}"))).map_err(err),
+        "keys" => v.eval(keys_script(text.as_deref().unwrap_or("[]"))).map_err(err),
         _ => v.eval(script(&what).ok_or_else(|| format!("unknown browser action {what}"))?).map_err(err),
     }
 }
@@ -1271,6 +1416,56 @@ pub async fn browser_diagnose(app: AppHandle, url: String) -> Result<Diagnosis, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn brow017_a_right_click_and_a_menu_pick_arrive_as_menu_navigations() {
+        // T-239: the page reports the pointer, its size, the link under it and whether text is selected.
+        let v = menu_of("kolux-chord:menu?x=12&y=34&vw=800&vh=600&s=1&l=https%3A%2F%2Fexample.com%2Fa%3Fb%3D1%26c%3D2").unwrap();
+        assert_eq!(v["kind"], "menu");
+        assert_eq!(v["x"], "12");
+        assert_eq!(v["vh"], "600");
+        assert_eq!(v["s"], "1");
+        assert_eq!(v["l"], "https://example.com/a?b=1&c=2");
+        let p = menu_of("kolux-chord:pick?what=open-kolux&u=https%3A%2F%2Fexample.com%2F").unwrap();
+        assert_eq!(p["kind"], "pick");
+        assert_eq!(p["what"], "open-kolux");
+        assert_eq!(p["u"], "https://example.com/");
+        assert_eq!(with_id(7, p)["id"], 7);
+        assert_eq!(menu_of("kolux-chord:back"), None);
+        assert_eq!(menu_of("kolux-chord:key?k=w"), None);
+        assert_eq!(menu_of("https://example.com/kolux-chord:menu?x=1"), None);
+        // Only a page on screen gets a menu (FS1); a hidden page's request is dropped, not loaded.
+        let tabs = Mutex::new(Allowance::default());
+        let menu = Url::parse("kolux-chord:menu?x=1&y=2&vw=3&vh=4&s=0&l=").unwrap();
+        assert!(matches!(navigation(&menu, None, &tabs, true, Instant::now()), Nav::Menu(_)));
+        assert!(matches!(navigation(&menu, None, &tabs, false, Instant::now()), Nav::Load(false)));
+        // The menu's data goes into the page as a string, never as code.
+        assert_eq!(menu_script(r#"{"x":1,"items":[]}"#), r#"window.__kxMenu && window.__kxMenu(JSON.parse("{\"x\":1,\"items\":[]}"))"#);
+        for needle in ["contextmenu", "__kxMenu", "execCommand(\"copy\")", "e.button !== 2", "\"Escape\""] {
+            assert!(CHORD_SCRIPT.contains(needle), "{needle}");
+        }
+    }
+
+    #[test]
+    fn brow018_an_app_shortcut_pressed_in_the_page_arrives_as_a_key_navigation() {
+        // T-239: the key, its code and the modifiers held (c, m, a, s, and g for AltGraph).
+        let v = key_of("kolux-chord:key?k=Tab&c=Tab&m=c").unwrap();
+        assert_eq!(v["kind"], "key");
+        assert_eq!(v["k"], "Tab");
+        assert_eq!(v["c"], "Tab");
+        assert_eq!(v["m"], "c");
+        assert_eq!(key_of("kolux-chord:menu?x=1"), None);
+        assert_eq!(key_of("kolux-chord:key"), None);
+        let tabs = Mutex::new(Allowance::default());
+        let url = Url::parse("kolux-chord:key?k=w&c=KeyW&m=c").unwrap();
+        assert!(matches!(navigation(&url, None, &tabs, true, Instant::now()), Nav::Key(_)));
+        assert!(matches!(navigation(&url, None, &tabs, false, Instant::now()), Nav::Load(false)));
+        assert_eq!(keys_script("[]"), r#"window.__kxKeys && window.__kxKeys(JSON.parse("[]"))"#);
+        // The page takes a held key once, honours the app's list, and mirrors the app's key matching.
+        for needle in ["__kxKeys", "if (e.repeat) return;", "AltGraph", "\"Key\" + k", "\"Digit\" + k", "k === \"Plus\""] {
+            assert!(CHORD_SCRIPT.contains(needle), "{needle}");
+        }
+    }
 
     #[test]
     fn brow001_tab_labels_and_addresses() {

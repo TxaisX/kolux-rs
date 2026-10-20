@@ -1,0 +1,39 @@
+diff --git a/src/settings/shortcutRows.test.ts b/src/settings/shortcutRows.test.ts
+index 4c1ee010..c12817d1 100644
+--- a/src/settings/shortcutRows.test.ts
++++ b/src/settings/shortcutRows.test.ts
+@@ -12,8 +12,8 @@ const ids = (r: ReturnType<typeof rows>) => r.map((x) => x.id);
+ 
+ test("every command is listed under its area with its chords and badges", () => {
+   const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+9", "zoom.in": null, "view.tasks": "Mod+P" } });
+-  expect(all.length).toBe(131); // 132 commands, Reopen closed tab hidden until T-164-b (T-543-b)
+-  expect(ids(all)).not.toContain("tab.reopenClosed");
++  expect(all.length).toBe(132); // every command, Reopen closed tab included again (T-239)
++  expect(ids(all)).toContain("tab.reopenClosed");
+   const by = (id: string) => all.find((r) => r.id === id)!;
+   expect(by("terminal.clear")).toMatchObject({ area: "Terminal", labels: ["Ctrl+K"], badges: [] });
+   expect(by("zoom.reset").badges).toEqual(["Modified"]);
+@@ -29,7 +29,7 @@ test("every command is listed under its area with its chords and badges", () =>
+ 
+ test("filters: all, modified, unassigned, conflicting", () => {
+   const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+9", "zoom.in": null, "view.tasks": "Mod+P" } });
+-  expect(filterRows(all, "all", "").length).toBe(131);
++  expect(filterRows(all, "all", "").length).toBe(132);
+   expect(ids(filterRows(all, "modified", ""))).toEqual(["zoom.in", "zoom.reset"]);
+   expect(filterRows(all, "unassigned", "").every((r) => r.labels.length === 0)).toBe(true);
+   expect(ids(filterRows(all, "unassigned", ""))).toContain("zoom.in");
+diff --git a/src/settings/shortcutRows.ts b/src/settings/shortcutRows.ts
+index 90cbfb66..847f0ff9 100644
+--- a/src/settings/shortcutRows.ts
++++ b/src/settings/shortcutRows.ts
+@@ -39,8 +39,8 @@ function nativeHits(chords: string[], native: readonly NativeChord[]): NativeCho
+ export function shortcutRows(map: Keymap, native: readonly NativeChord[] = []): Row[] {
+   const p = map.platform;
+   const title = (id: string) => map.bindings.get(id)?.action.title ?? id;
+-  // T-543-b: Reopen closed tab does nothing until T-164-b wires it, so its row is not offered for a key.
+-  return [...map.bindings.values()].filter(({ action }) => action.id !== "tab.reopenClosed").map(({ action, chords, custom, dropped }) => {
++  // T-239 (BROW-019): Reopen closed tab is offered again now that the window reopens closed browser tabs (T-543-b had hidden it).
++  return [...map.bindings.values()].map(({ action, chords, custom, dropped }) => {
+     const defaults = defaultsFor(action, p);
+     const disabled = custom && chords.length === 0 && defaults.length > 0;
+     const modified = custom && chords.join() !== defaults.join();

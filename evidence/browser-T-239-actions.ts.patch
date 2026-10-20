@@ -1,0 +1,37 @@
+diff --git a/src/keys/actions.ts b/src/keys/actions.ts
+index a1d3c4cc..b5d41f6d 100644
+--- a/src/keys/actions.ts
++++ b/src/keys/actions.ts
+@@ -115,9 +115,9 @@ export const actions: Action[] = [
+   a("tab.close", "Close active tab", "tabs", ["Mod+W"]),
+   a("tab.closeAll", "Close all editor tabs", "tabs", ["Mod+Alt+W"]),
+   a("tab.rename", "Rename active tab", "tabs", [], { darwin: ["Mod+R"], group: "workspace-shell" }),
+-  // T-543-b: ships unbound until T-164-b wires the closed-tab ring (src/terminal/closedTabs.ts) into the window;
+-  // with Mod+Shift+T it was a shortcut that did nothing. Its default chord was ["Mod+Shift+T"].
+-  a("tab.reopenClosed", "Reopen closed tab", "tabs", []),
++  // T-239 (BROW-019): bound again now that the window reopens a closed browser tab (browser/pages.ts;
++  // T-164-b adds terminal tabs through src/terminal/closedTabs.ts). T-543-b had shipped it unbound.
++  a("tab.reopenClosed", "Reopen closed tab", "tabs", ["Mod+Shift+T"]),
+   a("tab.nextSameType", "Next tab (same type)", "tabs", ["Mod+Alt+BracketRight"], { terminalSafe: true }),
+   a("tab.previousSameType", "Previous tab (same type)", "tabs", ["Mod+Alt+BracketLeft"], { terminalSafe: true }),
+   a("tab.nextAllTypes", "Next tab (all types)", "tabs", ["Mod+Shift+BracketRight"], { terminalSafe: true }),
+diff --git a/src/keys/keymap.test.ts b/src/keys/keymap.test.ts
+index 3483c1df..aeb6eee7 100644
+--- a/src/keys/keymap.test.ts
++++ b/src/keys/keymap.test.ts
+@@ -6,13 +6,13 @@ import { chordMatches, chordsOf, labelOf, labelParts, matchEvent, parseChord, re
+ 
+ const key = (k: Partial<KeyLike>): KeyLike => ({ key: "", code: "", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...k });
+ 
+-test("the table registers the 132 carried commands (VIEW-053 added one, T-546 added view.tower, T-246-c added the three ui.zoom keys); 53 ship unbound (T-543-b unbound Reopen closed tab) and 6 have only a macOS chord", () => {
++test("the table registers the 132 carried commands (VIEW-053 added one, T-546 added view.tower, T-246-c added the three ui.zoom keys); 52 ship unbound (T-239 bound Reopen closed tab again) and 6 have only a macOS chord", () => {
+   expect(actions.length).toBe(132);
+   const ids = new Set(actions.map((a) => a.id));
+   expect(ids.size).toBe(132);
+   expect(ids.has("tab.newSimulator")).toBe(false);
+   expect(ids.has("tab.openQuickCommandsMenu")).toBe(false);
+-  expect(actions.filter((a) => a.win32.length === 0 && !a.darwin).length).toBe(53);
++  expect(actions.filter((a) => a.win32.length === 0 && !a.darwin).length).toBe(52);
+   expect(actions.filter((a) => a.win32.length === 0 && a.darwin).map((a) => a.id).sort()).toEqual(["floatingWorkspace.maximize", "sidebar.ports.toggle", "tab.newAgent", "tab.rename", "workspace.rename"].sort());
+   expect(actions.filter((a) => a.id.startsWith("tab.newAgent.")).length).toBe(35);
+ });
