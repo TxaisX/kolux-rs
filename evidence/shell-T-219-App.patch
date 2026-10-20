@@ -1,0 +1,101 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 117d0ec7..23311fe4 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -32,6 +32,7 @@ import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
+ import { returnTab, type Which } from "./terminal/tabClose";
+ import { bulkCloseSet, closeOne, middleClickCloses, orderPinnedFirst, pinQuestion } from "./terminal/pin";
+ import { dropCell, dropTab, halfOf, showsDragHandle, zoneOf, type Zone } from "./terminal/rearrange";
++import { chosenTab, cycleTab, openSwitcher, stepSwitcher, switchOrderOf, tabByNumber, type CycleMode, type Switcher } from "./terminal/tabCycle";
+ import { splitMenuState, splitTabOut } from "./terminal/tabSplit";
+ import { forgetColors, setTabColor, tabMenuHead, tabStyle, TAB_COLORS, type TabColors } from "./terminal/tabColor";
+ import { forgetView } from "./terminal/viewKeep";
+@@ -261,6 +262,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   const [asking, setAsking] = useState<{ keys: number[]; title: string; body: string; confirm?: string } | null>(null);
+   // TERM-046: pinned tab keys live in window state, like the strip order (terminal/pin.ts).
+   const [pinned, setPinned] = useState<Set<number>>(new Set());
++  const [switcher, setSwitcher] = useState<Switcher | null>(null); // TERM-050: the Ctrl+Tab list while Ctrl is held
++  const switcherRef = useRef<Switcher | null>(null);
++  switcherRef.current = switcher;
+   const [tabMenu, setTabMenu] = useState<{ key: number; top: number; left: number } | null>(null); // TERM-049: the right-clicked tab
+   const [tabColors, setTabColors] = useState<TabColors>({}); // TERM-049: Tab Color, window state like pinned (terminal/tabColor.ts)
+   // TERM-015 / TERM-054: what is being dragged (a tab, or a whole cell by its pane header) and where it would land.
+@@ -659,6 +663,31 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+         case "tab.newTerminal":
+           void newTab(null);
+           break;
++        case "tab.nextSameType":
++        case "tab.previousSameType":
++        case "tab.nextAllTypes":
++        case "tab.previousAllTypes":
++        case "tab.nextTerminal":
++        case "tab.previousTerminal":
++        case "tab.selectByIndex": {
++          // TERM-051 / TERM-052: the tabs of the front cell in strip order.
++          const strip = orderOf(focused).map((k) => panes.find((x) => x.key === k)).filter((x): x is Pane => !!x);
++          const to =
++            hit.id === "tab.selectByIndex"
++              ? tabByNumber(strip, (hit.index ?? 0) + 1)
++              : cycleTab(strip, focused, hit.id.startsWith("tab.next") ? 1 : -1, (hit.id.endsWith("SameType") ? "same" : hit.id.endsWith("AllTypes") ? "all" : "terminals") as CycleMode);
++          if (to === null) return;
++          setFocused(to);
++          break;
++        }
++        case "tab.previousRecent": {
++          // TERM-050: the first press opens the list on the tab used just before; each press while Ctrl is held steps on, and letting go switches.
++          const open = switcherRef.current;
++          const next = open ? stepSwitcher(open, 1) : openSwitcher(panesIn(panes, activeDir).map((x) => x.key), recentTabs.current, focused, switchOrderOf(settings));
++          if (!next) return;
++          setSwitcher(next);
++          break;
++        }
+         case "tab.newBrowser":
+           void newTab("browser");
+           break;
+@@ -795,6 +824,27 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     return () => window.removeEventListener("keydown", onKey, true);
+   });
+ 
++  // TERM-050: letting go of Ctrl switches to the chosen tab; Escape or leaving the window drops the list.
++  useEffect(() => {
++    const done = (go: boolean) => {
++      const s = switcherRef.current;
++      if (!s) return;
++      setSwitcher(null);
++      if (go) setFocused(chosenTab(s));
++    };
++    const up = (e: KeyboardEvent) => e.key === "Control" && done(true);
++    const down = (e: KeyboardEvent) => e.key === "Escape" && switcherRef.current && (e.preventDefault(), e.stopPropagation(), done(false));
++    const lost = () => done(false);
++    window.addEventListener("keyup", up, true);
++    window.addEventListener("keydown", down, true);
++    window.addEventListener("blur", lost);
++    return () => {
++      window.removeEventListener("keyup", up, true);
++      window.removeEventListener("keydown", down, true);
++      window.removeEventListener("blur", lost);
++    };
++  }, []);
++
+   const addShell = (dir: string | null, branch: string | null) => {
+     const key = nextKey.current++;
+     setPanes((ps) => [...ps, { key, cwd: dir, branch, agent: "shell", program: null, args: [] }]);
+@@ -2091,6 +2141,18 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+             }}
+           />
+         )}
++        {switcher && (
++          <div className="menu tab-switcher" role="listbox" aria-label="Switch tab">
++            {switcher.list.map((k, i) => {
++              const p = panes.find((x) => x.key === k);
++              return (
++                <div key={k} className={`menu-item${i === switcher.at ? " on" : ""}`} role="option" aria-selected={i === switcher.at}>
++                  {p ? tabName(p, titles) : `Tab ${k}`}
++                </div>
++              );
++            })}
++          </div>
++        )}
+         {tabMenu && (
+           // TERM-049 / TERM-044: close items only; the close question (TERM-045) covers the whole set at once.
+           <>

@@ -1,0 +1,10 @@
+diff --git a/src/styles.css b/src/styles.css
+index 2b643a6a..3687300e 100644
+--- a/src/styles.css
++++ b/src/styles.css
+@@ -1515,3 +1515,5 @@ html[data-divider="row"], html[data-divider="row"] * { cursor: row-resize !impor
+ .sb-group-row { display: flex; align-items: center; gap: 2px; padding-right: 4px; }
+ .sb-group-row .sb-group { flex: 1; min-width: 0; }
+ .proj-group-kids { padding-left: 8px; }
++.tab-switcher { top: 20%; left: 50%; transform: translateX(-50%); z-index: 60; min-width: 280px; max-height: 60vh; overflow-y: auto; }
++.tab-switcher .menu-item.on { background: var(--row-selected); }
