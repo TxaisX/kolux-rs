@@ -70,6 +70,7 @@ mod schedule;
 mod resume;
 mod secrets;
 mod sessions;
+mod shell_marks;
 mod shell_history;
 mod skill_delete;
 mod state;

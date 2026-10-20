@@ -4,6 +4,7 @@
 // branch chip, program, status word; then gauge, more, expand, split, close on the right.
 import { useEffect, useRef, useState } from "react";
 import { branchChip, crewLabel, crewLine, foundAgent, headerOf, takesInband, titleState, type Crew } from "./status";
+import { followedTitle, Gate, IDLE, printsMarks, READY_WAIT_MS, reduceIdentity, Scanner, shownAgent, Startup, type Identity } from "./shellMarks";
 import PaneMenu, { paneMenuItems } from "./PaneMenu";
 import type { Chip } from "../board/chip";
 import type { AgentState } from "../projects/rows";
@@ -92,6 +93,8 @@ type Props = {
   onRunning?: (running: boolean | undefined) => void;
   /** TERM-030: true while this pane waits on the user, so the window can cycle to it. */
   onNeedsYou?: (needs: boolean) => void;
+  /** TERM-058: what the shell's marks say about the running program (title, agent), for the tab's name and icon. */
+  onIdentity?: (live: Identity) => void;
   /** STAT-001: the pane's last hook-fed state; wins over the title guess while the program runs. */
   hook?: AgentState | "background";
   /** The tool a hook PermissionRequest is waiting on (the hook status's `tool` while `hook` is "permission"): the
@@ -211,7 +214,7 @@ const stagger = () =>
     }, 150 + 60 * waiting++),
   );
 
-export default function TerminalPane({ hidden = false, gpu = true, name, plan, usage, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, dragCell, onEqualize, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
+export default function TerminalPane({ hidden = false, gpu = true, name, plan, usage, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, onIdentity, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, dragCell, onEqualize, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const keySettingsRef = useRef(keySettings);
   keySettingsRef.current = keySettings;
@@ -299,6 +302,13 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
   const [plusAt, setPlusAt] = useState<{ top: number; right: number } | null>(null);
   // ACCT-050: the agent the user started by hand in this shell, as Rust recognises it.
   const [found, setFound] = useState<Agent | null>(null);
+  // TERM-058: the running program as the shell's marks describe it (shellMarks.ts); the tab follows it too.
+  const [live, setLive] = useState<Identity>(IDLE);
+  const identity = useRef(onIdentity);
+  identity.current = onIdentity;
+  useEffect(() => {
+    identity.current?.(live);
+  }, [live]);
   // STAT-034 (hooks FIX-3): in-band status is taken only in an agent pane; the OSC handler is set up once.
   const inbandRef = useRef(false);
   inbandRef.current = takesInband(agent, program, found);
@@ -589,20 +599,38 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       if (d.write !== undefined) navigator.clipboard.writeText(d.write).catch((e) => sayOnce("osc52-unconfirmed", `A program's copy to the clipboard could not be confirmed (${e instanceof Error ? e.message : String(e)})`, setFlash));
       return true;
     });
-    // SESS-051: a typed-route prompt goes in once the program has drawn its screen and gone
-    // quiet. ponytail: "ready" is the first 1.5 s of silence after some output; SESS-032 owns the
-    // real readiness rule and replaces this timer.
-    let pending = typed?.trim() ? typed.trim() : null;
+    // ACCT-047 / TERM-058 (shellMarks.ts, tested there): a wrapped shell prints OSC 133 marks. Output
+    // before its first prompt is held so the banner and the prompt land together; the typed-route
+    // command (SESS-051) goes in once, at that prompt; a title set between a command start and the
+    // next prompt names the program (an agent started by hand). A shell without hooks is not held
+    // and keeps the 1.5 s quiet timer. Replayed history (below) never reaches the scanner.
+    const wrapped = agent === "shell" && printsMarks(shellName);
+    const scanner = new Scanner();
+    const gate = new Gate(wrapped);
+    const startup = new Startup(typed, wrapped);
+    let identityNow: Identity = IDLE;
+    const noteIdentity = (next: Identity) => {
+      if (next === identityNow) return;
+      identityNow = next;
+      setLive(next);
+    };
+    let readyWait: ReturnType<typeof setTimeout> | undefined;
+    const openGate = () => {
+      clearTimeout(readyWait);
+      const heldOut = gate.release();
+      if (heldOut) term.write(heldOut);
+    };
+    if (wrapped) readyWait = setTimeout(openGate, READY_WAIT_MS);
     let quiet: ReturnType<typeof setTimeout> | undefined;
+    const send = (text: string | null) => {
+      if (text === null || !alive) return;
+      write(text);
+      pasting.flush();
+    };
     const sawOutput = () => {
-      if (pending === null) return;
+      if (!startup.pending) return;
       clearTimeout(quiet);
-      quiet = setTimeout(() => {
-        if (pending === null || !alive) return;
-        write(pending + "\r");
-        pending = null;
-        pasting.flush();
-      }, 1500);
+      quiet = setTimeout(() => send(startup.onQuiet()), 1500);
     };
     // TERM-068 lives in paste.ts (tested there); the paste chords are left to the browser instead of xterm.
     typeIn.current = (data, only) => void write(data, only);
@@ -630,7 +658,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
         if (text.length > 2048) choice.clearGlyphs();
         return landed;
       },
-      () => pending !== null,
+      () => startup.pending,
       setFlash, // TERM-071: a paste over the limit says so in the header; nothing is sent
       () => term.modes.bracketedPasteMode && term.options.ignoreBracketedPasteMode !== true,
       // TERM-069: on Windows a multi-line paste always goes bracketed (single-line keeps the fast path).
@@ -685,7 +713,17 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
           if (!fromThisService(e.payload.generation, serviceRef.current)) return;
           const draw = () => {
             const bytes = decodeOutput(e.payload.data);
-            term.write(bytes, () => acks.drew(bytes.length));
+            const marks = scanner.feed(bytes);
+            for (const m of marks) noteIdentity(reduceIdentity(identityNow, m));
+            const ready = marks.some((m) => m.kind === "prompt");
+            const out = gate.push(bytes, ready);
+            // Held bytes are acknowledged at once: flow control counts what the pane took, not what it shows yet.
+            if (out) term.write(out, () => acks.drew(bytes.length));
+            else acks.drew(bytes.length);
+            if (ready) {
+              clearTimeout(readyWait);
+              send(startup.onPrompt());
+            }
             sawOutput();
           };
           if (idRef.current === null && forPane(e.payload, null, number)) draw();
@@ -705,12 +743,11 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
         await listen<ExitEvent>("terminal-exit", (e) =>
           mine(e.payload.id, () => {
             ended = true;
+            openGate(); // whatever a shell printed before dying is shown with its exit
+            noteIdentity(IDLE);
             // VIEW-069 / SESS-051: a program that ends before its typed-in opening prompt could be
             // handed over is a launch that failed, not a session that ran.
-            if (pending !== null) {
-              pending = null;
-              failed.current?.("the program ended before its opening prompt could be typed in");
-            }
+            if (startup.exited()) failed.current?.("the program ended before its opening prompt could be typed in");
           term.write(`\r\n\x1b[90m[process ${endedLabel(e.payload.code)}]\x1b[0m\r\n`);
             setStatus({ kind: "ended", code: e.payload.code });
             // TERM-111: a shell that exited by itself closes its pane (its neighbours take the space and
@@ -743,6 +780,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
           // APP-052: a terminal this run of the service still runs for the pane (the window reloaded) is taken back, not started again.
           const { id, program: ran, account: used } = back?.kind === "attached" ? { id: back.id, program: prog, account: account ?? null } : await invoke<{ id: number; program: string | null; account: string | null }>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program: prog, args: argv, env: env ?? null, paneKey: number, account: account ?? null });
           setStarted(ran);
+          // A shell taken back after a reload is past its prompt, and a fallback shell without hooks
+          // (ACCT-046) prints no mark: neither is held.
+          if (back !== null || !printsMarks(ran)) openGate();
           if (!alive) {
             invoke("terminal_kill", { id }).catch(() => {});
             return;
@@ -958,6 +998,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       choice.dispose();
       pasting.detach();
       shots();
+      clearTimeout(readyWait);
       acks.stop();
       term.dispose();
       delete (el as DevHost).__koluxTerm;
@@ -1153,8 +1194,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
   // TERM-031: one count per prompt shown (each entry into "permission"); an Approve/Deny control
   // carries the count it was drawn with, so an answer to a prompt that has gone sends nothing.
   if (prompt.current.hook !== hook) prompt.current = { count: nextPrompt(prompt.current.count, prompt.current.hook, hook), hook };
-  // A shell pane running an agent the user started by hand reads as that agent's session.
-  const shown: Agent = agent === "shell" && found ? found : agent;
+  // TERM-058: a shell pane running an agent the user started by hand reads as that agent's session;
+  // the hook's word (pane-agent) beats the title guess, and the title counts only while a command runs.
+  const shown: Agent = agent === "shell" && found ? found : shownAgent(agent, live);
   const header = headerOf(shown, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now, hook ?? guess ?? undefined);
   const { word, tone, glyph, age, needsYou } = header;
   const explain = header.state === "blocked" && stop ? `${stopLine(stop)}.` : header.explain;
@@ -1189,9 +1231,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     }
     term.focus();
   };
-  // The seat's job title names the pane; else the workspace folder (an agent launch's creature
-  // name); else "Terminal N" (SESS-024).
-  const title = jobTitle || (cwd ? folderName(cwd) : `Terminal${number ? ` ${number}` : ""}`);
+  // The seat's job title names the pane; else the running program's title (TERM-058); else the
+  // workspace folder (an agent launch's creature name); else "Terminal N" (SESS-024).
+  const title = followedTitle(jobTitle, live, cwd ? folderName(cwd) : `Terminal${number ? ` ${number}` : ""}`);
   const agentLabel = name ?? (shown === "shell" ? "Plain shell" : programWord(shown));
   // SET-028: a pane started with a model (a seat's pick or a worker's tier) names it.
   const model = agent === "shell" ? null : modelOf(args);

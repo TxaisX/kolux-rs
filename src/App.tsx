@@ -114,6 +114,7 @@ import { markFor, paneMark, programWord, type AgentInfo } from "./launch/PlusMen
 import { allSwitchedOff, DEFAULT_AGENT_KEY, defaultAgentId, FIRST_PASS, menuAgents, offeredAgents, type AgentPass } from "./launch/agents";
 import { SHOW_SLEEPING_SETTING, paneState, showSleepingFrom, strongest, type AgentState, type RowInfo } from "./projects/rows";
 import { VOCAB, nextNeedsYou } from "./terminal/status";
+import { followedTitle, IDLE, shownAgent, type Identity } from "./terminal/shellMarks";
 import type { KindKey } from "./settings/notifications";
 import { tabBadge, waitingInGrid, type Badge } from "./terminal/tabs";
 import NameField from "./terminal/NameField";
@@ -168,14 +169,16 @@ export type ShellTarget = { dir: string | null; branch: string | null };
 export type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; resumed?: boolean; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number; side?: "old" } };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
-function tabName(p: Pane, titles: Record<number, string>, label?: string): string {
+/** TERM-058: a terminal tab follows the running program's title (`live`) unless the user named it; a worker's task label (ORCH-066) comes first. */
+function tabName(p: Pane, titles: Record<number, string>, label?: string, live: Record<number, Identity> = {}): string {
   if (p.kind === "browser") return titles[p.key] || "New Tab";
   if (p.kind === "editor") return baseName(p.path ?? "");
   if (p.kind === "preview") return `Preview ${baseName(p.path ?? "")}`;
   if (p.kind === "changes") return "All Changes";
   if (p.kind === "diff") return `${baseName(p.path ?? "")} (${p.staged ? "staged" : "unstaged"})`;
-  // ORCH-066 / T-129-d: a worker's task label names the tab before the generic program word.
-  return p.title || label || (p.agent !== "shell" ? programWord(p.agent) : `Terminal ${p.key}`);
+  // ORCH-066 / T-129-d: a worker's task label names the tab first; then the user's own name; then the program's title (TERM-058).
+  if (label) return label;
+  return followedTitle(p.title, live[p.key] ?? IDLE, p.agent !== "shell" ? programWord(p.agent) : `Terminal ${p.key}`);
 }
 /** TERM-055: the one badge a tab carries beside its agent icon; its look and hover text come from the vocabulary (STAT-052). */
 function TabBadge({ kind }: { kind: Badge }) {
@@ -290,6 +293,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     return () => window.removeEventListener("keydown", h);
   }, [tabMenu]);
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
+  const [liveIds, setLiveIds] = useState<Record<number, Identity>>({}); // TERM-058: terminal panes' running program, from the shell marks
   const [allAgents, setAgents] = useState<AgentInfo[]>([]);
   const [agentPass, setAgentPass] = useState<AgentPass>(FIRST_PASS); // SESS-002
   const [shells, setShells] = useState<ShellInfo[]>([]); // SESS-006
@@ -2738,13 +2742,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                                 <Pin size={10} />
                               </span>
                             )}
-                            {p.kind === "editor" || p.kind === "preview" || p.kind === "diff" || p.kind === "changes" ? <FileCode size={12} /> : p.kind === "browser" ? <Globe size={12} /> : <VendorMark agent={p.agent} size={12} />}
+                            {p.kind === "editor" || p.kind === "preview" || p.kind === "diff" || p.kind === "changes" ? <FileCode size={12} /> : p.kind === "browser" ? <Globe size={12} /> : <VendorMark agent={shownAgent(p.agent, liveIds[p.key] ?? IDLE)} size={12} />}
                             {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key), hook[p.key])} />}
                             {context[p.key] && <Ring percent={contextFill(context[p.key], capOn(settings))} size={10} title={meterText(meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) ?? {})} />}
                             {renamingTab === p.key ? (
-                              <NameField value={tabName(p, titles)} label="Tab name" onSave={(name) => (setRenamingTab(null), renamePane(p.key, name))} onCancel={() => setRenamingTab(null)} />
+                              <NameField value={tabName(p, titles, labelOf(p), liveIds)} label="Tab name" onSave={(name) => (setRenamingTab(null), renamePane(p.key, name))} onCancel={() => setRenamingTab(null)} />
                             ) : (
-                              <span className="tab-name">{tabName(p, titles, labelOf(p))}</span>
+                              <span className="tab-name">{tabName(p, titles, labelOf(p), liveIds)}</span>
                             )}
                             {dirty[p.key] && <span className="unsaved" title="Unsaved changes" aria-label="Unsaved changes" />}
                             <button className="tab-x" aria-label={`Close ${tabName(p, titles)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>
@@ -2867,6 +2871,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     keySettings={settings}
                     crew={crew[p.key]}
                     onNeedsYou={(on) => setNeeds((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
+                    onIdentity={(l) => setLiveIds((m) => (m[p.key] === l ? m : { ...m, [p.key]: l }))}
                     onBell={() => noticed(p, "rang the bell")}
                     unread={unreadPanes.has(p.key)}
                     onPty={(id, account) => {
