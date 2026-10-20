@@ -11,6 +11,14 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
+/// T-075-b: the background terminal service that owns terminals so they outlive the window.
+#[path = "pty_service.rs"]
+pub mod service;
+
+/// T-184-b: the window's side of the service (panes routed through it, taken back after a restart).
+#[path = "pty_link.rs"]
+pub mod link;
+
 /// TERM-098 (Windows): a terminal's reply to a program's colour question (OSC 4/10/11/12 with
 /// `rgb:`) or light/dark question (CSI ? 997 ; 1|2 n) reaches the console layer as plain bytes,
 /// and it drops them, since it parses input only for the sequences it knows. Written as

@@ -13,6 +13,7 @@ import { formatMemory } from "./memory";
 import { cleanupCandidates, EndQuestion, endConfirmed, ManageSessions, paneless, sessionsLoaded, type InventoryTab } from "./manage";
 import { committedNote, endNeedsAsk, formatCommitted, formatCpu, groupSessions, RES_COLUMNS, type Resources, type Row, type SessionUsage, type Usage } from "./resources";
 import { bulkQuestion, bulkReport, leftOver, type Bulk, type BulkKind } from "../shell/endAll";
+import BackgroundSessions from "../terminal/BackgroundSessions";
 
 const cols = { gridTemplateColumns: RES_COLUMNS };
 
@@ -180,6 +181,7 @@ export default function ResourceManager({ names, workspaces, loaded, onClose }: 
           </div>
         )}
         {data && data.sessions.length > 0 && <ManageSessions loaded={isLoaded} candidates={asking ?? candidates} asking={asking !== null} onAsk={() => void askAll()} onEnd={() => void endAll()} onKeep={() => setAsking(null)} />}
+        <BackgroundSessions loaded={isLoaded} />
         {groups.map((g) => (
           <section key={g.dir ?? ""} className="res-group" aria-label={g.label}>
             <div className="res-label" title={g.dir ?? "Terminals started outside any workspace"}>
