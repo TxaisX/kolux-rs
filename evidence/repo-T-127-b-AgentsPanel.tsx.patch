@@ -1,0 +1,30 @@
+diff --git a/src/sessions/AgentsPanel.tsx b/src/sessions/AgentsPanel.tsx
+index fee20a1a..e7b38415 100644
+--- a/src/sessions/AgentsPanel.tsx
++++ b/src/sessions/AgentsPanel.tsx
+@@ -10,6 +10,7 @@ import { ago, filterSessions, groupSessions, MAX_QUERY, parseQuery, shortLabel,
+ import { chooseScope, DEFAULT_VIEW, DEPTHS, differing, effectiveScope, readScope, readView, SCOPE_KEY, VIEW_KEY, type Scope, type ViewPrefs } from "./prefs";
+ import { AFTER_START_MS, publishDelay, recall, remember, RescanLimiter } from "./refresh";
+ import { dragPayload, planFor, resumeBlock, SESSION_DRAG, type ResumePlan } from "./resume";
++import SessionDetail from "./SessionDetail";
+ 
+ export type PanelProps = {
+   /** The window's settings and the way to save one (the view options and the scope live there, so every window sees them). */
+@@ -26,6 +27,9 @@ export type PanelProps = {
+   /** The program of the shell the new tab runs, so the copied command is written for it. */
+   shell: string | null;
+   onResume: (s: Session, plan: ResumePlan) => void;
++  /** VIEW-084: every workspace folder open in Kolux, and the way to go to one (the row's worktree line). */
++  openDirs?: string[];
++  onJump?: (dir: string) => void;
+ };
+ 
+ /** What the back end is asked for under the saved scope and depth. */
+@@ -260,6 +264,7 @@ export default function AgentsPanel(props: PanelProps) {
+               <div className="agents-meta">
+                 {s.agent} · {ago(s.modifiedMs, now)} · {s.turns} message{s.turns === 1 ? "" : "s"}
+               </div>
++              <SessionDetail session={s} activeDir={activeDir} openDirs={props.openDirs ?? projectDirs} onJump={props.onJump} />
+               <div className="agents-actions">
+                 <button type="button" className="btn" disabled={block !== null} title={block ?? "Open a terminal and continue this session"} onClick={() => resume(s)}>
+                   Resume

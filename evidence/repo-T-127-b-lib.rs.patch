@@ -1,0 +1,21 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 15128337..faa75425 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -82,6 +82,7 @@ mod routing;
+ mod schedule;
+ mod resume;
+ mod secrets;
++mod session_rows;
+ mod sessions;
+ mod shell_marks;
+ mod shell_history;
+@@ -477,6 +478,8 @@ pub fn run() {
+             sessions::claude_workspace_sessions,
+             sessions::list::sessions_list,
+             sessions::list::session_resume_plan,
++            session_rows::session_row_detail,
++            session_rows::session_name,
+             terminal::terminal_spawn,
+             terminal::terminal_write,
+             terminal::terminal_service_info,
