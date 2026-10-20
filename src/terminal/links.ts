@@ -11,14 +11,20 @@ export type Found = { start: number; end: number; kind: "url" | "file"; target: 
 const TRAIL = /[.,;:!?'"`]+$/;
 const SUFFIX = "(?::(\\d+)(?::(\\d+))?|\\((\\d+)(?:,(\\d+))?\\))?";
 /** Each alternative is one shape: web link, file link, Windows drive or UNC path, a path with a separator
- *  (absolute POSIX, ./relative, ~/home or plain src/a/b.ts), or a bare name.ext:line (compiler output). */
+ *  (absolute POSIX, ./relative, ~/home or plain src/a/b.ts), or a bare name.ext:line (compiler output).
+ *  TERM-095: the path and name shapes start only where their character run starts (the lookbehinds): a greedy
+ *  run that is then backtracked for a separator costs one pass per run, not one per character, so a long
+ *  separator-free span (base64, a wall of dots or hyphens) scans in linear time; measured 16 KiB of "x" at
+ *  194 ms without them and under 2 ms with. What matches is unchanged: a start inside a run never matched
+ *  anything its run's start did not. */
 const RE = new RegExp(
   [
     "\\bhttps?://[^\\s<>\"'`]+",
     "\\bfile://[^\\s<>\"'`]+",
     "(?:[A-Za-z]:[\\\\/]|\\\\\\\\[^\\s\\\\/]+\\\\)[^\\s:*?\"<>|()]*" + SUFFIX,
-    "(?:\\.{1,2}[\\\\/]|~/|/)?[\\w.@~-]+(?:[\\\\/][\\w.@~-]+)+(?<![\\\\/.])" + SUFFIX,
-    "\\b[\\w-]+\\.[A-Za-z]{1,6}" + SUFFIX,
+    "(?<![\\w.@~-])(?:\\.{1,2}[\\\\/]|~/|/)?[\\w.@~-]+(?:[\\\\/][\\w.@~-]+)+(?<![\\\\/.])" + SUFFIX,
+    // the name shape may start after leading hyphens ("-foo.ts:3" finds foo.ts:3, as \b alone did)
+    "\\b(?<=(?:^|[^\\w-])-*)[\\w-]+\\.[A-Za-z]{1,6}" + SUFFIX,
   ].join("|"),
   "g",
 );
@@ -98,14 +104,26 @@ export function resolvePath(target: string, cwd: string | null): string | null {
 
 export type Row = { text: string; isWrapped: boolean };
 
+/** TERM-095: the longest logical line (in cells) that is scanned for links; longer ones get none. */
+export const LINK_SCAN_CAP = 16 * 1024;
+
 /** The rows that make up the logical line holding row `y`: back to the first unwrapped row, forward while the next
  *  row says it is wrapped. Returns the first row's index and the joined text, every row but the last padded to `cols`
  *  so an index in the text maps back to a cell. */
-export function spanOf(row: (y: number) => Row | undefined, y: number, cols: number): { first: number; text: string } {
+export function spanOf(row: (y: number) => Row | undefined, y: number, cols: number, cap = LINK_SCAN_CAP): { first: number; text: string } {
+  // TERM-095: a logical line past the cap gets no link scan; the walk stops at the cap too, so a hover over a 1 MB line
+  // costs a few hundred row lookups, never a join of the whole line and a regex pass over it.
+  const maxRows = Math.max(1, Math.floor(cap / Math.max(1, cols)));
   let first = y;
-  while (first > 0 && row(first)?.isWrapped) first--;
+  while (first > 0 && row(first)?.isWrapped) {
+    if (y - first >= maxRows) return { first: y, text: "" };
+    first--;
+  }
   let last = y;
-  while (row(last + 1)?.isWrapped) last++;
+  while (row(last + 1)?.isWrapped) {
+    if (last - first + 1 >= maxRows) return { first, text: "" };
+    last++;
+  }
   const parts: string[] = [];
   for (let i = first; i <= last; i++) {
     const t = row(i)?.text ?? "";

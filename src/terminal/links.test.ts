@@ -1,8 +1,46 @@
 // TERM-092 / TERM-093: links and file paths found in terminal text; wrapped rows joined; paths resolved.
 import { describe, expect, it } from "vitest";
-import { clickTarget, findLinks, fromFileUrl, hintFor, linkFor, rangeOf, resolvePath, spanOf, type Row } from "./links";
+import { clickTarget, findLinks, fromFileUrl, hintFor, LINK_SCAN_CAP, linkFor, rangeOf, resolvePath, spanOf, type Row } from "./links";
 
 const targets = (s: string) => findLinks(s).map((f) => `${f.kind}:${f.target}${f.line !== undefined ? `@${f.line}` : ""}${f.column !== undefined ? `,${f.column}` : ""}`);
+
+describe("TERM-095 link detection never freezes on huge lines", () => {
+  it("a 1 MB line on screen gets no link scan, and a hover over it costs a bounded walk", () => {
+    const cols = 200;
+    const text = "x".repeat(cols - 20) + " https://a.b/in-a-huge-line";
+    const rowCount = Math.ceil((1 << 20) / cols); // one logical line of 1 MB, wrapped
+    let reads = 0;
+    const row = (y: number): Row | undefined => (y >= 0 && y < rowCount ? (reads++, { text, isWrapped: y > 0 }) : undefined);
+    const t0 = performance.now();
+    for (const y of [0, 1, 2500, rowCount - 1]) expect(findLinks(spanOf(row, y, cols).text)).toEqual([]);
+    expect(performance.now() - t0).toBeLessThan(50);
+    expect(reads).toBeLessThan(4 * 2 * (LINK_SCAN_CAP / cols + 2));
+  });
+  it("a span at the cap with no separator (base64, dots, hyphens) scans in linear time", () => {
+    const b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const spans = ["x".repeat(LINK_SCAN_CAP), "a.".repeat(LINK_SCAN_CAP / 2), "a-".repeat(LINK_SCAN_CAP / 2), Array.from({ length: LINK_SCAN_CAP }, (_, i) => b64[i % 64]).join("")];
+    for (const s of spans) {
+      const t0 = performance.now();
+      expect(findLinks(s)).toEqual([]);
+      expect(performance.now() - t0, `${s.slice(0, 4)}...`).toBeLessThan(40);
+    }
+    // the run-start rule changes nothing about what is found
+    expect(targets("x=src/a/b.ts:3 at ~/w/y.md (./c/d) k:lib/e.rs")).toEqual(["file:src/a/b.ts@3", "file:~/w/y.md", "file:./c/d", "file:lib/e.rs"]);
+    expect(targets(" -foo.ts:3 --a-b.rs:4,1 x-y.md:2")).toEqual(["file:foo.ts@3", "file:a-b.rs@4", "file:x-y.md@2"]);
+    const hyphens = "-".repeat(LINK_SCAN_CAP - 8) + "a.ts:1";
+    const t0 = performance.now();
+    expect(targets(hyphens)).toEqual(["file:a.ts@1"]);
+    expect(performance.now() - t0).toBeLessThan(40);
+  });
+  it("a long line under the cap is still joined whole and scanned", () => {
+    const cols = 80;
+    const rows: Row[] = Array.from({ length: 12 }, (_, i) => ({ text: i === 11 ? "end https://a.b/x" : "y".repeat(cols), isWrapped: i > 0 }));
+    const span = spanOf((y) => rows[y], 5, cols);
+    expect(span.first).toBe(0);
+    expect(findLinks(span.text).map((f) => f.target)).toEqual(["https://a.b/x"]);
+    expect(spanOf((y) => rows[y], 5, cols, 10 * cols).text).toBe(""); // the same line past a smaller cap: no scan
+  });
+});
 
 describe("TERM-092 clickable web links", () => {
   it("finds http(s) links and leaves the sentence's trailing punctuation out", () => {

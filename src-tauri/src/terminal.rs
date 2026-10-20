@@ -665,7 +665,7 @@ impl Terminals {
         // ACCT-047: a shell pane's shell prints prompt marks (its own files still run first), so the pane
         // can hold its output until the prompt and type a startup command once, when the shell is ready.
         if program.as_deref().map(str::trim).is_none_or(str::is_empty) {
-            if let Some(shim_dir) = log_dir.as_deref().map(|d| d.join("shell")) {
+            if let Some(shim_dir) = log_dir.as_deref().map(|d| shell_hook_dir(&d.join("shell"))) {
                 for c in commands.iter_mut() {
                     crate::shell_marks::apply(c, &shim_dir);
                 }
@@ -1367,9 +1367,53 @@ pub fn terminal_memory_profile() -> MemoryProfile {
     MemoryProfile { profile, total_mb: total.unwrap_or(0) >> 20, scrollback }
 }
 
+/// TERM-137: this build's shell hook files live in a folder named after their contents (FNV-1a of every
+/// shim text) under `<lasting data folder>/shell`, so two builds that share the data folder never write
+/// over each other's files and a shell never mixes halves from two builds. A folder another build left
+/// there is kept untouched and never loaded (each shell is pointed at its own build's folder only);
+/// `shell_marks::apply` writes a missing file again on every pane start while the host runs.
+fn shell_hook_dir(base: &std::path::Path) -> std::path::PathBuf {
+    use crate::shell_marks::{wrap, ShellKind};
+    let texts = [ShellKind::Zsh, ShellKind::Bash, ShellKind::Fish].into_iter().flat_map(|k| wrap(k, &[], std::path::Path::new(""), None, None).files).map(|(_, t)| t);
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in texts.flat_map(String::into_bytes) {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    base.join(format!("{h:016x}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TERM-137: hook files of one build go to a folder named after their contents; a folder another build
+    /// left beside it is kept exactly as it was when this build writes its hooks again.
+    #[test]
+    fn term137_each_build_keeps_its_hook_files_in_a_content_named_folder_beside_other_builds() {
+        let base = std::env::temp_dir().join(format!("kolux-term137-{}", std::process::id())).join("shell");
+        let _ = std::fs::remove_dir_all(base.parent().unwrap());
+        let own = shell_hook_dir(&base);
+        assert_eq!(own, shell_hook_dir(&base), "the same build names the same folder");
+        let name = own.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(own.parent() == Some(base.as_path()) && name.len() == 16 && name.bytes().all(|b| b.is_ascii_hexdigit()), "{name}");
+        let foreign = base.join("0123456789abcdef").join("zsh").join(".zshrc");
+        std::fs::create_dir_all(foreign.parent().unwrap()).unwrap();
+        std::fs::write(&foreign, "older build's hooks").unwrap();
+        for _ in 0..2 {
+            let mut zsh = portable_pty::CommandBuilder::new("/bin/zsh");
+            assert_eq!(crate::shell_marks::apply(&mut zsh, &own), Some(crate::shell_marks::ShellKind::Zsh));
+            let zdotdir = zsh.get_env("ZDOTDIR").unwrap().to_string_lossy().into_owned();
+            assert!(zdotdir.contains(&name) && !zdotdir.contains("0123456789abcdef"), "zsh reads this build's folder only: {zdotdir}");
+        }
+        assert!(own.join("zsh").join(".zshrc").is_file(), "this build's hooks are on disk");
+        assert_eq!(std::fs::read_to_string(&foreign).unwrap(), "older build's hooks", "the other build's file is untouched");
+        std::fs::remove_file(own.join("zsh").join(".zshrc")).unwrap();
+        let mut zsh = portable_pty::CommandBuilder::new("zsh");
+        crate::shell_marks::apply(&mut zsh, &own);
+        assert!(own.join("zsh").join(".zshrc").is_file(), "a hook file that went missing is written again on the next pane start");
+        let _ = std::fs::remove_dir_all(base.parent().unwrap());
+    }
 
     /// ACCT-053: the redraw buffer of a restored pane never starts inside a wide character. A tail with a
     /// line break starts after it; one without (a single huge line) starts at the next character boundary.
