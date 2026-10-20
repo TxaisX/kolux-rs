@@ -25,7 +25,7 @@ test("T-550: with no figure to show the pill stays hidden", () => {
   expect(renderToString(createElement(UsagePillView, { hidden: true, onOpen: () => {} }))).toContain("hidden");
 });
 
-test("T-550: a click on the pill opens Settings at Accounts & keys", () => {
+test("T-550: a click on the pill opens Settings at Accounts & keys, AI connections section", () => {
   const target = new EventTarget();
   vi.stubGlobal("window", target);
   const seen: unknown[] = [];
@@ -37,7 +37,7 @@ test("T-550: a click on the pill opens Settings at Accounts & keys", () => {
   const button = UsagePillView(pill.props as unknown as Parameters<typeof UsagePillView>[0]) as unknown as El;
   expect(button.type).toBe("button");
   button.props.onClick?.();
-  expect(seen).toEqual([{ page: "accounts", section: undefined }]);
+  expect(seen).toEqual([{ page: "accounts", section: "connections" }]);
 });
 
 // FIX-5 (council P2 P12): the hover title is not read out by every screen reader, so the same words are also the button's description.

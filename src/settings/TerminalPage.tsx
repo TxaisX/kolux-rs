@@ -1,7 +1,7 @@
 // Settings > Terminal & sessions. TERM-045 / SET-043: whether closing a terminal with a live program
 // asks first. TERM-005: how many panes a new workspace starts with. SET-022: terminal text and the
 // cursor, with a live sample. SET-025: history, scrolling and the clipboard. SET-026: the default
-// shell on Windows.
+// shell on Windows. TERM-099 / TERM-100: bring in Ghostty settings and Warp themes.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Terminal } from "@xterm/xterm";
@@ -17,6 +17,7 @@ import { Segmented } from "./GeneralPage";
 import { InputCard, PowerShellCard } from "./InputCards";
 import { detectPlatform } from "../keys/keymap";
 import { readLook } from "./general";
+import TerminalImport from "./TerminalImport";
 import { useSettings } from "./useSettings";
 
 /** TERM-119: on unless switched off; the app reads the same field when it starts a shell. */
@@ -168,6 +169,7 @@ export default function TerminalPage() {
           <Switch label="Right-click pastes (or copies the selection)" checked={text.rightClickPaste} onChange={(on) => save({ [FIELDS.rightClickPaste]: on })} />
         </section>
       )}
+      {settings && <TerminalImport settings={settings} save={save} />}
       {settings && <InputCard settings={settings} platform={platform} onSave={save} />}
       {settings && shells && (
         <section className="conn-card" data-section="shell">

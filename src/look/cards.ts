@@ -9,7 +9,7 @@
 // tick, so when the ticked set equals a preset it writes that preset's marker ("preset:compact") as
 // the whole list: the marker means "follow this preset" and wins over `workspaceCardDensity`.
 //
-// For a later card that adds a detail (T-291-d's Automation tag): add one entry to CARD_DETAILS
+// For a later card that adds a detail (T-291-d's Automation tag is one, in no preset): add one entry to CARD_DETAILS
 // (its `line` reads a new field of `CardFacts`, which ProjectsPanel fills), name it in the presets
 // that should show it, and nothing else changes. The chooser, the Settings page and the saved
 // forms all read this list.
@@ -29,7 +29,10 @@ export const DENSITY_NOTE: Record<Density, string> = {
 };
 
 /** What the sidebar knows about one workspace, for the cards to draw. */
-export type CardFacts = { agents: number; state: StatusKey; pr: PrState; changed: number; note: string | null };
+export type CardFacts = { agents: number; state: StatusKey; pr: PrState; changed: number; note: string | null; /** AUTO-024 (T-291-d): an automation run made this worktree. Missing means no. */ automation?: boolean };
+
+/** AUTO-024: whether a worktree was made by an automation run (the back end stamps `madeBy`). */
+export const madeByAutomation = (w: { madeBy?: string | null }): boolean => w.madeBy === "automation";
 
 export type CardDetail = {
   id: string;
@@ -64,6 +67,8 @@ export const CARD_DETAILS: readonly CardDetail[] = [
       return first ? (first.length > 60 ? first.slice(0, 59) + "…" : first) : null;
     },
   },
+  // AUTO-024 (T-291-d): in no preset; the user ticks it. The tag is a worktree made by an automation run.
+  { id: "automation", label: "Automation", line: (f) => (f.automation ? "Automation" : null) },
 ];
 
 export const PRESETS: Record<Density, readonly string[]> = {
