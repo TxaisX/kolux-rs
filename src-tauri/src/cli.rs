@@ -1793,6 +1793,7 @@ pub fn main(words: Vec<String>) -> i32 {
     if !json && parsed.command == "terminal.list" {
         parsed.args.insert("includeVisualLayouts".into(), Value::Bool(true));
     }
+    caller_distro(&mut parsed.args, std::env::var("WSL_DISTRO_NAME").ok());
     let retry_word = CHANGES.contains(&parsed.command.as_str()).then(|| {
         let id = parsed.args.get("retryRequest").and_then(Value::as_str).map(str::to_string).unwrap_or_else(uuid);
         parsed.args.insert("retryRequest".into(), json!(id));
@@ -4851,9 +4852,29 @@ pub fn serve(app: tauri::AppHandle, dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Row 220: a client run inside WSL names its distribution, so the app can read a Linux-form
+/// path (/home/...) against it; a value the caller gave is kept.
+fn caller_distro(args: &mut Map<String, Value>, distro: Option<String>) {
+    if let Some(d) = distro.filter(|d| !d.trim().is_empty()) {
+        args.entry("callerDistro").or_insert(json!(d));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn row220_the_client_sends_the_wsl_distribution_it_runs_in() {
+        let mut a = Map::new();
+        caller_distro(&mut a, None);
+        caller_distro(&mut a, Some(" ".into()));
+        assert!(a.is_empty());
+        caller_distro(&mut a, Some("Ubuntu".into()));
+        assert_eq!(a["callerDistro"], "Ubuntu");
+        caller_distro(&mut a, Some("Debian".into()));
+        assert_eq!(a["callerDistro"], "Ubuntu", "a value already given is kept");
+    }
     use std::process::Command;
 
     fn words(s: &str) -> Vec<String> {
