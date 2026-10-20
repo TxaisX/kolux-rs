@@ -1028,6 +1028,8 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · look T-301 (APP-012 app icon variants and window blur) · Tauri 2 public API documentation (tauri crate 2.12: Window::set_icon, Window::set_effects, EffectsBuilder, image::Image); no other sources
 > 2026-10-20 · look T-302-c (web places of the project icon card) · no new outside sources: the guarded icon client, address rules and lookup are Kolux RS code already in browser.rs; URL host parsing per the url crate behaviour already used there
 > 2026-10-20 · look T-266-b (PROJ-062 ports and task on the workspace card hover) · no new outside sources: Kolux RS own ports.rs scan and Worktree.number
+> 2026-10-20 · accounts T-548-b (OD-11 per-account Codex plan figures) · no new outside sources: Kolux RS own codex_usage.rs, codex_accounts.rs, src/usage and src/tower code
+> 2026-10-20 · accounts T-139-d (Codex setup-change prompt, restored panes asked again) · no new outside sources: Kolux RS own accountChange.ts, layout.ts and App.tsx pane code
 > 2026-10-20 · skills T-292-b (SKILL-025/027, VIEW-100 skill half) · spec/15 and spec/05 cards only; this tree's own T-196-b event shape; no outside source
 > 2026-10-20 · hooks T-156-b batch 8 (attempts list masking, wiring) · spec SAFE-018/SAFE-019 as given in PLAN; this tree's own protected.rs mask and its test fixtures, protected_custom.rs, hooks.rs; no outside source
 > 2026-10-20 · hooks T-167-b batch 8 (sleep record) · spec/04 STAT-030/STAT-037 as given in PLAN; this tree's own agent_hooks/saved.rs and projects.rs workspace_sleep; no outside source
@@ -1040,3 +1042,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · core T-184-b · cards TERM-105, APP-052, ACCT-051 and DT-C27 (Txais 2026-10-20); this tree's own pty::service (T-075-b), terminal.rs and reattach.ts; no outside source
 > 2026-10-20 · core T-153-f · card VIEW-099 (and VIEW-116 for the question); this tree's own pty::service, pty::link, terminal.rs, src/status/manage.tsx and ResourceManager.tsx; no outside source
 > 2026-10-20 · core T-067-b · card USAGE-011 (with TERM-122 and T-260-c's activity end); this tree's own pty::link, terminal.rs, activity.rs and status.rs; no outside source
+> 2026-10-20 · accounts T-139-d (pane-output scan) · spec/07 ACCT-012, ACCT-023 as given in the brief; public source: github.com/openai/codex (Apache-2.0) codex-rs/login/src/auth/manager.rs lines 214-219 at b2aa07db, one short fixed phrase only ("access token could not be refreshed"); this tree's own codex_accounts.rs, SignInNotice.tsx, terminal/codec.ts output event shape

@@ -1567,7 +1567,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
               Review plan
             </button>
           )}
-          {usage ? <HeaderUsage context={context} agent={agent} readout={usage} /> : <ContextGauge context={context} agent={agent} />}
+          {usage ? <HeaderUsage context={context} agent={agent} readout={usage} account={account} /> : <ContextGauge context={context} agent={agent} />}
           <button
             className="ib"
             title="Pane menu"

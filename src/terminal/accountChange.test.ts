@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { accountLabel, accountPrompt } from "./accountChange";
+import { accountLabel, accountPrompt, codexSetup, setupChanged } from "./accountChange";
+import { layoutOf, restoreLayout } from "./layout";
 
 const accounts = [
   { id: "a1", email: "a@x.com" },
@@ -36,5 +37,49 @@ describe("accountPrompt (ACCT-023, ACCT-064)", () => {
   it("labels an account by email, else by a short id", () => {
     expect(accountLabel("a1", accounts)).toBe("a@x.com");
     expect(accountLabel("0123456789abcdef", [{ id: "0123456789abcdef", email: null }])).toBe("account 01234567");
+  });
+});
+
+describe("codexSetup and setupChanged (T-139-d)", () => {
+  const was = codexSetup({ agentOptions: { codex: { args: "--model m" } } });
+  it("reads the command, arguments, variables and permissions; blanks and padding change nothing", () => {
+    expect(codexSetup({})).toBe(codexSetup({ agentPermissions: "yolo", agentOptions: { codex: { command: "  ", args: "", env: "" } } }));
+    expect(codexSetup({ agentOptions: { codex: { args: " --model m " } } })).toBe(was);
+    expect(codexSetup({ agentPermissions: "manual" })).not.toBe(codexSetup({}));
+    expect(codexSetup({ agentOptions: { codex: { args: "--model n" } } })).not.toBe(was);
+    expect(codexSetup({ agentOptions: { claude: { args: "--model n" } } })).toBe(codexSetup({}));
+  });
+  it("asks a running Codex pane that started on another setup, once per change", () => {
+    const now = codexSetup({ agentOptions: { codex: { args: "--model n" } } });
+    expect(setupChanged({ agent: "codex", setup: was }, true, now, undefined)).toBe(true);
+    expect(setupChanged({ agent: "codex", setup: was }, true, now, now)).toBe(false);
+    const later = codexSetup({ agentOptions: { codex: { args: "--model o" } } });
+    expect(setupChanged({ agent: "codex", setup: was }, true, later, now)).toBe(true);
+    expect(setupChanged({ agent: "codex", setup: was }, true, was, now)).toBe(false);
+  });
+  it("leaves alone panes not running Codex, not running, or with no recorded setup", () => {
+    expect(setupChanged({ agent: "claude", setup: was }, true, "x", undefined)).toBe(false);
+    expect(setupChanged({ agent: "codex", setup: was }, false, "x", undefined)).toBe(false);
+    expect(setupChanged({ agent: "codex" }, true, "x", undefined)).toBe(false);
+  });
+});
+
+describe("a restored pane is asked again after Kolux restarts (T-139-d)", () => {
+  const pane = { key: 4, cwd: "/w", branch: null, agent: "codex" as const, program: "codex", args: [], agentId: "codex", account: "a1" };
+  it("carries its account through the saved layout, so the prompt comes back with the kept choice forgotten", () => {
+    const saved = layoutOf([pane], {}, 4, "/w", {});
+    const back = restoreLayout(JSON.parse(JSON.stringify(saved)));
+    const restored = back?.panes[0];
+    expect(restored?.account).toBe("a1");
+    // the person had kept it on a1 while b2 was active; the kept choice lives in memory only
+    expect(accountPrompt(pane, true, "b2", accounts, "b2")).toBeNull();
+    expect(accountPrompt(restored!, true, "b2", accounts, undefined)).toEqual({ kind: "changed", from: "a@x.com", to: "b@x.com" });
+    // an account removed while Kolux was closed is asked about too
+    expect(accountPrompt({ ...restored!, account: "gone" }, true, "b2", accounts, undefined)).toEqual({ kind: "removed", to: "b@x.com" });
+  });
+  it("a Codex pane with no account of its own (null) comes back as null, not unknown", () => {
+    const back = restoreLayout(JSON.parse(JSON.stringify(layoutOf([{ ...pane, account: null }], {}, 4, "/w", {}))));
+    expect(back?.panes[0].account).toBeNull();
+    expect(accountPrompt(back!.panes[0], true, "a1", accounts, undefined)).toMatchObject({ kind: "changed", from: "Codex's own sign-in" });
   });
 });
