@@ -8,6 +8,7 @@ import { fontStack } from "../settings/fonts";
 import { applyInput } from "./inputWire";
 import { drawOptions } from "../shell/termDraw";
 import { applyLinkState } from "../shell/linkAsk";
+import { LINK_MENU_FIELD, linkMenuOn } from "./linkMenu";
 
 export const FIELDS = {
   size: "terminalFontSize",
@@ -23,6 +24,7 @@ export const FIELDS = {
   fastScroll: "terminalFastScroll",
   copyOnSelect: "terminalCopyOnSelect",
   rightClickPaste: "terminalRightClickPaste",
+  linkMenu: LINK_MENU_FIELD, // TERM-094: the link action menu, on unless switched off
 } as const;
 
 /** SET-026: the saved default shell (Windows); "auto" tries PowerShell 7, then Windows PowerShell. */
@@ -52,6 +54,7 @@ export type TerminalText = {
   fastScroll: number;
   copyOnSelect: boolean;
   rightClickPaste: boolean;
+  linkMenu: boolean;
 };
 
 const windows = () => typeof navigator !== "undefined" && /Windows/.test(navigator.userAgent);
@@ -82,6 +85,7 @@ export function readText(s: Record<string, unknown>, onWindows = windows()): Ter
     fastScroll: clampNumber(s[FIELDS.fastScroll], 1, 20, 5),
     copyOnSelect: s[FIELDS.copyOnSelect] === true,
     rightClickPaste: typeof s[FIELDS.rightClickPaste] === "boolean" ? (s[FIELDS.rightClickPaste] as boolean) : onWindows, // on by default on Windows; right-click goes through attachPaste (council D2 MERGE 47 FB2)
+    linkMenu: linkMenuOn(s), // TERM-094
   };
 }
 

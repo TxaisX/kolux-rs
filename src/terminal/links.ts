@@ -142,8 +142,12 @@ export function rangeOf(start: number, end: number, first: number, cols: number)
 export type Where = "browser" | "kolux" | "editor" | "app";
 const WHERE: Record<Where, string> = { browser: "in your browser", kolux: "in Kolux", editor: "in the editor", app: "with its app" };
 
-/** The hover hint under the pointer: the modifier, the target, the line, and where it will open. */
-export const hintFor = (f: Found, mac: boolean, where: Where) => `${mac ? "Cmd" : "Ctrl"}+click to open ${f.target}${f.line !== undefined ? ` at line ${f.line}` : ""} ${WHERE[where]}`;
+/** The hover hint under the pointer: the modifier, the target, the line, and where it will open; with the link menu
+ *  on (TERM-094) it also names the menu gesture, and with it off the hint does not mention it. */
+export const hintFor = (f: Found, mac: boolean, where: Where, menu = false) => {
+  const mod = mac ? "Cmd" : "Ctrl";
+  return `${mod}+click to open ${f.target}${f.line !== undefined ? ` at line ${f.line}` : ""} ${WHERE[where]}${menu ? ` · ${mod}+right-click for more` : ""}`;
+};
 
 /** Which door a click goes through: the system browser (always with Shift, or when Open-in-Kolux is off), Kolux's own
  *  viewer, or the file opener. Alt with the link modifier inverts the web destination (Kolux when the setting says the
