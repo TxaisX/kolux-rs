@@ -1,0 +1,64 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index c21ca38a..32def716 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -124,6 +124,7 @@ import { inboxOverlay, onClose, onRunning, type Kept } from "./inbox/exitedPromp
+ import { inboxItems, type Source } from "./inbox/inbox";
+ import TowerView from "./tower/TowerView";
+ import FloorView from "./floor/FloorView";
++import SpaceView from "./space/SpaceView";
+ import { nameSeats, nameUsage, towerRows, usageByAccount } from "./tower/tower";
+ import { useTowerBridge } from "./tower/TowerWindow";
+ import { LANES, chipOf } from "./board/chip";
+@@ -135,7 +136,7 @@ import { readoutOf } from "./terminal/headerUsage";
+ import { usePlan } from "./usage/plan";
+ import ChooserPane from "./launch/ChooserPane";
+ import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, sheetStart, type Lineup } from "./launch/seats";
+-import { folderName, NESTING_KEY, workItem, type Created, type WorkItem, type CliWorkspace, type CliFile, type Project, type Worktree } from "./projects/model";
++import { folderName, NESTING_KEY, projectLabel, workItem, type Created, type WorkItem, type CliWorkspace, type CliFile, type Project, type Worktree } from "./projects/model";
+ import { focusIn, panesIn, sameDir, nameOf } from "./workspaces";
+ import { LAYOUT_FIELD, layoutOf, type SavedLayout } from "./terminal/layout";
+ import { layoutWriter } from "./terminal/layoutSave";
+@@ -668,6 +669,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+         case "view.floor":
+           setScreen((s) => (s === "floor" ? "terminals" : "floor"));
+           break;
++        case "view.space":
++          setScreen((s) => (s === "space" ? "terminals" : "space"));
++          break;
+         case "view.code":
+           leavePage();
+           break;
+@@ -1784,6 +1788,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   const inbox = screen === "inbox";
+   const tower = screen === "tower";
+   const floor = screen === "floor";
++  const space = screen === "space";
+   const agentsScreen = screen === "agents";
+   // T-050-b: an orchestrator-started session with no name or title is named after its worker's task
+   // (orchestration worker_labels, by terminal handle), looked up while the Agents screen, the Board or
+@@ -1801,13 +1806,14 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   const [now, setNow] = useState(Date.now());
+   const timed = inbox || board || tower;
+   // VIEW-009: a full page fills the workspace area; Show Code (view.code) and an Escape nothing else used leave it.
+-  const fullPage = settingsOpen || (terminals && page !== null) || inbox || tower || floor || screen === "artifacts";
++  // T-146-e: Skills and Space are full pages too; Skills keeps its own Escape (closeSkills returns to the screen it came from).
++  const fullPage = settingsOpen || (terminals && page !== null) || inbox || tower || floor || space || screen === "artifacts" || screen === "skills";
+   const leavePage = () => {
+     setSettingsOpen(false);
+     setPage(null);
+     setScreen("terminals");
+   };
+-  useEscapeLeaves(fullPage && !settingsOpen && page !== "automations", leavePage);
++  useEscapeLeaves(fullPage && !settingsOpen && page !== "automations" && screen !== "skills", leavePage);
+   useEffect(() => showScreen(screen, classic), [screen, classic]); // VIEW-006: each screen's own theme
+   useEffect(() => {
+     if (!timed) return;
+@@ -2583,6 +2589,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+               }} />}
+           {tower && <TowerView rows={towerRows(towerSeats)} usage={towerUsage} now={now} onOpen={openPane} />}
+           {floor && <FloorView onOpen={openPane} />}
++          {space && <SpaceView projectId={projectFor(projectOf(activeDir))} projectName={(() => { const p = projects.find((x) => x.id === projectFor(projectOf(activeDir))); return p ? projectLabel(p) : ""; })()} openDirs={openDirs} />}
+           {agentsScreen && selected === null && (
+             <div className="empty">
+               <h2>Agents</h2>

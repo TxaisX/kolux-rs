@@ -1,0 +1,34 @@
+diff --git a/src/keys/actions.ts b/src/keys/actions.ts
+index 71429abb..3fb57f5d 100644
+--- a/src/keys/actions.ts
++++ b/src/keys/actions.ts
+@@ -99,6 +99,7 @@ export const actions: Action[] = [
+   a("account.switchCodex", "Switch Codex account", "global", [], { keywords: ["account", "sign in", "login"] }),
+   a("sidebar.sleeping.toggle", "Show or Hide Sleeping Workspaces", "global", [], { keywords: ["sleep", "asleep", "wake"] }),
+   a("view.floor", "Show Floor", "global", []),
++  a("view.space", "Show Space", "global", [], { keywords: ["disk", "worktrees", "size", "reclaim"] }),
+   a("view.code", "Show Code", "global", ["Mod+Shift+3"]),
+   a("floatingWorkspace.minimize", "Minimize Floating Workspace Panel", "global", []),
+   a("zoom.in", "Zoom In", "global", ["Mod+Equal", "Mod+Shift+Plus", "Mod+NumpadAdd"], { terminalSafe: true }),
+diff --git a/src/keys/keymap.test.ts b/src/keys/keymap.test.ts
+index 9876ca46..18fe9589 100644
+--- a/src/keys/keymap.test.ts
++++ b/src/keys/keymap.test.ts
+@@ -6,13 +6,13 @@ import { chordMatches, chordsOf, labelOf, labelParts, matchEvent, parseChord, re
+ 
+ const key = (k: Partial<KeyLike>): KeyLike => ({ key: "", code: "", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...k });
+ 
+-test("the table registers the 134 carried commands (VIEW-053 added one, T-546 added view.tower, T-246-c added the three ui.zoom keys, T-548 added the two account switches); 55 ship unbound (T-543-b unbound Reopen closed tab) and 6 have only a macOS chord", () => {
+-  expect(actions.length).toBe(134);
++test("the table registers the 135 carried commands (VIEW-053 added one, T-546 added view.tower, T-246-c added the three ui.zoom keys, T-548 added the two account switches, T-146-e added view.space); 56 ship unbound (T-543-b unbound Reopen closed tab) and 6 have only a macOS chord", () => {
++  expect(actions.length).toBe(135);
+   const ids = new Set(actions.map((a) => a.id));
+-  expect(ids.size).toBe(134);
++  expect(ids.size).toBe(135);
+   expect(ids.has("tab.newSimulator")).toBe(false);
+   expect(ids.has("tab.openQuickCommandsMenu")).toBe(false);
+-  expect(actions.filter((a) => a.win32.length === 0 && !a.darwin).length).toBe(55);
++  expect(actions.filter((a) => a.win32.length === 0 && !a.darwin).length).toBe(56);
+   expect(actions.filter((a) => a.win32.length === 0 && a.darwin).map((a) => a.id).sort()).toEqual(["floatingWorkspace.maximize", "sidebar.ports.toggle", "tab.newAgent", "tab.rename", "workspace.rename"].sort());
+   expect(actions.filter((a) => a.id.startsWith("tab.newAgent.")).length).toBe(35);
+ });
