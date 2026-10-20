@@ -9,6 +9,9 @@ use crate::git::{command, native, run, Git};
 
 #[path = "scm_watch.rs"]
 pub mod watch;
+// GIT-018 / GIT-020 / GIT-022 (T-228-d): the writer agents, branch naming and review text.
+#[path = "scm_writers.rs"]
+pub mod writers;
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path};
@@ -1193,10 +1196,8 @@ pub fn write_message(program: &Path, args: &[&str], dir: &Path, input: Option<&s
 
 /// GIT-017 / GIT-018: a commit message for what is staged in `worktree`, written by Claude Code, or
 /// by the user's own `command` when one is set, following their `instructions`.
-// ponytail: Claude Code with its default writing model; choosing another agent, a model or an effort
-// is T-228-d's.
 #[tauri::command]
-pub async fn scm_commit_message(worktree: String, command: Option<String>, instructions: Option<String>) -> Result<String, String> {
+pub async fn scm_commit_message(worktree: String, command: Option<String>, instructions: Option<String>, agent: Option<String>, model: Option<String>, effort: Option<String>) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = Path::new(&worktree);
         let diff = run(&["diff", "--cached", "--no-color", "--no-ext-diff"], Some(dir))?;
@@ -1216,8 +1217,30 @@ pub async fn scm_commit_message(worktree: String, command: Option<String>, instr
             let program = crate::agents::find_program(&words[0]).unwrap_or_else(|| std::path::PathBuf::from(&words[0]));
             return write_message(&program, &args.iter().map(String::as_str).collect::<Vec<_>>(), dir, input.as_deref(), &worktree, limit);
         }
-        let program = stand_in.or_else(|| crate::agents::find_program("claude")).ok_or("Claude Code was not found on this computer")?;
-        write_message(&program, &["-p", "--model", "sonnet"], dir, Some(&prompt), &worktree, limit)
+        let id = agent.as_deref().filter(|a| !a.is_empty()).unwrap_or("claude");
+        if id == "claude" {
+            if let Some(program) = stand_in {
+                let inv = writers::invocation(writers::spec("claude").ok_or("no writer")?, model.as_deref(), effort.as_deref(), &prompt);
+                return write_message(&program, &inv.args.iter().map(String::as_str).collect::<Vec<_>>(), dir, inv.input.as_deref(), &worktree, limit);
+            }
+        }
+        let spec = writers::spec(id).ok_or_else(|| format!("unknown writer {id}"))?;
+        let program = writers::program_of(spec).ok_or_else(|| format!("{} was not found on this computer", spec.name))?;
+        // An agent that takes the prompt as an argument gets a diff cut to fit the command line.
+        let prompt = if spec.prompt_in_args {
+            let room = writers::arg_limit(&program);
+            let mut budget = MESSAGE_BUDGET.min(room.saturating_sub(message_prompt("", instructions.as_deref().unwrap_or("")).len()));
+            let mut text = message_prompt(&trim_diff(&diff, budget), instructions.as_deref().unwrap_or(""));
+            while text.len() > room && budget > 200 {
+                budget = budget * 4 / 5;
+                text = message_prompt(&trim_diff(&diff, budget), instructions.as_deref().unwrap_or(""));
+            }
+            text
+        } else {
+            prompt
+        };
+        let inv = writers::invocation(spec, model.as_deref(), effort.as_deref(), &prompt);
+        write_message(&program, &inv.args.iter().map(String::as_str).collect::<Vec<_>>(), dir, inv.input.as_deref(), &worktree, limit)
     })
     .await
     .map_err(|e| e.to_string())?

@@ -268,7 +268,7 @@ export function IntegrationsPanel({ onCheck }: { onCheck: () => void }) {
 export function StopSetup({ stop, taskSource }: { stop: string; taskSource: boolean | null }) {
   const { settings, save } = useSettings();
   // The writer mode the switch had before it was turned off, so turning it on again puts that back.
-  const before = useRef<"claude" | "custom" | null>(null);
+  const before = useRef<string | null>(null);
   // The settings cards draw nothing until the saved settings have arrived (stopCard), so a switch or box
   // is never built from a guessed default and written back over what is saved.
   const card = stopCard(stop, { taskSource, settings });
@@ -310,7 +310,7 @@ export function StopSetup({ stop, taskSource }: { stop: string; taskSource: bool
           role="switch"
           checked={card.writer.mode !== "off"}
           onChange={(e) => {
-            if (!e.target.checked && card.writer.mode !== "off") before.current = card.writer.mode;
+            if (!e.target.checked && card.writer.mode !== "off") before.current = card.writer.mode === "agent" ? card.writer.agent : "custom";
             void save({ [WRITER_KEY]: e.target.checked ? writerBack(before.current, card.hasCommand) : "off" });
           }}
         />

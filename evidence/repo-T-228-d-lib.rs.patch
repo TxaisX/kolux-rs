@@ -1,0 +1,11 @@
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -483,6 +483,8 @@ pub fn run() {
+             scm::scm_prs_poll,
+             scm::scm_commit_message,
+             scm::scm_commit_message_stop,
++            scm::writers::scm_writer_options,
++            scm::writers::scm_name_branch,
+             scm::scm_task_detail,
+             scm::scm_repo_labels,
+             github::github_repo_parent,
