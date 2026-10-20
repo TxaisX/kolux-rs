@@ -260,6 +260,7 @@ const SUMMARIES: &[(&str, &str)] = &[
     ("terminal switch", "Bring a terminal into view and focus it."),
     ("terminal close", "Close a terminal, its tab, or every terminal in a worktree."),
     ("orchestration task-update", "Move a task to another state; its worker is settled with it."),
+    ("orchestration task-reset", "Release a task Kolux held back after three failed hand-outs; it lists ready again."),
     ("orchestration worker-abandon", "Give up on a worker; its task goes back to ready."),
     ("orchestration worker-stop", "End a worker's agent terminal and keep its worktree."),
     ("orchestration worker-list", "List workers with what is left of their terminals and the next command to run."),

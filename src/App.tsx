@@ -1463,8 +1463,15 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     for (const f of ready) {
       if (f.kind === "file-open") openFile(f.path);
       else openDiff(f.path, f.staged);
+      // T-250-c: tell the command line the tab is open (a file that never gets here is listed as skipped).
+      if (f.ack !== undefined) void invoke("cli_file_result", { id: f.ack, failed: null }).catch(() => undefined);
     }
   }, [cliFiles, activeDir]);
+  // T-250-c: while this window runs, the command line waits for its answers about the files it asked to open.
+  useEffect(() => {
+    void invoke("cli_file_window", { listening: true }).catch(() => undefined);
+    return () => void invoke("cli_file_window", { listening: false }).catch(() => undefined);
+  }, []);
   const cli = useRef({ startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, dropPane: (_k: number) => {} });
   cli.current = { startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, dropPane: (k: number) => dropPane(k) };
   // AUTO-011 (T-085-g): a run's own agent tab shuts by itself, once, when that agent exits, unless the user

@@ -900,3 +900,6 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · hooks T-035-c · spec/12 EDIT-041; this tree's own prompt_scan.rs (T-129-d), status.rs answer_keys (VIEW-025), terminal.rs attached/read/write (APP-052, CLI-024); the menu keys come from VIEW-025's Enter and the numbers the menus print themselves; no outside source
 > 2026-10-19 · hooks T-140-e · this tree's own hooks.rs (SESS-030 with_session, AUTO-012 feed) and automations.rs (on_status, RUNS_KEY); no outside source
 > 2026-10-20 · hooks T-156-b · spec/10 SAFE-016..020; this tree's own protected.rs (RULES, check, mask, reason, ASK_FIELD/OFF_FIELD), hooks.rs reply_body (SAFE-009), SafetyPage.tsx (SAFE-015), automations.rs now_ms; the regex crate's documented RegexBuilder size limits; no outside source
+> 2026-10-19 · cli T-250-c · rules from spec CLI-008/CLI-022 cards; macOS osascript administrator-prompt form from Apple's public Terminal/AppleScript documentation (developer.apple.com); this tree's own cli_register.rs and file_cli.rs; no outside code
+> 2026-10-19 · cli T-262-b · this tree's own cli.rs and agents/inventory.rs; no outside code
+> 2026-10-19 · cli T-279-d · this tree's own orchestration.rs (breaker_reset) and cli.rs; no outside code

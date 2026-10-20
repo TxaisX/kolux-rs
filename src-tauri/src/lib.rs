@@ -726,6 +726,8 @@ pub fn run() {
             cli::cli_register::cli_register_state,
             cli::cli_register::cli_register,
             cli::cli_register::cli_unregister,
+            cli::file_cli::cli_file_window,
+            cli::file_cli::cli_file_result,
             diag::diag_bundle,
             resources::recovery::ui_heartbeat,
             resources::recovery::graphics_crash_noted,
