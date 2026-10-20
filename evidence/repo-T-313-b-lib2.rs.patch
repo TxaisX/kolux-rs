@@ -1,0 +1,22 @@
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -66,6 +66,8 @@
+ mod prompt_scan;
+ mod scm;
+ mod scm_open;
++mod scm_recipe;
++mod scm_stack;
+ mod pr_review;
+ mod skills;
+ mod star;
+@@ -604,6 +606,10 @@
+             github::pull_requests::pr_merge,
+             pr_checkout::scm_push_target,
+             scm_open::scm_open_with,
++            scm_recipe::scm_recipe_commit,
++            scm_recipe::scm_recipe_fix,
++            scm_stack::scm_stack_create,
++            scm_stack::scm_stack_record,
+             pr_review::scm_stack_prs,
+             scm::scm_task_labels,
+             scm::scm_task_body,

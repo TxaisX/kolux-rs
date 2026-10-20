@@ -96,3 +96,20 @@ export function withRepoAi(settings: Record<string, unknown> | null, repo: strin
   else now[repo] = mode;
   return now;
 }
+
+// ---- running a recipe (T-313-b) -----------------------------------------------------------------
+// The expansion of {variables} and the composed command live on the Rust side (scm_recipe.rs); this
+// only picks the recipe an action runs and shapes what the front end hands to the app's own launch.
+
+/** The saved recipe an action runs, or null (then the single writer chosen in settings is used). */
+export function recipeFor(settings: Record<string, unknown> | null, action: RecipeAction): Recipe | null {
+  return recipesOf(settings?.[RECIPES_KEY])[action] ?? null;
+}
+
+/** The usual request Fix with AI starts an agent with. */
+export const fixRequest = (output: string): string => `A git action in this workspace failed. Find the cause, fix it, and finish the action.\n\nGit said:\n${output}`;
+
+/** What a Fix with AI recipe hands the app: the agent to start, its extra arguments and the request. */
+export type FixLaunch = { agent: string; extra: string[]; prompt: string };
+/** The back end's answer for Fix with AI: an agent to start, or the text a command template printed. */
+export type FixPlan = ({ kind: "agent" } & FixLaunch) | { kind: "ran"; text: string };

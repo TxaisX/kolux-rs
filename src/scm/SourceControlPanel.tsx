@@ -20,7 +20,7 @@ import { invoke } from "@tauri-apps/api/core";
 import Ask from "../chrome/Ask";
 import { ChevronDown, Close, FileCode, Funnel, List, Minus, Plus, Refresh, Spark, Stop, Undo } from "../chrome/icons";
 import { useSettings } from "../settings/useSettings";
-import { aiShownFor } from "./recipes";
+import { aiShownFor, fixRequest, recipeFor, type FixLaunch, type FixPlan } from "./recipes";
 import { dismissGenerate, generate, genState, genSubscribe, genVersion, stopGenerate, writerName, DEFAULT_WRITER, type Writer } from "./generate";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
@@ -42,7 +42,7 @@ type Props = {
   writer?: Writer;
   onClose: () => void;
   /** GIT-004: starts an agent primed with what git and its hooks printed. */
-  onFix: (output: string) => void;
+  onFix: (output: string, launch?: FixLaunch) => void;
   /** VIEW-068: the base pinned for the workspace's project, which the summary measures against. */
   pinnedBase: string | null;
   /** GIT-011: Change Base Ref pins a new base for the workspace's project (blank goes back to the default). */
@@ -139,7 +139,22 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
   // GIT-019: the generate and Fix with AI controls follow the global switch and this repository's own mode.
   const { settings: appSettings } = useSettings();
   const aiOn = aiShownFor(appSettings, ghRepo ? `${ghRepo.owner}/${ghRepo.name}` : null);
-  const canGenerate = aiOn && (writer.mode === "custom" || (writer.mode === "agent" && agents.some((a) => a.id === writer.agent && a.installed)));
+  // GIT-019: a recipe for the action wins over the single writer; the Rust side expands its variables.
+  const commitRecipe = recipeFor(appSettings, "commit");
+  const fixRecipe = recipeFor(appSettings, "fix");
+  const canGenerate = aiOn && (commitRecipe !== null || writer.mode === "custom" || (writer.mode === "agent" && agents.some((a) => a.id === writer.agent && a.installed)));
+  // GIT-019: Fix with AI through the fix recipe: an agent recipe starts that agent with its extra arguments
+  // (the app's own launch); a command template runs and what it printed is shown.
+  const fix = async (output: string) => {
+    if (fixRecipe === null || dir === null) return onFix(output);
+    try {
+      const plan = await invoke<FixPlan>("scm_recipe_fix", { worktree: dir, recipe: fixRecipe, output, prompt: fixRequest(output) });
+      if (plan.kind === "agent") onFix(output, { agent: plan.agent, extra: plan.extra, prompt: plan.prompt });
+      else setAgentError(plan.text);
+    } catch (e) {
+      setAgentError(String(e));
+    }
+  };
   // GIT-036: Explain changes starts an agent with a prompt about the commit.
   const explain = (c: Commit) => {
     const prompt = explainPrompt(c);
@@ -774,7 +789,7 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
                 ) : (
                   canGenerate &&
                   (status?.staged.length ?? 0) > 0 && (
-                    <button className="ib scm-gen" title={`Write the message from what is staged with ${writer.mode === "custom" ? "your command" : writerName(writer.agent)}`} aria-label="Write the message with AI" onClick={() => dir !== null && generate(dir, onDraft, writer)}>
+                    <button className="ib scm-gen" title={`Write the message from what is staged with ${writer.mode === "custom" ? "your command" : writerName(writer.agent)}`} aria-label="Write the message with AI" onClick={() => dir !== null && generate(dir, onDraft, writer, commitRecipe)}>
                       <Spark />
                     </button>
                   )
@@ -1027,7 +1042,7 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
                   </div>
                 )}
                 {aiOn && failure.fix !== null && !failure.policy && (
-                  <button className="btn" onClick={() => onFix(failure.fix ?? failure.output)}>
+                  <button className="btn" onClick={() => void fix(failure.fix ?? failure.output)}>
                     Fix with AI
                   </button>
                 )}
