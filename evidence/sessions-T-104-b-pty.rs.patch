@@ -1,0 +1,20 @@
+diff --git a/src-tauri/src/pty.rs b/src-tauri/src/pty.rs
+index df008117..2138f283 100644
+--- a/src-tauri/src/pty.rs
++++ b/src-tauri/src/pty.rs
+@@ -68,7 +68,14 @@ pub fn chosen_then_auto(chosen: Option<(String, Vec<String>)>, auto: Vec<(PathBu
+ /// when that folder exists, else the user profile.
+ pub fn shell_commands(cwd: Option<&str>, chosen: Option<(String, Vec<String>)>) -> Vec<CommandBuilder> {
+     let dir = cwd.map(PathBuf::from).or_else(home_dir);
+-    chosen_then_auto(chosen, auto_shells(crate::agents::find_program, std::env::var_os("ComSpec").map(PathBuf::from)))
++    let chain = if cfg!(windows) {
++        chosen_then_auto(chosen, auto_shells(crate::agents::find_program, std::env::var_os("ComSpec").map(PathBuf::from)))
++    } else {
++        // ACCT-065: a bare name is passed through alone; a missing full path falls back to zsh, bash, sh.
++        let login = std::env::var("SHELL").ok();
++        crate::shell_marks::unix_shell_chain(chosen.as_ref().map(|(c, a)| (c.as_str(), a.as_slice())), login.as_deref(), |p| p.is_file())
++    };
++    chain
+         .into_iter()
+         .map(|(program, args)| {
+             let mut c = CommandBuilder::new(program);

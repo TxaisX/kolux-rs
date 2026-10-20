@@ -1,0 +1,12 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 5d134431..8c35850c 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -64,6 +64,7 @@ mod schedule;
+ mod resume;
+ mod secrets;
+ mod sessions;
++mod shell_marks;
+ mod shell_history;
+ mod skill_delete;
+ mod state;
