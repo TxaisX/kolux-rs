@@ -4,6 +4,7 @@ mod activity;
 mod agents;
 mod artifacts;
 mod automations;
+mod badge;
 mod awake;
 mod capture;
 mod chat;
@@ -36,7 +37,9 @@ mod import;
 // T-043-e: the macOS keychain rule table; the Mac wiring that calls it is T-043-f.
 #[cfg_attr(not(test), allow(dead_code))]
 mod keychain;
+mod agent_creds;
 mod grok;
+mod grok_status;
 mod install;
 mod keybindings;
 mod kits;
@@ -54,6 +57,7 @@ mod protected;
 mod ports;
 mod resources;
 mod projects;
+mod prompt_scan;
 mod scm;
 mod pr_review;
 mod skills;
@@ -365,6 +369,7 @@ pub fn run() {
             settings_patch,
             notify,
             notifications::notification_test,
+            badge::badge_set,
             notifications::notification_sound_load,
             notifications::open_notification_settings,
             hooks::agent_hooks::agent_hooks_sync,
@@ -468,6 +473,10 @@ pub fn run() {
             agents::open_install_page,
             agents::inventory::session_tabs,
             orchestration::task_reset,
+            orchestration::worker_labels,
+            prompt_scan::prompt_scan,
+            prompt_scan::prompt_scan_restored,
+            prompt_scan::prompt_scan_pruned,
             pty::shell_list,
             tools::tools_check,
             tools::tools_dismiss,
@@ -490,6 +499,8 @@ pub fn run() {
             scm::scm_prs_poll,
             scm::scm_commit_message,
             scm::scm_commit_message_stop,
+            scm::writers::scm_writer_options,
+            scm::writers::scm_name_branch,
             scm::scm_task_detail,
             scm::scm_repo_labels,
             github::github_repo_parent,
@@ -525,6 +536,10 @@ pub fn run() {
             browser::browser_close,
             browser::browser_probe,
             browser::browser_diagnose,
+            browser::browser_tab,
+            browser::browser_annotate,
+            browser::preview::browser_preview,
+            browser::preview::browser_preview_of,
             automations::automations_list,
             automations::automation_set_enabled,
             automations::automation_delete,
@@ -558,6 +573,12 @@ pub fn run() {
             grok::grok_sign_in,
             grok::grok_cancel,
             grok::grok_key_set,
+            agent_creds::agent_creds_view,
+            agent_creds::codex_sessions_home_set,
+            agent_creds::minimax_credential_set,
+            agent_creds::minimax_credential_forget,
+            agent_creds::minimax_options_set,
+            agent_creds::gemini_cli_credentials_set,
             codex_accounts::codex_accounts,
             codex_accounts::codex_account_sign_in,
             codex_accounts::codex_account_cancel,

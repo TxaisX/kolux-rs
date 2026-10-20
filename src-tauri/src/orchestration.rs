@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
+/// ORCH-055 (T-174-b): prompts typed into agents land exactly once.
+pub mod sendonce;
+
 const KEY: &str = "orchestration.mail";
 pub const KINDS: &[&str] = &["status", "dispatch", "worker_done", "merge_ready", "escalation", "handoff", "decision_gate", "question", "heartbeat"];
 
@@ -150,7 +153,7 @@ pub(crate) fn finished(d: &Value) -> bool {
 
 /// The handle of a dispatch's terminal, while it can still be that terminal: handles count up
 /// again from term-1 when Kolux restarts, so one stamped by an earlier run of the app is no one.
-fn terminal_of(d: &Value) -> Option<String> {
+pub(crate) fn terminal_of(d: &Value) -> Option<String> {
     if d["runtime"].as_u64().is_some_and(|r| r != u64::from(std::process::id())) {
         return None;
     }
@@ -440,7 +443,8 @@ pub fn worker_list(tasks: &[Value], dispatches: &[Value], run: Option<&str>, fro
         .collect();
     let page: Vec<Value> = rows.iter().skip(start).take(limit).cloned().collect();
     let next = (start + limit < rows.len()).then(|| b64.encode(format!("{scope}|{}", start + limit)));
-    Ok(json!({ "workers": page, "nextCursor": next, "total": rows.len(), "scope": { "run": run, "from": from } }))
+    // T-129-d: the coordinator's own finished top-level work rides beside the rows (ORCH-037).
+    Ok(json!({ "workers": page, "nextCursor": next, "total": rows.len(), "scope": { "run": run, "from": from }, "finishedItems": finished_items(tasks, dispatches, run) }))
 }
 
 /// ORCH-025: keep a settled worker's terminal open on purpose. The mark lives on the stored
@@ -698,6 +702,49 @@ pub fn attention(d: &Value, live: &dyn Fn(&str) -> bool, hook: Option<&str>, now
     // A made-at below 1e12 is no wall clock time (worker-start stores elapsed ms), so it proves nothing.
     let last = d["lastBeatAt"].as_u64().or_else(|| d["created"].as_u64().filter(|c| *c >= 1_000_000_000_000))?;
     (now.saturating_sub(last) > STALE_MS).then(|| ("stale", format!("no heartbeat for over {} minutes", STALE_MS / 60_000)))
+}
+
+/// ORCH-037 (T-129-d): the coordinator's own top-level work that finished well, each a finished
+/// item that needs nothing: a task of `run` with no parent that is completed and was never
+/// dispatched to a worker (the coordinator did it itself). A worker's task finishing well is no
+/// item: its dispatch carries it, and `attention` raises nothing for it.
+pub fn finished_items(tasks: &[Value], dispatches: &[Value], run: Option<&str>) -> Vec<Value> {
+    tasks
+        .iter()
+        .filter(|t| run.is_none() || t["runId"].as_str() == run)
+        .filter(|t| t["status"] == "completed" && t["parent"].is_null())
+        .filter(|t| !dispatches.iter().any(|d| d["taskId"] == t["id"]))
+        .map(|t| json!({ "taskId": t["id"], "label": t["displayName"].as_str().or(t["title"].as_str()), "attention": "finished", "attentionWhy": "the coordinator's own work finished well; nothing is needed", "completedAt": t["updated"] }))
+        .collect()
+}
+
+#[cfg(test)]
+mod finished_items_tests {
+    use super::*;
+
+    #[test]
+    fn orch037_only_the_coordinators_own_top_level_work_finishing_well_is_a_finished_item() {
+        let tasks = vec![
+            json!({ "id": "task-own", "runId": "run-1", "status": "completed", "parent": null, "title": "Write the plan", "updated": 5 }),
+            json!({ "id": "task-worker", "runId": "run-1", "status": "completed", "parent": null, "title": "Build the page" }),
+            json!({ "id": "task-child", "runId": "run-1", "status": "completed", "parent": "task-own", "title": "A sub-step" }),
+            json!({ "id": "task-open", "runId": "run-1", "status": "dispatched", "parent": null }),
+            json!({ "id": "task-other-run", "runId": "run-2", "status": "completed", "parent": null, "displayName": "Elsewhere" }),
+        ];
+        let dispatches = vec![json!({ "id": "dispatch-1", "runId": "run-1", "taskId": "task-worker", "status": "completed", "terminal": 4 })];
+        let items = finished_items(&tasks, &dispatches, Some("run-1"));
+        assert_eq!(items.len(), 1, "the worker's task, the sub-step, the open task and another Run's task are no items: {items:?}");
+        assert_eq!((items[0]["taskId"].as_str(), items[0]["label"].as_str(), items[0]["attention"].as_str(), items[0]["completedAt"].as_u64()), (Some("task-own"), Some("Write the plan"), Some("finished"), Some(5)));
+        // The worker finishing well raises no attention flag of its own.
+        assert_eq!(attention(&dispatches[0], &|_| true, None, 1_700_000_000_000), None);
+        // Every Run: the other Run's own work shows too, labelled by its display name.
+        let all = finished_items(&tasks, &dispatches, None);
+        assert_eq!(all.iter().map(|i| i["label"].as_str().unwrap_or_default()).collect::<Vec<_>>(), ["Write the plan", "Elsewhere"]);
+        // worker-list carries the items beside its rows, so a coordinator reading its workers sees them.
+        let listed = worker_list(&tasks, &dispatches, Some("run-1"), "term-1", None, None, 10, &|_| true).unwrap();
+        assert_eq!(listed["finishedItems"][0]["taskId"], "task-own");
+        assert_eq!(listed["workers"].as_array().map(Vec::len), Some(1));
+    }
 }
 
 /// ORCH-066: what a worker's row reads as: the task's display name, else its title, else a one-line

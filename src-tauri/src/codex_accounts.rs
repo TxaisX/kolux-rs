@@ -354,7 +354,7 @@ pub fn codex_accounts(store: tauri::State<'_, Mutex<Store>>, sign_ins: tauri::St
         Ok(mut seen) => accounts.iter().filter(|a| missing_now(&mut seen, &a.id, Path::new(&a.home).join("auth.json").exists(), std::time::Instant::now())).map(|a| a.id.clone()).collect(),
         Err(_) => Vec::new(),
     };
-    let settings_warning = user_dir(env.as_deref(), user.as_deref()).and_then(|u| user_settings(&u).err());
+    let settings_warning = user_dir(env.as_deref(), user.as_deref()).and_then(|u| settings_problem(&u));
     Ok(CodexView {
         settings_warning,
         drifted,
@@ -517,6 +517,109 @@ fn user_settings(user: &Path) -> Result<toml_edit::DocumentMut, String> {
     text.parse().map_err(|_| "Codex's settings file is not valid TOML, so the accounts keep the settings they had.".to_string())
 }
 
+/// ACCT-021: where an older release kept its one shared Codex home (the old app's roaming folder).
+pub fn legacy_home(roaming: Option<&Path>) -> Option<PathBuf> {
+    roaming.map(|r| r.join("kolux").join("codex-runtime-home"))
+}
+
+/// ACCT-021: the settings the accounts are given. The user's own come first; only when those are
+/// missing or empty, the shared settings an older release left are read instead (read only, without
+/// its hook entries or notify command, which belonged to that release's own hooks).
+/// ponytail: only the older home's settings file is read; its sign-in and sessions are ACCT-026's.
+fn settings_source(user: &Path, legacy: Option<&Path>) -> Result<toml_edit::DocumentMut, String> {
+    let own = user_settings(user);
+    let Err(why) = &own else { return own };
+    if !(why.contains("no settings file") || why.contains("is empty")) {
+        return own;
+    }
+    let older = legacy.and_then(|l| fs::read_to_string(l.join("config.toml")).ok()).filter(|t| !t.trim().is_empty());
+    let Some(mut doc) = older.and_then(|t| t.parse::<toml_edit::DocumentMut>().ok()) else { return own };
+    doc.remove("hooks");
+    doc.remove("notify");
+    Ok(doc)
+}
+
+/// ACCT-021: why the settings cannot be copied into the accounts from this machine, if they
+/// cannot (the older release's shared settings count as a source).
+pub fn settings_problem(user: &Path) -> Option<String> {
+    let roaming = std::env::var_os("APPDATA").map(PathBuf::from);
+    settings_source(user, legacy_home(roaming.as_deref()).as_deref()).err()
+}
+
+/// What an account's home is given from the user's own Codex folder besides the settings file:
+/// folders of skills, plugins, custom prompts and rules, and the user's global instruction files.
+/// A fixed list, so a sign-in file, a session or a log is never reachable from here.
+const SHARED_DIRS: [&str; 4] = ["skills", "plugins", "prompts", "rules"];
+const SHARED_FILES: [&str; 2] = ["AGENTS.md", "AGENTS.override.md"];
+/// How long one launch spends copying before it goes on (the rest follows at the next launch).
+pub const SHARE_LIMIT: Duration = Duration::from_secs(2);
+
+/// ACCT-021: copies one file when the user's is newer than the home's (or the home has none yet),
+/// and gives the copy the user's modified time so an untouched file is skipped next time.
+fn share_file(from: &Path, to: &Path) -> std::io::Result<bool> {
+    let mine = fs::metadata(from)?.modified()?;
+    if fs::metadata(to).and_then(|m| m.modified()).is_ok_and(|theirs| theirs >= mine) {
+        return Ok(false);
+    }
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(from, to)?;
+    fs::File::options().write(true).open(to)?.set_modified(mine)?;
+    Ok(true)
+}
+
+/// Copies a folder's files and sub-folders across; links are skipped, never followed.
+fn share_tree(from: &Path, to: &Path, deadline: std::time::Instant, copied: &mut usize) -> std::io::Result<()> {
+    for entry in fs::read_dir(from)? {
+        if std::time::Instant::now() >= deadline {
+            return Ok(());
+        }
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let target = to.join(entry.file_name());
+        if kind.is_dir() {
+            share_tree(&entry.path(), &target, deadline, copied)?;
+        } else if kind.is_file() && share_file(&entry.path(), &target)? {
+            *copied += 1;
+        }
+    }
+    Ok(())
+}
+
+/// ACCT-021: before a launch, the user's own Codex skills, plugins, prompts, rules and global
+/// instructions are made available inside an account's home. The home's own sign-in, sessions and
+/// settings are never touched: nothing outside the fixed lists above is read, and a file the home
+/// has changed since is kept. Returns how many files were copied; the first problem is the
+/// warning, and the rest is still tried.
+pub fn share_user_files(user: &Path, home: &Path, deadline: std::time::Instant) -> Result<usize, String> {
+    let mut copied = 0;
+    let mut problem = None;
+    if !home.is_dir() || user == home {
+        return Ok(0);
+    }
+    let mut note = |what: &str, e: std::io::Error| problem = problem.take().or(Some(format!("Codex's {what} could not be shared with the accounts (antivirus or another program may have a file locked): {e}")));
+    for name in SHARED_DIRS {
+        let from = user.join(name);
+        if from.is_dir() {
+            if let Err(e) = share_tree(&from, &home.join(name), deadline, &mut copied) {
+                note(name, e);
+            }
+        }
+    }
+    for name in SHARED_FILES {
+        let from = user.join(name);
+        if from.is_file() && std::time::Instant::now() < deadline {
+            match share_file(&from, &home.join(name)) {
+                Ok(true) => copied += 1,
+                Ok(false) => {}
+                Err(e) => note(name, e),
+            }
+        }
+    }
+    problem.map_or(Ok(copied), Err)
+}
+
 /// ACCT-021: before a launch, the user's Codex settings are copied into an account's home. The
 /// home keeps Kolux's sign-in line, the project trust Codex wrote there and Kolux's hook trust
 /// (the home's entry wins). True when the home's file changed; an error is the warning to show,
@@ -524,7 +627,19 @@ fn user_settings(user: &Path) -> Result<toml_edit::DocumentMut, String> {
 /// ponytail: a trust entry Codex writes between the last read and the rename is lost; the file is
 /// read again just before writing and the copy redone up to three times, a file lock if that shows.
 pub fn sync_settings(user: &Path, home: &Path) -> Result<bool, String> {
-    let mut doc = user_settings(user)?;
+    let shared = share_user_files(user, home, std::time::Instant::now() + SHARE_LIMIT);
+    let roaming = std::env::var_os("APPDATA").map(PathBuf::from);
+    let changed = sync_settings_from(user, legacy_home(roaming.as_deref()).as_deref(), home);
+    // The settings result leads; a skills copy that failed is the warning when the settings were fine.
+    match (changed, shared) {
+        (Ok(c), Ok(_)) => Ok(c),
+        (Ok(_), Err(e)) | (Err(e), _) => Err(e),
+    }
+}
+
+/// `sync_settings` for the settings alone, with the older release's shared home handed in.
+fn sync_settings_from(user: &Path, legacy: Option<&Path>, home: &Path) -> Result<bool, String> {
+    let mut doc = settings_source(user, legacy)?;
     doc["cli_auth_credentials_store"] = toml_edit::value("file");
     let file = home.join("config.toml");
     for _ in 0..3 {
@@ -668,7 +783,7 @@ mod tests {
         fs::create_dir_all(&user).unwrap();
         fs::create_dir_all(&home).unwrap();
         fs::write(home.join("config.toml"), HOME_CONFIG).unwrap();
-        let warn = |w: &str| sync_settings(&user, &home).unwrap_err().contains(w);
+        let warn = |w: &str| sync_settings_from(&user, None, &home).unwrap_err().contains(w);
         assert!(warn("no settings file"));
         fs::write(user.join("config.toml"), " \n").unwrap();
         assert!(warn("is empty"));
@@ -979,5 +1094,114 @@ mod tests {
         let (got, took) = rx.recv_timeout(Duration::from_secs(20)).expect("ready_home never gave up waiting");
         assert_eq!(got, Ok(None));
         assert!(took >= wait, "gave up after {took:?}, before the {wait:?} wait was up");
+    }
+
+    fn put(file: &Path, text: &str, age_secs: u64) {
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, text).unwrap();
+        let at = std::time::SystemTime::now() - Duration::from_secs(age_secs);
+        fs::File::options().write(true).open(file).unwrap().set_modified(at).unwrap();
+    }
+
+    fn read(file: &Path) -> Option<String> {
+        fs::read_to_string(file).ok()
+    }
+
+    // ACCT-021: the user's skills, plugins, prompts, rules and instructions reach the account's
+    // home; its sign-in, sessions and anything outside the fixed lists are never copied or touched;
+    // a later edit is picked up; a file the home changed since is kept.
+    #[test]
+    fn acct_021_the_users_skills_and_plugins_reach_the_home_without_its_sign_in_or_sessions() {
+        let dir = crate::test_dir::temp("codex-share");
+        let (user, home) = (dir.join("user"), dir.join("home"));
+        for (name, text) in [("skills/review/SKILL.md", "skill"), ("skills/review/refs/a.md", "ref"), ("plugins/p/plugin.json", "plug"), ("prompts/fix.md", "prompt"), ("rules/default.rules", "rule"), ("AGENTS.md", "mine")] {
+            put(&user.join(name), text, 600);
+        }
+        for name in ["auth.json", ".credentials.json", "sessions/2026/s.jsonl", "history.jsonl", "log/l.txt", "config.toml", "installation_id"] {
+            put(&user.join(name), "USER-PRIVATE", 600);
+        }
+        put(&home.join("auth.json"), "home-sign-in", 600);
+        put(&home.join("sessions/h.jsonl"), "home-session", 600);
+        let later = std::time::Instant::now() + Duration::from_secs(60);
+        assert_eq!(share_user_files(&user, &home, later), Ok(6));
+        assert_eq!(read(&home.join("skills/review/refs/a.md")).as_deref(), Some("ref"));
+        assert_eq!(read(&home.join("AGENTS.md")).as_deref(), Some("mine"));
+        assert_eq!(read(&home.join("rules/default.rules")).as_deref(), Some("rule"));
+        for name in [".credentials.json", "sessions/2026/s.jsonl", "history.jsonl", "log/l.txt", "config.toml", "installation_id"] {
+            assert!(!home.join(name).exists(), "{name} must not be copied");
+        }
+        assert_eq!(read(&home.join("auth.json")).as_deref(), Some("home-sign-in"), "the home's own sign-in stays");
+        assert_eq!(read(&home.join("sessions/h.jsonl")).as_deref(), Some("home-session"));
+        assert_eq!(share_user_files(&user, &home, later), Ok(0), "nothing new: nothing is copied again");
+        // The user edits a skill: it is picked up. Codex edits another file in the home: kept.
+        put(&user.join("skills/review/SKILL.md"), "skill v2", 10);
+        put(&user.join("prompts/fix.md"), "prompt v2", 700);
+        put(&home.join("prompts/fix.md"), "home edit", 5);
+        assert_eq!(share_user_files(&user, &home, later), Ok(1));
+        assert_eq!(read(&home.join("skills/review/SKILL.md")).as_deref(), Some("skill v2"));
+        assert_eq!(read(&home.join("prompts/fix.md")).as_deref(), Some("home edit"));
+        // A folder the user has not got, a home that is not there and a home that is the user's own are no-ops.
+        assert_eq!(share_user_files(&dir.join("nobody"), &home, later), Ok(0));
+        assert_eq!(share_user_files(&user, &dir.join("no-home"), later), Ok(0));
+        assert!(!dir.join("no-home").exists(), "a missing home is never created for this");
+        assert_eq!(share_user_files(&user, &user, later), Ok(0));
+    }
+
+    // ACCT-021: a launch spends only so long copying; the rest follows at the next one.
+    #[test]
+    fn acct_021_a_copy_that_is_out_of_time_stops_and_the_next_launch_finishes_it() {
+        let dir = crate::test_dir::temp("codex-share-time");
+        let (user, home) = (dir.join("user"), dir.join("home"));
+        put(&user.join("skills/a/SKILL.md"), "a", 60);
+        fs::create_dir_all(&home).unwrap();
+        assert_eq!(share_user_files(&user, &home, std::time::Instant::now()), Ok(0));
+        assert!(!home.join("skills").exists());
+        assert_eq!(share_user_files(&user, &home, std::time::Instant::now() + Duration::from_secs(60)), Ok(1));
+    }
+
+    // ACCT-021: with no usable settings file of their own, the shared settings an older release
+    // left are read (without its hook entries); a file that exists is never second-guessed.
+    #[test]
+    fn acct_021_shared_settings_left_by_an_older_release_still_count() {
+        let dir = crate::test_dir::temp("codex-legacy");
+        let (user, old, home) = (dir.join("user"), dir.join("roaming/kolux/codex-runtime-home"), dir.join("home"));
+        fs::create_dir_all(&user).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        assert_eq!(legacy_home(Some(&dir.join("roaming"))), Some(old.clone()));
+        assert_eq!(legacy_home(None), None);
+        let legacy = Some(old.as_path());
+        assert!(sync_settings_from(&user, legacy, &home).unwrap_err().contains("no settings file"), "no older home: the plain warning");
+        put(&old.join("config.toml"), "model = \"o3\"\nnotify = [\"old-hook\"]\n[hooks.state]\nk = 1\n[tui]\nnotifications = true\n", 60);
+        assert_eq!(sync_settings_from(&user, legacy, &home), Ok(true));
+        let doc: toml_edit::DocumentMut = read(&home.join("config.toml")).unwrap().parse().unwrap();
+        assert_eq!((doc["model"].as_str(), doc["tui"]["notifications"].as_bool()), (Some("o3"), Some(true)));
+        assert!(doc.get("hooks").is_none() && doc.get("notify").is_none(), "the older release's hook entries stay behind");
+        assert_eq!(doc["cli_auth_credentials_store"].as_str(), Some("file"));
+        put(&user.join("config.toml"), " \n", 30);
+        assert_eq!(sync_settings_from(&user, legacy, &home), Ok(false), "an empty file of their own falls back too");
+        put(&user.join("config.toml"), "model = \"o4\"\n", 20);
+        assert_eq!(sync_settings_from(&user, legacy, &home), Ok(true));
+        assert!(!read(&home.join("config.toml")).unwrap().contains("o3"), "their own file wins once it has content");
+        fs::remove_file(user.join("config.toml")).unwrap();
+        fs::create_dir_all(user.join("config.toml")).unwrap();
+        assert!(sync_settings_from(&user, legacy, &home).unwrap_err().contains("could not be read"), "a locked file is not papered over");
+        put(&old.join("config.toml"), "model = \n", 60);
+        fs::remove_dir(user.join("config.toml")).unwrap();
+        assert!(sync_settings_from(&user, legacy, &home).unwrap_err().contains("no settings file"), "a broken older file is the plain warning");
+    }
+
+    // ACCT-024: a Codex pane reattaching to a session that is already running is never held back
+    // for sign-in. The wait lives only in the start path; the attach command must not reach it.
+    #[test]
+    fn acct_024_reattaching_to_a_running_session_never_waits_for_a_sign_in() {
+        let source = include_str!("terminal.rs");
+        let from = source.find("pub fn terminal_attach(").expect("the attach command is in terminal.rs");
+        let body = &source[from..];
+        let body = &body[..body.find("\n}").expect("the attach command ends")];
+        for waits in ["codex_accounts", "ready_home", "wait_home", "SIGN_IN_WAIT", "auth.json"] {
+            assert!(!body.contains(waits), "the attach command reaches the sign-in wait through {waits}");
+        }
+        let start = source.find("pub async fn terminal_spawn(").expect("the start command is in terminal.rs");
+        assert!(source[start..].contains("ready_home("), "the wait is still the start path's");
     }
 }

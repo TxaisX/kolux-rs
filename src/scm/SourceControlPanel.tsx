@@ -19,7 +19,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type Re
 import { invoke } from "@tauri-apps/api/core";
 import Ask from "../chrome/Ask";
 import { ChevronDown, Close, FileCode, Funnel, List, Minus, Plus, Refresh, Spark, Stop, Undo } from "../chrome/icons";
-import { dismissGenerate, generate, genState, genSubscribe, genVersion, stopGenerate, type Writer } from "./generate";
+import { dismissGenerate, generate, genState, genSubscribe, genVersion, stopGenerate, writerName, DEFAULT_WRITER, type Writer } from "./generate";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
 import { watchStatus } from "./watch";
@@ -97,7 +97,7 @@ type Failure = { title: string; output: string; fix?: string | null; policy?: bo
 type Composer = { title: string; body: string; base: string; draft: boolean; error: string | null; busy: boolean };
 
 // VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
-export default function SourceControlPanel({ dir, writer = { mode: "claude", command: null, instructions: "" }, draft, onDraft, onClose, onFix, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr, view = "list", onView, onOpenDiff, diffSplit = "here", onDiffSplit, onAllChanges, notesSection }: Props) {
+export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft, onDraft, onClose, onFix, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr, view = "list", onView, onOpenDiff, diffSplit = "here", onDiffSplit, onAllChanges, notesSection }: Props) {
   const [asking, setAsking] = useState<Asking | null>(null);
   // GIT-003: the rows waiting for a yes before their work is thrown away.
   const [discardingRows, setDiscardingRows] = useState<Change[] | null>(null);
@@ -132,7 +132,7 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
   // GIT-017: Claude Code writes the message from what is staged; the run belongs to this worktree.
   useSyncExternalStore(genSubscribe, genVersion);
   const gen = dir === null ? null : genState(dir);
-  const canGenerate = writer.mode === "custom" || (writer.mode === "claude" && agents.some((a) => a.id === "claude" && a.installed));
+  const canGenerate = writer.mode === "custom" || (writer.mode === "agent" && agents.some((a) => a.id === writer.agent && a.installed));
   // GIT-036: Explain changes starts an agent with a prompt about the commit.
   const explain = (c: Commit) => {
     const prompt = explainPrompt(c);
@@ -756,7 +756,7 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
                 ) : (
                   canGenerate &&
                   (status?.staged.length ?? 0) > 0 && (
-                    <button className="ib scm-gen" title={`Write the message from what is staged with ${writer.mode === "custom" ? "your command" : "Claude Code"}`} aria-label="Write the message with AI" onClick={() => dir !== null && generate(dir, onDraft, writer)}>
+                    <button className="ib scm-gen" title={`Write the message from what is staged with ${writer.mode === "custom" ? "your command" : writerName(writer.agent)}`} aria-label="Write the message with AI" onClick={() => dir !== null && generate(dir, onDraft, writer)}>
                       <Spark />
                     </button>
                   )

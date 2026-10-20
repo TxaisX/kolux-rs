@@ -1016,7 +1016,7 @@ mod tests {
         let repo = base.join("r");
         fs::create_dir_all(&repo).unwrap();
         let g = |args: &[&str], dir: &Path| {
-            let out = std::process::Command::new("git").args(args).current_dir(dir).output().unwrap();
+            let out = { use std::os::windows::process::CommandExt; std::process::Command::new("git").args(args).current_dir(dir).creation_flags(0x0800_0000).output().unwrap() };
             assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
         };
         g(&["init", "-q", "-b", "main"], &repo);

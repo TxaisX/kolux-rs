@@ -8,6 +8,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ArrowLeft, ArrowRight, Bell, Clock, Close, Dots, Mark, Maximize, Minimize, PanelLeft, PanelRight, Restore, Search } from "./icons";
 import { Kbd } from "../keys/KeymapContext";
 import UsagePill from "../usage/UsagePill";
+import AccountSwitcher from "../switcher/AccountSwitcher";
 import { weeklyOf } from "../usage/claude";
 import { usePlan } from "../usage/plan";
 import { popAppMenu } from "./useChrome";
@@ -151,6 +152,7 @@ export default function TopBar({ screen, classic = false, sidebarWidth, onScreen
         <button className="ib bell" aria-label="Notifications" title="Inbox" aria-pressed={screen === "inbox"} onClick={() => onScreen(screen === "inbox" ? "terminals" : "inbox")}>
           <Bell />
         </button>
+        <AccountSwitcher />
         <UsagePill hidden={!anyPill} claudeOn={claudeOn} codexOn={codexOn} />
         <div className="wc">
           <button title="Minimize" onClick={() => win().minimize()}>
