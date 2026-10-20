@@ -5,11 +5,13 @@
 // confirms with what goes and where linked content stays, then shows each skill's outcome.
 // SKILL-020: each row's actions (View details, Reveal file, Copy path, Delete) and a details dialog
 // with the AIs that see the skill, when it was updated and its path; Delete goes through SKILL-022.
+// SKILL-024 / SKILL-026: SkillUpdate shows the out-of-date notice and the background update dialog.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Close, Dots, Funnel, Refresh } from "../chrome/icons";
 import { locale } from "../language";
 import Ask from "../chrome/Ask";
+import SkillUpdate from "./SkillUpdate";
 import { AGENT_FILTERS, COPIED, COPY_FAILED, MAX_DELETE, ROW_ACTIONS, actionBlocked, seenBy, NO_DESCRIPTION, NO_FILTERS, QUERY_LIMIT, SOURCES, dateText, eligible, escapeCloses, filtersOn, keepChosen, outcomeText, pickOf, rootState, shortPath, sourceCounts, sumUp, viewOf, visible, whyNot, type Done, type Filters, type Planned, type RowAction, type Scan, type Skill } from "./skills";
 
 type Asking = { kind: "confirm"; plan: Planned[] } | { kind: "done"; done: Done[] } | { kind: "error"; text: string };
@@ -274,6 +276,7 @@ export default function SkillsPage({ workspace, onClose }: Props) {
           {toast}
         </div>
       )}
+      <SkillUpdate workspace={workspace} onChanged={() => load(true)} bundled={skills.filter((s) => s.source === "bundled").map((s) => s.name)} />
       {tooLong && <div className="skills-note" role="status">That search is too long; searches are at most {QUERY_LIMIT} characters.</div>}
 
       <div className="skills-body">

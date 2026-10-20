@@ -3,7 +3,7 @@
 // XMLHttpRequest made to throw.
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { URL_CAP, type FeedbackFacts } from "../settings/privacy";
-import { block, closed, issue, MARK, reduce, typedText, withBlock } from "./model";
+import { block, closed, issue, MARK, reduce, tabTarget, typedText, withBlock } from "./model";
 
 const facts: FeedbackFacts = { version: "0.1.0", platform: "Win32", release: "Windows 10.0.26200", arch: "x86_64", login: "octo-fake" };
 
@@ -171,4 +171,11 @@ test("fix1: closing the box with a report typed keeps it for the next open, a se
   expect(typedText(reduce(sent, { t: "open", facts }).draft)).toBe("");
   // an empty box stays empty
   expect(typedText(reduce(reduce(reduce(closed, { t: "open", facts }), { t: "close" }), { t: "open", facts }).draft)).toBe("");
+});
+
+// APP-037 review item: the box is modal, so Tab stays inside it and wraps at both ends.
+test("tab order wraps inside the box and starts at an end when nothing inside has focus", () => {
+  expect([0, 1, 2, 3].map((at) => tabTarget(4, at, false))).toEqual([1, 2, 3, 0]);
+  expect([0, 1, 2, 3].map((at) => tabTarget(4, at, true))).toEqual([3, 0, 1, 2]);
+  expect([tabTarget(4, -1, false), tabTarget(4, -1, true), tabTarget(0, 0, false)]).toEqual([0, 3, -1]);
 });

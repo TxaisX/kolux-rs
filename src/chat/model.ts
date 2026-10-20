@@ -84,6 +84,22 @@ export function pickChat<P extends { key: number }>(panes: P[], focused: number 
  * waits as "starting": its terminal shows, with no Show terminal switch. */
 export const SHELL_OFFER: Offer = { chat: false, back: false, chooser: false };
 
+/** What Rust `chat_support` says about a pane: the agent it goes by (T-050-c: the one detected in
+ * front of the pane's terminal, else the launch record), whether the launch is still coming up, and
+ * whether a transcript home for that agent exists here. */
+export type Support = { agent?: string; launching: boolean; readable: boolean };
+
+/** T-050-c (VIEW-019): a pane's offer on the Agents screen from what is live in it. The agent in
+ * `support` already weighs the detected agent over the launch record, so a shell where the user
+ * typed `claude`, an orchestrator worker and a typed-command pane (program null) offer chat once an
+ * agent is in front and go back to the terminal when it exits; a launch whose program changed
+ * follows the new agent. Only a pane Kolux started a program in can be "starting": a shell with
+ * nothing in front is a plain shell, never the chooser. */
+export function liveOffer(program: string | null | undefined, title: string | undefined, support: Support): Offer & { agent?: string } {
+  const launching = support.launching && program != null;
+  return { agent: support.agent, ...chatOffer({ credited: support.agent, title, screen: "agents", switchOn: false, showingChat: false, launching, readable: support.readable }) };
+}
+
 /** T-050-b (VIEW-019): what the Agents screen's body shows for what pickChat chose. "chat": the
  * chat with the Show terminal switch off; "terminal": the terminal with the switch on (the user
  * forced it for this session); "starting": the launch line; "none": the terminal and no switch. */

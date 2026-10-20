@@ -3,8 +3,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { ITerminalOptions } from "@xterm/xterm";
-import { monoFont } from "../theme";
+import { monoFont, SPAN } from "../theme";
 import { fontStack } from "../settings/fonts";
+import { applyInput } from "./inputWire";
 
 export const FIELDS = {
   size: "terminalFontSize",
@@ -25,7 +26,8 @@ export const FIELDS = {
 /** SET-026: the saved default shell (Windows); "auto" tries PowerShell 7, then Windows PowerShell. */
 export const DEFAULT_SHELL_FIELD = "defaultShell";
 
-export const SIZE = { min: 10, max: 24, start: 14 };
+/** One size rule for both cards (coordinator call 2026-10-19): the Appearance span, 8 to 32, default 13. */
+export const SIZE = { min: SPAN.termSize[0], max: SPAN.termSize[1], start: SPAN.termSize[2] };
 export const LINE_HEIGHT = { min: 1, max: 2, start: 1 };
 export const SCROLLBACK = { min: 0, max: 100_000, start: 1000 };
 export const WEIGHTS = ["normal", "bold", "100", "200", "300", "400", "500", "600", "700", "800", "900"] as const;
@@ -106,6 +108,7 @@ export const TEXT_EVENT = "kolux-terminal-text";
 
 export function applyText(s: Record<string, unknown> | null | undefined): void {
   current = readText(s ?? {});
+  applyInput(s); // T-247-d: the input preferences ride the same settings reads
   if (typeof window !== "undefined") window.dispatchEvent(new Event(TEXT_EVENT));
 }
 

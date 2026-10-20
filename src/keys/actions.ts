@@ -94,6 +94,9 @@ export const actions: Action[] = [
   a("floatingWorkspace.maximize", "Maximize Floating Workspace Panel", "global", [], { darwin: ["Mod+Alt+Shift+A"] }),
   a("view.inbox", "Show Inbox", "global", []),
   a("view.tower", "Show Tower", "global", []),
+  // T-548 (OD-11): one key moves new panes to the provider's next account; unbound until Txais picks a chord.
+  a("account.switchClaude", "Switch Claude account", "global", [], { keywords: ["account", "sign in", "login"] }),
+  a("account.switchCodex", "Switch Codex account", "global", [], { keywords: ["account", "sign in", "login"] }),
   a("sidebar.sleeping.toggle", "Show or Hide Sleeping Workspaces", "global", [], { keywords: ["sleep", "asleep", "wake"] }),
   a("view.floor", "Show Floor", "global", []),
   a("view.code", "Show Code", "global", ["Mod+Shift+3"]),
@@ -134,7 +137,7 @@ export const actions: Action[] = [
   a("browser.focusAddressBar", "Focus Browser Address Bar", "browser", ["Mod+L"]),
   a("browser.grabElement", "Grab Page Element", "browser", ["Mod+C"]),
   a("editor.find", "Find in editor", "editor", ["Mod+F"]),
-  a("editor.replace", "Replace in editor", "editor", ["Mod+H"]),
+  a("editor.replace", "Replace in editor", "editor", ["Mod+H"], { darwin: ["Mod+Alt+F"] }),
   a("editor.save", "Save File", "editor", ["Mod+S"]),
   a("editor.markdownPreview", "Show Markdown Preview", "editor", ["Mod+Shift+V"]),
   a("editor.toggleWordWrap", "Toggle Word Wrap", "editor", ["Alt+Z"]),

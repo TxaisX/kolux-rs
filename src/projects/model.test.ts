@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead } from "./model";
+import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, splitGitSaid, type Linked, type PendingCreate, type PrHead } from "./model";
 
 const main: Worktree = { path: "C:\\src\\app", branch: "main", head: "aaaaaaa1", isMain: true };
 const zeta: Worktree = { path: "C:\\ws\\app\\zeta", branch: "zeta", head: "bbbbbbb2", isMain: false };
@@ -218,4 +218,10 @@ test("SESS-038: what a create cancelled mid-submit tells the user", () => {
   expect(stoppedNote("login", "cancelled: a newer workspace creation took its place, but its folder could not be removed: busy")).toEqual({ kind: "warn", text: "Stopped creating login, but its folder could not be removed: busy" });
   expect(stoppedNote("login", "fatal: invalid reference: x")).toEqual({ kind: "warn", text: "login: fatal: invalid reference: x" });
   expect(stoppedNote("login", null)).toEqual({ kind: "warn", text: "login was already made when the cancel arrived, so it stays; delete it if you do not want it." });
+});
+
+test("PROJ-031: a failed create splits into Kolux's words and Git's full output", () => {
+  const raw = "The workspace could not be made: that name is in use. Choose another." + "\nGit said: fatal: 'x' already exists" + "\nsecond line";
+  expect(splitGitSaid(raw)).toEqual({ summary: "The workspace could not be made: that name is in use. Choose another.", git: "fatal: 'x' already exists\nsecond line" });
+  expect(splitGitSaid("plain")).toEqual({ summary: "plain", git: null });
 });

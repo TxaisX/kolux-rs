@@ -86,3 +86,10 @@ export function reduce(s: State, a: Act): State {
       return { ...s, open: false };
   }
 }
+
+/** Which of `count` controls takes focus when Tab (Shift+Tab: `shift`) leaves control `at` (-1: none): focus wraps at both ends. */
+export function tabTarget(count: number, at: number, shift: boolean): number {
+  if (count <= 0) return -1;
+  if (at < 0) return shift ? count - 1 : 0;
+  return (at + (shift ? count - 1 : 1)) % count;
+}

@@ -81,6 +81,9 @@ const waiting = new Map<string, Spot & { at: number }>();
 const listeners = new Set<() => void>();
 const FRESH_MS = 10_000;
 
+/** T-222-c (TERM-093): a printed path:line names a line only; the spot is that line's start. */
+export const jumpSpot = (line: number): Spot => ({ line, col: 0, len: 0 });
+
 export function revealAt(path: string, spot: Spot) {
   waiting.set(keyOf(path), { ...spot, at: Date.now() });
   listeners.forEach((f) => f());

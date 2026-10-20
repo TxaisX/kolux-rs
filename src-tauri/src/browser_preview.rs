@@ -180,8 +180,6 @@ fn serve(mut s: TcpStream) {
 
 /// The front end asks for a document's preview address (a drop or a menu); the command line goes
 /// through `add` itself.
-// Registered by evidence/browser-T-241-lib.rs.patch (lib.rs is a shared file).
-#[allow(dead_code)]
 #[tauri::command]
 pub fn browser_preview(path: String) -> Result<Value, String> {
     add(&path)
@@ -189,7 +187,6 @@ pub fn browser_preview(path: String) -> Result<Value, String> {
 
 /// Whether a tab's address is a preview of ours, and of which file (the pane shows a folder/file
 /// chip instead of the address).
-#[allow(dead_code)]
 #[tauri::command]
 pub fn browser_preview_of(url: String) -> Option<Value> {
     of(&url)

@@ -23,6 +23,8 @@ pub const COMMANDS: &[super::Command] = &[
     ("skills get", "skills.get", &["topic", "full", "references", "reference"]),
     ("skills show", "skills.get", &["topic", "full", "references", "reference"]),
     ("skills coverage", "skills.coverage", &[]),
+    ("skills install", "skills.install", &["skill", "all", "agent", "local", "dry-run"]),
+    ("skills update", "skills.update", &["skill", "all", "local", "dry-run"]),
     ("agent hooks status", "agent.hooks.status", &[]),
     ("agent hooks on", "agent.hooks.on", &[]),
     ("agent hooks off", "agent.hooks.off", &[]),
@@ -104,6 +106,18 @@ pub fn coverage(home: &std::path::Path, local_app: Option<&std::path::Path>, age
         .collect()
 }
 
+/// SKILL-031: install or update Kolux skills through the community skills installer. The rules live
+/// in skills/cli_install.rs; this only hands over the arguments and the data folder.
+fn skills_install(p: &Parsed) -> Result<Value, Fail> {
+    use crate::skills::cli_install as ci;
+    let fail = |f: ci::Failure| Fail { code: f.code, message: f.message, data: f.data };
+    if let Some(f) = ci::json_refusal(&p.command, &p.args) {
+        return Err(fail(f));
+    }
+    let dir = super::data_dir();
+    ci::run(&ci::req_of(&p.command, &p.args), &ci::live_ctx(&dir), &crate::skills::installer::Real).map_err(fail)
+}
+
 fn skills_coverage() -> Value {
     let env = |v: &str| std::env::var_os(v).filter(|x| !x.is_empty()).map(std::path::PathBuf::from);
     let home = env(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).unwrap_or_default();
@@ -117,6 +131,63 @@ const SCHEMA: u32 = 1;
 
 /// One line each, in the words a person would use; keyed by the command's own words.
 const SUMMARIES: &[(&str, &str)] = &[
+    // T-195 (BROW-046, BROW-047), T-241 (BROW-044, BROW-045, BROW-048): the browser commands, for the agent context.
+    ("goto", "Send the worktree's browser tab to an address."),
+    ("back", "Go back one page in the browser tab."),
+    ("forward", "Go forward one page in the browser tab."),
+    ("reload", "Reload the browser tab's page."),
+    ("wait", "Wait for an element, text, address, load state or script in the page."),
+    ("eval", "Run a JavaScript expression in the page and print its value."),
+    ("scroll", "Scroll the page up or down."),
+    ("snapshot", "List the page's elements with references the other commands take."),
+    ("screenshot", "Capture the visible page (refused in this build)."),
+    ("full-screenshot", "Capture the whole page (refused in this build)."),
+    ("pdf", "Print the page to PDF (refused in this build)."),
+    ("click", "Click an element from the snapshot."),
+    ("dblclick", "Double-click an element from the snapshot."),
+    ("check", "Tick a checkbox or radio button."),
+    ("uncheck", "Clear a checkbox."),
+    ("focus", "Focus an element."),
+    ("clear", "Clear a field's value."),
+    ("select-all", "Select all text in a field."),
+    ("hover", "Move the pointer over an element."),
+    ("scrollintoview", "Scroll an element into view."),
+    ("fill", "Set a field's value in one go."),
+    ("type", "Type text into the focused element, key by key."),
+    ("inserttext", "Insert text at the focused element's caret."),
+    ("select", "Choose an option in a select element."),
+    ("keypress", "Press a key in the page."),
+    ("drag", "Drag one element onto another."),
+    ("upload", "Put files into a file input."),
+    ("download", "Save a link's file (refused in this build)."),
+    ("highlight", "Outline the elements a selector matches."),
+    ("find", "Find an element by role, text, label, placeholder or selector and act on it."),
+    ("get", "Read text, HTML, a value, the address, the title, a count or a box from the page."),
+    ("is", "Tell whether an element is visible, enabled or checked."),
+    ("mouse move", "Move the pointer to page coordinates."),
+    ("mouse down", "Press a mouse button."),
+    ("mouse up", "Release a mouse button."),
+    ("mouse wheel", "Turn the mouse wheel."),
+    ("exec", "Run one browser command written as a line."),
+    ("tab list", "List the worktree's browser tabs (--worktree all: every worktree's)."),
+    ("tab current", "Show the browser tab the commands go to."),
+    ("tab show", "Show one browser tab by number."),
+    ("tab switch", "Bring a browser tab on screen."),
+    ("tab create", "Open a browser tab at an address or on an HTML file."),
+    ("tab close", "Close a browser tab (destructive)."),
+    ("tab profile", "Show the profile the browser tab runs in."),
+    ("tab profile set", "Move the browser tab to a profile (from its next open)."),
+    ("tab profile use-default", "Move the browser tab back to the default profile."),
+    ("tab profile clone", "Copy the browser tab's profile and move the tab to the copy."),
+    ("profiles list", "List the browser profiles."),
+    ("profiles create", "Create a browser profile with its own cookies, storage and logins."),
+    ("profiles delete", "Delete a browser profile (destructive; not the default)."),
+    ("cookie get", "Read the cookies the open page can see."),
+    ("cookie set", "Set a cookie on the open page's site."),
+    ("cookie delete", "Delete a cookie on the open page's site (destructive)."),
+    ("storage get", "Read local or session storage of the open page."),
+    ("storage set", "Write a key in local or session storage of the open page."),
+    ("storage clear", "Clear local or session storage of the open page (destructive)."),
     ("worktree create", "Make a worktree in a repo, optionally starting an agent in it."),
     ("worktree rm", "Remove a worktree and its folder."),
     ("terminal read", "Read a terminal's output after a cursor, or its visible screen with --screen."),
@@ -128,6 +199,9 @@ const SUMMARIES: &[(&str, &str)] = &[
     ("open", "Start Kolux, or bring its window to the front, and wait until it answers."),
     ("status", "Say whether Kolux is running, not running, stale or still loading its workspaces."),
     ("diagnostics memory", "Show the Resource Manager's memory figures: resident and committed for Kolux, each terminal session and the total."),
+    ("file open", "Open a file in the editor of a worktree."),
+    ("file diff", "Open the diff of one file in a worktree, staged or not."),
+    ("file open-changed", "Open every changed file of a worktree as a diff, in the editor, or both."),
     ("repo list", "List the repos Kolux knows."),
     ("repo add", "Add a folder as a repo."),
     ("repo show", "Show one repo."),
@@ -185,6 +259,8 @@ const SUMMARIES: &[(&str, &str)] = &[
     ("skills list", "List the skill guides bundled with this CLI."),
     ("skills get", "Print a bundled skill guide, in short, in full, or one reference."),
     ("skills coverage", "Show which installed agents have the orchestration skill installed for the whole computer."),
+    ("skills install", "Install Kolux skills into the AI agents on this computer with the community skills installer."),
+    ("skills update", "Update the installed Kolux skills the community skills installer recorded and nobody changed."),
     ("claude-teams", "Run Claude Code with Agent Teams in Kolux panes; arguments go to Claude untouched."),
     ("agent hooks status", "Show whether each agent's status hooks are installed, partly installed or missing."),
     ("agent hooks on", "Switch the agent status hooks on and put Kolux's entries back into every agent."),
@@ -197,6 +273,7 @@ pub fn bare(path: &[String]) -> Option<&'static str> {
     match (path.len(), path.first().map(String::as_str), path.get(1).map(String::as_str)) {
         (3, Some("automations"), _) => Some("id"),
         (3, Some("skills"), Some("get" | "show")) => Some("topic"),
+        (3, Some("file"), Some("open" | "diff")) => Some("path"),
         _ => None,
     }
 }
@@ -353,6 +430,7 @@ pub fn run(p: &Parsed) -> Option<Result<Value, Fail>> {
         "skills.list" => Ok(json!({ "skills": SKILLS.iter().map(|s| json!({ "name": s.name, "description": split(s.guide).0, "aliases": s.aliases, "references": s.refs.iter().map(|r| r.0).collect::<Vec<_>>() })).collect::<Vec<_>>() })),
         "skills.get" => skills_get(&p.args),
         "skills.coverage" => Ok(skills_coverage()),
+        "skills.install" | "skills.update" => skills_install(p),
         // STAT-003: read from the files themselves, so Kolux may be closed.
         "agent.hooks.status" => Ok(switch::report(&profile_settings())),
         "agent.hooks.on" => switch::set(&super::data_dir(), true).map_err(Fail::from),
@@ -367,6 +445,7 @@ pub fn text(command: &str, r: &Value) -> Option<String> {
         "agent-context" => format!("{} commands; {} agent-context --json prints the whole document", r["commandCount"], crate::orchestration::CLI),
         "skills.list" => r["skills"].as_array().into_iter().flatten().map(|s| format!("{:<15}{}", s["name"].as_str().unwrap_or_default(), s["description"].as_str().unwrap_or_default())).collect::<Vec<_>>().join("\n"),
         "skills.get" => r["markdown"].as_str().unwrap_or_default().to_string(),
+        "skills.install" | "skills.update" => crate::skills::cli_install::text(r),
         "skills.coverage" => {
             let rows = r["agents"].as_array().into_iter().flatten().map(|a| {
                 let state = if a["covered"] == true { format!("covered      {}", a["foundIn"].as_str().unwrap_or_default()) } else if a["known"] == true { "not covered".into() } else { "not covered  (no known skills folder for it)".into() };
@@ -497,6 +576,12 @@ mod tests {
         assert_eq!(local("skills get orchestration --reference references/gates.md").unwrap(), gates);
         assert!(gates["markdown"].as_str().unwrap().starts_with("# Decision gates"));
         assert_eq!(local("skills get kolux-cli --references").unwrap()["markdown"], "- automations\n- json\n- worktrees");
+        // SKILL-031: a dry run prints the command and starts nothing; JSON is refused on a real run.
+        let dry = local("skills install --skill orchestration --agent universal --dry-run").unwrap();
+        assert_eq!(dry["command"], "npx --yes skills add kolux/skills --skill orchestration --agent universal -y -g");
+        assert_eq!(dry["ran"], false);
+        assert!(local("skills install --all --skill orchestration --dry-run").unwrap_err().message.contains("cannot be combined"));
+        assert!(local("skills install --local --all --agent universal --dry-run").unwrap()["command"].as_str().unwrap().ends_with("universal -y"));
         let nope = local("skills get nope").unwrap_err();
         assert_eq!(nope.code, "not_found");
         assert!(nope.message.contains("kolux-cli, koluxsecurity, koluxward, orchestration"), "{}", nope.message);

@@ -1,0 +1,15 @@
+T-227-d (lane/repo): PARTIAL, not ticked
+
+DONE
+- Line totals give up on an enormous branch: scm.rs summary() counts files first (cheap name-status); past LINES_FILE_CAP (20,000)
+  files it skips the numstat walk and sets Summary.linesSkipped. The files count and committed list stay. The window shows
+  "Too many files to count lines" instead of +0 -0 (model.ts LINES_SKIPPED_NOTE, summaryLabel, SourceControlPanel summary row).
+- Tests: cargo git011_an_enormous_branch_gives_up_on_line_totals_but_still_counts_its_files; vitest model.test.ts "GIT-011 an enormous branch says so".
+
+NOT DONE (blockers)
+- Other writer agents (Codex, Amp, Kimi, Copilot, Pi, Cursor, Antigravity): each needs its CLI's non-interactive flags confirmed
+  from public docs/--help, and this build may not start a real agent session, so the argument lists cannot be proven here.
+- Conflicted files kept out of the combined diff with a note: the combined diff is the editor lane's AllChangesPane (T-033), not this lane's file.
+
+LIVE PROOF PENDING (batched)
+1. On a branch with more than 20,000 changed files the branch row reads "Too many files to count lines" and the files count is still shown.

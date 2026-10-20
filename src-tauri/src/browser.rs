@@ -1078,8 +1078,6 @@ pub fn probe_result(answer: &str) -> &'static str {
 }
 
 /// Asks a tab's page where it is: `"page"`, `"error-page"` or `"no-answer"` (see `probe_result`).
-// Registered by evidence/browser-T-074-lib.rs.patch (lib.rs is a shared file); drop this allow once applied.
-#[allow(dead_code)]
 #[tauri::command]
 pub async fn browser_probe(app: AppHandle, id: u32) -> Result<&'static str, String> {
     let v = view(&app, id)?;
@@ -1186,8 +1184,6 @@ pub fn pick_tab(tabs: &[Tab], page: Option<u32>, worktree: Option<&str>) -> Resu
 }
 
 /// The pane says which worktree its tab belongs to and whether it is on screen (BROW-042).
-// Registered by evidence/browser-T-195-lib.rs.patch (lib.rs is a shared file); drop this allow once applied.
-#[allow(dead_code)]
 #[tauri::command]
 pub async fn browser_tab(app: AppHandle, id: u32, worktree: Option<String>, shown: bool, url: Option<String>, title: Option<String>) -> Result<(), String> {
     // T-241: the command line's profile store lives under the app's data folder; the app says where.
@@ -1390,8 +1386,6 @@ pub fn annotate_script(what: &str) -> Option<&'static str> {
 }
 
 /// BROW-037: starts, polls or stops the page picker in a tab; `poll` answers `{active, picks}`.
-// Registered by evidence/browser-T-195-lib.rs.patch (lib.rs is a shared file); drop this allow once applied.
-#[allow(dead_code)]
 #[tauri::command]
 pub async fn browser_annotate(app: AppHandle, id: u32, what: String) -> Result<serde_json::Value, String> {
     let _ = APP.set(app);
@@ -1530,8 +1524,6 @@ fn error_text(e: &(dyn std::error::Error + 'static)) -> String {
 
 /// Looks at why `url` failed to load, for the overlay's wording. The address passes the same
 /// check as a page load (`allowed`), so a page cannot aim this at the user's own network.
-// Registered by evidence/browser-T-074-lib.rs.patch (lib.rs is a shared file); drop this allow once applied.
-#[allow(dead_code)]
 #[tauri::command]
 pub async fn browser_diagnose(app: AppHandle, url: String) -> Result<Diagnosis, String> {
     let url = parse(&url)?;

@@ -7,8 +7,7 @@
 //! is replaced starts clean and an old reference is refused with "run snapshot again".
 //!
 //! `cli.rs` is a shared file: it gains this module's table, check, run and text by
-//! `evidence/browser-T-195-cli.rs.patch`; until that lands nothing here is reachable, hence the allow.
-#![allow(dead_code)]
+//! `evidence/browser-T-195-cli.rs.patch` (applied in MERGE 198).
 
 use super::{eval_json, pick_tab, preview, profiles, same_dir, tabs, tell, Tab, EVAL_WAIT, NEXT_PROFILE};
 use crate::cli::{Fail, Request};

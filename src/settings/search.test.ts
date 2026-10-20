@@ -7,14 +7,14 @@ const SOURCES: Record<string, string[]> = {
   appearance: ["AppearancePage.tsx"],
   accounts: ["SettingsPage.tsx"],
   agents: ["AgentsPage.tsx"],
-  terminal: ["TerminalPage.tsx"],
+  terminal: ["TerminalPage.tsx", "InputCards.tsx"],
   git: ["GitPage.tsx"],
   safety: ["SafetyPage.tsx"],
   notifications: ["NotificationsPage.tsx", "SettingsPage.tsx"],
   shortcuts: ["ShortcutsPage.tsx"],
   usage: ["SettingsPage.tsx"],
 };
-const FILES = import.meta.glob("./*Page.tsx", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
+const FILES = import.meta.glob(["./*Page.tsx", "./InputCards.tsx"], { query: "?raw", import: "default", eager: true }) as Record<string, string>;
 const read = (f: string) => FILES[`./${f}`] ?? "";
 
 describe("search all settings (SET-007)", () => {
