@@ -1,0 +1,40 @@
+diff --git a/src/terminal/TerminalPane.tsx b/src/terminal/TerminalPane.tsx
+index e31c5362..cbe3dc71 100644
+--- a/src/terminal/TerminalPane.tsx
++++ b/src/terminal/TerminalPane.tsx
+@@ -68,6 +68,7 @@ import NameField from "./NameField";
+ import { copyOnSelect } from "../shell/inputExtras";
+ import { askLink, linkState } from "../shell/linkAsk";
+ import { applyKoluxUnicode } from "../shell/unicodeWidth";
++import { afterLigatures, importLigatures } from "../shell/ligatures";
+ import { handlesIn } from "./tabs";
+ import { markShell, runningOf, shellInAgentPane } from "./remove";
+ import { registerTurnSource, xtermSource } from "./turnRead";
+@@ -588,21 +589,21 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
+     const settleLigatures = () => {
+       const ask = ++asked;
+       if (!ligaturesOn(currentInput().ligatures, currentText().family)) {
+-        ligatures?.dispose();
++        if (!ligatures) return;
++        ligatures.dispose();
+         ligatures = null;
++        afterLigatures(choice, term); // T-267: plain arrows again on the GPU path too
+         return;
+       }
+       if (ligatures) return;
+-      // MERGE 203 smoke fix: the package is not installed yet (package.json change held for Txais), and a literal
+-      // specifier makes vite fail the whole pane module at transform time. A variable specifier is left alone by
+-      // vite; the browser then rejects the bare name, loadLigatures catches it and the pane draws plain text.
+-      const ligaturesPkg: string = "@xterm/addon-ligatures";
+-      void loadLigatures(() => import(/* @vite-ignore */ ligaturesPkg) as Promise<typeof import("@xterm/addon-ligatures")>).then((a) => {
++      // T-267 / TERM-102: the addon is an approved dependency (MERGE 240), imported by its literal name so vite bundles it.
++      void loadLigatures(importLigatures).then((a) => {
+         if (!a) return;
+         if (!alive || ask !== asked) return a.dispose();
+         try {
+           term.loadAddon(a);
+           ligatures = a;
++          afterLigatures(choice, term); // T-267: the GPU glyph cache is rebuilt so the joined arrows draw
+         } catch {
+           a.dispose();
+         }

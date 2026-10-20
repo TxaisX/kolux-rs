@@ -1019,3 +1019,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · look T-266-b (PROJ-062 ports and task on the workspace card hover) · no new outside sources: Kolux RS own ports.rs scan and Worktree.number
 > 2026-10-20 · shell T-308 rest (TERM-104) · spec/03 TERM-104; Unicode Character Database 16.0.0 (https://www.unicode.org/Public/16.0.0/ucd/ EastAsianWidth.txt, emoji/emoji-data.txt, extracted/DerivedGeneralCategory.txt, Unicode License v3) and UAX #11 / UTS #51 (https://www.unicode.org/reports/); xterm.js public typings IUnicodeVersionProvider; no outside code
 > 2026-10-20 · shell T-280-b close · spec/10 SAFE-028 as given; rule on the unnamed older right-sidebar key dropped by coordinator default; this tree's own settings readers; no outside code
+> 2026-10-20 · shell T-267 ligatures · spec/03 TERM-102; @xterm/addon-ligatures 0.10.0 public README and typings (MIT, approved dependency on main since MERGE 240); no outside code
