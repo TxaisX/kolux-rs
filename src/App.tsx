@@ -110,6 +110,7 @@ import AutomationsPage from "./automations/AutomationsPage";
 import { forgetRunTab, openRunTab, paneOfTerminal, runPaneKey, runTabEnded, touchRunTab, typedInRunTab, type RunTabs } from "./automations/runTab";
 import RoutingPage from "./settings/RoutingPage";
 import TasksPage from "./tasks/TasksPage";
+import WorkspaceBoard from "./board/WorkspaceBoard";
 import { tasksRepo } from "./tasks/model";
 import SourceControlPanel from "./scm/SourceControlPanel";
 import { SCM_AGENT_KEY, SCM_GROUP_ORDER_KEY, SCM_VIEW_KEY, SCM_LINKED_PR_KEY, SUMMARY_UPSTREAM_KEY, linkedPrs, withLink } from "./scm/model";
@@ -224,6 +225,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>(() => startScreen(initial)); // SET-037
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [boardOpen, setBoardOpen] = useState(false); // T-142: the workspace board
   const [settingsAt, setSettingsAt] = useState<{ target: SettingsTarget | null; n: number }>({ target: null, n: 0 }); // SET-006: a link's page and section
   const [expanded, setExpanded] = useState<number | null>(null); // VIEW-026: the Board card showing its terminal
   const [zoom, setZoom] = useState<Zoom>({}); // TERM-013: each workspace's expanded cell
@@ -659,6 +661,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           break;
         case "sidebar.sleeping.toggle":
           saveSetting(SHOW_SLEEPING_SETTING, !showSleepingFrom(settings[SHOW_SLEEPING_SETTING]));
+          break;
+        case "workspace.openBoard":
+          setBoardOpen((o) => !o);
           break;
         case "view.inbox":
           setScreen((s) => (s === "inbox" ? "terminals" : "inbox"));
@@ -2386,6 +2391,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           </>
         )}
         {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} target={settingsAt.target} n={settingsAt.n} />}
+        {boardOpen && <WorkspaceBoard onClose={() => setBoardOpen(false)} />}
         {(terminals || screen === "artifacts" || screen === "skills") && sidebarOpen && (
           <ProjectsPanel
             reveal={reveal}
@@ -2509,7 +2515,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               }}
             />
           )}
-          {terminals && page === "tasks" && <TasksPage repo={tasksRepo(projects, activeDir)} />}
+          {terminals && page === "tasks" && <TasksPage repo={tasksRepo(projects, activeDir)} onStart={fromItem} onResume={(dir) => cli.current.select(dir, null, true)} />}
           {terminals && page === "routing" && (
             <RoutingPage
               agents={agents}

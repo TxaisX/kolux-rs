@@ -41,3 +41,14 @@ describe("FIX-1 issue actions (council FS 2)", () => {
     expect(actionError("gh did not answer within 30 seconds; try again in a moment", "close")).toMatch(/refresh the issue before/);
   });
 });
+
+describe("GIT-048 (T-281-b) a change shown at once is put back when GitHub refuses it", () => {
+  it("runs onFail after the error is told, and not after a success", async () => {
+    const order: string[] = [];
+    await runAction({ send: Promise.reject("nope"), refresh: async () => {}, setBusy: () => {}, setError: (e) => order.push(`error:${e}`), what: "close", onFail: () => order.push("put back") });
+    expect(order).toEqual(["error:null", "error:nope", "put back"]);
+    const ok: string[] = [];
+    await runAction({ send: Promise.resolve(), refresh: async () => {}, setBusy: () => {}, setError: () => {}, what: "close", onFail: () => ok.push("put back") });
+    expect(ok).toEqual([]);
+  });
+});

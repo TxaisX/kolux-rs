@@ -1481,6 +1481,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     draggable: true,
     onDragStart: (e: DragEvent) => {
       dragged.current = { kind: "row", id: pathKey(w.path) };
+      e.dataTransfer.setData("application/x-kolux-workspace", JSON.stringify([w.path])); // T-142: droppable on a workspace board lane
       e.dataTransfer.effectAllowed = "move";
     },
     onDragOver: (e: DragEvent) => {
