@@ -11,6 +11,10 @@ use std::collections::BTreeMap;
 pub mod sendonce;
 /// ORCH-034 (T-173-c): the orchestration store upgrades in place from every earlier layout of its own.
 pub mod upgrade;
+/// ORCH-062..064 (T-312): the runtime commands agents call for files, git and GitHub, past sessions
+/// and automations. The allow goes once evidence/orchestration-T-312-cli.patch is applied.
+#[allow(dead_code)]
+pub mod runtime;
 
 const KEY: &str = "orchestration.mail";
 pub const KINDS: &[&str] = &["status", "dispatch", "worker_done", "merge_ready", "escalation", "handoff", "decision_gate", "question", "heartbeat"];
