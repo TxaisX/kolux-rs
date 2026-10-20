@@ -4,8 +4,8 @@ homes under the scratchpad), alpha active; the Codex program set to a stand-in `
 a cmd.exe prompt open. Two Codex panes made with `kolux-dev worktree create --name acct-one|acct-two --agent codex`.
 
 $ kolux-dev terminal read --terminal term-6 | term-7          (both panes started on the active account)
-HOME=.../t139b/homes/alpha   C:\Users\XiongT\kolux-rs\workspaces\repo\acct-one-3>
-HOME=.../t139b/homes/alpha   C:\Users\XiongT\kolux-rs\workspaces\repo\acct-two-3>
+HOME=.../t139b/homes/alpha   %USERPROFILE%\kolux-rs\workspaces\repo\acct-one-3>
+HOME=.../t139b/homes/alpha   %USERPROFILE%\kolux-rs\workspaces\repo\acct-two-3>
 
 invoke codex_account_activate(acct-beta-0002)                 (the shell pane and the four ended Codex panes: no prompt)
 acct-one => "The Codex account changed | This pane still runs as alpha@example.com. Restart to run as beta@example.com,
@@ -13,7 +13,7 @@ acct-one => "The Codex account changed | This pane still runs as alpha@example.c
 acct-two => same prompt
 
 Restart on acct-one -> the pane remounts as term-8:
-HOME=.../t139b/homes/beta    C:\Users\XiongT\kolux-rs\workspaces\repo\acct-one-3>
+HOME=.../t139b/homes/beta    %USERPROFILE%\kolux-rs\workspaces\repo\acct-one-3>
 acct-two keeps its prompt (T-139-b-restarted.png).
 
 Keep on acct-two -> prompt gone.
@@ -23,4 +23,4 @@ activate beta again -> acct-one: none (its own account); acct-two: none (beta wa
 invoke codex_account_remove(acct-alpha-0001)
 acct-two => "This pane's Codex account was removed | Restart to run Codex as beta@example.com. | Restart"  (T-139-b-removed.png)
 Restart -> term-9:
-HOME=.../t139b/homes/beta    C:\Users\XiongT\kolux-rs\workspaces\repo\acct-two-3>
+HOME=.../t139b/homes/beta    %USERPROFILE%\kolux-rs\workspaces\repo\acct-two-3>

@@ -6,7 +6,7 @@ and what the script printed is what Claude would read. Each call is one hook rou
 
 == the script and the six bodies (t058-pane.ps1) ==
 script-header: rem Kolux RS agent hook for Claude Code (STAT-001, STAT-007, SAFE-009). Written by Kolux RS; edits are overwritten.
-pane=term-1 script=C:\Users\XiongT\.kolux-rs\agent-hooks\claude.cmd hookVersion-identity-set=True
+pane=term-1 script=%USERPROFILE%\.kolux-rs\agent-hooks\claude.cmd hookVersion-identity-set=True
 --data-binary @- "http://127.0.0.1:%KP%/claude" 2>NUL                       (the answer goes to stdout; Codex's script keeps -o NUL)
 [18:10:52.528] {"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}
    ->  {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"Kolux protected action: Force-push to main. The command waits for you; allow it once to run it, or refuse to leave it unrun."}}

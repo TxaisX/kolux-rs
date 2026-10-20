@@ -59,9 +59,9 @@ CLI-027 close, stop
   --all closes like close and adds that line as a note; kolux-dev --help lists close and not stop.
 
 Incident: the "claude --model opus" pane started the real Claude Code (the pane's PowerShell
-resolved claude to C:\Users\XiongT\.local\bin\claude.exe ahead of the stub). It ran with the temp
+resolved claude to %USERPROFILE%\.local\bin\claude.exe ahead of the stub). It ran with the temp
 CLAUDE_CONFIG_DIR, stopped at its folder-trust question (default "No, exit"), and was closed by the
-CLI without an answer; G:\Dev\claude-config\.claude.json and C:\Users\XiongT\.claude.json were not
+CLI without an answer; G:\Dev\claude-config\.claude.json and %USERPROFILE%\.claude.json were not
 written after it started (timestamps checked).
 
 Unit tests: cli.rs the_terminal_commands_are_checked_before_the_app_is_asked,

@@ -3,7 +3,7 @@ Throwaway repo G:/Temp/worktrees-T-116-c/app: main 7b2cd77 "init", develop 94f70
 (adds DEV.md). Added as a project; Settings opened, then "app" under REPOSITORIES clicked.
 
 Inherited values (T-116-c-a-inherited.png): "New workspaces start from" empty with grey "the default
-  branch"; "Workspaces folder" empty with grey "C:\Users\XiongT/kolux-rs/workspaces-worktrees (the
+  branch"; "Workspaces folder" empty with grey "%USERPROFILE%/kolux-rs/workspaces-worktrees (the
   global folder)". project_list: base and workspacesDir unset.
 Viewing writes nothing: both fields focused and left untouched (CDP focus, Tab) -> project_list still
   had no base or workspacesDir.

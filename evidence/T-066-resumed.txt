@@ -9,7 +9,7 @@ the id), prints a line and waits like a prompt. Setting and shim removed afterwa
 
 1. Workspace brisk-puffin active, New tab > Claude Code: the stand-in pane opened as tab "Claude"
    (tabs: Workspaces, Status, Terminal 3, README.md, Claude). ran.txt line 1:
-     cwd=C:\Users\XiongT\kolux-rs\workspaces\repo\brisk-puffin args=--permission-mode auto
+     cwd=%USERPROFILE%\kolux-rs\workspaces\repo\brisk-puffin args=--permission-mode auto
    The hook event gave the pane session "sess-t066-one"; the saved layout (settings.json savedLayout)
    showed pane 5 claude brisk-puffin args [] session "sess-t066-one", focused 5.
 

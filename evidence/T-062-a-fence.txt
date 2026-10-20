@@ -1,7 +1,7 @@
 T-062-a · EDIT-045 File access stays inside your projects (with the EDIT-053 remainder and the Windows removal retry of EDIT-044)
 Live against the lane core dev app (2026-10-12 22:36-22:46, port 1424, app pid 19632, window moved to the second
 screen before driving). The registered project is the lane's scratch repo (G:\Temp\core-T-025\repo); its workspaces
-live under C:\Users\XiongT\kolux-rs\workspaces\repo\<name>. The brisk-puffin workspace was prepared with escape-link,
+live under %USERPROFILE%\kolux-rs\workspaces\repo\<name>. The brisk-puffin workspace was prepared with escape-link,
 a symbolic link to G:\Temp\t062-secret.txt (outside every project, content "top secret"), and G:\Temp\t062-dir held
 inner.txt ("beneath"). The commands were called through the app's own bridge from its page (the same calls the
 editor and explorer make), then the explorer and editor were driven by clicks. Every line is what the page reported.
