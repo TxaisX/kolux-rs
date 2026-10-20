@@ -9,6 +9,7 @@ import PaneMenu, { paneMenuItems } from "./PaneMenu";
 import type { Chip } from "../board/chip";
 import type { AgentState } from "../projects/rows";
 import { invoke } from "@tauri-apps/api/core";
+import { withMilestones } from "../onboarding/milestoneNote";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Terminal, type ITerminalAddon } from "@xterm/xterm";
@@ -1221,6 +1222,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     let text: string;
     try {
       text = await invoke<string>("terminal_diagnostics", { id, cols: term.cols, rows: term.rows, renderer: drawing || "unknown", screen });
+      text = await withMilestones(text); // ONB-011: when each first-run milestone happened
     } catch (e) {
       setFlash(`Diagnostics could not be built (${String(e)})`);
       return;

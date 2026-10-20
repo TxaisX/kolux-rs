@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { markGuide, type GuideRecord } from "./guide";
 import { features, hasUsed, noteUse } from "./features";
-import { actionWord, autoStarts, FIRST_TARGET_TRIES, FOCUSED_SPLIT, GRID_TRIES, gridStarts, START_GRID, nextShown, place, prevShown, REPLAY_TOUR, stepLabel, stepWords, TOURS, tourFeature, type Placed, type Rect, type Tour, type TourId } from "./tour";
+import { actionWord, autoStarts, FOCUSED_SPLIT, GRID_TRIES, gaveUp, gridStarts, handsOver, lookAt, START_GRID, nextShown, ownerOff, place, prevShown, progress, REPLAY_TOUR, replayOf, stepWords, targetsOf, TOURS, tourFeature, type Placed, type Rect, type Tour, type TourId, type TourStep, type Want } from "./tour";
 
 
 /** The first copy of `sel` that is really on screen (hidden copies are passed over). */
@@ -17,6 +17,18 @@ function shown(sel: string): HTMLElement | null {
   return null;
 }
 
+/** The first place a step can point at that is on screen: its target, then its fallbacks in order (ONB-033). */
+const stepEl = (st: TourStep): HTMLElement | null => {
+  for (const t of targetsOf(st)) {
+    const el = shown(t);
+    if (el) return el;
+  }
+  return null;
+};
+
+/** Where the user is, as far as the window shows it: a change means they moved to another page (ONB-032). */
+const pageKey = () => [".board", "[data-tasks]", ".autos:not(.tasks)"].filter((q) => shown(q)).join("|");
+
 /** Another dialog (the first-run wizard, a confirmation) holds the window. */
 const blocked = () => [...document.querySelectorAll("[role=dialog]")].some((d) => !d.classList.contains("tour"));
 
@@ -26,8 +38,8 @@ function TourPanel({ tour, at, onAt, onEnd }: { tour: Tour; at: number; onAt: (i
   const box = useRef<HTMLDivElement>(null);
   const [geo, setGeo] = useState<{ t: Rect; p: Placed } | null>(null);
   const step = tour.steps[at];
-  const present = tour.steps.map((s) => !!shown(s.target));
-  const shownIdx = present.flatMap((p, i) => (p ? [i] : []));
+  const present = tour.steps.map((s) => !!stepEl(s));
+  const revealed = useRef<number | null>(null);
   const next = nextShown(present, at);
   const back = prevShown(present, at);
 
@@ -39,11 +51,16 @@ function TourPanel({ tour, at, onAt, onEnd }: { tour: Tour; at: number; onAt: (i
     let missing = 0;
     const tick = () => {
       frame = requestAnimationFrame(tick);
-      const el = shown(step.target);
+      const el = stepEl(step);
       if (!el) {
+        // ONB-033: a step whose target is behind a hidden control clicks that control once (the sidebar's toggle).
+        if (step.reveal && revealed.current !== at) {
+          revealed.current = at;
+          shown(step.reveal)?.click();
+        }
         if (++missing < 10) return;
         cancelAnimationFrame(frame);
-        const n = nextShown(tour.steps.map((s) => !!shown(s.target)), at);
+        const n = nextShown(tour.steps.map((s) => !!stepEl(s)), at);
         return n === null ? onEnd("lost") : onAt(n);
       }
       missing = 0;
@@ -82,7 +99,7 @@ function TourPanel({ tour, at, onAt, onEnd }: { tour: Tour; at: number; onAt: (i
   useEffect(() => {
     if (!step.noNext) return;
     const click = (e: MouseEvent) => {
-      const el = shown(step.target);
+      const el = stepEl(step);
       if (el && e.target instanceof Node && el.contains(e.target)) (next === null ? onEnd("done") : onAt(next));
     };
     window.addEventListener("click", click, true);
@@ -91,7 +108,8 @@ function TourPanel({ tour, at, onAt, onEnd }: { tour: Tour; at: number; onAt: (i
 
   const w = stepWords(step);
   const act = actionWord(step);
-  const label = stepLabel(shownIdx.indexOf(at), shownIdx.length);
+  const pr = progress(tour, present, at);
+  const label = pr.label;
   const arrow = geo?.p.side ? (geo.p.side === "bottom" || geo.p.side === "top" ? { left: Math.max(14, Math.min(geo.t.left + geo.t.width / 2 - geo.p.left, (box.current?.offsetWidth ?? 320) - 14)) } : { top: Math.max(14, Math.min(geo.t.top + geo.t.height / 2 - geo.p.top, (box.current?.offsetHeight ?? 140) - 14)) }) : null;
   return (
     <>
@@ -101,10 +119,10 @@ function TourPanel({ tour, at, onAt, onEnd }: { tour: Tour; at: number; onAt: (i
         <h3>{w.title}</h3>
         <p>{w.body}</p>
         <div className="tour-foot">
-          {shownIdx.length > 1 && (
+          {pr.dots > 1 && (
             <span className="tour-dots" aria-hidden="true">
-              {shownIdx.map((i) => (
-                <i key={i} className={i === at ? "on" : ""} />
+              {Array.from({ length: pr.dots }, (_, i) => (
+                <i key={i} className={i === pr.on ? "on" : ""} />
               ))}
             </span>
           )}
@@ -119,7 +137,13 @@ function TourPanel({ tour, at, onAt, onEnd }: { tour: Tour; at: number; onAt: (i
             </button>
           )}
           {act ? (
-            <button className="btn primary" onClick={() => shown(FOCUSED_SPLIT)?.click()}>
+            <button
+              className="btn primary"
+              onClick={() => {
+                const el = shown(step.action?.click ?? FOCUSED_SPLIT);
+                if (el && el.getAttribute("aria-pressed") !== "true") el.click();
+              }}
+            >
               {act}
             </button>
           ) : (
@@ -138,10 +162,13 @@ function TourPanel({ tour, at, onAt, onEnd }: { tour: Tour; at: number; onAt: (i
 export default function Tours() {
   const rec = useRef<GuideRecord | null>(null);
   const slot = useRef(false);
-  const want = useRef<{ id: TourId; forced: boolean; tries: number; limit?: number } | null>(null);
+  const want = useRef<Want | null>(null);
+  const settings = useRef<Record<string, unknown> | null>(null);
   const [run, setRun] = useState<{ tour: Tour; at: number } | null>(null);
-  const running = useRef(false);
-  running.current = run !== null;
+  const running = useRef<TourId | null>(null);
+  running.current = run?.tour.id ?? null;
+  const here = useRef(0); // the step the running tour is on, for the hand-over
+  here.current = run?.at ?? 0;
 
   useEffect(() => {
     invoke<GuideRecord>("tours_get").then(
@@ -151,9 +178,13 @@ export default function Tours() {
       },
       () => {},
     );
+    invoke<Record<string, unknown>>("get_settings").then((x) => (settings.current = x), () => {});
     const surfaced = new Set<TourId>();
     // ONB-012: nothing replays the grid tour.
-    const replay = (e: Event) => void ((e as CustomEvent<TourId>).detail !== "grid" && (want.current = { id: (e as CustomEvent<TourId>).detail, forced: true, tries: 0 }));
+    const replay = (e: Event) => {
+      const r = replayOf((e as CustomEvent).detail);
+      if (r && r.id !== "grid") want.current = { id: r.id, forced: true, tries: 0, page: pageKey(), after: r.after };
+    };
     // Any split counts (ONB-033: the parallel tour is for people who never split), and a split
     // during the parallel tour carries it past its split step.
     const split = () => {
@@ -170,7 +201,7 @@ export default function Tours() {
     const grid = () => {
       if (!gridStarts("session", rec.current?.toursSeen ?? [])) return;
       slot.current = true;
-      want.current = { id: "grid", forced: false, tries: 0, limit: GRID_TRIES };
+      want.current = { id: "grid", forced: false, tries: 0, limit: GRID_TRIES, page: pageKey() };
     };
     window.addEventListener(START_GRID, grid);
     window.addEventListener(REPLAY_TOUR, replay);
@@ -178,29 +209,32 @@ export default function Tours() {
     window.addEventListener("keydown", key, true);
     // ponytail: a quarter-second look for surfaces; an observer per tour if this ever shows in a profile.
     const timer = window.setInterval(() => {
-      if (document.hidden || running.current) return;
+      if (document.hidden) return;
       const r = rec.current;
       const w = want.current;
       if (w) {
         const tour = TOURS.find((t) => t.id === w.id);
-        const first = tour && nextShown(tour.steps.map((s) => !!shown(s.target)), -1);
-        if (tour && first !== null && first !== undefined && (w.forced || !blocked())) {
+        const first = tour && nextShown(tour.steps.map((st) => !!stepEl(st)), -1);
+        const act = lookAt(w, { running: running.current, page: pageKey(), firstShown: first !== null && first !== undefined, blocked: blocked(), off: ownerOff(settings.current, w.id), detached: !!tour?.detached });
+        if (act === "start" && tour && first !== null && first !== undefined) {
           want.current = null;
           setRun({ tour, at: first });
-        } else if (++w.tries >= (w.limit ?? (w.forced ? 4 * FIRST_TARGET_TRIES : FIRST_TARGET_TRIES))) {
-          // Gave up without showing: an automatic tour hands its slot back and is not marked seen.
+        } else if (act === "drop" || (act === "miss" && (++w.tries, gaveUp(w)))) {
+          // Gave up or was called off without showing: an automatic tour hands its slot back and is not marked seen.
           want.current = null;
           if (!w.forced) slot.current = false;
         }
         return;
       }
+      if (running.current) return;
       if (!r) return;
       // ONB-042: opening a surface that has a tour counts as using that feature, once per window.
       for (const t of TOURS) if (!surfaced.has(t.id) && tourFeature(t.id) && shown(t.trigger) && noteUse(t.id)) surfaced.add(t.id);
-      const auto = TOURS.find((t) => autoStarts({ id: t.id, auto: r.toursAuto, seen: r.toursSeen, slotUsed: slot.current, blocked: blocked(), tried: hasUsed("split") ? [...r.tried, "split"] : r.tried }) && shown(t.trigger));
+      const workspaceTab = !!document.querySelector(".sess.sel");
+      const auto = TOURS.find((t) => autoStarts({ id: t.id, auto: r.toursAuto, seen: r.toursSeen, slotUsed: slot.current, blocked: blocked(), tried: hasUsed("split") ? [...r.tried, "split"] : r.tried, workspaceTab }) && shown(t.trigger) && !ownerOff(settings.current, t.id));
       if (auto) {
         slot.current = true;
-        want.current = { id: auto.id, forced: false, tries: 0 };
+        want.current = { id: auto.id, forced: false, tries: 0, page: pageKey() };
       }
     }, 250);
     return () => {
@@ -215,7 +249,10 @@ export default function Tours() {
   if (!run) return null;
   const end = (how: "done" | "skipped" | "lost") => {
     const id = run.tour.id;
+    const next = handsOver(id, how, here.current);
     setRun(null);
+    // ONB-033: the create button opened the composer: the workspace-creation tour takes over, once the composer shows.
+    if (next) want.current = { id: next, forced: true, tries: 0, page: pageKey() };
     if (how === "lost") return;
     // Skipping or finishing marks it seen, once.
     if (rec.current && !rec.current.toursSeen.includes(id)) {

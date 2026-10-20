@@ -179,7 +179,7 @@ export const look = EditorView.theme(
 );
 
 /** `readOnly`: typing changes nothing (SKILL-012 previews a kit result this way). */
-type Props = { id: number; path: string; root?: string | null; readOnly?: boolean; /** EDIT-026: a log tab that keeps adding lines as the file grows (give it readOnly too). */ follow?: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; jump?: { line: number; at: number }; onLink?: LinkHandler; /** EDIT-020: the Markdown review notes, shown in a rail beside the rich view. */ notes?: Note[]; onRemoveNote?: (n: Note) => void };
+type Props = { id: number; path: string; root?: string | null; readOnly?: boolean; /** EDIT-026: a log tab that keeps adding lines as the file grows (give it readOnly too). */ follow?: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; jump?: { line: number; at: number; col?: number }; onLink?: LinkHandler; /** EDIT-020: the Markdown review notes, shown in a rail beside the rich view. */ notes?: Note[]; onRemoveNote?: (n: Note) => void };
 
 export default function EditorPane({ id, path, root = null, readOnly = false, follow = false, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, jump, onLink, notes = [], onRemoveNote }: Props) {
   const host = useRef<HTMLDivElement>(null);
@@ -450,7 +450,8 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   useEffect(() => onReveal(() => setReveals((n) => n + 1)), []);
   // T-222-c (TERM-093): a printed path:line opens the file at that line, the way a search hit does.
   useEffect(() => {
-    if (jump) revealAt(path, jumpSpot(jump.line));
+    // T-329-b: a chat link's column puts the cursor there; without one it is the line's start.
+    if (jump) revealAt(path, jump.col ? { ...jumpSpot(jump.line), col: jump.col } : jumpSpot(jump.line));
   }, [jump?.at]);
   useEffect(() => {
     const cm = view.current;
