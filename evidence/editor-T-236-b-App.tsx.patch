@@ -1,0 +1,20 @@
+diff --git a/src/App.tsx b/src/App.tsx
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -48,6 +48,7 @@ import { chordPlan } from "./browser/chord";
+ import { writerOf } from "./scm/generate";
+ import EditorPane, { editors } from "./editor/EditorPane";
+ import { baseName, keyOf } from "./editor/buffers";
++import { useDesktopDrops } from "./editor/desktopDrops";
+ import { NOTHING_TO_SEND, sendRoute } from "./editor/noteCommands";
+ import { noteTarget, plainNote, useRepoless } from "./editor/fileNotes";
+ import { LINE_NOTES_KEY, clearDelivered, lineNotesOf, markSent, noteBlocks, withLineNotes, type LineNote } from "./editor/diffNotes";
+@@ -916,6 +917,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "editor", path, jump }]);
+     setFocused(key);
+   };
++  // EDIT-039: a file dragged in from the desktop opens here; a folder on the project list is added there.
++  useDesktopDrops((path) => openFile(path), setToast);
+ 
+   // EDIT-014: a Mod+clicked link in a note. Web links open in the Kolux browser (Shift: the system browser),
+   // notes inside the worktree as previews, anything else as an editor tab at its line.

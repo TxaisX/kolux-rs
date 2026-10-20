@@ -76,3 +76,6 @@
 .pane.editor .rail-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--fg); }
 .pane.editor .rail-x { position: absolute; top: 3px; right: 3px; }
 .review-send-head { padding: 6px 8px 2px; font-size: 11px; border-top: 1px solid var(--line-subtle); margin-top: 2px; }
+/* EDIT-035 (T-236-b): the explorer's name filter */
+.explorer .ex-filter { flex: none; display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line-subtle); }
+.explorer .ex-filter .field { flex: 1; min-width: 0; font-size: 12px; padding: 3px 7px; }
