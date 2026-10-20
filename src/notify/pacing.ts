@@ -1,14 +1,15 @@
-// STAT-044: notifications are merged and paced. Repeats for one worktree inside the cooldown are
-// one notification (a task-complete and a terminal bell for the same event included); every event
-// carries a fixed id so the same event never shows twice; the memory of ids, worktrees and click
-// targets stays bounded during bursts; test notifications ignore all of it; the worktree in view stays
-// quiet while the window has focus if that option is on (other worktrees still show, STAT-041).
-// Clicking a notification focuses the pane that raised it:
+// STAT-044: notifications are merged and paced. One id per report; repeats inside 5 s per worktree
+// merge into one notification (a task-complete and a terminal bell for the same event included) and a
+// report already handled never shows twice; the memory of ids, worktrees and click targets stays
+// bounded during bursts; test notifications ignore all of it; a "gone quiet" warning is never held
+// back (it may be stuck); the worktree in view stays quiet while the window has focus if that option is
+// on (other worktrees still show, STAT-041). Clicking a notification focuses the pane that raised it:
 // `paneFor` answers the id with the pane. Pure functions over a small state, so every rule is tested.
 
 export type NotifyKind = "finish" | "stop" | "bell" | "quiet" | "test";
 export type NotifyEvent = {
-  /** A fixed identity for the event; the same event reported twice has the same id. */
+  /** One id per report (`eventId`): a report already handled never shows twice; repeats inside the
+   * cooldown merge by worktree, not by id. */
   id: string;
   /** The worktree the event is about; events without one are never merged with each other. */
   worktree: string | null;
@@ -55,6 +56,10 @@ export function decide(state: PacerState, ev: NotifyEvent, opts: { windowFocused
   if (state.seen.includes(ev.id)) return { show: false, reason: "duplicate", state };
   const seen = keep([...state.seen, ev.id]);
   const targets = ev.pane === null ? state.targets : keep([...state.targets.filter(([id]) => id !== ev.id), [ev.id, ev.pane] as [string, string]]);
+  // A "gone quiet" warning (no output for minutes: it may be stuck) is never held back by the cooldown or
+  // by "Stay quiet", and starts no cooldown of its own: it shows once per report, as it did before the
+  // pacer saw it, and keeps its click target.
+  if (ev.kind === "quiet") return { show: true, reason: "shown", state: { ...state, seen, targets } };
   const wt = normWorktree(ev.worktree);
   // "Stay quiet about the worktree you are looking at": only that worktree, only while Kolux has focus;
   // an out-of-view worktree's event still shows (STAT-041), and so does one with no worktree.

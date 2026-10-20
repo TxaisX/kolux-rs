@@ -78,8 +78,23 @@ LIVE PROOF PENDING (batched) — steps for the proof lane, once the patches are 
    quit flag was consumed); Quit without saving exits with every pane's process gone.
 9. (FIX-1) Option on, then switch to a build without the tray feature (or a failed install, see the diag
    file): the close button exits the app as before (no icon = no hide).
+10. (FIX-2, review a8c1d430 AFTER 4 / FIX-SOON 4) Option on, open the Tower window (second window), then
+   click the MAIN window's close button. Expected: main hides to the tray; the Tower window stays on screen
+   (today it closes only when main is destroyed); Tray > Open Kolux brings main back. Then close the Tower
+   window itself: main is untouched (not hidden), and a following Tray > Quit still asks about unsaved text
+   (the Tower's close consumed nothing).
+11. (FIX-2, review a8c1d430 FIX-SOON 1) tray Quit while the page is busy: with the window hidden, make the
+   page unresponsive (for example a terminal pane flooding output, or DevTools paused on a breakpoint in the
+   webview) and pick Tray > Quit. Expected: the window comes back; if the page never answers the close,
+   Kolux exits on its own about 5 s later and every pane's child process is gone (tasklist). Counter-check:
+   with a responsive page and unsaved text, Tray > Quit shows the question and Kolux does NOT exit after 5 s
+   while the question is open (the page answered, the flag is consumed); Keep working leaves it running.
 
 SEEN, NOT FIXED
+- (FIX-2, review AFTER 5) The closeToTray switch still shows in a build without the tray feature or after a
+  failed icon install, where it does nothing (safe: close_hides is false without an icon, so the close exits
+  as before). Hiding it needs a new `tray_icon_present` command plus a lib.rs registration, i.e. a 10th
+  coordinator patch on a sequence already queued for merge: deferred to T-324-b.
 - The Windows session-end record (APP-007's last rule) needs a WM_ENDSESSION / RunEvent hook in lib.rs
   and a store key the launch path reads: T-324-b.
 - The switch sits on the Notifications page (the lane's file); a General/Window page may be its home

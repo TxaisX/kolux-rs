@@ -3,9 +3,11 @@
 //! while the window was hidden or minimised, and clears once the window is shown; development
 //! copies carry DEV and the branch they run from in the icon and the tooltip, kept when the
 //! attention icon is swapped in; Linux gets no tray icon.
-//! APP-007: with the option on, the window's close button hides Kolux to the tray instead (the page's
-//! close handler asks `tray_close_requested` first); Quit from the tray and File > Exit go through the
-//! same close with a quit flag, so unsaved text is still asked about and every pane stops (ACCT-051).
+//! APP-007: with the option on, the main window's close button hides Kolux to the tray instead (the
+//! page's close handler asks `tray_close_requested` first; no other window's close counts); Quit from the
+//! tray and File > Exit go through the same close with a quit flag, so unsaved text is still asked about
+//! and every pane stops (ACCT-051). Should the page never answer that close (a hung webview), tray Quit
+//! still ends Kolux after `QUIT_FALLBACK`.
 //! The real icon needs tauri's `tray-icon` feature, switched on through this crate's `tray`
 //! feature (Cargo.toml is the coordinator's file: `evidence/tray-T-248-d-Cargo.toml.patch`).
 //! Without it `install` puts nothing in the tray and every model function still builds and tests.
@@ -14,8 +16,8 @@
 
 use crate::menu::Os;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 
 /// The tray icon's id, for the lookups that swap its icon.
 pub const TRAY_ID: &str = "kolux";
@@ -78,6 +80,21 @@ impl Dot {
             self.on = true;
         }
         was != self.on
+    }
+    /// One agent event with the window's current state: the dot learns whether the window is out of
+    /// sight, then takes the ping. `Some(on)` says the icon must be repainted and with what; `None`
+    /// says nothing changed.
+    pub fn report(&mut self, hidden: bool, what: Ping) -> Option<bool> {
+        let was = self.on;
+        if hidden {
+            self.window_hidden();
+        } else {
+            self.window_shown();
+        }
+        self.ping(what);
+        // measured across the whole report: a dot that was on and goes off because the window is back
+        // is a change too, and the icon is repainted with the model's new state, never a fixed "on"
+        (was != self.on).then_some(self.on)
     }
 }
 
@@ -266,24 +283,19 @@ pub fn install(app: &tauri::AppHandle) -> tauri::Result<()> {
 /// Is the main window out of sight: hidden, or minimised to the taskbar?
 fn window_hidden(app: &tauri::AppHandle) -> bool {
     use tauri::Manager;
-    app.get_webview_window("main").map(|w| !w.is_visible().unwrap_or(true) || w.is_minimized().unwrap_or(false)).unwrap_or(true)
+    app.get_webview_window(MAIN_LABEL).map(|w| !w.is_visible().unwrap_or(true) || w.is_minimized().unwrap_or(false)).unwrap_or(true)
 }
 
-/// A bell, a finished agent or a usage alert: the dot lights only while the window is out of sight.
+/// A bell, a finished agent or a usage alert: the dot lights only while the window is out of sight, and
+/// the icon is repainted with the model's new state (so a window brought back without a focus event
+/// loses its dot on the next event instead of keeping a stale one).
 pub fn ping(app: &tauri::AppHandle, what: Ping) {
     use tauri::Manager;
     let Some(state) = app.try_state::<TrayState>() else { return };
     let hidden = window_hidden(app);
-    let changed = state.dot.lock().map(|mut d| {
-        if hidden {
-            d.window_hidden();
-        } else {
-            d.window_shown();
-        }
-        d.ping(what)
-    });
-    if matches!(changed, Ok(true)) {
-        refresh(app, true);
+    let repaint = state.dot.lock().map(|mut d| d.report(hidden, what));
+    if let Ok(Some(on)) = repaint {
+        refresh(app, on);
     }
 }
 
@@ -305,7 +317,7 @@ pub fn window_shown(app: &tauri::AppHandle) {
 /// Open Kolux from the tray: the main window is shown, restored and focused, and the dot clears.
 pub fn open_window(app: &tauri::AppHandle) {
     use tauri::Manager;
-    if let Some(w) = app.get_webview_window("main") {
+    if let Some(w) = app.get_webview_window(MAIN_LABEL) {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
@@ -313,20 +325,38 @@ pub fn open_window(app: &tauri::AppHandle) {
     window_shown(app);
 }
 
+/// How long tray Quit waits for the page to answer the close before ending Kolux anyway.
+pub const QUIT_FALLBACK: Duration = Duration::from_secs(5);
+
 /// Quit from the tray: the same path as File > Exit. The quit flag is set, the window is brought back
 /// (so the unsaved-changes question can be seen) and asked to close; the page's close handler then
 /// writes what is pending, asks about unsaved text (VIEW-107) and destroys the window, whose Destroyed
-/// step stops every pane and child process (ACCT-051). Never `app.exit` straight: that would skip the
-/// question and drop a pending layout write. Without a main window there is nothing to ask: plain exit.
+/// step stops every pane and child process (ACCT-051). Never `app.exit` straight while the page is
+/// responsive: that would skip the question and drop a pending layout write. Without a main window there
+/// is nothing to ask: plain exit.
+/// The guaranteed way out (ACCT-051): a page that never answers the close (a hung webview, say under a
+/// runaway terminal burst) would otherwise hold Kolux open for ever, since Tauri leaves the window up
+/// while a page-side close listener exists. So after `QUIT_FALLBACK` the quit's own generation is checked:
+/// still pending means the page never called `tray_close_requested`, and `app.exit(0)` ends Kolux
+/// (RunEvent::Exit still stops every pane). A page that answered has consumed the flag, so a user sitting
+/// at the question is left alone, and a later quit has a newer generation, so it is never mistaken for
+/// this one.
 pub fn quit(app: &tauri::AppHandle) {
     use tauri::Manager;
-    begin_quit();
-    match app.get_webview_window("main") {
+    let generation = begin_quit();
+    match app.get_webview_window(MAIN_LABEL) {
         Some(w) => {
             let _ = w.show();
             let _ = w.unminimize();
             let _ = w.set_focus();
             let _ = w.close();
+            let app = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(QUIT_FALLBACK);
+                if quit_fallback_due(generation) {
+                    app.exit(0);
+                }
+            });
         }
         None => app.exit(0),
     }
@@ -337,19 +367,61 @@ pub fn quit(app: &tauri::AppHandle) {
 pub const CLOSE_TO_TRAY_FIELD: &str = "closeToTray";
 /// The store key that remembers the once-only explanation was shown.
 pub const CLOSE_EXPLAINED_KEY: &str = "tray.closeExplained";
+/// The main window's label; only its close request can hide to the tray or carry a quit.
+pub const MAIN_LABEL: &str = "main";
+
+/// The quit flag with a generation count. `begin` (tray Quit, File > Exit) marks a quit under way and
+/// numbers it; `take` consumes it on the close request that follows (one-shot, so a quit cancelled at
+/// the unsaved-changes question leaves no trace); `fallback_due(generation)` tells the timer that tray
+/// Quit started whether ITS quit is still unanswered: true only while that very generation is pending.
+#[derive(Debug, Default)]
+pub struct QuitFlag {
+    pending: u64,
+    last: u64,
+}
+
+impl QuitFlag {
+    /// A quit is under way: returns its generation.
+    pub fn begin(&mut self) -> u64 {
+        self.last += 1;
+        self.pending = self.last;
+        self.last
+    }
+    /// Reads the flag for the close request being handled and clears it.
+    pub fn take(&mut self) -> bool {
+        std::mem::take(&mut self.pending) != 0
+    }
+    /// Is the quit numbered `generation` still waiting for the page? A consumed flag (the page answered,
+    /// perhaps with the unsaved-changes question) or a newer quit means no.
+    pub fn fallback_due(&self, generation: u64) -> bool {
+        generation != 0 && self.pending == generation
+    }
+}
+
 /// Set by `begin_quit` (tray Quit, File > Exit), consumed by `take_quitting` on the close request that
 /// follows; a real quit is never turned into a hide.
-static QUITTING: AtomicBool = AtomicBool::new(false);
+static QUITTING: Mutex<QuitFlag> = Mutex::new(QuitFlag { pending: 0, last: 0 });
 
 /// A quit is under way (tray Quit, File > Exit): the close request that follows is a real quit, never a
-/// hide. One-shot, so a quit the user then cancels at the unsaved-changes question leaves no trace.
-pub fn begin_quit() {
-    QUITTING.store(true, Ordering::SeqCst);
+/// hide. Returns the quit's generation for `quit_fallback_due`.
+pub fn begin_quit() -> u64 {
+    QUITTING.lock().map(|mut q| q.begin()).unwrap_or(0)
 }
 
 /// Reads the quit flag for the close request being handled and clears it.
 pub fn take_quitting() -> bool {
-    QUITTING.swap(false, Ordering::SeqCst)
+    QUITTING.lock().map(|mut q| q.take()).unwrap_or(false)
+}
+
+/// Is the quit numbered `generation` still unanswered by the page?
+pub fn quit_fallback_due(generation: u64) -> bool {
+    QUITTING.lock().map(|q| q.fallback_due(generation)).unwrap_or(false)
+}
+
+/// Does `tray_close_requested` act for a window with this label? Only the main window's close can hide
+/// to the tray or carry a quit; any other window's call changes nothing.
+pub fn handles_close_request(label: &str) -> bool {
+    label == MAIN_LABEL
 }
 
 /// Does this close click hide the window instead of closing it? Only on Windows, only with the option
@@ -391,7 +463,7 @@ pub fn on_close_requested(app: &tauri::AppHandle, quitting: bool) -> bool {
     if !close_hides(Os::current(), &settings, quitting, icon_present(app)) {
         return false;
     }
-    if let Some(w) = app.get_webview_window("main") {
+    if let Some(w) = app.get_webview_window(MAIN_LABEL) {
         let _ = w.hide();
     }
     if let Some(state) = app.try_state::<TrayState>() {
@@ -420,9 +492,14 @@ pub fn on_close_requested(app: &tauri::AppHandle, quitting: bool) -> bool {
 /// every close request of the main window and reads `{ hid, quitting }`: `hid` true means the window
 /// went to the tray and the page must keep it alive and ask nothing; `quitting` says tray Quit or
 /// File > Exit asked for this close (the flag is consumed here, so a quit cancelled at the question
-/// leaves nothing behind). Registered by `evidence/tray-FIX-1-lib.rs.patch`.
+/// leaves nothing behind). Registered by `evidence/tray-FIX-1-lib.rs.patch`. Tauri passes the calling
+/// window: only the main window's call does anything; another window (the Tower) closing gets
+/// `{ hid: false, quitting: false }` and leaves the quit flag alone.
 #[tauri::command]
-pub fn tray_close_requested(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+pub fn tray_close_requested(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<serde_json::Value, String> {
+    if !handles_close_request(window.label()) {
+        return Ok(serde_json::json!({ "hid": false, "quitting": false }));
+    }
     let quitting = take_quitting();
     let hid = on_close_requested(&app, quitting);
     Ok(serde_json::json!({ "hid": hid, "quitting": quitting }))
@@ -635,6 +712,43 @@ mod tests {
         begin_quit();
         assert!(take_quitting(), "the close request after tray Quit or File > Exit is a quit");
         assert!(!take_quitting(), "the flag is consumed: a quit cancelled at the unsaved-changes question does not turn the next close into a quit");
+    }
+
+    #[test]
+    fn app_007_fix2_tray_quit_falls_back_to_exit_only_while_its_own_flag_is_still_pending() {
+        let mut q = QuitFlag::default();
+        assert!(!q.fallback_due(0), "no quit under way: nothing to fall back to");
+        let first = q.begin();
+        assert!(q.fallback_due(first), "the page never answered the close: the fallback must end Kolux");
+        assert!(q.take(), "the page's close handler consumes the flag");
+        assert!(!q.fallback_due(first), "consumed (the user may be sitting at the unsaved-changes question): the fallback does nothing");
+        assert!(!q.take(), "one-shot");
+        let again = q.begin();
+        assert_ne!(again, first, "every quit gets its own generation");
+        assert!(!q.fallback_due(first), "a newer quit is never mistaken for the old one");
+        assert!(q.fallback_due(again), "the newer quit's own timer still fires");
+    }
+
+    #[test]
+    fn stat_047_fix2_a_ping_with_the_window_back_repaints_the_dot_off() {
+        let mut d = Dot::default();
+        assert_eq!(d.report(true, Ping::AgentFinished), Some(true), "hidden: the dot comes on");
+        assert!(d.on);
+        // the window was restored without a focus event; the next agent event finds it visible
+        assert_eq!(d.report(false, Ping::AgentFinished), Some(false), "shown: the icon is repainted WITHOUT the dot");
+        assert!(!d.on);
+        assert_eq!(d.report(false, Ping::Bell), None, "nothing changed: no repaint");
+        assert_eq!(d.report(true, Ping::Bell), Some(true), "hidden again: on");
+        assert_eq!(d.report(true, Ping::UsageAlert), None, "already on: no repaint");
+    }
+
+    #[test]
+    fn app_007_fix2_only_the_main_windows_close_request_is_handled() {
+        assert!(handles_close_request(MAIN_LABEL));
+        assert!(handles_close_request("main"));
+        assert!(!handles_close_request("tower"), "the Tower window's close never hides main or consumes the quit flag");
+        assert!(!handles_close_request("Main"), "labels are exact");
+        assert!(!handles_close_request(""));
     }
 
     #[test]

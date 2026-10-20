@@ -44,6 +44,20 @@ test("stat044 test notifications ignore the cooldown and the id memory", () => {
   expect(decide(decide(s, t, quiet).state, t, quiet).show).toBe(true);
 });
 
+test("stat044 fix-2: a gone-quiet warning (it may be stuck) is never held back by the cooldown or by 'Stay quiet'", () => {
+  const looking = { windowFocused: true, suppressFocused: true, focusedWorktree: "C:/w/a" };
+  // a finish for C:/w/a was just shown, so a second finish right now would merge into its cooldown
+  const s = decide(emptyPacer(), ev(), quiet).state;
+  const r = decide(s, ev({ id: "a:quiet", kind: "quiet", at: 1500 }), looking);
+  expect(r.show).toBe(true);
+  expect(r.reason).toBe("shown");
+  // the same quiet report twice is still one notification, and its click target is kept
+  expect(decide(r.state, ev({ id: "a:quiet", kind: "quiet", at: 1600 }), looking).reason).toBe("duplicate");
+  expect(paneFor(r.state, "a:quiet")).toBe("p1");
+  // a quiet warning does not restart the worktree's cooldown for the finishes that follow
+  expect(decide(r.state, ev({ id: "a:2", at: 1000 + COOLDOWN_MS }), quiet).show).toBe(true);
+});
+
 test("stat044 the worktree in view stays quiet while the window has focus if that option is on", () => {
   const looking = { windowFocused: true, suppressFocused: true, focusedWorktree: "C:/w/a" };
   const r = decide(emptyPacer(), ev(), looking);
