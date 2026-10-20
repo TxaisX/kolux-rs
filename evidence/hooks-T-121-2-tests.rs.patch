@@ -1,0 +1,14 @@
+diff --git a/src-tauri/src/agent_hooks/tests.rs b/src-tauri/src/agent_hooks/tests.rs
+index 84e01e6a..0c3b9e1f 100644
+--- a/src-tauri/src/agent_hooks/tests.rs
++++ b/src-tauri/src/agent_hooks/tests.rs
+@@ -25,7 +25,8 @@ fn stat_004_hooks_go_only_to_found_agents_and_leave_switched_off_ones() {
+     assert_eq!(plan(&none, &ids(&["cursor", "kimi"]), true)[5..9], [("cursor", Plan::Install), ("droid", Plan::Leave), ("kimi", Plan::Install), ("copilot", Plan::Leave)], "T-121: and Cursor, Droid and Kimi too");
+     assert_eq!(plan(&none, &ids(&["copilot"]), true)[8], ("copilot", Plan::Install), "T-122: and Copilot CLI");
+     assert_eq!(plan(&none, &ids(&["grok", "devin"]), true)[9..11], [("grok", Plan::Install), ("devin", Plan::Install)], "T-122: and Grok and Devin");
+-    assert_eq!(plan(&none, &ids(&["pi"]), true)[11..], [("pi", Plan::Install)], "T-122: and Pi (STAT-021)");
++    assert_eq!(plan(&none, &ids(&["pi"]), true)[11..12], [("pi", Plan::Install)], "T-122: and Pi (STAT-021)");
++    assert_eq!(plan(&none, &ids(&["hermes"]), true)[12..], [("hermes", Plan::Install)], "T-121: and Hermes (STAT-016)");
+     let off = json!({ "agentStatusHooks": true, "disabledAgents": ["codex"] });
+     assert_eq!(plan(&off, &ids(&["claude", "codex"]), true)[..2], [("claude", Plan::Install), ("codex", Plan::Remove)], "a switched-off agent has its hooks taken out");
+     assert_eq!(plan(&off, &[], false)[..2], [("claude", Plan::Leave), ("codex", Plan::Remove)], "detection failed: nothing installed, nothing removed for being unfound");

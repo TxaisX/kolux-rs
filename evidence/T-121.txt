@@ -108,3 +108,51 @@ LIVE PROOF PENDING (batched)
   --accept-hooks / HERMES_ACCEPT_HOOKS=1 / hooks_auto_accept). It names plugins.enabled but not its format, so the
   spec's "switched-on plugin" route is still not buildable from public docs. The shell-hook route is a spec change
   (after-list design call) and needs a marked YAML block writer; not started this batch (budget).
+
+== Batch 6 (2026-10-20, hooks lane, Opus 5.5; lane/hooks from 8e6ef489): STAT-016 Hermes BUILT ==
+Coordinator default (Txais may overrule): built through Hermes's DOCUMENTED config.yaml shell hooks, not the
+card's "switched-on plugin" route, because the plugins.enabled list format is undocumented (after-list row).
+Source (public docs only): https://hermes-agent.nousresearch.com/docs/user-guide/features/hooks (shell hooks:
+top-level hooks: key in ~/.hermes/config.yaml keyed by event, entries command / timeout (seconds) / matcher;
+command split shell-style without a shell; stdin JSON hook_event_name, tool_name, tool_input, session_id, cwd,
+profile, extra; stdout read as a decision; first-use consent per (event, command) kept in
+~/.hermes/shell-hooks-allowlist.json as {"approvals": [{"event", "command"}]}, also --accept-hooks /
+HERMES_ACCEPT_HOOKS=1 / hooks_auto_accept). https://hermes-agent.nousresearch.com/docs/user-guide/configuration
+(state is profile-scoped through HERMES_HOME).
+Built (src-tauri/src/agent_hooks/hermes.rs, hermes_tests.rs; wired in more.rs; MANAGED/apply via
+evidence/hooks-T-121-2-mod.rs.patch, stat_004 via evidence/hooks-T-121-2-tests.rs.patch):
+- Events hooked (13): on_session_start (ignored, idle), pre_llm_call -> working, pre_tool_call / post_tool_call
+  -> working, pre_approval_request -> needs you (permission), post_approval_response -> working,
+  on_human_input_request -> waiting (question), on_human_input_resolved -> working, post_llm_call /
+  on_session_end / on_session_finalize / on_session_reset / agent_loop_stopped -> done.
+- No YAML crate in Cargo.toml and none added: a marked-block LINE editor, not a YAML parser. Kolux's entries
+  go in as blocks between "# >>> kolux-rs status hooks (... sum <16 hex>) >>>" and "# <<< kolux-rs status hooks
+  <<<"; the begin line carries a sha256 prefix of the block's lines. Under each event the user already hooks,
+  one block opens the user's own list; the other events go in one block opening the hooks: map; with no
+  hooks: key, one block at the end holds the whole key. A block whose lines no longer match its sum (edited
+  by hand), a lost end line or a stray end line: install AND removal refuse and leave the file alone.
+  Shapes a line editor cannot join (hooks: {} on one line, hooks as a list, an event set on one line or as a
+  map, two hooks: keys, a flow-style root) are refused, file untouched.
+- Removal gives the user's file back byte for byte (CRLF and a missing last line break included); a file
+  Kolux created goes; an emptied file stays empty. Command written as YAML '"<script path>"' (forward slashes,
+  quoted for the shell-style split). Hermes home: HERMES_HOME for the real home only; a scratch home keeps
+  ~/.hermes inside it (as Grok's GROK_HOME).
+- First-use consent: the docs give the allowlist file for approving without a prompt, so Kolux adds its 13
+  (event, command) pairs beside the user's (an older Kolux path's pairs are replaced) and takes only its own
+  out on removal (a file Kolux created goes). The status row says partial with a consent hint when the pairs
+  are missing.
+Tests (cargo test --lib hermes, 5 new): stat_016_install_keeps_the_users_yaml_and_removal_gives_it_back_byte_for_byte,
+stat_016_a_block_edited_by_hand_is_refused_not_overwritten, stat_016_crlf_missing_and_emptied_files,
+stat_016_shapes_a_line_editor_cannot_join_are_left_alone, stat_016_hermes_events_drive_the_dot; plus
+more::tests::t_121_rows_name_each_agent (Hermes row) and stat_004 (patch). Generated YAML parsed with the
+yaml npm package (uniqueKeys): user's pre_tool_call list holds Kolux's entry and the user's own; 13 events.
+Gates (logs G:/Temp/hooks-v3-logs/b6-t121-*): patched (24 patches) build 0, clippy 0, agent_hooks 102 passed /
+4 failed (known: t_152_1, t_134_b, t_152_b_2, vendors fix1_apply), hooks 121/4 known, status 57/0; reverted
+build 0, clippy 0, agent_hooks 102/4 known, status 57/0.
+LIVE PROOF PENDING (batched): with a scratch HOME holding .hermes/config.yaml (one user hook of your own),
+start Kolux (hooks on, Hermes found), open the Agents status rows: Hermes "installed"; config.yaml shows the
+user's text unchanged plus Kolux's marked blocks; run Hermes in a pane, ask for a tool that needs approval:
+dot shows needs you, approve: working, turn ends: done. Switch Hermes off: config.yaml is byte for byte the
+original and the allowlist holds only the user's pairs.
+Still open on T-121: STAT-013 Droid PermissionRequest install, STAT-014 Command Code, STAT-015 Kimi limit
+fields (no public reference for any of them).

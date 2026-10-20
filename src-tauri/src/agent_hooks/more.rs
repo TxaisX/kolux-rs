@@ -12,6 +12,7 @@
 //! - Grok (STAT-018, `grok`): Kolux's own `kolux-rs.json` in `hooks` under Grok's home, taken away at quit.
 //! - Devin CLI (STAT-019, `devin`): marked blocks in its commented user config (`jsonc`).
 //! - Pi (STAT-021, `pi`): Kolux's own extension file, `kolux-rs.ts`, in Pi's user extensions folder.
+//! - Hermes (STAT-016, `hermes`): marked blocks in its `config.yaml` shell hooks, approved in its allowlist.
 
 use super::super::{codex_change, install_groups, script, write_atomic, write_json, write_script, Change};
 use super::{back_up, backup_of, drop_created, fenced, kept, names_mine, read_opt, remove_groups, scratch_only, target_dir, was_created, Plan, BACKUP_RECORD};
@@ -24,7 +25,7 @@ pub const CURSOR_SCRIPT: &str = "cursor.cmd";
 pub const DROID_SCRIPT: &str = "droid.cmd";
 pub const KIMI_SCRIPT: &str = "kimi.cmd";
 /// The agents this module manages, by catalogue id.
-pub const AGENTS: [&str; 7] = ["cursor", "droid", "kimi", "copilot", "grok", "devin", "pi"];
+pub const AGENTS: [&str; 8] = ["cursor", "droid", "kimi", "copilot", "grok", "devin", "pi", "hermes"];
 pub const COPILOT_SCRIPT: &str = "copilot.cmd";
 /// STAT-017: Copilot CLI's 13 events, under the names its compat list gives (the PascalCase ones,
 /// whose payloads carry snake_case fields; subagentStart has no PascalCase form).
@@ -230,6 +231,8 @@ pub fn normalize_with(memory: &mut Memory, path: &str, event: &Value) -> Option<
         "devin" => devin::event(name, event)?,
         // T-122: Pi (STAT-021), through Kolux's own extension.
         "pi" => pi::event(name, event)?,
+        // T-121: Hermes (STAT-016), through its config.yaml shell hooks.
+        "hermes" => hermes::event(name, event)?,
         _ => return None,
     };
     let o = out.as_object_mut()?;
@@ -310,6 +313,7 @@ pub fn write_scripts(home: &Path) -> Result<String, String> {
     write_copilot_script(home)?;
     grok::write_script(home)?;
     pi::write_script(home)?;
+    hermes::write_script(home)?;
     devin::write_script(home)
 }
 
@@ -725,6 +729,12 @@ pub fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'stat
             let file = target(profile, pi::file(home))?;
             if install { pi::install(home, &file) } else { pi::remove(&file) }
         }
+        // STAT-016: the marked config.yaml blocks and their allowlist pairs.
+        "hermes" => {
+            let file = target(profile, hermes::file(home))?;
+            let allow = target(profile, hermes::allow_file(home))?;
+            if install { hermes::install(home, &file, &allow) } else { hermes::remove(home, &file, &allow) }
+        }
         _ => return Ok("left as it was"),
     }
     .map(|_| if install { "installed" } else { "removed" })
@@ -800,6 +810,7 @@ pub fn rows(home: &Path) -> Vec<Value> {
         row("grok", "Grok", grok::file(home), grok::inspect(home, &grok::file(home))),
         row("devin", "Devin", devin::file(home), devin::inspect(&devin::file(home))),
         row("pi", "Pi", pi::file(home), pi::inspect(home, &pi::file(home))),
+        row("hermes", "Hermes", hermes::file(home), hermes::inspect(home, &hermes::file(home), &hermes::allow_file(home))),
     ]
 }
 
@@ -811,6 +822,8 @@ pub mod grok;
 pub mod devin;
 #[path = "pi.rs"]
 pub mod pi;
+#[path = "hermes.rs"]
+pub mod hermes;
 
 #[cfg(test)]
 #[path = "more_tests.rs"]
