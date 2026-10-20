@@ -843,3 +843,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · repo T-226 · spec/05 VIEW-071, VIEW-074, VIEW-078 as given in the brief; Windows netstat public docs (listening table columns); this tree's own scm and terminal modules; no outside code
 > 2026-10-19 · repo T-214-b · spec/01 PROJ-005, PROJ-008 as given in the brief; this tree's own projects.rs, setup.rs, bulk.rs; no outside code
 > 2026-10-19 · repo T-215-b · spec/01 PROJ-012, PROJ-013 as given in the brief; this tree's own groups.rs and projects.rs; no outside code
+> 2026-10-19 · accounts T-171-c · spec/07 ACCT-021, ACCT-024 as given in the brief; Codex CLI public docs (the CODEX_HOME folder holds config.toml, AGENTS.md, prompts, skills, auth.json, sessions); this tree's own codex_accounts.rs and terminal.rs; no outside code
