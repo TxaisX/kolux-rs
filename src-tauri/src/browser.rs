@@ -16,6 +16,11 @@ use std::time::{Duration, Instant};
 use tauri::webview::{Color, NewWindowResponse, PageLoadEvent, WebviewBuilder};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Url, Webview, WebviewUrl};
 
+// T-195 (BROW-042, BROW-046, BROW-047): the command line's browser commands; cli.rs reaches them
+// through evidence/browser-T-195-cli.rs.patch.
+#[path = "browser_cli.rs"]
+pub mod cli;
+
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
 pub const CHORD_EVENT: &str = "browser-chord";
@@ -619,6 +624,8 @@ fn err(e: tauri::Error) -> String {
 #[allow(clippy::too_many_arguments)] // a Tauri command takes its arguments one by one
 pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webview, id: u32, url: String, spot: Spot, background: Option<[u8; 3]>, shown: Option<bool>) -> Result<(), String> {
     let url = parse(&url)?;
+    let _ = APP.set(app.clone()); // T-195: the command line's browser commands need the app
+    let _ = DRIVER.set(Box::new(drive));
     let dev = app_origin(&app);
     allowed(&url, dev.as_ref())?;
     let load_app = app.clone();
@@ -767,6 +774,7 @@ pub async fn browser_go(app: AppHandle, id: u32, what: String, text: Option<Stri
 #[tauri::command]
 pub async fn browser_close(app: AppHandle, id: u32) -> Result<(), String> {
     set_shown(id, false);
+    forget_tab(id);
     if let Ok(mut i) = ICONS.lock() {
         i.forget(id);
     }
@@ -811,6 +819,298 @@ pub async fn browser_probe(app: AppHandle, id: u32) -> Result<&'static str, Stri
     }
     let answer = tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(PROBE_WAIT).ok()).await.map_err(|e| e.to_string())?;
     Ok(answer.as_deref().map_or("no-answer", probe_result))
+}
+
+// ---------------------------------------------------------------- T-195: agents and notes drive the tab
+
+/// The app, for the browser commands of the command line (BROW-042): cli.rs answers requests on
+/// a thread of its own with no handle to the app, so the first tab opened leaves one here.
+static APP: OnceLock<AppHandle> = OnceLock::new();
+
+/// An open tab as its pane reports it (`browser_tab`): whose worktree it belongs to and whether it
+/// is the one on screen in its split. `seen` orders the tabs by when they were last on screen.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Tab {
+    pub id: u32,
+    pub worktree: Option<String>,
+    pub shown: bool,
+    pub seen: u64,
+}
+
+static TABS: Mutex<Vec<Tab>> = Mutex::new(Vec::new());
+static TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// How long a page command may take before the tab counts as not answering (a long script
+/// answers late; `wait` asks again).
+pub const EVAL_WAIT: Duration = Duration::from_millis(3000);
+/// Two unanswered page commands in a row and the page's helper is dropped, so the next command
+/// installs a fresh one (BROW-042: a stuck helper restarts).
+const EVAL_STRIKES: u8 = 2;
+static STRIKES: Mutex<Vec<(u32, u8)>> = Mutex::new(Vec::new());
+
+pub fn tabs() -> Vec<Tab> {
+    TABS.lock().map(|t| t.clone()).unwrap_or_default()
+}
+
+/// Records a tab's worktree and whether it is on screen; a tab on screen is the most recently seen.
+pub fn note_tab(tabs: &mut Vec<Tab>, id: u32, worktree: Option<String>, shown: bool, tick: u64) {
+    let seen = if shown { tick } else { tabs.iter().find(|t| t.id == id).map_or(0, |t| t.seen) };
+    match tabs.iter_mut().find(|t| t.id == id) {
+        Some(t) => {
+            t.worktree = worktree;
+            t.shown = shown;
+            t.seen = seen;
+        }
+        None => tabs.push(Tab { id, worktree, shown, seen }),
+    }
+}
+
+fn forget_tab(id: u32) {
+    if let Ok(mut t) = TABS.lock() {
+        t.retain(|t| t.id != id);
+    }
+    if let Ok(mut s) = STRIKES.lock() {
+        s.retain(|s| s.0 != id);
+    }
+}
+
+/// Two spellings of one folder: the real path when it exists, else the text with slashes and
+/// case made alike (Windows paths).
+pub fn same_dir(a: &str, b: &str) -> bool {
+    fn norm(p: &str) -> String {
+        let real = std::path::Path::new(p).canonicalize().map(|r| r.to_string_lossy().to_string()).unwrap_or_else(|_| p.to_string());
+        real.replace('\\', "/").trim_end_matches('/').to_lowercase()
+    }
+    norm(a) == norm(b)
+}
+
+/// BROW-042: which tab a command goes to. `--page` names one (a tab its pane has reported);
+/// otherwise the worktree's tab on screen, else the one last on screen there. Tabs the panes have
+/// not described yet (none carry a worktree) count for any worktree.
+pub fn pick_tab(tabs: &[Tab], page: Option<u32>, worktree: Option<&str>) -> Result<u32, String> {
+    if let Some(id) = page {
+        return if tabs.iter().any(|t| t.id == id) { Ok(id) } else { Err(format!("browser tab {id} is not open")) };
+    }
+    let best = |set: &[&Tab]| set.iter().find(|t| t.shown).or_else(|| set.iter().max_by_key(|t| t.seen)).map(|t| t.id);
+    let all: Vec<&Tab> = tabs.iter().collect();
+    let Some(wt) = worktree else {
+        return best(&all).ok_or_else(|| "no browser tab is open".to_string());
+    };
+    let mine: Vec<&Tab> = tabs.iter().filter(|t| t.worktree.as_deref().is_some_and(|w| same_dir(w, wt))).collect();
+    if let Some(id) = best(&mine) {
+        return Ok(id);
+    }
+    if tabs.iter().all(|t| t.worktree.is_none()) {
+        if let Some(id) = best(&all) {
+            return Ok(id);
+        }
+    }
+    Err(format!("no browser tab is open in {wt}"))
+}
+
+/// The pane says which worktree its tab belongs to and whether it is on screen (BROW-042).
+// Registered by evidence/browser-T-195-lib.rs.patch (lib.rs is a shared file); drop this allow once applied.
+#[allow(dead_code)]
+#[tauri::command]
+pub async fn browser_tab(id: u32, worktree: Option<String>, shown: bool) -> Result<(), String> {
+    let tick = TICK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut t = TABS.lock().map_err(|e| e.to_string())?;
+    note_tab(&mut t, id, worktree, shown, tick);
+    Ok(())
+}
+
+/// What the command line asks of a page. The code that reaches the web view sits behind this
+/// hook, set when the first tab opens, so cli.rs never links it directly: a test binary that links
+/// the window toolkit cannot load without the app's manifest (comctl32 v6), and cli.rs's tests
+/// call dispatch.
+pub enum Act<'a> {
+    Eval(u32, &'a str, Duration),
+    Navigate(u32, &'a str),
+    Go(u32, &'a str),
+}
+type Driver = dyn Fn(Act) -> Result<serde_json::Value, String> + Send + Sync;
+static DRIVER: OnceLock<Box<Driver>> = OnceLock::new();
+
+fn driver() -> Result<&'static Driver, String> {
+    DRIVER.get().map(|d| d.as_ref()).ok_or_else(|| "no browser tab has been opened yet".to_string())
+}
+
+/// The driver behind the hook: the one place the command line's work touches a web view.
+fn drive(act: Act) -> Result<serde_json::Value, String> {
+    let app = APP.get().ok_or("no browser tab has been opened yet")?;
+    match act {
+        Act::Eval(id, script, wait) => {
+            let v = view(app, id)?;
+            let (tx, rx) = std::sync::mpsc::channel::<String>();
+            v.eval_with_callback(script, move |answer| {
+                let _ = tx.send(answer);
+            })
+            .map_err(err)?;
+            match rx.recv_timeout(wait) {
+                Ok(answer) => {
+                    if let Ok(mut s) = STRIKES.lock() {
+                        s.retain(|s| s.0 != id);
+                    }
+                    serde_json::from_str(&answer).map_err(|_| "the page answered with something that is not JSON".to_string())
+                }
+                Err(_) => {
+                    let strikes = STRIKES.lock().map(|mut s| match s.iter_mut().find(|s| s.0 == id) {
+                        Some(s) => {
+                            s.1 += 1;
+                            s.1
+                        }
+                        None => {
+                            s.push((id, 1));
+                            1
+                        }
+                    });
+                    if strikes.is_ok_and(|n| n >= EVAL_STRIKES) {
+                        let _ = v.eval("delete window.__kx; delete window.__kxa");
+                        if let Ok(mut s) = STRIKES.lock() {
+                            s.retain(|s| s.0 != id);
+                        }
+                    }
+                    Err(format!("browser tab {id} did not answer within {} ms", wait.as_millis()))
+                }
+            }
+        }
+        Act::Navigate(id, url) => {
+            // `kolux goto`: the same gate as the address bar (T-500), then the page goes there.
+            let url = parse(url)?;
+            allowed(&url, app_origin(app).as_ref())?;
+            let to = url.to_string();
+            view(app, id)?.navigate(url).map_err(err)?;
+            Ok(serde_json::Value::String(to))
+        }
+        Act::Go(id, what) => {
+            let v = view(app, id)?;
+            match what {
+                "reload" => v.reload().map_err(err)?,
+                _ => v.eval(script(what).ok_or_else(|| format!("unknown browser action {what}"))?).map_err(err)?,
+            }
+            Ok(serde_json::Value::Null)
+        }
+    }
+}
+
+/// Runs a script in a tab's page and hands back the JSON it completes with. Blocking: it waits for
+/// the page's answer, so it runs on the command line's thread or under `spawn_blocking`, never on
+/// the app's main thread (which delivers the answer).
+pub fn eval_json(id: u32, script: &str, wait: Duration) -> Result<serde_json::Value, String> {
+    driver()?(Act::Eval(id, script, wait))
+}
+
+/// `kolux goto`; the answer is the address the page was sent to.
+pub fn navigate_to(id: u32, url: &str) -> Result<String, String> {
+    driver()?(Act::Navigate(id, url)).map(|v| v.as_str().unwrap_or_default().to_string())
+}
+
+/// `kolux back|forward|reload`.
+pub fn go(id: u32, what: &str) -> Result<(), String> {
+    driver()?(Act::Go(id, what)).map(|_| ())
+}
+
+/// BROW-037: the picker that runs in the page while the user annotates it. A hover outlines the
+/// element under the pointer; a click is taken (the page does not get it) and queued as a pick:
+/// a selector, the element's path, its text, its data-* hints, the React component chain and
+/// source location when the page carries them, and the computed styles that matter. `poll` drains
+/// the queue; `stop` takes the picker out again.
+const ANNOTATE_START: &str = r#"(function(){
+if(window.__kxa) return {ok:true,active:true};
+const A={q:[]};
+const box=document.createElement('div'); box.setAttribute('data-kx-annotate',''); box.style.cssText='position:fixed;pointer-events:none;z-index:2147483647;border:2px solid #ff5a00;background:rgba(255,90,0,.08);border-radius:2px;transition:all .05s;display:none';
+(document.body||document.documentElement).appendChild(box);
+const sel=e=>{ if(e.id&&document.querySelectorAll('#'+CSS.escape(e.id)).length===1) return '#'+CSS.escape(e.id); const tid=e.getAttribute('data-testid'); if(tid) return '[data-testid="'+tid+'"]';
+ const parts=[]; let n=e; while(n&&n.nodeType===1&&parts.length<5){ let p=n.tagName.toLowerCase(); if(n.id){ parts.unshift('#'+CSS.escape(n.id)); break; } const sib=[...(n.parentElement?n.parentElement.children:[])].filter(c=>c.tagName===n.tagName); if(sib.length>1) p+=':nth-of-type('+(sib.indexOf(n)+1)+')'; parts.unshift(p); n=n.parentElement; } return parts.join(' > '); };
+const path=e=>{ const out=[]; let n=e; while(n&&n.nodeType===1&&out.length<8){ out.unshift(n.tagName.toLowerCase()+(n.id?'#'+n.id:'')+(n.classList.length?'.'+[...n.classList].slice(0,2).join('.'):'')); n=n.parentElement; } return out.join(' > '); };
+const react=e=>{ const k=Object.keys(e).find(k=>k.startsWith('__reactFiber$')||k.startsWith('__reactInternalInstance$')); if(!k) return {}; let f=e[k]; const chain=[]; let src=null;
+ while(f&&chain.length<6){ const t=f.type; if(t&&typeof t!=='string'){ const nm=t.displayName||t.name||(t.render&&(t.render.displayName||t.render.name)); if(nm) chain.push(nm); } if(!src&&f._debugSource) src=f._debugSource.fileName+':'+f._debugSource.lineNumber; f=f.return; }
+ return {component:chain.length?chain.join(' < '):undefined,source:src||undefined}; };
+const styles=e=>{ const s=getComputedStyle(e); const out={}; for(const k of ['color','background-color','font-size','font-family','font-weight','padding','margin','border','display']){ const v=s.getPropertyValue(k); if(v&&v!=='none'&&v!=='normal'&&v!=='0px') out[k]=v; } return out; };
+const hints=e=>{ const out={}; for(const a of e.attributes){ if(a.name.startsWith('data-')||a.name.startsWith('aria-')||a.name==='role'||a.name==='name'||a.name==='href'||a.name==='type'||a.name==='class') out[a.name]=a.value.slice(0,200); } return out; };
+A.move=ev=>{ const e=ev.target; if(!(e instanceof Element)||e===box){ return; } const r=e.getBoundingClientRect(); box.style.display='block'; box.style.left=r.left+'px'; box.style.top=r.top+'px'; box.style.width=r.width+'px'; box.style.height=r.height+'px'; };
+A.click=ev=>{ ev.preventDefault(); ev.stopImmediatePropagation(); const e=ev.target; if(!(e instanceof Element)) return; const r=e.getBoundingClientRect(); const rx=react(e);
+ A.q.push({selector:sel(e),path:path(e),tag:e.tagName.toLowerCase(),text:((e.innerText||e.textContent||'').trim().replace(/\s+/g,' ')).slice(0,200),component:rx.component,source:rx.source,hints:hints(e),styles:styles(e),box:{x:Math.round(r.x),y:Math.round(r.y),width:Math.round(r.width),height:Math.round(r.height)},url:location.href}); };
+A.swallow=ev=>{ ev.preventDefault(); ev.stopImmediatePropagation(); };
+A.key=ev=>{ if(ev.key==='Escape'){ ev.preventDefault(); ev.stopImmediatePropagation(); A.q.push({escape:true}); } };
+document.addEventListener('mousemove',A.move,true); document.addEventListener('click',A.click,true); document.addEventListener('mousedown',A.swallow,true); document.addEventListener('mouseup',A.swallow,true); document.addEventListener('keydown',A.key,true);
+A.box=box; window.__kxa=A; return {ok:true,active:true};
+})()"#;
+const ANNOTATE_POLL: &str = "(function(){ const a=window.__kxa; if(!a) return {active:false,picks:[]}; return {active:true,picks:a.q.splice(0)}; })()";
+const ANNOTATE_STOP: &str = "(function(){ const a=window.__kxa; if(!a) return {ok:true,active:false}; document.removeEventListener('mousemove',a.move,true); document.removeEventListener('click',a.click,true); document.removeEventListener('mousedown',a.swallow,true); document.removeEventListener('mouseup',a.swallow,true); document.removeEventListener('keydown',a.key,true); a.box.remove(); delete window.__kxa; return {ok:true,active:false}; })()";
+
+/// The picker's script for `start`, `poll` or `stop`.
+pub fn annotate_script(what: &str) -> Option<&'static str> {
+    match what {
+        "start" => Some(ANNOTATE_START),
+        "poll" => Some(ANNOTATE_POLL),
+        "stop" => Some(ANNOTATE_STOP),
+        _ => None,
+    }
+}
+
+/// BROW-037: starts, polls or stops the page picker in a tab; `poll` answers `{active, picks}`.
+// Registered by evidence/browser-T-195-lib.rs.patch (lib.rs is a shared file); drop this allow once applied.
+#[allow(dead_code)]
+#[tauri::command]
+pub async fn browser_annotate(app: AppHandle, id: u32, what: String) -> Result<serde_json::Value, String> {
+    let _ = APP.set(app);
+    let script = annotate_script(&what).ok_or_else(|| format!("unknown annotate step {what}"))?;
+    tauri::async_runtime::spawn_blocking(move || eval_json(id, script, EVAL_WAIT)).await.map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod agent_tests {
+    use super::*;
+
+    fn tab(id: u32, worktree: Option<&str>, shown: bool, seen: u64) -> Tab {
+        Tab { id, worktree: worktree.map(str::to_string), shown, seen }
+    }
+
+    #[test]
+    fn brow042_the_worktrees_tab_on_screen_else_its_last_seen_else_a_clear_refusal() {
+        let tabs = vec![tab(1, Some("G:/wt/a"), false, 5), tab(2, Some("G:/wt/a"), true, 7), tab(3, Some("G:/wt/b"), false, 9)];
+        assert_eq!(pick_tab(&tabs, None, Some("G:/wt/a")), Ok(2));
+        assert_eq!(pick_tab(&tabs, None, Some("g:\\wt\\b\\")), Ok(3), "spellings of one folder match");
+        assert_eq!(pick_tab(&tabs, None, Some("G:/wt/c")), Err("no browser tab is open in G:/wt/c".into()));
+        assert_eq!(pick_tab(&tabs, None, None), Ok(2));
+        assert_eq!(pick_tab(&[tab(1, Some("G:/wt/a"), false, 5), tab(4, Some("G:/wt/a"), false, 8)], None, Some("G:/wt/a")), Ok(4), "none on screen: the last seen");
+        assert_eq!(pick_tab(&tabs, Some(3), Some("G:/wt/a")), Ok(3), "--page wins");
+        assert_eq!(pick_tab(&tabs, Some(9), None), Err("browser tab 9 is not open".into()));
+        assert_eq!(pick_tab(&[], None, None), Err("no browser tab is open".into()));
+        // Panes that have not reported a worktree yet: their tabs serve any worktree.
+        assert_eq!(pick_tab(&[tab(1, None, true, 1)], None, Some("G:/wt/a")), Ok(1));
+    }
+
+    #[test]
+    fn brow042_the_registry_keeps_one_row_per_tab_and_orders_by_last_shown() {
+        let mut tabs = Vec::new();
+        note_tab(&mut tabs, 1, Some("G:/wt/a".into()), true, 1);
+        note_tab(&mut tabs, 2, Some("G:/wt/a".into()), true, 2);
+        note_tab(&mut tabs, 1, Some("G:/wt/a".into()), false, 3);
+        assert_eq!(tabs, vec![tab(1, Some("G:/wt/a"), false, 1), tab(2, Some("G:/wt/a"), true, 2)]);
+        note_tab(&mut tabs, 2, None, false, 4);
+        assert_eq!(tabs[1], tab(2, None, false, 2), "hidden keeps the last time it was seen");
+        assert!(same_dir("G:/x/y", "g:\\x\\y\\") && !same_dir("G:/x/y", "G:/x/z"));
+    }
+
+    #[test]
+    fn brow037_the_picker_scripts_queue_picks_and_can_be_taken_out() {
+        assert!(annotate_script("start").unwrap().contains("window.__kxa=A"));
+        assert!(annotate_script("poll").unwrap().contains("a.q.splice(0)"));
+        assert!(annotate_script("stop").unwrap().contains("delete window.__kxa"));
+        assert_eq!(annotate_script("peek"), None);
+        for ev in ["mousemove", "click", "mousedown", "mouseup", "keydown"] {
+            assert!(ANNOTATE_START.contains(&format!("addEventListener('{ev}'")), "{ev} is taken while picking");
+            assert!(ANNOTATE_STOP.contains(&format!("removeEventListener('{ev}'")), "{ev} is given back");
+        }
+        for field in ["selector:", "path:", "component:", "source:", "hints:", "styles:", "box:"] {
+            assert!(ANNOTATE_START.contains(field), "a pick carries {field}");
+        }
+    }
+
+    // eval_json, navigate_to and go are not called from tests: linking them pulls the window
+    // toolkit into the test binary, which then needs the app's manifest (comctl32 v6) to load.
 }
 
 /// Why an address failed, for the overlay's wording (BROW-008).

@@ -1,0 +1,49 @@
+diff --git a/src-tauri/src/local_cli.rs b/src-tauri/src/local_cli.rs
+index 9858ba6b..86d00a6d 100644
+--- a/src-tauri/src/local_cli.rs
++++ b/src-tauri/src/local_cli.rs
+@@ -117,6 +117,44 @@ const SCHEMA: u32 = 1;
+ 
+ /// One line each, in the words a person would use; keyed by the command's own words.
+ const SUMMARIES: &[(&str, &str)] = &[
++    // T-195 (BROW-046, BROW-047): the browser commands, for the agent context.
++    ("goto", "Send the worktree's browser tab to an address."),
++    ("back", "Go back one page in the browser tab."),
++    ("forward", "Go forward one page in the browser tab."),
++    ("reload", "Reload the browser tab's page."),
++    ("wait", "Wait for an element, text, address, load state or script in the page."),
++    ("eval", "Run a JavaScript expression in the page and print its value."),
++    ("scroll", "Scroll the page up or down."),
++    ("snapshot", "List the page's elements with references the other commands take."),
++    ("screenshot", "Capture the visible page (refused in this build)."),
++    ("full-screenshot", "Capture the whole page (refused in this build)."),
++    ("pdf", "Print the page to PDF (refused in this build)."),
++    ("click", "Click an element from the snapshot."),
++    ("dblclick", "Double-click an element from the snapshot."),
++    ("check", "Tick a checkbox or radio button."),
++    ("uncheck", "Clear a checkbox."),
++    ("focus", "Focus an element."),
++    ("clear", "Clear a field's value."),
++    ("select-all", "Select all text in a field."),
++    ("hover", "Move the pointer over an element."),
++    ("scrollintoview", "Scroll an element into view."),
++    ("fill", "Set a field's value in one go."),
++    ("type", "Type text into the focused element, key by key."),
++    ("inserttext", "Insert text at the focused element's caret."),
++    ("select", "Choose an option in a select element."),
++    ("keypress", "Press a key in the page."),
++    ("drag", "Drag one element onto another."),
++    ("upload", "Put files into a file input."),
++    ("download", "Save a link's file (refused in this build)."),
++    ("highlight", "Outline the elements a selector matches."),
++    ("find", "Find an element by role, text, label, placeholder or selector and act on it."),
++    ("get", "Read text, HTML, a value, the address, the title, a count or a box from the page."),
++    ("is", "Tell whether an element is visible, enabled or checked."),
++    ("mouse move", "Move the pointer to page coordinates."),
++    ("mouse down", "Press a mouse button."),
++    ("mouse up", "Release a mouse button."),
++    ("mouse wheel", "Turn the mouse wheel."),
++    ("exec", "Run one browser command written as a line."),
+     ("worktree create", "Make a worktree in a repo, optionally starting an agent in it."),
+     ("worktree rm", "Remove a worktree and its folder."),
+     ("terminal read", "Read a terminal's output after a cursor, or its visible screen with --screen."),

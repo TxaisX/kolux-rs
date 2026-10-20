@@ -24,3 +24,17 @@
 .pane.browser .load-overlay p { margin: 0; max-width: 46ch; overflow-wrap: anywhere; }
 .pane.browser .load-overlay .btn-row { margin-top: 6px; flex-wrap: wrap; justify-content: center; }
 .pane.browser .load-overlay .connecting { color: var(--fg-icon-dim); }
+/* BROW-037: the notes tray sits under the toolbar while the user picks elements and writes notes on them. */
+.pane.browser .pane-head .ib.on { color: var(--accent, #ff5a00); }
+.pane.browser .notes-tray { display: flex; flex-direction: column; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--line-subtle); font-size: 12px; color: var(--fg-muted); max-height: 40%; overflow: auto; }
+.pane.browser .notes-tray .tray-head { display: flex; align-items: center; gap: 6px; }
+.pane.browser .notes-tray .tray-head .hint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane.browser .notes-tray code { font-size: 11px; color: var(--fg); background: var(--chip-bg); padding: 0 4px; border-radius: 3px; overflow-wrap: anywhere; }
+.pane.browser .notes-tray .draft { display: flex; align-items: flex-start; gap: 6px; }
+.pane.browser .notes-tray .draft textarea { flex: 1; min-width: 0; resize: vertical; font: inherit; }
+.pane.browser .notes-tray .notes { margin: 0; padding-left: 20px; }
+.pane.browser .notes-tray .notes li { overflow-wrap: anywhere; }
+.pane.browser .notes-tray .send-menu { list-style: none; margin: 0; padding: 2px 0; }
+.pane.browser .notes-tray .send-menu button { width: 100%; text-align: left; background: none; border: 0; color: var(--fg); padding: 3px 6px; cursor: pointer; }
+.pane.browser .notes-tray .send-menu button:hover { background: var(--chip-bg); }
+.pane.browser .notes-tray .send-menu small { color: var(--fg-muted); margin-left: 6px; }
