@@ -51,7 +51,12 @@ export function restoreFocus(prev: Focusable | null, find: (selector: string) =>
     return true;
   }
   for (const sel of FOCUS_FALLBACKS) {
-    const el = find(sel);
+    let el: Focusable | null = null;
+    try {
+      el = find(sel);
+    } catch {
+      // a page that cannot look elements up (the small test DOM) just has no fallback to focus
+    }
     if (el) {
       el.focus();
       return true;

@@ -1,16 +1,16 @@
 diff --git a/src/settings/TerminalPage.tsx b/src/settings/TerminalPage.tsx
-index 4100b59b..4815e639 100644
+index 5823c816..e562ff17 100644
 --- a/src/settings/TerminalPage.tsx
 +++ b/src/settings/TerminalPage.tsx
-@@ -18,6 +18,7 @@ import { InputCard, PowerShellCard } from "./InputCards";
- import { detectPlatform } from "../keys/keymap";
+@@ -19,6 +19,7 @@ import { detectPlatform } from "../keys/keymap";
  import { readLook } from "./general";
+ import TerminalImport from "./TerminalImport";
  import { useSettings } from "./useSettings";
 +import { DENSITIES, DENSITY_FIELD, readDensity } from "../shell/paneChrome";
  
  /** TERM-119: on unless switched off; the app reads the same field when it starts a shell. */
  const SHELL_HISTORY_FIELD = "shellHistoryPerWorktree";
-@@ -143,6 +144,10 @@ export default function TerminalPage() {
+@@ -144,6 +145,10 @@ export default function TerminalPage() {
            </div>
            <Switch label="Blinking cursor" checked={text.blink} onChange={(on) => save({ [FIELDS.blink]: on })} />
            <Switch label="Minimum contrast: keep text readable on any colour scheme" checked={text.contrast} onChange={(on) => save({ [FIELDS.contrast]: on })} />

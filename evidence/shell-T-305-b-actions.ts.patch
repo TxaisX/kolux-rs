@@ -1,0 +1,13 @@
+diff --git a/src/keys/actions.ts b/src/keys/actions.ts
+index 184e423a..2f6e1b47 100644
+--- a/src/keys/actions.ts
++++ b/src/keys/actions.ts
+@@ -122,6 +122,8 @@ export const actions: Action[] = [
+   // T-239 (BROW-019): bound again now that the window reopens a closed browser tab (browser/pages.ts;
+   // T-164-b adds terminal tabs through src/terminal/closedTabs.ts). T-543-b had shipped it unbound.
+   a("tab.reopenClosed", "Reopen closed tab", "tabs", ["Mod+Shift+T"]),
++  // T-305 (TERM-053): the tab search box (src/shell/TabSearch.tsx).
++  a("tab.search", "Search open tabs", "tabs", ["Mod+Shift+K"], { terminalSafe: true, keywords: ["find tab", "switch tab"] }),
+   a("tab.nextSameType", "Next tab (same type)", "tabs", ["Mod+Alt+BracketRight"], { terminalSafe: true }),
+   a("tab.previousSameType", "Previous tab (same type)", "tabs", ["Mod+Alt+BracketLeft"], { terminalSafe: true }),
+   a("tab.nextAllTypes", "Next tab (all types)", "tabs", ["Mod+Shift+BracketRight"], { terminalSafe: true }),

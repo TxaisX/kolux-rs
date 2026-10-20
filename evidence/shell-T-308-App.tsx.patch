@@ -1,19 +1,19 @@
 diff --git a/src/App.tsx b/src/App.tsx
-index cf6c35cc..1e9d6e72 100644
+index 0fdc21b0..8e1d06ba 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
-@@ -50,6 +50,7 @@ import { startFields, startTail } from "./projects/startArgs";
- import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
- import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./projects/WorktreePalette";
+@@ -52,6 +52,7 @@ import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./pro
+ import { renameOnFirstPrompt, useRenameOnFirstPrompt } from "./projects/renameOnWork";
+ import FolderRenameAsk from "./projects/FolderRenameAsk";
  import AboutPanel from "./shell/AboutPanel";
 +import LinkAskHost from "./shell/LinkAskDialog";
- import { nameBranchFor } from "./scm/autoBranch";
  import { navTarget, stepAllowed, travel, visit, type Place } from "./projects/nav";
  import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
-@@ -2329,6 +2330,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
-           />
-         )}
-         <TrustPrompt />
+ import BrowserPane, { OPEN_IN_BROWSER, openDetail, openInBrowser, type OpenInBrowser } from "./browser/BrowserPane";
+@@ -2351,6 +2352,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+             setRefresh((n) => n + 1);
+           }}
+         />
 +        <LinkAskHost />
          {guard.dialog}
          {quitAsk && (

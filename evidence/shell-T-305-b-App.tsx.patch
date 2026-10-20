@@ -1,0 +1,39 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 8e1d06ba..3b51a0c4 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -53,6 +53,8 @@ import { renameOnFirstPrompt, useRenameOnFirstPrompt } from "./projects/renameOn
+ import FolderRenameAsk from "./projects/FolderRenameAsk";
+ import AboutPanel from "./shell/AboutPanel";
+ import LinkAskHost from "./shell/LinkAskDialog";
++import TabSearch from "./shell/TabSearch";
++import { openTabSearch, tabSearchCommand } from "./shell/findTab";
+ import { navTarget, stepAllowed, travel, visit, type Place } from "./projects/nav";
+ import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
+ import BrowserPane, { OPEN_IN_BROWSER, openDetail, openInBrowser, type OpenInBrowser } from "./browser/BrowserPane";
+@@ -847,6 +849,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+           openPane(k); // EDIT-041: the same jump as Open in Code
+           break;
+         }
++        case "tab.search": // TERM-053
++          openTabSearch();
++          break;
+         case "terminal.setTitle":
+         case "terminal.clearPaneTitle":
+         case "tab.rename": {
+@@ -1432,6 +1437,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     ...(Object.keys(PAGES) as PageId[]).map((id) => ({ section: "Settings", label: PAGES[id], hint: "Settings page", run: () => openSettings(id) })),
+     ...paletteRows(accountSwitcher.groups, switchAccount), // T-548: Switch Claude to ...
+     { section: "Quick actions", label: "New terminal tab", run: () => void newTab(null) },
++    tabSearchCommand(() => openTabSearch()), // TERM-053
+     { section: "Quick actions", label: "New session", run: () => addChooser() },
+     // VIEW-042: actions on the worktree in front, not runnable while none is open
+     { section: "Quick actions", label: "Source control for this workspace", needs: "worktree", run: () => showRight("scm") },
+@@ -2353,6 +2359,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+           }}
+         />
+         <LinkAskHost />
++        <TabSearch tabs={() => paletteItems().filter((i) => i.section === "Open tabs")} />
+         {guard.dialog}
+         {quitAsk && (
+           <Ask

@@ -41,4 +41,7 @@ describe("view-039 focus return", () => {
     expect(log).toEqual([".xterm-helper-textarea", ".cm-content"]);
     expect(restoreFocus(null, find({}))).toBe(false);
   });
+  it("a page that cannot look elements up has no fallback and does not throw", () => {
+    expect(restoreFocus(null, () => { throw new TypeError("document.querySelector is not a function"); })).toBe(false);
+  });
 });

@@ -1,16 +1,16 @@
 diff --git a/src/App.tsx b/src/App.tsx
-index 81dbaa77..9d32f097 100644
+index b57887d7..375b51b5 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
-@@ -47,6 +47,7 @@ import { cacheDue, cacheMinutes } from "./projects/cache";
- import { startFields, startTail } from "./projects/startArgs";
- import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
+@@ -50,6 +50,7 @@ import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId }
  import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./projects/WorktreePalette";
+ import { renameOnFirstPrompt, useRenameOnFirstPrompt } from "./projects/renameOnWork";
+ import FolderRenameAsk from "./projects/FolderRenameAsk";
 +import AboutPanel from "./shell/AboutPanel";
- import { nameBranchFor } from "./scm/autoBranch";
  import { navTarget, stepAllowed, travel, visit, type Place } from "./projects/nav";
  import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
-@@ -2228,6 +2229,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+ import BrowserPane, { OPEN_IN_BROWSER, openDetail, openInBrowser, type OpenInBrowser } from "./browser/BrowserPane";
+@@ -2286,6 +2287,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
          uiZoom={zoomFactor()}
          onScreen={setScreen} installed={installedIds} codexAccount={codex.accounts.length > 0} onSearch={() => setPalette(true)} onBack={!stepAllowed(screen === "terminals", settingsOpen) || travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={!stepAllowed(screen === "terminals", settingsOpen) || travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} onZoom={(how) => zoomTerm(focused, how)} fullPage={fullPage} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
        <div className="body" style={{ "--sidebar-w": `${leftWidth}px` } as CSSProperties}>

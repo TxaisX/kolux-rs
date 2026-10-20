@@ -1,16 +1,16 @@
 diff --git a/src/settings/TerminalPage.tsx b/src/settings/TerminalPage.tsx
-index 4815e639..ebfd8eb1 100644
+index e562ff17..efd6adf1 100644
 --- a/src/settings/TerminalPage.tsx
 +++ b/src/settings/TerminalPage.tsx
-@@ -19,6 +19,7 @@ import { detectPlatform } from "../keys/keymap";
- import { readLook } from "./general";
+@@ -20,6 +20,7 @@ import { readLook } from "./general";
+ import TerminalImport from "./TerminalImport";
  import { useSettings } from "./useSettings";
  import { DENSITIES, DENSITY_FIELD, readDensity } from "../shell/paneChrome";
 +import { KOLUX_FIELD, switchPatch } from "../shell/linkAsk";
  
  /** TERM-119: on unless switched off; the app reads the same field when it starts a shell. */
  const SHELL_HISTORY_FIELD = "shellHistoryPerWorktree";
-@@ -166,6 +167,13 @@ export default function TerminalPage() {
+@@ -167,6 +168,13 @@ export default function TerminalPage() {
            )}
          </section>
        )}
