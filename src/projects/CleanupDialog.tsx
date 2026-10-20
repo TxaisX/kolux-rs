@@ -5,6 +5,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  DEFAULT_VIEW,
+  arrangeRows,
+  needsSizes,
+  sizeText,
+  type CleanupView,
+  type Sizes,
   lastScan,
   rememberScan,
   rememberShowAll,
@@ -41,6 +47,9 @@ export default function CleanupDialog({ project, onClose, onRemoved, onKept }: P
   const [scanning, setScanning] = useState(true);
   const [removing, setRemoving] = useState(false);
   const [said, setSaid] = useState<string[]>([]);
+  // PROJ-081: filters, search and sort; sizes are read only once a size filter or sort needs them.
+  const [view, setView] = useState<CleanupView>(DEFAULT_VIEW);
+  const [sizes, setSizes] = useState<Sizes>({});
   const ticksRef = useRef(ticks);
   ticksRef.current = ticks;
 
@@ -63,8 +72,22 @@ export default function CleanupDialog({ project, onClose, onRemoved, onKept }: P
   }, [rescan]);
   useEffect(() => rememberTicks(project.id, ticks), [project.id, ticks]);
 
-  const rows = scan ? shownRows(scan, showAll) : [];
-  const chosen = scan ? tickedPaths(ticks, scan, showAll) : [];
+  const listed = scan ? shownRows(scan, showAll) : [];
+  const rows = arrangeRows(listed, view, sizes);
+  const shownSet = new Set(rows.map((r) => r.path));
+  const chosen = scan ? tickedPaths(ticks, scan, showAll).filter((p) => shownSet.has(p)) : [];
+  const unread = needsSizes(view) ? listed.map((r) => r.path).filter((p) => !(p in sizes)) : [];
+  useEffect(() => {
+    if (unread.length === 0) return;
+    let live = true;
+    invoke<(number | null)[]>("cleanup_sizes", { paths: unread })
+      .then((got) => live && setSizes((old) => ({ ...old, ...Object.fromEntries(unread.map((p, i) => [p, got[i] ?? null])) })))
+      .catch(() => live && setSizes((old) => ({ ...old, ...Object.fromEntries(unread.map((p) => [p, null])) })));
+    return () => {
+      live = false;
+    };
+  }, [unread.join("\n")]);
+  const pick = <K extends keyof CleanupView>(k: K, v: CleanupView[K]) => setView((old) => ({ ...old, [k]: v }));
   const remove = async () => {
     setRemoving(true);
     try {
@@ -89,12 +112,49 @@ export default function CleanupDialog({ project, onClose, onRemoved, onKept }: P
         </span>
       )}
       {scan?.error && <span className="note warn">{scan.error}</span>}
-      {scan && rows.length === 0 && !scanning && !scan.error && <span>{showAll ? "This project has no workspaces Kolux made." : "No workspace has gone quiet."}</span>}
+      <div className="btn-row" data-cleanup-view>
+        <input type="search" aria-label="search workspaces" placeholder="Search" value={view.query} onChange={(e) => pick("query", e.target.value)} />
+        <select aria-label="Git state" value={view.git} onChange={(e) => pick("git", e.target.value as CleanupView["git"])}>
+          <option value="any">Any Git state</option>
+          <option value="merged">Merged</option>
+          <option value="unmerged">Unmerged commits</option>
+          <option value="changes">Uncommitted changes</option>
+          <option value="clean">Clean</option>
+          <option value="missing">Folder gone</option>
+        </select>
+        <select aria-label="activity" value={view.activity} onChange={(e) => pick("activity", e.target.value as CleanupView["activity"])}>
+          <option value="any">Any activity</option>
+          <option value="active">Terminal open</option>
+          <option value="idle">Idle a week or more</option>
+          <option value="never">Never visited</option>
+        </select>
+        <select aria-label="size" value={view.size} onChange={(e) => pick("size", e.target.value as CleanupView["size"])}>
+          <option value="any">Any size</option>
+          <option value="large">500 MB or more</option>
+          <option value="small">Under 500 MB</option>
+        </select>
+        <select aria-label="safety" value={view.safety} onChange={(e) => pick("safety", e.target.value as CleanupView["safety"])}>
+          <option value="any">Any</option>
+          <option value="safe">Ticked by default</option>
+          <option value="unsafe">Needs a look</option>
+        </select>
+        <select aria-label="sort by" value={view.sort} onChange={(e) => pick("sort", e.target.value as CleanupView["sort"])}>
+          <option value="scan">Scan order</option>
+          <option value="name">Name</option>
+          <option value="size">Size</option>
+          <option value="idle">Idle time</option>
+        </select>
+        <button className="btn" aria-label="sort direction" onClick={() => pick("desc", !view.desc)}>
+          {view.desc ? "Largest first" : "Smallest first"}
+        </button>
+      </div>
+      {scan && listed.length > 0 && rows.length === 0 && <span>No workspace matches the filters.</span>}
+      {scan && listed.length === 0 && !scanning && !scan.error && <span>{showAll ? "This project has no workspaces Kolux made." : "No workspace has gone quiet."}</span>}
       {rows.map((r) => (
         <label className="check" key={r.path} title={r.path}>
           <input type="checkbox" aria-label={`clean up ${rowLabel(r)}`} checked={ticks[r.path] === true} disabled={removing} onChange={(e) => setTicks({ ...ticks, [r.path]: e.target.checked })} />
           <span>
-            <b>{rowLabel(r)}</b> <span className="hint">{rowFacts(r)}</span>
+            <b>{rowLabel(r)}</b> <span className="hint">{[rowFacts(r), sizeText(sizes[r.path])].filter(Boolean).join(" · ")}</span>
           </span>
         </label>
       ))}
