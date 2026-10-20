@@ -11,6 +11,7 @@ test("EDIT-056 (T-237-b): code offers Edit and Changes, markdown Source, Rich an
 
 test("EDIT-056 (T-237-b): no Changes for notebooks, untitled, outside the worktree, binary files, and diff or conflict tabs", () => {
   expect(viewsFor({ path: "C:/w/n.ipynb" }).views).toEqual(["source", "rendered"]);
+  expect(viewsFor({ path: "C:/w/logo.SVG" }).views).toEqual(["source", "rendered", "changes"]); // EDIT-029: a picture and text, so its source can be diffed
   expect(viewsFor({ path: "C:/w/untitled.md", untitled: true }).views).toEqual(["source", "rich"]);
   expect(viewsFor({ path: "D:/x/a.ts", inWorktree: false }).views).toEqual(["edit"]);
   expect(viewsFor({ path: "C:/w/a.bin", binary: true }).views).toEqual(["edit"]);

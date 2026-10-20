@@ -172,3 +172,35 @@ export function takeCarried(path: string): { text: string; disk: string } | null
   carried.delete(k);
   return c;
 }
+
+/** Unsaved text a view held when it was torn down to be built again (a diff tab changing its
+ *  layout), with the disk copy it was typed over. */
+export type Held = { path: string; text: string; disk: string };
+
+/** The unsaved text of an open file and its disk copy, or null when it is clean or not open. */
+export function heldOf(path: string): Held | null {
+  const b = buffers.get(keyOf(path));
+  const v = b && [...b.views][0];
+  if (!b || !v || sameText(v.state.sliceDoc(), b.disk)) return null;
+  return { path, text: v.state.sliceDoc(), disk: b.disk };
+}
+
+/** How a view opening `path` starts. `text` is what it shows; `base` is the disk copy the buffer
+ *  takes for it, so a save is checked against the copy that text was typed over, never against a
+ *  newer one; `keep` is set when carried unsaved text was typed over a copy that is no longer the
+ *  one on disk: the caller keeps it beside the file (unsavedCopy.ts) instead of saving it over. */
+export type Opening = { text: string; base: string; keep?: string };
+
+/** The start of a view of `path` read as `disk` (EDIT-001, EDIT-032): a twin's text when another
+ *  view has the file open; else unsaved text held across a rebuild; else text carried by a move,
+ *  used only when the disk at the new place is the very copy it was typed over. The carry is
+ *  taken (once) in every case, so it can never surface later over a newer disk copy. */
+export function opening(path: string, disk: string, held?: Held | null): Opening {
+  const carry = takeCarried(path);
+  const twin = textOf(path);
+  if (twin !== null) return { text: twin, base: disk };
+  if (held && keyOf(held.path) === keyOf(path)) return { text: held.text, base: held.disk };
+  if (!carry) return { text: disk, base: disk };
+  if (carry.disk === disk) return { text: carry.text, base: disk };
+  return { text: carry.text, base: carry.disk, keep: carry.text };
+}

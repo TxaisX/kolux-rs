@@ -23,12 +23,22 @@ import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { ChevronDown, Close, List } from "../chrome/icons";
 import FileIcon from "./FileIcon";
 import CsvTable from "./CsvTable";
+import NotebookView from "./NotebookView";
+import SvgView from "./SvgView";
+import { insertError, insertPastedPicture, pastedPicture } from "./pictureBytes";
+import { applyImage } from "./richFormat";
+import ImageView from "./ImageView";
+import PdfView from "./PdfView";
+import { isPdf } from "./pdfFiles";
+import { isPicture, isSvg } from "./imageFiles";
+import { isNotebook } from "./notebook";
 import { isTable } from "./csv";
 import { useSettings } from "../settings/useSettings";
 import { prefPatch, readEditorPrefs } from "../settings/editorPrefs";
 import { undo } from "@codemirror/commands";
 import { clampView, keepView, takeView } from "../terminal/viewKeep";
-import { attach, baseName, detach, diskOf, hashOf, isDirty, isStale, loadText, relay, replaceAll, save, subscribe, takeCarried, textOf } from "./buffers";
+import { attach, baseName, detach, diskOf, hashOf, isDirty, isStale, loadText, opening, relay, replaceAll, save, subscribe, textOf } from "./buffers";
+import { keepUnsaved, keptToast } from "./unsavedCopy";
 import NamePrompt from "./NamePrompt";
 import { announceMoves } from "./fileMoved";
 import { isUntitled, needsName } from "./untitled";
@@ -48,6 +58,9 @@ import { minimap } from "./minimap";
 import { SlashMenu, TableMenu, WikiMenu } from "./SlashPanel";
 import TableControls from "./TableControls";
 import CodeLabel from "./CodeLabel";
+import DrawPanel from "./DrawPanel";
+import LinkHover from "./LinkHover";
+import { sourceLinks } from "./sourceLinks";
 import type { SlashView } from "./slashMenu";
 import type { WikiView } from "./wikiPopup";
 import { domPick, noteDraft, selections, type Note } from "./notes";
@@ -66,7 +79,7 @@ import { outline } from "./toc";
 import { mdPrefs, setMdPrefs } from "../shell/mdPrefs";
 import { FrontMatterBlock, TocResizer } from "../shell/MdViewControls";
 import { frontControl, tocVar } from "../shell/mdView";
-import { followClick, type LinkHandler } from "./linkClicks";
+import { followClick, openHref, type LinkHandler } from "./linkClicks";
 import { hasSpot, jumpSpot, onReveal, revealAt, spotRange, takeSpot } from "./search";
 import "./editor-extras.css";
 import { pasteGuard } from "./paste";
@@ -187,7 +200,7 @@ export const look = EditorView.theme(
 /** `readOnly`: typing changes nothing (SKILL-012 previews a kit result this way). */
 type Props = { id: number; path: string; root?: string | null; readOnly?: boolean; /** EDIT-026: a log tab that keeps adding lines as the file grows (give it readOnly too). */ follow?: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; jump?: { line: number; at: number; col?: number }; onLink?: LinkHandler; /** EDIT-020: the Markdown review notes, shown in a rail beside the rich view. */ notes?: Note[]; onRemoveNote?: (n: Note) => void };
 
-export default function EditorPane({ id, path, root = null, readOnly = false, follow = false, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, jump, onLink, notes = [], onRemoveNote }: Props) {
+function TextEditorPane({ id, path, root = null, readOnly = false, follow = false, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, jump, onLink, notes = [], onRemoveNote }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -201,8 +214,8 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   const [gone, setGone] = useState(false); // EDIT-032: the file was deleted or moved away while this tab is open
   const [comparing, setComparing] = useState(false);
   const [undoable, setUndoable] = useState<UndoEntry | null>(null);
-  const report = useRef({ onDirty, onToast });
-  report.current = { onDirty, onToast };
+  const report = useRef({ onDirty, onToast, onLink });
+  report.current = { onDirty, onToast, onLink };
   // EDIT-002: autosave reads the settings afresh at an edit (at most every 5 s), so switching it on
   // in Settings reaches tabs that are already open.
   const autoRef = useRef<Autosave | null>(null);
@@ -210,7 +223,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   const wantFocus = useRef(focused);
   wantFocus.current = focused;
   const md = isMarkdown(path);
-  const grid = isTable(path); // EDIT-023: a CSV or TSV file opens as a table, with Source beside it
+  const grid = isTable(path) || isNotebook(path) || isSvg(path); // EDIT-023: a CSV or TSV file opens as a table, a notebook (EDIT-024) as cells, an SVG file (EDIT-029) as its picture, with Source beside it
   const [table, setTable] = useState(grid);
   const [changesOn, setChangesOn] = useState(false); // EDIT-056: the Changes view (last commit beside the working file)
   const tableOn = grid && table;
@@ -235,6 +248,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   const rich = useRef<ReturnType<typeof mountRich> | null>(null);
   const [slashView, setSlashView] = useState<SlashView | null>(null);
   const [wikiView, setWikiView] = useState<WikiView | null>(null);
+  const wikiAsked = useRef(false); // the worktree file list is asked for once, by the rich view or by source-view note links
   const wikiFiles = useRef<string[]>([]); // the worktree's files for the [[ popup, listed once per open note
   const [richEditor, setRichEditor] = useState<ReturnType<typeof mountRich>["editor"] | null>(null);
   const [ready, setReady] = useState(0); // counts loads, so the rich view starts after each one
@@ -304,20 +318,31 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
       .then((st) => ((loaded = st), loadText(() => invoke<string>("file_read", { path }))))
       .then(async (text) => {
         // EDIT-032 carries unsaved text to a moved file's new path; EDIT-004 brings a draft back.
-        const carry = takeCarried(path);
-        const draft = readOnly || carry ? null : await drafts.take(wt, path).catch(() => null);
-        const r = carry ? { text: carry.text, moved: false, stale: false } : restoreFrom(text, await hashOf(text), draft);
+        // Row 131: carried text typed over a copy that is no longer on disk is kept beside the
+        // file, never saved over it; if that copy cannot be written the tab keeps the text and
+        // its saves are checked against the old copy, so they ask first.
+        let o = opening(path, text);
+        if (o.keep !== undefined) {
+          const kept = await keepUnsaved(path, o.keep).catch((e) => (report.current.onToast?.(keptToast(baseName(path), null, e)), null));
+          if (kept) {
+            report.current.onToast?.(keptToast(baseName(path), kept));
+            o = { text, base: text };
+          }
+        }
+        const carried = o.text !== text || o.base !== text;
+        const draft = readOnly || carried ? null : await drafts.take(wt, path).catch(() => null);
+        const r = carried ? { text: o.text, moved: false, stale: false } : restoreFrom(text, await hashOf(text), draft);
         if (r.stale) void drafts.discard(wt, path);
-        return { text, shown: r.text, draftMoved: r.moved };
+        return { text, shown: r.text, base: o.base, draftMoved: r.moved };
       })
       .then(
-      ({ text, shown, draftMoved }) => {
+      ({ text, shown, base, draftMoved }) => {
         if (!alive) return;
         made = new EditorView({
           doc: shown,
           parent: host.current!,
           // A file with Windows line ends is saved with them.
-          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), wrapping.of(wrapOn.current ? EditorView.lineWrapping : []), minimapping.of(miniOn.current ? minimap() : []), findSupport, conflictColours, pasteGuard((t) => report.current.onToast?.(t)), EditorView.updateListener.of((u) => {
+          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), wrapping.of(wrapOn.current ? EditorView.lineWrapping : []), minimapping.of(miniOn.current ? minimap() : []), findSupport, conflictColours, isMarkdown(path) ? sourceLinks(() => ({ note: path, root, files: () => { if (!wikiAsked.current && root) { wikiAsked.current = true; void invoke<{ files: string[] }>("file_list", { root }).then((l) => void (wikiFiles.current = l.files), () => undefined); } return wikiFiles.current; }, onLink: (a, shift) => report.current.onLink?.(a, shift), onToast: (t) => report.current.onToast?.(t) })) : [], pasteGuard((t) => report.current.onToast?.(t)), EditorView.updateListener.of((u) => {
             u.transactions.forEach((tr) => relay(path, u.view, tr));
             if (u.docChanged) setConflicts(u.state.field(conflictField).list.length);
             if (u.docChanged && isMarkdown(path)) {
@@ -336,7 +361,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
             made?.scrollDOM.scrollTo(v.scrollLeft, v.scrollTop);
           });
         }
-        attach(path, made, text);
+        attach(path, made, base);
         // A twin pane already holds this file: its stamp stays the one its copy came from.
         if (textOf(path) === text) remember(path, loaded);
         setNoteText(shown);
@@ -460,7 +485,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   // A new file in this tab starts over: rich again, and Open anyway forgotten.
   useEffect(() => {
     setMode(isMarkdown(path) ? "rich" : "source");
-    setTable(isTable(path));
+    setTable(isTable(path) || isSvg(path));
     setChangesOn(false);
     setBigOk(false);
     setBanner(null);
@@ -503,15 +528,18 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
     if (why) return fallBack({ text: `Showing source: the rich view cannot show this file because ${why}.` });
     let pushed = text;
     try {
-      rich.current = mountRich(richHost.current, splitFront(text).body, (out) => {
+      rich.current = mountRich(richHost.current, splitFront(text).body, (out, prev) => {
         const now = cm.state.doc.toString();
-        const change = richChange(now, out);
+        const change = richChange(now, out, prev);
         if (change) {
           pushed = now.slice(0, change.from) + change.insert + now.slice(change.to);
           cm.dispatch({ changes: change, userEvent: "input" });
         }
       }, (t) => report.current.onToast?.(t), setSlashView, { files: () => wikiFiles.current, notePath: shortPath(path, root), show: setWikiView });
-      if (root) void invoke<{ files: string[] }>("file_list", { root }).then((l) => void (wikiFiles.current = l.files), () => undefined);
+      if (root) {
+        wikiAsked.current = true;
+        void invoke<{ files: string[] }>("file_list", { root }).then((l) => void (wikiFiles.current = l.files), () => undefined);
+      }
       setRichEditor(rich.current.editor);
     } catch (err) {
       setRichError(String(err));
@@ -706,8 +734,25 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   }, [id, path, root, shown]);
   const railed = useMemo(() => (md ? railNotes(notes, path) : []), [md, notes, path]);
   const railShown = shown === "rich" && railed.length > 0;
+  // EDIT-009 (T-234-b): a picture pasted into a note (a screenshot, a copied image, or one picture path) is saved beside the note and linked there.
+  const pastePicture = (e: React.ClipboardEvent) => {
+    if (!md || readOnly || (shown !== "rich" && shown !== "source")) return;
+    const got = pastedPicture(e.clipboardData);
+    if (!got) return;
+    e.preventDefault();
+    e.stopPropagation();
+    insertPastedPicture(path, got, invoke).then(
+      (link) => {
+        const cm = view.current;
+        if (shownRef.current === "rich" && richEditor) {
+          if (!applyImage(richEditor, link)) onToast?.("Put the caret in the note first, then paste the picture.");
+        } else if (cm) cm.dispatch(cm.state.replaceSelection(link));
+      },
+      (err) => onToast?.(insertError(err)),
+    );
+  };
   return (
-    <section style={tocShown ? (tocVar(tocWidth) as CSSProperties) : undefined} className={`pane editor${focused ? " focused" : ""}${tocShown ? " toc-open" : ""}${railShown ? " rail-open" : ""}`} hidden={hidden} aria-label={`${name} pane`} onMouseDown={onFocus} onKeyDownCapture={onKeys} data-kind="editor" data-key={id}>
+    <section style={tocShown ? (tocVar(tocWidth) as CSSProperties) : undefined} className={`pane editor${focused ? " focused" : ""}${tocShown ? " toc-open" : ""}${railShown ? " rail-open" : ""}`} hidden={hidden} aria-label={`${name} pane`} onMouseDown={onFocus} onKeyDownCapture={onKeys} onPasteCapture={pastePicture} data-kind="editor" data-key={id}>
       <header className="pane-head">
         <span className="agent-mark" title="File">
           <FileIcon name={name} size={13} />
@@ -744,7 +789,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
           <span className="view-switch" role="group" aria-label="View">
             {views.map((v) => (
               <button key={v} aria-pressed={current === v} onClick={() => pick(v)} title={offer.why?.[v] ?? `${VIEW_LABEL[v]} view`}>
-                {VIEW_LABEL[v]}
+                {v === "rendered" && isNotebook(path) ? "Cells" : v === "rendered" && isSvg(path) ? "Picture" : VIEW_LABEL[v]}
               </button>
             ))}
           </span>
@@ -842,7 +887,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
       {comparing && <CompareView path={path} text={textOf(path) ?? ""} read={readDisk} onReload={reload} onKeep={keepMine} onClose={() => setComparing(false)} />}
       {changesOn && <DiffPane embedded against="head" id={id} path={path} root={root} staged={false} hidden={hidden || comparing} focused={focused} onFocus={onFocus} onToast={onToast} />}
       <div ref={host} className="pane-body" hidden={shown !== "source" || comparing} />
-      {grid && <CsvTable path={path} loaded={ready} hidden={shown !== "table" || comparing} />}
+      {grid && (isSvg(path) ? <SvgView path={path} loaded={ready} hidden={shown !== "table" || comparing} /> : isNotebook(path) ? <NotebookView path={path} loaded={ready} hidden={shown !== "table" || comparing} readOnly={readOnly} onText={(t) => { const cm = view.current; if (cm) cm.dispatch({ changes: { from: 0, to: cm.state.doc.length, insert: t } }); }} /> : <CsvTable path={path} loaded={ready} hidden={shown !== "table" || comparing} />)}
       {!hidden && shown === "source" && hint && copyKey && copiedSel !== hint.sel && !flash && (
         <div className="copy-hint" style={{ left: hint.x + 8, top: hint.y + 2 }}>
           {copyKey} copies with path and lines
@@ -859,7 +904,15 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
       {md && shown === "rich" && !comparing && <FrontMatterBlock front={frontText} hide={hideFront} />}
       {md && shown === "rich" && !comparing && !readOnly && <TableControls editor={richEditor} />}
       {md && shown === "rich" && !comparing && !readOnly && <CodeLabel editor={richEditor} />}
+      {md && shown === "rich" && !comparing && <DrawPanel editor={richEditor} />}
+      {md && shown === "rich" && !comparing && <LinkHover editor={richEditor} host={richHost.current} onOpen={(href, shift) => richHost.current && openHref(href, richHost.current, path, root, shift, onLink)} onToast={onToast} />}
       {md && <div ref={richHost} className="pane-body md-rich" onClickCapture={(e) => richHost.current && followClick(e.nativeEvent, richHost.current, path, root, onLink)} contentEditable suppressContentEditableWarning spellCheck={spell} hidden={shown !== "rich" || comparing} aria-label={`${name}, rich view`} />}
     </section>
   );
+}
+
+// EDIT-029 (T-235-b): a PNG, JPEG or similar file opens in the image viewer instead of the text editor (it would be refused as binary); everything else is the text editor.
+export default function EditorPane(props: Props) {
+  if (isPdf(props.path)) return <PdfView id={props.id} path={props.path} hidden={props.hidden} focused={props.focused} onFocus={props.onFocus} onClose={props.onClose} onToast={props.onToast} />;
+  return isPicture(props.path) ? <ImageView id={props.id} path={props.path} hidden={props.hidden} focused={props.focused} onFocus={props.onFocus} onClose={props.onClose} onToast={props.onToast} /> : <TextEditorPane {...props} />;
 }

@@ -43,3 +43,17 @@ LIVE PROOF PENDING (batched)
 2. Settings > General > Open in: reorder or add Zed. The Explorer's Open in button lists them in that order.
 STILL OPEN IN T-323-b: Open in for a single file and the keybindings file (needs a file variant of open_in in files.rs),
   worktree menu (T-304), proxy settings (Rust), Warp and Ghostty folder scan.
+
+PIECE 3 (lane/editor, 2026-10-20)
+BUILT
+- src/editor/openIn.ts: fileTargetsOf(settings) (the Open in list without the file manager), relInside(root, file) (path inside the worktree,
+  slashes forward, drive letters compared without case, null for outside, "..", or the root itself), openFileIn(root, file, app) (scm_open_with,
+  which already refuses an app not on the saved list and a path outside the worktree).
+- src/editor/Explorer.tsx: right-click on a FILE row adds "Open in <app>" for each app of Settings > General, in the user's order; a failed
+  launch shows in the explorer's notice. No Rust, no shared file.
+TESTS: openIn.test.ts +2 (file targets, relInside).
+READINGS: tsc --noEmit 0 (i-tsc.log); vitest src/editor src/settings 117 files, 736 passed (i-vitest.log).
+LIVE PROOF PENDING (batched)
+1. Right-click a file in the Explorer: the menu ends with Open in Visual Studio Code (and any app added in Settings > General). Click it: the file opens there.
+2. Right-click a folder: no Open in rows at the end (the toolbar button handles folders).
+STILL OPEN IN T-323-b: keybindings file Open in (settings lane), worktree menu (T-304), proxy settings (Rust), Warp and Ghostty folder scan.
