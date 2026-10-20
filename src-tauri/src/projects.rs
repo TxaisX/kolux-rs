@@ -366,6 +366,56 @@ pub fn reparent_in(store: &Store, project: &Project, scanned: Vec<Worktree>, pat
     set_parent(store, &me.path, Some(&to.path))
 }
 
+// ---- CLI-009 / CLI-019: the selector pieces `worktree set` needs (called from the cli.rs patch) ----
+
+/// `folder:<id>` where a parent worktree is expected: the folder project with that id and its
+/// folder workspace. A Git project, an unknown id and a folder project that has since got Git
+/// are refused with the reason.
+#[allow(dead_code)] // called from evidence/worktrees-T-117-b-b-cli.patch
+pub fn folder_parent(store: &Store, id: &str) -> Result<(Project, Worktree), String> {
+    let project = load_projects(store).into_iter().find(|p| p.id == id).ok_or_else(|| format!("no project has the id {id}"))?;
+    let folder = crate::folder_projects::folder_only(store, &project).ok_or_else(|| format!("{} is not a folder workspace; folder: takes the id of a project without Git", project.name))?;
+    Ok((project, folder))
+}
+
+/// CLI-019: the board status id `--workspace-status` names, by id or label in any case. The
+/// built-in set is todo, in-progress, in-review and completed (the spec's word for "done").
+#[allow(dead_code)] // called from evidence/worktrees-T-117-b-b-cli.patch
+pub fn resolve_status(store: &Store, wanted: &str) -> Result<String, String> {
+    let list = crate::bulk::statuses(store);
+    let find = |w: &str| list.iter().find(|s| s.id.eq_ignore_ascii_case(w) || s.label.eq_ignore_ascii_case(w)).map(|s| s.id.clone());
+    let w = wanted.trim();
+    find(w).or_else(|| w.eq_ignore_ascii_case("completed").then(|| find("done")).flatten()).ok_or_else(|| format!("there is no status {wanted}; the statuses are {}", list.iter().map(|s| s.id.as_str()).collect::<Vec<_>>().join(", ")))
+}
+
+/// The WSL distribution a Windows-side path belongs to (`\\wsl.localhost\<distro>\...` or
+/// `\\wsl$\<distro>\...`).
+#[allow(dead_code)] // called from evidence/worktrees-T-117-b-b-cli.patch
+pub fn wsl_distro_of(path: &str) -> Option<String> {
+    let p = path.replace('/', "\\");
+    let rest = p.strip_prefix("\\\\wsl.localhost\\").or_else(|| p.strip_prefix("\\\\wsl$\\"))?;
+    rest.split('\\').next().filter(|d| !d.is_empty()).map(str::to_string)
+}
+
+/// CLI-009: a path written in a WSL shell, as Windows sees it. A Windows drive mounted into Linux
+/// (`/mnt/c/...`) resolves with no distribution at all; any other Linux path belongs to the
+/// caller's own distribution, so when two distributions write the same path the caller's wins.
+/// Without a distribution a Linux path is left as written and matches nothing.
+#[allow(dead_code)] // called from evidence/worktrees-T-117-b-b-cli.patch
+pub fn wsl_path(path: &str, distro: Option<&str>) -> String {
+    let p = path.trim();
+    if let Some(rest) = p.strip_prefix("/mnt/") {
+        let (drive, tail) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+        if drive.len() == 1 && drive.chars().all(|c| c.is_ascii_alphabetic()) {
+            return format!("{}:{}", drive.to_ascii_uppercase(), if tail.is_empty() { "\\".to_string() } else { tail.replace('/', "\\") });
+        }
+    }
+    match distro.filter(|d| !d.is_empty()) {
+        Some(d) if p.starts_with('/') && !p.starts_with("//") => format!("\\\\wsl.localhost\\{d}{}", p.replace('/', "\\")),
+        _ => p.to_string(),
+    }
+}
+
 /// PROJ-040: records the composer's parent for a workspace just made. A parent removed in the
 /// meantime is dropped with a warning and the workspace sits at the top level. Git scans the
 /// worktrees with the store unlocked (T-442-b); only the store work holds the lock.
@@ -4114,6 +4164,50 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         assert_eq!(long, "add-support-for-importing-every-kind-of");
         assert_eq!(sentence_case("fix-login-bug"), "Fix login bug");
         assert_eq!(sentence_case("tx/fix-login"), "Fix login");
+    }
+
+    #[test]
+    fn cli009_a_wsl_path_on_a_mounted_drive_resolves_and_the_callers_distro_wins() {
+        assert_eq!(wsl_path("/mnt/c/Users/x/repo", None), "C:\\Users\\x\\repo");
+        assert_eq!(wsl_path("/mnt/d", Some("Ubuntu")), "D:\\");
+        // Not a drive: /mnt/wsl is Linux's own folder, so it belongs to the caller's distro.
+        assert_eq!(wsl_path("/mnt/wsl/x", Some("Debian")), "\\\\wsl.localhost\\Debian\\mnt\\wsl\\x");
+        // The same Linux path written from two distros reaches each caller's own.
+        assert_eq!(wsl_path("/home/u/app", Some("Ubuntu")), "\\\\wsl.localhost\\Ubuntu\\home\\u\\app");
+        assert_eq!(wsl_path("/home/u/app", Some("Debian")), "\\\\wsl.localhost\\Debian\\home\\u\\app");
+        assert_eq!(wsl_path("/home/u/app", None), "/home/u/app");
+        assert_eq!(wsl_path("C:\\work\\a", Some("Ubuntu")), "C:\\work\\a");
+        assert_eq!(wsl_distro_of("\\\\wsl.localhost\\Ubuntu\\home\\u"), Some("Ubuntu".into()));
+        assert_eq!(wsl_distro_of("//wsl$/Debian/home"), Some("Debian".into()));
+        assert_eq!(wsl_distro_of("C:\\work"), None);
+    }
+
+    #[test]
+    fn cli019_a_workspace_status_is_found_by_id_label_or_the_word_completed() {
+        let store = Store::open(&temp("status-profile")).unwrap();
+        assert_eq!(resolve_status(&store, "in-review").unwrap(), "in-review");
+        assert_eq!(resolve_status(&store, "In progress").unwrap(), "in-progress");
+        assert_eq!(resolve_status(&store, " TODO ").unwrap(), "todo");
+        assert_eq!(resolve_status(&store, "completed").unwrap(), "done");
+        let why = resolve_status(&store, "blocked").unwrap_err();
+        assert!(why.contains("no status blocked") && why.contains("in-review"), "{why}");
+    }
+
+    #[test]
+    fn cli009_folder_names_the_folder_workspace_of_a_project_without_git_only() {
+        let base = temp("folder-parent");
+        let store = Store::open(&base.join("db")).unwrap();
+        let plain = base.join("plain");
+        fs::create_dir_all(&plain).unwrap();
+        let project = crate::folder_projects::add_folder(&store, &plain).unwrap();
+        let (found, ws) = folder_parent(&store, &project.id).unwrap();
+        assert_eq!(found.id, project.id);
+        assert!(same_folder(Path::new(&ws.path), &plain));
+        assert!(folder_parent(&store, "nope").unwrap_err().contains("no project"));
+        let repo = temp_repo("folder-parent-git");
+        let git = Git::detect().unwrap();
+        let git_project = add_project(&git, &store, &repo).unwrap();
+        assert!(folder_parent(&store, &git_project.id).unwrap_err().contains("without Git"));
     }
 
     fn rename_fixture(name: &str, setting: Option<bool>) -> (Git, Mutex<Store>, Project, PathBuf, PathBuf, PathBuf) {

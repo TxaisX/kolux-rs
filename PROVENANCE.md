@@ -865,3 +865,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · accounts T-264 · spec/07 ACCT-022, ACCT-028, ACCT-029 and spec/06 USAGE-027 as given in the brief; this tree's own secrets.rs, codex_accounts.rs and settings components; no outside code
 > 2026-10-19 · worktrees T-116-b · spec/17 SET-031, spec/01 PROJ-039, spec/11 GIT-020 as given in the brief; git-branch documentation (git branch -m moves the branch's config, never overwrites without -M); this tree's own git.rs and projects.rs; no outside code
 > 2026-10-19 · worktrees T-112-b · spec/05 VIEW-076, spec/01 PROJ-086 as given in the brief; this tree's own folderWorkspace.ts and scm/checks.ts; no outside code
+> 2026-10-19 · worktrees T-117-b-b · spec/20 CLI-019 and CLI-009 as given in the brief; Microsoft public WSL path forms (/mnt/<drive>, \\wsl.localhost\<distro>); this tree's own cli.rs, bulk.rs and folder_projects.rs; no outside code
