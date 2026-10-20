@@ -865,3 +865,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · accounts T-264 · spec/07 ACCT-022, ACCT-028, ACCT-029 and spec/06 USAGE-027 as given in the brief; this tree's own secrets.rs, codex_accounts.rs and settings components; no outside code
 > 2026-10-19 · automations T-085-d · spec/09 AUTO-004 as named in the brief; this tree own automations.rs and scm.rs (checks_of, prs_poll) read; gh pr list --json fields from the GitHub CLI manual (public docs); no outside source
 > 2026-10-19 · automations T-085-f · spec/09 AUTO-004 as named in the brief; this tree own AutomationDialog.tsx and model.ts; no outside source
+> 2026-10-19 · automations T-140-b · spec/09 AUTO-014 as named in the brief; this tree's own chat.rs (transcript finder and tail reader) and status.rs (transcript_of) read, and the shapes of the Claude and Codex transcript lines as that chat.rs already reads them; no outside source

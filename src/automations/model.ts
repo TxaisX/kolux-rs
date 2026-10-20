@@ -224,9 +224,10 @@ export const RUN_BATCH = 100;
 const group = (s: RunStatus): Exclude<RunFilter, "all"> => (s === "completed" ? "success" : s === "failed" ? "failed" : s === "skipped" ? "skipped" : "progress");
 export const startedBy = (r: Run): string => (r.trigger === "manual" ? "by hand" : r.trigger === "event" ? "by an event" : "by the timetable");
 
-/** AUTO-014 / T-085-h: what the saved output is: the end's text, the most recent part of it, or
+/** AUTO-014 / T-085-h: what the saved output is: the end's text, the most recent part of it, what the agent itself said, or
  * the replay of a run that Kolux reconnected to after a restart and is still following. */
 export const outputNote = (r: Run): string => {
+  if (r.outputFrom === "transcript") return r.outputCut ? "The most recent of what the agent said; older text was left out." : "What the agent said during the run, from its transcript.";
   if (r.outputFrom === "replay") return r.outputCut ? "The most recent text the agent's terminal had shown when Kolux restarted; older lines were left out. The run carries on in that terminal." : "What the agent's terminal had shown when Kolux restarted. The run carries on in that terminal.";
   return r.outputCut ? "The most recent text the agent's terminal showed; older lines were left out." : "What the agent's terminal showed when the run ended.";
 };

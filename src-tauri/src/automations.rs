@@ -816,6 +816,7 @@ pub fn follow(app: &tauri::AppHandle, f: impl FnOnce(&Store) -> Result<Option<St
     match moved {
         Ok(Some(id)) => {
             keep_screen(app, &state, &id);
+            keep_said(&state, &id);
             drop(app.emit(EVENT, json!({ "runId": id })))
         }
         Ok(None) => {}
@@ -847,10 +848,16 @@ pub fn screen_text(read: &crate::terminal::Read) -> (String, bool) {
     while kept.last().is_some_and(String::is_empty) {
         kept.pop();
     }
-    let text = kept.join("\n");
+    let (text, cut) = cap_tail(kept.join("\n"));
+    (text, cut || read.dropped || read.more)
+}
+
+/// The size limit: past it only the most recent text is kept, from a whole line. Returns the text
+/// and whether anything was left out.
+fn cap_tail(text: String) -> (String, bool) {
     let n = text.chars().count();
     if n <= RUN_OUTPUT_CHARS {
-        return (text, read.dropped || read.more);
+        return (text, false);
     }
     let tail: String = text.chars().skip(n - RUN_OUTPUT_CHARS).collect();
     let tail = match tail.find('\n') {
@@ -858,6 +865,31 @@ pub fn screen_text(read: &crate::terminal::Read) -> (String, bool) {
         None => tail,
     };
     (tail, true)
+}
+
+/// T-140-b: what the agent itself said, from its transcript lines (Claude's JSON lines, Codex's
+/// rollout): the assistant's text blocks in order, a repeat of the block just before it dropped,
+/// tool calls, thinking, side chains and the user's own turns left out, under the same size limit.
+pub fn transcript_text(agent: &str, lines: &[String]) -> (String, bool) {
+    let mut said: Vec<String> = Vec::new();
+    for v in lines.iter().filter_map(|l| serde_json::from_str::<Value>(l).ok()) {
+        let (content, kinds) = match agent {
+            "codex" if v["type"] == "response_item" && v["payload"]["type"] == "message" && v["payload"]["role"] == "assistant" => (&v["payload"]["content"], ["output_text", "text"]),
+            "claude" | "openclaude" if v["type"] == "assistant" && v["isSidechain"] != true && v["isMeta"] != true => (&v["message"]["content"], ["text", "text"]),
+            _ => continue,
+        };
+        let blocks: Vec<&str> = match content {
+            Value::String(t) => vec![t.as_str()],
+            Value::Array(a) => a.iter().filter(|b| b["type"].as_str().is_some_and(|t| kinds.contains(&t))).filter_map(|b| b["text"].as_str()).collect(),
+            _ => Vec::new(),
+        };
+        for t in blocks.into_iter().map(str::trim).filter(|t| !t.is_empty()) {
+            if said.last().is_none_or(|p| p != t) {
+                said.push(t.to_string());
+            }
+        }
+    }
+    cap_tail(said.join("\n\n"))
 }
 
 /// AUTO-014: run `run_id`, now over, keeps `text` as its saved output, once: a run that already
@@ -879,7 +911,7 @@ pub fn keep_output(store: &Store, run_id: &str, text: &str, cut: bool) -> Result
 }
 
 /// The run that just moved, if it is over and has a pane still open, saves that pane's text. A pane
-/// that already closed has nothing left to read (T-140-b keeps its text through the exit).
+/// that already closed has nothing left to read (the exit keeps its text through `keep_output`).
 fn keep_screen(app: &tauri::AppHandle, state: &Mutex<Store>, run_id: &str) {
     use tauri::Manager;
     let pane = state
@@ -896,6 +928,62 @@ fn keep_screen(app: &tauri::AppHandle, state: &Mutex<Store>, run_id: &str) {
     if let Ok(s) = state.lock() {
         if let Err(e) = keep_output(&s, run_id, &text, cut) {
             eprintln!("automation run output: {e}");
+        }
+    }
+}
+
+/// T-140-b: run `run_id`, now over, keeps what the agent said (its transcript) in place of the
+/// pane's text, which stands in only when there is no transcript. A precheck's output or text that
+/// is already the transcript is left alone.
+pub fn keep_transcript(store: &Store, run_id: &str, text: &str, cut: bool) -> Result<Option<String>, String> {
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+    let mut runs = load(store, RUNS_KEY)?;
+    let open = |r: &Value| output_open(r) || r["outputFrom"] == "screen";
+    let Some(r) = runs.iter_mut().find(|r| r["id"] == run_id && !in_progress(r) && open(r)) else { return Ok(None) };
+    if let Some(row) = r.as_object_mut() {
+        row.insert("output".into(), json!(text));
+        row.insert("outputFrom".into(), json!("transcript"));
+        row.insert("outputCut".into(), json!(cut));
+    }
+    stash_output(store, r)?;
+    save(store, RUNS_KEY, &runs)?;
+    Ok(Some(run_id.to_string()))
+}
+
+/// Where a finished run's agent wrote its transcript: the file its hooks last reported while the
+/// pane lived, else the newest one its agent started in the run's folder since the run began.
+fn transcript_path(run: &Value) -> Option<std::path::PathBuf> {
+    let agent = run["provider"].as_str()?;
+    let pane = ["paneKey", "lastPaneKey"].iter().find_map(|k| run[*k].as_u64()).and_then(|p| u32::try_from(p).ok());
+    if let Some(p) = pane.and_then(crate::status::transcript_of) {
+        return Some(p.into());
+    }
+    let since = std::time::UNIX_EPOCH + std::time::Duration::from_millis(run["dispatchedAt"].as_u64()?);
+    let user_home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(std::path::PathBuf::from);
+    let homes = crate::chat::homes(agent, &[], |k| std::env::var(k).ok(), user_home);
+    crate::chat::find(agent, &homes, run["worktree"].as_str()?, since)
+}
+
+/// The run that just moved, if it is over, saves what its agent said when the transcript can be
+/// found and read. Runs after the pane's text was kept, which it then replaces.
+// ponytail: reads the transcript (at most its newest 8 MB) on the thread that moved the run; a
+// worker thread if that ever shows as a stall.
+fn keep_said(state: &Mutex<Store>, run_id: &str) {
+    let run = state
+        .lock()
+        .ok()
+        .and_then(|s| load(&s, RUNS_KEY).ok())
+        .and_then(|runs| runs.into_iter().find(|r| r["id"] == run_id))
+        .filter(|r| !in_progress(r) && (output_open(r) || r["outputFrom"] == "screen"));
+    let Some(run) = run else { return };
+    let Some(path) = transcript_path(&run) else { return };
+    let Ok((lines, _)) = crate::chat::Tail::new(path).read() else { return };
+    let (text, cut) = transcript_text(run["provider"].as_str().unwrap_or_default(), &lines);
+    if let Ok(s) = state.lock() {
+        if let Err(e) = keep_transcript(&s, run_id, &text, cut) {
+            eprintln!("automation run transcript: {e}");
         }
     }
 }
@@ -2092,6 +2180,91 @@ mod tests {
         assert_eq!(keep_output(&store, "run-1", "later text", true).unwrap(), None);
         let r = list(&store).unwrap()["runs"][0].clone();
         assert_eq!((r["output"].as_str(), r["outputFrom"].as_str(), r["outputCut"].as_bool()), (Some("Done: 3 files changed"), Some("screen"), Some(false)));
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn jl(vs: &[Value]) -> Vec<String> {
+        vs.iter().map(Value::to_string).collect()
+    }
+
+    #[test]
+    fn t140b_the_transcript_text_is_what_the_agent_said_and_nothing_else() {
+        let said = |t: &str| json!({ "type": "assistant", "message": { "content": [{ "type": "thinking", "thinking": "hmm" }, { "type": "text", "text": t }, { "type": "tool_use", "name": "Bash" }] } });
+        let claude = jl(&[
+            json!({ "type": "user", "message": { "content": "please look" } }),
+            said("First part."),
+            said("First part."),
+            json!({ "type": "assistant", "isSidechain": true, "message": { "content": [{ "type": "text", "text": "a helper said this" }] } }),
+            json!({ "type": "assistant", "isMeta": true, "message": { "content": [{ "type": "text", "text": "meta" }] } }),
+            json!({ "type": "assistant", "message": { "content": "A plain string reply." } }),
+            said("  Done: 3 files changed.  "),
+        ]);
+        let mut with_junk = claude.clone();
+        with_junk.insert(2, "not json at all".to_string());
+        for lines in [&claude, &with_junk] {
+            let (text, cut) = transcript_text("claude", lines);
+            assert_eq!(text, "First part.\n\nA plain string reply.\n\nDone: 3 files changed.");
+            assert!(!cut);
+        }
+        let codex = jl(&[
+            json!({ "type": "session_meta", "payload": { "cwd": "x" } }),
+            json!({ "type": "response_item", "payload": { "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "do it" }] } }),
+            json!({ "type": "response_item", "payload": { "type": "function_call", "name": "shell" } }),
+            json!({ "type": "response_item", "payload": { "type": "message", "role": "assistant", "content": [{ "type": "output_text", "text": "All green." }] } }),
+        ]);
+        assert_eq!(transcript_text("codex", &codex), ("All green.".to_string(), false));
+        // The wrong agent's format, an agent with no transcript and an empty one read as nothing.
+        assert_eq!(transcript_text("claude", &codex).0, "");
+        assert_eq!(transcript_text("gemini", &claude).0, "");
+        assert_eq!(transcript_text("claude", &[]).0, "");
+        // A long session keeps the newest part from a whole block's line and says so.
+        let long: Vec<String> = (0..40).map(|i| said(&format!("{i:02} {}", "z".repeat(900))).to_string()).collect();
+        let (text, cut) = transcript_text("claude", &long);
+        assert!(cut && text.chars().count() <= RUN_OUTPUT_CHARS && text.contains("39 zzz") && !text.contains("00 zzz"), "{}", text.len());
+    }
+
+    #[test]
+    fn t140b_a_finished_run_swaps_the_pane_text_for_the_transcript_and_nothing_else_is_touched() {
+        let dir = temp("transcript");
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let store = Store::open(&dir.join("db")).unwrap();
+        seed(&store, &ws);
+        dispatched(&store, &ws, 1, "claude");
+        claim(&store, 6, Some(60), &ws.to_string_lossy(), Some("claude")).unwrap();
+        // Still going: nothing is kept.
+        assert_eq!(keep_transcript(&store, "run-1", "said", false).unwrap(), None);
+        on_status(&store, Some(6), 60, "working", false, false, 10).unwrap();
+        on_status(&store, Some(6), 60, "done", false, false, 11).unwrap();
+        // The pane's text first, as the exit keeps it; then the transcript replaces it, once.
+        keep_output(&store, "run-1", "$ claude\nscreen noise", false).unwrap();
+        assert_eq!(list(&store).unwrap()["runs"][0]["outputFrom"], "screen");
+        assert_eq!(keep_transcript(&store, "run-1", "   ", false).unwrap(), None);
+        assert_eq!(keep_transcript(&store, "run-1", "The agent's words.", true).unwrap(), Some("run-1".to_string()));
+        let r = list(&store).unwrap()["runs"][0].clone();
+        assert_eq!((r["output"].as_str(), r["outputFrom"].as_str(), r["outputCut"].as_bool()), (Some("The agent's words."), Some("transcript"), Some(true)));
+        assert_eq!(store.get(&output_key("run-1")).unwrap().unwrap(), json!("The agent's words.").to_string());
+        // A second look, or a later pane text, cannot take it back.
+        assert_eq!(keep_transcript(&store, "run-1", "again", false).unwrap(), None);
+        assert_eq!(keep_output(&store, "run-1", "late screen", false).unwrap(), None);
+        // A run with no pane text yet takes the transcript too, and a precheck's own output stays.
+        dispatched(&store, &ws, 2, "claude");
+        claim(&store, 7, Some(70), &ws.to_string_lossy(), Some("claude")).unwrap();
+        pane_ended(&store, 7, Some(1), 20).unwrap();
+        assert!(keep_transcript(&store, "run-2", "from the transcript", false).unwrap().is_some());
+        dispatched(&store, &ws, 3, "claude");
+        let mut rows = load(&store, RUNS_KEY).unwrap();
+        let r3 = rows.iter_mut().find(|r| r["id"] == "run-3").unwrap();
+        r3["status"] = json!("skipped");
+        r3["output"] = json!("precheck said no");
+        save(&store, RUNS_KEY, &rows).unwrap();
+        assert_eq!(keep_transcript(&store, "run-3", "ignored", false).unwrap(), None);
+        // The file read the app does: a transcript on disk through Tail, then the same text.
+        let file = dir.join("session.jsonl");
+        std::fs::write(&file, jl(&[json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "From disk." }] } })]).join("\n") + "\n").unwrap();
+        let (lines, _) = crate::chat::Tail::new(file).read().unwrap();
+        assert_eq!(transcript_text("claude", &lines).0, "From disk.");
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }
