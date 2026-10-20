@@ -18,7 +18,7 @@
 // grouped by project, status or pull request and sorted Smart or by name (PROJ-045, PROJ-050).
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import CacheTimer from "./CacheTimer";
-import { blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
+import { asksBeforeDelete, blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, HIDE_AUTOMATION_SETTING, PIN_COPIES_SETTING, PIN_SETTING, SHOW_SLEEPING_SETTING, SLEEP_SETTING, asleepAfter, renameTo, showSleepingFrom, SORT_SETTING, jumpUnhides, withoutAutomationMade, groupFromSetting, groupRows, pathKey, pinnedSet, recentOrder, smartOrder, sortFromSetting, type AgentState, type PrState, type RowInfo } from "./rows";
@@ -61,6 +61,9 @@ import { trustedSetup } from "../setup/TrustPrompt";
 import { NO_GROUPS, groupChoices, groupTree, keepNewer, type Group, type Groups, type Node } from "./groups";
 import { HEADER_ORDER_SETTING, MANUAL_ORDER_SETTING, dragStart, dropBefore, dropOutcome, edgeScroll, idsFrom, manualOrder, moveHeader, moveRows, siblingIds } from "./order";
 import { CLEAR_FILTERS, FILTER_DEFAULT_SETTING, FILTER_PROJECTS_SETTING, filtersFrom, filtersOn, rowShown, toggleProject } from "./filter";
+import { deletePlan, rowMenu, type MenuItem } from "./menu";
+import { commentBlocks, itemFromPaste, type Span } from "./details";
+import { FILE_MANAGER, loadTargets, openIn } from "../editor/openIn";
 
 /** The pages that open over the content column from the sidebar footer. */
 export type Page = "automations" | "routing" | "tasks";
@@ -160,6 +163,10 @@ const noteRecent = (id: string) => {
 
 export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onOpenSession = () => {}, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onAdded = () => {}, onRemoved, onSleep, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts, onPending, onSetup, skillsOn = false, onSkills = () => {} }: Props) {
   const [moving, setMoving] = useState<string | null>(null); // the workspace whose parent picker is open (PROJ-048)
+  // PROJ-065: the right-click menu, PROJ-060: the details form, T-055: a parent deleted together with its children.
+  const [menu, setMenu] = useState<{ x: number; y: number; projectId: string; path: string; items: MenuItem[] } | null>(null);
+  const [detailsOf, setDetailsOf] = useState<{ path: string; name: string; item: string; comment: string; error?: string } | null>(null);
+  const [batch, setBatch] = useState<{ root: string; order: string[]; error?: string } | null>(null);
   // EDIT-041: coming from the Inbox the workspace rows can take seconds to list, so each render
   // looks for the selected row until it is there, then scrolls to it once.
   const revealed = useRef(0);
@@ -1001,6 +1008,97 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     }
   };
 
+  // PROJ-065: right-click on a workspace row lists what can be done to it.
+  const openMenu = async (e: { preventDefault(): void; altKey: boolean; clientX: number; clientY: number }, p: Project, w: Worktree) => {
+    e.preventDefault();
+    const { altKey: alt, clientX: x, clientY: y } = e;
+    const [st, targets] = await Promise.all([
+      invoke<{ list: { id: string; label: string }[] }>("workspace_statuses", { paths: [w.path] }).catch(() => ({ list: [] })),
+      loadTargets().catch(() => []),
+    ]);
+    const deleting = busy === "removing" && confirm?.path === w.path;
+    setMenu({ x, y, projectId: p.id, path: w.path, items: rowMenu({ count: 1, isMain: w.isMain, asleep: isAsleep(w), deleting, platform: navigator.platform, alt, statuses: st.list, editors: targets.filter((t) => !t.files) }) });
+  };
+  // T-055: a workspace with children offers only to delete them all; a lone one follows the question setting.
+  const startDelete = async (p: Project, w: Worktree) => {
+    const now = await invoke<Record<string, unknown>>("get_settings");
+    const plan = deletePlan([w.path], (worktrees[p.id] ?? []).map((x) => ({ path: x.path, parent: x.parent })), asksBeforeDelete(now));
+    if (plan.withChildren) setBatch({ root: w.path, order: plan.order });
+    else await ask(p.id, w.path, worktreeLabel(w));
+  };
+  const labelOf = (path: string) => {
+    const w = Object.values(worktrees).flat().find((x) => same(x.path, path));
+    return w ? worktreeLabel(w) : path;
+  };
+  // Children first and the parent last; stops at the first one with something uncommitted, and says which.
+  const removeBatch = async () => {
+    const b = batch;
+    const p = b && projects.find((x) => (worktrees[x.id] ?? []).some((y) => y.path === b.root));
+    if (!b || !p) return;
+    setBusy("removing");
+    try {
+      for (const path of b.order) {
+        const check = await invoke<RemoveCheck>("workspace_remove_check", { projectId: p.id, path });
+        if (blocker(check) !== null || check.changes.length > 0) {
+          setBatch({ ...b, order: b.order.slice(b.order.indexOf(path)), error: `${labelOf(path)} has ${blocker(check) ?? "uncommitted changes"}; nothing after it was removed` });
+          return;
+        }
+        await invoke("workspace_remove", { projectId: p.id, path, force: false, stamp: check.stamp, keepBranch: false });
+        onRemoved(path);
+      }
+      say("ok", `removed ${b.order.length} workspaces, children first`);
+      setBatch(null);
+    } catch (err) {
+      setBatch({ ...b, error: String(err) });
+    } finally {
+      setBusy("");
+      await reload();
+    }
+  };
+  const runMenu = async (id: string) => {
+    const m = menu;
+    setMenu(null);
+    const p = m && projects.find((x) => x.id === m.projectId);
+    const w = m && (worktrees[m.projectId] ?? []).find((x) => x.path === m.path);
+    if (!m || !p || !w) return;
+    try {
+      if (id === "delete") await startDelete(p, w);
+      else if (id === "sleep") sleep(w);
+      else if (id === "wake") wake(w);
+      else if (id === "parent") setMoving(w.path);
+      else if (id === "details") {
+        const d = await invoke<{ name: string | null; item: string | null; comment: string }>("workspace_details_get", { path: w.path });
+        setDetailsOf({ path: w.path, name: d.name ?? "", item: d.item ?? "", comment: d.comment });
+      } else if (id.startsWith("status:")) {
+        await invoke("workspace_status_set", { path: w.path, status: id.slice(7) });
+        await reload();
+      } else if (id === "open:files") await openIn(w.path, FILE_MANAGER);
+      else if (id.startsWith("open:editor:")) await openIn(w.path, { label: "", command: id.slice(12) });
+      else if (id === "open:terminal") show(w);
+      else if (id === "dev:copy-path") await navigator.clipboard.writeText(w.path);
+      else if (id === "dev:copy-branch") await navigator.clipboard.writeText(w.branch ?? "");
+    } catch (err) {
+      fail(err);
+    }
+  };
+  // PROJ-060: saves the name, linked item and comment; a refused link says why and writes nothing.
+  const saveDetails = async () => {
+    if (!detailsOf) return;
+    try {
+      await invoke("workspace_details_save", { path: detailsOf.path, name: detailsOf.name, item: detailsOf.item, comment: detailsOf.comment });
+      setDetailsOf(null);
+      await reload();
+    } catch (err) {
+      setDetailsOf({ ...detailsOf, error: String(err) });
+    }
+  };
+  const spanView = (sp: Span, i: number) =>
+    sp.t === "text" ? <span key={i}>{sp.text}</span> : (
+      <button key={i} className="link" title={sp.href} onClick={() => void invoke("open_external", { url: sp.href }).catch(fail)}>
+        {sp.t === "image" ? `image: ${sp.alt}` : sp.text}
+      </button>
+    );
+
   // PROJ-042: hide or show one worktree; the poll shows the change, this just does not wait for it.
   // PROJ-048: the parents a workspace can move under, and the move itself. The picker closes
   // first, so a refusal shows once it is gone.
@@ -1382,7 +1480,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     const up = w.parent ? (worktrees[p.id] ?? []).find((x) => !x.isMain && same(x.path, w.parent as string)) : undefined;
     return (
       <div key={w.path} data-worktree={worktreeLabel(w)} data-depth={depth} data-path={w.path}>
-        <div {...rowDrag(w)} className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onClick={() => show(w)} onKeyDown={(e) => (e.key === "Enter" ? show(w) : e.key === "F2" && startRename(w))} title={hoverTitle} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
+        <div {...rowDrag(w)} className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onContextMenu={(e) => void openMenu(e, p, w)} onClick={() => show(w)} onKeyDown={(e) => (e.key === "Enter" ? show(w) : e.key === "F2" && startRename(w))} title={hoverTitle} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
           {kids && (
             <button
               className={`fold${shut ? " shut" : ""}`}
@@ -1516,6 +1614,69 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         </div>
         <CardLine shown={cardDetails.shown} facts={facts} depth={depth} />
         {paneRows(w, depth)}
+        {detailsOf?.path === w.path && !asking && (
+          <div className="sb-form" data-details={worktreeLabel(w)}>
+            <input className="field" aria-label="Name" placeholder="Name (blank uses the branch)" value={detailsOf.name} onChange={(e) => setDetailsOf({ ...detailsOf, name: e.target.value })} />
+            <input
+              className="field"
+              aria-label="Linked issue or pull request"
+              placeholder="Issue or pull request address, or #number"
+              value={detailsOf.item}
+              onChange={(e) => setDetailsOf({ ...detailsOf, item: e.target.value })}
+              onPaste={(e) => {
+                const text = e.clipboardData.getData("text");
+                if (itemFromPaste(text) !== text.trim()) {
+                  e.preventDefault();
+                  setDetailsOf({ ...detailsOf, item: itemFromPaste(text) });
+                }
+              }}
+            />
+            <textarea className="field multi" aria-label="Comment" placeholder="Comment: # headings, [links](https://example.com) and ![images](https://example.com/a.png)" value={detailsOf.comment} onChange={(e) => setDetailsOf({ ...detailsOf, comment: e.target.value })} />
+            {commentBlocks(detailsOf.comment).map((b, i) => (
+              <div key={i} data-block={b.kind} style={b.kind === "heading" ? { fontWeight: 600 } : undefined}>
+                {b.spans.map(spanView)}
+              </div>
+            ))}
+            {detailsOf.error && (
+              <span className="note error" role="alert">
+                {detailsOf.error}
+              </span>
+            )}
+            <div className="btn-row">
+              <button className="btn" onClick={() => void saveDetails()}>
+                Save
+              </button>
+              <button className="btn" onClick={() => setDetailsOf(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        {batch?.root === w.path && (
+          <div className="sb-form warn" data-delete-all={worktreeLabel(w)}>
+            <div>
+              Delete <b>{worktreeLabel(w)}</b> and the {batch.order.length - 1} workspace{batch.order.length === 2 ? "" : "s"} made from it? They go children first, the parent last, each with its folder and branch. Anything with uncommitted changes stops the rest.
+            </div>
+            <ul style={{ margin: 0, paddingLeft: 16 }}>
+              {batch.order.map((d) => (
+                <li key={d}>{labelOf(d)}</li>
+              ))}
+            </ul>
+            {batch.error && (
+              <span className="note error" role="alert">
+                {batch.error}
+              </span>
+            )}
+            <div className="btn-row">
+              <button className="btn danger" onClick={() => void removeBatch()} disabled={busy !== ""}>
+                {busy === "removing" ? "Removing…" : "Delete all"}
+              </button>
+              <button className="btn" onClick={() => setBatch(null)}>
+                Keep
+              </button>
+            </div>
+          </div>
+        )}
         {moving === w.path && !asking && (
           <div className="sb-form" data-moving={worktreeLabel(w)}>
             <Picker key={`move-${w.path}`} name="Move under" value={up ? worktreeLabel(up) : "No parent"} startOpen items={moveItems(p, w)} onPick={(k) => void move(p, w, k)} />
@@ -1997,6 +2158,29 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
             />
           )}
           {message && <div className={`note ${message.kind}`}>{message.text}</div>}
+          {menu && (
+            <>
+              <div style={{ position: "fixed", inset: 0, zIndex: 49 }} onClick={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null); }} />
+              <div role="menu" aria-label="Workspace" data-menu-for={menu.path} style={{ position: "fixed", left: menu.x, top: menu.y, zIndex: 50, minWidth: 180, padding: 4, display: "flex", flexDirection: "column", background: "var(--app-bg)", border: "1px solid var(--line-focus)", borderRadius: 8 }} onKeyDown={(e) => e.key === "Escape" && setMenu(null)}>
+                {menu.items.map((it) =>
+                  it.children ? (
+                    <div key={it.id} role="group" aria-label={it.label} style={{ display: "flex", flexDirection: "column" }}>
+                      <div style={{ padding: "4px 8px", color: "var(--fg-muted)", fontSize: 11 }}>{it.label}</div>
+                      {it.children.map((c) => (
+                        <button key={c.id} role="menuitem" disabled={it.disabled || c.disabled} style={{ textAlign: "left", padding: "4px 8px 4px 20px" }} onClick={() => void runMenu(c.id)}>
+                          {c.label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <button key={it.id} role="menuitem" disabled={it.disabled} style={{ textAlign: "left", padding: "4px 8px", color: it.danger ? "#f0a07a" : undefined }} onClick={() => void runMenu(it.id)}>
+                      {it.label}
+                    </button>
+                  ),
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         <div className="sb-divider" />

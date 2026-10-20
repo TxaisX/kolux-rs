@@ -1,0 +1,13 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 48f4fe71..b1f78cb4 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -420,7 +420,7 @@ pub fn run() {
+             projects::workspace_unseen,
+             projects::workspace_seen,
+             projects::workspace_hide,
+-            projects::workspace_rename,
++            projects::workspace_rename, projects::workspace_details_get, projects::workspace_details_save,
+             projects::workspace_sleep,
+             projects::visibility_get,
+             projects::visibility_set,

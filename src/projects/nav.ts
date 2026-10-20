@@ -29,6 +29,9 @@ export function visit(h: History, p: Place): History {
   return { list, at: list.length - 1 };
 }
 
+/** PROJ-056: back and forward belong to the terminal view and do nothing under the settings page. */
+export const stepAllowed = (terminalView: boolean, settingsOpen: boolean) => terminalView && !settingsOpen;
+
 /** Back (-1) or forward (+1) to the nearest place that still exists; null when there is none. */
 export function travel(h: History, dir: 1 | -1, exists: (p: Place) => boolean): number | null {
   for (let i = h.at + dir; i >= 0 && i < h.list.length; i += dir) if (exists(h.list[i])) return i;
