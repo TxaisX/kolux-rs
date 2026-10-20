@@ -25,22 +25,34 @@ test("a plain click on a third row selects only that row", () => {
 
 test("two rows are covered by one confirmation", () => {
   const q = batchQuestion([
-    { name: "one", check: clean },
-    { name: "two", check: { ...clean, changes: [" M a.ts"] } },
+    { path: "C:/w/one", name: "one", check: clean },
+    { path: "C:/w/two", name: "two", check: { ...clean, changes: [" M a.ts"] } },
   ]);
   expect(q.title).toBe("Remove 2 workspaces?");
-  expect(q.removable).toEqual(["one", "two"]);
-  expect(q.dirty).toEqual([{ name: "two", lines: [" M a.ts"], more: 0 }]);
+  expect(q.removable).toEqual(["C:/w/one", "C:/w/two"]);
+  expect(q.dirty).toEqual([{ path: "C:/w/two", name: "two", lines: [" M a.ts"], more: 0 }]);
   expect(q.blocked).toEqual([]);
 });
 
 test("a locked workspace is named as blocked, left out of the removal and stays selected", () => {
   const q = batchQuestion([
-    { name: "one", check: clean },
-    { name: "two", check: { ...clean, locked: "on a USB drive" } },
+    { path: "C:/w/one", name: "one", check: clean },
+    { path: "C:/w/two", name: "two", check: { ...clean, locked: "on a USB drive" } },
   ]);
   expect(q.blocked.map((b) => b.name)).toEqual(["two"]);
-  expect(q.removable).toEqual(["one"]);
+  expect(q.removable).toEqual(["C:/w/one"]);
   expect(q.title).toBe("Remove one?");
-  expect(selectionAfterDelete(q, ["C:/one", "C:/two"], (p) => p.slice(3))).toEqual(["C:/two"]);
+  expect(selectionAfterDelete(q, ["C:/w/one", "C:/w/two"])).toEqual(["C:/w/two"]);
+});
+
+test("two workspaces with the same name are told apart by path: the locked one blocks only itself", () => {
+  const q = batchQuestion([
+    { path: "C:/shop/app", name: "app", check: { ...clean, locked: "on a USB drive" } },
+    { path: "C:/blog/app", name: "app", check: { ...clean, changes: [" M post.md"] } },
+  ]);
+  expect(q.blocked).toEqual([{ path: "C:/shop/app", name: "app", why: expect.any(String) }]);
+  expect(q.removable, "the other 'app' is still removed").toEqual(["C:/blog/app"]);
+  expect(q.dirty.map((d) => d.path), "and its changes are still shown").toEqual(["C:/blog/app"]);
+  expect(selectionAfterDelete(q, ["C:/shop/app", "C:/blog/app"]), "only the locked row stays selected").toEqual(["C:/shop/app"]);
+  expect(selectionAfterDelete(q, ["c:/SHOP/app", "C:/blog/app"], same)).toEqual(["c:/SHOP/app"]);
 });

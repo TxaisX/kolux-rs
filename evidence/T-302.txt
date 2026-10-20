@@ -38,8 +38,14 @@ Readings (real)
 - vitest run src/projects -> 23 files, 129 tests passed. tsc --noEmit -> no output (clean).
 - cargo clippy --lib --tests -- -D warnings -> exit 0.
 - MUTATION CHECKS (each made the named test fail, then the good copy was restored and the suite went green again):
-  Rust: dropping the ".." check in the link follower -> the link-escape test fails; letting remote_parts accept all-dot names / a
-  host without a dot -> the remote-address test fails.
+  Rust: dropping the ".." check in the link follower -> the link-escape test fails (t302-mutation-red2.log); remote_parts:
+  CORRECTED 2026-10-19 (FIX-4): the first remote_parts mutation log (t302-mutation-red.log) shows the remote-address test
+  passing and t302_a_file_that_is_too_large_or_not_a_picture_is_passed_over failing, so that sentence was wrong for that run.
+  Rerun in FIX-4 (evidence/worktrees-FIX-4.txt, fix4-mutB-remote-parts.log): remote_parts accepting any owner makes
+  t302_remote_addresses_are_read_on_every_form_git_accepts_and_odd_ones_refused FAIL ("https://github.com/o%20x/r" left Some, right None).
+  Order of the places, as built (and as spec/01 gives): favicon files, app bundle icons, a picture the manifest names, the icon
+  links of the page source, then the owner's avatar (the first summary above left the bundle step out). Web addresses named by
+  files in the repository are no longer followed (FIX-4); see evidence/worktrees-FIX-4.txt.
   TS: baseHint.behindHint ignoring the dismissal -> "create again after dismissing the hint" fails; autoIconView without the
   https check -> "an address or data that is not plainly safe to draw is no icon" fails (2 failed | 7 passed; restored 9 passed).
 
