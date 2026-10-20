@@ -11,7 +11,9 @@ import { ConnectGrid } from "../settings/ConnectGrid";
 import { ClaudeCard } from "../settings/SettingsPage";
 import CodexCard from "../settings/CodexCard";
 import GrokCard from "../settings/GrokCard";
-import { chordFires, leaveKey, milestone, SCREENS } from "./firstRun";
+import { chordFires, escapeLeaves, leaveKey, milestone, SCREENS } from "./firstRun";
+
+const inWizard = (t: EventTarget | null) => t instanceof Element && t.closest(".onb") !== null;
 
 const TILES = [
   { ai: "Claude", doing: "Writing up the findings" },
@@ -59,7 +61,7 @@ export function WizardView(p: ViewProps) {
   return (
     <div className="ask-backdrop onb-backdrop" hidden={p.hidden} onMouseDown={(e) => e.button === 0 && e.target === e.currentTarget && p.onOutside?.()}>
       <div className="onb-drag" data-tauri-drag-region />
-      <div className="onb" role="dialog" aria-modal="true" aria-label="Get started with Kolux">
+      <div className="onb" role="dialog" aria-modal="true" aria-label="Get started with Kolux" tabIndex={-1}>
         <div className="onb-head">
           <Mark size={22} />
           <div className="onb-progress">
@@ -69,7 +71,7 @@ export function WizardView(p: ViewProps) {
           </div>
           <span className="onb-count">{`${p.at + 1} of ${SCREENS.length}`}</span>
           {p.onClose && (
-            <button className="ib" title="Close" onClick={p.onClose}>
+            <button className="ib" title="Close" aria-label="Close setup" onClick={p.onClose}>
               <Close />
             </button>
           )}
@@ -219,8 +221,16 @@ export default function Wizard(props: Props) {
       main();
     };
     window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
+    const outside = escapeLeaves(window as unknown as Parameters<typeof escapeLeaves>[0], inWizard, () => leaving, () => setLeaving(true));
+    return () => {
+      window.removeEventListener("keydown", key);
+      outside();
+    };
   });
+  // ONB-006: the dialog is modal, so it takes the focus when it shows (a terminal behind it keeps no keys).
+  useEffect(() => {
+    if (!props.hidden) document.querySelector<HTMLElement>(".onb")?.focus();
+  }, [props.hidden]);
   const [mark] = useState(() => (id: string) => (v: boolean) => setOn((o) => (o[id] === v ? o : { ...o, [id]: v })));
   const [cards] = useState(() => ({ claude: <ClaudeCard onConnected={mark("claude")} />, codex: <CodexCard onConnected={mark("codex")} />, grok: <GrokCard onConnected={mark("grok")} /> }));
   return (

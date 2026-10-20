@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { CHECKLIST_CHANGED, chordFires, clearReadFailure, closer, readFailed, connectFailed, firstAiConnected, firstConnection, firstFolderAgent, kitLaunch, leaveKey, milestone, oneClick, openAt, reopenWizard, SCREENS, STATUSES_FAILED, wizardCloser, type Outcome } from "./firstRun";
+import { CHECKLIST_CHANGED, chordFires, clearReadFailure, closer, readFailed, connectFailed, escapeLeaves, firstAiConnected, firstConnection, firstFolderAgent, kitLaunch, leaveKey, milestone, oneClick, openAt, reopenWizard, SCREENS, STATUSES_FAILED, wizardCloser, type Outcome } from "./firstRun";
 import { WizardView } from "./Wizard";
 import { jargon } from "../glossary";
 
@@ -286,4 +286,41 @@ test("ACCT-035 (FIX-3): a failed read never replaces a connect failure the user 
   setError(readFailed);
   setError(clearReadFailure);
   expect(e).toBeNull();
+});
+
+// Install trial (after-list, fix-ui): a focused terminal behind the wizard swallowed Escape in the bubble phase.
+test("ONB-006: Escape from outside the wizard (a terminal behind it) still asks to leave, in the capture phase", () => {
+  const added: { f: (e: never) => void; capture: boolean }[] = [];
+  const win = { addEventListener: (_t: "keydown", f: (e: never) => void, capture: boolean) => void added.push({ f, capture }), removeEventListener: (_t: "keydown", f: (e: never) => void) => void added.splice(added.findIndex((a) => a.f === f), 1) };
+  let held = false;
+  let left = 0;
+  const outsideEl = {} as EventTarget;
+  const insideEl = {} as EventTarget;
+  const off = escapeLeaves(win, (t) => t === insideEl, () => held, () => left++);
+  expect(added).toHaveLength(1);
+  expect(added[0].capture).toBe(true);
+  const press = (over: Record<string, unknown> = {}) => {
+    const e = { key: "Escape", isComposing: false, defaultPrevented: false, target: outsideEl, prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; }, ...over };
+    added[0].f(e as never);
+    return e;
+  };
+  const e = press();
+  expect(left).toBe(1);
+  expect(e.prevented && e.stopped).toBe(true);
+  // Inside the dialog its own controls come first; mid-composition and other keys pass.
+  expect(press({ target: insideEl }).stopped).toBe(false);
+  expect(press({ isComposing: true }).stopped).toBe(false);
+  expect(press({ key: "Enter" }).stopped).toBe(false);
+  // While the "Skip setup?" question is up, Escape is that question's (No, keep going).
+  held = true;
+  expect(press().stopped).toBe(false);
+  expect(left).toBe(1);
+  off();
+  expect(added).toHaveLength(0);
+});
+
+test("ONB-006: the wizard's close button has an accessible name, and the dialog can take focus", () => {
+  const html = view(0, { onClose() {} });
+  expect(html).toMatch(/<button[^>]*title="Close"[^>]*aria-label="Close setup"/);
+  expect(html).toMatch(/role="dialog"[^>]*tabindex="-1"/i);
 });
