@@ -3422,3 +3422,4 @@ you picked with Open a file stays readable after Kolux restarts, so a reopened t
 > 2026-10-19 [watch] T-033-e batch-2 rerun: all edges already built and unit-proven (patches in the merged tree); made fix1_a_real_buffer_overflow deterministic (4 writers, long names, scm_watch.rs test only); ticked, live proof pending (batched).
 > 2026-10-19 [watch] T-275: gone.ts (retire dead agents, closed-tab ledger, genuine-new-turn rule) + 2 patches for the resolver; unit-proven, live proof pending (batched).
 > 2026-10-19 [watch] T-259: status/working.ts (working agents per workspace, split panes apart) + 3 patches (rows.ts, App.tsx, ProjectsPanel.tsx); unit-proven, live proof pending (batched).
+> 2026-10-19 [watch] T-309-b: status/finished.ts (one early pull request round per finish, skipped hidden/unlisted/limited) + 2 patches (useAgentStatus.ts, ProjectsPanel.tsx); unit-proven, live proof pending (batched).

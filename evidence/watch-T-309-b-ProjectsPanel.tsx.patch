@@ -1,0 +1,25 @@
+diff --git a/src/projects/ProjectsPanel.tsx b/src/projects/ProjectsPanel.tsx
+index 1ae80bd9..3a34d13e 100644
+--- a/src/projects/ProjectsPanel.tsx
++++ b/src/projects/ProjectsPanel.tsx
+@@ -49,6 +49,7 @@ import SkillsRow from "./SkillsRow";
+ import { chromeShown } from "../chrome/chromeItems";
+ import { VOCAB } from "../terminal/status";
+ import { workingWord } from "../status/working";
++import { onFinish, REFRESH_AFTER_MS, wantsRefresh } from "../status/finished";
+ import type { AgentPass } from "../launch/agents";
+ import { KeyText } from "../keys/KeymapContext";
+ import { requestUpdateCheck } from "../update/UpdateCenter";
+@@ -390,9 +391,12 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+       if (Date.now() - st.at > STALE_MS && st.limited * 1000 < Date.now()) later(0);
+     };
+     window.addEventListener("focus", focus);
++    // STAT-038: an agent finishing in a listed workspace brings the next round forward, once per finish.
++    const off = onFinish((cwd) => wantsRefresh({ hidden: document.hidden, paths: pollPaths, cwd, limitedUntil: st.limited, now: Date.now() }) && later(REFRESH_AFTER_MS));
+     return () => {
+       dead = true;
+       clearTimeout(timer);
++      off();
+       window.removeEventListener("focus", focus);
+     };
+   }, [pollKey]);

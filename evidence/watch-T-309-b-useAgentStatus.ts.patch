@@ -1,0 +1,21 @@
+diff --git a/src/status/useAgentStatus.ts b/src/status/useAgentStatus.ts
+index 63d81ef4..12f4dbca 100644
+--- a/src/status/useAgentStatus.ts
++++ b/src/status/useAgentStatus.ts
+@@ -18,6 +18,7 @@ import { newPaceMemory, noteId, paced } from "../notify/pace";
+ import { badgeCount } from "../notify/badge";
+ import { toAcknowledge } from "../notify/seen";
+ import { admit, ledger } from "./gone";
++import { finished } from "./finished";
+ 
+ export type TurnInfo = { tool?: string; detail?: string; ask?: string; reply?: string; wrote?: string; stop?: StopInfo; plan?: string; planCut?: boolean; monitoring?: boolean };
+ 
+@@ -218,6 +219,8 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
+       const prev = hookRef.current[paneKey];
+       // STAT-041: a finish, a permission request, a block, an interrupt or a sub-agent's turn is a note.
+       const note = turnNote(prev, e.payload);
++      // STAT-038 / T-309-b: a finish asks the sidebar's pull request poll for one early round.
++      if (note?.what === "finished") finished(paneKey, panesRef.current.find((x) => x.key === paneKey)?.cwd ?? null);
+       if (note) {
+         const p = panesRef.current.find((x) => x.key === paneKey);
+         if (p) noticedRef.current(p, note.what, note.body, note.stopped ? "notifyOnStopped" : "notifyOnFinish");

@@ -842,3 +842,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · watch T-033-e (batch 2) · no new outside source; own scm_watch.rs and evidence/T-033-e.txt
 > 2026-10-19 · watch T-275 · spec/04 STAT-031 as given in the brief; this tree own src/status/useAgentStatus.ts and status.rs; no outside source
 > 2026-10-19 · watch T-259 · spec/04 STAT-036 as given in the brief; no outside source
+> 2026-10-19 · watch T-309-b · spec/04 STAT-038 as given in the brief; no outside source
