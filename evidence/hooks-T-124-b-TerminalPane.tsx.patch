@@ -1,5 +1,5 @@
 diff --git a/src/terminal/TerminalPane.tsx b/src/terminal/TerminalPane.tsx
-index faa68bb3..62ac2f03 100644
+index cfbc2a02..a9bc6fdd 100644
 --- a/src/terminal/TerminalPane.tsx
 +++ b/src/terminal/TerminalPane.tsx
 @@ -5,6 +5,7 @@
@@ -9,8 +9,8 @@ index faa68bb3..62ac2f03 100644
 +import { inbandTurn } from "../status/inbandSession";
  import { followedTitle, Gate, IDLE, printsMarks, READY_WAIT_MS, reduceIdentity, Scanner, shownAgent, Startup, type Identity } from "./shellMarks";
  import PaneMenu, { paneMenuItems } from "./PaneMenu";
- import type { Chip } from "../board/chip";
-@@ -447,7 +448,11 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
+ import LinkActionMenu from "./LinkActionMenu";
+@@ -452,7 +453,11 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
      // T-563: the pane's live terminal goes with it, for the activity lane. hooks FIX-3: a plain shell's
      // output never moves the dot; the sequence is still kept off the screen.
      term.parser.registerOscHandler(9999, (data) => {
