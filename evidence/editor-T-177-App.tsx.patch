@@ -1,0 +1,28 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 28a6046f..aaeff019 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -75,6 +75,7 @@ import DiffPane, { diffNav } from "./editor/DiffPane";
+ import AllChangesPane from "./editor/AllChangesPane";
+ import { DIFF_SPLIT_KEY, diffSplitOf, targetCell } from "./scm/split";
+ import Explorer from "./editor/Explorer";
++import { discardDraftsOf, useFileMoves } from "./editor/useFileMoves";
+ import RightSidebar, { clampLeft, clampWidth, Grip, LEFT_KEY, readLeft, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
+ import { isMarkdown } from "./editor/markdown";
+ import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, resizePlan, rowsFor, splitIndex, toggleCard, blocking, freeCell, canExpand, toggleZoom, zoomedGroup, type Zoom } from "./terminal/grid";
+@@ -218,6 +219,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   const [dragLeft, setDragLeft] = useState<number | null>(null); // VIEW-050: the left sidebar mid-drag
+   // PROJ-067: the saved tabs and layout (already checked against the disk by main.tsx) are the starting state.
+   const [panes, setPanes] = useState<Pane[]>(() => layout?.panes ?? []); // T-543-b: no pane until a workspace is opened
++  useFileMoves(setPanes); // EDIT-032: editor tabs follow a renamed or moved file
+   const [focused, setFocused] = useState(layout?.focused ?? 0);
+   // TERM-040: which tab each cell shows; the focused pane's tab comes to the front, and a cell
+   // whose active tab was closed falls back to its last tab.
+@@ -1579,6 +1581,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   // else its right neighbour (left if it was last), never to a tab that is closing.
+   const dropPanes = (keys: number[]) => {
+     const gone = new Set(keys);
++    discardDraftsOf(panes.filter((p) => gone.has(p.key))); // EDIT-004: a tab closed on purpose keeps no draft
+     exitedPrompt.current = onClose(exitedPrompt.current, keys);
+     keys.forEach((k) => delete ptys.current[k]);
+     // TERM-106: a tab closed on purpose is not brought back after a restart.

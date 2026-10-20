@@ -27,10 +27,14 @@ import { isTable } from "./csv";
 import { useSettings } from "../settings/useSettings";
 import { prefPatch, readEditorPrefs } from "../settings/editorPrefs";
 import { undo } from "@codemirror/commands";
-import { attach, baseName, detach, isDirty, isStale, loadText, relay, replaceAll, save, subscribe, textOf } from "./buffers";
-import { beginSave, canUndo, checkOnce, endSave, forget, keep, POLL_MS, readFresh, reloadNow, remember, setBanner as markBanner, UNDO_TOAST_MS, type Io, type Stamp, type UndoEntry } from "./diskChange";
+import { attach, baseName, detach, hashOf, isDirty, isStale, loadText, relay, replaceAll, save, subscribe, takeCarried, textOf } from "./buffers";
+import { createAutosave, covers, movingNow, prefsReader, type Autosave } from "./autosave";
+import { drafts, restoreFrom, worktreeOf } from "./drafts";
+import { confirmed } from "./fileMoved";
+import { richChange, splitFront } from "./frontMatter";
+import { bannerUp, beginSave, canUndo, checkOnce, endSave, forget, keep, POLL_MS, readFresh, reloadNow, remember, setBanner as markBanner, UNDO_TOAST_MS, type Io, type Stamp, type UndoEntry } from "./diskChange";
 import { CompareView, DiskBanner, UndoToast } from "./DiskBanner";
-import { changeBetween, isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
+import { isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
 import { domPick, noteDraft, selections } from "./notes";
 import { contextText } from "./copyContext";
 import { shortPath } from "./diffNotes";
@@ -162,6 +166,10 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   const [undoable, setUndoable] = useState<UndoEntry | null>(null);
   const report = useRef({ onDirty, onToast });
   report.current = { onDirty, onToast };
+  // EDIT-002: autosave reads the settings afresh at an edit (at most every 5 s), so switching it on
+  // in Settings reaches tabs that are already open.
+  const autoRef = useRef<Autosave | null>(null);
+  const prefs = useRef(prefsReader(() => invoke<Record<string, unknown>>("get_settings"))).current;
   const wantFocus = useRef(focused);
   wantFocus.current = focused;
   const md = isMarkdown(path);
@@ -197,6 +205,8 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     setHint(c && contextText(v.state.doc, from, to, "").header ? { x: c.right, y: c.bottom, sel: `${from}-${to}` } : null);
   };
   const [conflicts, setConflicts] = useState(0);
+  const conflictsRef = useRef(0);
+  conflictsRef.current = conflicts;
   // EDIT-016 / EDIT-017: the rich view's find bar and contents panel, and the note text they read
   // (taken from the buffer a moment after typing stops).
   const [noteFind, setNoteFind] = useState<FindOpen | null>(null);
@@ -207,10 +217,23 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   useEffect(() => {
     let alive = true;
     let made: EditorView | null = null;
+    // EDIT-002: autosave; EDIT-032: it stands down while the file is being moved.
+    const auto = createAutosave({
+      prefs: prefs.get,
+      covered: () => covers({ readOnly, conflict: conflictsRef.current > 0 }),
+      dirty: () => isDirty(path),
+      held: () => bannerUp(path) || movingNow(path),
+      write: () => saveFile(path, setStale, report.current.onToast),
+    });
+    autoRef.current = auto;
+    const wt = worktreeOf(root, path);
     const off = subscribe(path, () => {
       const d = isDirty(path);
       setDirty(d);
       report.current.onDirty?.(d);
+      // EDIT-004: the unsaved text is kept as a draft; a clean tab clears it.
+      drafts.edited(wt, path, readOnly);
+      if (d && !readOnly) void prefs.refresh().then(() => alive && auto.edit());
     });
     setError(null);
     setStale(false);
@@ -220,11 +243,19 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     // T-073: the stamp is taken before the text, so a write landing in between shows at the next check.
     stampOne(path)
       .then((st) => ((loaded = st), loadText(() => invoke<string>("file_read", { path }))))
+      .then(async (text) => {
+        // EDIT-032 carries unsaved text to a moved file's new path; EDIT-004 brings a draft back.
+        const carry = takeCarried(path);
+        const draft = readOnly || carry ? null : await drafts.take(wt, path).catch(() => null);
+        const r = carry ? { text: carry.text, moved: false, stale: false } : restoreFrom(text, await hashOf(text), draft);
+        if (r.stale) void drafts.discard(wt, path);
+        return { text, shown: r.text, draftMoved: r.moved };
+      })
       .then(
-      (text) => {
+      ({ text, shown, draftMoved }) => {
         if (!alive) return;
         made = new EditorView({
-          doc: text,
+          doc: shown,
           parent: host.current!,
           // A file with Windows line ends is saved with them.
           extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), wrapping.of(wrapOn.current ? EditorView.lineWrapping : []), findSupport, conflictColours, pasteGuard((t) => report.current.onToast?.(t)), EditorView.updateListener.of((u) => {
@@ -240,7 +271,12 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
         attach(path, made, text);
         // A twin pane already holds this file: its stamp stays the one its copy came from.
         if (textOf(path) === text) remember(path, loaded);
-        setNoteText(text);
+        setNoteText(shown);
+        // EDIT-004: a draft over a disk copy that moved on comes back with the banner up.
+        if (draftMoved) setMoved({ stamp: loaded });
+        // EDIT-032: the file is read at its new place; autosave may write again.
+        confirmed(path);
+        if (shown !== text) auto.resume();
         setReady((n) => n + 1);
         // EDIT-009: a file still holding conflicts opens on the first one.
         setConflicts(made.state.field(conflictField).list.length);
@@ -257,6 +293,8 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     editors.set(id, () => saveFile(path, setStale, report.current.onToast));
     return () => {
       alive = false;
+      auto.cancel();
+      autoRef.current = null;
       clearTimeout(noteTimer.current);
       editors.delete(id);
       off();
@@ -313,7 +351,10 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     const t = window.setTimeout(() => setUndoable(null), UNDO_TOAST_MS);
     return () => window.clearTimeout(t);
   }, [undoable]);
-  useEffect(() => markBanner(path, !!moved), [path, moved]);
+  useEffect(() => {
+    markBanner(path, !!moved);
+    if (!moved) autoRef.current?.resume(); // EDIT-002: the banner went (Reload, Keep my edits)
+  }, [path, moved]);
   const reload = () =>
     void reloadNow(path, io.current).then(
       (u) => {
@@ -371,17 +412,18 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
       setMode("source");
     };
     if (text.length > RICH_LIMIT && !bigOk) return fallBack({ text: `This file is ${(text.length / 1048576).toFixed(1)} MB, so it opened in source view.`, big: true });
-    const why = unsupported(text);
+    // EDIT-019: front matter stays out of the rich view's text and is never touched by it.
+    const why = unsupported(splitFront(text).body);
     if (why) return fallBack({ text: `Showing source: the rich view cannot show this file because ${why}.` });
     let pushed = text;
     try {
-      rich.current = mountRich(richHost.current, text, (out) => {
+      rich.current = mountRich(richHost.current, splitFront(text).body, (out) => {
         const now = cm.state.doc.toString();
-        // The rich view drops the file's last line end; keep it.
-        const next = now.endsWith("\n") && !out.endsWith("\n") ? out + "\n" : out;
-        const change = changeBetween(now, next);
-        pushed = next;
-        if (change) cm.dispatch({ changes: change, userEvent: "input" });
+        const change = richChange(now, out);
+        if (change) {
+          pushed = now.slice(0, change.from) + change.insert + now.slice(change.to);
+          cm.dispatch({ changes: change, userEvent: "input" });
+        }
       }, (t) => report.current.onToast?.(t));
     } catch (err) {
       setRichError(String(err));
@@ -393,7 +435,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     // Text changed elsewhere (a twin pane, a reload) is shown afresh.
     const off = subscribe(path, () => {
       const now = cm.state.doc.toString();
-      if (now !== pushed) r.show((pushed = now));
+      if (now !== pushed) r.show(splitFront((pushed = now)).body);
     });
     return () => {
       off();
@@ -538,7 +580,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
           </span>
         )}
         <span className="right">
-          <button className="ib" onClick={onClose} title="Close tab (Ctrl+W)">
+          <button className="ib" onClick={() => (void drafts.discard(worktreeOf(root, path), path), onClose?.())} title="Close tab (Ctrl+W)">
             <Close size={12} />
           </button>
         </span>

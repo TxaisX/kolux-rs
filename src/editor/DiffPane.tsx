@@ -27,6 +27,9 @@ import { oldSideDoc, withOldSideNote } from "./oldSide";
 import { noteCommand } from "./noteCommands";
 import { useKeymap } from "../keys/KeymapContext";
 import { watchStatus } from "../scm/watch";
+import { askText, needsAsk } from "./bigDiff";
+import { bannerUp } from "./diskChange";
+import { covers, createAutosave, movingNow, prefsReader } from "./autosave";
 
 /** Next (1) or previous (-1) change, by pane key; App's F7 and Shift+F7 call the focused one. */
 export const diffNav = new Map<number, (dir: 1 | -1) => void>();
@@ -148,7 +151,11 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
   const front = useRef(!hidden);
   front.current = !hidden;
   const lang = useRef(new Compartment());
-  const ready = sides !== null;
+  // EDIT-028: a very big diff asks before it draws; Load draws it as usual.
+  const [loadBig, setLoadBig] = useState(false);
+  const asking = sides !== null && !loadBig && needsAsk(sides);
+  const ready = sides !== null && !asking;
+  const prefs = useRef(prefsReader(() => invoke<Record<string, unknown>>("get_settings"))).current;
   const [pop, setPop] = useState<Pop | null>(null);
   const noteRef = useRef({ notes, onDeleteNote, canNote: !!onSaveNote });
   noteRef.current = { notes, onDeleteNote, canNote: !!onSaveNote };
@@ -277,14 +284,26 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
   // tab's (EDIT-003, T-073-c), so an agent's edit made behind the diff is never overwritten unseen.
   useEffect(() => {
     if (staged) return;
+    // EDIT-002: autosave covers the diff tab of one unstaged file.
+    const auto = createAutosave({
+      prefs: prefs.get,
+      covered: () => covers({ staged: false }),
+      dirty: () => isDirty(path),
+      held: () => bannerUp(path) || movingNow(path),
+      write: () => saveFile(path, setStale, report.current.onToast),
+    });
+    let alive = true;
     const off = subscribe(path, () => {
       const d = isDirty(path);
       setDirty(d);
       report.current.onDirty?.(d);
+      if (d) void prefs.refresh().then(() => alive && auto.edit());
     });
     setStale(false);
     editors.set(id, () => saveFile(path, setStale, report.current.onToast));
     return () => {
+      alive = false;
+      auto.cancel();
       off();
       editors.delete(id);
     };
@@ -391,6 +410,14 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
         </div>
       )}
       {stale && !staged && <StaleNotice path={path} onDone={() => setStale(false)} onToast={report.current.onToast} />}
+      {asking && sides && (
+        <div className="notice md-banner" role="status">
+          {askText(name, sides)}
+          <button className="btn" onClick={() => setLoadBig(true)}>
+            Load the full diff
+          </button>
+        </div>
+      )}
       {ready && !changes && <div className="notice md-banner" role="status">No {staged ? "staged" : "unstaged"} changes in this file right now.</div>}
       <div ref={host} className="pane-body diff-body" />
       {pop && (

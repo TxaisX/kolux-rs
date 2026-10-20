@@ -21,6 +21,7 @@ import { loadTargets, openIn, type Target } from "./openIn";
 import ContentSearch from "./ContentSearch";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
+import { announceMoves } from "./fileMoved";
 
 export type Node = { name: string; path: string; kind: "dir" | "file" | "link" };
 export type Row = { node: Node; depth: number; parent: string | null };
@@ -248,6 +249,9 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
   };
   /** Open folders that moved or were renamed stay open at their new paths. */
   const follow = (moves: [string, string][], also?: string) => {
+    // EDIT-032: open tabs follow their files, unsaved text and drafts included.
+    announceMoves(moves);
+    moves.forEach(([from, to]) => void invoke("editor_draft_rename", { worktree: root, from, to }).catch(() => undefined));
     const to = (p: string) => moves.reduce((q, [a, b]) => (q === a || inside(q, a) ? b + q.slice(a.length) : q), p);
     const next = new Set([...open].map(to));
     if (also && also !== root) next.add(also);

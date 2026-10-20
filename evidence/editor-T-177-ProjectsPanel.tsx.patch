@@ -1,0 +1,12 @@
+diff --git a/src/projects/ProjectsPanel.tsx b/src/projects/ProjectsPanel.tsx
+index e73b84fc..a72e9d4e 100644
+--- a/src/projects/ProjectsPanel.tsx
++++ b/src/projects/ProjectsPanel.tsx
+@@ -956,6 +956,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+     setBusy("removing");
+     try {
+       await invoke("workspace_remove", { projectId: c.projectId, path: c.path, force: c.force, stamp: c.check.stamp });
++      void invoke("editor_drafts_drop", { worktree: c.path }).catch(() => undefined); // EDIT-004: removing a worktree discards its drafts
+       onRemoved(c.path);
+       say("ok", `removed ${c.branch} and its folder`);
+       setConfirm(null);

@@ -1,0 +1,24 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index ec1b427c..04f0b827 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -17,6 +17,7 @@ mod codex_accounts;
+ mod codex_usage;
+ mod creatures;
+ mod diag;
++mod editor_drafts;
+ mod editor_search;
+ mod fence;
+ mod files;
+@@ -577,6 +578,11 @@ pub fn run() {
+             files::file_stamps,
+             files::file_pick,
+             files::md_list,
++            editor_drafts::editor_draft_set,
++            editor_drafts::editor_draft_clear,
++            editor_drafts::editor_drafts_get,
++            editor_drafts::editor_drafts_drop,
++            editor_drafts::editor_draft_rename,
+             editor_search::editor_search,
+             editor_search::editor_search_cancel,
+             skills::skills_scan,
