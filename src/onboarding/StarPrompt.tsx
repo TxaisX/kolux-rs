@@ -2,10 +2,11 @@
 // public repository (star_info answers an empty one until then, OD-16) and stars only on the user's own click.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type { AppInfo } from "../app-info";
 import {
-  completedState, createStar, dismissed, emptyScreen, finishedTask, hidden, onboardingToast, showing, stateOf, STAR_EVENT, STAR_SETTING, thresholdDue, withVersion,
-  type Screen, type StarEvent, type StarState, type StarUi,
+  completedState, createStar, createStarFeed, dismissed, emptyScreen, finishedTask, hidden, onboardingToast, showing, stateOf, STAR_EVENT, STAR_SETTING, thresholdDue, withVersion,
+  type Screen, type StarEvent, type StarHook, type StarState, type StarUi, tellStar,
 } from "./star";
 
 type Info = { repo: string; starred: boolean | null };
@@ -65,7 +66,16 @@ export default function StarPrompt() {
       }
     };
     window.addEventListener(STAR_EVENT, on);
-    return () => window.removeEventListener(STAR_EVENT, on);
+    // Row 308: the agents' own status reports are the launches and finished tasks; typing counts as activity.
+    const feed = createStarFeed(tellStar);
+    const hooks = listen<StarHook>("agent-status", (e) => feed.hook(e.payload)).catch(() => () => {});
+    window.addEventListener("keydown", feed.typed, true);
+    return () => {
+      window.removeEventListener(STAR_EVENT, on);
+      window.removeEventListener("keydown", feed.typed, true);
+      feed.stop();
+      void hooks.then((off) => off());
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const later = useCallback(() => {

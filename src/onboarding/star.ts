@@ -159,3 +159,64 @@ export const tellStar = (e: StarEvent) => window.dispatchEvent(new CustomEvent(S
 export const starAfterClose = (outcome: string) => {
   if (outcome === "completed") tellStar({ kind: "onboarding-done" });
 };
+
+/** The part of an agent's status report (the agent-status event) the star prompt reads. */
+export type StarHook = { paneKey: number; state?: string; fresh?: boolean; child?: string };
+
+/**
+ * Row 308 (ONB-037): turns the agents' status reports into the prompt's moments. A started agent
+ * (a fresh session, not a sub-agent) is one launch; a turn that began with a prompt and ends done is
+ * a finished task, clean unless it was interrupted or blocked on the way, told once the other panes'
+ * reports and the user's typing have been quiet for QUIET_MS.
+ */
+export function createStarFeed(
+  tell: (e: StarEvent) => void,
+  now: () => number = Date.now,
+  later: (fn: () => void, ms: number) => () => void = (fn, ms) => {
+    const t = setTimeout(fn, ms);
+    return () => clearTimeout(t);
+  },
+) {
+  const turns = new Map<number, { clean: boolean }>();
+  let busyAt = Number.NEGATIVE_INFINITY;
+  let waiting: { clean: boolean; pane: number; cancel: () => void } | null = null;
+  const whenQuiet = () => {
+    if (!waiting) return;
+    const quiet = now() - busyAt;
+    if (quiet >= QUIET_MS) {
+      const { clean } = waiting;
+      waiting = null;
+      tell({ kind: "task-finished", clean, quietMs: quiet });
+    } else waiting.cancel = later(whenQuiet, QUIET_MS - quiet);
+  };
+  const busy = () => {
+    busyAt = now();
+  };
+  return {
+    hook(h: StarHook) {
+      if (h.child) return;
+      // Any other pane's report is activity.
+      if (!waiting || h.paneKey !== waiting.pane) busy();
+      if (h.fresh) {
+        // A new process starts with no turn open.
+        turns.delete(h.paneKey);
+        tell({ kind: "launch" });
+      }
+      const turn = turns.get(h.paneKey);
+      if (h.state === "working") {
+        if (!turn) turns.set(h.paneKey, { clean: true });
+      } else if (h.state === "interrupted" || h.state === "blocked") {
+        if (turn) turn.clean = false;
+      } else if (h.state === "done" && turn) {
+        turns.delete(h.paneKey);
+        waiting?.cancel();
+        // The quiet second is counted from the finish on.
+        busy();
+        waiting = { clean: turn.clean, pane: h.paneKey, cancel: () => {} };
+        whenQuiet();
+      }
+    },
+    typed: busy,
+    stop: () => waiting?.cancel(),
+  };
+}
