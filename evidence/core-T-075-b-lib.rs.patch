@@ -1,0 +1,16 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 0da06e99..550a9bef 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -193,6 +193,11 @@ fn dev_inject() -> Result<(), String> {
+     }
+ }
+ 
++/// T-075-b: the background terminal service process (`kolux-rs --terminal-service <identifier> <data folder>`).
++pub fn terminal_service_main(args: &[String]) -> i32 {
++    pty::service::main(args)
++}
++
+ #[cfg_attr(mobile, tauri::mobile_entry_point)]
+ pub fn run() {
+     diag::catch_panics();

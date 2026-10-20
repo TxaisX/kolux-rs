@@ -244,13 +244,13 @@ impl History {
 /// the registry lock with each chunk, so a viewer that fell behind redraws from a snapshot and drops the
 /// queued chunks the snapshot already holds (each output event carries the count after its chunk).
 #[derive(Default)]
-struct Snap {
+pub(crate) struct Snap {
     seq: u64,
     tail: std::collections::VecDeque<u8>,
 }
 
 impl Snap {
-    fn push(&mut self, chunk: &[u8]) -> u64 {
+    pub(crate) fn push(&mut self, chunk: &[u8]) -> u64 {
         self.seq += chunk.len() as u64;
         self.tail.extend(chunk);
         let over = self.tail.len().saturating_sub(HISTORY_KEEP);
@@ -259,7 +259,7 @@ impl Snap {
     }
 
     /// The snapshot a viewer redraws from: the count it covers and the tail from a line boundary.
-    fn snapshot(&mut self) -> Snapshot {
+    pub(crate) fn snapshot(&mut self) -> Snapshot {
         let all = self.tail.make_contiguous();
         // a tail that lost its start begins at the next line break (or character), never mid-sequence
         let keep = if self.seq == all.len() as u64 { all.len() } else { all.len().saturating_sub(1) };

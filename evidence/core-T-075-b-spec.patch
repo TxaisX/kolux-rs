@@ -1,0 +1,28 @@
+diff --git a/spec/03-terminals-panes.md b/spec/03-terminals-panes.md
+index f442f13d..fcd59ad1 100644
+--- a/spec/03-terminals-panes.md
++++ b/spec/03-terminals-panes.md
+@@ -354,8 +354,8 @@ Rules: a background host keeps sessions alive while the app is closed; scrollbac
+   quit and relaunch; restored panes accept input straight away; the focused pane and an expanded
+   pane come back as they were; terminals created from the command line or by automation are restored
+   too.
+-  (Kolux RS, T-067: not built. Tabs, splits, focus and agent sessions come back through the saved layout
+-  and session resume; the background host, scrollback and running programs wait for Txais's call.)
++  (Kolux RS, DT-C27 as changed 2026-10-20: Txais chose that terminals keep running after quit. The
++  background host is built (T-075-b); the window routing its panes through it is T-184-b.)
+ Acceptance:
+   - [ ] Quit with a build running; reopen; the build output continues in the same pane.
+   - [ ] Restored panes accept typing at once and the pane that had focus before quitting has it
+diff --git a/spec/07-accounts-keys.md b/spec/07-accounts-keys.md
+index 08fff294..9b9624d7 100644
+--- a/spec/07-accounts-keys.md
++++ b/spec/07-accounts-keys.md
+@@ -765,6 +765,8 @@ User does: closes a pane or quits Kolux.
+ User sees: no agent or shell processes are left orphaned.
+ Rules: panes are asked to stop first, then forced; during an immediate Windows shutdown the whole
+   process tree is ended; quitting stops every pane.
++  (Kolux RS, DT-C27 as changed 2026-10-20: quitting leaves terminals running in the background
++  terminal service; closing a pane still ends its whole process tree.)
+ Acceptance:
+   - [ ] Run a long command in a pane and quit → no matching process is left.
+   - [ ] Close a pane whose agent ignores the polite stop → the agent is forced to end.
