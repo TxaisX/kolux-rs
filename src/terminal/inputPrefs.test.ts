@@ -52,11 +52,11 @@ test("SET-025: only the middle button pastes, and only when on", () => {
 });
 
 test("SET-025: the full-screen scroll speed is corrected into range", () => {
-  expect(readInput({}, "linux").fullScreenScroll).toBe(3);
+  expect(readInput({}, "linux").fullScreenScroll).toBe(1);
   expect(readInput({ terminalFullScreenScroll: 0 }, "linux").fullScreenScroll).toBe(1);
   expect(readInput({ terminalFullScreenScroll: 99 }, "linux").fullScreenScroll).toBe(20);
-  expect(readInput({ terminalFullScreenScroll: "x" }, "linux").fullScreenScroll).toBe(3);
-  expect(readInput({ terminalFullScreenScroll: "" }, "linux").fullScreenScroll).toBe(3);
+  expect(readInput({ terminalFullScreenScroll: "x" }, "linux").fullScreenScroll).toBe(1);
+  expect(readInput({ terminalFullScreenScroll: "" }, "linux").fullScreenScroll).toBe(1);
 });
 
 test("SET-025: Option acts as Alt only on macOS; automatic keeps it typing characters on layouts that use it", () => {

@@ -60,7 +60,7 @@ export type InputPrefs = {
   powershell: "auto" | "7" | "5";
 };
 
-export const FULL_SCREEN_SCROLL = { min: 1, max: 20, start: 3 };
+export const FULL_SCREEN_SCROLL = { min: 1, max: 20, start: 1 }; // TERM-089: one report per notch inside full-screen programs
 
 const bool = (v: unknown, start: boolean) => (typeof v === "boolean" ? v : start);
 

@@ -24,6 +24,7 @@ import { notePrinted } from "../browser/preview";
 import { encodeHistory, replay, restoreTail, viewTop } from "./history";
 import { claimsClick } from "./linkClick";
 import { modeView, resetAfterExit } from "./modeReset";
+import { dragWantsHint, SHIFT_HINT, shownAgain, WheelDrain, type KeptView } from "./mouseFeel";
 import { fromThisService, reattach, type Attach, type Reattached, type ServiceInfo } from "./reattach";
 import { batchAcks, memoryProfile } from "./flow";
 import { explain as explainError, exitAdvice } from "./errors";
@@ -345,6 +346,29 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
   const serviceRef = useRef<ServiceInfo | null>(null);
   const isHidden = useRef(hidden);
   isHidden.current = hidden;
+  // TERM-091: a tab switch hides the pane; it comes back at the row it showed (a marker follows the row as the
+  // scrollback trims), or at the bottom if it was there. The return is read after the pane has its size again.
+  const keptView = useRef<{ bottom: boolean; marker: { line: number; dispose(): void } | null } | null>(null);
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    const buf = term.buffer.active;
+    if (hidden) {
+      const bottom = buf.viewportY >= buf.baseY;
+      keptView.current = { bottom, marker: bottom ? null : (term.registerMarker(buf.viewportY - (buf.baseY + buf.cursorY)) ?? null) };
+      return;
+    }
+    const kept = keptView.current;
+    keptView.current = null;
+    if (!kept) return;
+    const frame = requestAnimationFrame(() => {
+      const to = shownAgain({ bottom: kept.bottom, line: kept.marker ? kept.marker.line : null } satisfies KeptView, term.buffer.active.baseY);
+      kept.marker?.dispose();
+      if (to === "bottom") term.scrollToBottom();
+      else if (to !== null) term.scrollToLine(to);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [hidden]);
   const keymap = useKeymap();
   const keys = useRef(keymap);
   keys.current = keymap;
@@ -930,6 +954,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
           serviceRef.current = back.service;
           if (back.kind === "replaced") setFlash("The terminal service was replaced; the pane starts again on the new one");
         }
+        // TERM-088: the program whose history was just replayed is gone unless the service still runs it (attached);
+        // what it left on (mouse capture first) is turned off, so a plain drag selects again in the new shell.
+        if (keepInView && back?.kind !== "attached") term.write(resetAfterExit(modeView(term.modes), term.buffer.active.type === "alternate"));
         await start(program, args, keepInView, back);
       } catch (err) {
         fail(err);
@@ -1021,6 +1048,42 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       }
     };
     el.addEventListener("mouseenter", hover);
+    // TERM-089: in a full-screen program the wheel is counted in notches, scaled by the full-screen setting and drained
+    // per frame (mouseFeel.ts); the reports themselves are xterm's, one per event handed back to it.
+    const ours = new WeakSet<WheelEvent>();
+    let lastWheel: WheelEvent | null = null;
+    const drain = new WheelDrain(
+      (dir, n) => {
+        const at = lastWheel;
+        const host = term.element;
+        if (!at || !host) return;
+        for (let i = 0; i < n; i++) {
+          const ev = new WheelEvent("wheel", { deltaMode: 1, deltaY: dir, clientX: at.clientX, clientY: at.clientY, ctrlKey: at.ctrlKey, altKey: at.altKey, bubbles: true, cancelable: true });
+          ours.add(ev);
+          host.dispatchEvent(ev);
+        }
+      },
+      (f) => requestAnimationFrame(f),
+    );
+    term.attachCustomWheelEventHandler((e) => {
+      if (ours.has(e) || e.shiftKey || e.deltaY === 0) return true;
+      if (term.buffer.active.type !== "alternate" && term.modes.mouseTrackingMode === "none") return true; // scrollback: xterm's own
+      lastWheel = e;
+      e.preventDefault();
+      drain.push(e, currentInput().fullScreenScroll, currentText().fastScroll, term.rows);
+      return false;
+    });
+    // TERM-088: a plain drag over a program that takes the mouse goes to the program; say once that Shift selects.
+    let dragFrom: { x: number; y: number } | null = null;
+    const dragDown = (e: MouseEvent) => void (dragFrom = e.button === 0 ? { x: e.clientX, y: e.clientY } : null);
+    const dragMove = (e: MouseEvent) => {
+      if (!dragFrom || !(e.buttons & 1)) return void (dragFrom = null);
+      if (!dragWantsHint(term.modes.mouseTrackingMode, e.shiftKey, e.clientX - dragFrom.x, e.clientY - dragFrom.y)) return;
+      dragFrom = null;
+      sayOnce("shift-select", SHIFT_HINT, setFlash);
+    };
+    el.addEventListener("mousedown", dragDown);
+    el.addEventListener("mousemove", dragMove);
     const unwatchPointer = watchPointer(el, currentInput);
     // TERM-103 / TERM-114: after the machine slept the GPU's glyph atlas may be stale and the
     // program's size may be behind; a late heartbeat says so. A display scale change does the same.
@@ -1048,6 +1111,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       el.removeEventListener("mousedown", middle);
       el.removeEventListener("auxclick", middle);
       el.removeEventListener("mouseenter", hover);
+      el.removeEventListener("mousedown", dragDown);
+      el.removeEventListener("mousemove", dragMove);
       unwatchPointer();
       screenChange.dispose();
       ligatures?.dispose();

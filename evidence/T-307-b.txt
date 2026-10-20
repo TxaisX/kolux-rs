@@ -1,0 +1,43 @@
+T-307-b · core lane · 2026-10-20 · lane/core from 0f2b7058 · NOT ticked (two cards left open, below)
+
+Built
+TERM-088 Selecting text in mouse-capturing programs
+- Shift-drag selects over a program that takes the mouse (xterm forces selection with Shift; the pane's right-click
+  already follows the same rule). A plain drag over such a program now shows once: "This program uses the mouse. Hold
+  Shift while you drag to select text." (mouseFeel.ts dragWantsHint / SHIFT_HINT, TerminalPane drag listeners).
+- After a restart the pane replays its saved history, which holds the mouse-on codes of a program that is gone; unless
+  the terminal service still runs that program (attached), the modes it left on are turned off right after the replay
+  (resetAfterExit), so a plain drag selects again in the new shell. A program that dies while the pane is attached is
+  covered by the reset at exit (ACCT-060).
+TERM-089 Mouse wheel scroll speed
+- Normal 1.15 (text.ts default, one line), fast 5 (already), full-screen 1 (inputPrefs FULL_SCREEN_SCROLL start).
+- xterm sends one report (or one arrow key) per wheel event inside full-screen programs whatever the setting, so the
+  full-screen setting scaled nothing and fast bursts queued in the program. mouseFeel.ts WheelDrain counts whole notches
+  (100 px, or 3 lines, per notch; trackpad steps add up), scales by the full-screen setting (times fast with Ctrl/Alt),
+  sends the first notch at once and the rest at most once per frame, capped at twice one notch, dropping the excess.
+  TerminalPane hands each report back to xterm as a one-line wheel event, so xterm still does the encoding.
+TERM-091 Scrollback length
+- Default row limit and trimming from the oldest end: the scrollback setting (default 1000 rows) and the memory
+  profile size (ACCT-059) are xterm's scrollback, which drops the oldest rows.
+- A pane hidden by a tab switch keeps its row with a buffer marker (it follows the row as old rows are trimmed) and
+  scrolls back to it after it is shown and sized again; a pane at the bottom stays at the bottom.
+
+Left open
+TERM-094 Link action menu and VIEW-105 Link popover: the shell lane's T-308 (TERM-135, src/shell/linkAsk.ts and
+evidence/shell-T-308-TerminalPane.tsx.patch, not merged) changes the same plain-click path in TerminalPane's link
+handler, and the popover would replace that first-click question. Building them here would duplicate or conflict with
+that patch; they should be built after it merges, in that one place.
+
+Tests: src/terminal/mouseFeel.test.ts 7 (notch at once and scaled, fast multiplier, burst drains with no backlog,
+trackpad and direction change, Shift hint rule, reset after replay, kept row / bottom / trimmed). inputPrefs.test.ts and
+inputWire.test.ts updated for the full-screen default 1.
+
+Gates (logs G:/Temp/core-v3-logs/T-307-b-*): no Rust changed. tsc 0; vitest src/terminal src/settings src/keys 112 files
+716 passed. Batch-end gates in evidence of the commit message.
+
+LIVE PROOF PENDING (batched)
+1. In a pane run `vim` with `:set mouse=a`, drag: the Shift hint shows once; Shift-drag selects text.
+2. Start `htop`, quit Kolux from the tray while it runs, start Kolux: in the restored pane a plain drag selects text.
+3. In `less` on a long file, one wheel notch moves one line; Ctrl+notch moves five; spin the wheel hard and stop: the
+   view stops within a moment.
+4. Print 3000 lines, scroll to the middle, switch tabs and back: the same rows are shown.
