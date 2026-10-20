@@ -579,6 +579,18 @@ impl Git {
         run(&["for-each-ref", "--format=%(upstream:short)", &format!("refs/heads/{branch}")], Some(repo)).ok().filter(|s| !s.is_empty())
     }
 
+    /// PROJ-039 (T-107-d): whether any remote holds a branch of this name, so a pushed branch is
+    /// never renamed from under its remote even when no tracking is configured.
+    pub fn on_remote(&self, repo: &Path, branch: &str) -> bool {
+        Self::ref_ok(branch) && run(&["for-each-ref", "--format=%(refname)", &format!("refs/remotes/*/{branch}")], Some(repo)).is_ok_and(|s| !s.trim().is_empty())
+    }
+
+    /// PROJ-039 (T-107-d): whether `branch` is configured to track a remote (`branch.<name>.remote`),
+    /// even when the remote-tracking ref has not been fetched yet, so `upstream_of` says nothing.
+    pub fn tracks_remote(&self, repo: &Path, branch: &str) -> bool {
+        Self::ref_ok(branch) && run(&["config", "--get", &format!("branch.{branch}.remote")], Some(repo)).is_ok_and(|s| !s.trim().is_empty())
+    }
+
     /// GIT-020: renames the local branch `old` to `new` with `git branch -m`, which keeps the
     /// branch's commits and moves its tracking settings along. It never uses `-M` and deletes
     /// nothing: a name a local branch or a remote already uses is refused here, so the refusal does

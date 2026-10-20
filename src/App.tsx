@@ -48,7 +48,8 @@ import { cacheDue, cacheMinutes } from "./projects/cache";
 import { startFields, startTail } from "./projects/startArgs";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
 import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./projects/WorktreePalette";
-import { nameBranchFor } from "./scm/autoBranch";
+import { renameOnFirstPrompt, useRenameOnFirstPrompt } from "./projects/renameOnWork";
+import FolderRenameAsk from "./projects/FolderRenameAsk";
 import { navTarget, stepAllowed, travel, visit, type Place } from "./projects/nav";
 import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
 import BrowserPane, { OPEN_IN_BROWSER, openDetail, openInBrowser, type OpenInBrowser } from "./browser/BrowserPane";
@@ -1260,8 +1261,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // worker's own session from a tab the user opens in the same folder.
   const openIn = async (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean, extra: string[] = [], title?: string, dispatch?: string) => {
     await pretrust(agent.id, [dir]);
-    // GIT-020: the first task names a placeholder branch (the back end skips any other).
-    void nameBranchFor(dir, prompt, settings);
+    // GIT-020 / PROJ-039 (T-107-d): the first task names a Kolux-suggested branch; the back end
+    // leaves a hand-named workspace, a pushed branch or one with a pull request alone.
+    void renameOnFirstPrompt(dir, prompt, settings);
     const line = await invoke<StartLine>("agent_start_line", { id: agent.id, extra, prompt });
     const key = nextKey.current++;
     const pane: Pane = { key, cwd: dir, branch, agent: paneMark(agent, line), agentId: agent.id, ...startFields(line, agent.program, dispatch), title };
@@ -1276,6 +1278,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     }
     return key;
   };
+  // STAT-039 (T-110-b): a prompt typed into an agent started without one names the branch too.
+  useRenameOnFirstPrompt((key) => panes.find((p) => p.key === key)?.cwd ?? undefined, settings);
   const { afterSetup, startSetup, select, removedAll, removed, projectOf } = useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir, setStacked, nextKey, addShell, settings, screen, setScreen, setPage, owner, recentDirs, activeRef });
   // PROJ-033: a workspace made outside the composer runs its setup script in a background tab.
   const runSetup = (dir: string, branch: string | null) =>
@@ -2308,6 +2312,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               setCreateRequest((n) => n + 1);
             }}
             onClose={() => setPalette(false)}
+            linked={linkedPrs(settings[SCM_LINKED_PR_KEY])}
+            onItem={openInBrowser}
           />
         )}
         {asking && (
@@ -2324,6 +2330,14 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           />
         )}
         <TrustPrompt />
+        {/* STAT-039 (T-110-b): after the first work renamed a branch, asks before the folder follows; a moved folder's panes and the list follow it. */}
+        <FolderRenameAsk
+          onMoved={(from, to) => {
+            setPanes((ps) => ps.map((p) => (sameDir(p.cwd, from) ? { ...p, cwd: to } : p)));
+            setActiveDir((d) => (sameDir(d, from) ? to : d));
+            setRefresh((n) => n + 1);
+          }}
+        />
         {guard.dialog}
         {quitAsk && (
           <Ask

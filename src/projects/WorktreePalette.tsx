@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { workItem, worktreeLabel, type Project, type Worktree } from "./model";
 import { MAX_QUERY, fold, queryWords, scoreText } from "./nav";
 import { sameDir } from "../workspaces";
+import { githubItem, workspaceFor } from "../scm/paste";
 import type { AgentState } from "./rows";
 import type { Badge } from "../terminal/tabs";
 import { VOCAB } from "../terminal/status";
@@ -87,6 +88,12 @@ type Props = {
    * or pull request the query's address names), in `repo` when one repository chip is set. */
   onCreate: (name: string, repo: string | null) => void;
   onClose: () => void;
+  /** GIT-058: each workspace folder's linked pull request address (the scmLinkedPrs setting). */
+  linked?: Record<string, string>;
+  /** GIT-058: the GitHub hosts a pasted link may name (github.com when not given). */
+  hosts?: readonly string[];
+  /** GIT-058: open a pasted issue or pull request that has no workspace; without it, pasted links offer nothing. */
+  onItem?: (url: string) => void;
 };
 
 type Row = PaletteItem & { spans: [number, number][]; off: boolean };
@@ -134,6 +141,26 @@ export function chipFilter(items: PaletteItem[], chips: Chip[]): PaletteItem[] {
 /** VIEW-041: the repository chip's options, most workspaces first; hidden ones do not count. */
 export function repoOptions(projects: Project[], lists: Record<string, Worktree[]>): { id: string; name: string; count: number }[] {
   return projects.map((p) => ({ id: p.id, name: p.name, count: (lists[p.id] ?? []).filter((w) => !w.hidden).length })).sort((a, b) => b.count - a.count);
+}
+
+/** GIT-058: what a pasted GitHub issue or pull request link offers. The workspace whose linked pull
+ * request is that item comes first (it opens); else the item itself opens. Other text offers nothing. */
+export function pastedItems(text: string, linked: Record<string, string>, hosts: readonly string[], find: (dir: string) => Worktree | undefined, openItem: (url: string) => void, go: (w: Worktree) => void): PaletteItem[] {
+  const url = githubItem(text, hosts);
+  if (!url) return [];
+  const [owner, repo, kind, num] = url.slice("https://".length).split("/").slice(1);
+  const name = `${owner}/${repo}#${num}`;
+  const dir = workspaceFor(url, linked, hosts);
+  const w = dir ? find(dir) : undefined;
+  if (w) return [{ section: "Worktrees", label: `Open the workspace for ${name}`, hint: w.branch ?? worktreeLabel(w), dir: w.path, run: () => go(w) }];
+  return [{ section: "Pull requests", label: `Open ${kind === "pull" ? "pull request" : "issue"} ${name}`, hint: url, run: () => openItem(url) }];
+}
+
+/** GIT-058: Alt and a digit pick the numbered entry shown in the switcher (1 is the first row);
+ * null for any other key. Plain digits stay in the search box and Ctrl or Cmd keep their own chords. */
+export function chordRow(e: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey?: boolean; code: string }): number | null {
+  const m = /^Digit([1-9])$/.exec(e.code);
+  return m && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey ? Number(m[1]) - 1 : null;
 }
 
 /** ponytail: scoring stops after this long on a huge list and shows what it scored; an index
@@ -185,7 +212,7 @@ function Marked({ text, spans, from }: { text: string; spans: [number, number][]
   return <>{parts}</>;
 }
 
-export default function WorktreePalette({ projects, items, prOf, atOf, recent, scope, hasWorktree, onWorktree, onCreate, onClose }: Props) {
+export default function WorktreePalette({ projects, items, prOf, atOf, recent, scope, hasWorktree, onWorktree, onCreate, onClose, linked, hosts, onItem }: Props) {
   const [lists, setLists] = useState<Record<string, Worktree[]>>({});
   const [query, setQuery] = useState("");
   const [refused, setRefused] = useState(false);
@@ -211,10 +238,11 @@ export default function WorktreePalette({ projects, items, prOf, atOf, recent, s
   }, [projects]);
 
   const typed = query.trim() !== "";
-  const rows = useMemo(
-    () => paletteRows(chipFilter(withRepos([...items, ...worktreeItems(projects, lists, typed, prOf, onWorktree, atOf)], lists), chips), query, recent, hasWorktree),
-    [items, projects, lists, query, chips, hasWorktree],
-  );
+  const rows = useMemo(() => {
+    const pasted = onItem ? pastedItems(query, linked ?? {}, hosts ?? ["github.com"], (d) => Object.values(lists).flat().find((w) => sameDir(w.path, d)), onItem, onWorktree) : [];
+    const found = paletteRows(chipFilter(withRepos([...items, ...worktreeItems(projects, lists, typed, prOf, onWorktree, atOf)], lists), chips), query, recent, hasWorktree);
+    return [...pasted.map((p): Row => ({ ...p, spans: [], off: false })), ...found];
+  }, [items, projects, lists, query, chips, hasWorktree, linked, hosts, onItem]);
   const create = typed ? query.trim() : null;
   const item = create ? workItem(create) : null;
   const repoChips = chips.filter((c) => c.field === "repo");
@@ -233,7 +261,7 @@ export default function WorktreePalette({ projects, items, prOf, atOf, recent, s
     if (v.length > MAX_QUERY) return setRefused(true);
     setRefused(false);
     setQuery(v);
-    setAt(workItem(v) ? Infinity : 0);
+    setAt(workItem(v) && !(onItem && githubItem(v, hosts ?? ["github.com"])) ? Infinity : 0);
   };
   const chipLabel = (c: Chip) => (c.field === "repo" ? `Repository: ${projects.find((p) => p.id === c.value)?.name ?? c.value}` : `Kind: ${c.value}`);
   const addChip = (c: Chip) => {
@@ -252,7 +280,10 @@ export default function WorktreePalette({ projects, items, prOf, atOf, recent, s
           value={query}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Escape") onClose();
+            const chord = chordRow(e.nativeEvent);
+            if (chord !== null) {
+              if (chord < count) go(chord);
+            } else if (e.key === "Escape") onClose();
             else if (e.key === "Enter") count > 0 && go(cur);
             else if (e.key === "ArrowDown") setAt(Math.min(cur + 1, count - 1));
             else if (e.key === "ArrowUp") setAt(Math.max(cur - 1, 0));
@@ -291,7 +322,12 @@ export default function WorktreePalette({ projects, items, prOf, atOf, recent, s
             return (
               <Fragment key={`${r.section}|${r.label}|${r.hint ?? ""}|${r.parent ?? ""}|${i}`}>
                 {(i === 0 || rows[i - 1].section !== r.section) && <div className="palette-section">{r.section}</div>}
-                <button role="option" aria-selected={i === cur} aria-disabled={r.off} className={`menu-item${i === cur ? " at" : ""}${r.off ? " off" : ""}`} title={r.off ? "Open a worktree first" : undefined} onMouseEnter={() => setAt(i)} onClick={() => go(i)}>
+                <button role="option" aria-selected={i === cur} aria-disabled={r.off} className={`menu-item${i === cur ? " at" : ""}${r.off ? " off" : ""}`} title={r.off ? "Open a worktree first" : undefined} aria-keyshortcuts={i < 9 ? `Alt+${i + 1}` : undefined} onMouseEnter={() => setAt(i)} onClick={() => go(i)}>
+                  {i < 9 && (
+                    <span className="palette-num" aria-hidden="true">
+                      {i + 1}
+                    </span>
+                  )}
                   <RowMark mark={r.mark ?? null} since={r.since ?? 0} now={now} />
                   <span className="name">
                     <Marked text={r.label} spans={r.spans} from={0} />

@@ -19,7 +19,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { projectDrop } from "../editor/desktopDrops";
 import CacheTimer from "./CacheTimer";
-import { asksBeforeDelete, blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
+import { asksBeforeDelete, blocker, deleteTarget, isTextField, pointerDelete, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
+import ShortcodeInput from "./ShortcodeInput";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, HIDE_AUTOMATION_SETTING, PIN_COPIES_SETTING, PIN_SETTING, SHOW_SLEEPING_SETTING, SLEEP_SETTING, asleepAfter, renameTo, showSleepingFrom, SORT_SETTING, jumpUnhides, withoutAutomationMade, groupFromSetting, groupRows, pathKey, pinnedSet, recentOrder, smartOrder, sortFromSetting, type AgentState, type PrState, type RowInfo } from "./rows";
@@ -788,7 +789,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         ? await invoke<Created>("workspace_open_pr", { projectId: project.id, number: pr.number, folder: typed || null, name: typed || null, parent, ticket: mine.ticket, activeFolder: from })
         : reuse
         ? await invoke<Created>("workspace_open_branch", { projectId: project.id, branch: reuse, folder: existing ? typed || null : null, parent, ticket: mine.ticket, activeFolder: from })
-        : await invoke<Created>("workspace_create", { projectId: project.id, name: typed, base: base || null, branch: branch || null, parent, ticket: mine.ticket, issue, activeFolder: from });
+        : await invoke<Created>("workspace_create", { projectId: project.id, name: typed, base: base || null, branch: branch || null, parent, ticket: mine.ticket, issue, activeFolder: from, suggested: typed === shownSuggestion.current }); // PROJ-039 (T-107-d): a suggested name left as it was may be renamed by the first work
       const lost = overtaken.current.has(mine.ticket);
       noteRecent(project.id);
       if (stopped.current.has(mine.ticket)) {
@@ -847,6 +848,23 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     const hovered = [...document.querySelectorAll<HTMLElement>("[data-path]:hover")].pop()?.dataset.path ?? null;
     const target = deleteTarget(hovered, activeDir);
     if (deleteRequest === 0 || target === null) return;
+    if (hovered !== null) {
+      // PROJ-075: the row under the pointer; nothing on a main checkout, a row already deleting, or while a text field has focus
+      const row = projects.flatMap((p) => (worktrees[p.id] ?? []).map((w) => ({ p, w }))).find(({ w }) => same(hovered, w.path));
+      const act = row ? pointerDelete(row.w, { fieldFocused: isTextField(document.activeElement), deleting: new Set(busy === "removing" && confirm ? [confirm.path] : []) }) : null;
+      if (!row || act === null) return;
+      if (act.action === "forget") {
+        invoke("workspace_forget", { projectId: row.p.id, path: act.path })
+          .then(() => {
+            onRemoved(act.path);
+            say("ok", `took ${worktreeLabel(row.w)} out of Kolux; its folder stays on disk`);
+            return reload();
+          })
+          .catch(fail);
+        return;
+      }
+      return void ask(row.p.id, row.w.path, worktreeLabel(row.w));
+    }
     for (const p of projects) {
       const w = (worktrees[p.id] ?? []).find((x) => !x.isMain && same(target, x.path));
       if (w) return void ask(p.id, w.path, worktreeLabel(w));
@@ -1550,13 +1568,13 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
           )}
           <span className={`dot ${info.state}${isActive(w) ? " live" : ""}`} role="img" aria-label={isActive(w) || info.state !== "idle" ? info.state : "idle"} data-tip={VOCAB[info.state].explain} />
           {renaming === w.path ? (
-            <input
+            <ShortcodeInput
               className="rename"
               autoFocus
               aria-label="Workspace name"
               value={renameText}
               onClick={(e) => e.stopPropagation()}
-              onChange={(e) => setRenameText(e.target.value)}
+              onValue={setRenameText}
               onBlur={() => setRenaming(null)}
               onKeyDown={(e) => {
                 e.stopPropagation();
