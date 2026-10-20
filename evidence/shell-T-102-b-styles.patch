@@ -1,0 +1,20 @@
+diff --git a/src/styles.css b/src/styles.css
+index 1306c377..812d6925 100644
+--- a/src/styles.css
++++ b/src/styles.css
+@@ -368,6 +368,15 @@ input { font: inherit; }
+    on Classic always (TERM-028) */
+ .cell { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: 4px; }
+ .cell[hidden] { display: none; }
++/* TERM-015 / TERM-054: where a dragged pane or tab would land */
++.cell[data-drop="left"] { box-shadow: inset 4px 0 0 var(--line-focus); }
++.cell[data-drop="right"] { box-shadow: inset -4px 0 0 var(--line-focus); }
++.cell[data-drop="top"] { box-shadow: inset 0 4px 0 var(--line-focus); }
++.cell[data-drop="bottom"] { box-shadow: inset 0 -4px 0 var(--line-focus); }
++.cell[data-drop="centre"], .cell[data-drop="strip"] { outline: 2px dashed var(--line-focus); outline-offset: -2px; }
++.tab[data-drop="before"] { border-left: 3px solid var(--line-focus); }
++.tab[data-drop="after"] { border-right: 3px solid var(--line-focus); }
++.pane-grip { display: inline-flex; flex: none; cursor: grab; color: var(--fg-icon-dim); }
+ /* VIEW-026: the Board is the same cells as cards, one per pane; the panes never move in the DOM,
+    so an expanded card shows the live terminal and a collapsed one only its header. */
+ .grid[hidden], .board[hidden], .board .tabs { display: none; }

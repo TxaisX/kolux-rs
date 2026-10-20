@@ -1,0 +1,125 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 28a6046f..e1b6635d 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -31,6 +31,8 @@ import TrustPrompt, { trustedSetup } from "./setup/TrustPrompt";
+ import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
+ import { returnTab, type Which } from "./terminal/tabClose";
+ import { bulkCloseSet, closeOne, middleClickCloses, orderPinnedFirst, pinMenu, pinQuestion } from "./terminal/pin";
++import { dropCell, dropTab, halfOf, showsDragHandle, zoneOf, type Zone } from "./terminal/rearrange";
++import { forgetView } from "./terminal/viewKeep";
+ import { classify, removePlan, removeQuestion, shellInAgentPane } from "./terminal/remove";
+ import { applyAppearance, readAppearance, showScreen, zoomTerm } from "./theme";
+ import { useEscapeLeaves } from "./chrome/fullPage";
+@@ -258,6 +260,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   // TERM-046: pinned tab keys live in window state, like the strip order (terminal/pin.ts).
+   const [pinned, setPinned] = useState<Set<number>>(new Set());
+   const [tabMenu, setTabMenu] = useState<{ key: number; top: number; left: number } | null>(null); // TERM-049: the right-clicked tab
++  // TERM-015 / TERM-054: what is being dragged (a tab, or a whole cell by its pane header) and where it would land.
++  const dragging = useRef<{ tab: number } | { cell: number } | null>(null);
++  const [dropHint, setDropHint] = useState<{ group: number; zone?: Zone; tab?: number; half?: "before" | "after" } | null>(null);
+   const recentTabs = useRef<number[]>([]); // TERM-044: panes focused, newest first, so a closed tab returns to the one used before it
+   useEffect(() => {
+     if (!tabMenu) return;
+@@ -1581,6 +1586,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     const gone = new Set(keys);
+     exitedPrompt.current = onClose(exitedPrompt.current, keys);
+     keys.forEach((k) => delete ptys.current[k]);
++    keys.forEach(forgetView); // T-102-b: a closed tab's kept editor state goes with it
+     // TERM-106: a tab closed on purpose is not brought back after a restart.
+     keys.forEach((k) => void invoke("terminal_forget_history", { paneKey: k }).catch(() => {}));
+     setPanes((ps) => ps.filter((p) => !gone.has(p.key)));
+@@ -1596,6 +1602,20 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+ 
+   const dropPane = (key: number) => dropPanes([key]);
+ 
++  // TERM-054: a tab dropped on a tab or a cell; TERM-015: a cell dropped on another cell. A drop that
++  // would leave the layout as it is returns nothing, so nothing happens.
++  const dropTabOn = (key: number, target: Parameters<typeof dropTab>[2]) => {
++    const r = dropTab(panes, key, target);
++    if (!r) return;
++    setPanes(r.panes);
++    setActiveTab((m) => ({ ...m, [r.group]: key }));
++    setFocused(key);
++  };
++  const dropCellOn = (group: number, target: { group: number; zone: Zone }) => {
++    const next = dropCell(panes, group, target);
++    if (next) setPanes(next);
++  };
++
+   // TERM-045: every close (keyboard, a tab's x, the pane header) asks first when a program would
+   // stop; a tab's panes are checked together so a split tab asks once. Idle, switched off, or a
+   // failed check: the tab closes at once.
+@@ -2441,7 +2461,30 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                 const mine = agentsScreen && c.panes.some((p) => p.key === selected);
+                 const active = mine ? (selected as number) : activeOf(c);
+                 return (
+-                  <div key={c.group} className="cell" hidden={agentsScreen ? !mine : !board && (!sameDir(c.panes[0].cwd, activeDir) || (zoomed !== null && c.group !== zoomed))}>
++                  <div
++                    key={c.group}
++                    className="cell"
++                    data-drop={dropHint?.group === c.group && !dropHint.tab ? dropHint.zone : undefined}
++                    hidden={agentsScreen ? !mine : !board && (!sameDir(c.panes[0].cwd, activeDir) || (zoomed !== null && c.group !== zoomed))}
++                    onDragOver={(e) => {
++                      if (!dragging.current) return;
++                      e.preventDefault();
++                      setDropHint({ group: c.group, zone: zoneOf(e.clientX, e.clientY, e.currentTarget.getBoundingClientRect(), !!(e.target as Element).closest?.(".tabs")) });
++                    }}
++                    onDragLeave={(e) => {
++                      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropHint((h) => (h?.group === c.group ? null : h));
++                    }}
++                    onDrop={(e) => {
++                      const d = dragging.current;
++                      if (!d) return;
++                      e.preventDefault();
++                      const zone = zoneOf(e.clientX, e.clientY, e.currentTarget.getBoundingClientRect(), !!(e.target as Element).closest?.(".tabs"));
++                      dragging.current = null;
++                      setDropHint(null);
++                      if ("tab" in d) dropTabOn(d.tab, { kind: "cell", group: c.group, zone });
++                      else dropCellOn(d.cell, { group: c.group, zone });
++                    }}
++                  >
+                     {(c.panes.length > 1 || classic) && (
+                       <div className="tabs" role="tablist" aria-label="Tabs">
+                         {orderPinnedFirst(c.panes.map((p) => p.key), pinned)
+@@ -2453,6 +2496,32 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                             aria-selected={p.key === active}
+                             className="tab"
+                             tabIndex={0}
++                            data-drop={dropHint?.tab === p.key ? dropHint.half : undefined}
++                            draggable
++                            onDragStart={(e) => {
++                              // TERM-054: a tab drags along the strip, onto another cell's strip, or onto an edge band.
++                              dragging.current = { tab: p.key };
++                              e.dataTransfer.effectAllowed = "move";
++                              e.dataTransfer.setData("text/plain", tabName(p, titles));
++                            }}
++                            onDragEnd={() => (dragging.current = null, setDropHint(null))}
++                            onDragOver={(e) => {
++                              const d = dragging.current;
++                              if (!d || !("tab" in d)) return;
++                              e.preventDefault();
++                              e.stopPropagation();
++                              setDropHint({ group: c.group, tab: p.key, half: halfOf(e.clientX, e.currentTarget.getBoundingClientRect()) });
++                            }}
++                            onDrop={(e) => {
++                              const d = dragging.current;
++                              if (!d || !("tab" in d)) return;
++                              e.preventDefault();
++                              e.stopPropagation();
++                              const half = halfOf(e.clientX, e.currentTarget.getBoundingClientRect());
++                              dragging.current = null;
++                              setDropHint(null);
++                              dropTabOn(d.tab, { kind: "tab", key: p.key, half });
++                            }}
+                             onMouseDown={() => setFocused(p.key)}
+                             onDoubleClick={() => !p.kind && setRenamingTab(p.key)}
+                             onContextMenu={(e) => {
+@@ -2596,6 +2665,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                       then?.();
+                     }}
+                     onSplit={(dir) => splitPane(p.key, dir)}
++                    dragCell={!board && showsDragHandle(shown.length) ? { onStart: () => (dragging.current = { cell: groupOf(p) }), onEnd: () => (dragging.current = null, setDropHint(null)) } : undefined}
+                     onEqualize={terminals && gridCount > 1 ? equalizePanes : undefined}
+                     expand={board ? undefined : { on: zoomed === groupOf(p), can: canExpand(shown.length, classic), toggle: () => expandPane(p.key) }}
+                     title={p.title || nameOf(names, p.cwd)}
