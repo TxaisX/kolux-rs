@@ -7,8 +7,6 @@
 //! ponytail: ports owned by the workspace's own processes (no printed address) are not candidates
 //! yet; that needs the pane's process tree from the terminal lane (after-list).
 use serde::Serialize;
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 /// A TCP port something listens on, with the process that holds it (0 when unknown).
@@ -68,16 +66,24 @@ pub fn listening() -> Vec<Listening> {
     if cfg!(windows) { parse_netstat(&text) } else { parse_lsof(&text) }
 }
 
-/// Whether the port answers a HEAD request with an HTTP status line (a web server, not a database).
-pub fn speaks_http(port: u16) -> bool {
-    let wait = Duration::from_millis(400);
-    let Ok(mut s) = TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), wait) else { return false };
-    let _ = s.set_read_timeout(Some(wait));
-    if s.write_all(b"HEAD / HTTP/1.0\r\nHost: localhost\r\n\r\n").is_err() {
-        return false;
+/// How long a port gets to answer the HEAD request.
+const WEB_WAIT: Duration = Duration::from_millis(400);
+
+/// The address a port on this machine is asked at, with a HEAD request through the approved near
+/// client (APP-070): any HTTP answer means a web server, not a database.
+pub fn loopback(port: u16) -> Option<tauri::Url> {
+    tauri::Url::parse(&format!("http://127.0.0.1:{port}/")).ok()
+}
+
+/// The ports among the printed local addresses that are listening: the only ones asked.
+pub fn asked(listening: &[Listening], printed: &[String]) -> Vec<u16> {
+    let mut out: Vec<u16> = Vec::new();
+    for (_, port) in printed.iter().filter_map(|p| local_address(p)) {
+        if listening.iter().any(|l| l.port == port) && !out.contains(&port) {
+            out.push(port);
+        }
     }
-    let mut buf = [0u8; 5];
-    s.read_exact(&mut buf).is_ok() && buf.eq_ignore_ascii_case(b"HTTP/")
+    out
 }
 
 /// The host and port of a printed address, when it is a local web address.
@@ -118,8 +124,16 @@ pub fn rank(list: &mut [Candidate]) {
 
 /// The Preview button's candidates for a workspace: `printed` is what its terminals printed.
 #[tauri::command]
-pub async fn browser_dev_ports(printed: Vec<String>) -> Result<Vec<Candidate>, String> {
-    tauri::async_runtime::spawn_blocking(move || candidates(&listening(), &printed, speaks_http)).await.map_err(|e| e.to_string())
+pub async fn browser_dev_ports(app: tauri::AppHandle, printed: Vec<String>) -> Result<Vec<Candidate>, String> {
+    let now = tauri::async_runtime::spawn_blocking(listening).await.map_err(|e| e.to_string())?;
+    let mut web = Vec::new();
+    for port in asked(&now, &printed) {
+        let Some(url) = loopback(port) else { continue };
+        if super::head(&app, &url, true, WEB_WAIT).await.is_ok() {
+            web.push(port);
+        }
+    }
+    Ok(candidates(&now, &printed, |p| web.contains(&p)))
 }
 
 #[cfg(test)]
@@ -152,5 +166,36 @@ mod tests {
         let mut list = vec![Candidate { host: "localhost".into(), port: 9000, url: String::new(), printed: false, web: true }, Candidate { host: "localhost".into(), port: 8000, url: String::new(), printed: false, web: false }, Candidate { host: "localhost".into(), port: 8500, url: String::new(), printed: false, web: true }];
         rank(&mut list);
         assert_eq!(list.iter().map(|c| c.port).collect::<Vec<_>>(), vec![8500, 9000, 8000]);
+    }
+
+    #[test]
+    fn app070_only_listening_printed_ports_are_asked_and_through_the_near_client() {
+        let listening = [Listening { port: 5173, pid: 1 }, Listening { port: 3000, pid: 2 }];
+        let printed = ["http://localhost:5173/".to_string(), "http://127.0.0.1:5173/x".into(), "http://localhost:8080".into(), "https://example.com/".into(), "http://0.0.0.0:3000".into()];
+        assert_eq!(asked(&listening, &printed), vec![5173, 3000]);
+        assert_eq!(loopback(5173).unwrap().as_str(), "http://127.0.0.1:5173/");
+        // A web server answers the HEAD; a port that closes without an HTTP answer does not.
+        let clients = super::super::icon_clients(None, |_| Ok(vec![])).unwrap();
+        let web = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let web_port = web.local_addr().unwrap().port();
+        let mute = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mute_port = mute.local_addr().unwrap().port();
+        let a = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut s, _) = web.accept().unwrap();
+            let _ = s.read(&mut [0u8; 1024]);
+            s.write_all(b"HTTP/1.0 404 Not Found\r\n\r\n").unwrap();
+        });
+        let b = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut s, _) = mute.accept().unwrap();
+            let _ = s.read(&mut [0u8; 1024]);
+            s.write_all(b"\x00\x00\x00\x08garbage!").unwrap();
+        });
+        let ask = |p| tauri::async_runtime::block_on(super::super::head_with(&clients, &loopback(p).unwrap(), true, WEB_WAIT)).is_ok();
+        assert!(ask(web_port));
+        assert!(!ask(mute_port));
+        a.join().unwrap();
+        b.join().unwrap();
     }
 }

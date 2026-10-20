@@ -219,7 +219,7 @@ pub const CHORD_SCRIPT: &str = r#"(() => {
   };
   // T-242 (BROW-049 / BROW-050): the command line's recorder and emulation. Console messages are
   // kept from the first script on (a bounded ring), so `kolux console` sees what the page logged;
-  // fetch and XMLHttpRequest go through one wrapper that holds requests matching the intercept
+  // fetch and XHR go through one wrapper that holds requests matching the intercept
   // patterns (released when interception is disabled), fails them while offline and adds the extra
   // headers and credentials; geolocation, matchMedia and the dialogs answer as emulated. The app
   // hands the state in with `__kxEmu` on every load (so it stays in force), arms one dialog answer
@@ -1892,21 +1892,74 @@ pub fn https_twin(url: &Url) -> Option<String> {
     Some(u.to_string())
 }
 
-/// Name lookup and one TCP connection to the address (blocking): whether the name resolved, and
-/// the error kind of the last connection attempt when none succeeded.
-pub fn reach(url: &Url) -> (bool, Option<std::io::ErrorKind>) {
-    let Ok(addrs) = url.socket_addrs(|| None) else { return (false, None) };
-    if addrs.is_empty() {
-        return (false, None);
-    }
-    let mut last = None;
-    for a in addrs {
-        match std::net::TcpStream::connect_timeout(&a, DIAGNOSE_WAIT) {
-            Ok(_) => return (true, None),
-            Err(e) => last = Some(e.kind()),
+/// The addresses the address's host name looks up to (blocking); empty when the name does not resolve.
+pub fn lookup(url: &Url) -> Vec<IpAddr> {
+    url.socket_addrs(|| None).map(|a| a.into_iter().map(|s| s.ip()).collect()).unwrap_or_default()
+}
+
+/// What a HEAD request through the approved clients got back: the status and the length the
+/// answer says its body has.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Answer {
+    pub status: u16,
+    pub length: Option<u64>,
+}
+
+/// Why a HEAD request through the approved clients failed: the error chain's text, whether it ran
+/// out of time, and the socket error underneath when there is one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Failed {
+    pub text: String,
+    pub timeout: bool,
+    pub io: Option<std::io::ErrorKind>,
+}
+
+/// The socket error somewhere down an error's chain of causes.
+fn io_kind(e: &(dyn std::error::Error + 'static)) -> Option<std::io::ErrorKind> {
+    let mut cur = Some(e);
+    while let Some(x) = cur {
+        if let Some(io) = x.downcast_ref::<std::io::Error>() {
+            return Some(io.kind());
         }
+        cur = x.source();
     }
-    (true, last)
+    None
+}
+
+/// APP-070: every request Kolux itself makes outside the page (a download's size, a dev server's
+/// check, the failed-load diagnosis, the update check's installer) is one HEAD through the icon
+/// clients, the one approved way out: `near` for an address on this machine or the local network,
+/// the public-only client otherwise, both without a proxy and under the icon redirect rule. Nothing
+/// of the body is read.
+pub async fn head_with(clients: &IconClients, url: &Url, near: bool, wait: Duration) -> Result<Answer, Failed> {
+    match if near { &clients.near } else { &clients.far }.head(url.clone()).timeout(wait).send().await {
+        Ok(r) => Ok(Answer { status: r.status().as_u16(), length: r.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse().ok()) }),
+        Err(e) => Err(Failed { text: error_text(&e), timeout: e.is_timeout(), io: io_kind(&e) }),
+    }
+}
+
+/// `head_with` through the clients the app shares.
+pub async fn head(app: &AppHandle, url: &Url, near: bool, wait: Duration) -> Result<Answer, Failed> {
+    let Some(clients) = icon_client(app_origin(app)) else {
+        return Err(Failed { text: "no network client".into(), timeout: false, io: None });
+    };
+    head_with(clients, url, near, wait).await
+}
+
+/// What a failed diagnosis request says, as `failure_kind`'s connection and TLS inputs: a
+/// certificate the OS does not trust is the handshake's (strict checking, as the page's own load),
+/// a time-out or a socket error is the connection's, and anything else on https is the handshake's
+/// text; on http the server was reached.
+pub fn failed_parts(https: bool, f: &Failed) -> (Option<std::io::ErrorKind>, Option<String>) {
+    if certificate_error(&f.text) {
+        (None, Some(f.text.clone()))
+    } else if f.timeout {
+        (Some(std::io::ErrorKind::TimedOut), None)
+    } else if let Some(k) = f.io {
+        (Some(k), None)
+    } else {
+        (None, https.then(|| f.text.clone()))
+    }
 }
 
 fn error_text(e: &(dyn std::error::Error + 'static)) -> String {
@@ -1928,17 +1981,17 @@ pub async fn browser_diagnose(app: AppHandle, url: String) -> Result<Diagnosis, 
     allowed(&url, app_origin(&app).as_ref())?;
     let (local, https) = (local_host(&url), https_twin(&url));
     let probe = url.clone();
-    let (dns_ok, tcp) = tauri::async_runtime::spawn_blocking(move || reach(&probe)).await.map_err(|e| e.to_string())?;
-    let mut tls = None;
-    if dns_ok && tcp.is_none() && url.scheme() == "https" {
-        // Strict checking, as the page's own load: a certificate the OS does not trust fails here too.
-        if let Ok(client) = reqwest::Client::builder().timeout(DIAGNOSE_WAIT).no_proxy().redirect(reqwest::redirect::Policy::none()).build() {
-            if let Err(e) = client.head(url.as_str()).send().await {
-                tls = Some(error_text(&e));
-            }
+    let ips = tauri::async_runtime::spawn_blocking(move || lookup(&probe)).await.map_err(|e| e.to_string())?;
+    let (tcp, tls) = if ips.is_empty() {
+        (None, None)
+    } else {
+        // An address that looks up to this machine or the local network goes through the near client.
+        match head(&app, &url, ips.iter().any(|ip| local_ip(*ip)), DIAGNOSE_WAIT).await {
+            Ok(_) => (None, None),
+            Err(f) => failed_parts(url.scheme() == "https", &f),
         }
-    }
-    Ok(Diagnosis { kind: failure_kind(dns_ok, tcp, tls.as_deref()), local, https })
+    };
+    Ok(Diagnosis { kind: failure_kind(!ips.is_empty(), tcp, tls.as_deref()), local, https })
 }
 
 #[cfg(test)]
@@ -2747,16 +2800,55 @@ mod t074_tests {
         let port = gone.local_addr().unwrap().port();
         drop(gone);
         let url = parse(&format!("http://127.0.0.1:{port}/")).unwrap();
-        let (dns_ok, tcp) = reach(&url);
-        assert_eq!(failure_kind(dns_ok, tcp, None), "refused");
+        // APP-070: the check is a HEAD through the approved near client, not a socket of its own.
+        let clients = icon_clients(None, system_lookup).unwrap();
+        assert!(!lookup(&url).is_empty());
+        let f = tauri::async_runtime::block_on(head_with(&clients, &url, true, DIAGNOSE_WAIT)).unwrap_err();
+        let (tcp, tls) = failed_parts(false, &f);
+        assert_eq!(failure_kind(true, tcp, tls.as_deref()), "refused", "{f:?}");
         assert!(local_host(&url));
         assert_eq!(https_twin(&url), None);
+        // A server that answers: the HEAD gets its status and length, and the kind stays unknown.
         let open = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = parse(&format!("http://127.0.0.1:{}/", open.local_addr().unwrap().port())).unwrap();
-        assert_eq!(reach(&url), (true, None));
+        let server = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut s, _) = open.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = s.read(&mut buf);
+            s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1234\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        assert_eq!(tauri::async_runtime::block_on(head_with(&clients, &url, true, DIAGNOSE_WAIT)), Ok(Answer { status: 200, length: Some(1234) }));
+        server.join().unwrap();
         assert_eq!(failure_kind(true, None, None), "unknown");
         // A name that cannot exist (RFC 6761 .invalid) never resolves.
-        assert!(!reach(&parse("http://no-such-host.invalid/").unwrap()).0);
+        assert!(lookup(&parse("http://no-such-host.invalid/").unwrap()).is_empty());
+    }
+
+    #[test]
+    fn app070_a_failed_probe_is_split_into_the_connection_and_the_handshake() {
+        let f = |text: &str, timeout, io| Failed { text: text.into(), timeout, io };
+        use std::io::ErrorKind as K;
+        // A certificate the OS does not trust is the handshake's, even when a socket error carries it.
+        assert!(failed_parts(true, &f("error sending request / The certificate chain was issued by an authority that is not trusted", false, Some(K::Other))).1.is_some());
+        assert_eq!(failure_kind(true, None, Some("x509: certificate signed by unknown authority")), "certificate");
+        assert_eq!(failed_parts(true, &f("operation timed out", true, None)), (Some(K::TimedOut), None));
+        assert_eq!(failed_parts(false, &f("connect error", false, Some(K::ConnectionRefused))), (Some(K::ConnectionRefused), None));
+        assert_eq!(failed_parts(true, &f("handshake failure", false, None)), (None, Some("handshake failure".into())));
+        assert_eq!(failed_parts(false, &f("bad response", false, None)), (None, None));
+        let (tcp, tls) = failed_parts(true, &f("operation timed out", true, None));
+        assert_eq!(failure_kind(true, tcp, tls.as_deref()), "timeout");
+    }
+
+    #[test]
+    fn app070_a_public_only_probe_never_reaches_this_machine() {
+        // The far client's own lookup drops local addresses, so a HEAD to a loopback address through
+        // it never connects (a name rebound to this machine is caught the same way).
+        let open = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = open.local_addr().unwrap().port();
+        let clients = icon_clients(None, |_| Ok(vec![IpAddr::from([127, 0, 0, 1])])).unwrap();
+        let url = parse(&format!("http://rebound.example.com:{port}/")).unwrap();
+        assert!(tauri::async_runtime::block_on(head_with(&clients, &url, false, DIAGNOSE_WAIT)).is_err());
     }
 
     #[test]

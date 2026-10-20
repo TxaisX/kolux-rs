@@ -228,13 +228,20 @@ pub fn refused(app: &AppHandle, id: u32, url: &str, suggested: &str, why: &str) 
     let _ = app.emit(EVENT, &d);
 }
 
-/// The server's Content-Length from a HEAD request, when it answers one; nothing else is read.
+/// The size a HEAD answer gives a download: a success's non-zero Content-Length only (a redirect
+/// the near client stopped at, or an error page, says nothing about the file).
+pub fn total_of(a: &super::Answer) -> Option<u64> {
+    (200..300).contains(&a.status).then_some(a.length).flatten().filter(|t| *t > 0)
+}
+
+/// The server's Content-Length from a HEAD request, when it answers one; nothing else is read. The
+/// request goes through the approved clients (APP-070): the near one for an address on this
+/// machine or the local network, the public-only one otherwise.
 fn ask_total(app: AppHandle, key: u64, url: String) {
     tauri::async_runtime::spawn(async move {
-        let Ok(client) = reqwest::Client::builder().timeout(Duration::from_secs(8)).build() else { return };
-        let Ok(resp) = client.head(&url).send().await else { return };
-        let total = resp.content_length().filter(|t| *t > 0);
-        if let Some(total) = total {
+        let Ok(at) = super::parse(&url) else { return };
+        let Ok(answer) = super::head(&app, &at, super::local_host(&at), Duration::from_secs(8)).await else { return };
+        if let Some(total) = total_of(&answer) {
             let changed = DOWNLOADS.lock().ok().and_then(|mut all| {
                 let d = all.iter_mut().find(|x| x.key == key)?;
                 d.total = Some(total);
@@ -439,5 +446,17 @@ mod tests {
         assert_eq!(take_armed(&mut arms, 3, now), None, "a stale arm is dropped");
         assert_eq!(take_armed(&mut arms, 2, now + ARM_FOR), None, "too late");
         assert!(arms.is_empty());
+    }
+
+    #[test]
+    fn app070_only_a_successful_answer_gives_the_download_a_size() {
+        use super::super::Answer;
+        assert_eq!(total_of(&Answer { status: 200, length: Some(5000) }), Some(5000));
+        assert_eq!(total_of(&Answer { status: 206, length: Some(10) }), Some(10));
+        assert_eq!(total_of(&Answer { status: 200, length: Some(0) }), None);
+        assert_eq!(total_of(&Answer { status: 200, length: None }), None);
+        // A redirect the near client stopped at, or an error page, says nothing about the file.
+        assert_eq!(total_of(&Answer { status: 302, length: Some(150) }), None);
+        assert_eq!(total_of(&Answer { status: 404, length: Some(900) }), None);
     }
 }

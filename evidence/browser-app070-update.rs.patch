@@ -1,0 +1,32 @@
+diff --git a/src-tauri/src/update.rs b/src-tauri/src/update.rs
+index 8fcf0b05..e79760ac 100644
+--- a/src-tauri/src/update.rs
++++ b/src-tauri/src/update.rs
+@@ -135,14 +135,10 @@ fn compat_on(app: &AppHandle) -> bool {
+     care::compat_mode(saved, std::env::var(care::ENV_COMPAT).ok().as_deref())
+ }
+ 
+-/// True only when the release host answers that the named installer is not there (404).
+-async fn installer_missing(url: &str, compat: bool) -> bool {
+-    let mut b = reqwest::Client::builder().timeout(CHECK_TIMEOUT);
+-    if compat {
+-        b = b.http1_only();
+-    }
+-    let Ok(client) = b.build() else { return false };
+-    matches!(client.head(url).send().await, Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND)
++/// True only when the release host answers that the named installer is not there (404). The HEAD
++/// goes through the app's one approved public-only client (APP-070), which speaks HTTP/1.1 only.
++async fn installer_missing(app: &AppHandle, url: &tauri::Url) -> bool {
++    matches!(crate::browser::head(app, url, false, CHECK_TIMEOUT).await, Ok(a) if a.status == 404)
+ }
+ 
+ /// APP-028: what the next launch says about the last install attempt (read once, then removed).
+@@ -250,7 +246,7 @@ pub async fn update_check(app: AppHandle) -> Result<Option<Info>, String> {
+     };
+     // APP-031: a release whose installer is not uploaded yet is passed over until it is.
+     if let Some(u) = found.as_ref() {
+-        if installer_missing(u.download_url.as_str(), compat).await {
++        if installer_missing(&app, &u.download_url).await {
+             if !app.state::<Updates>().rounds.is_current(round) {
+                 return Err(care::MARK_STALE.into());
+             }
