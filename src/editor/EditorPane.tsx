@@ -49,6 +49,8 @@ import { SlashMenu, TableMenu, WikiMenu } from "./SlashPanel";
 import TableControls from "./TableControls";
 import CodeLabel from "./CodeLabel";
 import DrawPanel from "./DrawPanel";
+import LinkHover from "./LinkHover";
+import { sourceLinks } from "./sourceLinks";
 import type { SlashView } from "./slashMenu";
 import type { WikiView } from "./wikiPopup";
 import { domPick, noteDraft, selections, type Note } from "./notes";
@@ -67,7 +69,7 @@ import { outline } from "./toc";
 import { mdPrefs, setMdPrefs } from "../shell/mdPrefs";
 import { FrontMatterBlock, TocResizer } from "../shell/MdViewControls";
 import { frontControl, tocVar } from "../shell/mdView";
-import { followClick, type LinkHandler } from "./linkClicks";
+import { followClick, openHref, type LinkHandler } from "./linkClicks";
 import { hasSpot, jumpSpot, onReveal, revealAt, spotRange, takeSpot } from "./search";
 import "./editor-extras.css";
 import { pasteGuard } from "./paste";
@@ -202,8 +204,8 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   const [gone, setGone] = useState(false); // EDIT-032: the file was deleted or moved away while this tab is open
   const [comparing, setComparing] = useState(false);
   const [undoable, setUndoable] = useState<UndoEntry | null>(null);
-  const report = useRef({ onDirty, onToast });
-  report.current = { onDirty, onToast };
+  const report = useRef({ onDirty, onToast, onLink });
+  report.current = { onDirty, onToast, onLink };
   // EDIT-002: autosave reads the settings afresh at an edit (at most every 5 s), so switching it on
   // in Settings reaches tabs that are already open.
   const autoRef = useRef<Autosave | null>(null);
@@ -236,6 +238,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   const rich = useRef<ReturnType<typeof mountRich> | null>(null);
   const [slashView, setSlashView] = useState<SlashView | null>(null);
   const [wikiView, setWikiView] = useState<WikiView | null>(null);
+  const wikiAsked = useRef(false); // the worktree file list is asked for once, by the rich view or by source-view note links
   const wikiFiles = useRef<string[]>([]); // the worktree's files for the [[ popup, listed once per open note
   const [richEditor, setRichEditor] = useState<ReturnType<typeof mountRich>["editor"] | null>(null);
   const [ready, setReady] = useState(0); // counts loads, so the rich view starts after each one
@@ -318,7 +321,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
           doc: shown,
           parent: host.current!,
           // A file with Windows line ends is saved with them.
-          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), wrapping.of(wrapOn.current ? EditorView.lineWrapping : []), minimapping.of(miniOn.current ? minimap() : []), findSupport, conflictColours, pasteGuard((t) => report.current.onToast?.(t)), EditorView.updateListener.of((u) => {
+          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), wrapping.of(wrapOn.current ? EditorView.lineWrapping : []), minimapping.of(miniOn.current ? minimap() : []), findSupport, conflictColours, isMarkdown(path) ? sourceLinks(() => ({ note: path, root, files: () => { if (!wikiAsked.current && root) { wikiAsked.current = true; void invoke<{ files: string[] }>("file_list", { root }).then((l) => void (wikiFiles.current = l.files), () => undefined); } return wikiFiles.current; }, onLink: (a, shift) => report.current.onLink?.(a, shift), onToast: (t) => report.current.onToast?.(t) })) : [], pasteGuard((t) => report.current.onToast?.(t)), EditorView.updateListener.of((u) => {
             u.transactions.forEach((tr) => relay(path, u.view, tr));
             if (u.docChanged) setConflicts(u.state.field(conflictField).list.length);
             if (u.docChanged && isMarkdown(path)) {
@@ -512,7 +515,10 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
           cm.dispatch({ changes: change, userEvent: "input" });
         }
       }, (t) => report.current.onToast?.(t), setSlashView, { files: () => wikiFiles.current, notePath: shortPath(path, root), show: setWikiView });
-      if (root) void invoke<{ files: string[] }>("file_list", { root }).then((l) => void (wikiFiles.current = l.files), () => undefined);
+      if (root) {
+        wikiAsked.current = true;
+        void invoke<{ files: string[] }>("file_list", { root }).then((l) => void (wikiFiles.current = l.files), () => undefined);
+      }
       setRichEditor(rich.current.editor);
     } catch (err) {
       setRichError(String(err));
@@ -861,6 +867,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
       {md && shown === "rich" && !comparing && !readOnly && <TableControls editor={richEditor} />}
       {md && shown === "rich" && !comparing && !readOnly && <CodeLabel editor={richEditor} />}
       {md && shown === "rich" && !comparing && <DrawPanel editor={richEditor} />}
+      {md && shown === "rich" && !comparing && <LinkHover editor={richEditor} host={richHost.current} onOpen={(href, shift) => richHost.current && openHref(href, richHost.current, path, root, shift, onLink)} onToast={onToast} />}
       {md && <div ref={richHost} className="pane-body md-rich" onClickCapture={(e) => richHost.current && followClick(e.nativeEvent, richHost.current, path, root, onLink)} contentEditable suppressContentEditableWarning spellCheck={spell} hidden={shown !== "rich" || comparing} aria-label={`${name}, rich view`} />}
     </section>
   );

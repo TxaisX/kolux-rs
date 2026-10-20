@@ -13,13 +13,15 @@ import { Contents, FindBar, selectedIn, type FindOpen } from "./NoteTools";
 import { outline } from "./toc";
 import { followClick, type LinkHandler } from "./linkClicks";
 import { drawDiagrams, loadRenderers, renderNote, watchRenderers } from "./diagrams";
+import { filterDataPictures } from "./notePictures";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
 import "./editor-extras.css";
 
 type Props = { id: number; path: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; worktree?: string | null; onLink?: LinkHandler };
 
-export const renderMarkdown = (md: string) => DOMPurify.sanitize(marked.parse(md, { async: false }));
+// EDIT-009: an inline data picture over the size limit, not a picture type or damaged is left out (notePictures.ts)
+export const renderMarkdown = (md: string) => filterDataPictures(DOMPurify.sanitize(marked.parse(md, { async: false })));
 
 export default function PreviewPane({ id, path, hidden = false, focused = false, onFocus, onClose, worktree = null, onLink }: Props) {
   const [text, setText] = useState<string | null>(null);

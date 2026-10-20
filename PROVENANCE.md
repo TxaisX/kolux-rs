@@ -1022,3 +1022,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · hooks T-156-b batch 8 (attempts list masking, wiring) · spec SAFE-018/SAFE-019 as given in PLAN; this tree's own protected.rs mask and its test fixtures, protected_custom.rs, hooks.rs; no outside source
 > 2026-10-20 · hooks T-167-b batch 8 (sleep record) · spec/04 STAT-030/STAT-037 as given in PLAN; this tree's own agent_hooks/saved.rs and projects.rs workspace_sleep; no outside source
 > 2026-10-20 · editor T-235-b piece 3 (diagrams and maths in the rich view) · spec EDIT-029/EDIT-030 as given in PLAN; this tree's own diagrams.ts, richCode.ts, Lexical's public API docs; no outside source
+> 2026-10-20 · editor T-234-b pieces 6-7 (link bubble, source-view note links, data-picture check) · spec EDIT-009/EDIT-014 as given in PLAN; this tree's own linkClicks.ts, noteLinks.ts, CodeMirror and Lexical public API docs; no outside source

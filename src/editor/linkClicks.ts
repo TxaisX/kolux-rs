@@ -19,6 +19,14 @@ export function headingEl(page: ParentNode, slug: string): HTMLElement | null {
   return null;
 }
 
+/** Follows one link address from a note: an anchor in this note scrolls to its heading, anything else goes to `onLink`. */
+export function openHref(href: string, page: ParentNode, note: string, root: string | null, shift: boolean, onLink?: LinkHandler): void {
+  const act = resolveLink(href, note, root);
+  if (act.kind === "here") {
+    if (act.heading) headingEl(page, act.heading)?.scrollIntoView({ block: "start" });
+  } else if (act.kind !== "none") onLink?.(act, shift);
+}
+
 /** Handles a click inside a note's page. True when it was a link follow (the caller stops there). */
 export function followClick(e: MouseEvent, page: HTMLElement, note: string, root: string | null, onLink?: LinkHandler): boolean {
   if (e.button !== 0 || !(e.ctrlKey || e.metaKey)) return false;
@@ -26,9 +34,16 @@ export function followClick(e: MouseEvent, page: HTMLElement, note: string, root
   if (!a || !page.contains(a)) return false;
   e.preventDefault();
   e.stopPropagation();
-  const act = resolveLink(a.getAttribute("href") ?? "", note, root);
-  if (act.kind === "here") {
-    if (act.heading) headingEl(page, act.heading)?.scrollIntoView({ block: "start" });
-  } else if (act.kind !== "none") onLink?.(act, e.shiftKey);
+  openHref(a.getAttribute("href") ?? "", page, note, root, e.shiftKey, onLink);
   return true;
+}
+
+/** EDIT-014: the toast for a link to a file that is not there (null when it exists). `stamps` is file_stamps: null = gone. */
+export async function missingFileToast(path: string, stamps: (paths: string[]) => Promise<unknown[]>): Promise<string | null> {
+  try {
+    const [stamp] = await stamps([path]);
+    return stamp === null || stamp === undefined ? `Cannot open ${path.split(/[/\\]/).pop() ?? path}: the file is not there (or is outside this project).` : null;
+  } catch {
+    return null; // a failed check never blocks the open; the open itself reports its own error
+  }
 }

@@ -73,3 +73,25 @@ LIVE PROOF PENDING (batched)
    this name" flag.
 STILL OPEN IN T-234-b: code colouring (no tokenizer package), link hover bubble, missing-file toast (App.tsx), images
   (showing, paste and save, data-picture size check), source-view [[note]] underline, equal-share column width.
+
+PIECE 7 (lane/editor, 2026-10-20)
+BUILT
+- linkBubble.ts (pure: bubblePlace, cleanHref refusing javascript:/data:/vbscript:/blob: and control characters, linkKeyAt,
+  setLinkUrl) + LinkHover.tsx: hovering a link in the rich view shows a bubble with Open, Edit (inline address box) and Copy,
+  z-index 60 so it draws above the side panels. Open goes through openHref (linkClicks.ts, shared with Mod+click).
+- sourceLinks.ts: CodeMirror extension for notes in source view: markdown links and [[notes]] underlined (dashed when the
+  name is shared), Ctrl/Cmd+click follows through the same resolver; ambiguous or missing [[name]] gives a toast.
+- linkClicks.ts: missingFileToast(path, stamps) -> "Cannot open <name>: the file is not there (or is outside this project)."
+  App.tsx wiring is evidence/editor-T-234-b-App.tsx.patch (git apply --check clean; with it applied tsc exit 0, then reverted).
+- notePictures.ts: inline data: pictures over 4 MB, not a picture type or with damaged data are replaced by a short note in
+  the preview (PreviewPane.renderMarkdown wraps the sanitiser output); file pictures untouched.
+TESTS: linkBubble.test.ts, sourceLinks.test.ts 7, linkClicks.test.ts +2, notePictures.test.ts.
+READINGS: vitest run src/editor: 62 files, 405 tests passed; tsc --noEmit exit 0 (also with the patch applied); vite build exit 0
+  (logs g-vit.log g-tsc.log g-build.log). No Rust.
+LIVE PROOF PENDING (batched)
+1. Rich view: hover a link: bubble with Open, Edit, Copy; Edit changes the address; it draws over an open side panel.
+2. Source view of a .md: [[Other note]] and [text](file.md) underlined; Ctrl+click opens; a shared name toasts "N notes are named X".
+3. After applying the App.tsx patch: Ctrl+click a link to a deleted file: toast names the file.
+4. Preview of a note with a 5 MB data picture: "Picture not shown: ..." in its place.
+STILL OPEN IN T-234-b: code colouring (waits on a code highlighter library on main), local pictures in notes (waits on a
+  file-bytes read/write in files.rs), equal-share new column width (not expressible in markdown).
