@@ -82,6 +82,7 @@ mod routing;
 mod schedule;
 mod resume;
 mod secrets;
+mod settings_sync;
 mod sessions;
 mod shell_marks;
 mod shell_history;
@@ -135,11 +136,14 @@ fn get_settings(store: tauri::State<'_, Mutex<Store>>) -> Result<serde_json::Val
 /// thread; typing never waits on the profile drive.
 #[tauri::command(async)]
 fn settings_patch(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, set: serde_json::Map<String, serde_json::Value>, remove: Vec<String>) -> Result<(), String> {
-    write_settings(&app, &store, |old| state::patched(old, &set, &remove))
+    // SET-035 (T-181): updates aimed at retired or secret settings are ignored; every window gets the redacted change.
+    let (set, remove) = settings_sync::accepted(&set, &remove);
+    let payload = settings_sync::broadcast(&set, &remove);
+    write_settings(&app, &store, |old| state::patched(old, &set, &remove), payload)
 }
 
 /// The settings `change` makes of what is on disk, written under one lock.
-fn write_settings(app: &tauri::AppHandle, store: &Mutex<Store>, change: impl FnOnce(serde_json::Value) -> serde_json::Value) -> Result<(), String> {
+fn write_settings(app: &tauri::AppHandle, store: &Mutex<Store>, change: impl FnOnce(serde_json::Value) -> serde_json::Value, payload: serde_json::Value) -> Result<(), String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     let old = store.settings();
     // The window cannot write a secret field; the sealed values on disk are kept as they are.
@@ -153,7 +157,7 @@ fn write_settings(app: &tauri::AppHandle, store: &Mutex<Store>, change: impl FnO
         resume::switched(app, after);
     }
     // Views that depend on a setting (the lapsed sign-in notice, ACCT-012) read again.
-    let _ = tauri::Emitter::emit(app, "settings-saved", ());
+    let _ = tauri::Emitter::emit(app, "settings-saved", payload);
     Ok(())
 }
 

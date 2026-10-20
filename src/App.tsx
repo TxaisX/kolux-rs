@@ -91,6 +91,7 @@ import { KitGallery, KitSetup } from "./kits/Kits";
 import Wizard from "./onboarding/Wizard";
 import Guides from "./onboarding/Guides";
 import { ADD_PROJECT } from "./onboarding/firstRun";
+import { noteUse } from "./onboarding/features";
 import { startGridTour } from "./onboarding/tour";
 import { KITS, RECALL_KEY, remember, type Kit, type Vendor } from "./kits/catalog";
 import KitStrip from "./kits/KitStrip";
@@ -1395,6 +1396,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     setToast(`Making the workspace ${name}…`);
     invoke<Created>("workspace_create", { projectId, name, base: null, branch: null, parent: null, ticket: null, issue: null })
       .then((made) => {
+        noteUse("workspace-create");
         setRefresh((n) => n + 1);
         cli.current.select(made.path, made.branch, true);
         void runSetup(made.path, made.branch);
@@ -2416,10 +2418,12 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             scope={[]}
             hasWorktree={activeDir !== null && projectOf(activeDir) !== null}
             onWorktree={(w) => {
+              noteUse("palette");
               setScreen("terminals");
               select(w.path, w.branch ?? null);
             }}
             onCreate={(name, repo) => {
+              noteUse("palette");
               setScreen("terminals");
               const item = workItem(name);
               if (item) return fromItem(item);

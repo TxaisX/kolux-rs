@@ -192,9 +192,15 @@ function PageBody({ page, repo, onSaved }: { page: Page; repo?: Project; onSaved
           </div>
           <div className="conn-advanced" data-section="accounts-advanced">
             <h3 className="conn-advanced-head">Manage accounts (advanced)</h3>
-            <ClaudeAccounts />
-            <CodexAccounts />
-            <AgentCredentials />
+            <div data-section="accounts-claude">
+              <ClaudeAccounts />
+            </div>
+            <div data-section="accounts-codex">
+              <CodexAccounts />
+            </div>
+            <div data-section="agent-folders">
+              <AgentCredentials />
+            </div>
           </div>
         </>
       )}

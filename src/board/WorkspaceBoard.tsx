@@ -4,6 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Close, Search } from "../chrome/icons";
+import { noteUse } from "../onboarding/features";
 import type { Project, Worktree } from "../projects/model";
 import { projectLabel, worktreeLabel } from "../projects/model";
 import {
@@ -64,6 +65,7 @@ export default function WorkspaceBoard({ onClose }: { onClose: () => void }) {
   // Moves cards to a status, shown at once; a refusal puts them back and says why.
   const move = async (paths: string[], status: string) => {
     if (!data || paths.length === 0) return;
+    noteUse("board");
     const before = data;
     const set = new Set(paths);
     setData({ ...data, cards: data.cards.map((c) => (set.has(c.path) ? { ...c, status } : c)) });

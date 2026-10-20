@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { noteUse } from "../onboarding/features";
 import type { AgentInfo } from "../launch/PlusMenu";
 import { folderName, type Project, type Worktree } from "../projects/model";
 import { defaultForm, EVENT_CHOICES, findNext, GRACE, PRECHECK, preselect, type Automation, type Preset, type ScheduleForm } from "./model";
@@ -222,6 +223,7 @@ export default function AutomationDialog({ projects, agents, editing, template, 
     const input = { id: editing?.id, requestId, name, prompt, provider, projectId, workspaceMode: mode, workspace: mode === "existing" ? workspace : null, baseBranch: mode === "new-per-run" ? base : "", runSetup: setupShown === true, reuseSession: mode === "existing" && reuse, missedRunGraceMinutes: grace, precheck, precheckTimeoutSeconds: limit, schedule, trigger: timed ? undefined : { kind: "event", event: starts } };
     invoke<Automation>("automation_save", { input })
       .then((a) => {
+        noteUse("automations");
         onSaved(a);
         onClose();
       })

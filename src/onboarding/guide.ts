@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { locale } from "../language";
 import type { FirstRun } from "./newcomer";
 import { noteUse, type Features } from "./features";
+import { movedHint, type MovedId } from "./moved";
 import { isAiAgent } from "./agentKind";
 
 export type StepId = "browser" | "notifications" | "agent" | "cli" | "integrations" | "multitask" | "automate" | "repos";
@@ -141,14 +142,17 @@ export function completed(wf: Workflow, seen: ReadonlySet<string>): boolean {
 
 // ---- ONB-027: startup tips ----
 
-export type TipId = "cli" | "palette";
+export type TipId = "cli" | "palette" | MovedId;
 /** Newest first: the CLI tip, then the command-palette tip. */
 export const TIP_ORDER: TipId[] = ["cli", "palette"];
 
 /** The one tip this launch shows, or none. `cli` is "error" when its status could not be read, which
  *  counts as installed. No tip in a session that showed the first-run wizard. */
-export function nextTip(o: { seen: readonly string[]; tried: readonly string[]; cli: CliStatus | "error"; onboarding: boolean }): TipId | null {
+export function nextTip(o: { seen: readonly string[]; tried: readonly string[]; cli: CliStatus | "error"; onboarding: boolean; features?: Features }): TipId | null {
   if (o.onboarding) return null;
+  // ONB-042: a moved control's hint comes first, and only for a profile that used the control before it moved.
+  const moved = movedHint(o.features, o.seen);
+  if (moved) return moved;
   const done = (t: TipId) => (t === "cli" ? o.cli === "error" || (o.cli.installed && o.cli.onPath) : o.tried.includes("palette"));
   return TIP_ORDER.find((t) => !o.seen.includes(t) && !o.tried.includes(t) && !done(t)) ?? null;
 }
@@ -195,6 +199,8 @@ export type Facts = {
   setupScript: boolean | null;
   /** ONB-015 legacy rule: an old profile (see legacyProfile); null when it could not be read. */
   legacy?: boolean | null;
+  /** ONB-042: the legacy split-pane credit (moved.ts splitCredit); ticks Multi-task. */
+  splitCredit?: boolean;
 };
 
 /** ONB-015 Multi-task: a real workspace besides the main folder. The main folder (or two entries
@@ -211,7 +217,7 @@ export const pageCounts = (url: string | null | undefined): boolean => {
 export function doneFrom(f: Facts): Set<StepId> {
   if (f.legacy === true) return new Set(STEPS.map((s) => s.id)); // the legacy rule, everywhere
   const done = new Set<StepId>();
-  if (f.workspaces?.some(realWorkspace)) done.add("multitask");
+  if (f.workspaces?.some(realWorkspace) || f.splitCredit === true) done.add("multitask");
   if (f.pageShown) done.add("browser");
   if ((f.gitProjects ?? 0) >= 2) done.add("repos");
   if (f.integrations === "connected") done.add("integrations");
