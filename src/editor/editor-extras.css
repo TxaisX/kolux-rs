@@ -118,3 +118,6 @@
 .table-ctx-item:disabled { opacity: 0.45; cursor: default; }
 .code-label { position: fixed; z-index: 31; width: 140px; padding: 1px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); font: 11px var(--ui-font); opacity: 0.85; }
 .code-label:hover, .code-label:focus { opacity: 1; }
+.rich-draw { position: fixed; z-index: 30; max-height: 40vh; overflow: auto; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3); }
+.rich-draw iframe.md-diagram { display: block; width: 100%; border: 0; margin: 0 auto; background: transparent; }
+.rich-draw .md-math-block { text-align: center; overflow-x: auto; }

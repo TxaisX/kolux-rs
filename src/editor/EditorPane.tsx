@@ -48,6 +48,7 @@ import { minimap } from "./minimap";
 import { SlashMenu, TableMenu, WikiMenu } from "./SlashPanel";
 import TableControls from "./TableControls";
 import CodeLabel from "./CodeLabel";
+import DrawPanel from "./DrawPanel";
 import type { SlashView } from "./slashMenu";
 import type { WikiView } from "./wikiPopup";
 import { domPick, noteDraft, selections, type Note } from "./notes";
@@ -859,6 +860,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
       {md && shown === "rich" && !comparing && <FrontMatterBlock front={frontText} hide={hideFront} />}
       {md && shown === "rich" && !comparing && !readOnly && <TableControls editor={richEditor} />}
       {md && shown === "rich" && !comparing && !readOnly && <CodeLabel editor={richEditor} />}
+      {md && shown === "rich" && !comparing && <DrawPanel editor={richEditor} />}
       {md && <div ref={richHost} className="pane-body md-rich" onClickCapture={(e) => richHost.current && followClick(e.nativeEvent, richHost.current, path, root, onLink)} contentEditable suppressContentEditableWarning spellCheck={spell} hidden={shown !== "rich" || comparing} aria-label={`${name}, rich view`} />}
     </section>
   );

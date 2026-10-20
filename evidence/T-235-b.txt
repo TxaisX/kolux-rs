@@ -39,3 +39,26 @@ LIVE PROOF PENDING (batched), after the dependency is in
 2. A bad diagram shows its code plus "Diagram could not be drawn". "$E=mc^2$" and a $$ block render as maths;
    "costs $5 and $10" stays text.
 STILL OPEN IN T-235-b: diagrams and maths in the rich view, image viewer, PDF viewer, CI check tab (unchanged).
+
+PIECE 3 (lane/editor, 2026-10-20, main d11cc803 with mermaid 11.4.1 and katex 0.16.11 landed; diagramLibs.ts is on the tree)
+BUILT: diagrams and maths in the rich view.
+- richDraw.ts: drawable() (a mermaid fence of any spelling, or text holding $x$ / $$ spans; "$5 and $10" is not maths),
+  drawnAtCaret() (the block the caret is in; a list item or quote paragraph counts), allDrawable(), mathHtml() (the
+  preview's restoreMath: KaTeX with trust off, else the escaped source), diagramPanel() (strict mermaid -> DOMPurify SVG
+  clean -> the preview's locked page; a failure gives a one-line reason).
+- DrawPanel.tsx: a floating panel just below the block the caret is in; the diagram is an iframe with an EMPTY sandbox
+  and the no-script page policy, maths goes through the same sanitiser as the preview. The note text is never touched,
+  so the rich view's round trip is unchanged (test: markdown out equals markdown in with the caret in the fence).
+- EditorPane.tsx: one mount line (rich view, not in Changes view). editor-extras.css: .rich-draw.
+DECISION (coordinator default; Txais may overrule): the rich view draws a block as a panel under the caret, not in place of
+  the block, because replacing the fence in the document would change what the file round-trips to.
+TESTS: richDraw.test.ts 9 (drawable, caret block, list item, order and no text change, maths fallback and escaping, locked page,
+  failed diagram reason, missing renderer).
+READINGS: vitest run src/editor/richDraw.test.ts: 9 passed (g-draw.log); tsc --noEmit exit 0 (g-tsc.log).
+  No Rust, no shared file, no patch. The earlier editor-T-235-b-package.json patch is moot: both libraries are on main.
+LIVE PROOF PENDING (batched)
+1. Rich view of a note with a mermaid fence: click inside the fence; a panel with the drawn diagram shows just under it;
+   click elsewhere, it goes. A broken diagram shows one line "Diagram could not be drawn". Switch to source: the fence is unchanged.
+2. Click in a paragraph with $E=mc^2$ or a $$ block: the rendered maths shows in a panel under it; "costs $5 and $10" shows nothing.
+STILL OPEN IN T-235-b: image viewer and PDF viewer (need a file-bytes read in files.rs, a reliability-lane file, and a PDF library
+  that is not on main), CI check tab (waits on the Checks panel's data).
