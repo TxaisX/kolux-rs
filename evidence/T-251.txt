@@ -58,3 +58,48 @@ LIVE PROOF PENDING (batched)
 5. kolux cookie set --name a --value b --httpOnly --expires 0: the cookie is in the engine (DevTools Application tab,
    HttpOnly ticked) and absent from document.cookie.
 6. kolux screenshot: still refused (code unsupported) until page capture is reachable.
+
+== 2026-10-20 second pass (lane/browser from 55ab50c5): capture, print and download ==
+Needs evidence/browser-T-158-b-Cargo.toml.patch (webview2-com =0.39.1 + windows =0.62.2, Windows only; Cargo.lock
++2 dependency-edge lines, 0 new packages).
+WHAT CHANGED
+- src-tauri/src/browser_cli.rs: the refusal table is gone; screenshot, full-screenshot and pdf take --path.
+  capture(): screenshot = the engine's DevTools call Page.captureScreenshot (png or jpeg, the visible page);
+  full-screenshot = Page.getLayoutMetrics then Page.captureScreenshot clipped to the whole layout (sides capped at
+  16384 px); pdf = the engine's PrintToPdf straight to the file. The picture arrives as base64 and is decoded
+  before it is written, so "bytes" is the decoded size. download(): the tab's next download is armed to the
+  path, the element (--selector) is clicked through the page driver, and the download is watched until it ends
+  (120 s, then "still downloading" with the bytes so far); a click that starts nothing in 10 s fails and disarms.
+- out_path(): --path must be inside the worktree (the caller's folder when there is none) by kolux file's own rule
+  (file_cli::inside: "outside", "not_a_file"); the folder is made; the name is made safe and a taken name gets a
+  number (browser_downloads::place), so nothing is overwritten. Without --path a capture goes to the app data
+  folder's captures/ as page-<n>-<command>-<unix seconds>.<png|jpg|pdf>.
+- src-tauri/src/browser_downloads.rs: arm / disarm / take_armed / state_of; requested() uses an armed path first,
+  so the existing safe-download rules (registry row, progress, finished notice, tab-close cancel) still apply.
+- src-tauri/src/browser.rs: Act::DevTools and Act::Pdf behind the existing driver hook, devtools(), print_pdf(),
+  captures_dir(); src-tauri/src/browser_engine.rs: the DevTools and PrintToPdf glue (main thread start, answer
+  waited for on the command line's thread, 30 s).
+- evidence/browser-T-251-cli.rs.patch regenerated: help lines for --path and what the capture, pdf and download
+  verbs do now; evidence/browser-T-251-local_cli.rs.patch regenerated: the agent-context summaries no longer say
+  "refused in this build".
+TESTS (new)
+- cli047_capture_print_and_download_reach_the_page_instead_of_being_refused (replaces the refusal test)
+- cli047_capture_paths_stay_inside_the_worktree_and_never_overwrite
+- cli047_pictures_are_the_visible_page_or_the_whole_layout_and_sizes_are_decoded_bytes
+- browser::downloads cli047_an_armed_path_is_taken_once_by_its_own_tab_and_goes_stale
+
+READINGS (logs under G:/Temp/browser-v3-logs/; Cargo patch applied for every cargo run, then reverted)
+- cargo build exit 0; clippy --all-targets -D warnings exit 0; cargo test browser 136 passed; 0 failed
+  (t251a-build.log, t251a-clippy.log, t251a-cargo-test.log)
+- lib.rs patch + both regenerated T-251 patches applied: build exit 0, clippy exit 0, cargo test cli 174 passed;
+  0 failed (t251cli-*.log); then lib.rs, cli.rs, local_cli.rs reverted
+- tsc exit 0; vitest src/browser 19 files, 95 passed (t251-vitest.log); privacy app070 x2: the same known reds as
+  before this pass, nothing new (t251-privacy.log)
+
+LIVE PROOF PENDING (batched; replaces step 6 above)
+6. kolux screenshot: a png of the visible page in the app data folder's captures/; the answer's bytes equal the
+   file's size. kolux screenshot --format jpeg --path shots/a.jpg: shots/a.jpg in the worktree; again: a (2).jpg.
+7. kolux full-screenshot on a long page: the picture is the whole page's height.
+8. kolux pdf --path out/page.pdf: a PDF that opens; kolux pdf --path ../x.pdf: refused (outside).
+9. kolux download --selector a[download] --path dl/file.zip on a page with a download link: dl/file.zip in the
+   worktree, the pane's download strip shows it, the answer's bytes equal the file's size.

@@ -1,16 +1,32 @@
 diff --git a/src-tauri/src/local_cli.rs b/src-tauri/src/local_cli.rs
-index d8666c5c..9154ebc5 100644
+index d8666c5c..0ee75fe5 100644
 --- a/src-tauri/src/local_cli.rs
 +++ b/src-tauri/src/local_cli.rs
-@@ -138,7 +138,7 @@ const SUMMARIES: &[(&str, &str)] = &[
+@@ -138,11 +138,11 @@ const SUMMARIES: &[(&str, &str)] = &[
      ("reload", "Reload the browser tab's page."),
      ("wait", "Wait for an element, text, address, load state or script in the page."),
      ("eval", "Run a JavaScript expression in the page and print its value."),
 -    ("scroll", "Scroll the page up or down."),
 +    ("scroll", "Scroll the page up, down, left or right."),
      ("snapshot", "List the page's elements with references the other commands take."),
-     ("screenshot", "Capture the visible page (refused in this build)."),
-     ("full-screenshot", "Capture the whole page (refused in this build)."),
+-    ("screenshot", "Capture the visible page (refused in this build)."),
+-    ("full-screenshot", "Capture the whole page (refused in this build)."),
+-    ("pdf", "Print the page to PDF (refused in this build)."),
++    ("screenshot", "Save a picture of the visible page to a file."),
++    ("full-screenshot", "Save a picture of the whole page to a file."),
++    ("pdf", "Print the page to a PDF file."),
+     ("click", "Click an element from the snapshot."),
+     ("dblclick", "Double-click an element from the snapshot."),
+     ("check", "Tick a checkbox or radio button."),
+@@ -159,7 +159,7 @@ const SUMMARIES: &[(&str, &str)] = &[
+     ("keypress", "Press a key in the page."),
+     ("drag", "Drag one element onto another."),
+     ("upload", "Put files into a file input."),
+-    ("download", "Save a link's file (refused in this build)."),
++    ("download", "Click an element and save the file it downloads."),
+     ("highlight", "Outline the elements a selector matches."),
+     ("find", "Find an element by role, text, label, placeholder or selector and act on it."),
+     ("get", "Read text, HTML, a value, the address, the title, a count or a box from the page."),
 @@ -188,6 +188,12 @@ const SUMMARIES: &[(&str, &str)] = &[
      ("storage get", "Read local or session storage of the open page."),
      ("storage set", "Write a key in local or session storage of the open page."),

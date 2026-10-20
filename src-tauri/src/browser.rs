@@ -1559,6 +1559,10 @@ pub enum Act<'a> {
     Relayout(u32, Option<f64>),
     /// T-251 (CLI-047): a cookie the page itself cannot set (HTTP-only) goes to the engine's store.
     SetCookie(u32, tauri::webview::cookie::Cookie<'static>),
+    /// T-251 (CLI-047): one DevTools call on the page's engine (a picture of the page).
+    DevTools(u32, &'a str, String),
+    /// T-251 (CLI-047): the engine prints the page to a PDF file at this path.
+    Pdf(u32, &'a str),
 }
 type Driver = dyn Fn(Act) -> Result<serde_json::Value, String> + Send + Sync;
 static DRIVER: OnceLock<Box<Driver>> = OnceLock::new();
@@ -1571,7 +1575,7 @@ fn driver() -> Result<&'static Driver, String> {
 fn drive(act: Act) -> Result<serde_json::Value, String> {
     let app = APP.get().ok_or("no browser tab has been opened yet")?;
     // T-179 (BROW-021): a page an agent drives is under agent control, never unloaded for a while.
-    if let Act::Eval(id, ..) | Act::Navigate(id, _) | Act::Go(id, _) | Act::Relayout(id, _) = act {
+    if let Act::Eval(id, ..) | Act::Navigate(id, _) | Act::Go(id, _) | Act::Relayout(id, _) | Act::DevTools(id, ..) | Act::Pdf(id, _) = act {
         preview::drivable(id)?; // T-159 (BROW-040): a preview is driven only once it has rendered
         session::drove(id);
     }
@@ -1647,7 +1651,31 @@ fn drive(act: Act) -> Result<serde_json::Value, String> {
             view(app, id)?.set_cookie(c).map_err(err)?;
             Ok(serde_json::Value::Null)
         }
+        Act::DevTools(id, method, params) => {
+            let text = engine::devtools(&view(app, id)?, method, params, CAPTURE_WAIT)?;
+            serde_json::from_str(&text).map_err(|_| "the page's engine answered with something that is not JSON".to_string())
+        }
+        Act::Pdf(id, path) => engine::print_pdf(&view(app, id)?, path, CAPTURE_WAIT).map(serde_json::Value::Bool),
     }
+}
+
+/// T-251 (CLI-047): how long a picture or a PDF of a page may take.
+const CAPTURE_WAIT: Duration = Duration::from_secs(30);
+
+/// `kolux screenshot|full-screenshot`: one DevTools call on the page's engine, its JSON answer.
+pub fn devtools(id: u32, method: &str, params: String) -> Result<serde_json::Value, String> {
+    driver()?(Act::DevTools(id, method, params))
+}
+
+/// `kolux pdf`: the engine prints the page to `path`; whether it succeeded.
+pub fn print_pdf(id: u32, path: &str) -> Result<bool, String> {
+    driver()?(Act::Pdf(id, path)).map(|v| v.as_bool().unwrap_or(false))
+}
+
+/// T-251 (CLI-047): where a capture goes when the command names no `--path`.
+pub fn captures_dir() -> Result<std::path::PathBuf, String> {
+    let app = APP.get().ok_or("no browser tab has been opened yet")?;
+    app.path().app_data_dir().map(|d| d.join("captures")).map_err(err)
 }
 
 /// `kolux viewport` / `kolux set device`: the page is laid out again at the emulated size and scale.

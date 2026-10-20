@@ -12,6 +12,7 @@
 use super::{eval_json, pick_tab, preview, profiles, same_dir, tabs, tell, Tab, EVAL_WAIT, NEXT_PROFILE};
 use crate::cli::{Fail, Request};
 use serde_json::{json, Map, Value};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub type Command = (&'static str, &'static str, &'static [&'static str]);
@@ -27,9 +28,9 @@ pub const COMMANDS: &[Command] = &[
     ("eval", "browser.eval", &["expression", "worktree", "page"]),
     ("scroll", "browser.scroll", &["direction", "amount", "worktree", "page"]),
     ("snapshot", "browser.snapshot", &["worktree", "page"]),
-    ("screenshot", "browser.screenshot", &["format", "worktree", "page"]),
-    ("full-screenshot", "browser.full-screenshot", &["format", "worktree", "page"]),
-    ("pdf", "browser.pdf", &["worktree", "page"]),
+    ("screenshot", "browser.screenshot", &["format", "path", "worktree", "page"]),
+    ("full-screenshot", "browser.full-screenshot", &["format", "path", "worktree", "page"]),
+    ("pdf", "browser.pdf", &["path", "worktree", "page"]),
     ("click", "browser.click", &["element", "worktree", "page"]),
     ("dblclick", "browser.dblclick", &["element", "worktree", "page"]),
     ("check", "browser.check", &["element", "worktree", "page"]),
@@ -138,16 +139,6 @@ pub const LOG_DEFAULT: usize = 100;
 const CAPTURE_MAX: usize = 2000;
 const COLOR_SCHEMES: &[&str] = &["dark", "light"];
 const MOTIONS: &[&str] = &["reduce", "no-preference"];
-
-/// The commands that need the engine's picture or printer. Tauri's public API has no page capture
-/// or print on Windows (that is WebView2's CapturePreview / PrintToPdf, reached only through the
-/// webview2-com crate, not a dependency of this build), so they are refused with a clear message.
-const UNSUPPORTED: &[(&str, &str)] = &[
-    ("browser.screenshot", "screenshot needs the engine's page capture, which this build does not reach; use snapshot for the page's content"),
-    ("browser.full-screenshot", "full-screenshot needs the engine's page capture, which this build does not reach; use snapshot for the page's content"),
-    ("browser.pdf", "pdf needs the engine's printer, which this build does not reach"),
-    ("browser.download", "download needs the engine's download handler, which this build does not reach; the page's own link can still be clicked"),
-];
 
 /// Reference-based element commands (BROW-047).
 const ELEMENT: &[&str] = &["browser.click", "browser.dblclick", "browser.check", "browser.uncheck", "browser.focus", "browser.clear", "browser.select-all", "browser.hover", "browser.scrollintoview"];
@@ -617,12 +608,10 @@ fn exec(req: &Request, worktree: Option<&str>, line: &str) -> Result<Value, Fail
     run(&inner, worktree)
 }
 
-/// What stands between a request and the page: a command this build cannot do, then the tab it
-/// goes to (BROW-042). Pure, so it is tested without the app.
-pub fn gate(command: &str, page_no: Option<u32>, worktree: Option<&str>, tabs: &[super::Tab]) -> Result<u32, Fail> {
-    if let Some((_, why)) = UNSUPPORTED.iter().find(|(c, _)| *c == command) {
-        return Err(Fail { code: "unsupported", message: (*why).to_string(), data: Value::Null });
-    }
+/// What stands between a request and the page: the tab it goes to (BROW-042). Pure, so it is
+/// tested without the app. Every command reaches the page since the capture, print and download
+/// commands went to the engine (T-251).
+pub fn gate(_command: &str, page_no: Option<u32>, worktree: Option<&str>, tabs: &[super::Tab]) -> Result<u32, Fail> {
     pick_tab(tabs, page_no, worktree).map_err(|m| Fail { code: "not_found", message: m, data: json!({ "hint": "open a browser tab in the worktree (Ctrl+T, Browser) or name one with --page <n>" }) })
 }
 
@@ -975,6 +964,8 @@ pub fn run(req: &Request, worktree: Option<&str>) -> Result<Value, Fail> {
             answer["destructive"] = json!(true);
             Ok(answer)
         }
+        "browser.screenshot" | "browser.full-screenshot" | "browser.pdf" => capture(id, cmd, a, worktree, &req.cwd),
+        "browser.download" => download(id, a, worktree, &req.cwd),
         "browser.upload" => {
             let files = files_of(&text("files").unwrap_or_default())?;
             let mut answer = page(id, cmd, json!({ "element": a["element"], "files": files }), EVAL_WAIT)?;
@@ -986,6 +977,115 @@ pub fn run(req: &Request, worktree: Option<&str>) -> Result<Value, Fail> {
             answer["page"] = json!(id);
             Ok(answer)
         }
+    }
+}
+
+/// T-251 (CLI-047): where a capture or a download is written. `--path` must sit inside the
+/// worktree (the caller's folder when it is in none), by the same rule as `kolux file`; without it
+/// a capture goes to `fallback` (the app's captures folder). A file is never overwritten: a taken
+/// name gets a number, as downloads do, and the name is made safe the same way.
+pub fn out_path(worktree: Option<&str>, cwd: &str, given: Option<&str>, fallback: &Path, name: &str) -> Result<PathBuf, Fail> {
+    let (dir, file) = match given {
+        Some(g) => {
+            let root = worktree.unwrap_or(cwd);
+            let full = Path::new(root).join(crate::cli::file_cli::inside(root, cwd, g)?);
+            let file = full.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            (full.parent().map(Path::to_path_buf).unwrap_or_default(), file)
+        }
+        None => (fallback.to_path_buf(), name.to_string()),
+    };
+    std::fs::create_dir_all(&dir).map_err(|e| Fail::new("failed", format!("{}: {e}", dir.display())))?;
+    super::downloads::place(&dir, &file, &[]).map_err(|m| Fail::new("failed", m))
+}
+
+/// The largest side, in pixels, a whole-page picture is taken at (the engine's own limit).
+const PICTURE_MAX: f64 = 16384.0;
+
+/// The DevTools parameters for a picture: the visible page, or, given the page's layout metrics,
+/// the whole page.
+pub fn shot_params(format: &str, whole: Option<&Value>) -> String {
+    let mut p = json!({ "format": format, "fromSurface": true });
+    if let Some(m) = whole {
+        let size = if m["cssContentSize"].is_object() { &m["cssContentSize"] } else { &m["contentSize"] };
+        let side = |k: &str| size[k].as_f64().unwrap_or(0.0).clamp(1.0, PICTURE_MAX);
+        p["captureBeyondViewport"] = json!(true);
+        p["clip"] = json!({ "x": 0, "y": 0, "width": side("width"), "height": side("height"), "scale": 1 });
+    }
+    p.to_string()
+}
+
+/// The picture's bytes from the engine's base64 answer, so sizes are reported decoded.
+pub fn picture(answer: &Value) -> Result<Vec<u8>, Fail> {
+    use base64::Engine as _;
+    let data = answer["data"].as_str().filter(|d| !d.is_empty()).ok_or_else(|| Fail::new("failed", "the page's engine sent no picture"))?;
+    base64::engine::general_purpose::STANDARD.decode(data).map_err(|_| Fail::new("failed", "the page's engine sent a picture that is not base64"))
+}
+
+/// `kolux screenshot|full-screenshot|pdf`: the engine's picture or PDF of the page, written to a
+/// file; the answer names the file and its size in bytes.
+fn capture(id: u32, cmd: &str, a: &Value, worktree: Option<&str>, cwd: &str) -> Result<Value, Fail> {
+    let failed = |m: String| Fail::new("failed", m);
+    let format = a["format"].as_str().map(str::trim).filter(|f| !f.is_empty()).unwrap_or("png");
+    let ext = match cmd {
+        "pdf" => "pdf",
+        _ if format == "jpeg" => "jpg",
+        _ => "png",
+    };
+    let given = a["path"].as_str().map(str::trim).filter(|p| !p.is_empty());
+    let fallback = if given.is_none() { super::captures_dir().map_err(failed)? } else { PathBuf::new() };
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let path = out_path(worktree, cwd, given, &fallback, &format!("page-{id}-{cmd}-{stamp}.{ext}"))?;
+    let shown = path.display().to_string();
+    let bytes = if cmd == "pdf" {
+        if !super::print_pdf(id, &shown).map_err(failed)? {
+            return Err(failed(format!("the engine could not print page {id}")));
+        }
+        std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+    } else {
+        let whole = if cmd == "full-screenshot" { Some(super::devtools(id, "Page.getLayoutMetrics", "{}".into()).map_err(failed)?) } else { None };
+        let data = picture(&super::devtools(id, "Page.captureScreenshot", shot_params(format, whole.as_ref())).map_err(failed)?)?;
+        std::fs::write(&path, &data).map_err(|e| failed(format!("{shown}: {e}")))?;
+        data.len() as u64
+    };
+    let what = match cmd {
+        "pdf" => "PDF",
+        "full-screenshot" => "whole-page picture",
+        _ => "picture",
+    };
+    Ok(json!({ "page": id, "path": shown, "bytes": bytes, "format": ext, "summary": format!("{what} of page {id} written to {shown} ({bytes} bytes)") }))
+}
+
+/// How long `kolux download` watches a started download before it answers "still downloading".
+const DOWNLOAD_WAIT: Duration = Duration::from_secs(120);
+
+/// `kolux download`: the tab's next download is armed to the confined path, the element is
+/// clicked, and the download is watched until it ends (or DOWNLOAD_WAIT passes).
+fn download(id: u32, a: &Value, worktree: Option<&str>, cwd: &str) -> Result<Value, Fail> {
+    use super::downloads::{self, State};
+    let given = a["path"].as_str().map(str::trim).filter(|p| !p.is_empty()).ok_or_else(|| args("--path is required"))?;
+    let path = out_path(worktree, cwd, Some(given), Path::new(""), "")?;
+    downloads::arm(id, path.clone());
+    if let Err(f) = page(id, "find", json!({ "locator": "selector", "value": a["selector"], "action": "click" }), EVAL_WAIT) {
+        downloads::disarm(id);
+        return Err(f);
+    }
+    let shown = path.display().to_string();
+    let started = Instant::now();
+    loop {
+        match downloads::state_of(&path) {
+            Some((State::Done, bytes)) => return Ok(json!({ "page": id, "path": shown, "bytes": bytes, "summary": format!("downloaded {bytes} bytes to {shown}") })),
+            Some((State::Running, bytes)) if started.elapsed() >= DOWNLOAD_WAIT => {
+                return Ok(json!({ "page": id, "path": shown, "bytes": bytes, "running": true, "summary": format!("still downloading to {shown} ({bytes} bytes so far); the browser pane shows when it ends") }))
+            }
+            Some((State::Running, _)) => {}
+            Some((state, _)) => return Err(Fail::new("failed", format!("the download to {shown} {}", if state == State::Cancelled { "was cancelled" } else { "failed" }))),
+            None if started.elapsed() >= downloads::ARM_FOR => {
+                downloads::disarm(id);
+                return Err(Fail::new("failed", format!("clicking {} started no download within {} s", a["selector"], downloads::ARM_FOR.as_secs())));
+            }
+            None => {}
+        }
+        std::thread::sleep(Duration::from_millis(200));
     }
 }
 
@@ -1495,12 +1595,51 @@ mod tests {
     }
 
     #[test]
-    fn capture_and_print_commands_say_why_they_are_refused() {
+    fn cli047_capture_print_and_download_reach_the_page_instead_of_being_refused() {
         for c in ["browser.screenshot", "browser.full-screenshot", "browser.pdf", "browser.download"] {
             let f = gate(c, Some(1), None, &[]).unwrap_err();
-            assert_eq!(f.code, "unsupported", "{c}");
-            assert!(f.message.contains("this build does not reach"), "{c}: {}", f.message);
+            assert_eq!(f.code, "not_found", "{c}: only a missing tab stops it");
         }
+        let tabs = [super::super::Tab { id: 4, worktree: None, shown: true, seen: 1, url: String::new(), title: String::new() }];
+        assert_eq!(gate("browser.screenshot", Some(4), None, &tabs).unwrap(), 4);
+        assert!(check("browser.pdf", &flags(&[("path", "out/page.pdf")])).is_ok());
+        assert_eq!(check("browser.download", &flags(&[("selector", "a.zip")])).unwrap_err().message, "--path is required");
+    }
+
+    #[test]
+    fn cli047_capture_paths_stay_inside_the_worktree_and_never_overwrite() {
+        let root = std::env::temp_dir().join(format!("kx-cli047-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let wt = root.join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let w = wt.to_string_lossy().replace('\\', "/");
+        let p = out_path(Some(&w), &w, Some("shots/a.png"), Path::new(""), "").unwrap();
+        assert_eq!(p, wt.join("shots").join("a.png"));
+        assert!(wt.join("shots").is_dir(), "the folder is made");
+        std::fs::write(&p, b"x").unwrap();
+        assert_eq!(out_path(Some(&w), &w, Some("shots/a.png"), Path::new(""), "").unwrap(), wt.join("shots").join("a (2).png"));
+        assert_eq!(out_path(Some(&w), &w, Some("../escape.png"), Path::new(""), "").unwrap_err().code, "outside");
+        assert_eq!(out_path(Some(&w), &w, Some("C:/Windows/x.png"), Path::new(""), "").unwrap_err().code, "outside");
+        assert_eq!(out_path(Some(&w), &w, Some("."), Path::new(""), "").unwrap_err().code, "not_a_file");
+        let caps = root.join("captures");
+        assert_eq!(out_path(Some(&w), &w, None, &caps, "page-1-screenshot-9.png").unwrap(), caps.join("page-1-screenshot-9.png"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cli047_pictures_are_the_visible_page_or_the_whole_layout_and_sizes_are_decoded_bytes() {
+        let v: Value = serde_json::from_str(&shot_params("jpeg", None)).unwrap();
+        assert_eq!(v, json!({ "format": "jpeg", "fromSurface": true }));
+        let m = json!({ "cssContentSize": { "x": 0, "y": 0, "width": 1280.0, "height": 99999.0 }, "contentSize": { "width": 1.0, "height": 1.0 } });
+        let v: Value = serde_json::from_str(&shot_params("png", Some(&m))).unwrap();
+        assert_eq!(v["captureBeyondViewport"], json!(true));
+        assert_eq!(v["clip"], json!({ "x": 0, "y": 0, "width": 1280.0, "height": PICTURE_MAX, "scale": 1 }));
+        let old = json!({ "contentSize": { "width": 800.0, "height": 2000.0 } });
+        let v: Value = serde_json::from_str(&shot_params("png", Some(&old))).unwrap();
+        assert_eq!(v["clip"]["height"], json!(2000.0));
+        assert_eq!(picture(&json!({ "data": "iVBORw0KGgo=" })).unwrap().len(), 8, "8 decoded bytes, not 12 base64 characters");
+        assert_eq!(picture(&json!({})).unwrap_err().code, "failed");
+        assert!(picture(&json!({ "data": "not base64!" })).unwrap_err().message.contains("not base64"));
     }
 
     #[test]
