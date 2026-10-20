@@ -28,6 +28,7 @@ import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import SettingsPage from "./settings/SettingsPage";
 import Ask from "./chrome/Ask";
 import TrustPrompt, { trustedSetup } from "./setup/TrustPrompt";
+import { bulkRefusal, settleSetups, setupMode, type NewPlace } from "./launch/launchOrder";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { losable, quitQuestion, runningAgents, type Losable } from "./shell/closeAsk";
 import { returnTab, type Which } from "./terminal/tabClose";
@@ -171,6 +172,7 @@ import { AgentsChat } from "./chat/ChatView";
 import { answeredElsewhere } from "./chat/ask";
 import { fileJump, linksOpenInKolux } from "./chat/chatLinks";
 import { useTeamsHost, withTeams } from "./launch/teams";
+import { deliverPrompt, startWatch } from "./launch/startWatch";
 import { answered as cardAnswered, hearStates, hearingNow, holdFor, outcomeNote, pasteToPane, setHooksOn, writeTerminal } from "./chat/send";
 import { copyPrompt, hooksAbsent, kitTickEntry, kitWait, noticeSeen, sendPrompt } from "./chat/kitPrompt";
 import { KitPromptNotices } from "./chat/KitNotice";
@@ -1175,6 +1177,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // rules block and a handoff note made before it starts (SESS-025), in the project's main checkout
   // (or the chooser's folder outside any project), named after its worktree, or after the folder
   // and its seat number when the seats share one folder.
+  // SESS-005 (T-163): every shown agent pane is watched for a terminal process from the moment it
+  // is shown; onPty marks it seen, and a pane with none after five seconds gets a warning toast.
+  useEffect(() => {
+    const here = panesIn(panes, activeDir).filter((p) => p.agentId && p.program && !p.seats && !p.kind);
+    startWatch.prune(here.map((p) => p.key));
+    for (const p of here) startWatch.arm(p.key, agents.find((a) => a.id === p.agentId)?.name ?? String(p.agentId), setToast);
+  }, [panes, activeDir, agents]);
   const startSeats = async (key: number, seats: Seat[]) => {
     const chooser = panes.find((p) => p.key === key) ?? (sheet?.key === key ? sheet : undefined);
     if (!chooser) return;
@@ -1186,9 +1195,19 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       if (missing) throw new Error(`${missing.agent} is not installed.`);
       const separate = inGitFor(chooser) && (chooser.copies ?? defaultCopies(seats.length, inGitFor(chooser))) === "separate";
       const pid = projectOf(chooser.cwd) ?? projectFor(null);
+      // SESS-026 (T-150): a launch that makes new workspaces settles their setup before any agent
+      // starts, and is refused before anything is made when the project asks about setup each time.
+      const proj = projects.find((p) => p.id === pid);
+      const makes = picked.some(Boolean) && (separate || chooser.cwd === null);
+      const repo = makes && proj ? await invoke<{ mode?: string; wait?: boolean }>("repo_setup_get", { path: proj.path }).catch(() => null) : null;
+      const refused = bulkRefusal(proj?.name ?? "This project", setupMode(repo?.mode), makes);
+      if (refused) throw new Error(refused);
+      const madeNew: NewPlace[] = [];
+      const setupTrouble: string[] = [];
       const fresh = async (): Promise<{ cwd: string; branch: string | null }> => {
         if (!pid) throw new Error("Add a project first: an agent needs a project folder to work in.");
         const wt = await invoke<Worktree>("workspace_create_fresh", { projectId: pid });
+        madeNew.push({ cwd: wt.path, branch: wt.branch });
         return { cwd: wt.path, branch: wt.branch };
       };
       const places: { cwd: string | null; branch: string | null }[] = [];
@@ -1199,6 +1218,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         else places.push((shared ??= chooser.cwd === null ? await fresh() : { cwd: chooser.cwd, branch: chooser.branch }));
       }
       const batch = key;
+      await settleSetups(madeNew, setupMode(repo?.mode), repo?.wait === true, {
+        line: (dir) => trustedSetup(dir),
+        open: (dir, branch, line, where) => new Promise<void>((done) => startSetup(dir, branch, line, where, false, () => done())),
+        say: (m) => setupTrouble.push(m),
+      });
       for (const id of new Set(picked.flatMap((a) => (a ? [a.id] : [])))) await pretrust(id, picked.map((a, i) => (a?.id === id ? places[i].cwd : null)));
       // SESS-051: each agent's start line comes from the catalogue, prompt route included; a
       // refused line (Hermes past its limit) stops the whole Start before any pane is made.
@@ -1237,7 +1261,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       setActiveDir(made[0].cwd);
       setFocused(made[0].key);
       setRefresh((n) => n + 1);
-      setNotice(null);
+      setNotice(setupTrouble.length ? setupTrouble.join(" ") : null);
     } catch (err) {
       setNotice(String(err));
     } finally {
@@ -1561,11 +1585,12 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         return;
       }
       const a = p.agent ? agents.find((x) => x.id === p.agent) : undefined;
-      if (a) void cli.current.startIn(a, p.worktree.path, p.worktree.branch, p.prompt, p.activate);
-      else if (p.activate) cli.current.select(p.worktree.path, p.worktree.branch);
       // PROJ-033: a workspace made from the command line runs its setup script in a background tab
-      // unless it was told to skip it.
-      if (p.setup !== "skip") void cli.current.runSetup(p.worktree.path, p.worktree.branch);
+      // unless it was told to skip it. SESS-026 (T-150): the setup settles (asked, opened or said
+      // why not) before its agent starts.
+      const setup = p.setup !== "skip" ? cli.current.runSetup(p.worktree.path, p.worktree.branch) : Promise.resolve();
+      if (a) void setup.then(() => cli.current.startIn(a, p.worktree.path, p.worktree.branch, p.prompt, p.activate));
+      else if (p.activate) cli.current.select(p.worktree.path, p.worktree.branch);
     });
     return () => {
       off.then((f) => f()).catch(() => undefined);
@@ -1748,6 +1773,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // the workspace's empty placeholder.
   // SESS-024: a pane whose session failed to start goes away, with the reason in a toast.
   const failedPane = (key: number, error: string) => {
+    startWatch.seen(key); // SESS-005: its own toast says why; no five-second warning on top
     const ask = panes.find((p) => p.key === key)?.ask;
     if (ask) cliFailed.current[ask] = error;
     const { panes: rest, batchEmpty } = withoutFailed(panes, key);
@@ -2982,6 +3008,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     unread={unreadPanes.has(p.key)}
                     onPty={(id, account) => {
                       ptys.current[p.key] = id;
+                      startWatch.seen(p.key);
+                      // SESS-032 (T-163): an agent's opening prompt is handed over by Rust exactly once; a
+                      // prompt that does not go in is said in a toast.
+                      if (p.typed && p.agent !== "shell") void deliverPrompt(invoke, id, p.typed, agents.find((a) => a.id === p.agentId)?.name ?? p.agent).then((lost) => lost && setToast(lost));
                       report.current();
                       if (p.batch !== undefined && p.agent !== "shell") rememberLineup(p.batch);
                       // ACCT-023: a Codex pane remembers the account it began on.

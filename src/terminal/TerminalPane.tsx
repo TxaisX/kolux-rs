@@ -609,7 +609,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     const wrapped = agent === "shell" && printsMarks(shellName);
     const scanner = new Scanner();
     const gate = new Gate(wrapped);
-    const startup = new Startup(typed, wrapped);
+    // SESS-032 (T-163): an agent pane's opening prompt is handed over by Rust exactly once
+    // (agent_prompt_send, from App.tsx's onPty); only a shell pane types its startup command here.
+    const startup = new Startup(agent === "shell" ? typed : undefined, wrapped);
     let identityNow: Identity = IDLE;
     const noteIdentity = (next: Identity) => {
       if (next === identityNow) return;
