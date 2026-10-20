@@ -1,0 +1,18 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 4d39a6bb..94c56033 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -572,6 +572,13 @@ pub fn run() {
+             skills::skills_scan,
+             skill_delete::skills_delete_plan,
+             skill_delete::skills_delete,
++            skills::update::skills_update_check,
++            skills::update::skills_update_dismiss,
++            skills::update::skills_update_start,
++            skills::update::skills_update_stop,
++            skills::update::skills_update_status,
++            skills::update::skills_update_clear,
++            skills::installer::skills_install_command,
+             skills::skills_reveal,
+             files::open_in,
+             files::file_list,

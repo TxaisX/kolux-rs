@@ -8,6 +8,8 @@
 //! becomes an error the user can retry, never a shorter list. When the open project lives in a WSL
 //! distribution, that distribution's skill folders are read too, through `wsl::Runner` (T-243-b).
 
+pub mod installer;
+pub mod update;
 mod wsl;
 
 use serde::Serialize;
