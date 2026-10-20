@@ -783,6 +783,19 @@ struct ExitPayload {
     outcome: &'static str,
 }
 
+/// Terminal `id` ended, however: it exited, its pane closed, or (USAGE-011, T-067-b) the
+/// connection to the background terminal service that carried it was lost, which runs every
+/// carried pane's exit with no code. Any turn its panes had open ends in the activity counts, once:
+/// a status the same terminal repeats after a reconnect starts nothing.
+pub(crate) fn turns_end(id: u32) {
+    crate::activity::terminal_ended(id);
+    // TERM-122: after activity has closed its spells, the panes' sessions go with the
+    // terminal, so a closed pane, or an agent that was the pane's own program and
+    // exited or crashed, never keeps the computer awake (an agent typed into a shell
+    // pane ends with the shell, not with the agent).
+    crate::status::terminal_ended(id);
+}
+
 /// ORCH-057: how a session's end reads to its viewers.
 fn outcome_of(code: Option<u32>) -> &'static str {
     if code.is_some() {
@@ -1036,12 +1049,7 @@ impl Terminals {
                         f.release();
                     }
                 }
-                crate::activity::terminal_ended(id);
-                // TERM-122: after activity has closed its spells, the panes' sessions go with the
-                // terminal, so a closed pane, or an agent that was the pane's own program and
-                // exited or crashed, never keeps the computer awake (an agent typed into a shell
-                // pane ends with the shell, not with the agent).
-                crate::status::terminal_ended(id);
+                turns_end(id);
                 // AUTO-012: an automation run followed in this pane is over with it.
                 crate::automations::follow(&exit_app, |s| {
                     let run = crate::automations::pane_ended(s, id, code, crate::automations::now_ms())?;

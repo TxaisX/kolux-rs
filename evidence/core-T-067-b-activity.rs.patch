@@ -1,0 +1,53 @@
+diff --git a/src-tauri/src/activity.rs b/src-tauri/src/activity.rs
+index 5e3d29a7..ffde1605 100644
+--- a/src-tauri/src/activity.rs
++++ b/src-tauri/src/activity.rs
+@@ -384,6 +384,48 @@ pub fn activity_touch(store: StoreState<'_>, path: String) -> Result<(), String>
+ mod tests {
+     use super::*;
+ 
++    /// T-067-b (USAGE-011): losing the connection to the background terminal service ends the open
++    /// turn of every pane that connection carried, through the same end a closed pane takes, once;
++    /// the same status repeated after a reconnect starts nothing. Another pane's turn stays open.
++    #[test]
++    fn t067b_a_lost_service_connection_ends_the_open_turn_of_each_pane_it_carried_once() {
++        use std::sync::atomic::{AtomicU32, Ordering};
++        use std::sync::Arc;
++        const PANE: u32 = 967_101;
++        const OTHER: u32 = 967_102;
++        const TERM: u32 = 967_201;
++        const LOCAL: u32 = 967_202;
++        let (link, cut) = crate::pty::link::tests::losable_link(&[3]);
++        let ends = Arc::new(AtomicU32::new(0));
++        let e = ends.clone();
++        link.register(3, Box::new(|_: &[u8]| {}), Box::new(move |code| {
++            assert_eq!(code, None, "a lost connection says nothing of how the terminal ended");
++            e.fetch_add(1, Ordering::SeqCst);
++            crate::terminal::turns_end(TERM); // the exit every pane's handler runs
++        }));
++        link.flush(3);
++        let go = serde_json::json!({ "hook_event_name": "UserPromptSubmit", "prompt": "go" });
++        crate::status::report(PANE, Some(TERM), crate::status::Agent::Claude, &go);
++        crate::status::report(OTHER, Some(LOCAL), crate::status::Agent::Claude, &go);
++        let lane = |p: u32| with(|a| (a.open.get(&p).map(|o| o.turn), a.tracks.get(&p).map(|t| t.ended.is_some())));
++        assert_eq!((lane(PANE), lane(OTHER)), ((Some(true), Some(false)), (Some(true), Some(false))), "both turns open");
++        cut.send(()).unwrap();
++        let t0 = std::time::Instant::now();
++        while ends.load(Ordering::SeqCst) == 0 && t0.elapsed() < std::time::Duration::from_secs(15) {
++            std::thread::sleep(std::time::Duration::from_millis(20));
++        }
++        assert!(!link.alive());
++        assert_eq!(lane(PANE), (None, Some(true)), "the carried pane's turn ended with the connection");
++        assert_eq!(lane(OTHER), (Some(true), Some(false)), "a pane the connection did not carry keeps its turn");
++        // The same status again (a reconnect re-sending it) neither reopens the lane nor starts a turn.
++        crate::status::report(PANE, Some(TERM), crate::status::Agent::Claude, &go);
++        assert_eq!(lane(PANE), (None, Some(true)));
++        assert_eq!(crate::status::state_of(TERM), None);
++        assert_eq!(ends.load(Ordering::SeqCst), 1, "the end ran once");
++        crate::terminal::turns_end(LOCAL);
++        assert_eq!(lane(OTHER).0, None);
++    }
++
+     #[test]
+     fn view013_each_pane_keeps_its_state_changes_for_the_floor_and_old_ones_go() {
+         let mut a = Activity::load(None, 1);

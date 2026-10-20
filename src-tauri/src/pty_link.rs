@@ -496,6 +496,29 @@ pub(crate) mod tests {
         Link::connect(r.ep.clone(), Client::connect(&r.ep, Duration::from_secs(10)).unwrap()).unwrap()
     }
 
+    /// T-067-b: a link to a stand-in service that carries terminals `ids` and drops the connection
+    /// when the returned sender is used (or dropped); nothing in it ever exits by itself.
+    pub(crate) fn losable_link(ids: &[u32]) -> (Arc<Link>, std::sync::mpsc::Sender<()>) {
+        use std::io::{BufRead, BufReader};
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let ep = Endpoint { port: listener.local_addr().unwrap().port(), token: "t".into(), pid: 1, generation: 5, protocol: PROTOCOL };
+        let rows: Vec<Value> = ids.iter().map(|id| json!({ "id": id, "pid": null, "program": "x", "seq": 0, "data": "" })).collect();
+        let (cut, gate) = std::sync::mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut out = stream.try_clone().unwrap();
+            let mut lines = BufReader::new(stream).lines();
+            let _hello = lines.next();
+            writeln!(out, "{}", json!({ "ok": true, "result": { "generation": 5, "protocol": PROTOCOL, "pid": 1 } })).unwrap();
+            let attach: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+            writeln!(out, "{}", json!({ "re": attach["re"], "ok": true, "result": { "terminals": rows, "generation": 5 } })).unwrap();
+            let _ = gate.recv();
+            let _ = out.shutdown(std::net::Shutdown::Both);
+        });
+        let (l, _) = Link::connect(ep.clone(), Client::connect(&ep, Duration::from_secs(10)).unwrap()).unwrap();
+        (l, cut)
+    }
+
     /// A window pane: collects what it is handed and answers the console's cursor question.
     /// How a pane ended: None while it runs, then its exit code (None when unknown).
     type Ended = Arc<Mutex<Option<Option<u32>>>>;
