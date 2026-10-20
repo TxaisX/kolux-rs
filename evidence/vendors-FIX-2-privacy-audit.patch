@@ -1,0 +1,41 @@
+diff --git a/scripts/privacy-audit.test.mjs b/scripts/privacy-audit.test.mjs
+index ec90898e..feb25acc 100644
+--- a/scripts/privacy-audit.test.mjs
++++ b/scripts/privacy-audit.test.mjs
+@@ -15,13 +15,17 @@ const walk = (dir, out = []) => {
+   return out;
+ };
+ 
+-const CLIENTS = [/\bfetch\(\s*["'`]https?:/, /XMLHttpRequest/, /sendBeacon/, /new WebSocket\(/, /\breqwest::/, /tauri_plugin_updater/, /\bureq::/, /\bhyper::/, /TcpStream::connect/];
++// http.request and urllib.request: the clients of the Pi extension and the Hermes plugin that agent_hooks writes as text
++// (council FIX-SOON 2, vendors lane FIX-2).
++const CLIENTS = [/\bfetch\(\s*["'`]https?:/, /XMLHttpRequest/, /sendBeacon/, /new WebSocket\(/, /\breqwest::/, /tauri_plugin_updater/, /\bureq::/, /\bhyper::/, /TcpStream::connect/, /\bhttp\.request\(/, /\burllib\.request\b/];
+ const ALLOWED = {
+   "src-tauri/src/artifacts.rs": [/\breqwest::/], // the script CDNs, when saving an artifact for offline use
+   "src-tauri/src/browser.rs": [/\breqwest::/], // the open page's own site icon (APP-070: sites the user opens in the browser pane)
+   "src-tauri/src/update.rs": [/tauri_plugin_updater/], // GitHub Releases
+   "src-tauri/src/lib.rs": [/tauri_plugin_updater/],
+   "src-tauri/src/cli.rs": [/TcpStream::connect/], // kolux-dev talking to the app on 127.0.0.1
++  "src-tauri/src/agent_hooks/vendors_more.rs": [/\bhttp\.request\(/, /\burllib\.request\b/], // the Pi extension and the Hermes plugin posting to Kolux on 127.0.0.1, pinned below
++  "src-tauri/src/agent_hooks/vendors_more_tests.rs": [/\bhttp\.request\(/, /\burllib\.request\b/], // the tests that pin those two scripts' text; compiled under cfg(test) only, never shipped
+ };
+ // The one loopback call each file may make, as exact text: it is cut out before the scan, so any
+ // other fetch in the same file is still caught (an ALLOWED entry would pass the whole file).
+@@ -40,6 +44,17 @@ const PINNED = {
+     [/\breqwest::/g, 11],
+     [/\bicon_client_for\b/g, 4],
+   ],
++  // vendors_more.rs (council FIX-SOON 2): the Pi extension posts once through node:http with the host fixed at 127.0.0.1 and its
++  // own agent (never http.globalAgent, which NODE_USE_ENV_PROXY points at a proxy), and the Hermes plugin posts once through an
++  // urllib opener with no proxies and no redirects; every other spelling of either client moves a count and fails the audit.
++  "src-tauri/src/agent_hooks/vendors_more.rs": [
++    ['http.request({ host: "127.0.0.1", port: Number(port), path: "/pi", method: "POST", agent: false,', 1],
++    [/\bhttp\.request\(/g, 1],
++    ['"http://127.0.0.1:%s/hermes" % port', 1],
++    ["urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect()).open(req, timeout=1.5)", 1],
++    // the import, the redirect handler's base class, Request, build_opener and ProxyHandler: a second urllib call moves this
++    [/\burllib\.request\b/g, 5],
++  ],
+ };
+ const EXACT = {
+   "src-tauri/src/agent_hooks/vendors.rs": /\bfetch\(`http:\/\/127\.0\.0\.1:\$\{port\}\/amp`/g, // the Amp status plugin posting to Kolux on 127.0.0.1

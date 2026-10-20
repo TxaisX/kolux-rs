@@ -6,7 +6,8 @@
 //! `vendors::change`); nothing here answers for the agent except where its doc says a hook must.
 //!
 //! - Cursor: `~/.cursor/hooks.json`, `{"version": 1, "hooks": {event: [{command, timeout}]}}`;
-//!   `beforeSubmitPrompt` is answered "continue", the three before-tool events "allow".
+//!   `beforeSubmitPrompt` is answered "continue"; its three permission hooks are never installed,
+//!   so Kolux never answers one (FIX-2).
 //! - Droid: `~/.factory/settings.json`, `hooks` groups like Claude Code's.
 //! - Command Code: `~/.commandcode/settings.json`, `hooks` groups like Claude Code's.
 //! - Kimi: `[[hooks]]` tables between Kolux marker lines in `~/.kimi-code/config.toml` (or under
@@ -29,7 +30,12 @@ pub const COMMAND_CODE_SCRIPT: &str = "command-code.cmd";
 pub const KIMI_SCRIPT: &str = "kimi.sh";
 /// The Hermes plugin folder's name.
 pub const HERMES_PLUGIN: &str = "kolux-status";
-pub const CURSOR_EVENTS: [&str; 8] = ["beforeSubmitPrompt", "stop", "preToolUse", "postToolUse", "postToolUseFailure", "beforeShellExecution", "beforeMCPExecution", "afterAgentResponse"];
+/// Cursor's state events only. Its permission hooks (`preToolUse`, `beforeShellExecution`,
+/// `beforeMCPExecution`) are never installed (council FIX-BEFORE 1, 2026-10-19): Cursor blocks the
+/// action on any answer outside their schema, and a hook with nothing to say still prints `{}`, so
+/// the one safe answer is to never be asked. They stay mapped in `normalize` for a file an older
+/// Kolux wrote; the next status-hooks on takes those entries out (`clear_unused`).
+pub const CURSOR_EVENTS: [&str; 5] = ["beforeSubmitPrompt", "stop", "postToolUse", "postToolUseFailure", "afterAgentResponse"];
 pub const DROID_EVENTS: [&str; 8] = ["SessionStart", "UserPromptSubmit", "Stop", "SubagentStop", "PreToolUse", "PostToolUse", "PermissionRequest", "Notification"];
 const DROID_TOOL_EVENTS: [&str; 3] = ["PreToolUse", "PostToolUse", "PermissionRequest"];
 pub const COMMAND_CODE_EVENTS: [&str; 3] = ["PreToolUse", "PostToolUse", "Stop"];
@@ -222,10 +228,9 @@ pub fn normalize(path: &str, event: &Value) -> Option<Value> {
 }
 
 /// What the hook prints back when the vendor's doc says it must answer (COMPAT 3.1): Cursor's
-/// `beforeSubmitPrompt` gets "continue"; everything else nothing. Its before-tool events are never
-/// answered (council FIX-SOON 4, 2026-10-19): Cursor's docs do not say whether "allow" skips its own
-/// approval prompt, and no output fails open there (failClosed is off by default), so Cursor asks as
-/// it would without Kolux and the pane's state comes from the events alone.
+/// `beforeSubmitPrompt` gets "continue"; everything else nothing (the listener then prints `{}`,
+/// which is why Cursor's permission hooks are not installed at all: see `CURSOR_EVENTS`). Cursor asks
+/// as it would without Kolux and the pane's state comes from the events alone.
 pub fn reply(path: &str, body: &[u8]) -> Option<String> {
     if agent_of(path)? != "cursor" {
         return None;
@@ -363,6 +368,14 @@ def _text(v, n=16000):
     return v[:n] if isinstance(v, str) else (v if isinstance(v, bool) else None)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    # Whatever holds the port, a 301/302/303/307/308 is never followed: the default handler would
+    # re-send the token and pane name to the Location target. None here leaves the 30x to the
+    # default error handler, which raises into _send's except.
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def _send(name, fields):
     env = os.environ
     if not env.get("KOLUX_PANE_KEY") or not env.get("KOLUX_HOOK_IDENTITY"):
@@ -381,14 +394,15 @@ def _send(name, fields):
         if not port or not token or not re.fullmatch(r"[0-9]{1,5}", port):
             raise RuntimeError("no Kolux")
         # Loopback only: the same hook listener the .cmd scripts post to with curl --noproxy, through
-        # an opener with no proxies at all, so neither HTTP_PROXY nor the system proxy sees a hook.
+        # an opener with no proxies at all, so neither HTTP_PROXY nor the system proxy sees a hook,
+        # and no redirects, so the token never leaves for a Location target.
         req = urllib.request.Request(
             "http://127.0.0.1:%s/hermes" % port,
             data=json.dumps(body).encode("utf-8"),
             headers={"Content-Type": "application/json", "X-Kolux-Token": token, "X-Kolux-Pane": env["KOLUX_HOOK_IDENTITY"]},
             method="POST",
         )
-        urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=1.5).read()
+        urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect()).open(req, timeout=1.5).read()
     except Exception:
         # Kolux is closed or not answering: the event waits, one whole line, for the next start.
         # A tool event is only worth its moment: it is never held. Only what the status needs is
@@ -871,7 +885,9 @@ fn home_var(v: Option<std::ffi::OsString>) -> Option<PathBuf> {
     v.filter(|v| !v.is_empty()).map(PathBuf::from)
 }
 
-/// The folder of a file Kolux just removed goes too when nothing else is in it (council AFTER 4).
+/// The folder of a file Kolux just removed goes too when nothing else is in it (council AFTER 4),
+/// whoever made the folder: `remove_dir` only ever removes an empty folder, so an empty `hooks` or
+/// `extensions` folder the user made by hand goes as well and nothing of theirs is lost with it.
 fn drop_empty_dir(file: &Path) {
     if let Some(dir) = file.parent() {
         let _ = fs::remove_dir(dir);
@@ -1199,19 +1215,23 @@ function send(event, fields) {
   try {
     [port, token] = fs.readFileSync(env.KOLUX_HOOK_ENDPOINT, "utf8").split(/\s+/);
   } catch {}
-  // A port that is not 1-5 digits is not Kolux's.
-  if (!/^\d{1,5}$/.test(port) || !token) return;
+  // A port that is not 1-5 digits, or above 65535 (http.request would throw), is not Kolux's.
+  if (!/^\d{1,5}$/.test(port) || Number(port) > 65535 || !token) return;
   const body = { event };
   for (const [k, v] of Object.entries(fields)) {
     if (typeof v === "string" && v) body[k] = v.slice(0, 16000);
   }
   const data = JSON.stringify(body);
-  // Loopback only: the same hook listener the .cmd scripts post to with curl --noproxy. node:http
-  // with the host fixed never reads a proxy variable, whatever runtime loads the extension.
-  const req = http.request({ host: "127.0.0.1", port: Number(port), path: "/pi", method: "POST", timeout: 1500, headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data), "X-Kolux-Token": token, "X-Kolux-Pane": env.KOLUX_HOOK_IDENTITY } }, (res) => res.resume());
-  req.on("timeout", () => req.destroy());
-  req.on("error", () => {});
-  req.end(data);
+  // Loopback only: the same hook listener the .cmd scripts post to with curl --noproxy. The host is
+  // fixed, and `agent: false` gives the request its own agent instead of http.globalAgent, which
+  // Node 24.5+ points at HTTP_PROXY when NODE_USE_ENV_PROXY=1 is set (Bun's node:http is unverified,
+  // so the same option applies there). Anything http.request throws stays here.
+  try {
+    const req = http.request({ host: "127.0.0.1", port: Number(port), path: "/pi", method: "POST", agent: false, timeout: 1500, headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data), "X-Kolux-Token": token, "X-Kolux-Pane": env.KOLUX_HOOK_IDENTITY } }, (res) => res.resume());
+    req.on("timeout", () => req.destroy());
+    req.on("error", () => {});
+    req.end(data);
+  } catch {}
 }
 
 export default function (pi) {

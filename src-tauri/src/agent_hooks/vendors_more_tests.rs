@@ -129,15 +129,24 @@ fn routes_agents_and_scripts() {
 fn fix_1_hermes_and_pi_post_on_loopback_past_any_proxy_with_a_digits_only_port() {
     // Council FIX-BEFORE 1: Python's default opener honours HTTP_PROXY and the Windows system proxy, 127.0.0.1 included.
     let py = hermes_plugin();
-    assert!(py.contains("urllib.request.build_opener(urllib.request.ProxyHandler({}))"), "an opener with no proxies at all");
+    assert!(py.contains("urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())"), "an opener with no proxies at all and no redirects: {py}");
     assert!(!py.contains("urlopen("), "never the default opener");
     assert!(py.contains("import re") && py.contains(r#"re.fullmatch(r"[0-9]{1,5}", port)"#), "a port that is not 1-5 digits is refused");
-    // Council FIX-SOON 3: fetch honours HTTP_PROXY under Bun, and under Node with NODE_USE_ENV_PROXY; node:http never
-    // does, and a port such as `1@host` can no longer turn 127.0.0.1 into userinfo.
+    // FIX-2 (council AFTER 1): build_opener's default HTTPRedirectHandler would re-send the token and pane name to a
+    // 301/302/303/307/308 Location target; a handler whose redirect_request returns None refuses every redirect.
+    assert!(py.contains("class _NoRedirect(urllib.request.HTTPRedirectHandler):"), "{py}");
+    assert!(py.contains("    def redirect_request(self, req, fp, code, msg, headers, newurl):\n        return None\n"), "{py}");
+    // Council FIX-SOON 3: fetch honours HTTP_PROXY under Bun, and under Node with NODE_USE_ENV_PROXY; a port such as
+    // `1@host` can no longer turn 127.0.0.1 into userinfo.
     let js = pi_extension();
     assert!(js.contains("import http from \"node:http\";"));
-    assert!(js.contains(r#"http.request({ host: "127.0.0.1", port: Number(port), path: "/pi", method: "POST""#), "{js}");
-    assert!(js.contains(r#"if (!/^\d{1,5}$/.test(port) || !token) return;"#), "{js}");
+    assert!(js.contains(r#"http.request({ host: "127.0.0.1", port: Number(port), path: "/pi", method: "POST", agent: false,"#), "{js}");
+    // FIX-2 (council FIX-SOON 1): from Node 24.5, NODE_USE_ENV_PROXY=1 points http.globalAgent at HTTP_PROXY, so the request
+    // gets its own agent (`agent: false`); a port of 65536-99999 passes the digits check but makes http.request throw
+    // ERR_SOCKET_BAD_PORT at once, so the bound is checked and the request sits in try/catch.
+    assert!(js.contains(r#"if (!/^\d{1,5}$/.test(port) || Number(port) > 65535 || !token) return;"#), "{js}");
+    assert!(js.contains("  try {\n    const req = http.request(") && js.contains("    req.end(data);\n  } catch {}\n"), "{js}");
+    assert_eq!(js.matches("http.request(").count(), 1, "one request, inside the try: {js}");
     assert!(!js.contains("fetch(") && !js.contains("http://"), "no fetch and no URL string to bend");
 }
 
@@ -163,10 +172,11 @@ fn stat_012_cursor_entries_sit_beside_the_users_and_leave_without_a_trace() {
     assert!(!install_cursor(&home, &file).unwrap(), "a second install changes nothing");
     let v = read(&file);
     assert_eq!(v["version"], 1);
-    assert_eq!(v["hooks"]["beforeShellExecution"][0]["command"], "./my-check.sh");
-    assert!(v["hooks"]["beforeShellExecution"][1]["command"].as_str().unwrap().ends_with("cursor.cmd"), "a flat entry, not a group: {v}");
+    // FIX-2: the user's permission hook stays alone; Kolux never adds one of its own there.
+    assert_eq!(v["hooks"]["beforeShellExecution"], json!([{"command":"./my-check.sh","timeout":5}]), "{v}");
+    assert!(v["hooks"]["stop"][0]["command"].as_str().unwrap().ends_with("cursor.cmd"), "a flat entry, not a group: {v}");
     assert_eq!(v["hooks"]["stop"][0]["timeout"], 10);
-    assert_eq!(v["hooks"].as_object().unwrap().len(), 8);
+    assert_eq!(v["hooks"].as_object().unwrap().len(), 6, "the user's beforeShellExecution and Kolux's five state events: {v}");
     assert_eq!(switch::inspect(&file, &CURSOR_EVENTS).0, "installed");
     assert!(remove_hooks(&home, &file).unwrap());
     assert_eq!(fs::read_to_string(&file).unwrap(), before, "byte for byte the user's file again");
@@ -181,6 +191,63 @@ fn stat_012_cursor_entries_sit_beside_the_users_and_leave_without_a_trace() {
     fs::write(&file, r#"{"hooks":{"stop":"no"}}"#).unwrap();
     assert!(install_cursor(&home, &file).unwrap_err().contains("left alone"));
     let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn fix_2_cursor_hooks_file_names_no_permission_event_and_an_older_file_loses_them() {
+    // Council FIX-BEFORE 1 (option 1): Cursor's permission hooks (preToolUse, beforeShellExecution, beforeMCPExecution) block
+    // the action on any answer outside their schema, and a hook meant to print nothing still printed `{}` on the wire. So
+    // Kolux never installs one: the pane's state comes from beforeSubmitPrompt, the two post-tool events, afterAgentResponse
+    // and stop, and Kolux never answers a permission hook.
+    const PERMISSION: [&str; 3] = ["preToolUse", "beforeShellExecution", "beforeMCPExecution"];
+    const STATE: [&str; 5] = ["afterAgentResponse", "beforeSubmitPrompt", "postToolUse", "postToolUseFailure", "stop"];
+    for e in PERMISSION {
+        assert!(!CURSOR_EVENTS.contains(&e), "{e} is a permission hook: never installed");
+    }
+    let home = scratch("cursor-fix2");
+    let file = cursor_file(&home);
+    assert!(install_cursor(&home, &file).unwrap());
+    let v = read(&file);
+    let mut keys: Vec<&str> = v["hooks"].as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, STATE, "the written file names the five state events and no permission event: {v}");
+    assert!(!install_cursor(&home, &file).unwrap(), "a second on changes nothing");
+    // A file FIX-1 wrote still carries Kolux under the three permission events, one of them beside the user's own entry:
+    // the next on takes the three out and leaves the user's entry alone.
+    let mine = v["hooks"]["stop"][0].clone();
+    assert!(mine["command"].as_str().unwrap().ends_with("cursor.cmd"), "{mine}");
+    let mut old = v.clone();
+    let hooks = old["hooks"].as_object_mut().unwrap();
+    hooks.insert("preToolUse".into(), json!([mine]));
+    hooks.insert("beforeMCPExecution".into(), json!([mine]));
+    hooks.insert("beforeShellExecution".into(), json!([{"command":"./my-check.sh","timeout":5}, mine]));
+    fs::write(&file, serde_json::to_string_pretty(&old).unwrap()).unwrap();
+    assert!(install_cursor(&home, &file).unwrap(), "the next on changes the FIX-1 file");
+    let v = read(&file);
+    assert!(v["hooks"].get("preToolUse").is_none() && v["hooks"].get("beforeMCPExecution").is_none(), "Kolux's permission entries are gone: {v}");
+    assert_eq!(v["hooks"]["beforeShellExecution"], json!([{"command":"./my-check.sh","timeout":5}]), "the user's own entry stays, alone: {v}");
+    for e in STATE {
+        assert!(v["hooks"][e].as_array().unwrap().iter().any(names_mine), "{e} still drives the dot: {v}");
+    }
+    assert_eq!(switch::inspect(&file, &CURSOR_EVENTS).0, "installed");
+    assert!(!install_cursor(&home, &file).unwrap());
+    // The same file with no user's entry: off takes every Kolux entry, the three included, and the file Kolux made goes.
+    let home2 = scratch("cursor-fix2-off");
+    let file2 = cursor_file(&home2);
+    assert!(install_cursor(&home2, &file2).unwrap());
+    let mut old = read(&file2);
+    for e in PERMISSION {
+        old["hooks"].as_object_mut().unwrap().insert(e.into(), json!([mine]));
+    }
+    fs::write(&file2, serde_json::to_string_pretty(&old).unwrap()).unwrap();
+    assert!(remove_hooks(&home2, &file2).unwrap());
+    assert!(!file2.exists(), "off leaves nothing of a file Kolux made, whatever events an older Kolux added");
+    // Whatever Cursor still sends from an older file, reply() has nothing for a permission event.
+    for e in PERMISSION {
+        assert_eq!(reply("/cursor", format!(r#"{{"hook_event_name":"{e}","tool_name":"Shell","command":"rm -rf x"}}"#).as_bytes()), None, "{e}");
+    }
+    let _ = fs::remove_dir_all(&home);
+    let _ = fs::remove_dir_all(&home2);
 }
 
 #[test]

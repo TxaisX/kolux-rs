@@ -1,0 +1,86 @@
+FIX-2 on lane/vendors (wave 16, 2026-10-19) · from b83a0fd2 (FIX-1) · ONE commit
+Review: G:/Dev/claude-config/state/kolux-rs-council/d2/vendors-b83a0fd2-standin-review.md (BLOCKER 0 / FIX-BEFORE 1 / FIX-SOON 2 / AFTER 4)
+Builder: Claude Fable 5.1 (third spawn on this lane). No app launch, no real agent session; every cargo/node run under a scratch
+HOME/USERPROFILE/CLAUDE_CONFIG_DIR/CODEX_HOME/TEMP/TMP below G:/Temp/vendors-w16 (marker files present), KOLUX_* unset, one build
+slot per heavy job (slot.mjs acquire/release vendors). Logs: G:/Temp/vendors-w16-logs/fix2-*.log.
+
+WHAT CHANGED (all in src-tauri/src/agent_hooks/vendors_more.rs unless named; tests in vendors_more_tests.rs)
+(a) FIX-BEFORE 1, option 1 · Cursor (install_cursor): CURSOR_EVENTS is now the five state events
+    beforeSubmitPrompt, stop, postToolUse, postToolUseFailure, afterAgentResponse. preToolUse, beforeShellExecution and
+    beforeMCPExecution are no longer installed: the listener printed `{}` for them (hooks.rs reply_body falls back to "{}" when
+    reply() is None), which FIX-1 had described as "no answer". Kolux never answers a permission hook now because it never
+    receives one. The three stay in normalize() so an older file's events still read, and super::clear_unused takes their
+    Kolux entries out of ~/.cursor/hooks.json on the next on or off (no new installer code).
+    Tests: fix_2_cursor_hooks_file_names_no_permission_event_and_an_older_file_loses_them (fresh file has exactly the five
+    keys; a FIX-1-shaped file loses the three Kolux entries on install_cursor and keeps the user's ./my-check.sh entry alone,
+    switch::inspect says "installed"; a Kolux-made file with the three is fully removed by remove_hooks; reply() is None for
+    the three); stat_012_cursor_entries_sit_beside_the_users_and_leave_without_a_trace (hooks object has 6 keys: the user's
+    beforeShellExecution plus Kolux's five; the user's entry is alone under its event).
+    evidence/T-121.txt :24-32 and the live step 2a reworded (CORRECTION paragraph names the `{}` on the wire); PLAN.md T-121
+    FIX-1 stamp corrected and FIX-2 stamp added.
+(b) FIX-SOON 1 · Pi extension (pi_extension): http.request({... agent: false, ...}) so the post never rides http.globalAgent
+    (which NODE_USE_ENV_PROXY on Node 24.5+ can point at a proxy); the port must be 1-5 digits AND <= 65535 (http.request
+    throws above that); the request sits in try { ... } catch {}. The comment above the port check now says what the check is
+    for. Test: fix_1_hermes_and_pi_post_on_loopback_past_any_proxy_with_a_digits_only_port extended (agent: false in the
+    request text, the new port line, the try/catch shape, exactly one http.request(, no fetch(, no "http://").
+(c) FIX-SOON 2 · coordinator patch evidence/vendors-FIX-2-privacy-audit.patch for scripts/privacy-audit.test.mjs (not mine to
+    edit): CLIENTS gains /\bhttp\.request\(/ and /\burllib\.request\b/; ALLOWED lists vendors_more.rs and vendors_more_tests.rs
+    for those two; PINNED pins vendors_more.rs to exactly one Pi http.request (the exact text with host 127.0.0.1 and
+    agent: false), one Hermes URL string, one build_opener(ProxyHandler({}), _NoRedirect()).open(...), and five urllib.request
+    mentions. A /\bhttps?:\/\// pin was tried and dropped: the Kimi plugin's curl URL is a second honest match in the same file.
+(d) AFTER 1 · Hermes plugin (hermes_plugin): class _NoRedirect(urllib.request.HTTPRedirectHandler) whose redirect_request
+    returns None is passed to build_opener beside ProxyHandler({}), so a 301/302/303/307/308 from whatever holds the port is
+    never followed and the token never leaves for a Location target (Python docs: a handler subclass given to build_opener
+    replaces the default one). Test: fix_1_... asserts the class, the redirect_request/return None lines and the opener line.
+(e) AFTER 2 · drop_empty_dir doc now says remove_dir only ever removes an empty folder, so an empty hooks/extensions folder the
+    user made by hand goes too and nothing of theirs is lost. AFTER 3 · module doc and reply() doc say the permission hooks are
+    not installed. AFTER 4 · no "confirm" wording anywhere for a pending live step; live steps say LIVE PROOF PENDING (batched).
+
+RED (tests written first, code unchanged)
+  cargo test --manifest-path src-tauri/Cargo.toml --lib agent_hooks::vendors_more   → fix2-red.log
+  test result: FAILED. 17 passed; 3 failed (fix_1_..., fix_2_..., stat_012_...: all on the new assertions)
+GREEN
+  same command → fix2-green.log: 19 passed; 1 failed (stat_012_... still expected a Kolux entry beside the user's
+  beforeShellExecution; stale assertion fixed) → fix2-green-2.log: test result: ok. 20 passed; 0 failed
+
+PER-CARD GATES (lane tree with the five coordinator patches applied to the working copy, as FIX-1 did)
+  cargo build --manifest-path src-tauri/Cargo.toml                                      → fix2-build.log   exit 0 (35.74s)
+  cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings        → fix2-clippy.log  exit 0 (19.72s)
+  cargo test --manifest-path src-tauri/Cargo.toml --lib agent_hooks                     → fix2-test-agent-hooks.log
+     test result: FAILED. 91 passed; 1 failed: hooks::agent_hooks::tests::script_runs::fix_3_a_held_append_waits_out_another_writer
+     (hooks lane's timing test, flagged load-sensitive; six other builders were running) → alone: fix2-test-fix3a-alone.log
+     test result: ok. 1 passed; 0 failed
+  node node_modules/typescript/bin/tsc --noEmit                                         → fix2-tsc.log     exit 0
+  vitest on changed dirs: no .ts/.mjs changed in this lane (scripts/ touched only through the coordinator patch); the full run below covers it.
+
+COMBINED TREE (main c2f8580b + lane/hooks 146904a2 src-tauri diff + this lane's committed and working-copy diffs + the five
+coordinator patches + the privacy-audit patch, built as a detached git worktree at G:/Temp/vendors-w16/combined, no git merge)
+  cargo test --manifest-path src-tauri/Cargo.toml --lib agent_hooks → fix2-combined-agent-hooks.log
+     93 passed; 1 failed (fix_3_a_held_append_waits_out_another_writer, same timing test) → alone: fix2-combined-fix3a-alone.log 2 passed; 0 failed
+     (the review saw 93; this tree has 94 agent_hooks tests with fix_2_... added)
+  node node_modules/vitest/vitest.mjs run scripts/privacy-audit.test.mjs (patch applied) → fix2-combined-audit.log
+     Test Files 1 passed (1) · Tests 2 passed (2)
+     (first cut with the https?:// pin: 1 failed, "vendors_more.rs: /\bhttps?:\/\//g x2, want 1" = Hermes URL + Kimi curl URL; pin dropped)
+  evidence/vendors-FIX-2-privacy-audit.patch: 41 lines, 0 CR; GIT_INDEX_FILE temp index of c2f8580b: git apply --cached --check rc=0
+
+END-OF-BATCH GATES (lane tree)
+  cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast → fix2-test-full.log
+     lib: test result: FAILED. 992 passed; 1 failed; 2 ignored: hooks::agent_hooks::tests::script_runs::fix_4_a_missing_holding_folder_is_not_tried_again
+     panics with its own "4 attempts of 4 rounds never gave two held times within 1000 ms of each other: the PC is too loaded to judge"
+     → alone: fix2-test-fix4a-alone.log test result: ok. 1 passed; 0 failed (118.26s)
+     kolux-dev 0/0 · main 0/0 · tests/shim.rs 3 passed · doc-tests 0/0
+  node node_modules/vitest/vitest.mjs run → fix2-vitest-full.log: Test Files 225 passed (225) · Tests 1525 passed (1525)
+  node scripts/plan-check.mjs --write-state → plan-check: OK (Done: 460 / 690 tasks · P0 cards passing: 6 / 228)
+  grep -c '^## Last 10 passes' STATE.md → 1
+  grep -oE '^- \[[ x]\] T-[0-9a-z-]+' PLAN.md | sort | uniq -d → (nothing)
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts/firewall-check.ps1 -Baseline → 53 hit(s) in 22 file(s), 0 new, 0 baseline entries no longer present
+
+LIVE PROOF PENDING (batched): T-121 steps 2a/2b (Cursor: its own permission prompt appears, Kolux never answers, the dot shows
+working then done at stop) and T-122's Pi/Hermes live posts. NO APP LAUNCHES in this spawn.
+
+SEEN, NOT FIXED (not mine or out of scope)
+- fix_3_a_held_append_waits_out_another_writer and fix_4_a_missing_holding_folder_is_not_tried_again (hooks lane, tests.rs) fail under
+  load on a PC running several builders at once; each passes alone. Their thresholds belong to the hooks lane.
+- The committed lane tree compiles only with the five coordinator patches in the working copy (mod.rs, saved.rs, switch.rs,
+  tests.rs, hooks.rs); they are reverted before the commit, as before. Apply order for the coordinator: T-121-hooks, T-121-saved,
+  T-121-switch, T-122-mod, T-122-tests (never T-121-mod / T-121-tests), then vendors-FIX-2-privacy-audit.patch.
