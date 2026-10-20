@@ -12,8 +12,11 @@
 //! - T-251 (CLI-047): `kolux screenshot` / `full-screenshot` take a picture through the engine's
 //!   DevTools call (Page.captureScreenshot), `kolux pdf` prints through the engine's PrintToPdf.
 //!   Both are started on the main thread and waited for on the command line's own thread.
+//! - T-286-b (APP-040): the engine's process-failed event, from every browser page and the app's
+//!   own view, becomes a crash record when it is a real crash (browser_crash.rs decides).
 //! - T-272-d: the engine's accelerator-key event records each real key pressed in a page, so a
 //!   keyboard chord that page's script sends counts only after a real press there (browser_holder.rs).
+use std::path::PathBuf;
 use std::time::Duration;
 use tauri::{AppHandle, Webview};
 
@@ -22,8 +25,9 @@ mod imp {
     use crate::browser::certs;
     use webview2_com::Microsoft::Web::WebView2::Win32::*;
     use std::sync::mpsc::Sender;
-    use crate::browser::holder;
-    use webview2_com::{AcceleratorKeyPressedEventHandler, CallDevToolsProtocolMethodCompletedHandler, ClearServerCertificateErrorActionsCompletedHandler, PrintToPdfCompletedHandler, ServerCertificateErrorDetectedEventHandler};
+    use crate::browser::{crash, holder};
+    use std::path::PathBuf;
+    use webview2_com::{AcceleratorKeyPressedEventHandler, CallDevToolsProtocolMethodCompletedHandler, ClearServerCertificateErrorActionsCompletedHandler, PrintToPdfCompletedHandler, ProcessFailedEventHandler, ServerCertificateErrorDetectedEventHandler};
     use windows::core::{Interface, HSTRING, PWSTR};
     use windows::Win32::System::Com::CoTaskMemFree;
 
@@ -86,6 +90,44 @@ mod imp {
         }
     }
 
+    /// T-286-b (APP-040): hooks a view's process-failed event; each failure is read as far as the
+    /// runtime goes (kind; reason, exit code and process on newer runtimes; the faulting module on
+    /// newer still) and handed to `crash::report` with the memory reading taken now.
+    pub fn watch_failures(source: crash::Source, controller: &ICoreWebView2Controller, dir: PathBuf) {
+        // SAFETY: CoreWebView2 hands back the view's engine object.
+        let Ok(core) = (unsafe { controller.CoreWebView2() }) else { return };
+        let handler = ProcessFailedEventHandler::create(Box::new(move |_sender, args| {
+            let Some(args) = args else { return Ok(()) };
+            let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND::default();
+            // SAFETY: the getters below only write plain values or CoTaskMem strings `take` frees.
+            unsafe { args.ProcessFailedKind(&mut kind) }?;
+            let mut f = crash::Failure { kind: kind.0, ..Default::default() };
+            if let Ok(a2) = args.cast::<ICoreWebView2ProcessFailedEventArgs2>() {
+                let (mut reason, mut code) = (COREWEBVIEW2_PROCESS_FAILED_REASON::default(), 0i32);
+                if unsafe { a2.Reason(&mut reason) }.is_ok() {
+                    f.reason = Some(reason.0);
+                }
+                if unsafe { a2.ExitCode(&mut code) }.is_ok() {
+                    f.exit_code = Some(code);
+                }
+                f.process = unsafe { take(|p| a2.ProcessDescription(p)) };
+            }
+            if let Ok(a3) = args.cast::<ICoreWebView2ProcessFailedEventArgs3>() {
+                f.module = unsafe { take(|p| a3.FailureSourceModulePath(p)) };
+            }
+            let open = match source {
+                crash::Source::Page(id) => crate::browser::tabs().iter().any(|t| t.id == id),
+                crash::Source::App => true,
+            };
+            let when = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            crash::report(&dir, &f, source, open, crash::memory_now(), when);
+            Ok(())
+        }));
+        let mut token = 0i64;
+        // SAFETY: the handler lives as long as the engine holds it; the token is written once.
+        let _ = unsafe { core.add_ProcessFailed(&handler, &mut token) };
+    }
+
     /// Forgets the engine's remembered certificate allowances for one page's engine.
     pub fn clear(controller: &ICoreWebView2Controller) {
         // SAFETY: CoreWebView2 hands back the page's engine object.
@@ -138,6 +180,25 @@ mod imp {
 #[cfg(windows)]
 pub fn attach(id: u32, pw: &tauri::webview::PlatformWebview) {
     imp::attach(id, &pw.controller());
+}
+
+/// T-286-b (APP-040): a browser page's engine reports its process failures (main thread, from
+/// `browser_open`'s web view callback); `dir` is the profile folder holding the crash store.
+#[cfg(windows)]
+pub fn watch_page_failures(id: u32, pw: &tauri::webview::PlatformWebview, dir: Option<PathBuf>) {
+    if let Some(dir) = dir {
+        imp::watch_failures(super::crash::Source::Page(id), &pw.controller(), dir);
+    }
+}
+
+/// T-286-b (APP-040): the app's own view reports its engine's process failures (an interface
+/// process crash is a crash). Called once at startup.
+#[allow(dead_code)] // wired by evidence/browser-T-286-b-lib.rs.patch
+pub fn watch_app_failures(w: &tauri::WebviewWindow, dir: PathBuf) {
+    #[cfg(windows)]
+    let _ = w.with_webview(move |pw| imp::watch_failures(super::crash::Source::App, &pw.controller(), dir));
+    #[cfg(not(windows))]
+    let _ = (w, dir);
 }
 
 /// Starts `job` on the page's engine (main thread) and waits for its answer here; never called

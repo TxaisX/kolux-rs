@@ -57,6 +57,9 @@ pub mod certs;
 // T-158 / T-251 / T-272-d: the glue to WebView2's own events and calls (webview2-com).
 #[path = "browser_engine.rs"]
 pub mod engine;
+// T-286-b (APP-040): which engine process failures are real crashes, and their records.
+#[path = "browser_crash.rs"]
+pub mod crash;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
@@ -995,6 +998,8 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         Some(store) => crate::secrets::read_setting(&*store.lock().map_err(|e| e.to_string())?, "httpProxy")?,
         None => None,
     };
+    #[cfg(windows)]
+    let crash_dir = app.path().app_data_dir().ok();
     let builder = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile);
     let builder = match proxy_of(proxy.as_deref())? {
         Some(u) => builder.proxy_url(u),
@@ -1190,6 +1195,8 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         }
         // T-158 (BROW-024): the engine's certificate errors are answered by the certificate rules.
         engine::attach(id, &pw);
+        // T-286-b (APP-040): the engine's process failures become crash records when real.
+        engine::watch_page_failures(id, &pw, crash_dir);
     });
     #[cfg(not(windows))]
     let _ = page;
