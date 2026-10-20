@@ -1,5 +1,5 @@
 diff --git a/src-tauri/src/resources.rs b/src-tauri/src/resources.rs
-index ddd5432f..d6f94a64 100644
+index d1a5653f..4827c0af 100644
 --- a/src-tauri/src/resources.rs
 +++ b/src-tauri/src/resources.rs
 @@ -6,7 +6,6 @@
@@ -8,8 +8,8 @@ index ddd5432f..d6f94a64 100644
  /// T-293 (APP-030): the Windows publisher check on a downloaded update.
 -#[allow(dead_code)] // until evidence/reliability-T-293-update.rs.patch wires it (that patch drops this line)
  pub mod update_guard;
- 
- use serde::Serialize;
+ /// T-199 (APP-028, APP-029, APP-031): install records, the restart watchdog, download problems.
+ #[allow(dead_code)] // until evidence/reliability-T-199-update.rs.patch wires it (that patch drops this line)
 diff --git a/src-tauri/src/update.rs b/src-tauri/src/update.rs
 index f81c14c9..b2e8d476 100644
 --- a/src-tauri/src/update.rs

@@ -8,6 +8,9 @@ pub mod recovery;
 /// T-293 (APP-030): the Windows publisher check on a downloaded update.
 #[allow(dead_code)] // until evidence/reliability-T-293-update.rs.patch wires it (that patch drops this line)
 pub mod update_guard;
+/// T-199 (APP-028, APP-029, APP-031): install records, the restart watchdog, download problems.
+#[allow(dead_code)] // until evidence/reliability-T-199-update.rs.patch wires it (that patch drops this line)
+pub mod update_care;
 
 use serde::Serialize;
 use std::collections::HashMap;

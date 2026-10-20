@@ -1,0 +1,13 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 11e4b476..676c8c0c 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -776,6 +776,8 @@ pub fn run() {
+             update::update_check,
+             update::update_download,
+             update::update_restart,
++            update::update_last_attempt,
++            update::update_compat,
+             lifecycle::close_alive,
+             lifecycle::app_restart,
+             usage_alerts::usage_alerts_fired,

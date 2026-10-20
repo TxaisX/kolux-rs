@@ -1,0 +1,240 @@
+diff --git a/src-tauri/src/resources.rs b/src-tauri/src/resources.rs
+index 4827c0af..45f3e553 100644
+--- a/src-tauri/src/resources.rs
++++ b/src-tauri/src/resources.rs
+@@ -8,7 +8,6 @@ pub mod recovery;
+ /// T-293 (APP-030): the Windows publisher check on a downloaded update.
+ pub mod update_guard;
+ /// T-199 (APP-028, APP-029, APP-031): install records, the restart watchdog, download problems.
+-#[allow(dead_code)] // until evidence/reliability-T-199-update.rs.patch wires it (that patch drops this line)
+ pub mod update_care;
+ 
+ use serde::Serialize;
+diff --git a/src-tauri/src/update.rs b/src-tauri/src/update.rs
+index b2e8d476..8fcf0b05 100644
+--- a/src-tauri/src/update.rs
++++ b/src-tauri/src/update.rs
+@@ -11,10 +11,12 @@
+ //! themselves; a development copy may be pointed at a test feed through two environment
+ //! variables, which release builds ignore.
+ 
++use crate::resources::update_care as care;
+ use crate::resources::update_guard as guard;
+ use crate::state::Store;
+ use crate::terminal::Terminals;
+-use std::sync::Mutex;
++use std::sync::atomic::{AtomicBool, Ordering};
++use std::sync::{Arc, Mutex};
+ use std::time::Duration;
+ use tauri::{AppHandle, Emitter, Manager, State};
+ use tauri_plugin_updater::{Update, UpdaterExt};
+@@ -118,6 +120,60 @@ fn info_of(u: &Update) -> Info {
+ pub struct Updates {
+     pending: Mutex<Option<Update>>,
+     ready: Mutex<Option<(Update, Vec<u8>)>>,
++    /// T-199 (APP-029): Restart to update is already under way; a second click is ignored.
++    restarting: AtomicBool,
++    watchdog: Arc<care::Watchdog>,
++    /// APP-031: the newest check's number.
++    rounds: care::CheckRounds,
++    /// APP-028: the last install attempt's outcome, read once per launch.
++    last_attempt: Mutex<Option<Option<care::LastAttempt>>>,
++}
++
++/// T-199 (APP-031): the compatibility mode in force (the variable wins over the saved choice).
++fn compat_on(app: &AppHandle) -> bool {
++    let saved = app.state::<Mutex<Store>>().lock().ok().and_then(|s| s.get(care::KEY_COMPAT).ok().flatten()).as_deref() == Some("1");
++    care::compat_mode(saved, std::env::var(care::ENV_COMPAT).ok().as_deref())
++}
++
++/// True only when the release host answers that the named installer is not there (404).
++async fn installer_missing(url: &str, compat: bool) -> bool {
++    let mut b = reqwest::Client::builder().timeout(CHECK_TIMEOUT);
++    if compat {
++        b = b.http1_only();
++    }
++    let Ok(client) = b.build() else { return false };
++    matches!(client.head(url).send().await, Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND)
++}
++
++/// APP-028: what the next launch says about the last install attempt (read once, then removed).
++#[tauri::command]
++pub fn update_last_attempt(app: AppHandle, updates: State<'_, Updates>) -> Result<Option<care::LastAttempt>, String> {
++    let mut cached = updates.last_attempt.lock().map_err(|e| e.to_string())?;
++    if let Some(known) = cached.as_ref() {
++        return Ok(known.clone());
++    }
++    let store = app.state::<Mutex<Store>>();
++    let store = store.lock().map_err(|e| e.to_string())?;
++    let raw = store.get(care::KEY_ATTEMPT).ok().flatten().filter(|v| !v.is_empty());
++    let out = care::outcome(raw.as_deref(), &app.package_info().version.to_string(), now_ms());
++    if raw.is_some() {
++        let _ = store.set(care::KEY_ATTEMPT, "");
++    }
++    *cached = Some(out.clone());
++    Ok(out)
++}
++
++/// APP-031: the card's "Use compatibility mode" choice.
++#[tauri::command]
++pub fn update_compat(store: State<'_, Mutex<Store>>, on: bool) -> Result<(), String> {
++    store.lock().map_err(|e| e.to_string())?.set(care::KEY_COMPAT, if on { "1" } else { "0" }).map_err(|e| e.to_string())
++}
++
++fn record_attempt(app: &AppHandle, update: &Update) {
++    if let Ok(store) = app.state::<Mutex<Store>>().lock() {
++        let notes = clean_notes(update.body.as_deref());
++        let _ = store.set(care::KEY_ATTEMPT, &care::attempt_json(&update.current_version, &update.version, now_ms(), &notes));
++    }
+ }
+ 
+ #[derive(serde::Serialize)]
+@@ -130,6 +186,7 @@ pub struct Status {
+     dismissed_version: Option<String>,
+     tip_done: bool,
+     ready: Option<Info>,
++    compat: bool,
+ }
+ 
+ #[tauri::command]
+@@ -145,6 +202,7 @@ pub fn update_status(app: AppHandle, store: State<'_, Mutex<Store>>, updates: St
+         dismissed_version: get(KEY_DISMISSED).filter(|v| !v.is_empty()),
+         tip_done: get(KEY_TIP_DONE).as_deref() == Some("1"),
+         ready: updates.ready.lock().map_err(|e| e.to_string())?.as_ref().map(|(u, _)| info_of(u)),
++        compat: care::compat_mode(get(care::KEY_COMPAT).as_deref() == Some("1"), std::env::var(care::ENV_COMPAT).ok().as_deref()),
+     })
+ }
+ 
+@@ -168,17 +226,40 @@ fn now_ms() -> u64 {
+ pub async fn update_check(app: AppHandle) -> Result<Option<Info>, String> {
+     let feed = this_feed()?;
+     let url = feed.endpoint.parse().map_err(|e| format!("bad update address: {e}"))?;
+-    let found = app
+-        .updater_builder()
+-        .endpoints(vec![url])
+-        .map_err(|e| e.to_string())?
+-        .pubkey(feed.pubkey)
+-        .timeout(CHECK_TIMEOUT)
+-        .build()
+-        .map_err(|e| e.to_string())?
+-        .check()
+-        .await
+-        .map_err(|e| e.to_string())?;
++    // T-199 (APP-031): checks are numbered; a late answer from an earlier one stores nothing.
++    let round = app.state::<Updates>().rounds.begin();
++    let compat = compat_on(&app);
++    let mut builder = app.updater_builder().endpoints(vec![url]).map_err(|e| e.to_string())?.pubkey(feed.pubkey).timeout(CHECK_TIMEOUT);
++    if compat {
++        builder = builder.configure_client(|c| c.http1_only());
++    }
++    let found = match builder.build().map_err(|e| e.to_string())?.check().await {
++        Ok(found) => found,
++        Err(e) => {
++            let text = format!("{e} {e:?}");
++            match care::classify(&text) {
++                // A missing manifest counts as no update, not as an error.
++                care::Problem::NoManifest => None,
++                care::Problem::NoPlatform => {
++                    return Err(format!("{}The newest release has no installer for this system yet. Kolux RS will look again soon.", care::MARK_QUIET))
++                }
++                care::Problem::Protocol if !compat => return Err(format!("{}{e}", care::MARK_COMPAT)),
++                _ => return Err(e.to_string()),
++            }
++        }
++    };
++    // APP-031: a release whose installer is not uploaded yet is passed over until it is.
++    if let Some(u) = found.as_ref() {
++        if installer_missing(u.download_url.as_str(), compat).await {
++            if !app.state::<Updates>().rounds.is_current(round) {
++                return Err(care::MARK_STALE.into());
++            }
++            return Err(format!("{}Kolux RS {} is still being published. Kolux RS will look again soon.", care::MARK_QUIET, u.version));
++        }
++    }
++    if !app.state::<Updates>().rounds.is_current(round) {
++        return Err(care::MARK_STALE.into());
++    }
+     let mut found = found;
+     if let Ok(store) = app.state::<Mutex<Store>>().lock() {
+         let _ = store.set(KEY_LAST_CHECK, &now_ms().to_string());
+@@ -223,7 +304,15 @@ pub async fn update_download(app: AppHandle) -> Result<Info, String> {
+             || {},
+         )
+         .await
+-        .map_err(|e| e.to_string())?;
++        .map_err(|e| {
++            // T-199 (APP-031): an installer not uploaded yet waits quietly; a protocol error offers
++            // the compatibility mode.
++            match care::classify(&format!("{e} {e:?}")) {
++                care::Problem::Incomplete => format!("{}Kolux RS {} is still being published. Kolux RS will look again soon.", care::MARK_QUIET, update.version),
++                care::Problem::Protocol => format!("{}{e}", care::MARK_COMPAT),
++                _ => e.to_string(),
++            }
++        })?;
+     // T-293 (APP-030): the installer's Windows publisher must match this copy's; no bypass.
+     let (checked, version) = (bytes.clone(), update.version.clone());
+     let verdict = tauri::async_runtime::spawn_blocking(move || {
+@@ -251,19 +340,50 @@ pub async fn update_download(app: AppHandle) -> Result<Info, String> {
+ /// Restart to update: the shells end, the installer runs and starts the new version.
+ #[tauri::command]
+ pub fn update_restart(app: AppHandle) -> Result<(), String> {
+-    let ready = app.state::<Updates>().ready.lock().map_err(|e| e.to_string())?.take();
++    // T-199 (APP-029): only one install runs; a click while it is getting ready is ignored.
++    let updates = app.state::<Updates>();
++    if updates.restarting.swap(true, Ordering::SeqCst) {
++        return Ok(());
++    }
++    let result = restart_now(&app);
++    if result.is_err() {
++        updates.restarting.store(false, Ordering::SeqCst);
++    }
++    result
++}
++
++fn restart_now(app: &AppHandle) -> Result<(), String> {
++    let updates = app.state::<Updates>();
++    let ready = updates.ready.lock().map_err(|e| e.to_string())?.take();
+     let Some((update, bytes)) = ready else { return Err("No update is ready.".into()) };
+     // T-182 (APP-011): the update restart waits for the same save point as a quit; a save that
+     // fails or times out cancels it and the ready update is kept for the next try.
+-    if let Err(e) = crate::lifecycle::save_point(&app, 0) {
+-        *app.state::<Updates>().ready.lock().map_err(|e| e.to_string())? = Some((update, bytes));
++    if let Err(e) = crate::lifecycle::save_point(app, 0) {
++        *updates.ready.lock().map_err(|e| e.to_string())? = Some((update, bytes));
+         return Err(e);
+     }
+     app.state::<Terminals>().kill_all();
+     // T-286-b (APP-040): Kolux ending itself here is not a crash at the next start.
+-    crate::resources::recovery::note_self_end(&app, "restart to update (APP-029)");
++    crate::resources::recovery::note_self_end(app, "restart to update (APP-029)");
++    // T-199 (APP-028): the attempt is written down so the next launch can tell whether it took.
++    record_attempt(app, &update);
++    // APP-029: the old process is forced out at the deadline so it never blocks the installer.
++    updates.watchdog.arm(std::time::Instant::now() + care::WATCHDOG_AFTER);
++    updates.watchdog.watch(|| std::process::exit(0));
+     // On Windows this starts the installer and ends this process.
+-    update.install(&bytes).map_err(|e| e.to_string())?;
++    if let Err(e) = update.install(&bytes) {
++        // Failed straight away: stand the watchdog down, keep the app usable, give the real cause.
++        updates.watchdog.stand_down();
++        if let Ok(store) = app.state::<Mutex<Store>>().lock() {
++            let _ = store.set(care::KEY_ATTEMPT, "");
++        }
++        let cause = care::install_cause(&e.to_string());
++        if let Ok(dir) = app.path().app_data_dir() {
++            crate::diag::write(&dir, &format!("update {} did not start: {cause} (APP-029)", update.version));
++        }
++        *updates.ready.lock().map_err(|e| e.to_string())? = Some((update, bytes));
++        return Err(cause);
++    }
+     app.restart();
+ }
+ 
+@@ -271,6 +391,7 @@ pub fn update_restart(app: AppHandle) -> Result<(), String> {
+ pub fn install_on_quit(app: &AppHandle) {
+     let ready = app.state::<Updates>().ready.lock().ok().and_then(|mut r| r.take());
+     if let Some((update, bytes)) = ready {
++        record_attempt(app, &update);
+         let _ = update.restart_after_install(false).install(&bytes);
+     }
+ }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { afterBurst, boundaryMessage, captured, dialogLead, issueTitle, issueUrl, launchPrompt, NOTHING_CAPTURED, openFromHelp, openPending, type Crash } from "./model";
+import { afterBurst, boundaryMessage, captured, dialogLead, issueTitle, issueUrl, launchPrompt, NOTHING_CAPTURED, openFromHelp, openPending, updateNotice, type Crash } from "./model";
 import { FEEDBACK_REPO, URL_CAP } from "../settings/privacy";
 
 const crash = (summary: string, dismissed = false): Crash => ({ id: "1-0", when: 1_700_000_000, summary, dismissed });
@@ -55,4 +55,13 @@ test("T-183 APP-042: the screen boundary names what broke in plain words", () =>
   expect(boundaryMessage(new Error("x is not a function"))).toBe("Part of the interface stopped working: x is not a function");
   expect(boundaryMessage("odd")).toBe("Part of the interface stopped working: odd");
   expect(boundaryMessage(undefined)).toBe("Part of the interface stopped working.");
+});
+
+test("T-199 (APP-028): a failed install is reported once at the next launch with Try again and the installer page", () => {
+  const n = updateNotice({ kind: "failed", from: "0.2.0", to: "0.3.0", holder: null, releasesPage: "https://example.invalid/releases" });
+  expect(n?.text).toBe("The update to Kolux RS 0.3.0 did not install, so this is still 0.2.0. Try again, or download the installer and run it yourself.");
+  expect(n?.releasesPage).toBe("https://example.invalid/releases");
+  expect(updateNotice({ kind: "failed", from: "1", to: "2", holder: "Explorer", releasesPage: "p" })?.text).toContain(" Explorer was holding Kolux RS's files.");
+  expect(updateNotice({ kind: "updated", version: "0.3.0", notes: [] })).toBeNull();
+  expect(updateNotice(null)).toBeNull();
 });

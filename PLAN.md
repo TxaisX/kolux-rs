@@ -214,7 +214,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P1 · theme 8 · Release, update and CI pipeline (4 cards)
 
-- [ ] T-199 · APP-028 A failed update install is reported at the next launch, with a retry · APP-029 Restart to update either installs or explains why it could not · APP-031 Update download problems fix themselves or offer a fix · APP-061 Packaged builds are smoke-tested before they are published
+- [ ] T-199 · APP-028 A failed update install is reported at the next launch, with a retry · APP-029 Restart to update either installs or explains why it could not · APP-031 Update download problems fix themselves or offer a fix · APP-061 Packaged builds are smoke-tested before they are published · the first three ids built 2026-10-20 (reliability, evidence/T-199.txt, live proof pending (batched)); OPEN: the packaged-build smoke test needs the packaged app launched on a throwaway profile (builders may not) and a profile-migration command the CLI does not have; release.mjs already checks installer, .sig and version
 
 ### P1 · theme 6 · Business-user frame (33 cards)
 
