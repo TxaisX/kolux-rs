@@ -665,7 +665,7 @@ Compat: —
 Source: D-05-093
 
 ### VIEW-054 · Per-worktree skip-permissions override
-Tier: P1 · Pushed: 5 · State at 0.15.0: live-unverified
+Tier: D · Pushed: — · State at 0.15.0: dropped
 User does: sets or clears the skip-permissions mode for one worktree.
 User sees: that worktree's agents follow the override; it survives restarts.
 Rules: invalid saved entries are dropped on load.
@@ -673,6 +673,7 @@ Acceptance:
   - [ ] Set it on one worktree, restart → still set; others unaffected.
   - [ ] Damage one saved override entry → it is dropped on load and the others still apply.
 Compat: —
+Amended 2026-10-20 (DT-C44, DT-37): dropped. Txais took the recommended skip on 2026-10-13: the control may not exist in the old app, so it is not built.
 Source: D-05-054
 
 ### VIEW-067 · Discard changes with confirmation

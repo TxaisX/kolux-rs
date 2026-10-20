@@ -107,6 +107,9 @@ import { discardDraftsOf, useFileMoves } from "./editor/useFileMoves";
 import { useCloseGuard } from "./editor/CloseDialog";
 import { trashUnusedNotes } from "./editor/trashUnused";
 import AgentsPanel from "./sessions/AgentsPanel";
+import { FOLDER_TAB_KEY, offeredTabs, rememberTab, tabFor } from "./sessions/folderTabs";
+import { useWorkspaceKind } from "./sessions/useWorkspaceKind";
+import { AttachedWorktreesTab, FolderChecksTab } from "./projects/AttachedTabs.tsx"; // the extension: attachedTabs.ts (logic) differs only in case
 import { useWindowSync } from "./sessions/windowSync";
 import type { ResumePlan } from "./sessions/resume";
 import RightSidebar, { clampLeft, clampWidth, Grip, LEFT_KEY, readLeft, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
@@ -484,7 +487,12 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     saveChanged(settings, next).catch((err) => setNotice(String(err)));
   };
   // VIEW-056 / VIEW-057 (T-146-a): one right sidebar, its open state, tab and width kept in settings.
-  const right = readRight(settings);
+  // VIEW-057 (T-146-g): a folder workspace (a project without Git) offers Attached and PR Checks instead of the git tabs.
+  const kindProject = activeDir ? (Object.entries(owner).find(([d]) => sameDir(d, activeDir))?.[1] ?? null) : null;
+  const wsKind = useWorkspaceKind(kindProject, activeDir, refresh);
+  const offeredRight = offeredTabs(wsKind.folder);
+  const savedRight = readRight(settings);
+  const right = { ...savedRight, tab: tabFor(settings[FOLDER_TAB_KEY], activeDir, savedRight.tab, offeredRight) };
   const leftWidth = dragLeft ?? readLeft(settings);
   const explorerOpen = right.open && right.tab === "explorer";
   const scmOpen = right.open && right.tab === "scm";
@@ -1376,6 +1384,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     });
     setActiveDir(dir);
     setFocused(key);
+    return true;
   };
   const { afterSetup, startSetup, select, removedAll, removed, projectOf } = useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir, setStacked, nextKey, addShell, settings, screen, setScreen, setPage, owner, recentDirs, activeRef });
   // PROJ-033: a workspace made outside the composer runs its setup script in a background tab.
@@ -3158,7 +3167,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             })}
           </div>
         </div>
-        <RightSidebar tab={right.tab} width={clampWidth(dragWidth ?? right.width, window.innerWidth, sidebarOpen ? leftWidth + 8 : 0)} hidden={!terminals || !right.open || fullPage} onTab={(tab) => saveRight({ tab })} onWidth={(w, done) => {
+        <RightSidebar tab={right.tab} width={clampWidth(dragWidth ?? right.width, window.innerWidth, sidebarOpen ? leftWidth + 8 : 0)} hidden={!terminals || !right.open || fullPage} offered={offeredRight} onTab={(tab) => {
+          const next = { ...settings };
+          next[RIGHT_KEYS.tab] = tab;
+          if (wsKind.folder && activeDir !== null) next[FOLDER_TAB_KEY] = rememberTab(settings[FOLDER_TAB_KEY], activeDir, tab);
+          setSettings(next);
+          saveChanged(settings, next).catch((err) => setNotice(String(err)));
+        }} onWidth={(w, done) => {
           const used = clampWidth(w, window.innerWidth, sidebarOpen ? leftWidth + 8 : 0);
           setDragWidth(done ? null : used);
           if (done) saveRight({ width: used });
@@ -3179,8 +3194,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         )}
         {/* VIEW-080 (T-168, T-169): the Agents tab lists past sessions of every agent in the saved scope. */}
         {right.open && right.tab === "agents" && (
-          <AgentsPanel settings={settings} onSave={saveSetting} activeDir={activeDir} projects={projects} projectDirs={Object.entries(owner).filter(([, p]) => p === projectOf(activeDir)).map(([d]) => d)} rescanKey={panes.length} visible={terminals} shell={shells[0]?.program ?? null} onResume={(s, plan) => void resumeIn(s.agent, plan)} />
+          <AgentsPanel settings={settings} onSave={saveSetting} activeDir={activeDir} projects={projects} projectDirs={Object.entries(owner).filter(([, p]) => p === projectOf(activeDir)).map(([d]) => d)} rescanKey={panes.length} visible={terminals} shell={shells[0]?.program ?? null} onResume={(s, plan) => void resumeIn(s.agent, plan)} onResumeChat={(s, plan) => void resumeIn(s.agent, plan).then((ok) => ok && setScreen(classic ? "terminals" : "agents"))} />
         )}
+        {right.open && right.tab === "attached" && activeDir !== null && <AttachedWorktreesTab folder={activeDir} worktrees={wsKind.worktrees} />}
+        {right.open && right.tab === "prchecks" && activeDir !== null && <FolderChecksTab folder={activeDir} worktrees={wsKind.worktrees} />}
         {/* VIEW-073: the Checks tab follows the workspace of the focused terminal. */}
         {right.open && right.tab === "checks" && <ChecksPanel dir={activeDir} linked={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} visible={terminals} />}
         {activeDir ? <Explorer key={activeDir} root={activeDir} hidden={!explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => saveRight({ open: false })} onOpenTerminal={openTerminalIn} onWake={() => showRight("explorer")} /> : explorerOpen && <div className="sb-hint">Open a workspace to browse its files.</div>}
