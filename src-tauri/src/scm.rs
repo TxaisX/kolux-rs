@@ -2385,11 +2385,16 @@ pub async fn scm_base_sides(worktree: String, path: String, since: String) -> Re
 }
 
 /// GIT-001 (T-033-b): starts or joins the watch of the worktree holding `path`; its status arrives
-/// as the `scm-status-<id>` event, the same shape `scm_status` returns.
+/// as the `scm-status-<id>` event, the same shape `scm_status` returns. FIX-1 (T-033-e review): a
+/// watch that ends on its own says so as `scm-watch-ended-<id>`, and the page subscribes again.
 #[tauri::command]
 pub async fn scm_watch(app: tauri::AppHandle, path: String) -> Result<watch::WatchStart, String> {
     use tauri::{Emitter, Manager};
     let dir = app.path().app_data_dir().ok();
+    let ended = {
+        let app = app.clone();
+        std::sync::Arc::new(move |id: u64| drop(app.emit(&format!("scm-watch-ended-{id}"), ()))) as watch::Ended
+    };
     let sink = move |id: u64| {
         let (app, event) = (app.clone(), format!("scm-status-{id}"));
         std::sync::Arc::new(move |st: &Status| drop(app.emit(&event, st))) as std::sync::Arc<dyn Fn(&Status) + Send + Sync>
@@ -2399,7 +2404,7 @@ pub async fn scm_watch(app: tauri::AppHandle, path: String) -> Result<watch::Wat
             crate::diag::write(d, line);
         }
     });
-    watch::watch(Path::new(&path), sink, log)
+    watch::watch_with(Path::new(&path), sink, ended, log)
 }
 
 #[tauri::command]
@@ -4045,54 +4050,118 @@ mod tests {
         let _ = fs::remove_dir_all(&tools);
     }
 
+    /// FIX-8 (review FIX-SOON 3): the programs alive right now whose image or command line is under
+    /// `dir` (Windows), as "name pid" lines. A fixture copy of ping (see `fix8_fixture`) is the only
+    /// way a wait left behind by a half-done kill can be told from any other ping on the PC.
+    #[cfg(windows)]
+    fn processes_under(dir: &std::path::Path) -> Vec<String> {
+        let script = "$d = $env:KOLUX_RS_TEST_DIR; Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and ( ($_.ExecutablePath -and $_.ExecutablePath.IndexOf($d, [StringComparison]::OrdinalIgnoreCase) -ge 0) -or ($_.CommandLine -and $_.CommandLine.IndexOf($d, [StringComparison]::OrdinalIgnoreCase) -ge 0) ) } | ForEach-Object { $_.Name + ' ' + $_.ProcessId }";
+        let out = quiet("powershell").args(["-NoProfile", "-NonInteractive", "-Command", script]).env("KOLUX_RS_TEST_DIR", dir).output().expect("powershell did not start");
+        assert!(out.status.success(), "the process check failed, so it proves nothing: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
+    }
+
+    /// FIX-8: the fixture of the two timeout halves: gh.cmd starts late.cmd at once. late.cmd says it
+    /// started, waits about five seconds with its OWN copy of ping (so a wait left alive is found by
+    /// its path) and leaves a mark only if that wait ran to the end (`&&`: a tree kill ends the wait
+    /// with exit code 1 a moment before the batch above it, and the batch must not read that as the
+    /// wait being over). Returns gh.cmd.
+    #[cfg(windows)]
+    fn fix8_fixture(tools: &std::path::Path) -> PathBuf {
+        let system = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\Windows"));
+        fs::copy(system.join("System32").join("PING.EXE"), tools.join("ping.exe")).unwrap();
+        fs::write(tools.join("late.cmd"), "@echo off\r\necho started>\"%~dp0started.txt\"\r\n\"%~dp0ping.exe\" -n 6 127.0.0.1 >nul && echo late>\"%~dp0late.txt\"\r\n").unwrap();
+        let gh = tools.join("gh.cmd");
+        fs::write(&gh, "@echo off\r\ncmd /c \"%~dp0late.cmd\"\r\n").unwrap();
+        gh
+    }
+
+    /// FIX-8: the process check is not blind: it sees a program started from a folder and sees none
+    /// once that program has ended or in a folder where nothing ran.
+    #[cfg(windows)]
+    #[test]
+    fn fix8_the_process_check_sees_a_program_under_a_folder_and_none_after_it_ends() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fix8-probe-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        fix8_fixture(&tools);
+        assert!(processes_under(&tools).is_empty(), "nothing ran yet: {:?}", processes_under(&tools));
+        let mut waiter = quiet(tools.join("ping.exe")).args(["-n", "30", "127.0.0.1"]).spawn().unwrap();
+        let seen = processes_under(&tools);
+        assert!(seen.iter().any(|l| l.to_lowercase().starts_with("ping.exe ")), "the running copy was not found: {seen:?}");
+        waiter.kill().unwrap();
+        waiter.wait().unwrap();
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !processes_under(&tools).is_empty() && std::time::Instant::now() < end {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        assert!(processes_under(&tools).is_empty(), "the ended copy is still listed: {:?}", processes_under(&tools));
+        let _ = fs::remove_dir_all(&tools);
+    }
+
     /// FIX-4 (review FIX-SOON 1): a timeout ends the tree through the job that holds gh; the tree
     /// kill (a parent-pid walk that can reach a program gh never started) is asked only when there
-    /// is no job.
+    /// is no job. FIX-8: neither half can pass having proved nothing: the job half checks that the
+    /// program gh started really started (and tries again, up to three times, when a loaded PC made
+    /// the limit run out first), and both halves check that nothing started from the test's own
+    /// folder is still alive, so a half-done kill (the batch ended, its wait left running) fails.
     #[cfg(windows)]
     #[test]
     fn fix4_a_timeout_ends_the_tree_through_the_job_and_uses_the_tree_kill_only_without_one() {
         let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fix4-job-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tools);
         fs::create_dir_all(&tools).unwrap();
-        // gh.cmd starts a second program that says it started, then would leave a mark about five
-        // seconds later. The mark is written only if its wait ran to the end (`&&`): a tree kill
-        // ends the leaf (the wait, exit code 1) a moment before the batch above it, and the batch
-        // must not read that as the wait being over.
-        fs::write(tools.join("late.cmd"), "@echo off\r\necho started>\"%~dp0started.txt\"\r\nping -n 6 127.0.0.1 >nul && echo late>\"%~dp0late.txt\"\r\n").unwrap();
-        let gh = tools.join("gh.cmd");
-        fs::write(&gh, "@echo off\r\ncmd /c \"%~dp0late.cmd\"\r\n").unwrap();
+        let gh = fix8_fixture(&tools);
         let limit = std::time::Duration::from_secs(1);
         let asked = std::sync::Mutex::new(Vec::new());
-        let mut cmd = quiet(&gh);
-        cmd.current_dir(&tools);
-        let err = run_within_in(cmd, None, limit, true, &|p| asked.lock().unwrap().push(p), &|p| asked.lock().unwrap().push(p)).unwrap_err();
-        assert!(err.contains("did not answer within 1 second"), "{err}");
-        assert!(asked.lock().unwrap().is_empty(), "the tree kill ran although a job held gh: {:?}", asked.lock().unwrap());
-        std::thread::sleep(std::time::Duration::from_secs(8));
-        assert!(!tools.join("late.txt").exists(), "a program gh started outlived its time limit");
+        let mut tried = 0;
+        loop {
+            tried += 1;
+            for mark in ["started.txt", "late.txt"] {
+                fs::remove_file(tools.join(mark)).ok();
+            }
+            asked.lock().unwrap().clear();
+            let mut cmd = quiet(&gh);
+            cmd.current_dir(&tools);
+            let err = run_within_in(cmd, None, limit, true, &|p| asked.lock().unwrap().push(p), &|p| asked.lock().unwrap().push(p)).unwrap_err();
+            assert!(err.contains("did not answer within 1 second"), "{err}");
+            assert!(asked.lock().unwrap().is_empty(), "the tree kill ran although a job held gh: {:?}", asked.lock().unwrap());
+            std::thread::sleep(std::time::Duration::from_secs(8));
+            if tools.join("started.txt").exists() {
+                assert!(!tools.join("late.txt").exists(), "a program gh started outlived its time limit");
+                assert!(processes_under(&tools).is_empty(), "the job left a program alive: {:?}", processes_under(&tools));
+                break;
+            }
+            assert!(tried < 3, "fixture did not start: late.cmd never wrote started.txt in {tried} tries, so the job half proved nothing");
+        }
         // Without a job the tree kill is the fallback and is asked for gh's pid. gh starts its
         // second program only after about two seconds, as a loaded PC would, so the limit runs out
-        // before it exists; the tree kill waits for its started.txt (FIX-7), so the walk finds it.
+        // before it exists; the tree kill waits (up to 10 s) for its started.txt (FIX-7), so the
+        // walk finds it.
         fs::remove_file(tools.join("started.txt")).ok();
         fs::write(&gh, "@echo off\r\nping -n 3 127.0.0.1 >nul\r\ncmd /c \"%~dp0late.cmd\"\r\n").unwrap();
         let started = tools.join("started.txt");
+        let saw_it = std::sync::atomic::AtomicBool::new(false);
         let mut cmd = quiet(&gh);
         cmd.current_dir(&tools);
+        asked.lock().unwrap().clear();
         let err = run_within_in(cmd, None, limit, false, &|p| {
             asked.lock().unwrap().push(p);
             // The limit has run out, but the walk by parent pid only finds a program that exists.
-            let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
             while !started.exists() && std::time::Instant::now() < end {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
-            assert!(started.exists(), "gh's second program never started");
+            saw_it.store(started.exists(), std::sync::atomic::Ordering::SeqCst);
             crate::procs::kill_tree(p);
         }, &|_| {})
         .unwrap_err();
         assert!(err.contains("did not answer within 1 second"), "{err}");
         assert_eq!(asked.lock().unwrap().len(), 1, "the fallback tree kill is asked once");
+        assert!(saw_it.load(std::sync::atomic::Ordering::SeqCst), "fixture did not start: gh's second program never wrote started.txt within 10 s");
         std::thread::sleep(std::time::Duration::from_secs(8));
         assert!(!tools.join("late.txt").exists(), "the fallback left the program gh started running");
+        assert!(processes_under(&tools).is_empty(), "the fallback tree kill left a program alive: {:?}", processes_under(&tools));
         let _ = fs::remove_dir_all(&tools);
     }
 
@@ -4188,17 +4257,55 @@ mod tests {
         run_program("kolux-rs-no-such-program-fix7", &["-9".to_string()]);
     }
 
+    /// FIX-8 (review FIX-SOON 1): reads `kill_leftover` out of `src` and says whether its Unix block
+    /// hands the shared runner to the seam. The call must be live code, alone inside a block that
+    /// follows the `cfg(unix)` attribute: a call in a comment, outside the block, under no attribute
+    /// or replaced by an inline closure is an error.
+    fn leftover_wiring(src: &str) -> Result<(), String> {
+        let src = src.replace("\r\n", "\n");
+        let head = ["fn kill_leftover", "(pid: u32) {"].concat();
+        let from = src.find(&head).ok_or("kill_leftover not found")?;
+        let body = &src[from..from + src[from..].find("\n}").ok_or("kill_leftover has no end")?];
+        let live: Vec<&str> = body.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("//")).collect();
+        let want = ["#[cfg(unix)]", "{", "kill_leftover_with(pid, &run_program);", "}"];
+        if live.windows(4).any(|w| w.iter().zip(&want).all(|(a, b)| a == b)) {
+            Ok(())
+        } else {
+            Err(format!("the Unix block does not hand run_program to kill_leftover_with: {live:?}"))
+        }
+    }
+
+    /// FIX-8 (review FIX-SOON 1): the wiring check is not blind. Each wrong shape fails it (the old
+    /// inline closure, a call only in a comment, a call outside the block, a block with no
+    /// attribute) and the right one passes.
+    #[test]
+    fn fix8_the_wiring_check_fails_the_wrong_shapes_and_passes_the_right_one() {
+        let head = ["fn kill_leftover", "(pid: u32) {"].concat();
+        let call = ["kill_leftover_with(pid, &", "run_program);"].concat();
+        let attr = ["#[cfg(", "unix)]"].concat();
+        let tail = "    #[cfg(not(unix))]\n    crate::procs::kill_tree(pid);\n}\n";
+        let make = |inner: &str| format!("fn other() {{}}\n{head}\n{inner}{tail}");
+        let good = make(&format!("    {attr}\n    {{\n        {call}\n    }}\n"));
+        assert_eq!(leftover_wiring(&good), Ok(()));
+        assert_eq!(leftover_wiring(&good.replace('\n', "\r\n")), Ok(()), "CRLF must read the same");
+        let old_closure = make(&format!("    {attr}\n    {{\n        kill_leftover_with(pid, &|program, args| {{\n            let _ = quiet(program).args(args).output();\n        }});\n    }}\n"));
+        assert!(leftover_wiring(&old_closure).is_err(), "the old inline closure passed");
+        let commented = make(&format!("    {attr}\n    {{\n        // {call}\n    }}\n"));
+        assert!(leftover_wiring(&commented).is_err(), "a call in a comment passed");
+        let outside = make(&format!("    {attr}\n    {{\n    }}\n    {call}\n"));
+        assert!(leftover_wiring(&outside).is_err(), "a call outside the block passed");
+        let no_attr = make(&format!("    {{\n        {call}\n    }}\n"));
+        assert!(leftover_wiring(&no_attr).is_err(), "a block with no attribute passed");
+        assert!(leftover_wiring("fn nothing() {}\n").is_err());
+    }
+
     /// FIX-7 (review AFTER 1): `kill_leftover` hands the shared runner to the seam, so the code a
     /// Unix host runs is the code the runner test above runs (read from this file because Windows
-    /// cannot compile the Unix body).
+    /// cannot compile the Unix body). FIX-8: the check is `leftover_wiring`, which the test above
+    /// shows fails the wrong shapes.
     #[test]
     fn fix7_kill_leftover_uses_the_shared_runner() {
-        let src = include_str!("scm.rs");
-        let head = ["fn kill_leftover", "(pid: u32) {"].concat();
-        let from = src.find(&head).expect("kill_leftover not found");
-        let body = &src[from..from + src[from..].find("\n}").unwrap()];
-        let call = ["kill_leftover_with(pid, &", "run_program);"].concat();
-        assert!(body.contains(&call), "{body}");
+        assert_eq!(leftover_wiring(include_str!("scm.rs")), Ok(()));
     }
 
     /// FIX-4 (review AFTER 1): a gh that finishes just as the limit runs out still gets a short

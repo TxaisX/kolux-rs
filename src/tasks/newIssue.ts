@@ -92,6 +92,10 @@ const tell = (e: CreateEvent, error?: string, scope?: CreateScope) => watchers.f
 /** Whether a failure sent to `a` is the one a dialog for `b` should show (host and repository, case-insensitive). */
 export const sameScope = (a: CreateScope, b: CreateScope): boolean => sameHost(a.host, b.host) && a.repo.toLowerCase() === b.repo.toLowerCase();
 
+/** FIX-6 (council AFTER 2): whether a "created" event (sent to `scope`) resets the open dialog for
+ * `host` and `repo`; a create to another place coming back must not clear what is being typed here. */
+export const createResetsDialog = (scope: CreateScope | undefined, host: string, repo: string): boolean => !!scope && sameScope(scope, { host, repo });
+
 /** True while a create is out. */
 export const createBusy = () => inFlight;
 
@@ -111,7 +115,9 @@ export function watchCreate(w: (e: CreateEvent, error?: string, scope?: CreateSc
 export async function createOnce<T>(send: () => Promise<T>, scope: CreateScope): Promise<{ ok: true; value: T } | { ok: false; error: string } | null> {
   if (inFlight) return null;
   inFlight = true;
-  lastFailure = null;
+  // FIX-6 (council AFTER 1): only the failure of this same place is superseded; a create to another
+  // repository must not hide one that may have opened its issue (a second Create would duplicate it).
+  if (lastFailure && sameScope(lastFailure.scope, scope)) lastFailure = null;
   tell("busy", undefined, scope);
   try {
     const value = await send();

@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { DRAFT_LIMIT } from "./composer";
-import { HAND_CAP, SHELL_OFFER, agentsView, handInto, handOver, handTargets, handText, handTooLongText, viewedFirst, applyRead, chatCovers, chatOffer, combine, pickChat, typingInto, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type OfferInput } from "./model";
+import { HAND_CAP, SHELL_OFFER, agentsView, handInto, handOver, handTargets, handText, handTooLongText, viewedFirst, applyRead, chatCovers, chatOffer, combine, pickChat, typingInto, lastReply, lastReplyItem, previewToShow, stamp, type ChatItem, type ChatRead, type OfferInput } from "./model";
 
 const base: OfferInput = { credited: "claude", screen: "agents", switchOn: false, showingChat: false, launching: false, readable: true };
 const item = (id: string, role: ChatItem["role"], text: string, at: number): ChatItem => ({ id, role, kind: "text", text, at });
@@ -64,6 +64,15 @@ test("CHAT-011: when the turn ends exactly one reply remains", () => {
   const shown = previewToShow({ text: "The whole answer." }, false, lastReply(items));
   expect(combine(items, [], shown, []).filter((r) => r.row !== "message" || r.role === "assistant")).toHaveLength(1);
   expect(lastReply([item("m1", "assistant", "old", 1), item("u2", "user", "new question", 2)])).toBeUndefined();
+});
+
+test("FIX-7 (review of e20000d6, FIX-SOON 1): lastReplyItem hands back the item, so two replies with the same words are told apart by id", () => {
+  const items = [item("u1", "user", "Run it", 1), item("m1", "assistant", "Done.", 2), item("u2", "user", "Again", 3), item("m2", "assistant", "Done.", 4)];
+  expect(lastReplyItem(items)?.id).toBe("m2");
+  expect(lastReplyItem(items.slice(0, 2))?.id).toBe("m1");
+  expect(lastReplyItem(items)?.text).toBe(lastReply(items));
+  expect(lastReplyItem([...items, item("u3", "user", "And now", 5)])).toBeUndefined();
+  expect(lastReplyItem([item("m1", "assistant", "Done.", 2), { id: "t1", role: "assistant", kind: "thought", text: "hmm", at: 3 }])?.id).toBe("m1");
 });
 
 test("CHAT-010: timestamps follow the app's language", () => {

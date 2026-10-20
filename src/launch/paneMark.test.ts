@@ -20,12 +20,22 @@ const testModule = (src: string) =>
 /** A Rust string literal as written in source (plain with escapes, r"..." or r#"..."#). */
 const STR = String.raw`(?:r#"(.*?)"#|r"(.*?)"|"((?:[^"\\]|\\.)*)")`;
 const unescape = (s: string) => s.replace(/\\(.)/g, (_m, c: string) => (c === "n" ? "\n" : c === "t" ? "\t" : c === "r" ? "\r" : c === "0" ? "\0" : c));
-/** Every `assert_eq!(<fn>(<literal>), None|Some("..."))` in a Rust test module, and how many `<fn>(` calls that module holds. */
-function rustCases(src: string, fn: string): { cases: [string, string | null][]; calls: number } {
+/** Escapes `unescape` cannot read: `\u{..}` and `\x..` (a parsed literal holding one is a failure, not a silently wrong input). */
+const unreadable = (s: string) => [...s.matchAll(/\\(.)/g)].some((m) => m[1] === "u" || m[1] === "x");
+/**
+ * Every `assert_eq!(<fn>(<literal>), None|Some("..."))` in a Rust test module, how many uses of `<fn>` that module holds
+ * (a call, or a function pointer such as `.map(<fn>)`: any whole-word use), and the parsed literals it cannot read.
+ */
+function rustCases(src: string, fn: string): { cases: [string, string | null][]; calls: number; unreadable: string[] } {
   const mod = testModule(src);
   const re = new RegExp(String.raw`assert_eq!\(${fn}\(${STR}\), (?:None|Some\("(.*?)"\))`, "g");
-  const cases = [...mod.matchAll(re)].map((m): [string, string | null] => [m[1] ?? m[2] ?? unescape(m[3] ?? ""), m[4] ?? null]);
-  return { cases, calls: mod.split(`${fn}(`).length - 1 };
+  const found = [...mod.matchAll(re)];
+  const cases = found.map((m): [string, string | null] => [m[1] ?? m[2] ?? unescape(m[3] ?? ""), m[4] ?? null]);
+  return {
+    cases,
+    calls: [...mod.matchAll(new RegExp(String.raw`\b${fn}\b`, "g"))].length,
+    unreadable: found.filter((m) => m[3] !== undefined && unreadable(m[3])).map((m) => m[3]),
+  };
 }
 
 /** The pane-building calls in App.tsx: every `paneMark(` argument list, and every `markFor(` argument list, balanced. */
@@ -137,7 +147,8 @@ test("FIX-4: the App.tsx guard rejects the forms that would lose the Command ove
 });
 
 test("FIX-3: creditedAgent runs every case agents.rs asserts for credited_agent, and every call is parsed", () => {
-  const { cases, calls } = rustCases(rust, "credited_agent");
+  const { cases, calls, unreadable } = rustCases(rust, "credited_agent");
+  expect(unreadable, "no u{..} or x.. escape in a parsed literal").toEqual([]);
   expect(cases.length).toBeGreaterThanOrEqual(16);
   // An assert written another way (a variable, assert!(..is_none())) must not be skipped silently.
   expect(cases.length, "every credited_agent( call in agents.rs tests is an assert_eq! with a literal this parser reads").toBe(calls);
@@ -147,8 +158,9 @@ test("FIX-3: creditedAgent runs every case agents.rs asserts for credited_agent,
 });
 
 test("FIX-4: creditedProgram runs every case tools.rs asserts for credited_program, and every call is parsed", () => {
-  const { cases, calls } = rustCases(tools, "credited_program");
-  expect(cases.length).toBeGreaterThanOrEqual(10);
+  const { cases, calls, unreadable } = rustCases(tools, "credited_program");
+  expect(unreadable, "no u{..} or x.. escape in a parsed literal").toEqual([]);
+  expect(cases.length).toBeGreaterThanOrEqual(20);
   expect(cases.length, "every credited_program( call in tools.rs tests is an assert_eq! with a literal this parser reads").toBe(calls);
   for (const [input, want] of cases) {
     expect(creditedProgram(input), `credited_program(${JSON.stringify(input)})`).toBe(want);
@@ -160,6 +172,27 @@ test("FIX-4: the Rust assert parser reads escapes and counts calls it cannot rea
   const { cases, calls } = rustCases(src, "f");
   expect(cases).toEqual([['a\\b"c', "claude"], ["C:\\x", null]]);
   expect(calls).toBe(4);
+  // FIX-5: a function-pointer use is counted (so it is not skipped); a \u{..} or \x.. escape in a parsed literal is reported, an escaped backslash before x is not one.
+  const ptr = 'x\n#[cfg(test)]\nmod t { fn a() { assert_eq!(f("a"), None); let v = [1].map(f); } }';
+  expect(rustCases(ptr, "f").calls).toBe(2);
+  expect(rustCases(ptr, "f").cases.length).toBe(1);
+  const esc = String.raw`x
+#[cfg(test)]
+mod t { fn a() { assert_eq!(f("\u{41}"), None); assert_eq!(f("\x41"), None); assert_eq!(f("a\\x"), None); assert_eq!(f(r"\x"), None); } }`;
+  expect(rustCases(esc, "f").unreadable).toEqual([String.raw`\u{41}`, String.raw`\x41`]);
+});
+
+test("FIX-5: creditedProgram reads a line only when its first word is a bare name, otherwise the whole path", () => {
+  expect(creditedProgram(String.raw`C:\Users\Grok Fan\bin\tool.exe`)).toBeNull();
+  expect(creditedProgram(String.raw`C:\Users\Codex Fan\tools\x.exe`)).toBeNull();
+  expect(creditedProgram(String.raw`D:\Apps\Claude Code\launcher.exe`)).toBeNull();
+  expect(creditedProgram(String.raw`codex --cd C:\work\claude`)).toBe("codex");
+  expect(creditedProgram(String.raw`claude C:\tools\codex.cmd`)).toBe("claude");
+  expect(creditedProgram("/opt/Grok Tools/grok")).toBe("grok");
+  expect(creditedProgram(String.raw`C:\Program Files\Claude\claude.exe`)).toBe("claude");
+  // A Command like this must not draw another agent's mark: the folder name is not the program.
+  expect(markFor("openclaude", String.raw`C:\Users\Codex Fan\tools\x.exe`)).toBe("shell");
+  expect(markFor("openclaude", String.raw`codex --cd C:\work\claude`)).toBe("codex");
 });
 
 test("FIX-4: creditedAgent is exact outside ASCII the way Rust is: its whitespace set, ASCII-only lowercase", () => {

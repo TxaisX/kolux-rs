@@ -6,6 +6,7 @@ mod awake;
 mod capture;
 mod chat;
 mod chat_tools;
+mod clipboard;
 mod browser;
 mod cap;
 pub mod cli;
@@ -26,6 +27,7 @@ mod github;
 mod groups;
 mod hooks;
 mod include;
+mod import;
 // T-043-e: the macOS keychain rule table; the Mac wiring that calls it is T-043-f.
 #[cfg_attr(not(test), allow(dead_code))]
 mod keychain;
@@ -55,6 +57,7 @@ mod schedule;
 mod resume;
 mod secrets;
 mod sessions;
+mod shell_history;
 mod skill_delete;
 mod state;
 mod status;
@@ -123,11 +126,12 @@ fn write_settings(app: &tauri::AppHandle, store: &Mutex<Store>, change: impl FnO
     Ok(())
 }
 
-/// A desktop notification (STAT-041). The window decides when one is due and with which words.
+/// A desktop notification (STAT-041). The window decides when one is due and with which words, and
+/// (STAT-043) whether the system's own sound plays with it: `sound` is false when Kolux plays its
+/// own tone or file instead, or the volume is 0.
 #[tauri::command]
-fn notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
-    use tauri_plugin_notification::NotificationExt;
-    app.notification().builder().title(title).body(body).show().map_err(|e| e.to_string())
+fn notify(app: tauri::AppHandle, title: String, body: String, sound: Option<bool>) -> Result<(), String> {
+    notifications::show(&app, title, body, sound.unwrap_or(true))
 }
 
 /// The minutes of silence before a working agent is reported quiet; 10 by default, 0 is off
@@ -314,6 +318,14 @@ pub fn run() {
             }
             artifacts::serve(&ctx.app_handle().state::<artifacts::Library>(), &req)
         })
+        // T-033-e (FIX-1): a reload of the main page (F5 / Ctrl+R) destroys no window, and the old
+        // page never gets to release its git watches, so they are all let go as the new page starts
+        // loading (the new page subscribes afresh); at the first load there is nothing to let go.
+        .on_page_load(|webview, payload| {
+            if webview.label() == "main" && matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                scm::watch::unwatch_all();
+            }
+        })
         .on_window_event(|window, event| {
             // The window is gone: no shell may outlive it.
             // T-546-c: only the main window holds shells, so the Tower's own window closing changes nothing;
@@ -321,6 +333,8 @@ pub fn run() {
             if let tauri::WindowEvent::Destroyed = event {
                 if window.label() == "main" {
                     window.state::<Terminals>().kill_all();
+                    // T-033-e: no git watch outlives the window either (nothing is waited for here).
+                    scm::watch::unwatch_all();
                     if let Some(t) = window.app_handle().get_webview_window("tower") {
                         let _ = t.close();
                     }
@@ -337,11 +351,13 @@ pub fn run() {
             settings_patch,
             notify,
             notifications::notification_test,
+            notifications::notification_sound_load,
             notifications::open_notification_settings,
             hooks::agent_hooks::agent_hooks_sync,
             hooks::agent_hooks::agent_hooks_file,
             hooks::agent_hooks::saved::agent_status_saved,
             hooks::agent_hooks::saved::agent_resumable,
+            protected::protected_rules,
             hooks::claude_usage,
             sysmem::process_memory,
             fonts::list_fonts,
@@ -399,6 +415,18 @@ pub fn run() {
             projects::workspace_note_save,
             projects::branch_prefix_check,
             projects::workspace_create_fresh,
+            projects::workspace_suggest_name,
+            projects::project_icons_list,
+            projects::project_icon_set,
+            projects::project_auto_icon,
+            setup::setup_suggestion,
+            setup::setup_suggestion_save,
+            setup::setup_suggestion_dismiss,
+            setup::repo_setup_get,
+            setup::repo_setup_save,
+            setup::repo_setup_remove,
+            setup::repo_setup_policy_set,
+            setup::repo_setup_wait_set,
             projects::handoff_note_prepare,
             projects::workspace_remove,
             projects::workspace_remove_check,
@@ -548,6 +576,7 @@ pub fn run() {
             files::open_in,
             files::file_list,
             files::md_new,
+            files::md_templates,
             files::diff_sides,
             files::git_changes,
             files::change_entries,
@@ -566,6 +595,9 @@ pub fn run() {
             fsops::fs_copy,
             fsops::fs_move,
             fsops::clip_write,
+            clipboard::clip_copy_text,
+            clipboard::clip_copy_files,
+            clipboard::feedback_facts,
             diag::diag_bundle,
             diag::diag_review,
             diag::diag_review_discard,

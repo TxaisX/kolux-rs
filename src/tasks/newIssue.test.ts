@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closingDraft, createBusy, createdHere, createOnce, DRAFT_MAX, lastCreateFailure, closesDialog, titleLength, pickableLabels, TITLE_MAX, draftFrom, draftToSave, emptyDraft, issueTargets, openDraft, watchCreate, withRepo } from "./newIssue";
+import { closingDraft, createBusy, createdHere, createOnce, DRAFT_MAX, lastCreateFailure, closesDialog, createResetsDialog, titleLength, pickableLabels, TITLE_MAX, draftFrom, draftToSave, emptyDraft, issueTargets, openDraft, watchCreate, withRepo } from "./newIssue";
 
 // FIX-5: a create belongs to the host and repository it was sent to.
 const S = { host: "ghe.corp", repo: "acme/app" };
@@ -131,6 +131,36 @@ describe("FIX-3: what a New issue create reports after the user has moved on", (
     expect(lastCreateFailure("ghe.corp", "acme/app")).toBe("gh: HTTP 504 timeout");
     await createOnce(async () => 1, S);
     expect(lastCreateFailure("ghe.corp", "acme/app")).toBeNull();
+  });
+
+  it("FIX-6: a create to another repository leaves a scoped failure alone, so a second Create to the failed place still warns", async () => {
+    await createOnce(() => Promise.reject("gh: HTTP 504 timeout"), S);
+    // The user creates in another repository, and on another host with the same repository name.
+    await createOnce(async () => 1, { host: "ghe.corp", repo: "acme/other" });
+    expect(lastCreateFailure("ghe.corp", "acme/app")).toBe("gh: HTTP 504 timeout");
+    await createOnce(async () => 1, { host: "github.com", repo: "acme/app" });
+    expect(lastCreateFailure("ghe.corp", "acme/app")).toBe("gh: HTTP 504 timeout");
+    // A failure elsewhere replaces it (one slot), and a create to the same place clears it.
+    await createOnce(async () => 1, { host: "GHE.corp", repo: "Acme/App" });
+    expect(lastCreateFailure("ghe.corp", "acme/app")).toBeNull();
+  });
+
+  it("FIX-6: the failure is read for the repository selected now, so switching the picker moves it", async () => {
+    await createOnce(() => Promise.reject("gh: HTTP 504 timeout"), S);
+    // The dialog opened on acme/other; the user switches to acme/app and sees the failure, and back sees none.
+    expect(lastCreateFailure("ghe.corp", "acme/other")).toBeNull();
+    expect(lastCreateFailure("ghe.corp", "acme/app")).toBe("gh: HTTP 504 timeout");
+    expect(lastCreateFailure("ghe.corp", "acme/other")).toBeNull();
+    await createOnce(async () => 1, S);
+  });
+
+  it("FIX-6: a created event resets a dialog only when it was sent to that dialog's host and repository", () => {
+    expect(createResetsDialog(S, "ghe.corp", "acme/app")).toBe(true);
+    expect(createResetsDialog(S, "GHE.corp", "Acme/App")).toBe(true);
+    // A create to repo A that comes back while the user types in a dialog for repo B.
+    expect(createResetsDialog(S, "ghe.corp", "acme/other")).toBe(false);
+    expect(createResetsDialog(S, "github.com", "acme/app")).toBe(false);
+    expect(createResetsDialog(undefined, "ghe.corp", "acme/app")).toBe(false);
   });
 
   it("a create that comes back closes its own dialog, or any dialog when the issue belongs on screen, but an older opening's create leaves a newer dialog open when its issue is somewhere else", () => {

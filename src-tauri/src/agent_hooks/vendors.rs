@@ -48,12 +48,59 @@ pub fn agent_of(path: &str) -> Option<&'static str> {
     }
 }
 
+/// STAT-062 (T-126): the transcripts whose turn has ended, per vendor: Antigravity conversations
+/// after a fully idle Stop, Amp threads after an agent end. A late event naming one is discarded
+/// until a fresh invocation or agent start names it again. The ids are the vendor's own and unique
+/// per transcript, so one pane's ended thread never silences another's; the list is bounded, the
+/// oldest end forgotten first.
+#[derive(Default)]
+pub struct Ended(std::collections::VecDeque<(&'static str, String)>);
+const ENDED_CAP: usize = 256;
+
+impl Ended {
+    fn is_ended(&self, agent: &str, id: &str) -> bool {
+        self.0.iter().any(|(a, i)| *a == agent && i == id)
+    }
+
+    fn ended(&mut self, agent: &'static str, id: &str) {
+        self.fresh(agent, id);
+        self.0.push_back((agent, id.to_string()));
+        while self.0.len() > ENDED_CAP {
+            self.0.pop_front();
+        }
+    }
+
+    fn fresh(&mut self, agent: &str, id: &str) {
+        self.0.retain(|(a, i)| !(*a == agent && i == id));
+    }
+}
+
+/// Where in a transcript's turn an event falls, for the ended-turn memory.
+#[derive(Clone, Copy)]
+enum Turn {
+    /// A new turn begins: the transcript is forgotten as ended.
+    Fresh,
+    /// The turn ends: the transcript is remembered; a second end is discarded.
+    End,
+    /// A step inside the turn: discarded once the transcript has ended.
+    Within,
+}
+
+/// The one memory the hook listener and the spool replay share.
+static ENDED: std::sync::Mutex<Ended> = std::sync::Mutex::new(Ended(std::collections::VecDeque::new()));
+
 /// The vendor's event as the status rules read it (`hook_event_name` and Claude Code's field
-/// names), or `None` when it changes nothing.
+/// names), or `None` when it changes nothing (a late event after the turn ended among them).
 pub fn normalize(path: &str, event: &Value) -> Option<Value> {
+    let mut ended = ENDED.lock().unwrap_or_else(|e| e.into_inner());
+    normalize_with(&mut ended, path, event)
+}
+
+/// `normalize` with the ended-turn memory given (STAT-062).
+pub fn normalize_with(ended: &mut Ended, path: &str, event: &Value) -> Option<Value> {
     let path = format!("/{}", path.trim_start_matches('/'));
     let str_of = |k: &str| event.get(k).and_then(Value::as_str).filter(|s| !s.is_empty());
-    let (name, session, mut out) = if path == "/gemini" {
+    let (name, session, mut out, memory) = if path == "/gemini" {
         let tool = || json!({ "tool_name": str_of("tool_name"), "tool_input": event.get("tool_input").or_else(|| event.get("arguments")) });
         let (name, out) = match str_of("hook_event_name")? {
             "BeforeAgent" => ("UserPromptSubmit", json!({ "prompt": str_of("prompt") })),
@@ -62,32 +109,41 @@ pub fn normalize(path: &str, event: &Value) -> Option<Value> {
             "AfterTool" | "PostToolUse" => ("PostToolUse", tool()),
             _ => return None,
         };
-        (name, str_of("session_id"), out)
+        (name, str_of("session_id"), out, None)
     } else if let Some(name) = path.strip_prefix(ANTIGRAVITY_ROUTE) {
         let call = event.get("toolCall");
         let tool = || json!({ "tool_name": call.and_then(|c| c.get("name")), "tool_input": call.and_then(|c| c.get("args")) });
-        let (name, out) = match name {
-            "PreInvocation" => ("UserPromptSubmit", json!({ "prompt": str_of("prompt") })),
-            "PreToolUse" => ("PreToolUse", tool()),
-            "PostToolUse" | "PostInvocation" => ("PostToolUse", tool()),
+        let (name, out, turn) = match name {
+            "PreInvocation" => ("UserPromptSubmit", json!({ "prompt": str_of("prompt") }), Turn::Fresh),
+            "PreToolUse" => ("PreToolUse", tool(), Turn::Within),
+            "PostToolUse" | "PostInvocation" => ("PostToolUse", tool(), Turn::Within),
             // STAT-010: only a Stop with the agent fully idle ends the turn.
-            "Stop" if event.get("fullyIdle").and_then(Value::as_bool) == Some(true) => ("Stop", json!({})),
+            "Stop" if event.get("fullyIdle").and_then(Value::as_bool) == Some(true) => ("Stop", json!({}), Turn::End),
             _ => return None,
         };
-        (name, str_of("conversationId"), out)
+        (name, str_of("conversationId"), out, Some(("antigravity", turn)))
     } else if path == "/amp" {
-        let (name, out) = match str_of("event")? {
-            "agent.start" => ("UserPromptSubmit", json!({ "prompt": str_of("message") })),
-            "tool.call" => ("PreToolUse", json!({ "tool_name": str_of("tool") })),
-            "tool.result" => ("PostToolUse", json!({ "tool_name": str_of("tool") })),
+        let (name, out, turn) = match str_of("event")? {
+            "agent.start" => ("UserPromptSubmit", json!({ "prompt": str_of("message") }), Turn::Fresh),
+            "tool.call" => ("PreToolUse", json!({ "tool_name": str_of("tool") }), Turn::Within),
+            "tool.result" => ("PostToolUse", json!({ "tool_name": str_of("tool") }), Turn::Within),
             // STAT-011: an end that is not `done` (cancelled, an error) is an interruption.
-            "agent.end" => ("Stop", json!({ "kolux_interrupted": str_of("status") != Some("done") })),
+            "agent.end" => ("Stop", json!({ "kolux_interrupted": str_of("status") != Some("done") }), Turn::End),
             _ => return None,
         };
-        (name, str_of("thread"), out)
+        (name, str_of("thread"), out, Some(("amp", turn)))
     } else {
         return None;
     };
+    // STAT-062: the memory applies only to an event that names its transcript.
+    if let (Some((agent, turn)), Some(id)) = (memory, session) {
+        match turn {
+            Turn::Fresh => ended.fresh(agent, id),
+            Turn::End | Turn::Within if ended.is_ended(agent, id) => return None,
+            Turn::End => ended.ended(agent, id),
+            Turn::Within => {}
+        }
+    }
     let o = out.as_object_mut()?;
     o.retain(|_, v| !v.is_null());
     o.insert("hook_event_name".into(), name.into());
@@ -474,6 +530,56 @@ mod tests {
         assert_eq!(state(&mut s, "/amp", json!({"event":"agent.end","status":"done"})), Some("done"));
         assert_eq!(state(&mut s, "/amp", json!({"event":"agent.start","message":"again"})), Some("working"));
         assert_eq!(state(&mut s, "/amp", json!({"event":"agent.end","status":"cancelled"})), Some("interrupted"));
+    }
+
+    /// STAT-062 (T-126): once a transcript's turn has ended, a late tool or end-of-invocation
+    /// event naming it is discarded, so the pane stays done; a fresh invocation (Antigravity) or
+    /// agent start (Amp) begins a new turn; Amp's memory is per thread, so one ended thread never
+    /// silences another. The ids are unique to this test: the memory behind `normalize` is shared.
+    #[test]
+    fn stat_062_late_events_after_an_ended_turn_never_bring_back_working() {
+        let mut s = Session::default();
+        assert_eq!(state(&mut s, "/antigravity/PreInvocation", json!({"conversationId":"c-062","prompt":"go"})), Some("working"));
+        assert_eq!(state(&mut s, "/antigravity/PreToolUse", json!({"conversationId":"c-062","toolCall":{"name":"read_file","args":{}}})), Some("working"));
+        assert_eq!(state(&mut s, "/antigravity/Stop", json!({"conversationId":"c-062","fullyIdle":false,"terminationReason":"tool"})), None, "a Stop while still busy is not the end");
+        assert_eq!(s.resolved(), "working");
+        assert_eq!(state(&mut s, "/antigravity/Stop", json!({"conversationId":"c-062","fullyIdle":true})), Some("done"));
+        assert_eq!(state(&mut s, "/antigravity/PostToolUse", json!({"conversationId":"c-062","toolCall":{"name":"read_file"}})), None, "a late tool event for the ended transcript is discarded");
+        assert_eq!(s.resolved(), "done", "the pane stays done");
+        assert_eq!(state(&mut s, "/antigravity/PostInvocation", json!({"conversationId":"c-062"})), None, "a late end-of-invocation event too");
+        assert_eq!(state(&mut s, "/antigravity/Stop", json!({"conversationId":"c-062","fullyIdle":true})), None, "a repeated idle Stop changes nothing");
+        assert_eq!(s.resolved(), "done");
+        assert_eq!(state(&mut s, "/antigravity/PreInvocation", json!({"conversationId":"c-062","prompt":"again"})), Some("working"), "a fresh invocation begins a new turn");
+        assert_eq!(state(&mut s, "/antigravity/PostToolUse", json!({"conversationId":"c-062","toolCall":{"name":"read_file"}})), Some("working"), "and its tool events count again");
+        assert_eq!(state(&mut s, "/antigravity/Stop", json!({"conversationId":"c-062","fullyIdle":true})), Some("done"));
+        assert_eq!(state(&mut s, "/antigravity/PostToolUse", json!({"conversationId":"c-062-other","toolCall":{"name":"read_file"}})), Some("working"), "another transcript is never silenced by this one");
+
+        let mut s = Session::default();
+        assert_eq!(state(&mut s, "/amp", json!({"event":"agent.start","thread":"t-062-a","message":"one"})), Some("working"));
+        assert_eq!(state(&mut s, "/amp", json!({"event":"agent.start","thread":"t-062-b","message":"two"})), Some("working"));
+        assert_eq!(state(&mut s, "/amp", json!({"event":"agent.end","thread":"t-062-a","status":"done"})), Some("done"));
+        assert_eq!(state(&mut s, "/amp", json!({"event":"tool.result","thread":"t-062-a","tool":"Bash"})), None, "a late tool result for the ended thread is discarded");
+        assert_eq!(s.resolved(), "done", "the pane stays done");
+        assert_eq!(state(&mut s, "/amp", json!({"event":"tool.call","thread":"t-062-b","tool":"Bash"})), Some("working"), "the other thread in the pane still counts");
+        assert_eq!(state(&mut s, "/amp", json!({"event":"agent.end","thread":"t-062-b","status":"done"})), Some("done"));
+        assert_eq!(state(&mut s, "/amp", json!({"event":"tool.call","thread":"t-062-b","tool":"Bash"})), None);
+        assert_eq!(state(&mut s, "/amp", json!({"event":"agent.end","thread":"t-062-b","status":"cancelled"})), None, "a late end for an ended thread changes nothing");
+        assert_eq!(s.resolved(), "done");
+        assert_eq!(state(&mut s, "/amp", json!({"event":"agent.start","thread":"t-062-a","message":"three"})), Some("working"), "a fresh agent start begins a new turn");
+        assert_eq!(state(&mut s, "/amp", json!({"event":"tool.call","thread":"t-062-a","tool":"Bash"})), Some("working"));
+        assert_eq!(state(&mut s, "/amp", json!({"event":"tool.call","tool":"Bash"})), Some("working"), "an event naming no thread is read as before");
+
+        // The memory itself: bounded, per agent, and cleared by a fresh start.
+        let mut m = Ended::default();
+        for i in 0..=ENDED_CAP {
+            m.ended("amp", &format!("x{i}"));
+        }
+        assert!(!m.is_ended("amp", "x0") && m.is_ended("amp", &format!("x{ENDED_CAP}")), "the oldest ended id is forgotten past the cap");
+        assert!(!m.is_ended("antigravity", "x1"), "an Amp thread's end says nothing about an Antigravity conversation of the same name");
+        m.fresh("amp", "x1");
+        assert!(!m.is_ended("amp", "x1"));
+        assert_eq!(normalize_with(&mut m, "/amp", &json!({"event":"tool.call","thread":"x2","tool":"Bash"})), None);
+        assert!(normalize_with(&mut m, "/amp", &json!({"event":"tool.call","thread":"x1","tool":"Bash"})).is_some());
     }
 
     #[test]
