@@ -63,8 +63,13 @@ pub const COMMANDS: &[Command] = &[
     ("tab current", "browser.tab-current", &["worktree", "page"]),
     ("tab show", "browser.tab-show", &["index", "worktree", "page"]),
     ("tab switch", "browser.tab-switch", &["index", "focus", "worktree", "page"]),
-    ("tab create", "browser.tab-create", &["url", "profile", "worktree", "page"]),
+    ("tab create", "browser.tab-create", &["url", "profile", "lease", "holder", "worktree", "page"]),
     ("tab close", "browser.tab-close", &["index", "worktree", "page"]),
+    // T-312-b (ORCH-061): page leases. One holder at a time owns a placement; the pages it opens
+    // there with `tab create --lease` close when it releases the lease.
+    ("tab lease", "browser.tab-lease", &["lease", "holder", "worktree", "page"]),
+    ("tab release", "browser.tab-release", &["lease", "holder", "worktree", "page"]),
+    ("tab leases", "browser.tab-leases", &["worktree", "page"]),
     ("tab profile", "browser.tab-profile", &["worktree", "page"]),
     ("tab profile set", "browser.tab-profile-set", &["profile", "worktree", "page"]),
     ("tab profile use-default", "browser.tab-profile-use-default", &["worktree", "page"]),
@@ -329,6 +334,17 @@ pub fn check(command: &str, flags: &Map<String, Value>) -> Result<Map<String, Va
         }
         "browser.tab-profile-set" | "browser.profiles-delete" => {
             need("profile")?;
+        }
+        "browser.tab-lease" | "browser.tab-release" | "browser.tab-create" => {
+            if command != "browser.tab-create" || flags.contains_key("lease") {
+                need("lease")?;
+            }
+            if let Some(l) = text("lease") {
+                super::lease::name(l, "lease").map_err(args)?;
+            }
+            if let Some(h) = text("holder") {
+                super::lease::name(h, "holder").map_err(args)?;
+            }
         }
         "browser.profiles-create" => {
             need("label")?;
@@ -1105,6 +1121,10 @@ pub fn tab_rows(tabs: &[Tab], worktree: Option<&str>, all: bool) -> Vec<Tab> {
 
 fn row(t: &Tab, store: Option<&profiles::Store>) -> Value {
     let mut v = json!({ "page": t.id, "url": t.url, "title": t.title, "worktree": t.worktree, "shown": t.shown });
+    // T-312-b (ORCH-061): a page an agent placed under a lease says which.
+    if let Some(l) = super::lease::with(|l| l.place_of(t.id).map(str::to_string)) {
+        v["lease"] = json!(l);
+    }
     if let Some(s) = store {
         v["profile"] = json!(profiles::tab_profile(s, t.id));
     }
@@ -1123,6 +1143,17 @@ fn store() -> Result<(std::path::PathBuf, profiles::Store), Fail> {
     let root = profiles::root().map_err(|m| Fail::new("failed", m))?;
     let s = profiles::load(&root);
     Ok((root, s))
+}
+
+/// T-312-b (ORCH-061): who asks for a lease: `--holder`, else the Kolux terminal the call came
+/// from (the app checked its key), else the plain command line.
+pub fn holder_of(req: &Request) -> String {
+    let given = req.args["holder"].as_str().map(str::trim).filter(|s| !s.is_empty());
+    given.map(str::to_string).or_else(|| req.pane.as_ref().map(|p| p.handle.clone()).filter(|h| !h.is_empty())).unwrap_or_else(|| "cli".into())
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 /// Waits up to `limit` for the registry to show `done` (the pane acts on the event and reports).
@@ -1193,19 +1224,38 @@ fn tabs_cmd(req: &Request, worktree: Option<&str>, page_no: Option<u32>) -> Resu
                     *n = Some(p);
                 }
             }
+            // T-312-b (ORCH-061): a page placed under a lease needs the lease first.
+            let lease = text("lease");
+            let who = holder_of(req);
+            let took = match &lease {
+                Some(l) => super::lease::with(|t| t.acquire(l, &who, now_ms())).map_err(|m| Fail::new("blocked", m))?,
+                None => false,
+            };
             let before: Vec<u32> = tabs().iter().map(|t| t.id).collect();
-            tell(TAB_EVENT, json!({ "action": "create", "url": url, "worktree": worktree })).map_err(fail)?;
+            let told = tell(TAB_EVENT, json!({ "action": "create", "url": url, "worktree": worktree })).map_err(fail);
             let mut id = None;
-            settle(SETTLE, |t| {
-                id = t.iter().map(|t| t.id).find(|i| !before.contains(i));
-                id.is_some()
-            });
+            if told.is_ok() {
+                settle(SETTLE, |t| {
+                    id = t.iter().map(|t| t.id).find(|i| !before.contains(i));
+                    id.is_some()
+                });
+            }
             let Some(id) = id else {
                 if let Ok(mut n) = NEXT_PROFILE.lock() {
                     n.take();
                 }
+                if let (Some(l), true) = (&lease, took) {
+                    // A lease taken only for this page is not kept when the page never opened.
+                    let _ = super::lease::with(|t| t.release(l, &who, &[]));
+                }
+                told?;
                 return Err(fail("no new browser tab appeared within 5 s".into()));
             };
+            if let Some(l) = &lease {
+                super::lease::with(|t| t.add_page(l, &who, id)).map_err(fail)?;
+                answer["lease"] = json!(l);
+                answer["holder"] = json!(who);
+            }
             answer["page"] = json!(id);
             answer["url"] = json!(url);
             answer["summary"] = json!(format!("page {id} opened at {url}"));
@@ -1218,6 +1268,35 @@ fn tabs_cmd(req: &Request, worktree: Option<&str>, page_no: Option<u32>) -> Resu
                 return Err(fail(format!("browser tab {id} did not close")));
             }
             json!({ "page": id, "destructive": true, "summary": format!("page {id} closed") })
+        }
+        "browser.tab-lease" => {
+            let l = text("lease").unwrap_or_default();
+            let who = holder_of(req);
+            let took = super::lease::with(|t| t.acquire(&l, &who, now_ms())).map_err(|m| Fail::new("blocked", m))?;
+            let summary = if took { format!("{who} now holds placement {l}") } else { format!("{who} already holds placement {l}") };
+            json!({ "lease": l, "holder": who, "taken": took, "summary": summary })
+        }
+        "browser.tab-release" => {
+            let l = text("lease").unwrap_or_default();
+            let who = holder_of(req);
+            let open: Vec<u32> = tabs().iter().map(|t| t.id).collect();
+            let pages = super::lease::with(|t| t.release(&l, &who, &open)).map_err(|m| if m.starts_with("no lease") { Fail::new("not_found", m) } else { Fail::new("blocked", m) })?;
+            for p in &pages {
+                tell(TAB_EVENT, json!({ "action": "close", "page": p })).map_err(fail)?;
+            }
+            if !settle(SETTLE, |t| t.iter().all(|t| !pages.contains(&t.id))) {
+                let left: Vec<u32> = tabs().iter().map(|t| t.id).filter(|i| pages.contains(i)).collect();
+                return Err(fail(format!("placement {l} was released but page(s) {left:?} did not close")));
+            }
+            json!({ "lease": l, "holder": who, "closed": pages, "destructive": !pages.is_empty(), "summary": format!("placement {l} released; {} page(s) closed", pages.len()) })
+        }
+        "browser.tab-leases" => {
+            let open: Vec<u32> = tabs().iter().map(|t| t.id).collect();
+            let rows = super::lease::with(|t| {
+                t.prune(&open);
+                t.rows()
+            });
+            json!({ "leases": rows, "summary": format!("{} lease(s)", rows.len()) })
         }
         "browser.tab-profile" => {
             let id = current(None)?;
@@ -1312,6 +1391,7 @@ pub fn text(command: &str, r: &Value) -> Option<String> {
         "browser.network" => lines(&r["entries"], |e| format!("{:<6} {} {}{}", e["kind"].as_str().unwrap_or_default(), e["status"].as_u64().map(|s| s.to_string()).unwrap_or_else(|| e["failed"].as_str().map(|f| format!("({f})")).unwrap_or_default()), e["url"].as_str().unwrap_or_default(), e["ms"].as_u64().map(|ms| format!("  {ms} ms")).unwrap_or_default()), "no request recorded"),
         "browser.intercept-list" => format!("patterns: {}\n{}", match &r["patterns"] { Value::Array(p) => p.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "), _ => "none".into() }, lines(&r["held"], |e| format!("held {} {}", e["kind"].as_str().unwrap_or_default(), e["url"].as_str().unwrap_or_default()), "no request held")),
         "browser.clipboard-read" => r["text"].as_str().unwrap_or_default().to_string(),
+        "browser.tab-leases" => lines(&r["leases"], |l| format!("{}  held by {}  pages {}", l["lease"].as_str().unwrap_or_default(), l["holder"].as_str().unwrap_or_default(), l["pages"]), "no lease is held"),
         _ => r["summary"].as_str().map(str::to_string).unwrap_or_else(|| "ok".into()),
     })
 }
@@ -1692,7 +1772,32 @@ mod tests {
         assert_eq!(check("browser.profiles-delete", &flags(&[])).unwrap_err().message, "--profile is required");
         assert!(gate("browser.tab-show", Some(9), None, &[]).is_err_and(|f| f.code == "not_found"));
         let names: Vec<&str> = COMMANDS.iter().filter(|c| c.0.starts_with("tab ") || c.0.starts_with("profiles ")).map(|c| c.0).collect();
-        assert_eq!(names, ["tab list", "tab current", "tab show", "tab switch", "tab create", "tab close", "tab profile", "tab profile set", "tab profile use-default", "tab profile clone", "profiles list", "profiles create", "profiles delete"]);
+        assert_eq!(names, ["tab list", "tab current", "tab show", "tab switch", "tab create", "tab close", "tab lease", "tab release", "tab leases", "tab profile", "tab profile set", "tab profile use-default", "tab profile clone", "profiles list", "profiles create", "profiles delete"]);
+    }
+
+    #[test]
+    fn orch061_lease_commands_check_their_flags_and_name_the_holder() {
+        assert_eq!(check("browser.tab-lease", &flags(&[])).unwrap_err().message, "--lease is required");
+        assert_eq!(check("browser.tab-release", &flags(&[("holder", "a")])).unwrap_err().message, "--lease is required");
+        assert!(check("browser.tab-lease", &flags(&[("lease", &"x".repeat(81))])).unwrap_err().message.contains("longer than"));
+        assert!(check("browser.tab-lease", &flags(&[("lease", "review"), ("holder", "agent-a")])).is_ok());
+        // tab create takes a lease only when one is named; a bare --lease is refused.
+        assert!(check("browser.tab-create", &flags(&[("url", "https://a.test/")])).is_ok());
+        let mut bare = flags(&[("url", "https://a.test/")]);
+        bare.insert("lease".into(), json!(true));
+        assert_eq!(check("browser.tab-create", &bare).unwrap_err().message, "--lease is required");
+        assert!(check("browser.tab-create", &flags(&[("url", "https://a.test/"), ("lease", "review")])).is_ok());
+        // The holder: --holder, else the calling terminal, else the command line.
+        let mut req = Request { id: "1".into(), token: String::new(), command: "browser.tab-lease".into(), cwd: ".".into(), args: json!({}), pane: None, cli: String::new(), arrived: None };
+        assert_eq!(holder_of(&req), "cli");
+        req.pane = Some(crate::cli::Pane { handle: "term-4".into(), key: "k".into() });
+        assert_eq!(holder_of(&req), "term-4");
+        req.args = json!({ "holder": " agent-a " });
+        assert_eq!(holder_of(&req), "agent-a");
+        // The readable list.
+        let r = json!({ "leases": [{ "lease": "review", "holder": "term-4", "pages": [3, 5], "since": 1 }] });
+        assert_eq!(text("browser.tab-leases", &r).unwrap(), "review  held by term-4  pages [3,5]");
+        assert_eq!(text("browser.tab-leases", &json!({ "leases": [] })).unwrap(), "no lease is held");
     }
 
     #[test]

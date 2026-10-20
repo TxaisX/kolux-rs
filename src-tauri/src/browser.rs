@@ -60,6 +60,9 @@ pub mod engine;
 // T-286-b (APP-040): which engine process failures are real crashes, and their records.
 #[path = "browser_crash.rs"]
 pub mod crash;
+// T-312-b (ORCH-061): page leases for the runtime browser commands.
+#[path = "browser_lease.rs"]
+pub mod lease;
 // T-272-b (BROW-032): how a page's permission requests are answered.
 #[path = "browser_permissions.rs"]
 pub mod permissions;
