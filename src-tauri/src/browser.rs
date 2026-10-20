@@ -39,6 +39,9 @@ pub mod downloads;
 // T-179: BROW-020 tabs come back after a restart on their trail, BROW-021 the memory budget.
 #[path = "browser_session.rs"]
 pub mod session;
+// T-272-d: which page holds the keyboard, from the system's focus (keyboard chord provenance).
+#[path = "browser_holder.rs"]
+pub mod holder;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
@@ -1040,6 +1043,9 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
                 let _ = chord_app.emit(LINK_EVENT, LinkPayload { id, url, front });
                 false
             }
+            // T-272-d: a keyboard chord or app shortcut from a page while another page holds the
+            // keyboard was sent by this page's script, not pressed: it is dropped.
+            Nav::Chord(_) | Nav::Key(_) if holder::drop_chord(id) => false,
             Nav::Chord(what) => {
                 // Council FIX-3: the keyboard is not moved here. The app tells a chord pressed in
                 // the page (its own window does not hold the keyboard) from one the page's script
@@ -1128,7 +1134,19 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         Some(c) => builder.background_color(c),
         None => builder,
     };
-    window.add_child(builder, LogicalPosition::new(spot.x, spot.y), LogicalSize::new(spot.w, spot.h)).map_err(err)?;
+    let page = window.add_child(builder, LogicalPosition::new(spot.x, spot.y), LogicalSize::new(spot.w, spot.h)).map_err(err)?;
+    // T-272-d: remember the page's container window, so a keyboard chord can be checked against
+    // the window that really holds the keyboard.
+    #[cfg(windows)]
+    let _ = page.with_webview(move |pw| {
+        let mut container = Default::default();
+        // SAFETY: ParentWindow only writes the controller's parent window handle into `container`.
+        if unsafe { pw.controller().ParentWindow(&mut container) }.is_ok() {
+            holder::record(id, container.0 as isize);
+        }
+    });
+    #[cfg(not(windows))]
+    let _ = page;
     // A new page is laid over its pane; a tab opened behind starts hidden (council FIX-2, AFTER 3),
     // and the pane's bounds keep this true from here on.
     set_shown(id, shown.unwrap_or(true));
@@ -1297,6 +1315,7 @@ pub fn proxy_of(setting: Option<&str>) -> Result<Option<Url>, String> {
 pub async fn browser_close(app: AppHandle, id: u32) -> Result<(), String> {
     set_shown(id, false);
     families().leave(id); // T-272-c
+    holder::forget(id); // T-272-d
     forget_tab(id);
     if let Ok(mut i) = ICONS.lock() {
         i.forget(id);

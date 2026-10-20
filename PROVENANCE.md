@@ -908,3 +908,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · cli T-262-b · this tree's own cli.rs and agents/inventory.rs; no outside code
 > 2026-10-19 · cli T-279-d · this tree's own orchestration.rs (breaker_reset) and cli.rs; no outside code
 > 2026-10-20 · browser T-272-c · rules from the T-272-c PLAN line and the BROW-016 card; this tree's own browser.rs (Allowance, new_window, navigation), BrowserPane.tsx and site.ts; WHATWG URL parsing via the url crate already in the tree; no outside code
+> 2026-10-20 · browser T-272-d · rules from the T-272-d PLAN line; this tree's own browser.rs (navigation, chord arms) and chord.ts; Microsoft's public Win32 docs for GetGUIThreadInfo and IsChild; tauri 2.12 PlatformWebview::controller and the WebView2 controller's ParentWindow (public API docs); no outside code
