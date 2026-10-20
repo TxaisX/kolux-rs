@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { DONE_LIMIT, inboxItems, moveSelection, openLabel, settle, type Source } from "./inbox";
+import { DONE_LIMIT, exitNote, inboxItems, moveSelection, openLabel, settle, type Source } from "./inbox";
 
 const MIN = 60_000;
 const now = 10_000 * MIN;
@@ -51,4 +51,25 @@ test("an item that needs an answer offers Answer in Code, since nothing is answe
     [3, "Open in Code"],
     [4, "Open in Code"],
   ]);
+});
+
+test("T-035-b: a question or permission whose terminal has exited stays in Needs you as Answer in Code and says its terminal is gone; a finished or running item says nothing (EDIT-041)", () => {
+  const items = inboxItems([src(1, "permission", { running: false }), src(2, "waiting"), src(3, "waiting", { running: false, interrupted: true }), src(4, "done", { running: false, finishedAt: now - MIN }), src(5, "working")], now);
+  expect(items.map((i) => [i.key, i.group, i.exited, openLabel(i), exitNote(i) === null])).toEqual([
+    [1, "needs", true, "Answer in Code", false],
+    [2, "needs", false, "Answer in Code", true],
+    [3, "needs", true, "Answer in Code", false],
+    [5, "waiting", false, "Open in Code", true],
+    [4, "done", false, "Open in Code", true],
+  ]);
+  expect(exitNote(items[0])).toMatch(/terminal has exited/);
+});
+
+test("FIX-1: a blocked item whose terminal exited (a stop, not a prompt) gets its own sentence and never says a prompt cannot be answered", () => {
+  const [blocked] = inboxItems([src(1, "blocked", { running: false })], now);
+  expect(blocked).toMatchObject({ group: "needs", exited: true });
+  expect(exitNote(blocked)).toMatch(/stopped/);
+  expect(exitNote(blocked)).not.toMatch(/prompt/);
+  const [asked] = inboxItems([src(2, "waiting", { running: false })], now);
+  expect(exitNote(asked)).toMatch(/prompt cannot be answered/);
 });
