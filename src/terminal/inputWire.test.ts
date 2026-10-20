@@ -17,7 +17,7 @@ test("SET-025: the wheel speed is the full-screen one only while a full-screen p
   const p = readInput({ terminalFullScreenScroll: 7 }, "linux");
   expect(inputOptions(p, "linux", "en", true, 1.5).scrollSensitivity).toBe(7);
   expect(inputOptions(p, "linux", "en", false, 1.5).scrollSensitivity).toBe(1.5);
-  expect(inputOptions(readInput({}, "linux"), "linux", "en", true, 1).scrollSensitivity).toBe(3);
+  expect(inputOptions(readInput({}, "linux"), "linux", "en", true, 1).scrollSensitivity).toBe(1); // TERM-089
 });
 
 test("SET-022: the ligatures addon comes back when it loads and null when it is absent or fails to start", async () => {

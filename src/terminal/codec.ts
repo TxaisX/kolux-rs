@@ -10,7 +10,8 @@ export function decodeOutput(base64: string): Uint8Array {
   return bytes;
 }
 
-export type OutputEvent = { id: number; data: string; pane?: number | null; generation?: number };
+/** ORCH-057: `seq` is the session's output count after this chunk (resync.ts drops what a snapshot holds). */
+export type OutputEvent = { id: number; data: string; pane?: number | null; generation?: number; seq?: number };
 
 /**
  * TERM-098: whether an output chunk belongs to this pane. By terminal id once known; before the
@@ -20,9 +21,10 @@ export type OutputEvent = { id: number; data: string; pane?: number | null; gene
 export function forPane(e: { id: number; pane?: number | null }, id: number | null, key: number | undefined): boolean {
   return id === null ? key !== undefined && e.pane === key : e.id === id;
 }
-export type ExitEvent = { id: number; code: number | null };
+export type ExitEvent = { id: number; code: number | null; outcome?: "exited" | "unverifiable" };
 
-// What the pane header says once the program is gone.
-export function endedLabel(code: number | null): string {
+// What the pane header says once the program is gone. ORCH-057: an end Kolux could not confirm says so.
+export function endedLabel(code: number | null, outcome?: ExitEvent["outcome"]): string {
+  if (outcome === "unverifiable") return "ended, outcome unverifiable";
   return code === null ? "ended" : code === 0 ? "ended" : `ended (exit ${code})`;
 }

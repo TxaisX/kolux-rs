@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react";
 import type { Platform } from "../keys/actions";
 import { clampNumber } from "../terminal/text";
-import { FULL_SCREEN_SCROLL, INPUT_FIELDS, readInput, shellCardShown, type Auto } from "../terminal/inputPrefs";
+import { FULL_SCREEN_SCROLL, INPUT_FIELDS, osc52Save, readInput, shellCardShown, type Auto } from "../terminal/inputPrefs";
 import { Segmented } from "./GeneralPage";
 
 type Save = (patch: Record<string, unknown>) => void;
@@ -57,7 +57,7 @@ export function InputCard({ settings, platform, onSave }: { settings: Record<str
       </div>
       <p className="conn-detail">Automatic uses the graphics chip when the computer has one that works, and plain drawing otherwise. Open terminals keep how they were drawn until they are reopened.</p>
       <Switch label="Middle-click pastes (the selection, else the clipboard)" checked={p.middleClick} onChange={(on) => onSave({ [INPUT_FIELDS.middleClick]: on })} />
-      <Switch label="Programs may copy to the clipboard (OSC 52)" checked={p.osc52} onChange={(on) => onSave({ [INPUT_FIELDS.osc52]: on })} />
+      <Switch label="Programs may copy to the clipboard (OSC 52)" checked={p.osc52} onChange={(on) => onSave(osc52Save(on))} />
       <p className="conn-detail">The Privacy setting for clipboard access by programs must be on as well.</p>
       <Switch label="Hide the pointer while typing" checked={p.hidePointer} onChange={(on) => onSave({ [INPUT_FIELDS.hidePointer]: on })} />
       <Switch label="Focus follows the mouse" checked={p.focusFollowsMouse} onChange={(on) => onSave({ [INPUT_FIELDS.focusFollowsMouse]: on })} />

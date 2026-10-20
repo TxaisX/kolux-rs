@@ -76,7 +76,7 @@ export function readText(s: Record<string, unknown>, onWindows = windows()): Ter
     contrast: s[FIELDS.contrast] === true,
     // An older setting saved as a string of rows is read as rows.
     scrollback: clampNumber(s[FIELDS.scrollback], SCROLLBACK.min, SCROLLBACK.max, SCROLLBACK.start),
-    scroll: clampNumber(s[FIELDS.scroll], 0.1, 5, 1, 0.1),
+    scroll: clampNumber(s[FIELDS.scroll], 0.1, 5, 1.15, 0.1), // TERM-089: normal wheel speed 1.15
     fastScroll: clampNumber(s[FIELDS.fastScroll], 1, 20, 5),
     copyOnSelect: s[FIELDS.copyOnSelect] === true,
     rightClickPaste: typeof s[FIELDS.rightClickPaste] === "boolean" ? (s[FIELDS.rightClickPaste] as boolean) : onWindows, // on by default on Windows; right-click goes through attachPaste (council D2 MERGE 47 FB2)

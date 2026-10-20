@@ -482,6 +482,7 @@ pub fn run() {
             terminal::terminal_ack,
             terminal::terminal_memory_profile,
             terminal::terminal_kill,
+            terminal::terminal_next_input_source,
             terminal::terminal_layout,
             terminal::terminal_busy,
             terminal::terminal_diagnostics,
