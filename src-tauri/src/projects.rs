@@ -177,6 +177,8 @@ pub fn forget_workspace(store: &Store, path: &str) -> Result<(), String> {
     set_parent(store, path, None)?;
     // EDIT-040: a later workspace in the same folder starts with an empty note.
     store.set(&format!("{NOTE_PREFIX}{}", name_key(path)), "").map_err(|e| e.to_string())?;
+    // After-list row 59: every way a workspace goes drops its board status too.
+    crate::bulk::clear_status(store, path)?;
     set_origin(store, path, None)
 }
 

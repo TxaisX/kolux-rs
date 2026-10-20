@@ -153,8 +153,7 @@ pub fn workspace_forget(store: StoreState<'_>, project_id: Option<String>, path:
     let store = store.lock().map_err(|e| e.to_string())?;
     let project = project_id.and_then(|id| find_project(&store, &id).ok());
     forget_check(project.as_ref(), &path, Path::new(&path).exists())?;
-    crate::projects::forget_workspace(&store, &path)?;
-    clear_status(&store, &path)
+    crate::projects::forget_workspace(&store, &path)
 }
 
 // ---- PROJ-084: the status workflow ----------------------------------------------------------------
@@ -441,6 +440,9 @@ mod tests {
         set_status(&store, "C:/ws/a", "ideas").unwrap();
         clear_status(&store, "C:/ws/a").unwrap();
         assert!(status_map(&store).is_empty());
+        set_status(&store, "C:/ws/a", "ideas").unwrap();
+        crate::projects::forget_workspace(&store, "c:\\ws\\A").unwrap();
+        assert!(status_map(&store).is_empty(), "row 59: a workspace that goes takes its status with it");
         assert_eq!(set_statuses(&store, &[(None, "".into())]).unwrap(), default_statuses(), "an empty list falls back to the default set");
         drop(store);
         let _ = fs::remove_dir_all(dir);
