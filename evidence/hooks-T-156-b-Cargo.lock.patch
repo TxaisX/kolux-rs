@@ -1,0 +1,12 @@
+diff --git a/src-tauri/Cargo.lock b/src-tauri/Cargo.lock
+index ae63dca0..aadfa5b2 100644
+--- a/src-tauri/Cargo.lock
++++ b/src-tauri/Cargo.lock
+@@ -2026,6 +2026,7 @@ dependencies = [
+  "jiff",
+  "portable-pty",
+  "pulldown-cmark",
++ "regex",
+  "reqwest",
+  "rusqlite",
+  "serde",

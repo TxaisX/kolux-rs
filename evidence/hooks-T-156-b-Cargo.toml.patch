@@ -1,0 +1,13 @@
+diff --git a/src-tauri/Cargo.toml b/src-tauri/Cargo.toml
+index 6c9b739b..1ca1f8b9 100644
+--- a/src-tauri/Cargo.toml
++++ b/src-tauri/Cargo.toml
+@@ -53,6 +53,8 @@ unicode_names2 = "4.0.0"
+ # SKILL-013: the collected Results page renders Markdown, and the README lists SHA-256 hashes (sha2 is already in the tree).
+ pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+ sha2 = "0.10"
++# T-156-b (SAFE-016): the user's own regular-expression rules, built with a size limit (already in the tree).
++regex = "1"
+ 
+ [target.'cfg(windows)'.dependencies]
+ windows-sys = { version = "0.61", features = ["Wdk_System_Threading", "Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Console", "Win32_System_DataExchange", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

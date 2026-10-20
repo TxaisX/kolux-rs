@@ -1,0 +1,27 @@
+diff --git a/src/settings/SafetyPage.tsx b/src/settings/SafetyPage.tsx
+index 23635391..ebde43c9 100644
+--- a/src/settings/SafetyPage.tsx
++++ b/src/settings/SafetyPage.tsx
+@@ -3,10 +3,12 @@
+ // hook answer is hooks.rs); this page is the master switch and one switch per rule over the saved
+ // settings keys `protectedAsk` (never saved means on) and `protectedOff` (the ids switched off).
+ // The rule names and example commands come from Rust (`protected_rules`), so they cannot drift.
+-// Custom rules, per-project overrides and the recent-attempts list are T-156-b (SAFE-016..018).
++// Custom rules, per-project overrides and the recent-attempts list (T-156-b, SAFE-016..018) are
++// the two sections SafetyRules.tsx draws under this one.
+ import { useEffect, useRef, useState } from "react";
+ import { invoke } from "@tauri-apps/api/core";
+ import { hooksOn } from "./AgentsPage";
++import { SafetyAttempts, SafetyRules } from "./SafetyRules";
+ import { useSettings } from "./useSettings";
+ 
+ export const ASK_FIELD = "protectedAsk";
+@@ -127,6 +129,8 @@ export default function SafetyPage() {
+   return (
+     <>
+       <SafetyView settings={shown} rules={rules} error={rulesError} save={guarded} />
++      <SafetyRules settings={shown} rules={rules} save={guarded} />
++      <SafetyAttempts />
+       {error && (
+         <p className="conn-detail warn" role="alert">
+           {error}
