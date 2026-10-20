@@ -1015,7 +1015,8 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     #[cfg(windows)]
     let crash_dir = app.path().app_data_dir().ok();
     // T-239-b (BROW-025): whether this tab's profile shows Firefox on the sign-in hosts.
-    let (builder, spoof) = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile);
+    let key = url.to_string();
+    let (builder, spoof) = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile, &key);
     let builder = match proxy_of(proxy.as_deref())? {
         Some(u) => builder.proxy_url(u),
         None => builder,
@@ -1736,12 +1737,27 @@ pub fn terminal_live(handle: &str) -> bool {
 /// BROW-045: the profile the next `browser_open` runs in, left by `kolux tab create --profile`
 /// (the front end opens the tab and does not know the profile). ponytail: one slot, since tabs
 /// open one at a time from the command line; a map by url if that stops holding.
-pub static NEXT_PROFILE: Mutex<Option<String>> = Mutex::new(None);
+static NEXT_PROFILE: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// after-list 154: `tab create --profile` hands its profile over keyed by the address the tab
+/// opens at, so two creates close together each get their own profile, not each other's.
+pub fn hand_profile(url: &str, profile: String) {
+    if let Ok(mut n) = NEXT_PROFILE.lock() {
+        n.push((url.to_string(), profile));
+    }
+}
+
+/// Takes the profile handed over for `url`, oldest first; none when nothing waits for it.
+pub fn take_profile(url: &str) -> Option<String> {
+    let mut n = NEXT_PROFILE.lock().ok()?;
+    let at = n.iter().position(|(u, _)| u == url)?;
+    Some(n.remove(at).1)
+}
 
 /// A tab in a profile other than the default runs in that profile's own engine data folder; the
 /// answer also says whether that profile shows Firefox on the sign-in hosts (BROW-025).
-fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>) -> (WebviewBuilder<tauri::Wry>, bool) {
-    let profile = profile.or_else(|| NEXT_PROFILE.lock().ok().and_then(|mut n| n.take()));
+fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>, url: &str) -> (WebviewBuilder<tauri::Wry>, bool) {
+    let profile = profile.or_else(|| take_profile(url));
     let Some(p) = profile.filter(|p| p != profiles::DEFAULT) else { return (b, true) };
     let Ok(root) = profiles::root() else { return (b, true) };
     let mut store = profiles::load(&root);
@@ -2032,6 +2048,18 @@ pub async fn browser_diagnose(app: AppHandle, url: String) -> Result<Diagnosis, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn two_tab_creates_close_together_each_open_in_their_own_profile() {
+        hand_profile("https://a.example/", "work".into());
+        hand_profile("https://b.example/", "home".into());
+        // The second tab opens first: it still gets its own profile, not the first create's.
+        assert_eq!(take_profile("https://b.example/"), Some("home".into()));
+        assert_eq!(take_profile("https://a.example/"), Some("work".into()));
+        // Nothing left over for a later tab at either address.
+        assert_eq!(take_profile("https://a.example/"), None);
+        assert_eq!(take_profile("https://c.example/"), None);
+    }
 
     #[test]
     fn brow017_a_right_click_and_a_menu_pick_arrive_as_menu_navigations() {

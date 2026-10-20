@@ -9,7 +9,7 @@
 //! `cli.rs` is a shared file: it gains this module's table, check, run and text by
 //! `evidence/browser-T-195-cli.rs.patch` (applied in MERGE 198).
 
-use super::{eval_json, pick_tab, preview, profiles, same_dir, tabs, tell, Tab, EVAL_WAIT, NEXT_PROFILE};
+use super::{eval_json, pick_tab, preview, profiles, same_dir, tabs, tell, Tab, EVAL_WAIT};
 use crate::cli::{Fail, Request};
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
@@ -1235,12 +1235,13 @@ fn tabs_cmd(req: &Request, worktree: Option<&str>, page_no: Option<u32>) -> Resu
             } else {
                 super::allowed(&super::parse(&url).map_err(args)?, None).map_err(args)?;
             }
-            if let Some(p) = text("profile") {
+            // The address as the opening tab will see it, so the profile reaches this tab only.
+            let key = super::parse(&url).map(|u| u.to_string()).unwrap_or_else(|_| url.clone());
+            let handed = text("profile");
+            if let Some(p) = handed.clone() {
                 let (_, s) = store()?;
                 profiles::get(&s, &p).ok_or_else(|| Fail::new("not_found", format!("no profile is called {p}")))?;
-                if let Ok(mut n) = NEXT_PROFILE.lock() {
-                    *n = Some(p);
-                }
+                super::hand_profile(&key, p);
             }
             // T-312-b (ORCH-061): a page placed under a lease needs the lease first.
             let lease = text("lease");
@@ -1260,8 +1261,8 @@ fn tabs_cmd(req: &Request, worktree: Option<&str>, page_no: Option<u32>) -> Resu
                 });
             }
             let Some(id) = id else {
-                if let Ok(mut n) = NEXT_PROFILE.lock() {
-                    n.take();
+                if handed.is_some() {
+                    super::take_profile(&key);
                 }
                 if let (Some(l), true) = (&lease, took) {
                     // A lease taken only for this page is not kept when the page never opened.
