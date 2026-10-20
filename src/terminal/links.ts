@@ -140,3 +140,23 @@ export function clickTarget(f: Found, e: { ctrlKey: boolean; metaKey: boolean; s
 
 /** An OSC 8 link's own target as a Found, or null when it is not a web or file link (other schemes stay text). */
 export const linkFor = (uri: string): Found | null => findLinks(uri).find((f) => f.start === 0) ?? null;
+
+/** ACCT-061: the last check before a link is opened. A web link opens only as http, https or file (the Rust side
+ *  refuses anything else too); a file target must be a plain path with no control character. Everything else is
+ *  ignored: nothing opens, nothing is said. */
+export function allowed(f: Found): boolean {
+  if (f.target.length === 0 || /[\u0000-\u001f\u007f]/.test(f.target)) return false;
+  if (f.kind === "url") return /^(https?|file):\/\//i.test(f.target);
+  return true;
+}
+
+/** ACCT-061: a link scan that trips over unusual output (a regex that blows the stack, a buffer row that is gone)
+ *  is contained: that row has no links and the pane keeps working. `note` hears the error once, for the log. */
+export function safeLinks<T>(scan: () => T[], note?: (e: unknown) => void): T[] {
+  try {
+    return scan();
+  } catch (e) {
+    note?.(e);
+    return [];
+  }
+}

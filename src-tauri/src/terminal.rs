@@ -220,6 +220,9 @@ fn history_file(dir: &std::path::Path, key: u32) -> std::path::PathBuf {
 }
 
 /// The newest `keep` bytes of `all`, from the next line boundary so no escape sequence is cut in two.
+/// ACCT-053: a tail without any line break (one huge line) starts at a character boundary, so a
+/// wide character is never replayed as its stray trailing bytes (each one a replacement glyph) on
+/// the redraw of a restored pane.
 fn trim_history(all: &[u8], keep: usize) -> &[u8] {
     if all.len() <= keep {
         return all;
@@ -227,7 +230,11 @@ fn trim_history(all: &[u8], keep: usize) -> &[u8] {
     let from = all.len() - keep;
     match all[from..].iter().position(|b| *b == b'\n') {
         Some(i) => &all[from + i + 1..],
-        None => &all[from..],
+        None => {
+            // UTF-8 continuation bytes are 10xxxxxx; the first byte that is not one starts a character
+            let skip = all[from..].iter().take_while(|b| **b & 0xC0 == 0x80).count();
+            &all[from + skip..]
+        }
     }
 }
 
@@ -1363,6 +1370,23 @@ pub fn terminal_memory_profile() -> MemoryProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ACCT-053: the redraw buffer of a restored pane never starts inside a wide character. A tail with a
+    /// line break starts after it; one without (a single huge line) starts at the next character boundary.
+    #[test]
+    fn acct053_history_trim_never_cuts_a_wide_character_in_two() {
+        let text = "ab\n中文字 日本語 end".as_bytes();
+        let kept = trim_history(text, text.len() - 2);
+        assert_eq!(std::str::from_utf8(kept).unwrap(), "中文字 日本語 end", "a line break in the tail: start after it");
+        let line = "中文字 日本語 end".as_bytes(); // 中 = E4 B8 AD; keep lands inside it
+        for keep in [line.len() - 1, line.len() - 2] {
+            let kept = trim_history(line, keep);
+            let s = std::str::from_utf8(kept).expect("a character boundary");
+            assert_eq!(s, "文字 日本語 end", "keep={keep}");
+        }
+        assert_eq!(trim_history(line, line.len()), line);
+        assert_eq!(std::str::from_utf8(trim_history(line, 3)).unwrap(), "end");
+    }
 
     /// APP-052: a pane gets its terminal back only from the run that started it: attached while the
     /// session runs, fresh once it ended or never was, replaced when the pane asked for another run.

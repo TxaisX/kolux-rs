@@ -21,6 +21,7 @@ import { HeldKeys, screenLines, shouldRefocus, watchScale } from "./recover";
 import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } from "./codec";
 import { encodeHistory, replay, restoreTail, viewTop } from "./history";
 import { claimsClick } from "./linkClick";
+import { modeView, resetAfterExit } from "./modeReset";
 import { fromThisService, reattach, type Attach, type Reattached, type ServiceInfo } from "./reattach";
 import { batchAcks, memoryProfile } from "./flow";
 import { explain as explainError, exitAdvice } from "./errors";
@@ -48,7 +49,7 @@ import { attachScreenshotPaste, clipboardImage, pasteImage, type Deps as ShotDep
 import { answersPrompt, newlineAgent, routeKey } from "./shellKeys";
 import { heldByTerminal } from "../keys/terminalPolicy";
 import { answeredElsewhere } from "../chat/ask";
-import { clickTarget, findLinks, hintFor, linkFor, rangeOf, resolvePath, spanOf, type Found } from "./links";
+import { allowed, clickTarget, findLinks, hintFor, linkFor, rangeOf, resolvePath, safeLinks, spanOf, type Found } from "./links";
 import { dropSummary, dropText, overRect, shellKind } from "./drop";
 import { decideOsc52, parseOsc52, sayOnce } from "./osc52";
 import { findIn, linesOf, nearestFrom, placeMatches, searchLater, segments, stepIndex, type BufRow, type FindOptions, type Match, type Runner } from "./find";
@@ -415,10 +416,12 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     // TERM-096: a printed handle of an open terminal (term-N) is a link that opens its pane.
     term.registerLinkProvider({
       provideLinks(y, done) {
-        const text = term.buffer.active.getLine(y - 1)?.translateToString(true) ?? "";
-        const links = handlesIn(text).flatMap(({ start, end, handle }) => {
-          const go = handleRef.current?.(handle);
-          return go ? [{ range: { start: { x: start + 1, y }, end: { x: end, y } }, text: handle, activate: go }] : [];
+        const links = safeLinks(() => {
+          const text = term.buffer.active.getLine(y - 1)?.translateToString(true) ?? "";
+          return handlesIn(text).flatMap(({ start, end, handle }) => {
+            const go = handleRef.current?.(handle);
+            return go ? [{ range: { start: { x: start + 1, y }, end: { x: end, y } }, text: handle, activate: go }] : [];
+          });
         });
         done(links.length > 0 ? links : undefined);
       },
@@ -428,6 +431,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     // TERM-092: the link under the pointer, so a Ctrl+click on it is kept from a program that tracks the mouse.
     let hot: Found | null = null;
     const openFound = (f: Found, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }) => {
+      // ACCT-061: every link is checked before it is opened; a disallowed scheme or an odd target is ignored.
+      if (!allowed(f)) return;
       const o = openRef.current;
       const door = clickTarget(f, e, keys.current.platform === "darwin", o.linksOpenInKolux && !!o.onOpenLink);
       if (door === null) return;
@@ -469,7 +474,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     };
     term.registerLinkProvider({
       provideLinks(y, done) {
-        const links = linksOn(y);
+        // ACCT-061: a scan that trips over unusual output leaves this row without links; the pane keeps working.
+        const links = safeLinks(() => linksOn(y), (err) => console.warn("link scan skipped a row", err));
         done(links.length > 0 ? links : undefined);
       },
     });
@@ -478,11 +484,11 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     term.options.linkHandler = {
       allowNonHttpProtocols: true,
       activate: (e, uri) => {
-        const f = linkFor(uri);
+        const f = safeLinks(() => [linkFor(uri)])[0];
         if (f) openFound(f, e);
       },
       hover: (_e, uri) => {
-        const f = linkFor(uri);
+        const f = safeLinks(() => [linkFor(uri)])[0];
         if (f) (hot = f), setLinkHint(hintOf(f));
       },
       leave: () => ((hot = null), setLinkHint(null)),
@@ -748,6 +754,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
             // VIEW-069 / SESS-051: a program that ends before its typed-in opening prompt could be
             // handed over is a launch that failed, not a session that ran.
             if (startup.exited()) failed.current?.("the program ended before its opening prompt could be typed in");
+            // ACCT-060: the modes the program turned on (mouse, bracketed paste, hidden cursor, alt screen) are turned
+            // off now that it is gone, so the shell that follows works normally; a program still running is never touched.
+            term.write(resetAfterExit(modeView(term.modes), term.buffer.active.type === "alternate"));
           term.write(`\r\n\x1b[90m[process ${endedLabel(e.payload.code)}]\x1b[0m\r\n`);
             setStatus({ kind: "ended", code: e.payload.code });
             // TERM-111: a shell that exited by itself closes its pane (its neighbours take the space and

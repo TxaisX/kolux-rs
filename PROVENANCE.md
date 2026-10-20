@@ -882,3 +882,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · watch T-259 · spec/04 STAT-036 as given in the brief; no outside source
 > 2026-10-19 · watch T-309-b · spec/04 STAT-038 as given in the brief; no outside source
 > 2026-10-20 · core T-223-b · spec/03 TERM-120 as given in the brief; Microsoft Learn public docs: RegGetValueW (RRF_RT_REG_SZ expands REG_EXPAND_SZ), Windows Registry environment keys (HKLM Session Manager\Environment, HKCU\Environment), System.Console.OutputEncoding / $OutputEncoding (learn.microsoft.com, read 2026-10-20); no other outside source
+> 2026-10-20 · core T-254 · spec/07 ACCT-053/060/061 as given in the brief; public docs: ECMA-48 (CSI), xterm ctlseqs DECSET/DECRST private modes (invisible-island.net/xterm/ctlseqs), xterm.js public typings (node_modules/@xterm/xterm/typings/xterm.d.ts: IModes, windowsPty), Unicode UTF-8 continuation-byte form (RFC 3629); no other outside source
