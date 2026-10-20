@@ -707,6 +707,7 @@ pub fn mask(text: &str) -> String {
     let t = auth_headers(&t);
     let t = header_values(&t);
     let t = json_values(&t);
+    let t = piped_passwords(&t);
     let t = secret_flags(&t);
     let t = labelled_values(&t);
     env_lines(&t)
@@ -881,29 +882,261 @@ fn auth_headers(t: &str) -> String {
     })
 }
 
-/// Whether the text before `i` on its line says a header is being written: `Authorization`,
-/// `--header` or `-H`.
+/// Whether the text before `i` says a header is being written: `Authorization` or `--header` on
+/// its line, or curl's `-H` in the command that `i` belongs to.
 fn header_context(t: &str, i: usize) -> bool {
     let line = t[..i].rfind('\n').map_or(0, |p| p + 1);
     let head = t[line..i].to_ascii_lowercase();
-    head.contains("authorization") || head.contains("--header") || head.split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'')).any(|w| w == "-h")
+    head.contains("authorization") || head.contains("--header") || {
+        let words = words_before(t, i);
+        words.iter().any(|w| w.name == "-h") && runs(&words, |w| matches!(w, "curl" | "wget" | "http" | "https" | "xh"))
+    }
 }
 
-/// The words of the command before byte `i`, back to the nearest `;`, `|`, `&`, `(`, backtick or
-/// line break: lower case, without a folder or `.exe`, so `sudo /usr/bin/MySQL -p..` reads as
-/// `sudo`, `mysql`. Quotes split words too, so a wrapped command (`bash -c "mysql ..`) still shows
-/// its program.
-fn words_before(t: &str, i: usize) -> Vec<String> {
-    let head = &t[..i];
-    let start = head.rfind([';', '|', '&', '(', '`', '\n']).map_or(0, |p| p + 1);
-    head[start..]
-        .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '\\'))
-        .filter(|w| !w.is_empty())
-        .map(|w| {
-            let name = w.rsplit('/').next().unwrap_or(w).to_ascii_lowercase();
-            name.strip_suffix(".exe").map_or(name.clone(), str::to_string)
+/// Where the command that ends at the end of `head` begins: just after the last `;`, `|`, `&` or
+/// `(` that is not inside a quoted argument already closed by then, or after the last backtick or
+/// line break. A separator inside the quote that wraps the command (`bash -c "cd x; mysql ..`) is
+/// still a separator, because that quote is still open. Quotes are paired as they come, one kind
+/// inside another (`"a 'b; c' d"`), and an escaped quote (`\"`) is a kind of its own. A `'` inside an
+/// open `"` is an opener only when a matching `'` comes before the next `"` (`"it's; ..` is text),
+/// and the other way round: a `"` inside an open `'` opens only when a `"` comes before the next `'`
+/// (`'a "b; c'`). A `$(` or an opening backtick starts a command of its own, and its `)` or closing
+/// backtick gives back the command it interrupted (`$(which mysql) -u root -p..` is one command).
+fn segment_start(head: &str) -> usize {
+    let b = head.as_bytes();
+    // Open quotes as (kind, id); a separator remembers the ids that were open where it stood.
+    let mut open: Vec<(u8, usize)> = Vec::new();
+    let mut seps: Vec<(usize, Vec<usize>)> = Vec::new();
+    // `(` and opening backticks not closed yet: (kind, separators kept, line start kept, quote ids).
+    let mut frames: Vec<(u8, usize, usize, Vec<usize>)> = Vec::new();
+    let (mut next_id, mut hard, mut p) = (0, 0, 0);
+    while p < b.len() {
+        let c = b[p];
+        let top = open.last().map(|(top, _)| *top);
+        let kind = match c {
+            b'\\' if matches!(b.get(p + 1), Some(b'"' | b'\'')) => {
+                p += 1;
+                Some(b[p] | 0x80)
+            }
+            b'\'' if top == Some(b'"') && !opens_quote(&b[p + 1..], b'\'', b'"') => None,
+            b'"' if top == Some(b'\'') && !opens_quote(&b[p + 1..], b'"', b'\'') => None,
+            b'"' | b'\'' => Some(c),
+            _ => None,
+        };
+        let ids = || open.iter().map(|(_, id)| *id).collect::<Vec<usize>>();
+        if let Some(k) = kind {
+            if top == Some(k) {
+                open.pop();
+            } else {
+                open.push((k, next_id));
+                next_id += 1;
+            }
+        } else if c == b'\n' {
+            hard = p + 1;
+        } else if matches!(c, b'`' | b')') {
+            // The closer of the nearest opener of its kind that stood inside the same quotes.
+            let opener = if c == b'`' { b'`' } else { b'(' };
+            let here = ids();
+            if let Some(k) = frames.iter().rposition(|f| f.0 == opener && f.3 == here) {
+                seps.truncate(frames[k].1);
+                hard = frames[k].2;
+                frames.truncate(k);
+            } else if c == b'`' {
+                frames.push((b'`', seps.len(), hard, here));
+                hard = p + 1;
+            }
+        } else if matches!(c, b';' | b'|' | b'&' | b'(') {
+            if c == b'(' {
+                frames.push((b'(', seps.len(), hard, ids()));
+            }
+            seps.push((p + 1, ids()));
+        }
+        p += 1;
+    }
+    let now: Vec<usize> = open.iter().map(|(_, id)| *id).collect();
+    let live = seps.iter().rev().find(|(_, ids)| now.starts_with(ids)).map_or(0, |(pos, _)| *pos);
+    live.max(hard)
+}
+
+/// Whether the text after a quote of one kind that sits inside an open quote of the other kind holds
+/// a `want` quote before the next `stop` quote that is not escaped: only then does that quote open
+/// one of its own (`"mysql -e 'a; b'"`, `'say "hi; there"'`), else it is a lone mark inside text
+/// (`"don't; ..."`, `'a "b; c'`).
+fn opens_quote(rest: &[u8], want: u8, stop: u8) -> bool {
+    let mut p = 0;
+    while p < rest.len() {
+        match rest[p] {
+            b'\\' => p += 1,
+            c if c == want => return true,
+            c if c == stop => return false,
+            _ => {}
+        }
+        p += 1;
+    }
+    false
+}
+
+/// One word of a command: `name` is lower case, without a folder or `.exe`; `raw` keeps its case
+/// (`sudo -S` and `sudo -s` are different options); `folder` says the word had a folder part and is
+/// no program path (`/var/lib/mysql`, `C:\ProgramData\MySQL\my.ini`). A `.exe` path is a program,
+/// and so is a path whose parent folder is `bin` or `sbin` (`/usr/local/mysql/bin/mysql`). `end` is
+/// the byte offset in the text where the word ends.
+struct Word {
+    name: String,
+    raw: String,
+    folder: bool,
+    end: usize,
+}
+
+/// The words of the command before byte `i`, back to the start of that command (`segment_start`):
+/// without a folder (cut at `/` and at `\`) or `.exe`, so `sudo C:\bin\MySQL.exe -p..` reads as
+/// `sudo`, `mysql`. Quotes and brackets split words too, so a wrapped command (`bash -c "mysql ..`)
+/// or `$(which mysql)` still shows its program.
+fn words_before(t: &str, i: usize) -> Vec<Word> {
+    words_in(t, segment_start(&t[..i]), i)
+}
+
+/// The words of `t[from..to]` (see `words_before`).
+fn words_in(t: &str, from: usize, to: usize) -> Vec<Word> {
+    let seg = &t[from..to];
+    word_spans(seg)
+        .into_iter()
+        .filter_map(|(a, z)| {
+            let w = &seg[a..z];
+            let mut parts = w.rsplit(['/', '\\']);
+            let raw = parts.next().unwrap_or(w);
+            if raw.is_empty() {
+                return None;
+            }
+            let parent = parts.next().unwrap_or("");
+            let bin = parent.eq_ignore_ascii_case("bin") || parent.eq_ignore_ascii_case("sbin");
+            let lower = raw.to_ascii_lowercase();
+            let exe = lower.strip_suffix(".exe");
+            Some(Word { name: exe.unwrap_or(&lower).to_string(), raw: raw.to_string(), folder: raw.len() < w.len() && exe.is_none() && !bin, end: from + z })
         })
         .collect()
+}
+
+/// Where the words of `seg` begin and end: cut at white space, quotes, brackets and backticks, except
+/// that a quoted path which begins a word and holds spaces in its folders is one word
+/// (`"C:\Program Files\7-Zip\7z" a ..`, see `quoted_path`).
+fn word_spans(seg: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let (mut from, mut p) = (None, 0);
+    while p < seg.len() {
+        let c = seg[p..].chars().next().unwrap_or(' ');
+        if c.is_whitespace() || matches!(c, '"' | '\'' | '(' | ')' | '`') {
+            if let Some(f) = from.take() {
+                spans.push((f, p));
+            }
+            if let Some(q) = quoted_path(seg, p) {
+                spans.push((p + 1, q));
+                p = q;
+            }
+        } else if from.is_none() {
+            from = Some(p);
+        }
+        p += seg[p..].chars().next().map_or(1, char::len_utf8);
+    }
+    if let Some(f) = from {
+        spans.push((f, seg.len()));
+    }
+    spans
+}
+
+/// When a quote at byte `p` of `seg` begins a word and closes a path that holds spaces in its folders
+/// (`"C:\Program Files\7-Zip\7z"`, `'/opt/my tools/curl'`), where the closing quote is. The path
+/// starts like one (a drive, `/`, `\\`, `./`, `.\`, `~/`) and the part after its last `/` or `\` is a
+/// single word, else it is a quoted command line (`"/usr/bin/env mysql"`) that is read word by word.
+fn quoted_path(seg: &str, p: usize) -> Option<usize> {
+    let quote = *seg.as_bytes().get(p).filter(|b| matches!(**b, b'"' | b'\''))?;
+    if !seg[..p].chars().next_back().is_none_or(char::is_whitespace) {
+        return None;
+    }
+    let q = p + 1 + seg[p + 1..].find(quote as char)?;
+    let body = &seg[p + 1..q];
+    let b = body.as_bytes();
+    let starts = (b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'/' | b'\\')) || body.starts_with(['/', '\\']) || body.starts_with("./") || body.starts_with(".\\") || body.starts_with("~/");
+    let last = body.rsplit(['/', '\\']).next().unwrap_or(body);
+    (starts && body.contains(char::is_whitespace) && !last.is_empty() && !last.starts_with('-') && !last.contains(char::is_whitespace)).then_some(q)
+}
+
+/// Words that only run the command after them: wrappers, shells, and the keywords a shell script
+/// puts in front of a command (`then`, `do`, `else`, `!`, `{`). Shells, `cmd` and PowerShell are the
+/// ones whose options (`-c`, `/c`, `-Command`) never take a value of their own.
+const PASS_THROUGH: &[&str] = &["sudo", "doas", "env", "nohup", "time", "exec", "command", "nice", "ionice", "xargs", "stdbuf", "timeout", "setsid", "watch", "start", "call", "winpty", "bash", "sh", "zsh", "dash", "ksh", "fish", "cmd", "powershell", "pwsh", "if", "elif", "while", "until", "then", "do", "else", "!", "{"];
+const SHELLS: [&str; 9] = ["bash", "sh", "zsh", "dash", "ksh", "fish", "cmd", "powershell", "pwsh"];
+/// The options of a wrapper whose value is the next word (`sudo -u root mysql`, `xargs -n 1 curl`).
+/// They are per wrapper and case sensitive: `sudo -n`, `-i`, `-s`, `-S` and `env -i` take no value.
+fn takes_value(wrapper: &str, option: &str) -> bool {
+    let options: &[&str] = match wrapper {
+        "sudo" => &["-u", "-g", "-p", "-C", "-D", "-R", "-r", "-t", "-T", "-U", "--user", "--group", "--prompt", "--chdir", "--role", "--type"],
+        "doas" => &["-u", "-C"],
+        "env" => &["-u", "-C", "--unset", "--chdir"],
+        "nice" => &["-n"],
+        "ionice" => &["-c", "-n", "-p", "-P", "-u"],
+        "timeout" => &["-s", "-k", "--signal", "--kill-after"],
+        "xargs" => &["-n", "-I", "-L", "-P", "-d", "-s", "-E", "-a"],
+        "stdbuf" => &["-i", "-o", "-e"],
+        "watch" => &["-n"],
+        "time" => &["-f", "-o"],
+        "exec" => &["-a"],
+        _ => &[],
+    };
+    options.contains(&option)
+}
+
+/// Programs that run another program given later on their line (`ssh host mysql -p..`).
+const LAUNCHERS: [&str; 15] = ["ssh", "docker", "podman", "nerdctl", "kubectl", "oc", "wsl", "su", "runuser", "chroot", "nsenter", "lxc", "incus", "distrobox", "toolbox"];
+
+/// The index of the command word in `words` (what `words_before` returns): the first word that is
+/// not a wrapper, a wrapper's own option or value (`sudo -u root`, `timeout 5`, `cmd /c`) or a
+/// `NAME=value` placed before the program.
+fn command_index(words: &[Word]) -> Option<usize> {
+    let mut wrapper: Option<&str> = None;
+    let mut k = 0;
+    while k < words.len() {
+        let w = words[k].name.as_str();
+        let raw = words[k].raw.as_str();
+        k += 1;
+        if PASS_THROUGH.contains(&w) {
+            wrapper = Some(w);
+            continue;
+        }
+        if w.contains('=') && !w.starts_with('-') {
+            continue;
+        }
+        let Some(wrap) = wrapper else { return Some(k - 1) };
+        if w.starts_with('-') {
+            if !SHELLS.contains(&wrap) && takes_value(wrap, raw) {
+                k += 1;
+            }
+            continue;
+        }
+        let duration = w.as_bytes().first().is_some_and(u8::is_ascii_digit) && w.bytes().all(|b| b.is_ascii_digit() || matches!(b, b'.' | b's' | b'm' | b'h' | b'd'));
+        // `cmd /c`: the slash was taken for a folder separator, so the flag reads `c`.
+        if duration || (wrap == "cmd" && matches!(w, "c" | "k")) {
+            continue;
+        }
+        return Some(k - 1);
+    }
+    None
+}
+
+/// Whether the program these words run is one `is` accepts: the command word itself, or any other
+/// word that is not part of a folder path (`echo "mysql -p.."` writes a command, `winpty mysql ..`
+/// and `ssh host mysql ..` run one), or any word after a launcher, folder or not. A folder part
+/// (`find /var/lib/mysql`) is no program. A program name that is the pattern of a search tool
+/// (`grep curl -u a:b notes.txt`) counts: a pattern that spells a credential is one. A `.exe` path
+/// and a path under a `bin` folder are programs.
+fn runs(words: &[Word], is: impl Fn(&str) -> bool) -> bool {
+    if let Some(k) = command_index(words) {
+        let name = words[k].name.as_str();
+        if is(name) || (LAUNCHERS.contains(&name) && words[k + 1..].iter().any(|w| is(&w.name))) {
+            return true;
+        }
+    }
+    words.iter().any(|w| !w.folder && is(&w.name))
 }
 
 /// Programs that take their password attached to a short flag (`-pSecret`). That flag is read as a
@@ -931,6 +1164,10 @@ fn secretish(name: &str, flag: bool) -> bool {
     lower.split(['_', '-', '.']).any(|s| matches!(s, "pwd" | "auth" | "pass") || (!flag && s == "key"))
 }
 
+/// Where a bare flag value ends besides a space: a command separator, which is not part of it
+/// (`curl -u a:b; ls` keeps its `;`, or a second mask would read `ls` as curl's next word).
+const COMMAND_END: &[u8] = b";|&";
+
 /// The value that begins `rest`: a quoted one (also `\"..\"` inside a quoted command) to its
 /// closing quote, or a bare one to the next space, quote or any byte in `stops`. 0 when none.
 fn value_span(rest: &str, stops: &[u8]) -> usize {
@@ -946,9 +1183,15 @@ fn value_span(rest: &str, stops: &[u8]) -> usize {
 /// reference such as `$TOKEN`, `${TOKEN}` or `$(cmd)`, or nothing at all. A `$` inside single
 /// quotes is text, not a reference, and `$3cr3t` is not a name, so both are hidden.
 fn already(value: &str) -> bool {
+    already_as(value, true)
+}
+
+/// `already`, where `refs` says whether a `$name` counts as a variable reference. Inside a JSON body
+/// it never does: the body is text that goes to a server, whatever the shell around it would do.
+fn already_as(value: &str, refs: bool) -> bool {
     let single = value.trim_start_matches('\\').starts_with('\'');
     let v = value.trim_matches(|c| matches!(c, '"' | '\'' | '\\'));
-    let reference = !single && v.strip_prefix('$').and_then(|r| r.bytes().next()).is_some_and(|b| b.is_ascii_alphabetic() || matches!(b, b'_' | b'{' | b'('));
+    let reference = refs && !single && v.strip_prefix('$').and_then(|r| r.bytes().next()).is_some_and(|b| b.is_ascii_alphabetic() || matches!(b, b'_' | b'{' | b'('));
     v.is_empty() || v == HIDDEN || reference || STRIPE_PREFIXES.iter().any(|p| v.strip_prefix(p).is_some_and(|r| r.starts_with("....")))
 }
 
@@ -967,12 +1210,12 @@ fn secret_flags(t: &str) -> String {
             let Some(after) = rest.strip_prefix(f) else { continue };
             let gap = run(after, |b| b == b' ' || b == b'\t');
             let eq = f.starts_with("--") && after.starts_with('=');
-            if (gap == 0 && !eq) || !words_before(t, i).iter().any(|w| w == "curl") {
+            if (gap == 0 && !eq) || !runs(&words_before(t, i), |w| w == "curl") {
                 continue;
             }
             let at = if eq { 1 } else { gap };
             let value = &after[at..];
-            let len = value_span(value, &[]);
+            let len = value_span(value, COMMAND_END);
             let bare = value[..len].trim_matches(|c| matches!(c, '"' | '\'' | '\\'));
             if bare.split_once(':').is_some_and(|(_, pw)| !pw.is_empty() && !already(pw)) {
                 return Some((i + f.len() + at + len, format!("{f}{}{HIDDEN}", &after[..at])));
@@ -982,10 +1225,10 @@ fn secret_flags(t: &str) -> String {
         if let Some(after) = rest.strip_prefix("-p") {
             let gap = run(after, |b| b == b' ' || b == b'\t');
             let words = words_before(t, i);
-            let own = words.iter().rposition(|w| w == "sshpass").is_some_and(|p| words[p + 1..].iter().all(|w| w.starts_with('-')));
+            let own = words.iter().rposition(|w| w.name == "sshpass").is_some_and(|p| words[p + 1..].iter().all(|w| w.name.starts_with('-')));
             if gap > 0 && own {
                 let value = &after[gap..];
-                let len = value_span(value, &[]);
+                let len = value_span(value, COMMAND_END);
                 if len > 0 && !value.starts_with('-') && !already(&value[..len]) {
                     return Some((i + 2 + gap + len, format!("-p{}{HIDDEN}", &after[..gap])));
                 }
@@ -1002,23 +1245,95 @@ fn secret_flags(t: &str) -> String {
                 return None;
             }
             let value = &after[gap..];
-            let len = value_span(value, &[]);
+            let len = value_span(value, COMMAND_END);
             if len == 0 || value.starts_with('-') || already(&value[..len]) {
                 return None;
             }
             return Some((i + 2 + n + gap + len, format!("--{}{}{HIDDEN}", &flag[..n], &after[..gap])));
         }
         let tail = rest.strip_prefix("-p")?;
-        let len = value_span(tail, &[]);
+        let len = value_span(tail, COMMAND_END);
         let value = &tail[..len];
-        let program = words_before(t, i).iter().any(|w| takes_attached_password(w));
+        let program = runs(&words_before(t, i), takes_attached_password);
         (program && !value.is_empty() && !value.starts_with('-') && !value.starts_with('=') && !already(value)).then(|| (i + 2 + len, format!("-p{HIDDEN}")))
     })
 }
 
+/// The password that `echo` or `printf` pipes into a command that reads one from its input:
+/// `sudo -S` (`--stdin`, also inside a cluster such as `-nS`) or any command with `--password-stdin`
+/// (`docker login`). The argument of `echo` / `printf` goes (`echo -n pw | sudo -S ..` becomes
+/// `echo -n [hidden] | sudo -S ..`), except a variable reference such as `"$SUDO_PW"`.
+fn piped_passwords(t: &str) -> String {
+    let b = t.as_bytes();
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    for i in (0..b.len()).filter(|&i| b[i] == b'|' && b.get(i + 1) != Some(&b'|') && (i == 0 || b[i - 1] != b'|')) {
+        let left = words_before(t, i);
+        let Some(k) = command_index(&left).filter(|&k| matches!(left[k].name.as_str(), "echo" | "printf")) else { continue };
+        let echo = left[k].name == "echo";
+        // The arguments of the command: echo's own flags (`-n`, `-e`) stay.
+        let mut from = left[k].end;
+        loop {
+            let rest = &t[from..i];
+            let skipped = rest.len() - rest.trim_start().len();
+            let word = rest.split_whitespace().next().unwrap_or("");
+            if echo && word.len() > 1 && word.starts_with('-') && word[1..].bytes().all(|c| c.is_ascii_alphabetic()) {
+                from += skipped + word.len();
+            } else {
+                from += skipped;
+                break;
+            }
+        }
+        let mut to = from + t[from..i].trim_end().len();
+        // A quote that only closes the line around the command (`bash -c "echo pw | sudo -S .."`) stays.
+        if let Some(q) = t[from..to].chars().next_back().filter(|c| matches!(c, '"' | '\'')) {
+            if t[from..to].matches(q).count() % 2 == 1 {
+                to -= 1;
+            }
+        }
+        if from >= to || already(&t[from..to]) {
+            continue;
+        }
+        let rest = &t[i + 1..];
+        let end = rest.find([';', '|', '&', '\n']).unwrap_or(rest.len());
+        let right = words_in(t, i + 1, i + 1 + end);
+        let first = right.iter().position(|w| !(w.name.contains('=') && !w.name.starts_with('-')));
+        let sudo_stdin = first.is_some_and(|j| {
+            right[j].name == "sudo" && {
+                let mut m = j + 1;
+                let mut found = false;
+                while m < right.len() && right[m].raw.starts_with('-') {
+                    let r = right[m].raw.as_str();
+                    found |= r == "--stdin" || (!r.starts_with("--") && r.contains('S'));
+                    m += 1 + usize::from(takes_value("sudo", r));
+                }
+                found
+            }
+        });
+        if sudo_stdin || right.iter().any(|w| w.raw == "--password-stdin") {
+            spans.push((from, to));
+        }
+    }
+    let mut out = String::with_capacity(t.len());
+    let mut last = 0;
+    for (from, to) in spans {
+        if from < last {
+            continue;
+        }
+        out.push_str(&t[last..from]);
+        out.push_str(HIDDEN);
+        last = to;
+    }
+    out.push_str(&t[last..]);
+    out
+}
+
 /// A header written `Name: value` (a curl `-H` argument, a raw request): `Authorization` and
 /// cookies whatever their value, and any other hyphenated name that says it holds a secret
-/// (`X-Api-Key`, `PRIVATE-TOKEN`). For `Authorization` the scheme word stays (`token`, `Bearer`).
+/// (`X-Api-Key`, `PRIVATE-TOKEN`). Where `-H` or `--header` says a header is being written, any
+/// name that says it holds a secret goes (`Token`, `X_API_KEY`). A secret-sounding `name: value` that
+/// begins a line or a quoted string (a YAML line, `echo "password: ..."`) goes too when its value is
+/// one word, so a sentence such as `"token: rotate the keys"` stays. For `Authorization` the scheme
+/// word stays (`token`, `Bearer`).
 fn header_values(t: &str) -> String {
     scan(t, |t, i| {
         let prev = if i == 0 { b' ' } else { t.as_bytes()[i - 1] };
@@ -1030,16 +1345,19 @@ fn header_values(t: &str) -> String {
         let name = &rest[..n];
         let lower = name.to_ascii_lowercase();
         let auth = matches!(lower.as_str(), "authorization" | "proxy-authorization");
-        let header_like = name.contains('-') || matches!(lower.as_str(), "authorization" | "cookie" | "apikey");
-        if n < 3 || !header_like || !(auth || matches!(lower.as_str(), "cookie" | "set-cookie") || secretish(name, false)) {
+        if n < 3 || !(auth || matches!(lower.as_str(), "cookie" | "set-cookie") || secretish(name, false)) {
             return None;
         }
         let after = rest[n..].strip_prefix(':')?;
+        let header_like = name.contains('-') || matches!(lower.as_str(), "authorization" | "cookie" | "apikey") || header_context(t, i);
+        if !header_like && !begins_line_or_quote(t, i) {
+            return None;
+        }
         let gap = run(after, |b| b == b' ' || b == b'\t');
         let value = &after[gap..];
         let len = run(value, |b| !matches!(b, b'"' | b'\'' | b'\\' | b'\n' | b'\r' | b'`'));
         let value = value[..len].trim_end();
-        if value.is_empty() || value.contains(HIDDEN) || value.starts_with("//") {
+        if value.is_empty() || value.contains(HIDDEN) || value.starts_with("//") || (!header_like && value.contains(char::is_whitespace)) {
             return None;
         }
         let shown = match (auth, value.split_once(char::is_whitespace)) {
@@ -1048,6 +1366,28 @@ fn header_values(t: &str) -> String {
         };
         Some((i + n + 1 + gap + value.len(), format!("{name}:{}{shown}", &after[..gap])))
     })
+}
+
+/// Whether `i` is the first thing on its line (indentation aside) or right after an opening quote.
+fn begins_line_or_quote(t: &str, i: usize) -> bool {
+    let line = t[..i].rfind('\n').map_or(0, |p| p + 1);
+    t[line..i].trim().is_empty() || matches!(t.as_bytes()[i - 1], b'"' | b'\'')
+}
+
+/// The offset of the quote `q` (`"` or `\"`) that ends a JSON string whose text starts `value`: one
+/// with a backslash before it (an odd number of them for `"`) belongs to the value.
+fn json_end(value: &str, q: &str) -> Option<usize> {
+    let b = value.as_bytes();
+    let mut from = 0;
+    while let Some(k) = value[from..].find(q) {
+        let at = from + k;
+        let slashes = b[..at].iter().rev().take_while(|c| **c == b'\\').count();
+        if !(if q.len() == 1 { slashes % 2 == 1 } else { slashes > 0 }) {
+            return Some(at);
+        }
+        from = at + 1;
+    }
+    None
 }
 
 /// A JSON string value whose key says it holds a secret: `"password":"..."`, also written with
@@ -1069,8 +1409,8 @@ fn json_values(t: &str) -> String {
         }
         let after = body[n..].strip_prefix(q)?.trim_start().strip_prefix(':')?.trim_start();
         let value = after.strip_prefix(q)?;
-        let end = value.find(q)?;
-        if already(&value[..end]) {
+        let end = json_end(value, q)?;
+        if already_as(&value[..end], false) {
             return None;
         }
         let consumed = rest.len() - value.len();
@@ -1418,7 +1758,7 @@ mod tests {
     /// FIX-SOON 2: limits, tokenizers and "read it from stdin" are not secrets.
     #[test]
     fn safe019_flags_that_only_sound_like_secrets_are_left_as_typed() {
-        for c in ["llm --max-tokens 500 go", "llm --tokenizer gpt2 go", "echo x | docker login --password-stdin ghcr.io", "tool --pass-through x run", "tool --token-limit 20 run", "tool --max-token-count 20 run", "MAX_TOKENS=500 node app.js", "tool --tokens 5 run"] {
+        for c in ["llm --max-tokens 500 go", "llm --tokenizer gpt2 go", "cat token.txt | docker login --password-stdin ghcr.io", "tool --pass-through x run", "tool --token-limit 20 run", "tool --max-token-count 20 run", "MAX_TOKENS=500 node app.js", "tool --tokens 5 run"] {
             assert_eq!(masked(c), c, "{c}");
         }
         assert_eq!(masked("tool --password hunter2 run"), "tool --password [hidden] run", "the real flag still hides");
@@ -1465,5 +1805,251 @@ mod tests {
         for c in ["PASSWORD=\"$DB_PASS\" ./run", "PASSWORD=${DB_PASS} ./run", "PASSWORD=$(cat pw.txt) ./run", "docker exec -u 1000:1000 c ls", "docker run --user 1000:1000 img", "curl -H 'Accept: application/json' https://x", "curl -H 'Content-Type: text/plain' https://x", "echo \"note: remember the password\"", "curl -d '{\"name\":\"bob\",\"key\":\"abc\"}' https://x", "env npm_config_update_notifier_disabled=true npm i", "python -c 'from huggingface_hub import hf_hub_download_all_the_files_please'"] {
             assert_eq!(masked(c), c, "{c}");
         }
+    }
+
+    /// FIX-2 item 3 (stand-in review FIX-SOON 1): a `;`, `&`, `|` or `(` inside a quoted argument
+    /// that is already closed does not end the command, so the program is still known.
+    #[test]
+    fn safe019_separators_inside_closed_quotes_do_not_hide_the_program() {
+        assert_eq!(masked("curl \"https://api.example.com/v1?a=1&b=2\" -u admin:hunter2"), "curl \"https://api.example.com/v1?a=1&b=2\" -u [hidden]");
+        assert_eq!(masked("mysql -u root -e \"use shop; select 1\" -pS3cret"), "mysql -u root -e \"use shop; select 1\" -p[hidden]");
+        assert_eq!(masked("mysql -e 'select 1 | select 2' -pS3cret"), "mysql -e 'select 1 | select 2' -p[hidden]");
+        assert_eq!(masked("mysql -e \"select (1)\" -pS3cret"), "mysql -e \"select (1)\" -p[hidden]");
+        assert_eq!(masked("sshpass -p secret ssh -o 'ProxyCommand=nc %h %p; true' host"), "sshpass -p [hidden] ssh -o 'ProxyCommand=nc %h %p; true' host");
+        // A separator in the quote that wraps the command is still a separator, and so is one outside every quote.
+        assert_eq!(masked("bash -c \"cd x; find . -perm 644; mysql -pS3cret\""), "bash -c \"cd x; find . -perm 644; mysql -p[hidden]\"");
+        assert_eq!(masked("bash -c \"mysql -e 'a; b' -pS3cret\""), "bash -c \"mysql -e 'a; b' -p[hidden]\"");
+        assert_eq!(masked("curl \"a;b\" -u x:y; ls -u admin:hunter2"), "curl \"a;b\" -u [hidden]; ls -u admin:hunter2");
+        assert_eq!(masked("mysql -e \"a;b\"; find . -perm 644"), "mysql -e \"a;b\"; find . -perm 644");
+    }
+
+    /// FIX-2 item 4 (FIX-SOON 2): in a header the name needs no hyphen; a secret-sounding `name: value`
+    /// at the start of a line or of a quoted string goes too, but prose with spaces in it stays.
+    #[test]
+    fn safe019_any_secretish_header_name_and_name_colon_value_at_a_line_or_quote_start_are_hidden() {
+        assert_eq!(masked("curl -H \"Token: v4lue\" https://x"), "curl -H \"Token: [hidden]\" https://x");
+        assert_eq!(masked("curl -H 'X_API_KEY: v4lue' x"), "curl -H 'X_API_KEY: [hidden]' x");
+        assert_eq!(masked("curl --header 'Secret: v4lue' x"), "curl --header 'Secret: [hidden]' x");
+        assert_eq!(masked("echo \"password: hunter2\" >> config.yml"), "echo \"password: [hidden]\" >> config.yml");
+        assert_eq!(masked("password: hunter2\nname: bob"), "password: [hidden]\nname: bob");
+        assert_eq!(masked("db:\n  api_key: v4lue\n  host: x"), "db:\n  api_key: [hidden]\n  host: x");
+        for c in ["echo \"note: remember the password\"", "git commit -m \"token: rotate the keys\"", "curl -H 'Accept: application/json' https://x", "curl -H \"X-Request-Id: abc\" https://x", "echo password: reset", "grep -r \"token: \" src", "note: the token is rotated weekly"] {
+            assert_eq!(masked(c), c, "{c}");
+        }
+    }
+
+    /// FIX-2 item 5 (AFTER 1): inside a JSON body a `$` is text, and an escaped quote does not end the value.
+    #[test]
+    fn safe019_json_values_with_a_dollar_or_an_escaped_quote_are_hidden_whole() {
+        assert_eq!(masked("curl -d '{\"password\":\"$ecretPass\"}' https://x"), "curl -d '{\"password\":\"[hidden]\"}' https://x");
+        assert_eq!(masked("curl -d '{\"token\":\"$HOME_not_a_ref\"}' x"), "curl -d '{\"token\":\"[hidden]\"}' x");
+        assert_eq!(masked("curl -d '{\"password\":\"ab\\\"cd\"}' x"), "curl -d '{\"password\":\"[hidden]\"}' x");
+        assert_eq!(masked("curl -d '{\"password\":\"ab\\\\\\\"cd\",\"user\":\"bob\"}' x"), "curl -d '{\"password\":\"[hidden]\",\"user\":\"bob\"}' x");
+        assert_eq!(masked("bash -c \"curl -d '{\\\"token\\\":\\\"$up3r\\\"}' x\""), "bash -c \"curl -d '{\\\"token\\\":\\\"[hidden]\\\"}' x\"");
+        assert_eq!(masked("bash -c \"curl -d '{\\\"token\\\":\\\"ab\\\\\\\"cd\\\"}' x\""), "bash -c \"curl -d '{\\\"token\\\":\\\"[hidden]\\\"}' x\"");
+        // An empty value, one already hidden, and a key that is no secret stay; a variable reference outside JSON still stays.
+        for c in ["curl -d '{\"password\":\"\"}' x", "curl -d '{\"password\":\"[hidden]\"}' x", "curl -d '{\"name\":\"$USER\"}' x", "PASSWORD=\"$DB_PASS\" ./run"] {
+            assert_eq!(masked(c), c, "{c}");
+        }
+    }
+
+    /// FIX-2 item 6 (AFTER 2): the program is the command word, not any word that looks like one, so a
+    /// path or an argument that only contains `mysql` or `-h` is left as typed; a wrapper or a launcher
+    /// in front of the real program still shows it.
+    #[test]
+    fn safe019_the_command_word_decides_which_program_it_is() {
+        for c in ["find /var/lib/mysql -perm 644", "cat /etc/mysql/my.cnf -pfoo", "ls -h; echo \"Basic HttpClient\"", "ls -h \"Basic HttpClient\""] {
+            assert_eq!(masked(c), c, "{c}");
+        }
+        for (raw, shown) in [
+            // FIX-4: a search tool's pattern is still a credential when it spells one.
+            ("grep curl -u admin:hunter2 notes.txt", "grep curl -u [hidden] notes.txt"),
+            ("sudo -u root mysql -pS3cret db", "sudo -u root mysql -p[hidden] db"),
+            ("timeout 5 mysql -pS3cret db", "timeout 5 mysql -p[hidden] db"),
+            ("MYSQL_HOST=x mysql -pS3cret db", "MYSQL_HOST=x mysql -p[hidden] db"),
+            ("env FOO=1 mysqldump -pS3cret db", "env FOO=1 mysqldump -p[hidden] db"),
+            ("ssh db mysql -pS3cret", "ssh db mysql -p[hidden]"),
+            ("docker exec db mysql -pS3cret", "docker exec db mysql -p[hidden]"),
+            ("kubectl exec pod -- mysql -pS3cret", "kubectl exec pod -- mysql -p[hidden]"),
+            ("sudo curl -u admin:hunter2 https://x", "sudo curl -u [hidden] https://x"),
+            ("ssh host curl -u admin:hunter2 https://x", "ssh host curl -u [hidden] https://x"),
+            ("bash -c \"curl -u admin:hunter2 https://x\"", "bash -c \"curl -u [hidden] https://x\""),
+            ("curl -H 'Authorization: Bearer AbcdEfghIj' https://x", "curl -H 'Authorization: Bearer [hidden]' https://x"),
+            ("ssh host curl -H 'X-Note: Bearer AbcdEfghIj' https://x", "ssh host curl -H 'X-Note: Bearer [hidden]' https://x"),
+        ] {
+            assert_eq!(masked(raw), shown, "{raw}");
+        }
+    }
+
+    /// FIX-3 item 2a (stand-in review FIX-SOON 1): a Windows folder in front of the program, or a
+    /// command that only writes another command, still shows the program. A path that merely
+    /// contains `mysql` or `curl` stays as typed.
+    #[test]
+    fn safe019_windows_paths_and_commands_that_write_commands_still_show_the_program() {
+        for (raw, shown) in [
+            (r"C:\xampp\mysql\bin\mysql.exe -u root -pS3cret", r"C:\xampp\mysql\bin\mysql.exe -u root -p[hidden]"),
+            (r".\7z.exe a -pS3cret out.7z src", r".\7z.exe a -p[hidden] out.7z src"),
+            (r#"& "C:\Program Files\7-Zip\7z.exe" a -pS3cret x.7z"#, r#"& "C:\Program Files\7-Zip\7z.exe" a -p[hidden] x.7z"#),
+            (r"C:\Windows\System32\curl.exe -u admin:hunter2 https://x", r"C:\Windows\System32\curl.exe -u [hidden] https://x"),
+            ("C:/xampp/mysql/bin/mysql.exe -pS3cret shop", "C:/xampp/mysql/bin/mysql.exe -p[hidden] shop"),
+            ("echo \"mysql -pS3cret\" >> ~/.bashrc", "echo \"mysql -p[hidden]\" >> ~/.bashrc"),
+            ("echo curl -u admin:hunter2", "echo curl -u [hidden]"),
+            ("printf 'mysql -u root -pS3cret' > run.sh", "printf 'mysql -u root -p[hidden]' > run.sh"),
+        ] {
+            assert_eq!(masked(raw), shown, "{raw}");
+        }
+        for c in [r"find C:\xampp\mysql -perm 644", r"cat C:\ProgramData\MySQL\my.ini -pfoo", r"dir C:\tools\curl -u admin:hunter2", "find /var/lib/mysql -perm 644", "ls /opt/curl -u admin:hunter2"] {
+            assert_eq!(masked(c), c, "{c}");
+        }
+    }
+
+    /// FIX-3 item 2b (FIX-SOON 1): wrapper options take a value only where that wrapper's own option
+    /// does (`sudo -u root`, not `sudo -n`), and `then`, `do`, `else`, `!`, `{` and `winpty` pass through.
+    #[test]
+    fn safe019_wrapper_options_and_shell_keywords_do_not_hide_the_program() {
+        for (raw, shown) in [
+            ("sudo -n mysql -pS3cret", "sudo -n mysql -p[hidden]"),
+            ("sudo -i mysql -pS3cret db", "sudo -i mysql -p[hidden] db"),
+            ("sudo -s mysql -pS3cret", "sudo -s mysql -p[hidden]"),
+            ("echo pw | sudo -S mysql -pS3cret", "echo [hidden] | sudo -S mysql -p[hidden]"),
+            ("env -i mysql -pS3cret", "env -i mysql -p[hidden]"),
+            ("sudo -n curl -u admin:hunter2 https://x", "sudo -n curl -u [hidden] https://x"),
+            ("sudo --user root mysql -pS3cret", "sudo --user root mysql -p[hidden]"),
+            ("timeout -s KILL 5 mysql -pS3cret", "timeout -s KILL 5 mysql -p[hidden]"),
+            ("if true; then mysql -pS3cret; fi", "if true; then mysql -p[hidden]; fi"),
+            ("for d in a b; do mysql -pS3cret $d; done", "for d in a b; do mysql -p[hidden] $d; done"),
+            ("if false; then true; else mysql -pS3cret; fi", "if false; then true; else mysql -p[hidden]; fi"),
+            ("! mysql -pS3cret", "! mysql -p[hidden]"),
+            ("{ mysql -pS3cret; }", "{ mysql -p[hidden]; }"),
+            ("winpty mysql -pS3cret", "winpty mysql -p[hidden]"),
+            ("winpty docker exec -it db mysql -pS3cret", "winpty docker exec -it db mysql -p[hidden]"),
+            // FIX-4: a search tool behind a wrapper hides a pattern that spells a credential too.
+            ("sudo -n grep curl -u admin:hunter2 notes.txt", "sudo -n grep curl -u [hidden] notes.txt"),
+            ("env -i grep curl -u admin:hunter2 notes.txt", "env -i grep curl -u [hidden] notes.txt"),
+            ("sudo -S grep curl -u admin:hunter2 notes.txt", "sudo -S grep curl -u [hidden] notes.txt"),
+            ("sudo -u root grep curl -u admin:hunter2 notes.txt", "sudo -u root grep curl -u [hidden] notes.txt"),
+        ] {
+            assert_eq!(masked(raw), shown, "{raw}");
+        }
+    }
+
+    /// FIX-3 item 3 (FIX-SOON 2): a lone `'` inside a double-quoted argument is text, so a `;` or `&`
+    /// in that argument does not end the command and the program stays known.
+    #[test]
+    fn safe019_a_lone_apostrophe_inside_double_quotes_is_text_and_does_not_hide_the_program() {
+        assert_eq!(masked("mysql -u root -e \"select 1; -- don't\" -pS3cret"), "mysql -u root -e \"select 1; -- don't\" -p[hidden]");
+        assert_eq!(masked("curl \"https://x/?q=it's&a=1\" -u admin:hunter2"), "curl \"https://x/?q=it's&a=1\" -u [hidden]");
+        assert_eq!(masked("mysql -e \"it's; fine\" -e 'a;b' -pS3cret"), "mysql -e \"it's; fine\" -e 'a;b' -p[hidden]");
+        assert_eq!(masked("bash -c \"echo don't; mysql -pS3cret\""), "bash -c \"echo don't; mysql -p[hidden]\"");
+        assert_eq!(masked("bash -c \"mysql -e 'a; b' -pS3cret\""), "bash -c \"mysql -e 'a; b' -p[hidden]\"");
+        assert_eq!(masked("bash -c \"curl -d '{\\\"x\\\":1}' -u admin:hunter2 x\""), "bash -c \"curl -d '{\\\"x\\\":1}' -u [hidden] x\"");
+        // A separator outside the quote still ends the command.
+        assert_eq!(masked("mysql -e \"it's\"; find . -perm 644"), "mysql -e \"it's\"; find . -perm 644");
+    }
+
+    /// FIX-4 item 2 (stand-in review FIX-SOON 1): a search tool as the command word no longer exempts
+    /// its pattern (`grep -rn "mysql -p.."` is how someone hunts a leaked password), and `)` and a
+    /// closing backtick end a `$(..)` or backtick command and bring back the one that was running.
+    #[test]
+    fn safe019_search_patterns_and_command_substitutions_still_show_the_program() {
+        for (raw, shown) in [
+            (r#"grep -rn "mysql -pS3cret" ."#, r#"grep -rn "mysql -p[hidden]" ."#),
+            (r#"rg -e "curl -u admin:hunter2" logs/"#, r#"rg -e "curl -u [hidden]" logs/"#),
+            ("$(which mysql) -u root -pS3cret", "$(which mysql) -u root -p[hidden]"),
+            ("$(which curl) -u admin:hunter2 https://x", "$(which curl) -u [hidden] https://x"),
+            ("`which mysql` -pS3cret", "`which mysql` -p[hidden]"),
+            ("`which curl` -u admin:hunter2 https://x", "`which curl` -u [hidden] https://x"),
+            ("man curl -u admin:hunter2", "man curl -u [hidden]"),
+            // The substitution can sit inside a longer line, and the command around it is still known.
+            ("cd x && $(which mysql) -u root -pS3cret", "cd x && $(which mysql) -u root -p[hidden]"),
+            ("echo $(date) && `which curl` -u admin:hunter2 https://x", "echo $(date) && `which curl` -u [hidden] https://x"),
+        ] {
+            assert_eq!(masked(raw), shown, "{raw}");
+        }
+        // After the `)` or the closing backtick the line goes on as before: a separator still cuts it,
+        // and a path that only contains a program name stays as typed.
+        for c in ["echo $(date; ls); find /var/lib/mysql -perm 644", "echo `date`; find /opt/curl -u admin:hunter2", "echo $(ls /opt) > /var/lib/mysql/list -pr"] {
+            assert_eq!(masked(c), c, "{c}");
+        }
+    }
+
+    /// FIX-4 item 3 (FIX-SOON 2): a path whose parent folder is `bin` or `sbin` (any case) is a
+    /// program, wherever it stands in the line, and a quoted run that starts a command and holds
+    /// spaces in its folders is one word. A path under any other folder stays no program.
+    #[test]
+    fn safe019_a_program_under_a_bin_folder_or_in_a_quoted_command_is_still_a_program() {
+        for (raw, shown) in [
+            (r#""C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql" -u root -pS3cret"#, r#""C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql" -u root -p[hidden]"#),
+            (r"doskey db=C:\xampp\mysql\bin\mysql -u root -pS3cret", r"doskey db=C:\xampp\mysql\bin\mysql -u root -p[hidden]"),
+            ("alias db='/usr/local/mysql/bin/mysql -u root -pS3cret'", "alias db='/usr/local/mysql/bin/mysql -u root -p[hidden]'"),
+            ("echo \"/usr/bin/mysql -pS3cret\" >> ~/.bashrc", "echo \"/usr/bin/mysql -p[hidden]\" >> ~/.bashrc"),
+            ("echo /usr/sbin/curl -u admin:hunter2 https://x", "echo /usr/sbin/curl -u [hidden] https://x"),
+            (r"echo C:\Tools\BIN\mysql -u root -pS3cret", r"echo C:\Tools\BIN\mysql -u root -p[hidden]"),
+            // A quoted command that has spaces in its folders and no `bin` or `.exe`.
+            (r#""C:\Program Files\7-Zip\7z" a -pS3cret x.7z"#, r#""C:\Program Files\7-Zip\7z" a -p[hidden] x.7z"#),
+            (r#"& "C:\Program Files (x86)\7-Zip\7z" a -pS3cret x.7z"#, r#"& "C:\Program Files (x86)\7-Zip\7z" a -p[hidden] x.7z"#),
+            ("'/opt/my tools/curl' -u admin:hunter2 https://x", "'/opt/my tools/curl' -u [hidden] https://x"),
+        ] {
+            assert_eq!(masked(raw), shown, "{raw}");
+        }
+        for c in [
+            "find /var/lib/mysql -perm 644",
+            r"dir C:\tools\curl -u admin:hunter2",
+            "cat /etc/mysql/my.cnf -pfoo",
+            "ls /opt/bin/data/mysql -pr",
+            r#"find "C:\Program Files\Some Tool\mysql" -pfoo"#,
+            r#"dir "C:\Program Files\MySQL\data" -pfoo"#,
+            "ls /usr/bin -pr",
+        ] {
+            assert_eq!(masked(c), c, "{c}");
+        }
+    }
+
+    /// FIX-4 item 4 (FIX-SOON 3): the password that `echo` or `printf` pipes into `sudo -S` /
+    /// `--stdin`, or into a command with `--password-stdin`, is hidden. A variable reference, a pipe
+    /// that goes nowhere near a password reader, and `||` stay as typed.
+    #[test]
+    fn safe019_a_password_echoed_into_sudo_or_a_password_stdin_command_is_hidden() {
+        for (raw, shown) in [
+            ("echo pw | sudo -S mysql -pS3cret", "echo [hidden] | sudo -S mysql -p[hidden]"),
+            ("echo -n hunter2 | sudo -S ls", "echo -n [hidden] | sudo -S ls"),
+            ("printf '%s\\n' hunter2 | sudo --stdin ls", "printf [hidden] | sudo --stdin ls"),
+            ("echo \"my pass\" | sudo -S -p '' apt update", "echo [hidden] | sudo -S -p '' apt update"),
+            ("echo hunter2 | sudo -nS ls", "echo [hidden] | sudo -nS ls"),
+            ("echo S3cret | docker login -u bob --password-stdin", "echo [hidden] | docker login -u bob --password-stdin"),
+            ("echo S3cret | docker login --password-stdin registry.example.com", "echo [hidden] | docker login --password-stdin registry.example.com"),
+            ("bash -c \"echo pw | sudo -S mysql -pS3cret\"", "bash -c \"echo [hidden] | sudo -S mysql -p[hidden]\""),
+            ("cd x && echo hunter2 | sudo -S rm -rf y", "cd x && echo [hidden] | sudo -S rm -rf y"),
+        ] {
+            assert_eq!(masked(raw), shown, "{raw}");
+        }
+        for c in [
+            "echo hello | sudo tee out.txt",
+            "echo hello | sudo -n ls",
+            "echo \"$SUDO_PW\" | sudo -S ls",
+            "echo $PW | docker login --password-stdin",
+            "echo hello | grep -S x",
+            "echo pw | cat",
+            "echo pw || sudo -S ls",
+            "echo hello | docker login --username bob",
+        ] {
+            assert_eq!(masked(c), c, "{c}");
+        }
+    }
+
+    /// FIX-4 item 5 (AFTER 1): the mirror of the apostrophe rule. A `"` inside single quotes opens a
+    /// quote of its own only when another `"` comes before the next `'`; a lone one is text.
+    #[test]
+    fn safe019_a_lone_double_quote_inside_single_quotes_is_text_and_does_not_hide_the_program() {
+        for (raw, shown) in [
+            ("mysql -e 'a \"b; c' -pS3cret", "mysql -e 'a \"b; c' -p[hidden]"),
+            ("curl 'https://x/?q=a\"b&c=1' -u admin:hunter2", "curl 'https://x/?q=a\"b&c=1' -u [hidden]"),
+            ("mysql -e 'say \"hi; there\"' -pS3cret", "mysql -e 'say \"hi; there\"' -p[hidden]"),
+            ("bash -c 'echo \"x\"; mysql -pS3cret'", "bash -c 'echo \"x\"; mysql -p[hidden]'"),
+        ] {
+            assert_eq!(masked(raw), shown, "{raw}");
+        }
+        // A separator outside the quote still ends the command.
+        assert_eq!(masked("mysql -e 'a \"b'; find . -perm 644"), "mysql -e 'a \"b'; find . -perm 644");
     }
 }

@@ -8,10 +8,13 @@ import { defaultsOnly, labelOf } from "../keys/keymap";
 import "./onboarding.css";
 import { useSettings } from "../settings/useSettings";
 import Tours from "./Tours";
+import { AgentPanel, AutomatePanel, composer, IntegrationsPanel, MultitaskPanel, NotificationsPanel, StopSetup } from "./StepPanels";
+import { integrationSteps, readSeenCached, taskSourceOf } from "./integrations";
+import { guideOpenChanged } from "./actions";
 import { defaultAgentId } from "../launch/agents";
 import {
   caps, demoFrames, doneFrom, paletteKeys, doneId, firstOpen, forward, latest, markGuide, moveOn, nextTip, OPEN_EXPLORE, OPEN_GUIDE, guideClosed, PAGE_SHOWN, railKey, ring, startTicked, STEPS, stopDone, stopOf, TWO_REPOS, withRecord, words, workflowDone, WORKFLOWS,
-  type At, type Cap, type CapId, type CliStatus, type Facts, type GuideRecord, type Place, type Setup, type StepId, type TipId,
+  legacyProfile, type At, type Cap, type CapId, type CliStatus, type Facts, type GuideRecord, type Place, type Setup, type StepId, type TipId,
 } from "./guide";
 
 type Scan = { skills: { name: string; source: string }[] };
@@ -26,10 +29,11 @@ const UNREAD: Read = { workspaces: null, gitProjects: null, pageShown: false, in
 async function readFacts(check: ReturnType<typeof latest<boolean>>, put: (f: Partial<Read>) => void, alive: () => boolean): Promise<boolean | null> {
   const [settings, g] = await Promise.all([invoke<Record<string, unknown>>("get_settings").catch(() => null), invoke<GuideRecord>("guide_get").catch(() => null)]);
   if (!alive()) return null;
-  put({ notifications: settings ? settings.notifyOnFinish !== false : null, agent: settings ? defaultAgentId(settings) : null, pageShown: !!g?.tried.includes(PAGE_SHOWN) });
+  put({ notifications: settings ? settings.notifyOnFinish !== false : null, agent: settings ? defaultAgentId(settings) : null, pageShown: !!g?.tried.includes(PAGE_SHOWN), legacy: legacyProfile(settings, g?.tried ?? null) });
   put({ integrations: "checking" });
-  const gh = invoke<string | null>("scm_gh_account", { host: "github.com" }).then(
-    (login) => void (alive() && put({ integrations: login ? "connected" : "none" })),
+  // ONB-018: connected means signed in and the token accepted, not only a cached sign-in.
+  const gh = readSeenCached(invoke).then(
+    (x) => void (alive() && put({ integrations: integrationSteps(x).review === "done" ? "connected" : "none" })),
     () => void (alive() && put({ integrations: null })),
   );
   const projects = await invoke<{ path: string; id: string }[]>("project_list").catch(() => null);
@@ -156,6 +160,7 @@ function SetupGuide({ ask, open, onClose }: { ask: StepId | null; open: boolean;
     if (open) setAt(firstOpen(g.done, ask));
   }, [open, ask]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => setAt((a) => moveOn(a, g.done)), [doneKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => guideOpenChanged(composer, open), [open]); // ONB-016: a composer request from before a close and reopen is void (FIX-1: closing does not void it)
   const shown = useClosing(open);
   if (!shown) return null;
   const r = ring(g.done);
@@ -198,6 +203,11 @@ function SetupGuide({ ask, open, onClose }: { ask: StepId | null; open: boolean;
           </header>
           <p>{words(step).about}</p>
           {step.id === "cli" && <CliStep list={g.caps} onCheck={g.refresh} />}
+          {step.id === "multitask" && <MultitaskPanel close={onClose} />}
+          {step.id === "notifications" && <NotificationsPanel />}
+          {step.id === "agent" && <AgentPanel />}
+          {step.id === "integrations" && <IntegrationsPanel onCheck={g.refresh} />}
+          {step.id === "automate" && <AutomatePanel onCheck={g.refresh} />}
           {g.done.has(step.id) && <p className="guide-done">Done</p>}
         </section>
       </div>
@@ -210,12 +220,15 @@ function Explore({ onClose }: { onClose: () => void }) {
   const [seen, setSeen] = useState<Set<string>>(new Set());
   const [kept, setKept] = useState<Set<string>>(new Set());
   const [setup, setSetup] = useState<Setup>({ taskSource: false, skills: [] });
+  const [gh, setGh] = useState<boolean | null>(null);
   const rail = useRef<HTMLDivElement>(null);
   useEffect(() => {
     // Merged, not replaced: a stop visited before the record arrived stays seen (FIX-1).
     invoke<GuideRecord>("guide_get").then((g) => (setSeen((s) => withRecord(s, new Set(), g).seen), setKept((k) => withRecord(new Set(), k, g).kept)), () => {});
     // ONB-023: the setup a stop carries, read when the tour opens.
-    invoke<string | null>("scm_gh_account", { host: "github.com" }).then((l) => setSetup((s) => ({ ...s, taskSource: !!l })), () => {});
+    // FIX-1: GitHub counts as connected by the Connect integrations rule (sign-in accepted, task search answered),
+    // not by a cached sign-in alone; null until the read lands, so the stop says it is checking.
+    readSeenCached(invoke).then((x) => (setGh(taskSourceOf(x)), setSetup((s) => ({ ...s, taskSource: taskSourceOf(x) === true }))));
     invoke<Scan>("skills_scan", { workspace: null, refresh: false }).then((r) => setSetup((s) => ({ ...s, skills: r.skills.filter((k) => k.source === "home").map((k) => k.name) })), () => {});
   }, []);
   const stop = stopOf(at);
@@ -295,6 +308,7 @@ function Explore({ onClose }: { onClose: () => void }) {
           )}
           <h3>{stop.title}</h3>
           <p>{stop.caption}</p>
+          <StopSetup stop={stop.id} taskSource={gh} />
           <div className="btn-row">
             <span className="spacer" />
             <span className="hint">

@@ -50,7 +50,7 @@ import FindBar from "./FindBar";
 import { stopLine, type StopInfo } from "./notify";
 import NameField from "./NameField";
 import { handlesIn } from "./tabs";
-import { shellInAgentPane } from "./remove";
+import { markShell, runningOf, shellInAgentPane } from "./remove";
 
 // TERM-036: the pane menu's copy items; Copy Session ID shows only once the session is known.
 const COPY_IDS = [["session", "Copy Session ID"], ["terminal", "Copy Terminal ID"], ["pane", "Copy Pane ID"]] as const;
@@ -330,7 +330,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
   failed.current = onFailed;
 
   useEffect(() => {
-    report.current?.(status.kind === "starting" ? undefined : status.kind === "running");
+    report.current?.(runningOf(status.kind));
     if (status.kind === "running") pty.current?.(status.id, status.account);
   }, [status.kind]);
   // FIX-1: the pane key leaves the "agent pane running a shell" set when the pane goes (restart.current sets it).
@@ -703,7 +703,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
         early = [];
         setDied(null);
         // FIX-1: an agent pane that got a shell on Enter is asked about as a shell (terminal/remove.ts classify).
-        if (number !== undefined) (shell && agent !== "shell" ? shellInAgentPane.add(number) : shellInAgentPane.delete(number));
+        markShell(shellInAgentPane, number, shell, agent);
         setStatus({ kind: "starting" });
         void start(shell ? null : program, shell ? [] : args, false);
       };

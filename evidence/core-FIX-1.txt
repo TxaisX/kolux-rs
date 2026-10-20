@@ -51,3 +51,7 @@ LIVE PROOF PENDING (batched; no app launched)
    this shell"; with the shell idle the pane goes without a question.
 3. Right-click a pane, click Close Pane: the menu closes, then the usual close question / close happens.
 4. The PSReadLine capture described in evidence/T-151-d.txt step 4.
+5. (added by FIX-2, review AFTER 5) Add an agent pane (Claude or Codex) and watch it during its spawn window, before the
+   program's first output: its status chip reads "Starting" with a spinner (not "Stopped" / "Exited"), its tab badge is the
+   working one (not "done"), and the board lists it as running. Before FIX-1 a starting pane reported false, so for the whole
+   spawn window it read "Stopped / Exited" and "done". A restored session (stagger) shows the same during its wait.

@@ -327,10 +327,11 @@ pub struct Read {
 /// left out, 0 or 1, zero-padded forms included); a shell that repaints what is typed that way would
 /// otherwise have every drawing run together and read as the command twice. A move to any other
 /// column keeps the text. A column-1 H / f move starts over only on the row the last such move named
-/// (or with no row, or for the first one in the line); a move to a different row is a new line of
-/// the screen, so the earlier drawing stays (it runs on in this one log line).
+/// (or for the first one in the line); a row left out or 0 is row 1 (FIX-2), as a terminal reads it,
+/// so home followed by a move to row 2 keeps both. A move to a different row is a new line of the
+/// screen, so the earlier drawing stays (it runs on in this one log line).
 /// ponytail: no column-aware buffer. A repaint that moves to a column above 1 and overwrites in place
-/// would still read joined; unproven against real PSReadLine bytes (T-151-d live step 2).
+/// would still read joined; unproven against real PSReadLine bytes (T-151-d live step 4).
 fn last_drawing(s: &str) -> &str {
     // A CSI parameter as a number: empty is "left out" (None), zero-padded forms read as their value.
     let num = |p: &str| if p.is_empty() { None } else { Some(p.bytes().fold(0u32, |n, d| n.saturating_mul(10).saturating_add(u32::from(d - b'0')))) };
@@ -353,13 +354,11 @@ fn last_drawing(s: &str) -> &str {
                     }
                 } else {
                     let mut it = params.split(';');
-                    let (r, c) = (num(it.next().unwrap_or("")).map(|r| r.max(1)), num(it.next().unwrap_or("")));
-                    if matches!(c, None | Some(0 | 1)) && (r.is_none() || row.is_none() || r == row) {
+                    let (r, c) = (num(it.next().unwrap_or("")).unwrap_or(1).max(1), num(it.next().unwrap_or("")));
+                    if matches!(c, None | Some(0 | 1)) && row.is_none_or(|last| last == r) {
                         start = j + 1;
                     }
-                    if r.is_some() {
-                        row = r;
-                    }
+                    row = Some(r);
                 }
                 i = j;
             } else {
@@ -1449,10 +1448,11 @@ mod tests {
         // T-151-d: a shell that repaints what is typed shows the command once, whichever way it starts over.
         log.push(b"PS> d\rPS> di\rPS> dir\r\n");
         log.push(b"PS> d\x1b[1GPS> di\x1b[0G\x1b[2KPS> dir\n");
+        // FIX-2: the third one draws on row 3, then on row 1 (home): two screen rows, so both drawings are kept.
         log.push(b"\x1b[?25l\x1b[3;1HPS> dir\x1b[H\x1b[KPS> dir\x1b[?25h\n");
         log.push(b"PS> d\x1b[2;1fPS> dir\n");
         let texts: Vec<String> = log.read(None, None).lines.into_iter().map(|l| l.text).collect();
-        assert_eq!(texts, ["PS> dir"; 4]);
+        assert_eq!(texts, ["PS> dir", "PS> dir", "PS> dirPS> dir", "PS> dir"]);
         // The part not finished yet reads the same way.
         log.push(b"PS> d\x1b[1GPS> dir");
         assert_eq!(log.read(None, None).pending, "PS> dir");
@@ -1473,6 +1473,12 @@ mod tests {
         // The 1-second progress line still keeps its last drawing.
         log.push(b"10%\r\x1b[K50%\r100%\n");
         assert_eq!(log.read(Some(12), None).lines[0].text, "100%");
+        // FIX-2: a move with the row left out (home, or ";1") is row 1. The usual start of a full-screen frame, home
+        // then a move to row 2, keeps line one; and row 2 then home keeps row two.
+        log.push(b"\x1b[Hline one\x1b[2;1Hline two\n");
+        assert_eq!(log.read(Some(13), None).lines[0].text, "line oneline two");
+        log.push(b"\x1b[2;1Hrow two\x1b[;1Hrow one\n");
+        assert_eq!(log.read(Some(14), None).lines[0].text, "row tworow one");
     }
 
     #[test]
