@@ -750,7 +750,6 @@ pub fn stop_warning(receipt: &mut Value) {
 /// CLI-036: a terminal command aimed at a worker that has no terminal is refused by name, with
 /// the way to read it instead. `handle` is what the command was given: a dispatch id or a
 /// terminal handle; a handle that is no worker's passes through unchanged.
-#[allow(dead_code)] // T-089-c: the CLI calls it once the cli-lane hunk lands (evidence/T-089-c.txt)
 pub fn terminal_for(dispatches: &[Value], handle: &str) -> Result<String, Fail> {
     match dispatches.iter().find(|d| d["id"] == handle) {
         Some(d) => terminal_of(d).ok_or_else(|| Fail::new("no_terminal", format!("{handle} has no terminal, so terminal commands cannot reach it; read it with {CLI} orchestration worker-read --dispatch {handle} --source transcript"))),
@@ -894,7 +893,6 @@ pub fn labels_by_terminal(tasks: &[Value], dispatches: &[Value]) -> Value {
 }
 
 /// ORCH-066: the task name for each worker's terminal, for the Agents view and Board (T-129-d).
-#[allow(dead_code)] // registered in lib.rs by the coordinator (evidence/T-129-c.patch)
 #[tauri::command]
 pub fn worker_labels(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>) -> Result<Value, String> {
     let store = store.lock().map_err(|e| e.to_string())?;

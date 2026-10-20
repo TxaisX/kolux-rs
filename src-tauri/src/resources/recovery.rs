@@ -1457,11 +1457,11 @@ mod tests {
         assert!(own_install(Path::new("C:/Users/u/Apps/Kolux"), None, Some(profile)));
         assert!(!own_install(Path::new("C:/Program Files/Kolux RS"), Some(local), Some(profile)));
         assert!(!own_install(Path::new("C:/Program Files/Kolux RS"), None, None));
-        let steps = repair_steps(Path::new("C:/x/a.dll"), "txais");
+        let steps = repair_steps(Path::new("C:/x/a.dll"), "someone");
         assert_eq!(steps.len(), 3);
         assert_eq!(steps[0][1], "/reset", "inherited defaults first");
-        assert_eq!(&steps[1][1..3], &["/remove:d".to_string(), "txais".to_string()], "then the deny entries");
-        assert_eq!(steps[2][2], "txais:(F)", "then an explicit grant");
+        assert_eq!(&steps[1][1..3], &["/remove:d".to_string(), "someone".to_string()], "then the deny entries");
+        assert_eq!(steps[2][2], "someone:(F)", "then an explicit grant");
         assert!(steps.iter().all(|s| s[0] == "C:/x/a.dll" && s.contains(&"/C".to_string()) && s.contains(&"/Q".to_string())));
     }
 
@@ -1674,8 +1674,8 @@ mod tests {
         let older = "1 kolux-rs: config: a\n2 fatal error: old\n3 kolux-rs: config: a\n4 app exit\n5 kolux-rs: config: a\n";
         assert_eq!(previous_run_crash(older), None);
         // the report never carries the user's folder name
-        assert_eq!(scrub_report("panicked at C:\\Users\\txais\\src\\x.rs:1 boom"), "panicked at <home>\\src\\x.rs:1 boom");
-        assert_eq!(scrub_report("in /home/txais/dev and /Users/txais/dev"), "in <home>/dev and <home>/dev");
+        assert_eq!(scrub_report("panicked at C:\\Users\\someone\\src\\x.rs:1 boom"), "panicked at <home>\\src\\x.rs:1 boom");
+        assert_eq!(scrub_report("in /home/someone/dev and /Users/someone/dev"), "in <home>/dev and <home>/dev");
         assert_eq!(scrub_report("token=abcdefghijklmnop plain words"), crate::diag::scrub("token=abcdefghijklmnop plain words"), "secrets still masked");
         assert_eq!(scrub_report("nothing to hide"), "nothing to hide");
     }
@@ -1685,9 +1685,9 @@ mod tests {
         let dir = temp("crashes");
         assert_eq!(startup_scan(&dir), None, "no log, no record");
         fs::create_dir_all(dir.join("logs")).unwrap();
-        fs::write(dir.join("logs").join("kolux.log"), "1 kolux-rs: config: a\n2 fatal error: panicked at C:\\Users\\txais\\src\\x.rs: boom\n3 kolux-rs: config: a\n").unwrap();
+        fs::write(dir.join("logs").join("kolux.log"), "1 kolux-rs: config: a\n2 fatal error: panicked at C:\\Users\\someone\\src\\x.rs: boom\n3 kolux-rs: config: a\n").unwrap();
         let c = startup_scan(&dir).expect("a record");
-        assert!(!c.summary.contains("txais"), "paths are scrubbed: {}", c.summary);
+        assert!(!c.summary.contains("someone"), "paths are scrubbed: {}", c.summary);
         let all = crashes_read(&dir);
         assert_eq!(pending(&all), Some(&c), "it prompts");
         let mut all = all;
