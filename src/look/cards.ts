@@ -5,7 +5,9 @@
 //
 // Saved as two settings: `workspaceCardDensity` (the preset) and `workspaceCardDetails` (a custom
 // list; empty or missing means "follow the preset", so a preset picks up details added in later
-// versions, and an older profile never gets a duplicate).
+// versions, and an older profile never gets a duplicate). The sidebar chooser saves one key per
+// tick, so when the ticked set equals a preset it writes that preset's marker ("preset:compact") as
+// the whole list: the marker means "follow this preset" and wins over `workspaceCardDensity`.
 //
 // For a later card that adds a detail (T-291-d's Automation tag): add one entry to CARD_DETAILS
 // (its `line` reads a new field of `CardFacts`, which ProjectsPanel fills), name it in the presets
@@ -70,8 +72,13 @@ export const PRESETS: Record<Density, readonly string[]> = {
   detailed: ["status", "agents", "pr", "changes", "note"],
 };
 
+const MARK = "preset:";
+/** The one-entry list the chooser saves when a ticked set equals a preset: it follows that preset. */
+export const presetMark = (d: Density): string => MARK + d;
+const isMark = (saved: unknown): saved is [string] => Array.isArray(saved) && saved.length === 1 && typeof saved[0] === "string" && saved[0].startsWith(MARK);
+const markedPreset = (saved: unknown): Density | null => (isMark(saved) && (DENSITIES as readonly string[]).includes(saved[0].slice(MARK.length)) ? (saved[0].slice(MARK.length) as Density) : null);
+
 const known = new Set(CARD_DETAILS.map((d) => d.id));
-const lockedIds = CARD_DETAILS.filter((d) => d.locked).map((d) => d.id);
 /** Known ids only, once each, in the list's own order, with the locked ones always in. */
 export const tidyDetails = (v: unknown): string[] => {
   const asked = new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
@@ -85,8 +92,9 @@ export const densityOf = (v: unknown): Density => ((DENSITIES as readonly string
  *  preset the set equals, or "custom". */
 export function readCardDetails(settings: Record<string, unknown>): { shown: string[]; density: Density | "custom" } {
   const saved = settings[CARD_DETAILS_FIELD];
-  const custom = Array.isArray(saved) && saved.length > 0 ? tidyDetails(saved) : null;
-  const shown = custom ?? tidyDetails(PRESETS[densityOf(settings[CARD_DENSITY_FIELD])]);
+  const marked = markedPreset(saved);
+  const custom = !isMark(saved) && Array.isArray(saved) && saved.length > 0 ? tidyDetails(saved) : null;
+  const shown = custom ?? tidyDetails(PRESETS[marked ?? densityOf(settings[CARD_DENSITY_FIELD])]);
   const preset = DENSITIES.find((d) => sameSet(tidyDetails(PRESETS[d]), shown));
   return { shown, density: preset ?? "custom" };
 }
@@ -95,16 +103,6 @@ export const cardShows = (settings: Record<string, unknown>, id: string): boolea
 
 /** Choosing a preset: the preset is saved and any custom list is cleared. */
 export const densityPatch = (d: Density): Record<string, unknown> => ({ [CARD_DENSITY_FIELD]: d, [CARD_DETAILS_FIELD]: [] });
-
-/** Ticking or unticking one detail. A set that equals a preset is saved as that preset, so it keeps
- *  following the preset; anything else is saved as a custom list. */
-export function detailPatch(settings: Record<string, unknown>, id: string, on: boolean): Record<string, unknown> {
-  if (!known.has(id) || lockedIds.includes(id)) return {};
-  const now = readCardDetails(settings).shown;
-  const next = tidyDetails(on ? [...now, id] : now.filter((x) => x !== id));
-  const preset = DENSITIES.find((d) => sameSet(tidyDetails(PRESETS[d]), next));
-  return preset ? densityPatch(preset) : { [CARD_DETAILS_FIELD]: next };
-}
 
 /** The second line under a workspace's name: the shown details' words joined, or null for none. */
 export function cardLine(shown: readonly string[], f: CardFacts): string | null {
@@ -123,9 +121,12 @@ export function cardTitle(name: string, branch: string | null, shown: readonly s
   return [name, branch && branch !== name ? `Branch ${branch}` : null, ...hoverLines(shown, f), base].filter(Boolean).join("\n");
 }
 
-/** The `workspaceCardDetails` list after ticking or unticking one detail: one setting to save, for the
- *  sidebar's chooser (status stays in; a list that equals a preset still shows as that preset). */
+/** The `workspaceCardDetails` list after ticking or unticking one detail: the one setting the sidebar
+ *  chooser saves (status stays in). A set that equals a preset comes back as that preset's marker, so
+ *  the card keeps following the preset; any other set comes back as the list itself. */
 export const detailsAfter = (settings: Record<string, unknown>, id: string, on: boolean): string[] => {
   const now = readCardDetails(settings).shown;
-  return tidyDetails(!known.has(id) ? now : on ? [...now, id] : now.filter((x) => x !== id));
+  const next = tidyDetails(!known.has(id) ? now : on ? [...now, id] : now.filter((x) => x !== id));
+  const preset = DENSITIES.find((d) => sameSet(tidyDetails(PRESETS[d]), next));
+  return preset ? [presetMark(preset)] : next;
 };

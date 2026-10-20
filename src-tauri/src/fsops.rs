@@ -333,55 +333,6 @@ pub async fn fs_move(store: Store<'_>, grants: Grants<'_>, guard: Guard<'_>, git
     .map_err(|e| e.to_string())
 }
 
-/// Puts text on the system clipboard from the app side, so a copy works whether or not the web view
-/// holds focus or a user gesture (the web Clipboard API needs both). The explorer falls back to the
-/// web Clipboard API where this is not built.
-#[cfg(windows)]
-#[tauri::command]
-pub fn clip_write(window: tauri::WebviewWindow, text: String) -> Result<(), String> {
-    use windows_sys::Win32::Foundation::GlobalFree;
-    use windows_sys::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
-    use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
-    use windows_sys::Win32::System::Ole::CF_UNICODETEXT;
-    let owner = window.hwnd().map(|h| h.0).unwrap_or(std::ptr::null_mut());
-    let wide: Vec<u16> = text.encode_utf16().chain([0]).collect();
-    // SAFETY: the usual clipboard hand-off. The block is ours until SetClipboardData takes it, after
-    // which Windows owns it; on every failure before that it is freed here.
-    unsafe {
-        let mem = GlobalAlloc(GMEM_MOVEABLE, wide.len() * 2);
-        if mem.is_null() {
-            return Err("not enough memory to copy".into());
-        }
-        let dst = GlobalLock(mem) as *mut u16;
-        if dst.is_null() {
-            GlobalFree(mem);
-            return Err("not enough memory to copy".into());
-        }
-        std::ptr::copy_nonoverlapping(wide.as_ptr(), dst, wide.len());
-        GlobalUnlock(mem);
-        // Another app may hold the clipboard for a moment.
-        let open = (0..10).any(|_| OpenClipboard(owner) != 0 || { std::thread::sleep(std::time::Duration::from_millis(20)); false });
-        if !open {
-            GlobalFree(mem);
-            return Err("the clipboard is busy in another app; try again".into());
-        }
-        EmptyClipboard();
-        let taken = !SetClipboardData(CF_UNICODETEXT as u32, mem).is_null();
-        CloseClipboard();
-        if !taken {
-            GlobalFree(mem);
-            return Err("could not put the text on the clipboard".into());
-        }
-    }
-    Ok(())
-}
-
-#[cfg(not(windows))]
-#[tauri::command]
-pub fn clip_write(_text: String) -> Result<(), String> {
-    Err("no app-side clipboard here".into()) // ponytail: web Clipboard API fallback in the explorer; add a native path per OS if it falls short
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

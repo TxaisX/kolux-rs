@@ -3,6 +3,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import ShortcutsPage from "./ShortcutsPage";
 import { expect, test } from "vitest";
+import { actions } from "../keys/actions";
 import { resolve } from "../keys/keymap";
 import { filterRows, MAX_QUERY, shortcutRows } from "./shortcutRows";
 
@@ -10,8 +11,8 @@ const rows = (file: unknown = null) => shortcutRows(resolve(file, "win32"));
 const ids = (r: ReturnType<typeof rows>) => r.map((x) => x.id);
 
 test("every command is listed under its area with its chords and badges", () => {
-  const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+0", "zoom.in": null, "view.tasks": "Mod+P" } });
-  expect(all.length).toBe(128); // 129 commands, Reopen closed tab hidden until T-164-b (T-543-b)
+  const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+9", "zoom.in": null, "view.tasks": "Mod+P" } });
+  expect(all.length).toBe(133); // 134 commands, Reopen closed tab hidden until T-164-b (T-543-b)
   expect(ids(all)).not.toContain("tab.reopenClosed");
   const by = (id: string) => all.find((r) => r.id === id)!;
   expect(by("terminal.clear")).toMatchObject({ area: "Terminal", labels: ["Ctrl+K"], badges: [] });
@@ -27,8 +28,8 @@ test("every command is listed under its area with its chords and badges", () => 
 });
 
 test("filters: all, modified, unassigned, conflicting", () => {
-  const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+0", "zoom.in": null, "view.tasks": "Mod+P" } });
-  expect(filterRows(all, "all", "").length).toBe(128);
+  const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+9", "zoom.in": null, "view.tasks": "Mod+P" } });
+  expect(filterRows(all, "all", "").length).toBe(133);
   expect(ids(filterRows(all, "modified", ""))).toEqual(["zoom.in", "zoom.reset"]);
   expect(filterRows(all, "unassigned", "").every((r) => r.labels.length === 0)).toBe(true);
   expect(ids(filterRows(all, "unassigned", ""))).toContain("zoom.in");
@@ -54,4 +55,40 @@ test("groups the commands by area under the four filters and a capped search box
   expect(html).toContain(`maxLength="${MAX_QUERY}"`);
   for (const area of ["General", "Terminal", "File explorer"]) expect(html).toContain(`<h3 class="keys-area">${area}</h3>`);
   expect(html).toContain('data-id="terminal.clear"');
+});
+
+test("SET-010 (T-248-b): a global command on a chord the macOS menu owns conflicts with that menu item", () => {
+  const quit = [{ chord: "Mod+Q", name: "Quit Kolux" }];
+  const mac = (file: unknown, native = quit) => shortcutRows(resolve(file, "darwin"), native);
+  const by = (r: ReturnType<typeof rows>, id: string) => r.find((x) => x.id === id)!;
+  // Nothing bound there by default: no clash, with or without the menu's chords.
+  expect(mac(null).filter((r) => r.badges.includes("Conflicts"))).toEqual([]);
+  const hit = by(mac({ keybindings: { "view.tasks": "Mod+Q" } }), "view.tasks");
+  expect(hit.badges).toContain("Conflicts");
+  expect(hit.hint).toBe("Cmd+Q is also used by Quit Kolux in the menu here. Give one of them other keys.");
+  expect(ids(filterRows(mac({ keybindings: { "view.tasks": "Mod+Q" } }), "conflicting", ""))).toEqual(["view.tasks"]);
+  // Another spelling of the same chord still counts; a smaller scope is not shadowed by the menu.
+  expect(by(mac({ keybindings: { "view.tasks": "Cmd+Q" } }), "view.tasks").badges).toContain("Conflicts");
+  expect(by(mac({ keybindings: { "terminal.clear": "Mod+Q" } }), "terminal.clear").badges).not.toContain("Conflicts");
+  // Windows and Linux report no native chords, so nothing changes there.
+  expect(by(shortcutRows(resolve({ keybindings: { "view.tasks": "Mod+Q" } }, "win32"), []), "view.tasks").badges).not.toContain("Conflicts");
+  // Two commands on the menu's chord clash with each other first (the keymap drops both), as before.
+  expect(by(mac({ keybindings: { "view.tasks": "Mod+Q", "view.code": "Mod+Q" } }), "view.tasks").hint).toContain("is also used by Show Code here");
+});
+
+test("SET-019 (T-246-c): the interface zoom has its own keys, apart from the terminal zoom ones", () => {
+  const all = rows();
+  const by = (id: string) => all.find((r) => r.id === id)!;
+  expect(by("ui.zoomIn")).toMatchObject({ title: "Zoom Interface In", area: "General", labels: ["Ctrl+Alt+="], badges: [] });
+  expect(by("ui.zoomOut").labels).toEqual(["Ctrl+Alt+-"]);
+  expect(by("ui.zoomReset").labels).toEqual(["Ctrl+Alt+0"]);
+  // The terminal zoom keys stay as they were (TERM-078), and nothing in the table shares the new chords.
+  expect(by("zoom.in").labels).toEqual(["Ctrl+=", "Ctrl+Shift++", "Ctrl+Numpad +"]);
+  expect(by("zoom.reset").labels).toEqual(["Ctrl+0"]);
+  expect(all.filter((r) => r.badges.includes("Conflicts"))).toEqual([]);
+  expect(shortcutRows(resolve(null, "darwin")).find((r) => r.id === "ui.zoomOut")!.labels).toEqual(["Option+Cmd+-"]);
+  // They stay live while a terminal has focus under the terminal-first policy, like the other zoom keys.
+  for (const id of ["ui.zoomIn", "ui.zoomOut", "ui.zoomReset"]) expect(actions.find((a) => a.id === id)).toMatchObject({ scope: "global", terminalSafe: true, group: "menu" });
+  expect(ids(filterRows(all, "all", "bigger"))).toContain("ui.zoomIn");
+  expect(ids(filterRows(all, "all", "Reset Interface"))).toEqual(["ui.zoomReset"]);
 });

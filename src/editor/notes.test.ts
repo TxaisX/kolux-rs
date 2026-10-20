@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
-import { lineOf, noteDraft, notesMarkdown, reviewOn, sendTargets, type Note } from "./notes";
+import { lineOf, noteDraft, notesMarkdown, reviewOn, sendTargets, startChoices, type Note } from "./notes";
+import type { AgentInfo } from "../launch/PlusMenu";
 
 test("GIT-042: a note needs a selection and finds the selected line", () => {
   const text = "# Title\n\nFirst para.\nSecond line with **bold** words.\n";
@@ -43,4 +44,12 @@ test("EDIT-020: notes find their line whatever the line ends, and only running a
     { key: 2, label: "claude 2", since: "changed 3m ago" },
   ]);
   expect(sendTargets(panes.slice(1, 2), () => true, {}, now, () => "c")).toEqual([{ key: 2, label: "c", since: "no change yet" }]);
+});
+
+test("EDIT-020 (T-132-b): the Send menu offers to start each installed agent, the default first, leaving out the missing ones", () => {
+  const mk = (id: string, installed: boolean) => ({ id, name: id.toUpperCase(), program: id, args: [], installed, path: null, docs: true }) as unknown as AgentInfo;
+  const list = [mk("claude", true), mk("codex", true), mk("grok", false), mk("gemini", true)];
+  expect(startChoices(list, "codex")).toEqual([{ id: "codex", label: "CODEX" }, { id: "claude", label: "CLAUDE" }, { id: "gemini", label: "GEMINI" }]);
+  expect(startChoices(list, "").map((c) => c.id)).toEqual(["claude", "codex", "gemini"]);
+  expect(startChoices([mk("grok", false)], "grok")).toEqual([]);
 });

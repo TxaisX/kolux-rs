@@ -344,7 +344,7 @@ mod tests {
         git_in(&repo, &["reset", "-q", "--hard", &old]);
         git_in(&repo, &["checkout", "-q", "main"]);
         let root = temp("root");
-        let project = Project { id: "p".into(), name: "repo".into(), path: repo.to_string_lossy().to_string(), workspaces_dir: None, base: None };
+        let project = Project { id: "p".into(), name: "repo".into(), path: repo.to_string_lossy().to_string(), workspaces_dir: None, base: None, display_name: None };
         let place = Place { root: root.clone(), flat: false, prefix: String::new(), prefix_warning: None, refresh: false };
         let pr = PrHead { number: 12, title: "Fix the login page".into(), url: "https://github.com/t/r/pull/12".into(), head_ref_name: "feat/login".into(), head_ref_oid: tip.clone(), is_cross_repository: false, head_repository_owner: None, head_repository: None };
         // Lagging local branch: left alone, a new branch made at the head.

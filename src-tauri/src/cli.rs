@@ -7,6 +7,7 @@
 use crate::cli_accounts;
 use crate::git::{Git, Worktree};
 use crate::projects::{self, Project};
+use crate::orchestration::sendonce as so;
 use crate::state::Store;
 use crate::terminal::Terminals;
 use serde_json::{json, Map, Value};
@@ -21,6 +22,10 @@ use std::time::{Duration, Instant};
 mod automations_cli;
 #[path = "local_cli.rs"]
 mod local_cli;
+#[path = "cli_register.rs"]
+pub mod cli_register;
+#[path = "file_cli.rs"]
+mod file_cli;
 
 /// SKILL-017: Kolux's own skill guides (name, guide text), listed on the Skills page as bundled.
 pub fn bundled_skills() -> Vec<(&'static str, &'static str)> {
@@ -104,11 +109,11 @@ pub struct Parsed {
     pub args: Map<String, Value>,
 }
 
-const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev --version\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>, the name defaulting to its title] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev open [--json]\n      start Kolux, or bring its window to the front, and wait until it answers\n  kolux-dev status [--json]\n      running, not-running, stale (its startup file is left but nothing answers) or graph-not-ready (still loading its workspaces); exit 0 only when running\n  kolux-dev diagnostics memory [--json]\n      the Resource Manager's memory figures: resident and committed for Kolux, each terminal session and the total\n  kolux-dev repo list | repo add --path <folder> | repo show [--repo <selector>] [--json]\n  kolux-dev repo set-base-ref --ref <ref> [--repo <selector>] [--json]\n  kolux-dev repo search-refs [--repo <selector>] [--query <text>] [--limit <n>] [--json]\n  kolux-dev project list [--json]\n  kolux-dev worktree list | worktree ps [--repo <selector>] [--limit <n>] [--json]\n  kolux-dev worktree show [--worktree <selector>] | worktree current [--usage] [--json]\n      --usage adds the tokens the worktree's sessions used (tracked providers only)\n  kolux-dev worktree set [--worktree <selector>] [--display-name <d>] [--issue <number>|null] [--comment <text>]\n      [--parent-worktree <selector>|current] [--no-parent] [--json]\n  kolux-dev worktree changes | worktree overlap [--worktree <selector>] [--json]\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --model <m> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--retry-of <dispatch>] [--timeout-ms <ms>] [--max-depth <n>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration ask (--question <text> [--options <a,b>] [--to <who>] | --resume <message>) [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration gate-create --task <id> --question <text> [--options <json list>] [--json]\n  kolux-dev orchestration gate-resolve --id <gate> --resolution <text> [--json]\n  kolux-dev orchestration gate-list [--task <id>] [--status pending|resolved|timeout] [--run <run>] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration task-update --id <task> --status pending|ready|dispatched|completed|failed|blocked\n      [--result <text>] [--run <run>] [--retry-request <id>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>]\n      [--max-depth <n>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n  kolux-dev orchestration request-show --request <uuid> [--json]\n      what became of a change whose answer was lost (its --retry-request id)\n  kolux-dev account add [--agent claude|codex] [--json]\n      (runs the agent's own login in this terminal; Codex uses a device code)\n  kolux-dev account list [--json]\n  kolux-dev orchestration worker-abandon --dispatch <id> [--json]\n  kolux-dev orchestration worker-stop --dispatch <id> [--json]\n      (ends the worker's agent terminal; its worktree and other terminals stay)\n  kolux-dev orchestration worker-list [--run <run>] [--terminal-state active|reclaimable|retained|release_pending|release_unknown|released]\n      [--cursor <c>] [--limit 1-100] [--json]\n      (this terminal's Run unless --run names another; every Run when none is tied)\n  kolux-dev orchestration worker-retain --dispatch <id> [--json]\n      (keeps a settled worker's terminal open; the mark lasts across restarts)\n  kolux-dev orchestration worker-release --dispatch <id> [--retry-request <id>] [--json]\n      (saves a settled worker's output under the data folder, then closes its terminal; the worktree stays)\n  kolux-dev orchestration worker-show --dispatch <id> [--json]\n      (one worker's row, and whether it waits on a person: yes, no, or unknown when Kolux cannot tell)\n  kolux-dev orchestration reset (--all | --tasks | --messages) [--json]\n  kolux-dev terminal list [--worktree <selector>] [--limit <n>] [--include-visual-layouts] [--json]\n  kolux-dev terminal show --terminal <handle> [--json]\n  kolux-dev terminal create [--worktree active|<selector>] [--command <text>] [--title <t>] [--focus] [--json]\n  kolux-dev terminal split --terminal <handle> [--direction vertical|horizontal] [--command <text>] [--json]\n  kolux-dev terminal rename --terminal <handle> [--title <t>] [--json]\n      without --title the default name comes back\n  kolux-dev terminal switch --terminal <handle> [--json]   (also: focus)\n  kolux-dev terminal close (--terminal <handle> [--tab] | --worktree <selector> --all) [--json] (it replaces stop)\n  kolux-dev terminal read [--terminal <handle>] [--cursor <n>] [--limit <n>] [--screen] [--json]\n      (the output after a cursor, or with --screen the frame visible now; inside a Kolux terminal --terminal defaults to it)\n  kolux-dev terminal send [--terminal <handle>] [--text <text>] [--enter] [--interrupt] [--wait-submit <seconds>] [--retry-request <id>] [--json]\n  kolux-dev terminal wait [--terminal <handle>] --for exit|tui-idle [--timeout-ms <ms>] [--json]\n  kolux-dev automations list [--json]\n  kolux-dev automations show <id> [--json]\n  kolux-dev automations runs <id> [--limit <n>] [--json]\n  kolux-dev automations create --name <n> --trigger hourly|daily|weekdays|weekly|<cron line or RRULE> --prompt <text>\n      [--provider claude|codex|gemini] [--time HH:MM] [--day 0-6, Sunday 0] [--timezone <IANA zone>]\n      [--repo <selector> | --workspace <selector>] [--workspace-mode existing|new-per-run]
-      [--missed-run-grace-minutes 0|30|60|180|720|1440|2880]\n      [--precheck <command>] [--precheck-timeout 60|120|300|600] [--enabled | --disabled] [--json]\n      (--schedule is another name for --trigger)\n  kolux-dev automations edit <id> [the create flags; --time, --day and --timezone go with --trigger] [--json]\n  kolux-dev automations remove <id> [--json]\n  kolux-dev automations run <id> [--json]\n  kolux-dev agent-context [--json]   (every command, its flags and its usage; works with the app closed)\n  kolux-dev skills list [--json]\n  kolux-dev skills get <topic> [--full | --references | --reference <name>] [--topic <topic>] [--json]\n      (also: show; skills commands work with the app closed)\n  kolux-dev skills coverage [--json]\n      (which installed agents have the orchestration skill for the whole computer)\n  kolux-dev agent hooks status | agent hooks on | agent hooks off [--json]\n      (each agent's status hooks: installed, partial, not installed or error; on and off switch them\n      and bring every agent in line; these work with the app closed)\n  kolux-dev agent hooks prepare-codex\n      (install and trust Kolux's Codex hooks before Codex is first started)\n  kolux-dev claude-teams [claude arguments]   (Claude Code with Agent Teams, in a Kolux terminal; not on Windows)\n\nSelectors: --repo id:|name:|path:   --worktree active|current|id:<repo-id>::<path>|identity:|name:|branch:|issue:|path:\n--json prints one envelope on stdout; without it, errors go to stderr; warnings about flags nothing
+const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev --version\n  kolux-dev goto --url <address> | back | forward | reload | snapshot [--worktree <selector>] [--page <n>] [--json]\n      BROW-042: every browser command works on the agent's own worktree's visible browser tab (an agent outside every worktree gets the tab on screen);\n      --worktree picks another worktree's tab, --page a tab by number; snapshot lists the page's elements with references (e1, e2, ...) the other commands take\n  kolux-dev wait [--selector <css>] [--state visible|hidden] [--text <t>] [--url <pattern, * matches anything>] [--load load|domcontentloaded|networkidle] [--fn <js>] [--timeout <ms>] [--json]\n  kolux-dev eval --expression <js> | scroll --direction up|down [--amount <px>] [--json]\n  kolux-dev screenshot [--format <f>] | full-screenshot [--format <f>] | pdf [--json]\n      refused in this build (code unsupported): they need the engine's page capture and printer, which Kolux does not reach yet\n  kolux-dev click --element <ref> | dblclick --element <ref> | check --element <ref> | uncheck --element <ref> | focus --element <ref> [--json]\n  kolux-dev clear --element <ref> | select-all --element <ref> | hover --element <ref> | scrollintoview --element <ref> [--json]\n  kolux-dev fill --element <ref> --value <v> | type --input <text> | inserttext --text <text> | select --element <ref> --value <v> | keypress --key <k> [--json]\n  kolux-dev drag --from <ref> --to <ref> | upload --element <ref> --files <a,b> | download --selector <css> [--path <file>] | highlight --selector <css> [--json]\n      download is refused in this build (code unsupported): the engine's download handler is not reached yet\n  kolux-dev find --locator role|text|label|placeholder|selector --value <v> --action <command> [--text <t>] [--json]\n  kolux-dev get --what text|html|value|url|title|count|box [--element <ref>] | is --what visible|enabled|checked --element <ref> [--json]\n  kolux-dev mouse move --x <n> --y <n> | mouse down [--button left|right|middle] | mouse up [--button left|right|middle] | mouse wheel --dy <n> [--dx <n>] [--json]\n  kolux-dev exec --command <browser command line> [--json]\n      runs one browser command written as a line, quotes as in a shell; exec itself cannot be nested\n  kolux-dev tab list [--show-profile] [--worktree <selector>|all] | tab current | tab show [--index <n>] [--json]\n      BROW-044: the worktree's browser tabs (page number, title, address; * marks the one on screen); --worktree all lists every worktree's\n  kolux-dev tab switch --index <n> [--focus] | tab create [--url <address or .html file>] [--profile <id>] | tab close [--index <n>] [--json]\n      tab create given an HTML file on disk previews it in the tab (BROW-039); tab close is destructive\n  kolux-dev tab profile | tab profile set --profile <id> | tab profile use-default | tab profile clone [--json]\n      BROW-045: the profile (own cookies, storage, logins) the tab runs in; a change takes effect from the tab's next open\n  kolux-dev profiles list | profiles create --label <text> [--scope isolated|imported] [--no-ua-spoof] | profiles delete --profile <id> [--json]\n      profiles delete is destructive; the default profile cannot be deleted\n  kolux-dev cookie get [--name <n>] [--url <address>] | cookie set --name <n> --value <v> [--url <address>] [--domain <d>] [--path <p>] [--expires <unix seconds|date>] [--secure] [--sameSite Strict|Lax|None] | cookie delete --name <n> [--domain <d>] [--path <p>] [--json]\n      BROW-048: the open page's cookies (document.cookie); --url may only name the page's own site; --httpOnly is refused in this build (code unsupported); cookie delete is destructive\n  kolux-dev storage get --area local|session [--key <k>] | storage set --area local|session --key <k> --value <v> | storage clear --area local|session [--json]\n      storage clear is destructive\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>, the name defaulting to its title] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev open [--json]\n      start Kolux, or bring its window to the front, and wait until it answers\n  kolux-dev status [--json]\n      running, not-running, stale (its startup file is left but nothing answers) or graph-not-ready (still loading its workspaces); exit 0 only when running\n  kolux-dev diagnostics memory [--json]\n      the Resource Manager's memory figures: resident and committed for Kolux, each terminal session and the total\n  kolux-dev repo list | repo add --path <folder> | repo show [--repo <selector>] [--json]\n  kolux-dev repo set-base-ref --ref <ref> [--repo <selector>] [--json]\n  kolux-dev repo search-refs [--repo <selector>] [--query <text>] [--limit <n>] [--json]\n  kolux-dev project list [--json]\n  kolux-dev worktree list | worktree ps [--repo <selector>] [--limit <n>] [--json]\n  kolux-dev worktree show [--worktree <selector>] | worktree current [--usage] [--json]\n      --usage adds the tokens the worktree's sessions used (tracked providers only)\n  kolux-dev worktree set [--worktree <selector>] [--display-name <d>] [--issue <number>|null] [--comment <text>]\n      [--parent-worktree <selector>|current] [--no-parent] [--json]\n  kolux-dev worktree changes | worktree overlap [--worktree <selector>] [--json]\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --model <m> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--retry-of <dispatch>] [--timeout-ms <ms>] [--max-depth <n>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration ask (--question <text> [--options <a,b>] [--to <who>] | --resume <message>) [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration gate-create --task <id> --question <text> [--options <json list>] [--json]\n  kolux-dev orchestration gate-resolve --id <gate> --resolution <text> [--json]\n  kolux-dev orchestration gate-list [--task <id>] [--status pending|resolved|timeout] [--run <run>] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration task-update --id <task> --status pending|ready|dispatched|completed|failed|blocked\n      [--result <text>] [--run <run>] [--retry-request <id>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>]\n      [--max-depth <n>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n  kolux-dev orchestration request-show --request <uuid> [--json]\n      what became of a change whose answer was lost (its --retry-request id)\n  kolux-dev account add [--agent claude|codex] [--json]\n      (runs the agent's own login in this terminal; Codex uses a device code)\n  kolux-dev account list [--json]\n  kolux-dev file open <path> [--path <path>] [--worktree <selector>] [--json]\n      (a relative path is read from the current folder inside the worktree; an absolute path must lie inside it)\n  kolux-dev file diff <path> [--path <path>] [--staged] [--worktree <selector>] [--json]\n  kolux-dev file open-changed [--mode diff|edit|both] [--worktree <selector>] [--json]\n      (diffs by default; deleted files are skipped for editing and unresolved conflicts for diffs)\n  kolux-dev orchestration worker-abandon --dispatch <id> [--json]\n  kolux-dev orchestration worker-stop --dispatch <id> [--json]\n      (ends the worker's agent terminal; its worktree and other terminals stay)\n  kolux-dev orchestration worker-list [--run <run>] [--terminal-state active|reclaimable|retained|release_pending|release_unknown|released]\n      [--cursor <c>] [--limit 1-100] [--json]\n      (this terminal's Run unless --run names another; every Run when none is tied)\n  kolux-dev orchestration worker-retain --dispatch <id> [--json]\n      (keeps a settled worker's terminal open; the mark lasts across restarts)\n  kolux-dev orchestration worker-release --dispatch <id> [--retry-request <id>] [--json]\n      (saves a settled worker's output under the data folder, then closes its terminal; the worktree stays)\n  kolux-dev orchestration worker-show --dispatch <id> [--json]\n      (one worker's row, and whether it waits on a person: yes, no, or unknown when Kolux cannot tell)\n  kolux-dev orchestration reset (--all | --tasks | --messages) [--json]\n  kolux-dev terminal list [--worktree <selector>] [--limit <n>] [--include-visual-layouts] [--json]\n  kolux-dev terminal show --terminal <handle> [--json]\n  kolux-dev terminal create [--worktree active|<selector>] [--command <text>] [--title <t>] [--focus] [--json]\n  kolux-dev terminal split --terminal <handle> [--direction vertical|horizontal] [--command <text>] [--json]\n  kolux-dev terminal rename --terminal <handle> [--title <t>] [--json]\n      without --title the default name comes back\n  kolux-dev terminal switch --terminal <handle> [--json]   (also: focus)\n  kolux-dev terminal close (--terminal <handle> [--tab] | --worktree <selector> --all) [--json] (it replaces stop)\n  kolux-dev terminal read [--terminal <handle>] [--cursor <n>] [--limit <n>] [--screen] [--json]\n      (the output after a cursor, or with --screen the frame visible now; inside a Kolux terminal --terminal defaults to it)\n  kolux-dev terminal send [--terminal <handle>] [--text <text>] [--enter] [--interrupt] [--wait-submit <seconds>] [--retry-request <id>] [--json]\n  kolux-dev terminal wait [--terminal <handle>] --for exit|tui-idle [--timeout-ms <ms>] [--json]\n  kolux-dev automations list [--json]\n  kolux-dev automations show <id> [--json]\n  kolux-dev automations runs <id> [--limit <n>] [--json]\n  kolux-dev automations create --name <n> --trigger hourly|daily|weekdays|weekly|<cron line or RRULE> --prompt <text>\n      [--provider claude|codex|gemini] [--time HH:MM] [--day 0-6, Sunday 0] [--timezone <IANA zone>]\n      [--repo <selector> | --workspace <selector>] [--workspace-mode existing|new-per-run]
+      [--missed-run-grace-minutes 0|30|60|180|720|1440|2880]\n      [--precheck <command>] [--precheck-timeout 60|120|300|600] [--enabled | --disabled] [--json]\n      (--schedule is another name for --trigger)\n  kolux-dev automations edit <id> [the create flags; --time, --day and --timezone go with --trigger] [--json]\n  kolux-dev automations remove <id> [--json]\n  kolux-dev automations run <id> [--json]\n  kolux-dev agent-context [--json]   (every command, its flags and its usage; works with the app closed)\n  kolux-dev skills list [--json]\n  kolux-dev skills get <topic> [--full | --references | --reference <name>] [--topic <topic>] [--json]\n      (also: show; skills commands work with the app closed)\n  kolux-dev skills coverage [--json]\n      (which installed agents have the orchestration skill for the whole computer)\n  kolux-dev skills install [--skill <a,b> | --all] [--agent <a,b>|universal] [--local] [--dry-run] [--json]\n  kolux-dev skills update [--skill <a,b> | --all] [--local] [--dry-run] [--json]\n      (through the community skills installer; neither --skill nor --all lists what is on offer; --json only with --dry-run;\n      --local means this project, not the whole computer; skills update touches only copies the installer recorded)\n  kolux-dev agent hooks status | agent hooks on | agent hooks off [--json]\n      (each agent's status hooks: installed, partial, not installed or error; on and off switch them\n      and bring every agent in line; these work with the app closed)\n  kolux-dev agent hooks prepare-codex\n      (install and trust Kolux's Codex hooks before Codex is first started)\n  kolux-dev claude-teams [claude arguments]   (Claude Code with Agent Teams, in a Kolux terminal; not on Windows)\n\nSelectors: --repo id:|name:|path:   --worktree active|current|id:<repo-id>::<path>|identity:|name:|branch:|issue:|path:\n--json prints one envelope on stdout; without it, errors go to stderr; warnings about flags nothing
 acts on yet go to stderr and into the result's `warnings` list. Exit 0 worked, 1 any error.\n";
 
-const SWITCHES: &[&str] = &["force", "activate", "run-hooks", "no-parent", "takeover-legacy", "unread", "peek", "all", "format", "wait", "full", "ready", "brief", "inject", "dry-run", "return-preamble", "preamble", "tasks", "messages", "enabled", "disabled", "references", "focus", "include-visual-layouts", "tab", "screen", "enter", "interrupt", "usage"];
+const SWITCHES: &[&str] = &["force", "activate", "run-hooks", "no-parent", "takeover-legacy", "unread", "peek", "all", "format", "wait", "full", "ready", "brief", "inject", "dry-run", "return-preamble", "preamble", "tasks", "messages", "enabled", "disabled", "references", "focus", "include-visual-layouts", "tab", "screen", "enter", "interrupt", "usage", "staged", "secure", "http-only", "local", "show-profile", "no-ua-spoof", "httpOnly"];
 /// switch; stop is the old word for close, kept out of the help.
 const TERMINAL: &[(&str, &str, &[&str])] = &[
     ("terminal list", "terminal.list", &["worktree", "limit", "include-visual-layouts"]),
@@ -256,8 +261,14 @@ fn commands() -> Vec<Command> {
     all.extend(TERMINAL.iter().copied());
     all.extend(automations_cli::COMMANDS.iter().copied());
     all.extend(local_cli::COMMANDS.iter().copied());
+    all.extend(file_cli::COMMANDS.iter().copied());
+    // T-195 (BROW-042, BROW-046, BROW-047), T-241 (BROW-044, BROW-045, BROW-048): the browser commands live in browser.rs's own cli module.
+    all.extend(crate::browser::cli::COMMANDS.iter().copied());
     all
 }
+
+/// Flags that collect every value given instead of keeping one.
+const REPEATABLE: &[&str] = &["skill"];
 /// CLI-020: the verbs a typo is never pointed at from more than one edit away.
 const DESTRUCTIVE: &[&str] = &["rm", "remove", "delete"];
 
@@ -414,6 +425,14 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
                         } else {
                             return Err(Fail::args(format!("--{name} needs a value")));
                         };
+                        // CLI-002: a repeatable flag (--skill) collects every value given.
+                        if REPEATABLE.contains(&name.as_str()) {
+                            let list = flags.entry(name).or_insert_with(|| json!([]));
+                            if let (Some(list), Some(v)) = (list.as_array_mut(), value.as_str()) {
+                                list.push(json!(v));
+                            }
+                            continue;
+                        }
                         if let Some(old) = flags.get(&name) {
                             if *old != value {
                                 return Err(Fail::args(format!("--{name} was given twice with different values")));
@@ -640,6 +659,11 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
             max_depth(text("max-depth"))?;
         } else if command.starts_with("automations.") {
             args = automations_cli::check(command, &flags)?;
+        } else if command.starts_with("file.") {
+            // CLI-022: the path (bare or --path) and --mode are checked before any lookup.
+            args = file_cli::check(command, &flags)?;
+        } else if crate::browser::cli::is_browser(command) {
+            args = crate::browser::cli::check(command, &flags)?;
         } else if local_cli::COMMANDS.iter().any(|c| c.1 == command) {
             args = flags.clone();
         } else if TERM.iter().any(|(_, c, _)| *c == command) {
@@ -1143,8 +1167,14 @@ fn text_core(command: &str, r: &Value) -> String {
     if let Some(t) = local_cli::text(command, r) {
         return t;
     }
+    if let Some(t) = crate::browser::cli::text(command, r) {
+        return t;
+    }
     if let Some(t) = automations_cli::text(command, r) {
         return t;
+    }
+    if command.starts_with("file.") {
+        return file_cli::text_of(r);
     }
     if let Some(t) = query_text(command, r).or_else(|| terminal_text(command, r)) {
         return t;
@@ -1691,6 +1721,9 @@ pub fn main(words: Vec<String>) -> i32 {
         Err(f) => return finish(Err(f)),
     };
     // CLI-042 / CLI-043: these answer from the program itself, so the app may be closed.
+    if json && matches!(parsed.command.as_str(), "skills.install" | "skills.update") {
+        parsed.args.insert("json".into(), Value::Bool(true));
+    }
     if let Some(out) = local_cli::run(&parsed) {
         return finish(out.map(|v| (parsed.command.clone(), envelope(&id, "", Ok(v)))));
     }
@@ -2067,7 +2100,19 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         c if c.starts_with("orchestration.") => mail(ctx, req),
         c if c.starts_with("account.") => cli_accounts::dispatch(ctx, req),
         c if c.starts_with("automations.") => automations_cli::dispatch(ctx, req),
+        c if crate::browser::cli::is_browser(c) => {
+            // BROW-042: --worktree names the tab's worktree; without it the caller's own folder is
+            // the worktree, and a caller outside every worktree gets whichever tab is on screen.
+            // BROW-044: `tab list --worktree all` is every worktree's tabs (the module reads the word).
+            let worktree = match text("worktree") {
+                Some(sel) if sel == "all" => None,
+                Some(sel) => Some(pick_worktree(ctx, &sel, &req.cwd)?.1.path),
+                None => pick_worktree(ctx, "current", &req.cwd).ok().map(|(_, w)| w.path),
+            };
+            crate::browser::cli::run(req, worktree.as_deref())
+        }
         c if c.starts_with("terminal.") => terminal_cmd(ctx, req),
+        c if c.starts_with("file.") => file_cli::dispatch(ctx, req),
         other => Err(Fail::args(format!("unknown command {other}"))),
     }
 }
@@ -2965,7 +3010,7 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
             }
             m.once(retry, |_| {
                 if let (Some(tid), "inject") = (tid, mode) {
-                    type_brief(ctx.terminals, tid, &brief)?;
+                    type_brief(ctx, tid, &brief)?;
                 }
                 dispatches.push(json!({ "id": id, "runtime": std::process::id(), "runId": run, "taskId": task, "status": "running", "terminal": tid, "agent": agent, "mode": mode, "depth": depth, "maxDepth": cap, "brief": brief, "created": now_ms() }));
                 tasks[i]["status"] = json!("dispatched");
@@ -3053,10 +3098,13 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
             m.once(retry, |_| release_worker(&mut dispatches, &id, run.as_deref(), &live, &agent_of, &dir, &save, &read, &kill))?
         }
         WORKER_SHOW => {
-            // CLI-036: no pane hook state reaches this path yet, so a live pane reads unknown.
+            // CLI-036 / T-129-d: the pane's own hook state, else a prompt read off its newest output
+            // (ORCH-056), decides whether the worker waits on a person; a quiet pane reads unknown.
             let id = text("dispatch").ok_or_else(|| Fail::args("--dispatch is required"))?;
             let live = |h: &str| ctx.terminals.live(h);
-            let mut shown = o::worker_show(&tasks, &dispatches, &id, run.as_deref(), &live, None)?;
+            let tid = dispatches.iter().find(|d| d["id"] == id.as_str() && d["runId"].as_str() == run.as_deref()).and_then(o::terminal_of).and_then(|h| h.strip_prefix("term-")?.parse::<u32>().ok());
+            let attention = tid.and_then(|t| crate::prompt_scan::worker_attention(t, || ctx.terminals.read(t, None, Some(crate::prompt_scan::FRAME_LINES))));
+            let mut shown = o::worker_show(&tasks, &dispatches, &id, run.as_deref(), &live, attention)?;
             // cli FIX-9: a session recorded after the start gave up, and the status the row already had then.
             if let Some(d) = dispatches.iter().find(|d| d["id"] == id.as_str() && d["runId"].as_str() == run.as_deref()) {
                 for k in ["lateStamp", "lateAfter"] {
@@ -3123,9 +3171,9 @@ fn pane_agent(ctx: &Ctx, h: &str) -> Option<String> {
 const SUBMIT_WATCH: Duration = Duration::from_secs(3);
 /// MERGE 49: a zero wait would report an idle agent not submitted before it could start a turn.
 const WAIT_SUBMIT_ZERO: &str = "--wait-submit takes the seconds to watch, 1 or more; leave it out for the default 3 s";
-/// Receipts by terminal and `--retry-request` id: an exact retry answers without sending again.
-/// ponytail: in memory, bounded; a retry after a Kolux restart sends anew.
-static SENT: Mutex<Vec<(String, Value)>> = Mutex::new(Vec::new());
+/// `terminal send` receipts by terminal and `--retry-request` id live in the store
+/// (`orchestration::sendonce::Receipts`, ORCH-055): an exact retry, also after a restart, answers
+/// without sending again.
 const BLOCKED: [&str; 3] = ["permission", "waiting", "blocked"];
 
 /// TERM-126: what became of a prompt sent with Enter, watched for `--wait-submit` seconds.
@@ -3302,8 +3350,10 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let watch = asked.map(Duration::from_secs).unwrap_or(SUBMIT_WATCH);
             let retry = text("retryRequest").map(|r| format!("{handle}|{r}"));
             if let Some(key) = &retry {
-                if let Some(receipt) = SENT.lock().ok().and_then(|s| s.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())) {
-                    let mut again = receipt;
+                // ORCH-055: the receipt lasts in the store, so a retry after a restart sends nothing.
+                let store = ctx.store.lock().map_err(|e| e.to_string())?;
+                if let Some(receipt) = so::Receipts::load(&store).find(key) {
+                    let mut again = receipt.clone();
                     again["retried"] = json!(true);
                     return Ok(again);
                 }
@@ -3325,23 +3375,41 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 crate::status::cancel(id);
                 delivered.push("interrupt");
             }
-            if let Some(t) = &body {
-                // An agent's input box takes the text as one paste, so its line breaks do not send it early.
-                if agent.is_some() { write(&format!("\u{1b}[200~{t}\u{1b}[201~"))? } else { write(t)? }
-                delivered.push("text");
-            }
-            if enter {
-                if prompt {
-                    std::thread::sleep(Duration::from_millis(300));
+            let mut sent_ms = now_ms();
+            let mut held = None;
+            if body.is_some() {
+                // ORCH-055: the text goes in once the input box has settled, Enter once after a pause
+                // that grows with its size; nothing is pasted while a permission prompt shows.
+                let d = send_once(ctx, id, body.as_deref(), enter, agent.is_some())?;
+                match &d.outcome {
+                    so::Outcome::Blocked(why) => return Err(Fail::new("blocked", format!("{handle} shows a permission or approval prompt ({why}); nothing was pasted. Answer it first ({} terminal read --terminal {handle} --screen shows it), then send again", crate::orchestration::CLI))),
+                    so::Outcome::Gone => return Err(gone()),
+                    so::Outcome::Sent | so::Outcome::TextOnly => {}
+                    other => held = Some(other.clone()),
                 }
+                delivered.extend(d.delivered);
+                sent_ms = d.pasted_ms.unwrap_or(sent_ms);
+            } else if enter {
+                // A bare Enter answers what the agent shows; it is not a prompt, so it goes at once.
                 write("\r")?;
                 delivered.push("enter");
             }
             let mut out = json!({ "terminal": handle, "delivered": delivered, "agent": agent, "prompt": prompt });
-            if let Some(before) = before {
+            if let Some(h) = held {
+                // The text is in the box and Enter was held back: say why and what to do; no retry pastes it again.
+                out["receipt"] = json!(h.word());
+                out["submitted"] = json!(false);
+                out["enterHeld"] = json!(true);
+                out["state"] = json!(crate::status::state_of(id));
+                out["next"] = json!(format!("{} terminal read --terminal {handle} --screen", crate::orchestration::CLI));
+                out["warnings"] = json!([held_line(&handle, &h)]);
+            } else if let Some(before) = before {
                 let next = format!("kolux terminal read --terminal {handle} --screen");
                 let moved = || output_mark(ctx.terminals.read(id, None, Some(1))) != output_before;
-                let v = submit_verdict(&handle, before, watch, asked.is_some(), || crate::status::activity(id), || crate::status::state_of(id), moved);
+                // ORCH-055: a report dated before the send is the old turn's, not proof the prompt arrived.
+                let old_mark = before.map(|(m, _)| m);
+                let activity = || crate::status::activity(id).map(|(m, working)| (if so::proves_arrival(m.0, sent_ms) { m } else { old_mark.unwrap_or(m) }, working));
+                let v = submit_verdict(&handle, before, watch, asked.is_some(), activity, || crate::status::state_of(id), moved);
                 out["receipt"] = json!(v.receipt);
                 out["submitted"] = json!(v.submitted);
                 out["state"] = json!(v.state);
@@ -3358,13 +3426,10 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 out["warnings"] = json!(warnings);
             }
             if let Some(key) = retry {
-                if let Ok(mut s) = SENT.lock() {
-                    s.retain(|(k, _)| k != &key);
-                    s.push((key, out.clone()));
-                    if s.len() > 100 {
-                        s.remove(0);
-                    }
-                }
+                let store = ctx.store.lock().map_err(|e| e.to_string())?;
+                let mut receipts = so::Receipts::load(&store);
+                receipts.record(&key, now_ms(), out.clone());
+                receipts.save(&store).map_err(|e| Fail::new("failed", e))?;
             }
             Ok(out)
         }
@@ -3404,11 +3469,54 @@ fn drift(git: &Git, project: &Project, dir: &str) -> Option<(u32, String)> {
 }
 
 /// ORCH-013's inject: the brief goes in as one bracketed paste, so its line breaks do not send it
-/// early, then Enter submits it.
-fn type_brief(terminals: &Terminals, id: u32, brief: &str) -> Result<(), Fail> {
-    terminals.write(id, &format!("\u{1b}[200~{brief}\u{1b}[201~")).map_err(|e| Fail::new("failed", e))?;
-    std::thread::sleep(Duration::from_millis(300));
-    terminals.write(id, "\r").map_err(|e| Fail::new("failed", e))
+/// early, then Enter submits it, once (ORCH-055). A brief turned away as blocked or left in the box
+/// unsubmitted is a failure, so the dispatch keeps no receipt and the task is not marked dispatched.
+fn type_brief(ctx: &Ctx, id: u32, brief: &str) -> Result<(), Fail> {
+    let handle = crate::terminal::handle_of(id);
+    let d = send_once(ctx, id, Some(brief), true, true)?;
+    match d.outcome {
+        so::Outcome::Sent => Ok(()),
+        so::Outcome::Blocked(why) => Err(Fail::new("blocked", format!("{handle} shows a permission or approval prompt ({why}); the brief was not typed. Answer it first, then dispatch again"))),
+        so::Outcome::Gone => Err(Fail::new("not_found", format!("{handle} ended while the brief was typed"))),
+        other => Err(Fail::new("not_submitted", format!("{}; the brief is in {handle}'s input box, so press Enter there or send `{} terminal send --terminal {handle} --enter` instead of dispatching again", held_line(&handle, &other), crate::orchestration::CLI))),
+    }
+}
+
+/// ORCH-055: why Enter was held back after the text went in.
+fn held_line(handle: &str, o: &so::Outcome) -> String {
+    match o {
+        so::Outcome::Stale => format!("another writer typed into {handle} between the text and Enter, so Enter was held back and the send is stale"),
+        so::Outcome::Cancelled => format!("the prompt was cancelled in {handle} while Kolux checked that the text arrived, so no Enter was sent"),
+        so::Outcome::HeldPermission(why) => format!("{handle} showed a permission prompt mid-paste ({why}), so Enter was held back"),
+        other => format!("the send to {handle} ended {}", other.word()),
+    }
+}
+
+/// ORCH-055: types `text` (and Enter) into terminal `id` exactly once, behind the terminal's other
+/// senders: waits for the input box to settle, pastes, holds Enter back for the size-scaled pause and
+/// while a large paste is taken in, and never presses it when another writer, a cancel or a
+/// permission prompt comes between the text and Enter.
+fn send_once(ctx: &Ctx, id: u32, text: Option<&str>, enter: bool, agent: bool) -> Result<so::Delivery, Fail> {
+    let turn = so::lane(id);
+    let _turn = turn.lock().unwrap_or_else(|p| p.into_inner());
+    let ticket = so::claim(id);
+    let mut send = so::Send::new(text.map_or(0, str::len), enter, cfg!(windows), now_ms());
+    let handle = crate::terminal::handle_of(id);
+    let look = || {
+        let now = now_ms();
+        let tail = ctx.terminals.read(id, None, Some(8)).map(|r| r.lines.iter().map(|l| l.text.clone()).chain(std::iter::once(r.pending)).collect::<Vec<_>>().join("\n")).unwrap_or_default();
+        let seen = so::current(id);
+        so::Look {
+            now_ms: now,
+            last_output_ms: ctx.terminals.quiet_for(id).map(|q| now.saturating_sub(q.as_millis() as u64)),
+            hooks_state: crate::status::state_of(id).map(str::to_string),
+            screen_tail: tail,
+            other_writer: seen.writer != ticket.writer,
+            cancelled: seen.cancel != ticket.cancel,
+            live: ctx.terminals.live(&handle),
+        }
+    };
+    so::drive(&mut send, text, agent, look, |s| ctx.terminals.write(id, s), std::thread::sleep).map_err(|e| Fail::new("failed", e))
 }
 
 // ---------------------------------------------------------------- worker start (ORCH-016)
@@ -4773,7 +4881,14 @@ mod tests {
         // CLI-025: send needs something to send; a retry of a known request answers without a terminal.
         assert!(dispatch(&ctx, &req("terminal.send", json!({ "terminal": "term-9" }), None)).unwrap_err().message.contains("--text, --enter or --interrupt"));
         assert_eq!(dispatch(&ctx, &req("terminal.send", json!({ "terminal": "term-9", "enter": true }), None)).unwrap_err().code, "not_found");
-        SENT.lock().unwrap().push(("term-9|r1".into(), json!({ "terminal": "term-9", "receipt": "turn_began" })));
+        // ORCH-055: the receipt is kept in the store, so it answers after a restart too.
+        {
+            let s = store.lock().unwrap();
+            let mut receipts = so::Receipts::load(&s);
+            receipts.record("term-9|r1", now_ms(), json!({ "terminal": "term-9", "receipt": "turn_began" }));
+            receipts.save(&s).unwrap();
+            assert!(so::Receipts::load(&s).find("term-9|r1").is_some());
+        }
         let again = dispatch(&ctx, &req("terminal.send", json!({ "terminal": "term-9", "text": "hi", "enter": true, "retryRequest": "r1" }), None)).unwrap();
         assert_eq!((again["receipt"].as_str(), again["retried"].as_bool()), (Some("turn_began"), Some(true)));
         assert_eq!(dispatch(&ctx, &req("terminal.send", json!({ "terminal": "term-9", "text": "hi", "enter": true, "retryRequest": "r2" }), None)).unwrap_err().code, "not_found");
@@ -7504,6 +7619,124 @@ mod tests {
         let e = start(Some("term-2"), &run_a);
         assert_ne!(e.code, "caller_mismatch", "{}", e.message);
         assert!(!e.message.contains("Kolux knows no agent"), "turned away before the agent is looked up: {}", e.message);
+        drop(ctx);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// CLI-002 / T-250-b: the grammar of the commands whose work is not built yet is already exact.
+    #[test]
+    fn t250b_a_cookie_set_keeps_an_empty_value_and_refuses_a_missing_one_skills_install_collects_every_skill() {
+        let ok = |s: &str| parse(&words(s)).1.unwrap().unwrap();
+        let empty = ok("cookie set --name a --value=");
+        assert_eq!((empty.command.as_str(), &empty.args["value"], &empty.args["name"]), ("browser.cookie-set", &json!(""), &json!("a")));
+        assert!(parse(&words("cookie set --name a")).1.unwrap_err().message.contains("--value is required"));
+        assert!(parse(&words("cookie set --name a --value")).1.unwrap_err().message.contains("--value needs a value"));
+        // A value that starts with two dashes is taken only in the equals form.
+        assert_eq!(ok("cookie set --name a --value=--x").args["value"], "--x");
+        assert!(parse(&words("cookie set --name a --value --x")).1.is_err());
+        let two = ok("skills install --skill a --skill b");
+        assert_eq!(two.command, "skills.install");
+        assert_eq!(two.args["skill"], json!(["a", "b"]));
+        assert_eq!(ok("skills install --skill=only").args["skill"], json!(["only"]));
+        // Ordinary text flags still keep one value and refuse a second, different one.
+        assert!(parse(&words("worktree rm --worktree a --worktree b")).1.unwrap_err().message.contains("twice"));
+        // cookie set and skills install are each routed, once.
+        assert_eq!(commands().iter().filter(|c| c.0 == "cookie set").count(), 1);
+        assert!(commands().iter().any(|c| c.0 == "skills install"));
+    }
+
+    #[test]
+    fn t250b_b_the_file_words_take_a_bare_path_or_a_flag_and_check_their_values_before_any_lookup() {
+        let ok = |s: &str| parse(&words(s)).1.unwrap().unwrap();
+        let bare = ok("file open src/a.rs");
+        assert_eq!((bare.command.as_str(), &bare.args["path"]), ("file.open", &json!("src/a.rs")));
+        assert_eq!(ok("file diff --path a.rs --staged --worktree name:x").args["staged"], true);
+        assert_eq!(ok("file diff a.rs").args["path"], "a.rs");
+        assert_eq!(ok("file open-changed").command, "file.open-changed");
+        assert_eq!(ok("file open-changed --mode both").args["mode"], "both");
+        assert!(parse(&words("file open a.rs --path b.rs")).1.unwrap_err().message.contains("twice"));
+        assert!(parse(&words("file open a.rs --worktree")).1.unwrap_err().message.contains("--worktree needs a value"));
+        assert!(parse(&words("file open a.rs --worktree=")).1.unwrap_err().message.contains("--worktree cannot be empty"));
+        assert!(parse(&words("file open")).1.unwrap_err().message.contains("file path is required"));
+        assert!(parse(&words("file open-changed --mode tabs")).1.unwrap_err().message.contains("--mode takes diff, edit or both"));
+        assert!(parse(&words("file open a.rs --mode edit")).1.is_err());
+        assert_eq!(help(&["file".to_string()]).1, 0);
+    }
+
+    #[test]
+    fn t250b_c_file_open_diff_and_open_changed_tell_the_window_and_report_opened_and_skipped() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-cli250b-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let commit = |cwd: &Path, file: &str, text: &str| {
+            std::fs::write(cwd.join(file), text).unwrap();
+            git(&["add", "-A"], cwd);
+            git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", file], cwd);
+        };
+        git(&["init", "-q", "-b", "main"], &repo);
+        commit(&repo, "a.txt", "base\n");
+        commit(&repo, "gone.txt", "bye\n");
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        projects::add_project(&git_, &store.lock().unwrap(), &repo).unwrap();
+        {
+            let s = store.lock().unwrap();
+            let mut settings = s.settings();
+            settings["workspacesDir"] = json!(dir.join("ws").display().to_string());
+            settings["branchPrefix"] = json!("none");
+            s.save_settings(&settings).unwrap();
+        }
+        let sent: Mutex<Vec<Value>> = Mutex::new(Vec::new());
+        let notify = |v: Value| sent.lock().unwrap().push(v);
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
+        let one = PathBuf::from(dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": "one" }))).unwrap()["path"].as_str().unwrap());
+        sent.lock().unwrap().clear();
+        std::fs::remove_file(one.join("gone.txt")).unwrap();
+        std::fs::write(one.join("a.txt"), "changed\n").unwrap();
+        std::fs::write(one.join("new.txt"), "fresh\n").unwrap();
+        std::fs::create_dir_all(one.join("sub")).unwrap();
+        std::fs::write(one.join("sub").join("deep.txt"), "x\n").unwrap();
+        let tail = |v: &Value| v["path"].as_str().unwrap().rsplit(['/', '\\']).next().unwrap().to_string();
+
+        // A relative path opens from the current folder inside the worktree.
+        let r = dispatch(&ctx, &req("file.open", &one.join("sub"), json!({ "path": "deep.txt" }))).unwrap();
+        assert_eq!(r["opened"], json!([{ "path": "sub/deep.txt", "kind": "edit", "staged": false }]));
+        let ev = sent.lock().unwrap().pop().unwrap();
+        assert_eq!((ev["kind"].as_str(), tail(&ev).as_str()), (Some("file-open"), "deep.txt"));
+        assert_eq!(ev["worktree"].as_str().map(|w| w.replace('\\', "/")), Some(one.display().to_string().replace('\\', "/")));
+        assert!(ev.get("branch").is_some());
+        // The explicit --worktree skips the guess about the current folder.
+        let r = dispatch(&ctx, &req("file.open", &dir, json!({ "path": "a.txt", "worktree": "name:one" }))).unwrap();
+        assert_eq!(r["opened"][0]["path"], "a.txt");
+        // A full path inside the worktree works; its top folder is refused and nothing is sent.
+        let full = one.join("a.txt").display().to_string();
+        assert_eq!(dispatch(&ctx, &req("file.open", &dir, json!({ "path": full, "worktree": "name:one" }))).unwrap()["opened"][0]["path"], "a.txt");
+        sent.lock().unwrap().clear();
+        let top = dispatch(&ctx, &req("file.open", &dir, json!({ "path": one.display().to_string(), "worktree": "name:one" }))).unwrap_err();
+        assert_eq!(top.code, "not_a_file");
+        assert!(sent.lock().unwrap().is_empty());
+        // A file that is not there cannot be edited, but its diff can be shown.
+        assert_eq!(dispatch(&ctx, &req("file.open", &one, json!({ "path": "gone.txt" }))).unwrap_err().code, "not_found");
+        let d = dispatch(&ctx, &req("file.diff", &one, json!({ "path": "gone.txt", "staged": true }))).unwrap();
+        assert_eq!(d["opened"][0], json!({ "path": "gone.txt", "kind": "diff", "staged": true }));
+        assert_eq!(sent.lock().unwrap().last().unwrap()["kind"], "file-diff");
+
+        // open-changed: diffs by default; editing skips the deleted file.
+        sent.lock().unwrap().clear();
+        let c = dispatch(&ctx, &req("file.open-changed", &one, json!({}))).unwrap();
+        let mut diffs: Vec<String> = c["opened"].as_array().unwrap().iter().map(|o| o["path"].as_str().unwrap().to_string()).collect();
+        diffs.sort();
+        assert_eq!(diffs, vec!["a.txt", "gone.txt", "new.txt", "sub/deep.txt"]);
+        assert_eq!(c["skipped"], json!([]));
+        assert_eq!(sent.lock().unwrap().iter().filter(|e| e["kind"] == "file-diff").count(), 4);
+        let e = dispatch(&ctx, &req("file.open-changed", &one, json!({ "mode": "edit" }))).unwrap();
+        assert_eq!(e["skipped"], json!([{ "path": "gone.txt", "kind": "edit", "why": "deleted" }]));
+        assert_eq!(e["opened"].as_array().unwrap().len(), 3);
+        assert!(dispatch(&ctx, &req("file.open-changed", &one, json!({ "mode": "tabs" }))).is_err());
         drop(ctx);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);

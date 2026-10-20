@@ -53,6 +53,15 @@ export function planOf(agent: string, claude: ClaudeLimit[], codex: CodexUsage |
   return p && (p.fiveHour !== null || p.weekly !== null) ? p : null;
 }
 
+/** T-548: the Codex figures a pane may carry. src/usage holds the figures of the ACTIVE Codex account
+ *  only, so a Codex pane begun on another account (`paneAccount` a different id, or null = Codex's own
+ *  sign-in while a managed one is active) gets none rather than the active account's under its name.
+ *  A pane with no recorded account yet (undefined) is unknown, so nothing is hidden; other agents pass through. */
+export function codexOf(agent: string, paneAccount: string | null | undefined, active: string | null, codex: CodexUsage | null): CodexUsage | null {
+  if (agent !== "codex" || paneAccount === undefined) return codex;
+  return paneAccount === active ? codex : null;
+}
+
 /** The card's meter, or null when there is neither a context reading nor plan figures (USAGE-002). */
 export function meterOf(ctx: ContextReading | undefined, agent: string, claude: ClaudeLimit[], codex: CodexUsage | null, capped = true): Meter | null {
   const m: Meter = {};

@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { Close } from "../chrome/icons";
 import { baseName } from "./buffers";
-import { notesMarkdown, type Note, type Picked, type SendTarget } from "./notes";
+import { notesMarkdown, type Note, type Picked, type SendTarget, type StartChoice } from "./notes";
 
 type Props = {
   picked: Picked | null;
@@ -19,9 +19,12 @@ type Props = {
   onMenu: (open: boolean) => void;
   /** Sends every note to that agent; the promise gives the reason when nothing was sent. */
   onSend: (key: number) => Promise<string | null>;
+  /** EDIT-020: the agents the menu can start with the notes as the first prompt, and the start. */
+  starters?: StartChoice[];
+  onStart?: (id: string) => Promise<string | null>;
 };
 
-export default function ReviewNotes({ picked, notes, onAdd, onCancel, onRemove, onClear, targets, menu, onMenu, onSend }: Props) {
+export default function ReviewNotes({ picked, notes, onAdd, onCancel, onRemove, onClear, targets, menu, onMenu, onSend, starters = [], onStart }: Props) {
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
@@ -83,7 +86,7 @@ export default function ReviewNotes({ picked, notes, onAdd, onCancel, onRemove, 
           </div>
           {menu && (
             <div className="review-send" role="menu" aria-label="Send the notes to">
-              {targets.length === 0 && <div className="sb-hint">No agent is running in this worktree. Start one, or copy the notes instead.</div>}
+              {targets.length === 0 && <div className="sb-hint">{starters.length > 0 && onStart ? "No agent is running in this worktree. Start one below, or copy the notes instead." : "No agent is running in this worktree. Start one, or copy the notes instead."}</div>}
               {targets.map((t) => (
                 <button
                   key={t.key}
@@ -98,6 +101,26 @@ export default function ReviewNotes({ picked, notes, onAdd, onCancel, onRemove, 
                   <span className="muted">{t.since}</span>
                 </button>
               ))}
+              {onStart && starters.length > 0 && (
+                <>
+                  <div className="review-send-head muted">Start a new agent</div>
+                  {starters.map((s) => (
+                    <button
+                      key={s.id}
+                      role="menuitem"
+                      className="review-send-item"
+                      data-start-agent={s.id}
+                      onClick={async () => {
+                        onMenu(false);
+                        setSaid(await onStart(s.id));
+                      }}
+                    >
+                      <span className="name">{s.label}</span>
+                      <span className="muted">new</span>
+                    </button>
+                  ))}
+                </>
+              )}
             </div>
           )}
           {said && <div className="sb-hint">{said}</div>}

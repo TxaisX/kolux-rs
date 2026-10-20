@@ -6,8 +6,9 @@
 //! here (reload, developer tools, full screen, minimise, maximise, exit) or comes back
 //! to the page as a `menu-action` event carrying the item id, which is the keymap action id where
 //! one exists (`app.settings`, `sidebar.left.toggle`, ...), so the page runs the same code as the
-//! shortcut. T-248-b: APP-010 sidebar footer, APP-013 focus routing, APP-015 navigation guard.
-use serde::Deserialize;
+//! shortcut. T-248-b: the Help items, the native-accelerator list the Shortcuts page judges clashes
+//! against (SET-010) and the main window's navigation guard (APP-015, `navigation`).
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
@@ -67,6 +68,60 @@ pub enum Stock {
     Quit,
 }
 
+impl Stock {
+    /// The chord macOS gives this stock item, in the keymap's spelling, and the name the Shortcuts
+    /// page uses for it (SET-010: a chord that collides with a native menu accelerator is a clash).
+    pub fn chord(self) -> Option<(&'static str, &'static str)> {
+        Some(match self {
+            Stock::Undo => ("Mod+Z", "Undo"),
+            Stock::Redo => ("Mod+Shift+Z", "Redo"),
+            Stock::Cut => ("Mod+X", "Cut"),
+            Stock::Copy => ("Mod+C", "Copy"),
+            Stock::Paste => ("Mod+V", "Paste"),
+            Stock::SelectAll => ("Mod+A", "Select All"),
+            Stock::Minimize => ("Mod+M", "Minimize"),
+            Stock::Hide => ("Mod+H", "Hide Kolux"),
+            Stock::HideOthers => ("Mod+Alt+H", "Hide Others"),
+            Stock::Quit => ("Mod+Q", "Quit Kolux"),
+            Stock::Maximize | Stock::About | Stock::Services | Stock::ShowAll => return None,
+        })
+    }
+}
+
+/// A chord the system menu owns, for the Shortcuts page.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct NativeChord {
+    pub chord: &'static str,
+    pub name: &'static str,
+}
+
+/// What `menu_sync` hands back: every accelerator the menu items hold, and the chords of the stock
+/// items the system menu owns. Only a platform with an attached menu bar (macOS) has any: the
+/// popup menu of Windows and Linux never catches a key.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Synced {
+    pub accelerators: Vec<String>,
+    pub native: Vec<NativeChord>,
+}
+
+/// Every stock item in `nodes` that owns a chord.
+pub fn native_chords(os: Os, nodes: &[Node]) -> Vec<NativeChord> {
+    fn walk(nodes: &[Node], out: &mut Vec<NativeChord>) {
+        for n in nodes {
+            match n {
+                Node::Stock(s) => out.extend(s.chord().map(|(chord, name)| NativeChord { chord, name })),
+                Node::Sub { items, .. } => walk(items, out),
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    if attaches_bar(os) {
+        walk(nodes, &mut out);
+    }
+    out
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Node {
     Item { id: &'static str, label: &'static str, accel: Option<String> },
@@ -90,6 +145,7 @@ pub fn spec(os: Os, s: &MenuState) -> Vec<Node> {
             label: "Kolux",
             items: vec![
                 Node::Stock(Stock::About),
+                item("help.checkUpdates", "Check for Updates..."),
                 Node::Sep,
                 item("app.settings", "Settings..."),
                 Node::Sep,
@@ -143,10 +199,14 @@ pub fn spec(os: Os, s: &MenuState) -> Vec<Node> {
         .concat(),
     });
     bar.push(Node::Sub { label: "Window", items: vec![Node::Stock(Stock::Minimize), Node::Stock(Stock::Maximize)] });
-    // Report Crash, Explore Kolux, Getting Started and Check for Updates come with T-248-b.
+    // APP-009: Help holds Explore Kolux and Getting Started everywhere (Report Crash waits for T-183); About and Check
+    // for Updates sit here on Windows and Linux, and in the app menu on macOS.
+    // Report Crash joins this list with the crash report card (T-183): until then it would open nothing.
+    let mut help = vec![item("help.explore", "Explore Kolux"), item("help.gettingStarted", "Getting Started")];
     if os != Os::Mac {
-        bar.push(Node::Sub { label: "Help", items: vec![Node::Stock(Stock::About)] });
+        help.extend([Node::Sep, Node::Stock(Stock::About), item("help.checkUpdates", "Check for Updates")]);
     }
+    bar.push(Node::Sub { label: "Help", items: help });
     bar
 }
 
@@ -171,8 +231,7 @@ pub fn route(id: &str) -> Route {
     }
 }
 
-/// Every accelerator the menu holds, so the Shortcuts page can count a chord that collides with
-/// one as a clash (SET-010; the page side is T-248-b).
+/// Every accelerator the menu holds (`menu_sync` hands it to the page).
 pub fn accelerators(nodes: &[Node]) -> Vec<String> {
     let mut out = Vec::new();
     for n in nodes {
@@ -183,6 +242,94 @@ pub fn accelerators(nodes: &[Node]) -> Vec<String> {
         }
     }
     out
+}
+
+/// APP-015: what the main window does when something tries to move it to an address.
+// ponytail: only the tools.rs hunk (evidence/chrome-T-248-b-tools.rs.patch) calls these; until the
+// coordinator lands it the non-test build has no caller, so dead_code is allowed. Drop the attribute
+// with the hunk.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Nav {
+    /// The app's own page (or its dev server): the window goes there.
+    Allow,
+    /// A web or mail address: the window stays and the default browser opens it.
+    External,
+    /// Anything else (a file on some host, a data address, a script): nothing happens.
+    Block,
+}
+
+/// The one origin the app's own pages are served from on this platform (never a list of several).
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Own {
+    /// `tauri://localhost`: macOS and Linux.
+    Tauri,
+    /// `http://tauri.localhost`: Windows, the window config's default (no `useHttpsScheme`).
+    Http,
+    /// `https://tauri.localhost`: Windows with `useHttpsScheme` set in the window config.
+    Https,
+}
+
+impl Own {
+    /// `https` is the window config's `use_https_scheme`; it only changes Windows.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn for_platform(os: Os, https: bool) -> Own {
+        match (os, https) {
+            (Os::Windows, true) => Own::Https,
+            (Os::Windows, false) => Own::Http,
+            _ => Own::Tauri,
+        }
+    }
+
+    fn scheme_host(self) -> (&'static str, &'static str) {
+        match self {
+            Own::Tauri => ("tauri", "localhost"),
+            Own::Http => ("http", "tauri.localhost"),
+            Own::Https => ("https", "tauri.localhost"),
+        }
+    }
+}
+
+/// Decides one navigation of the main window. `own` is the platform's real origin and `dev` the dev
+/// server's address (a debug build passes it, a release build `None`). Only that exact scheme and host
+/// are the app: the other platforms' forms of the app's origin are outside addresses here (a web
+/// address goes to the browser, `tauri://` elsewhere is dropped), because an allowed page gets the
+/// app's command access. The host and port are compared as parsed (case folded, no userinfo, no port,
+/// no trailing dot, look-alike letters stay different), and `about:blank` is dropped like any other
+/// non-web address.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn navigation(url: &tauri::Url, own: Own, dev: Option<&tauri::Url>) -> Nav {
+    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
+    let plain = url.username().is_empty() && url.password().is_none();
+    let (own_scheme, own_host) = own.scheme_host();
+    if url.scheme() == own_scheme && plain && url.port().is_none() && host == own_host {
+        return Nav::Allow;
+    }
+    match url.scheme() {
+        "http" | "https" => {
+            let dev_server = plain
+                && dev.is_some_and(|d| d.scheme() == url.scheme() && d.host_str().map(str::to_ascii_lowercase).as_deref() == Some(host.as_str()) && d.port_or_known_default() == url.port_or_known_default());
+            if dev_server {
+                Nav::Allow
+            } else {
+                Nav::External
+            }
+        }
+        "mailto" => Nav::External,
+        _ => Nav::Block,
+    }
+}
+
+/// Decides one request to open a new window (`target=_blank`, `window.open`): a web or mail address
+/// opens in the default browser (`External`, the same path as a navigation), everything else is denied
+/// (`Block`). The app's own pages never open a second window, so this never answers `Allow`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn new_window(url: &tauri::Url, own: Own, dev: Option<&tauri::Url>) -> Nav {
+    match navigation(url, own, dev) {
+        Nav::External => Nav::External,
+        Nav::Allow | Nav::Block => Nav::Block,
+    }
 }
 
 fn last() -> &'static Mutex<Option<MenuState>> {
@@ -298,15 +445,16 @@ fn listen_once<R: Runtime>(app: &tauri::AppHandle<R>) {
 }
 
 /// The page's menu state changed: keep it for the next time the menu opens (and on macOS rebuild
-/// the app menu bar when it differs from the last one). Returns every accelerator the menu holds.
+/// the app menu bar when it differs from the last one). Returns every accelerator the menu holds
+/// and the chords its stock items own, which the Shortcuts page counts as clashes (SET-010).
 #[tauri::command]
-pub fn menu_sync<R: Runtime>(window: WebviewWindow<R>, state: MenuState) -> Result<Vec<String>, String> {
+pub fn menu_sync<R: Runtime>(window: WebviewWindow<R>, state: MenuState) -> Result<Synced, String> {
     let os = Os::current();
     let nodes = spec(os, &state);
-    let accels = accelerators(&nodes);
+    let synced = Synced { accelerators: accelerators(&nodes), native: native_chords(os, &nodes) };
     let mut last = last().lock().unwrap_or_else(|e| e.into_inner());
     if last.as_ref() == Some(&state) {
-        return Ok(accels);
+        return Ok(synced);
     }
     listen_once(window.app_handle());
     if attaches_bar(os) {
@@ -314,7 +462,7 @@ pub fn menu_sync<R: Runtime>(window: WebviewWindow<R>, state: MenuState) -> Resu
         window.app_handle().set_menu(menu).map_err(|e| e.to_string())?;
     }
     *last = Some(state);
-    Ok(accels)
+    Ok(synced)
 }
 
 /// Opens the whole menu (File, Edit, View, Window, Help) under the Kolux mark at (x, y), in the
@@ -349,11 +497,10 @@ mod tests {
     }
 
     #[test]
-    fn app_009_windows_has_file_edit_view_window_help_and_help_holds_about_until_t248b() {
+    fn app_009_windows_has_file_edit_view_window_help() {
         let bar = spec(Os::Windows, &state("terminals"));
         assert_eq!(labels(&bar), ["File", "Edit", "View", "Window", "Help"]);
         assert_eq!(ids(sub(&bar, "File")), ["app.settings", "file.exit"]);
-        assert_eq!(sub(&bar, "Help"), [Node::Stock(Stock::About)]);
         assert_eq!(sub(&bar, "Window"), [Node::Stock(Stock::Minimize), Node::Stock(Stock::Maximize)]);
         // Linux gets the same bar as Windows.
         assert_eq!(spec(Os::Linux, &state("terminals")), bar);
@@ -362,9 +509,9 @@ mod tests {
     #[test]
     fn app_009_macos_app_menu_replaces_file_and_runs_hide_hide_others_show_all_in_order() {
         let bar = spec(Os::Mac, &state("terminals"));
-        assert_eq!(labels(&bar), ["Kolux", "Edit", "View", "Window"]);
+        assert_eq!(labels(&bar), ["Kolux", "Edit", "View", "Window", "Help"]);
         let app = sub(&bar, "Kolux");
-        assert_eq!(ids(app), ["app.settings"]);
+        assert_eq!(ids(app), ["help.checkUpdates", "app.settings"]);
         let stock: Vec<Stock> = app.iter().filter_map(|n| if let Node::Stock(s) = n { Some(*s) } else { None }).collect();
         assert_eq!(stock, [Stock::About, Stock::Services, Stock::Hide, Stock::HideOthers, Stock::ShowAll, Stock::Quit]);
     }
@@ -457,6 +604,187 @@ mod tests {
     fn app_009_only_macos_attaches_a_native_bar_the_frameless_window_opens_it_from_the_mark() {
         assert!(attaches_bar(Os::Mac));
         assert!(!attaches_bar(Os::Windows) && !attaches_bar(Os::Linux));
+    }
+
+    #[test]
+    fn app_009_help_holds_the_two_page_items_everywhere_and_about_and_updates_on_windows_and_linux() {
+        for os in [Os::Windows, Os::Linux] {
+            let bar = spec(os, &state("terminals"));
+            let help = sub(&bar, "Help");
+            assert_eq!(ids(help), ["help.explore", "help.gettingStarted", "help.checkUpdates"], "{os:?}");
+            assert!(help.contains(&Node::Stock(Stock::About)));
+        }
+        // macOS: About and Check for Updates are in the app menu, Help keeps the two page items.
+        let mac = spec(Os::Mac, &state("terminals"));
+        assert_eq!(ids(sub(&mac, "Help")), ["help.explore", "help.gettingStarted"]);
+        assert_eq!(sub(&mac, "Kolux")[0], Node::Stock(Stock::About));
+    }
+
+    #[test]
+    fn app_009_help_clicks_go_to_the_page_by_item_id() {
+        for id in ["help.reportCrash", "help.explore", "help.gettingStarted", "help.checkUpdates"] {
+            assert_eq!(route(id), Route::Page(id.into()));
+        }
+    }
+
+    #[test]
+    fn set_010_only_a_macos_menu_bar_owns_chords_and_they_are_the_stock_items() {
+        let s = state("terminals");
+        for os in [Os::Windows, Os::Linux] {
+            assert!(native_chords(os, &spec(os, &s)).is_empty(), "{os:?} popup menu catches no key");
+        }
+        let native = native_chords(Os::Mac, &spec(Os::Mac, &s));
+        let chords: Vec<&str> = native.iter().map(|n| n.chord).collect();
+        assert_eq!(chords, ["Mod+H", "Mod+Alt+H", "Mod+Q", "Mod+Z", "Mod+Shift+Z", "Mod+X", "Mod+C", "Mod+V", "Mod+A", "Mod+M"]);
+        assert!(native.iter().any(|n| n.chord == "Mod+Q" && n.name == "Quit Kolux"));
+        // Items the system gives no chord (About, Services, Show All, Zoom) are left out.
+        assert_eq!(Stock::About.chord(), None);
+        assert_eq!(Stock::Maximize.chord(), None);
+    }
+
+    #[test]
+    fn set_010_the_synced_answer_serialises_for_the_page() {
+        let native = native_chords(Os::Mac, &spec(Os::Mac, &state("agents")));
+        let synced = Synced { accelerators: vec!["CmdOrCtrl+Comma".into()], native };
+        let v = serde_json::to_value(&synced).unwrap();
+        assert_eq!(v["accelerators"][0], "CmdOrCtrl+Comma");
+        assert_eq!(v["native"][2], serde_json::json!({ "chord": "Mod+Q", "name": "Quit Kolux" }));
+    }
+
+    fn nav_with(os: Os, https: bool, url: &str, dev: Option<&str>) -> Nav {
+        let dev = dev.map(|d| tauri::Url::parse(d).unwrap());
+        navigation(&tauri::Url::parse(url).unwrap(), Own::for_platform(os, https), dev.as_ref())
+    }
+
+    fn nav(os: Os, url: &str) -> Nav {
+        nav_with(os, false, url, None)
+    }
+
+    fn nav_dev(url: &str, dev: &str) -> Nav {
+        nav_with(Os::Windows, false, url, Some(dev))
+    }
+
+    fn pop_up(os: Os, url: &str) -> Nav {
+        new_window(&tauri::Url::parse(url).unwrap(), Own::for_platform(os, false), None)
+    }
+
+    #[test]
+    fn app_015_the_origin_follows_the_platform_and_the_window_config() {
+        assert_eq!(Own::for_platform(Os::Windows, false), Own::Http, "tauri.conf.json sets no useHttpsScheme, so Windows serves http");
+        assert_eq!(Own::for_platform(Os::Windows, true), Own::Https);
+        assert_eq!(Own::for_platform(Os::Mac, false), Own::Tauri);
+        assert_eq!(Own::for_platform(Os::Mac, true), Own::Tauri, "the https flag only changes Windows");
+        assert_eq!(Own::for_platform(Os::Linux, true), Own::Tauri);
+    }
+
+    #[test]
+    fn app_015_each_platform_loads_only_the_origin_it_really_serves() {
+        // Windows (no useHttpsScheme): exactly http://tauri.localhost.
+        for own in ["http://tauri.localhost/", "http://tauri.localhost/index.html", "http://tauri.localhost/settings?x=1#y"] {
+            assert_eq!(nav(Os::Windows, own), Nav::Allow, "{own}");
+        }
+        assert_eq!(nav(Os::Windows, "https://tauri.localhost/"), Nav::External, "https would reach whatever listens on the loopback address");
+        assert_eq!(nav(Os::Windows, "tauri://localhost/"), Nav::Block, "an unregistered scheme on Windows");
+        // Windows with useHttpsScheme: exactly https://tauri.localhost.
+        assert_eq!(nav_with(Os::Windows, true, "https://tauri.localhost/", None), Nav::Allow);
+        assert_eq!(nav_with(Os::Windows, true, "http://tauri.localhost/", None), Nav::External);
+        assert_eq!(nav_with(Os::Windows, true, "tauri://localhost/", None), Nav::Block);
+        // macOS and Linux: exactly tauri://localhost.
+        for os in [Os::Mac, Os::Linux] {
+            assert_eq!(nav(os, "tauri://localhost/"), Nav::Allow, "{os:?}");
+            assert_eq!(nav(os, "tauri://localhost/index.html"), Nav::Allow, "{os:?}");
+            assert_eq!(nav(os, "http://tauri.localhost/"), Nav::External, "{os:?}");
+            assert_eq!(nav(os, "https://tauri.localhost/"), Nav::External, "{os:?}");
+        }
+    }
+
+    #[test]
+    fn app_015_a_web_address_goes_to_the_browser_and_nothing_else_loads_in_the_window() {
+        for os in [Os::Windows, Os::Mac, Os::Linux] {
+            for web in ["https://example.com/", "http://example.com:8080/x", "mailto:someone@example.com"] {
+                assert_eq!(nav(os, web), Nav::External, "{os:?} {web}");
+            }
+            // about:blank would blank the app window, so it is dropped like any other non-web address.
+            for bad in ["about:blank", "about:srcdoc", "file://server/share/page.html", "file:///C:/Windows/win.ini", "data:text/html,<script>1</script>", "javascript:alert(1)", "blob:https://tauri.localhost/1234", "ftp://example.com/x", "ms-msdt:/id", "kolux://x"] {
+                assert_eq!(nav(os, bad), Nav::Block, "{os:?} {bad}");
+            }
+        }
+    }
+
+    #[test]
+    fn app_015_addresses_dressed_up_as_the_apps_own_pages_never_match() {
+        // The host is what is parsed, not what the text starts with.
+        assert_eq!(nav(Os::Windows, "http://tauri.localhost@evil.example/"), Nav::External);
+        assert_eq!(nav(Os::Windows, "http://tauri.localhost:9999/"), Nav::External);
+        assert_eq!(nav(Os::Windows, "http://tauri.localhost.evil.example/"), Nav::External);
+        assert_eq!(nav(Os::Windows, "http://user:pw@tauri.localhost/"), Nav::External);
+        assert_eq!(nav(Os::Mac, "tauri://localhost.evil.example/"), Nav::Block);
+        assert_eq!(nav(Os::Mac, "tauri://evil/"), Nav::Block);
+        assert_eq!(nav(Os::Mac, "tauri://user@localhost/"), Nav::Block);
+        assert_eq!(nav(Os::Mac, "tauri://localhost:9999/"), Nav::Block);
+    }
+
+    #[test]
+    fn app_015_case_trailing_dot_idn_and_percent_encoding_resolve_the_way_the_parser_does() {
+        // Host case never matters.
+        assert_eq!(nav(Os::Windows, "http://TAURI.LOCALHOST/"), Nav::Allow);
+        assert_eq!(nav(Os::Windows, "HTTP://Tauri.Localhost/"), Nav::Allow);
+        assert_eq!(nav(Os::Mac, "tauri://LOCALHOST/"), Nav::Allow);
+        assert_eq!(nav(Os::Linux, "TAURI://localhost/"), Nav::Allow);
+        // A trailing dot is a different host (the DNS root form), so it is an outside address.
+        assert_eq!(nav(Os::Windows, "http://tauri.localhost./"), Nav::External);
+        assert_eq!(nav(Os::Mac, "tauri://localhost./"), Nav::Block);
+        // Look-alike letters (Cyrillic a and o, fullwidth dot) are other hosts.
+        assert_eq!(nav(Os::Windows, "http://t\u{430}uri.localhost/"), Nav::External);
+        assert_eq!(nav(Os::Windows, "http://tauri.l\u{43e}calhost/"), Nav::External);
+        assert_eq!(nav(Os::Windows, "http://tauri\u{ff0e}localhost.evil.example/"), Nav::External);
+        assert_eq!(nav(Os::Mac, "tauri://l\u{43e}calhost/"), Nav::Block);
+        // A percent-encoded dot decodes to the real host in a web address (so Allow is correct), and
+        // an encoded letter in the opaque tauri host stays encoded, so it is not the app.
+        assert_eq!(nav(Os::Windows, "http://tauri%2Elocalhost/"), Nav::Allow);
+        assert_eq!(nav(Os::Mac, "tauri://local%68ost/"), Nav::Block);
+    }
+
+    #[test]
+    fn app_015_only_a_debug_build_allows_its_own_dev_server_and_only_that_host_and_port() {
+        let dev = "http://localhost:1441";
+        assert_eq!(nav_dev("http://localhost:1441/", dev), Nav::Allow);
+        assert_eq!(nav_dev("http://localhost:1441/some/page?x=1", dev), Nav::Allow);
+        assert_eq!(nav_dev("http://localhost:3000/", dev), Nav::External);
+        assert_eq!(nav_dev("https://localhost:1441/", dev), Nav::External);
+        assert_eq!(nav_dev("http://127.0.0.1:1441/", dev), Nav::External);
+        assert_eq!(nav_dev("http://localhost:1441@evil.example/", dev), Nav::External);
+        // A release build passes no dev server, so the same address is an outside one.
+        assert_eq!(nav(Os::Windows, "http://localhost:1441/"), Nav::External);
+    }
+
+    #[test]
+    fn app_015_a_new_window_request_opens_web_and_mail_addresses_in_the_browser_and_denies_the_rest() {
+        for os in [Os::Windows, Os::Mac, Os::Linux] {
+            for web in ["https://example.com/", "http://example.com/x", "mailto:someone@example.com"] {
+                assert_eq!(pop_up(os, web), Nav::External, "{os:?} {web}");
+            }
+            // The app's own page never opens a second app window, and nothing else opens at all.
+            for own in ["tauri://localhost/", "http://tauri.localhost/", "https://tauri.localhost/"] {
+                assert_ne!(pop_up(os, own), Nav::Allow, "{os:?} {own}");
+            }
+            for bad in ["about:blank", "file:///C:/x.html", "data:text/html,1", "javascript:alert(1)", "blob:https://example.com/1", "ftp://example.com/x", "ms-msdt:/id"] {
+                assert_eq!(pop_up(os, bad), Nav::Block, "{os:?} {bad}");
+            }
+        }
+        assert_eq!(pop_up(Os::Windows, "http://tauri.localhost/"), Nav::Block);
+        assert_eq!(pop_up(Os::Mac, "tauri://localhost/"), Nav::Block);
+        // The dev server is the app too in a debug build.
+        let dev = tauri::Url::parse("http://localhost:1441").unwrap();
+        assert_eq!(new_window(&tauri::Url::parse("http://localhost:1441/").unwrap(), Own::Http, Some(&dev)), Nav::Block);
+    }
+
+    #[test]
+    fn app_009_report_crash_stays_out_of_the_menu_until_the_crash_card_lands() {
+        for os in [Os::Windows, Os::Mac, Os::Linux] {
+            let bar = spec(os, &state("terminals"));
+            assert!(!ids(sub(&bar, "Help")).contains(&"help.reportCrash"), "{os:?}");
+        }
     }
 
     #[test]

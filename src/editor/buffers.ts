@@ -134,3 +134,41 @@ export function textOf(path: string): string | null {
   const v = buffers.get(keyOf(path))?.views.values().next().value;
   return v ? v.state.sliceDoc() : null;
 }
+
+/** The text of the open file and the disk copy it was typed over, for the drafts (EDIT-004). */
+export function diskOf(path: string): string | null {
+  const b = buffers.get(keyOf(path));
+  return b && b.views.size ? b.disk : null;
+}
+
+// EDIT-032: unsaved text that follows a renamed or moved file. The tab at the new path starts from
+// the disk copy it reads, then takes what was carried so the edits stay and the tab stays unsaved.
+const carried = new Map<string, { text: string; disk: string }>();
+
+/** Carries the unsaved text of every open file the moves touch (a folder move takes what is under
+ *  it) to the new path. Returns the new paths' keys. A clean file carries nothing: its tab reads
+ *  the disk at the new place. */
+export function carryOver(moves: [string, string][]): string[] {
+  const made: string[] = [];
+  for (const [k, b] of buffers) {
+    const v = [...b.views][0];
+    if (!v || sameText(v.state.sliceDoc(), b.disk)) continue;
+    for (const [from, to] of moves) {
+      const f = keyOf(from);
+      if (k !== f && !k.startsWith(f + "/")) continue;
+      const nk = keyOf(to) + k.slice(f.length);
+      carried.set(nk, { text: v.state.sliceDoc(), disk: b.disk });
+      made.push(nk);
+      break;
+    }
+  }
+  return made;
+}
+
+/** The text carried to this path, once. */
+export function takeCarried(path: string): { text: string; disk: string } | null {
+  const k = keyOf(path);
+  const c = carried.get(k) ?? null;
+  carried.delete(k);
+  return c;
+}

@@ -7,7 +7,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { Refresh, Search } from "../chrome/icons";
 import type { Usage } from "../usage/tokens";
 import { runUsage, usageWord } from "./usage";
-import { ago, dashboardRows, onScreen, RUN_BATCH, runTiles, startedBy, statusWord, triggerLabel, type Automation, type Run, type RunFilter } from "./model";
+import { ago, dashboardRows, onScreen, outputNote, RUN_BATCH, runTiles, startedBy, statusWord, triggerLabel, type Automation, type Run, type RunFilter } from "./model";
 
 const ROW = 33; // .autos-table td: 32 px and a 1 px rule
 const filters: Array<{ value: RunFilter; label: string }> = [
@@ -194,8 +194,8 @@ export function RunPage({ run, automation, now, usage = null, agentName, onRuns,
       </dl>
       {run.outputFrom && (
         <div className="run-output">
-          <h3>Saved output</h3>
-          <p className="muted">{run.outputCut ? "The most recent text the agent's terminal showed; older lines were left out." : "What the agent's terminal showed when the run ended."}</p>
+          <h3>{run.outputFrom === "replay" ? "Output so far" : "Saved output"}</h3>
+          <p className="muted">{outputNote(run)}</p>
           <pre className="auto-output">{run.output}</pre>
         </div>
       )}

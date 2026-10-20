@@ -255,7 +255,7 @@ export const remoteItems = (s: Status | null): RemoteItem[] => {
 export type Lines = { added: number; removed: number };
 
 /** VIEW-068: the branch against `against` (the pinned base, the upstream or the default branch). */
-export type Summary = { against: string; ahead: number; behind: number; source: Lines; tests: Lines; generated: Lines; files: number; committed: Change[] };
+export type Summary = { against: string; ahead: number; behind: number; source: Lines; tests: Lines; generated: Lines; files: number; committed: Change[]; linesSkipped?: boolean };
 
 /** GIT-011: the branch row's file count. */
 export const filesWord = (n: number): string => `${n} ${n === 1 ? "file" : "files"} changed`;
@@ -314,8 +314,12 @@ export const summaryRows = (s: Summary): (Lines & { label: string })[] => [
   ...(empty(s.generated) ? [] : [{ label: "Generated", ...s.generated }]),
 ];
 
+/** GIT-011: said in place of the line totals when the branch touched too many files to count them. */
+export const LINES_SKIPPED_NOTE = "Too many files to count lines";
+
 /** What a screen reader hears on the summary, collapsed or not: the totals and the split. */
 export const summaryLabel = (branch: string | null, s: Summary): string => {
+  if (s.linesSkipped) return `${branch ?? "Detached HEAD"}, ${s.ahead} ahead and ${s.behind} behind ${s.against}, ${LINES_SKIPPED_NOTE}`;
   const t = summaryTotal(s);
   const split = summaryRows(s).map((r) => `${r.label.toLowerCase()} ${grouped(r.added)} added ${grouped(r.removed)} removed`).join(", ");
   return `${branch ?? "Detached HEAD"}, ${s.ahead} ahead and ${s.behind} behind ${s.against}, ${grouped(t.added)} line${t.added === 1 ? "" : "s"} added and ${grouped(t.removed)} removed: ${split}`;

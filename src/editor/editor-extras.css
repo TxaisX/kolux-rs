@@ -66,3 +66,23 @@
 .csv-table th, .csv-table td { border: 1px solid var(--border, color-mix(in srgb, var(--fg) 14%, transparent)); padding: 2px 8px; text-align: left; white-space: pre; max-width: 40ch; overflow: hidden; text-overflow: ellipsis; }
 .csv-table thead th { position: sticky; top: 0; background: var(--pane-bg); color: var(--fg); font-weight: 600; z-index: 1; }
 .csv-table th.csv-n { position: sticky; left: 0; color: var(--fg-faint); font-weight: 400; text-align: right; background: var(--pane-bg); }
+/* EDIT-020 (T-132-b): the review notes rail beside the rich view, and the Send menu's start section */
+.pane.editor.rail-open .md-rich { padding-right: 214px; }
+.pane.editor.rail-open.toc-open .md-rich { padding-right: 466px; }
+.pane.editor .note-rail { position: absolute; z-index: 2; right: 0; width: 200px; overflow: hidden; pointer-events: none; }
+.pane.editor.toc-open .note-rail { right: 230px; }
+.pane.editor .rail-card { position: absolute; left: 0; right: 8px; padding: 5px 24px 5px 8px; display: flex; flex-direction: column; gap: 2px; overflow: hidden; background: var(--surface); border: 1px solid var(--line-focus); border-radius: 8px; font: 12px/1.35 var(--ui-font); pointer-events: auto; cursor: pointer; box-sizing: border-box; }
+.pane.editor .rail-where { color: var(--fg-muted); font-size: 11px; }
+.pane.editor .rail-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--fg); }
+.pane.editor .rail-x { position: absolute; top: 3px; right: 3px; }
+.review-send-head { padding: 6px 8px 2px; font-size: 11px; border-top: 1px solid var(--line-subtle); margin-top: 2px; }
+/* EDIT-035 (T-236-b): the explorer's name filter */
+.explorer .ex-filter { flex: none; display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line-subtle); }
+.explorer .ex-filter .field { flex: 1; min-width: 0; font-size: 12px; padding: 3px 7px; }
+/* EDIT-057 (T-237-b): the rich view's formatting toolbar */
+.pane.editor .rich-bar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 3px 8px; border-bottom: 1px solid var(--line-subtle); background: var(--bg-raised, var(--bg)); }
+.pane.editor .rich-bar .ib { min-width: 26px; height: 24px; font-size: 12px; }
+.pane.editor .rich-bar .rich-bold { font-weight: 700; }
+.pane.editor .rich-bar .rich-italic { font-style: italic; }
+.pane.editor .rich-bar .rich-strike { text-decoration: line-through; }
+.pane.editor .rich-bar .rich-more { height: 24px; font-size: 12px; background: transparent; color: var(--fg); border: 1px solid var(--line-subtle); border-radius: 4px; }

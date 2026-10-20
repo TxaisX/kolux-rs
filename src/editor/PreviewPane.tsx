@@ -11,15 +11,16 @@ import { baseName, subscribe, textOf } from "./buffers";
 import { domPick, selections } from "./notes";
 import { Contents, FindBar, selectedIn, type FindOpen } from "./NoteTools";
 import { outline } from "./toc";
+import { followClick, type LinkHandler } from "./linkClicks";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
 import "./editor-extras.css";
 
-type Props = { id: number; path: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void };
+type Props = { id: number; path: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; worktree?: string | null; onLink?: LinkHandler };
 
 export const renderMarkdown = (md: string) => DOMPurify.sanitize(marked.parse(md, { async: false }));
 
-export default function PreviewPane({ id, path, hidden = false, focused = false, onFocus, onClose }: Props) {
+export default function PreviewPane({ id, path, hidden = false, focused = false, onFocus, onClose, worktree = null, onLink }: Props) {
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tries, setTries] = useState(0);
@@ -111,6 +112,8 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
         className="pane-body md-preview"
         aria-readonly="true"
         onClick={(e) => {
+          // EDIT-014: Mod+click follows a link; a plain click never navigates.
+          if (followClick(e.nativeEvent, e.currentTarget, path, worktree, onLink)) return;
           if ((e.target as HTMLElement).closest("a")) e.preventDefault();
         }}
         dangerouslySetInnerHTML={{ __html: text === null ? "" : renderMarkdown(text) }}

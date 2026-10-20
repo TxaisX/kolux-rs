@@ -1,0 +1,31 @@
+T-237-b (2026-10-19, lane/editor from 9c2affed, third piece): the rich-view formatting toolbar, the Open in app edit, and the pure rules for the untitled-note first save and the file-tab view switch.
+
+BUILT (unit-tested, no app launch)
+- EDIT-057: richFormat.ts (applyFormat on the Lexical editor: body text, headings 1 to 5, bold, italic, strikethrough, bullet,
+  numbered and check lists, quote; headings, quote and lists toggle back to body text on a second press; More blocks = headings
+  4 and 5) and RichToolbar.tsx (buttons never take the focus, a tooltip on each, shown above a note in rich view only, not in
+  source, the preview, a compare view or a read-only tab). EditorPane renders it; editor-extras.css styles it.
+- SET-039 edit: openInEdit.ts editApp (a row's name and command change in place; a preset row becomes a custom row at the same
+  place; an empty field, no change or a duplicate command changes nothing). Settings > General gets an Edit button per row and
+  a Save changes / Cancel pair on the custom fields (patch below).
+- EDIT-054 rules: untitled.ts isUntitled (untitled(-N).md directly in the worktree root), suggestedName, checkName (typed name
+  under the worktree, folders allowed, .md added, the suggested name simply saves, an existing name is refused with a reason,
+  absolute paths, .., reserved or illegal names refused). Not yet wired to a prompt (see LEFT).
+- EDIT-056 rules: viewSwitch.ts viewsFor (code Edit + Changes; markdown Source, Rich, Changes; CSV/TSV/diagram files source,
+  rendered, Changes; notebooks source + rendered only; no Changes for untitled, outside the worktree, binary, diff or
+  conflict tabs), changesBanner (nothing uncommitted), viewEditable (the rendered CSV/TSV table is read-only). Not yet wired.
+READINGS (logs G:/Temp/editor-v3-logs/p1b-237-*.log)
+- tsc --noEmit exit 0, also with all 10 shared-file patches applied; vitest src/editor 41 files, 252 passed
+  (new: richFormat 5 tests, untitled 3, viewSwitch 3, openInEdit 3).
+PATCH: evidence/editor-T-237-b-GeneralPage.tsx.patch (NEW, independent of the others: applies on current src/settings/GeneralPage.tsx).
+LEFT (after list): the first-save name prompt and the tab following the file (needs the save path in autosave.ts, which this
+  batch may not touch); the view switch in the tab header and the editable Changes view; Link and Image toolbar buttons and the
+  collapsible section (no link-edit shortcut, picker or collapsible block in the rich view yet); the toolbar buttons do not
+  light up for formatting at the caret (the card says not yet).
+LIVE PROOF PENDING (batched)
+ 1. Open a note in rich view: the toolbar sits above the text; switch to source: it is gone.
+ 2. Select a word, click Bold: the word turns bold, the selection stays, typing carries on. Click H2 on a line, click H2
+    again: back to body text. Click Numbered list, type one item, Enter twice: the list ends on a plain paragraph.
+ 3. More: Heading 4 and Heading 5 are offered and apply.
+ 4. Settings > General > Open in: Edit a custom app, change the command, Save changes: the Open in menus use the new command.
+    Edit File Explorer's name: it stays in the same place with the new name.
