@@ -1,8 +1,8 @@
 T-267 · TERM-011 Inactive panes dim · TERM-026 Pane header density · TERM-057 Tab strip overflow scrollbar · TERM-102 Minimum contrast and ligatures
 Lane: shell · from 348a2a7e (main, MERGE 213) · 2026-10-20 · Routing v3 (build first, live proofs batched) · builder Sonnet 5.5
 
-STATUS: OPEN. Built: TERM-011, TERM-026, TERM-057, TERM-102 (minimum contrast). Open: TERM-102 ligatures, held by Txais
-(the @xterm/addon-ligatures dependency and any package.json change). Left unticked for that one id.
+STATUS: DONE 2026-10-20 (v6 batch, builder Opus 5.5, lane/shell from bdd0a762): ligatures built now that Txais approved
+the @xterm/addon-ligatures 0.10.0 dependency and MERGE 240 put it on main (see LIGATURES below). Earlier: TERM-011, -026, -057, contrast.
 
 WHAT WAS BUILT
 - TERM-011 (found built, nothing changed): Appearance > "Panes not in focus" slider (SPAN.paneDim 30..100, theme.ts) writes
@@ -41,3 +41,28 @@ LIVE PROOF PENDING (batched)
 2. Settings > Terminal > Pane headers > Compact: every pane header gets visibly shorter; Comfortable restores it.
 3. Split two panes, click one: the other fades within about 140 ms (set "Panes not in focus" below 100% first).
 4. Run `printf '\e[2;30mdim\e[0m'` on a dark scheme: text is lifted to readable; turn Minimum contrast off: back to dim.
+
+LIGATURES (2026-10-20 v6 batch, builder Opus 5.5, from bdd0a762; main fb7320a2 package.json lists "@xterm/addon-ligatures": "0.10.0")
+- The lane's node_modules was refreshed from main's lockfile (pnpm install --frozen-lockfile; no package.json or lockfile change here).
+- src/shell/ligatures.ts: importLigatures() imports the approved package by its literal name (vite bundles it: t267b-vitebuild.log
+  shows a separate addon-ligatures chunk, 190.69 kB, build exit 0), replacing the MERGE 203 variable specifier that left the browser
+  a bare name it could not resolve (ligatures never drew). afterLigatures() clears the GPU glyph cache and repaints every row when
+  ligatures switch on or off (the addon's typings ask for the WebGL atlas to be rebuilt after it activates).
+- The rule stays T-247-d's: ligaturesOn (a saved on/off wins; automatic = known ligature fonts: Fira Code, JetBrains Mono, Cascadia
+  Code, Iosevka, ...). In a webview the addon cannot read the font file, so it joins its fallback list (-> => != === <!-- /* ...) and
+  sets the font's "calt" on; turning off deregisters the joiner and clears the feature setting.
+- Patch evidence/shell-T-267-TerminalPane.tsx.patch: applies AFTER evidence/shell-T-308-TerminalPane.tsx.patch (git apply check ok).
+- Tests: src/shell/ligatures.test.ts 5 vitest (real package import; the pane's guarded loader gives a real addon; joins "->" at [2,4]
+  and "!==" at [2,5], none in plain words, calt on, dispose undoes both; auto only for known fonts, saved on/off wins; redraw clears the
+  GPU cache and repaints rows 0..rows-1, a lost context still repaints). The test points the literal name at the package's browser
+  entry (lib/addon-ligatures.mjs) because vitest in node looks for "main", which the package does not ship.
+- Gates: t267b-tsc.log bare exit 0; t267b-tsc-patched.log with the T-308 + T-267 TerminalPane patches exit 0; t267b-vitest.log
+  src/shell src/terminal with both patches 80 files / 584 passed; t267b-vitebuild.log exit 0; no Rust changed (cargo skipped);
+  t267b-plancheck.log plan-check OK; uniq -d empty; t267b-firewall.log 0 new.
+
+LIVE PROOF PENDING (batched, ligatures)
+L1. Settings > Appearance > Terminal font: Cascadia Code (or Fira Code). In a pane: echo '-> => != === <!--': the arrows and
+    comparisons draw joined. Switch the font to Consolas: they draw as separate characters again, on both GPU and plain renderers.
+L2. Settings > Terminal > Ligatures Off with Cascadia Code: plain. On with Consolas: joined only where the font has them.
+L3. Watch for a WebView2 "local fonts" permission prompt on first use (the addon asks the browser for local fonts before falling
+    back); if one shows, it is an after-list item for the webview permission handler.
