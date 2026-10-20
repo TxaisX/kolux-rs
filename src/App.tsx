@@ -94,6 +94,7 @@ import TerminalPane, { focusedTerminalEdit, type PaneNotice } from "./terminal/T
 import { accountLabel, accountPrompt, type CodexAccount } from "./terminal/accountChange";
 import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
 import AutomationsPage from "./automations/AutomationsPage";
+import { forgetRunTab, openRunTab, paneOfTerminal, runTabEnded, touchRunTab, typedInRunTab, type RunTabs } from "./automations/runTab";
 import RoutingPage from "./settings/RoutingPage";
 import TasksPage from "./tasks/TasksPage";
 import { tasksRepo } from "./tasks/model";
@@ -299,6 +300,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // TERM-106: the tabs that came back from the saved layout replay their saved output first.
   const restoredKeys = useRef(new Set((layout?.panes ?? []).map((p) => p.key)));
   const runPanes = useRef<Record<string, number>>({});
+  const runTabs = useRef<RunTabs>({}); // AUTO-011 (T-085-g): the agent tabs automation runs opened, and whether the user touched them
 
   useEffect(() => {
     invoke<AppInfo>("app_info").then(setInfo).catch(() => setInfo(null));
@@ -1318,6 +1320,30 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   };
   const cli = useRef({ startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, dropPane: (_k: number) => {} });
   cli.current = { startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, dropPane: (k: number) => dropPane(k) };
+  // AUTO-011 (T-085-g): a run's own agent tab shuts by itself, once, when that agent exits, unless the user
+  // clicked (the pane's mouse-down above) or typed in it (a key inside the focused pane) or pinned it.
+  const focusedNow = useRef(focused);
+  focusedNow.current = focused;
+  const pinnedNow = useRef(pinned);
+  pinnedNow.current = pinned;
+  useEffect(() => {
+    const typed = (e: KeyboardEvent) => {
+      const inside = e.target instanceof Element && e.target.closest(".pane.focused") !== null;
+      if (typedInRunTab(runTabs.current, focusedNow.current, inside)) runTabs.current = touchRunTab(runTabs.current, focusedNow.current);
+    };
+    document.addEventListener("keydown", typed, true);
+    const off = listen<{ id: number }>("terminal-exit", (e) => {
+      const key = paneOfTerminal(ptys.current, e.payload.id);
+      if (key === null) return;
+      const ended = runTabEnded(runTabs.current, key, pinnedNow.current.has(key));
+      runTabs.current = ended.tabs;
+      if (ended.verdict === "close") cli.current.dropPane(key);
+    });
+    return () => {
+      document.removeEventListener("keydown", typed, true);
+      off.then((f) => f()).catch(() => undefined);
+    };
+  }, []);
   useEffect(() => {
     const off = listen<CliWorkspace>("cli-workspace", (e) => {
       const p = e.payload;
@@ -1339,7 +1365,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         if (a)
           void cli.current.startIn(a, p.path, p.branch, ...startTail(p)).then((key) => {
             // AUTO-013: an automation run remembers its pane, so View run opens that terminal.
-            if (key !== null && p.runId) runPanes.current[p.runId] = key;
+            if (key !== null && p.runId) {
+              runPanes.current[p.runId] = key;
+              runTabs.current = openRunTab(runTabs.current, key, p.runId);
+            }
           });
         return;
       }
@@ -1581,6 +1610,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     const gone = new Set(keys);
     exitedPrompt.current = onClose(exitedPrompt.current, keys);
     keys.forEach((k) => delete ptys.current[k]);
+    keys.forEach((k) => (runTabs.current = forgetRunTab(runTabs.current, k)));
     // TERM-106: a tab closed on purpose is not brought back after a restart.
     keys.forEach((k) => void invoke("terminal_forget_history", { paneKey: k }).catch(() => {}));
     setPanes((ps) => ps.filter((p) => !gone.has(p.key)));
@@ -2549,7 +2579,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     context={context[p.key] ? contextFill(context[p.key], capOn(settings)) : null}
                     usage={p.agent === "shell" ? undefined : readoutOf(context[p.key], capOn(settings), readsLeft(settings))}
                     focused={p.key === focused}
-                    onFocus={() => setFocused(p.key)}
+                    onFocus={() => {
+                      setFocused(p.key);
+                      runTabs.current = touchRunTab(runTabs.current, p.key);
+                    }}
                     onRunning={(on) => {
                       // T-151-c: a program still starting reports undefined: no entry yet, so it never reads as ended
                       if (on === undefined) {
