@@ -1634,6 +1634,13 @@ pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: S
 /// The deletion `workspace_remove` and the cleanup dialog (T-113-b) share: the same refusals, the
 /// same ending of terminals and watch, the same record clean-up afterwards.
 pub(crate) fn remove_now(git: &Git, store: &Mutex<Store>, terminals: &crate::terminal::Terminals, project: &Project, path: &str, force: bool, stamp: &str) -> Result<Option<KeptBranch>, String> {
+    remove_now_keeping(git, store, terminals, project, path, force, stamp, false)
+}
+
+/// `remove_now`; `keep_anyway` keeps the branch as if the workspace had been opened on it (the
+/// cleanup dialog does this for a branch holding commits that are in no other branch).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn remove_now_keeping(git: &Git, store: &Mutex<Store>, terminals: &crate::terminal::Terminals, project: &Project, path: &str, force: bool, stamp: &str, keep_anyway: bool) -> Result<Option<KeptBranch>, String> {
     if let Some(why) = removal_refused(&remove_check(git, project, path)?, force, stamp) {
         return Err(why);
     }
@@ -1647,7 +1654,7 @@ pub(crate) fn remove_now(git: &Git, store: &Mutex<Store>, terminals: &crate::ter
     // FIX-2 (T-033-e review): what to keep is decided first, so the one `?` that can return early
     // runs before the watch ends; an early return after it would drop the handle below without
     // telling the page.
-    let keep = keeps_branch(&*store.lock().map_err(|e| e.to_string())?, path);
+    let keep = keep_anyway || keeps_branch(&*store.lock().map_err(|e| e.to_string())?, path);
     // T-033-e: the Source Control watch on this folder ends first and its folder handles are
     // closed (joined) before git deletes the folder, so nothing of ours stands in the way.
     let watch = crate::scm::watch::unwatch_root(Path::new(path));

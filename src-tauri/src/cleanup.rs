@@ -5,7 +5,7 @@
 //! changes, a lock or another worktree inside it is left in place with the reason.
 
 use crate::git::{Git, Worktree};
-use crate::projects::{find_project, keeps_branch, kolux_made, load_origins, name_key, remove_check, remove_now, KeptBranch, Project};
+use crate::projects::{find_project, keeps_branch, kolux_made, load_origins, name_key, remove_check, remove_now_keeping, KeptBranch, Project};
 use crate::state::Store;
 use std::collections::HashMap;
 use std::path::Path;
@@ -76,6 +76,7 @@ pub fn remove_selected(git: &Git, store: &Mutex<Store>, terminals: &crate::termi
             return out;
         }
     };
+    let base = base_of(git, project);
     for path in paths {
         if let Some(why) = left_in_place(&origins, &all, path) {
             out.left.push(Left { path: path.clone(), why });
@@ -88,7 +89,10 @@ pub fn remove_selected(git: &Git, store: &Mutex<Store>, terminals: &crate::termi
                 continue;
             }
         };
-        match remove_now(git, store, terminals, project, path, false, &stamp) {
+        // Commits in no other branch must not be lost with the workspace: its branch is kept and
+        // handed to the kept-branch list, which deletes it only while it has not moved.
+        let unmerged = all.iter().find(|w| name_key(&w.path) == name_key(path)).is_some_and(|w| unmerged_of(git, Path::new(&project.path), w, base.as_deref()));
+        match remove_now_keeping(git, store, terminals, project, path, false, &stamp, unmerged) {
             Ok(kept) => {
                 out.removed.push(path.clone());
                 out.kept.extend(kept);
@@ -119,6 +123,9 @@ pub struct ScanRow {
     pub changes: usize,
     /// Everything on its branch is already in the base.
     pub merged: bool,
+    /// Its branch holds commits that are not in the base (or Git could not say), so removing the
+    /// workspace keeps the branch.
+    pub unmerged: bool,
     /// A terminal is open in it.
     pub active: bool,
     pub locked: bool,
@@ -126,7 +133,7 @@ pub struct ScanRow {
     pub missing: bool,
     /// Gone quiet: idle for QUIET_DAYS or more, merged, or missing.
     pub quiet: bool,
-    /// Clean, inactive and quiet: ticked when the dialog opens.
+    /// Clean, inactive, quiet and with nothing unmerged (merged, folder gone, or no commits beyond the base): ticked when the dialog opens.
     pub preselect: bool,
     /// Opened on an existing branch, so its branch stays when the workspace goes.
     pub keeps_branch: bool,
@@ -163,7 +170,19 @@ fn in_use(busy: &[String], path: &str) -> bool {
     })
 }
 
-fn scan_row(git: &Git, w: &Worktree, base: Option<&str>, busy: &[String], now_secs: u64, keeps: bool) -> ScanRow {
+/// The branch cleanup compares workspaces against: the project's own, else the repository's default.
+fn base_of(git: &Git, project: &Project) -> Option<String> {
+    project.base.as_deref().map(str::trim).filter(|b| !b.is_empty()).map(str::to_string).or_else(|| git.default_branch(Path::new(&project.path)))
+}
+
+/// Does the workspace's branch (or, with none, its checked-out commit) hold commits that are not
+/// in `base`? With no base to compare against, or when Git cannot say, the answer is yes.
+fn unmerged_of(git: &Git, repo: &Path, w: &Worktree, base: Option<&str>) -> bool {
+    let rev = w.branch.as_deref().map_or_else(|| w.head.clone(), |b| format!("refs/heads/{b}"));
+    base.is_none_or(|b| git.has_unmerged(repo, &rev, b))
+}
+
+fn scan_row(git: &Git, repo: &Path, w: &Worktree, base: Option<&str>, busy: &[String], now_secs: u64, keeps: bool) -> ScanRow {
     let dir = Path::new(&w.path);
     let missing = !dir.exists();
     let mut note = None;
@@ -185,8 +204,11 @@ fn scan_row(git: &Git, w: &Worktree, base: Option<&str>, busy: &[String], now_se
     let active = in_use(busy, &w.path);
     let locked = w.locked.is_some();
     let quiet = missing || merged || idle_days.is_some_and(|d| d >= QUIET_DAYS);
-    let preselect = quiet && changes == 0 && note.is_none() && !active && !locked;
-    ScanRow { path: w.path.clone(), branch: w.branch.clone(), name: w.name.clone(), idle_days, changes, merged, active, locked, missing, quiet, preselect, keeps_branch: keeps, note }
+    let unmerged = unmerged_of(git, repo, w, base);
+    // Idle alone never ticks a workspace: its commits must be in the base too (or the folder gone,
+    // in which case removing keeps the branch).
+    let preselect = quiet && (merged || missing || !unmerged) && changes == 0 && note.is_none() && !active && !locked;
+    ScanRow { path: w.path.clone(), branch: w.branch.clone(), name: w.name.clone(), idle_days, changes, merged, unmerged, active, locked, missing, quiet, preselect, keeps_branch: keeps, note }
 }
 
 /// Lists the workspaces Kolux made in `project`, each with what decides whether cleanup may
@@ -205,8 +227,8 @@ pub fn scan_project(git: &Git, store: &Mutex<Store>, project: &Project, busy: &[
         let offered = offerable(&load_origins(&store), all);
         offered.into_iter().map(|w| (keeps_branch(&store, &w.path), w)).collect::<Vec<_>>()
     };
-    let base = project.base.as_deref().map(str::trim).filter(|b| !b.is_empty()).map(str::to_string).or_else(|| git.default_branch(repo));
-    let mut rows: Vec<ScanRow> = offered.iter().map(|(keeps, w)| scan_row(git, w, base.as_deref(), busy, now_secs, *keeps)).collect();
+    let base = base_of(git, project);
+    let mut rows: Vec<ScanRow> = offered.iter().map(|(keeps, w)| scan_row(git, repo, w, base.as_deref(), busy, now_secs, *keeps)).collect();
     rows.sort_by(|a, b| b.idle_days.cmp(&a.idle_days).then_with(|| a.path.cmp(&b.path)));
     Scan { project_id: project.id.clone(), rows, error: None, timed_out: false, at_ms: now_ms() }
 }
@@ -459,22 +481,65 @@ mod tests {
     }
 
     #[test]
-    fn proj080_idle_clean_workspaces_come_preselected_and_only_kolux_made_ones_are_listed() {
+    fn proj080_idle_clean_merged_workspaces_come_preselected_and_only_kolux_made_ones_are_listed() {
         let (base, _repo, store, project) = repo_with_two("scan-idle");
         let git = Git::detect().unwrap();
         let store = Mutex::new(store);
-        // ours has a commit of its own, so it is not merged and not quiet today ...
-        commit_in(&base.join("ours"), "own.txt");
+        // ours has no commit of its own: everything is in main already, and quiet at once.
         let today = scan_project(&git, &store, &project, &[], secs_now());
         assert_eq!(today.rows.len(), 1, "the main checkout and the one Kolux did not make are not listed: {today:?}");
-        assert!(!row(&today, "ours").quiet && !row(&today, "ours").preselect, "{today:?}");
-        // ... and a month later it has gone quiet, is clean and inactive: ticked.
+        assert!(row(&today, "ours").quiet && row(&today, "ours").merged && !row(&today, "ours").unmerged, "{today:?}");
+        // a month later it is still clean and inactive: ticked.
         let later = scan_project(&git, &store, &project, &[], secs_now() + 30 * 86_400);
         let r = row(&later, "ours");
-        assert!(r.quiet && r.preselect && !r.merged && r.changes == 0 && r.idle_days.unwrap() >= 29, "{r:?}");
+        assert!(r.quiet && r.preselect && r.merged && r.changes == 0 && r.idle_days.unwrap() >= 29, "{r:?}");
         assert_eq!(r.branch.as_deref(), Some("ours"));
         drop(store);
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn proj080_an_idle_clean_workspace_with_unmerged_commits_is_listed_but_not_ticked_and_its_branch_survives_removal() {
+        let (base, repo, store, project) = repo_with_two("scan-unmerged");
+        let git = Git::detect().unwrap();
+        let store = Mutex::new(store);
+        let ours = base.join("ours");
+        commit_in(&ours, "own.txt");
+        let later = scan_project(&git, &store, &project, &[], secs_now() + 30 * 86_400);
+        let r = row(&later, "ours");
+        assert!(r.quiet && r.unmerged && !r.merged && !r.preselect && r.changes == 0 && r.idle_days.unwrap() >= 29, "listed as quiet, never pre-ticked: {r:?}");
+        assert!(!preselected_paths(&later).contains(&r.path));
+        // The user ticks it anyway: the folder goes, the branch and its commit stay, and it is reported as kept.
+        let tip = crate::git::run(&["rev-parse", "refs/heads/ours"], Some(&repo)).unwrap();
+        let path = ours.to_string_lossy().into_owned();
+        let got = remove_selected(&git, &store, &crate::terminal::Terminals::default(), &project, std::slice::from_ref(&path));
+        assert_eq!(got.removed, vec![path], "{got:?}");
+        assert_eq!(got.kept, vec![KeptBranch { branch: "ours".into(), commit: tip.clone() }], "{got:?}");
+        assert!(!ours.exists(), "the folder went");
+        let at = crate::git::run(&["rev-parse", "--verify", "refs/heads/ours"], Some(&repo)).unwrap();
+        assert_eq!(at, tip, "the branch still holds its commit");
+        // The kept-branch flow still deletes it while it has not moved.
+        let done = delete_kept(&git, &project, &got.kept);
+        assert!(done[0].deleted, "{done:?}");
+        drop(store);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn proj080_a_merged_workspace_still_loses_its_branch_with_the_folder() {
+        let (base, repo, store, project) = repo_with_two("scan-merged-remove");
+        let git = Git::detect().unwrap();
+        let store = Mutex::new(store);
+        let path = base.join("ours").to_string_lossy().into_owned();
+        let got = remove_selected(&git, &store, &crate::terminal::Terminals::default(), &project, std::slice::from_ref(&path));
+        assert!(got.removed == vec![path] && got.kept.is_empty(), "{got:?}");
+        assert!(crate::git::run(&["show-ref", "--verify", "--quiet", "refs/heads/ours"], Some(&repo)).is_err(), "nothing unmerged, so the branch went");
+        drop(store);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    fn preselected_paths(scan: &Scan) -> Vec<String> {
+        scan.rows.iter().filter(|r| r.preselect).map(|r| r.path.clone()).collect()
     }
 
     #[test]

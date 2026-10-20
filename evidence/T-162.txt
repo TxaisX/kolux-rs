@@ -71,3 +71,19 @@ LIVE PROOF PENDING (batched)
                (progress shows once). 3. Close and reopen -> the old list shows at once with "Scanning again". 4. Tick
                Show every workspace -> recent and dirty ones appear unticked. 5. Remove -> ticked ones go, one with changes
                is listed back with its reason.
+
+DATA-LOSS FIX (review BLOCKER, 2026-10-19 night, on 8f16886f)
+  Problem: an idle (7+ days), clean workspace holding commits that are in no other branch came up ticked, and Remove ran
+           git branch -D on its branch, so those commits ended on no branch.
+  Fix:     the scan now reports unmerged (the branch holds commits the base lacks, or Git could not say). A row is ticked on open
+           only when quiet AND (merged, folder gone, or no commits beyond the base); idle alone lists it, never ticks it.
+           The dialog's removal keeps the branch of an unmerged workspace (remove_now_keeping) and returns it as a KeptBranch,
+           so the existing "Delete branch" notice/list handles it (refused once the branch has moved). The row says "unmerged commits".
+  Tests:   cleanup:: proj080_an_idle_clean_workspace_with_unmerged_commits_is_listed_but_not_ticked_and_its_branch_survives_removal,
+           proj080_a_merged_workspace_still_loses_its_branch_with_the_folder, proj080_idle_clean_merged_workspaces_come_preselected_...;
+           vitest src/projects/cleanup.test.ts "explains each row in plain words" (unmerged commits fact).
+  Gates:   clippy --all-targets -D warnings clean; cargo test -- cleanup:: projects:: git:: 95 passed; tsc clean; vitest src/projects 144 passed.
+  LIVE PROOF PENDING: in a project with a Kolux-made workspace whose last commit is a week old, with one commit not merged into the base:
+           Clean up workspaces... lists it with "unmerged commits" and unticked. Tick it, Remove -> the folder goes and the kept-branch
+           notice offers "Delete branch" for it; the branch is still listed in the repository until you choose that.
+

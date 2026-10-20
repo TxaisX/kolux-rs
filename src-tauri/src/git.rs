@@ -500,6 +500,12 @@ impl Git {
         Self::ref_ok(base) && run_within(&["merge-base", "--is-ancestor", "HEAD", base], Some(worktree), READ_TIMEOUT).is_ok()
     }
 
+    /// Does `rev` (a branch ref or a commit) hold commits that `base` lacks? Anything that cannot
+    /// be read counts as yes, so a doubtful branch is kept rather than deleted.
+    pub fn has_unmerged(&self, repo: &Path, rev: &str, base: &str) -> bool {
+        !(Self::ref_ok(base) && Self::ref_ok(rev) && run_within(&["merge-base", "--is-ancestor", rev, base], Some(repo), READ_TIMEOUT).is_ok())
+    }
+
     /// PROJ-070: the checkout's uncommitted and untracked changes, one `git status --porcelain` line each.
     pub fn status_lines(&self, worktree: &Path) -> Result<Vec<String>, String> {
         run_within_raw(&["status", "--porcelain"], Some(worktree), READ_TIMEOUT).map(|s| s.lines().filter(|l| !l.is_empty()).map(str::to_string).collect())

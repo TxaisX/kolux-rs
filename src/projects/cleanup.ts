@@ -9,6 +9,8 @@ export type ScanRow = {
   idleDays: number | null;
   changes: number;
   merged: boolean;
+  /** Its branch holds commits that are in no other branch; removing the workspace keeps the branch. */
+  unmerged: boolean;
   active: boolean;
   locked: boolean;
   missing: boolean;
@@ -35,7 +37,7 @@ export const rowLabel = (r: ScanRow) => r.name ?? r.branch ?? lastSegment(r.path
 /** The rows the dialog shows: the ones gone quiet, or every workspace when "show all" is on. */
 export const shownRows = (scan: Scan, showAll: boolean): ScanRow[] => (showAll ? scan.rows : scan.rows.filter((r) => r.quiet));
 
-/** What the dialog ticks when it opens: clean, inactive workspaces that have gone quiet. */
+/** What the dialog ticks when it opens: clean, inactive, quiet workspaces whose commits are all in the base (or whose folder is gone). */
 export const preselected = (scan: Scan): string[] => scan.rows.filter((r) => r.preselect).map((r) => r.path);
 
 /** The facts that explain a row, in plain words. */
@@ -44,6 +46,7 @@ export function rowFacts(r: ScanRow): string {
   if (r.missing) out.push("folder is gone");
   else if (r.idleDays !== null) out.push(r.idleDays === 0 ? "touched today" : `idle ${r.idleDays} day${r.idleDays === 1 ? "" : "s"}`);
   if (r.merged) out.push("merged");
+  if (r.unmerged && !r.merged) out.push("unmerged commits");
   if (r.changes > 0) out.push(`${r.changes} uncommitted change${r.changes === 1 ? "" : "s"}`);
   else if (!r.missing && r.note === null) out.push("clean");
   if (r.active) out.push("a terminal is open");

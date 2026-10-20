@@ -8,6 +8,7 @@ const row = (path: string, over: Partial<ScanRow> = {}): ScanRow => ({
   idleDays: 12,
   changes: 0,
   merged: false,
+  unmerged: false,
   active: false,
   locked: false,
   missing: false,
@@ -64,6 +65,8 @@ describe("PROJ-080 the cleanup list", () => {
     expect(rowFacts(row("/w/a"))).toBe("idle 12 days · clean");
     expect(rowFacts(row("/w/a", { idleDays: 1, merged: true, changes: 1, active: true, keepsBranch: true }))).toBe("idle 1 day · merged · 1 uncommitted change · a terminal is open · its branch stays");
     expect(rowFacts(row("/w/a", { missing: true, idleDays: null }))).toBe("folder is gone");
+    expect(rowFacts(row("/w/a", { unmerged: true, preselect: false }))).toBe("idle 12 days · unmerged commits · clean");
+    expect(rowFacts(row("/w/a", { merged: true }))).not.toContain("unmerged");
     expect(rowFacts(row("/w/a", { note: "Its details could not be read: timed out" }))).toContain("could not be read");
     expect(rowLabel(row("/w/a", { name: "Otter run" }))).toBe("Otter run");
     expect(rowLabel(row("C:\\w\\fox", { branch: null }))).toBe("fox");
