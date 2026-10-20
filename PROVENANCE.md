@@ -1024,3 +1024,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · skills T-292-b (SKILL-025/027, VIEW-100 skill half) · spec/15 and spec/05 cards only; this tree's own T-196-b event shape; no outside source
 > 2026-10-20 · hooks T-156-b batch 8 (attempts list masking, wiring) · spec SAFE-018/SAFE-019 as given in PLAN; this tree's own protected.rs mask and its test fixtures, protected_custom.rs, hooks.rs; no outside source
 > 2026-10-20 · hooks T-167-b batch 8 (sleep record) · spec/04 STAT-030/STAT-037 as given in PLAN; this tree's own agent_hooks/saved.rs and projects.rs workspace_sleep; no outside source
+> 2026-10-20 · onboarding T-321-c · spec/16 ONB-024 as given in the brief; this tree's own claude_accounts, codex_accounts, skills installer and InlineTerminal; no outside source
