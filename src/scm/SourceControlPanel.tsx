@@ -26,6 +26,7 @@ import { watchStatus } from "./watch";
 import { afterRefresh, commitBox, failureSummary, mainStep, statusGuard } from "./rules";
 import { DIFF_SPLITS, type DiffSplit } from "./split";
 import { openInBrowser } from "../browser/BrowserPane";
+import { HistoryLoads, acceptHistory, historyFor, type LoadedHistory } from "./history";
 import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, type RowKey, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine, PULL_POLICIES, filterRows, fullPath } from "./model";
 
 type Props = {
@@ -436,20 +437,25 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
   // GIT-035: the history section loads while it is open, again when HEAD moves or on refresh.
   const [histOpen, setHistOpen] = useState(false);
   const [histTick, setHistTick] = useState(0);
-  const [history, setHistory] = useState<Commit[] | null>(null);
+  // VIEW-071: a load is tagged with its worktree and number, so a slow one never replaces a newer one and another worktree's list is never drawn.
+  const [loadedHist, setLoadedHist] = useState<LoadedHistory | null>(null);
+  const histLoads = useRef(new HistoryLoads());
+  const history = historyFor(loadedHist, dir);
   const [picked, setPicked] = useState<{ hash: string; files: Change[] | null } | null>(null);
   const [ctx, setCtx] = useState<{ x: number; y: number; commit: Commit } | null>(null);
   // GIT-014: the changes filter (Escape empties and closes it) and a changed file's menu.
   const [filter, setFilter] = useState<string | null>(null);
   const [fileCtx, setFileCtx] = useState<{ x: number; y: number; path: string } | null>(null);
   useEffect(() => {
-    setHistory(null);
+    histLoads.current.begin();
+    setLoadedHist(null);
     setPicked(null);
   }, [dir]);
   useEffect(() => {
     if (!histOpen || dir === null) return;
+    const seq = histLoads.current.begin();
     invoke<Commit[]>("scm_history", { worktree: dir })
-      .then(setHistory)
+      .then((commits) => setLoadedHist((shown) => acceptHistory(histLoads.current, seq, dir, commits, shown)))
       .catch((err) => setError(String(err)));
   }, [histOpen, dir, head, histTick]);
   const rows = history ? graph(history) : [];

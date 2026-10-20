@@ -327,7 +327,7 @@ pub fn space_rows(worktrees: &[crate::git::Worktree], budget: u64) -> Vec<SpaceR
 /// Scan budget: entries walked per worktree before the size is marked incomplete.
 pub const SCAN_BUDGET: u64 = 2_000_000;
 
-fn space_key(project_id: &str) -> String {
+pub(crate) fn space_key(project_id: &str) -> String {
     format!("spaceScan:{project_id}")
 }
 

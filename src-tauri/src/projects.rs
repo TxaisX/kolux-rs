@@ -103,12 +103,12 @@ pub fn load_projects(store: &Store) -> Vec<Project> {
     store.get(PROJECTS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
 
-fn save_projects(store: &Store, projects: &[Project]) -> Result<(), String> {
+pub(crate) fn save_projects(store: &Store, projects: &[Project]) -> Result<(), String> {
     store.set(PROJECTS_KEY, &serde_json::to_string(projects).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
-/// PROJ-015: takes projects out of Kolux's list; their folders on disk are not touched. (The
-/// rest of removing a project, PROJ-008, comes with T-214-b.)
+/// PROJ-015: takes projects out of Kolux's list; their folders on disk are not touched. The rest
+/// of removing a project (PROJ-008) is `folder_projects::project_remove`.
 pub(crate) fn forget_projects(store: &Store, ids: &[String]) -> Result<(), String> {
     if ids.is_empty() {
         return Ok(());
@@ -124,8 +124,21 @@ pub(crate) fn forget_projects(store: &Store, ids: &[String]) -> Result<(), Strin
     if icons.len() != before {
         save_icons(store, &icons)?;
     }
+    // PROJ-005: a folder project's flag goes with it.
+    crate::folder_projects::unflag(store, ids)?;
     // PROJ-035: and so do its dismissed setup card and its saved local setup.
     crate::setup::prune_setup(store, ids, &gone)
+}
+
+/// PROJ-008: drops the retired suggested names kept for one workspaces folder.
+pub(crate) fn clear_retired_scope(store: &Store, scope: &str) -> Result<(), String> {
+    let mut all = retired_all(store);
+    let before = all.len();
+    all.retain(|r| r.scope != scope);
+    if all.len() == before {
+        return Ok(());
+    }
+    store.set(RETIRED_KEY, &serde_json::to_string(&all).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
 fn load_names(store: &Store) -> serde_json::Map<String, serde_json::Value> {
@@ -469,7 +482,7 @@ pub fn looks_secret(path: &str) -> bool {
 }
 
 /// GIT-061: only a full path to an existing folder that is not in a Git repository yet.
-fn plain_folder(folder: &Path) -> Result<(), String> {
+pub(crate) fn plain_folder(folder: &Path) -> Result<(), String> {
     if !folder.is_absolute() {
         return Err(format!("{} is not a full path; choose the folder itself", folder.display()));
     }
@@ -1387,7 +1400,16 @@ pub async fn workspace_seen(git: State<'_, Git>, store: StoreState<'_>, project_
 /// async, so they run off the window's thread and typing never queues behind a slow git.
 /// ponytail: git still blocks one async worker while it runs; spawn_blocking if workers ever starve.
 fn scan(git: &Git, store: &Mutex<Store>, project_id: &str) -> Result<(Project, Vec<Worktree>), String> {
-    let project = find_project(&*store.lock().map_err(|e| e.to_string())?, project_id)?;
+    let (project, folder) = {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        let project = find_project(&store, project_id)?;
+        // PROJ-005: a folder project has its one folder workspace, until Git is started in it.
+        let folder = crate::folder_projects::folder_only(&store, &project);
+        (project, folder)
+    };
+    if let Some(only) = folder {
+        return Ok((project, vec![only]));
+    }
     let all = git.worktrees(Path::new(&project.path))?;
     Ok((project, all))
 }

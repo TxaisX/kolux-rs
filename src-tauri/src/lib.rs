@@ -1,3 +1,5 @@
+mod folder_projects;
+mod repo_scan;
 mod activity;
 mod agents;
 mod artifacts;
@@ -48,6 +50,7 @@ mod orchestration;
 mod foreground;
 mod procs;
 mod protected;
+mod ports;
 mod resources;
 mod projects;
 mod scm;
@@ -401,6 +404,8 @@ pub fn run() {
             projects::git_version,
             projects::project_list,
             projects::project_add,
+            folder_projects::project_add_folder, folder_projects::project_remove,
+            repo_scan::repo_scan_start, repo_scan::repo_scan_stop, repo_scan::repo_scan_labels, repo_scan::repo_import,
             projects::workspace_list,
             projects::workspace_preview,
             projects::workspace_create,
@@ -503,6 +508,7 @@ pub fn run() {
             bulk::workspace_remove_many, bulk::workspace_kept_branch_delete, bulk::workspace_forget,
             bulk::workspace_statuses, bulk::workspace_statuses_set, bulk::workspace_status_set,
             bulk::space_scan, bulk::space_saved,
+            ports::ports_list, ports::ports_stop,
             keybindings::keybindings_read,
             menu::menu_sync, menu::menu_popup,
             keybindings::keybindings_write,

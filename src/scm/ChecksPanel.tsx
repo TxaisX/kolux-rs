@@ -6,6 +6,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { Refresh } from "../chrome/icons";
+import { openInBrowser } from "../browser/BrowserPane";
+import { useSettings } from "../settings/useSettings";
+import PrStart from "./PrStart";
+import { reviewHint, reviewWhere } from "./startPr";
 import { CHECKS_POLL_MS, checksSummary, reuseNoPr, stillRunning, type PrChecks } from "./checks";
 import { prStateWord } from "./model";
 import { CHECK_CAP, capped, checkGroups } from "./review";
@@ -27,6 +31,8 @@ const when = (t?: string | null) => (t ? new Date(t).toLocaleString([], { dateSt
 
 export default function ChecksPanel({ dir, linked, visible }: Props) {
   const [note, setNote] = useState<string | null>(null);
+  const { settings } = useSettings();
+  const inKolux = settings?.linksOpenInKolux === true;
   const rerun = (c: Check) => {
     setNote(null);
     invoke("scm_check_rerun", { worktree: dir, link: c.link, failedOnly: true })
@@ -90,13 +96,27 @@ export default function ChecksPanel({ dir, linked, visible }: Props) {
         ) : !data ? (
           <div className="sb-hint">Looking for this branch's pull request…</div>
         ) : !pr ? (
-          <div className="sb-hint">There is no review for this branch: it has no pull request.</div>
+          <PrStart dir={dir} onCreated={() => load(true)} />
         ) : (
           <>
             <div className="scm-prrow checks-review">
               <span className={`scm-prstate ${pr.state.toLowerCase()}`}>{prStateWord(pr)}</span>
-              <span className="scm-prtitle" title={pr.title ?? undefined}>
+              <a
+                className="scm-prtitle"
+                href={pr.url}
+                data-review-link
+                title={`${pr.title ?? ""}
+${reviewHint(inKolux)}`.trim()}
+                onClick={(e) => {
+                  e.preventDefault();
+                  if (reviewWhere(e, inKolux) === "kolux") openInBrowser(pr.url);
+                  else void invoke("open_external", { url: pr.url });
+                }}
+              >
                 #{pr.number} {pr.title}
+              </a>
+              <span className="sb-hint" data-review-hint>
+                {reviewHint(inKolux)}
               </span>
             </div>
             {data.conflict && <div className="note warn">This pull request has merge conflicts with its base branch; it cannot merge until they are resolved.</div>}
