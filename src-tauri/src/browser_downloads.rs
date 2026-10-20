@@ -149,8 +149,8 @@ static DOWNLOADS: Mutex<Vec<Download>> = Mutex::new(Vec::new());
 static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 static POLLER: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
-/// Whether a tab is still writing a download (BROW-013: such a page is never unloaded).
-#[allow(dead_code)] // the memory budget's check, T-179 (BROW-021)
+/// Whether a tab is still writing a download (BROW-013: such a page is never unloaded; the memory
+/// budget's check, T-179 BROW-021).
 pub fn downloading(id: u32) -> bool {
     DOWNLOADS.lock().map(|d| d.iter().any(|x| x.id == id && x.state == State::Running)).unwrap_or(false)
 }

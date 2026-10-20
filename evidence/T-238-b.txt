@@ -63,7 +63,8 @@ Gates (G:/Temp/browser-v3-logs/t238b-*.log, read back)
   apply; browser-T-239-actions.ts, browser-T-239-shortcutRows.ts, browser-T-242-lib.rs and
   browser-T-242-App.tsx no longer apply (their context moved on main) and their one-line lib.rs
   hunk was placed by hand for this gate. The new patch applies clean on the merged lib.rs
-  (git apply --check) and also after the T-242 line.
+  (git apply --check) and also after the T-242 line (regenerated in the T-179 commit: the first
+  cut shared T-242's context and failed once that line was in).
 - node scripts/plan-check.mjs --write-state: OK, Done 531 / 711 (t238b-plan-check.log); no
   duplicate task ids.
 - firewall-check -Baseline: 53 hits in 22 files, 0 new (t238b-firewall.log).

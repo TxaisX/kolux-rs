@@ -33,6 +33,9 @@ pub mod ports;
 pub mod history;
 #[path = "browser_downloads.rs"]
 pub mod downloads;
+// T-179: BROW-020 tabs come back after a restart on their trail, BROW-021 the memory budget.
+#[path = "browser_session.rs"]
+pub mod session;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
@@ -868,6 +871,13 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     if let Ok(dir) = app.path().app_data_dir() {
         profiles::set_root(dir); // T-241
     }
+    // T-179 (BROW-020): a tab that was open at the last quit comes back on its trail; one that is
+    // not on screen stays blank until it is shown. Its saved title names the tab meanwhile.
+    let opening = session::opening(id, url.as_str(), shown.unwrap_or(true));
+    let url = parse(&opening.url)?;
+    if let Some(title) = opening.title {
+        let _ = app.emit(TITLE_EVENT, TitlePayload { id, title });
+    }
     let _ = DRIVER.set(Box::new(drive));
     let dev = app_origin(&app);
     allowed(&url, dev.as_ref())?;
@@ -937,11 +947,13 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
             }
             if event == "finished" {
                 history::noted_load(id, payload.url().as_str()); // T-238-b (BROW-004)
+                session::noted_load(id, payload.url().as_str()); // T-179 (BROW-020)
             }
             let _ = load_app.emit(LOAD_EVENT, LoadPayload { id, event, url: payload.url().to_string() });
         })
         .on_document_title_changed(move |_, title| {
             history::noted_title(id, &title);
+            session::noted_title(id, &title);
             let _ = app.emit(TITLE_EVENT, TitlePayload { id, title });
         })
         // T-238-b (BROW-013): a download goes to the system Downloads folder under a safe, unique
@@ -1002,6 +1014,11 @@ pub async fn browser_bounds(app: AppHandle, id: u32, spot: Spot, shown: bool, ba
         s.insert(id, spot);
     }
     place(&v, id, &spot)?;
+    // T-179 (BROW-020, BROW-021): a page left blank for later (a restart, or the memory budget)
+    // loads now that its tab is on screen.
+    if let Some(url) = session::take_pending(id) {
+        v.navigate(parse(&url)?).map_err(err)?;
+    }
     v.show().map_err(err)
 }
 
@@ -1070,8 +1087,26 @@ pub async fn browser_go(app: AppHandle, id: u32, what: String, text: Option<Stri
         // T-239: `text` is the menu's JSON spec (BROW-017) or the JSON list of chords the page forwards (BROW-018).
         "menu" => v.eval(menu_script(text.as_deref().unwrap_or("{}"))).map_err(err),
         "keys" => v.eval(keys_script(text.as_deref().unwrap_or("[]"))).map_err(err),
+        "back" | "forward" => step_history(&v, id, &what),
         _ => v.eval(script(&what).ok_or_else(|| format!("unknown browser action {what}"))?).map_err(err),
     }
+}
+
+/// Back and forward (BROW-005), with the trail behind them (T-179, BROW-020): the engine's own list
+/// is asked first; a tab that came back from a restart (or a page the budget reloaded) has none,
+/// and then the trail's neighbour is loaded instead.
+fn step_history(v: &Webview, id: u32, what: &str) -> Result<(), String> {
+    let (probe, delta) = if what == "back" { ("!!(window.navigation && navigation.canGoBack)", -1) } else { ("!!(window.navigation && navigation.canGoForward)", 1) };
+    let page = v.clone();
+    let own = script(what).ok_or_else(|| format!("unknown browser action {what}"))?;
+    v.eval_with_callback(probe, move |answer| {
+        if answer.trim() == "true" {
+            let _ = page.eval(own);
+        } else if let Some(url) = session::step_tab(id, delta).and_then(|u| parse(&u).ok()) {
+            let _ = page.navigate(url);
+        }
+    })
+    .map_err(err)
 }
 
 #[tauri::command]
@@ -1089,6 +1124,7 @@ pub async fn browser_close(app: AppHandle, id: u32) -> Result<(), String> {
     // T-238-b (BROW-013): closing the web view cancels its running downloads; the pane is told.
     downloads::cancel_tab(&app, id);
     history::forget_tab(id);
+    session::forget(id); // T-179: a closed tab does not come back after a restart
     view(&app, id)?.close().map_err(err)
 }
 
@@ -1227,18 +1263,33 @@ pub async fn browser_tab(app: AppHandle, id: u32, worktree: Option<String>, show
     if let Ok(dir) = app.path().app_data_dir() {
         profiles::set_root(dir);
     }
-    let _ = APP.set(app);
     let tick = TICK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let mut t = TABS.lock().map_err(|e| e.to_string())?;
-    note_tab(&mut t, id, worktree, shown, tick);
-    if let Some(t) = t.iter_mut().find(|t| t.id == id) {
-        if let Some(url) = url {
-            t.url = url;
-        }
-        if let Some(title) = title {
-            t.title = title;
+    session::placed(id, worktree.clone()); // T-179 (BROW-020): the trail knows its worktree
+    {
+        let mut t = TABS.lock().map_err(|e| e.to_string())?;
+        note_tab(&mut t, id, worktree, shown, tick);
+        if let Some(t) = t.iter_mut().find(|t| t.id == id) {
+            if let Some(url) = url {
+                t.url = url;
+            }
+            if let Some(title) = title {
+                t.title = title;
+            }
         }
     }
+    // T-179 (BROW-021): a tab coming on screen is a visit to its worktree; past the budget the
+    // least recently visited hidden worktrees give up their pages (blank until shown again).
+    if shown {
+        let pages: Vec<session::Page> = tabs().into_iter().map(|t| session::Page { id: t.id, worktree: t.worktree, seen: t.seen, live: session::is_live(t.id), spared: downloads::downloading(t.id) || session::driven(t.id) }).collect();
+        for id in session::to_unload(&pages, session::BUDGET) {
+            if session::unloading(id).is_some() {
+                if let Ok(v) = view(&app, id) {
+                    let _ = v.navigate(parse(session::BLANK)?);
+                }
+            }
+        }
+    }
+    let _ = APP.set(app);
     Ok(())
 }
 
@@ -1266,6 +1317,10 @@ fn driver() -> Result<&'static Driver, String> {
 /// The driver behind the hook: the one place the command line's work touches a web view.
 fn drive(act: Act) -> Result<serde_json::Value, String> {
     let app = APP.get().ok_or("no browser tab has been opened yet")?;
+    // T-179 (BROW-021): a page an agent drives is under agent control, never unloaded for a while.
+    if let Act::Eval(id, ..) | Act::Navigate(id, _) | Act::Go(id, _) | Act::Relayout(id, _) = act {
+        session::drove(id);
+    }
     match act {
         Act::Eval(id, script, wait) => {
             let v = view(app, id)?;
@@ -1314,6 +1369,7 @@ fn drive(act: Act) -> Result<serde_json::Value, String> {
             let v = view(app, id)?;
             match what {
                 "reload" => v.reload().map_err(err)?,
+                "back" | "forward" => step_history(&v, id, what)?,
                 _ => v.eval(script(what).ok_or_else(|| format!("unknown browser action {what}"))?).map_err(err)?,
             }
             Ok(serde_json::Value::Null)
