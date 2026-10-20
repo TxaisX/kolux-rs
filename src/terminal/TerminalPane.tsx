@@ -19,6 +19,7 @@ import { copySelection } from "./copy";
 import { HeldKeys, screenLines, shouldRefocus, watchScale } from "./recover";
 import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } from "./codec";
 import { encodeHistory, replay, restoreTail, viewTop } from "./history";
+import { fromThisService, reattach, type Attach, type Reattached, type ServiceInfo } from "./reattach";
 import { batchAcks, memoryProfile } from "./flow";
 import { explain as explainError, exitAdvice } from "./errors";
 import { DIVIDER_DONE, dragging } from "./dividers";
@@ -41,6 +42,7 @@ import { labelOf } from "../keys/keymap";
 import { attachPaste } from "./paste";
 import { answersPrompt, newlineAgent, routeKey } from "./shellKeys";
 import { heldByTerminal } from "../keys/terminalPolicy";
+import { answeredElsewhere } from "../chat/ask";
 import { clickTarget, findLinks, hintFor, linkFor, rangeOf, resolvePath, spanOf, type Found } from "./links";
 import { dropSummary, dropText, overRect, shellKind } from "./drop";
 import { decideOsc52, parseOsc52, sayOnce } from "./osc52";
@@ -49,7 +51,7 @@ import FindBar from "./FindBar";
 import { stopLine, type StopInfo } from "./notify";
 import NameField from "./NameField";
 import { handlesIn } from "./tabs";
-import { shellInAgentPane } from "./remove";
+import { markShell, runningOf, shellInAgentPane } from "./remove";
 
 // TERM-036: the pane menu's copy items; Copy Session ID shows only once the session is known.
 const COPY_IDS = [["session", "Copy Session ID"], ["terminal", "Copy Terminal ID"], ["pane", "Copy Pane ID"]] as const;
@@ -185,6 +187,12 @@ type Props = {
   };
 };
 
+// APP-052: the terminal service as the pane reaches it (reattach.ts is tested over a fake one).
+const tauriService = {
+  info: () => invoke<ServiceInfo>("terminal_service_info"),
+  attach: (paneKey: number, generation: number) => invoke<Attach>("terminal_attach", { paneKey, generation }),
+};
+
 // TERM-113: panes that are not on screen at mount (background tabs of a restored layout) start one
 // after another, a short beat apart, so the shown tab's programs get the first spawns and come up
 // usable first. ponytail: a timer ladder, not a queue; the visible panes never wait.
@@ -311,6 +319,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     };
   }, [cwd, hidden, focused]);
   const idRef = useRef<number | null>(null);
+  // APP-052: the run of the terminal service this pane's terminal belongs to; its typing carries it.
+  const serviceRef = useRef<ServiceInfo | null>(null);
   const isHidden = useRef(hidden);
   isHidden.current = hidden;
   const keymap = useKeymap();
@@ -329,7 +339,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
   failed.current = onFailed;
 
   useEffect(() => {
-    report.current?.(status.kind === "starting" ? undefined : status.kind === "running");
+    report.current?.(runningOf(status.kind));
     if (status.kind === "running") pty.current?.(status.id, status.account);
   }, [status.kind]);
   // FIX-1: the pane key leaves the "agent pane running a shell" set when the pane goes (restart.current sets it).
@@ -514,7 +524,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
             setFlash("The terminal changed before the drop landed; nothing was typed");
             return;
           }
-          return invoke("terminal_write", { id, data });
+          return invoke("terminal_write", { id, data, generation: serviceRef.current?.generation ?? null });
         })
         .catch((e) => setFlash(`Typing could not reach the program (${explainError(String(e))})`)));
     };
@@ -580,7 +590,10 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       const route = routeKey(keys.current, e, term.hasSelection(), newlineAgent(startedRef.current, agentRef.current), (id) => heldByTerminal(id, keySettingsRef.current));
       // T-151-b (council D2 MERGE 47 S2): a real key that goes to the program answers the permission prompt as
       // far as the buttons are concerned; xterm's own focus / mouse / cursor replies (onData) no longer do.
-      if (answersPrompt(route, e.key)) setAnswered(prompt.current.count);
+      if (answersPrompt(route, e.key)) {
+        setAnswered(prompt.current.count);
+        if (number !== undefined) answeredElsewhere(number); // FIX-1: the chat card for this prompt goes too
+      }
       if (route.kind === "ime" || route.kind === "shell") return true;
       if (route.kind === "send") {
         e.preventDefault(); // Alt+Left is the webview's own "back" otherwise
@@ -610,6 +623,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
         // TERM-098: a chunk tagged with this pane's key is drawn at once, before terminal_spawn answers;
         // anything else that arrives first is held until the id is known and replayed then.
         await listen<OutputEvent>("terminal-output", (e) => {
+          // APP-052: output from a replaced run of the terminal service is dropped, never drawn.
+          if (!fromThisService(e.payload.generation, serviceRef.current)) return;
           const draw = () => {
             const bytes = decodeOutput(e.payload.data);
             term.write(bytes, () => acks.drew(bytes.length));
@@ -665,9 +680,10 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       };
       // TERM-111: start() also serves the overlay's Restart (the original start line) and the shell an
       // agent pane gets on Enter after its program ended; the buffer is kept both times.
-      const start = async (prog: string | null, argv: readonly string[], keepInView: boolean) => {
+      const start = async (prog: string | null, argv: readonly string[], keepInView: boolean, back: Reattached | null = null) => {
         try {
-          const { id, program: ran, account: used } = await invoke<{ id: number; program: string | null; account: string | null }>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program: prog, args: argv, env: env ?? null, paneKey: number, account: account ?? null });
+          // APP-052: a terminal this run of the service still runs for the pane (the window reloaded) is taken back, not started again.
+          const { id, program: ran, account: used } = back?.kind === "attached" ? { id: back.id, program: prog, account: account ?? null } : await invoke<{ id: number; program: string | null; account: string | null }>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program: prog, args: argv, env: env ?? null, paneKey: number, account: account ?? null });
           setStarted(ran);
           if (!alive) {
             invoke("terminal_kill", { id }).catch(() => {});
@@ -699,7 +715,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
         early = [];
         setDied(null);
         // FIX-1: an agent pane that got a shell on Enter is asked about as a shell (terminal/remove.ts classify).
-        if (number !== undefined) (shell && agent !== "shell" ? shellInAgentPane.add(number) : shellInAgentPane.delete(number));
+        markShell(shellInAgentPane, number, shell, agent);
         setStatus({ kind: "starting" });
         void start(shell ? null : program, shell ? [] : args, false);
       };
@@ -739,7 +755,20 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
         // TERM-113: a pane that is not on screen at mount lets the shown ones start first.
         if (el.clientWidth === 0 || el.clientHeight === 0) await stagger();
         if (!alive) return;
-        await start(program, args, keepInView);
+        // APP-052: the pane asks the terminal service for its terminal first and waits for the service
+        // to answer, up to a hard limit; no answer or too old a service fails the pane in plain words.
+        // A pane without a key (nothing saved for it) has no terminal to ask for.
+        const back = number === undefined ? null : await reattach(tauriService, number, serviceRef.current);
+        if (!alive) return;
+        if (back !== null) {
+          if (back.kind === "refused" || back.kind === "timeout") {
+            fail(back.reason);
+            return;
+          }
+          serviceRef.current = back.service;
+          if (back.kind === "replaced") setFlash("The terminal service was replaced; the pane starts again on the new one");
+        }
+        await start(program, args, keepInView, back);
       } catch (err) {
         fail(err);
       }
@@ -1135,6 +1164,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
                   onClick={() => {
                     const keys = answerKeys(shown, answer);
                     setAnswered(drawnAt); // T-151-b: the first click answers; the buttons go until the next prompt
+                    if (number !== undefined) answeredElsewhere(number); // FIX-1: the chat card for this prompt goes too
                     if (keys !== null && canAnswer(shown, hook, drawnAt, prompt.current.count, pendingTool)) typeIn.current(keys);
                     else setFlash("The prompt has gone; nothing was sent");
                   }}

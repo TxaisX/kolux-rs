@@ -17,3 +17,10 @@
 .pane.browser .find-bar .find { flex: 1; min-width: 0; }
 /* BROW-023: the site icon takes the globe's place. */
 .pane.browser .pane-head .site-icon { display: block; object-fit: contain; }
+/* T-074 (BROW-008, BROW-009): the recovery overlay fills the pane body while the page under it is hidden. */
+.pane.browser .pane-body { position: relative; }
+.pane.browser .load-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; text-align: center; background: var(--surface); color: var(--fg-muted); font-size: 12px; overflow: auto; }
+.pane.browser .load-overlay h2 { margin: 0; font-size: 14px; font-weight: 600; color: var(--fg); }
+.pane.browser .load-overlay p { margin: 0; max-width: 46ch; overflow-wrap: anywhere; }
+.pane.browser .load-overlay .btn-row { margin-top: 6px; flex-wrap: wrap; justify-content: center; }
+.pane.browser .load-overlay .connecting { color: var(--fg-icon-dim); }

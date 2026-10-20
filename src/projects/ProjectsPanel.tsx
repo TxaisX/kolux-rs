@@ -24,7 +24,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, HIDE_AUTOMATION_SETTING, PIN_COPIES_SETTING, PIN_SETTING, SHOW_SLEEPING_SETTING, SLEEP_SETTING, asleepAfter, renameTo, showSleepingFrom, SORT_SETTING, jumpUnhides, withoutAutomationMade, groupFromSetting, groupRows, pathKey, pinnedSet, recentOrder, smartOrder, sortFromSetting, type AgentState, type PrState, type RowInfo } from "./rows";
 import { linkedPrs, pushBadge, SCM_LINKED_PR_KEY, type Pushed } from "../scm/model";
 import { mergePoll, nextDelay, pollItems, STALE_MS, type PrPoll } from "../scm/poll";
-import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
+import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, projectLabel, splitGitSaid, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
 import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
 import AddProject from "./AddProject";
 import CardLine from "../look/CardLine";
@@ -40,6 +40,7 @@ import { cardView, saveArgs, type SetupSuggestion } from "./setupSuggestion";
 import { cardProjectOf, newestOnly } from "./cardAsk";
 import Picker, { type PickItem } from "./Picker";
 import StartGit, { type FirstFile } from "./StartGit";
+import ScanRepos from "./ScanRepos";
 import { openKits } from "../kits/Kits";
 import { ADD_PROJECT } from "../onboarding/firstRun";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
@@ -139,6 +140,22 @@ type Props = {
 const NOT_BUILT = false;
 const RECENT_KEY = "kolux.composer.recentProjects";
 const ADD_ITEM = "+add";
+// PROJ-031: Kolux's sentence first; Git's own output stays one click away.
+function MessageNote({ kind, text }: { kind: string; text: string }) {
+  const { summary, git } = splitGitSaid(text);
+  return (
+    <div className={`note ${kind}`}>
+      {summary}
+      {git && (
+        <details>
+          <summary>Git's full output</summary>
+          <pre>{git}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
 const readRecent = (): string[] => {
   try {
     const v = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
@@ -252,9 +269,10 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const [setupSkip, setSetupSkip] = useState(false); // PROJ-033: the setup policy; the project's script runs unless skipped
   const [setupWhere, setSetupWhere] = useState<SetupWhere>("tab");
   const [setupWait, setSetupWait] = useState(false);
+  const waitTouched = useRef(false); // the user clicked the wait box since the project last changed
   const nameRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
-  const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; refusal?: string } | null>(null);
+  const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; keep?: boolean; refusal?: string } | null>(null);
   const [busy, setBusy] = useState("");
   const [startGit, setStartGit] = useState<{ folder: string; files: FirstFile[] } | null>(null);
   const [importing, setImporting] = useState<{ project: string; path: string; list: SetupImport[] } | null>(null);
@@ -270,6 +288,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const [groupFor, setGroupFor] = useState<string | null>(null); // the group whose settings form is open
   const [groupName, setGroupName] = useState("");
   const [groupParent, setGroupParent] = useState("");
+  const [scanRoot, setScanRoot] = useState<string | null>(null); // PROJ-012: the folder being scanned for repositories
+  const [dropProject, setDropProject] = useState<string | null>(null); // PROJ-008: the id being asked about
   const [dropGroup, setDropGroup] = useState<{ remove: boolean } | null>(null); // PROJ-015: the delete question
   const seen = useRef<Record<string, AgentState>>({});
   const groupBy = groupFromSetting(settings[GROUP_SETTING]);
@@ -315,7 +335,9 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const fail = (err: unknown) => say("error", String(err));
 
   const scanned = useRef<Record<string, Worktree[]>>({}); // ACCT-056: the last list each scan gave
+  const refreshSeq = useRef(0); // PROJ-068: an older refresh never replaces the result of a newer one
   const refreshWorktrees = useCallback(async (list: Project[]) => {
+    const seq = ++refreshSeq.current;
     const next: Record<string, Worktree[]> = {};
     const unseen: Record<string, Worktree[]> = {};
     for (const p of list) {
@@ -328,6 +350,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         say("warn", `Could not list the workspaces of ${p.name}, so the last known list stays: ${String(err)}`);
       }
     }
+    if (seq !== refreshSeq.current) return;
     scanned.current = next;
     setWorktrees(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => !w.hidden)])));
     setHiddenWts(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => w.hidden)])));
@@ -442,6 +465,17 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     setPrDraft(null);
     setLinked((l) => (creating === null ? null : keepOnSwitch(l))); // SESS-038
   }, [creating]);
+  const waitPath = projects.find((x) => x.id === creating)?.path;
+  useEffect(() => {
+    // SET-033: the repository's own choice of whether the agent waits for setup starts the checkbox
+    waitTouched.current = false;
+    setSetupWait(false); // another repository's choice is not this one's while the read is out
+    if (!waitPath) return;
+    let live = true;
+    // a late reply never undoes a click: the box the user touched stays as they set it
+    invoke<{ wait: boolean }>("repo_setup_get", { path: waitPath }).then((s) => live && !waitTouched.current && setSetupWait(s.wait)).catch(() => {});
+    return () => void (live = false);
+  }, [waitPath]);
   useEffect(() => {
     // SESS-036: the chosen project's own issues and pull requests matching the name, and a pasted
     // link resolved to its item (its title seeds the name). Lookups that fail for want of gh stay quiet.
@@ -538,6 +572,32 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
           .catch(fail);
     } finally {
       setBusy("");
+    }
+  };
+  // PROJ-005: the plain folder can also be opened as a folder project, with no Git.
+  const openAsFolder = async () => {
+    if (!startGit) return;
+    setBusy("adding");
+    try {
+      await added(await invoke<Project>("project_add_folder", { path: startGit.folder }), false);
+      setStartGit(null);
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy("");
+    }
+  };
+  // PROJ-008: the question, then the removal; its folders and files stay on disk.
+  const removeProject = async (p: Project) => {
+    try {
+      const gone = await invoke<{ name: string; path: string; ended: number }>("project_remove", { projectId: p.id });
+      onRemoved(gone.path);
+      setDropProject(null);
+      setSettingsFor(null);
+      say("ok", `${gone.name} is out of Kolux${gone.ended ? `; ${gone.ended} terminal${gone.ended === 1 ? "" : "s"} closed` : ""}. Its folder is still on disk`);
+      await reload();
+    } catch (err) {
+      fail(err);
     }
   };
   const startGitAndAdd = async (files: string[]) => {
@@ -766,7 +826,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const projectItems = (q: string): PickItem[] => {
     const hints = pathHints(projects);
     const r = rankProjects(projects, q, readRecent());
-    const item = (group: string) => (m: ProjectMatch<Project>): PickItem => ({ key: m.p.id, label: m.p.name, hits: m.hits, group, title: m.p.path, hint: hints[m.p.id] && middle(hints[m.p.id], 28) });
+    const item = (group: string) => (m: ProjectMatch<Project>): PickItem => ({ key: m.p.id, label: projectLabel(m.p), hits: m.hits, group, title: m.p.path, hint: hints[m.p.id] && middle(hints[m.p.id], 28) });
     return [...r.recent.map(item("Recent")), ...r.rest.map(item("Projects")), { key: ADD_ITEM, label: "Add project…" }];
   };
   const pickProject = (id: string) => {
@@ -890,7 +950,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
           )}
           {!setupSkip && setupWhere === "tab" && (
             <label className="check">
-              <input type="checkbox" aria-label="wait for setup" checked={setupWait} onChange={(e) => setSetupWait(e.target.checked)} />
+              <input type="checkbox" aria-label="wait for setup" checked={setupWait} onChange={(e) => ((waitTouched.current = true), setSetupWait(e.target.checked))} />
               Wait for setup to finish before the agent starts
             </label>
           )}
@@ -943,9 +1003,9 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     if (!c) return;
     setBusy("removing");
     try {
-      await invoke("workspace_remove", { projectId: c.projectId, path: c.path, force: c.force, stamp: c.check.stamp });
+      const kept = await invoke<{ branch: string; commit: string } | null>("workspace_remove", { projectId: c.projectId, path: c.path, force: c.force, stamp: c.check.stamp, keepBranch: c.keep });
       onRemoved(c.path);
-      say("ok", `removed ${c.branch} and its folder`);
+      say("ok", kept ? `removed ${c.branch}'s folder; kept the branch ${kept.branch}` : `removed ${c.branch} and its folder`);
       setConfirm(null);
       await reload();
     } catch (err) {
@@ -1324,7 +1384,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
             </span>
           )}
           {pushTag(w)}
-          {groupBy !== "project" && <span className="hint">{p.name}</span>}
+          {groupBy !== "project" && <span className="hint">{projectLabel(p)}</span>}
           {liveCount(w)}
           {!asking && (
             <button
@@ -1439,6 +1499,12 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                 Delete my changes too
               </label>
             )}
+            {!blocker(confirm.check) && (
+              <label className="del-force">
+                <input type="checkbox" checked={confirm.keep === true} onChange={(e) => setConfirm({ ...confirm, keep: e.target.checked })} />
+                Keep the branch
+              </label>
+            )}
             <div className="btn-row">
               <button className="btn danger" onClick={() => remove()} disabled={busy !== "" || blocker(confirm.check) !== null}>
                 {busy === "removing" ? "Removing…" : "Remove"}
@@ -1477,8 +1543,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         <div key={p.id}>
           <div className="proj" title={p.path}>
             <HeaderBadge colour={headerColourOf(settings, "p", p.id)} />
-            <ProjectIcon value={icons[p.id]} name={p.name} />
-            <span className="name">{p.name}</span>
+            <ProjectIcon value={icons[p.id]} name={projectLabel(p)} />
+            <span className="name" title={p.displayName ? p.name : undefined}>{projectLabel(p)}</span>
             <button className={`ib${settingsFor === p.id ? " on" : ""}`} title="Project settings: its workspaces folder and base ref" aria-pressed={settingsFor === p.id} onClick={() => (settingsFor === p.id ? setSettingsFor(null) : openSettings(p))}>
               <Gear />
             </button>
@@ -1525,7 +1591,23 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                 <button className="btn" onClick={() => setSettingsFor(null)}>
                   Cancel
                 </button>
+                <button className="btn danger" data-remove-project onClick={() => setDropProject(dropProject === p.id ? null : p.id)}>
+                  Remove project
+                </button>
               </div>
+              {dropProject === p.id && (
+                <div className="note" role="alertdialog" aria-label="Remove project">
+                  <div>Remove {p.name} from Kolux? Its terminals close and its list entries, saved setup and remembered names are cleared. The folder and its files stay on disk.</div>
+                  <div className="btn-row">
+                    <button className="btn danger" data-remove-project-yes onClick={() => removeProject(p)}>
+                      Remove {p.name}
+                    </button>
+                    <button className="btn" onClick={() => setDropProject(null)}>
+                      Keep it
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {(fresh[p.id] ?? []).length > 0 && review !== p.id && (
@@ -1831,7 +1913,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
               onRetry={() => void askCard()}
             />
           )}
-          {message && <div className={`note ${message.kind}`}>{message.text}</div>}
+          {message && <MessageNote kind={message.kind} text={message.text} />}
         </div>
 
         <div className="sb-divider" />
@@ -1910,7 +1992,24 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         </div>
       </aside>
       {importing && <ImportSetup {...importing} busy={busy !== ""} onImport={importSetup} onClose={() => setImporting(null)} />}
-      {startGit && <StartGit {...startGit} busy={busy !== ""} onStart={startGitAndAdd} onCancel={() => setStartGit(null)} />}
+      {startGit && <StartGit {...startGit} busy={busy !== ""} onStart={startGitAndAdd} onFolder={openAsFolder} onScan={() => (setScanRoot(startGit.folder), setStartGit(null))} onCancel={() => setStartGit(null)} />}
+      {scanRoot !== null && (
+        <ScanRepos
+          root={scanRoot}
+          onClose={() => setScanRoot(null)}
+          onProblem={fail}
+          onDone={async (message, project) => {
+            setScanRoot(null);
+            setShowAdd(false);
+            say("ok", message);
+            await reload();
+            if (project) {
+              const open = openedWorktree(await invoke<Worktree[]>("workspace_list", { projectId: project.id }), project.path);
+              if (open) (onSelect(open.path, open.branch), onAdded(open.path, open.branch));
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

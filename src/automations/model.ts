@@ -41,7 +41,7 @@ export const defaultForm: ScheduleForm = { preset: "weekdays", time: "09:00", da
 
 /** AUTO-012's states; `cause` says why a run was skipped. */
 export type RunStatus = "pending" | "dispatching" | "dispatched" | "completed" | "skipped" | "failed";
-export type Run = { id: string; automationId: string; number: number; trigger: "manual" | "schedule" | "event"; status: RunStatus; at: number; cause?: string; detail?: string; exitCode?: number | null; timedOut?: boolean; output?: string; worktree?: string; worktreeName?: string; repeats?: number; lastAt?: number; eventDetail?: string; worktreeGone?: boolean; dispatchedAt?: number; finishedAt?: number; provider?: string; outputFrom?: "screen" | "transcript"; outputCut?: boolean; sessionId?: string; paneEnded?: boolean };
+export type Run = { id: string; automationId: string; number: number; trigger: "manual" | "schedule" | "event"; status: RunStatus; at: number; cause?: string; detail?: string; exitCode?: number | null; timedOut?: boolean; output?: string; worktree?: string; worktreeName?: string; repeats?: number; lastAt?: number; eventDetail?: string; worktreeGone?: boolean; dispatchedAt?: number; finishedAt?: number; provider?: string; outputFrom?: "screen" | "transcript" | "replay"; outputCut?: boolean; sessionId?: string; paneEnded?: boolean; reconnected?: boolean };
 
 export type SortKey = "name" | "trigger" | "agent" | "project" | "lastRun" | "nextRun";
 export type Filters = { state: "all" | "on" | "paused"; result: "all" | "never" | RunStatus; agents: string[] };
@@ -217,6 +217,13 @@ export type RunFilter = "all" | "progress" | "success" | "failed" | "skipped";
 export const RUN_BATCH = 100;
 const group = (s: RunStatus): Exclude<RunFilter, "all"> => (s === "completed" ? "success" : s === "failed" ? "failed" : s === "skipped" ? "skipped" : "progress");
 export const startedBy = (r: Run): string => (r.trigger === "manual" ? "by hand" : r.trigger === "event" ? "by an event" : "by the timetable");
+
+/** AUTO-014 / T-085-h: what the saved output is: the end's text, the most recent part of it, or
+ * the replay of a run that Kolux reconnected to after a restart and is still following. */
+export const outputNote = (r: Run): string => {
+  if (r.outputFrom === "replay") return r.outputCut ? "The most recent text the agent's terminal had shown when Kolux restarted; older lines were left out. The run carries on in that terminal." : "What the agent's terminal had shown when Kolux restarted. The run carries on in that terminal.";
+  return r.outputCut ? "The most recent text the agent's terminal showed; older lines were left out." : "What the agent's terminal showed when the run ended.";
+};
 
 /** Every run that fits the filter and the search, newest first. */
 export function dashboardRows(runs: Run[], automation: (id: string) => string, filter: RunFilter, query: string): Run[] {

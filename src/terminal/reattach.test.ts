@@ -1,0 +1,95 @@
+// APP-052 (T-075): a pane takes its terminal back from the run of the service that owns it, over a fake service.
+import { describe, expect, it } from "vitest";
+import { type Attach, fromThisService, LIMIT_MS, reattach, type ServiceInfo } from "./reattach";
+
+/** A fake terminal service: `down` failed answers before it comes up, then `info`; attach answers from `answers`. */
+function fake(info: ServiceInfo, answer: Partial<Attach> = {}, down = 0) {
+  const calls = { info: 0, attach: [] as [number, number][] };
+  const service = {
+    info: async () => {
+      calls.info++;
+      if (calls.info <= down) throw new Error("not up yet");
+      return info;
+    },
+    attach: async (paneKey: number, generation: number) => {
+      calls.attach.push([paneKey, generation]);
+      return { state: "fresh", id: null, generation: info.generation, protocol: info.protocol, ...answer } as Attach;
+    },
+  };
+  return { service, calls };
+}
+
+/** A clock that advances only by sleeping, so the hard limit is reached without waiting. */
+function clock() {
+  let t = 0;
+  const slept: number[] = [];
+  return {
+    now: () => t,
+    sleep: async (ms: number) => {
+      slept.push(ms);
+      t += ms;
+    },
+    slept,
+  };
+}
+
+const run = { generation: 1_700_000_000_000_042, protocol: 1 };
+
+describe("reattach", () => {
+  it("takes a terminal back when this run of the service still runs it (webview reload)", async () => {
+    const { service, calls } = fake(run, { state: "attached", id: 7 });
+    expect(await reattach(service, 3, null, LIMIT_MS, clock())).toEqual({ kind: "attached", id: 7, service: run });
+    expect(calls.attach).toEqual([[3, run.generation]]);
+  });
+
+  it("starts fresh when the service runs nothing for the pane", async () => {
+    const { service } = fake(run);
+    expect(await reattach(service, 3, run, LIMIT_MS, clock())).toEqual({ kind: "fresh", service: run });
+  });
+
+  it("says replaced when the pane's terminal belonged to another run, asking with the run it knew", async () => {
+    const newer = { generation: run.generation + 1000, protocol: 1 };
+    const { service, calls } = fake(newer, { state: "replaced" });
+    expect(await reattach(service, 3, run, LIMIT_MS, clock())).toEqual({ kind: "replaced", service: newer });
+    expect(calls.attach).toEqual([[3, run.generation]]);
+  });
+
+  it("waits for a service still coming up, then attaches", async () => {
+    const { service, calls } = fake(run, { state: "attached", id: 9 }, 2);
+    const c = clock();
+    expect(await reattach(service, 3, null, LIMIT_MS, c)).toEqual({ kind: "attached", id: 9, service: run });
+    expect(calls.info).toBe(3);
+    expect(c.slept).toEqual([100, 100]);
+  });
+
+  it("gives up at the hard limit instead of hanging when the service never answers", async () => {
+    const { service, calls } = fake(run, {}, Number.POSITIVE_INFINITY);
+    const c = clock();
+    const back = await reattach(service, 3, null, LIMIT_MS, c);
+    expect(back).toEqual({ kind: "timeout", waited: LIMIT_MS, reason: "the terminal service did not answer within 3 s" });
+    expect(c.now()).toBe(LIMIT_MS);
+    expect(calls.info).toBe(LIMIT_MS / 100 + 1);
+    expect(calls.attach).toEqual([]);
+  });
+
+  it("refuses a service older than the oldest protocol this window speaks", async () => {
+    const { service, calls } = fake({ generation: 5, protocol: 0 });
+    expect(await reattach(service, 3, null, LIMIT_MS, clock())).toEqual({ kind: "refused", reason: "the terminal service speaks protocol 0; this window needs 1 or newer" });
+    expect(calls.attach).toEqual([]);
+  });
+
+  it("works with a newer service (additions only)", async () => {
+    const newer = { generation: 5, protocol: 7 };
+    const { service } = fake(newer);
+    expect(await reattach(service, 3, null, LIMIT_MS, clock())).toEqual({ kind: "fresh", service: newer });
+  });
+});
+
+describe("fromThisService", () => {
+  it("drops output from a replaced run and keeps everything else", () => {
+    expect(fromThisService(run.generation, run)).toBe(true);
+    expect(fromThisService(run.generation + 1, run)).toBe(false);
+    expect(fromThisService(undefined, run)).toBe(true);
+    expect(fromThisService(run.generation + 1, null)).toBe(true);
+  });
+});
