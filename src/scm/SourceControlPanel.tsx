@@ -27,7 +27,7 @@ import { afterRefresh, commitBox, failureSummary, mainStep, statusGuard } from "
 import { DIFF_SPLITS, type DiffSplit } from "./split";
 import { openInBrowser } from "../browser/BrowserPane";
 import { HistoryLoads, acceptHistory, historyFor, type LoadedHistory } from "./history";
-import { LINES_SKIPPED_NOTE, canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, type RowKey, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine, PULL_POLICIES, filterRows, fullPath } from "./model";
+import { LINES_SKIPPED_NOTE, canCommit, changeCount, cutBanner, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, type RowKey, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine, PULL_POLICIES, filterRows, fullPath } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -159,6 +159,7 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
   const [status, setStatus] = useState<Status | null>(null);
   const statusRef = useRef<Status | null>(null);
   statusRef.current = status;
+  const cut = cutBanner(status);
   const [error, setError] = useState<string | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -475,7 +476,8 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
     if (!status) return;
     switch (step.action) {
       case "stage":
-        return stage([...status.changed, ...status.untracked].map((c) => c.path), true);
+        // GIT-012: with the lists cut short, "Stage all" means the whole worktree, not the rows shown.
+        return stage((status.cut ?? 0) > 0 ? ["."] : [...status.changed, ...status.untracked].map((c) => c.path), true);
       case "commit":
         return commit();
       case "pr":
@@ -1086,6 +1088,19 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
                   setFilter(null);
                 }}
               />
+            )}
+            {cut && (
+              <div className="note warn" role="status" data-scm-cut>
+                {cut.text}
+                {cut.offer.length > 0 && (
+                  <>
+                    {" "}
+                    <button className="link" disabled={busy} onClick={() => void guarded(() => invoke("scm_ignore_heavy", { worktree: dir, folders: cut.offer }))}>
+                      Add {cut.offer.join(", ")} to .gitignore
+                    </button>
+                  </>
+                )}
+              </div>
             )}
             <div className="sb-list">
               {status && changeCount(status) === 0 && <div className="sb-hint">No changes{status.branch ? ` on ${status.branch}` : ""}.</div>}

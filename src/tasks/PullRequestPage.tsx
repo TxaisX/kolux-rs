@@ -10,7 +10,7 @@ import { Close } from "../chrome/icons";
 import GhBanner, { classify } from "./GhBanner";
 import Markdown from "./MarkdownView";
 import { safeHref } from "./markdown";
-import { askForReview, heldWords, MERGE_METHODS, mergeBox, type PrCheck, type PrFiles, type PrPageData, type PrTab, type PrThreads, REACTION_EMOJI, REVIEW_LABEL, rerunTargets, reviewerSuggestions, saveTab, savedTab, summarizeChecks, type Target } from "./prModel";
+import { askForReview, editReviewers, heldWords, NO_REVIEWER_EDIT, type ReviewerEdit, settleReviewers, undoReviewers, withReviewers, MERGE_METHODS, mergeBox, type PrCheck, type PrFiles, type PrPageData, type PrTab, type PrThreads, REACTION_EMOJI, REVIEW_LABEL, rerunTargets, reviewerSuggestions, saveTab, savedTab, summarizeChecks, type Target } from "./prModel";
 import type { Person } from "./repoFacts";
 
 const NO_THREADS: PrThreads = { threads: [], truncated: false, limit: 0 };
@@ -35,6 +35,7 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
   const [loaded, setLoaded] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<ReviewerEdit>(NO_REVIEWER_EDIT);
 
   // The head commit the page last showed. When a reload finds another one, the files read for the
   // old head are dropped and a merge confirm still open is closed, so a merge never pins a commit
@@ -57,6 +58,7 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
       }
       shown.current = p.headSha;
       setPage(p);
+      setPending((r) => settleReviewers(p.reviewers, r));
       setChecks(await invoke<PrCheck[]>("pr_checks", { host: args.host, repo: args.repo, sha: p.headSha }).catch(() => []));
       setThreads(await invoke<PrThreads>("pr_threads", args).catch(() => NO_THREADS));
     } catch (e) {
@@ -125,12 +127,22 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
   const pageUrl = safeHref(page.url);
   const mine = (n: string) => ({ ...args, add: [], remove: [n] });
   const copy = () => void navigator.clipboard.writeText(page.url).then(() => setNote("Link copied."), () => setNote(page.url));
-  const suggestions = typed.trim() ? reviewerSuggestions(people, page, typed) : [];
+  const reviewers = withReviewers(page.reviewers, pending);
+  const suggestions = typed.trim() ? reviewerSuggestions(people, { author: page.author, reviewers }, typed) : [];
+  // GIT-048: shown at once, not behind `busy`; a failed write is put back and says so.
+  const review = (add: string[], remove: string[]) => {
+    setNote(null);
+    setPending((r) => editReviewers(r, add, remove));
+    invoke("pr_reviewers", { ...args, add, remove }).then(reload, (e) => {
+      setPending((r) => undoReviewers(r, add, remove));
+      setNote(`The reviewer change was undone: ${say(e)}`);
+    });
+  };
   const askFor = (login: string) => {
-    const r = askForReview(page, [login]);
+    const r = askForReview({ reviewers }, [login]);
     if (!r.ok) return setNote(r.reason);
     setTyped("");
-    if (r.add.length) void act(() => invoke("pr_reviewers", { ...args, add: r.add, remove: [] }));
+    if (r.add.length) review(r.add, []);
   };
 
   return (
@@ -227,11 +239,11 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
           <aside className="pr-side">
             <h3>Reviewers</h3>
             {page.reviewsTruncated && <p className="tasks-kind">Showing the first {page.reviewsLimit} reviews; some reviewers may be missing.</p>}
-            {page.reviewers.map((r) => (
+            {reviewers.map((r) => (
               <div key={r.login} className="pr-person">
                 {r.login} <span className={`pr-review ${r.state}`}>{REVIEW_LABEL[r.state] ?? r.state}</span>
                 {r.state === "requested" && (
-                  <button className="ib" title={`Take back the request to ${r.login}`} disabled={busy} onClick={() => void act(() => invoke("pr_reviewers", { ...args, add: [], remove: [r.login] }))}>
+                  <button className="ib" title={`Take back the request to ${r.login}`} onClick={() => review([], [r.login])}>
                     <Close />
                   </button>
                 )}
@@ -239,7 +251,7 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
             ))}
             <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Ask for a review..." aria-label="Ask for a review" onKeyDown={(e) => e.key === "Enter" && typed.trim() && askFor(typed.trim().replace(/^@/, ""))} />
             {suggestions.map((p) => (
-              <button key={p.login} className="btn" disabled={busy} onClick={() => askFor(p.login)}>
+              <button key={p.login} className="btn" onClick={() => askFor(p.login)}>
                 {p.login}
               </button>
             ))}

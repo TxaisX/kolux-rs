@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { classify as kindOf } from "./ghHealth";
 import { bannerOf, classify, minutesUntil, resetOf, waitMs } from "./ghHealth";
 
 test("GIT-028: gh's own words sort into the kinds of trouble", () => {
@@ -50,4 +51,16 @@ test("GIT-028: the budget that ends the wait is the used-up one, else Search", (
   expect(resetOf(rows.map((r) => ({ ...r, remaining: 5 })))).toBe(260);
   expect(resetOf([])).toBeUndefined();
   expect(resetOf(null)).toBeUndefined();
+});
+
+test("T-281 (GIT-045): an account without access and an expired sign-in are told apart from a rate limit", () => {
+  expect(kindOf("The account gh is signed in with cannot see this repository: run gh auth status to check which account it is, or gh auth login with one that has access")).toBe("no-access");
+  expect(kindOf("HTTP 403: Resource not accessible by integration")).toBe("no-access");
+  expect(kindOf("HTTP 403: API rate limit exceeded for user")).toBe("rate-limit");
+  expect(kindOf("HTTP 403: You have triggered an abuse detection mechanism")).toBe("rate-limit");
+  expect(kindOf("gh's sign-in no longer works (it expired or was revoked): run gh auth login again")).toBe("signed-out");
+  const b = bannerOf("no-access", 0, undefined, "ghe.example.com");
+  expect(b?.title).toBe("This account cannot see the repository");
+  expect(b?.steps.join(" ")).toContain("gh auth status --hostname ghe.example.com");
+  expect(bannerOf("signed-out", 0)?.body).toContain("sign-in expired");
 });

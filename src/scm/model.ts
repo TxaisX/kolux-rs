@@ -28,7 +28,18 @@ export type Status = {
   submodules?: Record<string, string>;
   /** GIT-013: changed submodules left out of the list past the back end's limit. */
   submodulesCut?: number;
+  /** GIT-012: changes left out of the lists (each shows its first 1,000); 0 when none are. */
+  cut?: number;
+  /** GIT-012: heavy folders (dependencies, build output) not ignored yet, offered when the lists are cut. */
+  heavy?: string[];
 };
+
+/** GIT-012: the cut-short banner: what it says and the folders it offers to ignore; null when nothing was cut. */
+export function cutBanner(s: Pick<Status, "cut" | "heavy"> | null): { text: string; offer: string[] } | null {
+  const cut = s?.cut ?? 0;
+  if (cut <= 0) return null;
+  return { text: `This list is cut short: ${cut.toLocaleString("en-US")} more change${cut === 1 ? " is" : "s are"} left out so the panel stays quick.`, offer: s?.heavy ?? [] };
+}
 
 /** GIT-065: whether a workspace's commits are on its remote (`scm_pushed`). */
 export type Pushed = { path: string; state: "synced" | "ahead" | "unpublished" | "unknown"; count: number };
@@ -57,7 +68,7 @@ export type KeyLike = { key: string; ctrlKey: boolean; metaKey: boolean; altKey:
 export const isCommitShortcut = (e: KeyLike): boolean => e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && !e.isComposing;
 
 /** The sum of every section, for the panel's header. */
-export const changeCount = (s: Status | null): number => (s ? s.staged.length + s.changed.length + s.untracked.length + s.conflicts.length : 0);
+export const changeCount = (s: Status | null): number => (s ? s.staged.length + s.changed.length + s.untracked.length + s.conflicts.length + (s.cut ?? 0) : 0);
 
 /** The sections whose rows can be discarded (VIEW-067); conflicts are resolved, not discarded. */
 export type Section = "Staged" | "Changes" | "Untracked";

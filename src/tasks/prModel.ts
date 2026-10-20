@@ -83,6 +83,31 @@ export function askForReview(page: Pick<PrPageData, "reviewers">, logins: string
   );
 }
 
+// T-281 (GIT-048): review requests asked for or taken back show at once, laid over the page GitHub last
+// sent; a reload that does not show them yet cannot flip them back, and a failed write puts back only itself.
+export type ReviewerEdit = { ask: string[]; drop: string[] };
+export const NO_REVIEWER_EDIT: ReviewerEdit = { ask: [], drop: [] };
+const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+export function editReviewers(p: ReviewerEdit, add: string[], remove: string[]): ReviewerEdit {
+  return { ask: [...p.ask.filter((x) => !remove.includes(x) && !add.includes(x)), ...add], drop: [...p.drop.filter((x) => !add.includes(x) && !remove.includes(x)), ...remove] };
+}
+
+export function undoReviewers(p: ReviewerEdit, add: string[], remove: string[]): ReviewerEdit {
+  return { ask: p.ask.filter((x) => !add.includes(x)), drop: p.drop.filter((x) => !remove.includes(x)) };
+}
+
+/** The reviewer list with the pending edit applied: a take-back hides the request, an ask shows as requested. */
+export function withReviewers(list: PrReviewer[], p: ReviewerEdit): PrReviewer[] {
+  const kept = list.filter((r) => !(r.state === "requested" && p.drop.some((d) => same(d, r.login))));
+  return [...kept, ...p.ask.filter((a) => !kept.some((r) => same(r.login, a))).map((login) => ({ login, state: "requested" }))];
+}
+
+/** Keeps only the parts of the pending edit GitHub's list does not show yet. */
+export function settleReviewers(list: PrReviewer[], p: ReviewerEdit): ReviewerEdit {
+  return { ask: p.ask.filter((a) => !list.some((r) => same(r.login, a))), drop: p.drop.filter((d) => list.some((r) => r.state === "requested" && same(r.login, d))) };
+}
+
 export type MergeBox = { canMerge: boolean; reason: string };
 
 /** What the merge box says: draft, closed, merged and blocked pull requests cannot be merged from

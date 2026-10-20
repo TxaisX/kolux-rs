@@ -10,7 +10,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Refresh, Search } from "../chrome/icons";
 import GhBanner, { classify } from "./GhBanner";
-import { applyEdits, editAssign, editState, type Edits, leavesFilter, settle, undoAssign, undoState } from "./edits";
+import { emptyReason } from "./emptyState";
+import { applyEdits, editAssign, editLabels, editState, type Edits, leavesFilter, settle, undoAssign, undoLabels, undoState } from "./edits";
 import type { Worktree } from "../projects/model";
 import { useSettings } from "../settings/useSettings";
 import { beyondWindow, defaultPreset, FILTERS, type FilterKey, filterValue, issueSource, listState, pageButtons, pageCount, PER_PAGE, PRESETS, setFilter, type Task, type TaskDetail, type TaskLabel, type TaskPage, taskKind, taskQueries } from "./model";
@@ -425,10 +426,8 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
           {source.warning}
         </div>
       )}
-      {!repo ? (
-        <div className="autos-none tasks-none">Add a project to see its GitHub issues and pull requests.</div>
-      ) : gh === null ? (
-        <div className="autos-none tasks-none">{repo.name} has no GitHub remote, so there are no issues or pull requests to list.</div>
+      {!repo || gh === null ? (
+        <div className="autos-none tasks-none">{emptyReason({ project: repo?.name ?? null, remote: false, loaded: false, count: 0, query, page })}</div>
       ) : error !== null ? (
         // GIT-028: GitHub out of reach (limit, outage, slow, signed out, no gh) gets a banner and, when it is the user to fix, the sign-in help.
         classify(error, login === null ? false : undefined) !== "other" ? (
@@ -438,10 +437,8 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
             {error}
           </div>
         )
-      ) : result === null ? (
-        <div className="autos-none tasks-none">Loading…</div>
-      ) : result.items.length === 0 ? (
-        <div className="autos-none tasks-none">Nothing matches.</div>
+      ) : result === null || result.items.length === 0 ? (
+        <div className="autos-none tasks-none">{emptyReason({ project: repo.name, remote: true, loaded: result !== null, count: result?.items.length ?? 0, query, page })}</div>
       ) : (
         <ul className="tasks-list" ref={list} onScroll={(e) => (kept.scroll = e.currentTarget.scrollTop)}>
           {applyEdits(result.items, edits).map((t) => (
@@ -528,10 +525,15 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
           onClose={() => setOpen(null)}
           work={open.state === "open" ? { label: workLabel(resumeDir(open), open), run: () => work(open) } : undefined}
           onPage={open.kind === "pr" ? () => { setPr({ host: open.host ?? gh.host, repo: open.repo, number: open.number, kind: "pull" }); setOpen(null); } : undefined}
-          onLabels={(labels: TaskLabel[]) => setResult((r) => r && { ...r, items: r.items.map((x) => (x.url === open.url ? { ...x, labels } : x)) })}
+          onLabels={(labels: TaskLabel[]) => {
+            setResult((r) => r && { ...r, items: r.items.map((x) => (x.url === open.url ? { ...x, labels } : x)) });
+            setEdits((e) => settle(e, [{ ...open, labels }], Date.now()));
+          }}
+          onEditLabels={(add: TaskLabel[], remove: string[]) => setEdits((e) => editLabels(e, open.url, add, remove, Date.now()))}
+          onUndoLabels={(add: string[], remove: string[]) => setEdits((e) => undoLabels(e, open.url, add, remove))}
           onState={(d: TaskDetail) => {
             setResult((r) => r && { ...r, items: r.items.map((x) => (x.url === open.url ? { ...x, state: d.state, assignees: d.assignees } : x)) });
-            setEdits((e) => settle(e, [{ url: open.url, state: d.state, assignees: d.assignees }], Date.now()));
+            setEdits((e) => settle(e, [{ url: open.url, state: d.state, assignees: d.assignees, labels: d.labels }], Date.now()));
           }}
           onAssign={(add: string[], remove: string[]) => setEdits((e) => editAssign(e, open.url, add, remove, Date.now()))}
           onUndoAssign={(add: string[], remove: string[]) => setEdits((e) => undoAssign(e, open.url, add, remove))}

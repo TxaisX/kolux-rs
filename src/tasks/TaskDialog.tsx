@@ -12,7 +12,7 @@ import { Close } from "../chrome/icons";
 import { type IssueAction, runAction } from "./issueActions";
 import Markdown from "./MarkdownView";
 import MentionField from "./MentionField";
-import { type Edit, withAssignees } from "./edits";
+import { type Edit, withAssignees, withLabels } from "./edits";
 import { duplicateQuery, eventLine, issueNumber, type Task, type TaskDetail, type TaskLabel, type TaskPage, taskKind } from "./model";
 import type { Person } from "./repoFacts";
 
@@ -20,7 +20,7 @@ const FRESH_MS = 15_000;
 
 // GIT-048 (T-281-b): `edit` is what is pending for this item (shown at once, on top of what GitHub last said); `onAssign`/`onUndoAssign`
 // and `onShowState`/`onUndoState` hand a change to the page before and after GitHub answers; `onState` carries GitHub's answer.
-export default function TaskDialog({ task, host, onClose, onLabels, onState, onAssign, onUndoAssign, onShowState, onUndoState, edit, work, onPage }: { task: Task; host: string; onClose: () => void; onLabels: (labels: TaskLabel[]) => void; onState: (d: TaskDetail) => void; onAssign?: (add: string[], remove: string[]) => void; onUndoAssign?: (add: string[], remove: string[]) => void; onShowState?: (state: string) => void; onUndoState?: () => void; edit?: Edit; work?: { label: string; run: () => void }; onPage?: () => void }) {
+export default function TaskDialog({ task, host, onClose, onLabels, onState, onAssign, onUndoAssign, onShowState, onUndoState, onEditLabels, onUndoLabels, edit, work, onPage }: { task: Task; host: string; onClose: () => void; onLabels: (labels: TaskLabel[]) => void; onState: (d: TaskDetail) => void; onAssign?: (add: string[], remove: string[]) => void; onUndoAssign?: (add: string[], remove: string[]) => void; onShowState?: (state: string) => void; onUndoState?: () => void; onEditLabels?: (add: TaskLabel[], remove: string[]) => void; onUndoLabels?: (add: string[], remove: string[]) => void; edit?: Edit; work?: { label: string; run: () => void }; onPage?: () => void }) {
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
   const [offer, setOffer] = useState<TaskLabel[]>([]);
@@ -69,15 +69,19 @@ export default function TaskDialog({ task, host, onClose, onLabels, onState, onA
     };
   }, [task.url]);
 
+  // T-281 (GIT-048): a label edit shows at once like an assignee edit; a failed write puts back only itself and says so.
   const labels = (add: string[], remove: string[]) => {
-    setBusy(true);
+    setError(null);
+    onEditLabels?.(offer.filter((o) => add.includes(o.name)), remove);
     invoke<TaskLabel[]>("scm_task_labels", { ...args, add, remove })
       .then((l) => {
         setDetail((d) => d && { ...d, labels: l });
         onLabels(l);
       })
-      .catch((e) => setError(String(e)))
-      .finally(() => setBusy(false));
+      .catch((e) => {
+        setError(`The label change was undone: ${String(e)}`);
+        onUndoLabels?.(add, remove);
+      });
   };
   const save = () => {
     if (draft === null) return;
@@ -111,7 +115,7 @@ export default function TaskDialog({ task, host, onClose, onLabels, onState, onA
       })
       .catch((e) => setError(String(e)));
 
-  const have = detail?.labels ?? task.labels;
+  const have = withLabels(detail?.labels ?? task.labels, edit);
   const more = offer.filter((o) => !have.some((h) => h.name === o.name));
   const state = edit?.state ?? detail?.state ?? task.state;
   const assignees = withAssignees(detail?.assignees ?? task.assignees, edit);
@@ -192,14 +196,14 @@ export default function TaskDialog({ task, host, onClose, onLabels, onState, onA
                 <span key={l.name} className="tasks-label" style={l.color ? { borderColor: `#${l.color}` } : undefined}>
                   {l.color && <i style={{ background: `#${l.color}` }} />}
                   {l.name}
-                  <button className="task-x" title={`Remove ${l.name}`} disabled={busy} onClick={() => labels([], [l.name])}>
+                  <button className="task-x" title={`Remove ${l.name}`} onClick={() => labels([], [l.name])}>
                     ×
                   </button>
                 </span>
               ))}
               {have.length === 0 && <span className="muted">None</span>}
             </div>
-            <select className="field" aria-label="Add a label" value="" disabled={busy || more.length === 0} onChange={(e) => e.target.value && labels([e.target.value], [])}>
+            <select className="field" aria-label="Add a label" value="" disabled={more.length === 0} onChange={(e) => e.target.value && labels([e.target.value], [])}>
               <option value="">{more.length ? "Add a label…" : "No more labels"}</option>
               {more.map((l) => (
                 <option key={l.name} value={l.name}>
