@@ -1,0 +1,645 @@
+//! T-121 (STAT-012 / STAT-013 / STAT-015): status hooks for Cursor Agent, Factory's Droid and Kimi
+//! Code, from each vendor's public hook docs (PROVENANCE.md, T-121). As for the T-120-b vendors,
+//! each event is turned into the one shape the status rules read (`normalize`); `change` then reads
+//! it with Codex's rules plus what each card adds (a blocked stop, a question).
+//!
+//! - Cursor Agent: `~/.cursor/hooks.json`, `{"version": 1, "hooks": {"<event>": [{"command"}]}}`.
+//! - Droid: `~/.factory/hooks.json` keyed by event (Claude Code's matcher groups), or, while that
+//!   file is absent, the `hooks` key of `~/.factory/settings.json`, where `hooksDisabled` lives too.
+//! - Kimi Code: `[[hooks]]` tables in `~/.kimi-code/config.toml`, inside one marked block after
+//!   the user's own settings; taking the block out gives the file back byte for byte.
+
+use super::super::{codex_change, install_groups, script, write_atomic, write_json, write_script, Change};
+use super::{back_up, backup_of, drop_created, fenced, kept, names_mine, read_opt, remove_groups, scratch_only, target_dir, was_created, Plan, BACKUP_RECORD};
+use serde_json::{json, Map, Value};
+use std::collections::VecDeque;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+pub const CURSOR_SCRIPT: &str = "cursor.cmd";
+pub const DROID_SCRIPT: &str = "droid.cmd";
+pub const KIMI_SCRIPT: &str = "kimi.cmd";
+/// The agents this module manages, by catalogue id.
+pub const AGENTS: [&str; 3] = ["cursor", "droid", "kimi"];
+/// STAT-012: the eight Cursor events installed. Session start can fire while idle and is left
+/// unhooked on purpose; session end is understood (`normalize`) but not installed.
+pub const CURSOR_EVENTS: [&str; 8] = ["beforeSubmitPrompt", "stop", "preToolUse", "postToolUse", "postToolUseFailure", "beforeShellExecution", "beforeMCPExecution", "afterAgentResponse"];
+/// STAT-013: Droid's documented events Kolux hooks. SessionStart and SubagentStop are installed
+/// and ignored (both fire while idle). PermissionRequest is not in Factory's hook reference, so it
+/// is read when it comes but not installed.
+pub const DROID_EVENTS: [&str; 7] = ["SessionStart", "UserPromptSubmit", "Stop", "SubagentStop", "PreToolUse", "PostToolUse", "Notification"];
+const DROID_TOOL_EVENTS: [&str; 2] = ["PreToolUse", "PostToolUse"];
+/// STAT-015: Kimi's events (its hook docs list each one).
+pub const KIMI_EVENTS: [&str; 7] = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "Stop", "StopFailure"];
+/// Seconds, the unit Droid and Kimi take.
+const TIMEOUT: u64 = 10;
+/// The key a normalized event of this module carries: the agent it came from.
+pub const MARK: &str = "kolux_more";
+/// STAT-015: Kimi's block, opened and closed by these lines. A begin line naming Kolux under
+/// another spelling (the product's former name) is taken as the same block and replaced.
+const KIMI_BEGIN: &str = "# >>> kolux-rs status hooks (written by Kolux RS; Kolux takes this block out when its hooks go) >>>";
+const KIMI_BEGIN_JOINED: &str = "# >>> kolux-rs status hooks (written by Kolux RS; joined) >>>";
+const KIMI_END: &str = "# <<< kolux-rs status hooks <<<";
+const MEMORY_CAP: usize = 256;
+
+/// A path the hook listener takes for one of these agents.
+pub fn is_route(path: &str) -> bool {
+    agent_of(path).is_some()
+}
+
+/// The agent id a route reports for.
+pub fn agent_of(path: &str) -> Option<&'static str> {
+    AGENTS.iter().copied().find(|a| path.trim_start_matches('/') == *a)
+}
+
+/// What these agents' events need remembered between events, per session.
+#[derive(Default)]
+pub struct Memory {
+    /// STAT-012: Cursor conversations whose turn stopped completed; an after-response event
+    /// counts as done only for these.
+    done: VecDeque<String>,
+    /// STAT-013: the last tool each Droid session started, which its permission notice is about.
+    tools: VecDeque<(String, String)>,
+}
+
+impl Memory {
+    fn mark_done(&mut self, id: &str, done: bool) {
+        self.done.retain(|d| d != id);
+        if done {
+            self.done.push_back(id.to_string());
+            while self.done.len() > MEMORY_CAP {
+                self.done.pop_front();
+            }
+        }
+    }
+
+    fn tool(&mut self, id: &str, tool: Option<&str>) {
+        self.tools.retain(|(s, _)| s != id);
+        if let Some(t) = tool {
+            self.tools.push_back((id.to_string(), t.to_string()));
+            while self.tools.len() > MEMORY_CAP {
+                self.tools.pop_front();
+            }
+        }
+    }
+
+    fn last_tool(&self, id: &str) -> Option<&str> {
+        self.tools.iter().find(|(s, _)| s == id).map(|(_, t)| t.as_str())
+    }
+}
+
+static MEMORY: std::sync::Mutex<Memory> = std::sync::Mutex::new(Memory { done: VecDeque::new(), tools: VecDeque::new() });
+
+/// The event as the status rules read it, or `None` when it changes nothing.
+pub fn normalize(path: &str, event: &Value) -> Option<Value> {
+    let mut memory = MEMORY.lock().unwrap_or_else(|e| e.into_inner());
+    normalize_with(&mut memory, path, event)
+}
+
+/// The listener's and the spool replay's one entry for every vendor route: this module's, else
+/// the T-120-b vendors'.
+pub fn normalize_any(path: &str, event: &Value) -> Option<Value> {
+    if is_route(path) { normalize(path, event) } else { super::vendors::normalize(path, event) }
+}
+
+/// `normalize` with the memory given.
+pub fn normalize_with(memory: &mut Memory, path: &str, event: &Value) -> Option<Value> {
+    let agent = agent_of(path)?;
+    let str_of = |k: &str| event.get(k).and_then(Value::as_str).filter(|s| !s.is_empty());
+    let name = str_of("hook_event_name")?;
+    let tool = |n: Option<&str>, input: Option<&Value>| json!({ "tool_name": n, "tool_input": input });
+    let (name, session, mut out) = match agent {
+        "cursor" => {
+            let session = str_of("conversation_id");
+            let (name, out) = match name {
+                "beforeSubmitPrompt" => ("UserPromptSubmit", json!({ "prompt": str_of("prompt") })),
+                "preToolUse" => ("PreToolUse", tool(str_of("tool_name"), event.get("tool_input"))),
+                // STAT-012: shell and MCP steps are working, and never notify.
+                "beforeShellExecution" => ("PreToolUse", tool(Some("Shell"), Some(&json!({ "command": str_of("command") })))),
+                "beforeMCPExecution" => ("PreToolUse", tool(str_of("tool_name"), event.get("tool_input"))),
+                "postToolUse" | "postToolUseFailure" => ("PostToolUse", tool(str_of("tool_name"), None)),
+                // STAT-012: a stop whose status is anything but completed is an interruption.
+                "stop" => {
+                    let completed = str_of("status") == Some("completed");
+                    if let Some(s) = session {
+                        memory.mark_done(s, completed);
+                    }
+                    ("Stop", json!({ "kolux_interrupted": !completed }))
+                }
+                // The reply arrives on its own; it is a done only once the turn already stopped done.
+                "afterAgentResponse" if session.is_some_and(|s| memory.done.iter().any(|d| d == s)) => ("Stop", json!({ "last_assistant_message": str_of("text") })),
+                "sessionEnd" => ("Stop", json!({})),
+                _ => return None,
+            };
+            if name == "UserPromptSubmit" {
+                if let Some(s) = session {
+                    memory.mark_done(s, false);
+                }
+            }
+            (name, session, out)
+        }
+        "droid" => {
+            let session = str_of("session_id");
+            let (name, out) = match name {
+                "UserPromptSubmit" => ("UserPromptSubmit", json!({ "prompt": str_of("prompt") })),
+                // STAT-013: Kolux never infers an interruption from Ctrl+C for Droid.
+                "Stop" => ("Stop", json!({ "kolux_no_cancel": true })),
+                "PreToolUse" => {
+                    if let Some(s) = session {
+                        memory.tool(s, str_of("tool_name"));
+                    }
+                    ("PreToolUse", tool(str_of("tool_name"), event.get("tool_input")))
+                }
+                "PostToolUse" => ("PostToolUse", tool(str_of("tool_name"), None)),
+                "PermissionRequest" => ("PermissionRequest", tool(str_of("tool_name"), event.get("tool_input"))),
+                "Notification" => match droid_notice(str_of("notification_type"), str_of("message"))? {
+                    Notice::Permission => ("PermissionRequest", tool(session.and_then(|s| memory.last_tool(s)), None)),
+                    Notice::Ask => ("PreToolUse", json!({ "kolux_ask": str_of("message").unwrap_or("Droid needs your input") })),
+                    Notice::Idle => ("Stop", json!({ "kolux_no_cancel": true })),
+                },
+                // SessionStart and SubagentStop fire while idle; the rest change nothing.
+                _ => return None,
+            };
+            (name, session, out)
+        }
+        "kimi" => {
+            let session = str_of("session_id");
+            let (name, out) = match name {
+                "UserPromptSubmit" => ("UserPromptSubmit", json!({ "prompt": str_of("prompt") })),
+                n @ ("PreToolUse" | "PermissionRequest") => (n, tool(str_of("tool_name"), event.get("tool_input"))),
+                "PostToolUse" | "PostToolUseFailure" => ("PostToolUse", tool(str_of("tool_name"), None)),
+                "Stop" => ("Stop", json!({})),
+                // STAT-015: a rate-limit failure is blocked for the limit, never done.
+                "StopFailure" => {
+                    let error = str_of("error_type").or_else(|| str_of("error"));
+                    ("StopFailure", json!({ "kolux_cause": if error.is_some_and(is_rate_limit) { "limit" } else { "error" }, "error_details": str_of("message") }))
+                }
+                _ => return None,
+            };
+            (name, session, out)
+        }
+        _ => return None,
+    };
+    let o = out.as_object_mut()?;
+    o.retain(|_, v| !v.is_null());
+    o.insert("hook_event_name".into(), name.into());
+    o.insert(MARK.into(), agent.into());
+    if let Some(s) = session {
+        o.insert("session_id".into(), s.into());
+    }
+    Some(out)
+}
+
+/// STAT-015: a failure kind that names a rate limit.
+fn is_rate_limit(kind: &str) -> bool {
+    let k = kind.to_ascii_lowercase().replace([' ', '-'], "_");
+    k.contains("rate_limit") || k.contains("ratelimit") || k.contains("429")
+}
+
+enum Notice {
+    Permission,
+    Ask,
+    Idle,
+}
+
+/// STAT-013: a Droid notice by its documented type (`permission_prompt`, `idle_prompt`,
+/// `elicitation_dialog`), else by its wording; anything else is ignored.
+fn droid_notice(kind: Option<&str>, message: Option<&str>) -> Option<Notice> {
+    match kind {
+        Some("permission_prompt") => return Some(Notice::Permission),
+        Some("idle_prompt") => return Some(Notice::Idle),
+        Some("elicitation_dialog") => return Some(Notice::Ask),
+        Some(_) => return None,
+        None => {}
+    }
+    let m = message?.to_ascii_lowercase();
+    if m.contains("permission") {
+        Some(Notice::Permission)
+    } else if m.contains("waiting for your input") || m.contains("waiting for input") || m.contains("idle") {
+        Some(Notice::Idle)
+    } else {
+        None
+    }
+}
+
+/// A normalized event of this module's (`Some`), read by Codex's rules with what the cards add;
+/// `None` for another vendor's event.
+pub fn change(event: &Value) -> Option<Option<Change>> {
+    event.get(MARK)?;
+    let str_of = |k: &str| event.get(k).and_then(Value::as_str).filter(|s| !s.is_empty());
+    let session = str_of("session_id").map(|s| s.chars().take(100).collect::<String>());
+    if str_of("hook_event_name") == Some("StopFailure") {
+        let cause = if str_of("kolux_cause") == Some("limit") { "limit" } else { "error" };
+        return Some(Some(Change { state: "blocked", cause: Some(cause), detail: str_of("error_details").map(|d| d.chars().take(160).collect()), session, ..Change::default() }));
+    }
+    let mut change = codex_change(event);
+    if let (Some(c), Some(ask)) = (change.as_mut(), str_of("kolux_ask")) {
+        c.state = "waiting";
+        c.detail = ask.lines().map(str::trim).find(|l| !l.is_empty()).map(|l| l.chars().take(160).collect());
+        c.ask = Some(ask.chars().take(8000).collect());
+    }
+    Some(change)
+}
+
+// Wired into agent_hooks::sync by evidence/hooks-T-121-mod.rs.patch (the lane/vendors region).
+#[allow(dead_code)]
+pub fn write_scripts(home: &Path) -> Result<String, String> {
+    write_script(home, CURSOR_SCRIPT, &script("cursor", "cursor", true))?;
+    write_script(home, DROID_SCRIPT, &script("droid", "droid", true))?;
+    // Kimi adds a hook's output to the model's context, so its script prints nothing.
+    write_script(home, KIMI_SCRIPT, &script("kimi", "kimi", false))
+}
+
+fn quoted(path: &str) -> String {
+    format!("\"{path}\"")
+}
+
+pub fn cursor_file(home: &Path) -> PathBuf {
+    home.join(".cursor").join("hooks.json")
+}
+
+/// Droid reads `hooks.json` when it is there, else the `hooks` key of `settings.json`; Kolux
+/// writes where Droid reads, so the user's hooks in `settings.json` never stop counting.
+pub fn droid_file(home: &Path) -> PathBuf {
+    let dir = home.join(".factory");
+    if dir.join("hooks.json").is_file() { dir.join("hooks.json") } else { dir.join("settings.json") }
+}
+
+fn droid_wrapped(file: &Path) -> bool {
+    file.file_name().is_some_and(|n| n == "hooks.json")
+}
+
+pub fn kimi_file(home: &Path) -> PathBuf {
+    home.join(".kimi-code").join("config.toml")
+}
+
+/// A fenced run writes only below a scratch marker in the temp folder (as `vendors::target`).
+#[allow(dead_code)]
+fn target(profile: &Path, file: PathBuf) -> Result<PathBuf, String> {
+    if fenced(profile) {
+        let probe = file.ancestors().skip(1).find(|a| a.is_dir()).map(|a| a.join("probe")).unwrap_or_else(|| file.clone());
+        scratch_only(&probe, &std::env::temp_dir(), &super::super::home_dir()).map_err(|e| e.replace(&probe.display().to_string(), &file.display().to_string()))?;
+    }
+    Ok(file)
+}
+
+fn parse(file: &Path, text: Option<&str>) -> Result<Value, String> {
+    match text {
+        Some(t) => serde_json::from_str(t).map_err(|e| format!("{} is not JSON ({e}); left alone", file.display())),
+        None => Ok(json!({})),
+    }
+}
+
+/// A copy of the user's file is kept before Kolux's first write (`agent_hooks::back_up`); a file
+/// already holding Kolux's entries with no copy was written by Kolux and needs none.
+fn keep_copy(home: &Path, file: &Path, agent: &str, mine_already: bool) -> Result<(), String> {
+    if file.exists() && mine_already && !backup_of(file).exists() {
+        return Ok(());
+    }
+    // The record is found by the resolved path, which needs the folder to exist from the start.
+    if let Some(dir) = file.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("{}: {e}; hooks not installed", dir.display()))?;
+    }
+    if let Some((original, copy)) = back_up(file, &target_dir(home, file).join(BACKUP_RECORD))? {
+        eprintln!("kolux-rs: {agent} hooks: kept a copy before the first write: sha256 original {original}, backup {copy}");
+    }
+    Ok(())
+}
+
+/// `v` goes back into `file`: the kept copy's own bytes when it reads the same, the file deleted
+/// when Kolux created it and nothing is left, else `v` written over the text read.
+fn write_back(home: &Path, file: &Path, v: &Value, text: &str) -> Result<(), String> {
+    match kept(file).filter(|(_, c)| c == v) {
+        Some((bytes, _)) => write_atomic(file, &bytes, Some(text)),
+        None if drop_created(file, &target_dir(home, file).join(BACKUP_RECORD), v, text)? => Ok(()),
+        None => write_json(file, v, Some(text)),
+    }
+}
+
+fn root_of<'a>(file: &Path, v: &'a mut Value) -> Result<&'a mut Map<String, Value>, String> {
+    v.as_object_mut().ok_or_else(|| format!("{} has a top level that is not an object; left alone", file.display()))
+}
+
+/// STAT-012: one Kolux entry under each Cursor event, the user's entries kept where they are.
+pub fn install_cursor(home: &Path, file: &Path) -> Result<bool, String> {
+    let command = quoted(&write_script(home, CURSOR_SCRIPT, &script("cursor", "cursor", true))?);
+    let text = read_opt(file)?;
+    let mut v = parse(file, text.as_deref())?;
+    let before = v.clone();
+    let root = root_of(file, &mut v)?;
+    if root.get("hooks").is_some_and(|h| !h.is_object()) {
+        return Err(format!("{} has a \"hooks\" value that is not an object; left alone", file.display()));
+    }
+    let hooks = root.entry("hooks").or_insert_with(|| json!({})).as_object_mut().expect("checked above");
+    if let Some(e) = CURSOR_EVENTS.iter().find(|e| hooks.get(**e).is_some_and(|g| !g.is_array())) {
+        return Err(format!("{} has a \"{e}\" value that is not a list; left alone", file.display()));
+    }
+    let mine_already = hooks.values().filter_map(Value::as_array).flatten().any(names_mine);
+    for (event, entries) in hooks.iter_mut() {
+        if let Some(list) = entries.as_array_mut().filter(|_| !CURSOR_EVENTS.contains(&event.as_str())) {
+            list.retain(|h| !names_mine(h));
+        }
+    }
+    hooks.retain(|e, l| CURSOR_EVENTS.contains(&e.as_str()) || l.as_array().is_none_or(|l| !l.is_empty()));
+    for event in CURSOR_EVENTS {
+        let list = hooks.entry(event).or_insert_with(|| json!([])).as_array_mut().expect("checked above");
+        let mine = json!({ "command": command });
+        match list.iter().position(names_mine) {
+            Some(i) => {
+                list.retain(|h| !names_mine(h));
+                list.insert(i.min(list.len()), mine);
+            }
+            None => list.push(mine),
+        }
+    }
+    // Cursor requires the version; the user's own value stays.
+    root.entry("version").or_insert(json!(1));
+    if v == before {
+        return Ok(false);
+    }
+    keep_copy(home, file, "cursor", mine_already)?;
+    write_json(file, &v, text.as_deref())?;
+    Ok(true)
+}
+
+pub fn remove_cursor(home: &Path, file: &Path) -> Result<bool, String> {
+    let Some(text) = read_opt(file)? else { return Ok(false) };
+    let mut v = parse(file, Some(&text))?;
+    let Some(hooks) = v.get_mut("hooks").and_then(Value::as_object_mut) else { return Ok(false) };
+    let mut changed = false;
+    for list in hooks.values_mut().filter_map(Value::as_array_mut) {
+        let n = list.len();
+        list.retain(|h| !names_mine(h));
+        changed |= list.len() != n;
+    }
+    if !changed {
+        return Ok(false);
+    }
+    hooks.retain(|_, l| l.as_array().is_none_or(|l| !l.is_empty()));
+    let copy = kept(file).map(|(_, c)| c);
+    let root = v.as_object_mut().expect("has hooks");
+    if root.get("hooks").and_then(Value::as_object).is_some_and(Map::is_empty) && copy.as_ref().is_none_or(|c| c.get("hooks").is_none()) {
+        root.remove("hooks");
+    }
+    // The version Kolux added goes with its last entry.
+    let added_version = copy.as_ref().map_or_else(|| was_created(&target_dir(home, file).join(BACKUP_RECORD), file), |c| c.get("version").is_none());
+    if added_version && !root.contains_key("hooks") && root.get("version") == Some(&json!(1)) {
+        root.remove("version");
+    }
+    write_back(home, file, &v, &text)?;
+    Ok(true)
+}
+
+/// STAT-013: Claude Code's matcher groups, under each event at the top of `hooks.json` or in the
+/// `hooks` key of `settings.json`.
+pub fn install_droid(home: &Path, file: &Path) -> Result<bool, String> {
+    let command = quoted(&write_script(home, DROID_SCRIPT, &script("droid", "droid", true))?);
+    let text = read_opt(file)?;
+    let v = parse(file, text.as_deref())?;
+    let wrapped = droid_wrapped(file);
+    let mut groups = if wrapped { json!({ "hooks": v.clone() }) } else { v.clone() };
+    let hooks = groups.get("hooks");
+    if !v.is_object() || hooks.is_some_and(|h| !h.is_object()) {
+        return Err(format!("{} has a hooks map that is not an object; left alone", file.display()));
+    }
+    if let Some(e) = DROID_EVENTS.iter().find(|e| hooks.and_then(|h| h.get(**e)).is_some_and(|g| !g.is_array())) {
+        return Err(format!("{} has a \"{e}\" value that is not a list; left alone", file.display()));
+    }
+    let mine_already = remove_groups(&mut groups.clone(), false);
+    if !install_groups(&mut groups, &DROID_EVENTS, &DROID_TOOL_EVENTS, &command, TIMEOUT) {
+        return Ok(false);
+    }
+    let out = if wrapped { groups["hooks"].take() } else { groups };
+    keep_copy(home, file, "droid", mine_already)?;
+    write_json(file, &out, text.as_deref())?;
+    Ok(true)
+}
+
+pub fn remove_droid(home: &Path, file: &Path) -> Result<bool, String> {
+    let Some(text) = read_opt(file)? else { return Ok(false) };
+    let v = parse(file, Some(&text))?;
+    let wrapped = droid_wrapped(file);
+    let mut groups = if wrapped { json!({ "hooks": v }) } else { v };
+    let drop_empty = !wrapped && kept(file).is_none_or(|(_, c)| c.get("hooks").is_none());
+    if !remove_groups(&mut groups, drop_empty) {
+        return Ok(false);
+    }
+    let out = if wrapped { groups["hooks"].take() } else { groups };
+    write_back(home, file, &out, &text)?;
+    Ok(true)
+}
+
+/// STAT-013: Factory's global switch, `hooksDisabled` in `~/.factory/settings.json`.
+fn droid_switched_off(home: &Path) -> bool {
+    let file = home.join(".factory").join("settings.json");
+    read_opt(&file).ok().flatten().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| v.get("hooksDisabled").and_then(Value::as_bool)) == Some(true)
+}
+
+/// A TOML basic string.
+fn toml_str(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// STAT-015: Kolux's block: one `[[hooks]]` table per Kimi event, no matcher (every tool).
+pub fn kimi_block(script_path: &str, joined: bool) -> String {
+    let mut out = String::new();
+    if joined {
+        out.push('\n');
+    }
+    out.push_str(if joined { KIMI_BEGIN_JOINED } else { KIMI_BEGIN });
+    out.push('\n');
+    for e in KIMI_EVENTS {
+        out.push_str(&format!("[[hooks]]\nevent = \"{e}\"\ncommand = {}\ntimeout = {TIMEOUT}\n", toml_str(&quoted(script_path))));
+    }
+    out.push_str(KIMI_END);
+    out.push('\n');
+    out
+}
+
+fn is_kimi_begin(line: &str) -> bool {
+    let l = line.trim_end_matches('\r').to_ascii_lowercase();
+    l.starts_with("# >>> kolux") && l.contains("hooks")
+}
+
+/// A line Kolux writes inside its block, for finding a block whose end line a hand edit removed.
+fn is_kimi_own_line(line: &str) -> bool {
+    let l = line.trim();
+    l.is_empty() || l == "[[hooks]]" || l.starts_with("event = ") || l.starts_with("timeout = ") || (l.starts_with("command = ") && super::super::is_my_command(l))
+}
+
+/// Where Kolux's block sits in `text`: (start byte, end byte, joined). The block runs from its
+/// begin line through its end line; without an end line, through the last line Kolux writes.
+fn kimi_span(text: &str) -> Option<(usize, usize, bool)> {
+    let mut at = 0;
+    let mut start = None;
+    let mut last_own = 0;
+    for line in text.split_inclusive('\n') {
+        let next = at + line.len();
+        match start {
+            None if is_kimi_begin(line) => {
+                start = Some((at, line.contains("joined")));
+                last_own = next;
+            }
+            Some((s, joined)) if line.trim_end().starts_with("# <<< kolux") => return Some((s, next, joined)),
+            // A table of Kolux's ends on its timeout line; a user table after the block is kept.
+            Some(_) if is_kimi_own_line(line) => {
+                if line.trim().starts_with("timeout = ") {
+                    last_own = next;
+                }
+            }
+            Some((s, joined)) => return Some((s, last_own, joined)),
+            None => {}
+        }
+        at = next;
+    }
+    start.map(|(s, joined)| (s, last_own, joined))
+}
+
+/// `text` without Kolux's block (and without the line break the block added before itself).
+fn kimi_without(text: &str) -> Option<String> {
+    let (s, e, joined) = kimi_span(text)?;
+    let s = if joined && text[..s].ends_with('\n') { s - 1 } else { s };
+    Some(format!("{}{}", &text[..s], &text[e..]))
+}
+
+/// A top-level `hooks = ...` key would clash with Kolux's `[[hooks]]` tables.
+fn kimi_clash(text: &str) -> bool {
+    let mut top = true;
+    for l in text.lines().map(str::trim) {
+        if l.starts_with('[') {
+            top = false;
+        }
+        if top && (l.starts_with("hooks=") || l.starts_with("hooks =")) {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn install_kimi(home: &Path, file: &Path) -> Result<bool, String> {
+    let path = write_script(home, KIMI_SCRIPT, &script("kimi", "kimi", false))?;
+    let text = read_opt(file)?;
+    let mine_already = text.as_deref().is_some_and(|t| kimi_span(t).is_some());
+    let base = text.as_deref().map(|t| kimi_without(t).unwrap_or_else(|| t.to_string())).unwrap_or_default();
+    if kimi_clash(&base) {
+        return Err(format!("{} sets hooks as a plain key, which Kolux's [[hooks]] tables would clash with; left alone", file.display()));
+    }
+    let joined = !base.is_empty() && !base.ends_with('\n');
+    let new = format!("{base}{}", kimi_block(&path, joined));
+    if text.as_deref() == Some(new.as_str()) {
+        return Ok(false);
+    }
+    keep_copy(home, file, "kimi", mine_already)?;
+    write_atomic(file, new.as_bytes(), text.as_deref())?;
+    Ok(true)
+}
+
+/// STAT-015: the block comes out and the file is the user's again, byte for byte; a file Kolux
+/// created and left empty goes.
+pub fn remove_kimi(home: &Path, file: &Path) -> Result<bool, String> {
+    let Some(text) = read_opt(file)? else { return Ok(false) };
+    let Some(rest) = kimi_without(&text) else { return Ok(false) };
+    let record = target_dir(home, file).join(BACKUP_RECORD);
+    if rest.is_empty() && !backup_of(file).exists() && was_created(&record, file) {
+        fs::remove_file(file).map_err(|e| format!("{}: {e}; nothing removed", file.display()))?;
+        let _ = fs::remove_file(record);
+        return Ok(true);
+    }
+    write_atomic(file, rest.as_bytes(), Some(&text))?;
+    Ok(true)
+}
+
+/// `agent_hooks::apply` for these agents (wired by evidence/hooks-T-121-mod.rs.patch).
+#[allow(dead_code)]
+pub fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'static str, String> {
+    let install = plan == Plan::Install;
+    match id {
+        "cursor" => {
+            let file = target(profile, cursor_file(home))?;
+            if install { install_cursor(home, &file) } else { remove_cursor(home, &file) }
+        }
+        "droid" => {
+            let file = target(profile, droid_file(home))?;
+            if install { install_droid(home, &file) } else { remove_droid(home, &file) }
+        }
+        "kimi" => {
+            let file = target(profile, kimi_file(home))?;
+            if install { install_kimi(home, &file) } else { remove_kimi(home, &file) }
+        }
+        _ => return Ok("left as it was"),
+    }
+    .map(|_| if install { "installed" } else { "removed" })
+}
+
+fn inspect_cursor(file: &Path) -> (&'static str, Option<String>) {
+    let v: Value = match read_opt(file).map(|t| t.map(|t| serde_json::from_str::<Value>(&t))) {
+        Ok(None) => return ("not installed", None),
+        Ok(Some(Ok(v))) => v,
+        Ok(Some(Err(e))) => return ("error", Some(format!("{} is not JSON ({e})", file.display()))),
+        Err(e) => return ("error", Some(e)),
+    };
+    let has = |e: &str| v.get("hooks").and_then(|h| h.get(e)).and_then(Value::as_array).is_some_and(|l| l.iter().any(names_mine));
+    let missing: Vec<&str> = CURSOR_EVENTS.iter().copied().filter(|e| !has(e)).collect();
+    match missing.len() {
+        0 => ("installed", None),
+        n if n == CURSOR_EVENTS.len() => ("not installed", None),
+        _ => ("partial", Some(format!("no Kolux entry for {}", missing.join(", ")))),
+    }
+}
+
+fn inspect_droid(home: &Path) -> (&'static str, Option<String>) {
+    let file = droid_file(home);
+    let v: Value = match read_opt(&file).map(|t| t.map(|t| serde_json::from_str::<Value>(&t))) {
+        Ok(None) => return ("not installed", None),
+        Ok(Some(Ok(v))) => v,
+        Ok(Some(Err(e))) => return ("error", Some(format!("{} is not JSON ({e})", file.display()))),
+        Err(e) => return ("error", Some(e)),
+    };
+    let hooks = if droid_wrapped(&file) { Some(&v) } else { v.get("hooks") };
+    let has = |e: &str| hooks.and_then(|h| h.get(e)).and_then(Value::as_array).is_some_and(|gs| gs.iter().filter_map(|g| g.get("hooks").and_then(Value::as_array)).flatten().any(names_mine));
+    let missing: Vec<&str> = DROID_EVENTS.iter().copied().filter(|e| !has(e)).collect();
+    if missing.len() == DROID_EVENTS.len() {
+        return ("not installed", None);
+    }
+    // STAT-013: with Factory's hooks switched off globally, none of Kolux's run.
+    if droid_switched_off(home) {
+        return ("partial", Some("hooks are switched off in Factory's settings (hooksDisabled)".into()));
+    }
+    if missing.is_empty() { ("installed", None) } else { ("partial", Some(format!("no Kolux entry for {}", missing.join(", ")))) }
+}
+
+fn inspect_kimi(file: &Path) -> (&'static str, Option<String>) {
+    match read_opt(file) {
+        Ok(None) => ("not installed", None),
+        Ok(Some(t)) => match kimi_span(&t) {
+            None => ("not installed", None),
+            Some((s, e, _)) => {
+                let block = &t[s..e];
+                let missing: Vec<&str> = KIMI_EVENTS.iter().copied().filter(|ev| !block.contains(&format!("event = \"{ev}\""))).collect();
+                if !block.contains(KIMI_END) {
+                    ("partial", Some("the Kolux block has lost its end line".into()))
+                } else if missing.is_empty() {
+                    ("installed", None)
+                } else {
+                    ("partial", Some(format!("no Kolux entry for {}", missing.join(", "))))
+                }
+            }
+        },
+        Err(e) => ("error", Some(e)),
+    }
+}
+
+/// `kolux agent hooks status` rows for these agents (wired by evidence/hooks-T-121-switch.rs.patch).
+#[allow(dead_code)]
+pub fn rows(home: &Path) -> Vec<Value> {
+    let row = |agent: &str, name: &str, file: PathBuf, (state, reason): (&str, Option<String>)| json!({ "agent": agent, "name": name, "state": state, "file": file.display().to_string(), "reason": reason });
+    vec![
+        row("cursor", "Cursor Agent", cursor_file(home), inspect_cursor(&cursor_file(home))),
+        row("droid", "Droid", droid_file(home), inspect_droid(home)),
+        row("kimi", "Kimi Code", kimi_file(home), inspect_kimi(&kimi_file(home))),
+    ]
+}
+
+#[cfg(test)]
+#[path = "more_tests.rs"]
+mod tests;

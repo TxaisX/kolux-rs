@@ -1,0 +1,12 @@
+diff --git a/src-tauri/src/agent_hooks/switch.rs b/src-tauri/src/agent_hooks/switch.rs
+index 9495e562..50403b39 100644
+--- a/src-tauri/src/agent_hooks/switch.rs
++++ b/src-tauri/src/agent_hooks/switch.rs
+@@ -67,6 +67,7 @@ pub fn report(settings: &Value) -> Value {
+         agents.push(row("codex", "Codex", &home.join("hooks.json"), &CODEX_EVENTS));
+     }
+     agents.extend(super::vendors::rows(&super::home_dir()));
++    agents.extend(super::more::rows(&super::home_dir()));
+     json!({ "on": on(settings), "agents": agents })
+ }
+ 

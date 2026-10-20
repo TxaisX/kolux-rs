@@ -666,6 +666,7 @@ pub fn agent_hooks_file() -> String {
     crate::hooks::claude_settings_file().display().to_string()
 }
 
+pub mod more;
 pub mod saved;
 pub mod switch;
 pub mod vendors;

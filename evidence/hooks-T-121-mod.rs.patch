@@ -1,0 +1,31 @@
+diff --git a/src-tauri/src/agent_hooks/mod.rs b/src-tauri/src/agent_hooks/mod.rs
+index e91cce4d..f971aa21 100644
+--- a/src-tauri/src/agent_hooks/mod.rs
++++ b/src-tauri/src/agent_hooks/mod.rs
+@@ -26,7 +26,7 @@ const LOCK_STALE: Duration = Duration::from_secs(30);
+ const LOCK_WAIT: Duration = Duration::from_secs(35);
+ 
+ /// The agents whose hooks Kolux manages, by catalogue id.
+-pub const MANAGED: [&str; 5] = ["claude", "codex", "gemini", "antigravity", "amp"];
++pub const MANAGED: [&str; 8] = ["claude", "codex", "gemini", "antigravity", "amp", "cursor", "droid", "kimi"];
+ 
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ pub enum Plan {
+@@ -583,6 +583,8 @@ fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'static s
+         }
+         // T-120-b: Gemini CLI, Antigravity and Amp.
+         (id @ ("gemini" | "antigravity" | "amp"), Plan::Install | Plan::Remove) => vendors::apply(home, profile, id, plan),
++        // T-121: Cursor Agent, Droid and Kimi Code.
++        (id @ ("cursor" | "droid" | "kimi"), Plan::Install | Plan::Remove) => more::apply(home, profile, id, plan),
+         _ => Ok("left as it was"),
+     }
+ }
+@@ -604,7 +606,7 @@ pub fn sync(settings: &Value, profile: &Path) -> Vec<(&'static str, Result<&'sta
+             return Vec::new();
+         }
+     };
+-    for refresh in [write_claude_script, write_status_script, write_codex_script, vendors::write_gemini_script, vendors::write_antigravity_script] {
++    for refresh in [write_claude_script, write_status_script, write_codex_script, vendors::write_gemini_script, vendors::write_antigravity_script, more::write_scripts] {
+         if let Err(e) = refresh(&home) {
+             eprintln!("kolux-rs: agent hook script: {e}");
+         }

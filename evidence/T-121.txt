@@ -1,0 +1,94 @@
+T-121 · STAT-012 Cursor Agent · STAT-013 Droid · STAT-014 Command Code · STAT-015 Kimi Code · STAT-016 Hermes (LEFT OPEN)
+lane/hooks from b9044494 (merge of main fcfa8ffc) · 2026-10-20 · Claude Opus 5.5 · Routing v3 (build first, live proof batched)
+
+Sources (public docs only; cited in PROVENANCE.md)
+- Cursor: https://cursor.com/docs/agent/hooks (hooks.json layout, event names, stdin fields: conversation_id,
+  hook_event_name, prompt, tool_name/tool_input, command, status completed|aborted|error, text, reason).
+- Droid: https://docs.factory.ai/reference/hooks-reference and https://docs.factory.ai/cli/configuration/settings
+  (~/.factory/hooks.json keyed by event, else the hooks key of settings.json; matcher groups; timeout in seconds;
+  events PreToolUse PostToolUse UserPromptSubmit Notification Stop SubagentStop PreCompact SessionStart SessionEnd;
+  Notification message + notification_type permission_prompt|idle_prompt|auth_success|elicitation_dialog;
+  hooksDisabled in settings.json).
+- Kimi Code: https://www.kimi.com/code/docs/en/kimi-code-cli/customization/hooks.html ([[hooks]] tables in
+  ~/.kimi-code/config.toml with event, matcher, command, timeout 1-600 s; events incl. UserPromptSubmit PreToolUse
+  PostToolUse PostToolUseFailure PermissionRequest Stop StopFailure; base stdin hook_event_name session_id cwd;
+  a hook's stdout on exit 0 may be added to the context, so Kolux's Kimi script prints nothing).
+- Command Code, Hermes: no public hook reference found (see LEFT OPEN).
+
+Built (lane-local, in this commit)
+- src-tauri/src/agent_hooks/more.rs (new) + more_tests.rs (new, 13 tests): routes /cursor /droid /kimi; normalize
+  (vendor event -> the one shape the status rules read, marked kolux_more); change (Codex's rules plus a blocked
+  StopFailure with cause limit|error and a question as waiting); installers/removers per vendor with the shared
+  safety helpers (copy kept before Kolux's first write, record, removal gives back the user's bytes, a file Kolux
+  created is deleted when only Kolux was in it, refusal of shapes it would have to replace, fenced runs write only
+  below a scratch marker); rows for `kolux agent hooks status`.
+  · STAT-012 Cursor: beforeSubmitPrompt = working + prompt; preToolUse / beforeShellExecution / beforeMCPExecution
+    = working (shell and MCP never notify); postToolUse(+Failure) = working; stop completed = done, any other status
+    = interrupted; afterAgentResponse = done (with the reply) only after a completed stop of that conversation
+    (bounded memory, 256); sessionStart not hooked; sessionEnd understood, not installed. Install: one flat
+    {"command"} entry per event in ~/.cursor/hooks.json, user entries kept in place, version 1 added only if absent
+    and taken out again with Kolux's last entry.
+  · STAT-013 Droid: SessionStart / SubagentStop / SessionEnd / PreCompact ignored; Notification by type, else by
+    wording: permission -> needs you (with the session's last started tool, so that tool's next step clears it),
+    idle -> done, elicitation -> waiting with the question, anything else ignored; a Ctrl+C never makes a Droid
+    stop interrupted (status.rs reads kolux_no_cancel). Install goes where Droid reads: hooks.json when present
+    (events at its top level), else the hooks key of settings.json; matcher "*" on tool events; 10 s timeout.
+    hooksDisabled true in settings.json -> status row "partial" naming it.
+  · STAT-015 Kimi: one marked block appended after the user's TOML settings ([[hooks]] per event, timeout 10);
+    reinstall replaces it (never doubles); removal restores the bytes (a line break Kolux added before the block on
+    a file without a final newline goes too); a block whose end line was deleted is recovered up to Kolux's last
+    table; a begin line under another Kolux spelling (former name) is replaced; a plain top-level `hooks =` key is
+    refused (left alone). StopFailure = blocked (limit when the failure names a rate limit, else error).
+- src-tauri/src/status.rs: Agent::Vendor goes to more::change first, then vendors::change; Stop: a Ctrl+C counts
+  only when the event lacks kolux_no_cancel (Droid).
+- src-tauri/src/agent_hooks/saved.rs: the spool replay knows the new routes (agent_of, more::normalize_any).
+- src-tauri/src/agent_hooks/mod.rs: `pub mod more;` only (outside apply/sync).
+
+Patches for the resolver (lane/vendors region; apply in this order, all from this lane's tree)
+1. evidence/hooks-T-121-mod.rs.patch: MANAGED gains cursor, droid, kimi; apply() arm -> more::apply; sync()
+   refreshes more::write_scripts.
+2. evidence/hooks-T-121-switch.rs.patch: report() adds more::rows.
+3. evidence/hooks-T-121-hooks.rs.patch: answer() takes the new routes through more::normalize_any.
+4. evidence/hooks-T-121-tests.rs.patch: stat_004 slices the plan as [2..5] and asserts the three new agents [5..].
+The #[allow(dead_code)] on more::apply / write_scripts / target / rows can go once patches 1-2 are in.
+
+Readings (logs under G:\Temp\hooks-v3-logs\, read back)
+- cargo build: exit 0 (b3-t121-build.log).
+- cargo clippy --all-targets -D warnings: 0 (b3-t121-clippy.log).
+- cargo test --lib agent_hooks::more: 13 passed, 0 failed (b3-t121-test2.log): t_121_routes_and_agents,
+  stat_012_cursor_events_drive_the_dot, stat_012_cursor_memory_is_bounded,
+  stat_013_droid_notices_by_type_and_wording, stat_013_droid_never_reads_ctrl_c_as_an_interruption,
+  stat_015_kimi_events_and_a_rate_limit_failure_is_blocked,
+  stat_012_cursor_install_keeps_the_users_entries_and_removal_gives_back_the_bytes,
+  stat_012_cursor_file_kolux_created_goes_and_bad_shapes_are_left_alone,
+  stat_013_droid_install_goes_where_droid_reads_and_removal_gives_back_the_bytes,
+  stat_015_kimi_block_goes_after_the_users_settings_and_comes_out_byte_for_byte,
+  stat_015_kimi_recovers_a_lost_end_line_and_replaces_a_former_name_block,
+  stat_015_kimi_file_kolux_created_goes_and_its_script_prints_nothing, t_121_rows_name_each_agent.
+- cargo test --lib hooks: 106 passed, 0 failed (b3-t121-test-hooks.log); cargo test --lib status: 57 passed, 0
+  failed (b3-t121-test-status.log).
+- Patches 1-4 applied: clippy --all-targets -D warnings 0 (b3-t121-clippy-patched.log); cargo test --lib
+  agent_hooks 87 passed, 0 failed (b3-t121-test-patched.log); then reverted; `git apply --check` OK for all four.
+- All test files live under the temp folder (TMP = G:\Temp\hooks-v3\tmp) with HOME / USERPROFILE /
+  CLAUDE_CONFIG_DIR / CODEX_HOME on G:\Temp\hooks-v3\ scratch folders; no real agent was started.
+
+LEFT OPEN (missing public source, nothing guessed)
+- STAT-013: Factory's hook reference does not list a PermissionRequest event, so Kolux reads one if it comes but
+  does not install it; permission comes from the Notification event.
+- STAT-014 Command Code: no public hook or transcript reference for Command Code was found; not built.
+- STAT-015: Kimi's hook docs do not name StopFailure's error fields or values, so the limit cause is read from
+  error_type / error when it names a rate limit, else the failure is blocked (error); a real StopFailure payload is
+  needed to confirm.
+- STAT-016 Hermes: the public plugin docs do not confirm the YAML enable/disable keys or which hook names carry an
+  approval, so the plugin is not built.
+
+LIVE PROOF PENDING (batched)
+1. With the four patches applied, start Kolux with cursor-agent, droid and kimi installed: `kolux agent hooks
+   status` shows Cursor Agent / Droid / Kimi Code installed; ~/.cursor/hooks.json, ~/.factory/(hooks|settings).json
+   and ~/.kimi-code/config.toml hold Kolux's entries next to the user's.
+2. Cursor: send a prompt -> pane working; let it finish -> done with the reply; press Esc mid-turn -> interrupted;
+   a shell step never shows a permission dot.
+3. Droid: ask for a command that needs approval -> needs you; approve -> working; finish -> done; Ctrl+C then a
+   Droid stop -> done (not interrupted).
+4. Kimi: prompt -> working; approval -> needs you; finish -> done; Kimi's context never shows Kolux's output.
+5. Switch the hooks off on Settings > Agents: the three files read byte for byte as before.

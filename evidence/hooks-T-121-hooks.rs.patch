@@ -1,0 +1,14 @@
+diff --git a/src-tauri/src/hooks.rs b/src-tauri/src/hooks.rs
+index 92a9171f..72d5f4c9 100644
+--- a/src-tauri/src/hooks.rs
++++ b/src-tauri/src/hooks.rs
+@@ -341,7 +341,8 @@ pub fn answer(req: &Request, token: &str) -> (u16, Option<crate::status::Status>
+         "/claude" => (crate::status::Agent::Claude, event),
+         "/codex" => (crate::status::Agent::Codex, event),
+         // T-120-b: Gemini CLI, Antigravity and Amp, each turned into the shape the rules read.
+-        p if agent_hooks::vendors::is_route(p) => match agent_hooks::vendors::normalize(p, &event) {
++        // T-121: Cursor Agent, Droid and Kimi Code too.
++        p if agent_hooks::vendors::is_route(p) || agent_hooks::more::is_route(p) => match agent_hooks::more::normalize_any(p, &event) {
+             Some(e) => (crate::status::Agent::Vendor, e),
+             None => return (200, None),
+         },
