@@ -1,25 +1,40 @@
 diff --git a/src/status/useAgentStatus.ts b/src/status/useAgentStatus.ts
-index 6a6e6514..9d2e2a5b 100644
+index 6a6e6514..f04500e8 100644
 --- a/src/status/useAgentStatus.ts
 +++ b/src/status/useAgentStatus.ts
-@@ -157,7 +157,10 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
+@@ -11,6 +11,7 @@ import type { Crew } from "../terminal/status";
+ import { noteTitle, turnNote, type StopInfo, type Turn } from "../terminal/notify";
+ import type { ContextReading } from "../usage/meter";
+ import { raiseNotification, type KindKey } from "../settings/notifications";
++import { eventId } from "../notify/pacing";
+ import { marksUnread } from "../terminal/tabs";
+ import { folderName } from "../projects/model";
+ import { sameDir } from "../workspaces";
+@@ -157,7 +158,16 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
      // STAT-041: every note on a pane out of view (or in an unfocused window) is a desktop
      // notification unless 'Agent Task Complete' is off (a stop goes by 'Agent Stopped', STAT-023);
      // the unread mark and the toast keep T-024's one-mark-until-viewed rule.
 -    if (!(inView(p.key) && winFocused) && settings[gate] !== false) void raiseNotification(settings, title, body).catch(() => {});
-+    // STAT-044: a fixed id per event (pane, what, body, minute) so a repeat never shows twice and a
-+    // click can focus this pane; a hook sequence number would be a better id (T-125-b).
-+    const event = { id: `${p.key}:${what}:${body.slice(0, 40)}:${Math.floor(Date.now() / 60000)}`, worktree: p.cwd, pane: String(p.key), kind: gate === "notifyOnStopped" ? ("stop" as const) : gate === "notifyBell" ? ("bell" as const) : ("finish" as const) };
-+    if (!(inView(p.key) && winFocused) && settings[gate] !== false) void raiseNotification(settings, title, body, event).catch(() => {});
++    // STAT-044: one id per reported event (pane, what, the moment) so a repeat never shows twice and a
++    // click can focus this pane; two real finishes inside one minute are two events, and a repeat that
++    // follows within the cooldown merges in the pacer. A hook sequence number would be exact (T-125-b).
++    const kind = gate === "notifyOnStopped" ? ("stop" as const) : gate === "notifyBell" ? ("bell" as const) : ("finish" as const);
++    const event = { id: eventId(String(p.key), what, Date.now()), worktree: p.cwd, pane: String(p.key), kind };
++    // STAT-047: the tray dot lights (while the window is hidden) before any toast switch is consulted.
++    void invoke("tray_ping", { kind: kind === "bell" ? "bell" : "finished" }).catch(() => {});
++    // STAT-044 "Stay quiet about the worktree you are looking at": only the worktree in view is held back.
++    const focusedWorktree = panes.find((x) => inView(x.key))?.cwd ?? null;
++    if (!(inView(p.key) && winFocused) && settings[gate] !== false) void raiseNotification(settings, title, body, event, focusedWorktree).catch(() => {});
      if (!marksUnread(p.key, known, unreadPanes, inView(p.key), winFocused)) return;
      setUnreadPanes((u) => new Set([...u, p.key]));
      if (p.cwd !== null) markDir(p.cwd, true);
-@@ -170,7 +173,7 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
+@@ -170,7 +180,8 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
    const quiet = (p: Pane, minutes: number) => {
      const title = noteTitle(tabName(p, titles), repoOf(p), `has gone quiet for ${minutes} min`);
      setToast(title);
 -    void raiseNotification(settings, title, "No terminal output since then. It may be stuck.").catch(() => {});
-+    void raiseNotification(settings, title, "No terminal output since then. It may be stuck.", { id: `${p.key}:quiet:${minutes}:${Math.floor(Date.now() / 60000)}`, worktree: p.cwd, pane: String(p.key), kind: "quiet" }).catch(() => {});
++    const focusedWorktree = panes.find((x) => inView(x.key))?.cwd ?? null;
++    void raiseNotification(settings, title, "No terminal output since then. It may be stuck.", { id: eventId(String(p.key), `quiet ${minutes}`, Date.now()), worktree: p.cwd, pane: String(p.key), kind: "quiet" }, focusedWorktree).catch(() => {});
    };
    const quietRef = useRef(quiet);
    quietRef.current = quiet;

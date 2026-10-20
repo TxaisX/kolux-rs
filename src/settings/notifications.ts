@@ -154,11 +154,13 @@ export function resetPacer(): void {
 /** STAT-043: a desktop notification with the chosen sound. The toast is silent whenever Kolux plays
  * its own tone or file, so one sound plays; the sound starts once the toast is shown. STAT-044: with
  * an `event` the notification is merged and paced (`decide`) and the backend learns its id and pane,
- * so a click can focus that pane; a merged or repeated event raises nothing. */
-export async function raiseNotification(settings: Record<string, unknown>, title: string, body: string, event?: Omit<NotifyEvent, "at">): Promise<void> {
+ * so a click can focus that pane; a merged or repeated event raises nothing. With "Stay quiet about the
+ * worktree you are looking at" on, an event in `focusedWorktree` is held back while the window has
+ * focus; every other worktree's event still shows (STAT-041). */
+export async function raiseNotification(settings: Record<string, unknown>, title: string, body: string, event?: Omit<NotifyEvent, "at">, focusedWorktree: string | null = null): Promise<void> {
   const prefs = readNotifications(settings);
   if (event) {
-    const d = decide(pacer, { ...event, at: Date.now() }, { windowFocused: typeof document !== "undefined" && document.hasFocus(), suppressFocused: prefs.suppressFocused });
+    const d = decide(pacer, { ...event, at: Date.now() }, { windowFocused: typeof document !== "undefined" && document.hasFocus(), suppressFocused: prefs.suppressFocused, focusedWorktree });
     pacer = d.state;
     if (!d.show) return;
   }

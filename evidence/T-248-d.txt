@@ -1,4 +1,8 @@
-# T-248-b evidence: APP-008 the real tray icon (lane/tray, 2026-10-19, from main 4de08e1c)
+# T-248-d evidence: APP-008 the real tray icon (lane/tray, 2026-10-19, from main 4de08e1c)
+
+Renamed from T-248-b by FIX-1 (2026-10-19, from d6a1d645): main already carries a different T-248-b (the
+chrome lane's navigation / Shortcuts / Help card), so this lane's tray task is T-248-d. The patches below
+were recut against main 34e7ea29 under the new name (see evidence/tray-FIX-1.txt).
 
 Scope this pass: APP-008 only (the card's other rules went to T-248-c in PLAN.md). NO APP LAUNCHES
 this wave (Txais): the live boxes are written up below for the coordinator to run.
@@ -9,8 +13,9 @@ this wave (Txais): the live boxes are written up below for the coordinator to ru
   on Windows, tooltip "Kolux DEV (<branch>)", the Dot) now drives a real tray icon:
   `install` (menu, tooltip, icon, click and menu handlers), `ping` (lights the dot only while the
   main window is hidden or minimised, read live from the window), `window_shown` (clears it),
-  `open_window` (show + unminimize + focus + clear), `quit` (app.exit(0): the Exit step in lib.rs
-  stops every pane and child process, the same path as File > Exit).
+  `open_window` (show + unminimize + focus + clear), `quit` (FIX-1: begin_quit, show the window and
+  ask it to close, so the page asks about unsaved text and the Destroyed step in lib.rs stops every pane
+  and child process, the same path as File > Exit; never app.exit straight).
   The DEV marker and the amber dot are painted onto the app icon's own RGBA (`paint`), so no image
   decoding feature is needed; the DEV square stays when the dot version is swapped in (STAT-047).
   The branch of a development copy is read from the checkout's Git HEAD (`git_head_file`,
@@ -23,13 +28,15 @@ this wave (Txais): the live boxes are written up below for the coordinator to ru
 
 ## Patches for the coordinator (not applied in this commit; files are not this lane's)
 
-- evidence/tray-T-248-b-Cargo.toml.patch: `tray = ["tauri/tray-icon"]`, `default = ["tray"]`.
+- evidence/tray-T-248-d-Cargo.toml.patch: `tray = ["tauri/tray-icon"]`, `default = ["tray"]`.
   Cargo.lock does not change (tray-icon 0.25.1 is already resolved as tauri's optional dependency;
-  checked: `git status --short src-tauri/Cargo.lock` printed nothing with the patch applied).
-- evidence/tray-T-248-b-lib.rs.patch: `tray::install(app.handle())?;` in setup after
-  `app.manage(Terminals::default())`, and `WindowEvent::Focused(true)` on "main" ->
+  checked again by FIX-1's wired gate: `git diff --stat HEAD -- src-tauri/Cargo.lock` printed nothing).
+- evidence/tray-T-248-d-lib.rs.patch: in setup after `app.manage(Terminals::default())`:
+  `if let Err(e) = tray::install(app.handle()) { diag::write(&dir, ...) }` (FIX-1: the icon is optional,
+  an error is logged and the app goes on; never `?`), and `WindowEvent::Focused(true)` on "main" ->
   `tray::window_shown`.
-- Both: `git read-tree 4de08e1c` + `git apply --cached --check` -> "patch check: OK against 4de08e1c".
+- Both: recut by FIX-1 against main 34e7ea29; `git read-tree 34e7ea29` + `git apply --cached --check`
+  OK alone and in order (G:/Temp/tray-w16-logs/FIX-1-patches.log).
 
 ## Tests (src-tauri/src/tray.rs; red first: 6 missing symbols, G:/Temp/tray-w16-logs/t248b-red.log)
 
@@ -46,7 +53,7 @@ Without the Cargo.toml patch (the committed tree):
   cargo build                      -> exit 0
   cargo clippy --all-targets -D warnings -> exit 0, "Finished `dev` profile ... in 44.14s"
   cargo test --lib tray            -> test result: ok. 7 passed; 0 failed
-With evidence/tray-T-248-b-Cargo.toml.patch + lib.rs.patch applied (then reverted):
+With evidence/tray-T-248-d-Cargo.toml.patch + lib.rs.patch applied (then reverted; first run as T-248-b):
   cargo build                      -> exit 0
   cargo clippy --all-targets -D warnings -> exit 0, "Finished `dev` profile ... in 35.31s"
   cargo test --lib tray            -> test result: ok. 7 passed; 0 failed
@@ -66,5 +73,9 @@ No TypeScript changed in this card: vitest and tsc skipped (they run at the batc
 5. With the window on screen, repeat step 3's invoke. Expected: no dot.
 6. Settings > Notifications > "Send a test notification". Expected: a toast, no dot even if the
    window is then hidden.
-7. Choose Quit from the tray with a shell pane open. Expected: the app exits and the pane's shell
-   process is gone (Get-Process shows no child of the app's pid).
+7. Choose Quit from the tray with a shell pane open and no unsaved file. Expected: the app exits and
+   the pane's shell process is gone (Get-Process shows no child of the app's pid).
+8. (FIX-1) Choose Quit from the tray with an unsaved editor file open. Expected: the window comes
+   back and asks "unsaved changes ... Quit without saving / Keep working"; Keep working leaves Kolux
+   running with the window on screen; a second tray Quit asks again; Quit without saving exits and the
+   shells are gone.

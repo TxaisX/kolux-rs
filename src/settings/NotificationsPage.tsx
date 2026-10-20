@@ -59,7 +59,7 @@ export function NotificationsView({ settings, onSave }: { settings: Record<strin
           <input type="checkbox" role="switch" checked={n.suppressFocused} onChange={(e) => onSave({ [SUPPRESS_FOCUSED_FIELD]: e.target.checked })} />
           <span>
             Stay quiet about the worktree you are looking at
-            <small>Events in the worktree that has focus are not announced.</small>
+            <small>While Kolux has focus, events in the worktree you are viewing are not announced; other worktrees still are.</small>
           </span>
         </label>
         <label className="conn-switch">

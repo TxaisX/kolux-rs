@@ -3,11 +3,14 @@
 //! while the window was hidden or minimised, and clears once the window is shown; development
 //! copies carry DEV and the branch they run from in the icon and the tooltip, kept when the
 //! attention icon is swapped in; Linux gets no tray icon.
+//! APP-007: with the option on, the window's close button hides Kolux to the tray instead (the page's
+//! close handler asks `tray_close_requested` first); Quit from the tray and File > Exit go through the
+//! same close with a quit flag, so unsaved text is still asked about and every pane stops (ACCT-051).
 //! The real icon needs tauri's `tray-icon` feature, switched on through this crate's `tray`
-//! feature (Cargo.toml is the coordinator's file: `evidence/tray-T-248-b-Cargo.toml.patch`).
+//! feature (Cargo.toml is the coordinator's file: `evidence/tray-T-248-d-Cargo.toml.patch`).
 //! Without it `install` puts nothing in the tray and every model function still builds and tests.
 #![allow(unexpected_cfgs)] // the `tray` feature is declared by that Cargo.toml patch
-#![allow(dead_code)] // without it only the tests reach the model; `install` and `window_shown` wait on the lib.rs patch
+#![allow(dead_code)] // without it only the tests reach the model; `install`, `window_shown` and the commands wait on the lib.rs patches
 
 use crate::menu::Os;
 use std::path::{Path, PathBuf};
@@ -113,12 +116,14 @@ pub fn git_head_file(checkout: &Path) -> Option<PathBuf> {
 
 /// A development copy runs from its source tree: the branch of the checkout that holds src-tauri.
 fn dev_branch() -> Option<String> {
-    if !tauri::is_dev() {
-        return None;
+    // Only a debug build knows its source path; a release binary carries no build-machine path.
+    #[cfg(debug_assertions)]
+    if tauri::is_dev() {
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).parent()?;
+        let head = git_head_file(checkout)?;
+        return branch_from_head(&std::fs::read_to_string(head).ok()?);
     }
-    let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).parent()?;
-    let head = git_head_file(checkout)?;
-    branch_from_head(&std::fs::read_to_string(head).ok()?)
+    None
 }
 
 /// The attention dot's colour (amber) and the DEV marker's (blue), as RGBA.
@@ -247,7 +252,7 @@ pub struct TrayState {
 
 /// Puts Kolux's icon in the tray on Windows and macOS. Nothing happens on Linux, or in a build
 /// without the `tray` feature. Called from the app's setup (lib.rs, the coordinator's file:
-/// `evidence/tray-T-248-b-lib.rs.patch`).
+/// `evidence/tray-T-248-d-lib.rs.patch`), which logs an error and goes on: the icon is optional.
 pub fn install(app: &tauri::AppHandle) -> tauri::Result<()> {
     use tauri::Manager;
     app.manage(TrayState::default());
@@ -308,12 +313,23 @@ pub fn open_window(app: &tauri::AppHandle) {
     window_shown(app);
 }
 
-/// Quit from the tray: the app's ordinary exit, whose Exit step stops every pane and child process
-/// (the same path as File > Exit), never the close button's path. The flag keeps the close handler
-/// from hiding the window while the quit is under way.
+/// Quit from the tray: the same path as File > Exit. The quit flag is set, the window is brought back
+/// (so the unsaved-changes question can be seen) and asked to close; the page's close handler then
+/// writes what is pending, asks about unsaved text (VIEW-107) and destroys the window, whose Destroyed
+/// step stops every pane and child process (ACCT-051). Never `app.exit` straight: that would skip the
+/// question and drop a pending layout write. Without a main window there is nothing to ask: plain exit.
 pub fn quit(app: &tauri::AppHandle) {
-    QUITTING.store(true, Ordering::SeqCst);
-    app.exit(0);
+    use tauri::Manager;
+    begin_quit();
+    match app.get_webview_window("main") {
+        Some(w) => {
+            let _ = w.show();
+            let _ = w.unminimize();
+            let _ = w.set_focus();
+            let _ = w.close();
+        }
+        None => app.exit(0),
+    }
 }
 
 /// APP-007: the setting for "closing the window hides Kolux to the tray" (Windows; off by default).
@@ -321,13 +337,40 @@ pub fn quit(app: &tauri::AppHandle) {
 pub const CLOSE_TO_TRAY_FIELD: &str = "closeToTray";
 /// The store key that remembers the once-only explanation was shown.
 pub const CLOSE_EXPLAINED_KEY: &str = "tray.closeExplained";
-/// Set by `quit`; a real quit is never intercepted by the close handler.
+/// Set by `begin_quit` (tray Quit, File > Exit), consumed by `take_quitting` on the close request that
+/// follows; a real quit is never turned into a hide.
 static QUITTING: AtomicBool = AtomicBool::new(false);
 
+/// A quit is under way (tray Quit, File > Exit): the close request that follows is a real quit, never a
+/// hide. One-shot, so a quit the user then cancels at the unsaved-changes question leaves no trace.
+pub fn begin_quit() {
+    QUITTING.store(true, Ordering::SeqCst);
+}
+
+/// Reads the quit flag for the close request being handled and clears it.
+pub fn take_quitting() -> bool {
+    QUITTING.swap(false, Ordering::SeqCst)
+}
+
 /// Does this close click hide the window instead of closing it? Only on Windows, only with the option
-/// saved as a real `true`, and never while a quit is under way.
-pub fn close_hides(os: Os, settings: &serde_json::Value, quitting: bool) -> bool {
-    matches!(os, Os::Windows) && settings.get(CLOSE_TO_TRAY_FIELD) == Some(&serde_json::Value::Bool(true)) && !quitting
+/// saved as a real `true`, only while a tray icon is there to bring the window back, and never while a
+/// quit is under way.
+pub fn close_hides(os: Os, settings: &serde_json::Value, quitting: bool, icon_present: bool) -> bool {
+    matches!(os, Os::Windows) && settings.get(CLOSE_TO_TRAY_FIELD) == Some(&serde_json::Value::Bool(true)) && !quitting && icon_present
+}
+
+/// Is there a tray icon that could bring a hidden window back? Only with the `tray` feature and a
+/// successful `install`.
+fn icon_present(app: &tauri::AppHandle) -> bool {
+    #[cfg(feature = "tray")]
+    {
+        app.tray_by_id(TRAY_ID).is_some()
+    }
+    #[cfg(not(feature = "tray"))]
+    {
+        let _ = app;
+        false
+    }
 }
 
 /// Is the first-time explanation still owed? `stored` is the CLOSE_EXPLAINED_KEY value.
@@ -335,15 +378,17 @@ pub fn explain_due(stored: Option<&str>) -> bool {
     matches!(stored, None | Some(""))
 }
 
-/// The main window's close button (lib.rs CloseRequested, `evidence/tray-T-324-lib.rs.patch`): true
-/// when the close was intercepted and the caller must `prevent_close`. The window hides, the dot
-/// model learns it is hidden, and the first time a notification says where Kolux went. A real quit
-/// (File > Exit, tray Quit, the system ending the session) passes through untouched.
-pub fn on_close_requested(app: &tauri::AppHandle) -> bool {
+/// The main window's close request, as the page's close handler reports it through
+/// `tray_close_requested`: true when the window was hidden to the tray instead, so the page keeps the
+/// window alive (preventDefault) and skips the unsaved-changes question (nothing is lost, Kolux keeps
+/// running). The dot model learns the window is hidden, and the first time a notification says where
+/// Kolux went. With `quitting` (tray Quit, File > Exit), with no tray icon, or with the option off,
+/// nothing happens here and the close goes on as before.
+pub fn on_close_requested(app: &tauri::AppHandle, quitting: bool) -> bool {
     use tauri::Manager;
     let Some(store) = app.try_state::<Mutex<crate::state::Store>>() else { return false };
     let Ok(settings) = store.lock().map(|s| s.settings()) else { return false };
-    if !close_hides(Os::current(), &settings, QUITTING.load(Ordering::SeqCst)) {
+    if !close_hides(Os::current(), &settings, quitting, icon_present(app)) {
         return false;
     }
     if let Some(w) = app.get_webview_window("main") {
@@ -369,6 +414,26 @@ pub fn on_close_requested(app: &tauri::AppHandle) -> bool {
         let _ = crate::notifications::show_plain(app, "Kolux is still running".into(), "The window went to the tray. Open Kolux or Quit from the tray icon.".into(), false);
     }
     true
+}
+
+/// APP-007: the page's close handler (App.tsx, `evidence/tray-FIX-1-App.tsx.patch`) calls this first on
+/// every close request of the main window and reads `{ hid, quitting }`: `hid` true means the window
+/// went to the tray and the page must keep it alive and ask nothing; `quitting` says tray Quit or
+/// File > Exit asked for this close (the flag is consumed here, so a quit cancelled at the question
+/// leaves nothing behind). Registered by `evidence/tray-FIX-1-lib.rs.patch`.
+#[tauri::command]
+pub fn tray_close_requested(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let quitting = take_quitting();
+    let hid = on_close_requested(&app, quitting);
+    Ok(serde_json::json!({ "hid": hid, "quitting": quitting }))
+}
+
+/// STAT-047: the page reports an agent event before any toast switch is consulted, so the dot lights
+/// while the window is hidden even when that kind of toast is off. `kind` "bell" is a terminal bell.
+#[tauri::command]
+pub fn tray_ping(app: tauri::AppHandle, kind: Option<String>) {
+    let what = if kind.as_deref() == Some("bell") { Ping::Bell } else { Ping::AgentFinished };
+    ping(&app, what);
 }
 
 #[cfg(feature = "tray")]
@@ -547,12 +612,29 @@ mod tests {
     #[test]
     fn app_007_close_hides_only_on_windows_with_the_option_on_and_never_while_quitting() {
         use serde_json::json;
-        assert!(!close_hides(Os::Windows, &json!({}), false), "off by default");
-        assert!(close_hides(Os::Windows, &json!({ CLOSE_TO_TRAY_FIELD: true }), false));
-        assert!(!close_hides(Os::Windows, &json!({ CLOSE_TO_TRAY_FIELD: "yes" }), false), "only a real true");
-        assert!(!close_hides(Os::Mac, &json!({ CLOSE_TO_TRAY_FIELD: true }), false), "a Windows option");
-        assert!(!close_hides(Os::Linux, &json!({ CLOSE_TO_TRAY_FIELD: true }), false));
-        assert!(!close_hides(Os::Windows, &json!({ CLOSE_TO_TRAY_FIELD: true }), true), "a real quit is never intercepted");
+        assert!(!close_hides(Os::Windows, &json!({}), false, true), "off by default");
+        assert!(close_hides(Os::Windows, &json!({ CLOSE_TO_TRAY_FIELD: true }), false, true));
+        assert!(!close_hides(Os::Windows, &json!({ CLOSE_TO_TRAY_FIELD: "yes" }), false, true), "only a real true");
+        assert!(!close_hides(Os::Mac, &json!({ CLOSE_TO_TRAY_FIELD: true }), false, true), "a Windows option");
+        assert!(!close_hides(Os::Linux, &json!({ CLOSE_TO_TRAY_FIELD: true }), false, true));
+        assert!(!close_hides(Os::Windows, &json!({ CLOSE_TO_TRAY_FIELD: true }), true, true), "a real quit is never intercepted");
+    }
+
+    #[test]
+    fn app_007_fix1_close_hides_only_while_a_tray_icon_can_bring_the_window_back() {
+        use serde_json::json;
+        let on = json!({ CLOSE_TO_TRAY_FIELD: true });
+        assert!(close_hides(Os::Windows, &on, false, true), "option on, icon present, no quit: hide");
+        assert!(!close_hides(Os::Windows, &on, false, false), "option on but no tray icon (feature off, or the icon failed to install): close, or nothing could bring the window back");
+        assert!(!close_hides(Os::Windows, &on, true, true), "a quit under way closes even with the option on and the icon present");
+    }
+
+    #[test]
+    fn app_007_fix1_the_quit_flag_belongs_to_the_one_close_that_follows_it() {
+        assert!(!take_quitting(), "nothing under way at the start");
+        begin_quit();
+        assert!(take_quitting(), "the close request after tray Quit or File > Exit is a quit");
+        assert!(!take_quitting(), "the flag is consumed: a quit cancelled at the unsaved-changes question does not turn the next close into a quit");
     }
 
     #[test]

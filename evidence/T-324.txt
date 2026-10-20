@@ -4,14 +4,23 @@ Windows session-end record (sign-out / shutdown recorded so the next launch know
 
 WHAT WAS BUILT
 - src-tauri/src/tray.rs: CLOSE_TO_TRAY_FIELD = "closeToTray" (off by default), CLOSE_EXPLAINED_KEY =
-  "tray.closeExplained"; close_hides(os, settings, quitting): Windows only, only a real `true`, never
-  while a quit is under way; explain_due(stored): the first-time explanation is owed until the key is
-  set; on_close_requested(app) -> bool: with the option on it hides the main window, tells the dot model
-  the window is hidden (so the next agent event lights the dot), shows the once-only explanation
-  ("Kolux is still running — the window went to the tray...") and answers true so lib.rs calls
-  prevent_close; otherwise false and the close goes through. quit() now sets a QUITTING flag before
-  app.exit(0), so Quit from the tray is never intercepted and still reaches the RunEvent::Exit step that
-  kills every pane and child process (Terminals::kill_all). Ping::UsageAlert added.
+  "tray.closeExplained"; close_hides(os, settings, quitting, icon_present): Windows only, only a real
+  `true`, never while a quit is under way, only while a tray icon can bring the window back (FIX-1);
+  explain_due(stored): the first-time explanation is owed until the key is set;
+  on_close_requested(app, quitting) -> bool: with the option on and the icon present it hides the main
+  window, tells the dot model the window is hidden (so the next agent event lights the dot), shows the
+  once-only explanation ("Kolux is still running — the window went to the tray...") and answers true;
+  otherwise false and the close goes through.
+  FIX-1 wiring (replaces the dropped lib.rs CloseRequested hook): the page's onCloseRequested handler
+  (evidence/tray-FIX-1-App.tsx.patch) flushes, returns at once when its own "Quit without saving" flag
+  is set, then awaits the `tray_close_requested` command -> { hid, quitting }; hid true -> preventDefault
+  and no unsaved-changes question (nothing is lost, Kolux keeps running); otherwise the question as
+  before. begin_quit() / take_quitting(): a one-shot QUITTING flag set by tray Quit and File > Exit
+  (evidence/tray-FIX-1-menu.rs.patch) and consumed by the one close that follows, so a quit cancelled
+  at the question leaves no trace. quit(): begin_quit, show + unminimize + focus the main window, then
+  close() (app.exit only when there is no main window), so the page asks about unsaved text and the
+  Destroyed step in lib.rs (Terminals::kill_all, ACCT-051) ends every pane and child process.
+  Ping::UsageAlert added. dev_branch's CARGO_MANIFEST_DIR path is read in debug builds only.
 - src/settings/notifications.ts: CLOSE_TO_TRAY_FIELD and readNotifications().closeToTray (true only when
   saved as true). src/settings/NotificationsPage.tsx: the switch "Closing the window keeps Kolux in the
   tray" (Windows only; the agents keep running; Quit from the tray icon stops everything).
@@ -21,12 +30,15 @@ WHAT WAS BUILT
   an alert the user switched off (usage-alerts preference or master switch off) is not "held back" and
   puts no dot; src/usage/alerts.ts is untouched.
 
-PATCHES FOR THE COORDINATOR (unified diffs against main 4de08e1c; each passes `git apply --cached --check`
-on a `git read-tree 4de08e1c` index)
-- evidence/tray-T-324-lib.rs.patch: WindowEvent::CloseRequested on "main" -> tray::on_close_requested
-  (window.app_handle()) -> api.prevent_close() when true. Applies together with T-248-b's and T-125's
-  lib.rs patches (all three were applied at once for the wired gate).
+PATCHES FOR THE COORDINATOR (unified diffs against main 34e7ea29, recut by FIX-1; each passes
+`git apply --cached --check` on a `git read-tree 34e7ea29` index alone and in the order listed in
+evidence/tray-FIX-1.txt)
+- evidence/tray-FIX-1-lib.rs.patch: registers tray::tray_close_requested and tray::tray_ping.
+- evidence/tray-FIX-1-App.tsx.patch: the async onCloseRequested handler described above.
+- evidence/tray-FIX-1-menu.rs.patch: Route::Exit calls crate::tray::begin_quit() before view.close().
 - evidence/tray-T-324-usage_alerts.rs.patch: the one-line tray ping in usage_alert_send.
+- (dropped) evidence/tray-T-324-lib.rs.patch: the Rust CloseRequested hook raced the page's handler
+  (D2 review BLOCKER 1); the page now asks first.
 
 TESTS
 - src-tauri/src/tray.rs (+2, written red first: cargo test --no-run exit 101 with close_hides /
@@ -51,10 +63,21 @@ LIVE PROOF PENDING (batched) — steps for the proof lane, once the patches are 
 2. Switch it on, click close: the window disappears, the process stays alive, the tray icon is present,
    and a notification "Kolux is still running" appears. Close again later: no second notification.
 3. While hidden, let an agent finish: the tray dot lights. Tray > Open Kolux: the window and the dot clear.
-4. Tray > Quit with the option on: the app exits and every pane's child process is gone (check with
-   Task Manager / `tasklist` for the shells that were running).
+4. Tray > Quit with the option on and no unsaved file: the app exits and every pane's child process is
+   gone (check with Task Manager / `tasklist` for the shells that were running).
 5. While hidden, drive an account over 80% (or hold a usage alert back in the system's notification
    settings): the tray dot lights.
+6. (FIX-1) Option on, an editor tab with unsaved text: click the window's close button. Expected: the
+   window hides to the tray with NO unsaved-changes question (nothing is lost; Kolux keeps running).
+   Tray > Open Kolux: the unsaved text is still there.
+7. (FIX-1) Option on, unsaved text: File > Exit. Expected: the unsaved-changes question appears (the
+   window does not hide); Keep working -> still running, window on screen; Quit without saving -> the app
+   exits and the shells are gone.
+8. (FIX-1) Option on, window hidden in the tray, unsaved text: Tray > Quit. Expected: the window comes
+   back with the question; Keep working leaves it on screen (a later close button hides again, since the
+   quit flag was consumed); Quit without saving exits with every pane's process gone.
+9. (FIX-1) Option on, then switch to a build without the tray feature (or a failed install, see the diag
+   file): the close button exits the app as before (no icon = no hide).
 
 SEEN, NOT FIXED
 - The Windows session-end record (APP-007's last rule) needs a WM_ENDSESSION / RunEvent hook in lib.rs

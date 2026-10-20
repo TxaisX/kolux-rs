@@ -1,12 +1,12 @@
 diff --git a/src-tauri/Cargo.toml b/src-tauri/Cargo.toml
-index 6c9b739b..688d9e73 100644
+index 6c9b739b..71079649 100644
 --- a/src-tauri/Cargo.toml
 +++ b/src-tauri/Cargo.toml
 @@ -27,6 +27,9 @@ required-features = ["release-cli"]
  
  [features]
  release-cli = []
-+# APP-008 / T-248-b: the real tray icon (Open Kolux, Quit, the attention dot); on by default.
++# APP-008 / T-248-d: the real tray icon (Open Kolux, Quit, the attention dot); on by default.
 +tray = ["tauri/tray-icon"]
 +default = ["tray"]
  

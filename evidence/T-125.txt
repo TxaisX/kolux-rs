@@ -22,7 +22,14 @@ WHAT WAS BUILT
   errors ignored). The three carry #[allow(dead_code)] until the lib.rs patch registers them.
 - src-tauri/src/tray.rs: BADGE_SIZE = 32, badge_text (0 -> none, >99 -> "99+"), paint_badge (amber disc,
   the digits in a 3x5 pixel font in white, scale 3 for one or two glyphs, 2 for "99+").
-- STAT-047 came free from T-248-b: notifications::show already pings the tray; notify_event does the same.
+- STAT-047 came free from T-248-d (first ticked as T-248-b): notifications::show already pings the tray;
+  notify_event does the same. FIX-1 adds the `tray_ping` command, called by useAgentStatus before the
+  toast switch is consulted, so the dot lights for an event whose toast kind is off.
+- FIX-1: eventId(pane, what, stamp) in pacing.ts is the id (one per report; Date.now() as the stamp until
+  a hook sequence number exists, T-125-b); the pacer's "Stay quiet" rule holds back only the worktree in
+  view (decide gets focusedWorktree; useAgentStatus passes the in-view pane's cwd), so an out-of-view
+  worktree's finish still notifies while Kolux has focus. Terminal bell: no bell event reaches
+  raiseNotification today (src/terminal is another lane's), so that wiring is T-125-b.
 
 PATCHES FOR THE COORDINATOR (unified diffs against main 4de08e1c, each passes `git apply --cached --check`
 on a `git read-tree 4de08e1c` index)
@@ -30,9 +37,12 @@ on a `git read-tree 4de08e1c` index)
 - evidence/tray-T-125-App.tsx.patch: listen("notification-click") -> setFocused(pane key) when the pane
   exists; useEffect on unreadDirs -> invoke("badge_set", {count: badgeCount(unreadDirs)}); the import.
 - evidence/tray-T-125-useAgentStatus.ts.patch: noticed() and quiet() pass {id, worktree: p.cwd,
-  pane: String(p.key), kind} to raiseNotification; id = pane:what:body[0..40]:minute (quiet:
-  pane:quiet:minutes:minute); kind stop for notifyOnStopped, bell for notifyBell, else finish.
-- T-248-b's two patches (Cargo.toml tray feature, lib.rs install + Focused hook) are still required.
+  pane: String(p.key), kind} plus focusedWorktree to raiseNotification; id = eventId(pane, what, Date.now())
+  (quiet: eventId(pane, "quiet <minutes>", Date.now())); kind stop for notifyOnStopped, bell for notifyBell,
+  else finish; invoke("tray_ping", {kind}) before the toast gate (FIX-1).
+- T-248-d's two patches (Cargo.toml tray feature, lib.rs install + Focused hook) are still required; the
+  tray_ping command is registered by evidence/tray-FIX-1-lib.rs.patch.
+- All recut by FIX-1 against main 34e7ea29 (evidence/tray-FIX-1.txt has the check log).
 
 TESTS (all written red first, then green)
 - src/notify/pacing.test.ts (9): two completions in one worktree inside the cooldown are one, shown
@@ -65,9 +75,17 @@ LIVE PROOF PENDING (batched) — steps for the proof lane, once the patches are 
 3. Two workspaces with unseen results: the taskbar icon carries an amber "2" overlay; open both tabs:
    the overlay clears. 100+ unseen workspaces are not reachable by hand; "99+" is covered by the test.
 4. Notifications page test button: shows every time, no dot, no pacing.
+5. (FIX-1) Two tabs open (worktrees A and B), tab A in view, Kolux focused, "Stay quiet about the worktree
+   you are looking at" on: an agent in B finishes -> a toast; an agent in A finishes -> no toast (the
+   unread mark and the in-app toast still appear).
+6. (FIX-1) Notification click into another tab: with tab A in view, let B's agent finish, then call
+   `window.__TAURI__.core.invoke("notification_clicked", {id})` with that event's id (or click the toast
+   once T-125-b wires activation). Expected: tab B is focused.
+7. (FIX-1) Two finishes 30 s apart in one pane inside the same clock minute: two toasts (one id each).
 
 SEEN, NOT FIXED
 - tauri-plugin-notification 2.5.1 desktop show() drops the notify-rust handle, so an OS toast click
   cannot reach notification_clicked yet (T-125-b).
-- The event id is pane+what+body+minute; a hook sequence number would be exact (T-125-b).
+- The event id is pane+what+stamp (FIX-1); a hook sequence number would be exact (T-125-b).
+- The terminal bell never reaches raiseNotification yet (src/terminal, another lane): T-125-b.
 - macOS / Linux badge: set_badge_count is wired but unproven here (Windows machine).

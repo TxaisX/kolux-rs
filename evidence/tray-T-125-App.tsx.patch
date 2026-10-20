@@ -1,5 +1,5 @@
 diff --git a/src/App.tsx b/src/App.tsx
-index d77f6321..52b3ea97 100644
+index ee1b58d7..4ec5eff4 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
 @@ -120,6 +120,7 @@ import ChooserPane from "./launch/ChooserPane";
@@ -10,7 +10,7 @@ index d77f6321..52b3ea97 100644
  import { LAYOUT_FIELD, layoutOf, type SavedLayout } from "./terminal/layout";
  import { Kbd, KeymapProvider, useKeymap } from "./keys/KeymapContext";
  import { recording } from "./keys/record";
-@@ -1887,6 +1888,20 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1905,6 +1906,20 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
    report.current = reportLayout;
    useEffect(() => report.current());
    const { noticed, panesRef } = useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir });

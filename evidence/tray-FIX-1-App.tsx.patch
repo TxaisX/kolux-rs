@@ -1,0 +1,26 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index ee1b58d7..73d6d905 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1174,9 +1174,19 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   unsaved.current = panes.filter((p) => dirty[p.key]).map((p) => baseName(p.path ?? p.title ?? "Untitled"));
+   const quitting = useRef(false);
+   useEffect(() => {
+-    const off = getCurrentWindow().onCloseRequested((e) => {
++    const off = getCurrentWindow().onCloseRequested(async (e) => {
+       screenWriter.flush();
+-      if (quitting.current || unsaved.current.length === 0) return;
++      if (quitting.current) return;
++      // APP-007: with "Closing the window keeps Kolux in the tray" on, the window hides instead (tray.rs
++      // decides: Windows, option on, tray icon present, no quit under way); nothing is lost, so the
++      // unsaved-changes question is skipped. Quit from the tray and File > Exit report `quitting` and
++      // go on to the question below, exactly as the close button does.
++      const tray = await invoke<{ hid: boolean; quitting: boolean }>("tray_close_requested").catch(() => ({ hid: false, quitting: false }));
++      if (tray.hid) {
++        e.preventDefault();
++        return;
++      }
++      if (unsaved.current.length === 0) return;
+       e.preventDefault();
+       setQuitAsk([...unsaved.current]);
+     });
