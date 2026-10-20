@@ -1,6 +1,7 @@
 // BROW-037: notes on a page's elements. The user picks elements in the page (browser_annotate runs
 // the picker there), writes a note on each, and sends the lot to an agent in the worktree as one
 // message. This file is the pure part: the tray's rules and the message's text.
+import { cleanUrl, maskSecrets, scrubPick } from "./scrub";
 
 /** The most notes one tray holds; picking stops when it is full. */
 export const MAX_NOTES = 20;
@@ -84,7 +85,8 @@ function noteLines(n: Note, i: number): string[] {
 /** The message sent to the agent; `null` with nothing to send. */
 export function notesMarkdown(notes: Note[], title: string, url: string): string | null {
   if (notes.length === 0) return null;
-  const lines = [`Page notes on ${title || url} (${url}), ${notes.length} element${notes.length === 1 ? "" : "s"}:`, ""];
+  const bare = cleanUrl(url) ?? ""; // T-158 (BROW-036)
+  const lines = [`Page notes on ${maskSecrets(title) || bare} (${bare}), ${notes.length} element${notes.length === 1 ? "" : "s"}:`, ""];
   notes.forEach((n, i) => lines.push(...noteLines(n, i), ""));
   return lines.join("\n").trimEnd() + "\n";
 }
@@ -97,7 +99,11 @@ export function readPicks(answer: unknown): { active: boolean; picks: Pick[]; es
   for (const p of a.picks ?? []) {
     const o = p as { escape?: boolean; selector?: unknown };
     if (o.escape) escape = true;
-    else if (typeof o.selector === "string") picks.push(o as Pick);
+    else {
+      // T-158 (BROW-036): secrets masked, addresses bare, a broken capture thrown away.
+      const s = scrubPick(p);
+      if (s) picks.push(s);
+    }
   }
   return { active: a.active === true, picks, escape };
 }

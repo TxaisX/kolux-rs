@@ -287,6 +287,10 @@ pub fn run() {
             diag::write(&dir, &format!("app start {starts}, Kolux RS {}", app.package_info().version));
             // SET-004: the window starts hidden and the page shows it once its first frame has the saved
             // look; this is the backstop for a page that never gets that far.
+            // T-286-b (APP-040): the app's own view reports its engine's process failures.
+            if let Some(w) = app.get_webview_window("main") {
+                browser::engine::watch_app_failures(&w, dir.clone());
+            }
             if let Some(w) = app.get_webview_window("main") {
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_secs(5));
@@ -676,6 +680,7 @@ pub fn run() {
             browser::browser_cookies_import,
             browser::browser_probe,
             browser::browser_diagnose,
+            browser::certs::browser_cert,
             browser::browser_tab,
             browser::browser_annotate,
             browser::preview::browser_preview,
@@ -842,6 +847,10 @@ pub fn run() {
         .build(context)
         .unwrap_or_else(|e| tools::startup_failed(&e.to_string()))
         .run(|app, event| {
+            // T-286-b (APP-040): engine exits once the app is quitting are not crashes.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                browser::crash::quitting();
+            }
             if let tauri::RunEvent::Exit = event {
                 // T-075 (APP-050): the final save is one barrier with a deadline: begin() stops the
                 // batched savers, each step runs on its own thread and is waited for only as long as

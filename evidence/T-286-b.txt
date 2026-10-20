@@ -1,3 +1,63 @@
+T-286-b · crash records from the WebView2 process-failed event (browser lane part)
+2026-10-20 · lane/browser from 4d5e3390 · Opus standing in for Fable
+
+What the browser lane built
+- src-tauri/src/browser_crash.rs (new, pure logic plus one write path):
+  classify(): quitting, a closed tab, a hang, a kill (terminated), an unresponsive end, a failed
+  launch and a deleted profile are NOT crashes. A browser page's own renderer crash is the site's
+  page (diag line only). The browser process, graphics, utility, sandbox helper, plugin and
+  unknown helper processes, and the app's own interface renderer, ARE crashes.
+  summary(): exit code as 0x%08X, the process name, "seen by N views", the faulting module when
+  WebView2 names it, and the host memory reading (physical and commit; free disk is never shown).
+  add_or_merge(): newest five kept; the same crash from another view within 30 s merges into the
+  one record (siblings never become their own records).
+  report(): always writes a diag line, scrubs the summary with recovery::scrub_report, writes
+  through recovery::crashes_write with retries at 0/50/150/400 ms when the file is locked; a
+  damaged crashes.json starts empty.
+- src-tauri/src/browser_engine.rs: ProcessFailed hook (watch_failures) reads the kind, the reason,
+  the exit code and the process description (Args2) and the faulting module path (Args3), takes
+  the memory reading at once (GlobalMemoryStatusEx), and calls crash::report. watch_page_failures
+  runs for every browser page; watch_app_failures is wired for the main window by the lib.rs patch.
+- src-tauri/src/browser_helpers.rs: stop_all marks quitting first, so the shutdown exits that
+  follow are never crashes.
+- Patches (shared files, not applied on the lane):
+  evidence/browser-T-286-b-recovery.rs.patch: the crash store keeps five, not twenty.
+  evidence/browser-T-286-b-lib.rs.patch: watch_app_failures(main window) in setup; crash::quitting
+  on ExitRequested.
+
+Gates (Cargo patch applied, reverted before the commit)
+  All pending patches applied (Cargo, T-158-b lib, T-251 cli + local_cli, T-286-b lib + recovery):
+    cargo build exit 0 · clippy --all-targets -D warnings exit 0 · cargo test browser/recovery/crash
+    175 passed 0 failed (log t286c-*.log)
+  Lane only (Cargo patch only): build 0 · clippy 0 · 175 passed 0 failed (log t286d-*.log)
+  T-286-b lib patch applies alone and after the T-158-b lib patch; recovery patch applies clean.
+  tsc exit 0 · vitest src/browser 19 files 95 tests passed · privacy app070 x2 red (known, not this task)
+  New tests: t286b_shutdown_exits_and_kills_are_not_crashes, t286b_interface_and_unknown_child_crashes_are_crashes,
+  t286b_only_the_newest_five_are_kept, t286b_the_same_crash_from_other_views_merges_into_one_record,
+  t286b_the_record_carries_memory_and_the_faulting_module, t286b_the_memory_reading_comes_from_the_system,
+  t286b_report_writes_a_scrubbed_record_and_merges_the_next_view
+
+Left open (needs a live crash or another lane)
+- Late crash dumps merged into the record they belong to: needs a real crash dump to arrive.
+- The faulting module named from a crash dump: only WebView2's own module path is used now.
+- Retry on a locked save inside recovery's own note_crash path (reliability lane's file).
+- The reliability lane's part of the line: repaint after sleep, held and replayed updates while
+  hidden, the background-throttling exemption, sessions kept per host.
+
+LIVE PROOF PENDING (batched; apply both T-286-b patches first)
+1. Crash the app's own interface renderer seven times (DevTools on the main window, then
+   location.href = "edge://crash"), reopening between. Expect: the crash list shows five records,
+   newest first, each naming "interface renderer", an exit code and a memory line.
+2. Quit the app normally ten times. Expect: no crash record and no crash prompt on the next start.
+3. Kill a helper process by its PID with Task Manager. Expect: no crash record (a kill is not a
+   crash; diag line only).
+4. In a browser page open edge://crash. Expect: no crash record (the site's page; diag line only).
+5. With three browser pages open, open edge://gpucrash in one. Expect: one record for the graphics
+   process saying "seen by N views", not N records.
+6. Mark crashes.json read-only for two seconds during step 1. Expect: the record lands once the
+   file is writable within the retry window, or a diag line says the save failed.
+
+----- the reliability lane's T-286-b part -----
 T-286-b evidence (lane reliability, 2026-10-20, Opus stand-in; lane/reliability from 348a2a7e)
 
 Built (unit-tested; live proof pending, batched):
