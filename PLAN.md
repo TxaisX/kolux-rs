@@ -347,7 +347,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P2 · theme 8 · Release, update and CI pipeline (1 cards)
 
-- [ ] T-293 · APP-030 An update whose Windows signature does not match is stopped, with no bypass
+- [x] T-293 · APP-030 An update whose Windows signature does not match is stopped, with no bypass · done 2026-10-20 (lane/reliability from 348a2a7e; evidence/T-293.txt: the downloaded installer's Authenticode publisher is compared with the running copy's (or the build's pinned publisher), a mismatch, an unsigned installer for a signed copy or a damaged signature stops it with a security stop card and no install button, the refused version is never offered again; wiring in evidence/reliability-T-293-update.rs.patch and -UpdateCenter.tsx.patch) · live proof pending (batched)
 
 ### P2 · theme 6 · Business-user frame (6 cards)
 

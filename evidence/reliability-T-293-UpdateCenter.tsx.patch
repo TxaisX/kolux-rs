@@ -1,0 +1,88 @@
+diff --git a/src/update/UpdateCenter.tsx b/src/update/UpdateCenter.tsx
+index d1dedff2..b9951737 100644
+--- a/src/update/UpdateCenter.tsx
++++ b/src/update/UpdateCenter.tsx
+@@ -189,7 +189,9 @@ export default function UpdateCenter() {
+             : p.kind === "ready"
+               ? `Kolux RS ${version} is ready`
+               : p.kind === "error"
+-                ? p.retry === "check"
++                ? p.security
++                  ? "Update refused for security"
++                  : p.retry === "check"
+                   ? "The update check failed"
+                   : `Kolux RS ${version} did not download`
+                 : "";
+diff --git a/src/update/card.test.ts b/src/update/card.test.ts
+index 64400913..0340601e 100644
+--- a/src/update/card.test.ts
++++ b/src/update/card.test.ts
+@@ -184,4 +184,14 @@ describe("status bar item (VIEW-100)", () => {
+     expect(s.shown).toBe(true);
+     expect(run(initialCard(null, true), { type: "show" }).shown).toBe(false);
+   });
++
++  it("T-293 (APP-030): a refused installer shows a security stop with no install or retry button", () => {
++    let s = run(initialCard(null, true), { type: "checkStart", requested: false }, { type: "checkDone", requested: false, found: info("0.2.0") }, { type: "downloadStart", info: info("0.2.0") });
++    s = run(s, { type: "downloadFailed", info: info("0.2.0"), message: "update:refused|Kolux RS refused this update: signed by Mallory.", offline: false });
++    expect(s.shown && !s.collapsed).toBe(true);
++    expect(s.phase).toMatchObject({ kind: "error", retry: "none", security: true, message: "Kolux RS refused this update: signed by Mallory." });
++    expect(mainAction(s.phase)).toBeNull();
++    expect(barItem(s.phase)).toMatchObject({ tone: "error", text: "Update refused" });
++    expect(s.popup).toBeNull();
++  });
+ });
+diff --git a/src/update/card.ts b/src/update/card.ts
+index 83628b63..75b7ecd6 100644
+--- a/src/update/card.ts
++++ b/src/update/card.ts
+@@ -15,7 +15,7 @@ export type Phase =
+   | { kind: "available"; info: UpdateInfo }
+   | { kind: "downloading"; info: UpdateInfo; received: number; total: number | null }
+   | { kind: "ready"; info: UpdateInfo }
+-  | { kind: "error"; message: string; next: string; info: UpdateInfo | null; retry: "check" | "download" };
++  | { kind: "error"; message: string; next: string; info: UpdateInfo | null; retry: "check" | "download" | "none"; security?: boolean };
+ 
+ export interface CardState {
+   phase: Phase;
+@@ -65,6 +65,9 @@ export function nextStep(offline: boolean, stage: "check" | "download"): string
+     : "Press Try again to download it once more; your work is not affected.";
+ }
+ 
++/** T-293 (APP-030): the marker update_download puts before a refused installer's reason. */
++export const REFUSED_MARK = "update:refused|";
++
+ /** The updater's own words, turned into a sentence a user can act on. */
+ export function plainError(raw: string): string {
+   if (/signature/i.test(raw)) return "The download's signature did not match, so it was thrown away.";
+@@ -135,6 +138,12 @@ export function cardReducer(s: CardState, a: Action): CardState {
+       return { ...next, popup: v, popupSeen: [...s.popupSeen, v] };
+     }
+     case "downloadFailed": {
++      // T-293 (APP-030): a refused installer is a security stop: no Try again, no install anyway.
++      if (a.message.startsWith(REFUSED_MARK)) {
++        const message = a.message.slice(REFUSED_MARK.length);
++        const next = "There is no way to install this download. If you did not expect this, get Kolux RS from its releases page.";
++        return { ...s, requested: true, shown: true, collapsed: false, popup: null, phase: { kind: "error", message, next, info: a.info, retry: "none", security: true } };
++      }
+       // Download errors bring the card up even after a quiet check.
+       return {
+         ...s,
+@@ -191,7 +200,7 @@ export function mainAction(p: Phase): "close" | "download" | "restart" | "retryC
+     case "ready":
+       return "restart";
+     case "error":
+-      return p.retry === "check" ? "retryCheck" : "retryDownload";
++      return p.retry === "none" ? null : p.retry === "check" ? "retryCheck" : "retryDownload";
+     default:
+       return null;
+   }
+@@ -216,7 +225,7 @@ export function barItem(p: Phase): BarItem | null {
+     case "ready":
+       return { tone: "ready", text: "Restart to update", title: `Kolux RS ${p.info.version} is ready to install. ${title}` };
+     case "error":
+-      return { tone: "error", text: "Update failed", title: `${p.message} ${title}` };
++      return { tone: "error", text: p.security ? "Update refused" : "Update failed", title: `${p.message} ${title}` };
+     default:
+       return null;
+   }

@@ -5,6 +5,9 @@
 /// graphics, crash reports) lives beside the Resource Manager so this lane's own file declares it.
 pub mod crashdump;
 pub mod recovery;
+/// T-293 (APP-030): the Windows publisher check on a downloaded update.
+#[allow(dead_code)] // until evidence/reliability-T-293-update.rs.patch wires it (that patch drops this line)
+pub mod update_guard;
 
 use serde::Serialize;
 use std::collections::HashMap;
