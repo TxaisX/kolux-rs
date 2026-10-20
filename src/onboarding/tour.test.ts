@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { autoStarts, GRID_PANE, GRID_RESULTS, GRID_STATUS, gridStarts, nextShown, place, prevShown, stepLabel, tourFeature, TOURS } from "./tour";
+import { autoStarts, CREATE_AGENT, CREATE_NAME, CREATE_NOTE, GRID_PANE, GRID_RESULTS, GRID_STATUS, gridStarts, nextShown, place, prevShown, stepLabel, tourFeature, TOURS } from "./tour";
 
 const base = { id: "tasks" as const, auto: true, seen: [], slotUsed: false, blocked: false, tried: [] };
 
@@ -41,7 +41,7 @@ describe("when tours start by themselves (ONB-032)", () => {
     expect(autoStarts({ ...base, id: "parallel", tried: ["split"] })).toBe(false);
   });
   it("has the catalogue the store keeps, translated", () => {
-    expect(TOURS.map((t) => t.id)).toEqual(["tasks", "automations", "parallel", "grid"]);
+    expect(TOURS.map((t) => t.id)).toEqual(["tasks", "automations", "parallel", "grid", "create"]);
     expect(TOURS.every((t) => t.steps.every((s) => s.ko.title && s.en.title))).toBe(true);
   });
 });
@@ -57,6 +57,15 @@ describe("the grid tour when the first run ends (ONB-012)", () => {
     const grid = TOURS.find((t) => t.id === "grid")!;
     expect(grid.steps.map((s) => s.target)).toEqual([GRID_PANE, GRID_STATUS, GRID_RESULTS]);
     expect(autoStarts({ ...base, id: "grid" })).toBe(false);
+  });
+});
+
+describe("the new-workspace tour (ONB-016)", () => {
+  it("points at the composer's name, agent and note, and only the Setup Guide starts it", () => {
+    const t = TOURS.find((x) => x.id === "create")!;
+    expect(t.steps.map((s) => s.target)).toEqual([CREATE_NAME, CREATE_AGENT, CREATE_NOTE]);
+    expect(autoStarts({ ...base, id: "create" })).toBe(false);
+    expect(tourFeature("create")).toBe(false);
   });
 });
 

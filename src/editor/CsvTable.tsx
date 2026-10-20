@@ -1,6 +1,9 @@
 // EDIT-023 (T-316): the grid an editor tab shows for a CSV or TSV file. It follows the tab's open
-// text live, shows the first rows only (SHOWN_ROWS) so a huge file never locks the view, and the
-// first row is the header. Cells are text, never HTML.
+// text live, reads only the header and the first rows (SHOWN_ROWS, plus one to know there are more)
+// and stops after SCAN_CHARS characters or at a cell over CELL_CHARS (a quote that never closes turns
+// the rest of the file into one cell), so a huge file never builds its other cells on the window thread,
+// and the first row is the header. A file with more than was read says "at least N rows"; if not even
+// the header row finished, it says so and points to the source view. Cells are text, never HTML.
 import { useEffect, useMemo, useState } from "react";
 import { subscribe, textOf } from "./buffers";
 import { parseTable, SHOWN_ROWS } from "./csv";
@@ -24,12 +27,12 @@ export default function CsvTable({ path, loaded, hidden = false }: Props) {
   return (
     <div className="pane-body csv-table" role="region" aria-label={`${path.split(/[\\/]/).pop()}, table view`}>
       {table.rows.length === 0 ? (
-        <p className="csv-note">This file is empty.</p>
+        <p className="csv-note">{table.more ? "The first row never ends (a quote is opened and not closed), so there is no table to show; the source view has the text." : "This file is empty."}</p>
       ) : (
         <>
           <p className="csv-note">
-            {body.length === 1 ? "1 row" : `${body.length} rows`}, {width === 1 ? "1 column" : `${width} columns`}, separated by {sepName}
-            {body.length > rows.length && ` (showing the first ${rows.length}; the source view has them all)`}
+            {table.more ? `at least ${body.length} rows` : body.length === 1 ? "1 row" : `${body.length} rows`}, {width === 1 ? "1 column" : `${width} columns`}, separated by {sepName}
+            {table.more && ` (showing the first ${rows.length}; the source view has them all)`}
           </p>
           <div className="csv-scroll">
             <table>

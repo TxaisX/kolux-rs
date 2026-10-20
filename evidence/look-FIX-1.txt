@@ -84,3 +84,61 @@ D. Tick wording (FIX-BEFORE 3 / FB2)
 Not done (AFTER 3, kept as is): the refusal toast still says "32 MB" though the limit counts
 characters (UTF-16 units). "32 million characters" would be wrong too (the limit is 33,554,432
 units); for plain text one character is one byte, so "32 MB" reads true for the usual paste.
+
+==================================================================
+ROUND 2 (2026-10-19, after MERGE 140; the file above is the 2026-10-14 round)
+==================================================================
+look FIX-1 (council review of 87f3fd67, Send-to-build items 4-7 and the AFTER items inside OWNS)
+BEFORE 87f3fd67 -> main 1512cfee merged (merge commit 75d31b8e), then the fixes below.
+
+Item 4 - sidebar chooser collapses a preset-equal list to the preset
+  Cause: the sidebar saves ONE key per call (App saveSetting copies the settings it closed over), so the chooser could not write
+  the preset and the density together, and a list equal to a preset was saved literally and then never followed the preset.
+  Fix: a ticked set equal to a preset is saved as that preset's marker, a one-entry list "preset:compact" / "preset:default" /
+  "preset:detailed" in workspaceCardDetails; readCardDetails reads it as "follow this preset" and it wins over workspaceCardDensity.
+  The Settings page (two keys per save) still writes density + [] and clears a marker. detailPatch (dead code) is deleted; the tests
+  now call detailsAfter, which is what the sidebar calls.
+  Red before: cards.test.ts, run before the change: 3 failed | 7 passed (log G:/Temp/look-w1-logs/fix1-red.log); the frozen-list
+  test failed on "not a literal list" (saved ["status","agents"] where ["preset:default"] is wanted).
+  Green after: cards.test.ts 10 passed.
+
+Item 5 - click-through tests (clickThrough.test.ts, helper clickTree.ts)
+  The project has no DOM test environment (no jsdom, happy-dom or testing-library, and package.json is not ours), so clickTree.ts
+  walks the element tree a component returns and fires the handlers a click or edit reaches, against a store that saves one key per
+  sidebar call and a whole patch per Settings save. Covered: the eight header swatches and what a pick saves for a project and a group
+  (and grey clearing it); the Card details tick-boxes (status locked and writes nothing, untick down to Default and Compact, saved as
+  markers); the sidebar look buttons, tint colour and strength; the card layout buttons (Custom disappears after a pick) and the pin
+  switch. These cover code that already worked, so they were green on first run; the only red-before is item 4's.
+
+Item 6 - ports and task hover lines (PROJ-062) are NOT built
+  CardFacts holds agents, state, pull request, changed files and the note. The Compact line "hovering shows the pull request and
+  ports" cannot pass until a ports source and a task source exist per workspace. Open line T-266-b added directly under T-266 in PLAN.md.
+
+Item 7 - header colour pruning and the Card details heading
+  forgetHeaderColours(settings, [{kind,id}]) drops entries of deleted groups and their projects (tested). The sidebar has no delete
+  for a project (nothing in ProjectsPanel invokes a project removal), so only group delete needs the call.
+  "Card details" is now an h3 inside a labelled group (CardDetailsChooser.tsx, tested; .sb-form .sb-subhead in styles.css).
+AFTER 3 - the card line's indent: CARD_INDENT 44 and CARD_STEP 14 now live once in CardLine.tsx (cardIndent(depth)); CardLine takes
+  depth (indent still accepted, so the lane works before the patch lands). The row padding in ProjectsPanel is still its own number.
+AFTER 1 (Rust poisoned-lock arm) is not touched here; AFTER 2 was already fixed on main.
+
+Patch for the coordinator (ProjectsPanel.tsx is outside OWNS; 4 small hunks, tiny on purpose): evidence/look-FIX-1-ProjectsPanel.patch
+  - imports; the two header swatch rows become <HeaderColourPicker .../>; the inline Card details block becomes <CardDetailsChooser/>;
+    CardLine gets depth={depth}; deleteGroup calls onSetting(headerColours, forgetHeaderColours(...)) after group_delete.
+  Checked: `git apply --check` exits 0 on the lane tree; with it applied tsc is clean and `vitest run src/look src/projects` =
+  18 files, 106 tests passed. The lane tree WITHOUT the patch also passes (the old inline chooser calls detailsAfter, which is fixed).
+
+Gates (from G:/Dev/kolux-rs-lanes/look, logs in G:/Temp/look-w1-logs/):
+  pnpm exec tsc --noEmit: clean (fix1-tsc.log empty)
+  pnpm test: 215 files, 1473 tests passed (fix1-vitest.log)
+  node scripts/plan-check.mjs --write-state: plan-check: OK; '## Last 10 passes' count 1; duplicate T- ids: none
+  scripts/firewall-check.ps1 -Baseline: 53 hits, 0 new
+  Rust: not touched, no cargo run.
+
+LIVE PROOF PENDING (coordinator, after the patch is applied; do not launch from the lane):
+  1. Sidebar filter panel > Card details: from Detailed untick Pull request, Changed files, Note. Settings > Appearance > Window &
+     Sidebar > Workspace cards should read Default (not Custom).
+  2. Untick Agent summary: it reads Compact. Tick Agent summary and Pull request: it reads Custom with the two details drawn.
+  3. Project settings > Header colour: pick Blue, the badge turns blue; reopen: Blue is marked. Delete a group that had a colour:
+     the badge colour of its projects is unaffected unless they were removed with it.
+  4. Restart the app: every choice above is still there.

@@ -8,19 +8,19 @@ type Hook = AgentState | "background" | undefined;
 
 export type Answer = "approve" | "deny";
 
-/** The keys each program takes for an answer at its permission prompt. ponytail: Claude Code's
- *  prompt opens with Yes highlighted (Enter takes it, Escape backs out); Codex takes y / n. Other
- *  agents are treated like Codex. */
+/** The keys each program takes for an answer at its permission prompt. Claude Code's prompt opens with Yes
+ *  highlighted (Enter takes it, Escape backs out); Codex takes y / n. T-151-c: any other program (a plain shell,
+ *  an agent added later) gets no keys until its prompt is known, so nothing guessed is ever typed into it. */
 export const answerKeys = (agent: string, answer: Answer): string | null => {
-  if (agent === "shell") return null;
   if (agent === "claude") return answer === "approve" ? "\r" : "\x1b";
-  return answer === "approve" ? "y" : "n";
+  if (agent === "codex") return answer === "approve" ? "y" : "n";
+  return null;
 };
 
 /** Council D2 (after MERGE 47): Enter typed into a pane on a guess (the program's title, an OSC report) could land
  *  on whatever is in front of the agent, so the buttons and the answer need a hook PermissionRequest that names
  *  the tool it waits on (`tool`, from the hook's own status), the same thing the window's answer command needs. */
-const hookPrompt = (agent: string, hook: Hook, tool: string | undefined) => agent !== "shell" && hook === "permission" && !!tool;
+const hookPrompt = (agent: string, hook: Hook, tool: string | undefined) => answerKeys(agent, "approve") !== null && hook === "permission" && !!tool;
 
 /** True only for an agent pane whose hook still says "permission" for a named tool and whose prompt count has not moved since the control was drawn. */
 export const canAnswer = (agent: string, hook: Hook, drawnAt: number, now: number, tool: string | undefined): boolean => hookPrompt(agent, hook, tool) && drawnAt === now;

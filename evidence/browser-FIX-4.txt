@@ -22,7 +22,7 @@ Code (browser lane)
   src/browser/BrowserPane.tsx  the opener refocus asks windowHasFocus() first.
 
 Tests (red first, then green)
-  cargo, red (fix4-cargo-red.log, helpers present with the old behaviour): 0 passed, 4 failed
+  cargo, red (fix4-cargo-red.log, regression stubs, not the old code): 0 passed, 4 failed
     fix4_1_focus_app_only_while_the_apps_window_holds_the_keyboard   FAILED
     fix4_2_a_local_page_reaches_no_other_port_of_its_host            FAILED
     fix4_2_a_same_host_redirect_to_another_port_is_never_followed    FAILED

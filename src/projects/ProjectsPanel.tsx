@@ -28,9 +28,10 @@ import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoice
 import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
 import AddProject from "./AddProject";
 import CardLine from "../look/CardLine";
-import { HeaderBadge, HeaderSwatches } from "../look/HeaderBadge";
-import { HEADER_COLOURS_SETTING, headerColourOf, pickHeaderColour } from "../look/headerColour";
-import { CARD_DETAILS, CARD_DETAILS_FIELD, cardTitle, detailsAfter, readCardDetails, type CardFacts } from "../look/cards";
+import { HeaderBadge, HeaderColourPicker } from "../look/HeaderBadge";
+import { CardDetailsChooser } from "../look/CardDetailsChooser";
+import { HEADER_COLOURS_SETTING, colourSaveAfterDelete, headerColourOf, headersGoneWithGroup } from "../look/headerColour";
+import { cardTitle, readCardDetails, type CardFacts } from "../look/cards";
 import { takeSuggestion } from "./suggest";
 import { IconPicker } from "./IconPicker";
 import { ProjectIcon } from "./IconView";
@@ -171,6 +172,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const [plusOpen, setPlusOpen] = useState(false);
   const index = useRef(onIndex);
   index.current = onIndex;
+  const live = useRef({ settings, onSetting }); // the settings as of the latest render, for steps that finish after an await
+  live.current = { settings, onSetting };
   const [listed, setWorktrees] = useState<Record<string, Worktree[]>>({}); // the ones not hidden by hand
   // AUTO-024: the switch that leaves out worktrees made by automation runs; moving to one turns it off.
   const hideAuto = settings[HIDE_AUTOMATION_SETTING] === true;
@@ -249,9 +252,10 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const [setupSkip, setSetupSkip] = useState(false); // PROJ-033: the setup policy; the project's script runs unless skipped
   const [setupWhere, setSetupWhere] = useState<SetupWhere>("tab");
   const [setupWait, setSetupWait] = useState(false);
+  const waitTouched = useRef(false); // the user clicked the wait box since the project last changed
   const nameRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
-  const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; refusal?: string } | null>(null);
+  const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; keep?: boolean; refusal?: string } | null>(null);
   const [busy, setBusy] = useState("");
   const [startGit, setStartGit] = useState<{ folder: string; files: FirstFile[] } | null>(null);
   const [importing, setImporting] = useState<{ project: string; path: string; list: SetupImport[] } | null>(null);
@@ -439,6 +443,17 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     setPrDraft(null);
     setLinked((l) => (creating === null ? null : keepOnSwitch(l))); // SESS-038
   }, [creating]);
+  const waitPath = projects.find((x) => x.id === creating)?.path;
+  useEffect(() => {
+    // SET-033: the repository's own choice of whether the agent waits for setup starts the checkbox
+    waitTouched.current = false;
+    setSetupWait(false); // another repository's choice is not this one's while the read is out
+    if (!waitPath) return;
+    let live = true;
+    // a late reply never undoes a click: the box the user touched stays as they set it
+    invoke<{ wait: boolean }>("repo_setup_get", { path: waitPath }).then((s) => live && !waitTouched.current && setSetupWait(s.wait)).catch(() => {});
+    return () => void (live = false);
+  }, [waitPath]);
   useEffect(() => {
     // SESS-036: the chosen project's own issues and pull requests matching the name, and a pasted
     // link resolved to its item (its title seeds the name). Lookups that fail for want of gh stay quiet.
@@ -624,7 +639,10 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   };
   const deleteGroup = async (g: Group, remove: boolean) => {
     try {
+      const gone = headersGoneWithGroup(groups.members, g.id, remove); // read before the delete: the answer no longer lists the members
       takeGroups(await invoke<Groups>("group_delete", { id: g.id, removeProjects: remove }));
+      const colours = colourSaveAfterDelete(live.current.settings, gone); // null when none of them had a colour: nothing is saved
+      if (colours) live.current.onSetting(HEADER_COLOURS_SETTING, colours);
       setGroupFor(null);
       setDropGroup(null);
       say("ok", remove ? `Deleted the group ${g.name} and took its projects out of Kolux; their folders are still on disk` : `Deleted the group ${g.name}; its projects are at the top level now`);
@@ -884,7 +902,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
           )}
           {!setupSkip && setupWhere === "tab" && (
             <label className="check">
-              <input type="checkbox" aria-label="wait for setup" checked={setupWait} onChange={(e) => setSetupWait(e.target.checked)} />
+              <input type="checkbox" aria-label="wait for setup" checked={setupWait} onChange={(e) => ((waitTouched.current = true), setSetupWait(e.target.checked))} />
               Wait for setup to finish before the agent starts
             </label>
           )}
@@ -937,9 +955,9 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     if (!c) return;
     setBusy("removing");
     try {
-      await invoke("workspace_remove", { projectId: c.projectId, path: c.path, force: c.force, stamp: c.check.stamp });
+      const kept = await invoke<{ branch: string; commit: string } | null>("workspace_remove", { projectId: c.projectId, path: c.path, force: c.force, stamp: c.check.stamp, keepBranch: c.keep });
       onRemoved(c.path);
-      say("ok", `removed ${c.branch} and its folder`);
+      say("ok", kept ? `removed ${c.branch}'s folder; kept the branch ${kept.branch}` : `removed ${c.branch} and its folder`);
       setConfirm(null);
       await reload();
     } catch (err) {
@@ -1396,7 +1414,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
             </button>
           )}
         </div>
-        <CardLine shown={cardDetails.shown} facts={facts} indent={44 + depth * 14} />
+        <CardLine shown={cardDetails.shown} facts={facts} depth={depth} />
         {paneRows(w, depth)}
         {moving === w.path && !asking && (
           <div className="sb-form" data-moving={worktreeLabel(w)}>
@@ -1431,6 +1449,12 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
               <label className="del-force">
                 <input type="checkbox" checked={confirm.force} onChange={(e) => setConfirm({ ...confirm, force: e.target.checked })} />
                 Delete my changes too
+              </label>
+            )}
+            {!blocker(confirm.check) && (
+              <label className="del-force">
+                <input type="checkbox" checked={confirm.keep === true} onChange={(e) => setConfirm({ ...confirm, keep: e.target.checked })} />
+                Keep the branch
               </label>
             )}
             <div className="btn-row">
@@ -1510,7 +1534,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                 ))}
               </select>
               <label>Header colour</label>
-              <HeaderSwatches value={headerColourOf(settings, "p", p.id).id} onPick={(c) => onSetting(HEADER_COLOURS_SETTING, pickHeaderColour(settings, "p", p.id, c))} />
+              <HeaderColourPicker settings={settings} kind="p" id={p.id} onSetting={onSetting} />
               <IconPicker value={icons[p.id]} name={p.name} onSet={(icon) => setIcon(p, icon)} onProblem={(text) => say("warn", text)} />
               <div className="btn-row">
                 <button className="btn" onClick={() => saveProject(p)}>
@@ -1565,7 +1589,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         ))}
       </select>
       <label>Header colour</label>
-      <HeaderSwatches value={headerColourOf(settings, "g", g.id).id} onPick={(c) => onSetting(HEADER_COLOURS_SETTING, pickHeaderColour(settings, "g", g.id, c))} />
+      <HeaderColourPicker settings={settings} kind="g" id={g.id} onSetting={onSetting} />
       {dropGroup ? (
         <>
           <div className="sb-hint">
@@ -1766,13 +1790,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                 <input type="checkbox" aria-label="show sleeping workspaces" checked={showSleeping} onChange={(e) => onSetting(SHOW_SLEEPING_SETTING, e.target.checked)} />
                 Show sleeping workspaces
               </label>
-              <label>Card details</label>
-              {CARD_DETAILS.map((d) => (
-                <label key={d.id} className="check">
-                  <input type="checkbox" aria-label={`card shows ${d.label.toLowerCase()}`} checked={cardDetails.shown.includes(d.id)} disabled={d.locked} onChange={(e) => onSetting(CARD_DETAILS_FIELD, detailsAfter(settings, d.id, e.target.checked))} />
-                  {d.label}
-                </label>
-              ))}
+              <CardDetailsChooser settings={settings} onSetting={onSetting} />
             </div>
           )}
           {creating === "" && nameField(null)}

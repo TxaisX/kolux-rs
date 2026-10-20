@@ -6,7 +6,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentState } from "../projects/rows";
 import { LIMIT } from "../terminal/paste";
-import { ASKING_NOTE, asksInTerminal, enqueue, pasteSteps, sendSteps, typeSteps, type Step } from "./composer";
+import { ASKING_NOTE, asksInTerminal, cancelQueued, enqueue, epochOf, pasteSteps, sendSteps, typeSteps, type Step } from "./composer";
 
 /** CHAT-022: what the box says when Kolux has no hook reading for the pane (hooks off for it, Codex
  * trust not given, an agent with no hook route, no event yet, or only an event from an earlier run). */
@@ -151,7 +151,7 @@ export type SendDeps = {
   /** Told when the send waits on a tool that just started (the box shows it). */
   onWait?: (note: string) => void;
 };
-export type SendOutcome = "sent" | "held" | "stopped" | "too-long" | "no-terminal";
+export type SendOutcome = "sent" | "held" | "stopped" | "too-long" | "no-terminal" | "cancelled";
 
 /** Types `steps` into pane `key`'s terminal, after any earlier send to it. Before every write (the
  * Enter above all) the pane's own readings are checked again, after waiting out a tool that just
@@ -161,18 +161,22 @@ async function typeInto(key: number, text: string, steps: Step[], deps: SendDeps
   const terminal = deps.terminalOf(key);
   if (terminal === undefined) return "no-terminal";
   let busy = false;
-  const held = () => busy || holdFor(key, deps.stateOf, terminal) !== undefined;
-  if (held()) return "held";
+  // CHAT-018: Stop cancels what is still waiting or half typed (never an Enter already pressed).
+  const epoch = epochOf(terminal);
+  const cancelled = () => epochOf(terminal) !== epoch;
+  const held = () => busy || cancelled() || holdFor(key, deps.stateOf, terminal) !== undefined;
+  if (held()) return cancelled() ? "cancelled" : "held";
   const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
   const pause = async () => {
     for (let i = 0, ms = toolWait(key, terminal); ms > 0; i++, ms = toolWait(key, terminal)) {
+      if (cancelled()) return; // FIX-1: Stop ends the wait; the held() check right after drops the send
       if (i === TOOL_WAIT_LIMIT) return void (busy = true);
       deps.onWait?.(TOOL_WAIT_NOTE);
       await sleep(ms);
     }
   };
   const done = await enqueue(terminal, () => typeSteps(steps, (d) => deps.write(terminal, d), sleep, held, pause));
-  return done ? "sent" : "stopped";
+  return done ? "sent" : cancelled() ? "cancelled" : "stopped";
 }
 
 /** CHAT-020, CHAT-022: types the chat message `text` into pane `key`'s terminal (see typeInto). */
@@ -185,15 +189,19 @@ export const pasteToPane = (key: number, text: string, deps: SendDeps, clearLine
 /** The terminal write the window's sends use. */
 export const writeTerminal = (id: number, data: string) => invoke("terminal_write", { id, data });
 
+/** CHAT-018: what the box says about a message that was waiting to send when Stop was pressed. */
+export const CANCELLED_NOTE = "Stop cancelled the message that was waiting to send.";
+
 /** What to tell the user about a send that did not go: why it was held or stopped. */
 export function outcomeNote(got: SendOutcome, key: number, deps: Pick<SendDeps, "terminalOf" | "stateOf">): string {
+  if (got === "cancelled") return CANCELLED_NOTE;
   if (got === "too-long") return TOO_LONG_NOTE;
   if (got === "no-terminal") return NO_TERMINAL_NOTE;
   const why = holdFor(key, deps.stateOf, deps.terminalOf(key)) ?? (got === "stopped" ? BUSY_NOTE : UNSEEN_NOTE);
   return got === "stopped" ? `${STOPPED_NOTE} ${why}` : why;
 }
 
-export type BoxUi = { note: (n: string | null) => void; onQueued: () => void; onFailed: () => void };
+export type BoxUi = { note: (n: string | null) => void; onQueued: () => void; onFailed: () => void; /** CHAT-018: the send was cancelled by Stop before its Enter; its waiting row goes. */ onCancelled?: () => void };
 /** CHAT-020, CHAT-022: what the chat box's Enter does (ChatView.send runs exactly this). False when
  * nothing was sent, so the box keeps the text, after `note` said why (council FIX-2, FS3). Otherwise
  * the send starts: `onQueued` now, `onFailed` if it ends unsent, with the reason in `note`. */
@@ -217,6 +225,10 @@ export function boxSend(key: number, agent: string | undefined, text: string, de
   sendToPane(key, agent, text, { ...deps, onWait }).then(
     (got) => {
       if (got === "sent") return void (waited && ui.note(null));
+      if (got === "cancelled" && ui.onCancelled) {
+        ui.onCancelled();
+        return ui.note(CANCELLED_NOTE);
+      }
       ui.onFailed();
       ui.note(outcomeNote(got, key, deps));
     },
@@ -226,4 +238,26 @@ export function boxSend(key: number, agent: string | undefined, text: string, de
     },
   );
   return true;
+}
+
+/** CHAT-018: the key that interrupts the agent. Claude Code and Codex both take Escape while a turn runs; Escape only ever
+ * backs out of a menu, so a Stop that lands in one cannot approve anything. */
+export const INTERRUPT_KEY = "\x1b";
+export type StopOutcome = "stopped" | "no-terminal" | "asking";
+/** CHAT-018: Stop for pane `key`. Any send still waiting in the queue (or half typed) is cancelled first, then the interrupt
+ * goes out after whatever write is already in flight. While the agent asks something in its terminal nothing is sent: Escape
+ * there would answer the question, and answering is the permission card's job. */
+export async function stopPane(key: number, deps: Pick<SendDeps, "terminalOf" | "stateOf" | "write">): Promise<StopOutcome> {
+  const terminal = deps.terminalOf(key);
+  if (terminal === undefined) return "no-terminal";
+  if (asksInTerminal(deps.stateOf?.(key)) || asksInTerminal(heardOf(key))) return "asking";
+  cancelQueued(terminal);
+  // FIX-1: the interrupt waits behind any write already in flight, and a prompt can open meanwhile; look again at its turn.
+  return enqueue<StopOutcome>(terminal, async () => {
+    // FIX-2: a program started again (or gone) meanwhile: the Escape would go to a dead session or to one nobody asked to stop.
+    if (deps.terminalOf(key) !== terminal) return "no-terminal";
+    if (asksInTerminal(deps.stateOf?.(key)) || asksInTerminal(heardOf(key))) return "asking";
+    await deps.write(terminal, INTERRUPT_KEY);
+    return "stopped";
+  });
 }

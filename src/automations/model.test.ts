@@ -1,5 +1,13 @@
 import { expect, test } from "vitest";
-import { confirmDelete, keepSelection, runActions, runStep, pageKey, dashboardRows, onScreen, RUN_BATCH, runTiles, findNext, lastRun, matches, normalizeQuery, noFilters, passes, preselect, PROMPT_SEARCH_CHARS, sortRows, statusWord, triggerLabel, upcoming, GRACE, graceWord, PRECHECK, precheckWord, type Automation, type Names, type Run } from "./model";
+import { confirmDelete, keepSelection, runActions, runStep, pageKey, dashboardRows, onScreen, outputNote, RUN_BATCH, runTiles, findNext, lastRun, matches, normalizeQuery, noFilters, passes, preselect, PROMPT_SEARCH_CHARS, sortRows, statusWord, triggerLabel, upcoming, GRACE, graceWord, PRECHECK, precheckWord, type Automation, type Names, type Run } from "./model";
+
+test("T-085-h a run reconnected after a restart says its output is the replay so far, not the end", () => {
+  const r: Run = { id: "run-1", automationId: "a", number: 1, trigger: "schedule", status: "dispatched", at: 0, output: "hi", outputFrom: "replay", reconnected: true };
+  expect(outputNote(r)).toBe("What the agent's terminal had shown when Kolux restarted. The run carries on in that terminal.");
+  expect(outputNote({ ...r, outputCut: true })).toContain("older lines were left out. The run carries on");
+  expect(outputNote({ ...r, status: "completed", outputFrom: "screen" })).toBe("What the agent's terminal showed when the run ended.");
+  expect(outputNote({ ...r, status: "completed", outputFrom: "screen", outputCut: true })).toBe("The most recent text the agent's terminal showed; older lines were left out.");
+});
 
 const names: Names = { project: (id) => ({ p1: "shop", p2: "blog" })[id] ?? id, agent: (id) => ({ claude: "Claude Code", codex: "Codex" })[id] ?? id };
 const auto = (id: string, name: string, extra: Partial<Automation> = {}): Automation => ({ id, name, prompt: "", provider: "claude", projectId: "p1", enabled: true, ...extra });

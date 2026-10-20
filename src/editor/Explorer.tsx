@@ -329,7 +329,7 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
   };
   const relative = (p: string) => (p.startsWith(root) ? p.slice(root.length).replace(/^[\\/]/, "") : p);
   const copy = (text: string) =>
-    invoke("clip_write", { text })
+    invoke("clip_copy_text", { text })
       .catch(() => navigator.clipboard.writeText(text))
       .then(() => setNote({ text: `Copied ${text}` }), fail);
 

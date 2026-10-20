@@ -101,6 +101,10 @@ export const actions: Action[] = [
   a("zoom.in", "Zoom In", "global", ["Mod+Equal", "Mod+Shift+Plus", "Mod+NumpadAdd"], { terminalSafe: true }),
   a("zoom.out", "Zoom Out", "global", ["Mod+Minus", "Mod+NumpadSubtract"], { terminalSafe: true }),
   a("zoom.reset", "Reset Size", "global", ["Mod+0"], { terminalSafe: true }),
+  // SET-019 (T-246-c): the saved interface zoom has its own keys, since Mod+= / Mod+- / Mod+0 zoom the focused pane (TERM-078).
+  a("ui.zoomIn", "Zoom Interface In", "global", ["Mod+Alt+Equal"], { group: "menu", terminalSafe: true, keywords: ["zoom", "bigger", "interface", "scale"] }),
+  a("ui.zoomOut", "Zoom Interface Out", "global", ["Mod+Alt+Minus"], { group: "menu", terminalSafe: true, keywords: ["zoom", "smaller", "interface", "scale"] }),
+  a("ui.zoomReset", "Reset Interface Zoom", "global", ["Mod+Alt+0"], { group: "menu", terminalSafe: true, keywords: ["zoom", "actual size", "interface", "scale"] }),
   a("worktree.history.back", "Worktree History Back", "global", ["Mod+Alt+ArrowLeft"]),
   a("worktree.history.forward", "Worktree History Forward", "global", ["Mod+Alt+ArrowRight"]),
   a("tab.newTerminal", "New terminal tab", "tabs", ["Mod+T"]),
