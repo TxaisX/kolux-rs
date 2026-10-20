@@ -67,24 +67,33 @@ fn include_target(dir: &Path, value: &str) -> Option<PathBuf> {
 }
 
 /// The first config file that exists in `candidates`, then the files it includes (relative paths inside
-/// its own folder, at most `MAX_CONFIG_FILES` in all, each once).
+/// its own folder, also after symlinks and junctions are resolved; at most `MAX_CONFIG_FILES` in all, each once).
 pub(crate) fn ghostty_config(candidates: &[PathBuf]) -> Vec<GhosttyFile> {
     let Some(first) = candidates.iter().find(|p| p.is_file()) else {
         return Vec::new();
     };
     let dir = first.parent().map(Path::to_path_buf).unwrap_or_default();
+    // The folder's real place, links resolved: an include must still be inside it after its own links are
+    // resolved (FIX-2, 2026-10-19). The first config file may itself be a link, as in a dotfiles setup.
+    let real_dir = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
     let mut out = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let mut queue = vec![first.clone()];
+    let mut is_first = true;
     while let Some(path) = queue.pop() {
         if out.len() >= MAX_CONFIG_FILES {
             break;
         }
-        let key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        if !seen.insert(key) {
+        let real = std::fs::canonicalize(&path).ok();
+        if !seen.insert(real.clone().unwrap_or_else(|| path.clone())) {
             continue;
         }
         let label = file_name(&path);
+        let first_file = std::mem::replace(&mut is_first, false);
+        if !first_file && real.as_ref().is_some_and(|r| !r.starts_with(&real_dir)) {
+            out.push(GhosttyFile { label, text: None, skipped: Some("is outside the configuration folder".into()) });
+            continue;
+        }
         match read_capped(&path) {
             Ok(text) => {
                 let mut includes: Vec<PathBuf> = text
@@ -255,6 +264,81 @@ mod tests {
         }
         let chain = d.put("start", "config-file = c0\n");
         assert_eq!(ghostty_config(&[chain]).len(), MAX_CONFIG_FILES);
+    }
+
+    /// Makes `link` a file symlink to `target`; false (so the test prints SKIPPED) when this account may not.
+    fn file_link(link: &Path, target: &Path) -> bool {
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(target, link);
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(target, link);
+        made.is_ok()
+    }
+
+    /// Makes `link` a folder link to `target` (a junction on Windows, which needs no privilege).
+    fn dir_link(link: &Path, target: &Path) -> bool {
+        #[cfg(windows)]
+        {
+            std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(target).output().is_ok_and(|o| o.status.success())
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+    }
+
+    #[test]
+    fn term_099_fix2_an_include_that_is_a_symlink_to_a_file_outside_the_config_folder_is_not_read() {
+        let d = Dir::new("lnk");
+        let cfg = d.put("ghostty/config", "font-size = 13\nconfig-file = linked\nconfig-file = inner/ok\n");
+        let outside = d.put("elsewhere/secret", "SECRET-OUTSIDE\n");
+        d.put("ghostty/inner/ok", "cursor-style = bar\n");
+        if !file_link(&d.0.join("ghostty/linked"), &outside) {
+            println!("SKIPPED: this account cannot create a file symlink, so the file-symlink containment check did not run");
+            return;
+        }
+        let files = ghostty_config(&[cfg]);
+        let labels: Vec<_> = files.iter().map(|f| f.label.as_str()).collect();
+        assert_eq!(labels, ["config", "linked", "ok"]);
+        let linked = &files[1];
+        assert!(linked.text.is_none(), "the symlink target must not be read: {linked:?}");
+        assert_eq!(linked.skipped.as_deref(), Some("is outside the configuration folder"));
+        assert!(files[2].text.as_deref().unwrap().contains("cursor-style = bar"), "a plain sub-folder include still reads");
+        assert!(!format!("{files:?}").contains("SECRET-OUTSIDE"));
+    }
+
+    #[test]
+    fn term_099_fix2_an_include_through_a_folder_link_that_leaves_the_config_folder_is_not_read() {
+        let d = Dir::new("junc");
+        let cfg = d.put("ghostty/config", "config-file = away/secret\nconfig-file = real/ok\n");
+        d.put("elsewhere/secret", "SECRET-OUTSIDE\n");
+        d.put("ghostty/real/ok", "font-size = 12\n");
+        if !dir_link(&d.0.join("ghostty").join("away"), &d.0.join("elsewhere")) {
+            println!("SKIPPED: this account cannot create a folder link, so the folder-link containment check did not run");
+            return;
+        }
+        let files = ghostty_config(&[cfg]);
+        let secret = files.iter().find(|f| f.label == "secret").expect("the include is listed by name");
+        assert!(secret.text.is_none(), "a file reached through a folder link outside must not be read: {secret:?}");
+        assert_eq!(secret.skipped.as_deref(), Some("is outside the configuration folder"));
+        assert!(files.iter().any(|f| f.label == "ok" && f.text.is_some()));
+        assert!(!format!("{files:?}").contains("SECRET-OUTSIDE"));
+    }
+
+    #[test]
+    fn term_099_fix2_the_config_file_itself_may_be_a_symlink_as_in_a_dotfiles_setup() {
+        let d = Dir::new("dot");
+        let real = d.put("dotfiles/ghostty-config", "font-size = 15\nconfig-file = extra\n");
+        d.put("ghostty/extra", "cursor-style = block\n");
+        let link = d.0.join("ghostty/config");
+        if !file_link(&link, &real) {
+            println!("SKIPPED: this account cannot create a file symlink, so the dotfiles-config check did not run");
+            return;
+        }
+        let files = ghostty_config(&[link]);
+        assert_eq!(files.len(), 2, "{files:?}");
+        assert!(files[0].text.as_deref().unwrap().contains("font-size = 15"));
+        assert!(files[1].text.as_deref().unwrap().contains("cursor-style = block"));
     }
 
     #[test]

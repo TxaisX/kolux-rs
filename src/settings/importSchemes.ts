@@ -278,7 +278,7 @@ export function importGhostty(files: GhosttyFileIn[], readTheme: (name: string) 
     }
     for (const l of ghosttyLines(f.text)) {
       if ("bad" in l) {
-        bad(l.bad, "", "not a key = value line");
+        bad(l.bad.length > 60 ? l.bad.slice(0, 60) + "…" : l.bad, "", "not a key = value line");
         continue;
       }
       const { key, value } = l;

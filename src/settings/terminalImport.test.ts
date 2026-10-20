@@ -75,6 +75,14 @@ describe("TERM-099 Ghostty configuration", () => {
     expect(r.invalid).toEqual([{ key: "this is not a setting", value: "", reason: "not a key = value line" }]);
   });
 
+  it("a very long junk line is shown cut short, not whole (FIX-2)", () => {
+    const r = importGhostty([file("x".repeat(500) + "\n")], NO_THEMES);
+    expect(r.invalid).toHaveLength(1);
+    expect(r.invalid[0].key.length).toBeLessThanOrEqual(61);
+    expect(r.invalid[0].key.endsWith("…")).toBe(true);
+    expect(r.invalid[0].key.startsWith("xxxx")).toBe(true);
+  });
+
   it("a config with no colours gives no scheme", () => {
     expect(importGhostty([file("font-size = 12\n")], NO_THEMES).schemes).toEqual([]);
   });

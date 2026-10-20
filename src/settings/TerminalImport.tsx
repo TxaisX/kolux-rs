@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { applyAppearance, readAppearance } from "../theme";
 import { planImport, planSummary, type GhosttyImport, type WarpScan } from "./importSchemes";
-import { ghosttyPatch, hasChanges, readGhostty, readWarp } from "./terminalImportRead";
+import { ghosttyPatch, pickedSchemes, previewLines, readGhostty, readSavedSettings, readWarp, saveChecked, warpRows } from "./terminalImportRead";
 
 type Props = { settings: Record<string, unknown>; save: (patch: Record<string, unknown>) => Promise<unknown> };
 
@@ -26,15 +26,24 @@ function GhosttyImportBox({ settings, save }: Props) {
       setBusy(false);
     }
   };
-  const apply = (r: GhosttyImport) => {
+  const apply = async (r: GhosttyImport) => {
     const { patch, plan } = ghosttyPatch(readAppearance(settings).custom, r);
+    setBusy(true);
+    const saved = Object.keys(patch).length === 0 || (await saveChecked(save, patch, readSavedSettings));
+    setBusy(false);
+    if (!saved) {
+      // Nothing is shown as changed: the window keeps its look, and the import stays open to try again.
+      setResult("The import could not be saved, so nothing was changed. Try again.");
+      return;
+    }
     applyNow(settings, patch);
-    void save(patch);
     const done = [r.applied.length && `Set ${r.applied.join(", ")}.`, (plan.added.length || plan.replaced.length || plan.refused.length) && planSummary(plan)].filter(Boolean).join(" ");
     setResult(done || "Nothing changed.");
     setFound(null);
   };
   const r = found && found !== "none" ? found : null;
+  // The preview and Bring in use the same plan, so the preview never promises what the cap will refuse.
+  const now = r ? ghosttyPatch(readAppearance(settings).custom, r) : null;
   return (
     <div className="scheme-import" data-section="ghostty-import">
       <div className="btn-row">
@@ -47,7 +56,10 @@ function GhosttyImportBox({ settings, save }: Props) {
       {r && (
         <div role="group" aria-label="Ghostty settings to bring in">
           {r.applied.length > 0 && <p className="conn-detail">Will set: {r.applied.join(", ")}.</p>}
-          {r.schemes.length > 0 && <p className="conn-detail">Will add the colour scheme{r.schemes.length > 1 ? "s" : ""} {r.schemes.map((s) => s.name).join(" and ")}.</p>}
+          {now &&
+            previewLines(now.plan).map((l) => (
+              <p key={l} className="conn-detail">{l}</p>
+            ))}
           {r.notes.map((n) => (
             <p key={n} className="conn-detail">{n}</p>
           ))}
@@ -57,14 +69,14 @@ function GhosttyImportBox({ settings, save }: Props) {
               Left out: {i.key}{i.value ? ` = ${i.value}` : ""} ({i.reason}).
             </p>
           ))}
-          {r.skipped.map((s) => (
-            <p key={s.file} className="conn-detail warn">
+          {r.skipped.map((s, i) => (
+            <p key={`${i}:${s.file}`} className="conn-detail warn">
               {s.file} {s.reason}.
             </p>
           ))}
-          {!hasChanges(r) && <p className="conn-detail">There is nothing in it to bring in.</p>}
+          {now && Object.keys(now.patch).length === 0 && <p className="conn-detail">There is nothing in it to bring in.</p>}
           <div className="btn-row">
-            <button type="button" className="btn" disabled={!hasChanges(r)} onClick={() => apply(r)}>
+            <button type="button" className="btn" disabled={busy || !now || Object.keys(now.patch).length === 0} onClick={() => void apply(r)}>
               Bring in
             </button>
             <button type="button" className="btn" onClick={() => setFound(null)}>
@@ -80,7 +92,7 @@ function GhosttyImportBox({ settings, save }: Props) {
 
 function WarpImportBox({ settings, save }: Props) {
   const [scan, setScan] = useState<WarpScan | null>(null);
-  const [ticked, setTicked] = useState<Set<string>>(new Set());
+  const [ticked, setTicked] = useState<Set<string>>(new Set()); // row keys (place + file name), not bare file names
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState("");
   const look = async () => {
@@ -96,18 +108,23 @@ function WarpImportBox({ settings, save }: Props) {
       setBusy(false);
     }
   };
-  const apply = (s: WarpScan) => {
-    const saved = readAppearance(settings).custom;
-    const picked = s.themes.filter((t) => ticked.has(t.file)).map((t) => t.scheme);
-    const plan = planImport(saved, picked);
+  const apply = async (s: WarpScan) => {
+    const plan = planImport(readAppearance(settings).custom, pickedSchemes(warpRows(s), ticked));
     if (plan.added.length || plan.replaced.length) {
       const patch = { terminalCustomSchemes: plan.custom };
+      setBusy(true);
+      const saved = await saveChecked(save, patch, readSavedSettings);
+      setBusy(false);
+      if (!saved) {
+        setResult("The themes could not be saved, so nothing was changed. Try again.");
+        return;
+      }
       applyNow(settings, patch);
-      void save(patch);
     }
     setResult(planSummary(plan));
     setScan(null);
   };
+  const rows = scan ? warpRows(scan) : [];
   return (
     <div className="scheme-import" data-section="warp-import">
       <div className="btn-row">
@@ -121,17 +138,17 @@ function WarpImportBox({ settings, save }: Props) {
         <div role="group" aria-label="Warp themes to bring in">
           {scan.themes.length > 1 && (
             <label className="conn-switch">
-              <input type="checkbox" aria-label="Select all" checked={ticked.size === scan.themes.length} onChange={(e) => setTicked(e.target.checked ? new Set(scan.themes.map((t) => t.file)) : new Set())} />
+              <input type="checkbox" aria-label="Select all" checked={ticked.size === rows.length} onChange={(e) => setTicked(e.target.checked ? new Set(rows.map((t) => t.key)) : new Set())} />
               <span>Select all</span>
             </label>
           )}
-          {scan.themes.map((t) => (
-            <label key={t.file} className="conn-switch scheme-incoming">
+          {rows.map((t) => (
+            <label key={t.key} className="conn-switch scheme-incoming">
               <input
                 type="checkbox"
                 aria-label={`Bring in ${t.scheme.name}`}
-                checked={ticked.has(t.file)}
-                onChange={(e) => setTicked((c) => (e.target.checked ? new Set(c).add(t.file) : new Set([...c].filter((f) => f !== t.file))))}
+                checked={ticked.has(t.key)}
+                onChange={(e) => setTicked((c) => (e.target.checked ? new Set(c).add(t.key) : new Set([...c].filter((k) => k !== t.key))))}
               />
               <span className="scheme-swatch" style={{ background: t.scheme.background, color: t.scheme.foreground }}>
                 Aa
@@ -145,13 +162,13 @@ function WarpImportBox({ settings, save }: Props) {
               </span>
             </label>
           ))}
-          {scan.skipped.map((s) => (
-            <p key={s.file} className="conn-detail warn">
+          {scan.skipped.map((s, i) => (
+            <p key={`${i}:${s.file}`} className="conn-detail warn">
               {s.file}: {s.reason}
             </p>
           ))}
           <div className="btn-row">
-            <button type="button" className="btn" disabled={ticked.size === 0} onClick={() => apply(scan)}>
+            <button type="button" className="btn" disabled={busy || ticked.size === 0} onClick={() => void apply(scan)}>
               Bring in {ticked.size || ""}
             </button>
             <button type="button" className="btn" onClick={() => setScan(null)}>
