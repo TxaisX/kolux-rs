@@ -40,6 +40,7 @@ import { cardView, saveArgs, type SetupSuggestion } from "./setupSuggestion";
 import { cardProjectOf, newestOnly } from "./cardAsk";
 import Picker, { type PickItem } from "./Picker";
 import StartGit, { type FirstFile } from "./StartGit";
+import ScanRepos from "./ScanRepos";
 import { openKits } from "../kits/Kits";
 import { ADD_PROJECT } from "../onboarding/firstRun";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
@@ -271,6 +272,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const [groupFor, setGroupFor] = useState<string | null>(null); // the group whose settings form is open
   const [groupName, setGroupName] = useState("");
   const [groupParent, setGroupParent] = useState("");
+  const [scanRoot, setScanRoot] = useState<string | null>(null); // PROJ-012: the folder being scanned for repositories
   const [dropProject, setDropProject] = useState<string | null>(null); // PROJ-008: the id being asked about
   const [dropGroup, setDropGroup] = useState<{ remove: boolean } | null>(null); // PROJ-015: the delete question
   const seen = useRef<Record<string, AgentState>>({});
@@ -1971,7 +1973,24 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         </div>
       </aside>
       {importing && <ImportSetup {...importing} busy={busy !== ""} onImport={importSetup} onClose={() => setImporting(null)} />}
-      {startGit && <StartGit {...startGit} busy={busy !== ""} onStart={startGitAndAdd} onFolder={openAsFolder} onCancel={() => setStartGit(null)} />}
+      {startGit && <StartGit {...startGit} busy={busy !== ""} onStart={startGitAndAdd} onFolder={openAsFolder} onScan={() => (setScanRoot(startGit.folder), setStartGit(null))} onCancel={() => setStartGit(null)} />}
+      {scanRoot !== null && (
+        <ScanRepos
+          root={scanRoot}
+          onClose={() => setScanRoot(null)}
+          onProblem={fail}
+          onDone={async (message, project) => {
+            setScanRoot(null);
+            setShowAdd(false);
+            say("ok", message);
+            await reload();
+            if (project) {
+              const open = openedWorktree(await invoke<Worktree[]>("workspace_list", { projectId: project.id }), project.path);
+              if (open) (onSelect(open.path, open.branch), onAdded(open.path, open.branch));
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

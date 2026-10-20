@@ -14,7 +14,7 @@ export function firstCommitLine(files: FirstFile[], chosen: Set<string>) {
   return `${n} file${n === 1 ? "" : "s"} in the first commit${out ? `, ${out} left out` : ""}.`;
 }
 
-export default function StartGit({ folder, files, busy, onStart, onFolder, onCancel }: { folder: string; files: FirstFile[]; busy: boolean; onStart: (files: string[]) => void; onFolder?: () => void; onCancel: () => void }) {
+export default function StartGit({ folder, files, busy, onStart, onFolder, onScan, onCancel }: { folder: string; files: FirstFile[]; busy: boolean; onStart: (files: string[]) => void; onFolder?: () => void; onScan?: () => void; onCancel: () => void }) {
   const [chosen, setChosen] = useState(() => defaultChosen(files));
   const toggle = (p: string) =>
     setChosen((c) => {
@@ -57,6 +57,11 @@ export default function StartGit({ folder, files, busy, onStart, onFolder, onCan
           <button className="btn" onClick={onCancel}>
             Cancel
           </button>
+          {onScan && (
+            <button className="btn" disabled={busy} onClick={onScan} title="The folder holds several repositories: list them and bring in the ones you pick">
+              Look for repositories inside
+            </button>
+          )}
           {onFolder && (
             <button className="btn" disabled={busy} onClick={onFolder}>
               Open as a folder

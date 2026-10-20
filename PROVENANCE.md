@@ -832,3 +832,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · chrome T-049-c · rules from the VIEW-003, VIEW-004 and SET-037 cards; this tree own src/chrome, src/App.tsx and src/styles.css; no outside source
 > 2026-10-19 · repo T-226 · spec/05 VIEW-071, VIEW-074, VIEW-078 as given in the brief; Windows netstat public docs (listening table columns); this tree's own scm and terminal modules; no outside code
 > 2026-10-19 · repo T-214-b · spec/01 PROJ-005, PROJ-008 as given in the brief; this tree's own projects.rs, setup.rs, bulk.rs; no outside code
+> 2026-10-19 · repo T-215-b · spec/01 PROJ-012, PROJ-013 as given in the brief; this tree's own groups.rs and projects.rs; no outside code
