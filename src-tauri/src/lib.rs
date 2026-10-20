@@ -44,6 +44,7 @@ mod install;
 mod keybindings;
 mod kits;
 mod links;
+mod lifecycle;
 mod menu;
 mod bulk;
 mod names;
