@@ -1520,8 +1520,9 @@ pub fn workspace_remove_check(git: State<'_, Git>, store: StoreState<'_>, projec
 }
 
 /// PROJ-070: deletes the workspace only when the check made just now still matches `stamp` (what
-/// the question showed) and nothing refuses it; `force` loses uncommitted changes.
-#[tauri::command]
+/// the question showed) and nothing refuses it; `force` loses uncommitted changes. Async (T-033-e
+/// FIX-1): it joins the watch's reader threads and runs git, never on the window's thread.
+#[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: State<'_, crate::terminal::Terminals>, project_id: String, path: String, force: bool, stamp: String) -> Result<(), String> {
     let project = {
@@ -1538,8 +1539,20 @@ pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: S
         let n = stopped.stuck.len();
         return Err(format!("{n} process{} in this workspace did not stop. Tick Delete my changes too to delete it anyway, leaving {} running.", if n == 1 { "" } else { "es" }, if n == 1 { "it" } else { "them" }));
     }
+    // FIX-2 (T-033-e review): what to keep is decided first, so the one `?` that can return early
+    // runs before the watch ends; an early return after it would drop the handle below without
+    // telling the page.
     let keep = keeps_branch(&*store.lock().map_err(|e| e.to_string())?, &path);
-    remove_worktree(&git, &project, &path, force, keep)?;
+    // T-033-e: the Source Control watch on this folder ends first and its folder handles are
+    // closed (joined) before git deletes the folder, so nothing of ours stands in the way.
+    let watch = crate::scm::watch::unwatch_root(Path::new(&path));
+    if let Err(e) = remove_worktree(&git, &project, &path, force, keep) {
+        // FIX-1: the folder stays after all, so its panel is told to watch it again.
+        if let Some(w) = watch {
+            w.tell_page();
+        }
+        return Err(e);
+    }
     let store = store.lock().map_err(|e| e.to_string())?;
     forget_workspace(&store, &path)
 }
@@ -1700,19 +1713,26 @@ pub fn forget_gone_at_start(app: tauri::AppHandle) {
             Err(_) => return,
         };
         let busy: Vec<String> = app.state::<crate::terminal::Terminals>().list().into_iter().filter_map(|(_, _, dir)| dir).collect();
-        let git = app.state::<Git>();
         let dir = app.path().app_data_dir().ok();
-        for p in projects {
-            let repo = Path::new(&p.path);
-            if let Ok(all) = git.worktrees(repo) {
-                for path in sweep_gone(&app.state::<Mutex<Store>>(), repo, &kolux_made(&origins, all), &busy, dir.as_deref()) {
-                    if let Some(dir) = dir.as_deref() {
-                        crate::diag::write(dir, &format!("forgot the worktree {path}: its folder is gone and no session uses it"));
-                    }
-                }
+        for path in sweep_all_gone(&app.state::<Mutex<Store>>(), &app.state::<Git>(), &projects, &origins, &busy, dir.as_deref()) {
+            if let Some(dir) = dir.as_deref() {
+                crate::diag::write(dir, &format!("forgot the worktree {path}: its folder is gone and no session uses it"));
             }
         }
     });
+}
+
+/// The sweep `forget_gone_at_start` runs: for every project, the gone worktrees Kolux RS made and no
+/// session uses are forgotten. A project whose folder Git cannot read is skipped. Returns every path forgotten.
+fn sweep_all_gone(store: &Mutex<Store>, git: &Git, projects: &[Project], origins: &serde_json::Map<String, serde_json::Value>, busy: &[String], diag_dir: Option<&Path>) -> Vec<String> {
+    let mut forgotten = Vec::new();
+    for p in projects {
+        let repo = Path::new(&p.path);
+        if let Ok(all) = git.worktrees(repo) {
+            forgotten.extend(sweep_gone(store, repo, &kolux_made(origins, all), busy, diag_dir));
+        }
+    }
+    forgotten
 }
 
 // ---- PROJ-019: a project's icon, chosen by hand
@@ -1805,14 +1825,19 @@ pub fn project_icon_set(store: StoreState<'_>, project_id: String, icon: String)
 // ---- PROJ-018: an icon found in the repository
 //
 // Places are tried in this order, the first hit wins: a small favicon inside the repository, icons
-// of desktop app bundles, an image the package manifest names on the web, the favicon of the
-// homepage the manifest names, the icon links declared in the page source, and last the avatar of
-// the owner on the hosting site. Only files inside the repository are read (never through a link
-// or a `..`), and a file over `AUTO_ICON_FILE_MAX` is passed over. Nothing is fetched here: a web
-// address is handed to the page, which loads it like any picture. No hit gives the folder symbol.
+// of desktop app bundles, a picture the package manifest names inside the repository, the icon
+// links the page source declares inside the repository, and last the avatar of the owner on the
+// hosting site. Only files inside the repository are read (never through a link or a `..`), and a
+// file over `AUTO_ICON_FILE_MAX` is passed over. FIX-4 (2026-10-19): a repository never makes the
+// app load a web address of its choosing. The manifest's web `icon`, its `homepage` favicon and
+// `https` icon links in the page source are not followed (T-302-c fetches them in Rust, behind
+// checks); the one address handed to the page is the owner's avatar on github.com, which the
+// content policy allows and nothing else. No hit gives the folder symbol.
 
-/// The most a file may take to be used as an icon (a 64 KB data URL once encoded).
-pub const AUTO_ICON_FILE_MAX: u64 = 48 * 1024;
+/// The most a file may take to be used as an icon: the biggest whole number of 3-byte groups whose
+/// data URL (base64 text plus the longest header, 40 characters) still fits `ICON_IMAGE_MAX`.
+/// `src/projects/projectIcon.ts` holds the same figure (49 122) and both are tested against it.
+pub const AUTO_ICON_FILE_MAX: u64 = ((ICON_IMAGE_MAX as u64 - 40) / 4) * 3;
 const FAVICON_DIRS: &[&str] = &["", "public", "static", "assets", "src", "app", "web", "www", "docs", "site"];
 const FAVICON_NAMES: &[&str] = &["favicon.ico", "favicon.png", "favicon.svg"];
 const BUNDLE_ICONS: &[&str] = &[
@@ -1829,8 +1854,8 @@ const BUNDLE_ICONS: &[&str] = &[
 const PAGE_FILES: &[&str] = &["index.html", "public/index.html", "src/index.html", "app/index.html", "static/index.html", "web/index.html"];
 const PAGE_READ_MAX: u64 = 256 * 1024;
 
-/// What a project shows when the repository holds an icon: a picture as a data URL (`image`), or a
-/// web address the page loads itself (`remote` for a picture on the web, `avatar` for the owner's).
+/// What a project shows when the repository holds an icon: a picture as a data URL (`image`), or the
+/// owner's avatar address on the hosting site (`avatar`, the only web address ever handed over).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct AutoIcon {
     pub kind: &'static str,
@@ -1878,18 +1903,15 @@ fn repo_image(repo: &Path, rel: &str) -> Option<String> {
     Some(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes)))
 }
 
-/// `https://host[:port]` of a web address, and only that: a plain host, no login, no odd characters.
-fn web_origin(url: &str) -> Option<String> {
-    let rest = url.trim().strip_prefix("https://")?;
-    let host = rest.split(['/', '?', '#']).next()?;
-    let ok = !host.is_empty() && host.len() <= 253 && host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'));
-    ok.then(|| format!("https://{host}"))
-}
-
-/// A web address kept only when it is plain `https` with no spaces or quotes.
-fn web_address(url: &str) -> Option<String> {
-    let url = url.trim();
-    (web_origin(url).is_some() && url.len() <= 2048 && !url.chars().any(|c| c.is_whitespace() || c.is_control() || matches!(c, '"' | '\'' | '<' | '>' | '\\'))).then(|| url.to_string())
+/// The text of the file at `rel` inside `repo` (at most `PAGE_READ_MAX` bytes), for a plain file only:
+/// nothing for a missing file, a link, or a file that a link on the way leads out of the repository.
+fn repo_text(repo: &Path, rel: &str) -> Option<String> {
+    let path = rel.split('/').fold(repo.to_path_buf(), |p, part| p.join(part));
+    let meta = fs::symlink_metadata(&path).ok()?;
+    if !meta.is_file() || meta.len() > PAGE_READ_MAX || !fs::canonicalize(&path).ok()?.starts_with(fs::canonicalize(repo).ok()?) {
+        return None;
+    }
+    fs::read_to_string(&path).ok()
 }
 
 /// The `href` of every icon link (`rel` holding "icon") in the page text.
@@ -1954,7 +1976,6 @@ fn owner_avatar(origin: Option<&str>, upstream: Option<&str>) -> Option<String> 
 /// The icon the repository at `repo` offers, trying the places in order; `None` means the folder symbol.
 pub fn auto_icon(repo: &Path) -> Option<AutoIcon> {
     let image = |src: String| AutoIcon { kind: "image", src };
-    let remote = |src: String| AutoIcon { kind: "remote", src };
     for dir in FAVICON_DIRS {
         for name in FAVICON_NAMES {
             let rel = if dir.is_empty() { name.to_string() } else { format!("{dir}/{name}") };
@@ -1966,32 +1987,16 @@ pub fn auto_icon(repo: &Path) -> Option<AutoIcon> {
     if let Some(src) = BUNDLE_ICONS.iter().find_map(|rel| repo_image(repo, rel)) {
         return Some(image(src));
     }
-    let manifest: Option<serde_json::Value> = fs::metadata(repo.join("package.json"))
-        .ok()
-        .filter(|m| m.is_file() && m.len() <= PAGE_READ_MAX)
-        .and_then(|_| fs::read_to_string(repo.join("package.json")).ok())
-        .and_then(|t| serde_json::from_str(&t).ok());
-    let icon_field = manifest.as_ref().and_then(|m| m["icon"].as_str());
-    if let Some(src) = icon_field.and_then(web_address) {
-        return Some(remote(src));
-    }
-    if let Some(src) = icon_field.and_then(|rel| repo_image(repo, rel)) {
+    // a web address in the manifest or the page source is never followed (FIX-4): `repo_image` refuses
+    // anything with a scheme, so only a path inside the repository can match
+    let manifest: Option<serde_json::Value> = repo_text(repo, "package.json").and_then(|t| serde_json::from_str(&t).ok());
+    if let Some(src) = manifest.as_ref().and_then(|m| m["icon"].as_str()).and_then(|rel| repo_image(repo, rel)) {
         return Some(image(src));
     }
-    if let Some(origin) = manifest.as_ref().and_then(|m| m["homepage"].as_str()).and_then(web_origin) {
-        return Some(remote(format!("{origin}/favicon.ico")));
-    }
     for page in PAGE_FILES {
-        let Ok(meta) = fs::metadata(repo.join(page)) else { continue };
-        if !meta.is_file() || meta.len() > PAGE_READ_MAX {
-            continue;
-        }
-        let Ok(text) = fs::read_to_string(repo.join(page)) else { continue };
+        let Some(text) = repo_text(repo, page) else { continue };
         let beside = page.rsplit_once('/').map_or("", |(d, _)| d);
         for href in icon_links(&text) {
-            if let Some(src) = web_address(&href) {
-                return Some(remote(src));
-            }
             let from_root = href.starts_with('/');
             let rel = if from_root || beside.is_empty() { href.clone() } else { format!("{beside}/{href}") };
             if let Some(src) = repo_image(repo, &rel).or_else(|| from_root.then(|| repo_image(repo, &format!("public/{}", href.trim_start_matches('/')))).flatten()) {
@@ -1999,15 +2004,21 @@ pub fn auto_icon(repo: &Path) -> Option<AutoIcon> {
             }
         }
     }
+    // Git looks in the parent folders for a repository; a folder inside another repository is not that
+    // repository, so its owner is not this project's owner (FIX-4). `--show-prefix` is empty at the top.
+    if !crate::git::run(&["rev-parse", "--show-prefix"], Some(repo)).is_ok_and(|p| p.is_empty()) {
+        return None;
+    }
     let url = |name: &str| crate::git::run(&["remote", "get-url", name], Some(repo)).ok();
     owner_avatar(url("origin").as_deref(), url("upstream").as_deref()).map(|src| AutoIcon { kind: "avatar", src })
 }
 
-/// The automatic icon of project `project_id` (PROJ-018). Reads files off the thread that holds the store.
+/// The automatic icon of project `project_id` (PROJ-018). The store lock is released before any file or
+/// git work, and that work runs on the blocking pool so a panel asking for every row never stalls the async workers.
 #[tauri::command]
 pub async fn project_auto_icon(store: StoreState<'_>, project_id: String) -> Result<Option<AutoIcon>, String> {
     let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
-    Ok(auto_icon(Path::new(&project.path)))
+    tauri::async_runtime::spawn_blocking(move || auto_icon(Path::new(&project.path))).await.map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -3519,16 +3530,19 @@ mod tests {
     #[test]
     fn t302_places_are_tried_in_the_order_the_card_gives() {
         let repo = temp("t302-order");
-        // 5th: a link in the page source; 4th: the homepage; 3rd: an image on the web; 2nd: an app bundle
+        // 4th: a link in the page source; 3rd: a picture the manifest names; 2nd: an app bundle
         put(&repo, "index.html", b"<html><head><link rel=\"icon\" href=\"/img/page.png\"></head></html>");
         put(&repo, "img/page.png", PNG);
         assert!(src_of(auto_icon(&repo), "image").starts_with("data:image/png"), "the page link is the last place before the avatar");
-        put(&repo, "package.json", br#"{"homepage":"https://example.org/site/","icon":"https://cdn.example.org/logo.png"}"#);
-        assert_eq!(src_of(auto_icon(&repo), "remote"), "https://cdn.example.org/logo.png", "an image on the web beats the page link");
-        put(&repo, "package.json", br#"{"homepage":"https://example.org/site/"}"#);
-        assert_eq!(src_of(auto_icon(&repo), "remote"), "https://example.org/favicon.ico", "the homepage's favicon beats the page link");
+        put(&repo, "package.json", br#"{"homepage":"https://example.org/site/","icon":"img/manifest.png"}"#);
+        put(&repo, "img/manifest.png", b"\x89PNG\r\n\x1a\nmanifest");
+        let manifest = src_of(auto_icon(&repo), "image");
+        assert!(manifest.starts_with("data:image/png"), "a picture the manifest names beats the page link");
+        use base64::Engine as _;
+        assert_eq!(base64::engine::general_purpose::STANDARD.decode(manifest.trim_start_matches("data:image/png;base64,")).unwrap(), b"\x89PNG\r\n\x1a\nmanifest");
         put(&repo, "src-tauri/icons/icon.png", PNG);
-        assert!(src_of(auto_icon(&repo), "image").starts_with("data:image/png"), "an app bundle icon beats the web");
+        let bundle = src_of(auto_icon(&repo), "image");
+        assert_eq!(base64::engine::general_purpose::STANDARD.decode(bundle.trim_start_matches("data:image/png;base64,")).unwrap(), PNG, "an app bundle icon beats the manifest's picture");
         put(&repo, "favicon.ico", &[0, 0, 1, 0, 1, 0]);
         assert!(src_of(auto_icon(&repo), "image").starts_with("data:image/x-icon"), "a favicon in the repository beats a bundle");
         let _ = fs::remove_dir_all(&repo);
@@ -3614,6 +3628,142 @@ mod tests {
             assert_eq!(remote_parts(url), None, "{url}");
         }
         assert_eq!(owner_avatar(Some("https://github.com/a b/r"), None), None);
+    }
+
+    // ---- FIX-4 (review of a771196e): what a repository may make the page load
+
+    #[test]
+    fn fix4_no_web_address_chosen_by_a_repository_file_is_ever_handed_to_the_page() {
+        let repo = temp("fix4-nourl");
+        put(&repo, "package.json", br#"{"homepage":"https://tracker.example.org/","icon":"https://tracker.example.org/logo.png"}"#);
+        put(&repo, "index.html", b"<link rel=\"icon\" href=\"https://192.168.1.1/x.ico\"><link rel=\"icon\" href=\"https://localhost:8080/y.ico\">");
+        assert_eq!(auto_icon(&repo), None, "package.json and the page source name web addresses; none may be handed over");
+        // a local picture named beside them still works
+        put(&repo, "icon.png", PNG);
+        assert!(src_of(auto_icon(&repo), "image").starts_with("data:image/png"));
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn fix4_only_the_hosting_sites_own_avatar_hosts_are_ever_returned() {
+        let repo = temp_repo("fix4-hosts");
+        git_in(&repo, &["remote", "add", "origin", "https://github.com/octo/widget.git"]);
+        let src = src_of(auto_icon(&repo), "avatar");
+        assert!(crate::github::avatar_ok(&src, "github.com"), "{src}");
+        for host in ["evil.example", "github.com.evil.example", "127.0.0.1", "localhost"] {
+            git_in(&repo, &["remote", "set-url", "origin", &format!("https://{host}/octo/widget.git")]);
+            assert_eq!(auto_icon(&repo), None, "{host}");
+        }
+        assert_eq!(owner_avatar(Some("https://github.com/o/r"), None).as_deref(), Some("https://github.com/o.png"));
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn fix4_the_largest_accepted_file_still_fits_the_frontend_limit() {
+        // the data URL a file makes is its base64 text plus the longest header (svg+xml)
+        let url_len = |bytes: u64| (bytes.div_ceil(3) * 4) as usize + "data:image/svg+xml;base64,".len();
+        assert!(url_len(AUTO_ICON_FILE_MAX) <= ICON_IMAGE_MAX, "a file of exactly AUTO_ICON_FILE_MAX bytes makes {} characters", url_len(AUTO_ICON_FILE_MAX));
+        assert!(url_len(AUTO_ICON_FILE_MAX + 3) + 14 > ICON_IMAGE_MAX, "the limit keeps the frontend's 40-character header budget and no less");
+        assert_eq!(AUTO_ICON_FILE_MAX, 49_122, "src/projects/projectIcon.ts AUTO_ICON_FILE_MAX is checked against this same figure");
+        let mut edge = b"<svg ".to_vec();
+        edge.resize(AUTO_ICON_FILE_MAX as usize, b' ');
+        let repo = temp("fix4-edge");
+        put(&repo, "favicon.svg", &edge);
+        let src = src_of(auto_icon(&repo), "image");
+        assert!(src.len() <= ICON_IMAGE_MAX, "{}", src.len());
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn fix4_the_launch_sweep_forgets_only_gone_worktrees_kolux_made_that_no_session_uses_in_every_project() {
+        // forget_gone_at_start gathers the projects, origins and busy folders, then runs this
+        let base = temp("fix4-launch");
+        let (a, b) = (base.join("a"), base.join("b"));
+        init_repo(&a);
+        init_repo(&b);
+        let git = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&base.join("db")).unwrap());
+        let add = |repo: &Path, name: &str| {
+            let folder = base.join("ws").join(name);
+            git_in(repo, &["worktree", "add", "-q", &folder.to_string_lossy(), "-b", name]);
+            folder
+        };
+        let (a_made, a_mine, a_busy, b_made) = (add(&a, "a-made"), add(&a, "a-by-hand"), add(&a, "a-busy"), add(&b, "b-made"));
+        let key = |p: &Path| p.to_string_lossy().to_string();
+        {
+            let s = store.lock().unwrap();
+            for p in [&a_made, &a_busy, &b_made] {
+                set_origin(&s, &key(p), Some(&serde_json::json!({"issue": 1}))).unwrap();
+            }
+        }
+        for p in [&a_made, &a_mine, &a_busy, &b_made] {
+            fs::remove_dir_all(p).unwrap();
+        }
+        let project = |id: &str, path: &Path| Project { id: id.into(), name: id.into(), path: key(path), workspaces_dir: None, base: None };
+        let projects = [project("gone-folder", &base.join("nowhere")), project("a", &a), project("b", &b)];
+        let origins = load_origins(&store.lock().unwrap());
+        let mut forgotten = sweep_all_gone(&store, &git, &projects, &origins, &[key(&a_busy)], None);
+        forgotten.sort();
+        let mut want = vec![key(&a_made), key(&b_made)];
+        want.sort();
+        assert_eq!(forgotten, want, "both projects are swept; a folder Git cannot read is skipped; one made by hand or in use stays");
+        let listed = |repo: &Path| git.worktrees(repo).unwrap().into_iter().map(|w| w.path).collect::<Vec<_>>();
+        assert_eq!(listed(&a).len(), 3, "main, the one made by hand and the busy one: {:?}", listed(&a));
+        assert_eq!(listed(&b).len(), 1);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// A folder link from `link` to `target` (a junction on Windows, which needs no privilege).
+    fn link_dir(link: &Path, target: &Path) {
+        #[cfg(windows)]
+        let ok = Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(target).output().unwrap().status.success();
+        #[cfg(not(windows))]
+        let ok = std::os::unix::fs::symlink(target, link).is_ok();
+        assert!(ok, "could not link {} to {}", link.display(), target.display());
+    }
+
+    #[test]
+    fn fix4_a_page_reached_through_a_link_out_of_the_repository_is_not_read() {
+        let base = temp("fix4-link");
+        let repo = base.join("repo");
+        let outside = base.join("outside");
+        put(&repo, "logo.png", PNG);
+        put(&outside, "index.html", b"<link rel=\"icon\" href=\"/logo.png\">");
+        put(&outside, "package.json", br#"{"icon":"logo.png"}"#);
+        link_dir(&repo.join("public"), &outside);
+        assert_eq!(repo_text(&repo, "public/index.html"), None, "read through a link that leaves the repository");
+        assert_eq!(auto_icon(&repo), None, "the page outside the repository named logo.png; it must not be read at all");
+        // the same page inside the repository is read
+        put(&repo, "src/index.html", b"<link rel=\"icon\" href=\"/logo.png\">");
+        assert!(src_of(auto_icon(&repo), "image").starts_with("data:image/png"));
+        // a package.json that is itself outside through a link is not read either
+        let repo2 = base.join("repo2");
+        put(&repo2, "logo.png", PNG);
+        link_dir(&repo2.join("sub"), &outside);
+        assert_eq!(repo_text(&repo2, "sub/package.json"), None);
+        assert!(repo_text(&outside, "package.json").is_some(), "the same file read in place is fine");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn fix4_the_avatar_of_a_parent_repository_is_not_this_projects_avatar() {
+        let parent = temp_repo("fix4-parent");
+        git_in(&parent, &["remote", "add", "origin", "https://github.com/octo/dotfiles.git"]);
+        let inner = parent.join("notes").join("plain-folder");
+        fs::create_dir_all(&inner).unwrap();
+        assert_eq!(auto_icon(&inner), None, "a plain folder inside another repository has no owner of its own");
+        // the repository's own top folder still shows the owner
+        assert_eq!(src_of(auto_icon(&parent), "avatar"), "https://github.com/octo.png");
+        // a repository nested inside it with its own remote shows its own owner
+        let nested = parent.join("vendor").join("lib");
+        init_repo(&nested);
+        git_in(&nested, &["remote", "add", "origin", "https://github.com/other/lib.git"]);
+        assert_eq!(src_of(auto_icon(&nested), "avatar"), "https://github.com/other.png");
+        // a nested repository without a remote does not borrow the parent's
+        let bare = parent.join("vendor").join("bare");
+        init_repo(&bare);
+        assert_eq!(auto_icon(&bare), None);
+        let _ = fs::remove_dir_all(&parent);
     }
 
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { caps, completed, doneFrom, doneId, firstOpen, forward, latest, milestonesShown, moveOn, nextTip, notePage, PAGE_SHOWN, pageNoter, pageCounts, railKey, ring, startTicked, stopDone, STEPS, stopOf, visits, withRecord, workflowDone, WORKFLOWS, type Facts, type Place, type Setup, type StepId } from "./guide";
+import { caps, completed, doneFrom, doneId, firstOpen, forward, latest, legacyProfile, LEGACY_DONE, milestonesShown, moveOn, nextTip, notePage, PAGE_SHOWN, pageNoter, pageCounts, railKey, ring, startTicked, stopDone, STEPS, stopOf, visits, withRecord, workflowDone, WORKFLOWS, type Facts, type Place, type Setup, type StepId } from "./guide";
 
 const set = (...ids: StepId[]) => new Set<StepId>(ids);
 
@@ -218,5 +218,25 @@ describe("the browser pane's page note (ONB-015)", () => {
     const r = withRecord(new Set(["workspaces"]), new Set(["explore-usage"]), { visited: ["tasks", "nope"], tried: ["explore-agents"] });
     expect([...r.seen].sort()).toEqual(["explore-agents", "tasks", "workspaces"]);
     expect([...r.kept].sort()).toEqual(["explore-agents", "explore-usage"]);
+  });
+});
+
+describe("the legacy-profile rule (ONB-015)", () => {
+  it("an old profile that hid the sidebar checklist, or finished the earlier steps, counts every step as complete", () => {
+    expect(legacyProfile({ setupChecklist: false }, [])).toBe(true);
+    expect(legacyProfile({}, [LEGACY_DONE])).toBe(true);
+    expect([...doneFrom({ ...none, legacy: true })].sort()).toEqual(STEPS.map((s) => s.id).sort());
+  });
+  it("a profile that never hid the checklist is not legacy, and a failed read is never taken as completion", () => {
+    expect(legacyProfile({ setupChecklist: true }, [])).toBe(false);
+    expect(legacyProfile({}, ["browser-page"])).toBe(false);
+    expect(legacyProfile(null, null)).toBeNull();
+    expect(legacyProfile(null, [])).toBe(false);
+    expect([...doneFrom({ ...none, legacy: null })]).toEqual([]);
+    expect([...doneFrom({ ...none, legacy: false })]).toEqual([]);
+  });
+  it("a retired step id (the old split-terminal step) no longer counts toward progress", () => {
+    const stale = new Set(["split-terminal", "browser"]) as unknown as Set<StepId>;
+    expect(ring(stale).done).toBe(ring(set("browser")).done);
   });
 });

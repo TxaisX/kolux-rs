@@ -113,11 +113,11 @@ export default function SafetyPage() {
   useEffect(() => {
     invoke<RuleInfo[]>("protected_rules").then(setRules, (e) => setRulesError(String(e)));
   }, []);
-  // Each save shows the new state at once, then the page draws what a re-read finds on disk; only
-  // the newest save's re-read counts.
+  // After each save the page draws what a re-read finds on disk; only the newest save's re-read
+  // counts. The last re-read stays on screen until the next one lands: useSettings keeps what a
+  // refused save wrote, so dropping it at the start of a save would flash that wrong switch.
   const guarded = (patch: Settings) => {
     const mine = ++latest.current;
-    setDisk(null);
     return savedState(save, () => invoke<Settings>("get_settings"), patch).then((s) => {
       if (mine === latest.current) setDisk(s);
     });
