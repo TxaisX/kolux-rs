@@ -96,11 +96,126 @@ pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000; // no console flashes up behind the app
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
+    // GIT-070: paths past Windows' old 260-character limit work (Git for Windows' own switch). Given
+    // through the environment so the command line stays as written, and only when nothing else is
+    // injecting config that way; a git older than 2.31 ignores it.
+    if cfg!(windows) && std::env::var_os("GIT_CONFIG_COUNT").is_none() {
+        cmd.env("GIT_CONFIG_COUNT", "1").env("GIT_CONFIG_KEY_0", "core.longpaths").env("GIT_CONFIG_VALUE_0", "true");
+    }
     cmd
 }
 
+/// GIT-070: how many short git reads one worktree runs at once. There is no app-wide cap: sixteen
+/// worktrees each get their own turns, and a slow repository never holds up another one.
+const READS_PER_WORKTREE: usize = 4;
+/// GIT-070: how long a short read may take before it and everything it started are stopped.
+pub(crate) const SHORT_READ_LIMIT: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// GIT-070: the git commands that only read and finish quickly. Only these wait for a turn and get
+/// `SHORT_READ_LIMIT`; everything else (worktree add, fetch, clone, push, pull, commit, merge...)
+/// runs at once with no time limit added here, so a long checkout or transfer is never cut off.
+const SHORT_READS: [&str; 18] = ["status", "diff", "log", "show", "rev-parse", "rev-list", "ls-files", "ls-tree", "for-each-ref", "cat-file", "cherry", "merge-base", "symbolic-ref", "describe", "check-ignore", "name-rev", "blame", "count-objects"];
+
+/// GIT-070: whether `args` is a short read (see `SHORT_READS`); `worktree` counts only as
+/// `worktree list`. Leading `-c key=value` / `-C dir` and other options are skipped.
+pub(crate) fn short_read(args: &[&str]) -> bool {
+    let mut words = args.iter().copied();
+    while let Some(w) = words.next() {
+        if w == "-c" || w == "-C" {
+            words.next();
+        } else if !w.starts_with('-') {
+            return SHORT_READS.contains(&w) || (w == "worktree" && words.next() == Some("list"));
+        }
+    }
+    false
+}
+
+/// GIT-070: turns for short reads, counted per worktree. Foreground work (the panel on screen) that
+/// is waiting goes before background work (badges, sweeps) waiting on the same worktree.
+pub(crate) struct Limiter {
+    at_once: usize,
+    /// worktree -> (running, foreground callers waiting)
+    state: std::sync::Mutex<std::collections::BTreeMap<PathBuf, (usize, usize)>>,
+    freed: std::sync::Condvar,
+}
+
+pub(crate) struct Turn<'a>(&'a Limiter, PathBuf);
+
+impl Drop for Turn<'_> {
+    fn drop(&mut self) {
+        let mut s = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(e) = s.get_mut(&self.1) {
+            e.0 -= 1;
+            if *e == (0, 0) {
+                s.remove(&self.1);
+            }
+        }
+        self.0.freed.notify_all();
+    }
+}
+
+impl Limiter {
+    pub(crate) const fn new(at_once: usize) -> Self {
+        Limiter { at_once, state: std::sync::Mutex::new(std::collections::BTreeMap::new()), freed: std::sync::Condvar::new() }
+    }
+
+    pub(crate) fn enter(&self, worktree: &Path, foreground: bool) -> Turn<'_> {
+        let key = worktree.to_path_buf();
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        s.entry(key.clone()).or_default().1 += usize::from(foreground);
+        loop {
+            // A background caller is not counted while it waits, so its entry may have gone.
+            let (running, waiting) = *s.entry(key.clone()).or_default();
+            if running < self.at_once && (foreground || waiting == 0) {
+                break;
+            }
+            s = self.freed.wait(s).unwrap_or_else(|e| e.into_inner());
+        }
+        let e = s.get_mut(&key).expect("entry held under the lock");
+        e.0 += 1;
+        if foreground {
+            e.1 -= 1;
+            self.freed.notify_all();
+        }
+        Turn(self, key)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn running(&self, worktree: &Path) -> usize {
+        self.state.lock().unwrap().get(worktree).map_or(0, |e| e.0)
+    }
+}
+
+static LIMITER: Limiter = Limiter::new(READS_PER_WORKTREE);
+
+thread_local! {
+    static FOREGROUND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// GIT-070: runs `read` with its short git reads counted as foreground work.
+pub(crate) fn foreground<T>(read: impl FnOnce() -> T) -> T {
+    let was = FOREGROUND.replace(true);
+    let out = read();
+    FOREGROUND.set(was);
+    out
+}
+
 /// Runs git and returns its stdout byte for byte; a non-zero exit becomes an error carrying stderr.
+/// GIT-070: a short read waits for its worktree's turn and is stopped at `SHORT_READ_LIMIT`.
 pub(crate) fn output(args: &[&str], cwd: Option<&Path>) -> Result<Vec<u8>, String> {
+    gated(args, cwd, &LIMITER, SHORT_READ_LIMIT)
+}
+
+fn gated(args: &[&str], cwd: Option<&Path>, limiter: &Limiter, limit: std::time::Duration) -> Result<Vec<u8>, String> {
+    if !short_read(args) {
+        return plain_output(args, cwd);
+    }
+    let _turn = cwd.map(|d| limiter.enter(d, FOREGROUND.get()));
+    bytes_within(args, cwd, limit)
+}
+
+/// git with no turn and no time limit: the long-running and writing commands.
+fn plain_output(args: &[&str], cwd: Option<&Path>) -> Result<Vec<u8>, String> {
     let out = command(args, cwd).output().map_err(|e| format!("could not run git: {e}"))?;
     if out.status.success() {
         Ok(out.stdout)
@@ -230,36 +345,49 @@ pub(crate) fn run_within(args: &[&str], cwd: Option<&Path>, limit: std::time::Du
 
 /// run_within keeping leading spaces (status lines).
 fn run_within_raw(args: &[&str], cwd: Option<&Path>, limit: std::time::Duration) -> Result<String, String> {
+    bytes_within(args, cwd, limit).map(|b| String::from_utf8_lossy(&b).to_string())
+}
+
+/// git with a deadline, stdout byte for byte. Past the deadline git and every process it started
+/// are ended (GIT-070: the whole tree, not just git) and the error names the wait.
+fn bytes_within(args: &[&str], cwd: Option<&Path>, limit: std::time::Duration) -> Result<Vec<u8>, String> {
     use std::io::Read;
     use std::process::Stdio;
     let mut child = command(args, cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("could not run git: {e}"))?;
-    let drain = |mut r: Box<dyn Read + Send>| std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = r.read_to_end(&mut buf);
-        buf
-    });
+    let drain = |mut r: Box<dyn Read + Send>| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = r.read_to_end(&mut buf);
+            let _ = tx.send(buf);
+        });
+        rx
+    };
     let out = drain(Box::new(child.stdout.take().expect("piped")));
     let err = drain(Box::new(child.stderr.take().expect("piped")));
-    let start = std::time::Instant::now();
+    let deadline = std::time::Instant::now() + limit;
+    let stopped = |child: &mut std::process::Child| {
+        crate::procs::kill_tree(child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+        Err(format!(
+            "Git did not finish in {} seconds, so Kolux stopped waiting. A folder that a cloud service (OneDrive, Dropbox, iCloud) is syncing is the usual cause: move the project or the workspaces folder outside it.",
+            limit.as_secs()
+        ))
+    };
+    // Waiting on the end of stdout, not polling, keeps a quick read quick.
+    let Ok(out) = out.recv_timeout(limit) else { return stopped(&mut child) };
     let status = loop {
         match child.try_wait() {
             Ok(Some(s)) => break s,
-            Ok(None) if start.elapsed() >= limit => {
-                crate::procs::kill_tree(child.id());
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!(
-                    "Git did not finish in {} seconds, so Kolux stopped waiting. A folder that a cloud service (OneDrive, Dropbox, iCloud) is syncing is the usual cause: move the project or the workspaces folder outside it.",
-                    limit.as_secs()
-                ));
-            }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(25)),
+            Ok(None) if std::time::Instant::now() >= deadline => return stopped(&mut child),
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(2)),
             Err(e) => return Err(format!("could not wait for git: {e}")),
         }
     };
-    let (out, err) = (out.join().unwrap_or_default(), err.join().unwrap_or_default());
+    let err = err.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).unwrap_or_default();
     if status.success() {
-        Ok(String::from_utf8_lossy(&out).to_string())
+        Ok(out)
     } else {
         let err = String::from_utf8_lossy(&err).trim().to_string();
         Err(if err.is_empty() { format!("git {} failed ({status})", args.join(" ")) } else { err })
@@ -889,6 +1017,98 @@ mod tests {
         run(&["add", "."], Some(&dir)).unwrap();
         run(&["commit", "-q", "-m", "first"], Some(&dir)).unwrap();
         dir
+    }
+
+    #[test]
+    fn git070_only_short_reads_take_a_turn_and_long_running_commands_are_exempt() {
+        for args in [&["status", "--porcelain=v2"][..], &["-c", "core.quotepath=off", "diff", "--numstat"], &["-C", "x", "log", "-1"], &["rev-parse", "HEAD"], &["worktree", "list", "--porcelain"], &["for-each-ref"]] {
+            assert!(short_read(args), "{args:?}");
+        }
+        for args in [&["worktree", "add", "-b", "x", "d", "main"][..], &["fetch", "origin"], &["clone", "u", "d"], &["push", "-u", "origin", "x"], &["pull"], &["commit", "-m", "x"], &["-c", "alias.x=!sleep 1", "x"], &["--version"], &["worktree", "remove", "d"], &[]] {
+            assert!(!short_read(args), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn git070_turns_are_per_worktree_and_exempt_commands_never_wait() {
+        ISOLATED.with(|i| i.set(true));
+        let (a, b) = (temp_repo("git070-a"), temp_repo("git070-b"));
+        static L: Limiter = Limiter::new(1);
+        let held = L.enter(&a, false);
+        // A short read on the busy worktree waits for its turn...
+        let (tx, rx) = std::sync::mpsc::channel();
+        let a2 = a.clone();
+        let waiter = std::thread::spawn(move || {
+            ISOLATED.with(|i| i.set(true));
+            let _ = tx.send(gated(&["rev-parse", "HEAD"], Some(&a2), &L, SHORT_READ_LIMIT));
+        });
+        assert!(rx.recv_timeout(std::time::Duration::from_millis(400)).is_err(), "a short read waited for the worktree's turn");
+        // ...while another worktree's short read does not (no app-wide cap)...
+        assert!(gated(&["rev-parse", "HEAD"], Some(&b), &L, SHORT_READ_LIMIT).is_ok());
+        // ...and fetch and worktree add on the busy worktree run at once, with no turn taken.
+        assert!(gated(&["fetch", "-q", "."], Some(&a), &L, SHORT_READ_LIMIT).is_ok());
+        let wt = a.with_file_name(format!("{}-wt", a.file_name().unwrap().to_string_lossy()));
+        let _ = fs::remove_dir_all(&wt);
+        assert!(gated(&["worktree", "add", "-q", "-b", "side", &wt.to_string_lossy(), "main"], Some(&a), &L, SHORT_READ_LIMIT).is_ok());
+        assert_eq!(L.running(&a), 1, "only the held turn is counted");
+        drop(held);
+        assert!(rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap().is_ok(), "the waiting read ran once the turn was free");
+        waiter.join().unwrap();
+        assert_eq!(L.running(&a), 0);
+        for d in [&wt, &a, &b] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn git070_waiting_foreground_reads_go_before_waiting_background_reads_on_one_worktree() {
+        static L: Limiter = Limiter::new(1);
+        let dir = Path::new("git070-order");
+        let order = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let held = L.enter(dir, false);
+        let wait = |fg: bool, name: &'static str| {
+            let order = order.clone();
+            std::thread::spawn(move || {
+                let _t = L.enter(dir, fg);
+                order.lock().unwrap().push(name);
+            })
+        };
+        let bg = wait(false, "background");
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let fg = wait(true, "foreground");
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        drop(held);
+        bg.join().unwrap();
+        fg.join().unwrap();
+        assert_eq!(*order.lock().unwrap(), ["foreground", "background"]);
+        assert_eq!(L.running(dir), 0);
+    }
+
+    #[test]
+    fn git070_a_hung_short_read_is_stopped_at_its_limit_and_the_next_read_runs() {
+        ISOLATED.with(|i| i.set(true));
+        let dir = temp_repo("git070-hang");
+        fs::write(dir.join("README.md"), "changed\n").unwrap();
+        static L: Limiter = Limiter::new(4);
+        let started = std::time::Instant::now();
+        // diff hands each changed file to an external tool that never ends.
+        let err = gated(&["-c", "diff.external=sleep 20;:", "diff", "--ext-diff"], Some(&dir), &L, std::time::Duration::from_millis(600)).unwrap_err();
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "stopped at the limit: {:?}", started.elapsed());
+        assert!(err.contains("did not finish"), "{err}");
+        assert_eq!(L.running(&dir), 0, "the turn is given back");
+        assert!(gated(&["diff", "--name-only"], Some(&dir), &L, SHORT_READ_LIMIT).unwrap().starts_with(b"README.md"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn git070_long_windows_paths_are_switched_on_without_changing_the_command_line() {
+        let cmd = command(&["status"], None);
+        let env: Vec<_> = cmd.get_envs().filter_map(|(k, v)| Some((k.to_string_lossy().into_owned(), v?.to_string_lossy().into_owned()))).collect();
+        if std::env::var_os("GIT_CONFIG_COUNT").is_none() {
+            assert!(env.contains(&("GIT_CONFIG_KEY_0".into(), "core.longpaths".into())), "{env:?}");
+        }
+        assert_eq!(cmd.get_args().collect::<Vec<_>>(), ["status"]);
     }
 
     #[test]

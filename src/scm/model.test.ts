@@ -1,5 +1,6 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { describe, expect, it, test } from "vitest";
+import { cutBanner, changeCount as countOf } from "./model";
 import { LINES_SKIPPED_NOTE, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, pushTarget, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, select, discardAsk, type Section, budgetLine, budgetLow, mergeActions, mergeLabel, type MergeInfo, graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, commitUrl, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine } from "./model";
 
 const commit = (hash: string, parents: string[], subject = hash): Commit => ({ hash, short: hash, parents, author: "a", time: 0, subject, message: subject, labels: [], outgoing: false, incoming: false });
@@ -570,4 +571,15 @@ test("GIT-011 an enormous branch says so instead of showing line totals", () => 
   const big = sum({ files: 30000, linesSkipped: true });
   expect(summaryLabel("feat", big)).toBe(`feat, 1 ahead and 0 behind main, ${LINES_SKIPPED_NOTE}`);
   expect(summaryLabel("feat", sum())).toContain("10 lines added");
+});
+
+test("T-281 (GIT-012): a cut list says how much is left out, offers its heavy folders and still counts every change", () => {
+  expect(cutBanner(null)).toBeNull();
+  expect(cutBanner({ cut: 0, heavy: [] })).toBeNull();
+  expect(cutBanner({ cut: 1, heavy: [] })).toEqual({ text: "This list is cut short: 1 more change is left out so the panel stays quick.", offer: [] });
+  const b = cutBanner({ cut: 12345, heavy: ["node_modules", "dist"] });
+  expect(b?.text).toContain("12,345 more changes are left out");
+  expect(b?.offer).toEqual(["node_modules", "dist"]);
+  const s = { ...emptyStatus, changed: [{ path: "a", status: "M" }], cut: 4 } as unknown as Status;
+  expect(countOf(s)).toBe(5);
 });

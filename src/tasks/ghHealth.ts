@@ -2,7 +2,7 @@
 // call is sorted by what gh printed into a kind of trouble; each kind has a banner in plain words, and
 // a signed-out gh gets a short walk through signing in. Pure, tested on its own.
 
-export type Trouble = "rate-limit" | "timeout" | "outage" | "signed-out" | "no-gh" | "other";
+export type Trouble = "rate-limit" | "timeout" | "outage" | "signed-out" | "no-access" | "no-gh" | "other";
 
 /** The one `scm_gh_budget` row shape this file needs (the same as scm/model.ts Budget). */
 export type BudgetRow = { name: string; limit: number; remaining: number; reset: number };
@@ -15,6 +15,8 @@ export function classify(error: string, signedIn?: boolean): Trouble {
   const t = error.toLowerCase();
   const has = (...w: string[]) => w.some((x) => t.includes(x));
   if (has("is not installed", "gh: command not found")) return "no-gh";
+  // T-281 (GIT-045): signed in, but as an account that cannot see this repository (its words also name gh auth login).
+  if (has("cannot see this repository") || (has("resource not accessible", "http 403") && !has("rate limit", "abuse detection"))) return "no-access";
   if (has("gh auth login", "not logged in", "sign in to github", "bad credentials", "http 401", "requires authentication", "gh is signed in to")) return "signed-out";
   if (has("rate limit", "abuse detection", "retry-after")) return "rate-limit";
   if (has("did not answer within", "gh did not finish")) return "timeout";
@@ -69,11 +71,23 @@ export function bannerOf(kind: Trouble, nowMs: number, resetSec?: number, host =
       return {
         kind,
         title: "Sign in to GitHub",
-        body: "Kolux reads GitHub through the GitHub CLI (gh), and gh is not signed in here.",
+        body: "Kolux reads GitHub through the GitHub CLI (gh), and gh is not signed in here, or its sign-in expired.",
         steps: [
           "Open a terminal pane in Kolux.",
           host === "github.com" ? "Run: gh auth login" : `Run: gh auth login --hostname ${host}`,
           "Choose the host, then HTTPS, and sign in with the browser when it asks.",
+          "Come back here and press Refresh.",
+        ],
+      };
+    case "no-access":
+      return {
+        kind,
+        title: "This account cannot see the repository",
+        body: "gh is signed in, but with an account that has no access to this repository.",
+        steps: [
+          "Open a terminal pane in Kolux.",
+          host === "github.com" ? "Run: gh auth status, to see which account gh uses" : `Run: gh auth status --hostname ${host}, to see which account gh uses`,
+          host === "github.com" ? "Run: gh auth login, with an account that has access" : `Run: gh auth login --hostname ${host}, with an account that has access`,
           "Come back here and press Refresh.",
         ],
       };

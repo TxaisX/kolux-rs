@@ -5,7 +5,7 @@
 //! Reading status never touches the network: the ahead / behind counts come from the refs git
 //! already has, so an unpublished branch is not checked against the remote over and over.
 
-use crate::git::{command, native, run, Git};
+use crate::git::{command, native, output, run, Git};
 
 #[path = "scm_watch.rs"]
 pub mod watch;
@@ -58,6 +58,95 @@ pub struct Status {
     pub submodules: std::collections::BTreeMap<String, String>,
     /// GIT-013: submodule rows left out past `SUBMODULE_ROWS`, for the panel's note.
     pub submodules_cut: u32,
+    /// GIT-012: how many changes the panel's lists leave out (each list shows its first
+    /// `PANEL_CAP`); 0 when nothing is cut.
+    pub cut: usize,
+    /// GIT-012: heavy folders (dependencies, build output) at the top of the worktree that are
+    /// not ignored yet; looked for only when the lists are cut.
+    pub heavy: Vec<String>,
+}
+
+/// GIT-012: the most rows one section of the panel lists.
+pub const PANEL_CAP: usize = 1_000;
+/// GIT-012: folders that hold dependencies or build output, offered for the ignore file.
+pub const HEAVY: [&str; 12] = ["node_modules", "target", "dist", "build", ".venv", "venv", "__pycache__", ".next", ".nuxt", ".gradle", "obj", "coverage"];
+
+/// GIT-012: the panel's view of a status: each section cut to `PANEL_CAP` rows and, when that cuts
+/// anything, the heavy folders that exist and are not ignored yet.
+pub fn capped(mut st: Status, worktree: &Path) -> Status {
+    for list in [&mut st.staged, &mut st.changed, &mut st.untracked] {
+        st.cut += list.len().saturating_sub(PANEL_CAP);
+        list.truncate(PANEL_CAP);
+    }
+    if st.cut > 0 {
+        // `git check-ignore` exits 0 for an ignored path and 1 for one that is not.
+        st.heavy = HEAVY.iter().filter(|h| worktree.join(h).is_dir() && command(&["check-ignore", "-q", &format!("{h}/")], Some(worktree)).status().is_ok_and(|s| s.code() == Some(1))).map(|h| h.to_string()).collect();
+    }
+    st
+}
+
+/// GIT-012: adds a `/<folder>/` line to the worktree's `.gitignore` for each named heavy folder,
+/// making the file when there is none. Only names from `HEAVY` are taken.
+pub fn ignore_heavy(worktree: &Path, folders: &[String]) -> Result<(), String> {
+    if folders.is_empty() || folders.iter().any(|f| !HEAVY.contains(&f.as_str())) {
+        return Err("Only dependency and build folders can be added to the ignore file here".into());
+    }
+    let file = worktree.join(".gitignore");
+    let had = fs::read_to_string(&file).unwrap_or_default();
+    let mut add = String::new();
+    if !had.is_empty() && !had.ends_with('\n') {
+        add.push('\n');
+    }
+    for f in folders {
+        if !had.lines().any(|l| l.trim() == format!("/{f}/")) {
+            add.push_str(&format!("/{f}/\n"));
+        }
+    }
+    fs::OpenOptions::new().create(true).append(true).open(&file).and_then(|mut w| w.write_all(add.as_bytes())).map_err(|e| format!("could not write {}: {e}", file.display()))
+}
+
+type Shared = std::sync::Arc<(std::sync::Mutex<Option<Result<Status, String>>>, std::sync::Condvar)>;
+type Running = std::sync::Mutex<Vec<(std::path::PathBuf, Shared)>>;
+
+/// Hands the answer to everyone waiting on it and takes the read off the running list, even when
+/// the read itself panicked.
+struct Publish<'a>(&'a Running, &'a Path, Shared);
+
+impl Drop for Publish<'_> {
+    fn drop(&mut self) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).retain(|(p, _)| p != self.1);
+        let mut slot = self.2 .0.lock().unwrap_or_else(|e| e.into_inner());
+        slot.get_or_insert_with(|| Err("The status read stopped; refresh to try again".into()));
+        self.2 .1.notify_all();
+    }
+}
+
+/// GIT-070: a status read of a worktree that another caller is already reading waits for that
+/// answer instead of starting git again.
+fn shared(running: &Running, worktree: &Path, read: impl FnOnce() -> Result<Status, String>) -> Result<Status, String> {
+    let (first, s) = {
+        let mut r = running.lock().unwrap_or_else(|e| e.into_inner());
+        match r.iter().find(|(p, _)| p == worktree) {
+            Some((_, s)) => (false, s.clone()),
+            None => {
+                let s = Shared::default();
+                r.push((worktree.to_path_buf(), s.clone()));
+                (true, s)
+            }
+        }
+    };
+    if first {
+        let publish = Publish(running, worktree, s.clone());
+        let answer = read();
+        *s.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(answer.clone());
+        drop(publish);
+        return answer;
+    }
+    let mut slot = s.0.lock().unwrap_or_else(|e| e.into_inner());
+    while slot.is_none() {
+        slot = s.1.wait(slot).unwrap_or_else(|e| e.into_inner());
+    }
+    slot.clone().unwrap_or_else(|| Err("The status read stopped; refresh to try again".into()))
 }
 
 /// GIT-013: at most this many changed submodules are listed; the rest are counted in the note.
@@ -124,12 +213,15 @@ pub struct CommitOutcome {
 }
 
 pub fn status(worktree: &Path) -> Result<Status, String> {
+    static RUNNING: Running = std::sync::Mutex::new(Vec::new());
+    shared(&RUNNING, worktree, || read_status(worktree))
+}
+
+fn read_status(worktree: &Path) -> Result<Status, String> {
     // Every untracked file by name, not a collapsed folder, so each can be staged on its own.
-    let out = command(&["status", "--porcelain=v2", "--branch", "--untracked-files=all", "-z"], Some(worktree)).output().map_err(|e| format!("could not run git: {e}"))?;
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
-    }
-    let mut st = parse_status(&String::from_utf8_lossy(&out.stdout));
+    // GIT-070: a short read, so it takes the worktree's turn and has a time limit.
+    let out = output(&["status", "--porcelain=v2", "--branch", "--untracked-files=all", "-z"], Some(worktree))?;
+    let mut st = parse_status(&String::from_utf8_lossy(&out));
     if st.upstream.is_some() && st.behind > 0 {
         // Every upstream-only commit marked `-` has an identical patch in HEAD.
         st.rewritten = run(&["cherry", "HEAD", "@{upstream}"], Some(worktree)).is_ok_and(|t| !t.is_empty() && t.lines().all(|l| l.starts_with('-')));
@@ -861,13 +953,21 @@ fn grace_after(now: std::time::Instant, deadline: std::time::Instant) -> std::ti
     std::time::Duration::from_millis(500).min(deadline.saturating_duration_since(now)).max(std::time::Duration::from_millis(200))
 }
 
-/// GIT-023: gh's failures in the words the panel shows.
+/// GIT-023: gh's failures in the words the panel shows. GIT-045: signed out, a sign-in that no
+/// longer works, and an account that cannot see the repository are told apart (a missing gh is
+/// `gh_program`'s own message).
 pub fn gh_words(said: &str) -> String {
     let low = said.to_lowercase();
     if low.contains("known github host") || low.contains("not a github") {
         "This remote's host is not supported; pull requests need a GitHub remote".into()
+    } else if low.contains("bad credentials") || low.contains("http 401") {
+        "gh's sign-in no longer works (it expired or was revoked): run gh auth login again".into()
     } else if low.contains("gh auth login") || low.contains("not logged in") || low.contains("authentication") {
         "Sign in to GitHub first: run gh auth login".into()
+    } else if !low.contains("rate limit") && (low.contains("resource not accessible") || low.contains("http 403")) {
+        // A search refused over one repository (HTTP 422) and "Could not resolve to a Repository" keep
+        // gh's words: Tasks names the refused repository from them (repo_trouble, github::lookup_error).
+        "The account gh is signed in with cannot see this repository: run gh auth status to check which account it is, or gh auth login with one that has access".into()
     } else {
         said.trim().to_string()
     }
@@ -2486,7 +2586,21 @@ fn has_commit_hook(worktree: &Path) -> bool {
 
 #[tauri::command]
 pub async fn scm_status(worktree: String) -> Result<Status, String> {
-    status(Path::new(&worktree))
+    // GIT-070: the panel on screen is foreground work, off the async workers so a burst of
+    // background calls cannot hold it up; GIT-012: its lists are capped.
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = Path::new(&worktree);
+        crate::git::foreground(|| status(dir).map(|st| capped(st, dir)))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// GIT-012: the cut-short banner's offer; only inside a project or worktree (ACCT-055, fence.rs).
+#[allow(dead_code)] // registered by evidence/tasks-T-281-lib.patch
+#[tauri::command]
+pub async fn scm_ignore_heavy(worktree: String, folders: Vec<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
+    ignore_heavy(&fence.allow(&worktree, &store, &git, false)?, &folders)
 }
 
 /// GIT-038 (T-033-c): All Changes measured against the branch's base: `against` is the pinned
@@ -2593,7 +2707,8 @@ pub async fn scm_unwatch(id: u64) {
 
 #[tauri::command]
 pub async fn scm_summary(worktree: String, pinned: Option<String>, upstream: bool) -> Result<Summary, String> {
-    summary(Path::new(&worktree), pinned.as_deref(), upstream)
+    // GIT-070: the branch summary of the panel on screen is foreground work too.
+    tauri::async_runtime::spawn_blocking(move || crate::git::foreground(|| summary(Path::new(&worktree), pinned.as_deref(), upstream))).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -2645,6 +2760,61 @@ mod tests {
         run(&["add", "."], Some(&dir)).unwrap();
         run(&["commit", "-q", "-m", "first"], Some(&dir)).unwrap();
         dir
+    }
+
+    #[test]
+    fn git012_a_huge_change_set_is_cut_and_its_heavy_folder_offered_until_ignored() {
+        let dir = temp_repo("git012-heavy");
+        fs::create_dir_all(dir.join("node_modules")).unwrap();
+        for i in 0..PANEL_CAP + 200 {
+            fs::write(dir.join("node_modules").join(format!("m{i}.js")), "x").unwrap();
+        }
+        fs::create_dir_all(dir.join("target")).unwrap();
+        fs::write(dir.join("target").join("out.bin"), "x").unwrap();
+        fs::write(dir.join(".gitignore"), "/target/").unwrap();
+        let st = capped(status(&dir).unwrap(), &dir);
+        // node_modules' 1,200 files plus .gitignore: the list shows 1,000 and counts the rest.
+        assert_eq!((st.untracked.len(), st.cut), (PANEL_CAP, 201));
+        assert_eq!(st.heavy, ["node_modules"], "target is ignored already and the other heavy names are not there");
+        ignore_heavy(&dir, &["node_modules".into()]).unwrap();
+        assert_eq!(fs::read_to_string(dir.join(".gitignore")).unwrap(), "/target/\n/node_modules/\n");
+        let st = capped(status(&dir).unwrap(), &dir);
+        assert_eq!((st.untracked.len(), st.cut, st.heavy.len()), (1, 0, 0), "the list shrinks and nothing is offered again");
+        ignore_heavy(&dir, &["node_modules".into()]).unwrap();
+        assert_eq!(fs::read_to_string(dir.join(".gitignore")).unwrap(), "/target/\n/node_modules/\n", "never written twice");
+        assert!(ignore_heavy(&dir, &["src".into()]).is_err(), "only known heavy folders");
+        assert!(ignore_heavy(&dir, &[]).is_err());
+        let fresh = temp_repo("git012-fresh");
+        ignore_heavy(&fresh, &["dist".into()]).unwrap();
+        assert_eq!(fs::read_to_string(fresh.join(".gitignore")).unwrap(), "/dist/\n", "made when there is none");
+        // A small change set is left whole and nothing is looked for.
+        let small = capped(status(&fresh).unwrap(), &fresh);
+        assert_eq!((small.cut, small.heavy.len()), (0, 0));
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&fresh);
+    }
+
+    #[test]
+    fn git070_a_status_read_already_running_is_shared_not_started_again() {
+        static R: Running = std::sync::Mutex::new(Vec::new());
+        static READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let read = || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            READS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Status { ahead: 7, ..Status::default() })
+        };
+        let dir = Path::new("git070-shared-worktree");
+        let first = std::thread::spawn(move || shared(&R, dir, read));
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        let second = shared(&R, dir, || Err("a second git was started".into()));
+        assert_eq!(second.unwrap().ahead, 7);
+        assert_eq!(first.join().unwrap().unwrap().ahead, 7);
+        assert_eq!(READS.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(R.lock().unwrap().is_empty());
+        assert_eq!(shared(&R, dir, read).unwrap().ahead, 7, "a later read runs on its own");
+        assert_eq!(READS.load(std::sync::atomic::Ordering::SeqCst), 2);
+        // Another worktree is never handed this one's answer.
+        assert!(shared(&R, Path::new("other"), || Err("own read".into())).is_err());
     }
 
     /// FIX-2 (b) / FIX-R2: no console window flashes up behind the app, so every program this file
@@ -3202,6 +3372,14 @@ mod tests {
         // gh's own failures come back in plain words.
         assert!(gh_words("none of the git remotes configured for this repository point to a known GitHub host").contains("not supported"));
         assert!(gh_words("To get started with GitHub CLI, please run:  gh auth login").contains("Sign in"));
+        // GIT-045: a sign-in that stopped working and an account without access are told apart; a
+        // refused search and a gone repository keep gh's words (Tasks names the repository from them).
+        assert!(gh_words("HTTP 401: Bad credentials (https://api.github.com/search/issues)").contains("no longer works"));
+        assert!(gh_words("GraphQL: Resource not accessible by integration (repository.issues)").contains("cannot see this repository"));
+        assert!(gh_words("HTTP 403: Must have admin rights to Repository.").contains("cannot see this repository"));
+        assert!(gh_words("HTTP 403: API rate limit exceeded for user ID 1.").contains("rate limit"), "a spent limit stays a limit");
+        assert!(gh_words("HTTP 422: Validation Failed: The listed users and repositories cannot be searched").contains("cannot be searched"));
+        assert!(gh_words("GraphQL: Could not resolve to a Repository with the name 'a/b'.").contains("Could not resolve to a Repository"));
         let _ = fs::remove_dir_all(&tools);
         let _ = fs::remove_dir_all(&bare);
         let _ = fs::remove_dir_all(&dir);

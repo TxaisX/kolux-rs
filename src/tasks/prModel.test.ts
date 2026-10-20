@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { editReviewers, NO_REVIEWER_EDIT, settleReviewers, undoReviewers, withReviewers } from "./prModel";
 import { askForReview, heldWords, mergeBox, parseGitHubUrl, type PrCheck, rerunTargets, reviewerSuggestions, savedTab, saveTab, sizeWords, summarizeChecks } from "./prModel";
 
 const check = (name: string, status: string, conclusion: string, runId: number | null): PrCheck => ({ id: 1, name, status, conclusion, url: "", runId });
@@ -91,5 +92,22 @@ describe("GIT-039 (T-176-d) a held-back file diff names the limit that held it",
   it("sizes read in KB under a megabyte", () => {
     expect(sizeWords(1)).toBe("1 KB");
     expect(sizeWords(150 * 1024)).toBe("150 KB");
+  });
+});
+
+describe("T-281 (GIT-048): review requests", () => {
+  const list = [{ login: "ann", state: "approved" }, { login: "bob", state: "requested" }];
+  it("show at once, are not flipped back by a stale page, and settle when GitHub agrees", () => {
+    const p = editReviewers(editReviewers(NO_REVIEWER_EDIT, ["cy"], []), [], ["bob"]);
+    expect(withReviewers(list, p)).toEqual([{ login: "ann", state: "approved" }, { login: "cy", state: "requested" }]);
+    expect(settleReviewers(list, p)).toEqual(p);
+    expect(settleReviewers([{ login: "ann", state: "approved" }, { login: "Cy", state: "requested" }], p)).toEqual(NO_REVIEWER_EDIT);
+    // a take-back never hides a finished review
+    expect(withReviewers(list, editReviewers(NO_REVIEWER_EDIT, [], ["ann"]))).toEqual(list);
+  });
+  it("a failed write puts back only itself; asking again cancels a take-back", () => {
+    const p = editReviewers(editReviewers(NO_REVIEWER_EDIT, ["cy"], []), ["dee"], []);
+    expect(undoReviewers(p, ["cy"], [])).toEqual({ ask: ["dee"], drop: [] });
+    expect(editReviewers(editReviewers(NO_REVIEWER_EDIT, [], ["bob"]), ["bob"], [])).toEqual({ ask: ["bob"], drop: [] });
   });
 });
