@@ -67,6 +67,7 @@ pub fn report(settings: &Value) -> Value {
         agents.push(row("codex", "Codex", &home.join("hooks.json"), &CODEX_EVENTS));
     }
     agents.extend(super::vendors::rows(&super::home_dir()));
+    agents.extend(super::more::rows(&super::home_dir()));
     json!({ "on": on(settings), "agents": agents })
 }
 

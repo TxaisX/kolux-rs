@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { askForReview, heldWords, mergeBox, parseGitHubUrl, type PrCheck, rerunTargets, reviewerSuggestions, savedTab, saveTab, sizeWords, summarizeChecks } from "./prModel";
+import { editReviewers, NO_REVIEWER_EDIT, settleReviewers, undoReviewers, withReviewers } from "./prModel";
+import { askForReview, failedChecks, fixBlocker, fixText, headLabel, isEditor, labelsToAdd, lineageNote, viewedLine, viewedOf, withViewed, type PrViewed, heldWords, mergeBox, parseGitHubUrl, type PrCheck, rerunTargets, reviewerSuggestions, savedTab, saveTab, sizeWords, summarizeChecks } from "./prModel";
 
 const check = (name: string, status: string, conclusion: string, runId: number | null): PrCheck => ({ id: 1, name, status, conclusion, url: "", runId });
 
@@ -91,5 +92,76 @@ describe("GIT-039 (T-176-d) a held-back file diff names the limit that held it",
   it("sizes read in KB under a megabyte", () => {
     expect(sizeWords(1)).toBe("1 KB");
     expect(sizeWords(150 * 1024)).toBe("150 KB");
+  });
+});
+
+describe("T-281 (GIT-048): review requests", () => {
+  const list = [{ login: "ann", state: "approved" }, { login: "bob", state: "requested" }];
+  it("show at once, are not flipped back by a stale page, and settle when GitHub agrees", () => {
+    const p = editReviewers(editReviewers(NO_REVIEWER_EDIT, ["cy"], []), [], ["bob"]);
+    expect(withReviewers(list, p)).toEqual([{ login: "ann", state: "approved" }, { login: "cy", state: "requested" }]);
+    expect(settleReviewers(list, p)).toEqual(p);
+    expect(settleReviewers([{ login: "ann", state: "approved" }, { login: "Cy", state: "requested" }], p)).toEqual(NO_REVIEWER_EDIT);
+    // a take-back never hides a finished review
+    expect(withReviewers(list, editReviewers(NO_REVIEWER_EDIT, [], ["ann"]))).toEqual(list);
+  });
+  it("a failed write puts back only itself; asking again cancels a take-back", () => {
+    const p = editReviewers(editReviewers(NO_REVIEWER_EDIT, ["cy"], []), ["dee"], []);
+    expect(undoReviewers(p, ["cy"], [])).toEqual({ ask: ["dee"], drop: [] });
+    expect(editReviewers(editReviewers(NO_REVIEWER_EDIT, [], ["bob"]), ["bob"], [])).toEqual({ ask: ["bob"], drop: [] });
+  });
+});
+
+describe("T-232-d: viewed marks, Fix with AI, forks, recent editors", () => {
+  const v: PrViewed = { files: [{ path: "a.rs", state: "viewed" }, { path: "b.rs", state: "unviewed" }, { path: "c.rs", state: "dismissed" }], truncated: false, limit: 0 };
+  it("reads a file's mark, marks it at once, and counts viewed and changed-since-viewed files", () => {
+    expect(viewedOf(v, "a.rs")).toBe("viewed");
+    expect(viewedOf(v, "zzz")).toBe("unviewed");
+    expect(viewedOf(null, "a.rs")).toBe("unviewed");
+    const next = withViewed(v, "b.rs", true);
+    expect(viewedOf(next, "b.rs")).toBe("viewed");
+    expect(viewedOf(v, "b.rs"), "the old list is not changed").toBe("unviewed");
+    expect(withViewed(v, "new.rs", true).files).toHaveLength(4);
+    const files = ["a.rs", "b.rs", "c.rs", "d.rs"].map((filename) => ({ filename }));
+    expect(viewedLine(files, v)).toBe("1 of 4 files viewed, 1 changed since viewed");
+    expect(viewedLine(files, next)).toBe("2 of 4 files viewed, 1 changed since viewed");
+    expect(viewedLine(files, null)).toBe("");
+    expect(viewedLine([], v)).toBe("");
+  });
+  it("lets only a failed check with a run, and a workspace, be fixed with AI", () => {
+    const bad = { id: 1, name: "build", status: "completed", conclusion: "failure", url: "https://github.com/a/b/actions/runs/9/job/3", runId: 9 };
+    expect(fixBlocker(bad, "G:/w")).toBeNull();
+    expect(fixBlocker(bad, null)).toMatch(/Start a workspace/);
+    expect(fixBlocker({ ...bad, conclusion: "success" }, "G:/w")).toMatch(/Only a failed check/);
+    expect(fixBlocker({ ...bad, status: "in_progress", conclusion: "" }, "G:/w")).toMatch(/Only a failed check/);
+    expect(fixBlocker({ ...bad, runId: null }, "G:/w")).toMatch(/no workflow run/);
+    expect(fixBlocker({ ...bad, url: "https://example.com/x" }, "G:/w")).toMatch(/no workflow run/);
+    expect(failedChecks([bad, { ...bad, id: 2, conclusion: "success" }, { ...bad, id: 3, conclusion: "timed_out" }]).map((c) => c.id)).toEqual([1, 3]);
+    const text = fixText(bad, "line\nboom");
+    expect(text).toContain('The check "build" is failing on this pull request');
+    expect(text).toContain("boom");
+  });
+  it("names the branch's owner only for a fork, and a fork's parent", () => {
+    expect(headLabel("up/app", { headRef: "fix", headRepo: "me/app" })).toBe("me:fix");
+    expect(headLabel("up/app", { headRef: "fix", headRepo: "UP/app" })).toBe("fix");
+    expect(headLabel("up/app", { headRef: "fix", headRepo: "" })).toBe("fix");
+    expect(headLabel("up/app", { headRef: "fix" })).toBe("fix");
+    expect(lineageNote({ fork: true, parent: "up/app", parentOwner: "up" })).toBe("Fork of up/app");
+    expect(lineageNote({ fork: true, parent: null, parentOwner: null })).toBe("Fork (its parent is gone)");
+    expect(lineageNote({ fork: false })).toBeNull();
+    expect(lineageNote(null)).toBeNull();
+  });
+  it("offers labels the pull request does not carry yet, ignoring case", () => {
+    expect(labelsToAdd([{ name: "bug" }, { name: "Docs" }, { name: "ui" }], [{ name: "docs" }])).toEqual(["bug", "ui"]);
+  });
+  it("puts recent editors of the changed files first, even when the people list lacks them", () => {
+    const people = ["ana", "bo", "cy", "dee"].map((login) => ({ login, avatar: "" }));
+    const page = { author: "ana", reviewers: [{ login: "bo", state: "approved" }] };
+    expect(reviewerSuggestions(people, page, "", 8, ["dee", "eve", "ANA", "bo"]).map((p) => p.login)).toEqual(["dee", "eve", "cy"]);
+    expect(reviewerSuggestions(people, page, "e", 8, ["eve", "dee"]).map((p) => p.login)).toEqual(["eve", "dee"]);
+    expect(reviewerSuggestions(people, page, "", 2, ["eve", "dee"]).map((p) => p.login)).toEqual(["eve", "dee"]);
+    expect(reviewerSuggestions(people, page, "").map((p) => p.login), "no editors: as before").toEqual(["cy", "dee"]);
+    expect(isEditor(["Eve"], "eve")).toBe(true);
+    expect(isEditor([], "eve")).toBe(false);
   });
 });

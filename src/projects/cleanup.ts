@@ -109,3 +109,78 @@ export function keptBatches(items: KeptItem[], ticked: Record<string, boolean>):
 
 /** What is left on the list after a delete: the refused ones stay, so the reason can be read. */
 export const keptAfter = (items: KeptItem[], results: BranchResult[]): KeptItem[] => items.filter((k) => !results.some((r) => r.branch === k.branch && r.deleted));
+
+// PROJ-081: filters, search and sorting in the cleanup list. Sizes are read only when a size
+// filter or the size sort needs them (`needsSizes`); rows whose size is unknown, or that were
+// never visited, drop to the bottom of a sort whichever way it runs.
+export type GitFilter = "any" | "merged" | "unmerged" | "changes" | "clean" | "missing";
+export type ActivityFilter = "any" | "active" | "idle" | "never";
+export type SafetyFilter = "any" | "safe" | "unsafe";
+export type SizeFilter = "any" | "large" | "small";
+export type SortBy = "scan" | "name" | "size" | "idle";
+export type CleanupView = { query: string; git: GitFilter; activity: ActivityFilter; safety: SafetyFilter; size: SizeFilter; sort: SortBy; desc: boolean };
+/** A sizes map: bytes, null = unknown (missing, unreadable or too big to walk), absent = not read yet. */
+export type Sizes = Record<string, number | null>;
+
+export const DEFAULT_VIEW: CleanupView = { query: "", git: "any", activity: "any", safety: "any", size: "any", sort: "scan", desc: false };
+/** The size filter's line between small and large workspaces. */
+export const LARGE_BYTES = 500 * 1024 * 1024;
+/** How many days without a visit make a workspace idle for the filter. */
+export const IDLE_DAYS = 7;
+
+export const needsSizes = (v: CleanupView) => v.sort === "size" || v.size !== "any";
+
+const gitMatches = (r: ScanRow, g: GitFilter) =>
+  g === "any" ||
+  (g === "merged" && r.merged) ||
+  (g === "unmerged" && r.unmerged && !r.merged) ||
+  (g === "changes" && r.changes > 0) ||
+  (g === "clean" && !r.missing && r.changes === 0) ||
+  (g === "missing" && r.missing);
+
+const activityMatches = (r: ScanRow, a: ActivityFilter) =>
+  a === "any" || (a === "active" && r.active) || (a === "idle" && !r.active && r.idleDays !== null && r.idleDays >= IDLE_DAYS) || (a === "never" && r.idleDays === null && !r.missing);
+
+const safetyMatches = (r: ScanRow, s: SafetyFilter) => s === "any" || (s === "safe" ? r.preselect : !r.preselect);
+
+const sizeMatches = (r: ScanRow, s: SizeFilter, sizes: Sizes) => {
+  if (s === "any") return true;
+  const b = sizes[r.path];
+  if (b === null || b === undefined) return false;
+  return s === "large" ? b >= LARGE_BYTES : b < LARGE_BYTES;
+};
+
+/** Search: the label, branch, folder and facts, ignoring case. */
+const searchMatches = (r: ScanRow, q: string) => {
+  const s = q.trim().toLowerCase();
+  if (!s) return true;
+  return [rowLabel(r), r.branch ?? "", r.path, rowFacts(r)].some((t) => t.toLowerCase().includes(s));
+};
+
+/** The rows in view: filtered, searched and sorted; unknown sizes and never-visited rows go last. */
+export function arrangeRows(rows: ScanRow[], v: CleanupView, sizes: Sizes = {}): ScanRow[] {
+  const kept = rows.filter((r) => gitMatches(r, v.git) && activityMatches(r, v.activity) && safetyMatches(r, v.safety) && sizeMatches(r, v.size, sizes) && searchMatches(r, v.query));
+  if (v.sort === "scan") return kept;
+  const key = (r: ScanRow): number | string | null =>
+    v.sort === "name" ? rowLabel(r).toLowerCase() : v.sort === "size" ? (sizes[r.path] ?? null) : r.idleDays;
+  const sign = v.desc ? -1 : 1;
+  return kept
+    .map((r, i) => ({ r, i, k: key(r) }))
+    .sort((a, b) => {
+      if (a.k === null || b.k === null) return a.k === b.k ? a.i - b.i : a.k === null ? 1 : -1;
+      if (a.k < b.k) return -sign;
+      if (a.k > b.k) return sign;
+      return a.i - b.i;
+    })
+    .map((x) => x.r);
+}
+
+/** A size in plain words for the row facts. */
+export function sizeText(bytes: number | null | undefined): string | null {
+  if (bytes === null || bytes === undefined) return null;
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let n = bytes;
+  let u = 0;
+  while (n >= 1024 && u < units.length - 1) (n /= 1024), u++;
+  return `${u === 0 ? n : n.toFixed(n < 10 ? 1 : 0)} ${units[u]}`;
+}

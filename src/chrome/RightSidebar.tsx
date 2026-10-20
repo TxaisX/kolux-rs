@@ -10,11 +10,12 @@
 // tabs are T-146-g.
 import { Component, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from "react";
 
-export type RightTab = "explorer" | "scm" | "checks";
+export type RightTab = "explorer" | "scm" | "checks" | "agents";
 export const RIGHT_TABS: { id: RightTab; label: string; hint: string }[] = [
   { id: "explorer", label: "Explorer", hint: "Explorer (Ctrl+Shift+E)" },
   { id: "scm", label: "Source Control", hint: "Source Control (Ctrl+Shift+G)" },
   { id: "checks", label: "Checks", hint: "Checks on this workspace's pull request" },
+  { id: "agents", label: "Agents", hint: "Past agent sessions: search, resume, copy the resume command" },
 ];
 export const RIGHT_KEYS = { open: "rightSidebarOpen", tab: "rightSidebarTab", width: "rightSidebarWidth" } as const;
 export const RIGHT_MIN = 240;
@@ -27,7 +28,7 @@ export function readRight(s: Record<string, unknown>): { open: boolean; tab: Rig
   return {
     open: s[RIGHT_KEYS.open] !== false,
     // an older saved "search" tab, or any other unknown one, opens the Explorer
-    tab: s[RIGHT_KEYS.tab] === "scm" || s[RIGHT_KEYS.tab] === "checks" ? (s[RIGHT_KEYS.tab] as RightTab) : "explorer",
+    tab: s[RIGHT_KEYS.tab] === "scm" || s[RIGHT_KEYS.tab] === "checks" || s[RIGHT_KEYS.tab] === "agents" ? (s[RIGHT_KEYS.tab] as RightTab) : "explorer",
     width: typeof w === "number" && Number.isFinite(w) && w >= RIGHT_MIN ? Math.round(w) : RIGHT_DEFAULT,
   };
 }

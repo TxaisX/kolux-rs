@@ -15,6 +15,11 @@ export type Clip = {
 /** The path as the program receives it: bracketed whatever the program asked for. */
 export const bracketedPath = (path: string) => BRACKET_OPEN + path + BRACKET_CLOSE;
 
+/** T-249-c (APP-016): the path as typed for the agent: in double quotes when it holds a space or a
+ * character a shell or an agent CLI would split on, as a file dragged into a terminal arrives, so the
+ * agent reads it as one image path (agent CLIs accept a pasted image path per their public docs). */
+export const typedPath = (path: string) => (/[\s"'&;()|<>^`]/.test(path) ? `"${path.replace(/"/g, "")}"` : path);
+
 /** The clipboard's text, or null when reading it threw (the image is then still tried). */
 export function textOf(clip: Clip): string | null {
   try {
@@ -64,7 +69,7 @@ export async function pasteImage(file: File, d: Deps): Promise<boolean> {
     return false;
   }
   try {
-    await d.send(bracketedPath(path));
+    await d.send(bracketedPath(typedPath(path)));
     return true;
   } catch {
     d.report("The screenshot was saved but its path could not be pasted into the terminal.");

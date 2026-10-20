@@ -11,6 +11,13 @@ use std::collections::BTreeMap;
 pub mod sendonce;
 /// ORCH-034 (T-173-c): the orchestration store upgrades in place from every earlier layout of its own.
 pub mod upgrade;
+/// ORCH-062..064 (T-312): the runtime commands agents call for files, git and GitHub, past sessions
+/// and automations.
+pub mod runtime;
+/// ORCH-042 (T-255): Agent Teams teammate panes, the host-neutral half. Nothing calls it yet:
+/// Claude Code documents split panes only through tmux or iTerm2 (T-255 and T-191-c stay open).
+#[allow(dead_code)]
+pub mod teams;
 
 const KEY: &str = "orchestration.mail";
 pub const KINDS: &[&str] = &["status", "dispatch", "worker_done", "merge_ready", "escalation", "handoff", "decision_gate", "question", "heartbeat"];

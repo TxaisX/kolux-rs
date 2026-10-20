@@ -1,5 +1,5 @@
-import { expect, test } from "vitest";
-import { asksBeforeDelete, blocker, deleteTarget, isClean, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
+import { describe, expect, test } from "vitest";
+import { asksBeforeDelete, blocker, deleteTarget, isClean, isTextField, pointerDelete, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
 
 const clean: RemoveCheck = { changes: [], locked: null, nested: [], stamp: "h|" };
 
@@ -31,4 +31,31 @@ test("VIEW-048: the shortcut deletes the hovered workspace before the active one
   expect(deleteTarget("G:/ws/b", "G:/ws/a")).toBe("G:/ws/b");
   expect(deleteTarget(null, "G:/ws/a")).toBe("G:/ws/a");
   expect(deleteTarget(null, null)).toBe(null);
+});
+
+describe("PROJ-075: delete the workspace under the pointer", () => {
+  const none = new Set<string>();
+  const wt = { path: "G:/ws/app/fix", isMain: false, head: "abc1234" };
+  const folder = { path: "G:/notes/drafts", isMain: false, head: "" };
+  const main = { path: "G:/src/app", isMain: true, head: "abc1234" };
+  test("a hovered worktree starts its delete; a folder workspace is only taken out of Kolux", () => {
+    expect(pointerDelete(wt, { fieldFocused: false, deleting: none })).toEqual({ action: "delete", path: wt.path });
+    expect(pointerDelete(folder, { fieldFocused: false, deleting: none })).toEqual({ action: "forget", path: folder.path });
+  });
+  test("nothing on the main checkout, on a row already deleting, while a text field has focus, or with no row", () => {
+    expect(pointerDelete(main, { fieldFocused: false, deleting: none })).toBeNull();
+    expect(pointerDelete(wt, { fieldFocused: false, deleting: new Set(["G:\\WS\\app\\fix\\"]) })).toBeNull();
+    expect(pointerDelete(wt, { fieldFocused: true, deleting: none })).toBeNull();
+    expect(pointerDelete(null, { fieldFocused: false, deleting: none })).toBeNull();
+  });
+  test("text fields are told apart from other focused controls", () => {
+    const el = (tag: string, attrs: Record<string, string> = {}) => ({ tagName: tag.toUpperCase(), type: attrs.type ?? "", isContentEditable: attrs.ce === "1", getAttribute: (n: string) => (n === "contenteditable" && attrs.ce === "1" ? "true" : null) }) as unknown as Element;
+    expect(isTextField(el("input"))).toBe(true);
+    expect(isTextField(el("input", { type: "search" }))).toBe(true);
+    expect(isTextField(el("input", { type: "checkbox" }))).toBe(false);
+    expect(isTextField(el("textarea"))).toBe(true);
+    expect(isTextField(el("div", { ce: "1" }))).toBe(true);
+    expect(isTextField(el("button"))).toBe(false);
+    expect(isTextField(null)).toBe(false);
+  });
 });

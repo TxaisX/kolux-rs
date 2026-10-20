@@ -12,6 +12,7 @@ import "./chat.css";
 import { fold, isFullPath, thoughtIds as idsOf, toggled, type View } from "./steps";
 import { NoticeRow, PlanRow, StepRow, ThoughtRow } from "./StepRows";
 import { SHELL_OFFER, agentsView, handOver, handTargets, viewedFirst, capPending, chatCovers, combine, liveOffer, pickChat, typingInto, lastReply, lastReplyItem, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row, type Support } from "./model";
+import { useTurnPreview } from "../terminal/turnRead";
 import { Composer, type ComposerHandle } from "./MessageBox";
 import { readModel } from "./controls";
 import { keepPosition, loadLabel, visibleRows } from "./page";
@@ -86,7 +87,10 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
   const [sent, setSent] = useState<Pending[]>([]);
   useEffect(() => setSent([]), [pane.key]);
   const allPending = useMemo(() => capPending([...pending, ...sent]), [pending, sent]);
-  const rows = useMemo(() => combine(items, extras, previewToShow(preview, open, lastReply(items)), allPending), [items, extras, preview, open, allPending]);
+  // T-325-c (CHAT-011 / CHAT-010): the reply read off the pane's terminal while the turn runs, unless a caller passes one.
+  const live = useTurnPreview(pane.key, open && !hiddenProp);
+  const shownPreview = preview ?? live;
+  const rows = useMemo(() => combine(items, extras, previewToShow(shownPreview, open, lastReply(items)), allPending), [items, extras, shownPreview, open, allPending]);
   const key = pane.key;
   const terminalOf = (k: number) => (k === key && pane.terminal !== undefined ? pane.terminal : ptyOf?.(k));
   // CHAT-009: a hidden chat (its screen left, `hidden`, or the window's page hidden) reads nothing; shown again it

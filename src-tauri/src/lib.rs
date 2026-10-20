@@ -1,4 +1,5 @@
 mod folder_projects;
+mod floating_trust;
 mod repo_scan;
 mod activity;
 mod agents;
@@ -60,11 +61,16 @@ mod protected;
 #[allow(dead_code)]
 mod protected_custom;
 mod ports;
+mod labels;
+mod tidy;
 mod resources;
 mod projects;
 mod prompt_answer;
 mod prompt_scan;
 mod scm;
+mod scm_open;
+mod scm_recipe;
+mod scm_stack;
 mod pr_review;
 mod skills;
 mod star;
@@ -82,6 +88,7 @@ mod shell_history;
 mod skill_delete;
 mod state;
 mod status;
+mod sub_work;
 mod term_import;
 mod sysmem;
 mod terminal;
@@ -191,12 +198,12 @@ pub fn run() {
     let mut context = tauri::generate_context!();
     let windows: Vec<String> = context.config().app.windows.iter().filter(|w| w.create).map(|w| w.label.clone()).collect();
     // T-183 (APP-043): after repeated graphics crashes a saved flag puts every window in safe graphics.
+    // T-286-b (APP-017): every window is excused from background throttling (WebView2 browser
+    // arguments; later webviews on the same data folder reuse the same string).
     let safe = resources::recovery::safe_graphics_on(&context.config().identifier, &context.package_info().version.to_string());
     for w in &mut context.config_mut().app.windows {
         w.create = false;
-        if safe {
-            w.additional_browser_args = Some(resources::recovery::safe_args(w.additional_browser_args.as_deref()));
-        }
+        w.additional_browser_args = Some(resources::recovery::launch_browser_args(w.additional_browser_args.as_deref(), safe));
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -343,6 +350,23 @@ pub fn run() {
                 std::thread::sleep(std::time::Duration::from_secs(15));
                 resume::tick(&handle, &log_dir);
             });
+            // PROJ-069: quiet repositories get Git's own housekeeping (prune + gc, nothing deleted);
+            // PROJ-088: the workspace label addresses follow their setting (off by default).
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let resolver = handle.clone();
+                let resolve: labels::Resolve = std::sync::Arc::new(move |label: &str| labels::resolve_in(&resolver, label));
+                let mut tidy_at = std::time::Instant::now() + tidy::POLL;
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    let on = handle.state::<Mutex<Store>>().lock().map(|s| labels::enabled(&s.settings())).unwrap_or(false);
+                    labels::apply(on, &resolve);
+                    if std::time::Instant::now() >= tidy_at {
+                        tidy_at = std::time::Instant::now() + tidy::POLL;
+                        tidy::pass(&handle);
+                    }
+                }
+            });
             // ACCT-050: an agent started by hand in a shell pane is recognised within a few seconds.
             let handle = app.handle().clone();
             std::thread::spawn(move || loop {
@@ -451,6 +475,8 @@ pub fn run() {
             term_import::term_import_warp,
             resources::resources,
             sessions::claude_workspace_sessions,
+            sessions::list::sessions_list,
+            sessions::list::session_resume_plan,
             terminal::terminal_spawn,
             terminal::terminal_write,
             terminal::terminal_service_info,
@@ -463,6 +489,7 @@ pub fn run() {
             terminal::terminal_ack,
             terminal::terminal_memory_profile,
             terminal::terminal_kill,
+            terminal::terminal_next_input_source,
             terminal::terminal_layout,
             terminal::terminal_busy,
             terminal::terminal_diagnostics,
@@ -519,11 +546,14 @@ pub fn run() {
             setup::repo_setup_remove,
             setup::repo_setup_policy_set,
             setup::repo_setup_wait_set,
+            setup::repo_setup_mode_set,
             projects::handoff_note_prepare,
             projects::workspace_remove,
             cleanup::cleanup_remove,
             cleanup::cleanup_scan,
             cleanup::branch_delete_kept,
+            cleanup::cleanup_sizes,
+            labels::labels_list,
             projects::workspace_remove_check,
             projects::project_set,
             projects::project_display_name_set,
@@ -541,6 +571,7 @@ pub fn run() {
             setup::setup_import,
             agents::agent_list,
             agents::agent_start_line,
+            agents::agent_prompt_send,
             agents::open_install_page,
             agents::inventory::session_tabs,
             orchestration::task_reset,
@@ -561,6 +592,7 @@ pub fn run() {
             token_usage::token_tracking_set,
             trust::trust_folders_cmd,
             scm::scm_status, scm::scm_reveal,
+            scm::scm_ignore_heavy,
             scm::scm_watch, scm::scm_unwatch,
             scm::scm_base_changes, scm::scm_base_sides,
             scm::scm_pushed, scm::scm_head, scm::scm_summary, scm::scm_abort,
@@ -574,9 +606,12 @@ pub fn run() {
             scm::scm_commit_message_stop,
             scm::writers::scm_writer_options,
             scm::writers::scm_name_branch,
+            projects::workspace_rename_on_first_prompt,
+            projects::workspace_move_folder,
             scm::scm_task_detail,
             scm::scm_repo_labels,
             github::github_repo_parent,
+            github::github_repo_lineage,
             github::github_people,
             github::github_project,
             github::github_projects,
@@ -584,18 +619,30 @@ pub fn run() {
             github::github_issue_state,
             github::github_issue_comment,
             github::github_issue_create,
+            github::github_issue_types,
+            github::github_issue_type_set,
             github::pull_requests::pr_page,
             github::pull_requests::pr_files,
             github::pull_requests::pr_file_patch,
             github::pull_requests::pr_checks,
             github::pull_requests::pr_threads,
             github::pull_requests::pr_set_state,
+            github::pull_requests::pr_viewed,
+            github::pull_requests::pr_set_viewed,
+            github::pull_requests::pr_editors,
             github::pull_requests::pr_rerun,
             github::pull_requests::pr_reviewers,
             github::pull_requests::pr_assignees,
             github::pull_requests::pr_react,
             github::pull_requests::pr_reply,
             github::pull_requests::pr_merge,
+            pr_checkout::scm_push_target,
+            scm_open::scm_open_with,
+            scm_recipe::scm_recipe_commit,
+            scm_recipe::scm_recipe_fix,
+            scm_stack::scm_stack_create,
+            scm_stack::scm_stack_record,
+            pr_review::scm_stack_prs,
             scm::scm_task_labels,
             scm::scm_task_body,
             scm::scm_stage,
@@ -709,6 +756,9 @@ pub fn run() {
             files::file_write,
             files::file_stamps,
             files::file_pick,
+            floating_trust::floating_trusted,
+            floating_trust::floating_pick,
+            floating_trust::floating_start,
             files::md_list,
             editor_drafts::editor_draft_set,
             editor_drafts::editor_draft_clear,
@@ -776,6 +826,8 @@ pub fn run() {
             update::update_check,
             update::update_download,
             update::update_restart,
+            update::update_last_attempt,
+            update::update_compat,
             lifecycle::close_alive,
             lifecycle::app_restart,
             usage_alerts::usage_alerts_fired,
@@ -792,6 +844,11 @@ pub fn run() {
                 final_save::begin();
                 // T-283 (BROW-043): this run's browser helpers end with it.
                 browser::helpers::stop_all();
+                // T-122 (STAT-018): Grok's Kolux-written hook file goes, unless another running
+                // Kolux owns it; the removal is cut short after grok::QUIT_LIMIT.
+                if let Ok(dir) = app.path().app_data_dir() {
+                    hooks::agent_hooks::more::grok::at_quit(&dir);
+                }
                 // T-182 (APP-011): the same steps make the save point a restart waits for.
                 let report = final_save::run(final_save::QUIT_DEADLINE, lifecycle::quit_steps(app));
                 if let Ok(dir) = app.path().app_data_dir() {

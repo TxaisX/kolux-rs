@@ -64,6 +64,9 @@ pub struct PrPage {
     pub head_ref: String,
     pub head_sha: String,
     pub base_ref: String,
+    /// T-232-d (GIT-060): the repository the branch lives in (`owner/name`), empty when its fork was deleted;
+    /// it differs from the pull request's repository when the branch comes from a fork.
+    pub head_repo: String,
     /// GitHub's word for whether it can merge: clean, blocked, behind, dirty, unstable, unknown...
     pub mergeable_state: String,
     pub labels: Vec<Label>,
@@ -230,6 +233,7 @@ pub fn page_of(pull: &Value, reviews: &Value, issue: &Value) -> Result<PrPage, S
         head_ref: s(&pull["head"]["ref"]),
         head_sha: s(&pull["head"]["sha"]),
         base_ref: s(&pull["base"]["ref"]),
+        head_repo: s(&pull["head"]["repo"]["full_name"]),
         mergeable_state: s(&pull["mergeable_state"]),
         labels,
         assignees,
@@ -410,6 +414,156 @@ pub fn read_threads(gh: &Path, host: &str, repo: &str, number: u64) -> Result<Pr
     Ok(PrThreads { threads: threads_of(&all), truncated, limit: READ_LIMIT })
 }
 
+// ---- T-232-d: viewed marks, recent editors ------------------------------------------------------
+
+/// GIT-052: one file's viewed mark as GitHub keeps it: `viewed`, `unviewed`, or `dismissed` (it was
+/// viewed, then changed by a later commit).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ViewedFile {
+    pub path: String,
+    pub state: String,
+}
+
+/// The viewed marks of a pull request's files; `truncated` when it has more files than were read.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrViewed {
+    pub files: Vec<ViewedFile>,
+    pub truncated: bool,
+    pub limit: usize,
+}
+
+/// GitHub's GraphQL reference: PullRequestChangedFile.viewerViewedState (docs.github.com/en/graphql/reference/objects).
+const VIEWED_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){files(first:100,after:$after){nodes{path viewerViewedState}pageInfo{hasNextPage endCursor}}}}}";
+/// docs.github.com/en/graphql/reference/mutations: markFileAsViewed and unmarkFileAsViewed.
+const MARK_VIEWED: &str = "mutation($id:ID!,$path:String!){markFileAsViewed(input:{pullRequestId:$id,path:$path}){clientMutationId}}";
+const UNMARK_VIEWED: &str = "mutation($id:ID!,$path:String!){unmarkFileAsViewed(input:{pullRequestId:$id,path:$path}){clientMutationId}}";
+
+/// One GraphQL call: the query and its variables go to gh on standard input (`gh api graphql --input -`),
+/// never on the command line. GraphQL answers 200 with an `errors` list on failure; the first message is the error.
+fn graphql(gh: &Path, host: &str, query: &str, variables: Value) -> Result<Value, String> {
+    host_allowed(gh, host)?;
+    let input = json!({ "query": query, "variables": variables }).to_string();
+    let args = ["api", "graphql", "--hostname", host, "--input", "-"];
+    let text = gh_run(gh, &std::env::temp_dir(), &args, Some(&input)).map_err(|e| format!("{host}: {}", gh_words(&e)))?;
+    let v: Value = serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
+    if let Some(first) = v["errors"].as_array().and_then(|e| e.first()) {
+        let msg = s(&first["message"]);
+        return Err(format!("{host}: {}", if msg.is_empty() { "GitHub refused the request".to_string() } else { msg }));
+    }
+    Ok(v)
+}
+
+fn viewed_state(raw: &str) -> Option<&'static str> {
+    match raw {
+        "VIEWED" => Some("viewed"),
+        "UNVIEWED" => Some("unviewed"),
+        "DISMISSED" => Some("dismissed"),
+        _ => None,
+    }
+}
+
+/// The files of one GraphQL page with their viewed marks, whether another page follows and its cursor.
+pub fn viewed_page(v: &Value) -> (Vec<ViewedFile>, bool, Option<String>) {
+    let files = &v["data"]["repository"]["pullRequest"]["files"];
+    let list = files["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|n| {
+            let path = n["path"].as_str().filter(|p| !p.is_empty())?;
+            Some(ViewedFile { path: path.to_string(), state: viewed_state(n["viewerViewedState"].as_str().unwrap_or(""))?.to_string() })
+        })
+        .collect();
+    let more = files["pageInfo"]["hasNextPage"].as_bool() == Some(true);
+    (list, more, files["pageInfo"]["endCursor"].as_str().map(String::from))
+}
+
+fn split_repo(repo: &str) -> Result<(&str, &str), String> {
+    if !full_name_ok(repo) {
+        return Err("This repository's name cannot be read".into());
+    }
+    repo.split_once('/').ok_or_else(|| "This repository's name cannot be read".to_string())
+}
+
+/// GIT-052: which of the pull request's files the signed-in person marked viewed on GitHub (read
+/// PAGE_CAP pages deep, the same 500 files the Files tab reads).
+pub fn read_viewed(gh: &Path, host: &str, repo: &str, number: u64) -> Result<PrViewed, String> {
+    if number == 0 {
+        return Err("A pull request number is more than zero.".into());
+    }
+    let (owner, name) = split_repo(repo)?;
+    let mut files = Vec::new();
+    let mut after: Option<String> = None;
+    for page in 1..=PAGE_CAP {
+        let v = graphql(gh, host, VIEWED_QUERY, json!({ "owner": owner, "name": name, "number": number, "after": after }))?;
+        if v["data"]["repository"]["pullRequest"].is_null() {
+            return Err("GitHub did not find this pull request.".into());
+        }
+        let (got, more, cursor) = viewed_page(&v);
+        files.extend(got);
+        match (more, cursor) {
+            (true, Some(c)) if page < PAGE_CAP => after = Some(c),
+            (more, _) => return Ok(PrViewed { files, truncated: more, limit: READ_LIMIT }),
+        }
+    }
+    Ok(PrViewed { files, truncated: false, limit: READ_LIMIT })
+}
+
+/// GIT-052: mark one file viewed (or clear the mark) on GitHub. The mutation needs the pull request's
+/// node id, which the REST record carries. Returns the state it set.
+pub fn set_viewed(gh: &Path, host: &str, repo: &str, number: u64, path: &str, viewed: bool) -> Result<String, String> {
+    if path.is_empty() || path.len() > 4096 || path.contains(['\0', '\n', '\r']) {
+        return Err("That file name cannot be marked.".into());
+    }
+    let pull = gh_json(gh, host, &pull_path(host, repo, number, "")?, &[])?;
+    let id = pull["node_id"].as_str().filter(|i| !i.is_empty() && i.len() <= 128).ok_or("GitHub did not describe this pull request; refresh and try again.")?;
+    graphql(gh, host, if viewed { MARK_VIEWED } else { UNMARK_VIEWED }, json!({ "id": id, "path": path }))?;
+    Ok((if viewed { "viewed" } else { "unviewed" }).to_string())
+}
+
+/// GIT-053: how many of the pull request's files, and how many commits of each, are read to find who
+/// recently edited them.
+const EDITOR_FILES: usize = 8;
+const EDITOR_COMMITS: usize = 10;
+
+/// GIT-053: the people who recently committed to the given files' histories (`commits` is one commit
+/// list per file), most commits first, each once; bots and names GitHub would not accept as logins are left out.
+pub fn editors_of(commits: &[Value]) -> Vec<String> {
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    for list in commits {
+        for c in list.as_array().into_iter().flatten() {
+            let a = &c["author"];
+            let Some(login) = a["login"].as_str().filter(|l| login_ok(l)) else { continue };
+            if a["type"].as_str() == Some("Bot") || login.ends_with("[bot]") {
+                continue;
+            }
+            match counts.iter_mut().find(|(l, _)| l.eq_ignore_ascii_case(login)) {
+                Some((_, n)) => *n += 1,
+                None => counts.push((login.to_string(), 1)),
+            }
+        }
+    }
+    counts.sort_by_key(|c| std::cmp::Reverse(c.1));
+    counts.into_iter().map(|(l, _)| l).collect()
+}
+
+/// GIT-053: recent editors of a pull request's first files (the default branch's history of each).
+pub fn read_editors(gh: &Path, host: &str, repo: &str, number: u64) -> Result<Vec<String>, String> {
+    let listed = gh_json(gh, host, &pull_path(host, repo, number, "files")?, &["-X", "GET", "-f", &format!("per_page={EDITOR_FILES}")])?;
+    let base = format!("{}/commits", repo_path(host, repo)?);
+    let per = format!("per_page={EDITOR_COMMITS}");
+    let mut lists = Vec::new();
+    for f in listed.as_array().into_iter().flatten().take(EDITOR_FILES) {
+        let name = s(&f["filename"]);
+        if name.is_empty() {
+            continue;
+        }
+        lists.push(gh_json(gh, host, &base, &["-X", "GET", "-f", &format!("path={name}"), "-f", &per])?);
+    }
+    Ok(editors_of(&lists))
+}
+
 /// One write: `method` on `path`, the JSON body (when there is one) on standard input.
 fn write(gh: &Path, host: &str, method: &str, path: &str, body: Option<Value>) -> Result<Value, String> {
     host_allowed(gh, host)?;
@@ -587,6 +741,22 @@ pub async fn pr_checks(host: String, repo: String, sha: String) -> Result<Vec<Pr
 #[tauri::command]
 pub async fn pr_threads(host: String, repo: String, number: u64) -> Result<PrThreads, String> {
     blocking(move |gh| read_threads(gh, &host, &repo, number)).await
+}
+
+#[tauri::command]
+pub async fn pr_viewed(host: String, repo: String, number: u64) -> Result<PrViewed, String> {
+    blocking(move |gh| read_viewed(gh, &host, &repo, number)).await
+}
+
+#[tauri::command]
+pub async fn pr_set_viewed(host: String, repo: String, number: u64, path: String, viewed: bool) -> Result<String, String> {
+    repo_ok(&repo)?;
+    blocking(move |gh| set_viewed(gh, &host, &repo, number, &path, viewed)).await
+}
+
+#[tauri::command]
+pub async fn pr_editors(host: String, repo: String, number: u64) -> Result<Vec<String>, String> {
+    blocking(move |gh| read_editors(gh, &host, &repo, number)).await
 }
 
 #[tauri::command]
@@ -1034,5 +1204,124 @@ mod tests {
         assert!(got.truncated);
         assert_eq!(got.limit, 500);
         assert_eq!(calls(&dir).lines().count(), PAGE_CAP + 1);
+    }
+
+    fn bodies(dir: &std::path::Path) -> Vec<Value> {
+        fs::read_to_string(dir.join("body.txt")).unwrap_or_default().lines().filter(|l| !l.trim().is_empty()).map(|l| serde_json::from_str(l.trim()).unwrap()).collect()
+    }
+
+    fn viewed_answer(files: &[(&str, &str)], more: bool, cursor: Option<&str>) -> Value {
+        let nodes: Vec<Value> = files.iter().map(|(p, st)| json!({ "path": p, "viewerViewedState": st })).collect();
+        json!({ "data": { "repository": { "pullRequest": { "files": { "nodes": nodes, "pageInfo": { "hasNextPage": more, "endCursor": cursor } } } } } })
+    }
+
+    #[test]
+    fn viewed_marks_are_read_from_the_graphql_answer_and_unknown_states_are_dropped() {
+        let v = viewed_answer(&[("a.rs", "VIEWED"), ("b.rs", "UNVIEWED"), ("c.rs", "DISMISSED"), ("d.rs", "SOMETHING_NEW"), ("", "VIEWED")], true, Some("c1"));
+        let (files, more, cursor) = viewed_page(&v);
+        let got: Vec<(&str, &str)> = files.iter().map(|f| (f.path.as_str(), f.state.as_str())).collect();
+        assert_eq!(got, vec![("a.rs", "viewed"), ("b.rs", "unviewed"), ("c.rs", "dismissed")]);
+        assert!(more);
+        assert_eq!(cursor.as_deref(), Some("c1"));
+        let (none, more, cursor) = viewed_page(&json!({ "data": { "repository": { "pullRequest": null } } }));
+        assert!(none.is_empty() && !more && cursor.is_none());
+    }
+
+    #[test]
+    fn reading_viewed_marks_follows_the_cursor_and_sends_the_query_on_stdin() {
+        let (gh, dir) = stand_in("pr-viewed-read", &viewed_answer(&[("a.rs", "VIEWED")], true, Some("cur1")));
+        fs::write(dir.join("answer2.json"), viewed_answer(&[("b.rs", "UNVIEWED")], false, None).to_string()).unwrap();
+        let got = read_viewed(&gh, "github.com", "acme/app", 7).unwrap();
+        assert_eq!(got.files.len(), 2);
+        assert!(!got.truncated);
+        let c = calls(&dir);
+        assert_eq!(c.lines().count(), 2, "{c}");
+        assert!(c.lines().all(|l| l.contains("api graphql --hostname github.com --input -")), "{c}");
+        assert!(!c.contains("acme") && !c.contains("query"), "the query and its variables go on stdin: {c}");
+        let b = bodies(&dir);
+        assert_eq!(b[0]["variables"], json!({ "owner": "acme", "name": "app", "number": 7, "after": null }));
+        assert_eq!(b[1]["variables"]["after"], json!("cur1"));
+        assert!(b[0]["query"].as_str().unwrap().contains("viewerViewedState"));
+        assert!(read_viewed(&gh, "github.com", "acme/../app", 7).is_err());
+        assert!(read_viewed(&gh, "github.com", "acme/app", 0).is_err());
+        assert_eq!(calls(&dir).lines().count(), 2, "a refused name or number sends nothing");
+    }
+
+    #[test]
+    fn viewed_marks_past_the_page_cap_are_reported_as_cut_and_a_graphql_error_is_the_error() {
+        let (gh, dir) = stand_in("pr-viewed-cap", &viewed_answer(&[("a.rs", "VIEWED")], true, Some("again")));
+        let got = read_viewed(&gh, "github.com", "acme/app", 7).unwrap();
+        assert!(got.truncated);
+        assert_eq!(calls(&dir).lines().count(), PAGE_CAP);
+
+        let (gh, _dir) = stand_in("pr-viewed-err", &json!({ "errors": [{ "message": "Could not resolve to a PullRequest" }] }));
+        let e = read_viewed(&gh, "github.com", "acme/app", 7).unwrap_err();
+        assert!(e.contains("Could not resolve"), "{e}");
+        let (gh, _dir) = stand_in("pr-viewed-null", &json!({ "data": { "repository": { "pullRequest": null } } }));
+        assert!(read_viewed(&gh, "github.com", "acme/app", 7).unwrap_err().contains("did not find"));
+    }
+
+    #[test]
+    fn marking_a_file_viewed_looks_up_the_node_id_then_sends_the_matching_mutation() {
+        let (gh, dir) = stand_in("pr-viewed-set", &json!({ "node_id": "PR_kwDOabc", "data": {} }));
+        assert_eq!(set_viewed(&gh, "github.com", "acme/app", 7, "src/a b.rs", true).unwrap(), "viewed");
+        assert_eq!(set_viewed(&gh, "github.com", "acme/app", 7, "src/a b.rs", false).unwrap(), "unviewed");
+        let c = calls(&dir);
+        assert_eq!(c.lines().count(), 4, "{c}");
+        assert!(c.contains("api repos/acme/app/pulls/7 --hostname github.com"), "{c}");
+        let b = bodies(&dir);
+        assert!(b[0]["query"].as_str().unwrap().contains("markFileAsViewed"));
+        assert!(b[1]["query"].as_str().unwrap().contains("unmarkFileAsViewed"));
+        assert_eq!(b[0]["variables"], json!({ "id": "PR_kwDOabc", "path": "src/a b.rs" }));
+        assert!(!c.contains("a b.rs"), "the file name goes on stdin: {c}");
+    }
+
+    #[test]
+    fn marking_refuses_odd_file_names_and_a_pull_request_without_a_node_id() {
+        let (gh, dir) = stand_in("pr-viewed-refused", &json!({ "node_id": "PR_x" }));
+        assert!(set_viewed(&gh, "github.com", "acme/app", 7, "", true).is_err());
+        assert!(set_viewed(&gh, "github.com", "acme/app", 7, "a\nb", true).is_err());
+        assert!(set_viewed(&gh, "github.com", "acme/app", 7, &"x".repeat(4097), true).is_err());
+        assert!(set_viewed(&gh, "github.com", "acme/app", 0, "a.rs", true).is_err());
+        assert!(!dir.join("calls.txt").exists());
+        let (gh, dir) = stand_in("pr-viewed-noid", &json!({ "number": 7 }));
+        assert!(set_viewed(&gh, "github.com", "acme/app", 7, "a.rs", true).is_err());
+        assert_eq!(calls(&dir).lines().count(), 1, "no mutation was sent");
+    }
+
+    #[test]
+    fn recent_editors_are_ranked_by_commits_and_bots_and_odd_names_are_left_out() {
+        let by = |l: &str| json!({ "author": { "login": l, "type": "User" } });
+        let lists = vec![
+            json!([by("ana"), by("bo"), json!({ "author": { "login": "dependabot[bot]", "type": "Bot" } }), json!({ "author": null }), by("bad login")]),
+            json!([by("BO"), by("cy"), json!({ "author": { "login": "ci", "type": "Bot" } })]),
+            json!([by("cy"), by("cy")]),
+        ];
+        // cy has 3 commits, bo 2 (the second spelled BO), ana 1; the bots, the missing author and the name with a space are not people
+        assert_eq!(editors_of(&lists), vec!["cy".to_string(), "bo".to_string(), "ana".to_string()]);
+        assert!(editors_of(&[]).is_empty());
+    }
+
+    #[test]
+    fn reading_editors_asks_for_each_changed_files_history_with_the_name_as_a_gh_field() {
+        let (gh, dir) = stand_in("pr-editors", &json!([{ "filename": "src/a.rs" }, { "filename": "b.rs" }, { "filename": "" }]));
+        fs::write(dir.join("answer2.json"), json!([{ "author": { "login": "ana", "type": "User" } }]).to_string()).unwrap();
+        fs::write(dir.join("answer3.json"), json!([{ "author": { "login": "bo", "type": "User" } }, { "author": { "login": "ana", "type": "User" } }]).to_string()).unwrap();
+        let got = read_editors(&gh, "github.com", "acme/app", 7).unwrap();
+        assert_eq!(got, vec!["ana".to_string(), "bo".to_string()]);
+        let c = calls(&dir).replace('"', "");
+        assert!(c.contains("api repos/acme/app/pulls/7/files --hostname github.com -X GET -f per_page=8"), "{c}");
+        assert!(c.contains("api repos/acme/app/commits --hostname github.com -X GET -f path=src/a.rs -f per_page=10"), "{c}");
+        assert!(c.contains("-f path=b.rs"), "{c}");
+        assert_eq!(c.lines().count(), 3, "the empty name asked nothing: {c}");
+        assert!(read_editors(&gh, "github.com", "acme/../app", 7).is_err());
+    }
+
+    #[test]
+    fn the_page_names_the_repository_the_branch_lives_in() {
+        let mut p = pull();
+        p["head"]["repo"] = json!({ "full_name": "me/app" });
+        assert_eq!(page_of(&p, &json!([]), &json!({})).unwrap().head_repo, "me/app");
+        assert_eq!(page_of(&pull(), &json!([]), &json!({})).unwrap().head_repo, "", "a deleted fork has no repository");
     }
 }

@@ -19,15 +19,19 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type Re
 import { invoke } from "@tauri-apps/api/core";
 import Ask from "../chrome/Ask";
 import { ChevronDown, Close, FileCode, Funnel, List, Minus, Plus, Refresh, Spark, Stop, Undo } from "../chrome/icons";
+import { useSettings } from "../settings/useSettings";
+import { aiShownFor, fixRequest, recipeFor, type FixLaunch, type FixPlan } from "./recipes";
 import { dismissGenerate, generate, genState, genSubscribe, genVersion, stopGenerate, writerName, DEFAULT_WRITER, type Writer } from "./generate";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
+import FileOpenWith from "./FileOpenWith";
+import { forkNotice, loadPushTarget, type PushTarget } from "./forkPush";
 import { watchStatus } from "./watch";
 import { afterRefresh, commitBox, failureSummary, mainStep, statusGuard } from "./rules";
 import { DIFF_SPLITS, type DiffSplit } from "./split";
 import { openInBrowser } from "../browser/BrowserPane";
 import { HistoryLoads, acceptHistory, historyFor, type LoadedHistory } from "./history";
-import { LINES_SKIPPED_NOTE, canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, type RowKey, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine, PULL_POLICIES, filterRows, fullPath } from "./model";
+import { LINES_SKIPPED_NOTE, canCommit, changeCount, cutBanner, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, type RowKey, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine, PULL_POLICIES, filterRows, fullPath } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -38,7 +42,9 @@ type Props = {
   writer?: Writer;
   onClose: () => void;
   /** GIT-004: starts an agent primed with what git and its hooks printed. */
-  onFix: (output: string) => void;
+  /** VIEW-066: false when Source Control AI actions are hidden; the agent fix after a failed push goes with them. */
+  aiShown?: boolean;
+  onFix: (output: string, launch?: FixLaunch) => void;
   /** VIEW-068: the base pinned for the workspace's project, which the summary measures against. */
   pinnedBase: string | null;
   /** GIT-011: Change Base Ref pins a new base for the workspace's project (blank goes back to the default). */
@@ -92,12 +98,12 @@ function GraphCell({ row }: { row: GraphRow }) {
   );
 }
 
-type Failure = { title: string; output: string; fix?: string | null; policy?: boolean };
+type Failure = { title: string; output: string; fix?: string | null; policy?: boolean; behind?: boolean };
 
 type Composer = { title: string; body: string; base: string; draft: boolean; error: string | null; busy: boolean };
 
 // VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
-export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft, onDraft, onClose, onFix, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr, view = "list", onView, onOpenDiff, diffSplit = "here", onDiffSplit, onAllChanges, notesSection }: Props) {
+export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft, onDraft, onClose, onFix, aiShown = true, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr, view = "list", onView, onOpenDiff, diffSplit = "here", onDiffSplit, onAllChanges, notesSection }: Props) {
   const [asking, setAsking] = useState<Asking | null>(null);
   // GIT-003: the rows waiting for a yes before their work is thrown away.
   const [discardingRows, setDiscardingRows] = useState<Change[] | null>(null);
@@ -132,7 +138,25 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
   // GIT-017: Claude Code writes the message from what is staged; the run belongs to this worktree.
   useSyncExternalStore(genSubscribe, genVersion);
   const gen = dir === null ? null : genState(dir);
-  const canGenerate = writer.mode === "custom" || (writer.mode === "agent" && agents.some((a) => a.id === writer.agent && a.installed));
+  // GIT-019: the generate and Fix with AI controls follow the global switch and this repository's own mode.
+  const { settings: appSettings } = useSettings();
+  const aiOn = aiShownFor(appSettings, ghRepo ? `${ghRepo.owner}/${ghRepo.name}` : null);
+  // GIT-019: a recipe for the action wins over the single writer; the Rust side expands its variables.
+  const commitRecipe = recipeFor(appSettings, "commit");
+  const fixRecipe = recipeFor(appSettings, "fix");
+  const canGenerate = aiOn && (commitRecipe !== null || writer.mode === "custom" || (writer.mode === "agent" && agents.some((a) => a.id === writer.agent && a.installed)));
+  // GIT-019: Fix with AI through the fix recipe: an agent recipe starts that agent with its extra arguments
+  // (the app's own launch); a command template runs and what it printed is shown.
+  const fix = async (output: string) => {
+    if (fixRecipe === null || dir === null) return onFix(output);
+    try {
+      const plan = await invoke<FixPlan>("scm_recipe_fix", { worktree: dir, recipe: fixRecipe, output, prompt: fixRequest(output) });
+      if (plan.kind === "agent") onFix(output, { agent: plan.agent, extra: plan.extra, prompt: plan.prompt });
+      else setAgentError(plan.text);
+    } catch (e) {
+      setAgentError(String(e));
+    }
+  };
   // GIT-036: Explain changes starts an agent with a prompt about the commit.
   const explain = (c: Commit) => {
     const prompt = explainPrompt(c);
@@ -159,6 +183,7 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
   const [status, setStatus] = useState<Status | null>(null);
   const statusRef = useRef<Status | null>(null);
   statusRef.current = status;
+  const cut = cutBanner(status);
   const [error, setError] = useState<string | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -209,6 +234,17 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
   // VIEW-068: the branch summary is measured while the panel is open, when HEAD moves and at
   // least every 30 s; the last one stays on screen while the next is worked out.
   const [summary, setSummary] = useState<Summary | null>(null);
+  // GIT-010: the fork the branch pushes to, when it is not the project's own repository.
+  const [pushTo, setPushTo] = useState<PushTarget | null>(null);
+  const pushKey = status?.branch ? `${status.branch}|${status.upstream ?? ""}` : "";
+  useEffect(() => {
+    let live = true;
+    setPushTo(null);
+    if (dir !== null && pushKey) void loadPushTarget(dir).then((t) => live && setPushTo(t));
+    return () => {
+      live = false;
+    };
+  }, [dir, pushKey]);
   const [measureTick, setMeasureTick] = useState(0);
   const [baseDraft, setBaseDraft] = useState<string | null>(null);
   useEffect(() => setSummary(null), [dir]);
@@ -310,7 +346,7 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
       setFailure(null);
       setInfo(`${label}: done`);
     } else {
-      setFailure({ title: failureTitle(label, out), output: out.output, fix: out.kind === "hook" ? (out.detail ?? out.output) : !out.kind || out.kind === "other" ? out.output : null, policy: out.kind === "no-policy" });
+      setFailure({ title: failureTitle(label, out), output: out.output, fix: out.kind === "hook" ? (out.detail ?? out.output) : !out.kind || out.kind === "other" ? out.output : null, policy: out.kind === "no-policy", behind: out.kind === "non-fast-forward" });
     }
   };
   const remote = (action: RemoteAction, label: string) => guarded(() => runRemote(action, label));
@@ -475,7 +511,8 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
     if (!status) return;
     switch (step.action) {
       case "stage":
-        return stage([...status.changed, ...status.untracked].map((c) => c.path), true);
+        // GIT-012: with the lists cut short, "Stage all" means the whole worktree, not the rows shown.
+        return stage((status.cut ?? 0) > 0 ? ["."] : [...status.changed, ...status.untracked].map((c) => c.path), true);
       case "commit":
         return commit();
       case "pr":
@@ -756,7 +793,7 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
                 ) : (
                   canGenerate &&
                   (status?.staged.length ?? 0) > 0 && (
-                    <button className="ib scm-gen" title={`Write the message from what is staged with ${writer.mode === "custom" ? "your command" : writerName(writer.agent)}`} aria-label="Write the message with AI" onClick={() => dir !== null && generate(dir, onDraft, writer)}>
+                    <button className="ib scm-gen" title={`Write the message from what is staged with ${writer.mode === "custom" ? "your command" : writerName(writer.agent)}`} aria-label="Write the message with AI" onClick={() => dir !== null && generate(dir, onDraft, writer, commitRecipe)}>
                       <Spark />
                     </button>
                   )
@@ -976,6 +1013,11 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
                 </div>
               </div>
             )}
+            {forkNotice(pushTo) && (
+              <div className="note" role="status" data-fork-push>
+                {forkNotice(pushTo)}
+              </div>
+            )}
             {info && (
               <div className="note ok" role="status">
                 {info}
@@ -1003,11 +1045,19 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
                     ))}
                   </div>
                 )}
-                {failure.fix !== null && !failure.policy && (
-                  <button className="btn" onClick={() => onFix(failure.fix ?? failure.output)}>
+                {failure.behind && (
+                  <button className="btn" disabled={busy} title="The remote has commits this copy lacks; bring them in, then push again" data-pull-first onClick={() => remote("pull", "Pull")}>
+                    Pull first
+                  </button>
+                )}
+                {aiShown && aiOn && failure.fix !== null && !failure.policy && (
+                  <button className="btn" onClick={() => void fix(failure.fix ?? failure.output)}>
                     Fix with AI
                   </button>
                 )}
+                <button className="btn ghost" data-dismiss-failure onClick={() => setFailure(null)}>
+                  Dismiss
+                </button>
               </div>
             )}
             {error && <div className="note error">{error}</div>}
@@ -1086,6 +1136,19 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
                   setFilter(null);
                 }}
               />
+            )}
+            {cut && (
+              <div className="note warn" role="status" data-scm-cut>
+                {cut.text}
+                {cut.offer.length > 0 && (
+                  <>
+                    {" "}
+                    <button className="link" disabled={busy} onClick={() => void guarded(() => invoke("scm_ignore_heavy", { worktree: dir, folders: cut.offer }))}>
+                      Add {cut.offer.join(", ")} to .gitignore
+                    </button>
+                  </>
+                )}
+              </div>
             )}
             <div className="sb-list">
               {status && changeCount(status) === 0 && <div className="sb-hint">No changes{status.branch ? ` on ${status.branch}` : ""}.</div>}
@@ -1192,6 +1255,7 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
                       <span className="name">{item.label}</span>
                     </button>
                   ))}
+                  <FileOpenWith dir={dir} path={fileCtx.path} done={() => setFileCtx(null)} onError={(m) => setError(m)} />
                 </div>
               </>
             )}

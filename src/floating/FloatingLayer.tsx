@@ -19,7 +19,9 @@ import {
   clampButton, insetFor, moveBy, parseButton, parseSaved, resizeBy, SETTING_BUTTON, SETTING_PANEL, shown, startsPanelMove, toggleMaximize, toStored,
   type Edge, type Pos, type Rect, type Saved, type Win, BUTTON,
 } from "./geometry";
-import { add, answer, asked, close, closeKey, empty, hide, programExited, reorder, route, saveTarget, select, selectNumber, setDirty, startFolder, step, toggle, type Kind, type Panel } from "./panel";
+import { add, answer, asked, close, closeKey, empty, hide, programExited, reorder, saveTarget, select, selectNumber, setDirty, setTitle, step, toggle, type Kind, type Panel } from "./panel";
+import { startFolderFor } from "./trusted";
+import { routeFloating } from "../shell/inputExtras";
 import "./floating.css";
 
 /**
@@ -52,6 +54,7 @@ export default function FloatingLayer({ agents = [], defaultId, home, pending = 
   const [place, setPlace] = useState<Saved>(() => parseSaved(null, winSize(), inset));
   const [btn, setBtn] = useState<Pos>(() => parseButton(null, winSize()));
   const [note, setNote] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<number | null>(null); // TERM-062: the panel tab whose name is being edited
   const loaded = useRef(false);
 
   // The saved places arrive with the settings, once.
@@ -70,12 +73,13 @@ export default function FloatingLayer({ agents = [], defaultId, home, pending = 
 
   const doAdd = (kind: Kind) => {
     setNote(null);
-    if (kind === "terminal") return run((p) => add(p, { kind, cwd: home ? startFolder(home) : undefined }));
+    // SAFE-027 (T-271): terminals and agents start only in a folder the user picked; a refusal opens nothing and says why.
+    if (kind === "terminal") return void startFolderFor(invoke).then((s) => ("cwd" in s ? run((p) => add(p, { kind, cwd: s.cwd })) : setNote(s.refused)));
     if (kind === "browser") return run((p) => add(p, { kind }));
     if (kind === "agent") {
       const a = defaultId ? agents.find((x) => x.id === defaultId && x.installed) : agents.find((x) => x.installed);
       if (!a) return setNote(defaultId ? `The default agent (${defaultId}) is not installed or is switched off.` : "No agent is installed and switched on.");
-      return run((p) => add(p, { kind, agent: a.id, title: a.name, cwd: home ? startFolder(home) : undefined }));
+      return void startFolderFor(invoke).then((s) => ("cwd" in s ? run((p) => add(p, { kind, agent: a.id, title: a.name, cwd: s.cwd })) : setNote(s.refused)));
     }
     if (!home) return setNote("A new note needs a folder to live in; open a workspace and use its Markdown tab.");
     invoke<string>("md_new", { root: home, template: null }).then(
@@ -96,7 +100,7 @@ export default function FloatingLayer({ agents = [], defaultId, home, pending = 
       const scopes: Scope[] = inPanel && activeKind === "markdown" ? ["global", "tabs", "editor"] : ["global", "tabs"];
       const hit = matchEvent(keymap, e, scopes);
       if (!hit || heldByTerminal(hit.id, s)) return false;
-      const op = route(hit.id, hit.index, p.open, inPanel);
+      const op = routeFloating(hit.id, hit.index, p.open, inPanel);
       if (!op) return false;
       e.preventDefault();
       e.stopPropagation();
@@ -120,6 +124,9 @@ export default function FloatingLayer({ agents = [], defaultId, home, pending = 
         }
         case "close":
           run(closeKey);
+          break;
+        case "rename":
+          if (p.active !== null) setRenaming(p.active);
           break;
         case "select":
           run((q) => selectNumber(q, op.n));
@@ -217,7 +224,22 @@ export default function FloatingLayer({ agents = [], defaultId, home, pending = 
                   onClick={() => run((p) => select(p, t.key))}
                 >
                   <span className="ico" data-nodrag>{ICON[t.kind]}</span>
-                  <span className="name">{t.title}</span>
+                  {renaming === t.key ? (
+                    <input
+                      className="name"
+                      aria-label="Tab name"
+                      autoFocus
+                      defaultValue={t.title}
+                      onClick={(e) => e.stopPropagation()}
+                      onBlur={(e) => (e.currentTarget.dataset.skip || run((p) => setTitle(p, t.key, e.currentTarget.value.trim() || t.title)), setRenaming(null))}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") e.currentTarget.blur();
+                        else if (e.key === "Escape") (e.currentTarget.dataset.skip = "1", setRenaming(null));
+                      }}
+                    />
+                  ) : (
+                    <span className="name">{t.title}</span>
+                  )}
                   {t.dirty && <span className="unsaved" title="Unsaved changes">●</span>}
                   <button className="x" aria-label={`Close ${t.title}`} onClick={(e) => (e.stopPropagation(), run((p) => close(p, [t.key])))}>×</button>
                 </div>

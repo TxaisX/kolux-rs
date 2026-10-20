@@ -12,7 +12,7 @@
 // Source switch; the source view is the CodeMirror one, which keeps holding the text throughout.
 // EDIT-007: Copy Context copies the selection under its path and line range, with a hint beside a
 // selection it applies to; EDIT-020: review notes take a selection from any file, not just Markdown.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
 import { EditorView } from "@codemirror/view";
@@ -60,6 +60,9 @@ import { matchEvent } from "../keys/keymap";
 import { Contents, FindBar, selectedIn, type FindOpen } from "./NoteTools";
 import { replaceInRich } from "./notefind";
 import { outline } from "./toc";
+import { mdPrefs, setMdPrefs } from "../shell/mdPrefs";
+import { FrontMatterBlock, TocResizer } from "../shell/MdViewControls";
+import { frontControl, tocVar } from "../shell/mdView";
 import { followClick, type LinkHandler } from "./linkClicks";
 import { hasSpot, jumpSpot, onReveal, revealAt, spotRange, takeSpot } from "./search";
 import "./editor-extras.css";
@@ -253,7 +256,13 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   // EDIT-016 / EDIT-017: the rich view's find bar and contents panel, and the note text they read
   // (taken from the buffer a moment after typing stops).
   const [noteFind, setNoteFind] = useState<FindOpen | null>(null);
-  const [toc, setToc] = useState(false);
+  // VIEW-113: the contents panel stays open or shut for this file.
+  const [toc, setToc] = useState(() => mdPrefs(path).toc);
+  useEffect(() => void setMdPrefs(path, { toc }), [path, toc]);
+  // VIEW-113: front matter shown or hidden, and the contents panel width, also stay per file.
+  const [hideFront, setHideFront] = useState(() => mdPrefs(path).hideFront);
+  const [tocWidth, setTocWidth] = useState(() => mdPrefs(path).tocWidth);
+  useEffect(() => void setMdPrefs(path, { hideFront, tocWidth }), [path, hideFront, tocWidth]);
   const [noteText, setNoteText] = useState("");
   const noteTimer = useRef(0);
 
@@ -579,6 +588,8 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   shownRef.current = shown;
   const richRoot = useCallback(() => richHost.current, []);
   const hasHeadings = useMemo(() => md && outline(noteText).length > 0, [md, noteText]);
+  const frontText = useMemo(() => (md ? splitFront(noteText).front : ""), [md, noteText]);
+  const frontCtl = frontControl(frontText, hideFront);
   const tocShown = toc && hasHeadings && shown === "rich";
   // GIT-042, EDIT-020: the add-note shortcut reads this tab's selection, in any file.
   useEffect(() => {
@@ -681,7 +692,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   const railed = useMemo(() => (md ? railNotes(notes, path) : []), [md, notes, path]);
   const railShown = shown === "rich" && railed.length > 0;
   return (
-    <section className={`pane editor${focused ? " focused" : ""}${tocShown ? " toc-open" : ""}${railShown ? " rail-open" : ""}`} hidden={hidden} aria-label={`${name} pane`} onMouseDown={onFocus} onKeyDownCapture={onKeys} data-kind="editor" data-key={id}>
+    <section style={tocShown ? (tocVar(tocWidth) as CSSProperties) : undefined} className={`pane editor${focused ? " focused" : ""}${tocShown ? " toc-open" : ""}${railShown ? " rail-open" : ""}`} hidden={hidden} aria-label={`${name} pane`} onMouseDown={onFocus} onKeyDownCapture={onKeys} data-kind="editor" data-key={id}>
       <header className="pane-head">
         <span className="agent-mark" title="File">
           <FileIcon name={name} size={13} />
@@ -722,6 +733,11 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
               </button>
             ))}
           </span>
+        )}
+        {md && shown === "rich" && frontCtl && (
+          <button className="ib" aria-pressed={frontCtl.pressed} title={frontCtl.label} aria-label={frontCtl.label} onClick={() => setHideFront((v) => !v)}>
+            Front
+          </button>
         )}
         {hasHeadings && shown === "rich" && (
           <button className="ib" aria-pressed={toc} title="Contents" aria-label="Contents" onClick={() => setToc((v) => !v)}>
@@ -806,6 +822,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
       {md && shown === "rich" && !comparing && !readOnly && <RichToolbar get={() => rich.current} />}
       {railShown && <NoteRail host={richHost} notes={railed} version={noteText} onRemove={onRemoveNote} />}
       {tocShown && <Contents md={noteText} path={path} root={richRoot} onClose={() => setToc(false)} />}
+      {tocShown && <TocResizer width={tocWidth} onWidth={setTocWidth} />}
       {comparing && <CompareView path={path} text={textOf(path) ?? ""} read={readDisk} onReload={reload} onKeep={keepMine} onClose={() => setComparing(false)} />}
       {changesOn && <DiffPane embedded against="head" id={id} path={path} root={root} staged={false} hidden={hidden || comparing} focused={focused} onFocus={onFocus} onToast={onToast} />}
       <div ref={host} className="pane-body" hidden={shown !== "source" || comparing} />
@@ -822,6 +839,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
       )}
       {md && shown === "rich" && !comparing && <SlashMenu view={slashView} onPick={(id) => rich.current?.pickSlash(id)} />}
       {md && shown === "rich" && !comparing && <TableMenu editor={richEditor} />}
+      {md && shown === "rich" && !comparing && <FrontMatterBlock front={frontText} hide={hideFront} />}
       {md && <div ref={richHost} className="pane-body md-rich" onClickCapture={(e) => richHost.current && followClick(e.nativeEvent, richHost.current, path, root, onLink)} contentEditable suppressContentEditableWarning spellCheck={spell} hidden={shown !== "rich" || comparing} aria-label={`${name}, rich view`} />}
     </section>
   );

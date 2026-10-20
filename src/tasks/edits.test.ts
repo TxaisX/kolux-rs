@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { editLabels, undoLabels, withLabels } from "./edits";
 import { applyEdits, EDIT_TTL_MS, editAssign, editState, leavesFilter, settle, undoAssign, undoState, wantedState, withAssignees } from "./edits";
 import type { Task } from "./model";
 
@@ -59,4 +60,25 @@ test("GIT-048: an item that stops matching the state filter fades out; no state 
   expect(leavesFilter({ state: "open" }, "closed")).toBe(true);
   expect(leavesFilter({ state: "open" }, "merged")).toBe(true);
   expect(leavesFilter({ state: "closed" }, null)).toBe(false);
+});
+
+test("T-281 (GIT-048): label edits show at once, survive a stale answer, and settle when GitHub agrees", () => {
+  const url = task(7).url;
+  const bug = { name: "bug", color: "d00" };
+  const ui = { name: "ui", color: "0a0" };
+  let e = editLabels({}, url, [bug], [], 1);
+  e = editLabels(e, url, [ui], ["old"], 2);
+  const row = task(7, { labels: [{ name: "old", color: "" }] });
+  expect(applyEdits([row], e)[0].labels.map((l) => l.name)).toEqual(["bug", "ui"]);
+  // a late answer from the first write (bug only, old still on) does not flip anything back
+  expect(Object.keys(settle(e, [task(7, { labels: [bug, { name: "old", color: "" }] })], 3))).toEqual([url]);
+  expect(withLabels([bug, { name: "old", color: "" }], e[url]).map((l) => l.name)).toEqual(["bug", "ui"]);
+  // GitHub agrees: the edit is dropped
+  expect(settle(e, [task(7, { labels: [bug, ui] })], 4)).toEqual({});
+  // asking for the opposite cancels; a failed write puts back only itself
+  expect(withLabels([], editLabels(e, url, [], ["bug"], 5)[url]).map((l) => l.name)).toEqual(["ui"]);
+  const failed = undoLabels(e, url, ["ui"], ["old"]);
+  expect(withLabels([{ name: "old", color: "" }], failed[url]).map((l) => l.name)).toEqual(["old", "bug"]);
+  // an item with only an assignee edit is unaffected by labels
+  expect(withLabels([bug], undefined)).toEqual([bug]);
 });

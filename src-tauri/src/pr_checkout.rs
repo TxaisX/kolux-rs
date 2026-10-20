@@ -126,6 +126,68 @@ pub fn remotes(repo: &Path) -> String {
     run(&["config", "--get-regexp", r"^remote\..*\.url$"], Some(repo)).unwrap_or_default()
 }
 
+/// GIT-010: where the branch checked out in a worktree pushes to.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushTarget {
+    pub branch: String,
+    pub remote: String,
+    /// The branch name on that remote (the upstream's), which differs from `branch` for a branch
+    /// taken from a fork's pull request and renamed on the way in.
+    pub remote_branch: String,
+    pub url: String,
+    /// `owner/name` of the fork the branch pushes to, or its address when that is not a GitHub one;
+    /// None when the push goes to the project's own repository.
+    pub fork: Option<String>,
+}
+
+fn same_repo(a: &str, b: &str) -> bool {
+    match (crate::scm::github_repo(a, ""), crate::scm::github_repo(b, "")) {
+        (Some(x), Some(y)) => x.key == y.key,
+        _ => a.trim().trim_end_matches(".git").trim_end_matches('/') == b.trim().trim_end_matches(".git").trim_end_matches('/'),
+    }
+}
+
+/// The settings a branch's push takes, as `git config` gives them: the branch's own push remote,
+/// then the repository's default push remote, then the remote the branch tracks.
+pub fn push_target(worktree: &Path) -> Option<PushTarget> {
+    let branch = run(&["symbolic-ref", "--quiet", "--short", "HEAD"], Some(worktree)).ok().filter(|b| !b.is_empty())?;
+    let conf = |key: String| run(&["config", "--get", &key], Some(worktree)).ok().filter(|v| !v.is_empty());
+    let remote = conf(format!("branch.{branch}.pushRemote")).or_else(|| conf("remote.pushDefault".to_string())).or_else(|| conf(format!("branch.{branch}.remote")))?;
+    if remote == "." {
+        return None;
+    }
+    let remote_branch = conf(format!("branch.{branch}.merge")).map(|m| m.strip_prefix("refs/heads/").unwrap_or(&m).to_string()).unwrap_or_else(|| branch.clone());
+    let url = run(&["remote", "get-url", "--push", &remote], Some(worktree)).ok()?;
+    let origin = run(&["remote", "get-url", "origin"], Some(worktree)).ok();
+    let fork = (remote != "origin" && origin.as_deref().is_none_or(|o| !same_repo(o, &url))).then(|| match crate::scm::github_repo(&url, "") {
+        Some(g) => format!("{}/{}", g.owner, g.name),
+        None => url.clone(),
+    });
+    Some(PushTarget { branch, remote, remote_branch, url, fork })
+}
+
+/// GIT-010: the git arguments of a push. A branch whose remote name differs from its own (a fork
+/// pull request's branch, renamed so it never clashes) is pushed to the remote name on purpose,
+/// since a plain push would refuse the mismatch; any other branch takes the plain push.
+pub fn push_args(t: Option<&PushTarget>, lease: bool) -> Vec<String> {
+    let mut args = vec!["push".to_string()];
+    if lease {
+        args.push("--force-with-lease".to_string());
+    }
+    if let Some(t) = t.filter(|t| t.fork.is_some() && t.remote_branch != t.branch) {
+        args.push(t.remote.clone());
+        args.push(format!("HEAD:refs/heads/{}", t.remote_branch));
+    }
+    args
+}
+
+/// GIT-010: what the panel's notice reads from; None when the push is to the project's own repository.
+#[tauri::command(async)]
+pub fn scm_push_target(worktree: String) -> Option<PushTarget> {
+    push_target(Path::new(&worktree)).filter(|t| t.fork.is_some())
+}
+
 /// SESS-036: an issue or pull request the composer can link a new workspace to.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Linkable {
@@ -190,7 +252,8 @@ pub fn open(git: &Git, place: &Place, project: &Project, pr: &PrHead, fork: Opti
     let latest = if pr.head_ref_oid.is_empty() { sha(repo, &tracking).unwrap_or_default() } else { pr.head_ref_oid.clone() };
     // A local branch of the head's name is reused only when it is at the pull request's head.
     let local = sha(repo, &format!("refs/heads/{head}"));
-    let reuse = local.as_deref() == Some(latest.as_str());
+    // GIT-010: a leftover local branch of a fork's pull request is never reused; a fresh ref is made.
+    let reuse = fork.is_none() && local.as_deref() == Some(latest.as_str());
     let branch = if reuse || local.is_none() {
         head.to_string()
     } else {
@@ -212,6 +275,9 @@ pub fn open(git: &Git, place: &Place, project: &Project, pr: &PrHead, fork: Opti
     } else {
         crate::projects::add_retrying(repo, &dest, Some(&branch), overtaken, || run(&["worktree", "add", "-b", &branch, &dest_s, &latest], Some(repo)).map(drop))?;
         run(&["branch", &format!("--set-upstream-to={remote}/{head}"), &branch], Some(repo))?;
+        if fork.is_some() {
+            run(&["config", &format!("branch.{branch}.pushRemote"), &remote], Some(repo))?;
+        }
     }
     let warnings = crate::include::bring_along(repo, &dest);
     if overtaken() {
@@ -385,5 +451,87 @@ mod tests {
         for d in [remote, repo, root, fork] {
             let _ = fs::remove_dir_all(d);
         }
+    }
+
+    #[test]
+    fn git010_a_branch_from_a_fork_pushes_to_the_fork_and_a_second_open_gets_a_fresh_ref() {
+        let git = Git::detect().unwrap();
+        let remote = temp("g10-origin");
+        git_in(&remote, &["init", "-q", "--bare", "-b", "main"]);
+        let fork = temp("g10-fork");
+        git_in(&fork, &["init", "-q", "--bare", "-b", "main"]);
+        let repo = temp("g10-repo");
+        git_in(&repo, &["init", "-q", "-b", "main"]);
+        git_in(&repo, &["config", "user.email", "t@example.com"]);
+        git_in(&repo, &["config", "user.name", "t"]);
+        commit(&repo, "a.txt");
+        let url = remote.to_string_lossy().to_string();
+        git_in(&repo, &["remote", "add", "origin", &url]);
+        git_in(&repo, &["push", "-q", "origin", "main"]);
+        // The fork holds the pull request's branch, one commit ahead of main.
+        git_in(&repo, &["checkout", "-q", "-b", "feat/login"]);
+        let tip = commit(&repo, "b.txt");
+        let fork_s = fork.to_string_lossy().to_string();
+        git_in(&repo, &["push", "-q", &fork_s, "feat/login"]);
+        git_in(&repo, &["checkout", "-q", "main"]);
+        let root = temp("g10-root");
+        let project = Project { id: "p".into(), name: "repo".into(), path: repo.to_string_lossy().to_string(), workspaces_dir: None, base: None, display_name: None };
+        let place = Place { root: root.clone(), flat: false, prefix: String::new(), prefix_warning: None, refresh: false };
+        let pr = PrHead { number: 21, title: "Docs".into(), url: "https://github.com/t/r/pull/21".into(), head_ref_name: "feat/login".into(), head_ref_oid: tip.clone(), is_cross_repository: true, head_repository_owner: Some(Login { login: "someone".into() }), head_repository: None };
+        // The local branch of that name exists already at the head: a fork's pull request still gets a fresh ref.
+        git_in(&repo, &["branch", "-f", "feat/login", &tip]);
+        let (first, reused) = open(&git, &place, &project, &pr, Some(&fork_s), None, &|| false).unwrap();
+        assert!(!reused);
+        assert_eq!(first.worktree.branch.as_deref(), Some("feat/login-pr-21"));
+        let wt = Path::new(&first.worktree.path);
+        assert_eq!(git_in(wt, &["config", "--get", "branch.feat/login-pr-21.pushRemote"]), "someone");
+        let target = push_target(wt).unwrap();
+        assert_eq!(target.remote, "someone");
+        assert_eq!(target.branch, "feat/login-pr-21");
+        assert_eq!(target.remote_branch, "feat/login");
+        assert_eq!(target.fork.as_deref(), Some(fork_s.as_str()), "a non-GitHub address is named as it is");
+        assert_eq!(scm_push_target(first.worktree.path.clone()).map(|t| t.remote), Some("someone".to_string()));
+        // The push lands on the fork's branch, not on origin.
+        let mine = commit(wt, "c.txt");
+        let args = push_args(Some(&target), false);
+        assert_eq!(args, vec!["push", "someone", "HEAD:refs/heads/feat/login"]);
+        assert_eq!(push_args(Some(&target), true), vec!["push", "--force-with-lease", "someone", "HEAD:refs/heads/feat/login"]);
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        git_in(wt, &refs);
+        assert_eq!(git_in(&fork, &["rev-parse", "feat/login"]), mine);
+        assert!(run(&["rev-parse", "--verify", "--quiet", "refs/heads/feat/login"], Some(&remote)).is_err(), "origin is untouched");
+        // A second open of the same pull request: another fresh ref, never the first one.
+        let (second, _) = open(&git, &place, &project, &pr, Some(&fork_s), Some("again"), &|| false).unwrap();
+        assert_eq!(second.worktree.branch.as_deref(), Some("feat/login-pr-21-2"));
+        // A branch on origin is no fork; the plain push is kept.
+        git_in(&repo, &["branch", "--set-upstream-to=origin/main", "main"]);
+        assert!(scm_push_target(repo.to_string_lossy().to_string()).is_none());
+        let plain = push_target(&repo).unwrap();
+        assert_eq!(plain.fork, None);
+        assert_eq!(push_args(Some(&plain), false), vec!["push"]);
+        assert_eq!(push_args(None, true), vec!["push", "--force-with-lease"]);
+        for d in [remote, repo, root, fork] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn git010_the_fork_is_named_by_owner_and_name_when_the_address_is_github_shaped() {
+        let repo = temp("g10-name");
+        git_in(&repo, &["init", "-q", "-b", "main"]);
+        git_in(&repo, &["remote", "add", "origin", "https://github.com/acme/app.git"]);
+        git_in(&repo, &["remote", "add", "someone", "https://github.com/someone/app-fork.git"]);
+        git_in(&repo, &["config", "branch.main.remote", "someone"]);
+        git_in(&repo, &["config", "branch.main.merge", "refs/heads/main"]);
+        let t = push_target(&repo).unwrap();
+        assert_eq!(t.fork.as_deref(), Some("someone/app-fork"));
+        // The same repository under another remote name is not a fork.
+        git_in(&repo, &["remote", "add", "mirror", "git@github.com:acme/app.git"]);
+        git_in(&repo, &["config", "branch.main.remote", "mirror"]);
+        assert_eq!(push_target(&repo).unwrap().fork, None);
+        // A branch with no remote has no target.
+        git_in(&repo, &["config", "--unset", "branch.main.remote"]);
+        assert!(push_target(&repo).is_none());
+        let _ = fs::remove_dir_all(repo);
     }
 }

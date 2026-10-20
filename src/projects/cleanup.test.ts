@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { addKept, forgetCleanupMemory, keptAfter, keptBatches, keptView, lastScan, preselected, rememberScan, rememberShowAll, rememberedShowAll, rowFacts, rowLabel, shownRows, tickedPaths, ticksAfterScan, type KeptItem, type Scan, type ScanRow } from "./cleanup";
+import { DEFAULT_VIEW, arrangeRows, needsSizes, sizeText, addKept, forgetCleanupMemory, keptAfter, keptBatches, keptView, lastScan, preselected, rememberScan, rememberShowAll, rememberedShowAll, rowFacts, rowLabel, shownRows, tickedPaths, ticksAfterScan, type KeptItem, type Scan, type ScanRow } from "./cleanup";
 
 const row = (path: string, over: Partial<ScanRow> = {}): ScanRow => ({
   path,
@@ -97,5 +97,51 @@ describe("PROJ-073 kept branches", () => {
   it("a refused branch stays on the list and a deleted one leaves it", () => {
     const left = keptAfter([k("p", "a"), k("p", "b")], [{ branch: "a", deleted: true, why: null }, { branch: "b", deleted: false, why: "The branch has moved since you were asked" }]);
     expect(left.map((x) => x.branch)).toEqual(["b"]);
+  });
+});
+
+describe("PROJ-081 cleanup filters, search and sorting", () => {
+  const big = row("w/big", { merged: true });
+  const small = row("w/small", { unmerged: true, preselect: false });
+  const unknown = row("w/unknown", { changes: 2, preselect: false });
+  const never = row("w/never", { idleDays: null });
+  const gone = row("w/gone", { missing: true, idleDays: null });
+  const all = [unknown, small, never, big, gone];
+  const sizes = { "w/big": 900 * 1024 * 1024, "w/small": 10, "w/never": 5000, "w/gone": null };
+
+  it("sort by size, largest first: rows without a size are last", () => {
+    const v = { ...DEFAULT_VIEW, sort: "size" as const, desc: true };
+    expect(arrangeRows(all, v, sizes).map((r) => r.path)).toEqual(["w/big", "w/never", "w/small", "w/unknown", "w/gone"]);
+    expect(arrangeRows(all, { ...v, desc: false }, sizes).map((r) => r.path)).toEqual(["w/small", "w/never", "w/big", "w/unknown", "w/gone"]);
+  });
+
+  it("filter by Git state keeps only matching rows", () => {
+    expect(arrangeRows(all, { ...DEFAULT_VIEW, git: "merged" }).map((r) => r.path)).toEqual(["w/big"]);
+    expect(arrangeRows(all, { ...DEFAULT_VIEW, git: "unmerged" }).map((r) => r.path)).toEqual(["w/small"]);
+    expect(arrangeRows(all, { ...DEFAULT_VIEW, git: "changes" }).map((r) => r.path)).toEqual(["w/unknown"]);
+    expect(arrangeRows(all, { ...DEFAULT_VIEW, git: "missing" }).map((r) => r.path)).toEqual(["w/gone"]);
+    expect(arrangeRows(all, { ...DEFAULT_VIEW, git: "clean" }).map((r) => r.path)).toEqual(["w/small", "w/never", "w/big"]);
+  });
+
+  it("activity, safety, size filters and search narrow the list; idle sort puts never-visited rows last", () => {
+    expect(arrangeRows(all, { ...DEFAULT_VIEW, activity: "never" }).map((r) => r.path)).toEqual(["w/never"]);
+    expect(arrangeRows(all, { ...DEFAULT_VIEW, safety: "safe" }).map((r) => r.path)).toEqual(["w/never", "w/big", "w/gone"]);
+    expect(arrangeRows(all, { ...DEFAULT_VIEW, size: "large" }, sizes).map((r) => r.path)).toEqual(["w/big"]);
+    expect(arrangeRows(all, { ...DEFAULT_VIEW, query: "SMA" }).map((r) => r.path)).toEqual(["w/small"]);
+    expect(arrangeRows(all, { ...DEFAULT_VIEW, query: "uncommitted" }).map((r) => r.path)).toEqual(["w/unknown"]);
+    const idle = arrangeRows([never, row("w/a", { idleDays: 3 }), row("w/b", { idleDays: 30 })], { ...DEFAULT_VIEW, sort: "idle", desc: true });
+    expect(idle.map((r) => r.path)).toEqual(["w/b", "w/a", "w/never"]);
+    expect(arrangeRows(all, DEFAULT_VIEW)).toEqual(all);
+  });
+
+  it("sizes are read only when a size filter or the size sort needs them", () => {
+    expect(needsSizes(DEFAULT_VIEW)).toBe(false);
+    expect(needsSizes({ ...DEFAULT_VIEW, git: "merged", sort: "name" })).toBe(false);
+    expect(needsSizes({ ...DEFAULT_VIEW, sort: "size" })).toBe(true);
+    expect(needsSizes({ ...DEFAULT_VIEW, size: "small" })).toBe(true);
+    expect(sizeText(null)).toBeNull();
+    expect(sizeText(512)).toBe("512 B");
+    expect(sizeText(1536)).toBe("1.5 KB");
+    expect(sizeText(900 * 1024 * 1024)).toBe("900 MB");
   });
 });

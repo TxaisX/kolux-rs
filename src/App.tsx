@@ -28,6 +28,7 @@ import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import SettingsPage from "./settings/SettingsPage";
 import Ask from "./chrome/Ask";
 import TrustPrompt, { trustedSetup } from "./setup/TrustPrompt";
+import { bulkRefusal, settleSetups, setupMode, type NewPlace } from "./launch/launchOrder";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { losable, quitQuestion, runningAgents, type Losable } from "./shell/closeAsk";
 import { returnTab, type Which } from "./terminal/tabClose";
@@ -35,6 +36,7 @@ import { bulkCloseSet, closeOne, middleClickCloses, orderPinnedFirst, pinQuestio
 import { dropCell, dropTab, halfOf, showsDragHandle, zoneOf, type Zone } from "./terminal/rearrange";
 import { chosenTab, cycleTab, openSwitcher, stepSwitcher, switchOrderOf, tabByNumber, type CycleMode, type Switcher } from "./terminal/tabCycle";
 import { splitMenuState, splitTabOut } from "./terminal/tabSplit";
+import { moveToTab, tidyWeights } from "./shell/tidy";
 import { forgetColors, setTabColor, tabMenuHead, tabStyle, TAB_COLORS, type TabColors } from "./terminal/tabColor";
 import { forgetView } from "./terminal/viewKeep";
 import { classify, removePlan, removeQuestion, shellInAgentPane } from "./terminal/remove";
@@ -48,13 +50,20 @@ import { cacheDue, cacheMinutes } from "./projects/cache";
 import { startFields, startTail } from "./projects/startArgs";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
 import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./projects/WorktreePalette";
-import { nameBranchFor } from "./scm/autoBranch";
+import { renameOnFirstPrompt, useRenameOnFirstPrompt } from "./projects/renameOnWork";
+import FolderRenameAsk from "./projects/FolderRenameAsk";
+import AboutPanel from "./shell/AboutPanel";
+import { ABOUT_MENU_ID, openAbout } from "./shell/about";
+import LinkAskHost from "./shell/LinkAskDialog";
+import TabSearch from "./shell/TabSearch";
+import { openTabSearch, tabSearchCommand } from "./shell/findTab";
 import { navTarget, stepAllowed, travel, visit, type Place } from "./projects/nav";
 import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
 import BrowserPane, { OPEN_IN_BROWSER, openDetail, openInBrowser, type OpenInBrowser } from "./browser/BrowserPane";
 import PreviewButton from "./browser/PreviewButton";
 import { chordPlan } from "./browser/chord";
 import { livePages, pageRows, rememberClosed, takeClosed } from "./browser/pages";
+import { closedPanes, paneFor, placement } from "./chrome/reopenTab";
 import { writerOf } from "./scm/generate";
 import { usePrRows } from "./scm/usePrRows";
 import EditorPane, { editors } from "./editor/EditorPane";
@@ -76,6 +85,7 @@ import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
 import ArtifactsPage from "./artifacts/ArtifactsPage";
 import SkillsPage from "./skills/SkillsPage";
 import { generatedOn, generatedTitle, tabText, tabTip } from "./shell/tabTitle";
+import { needsBeat, statusTitle, useBeatFrame } from "./status/tabNameRule";
 import { closeSkills, toggleSkills } from "./skills/nav";
 import { KitGallery, KitSetup } from "./kits/Kits";
 import Wizard from "./onboarding/Wizard";
@@ -93,6 +103,9 @@ import Explorer from "./editor/Explorer";
 import { discardDraftsOf, useFileMoves } from "./editor/useFileMoves";
 import { useCloseGuard } from "./editor/CloseDialog";
 import { trashUnusedNotes } from "./editor/trashUnused";
+import AgentsPanel from "./sessions/AgentsPanel";
+import { useWindowSync } from "./sessions/windowSync";
+import type { ResumePlan } from "./sessions/resume";
 import RightSidebar, { clampLeft, clampWidth, Grip, LEFT_KEY, readLeft, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
 import { isMarkdown } from "./editor/markdown";
 import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, resizePlan, rowsFor, splitIndex, toggleCard, blocking, freeCell, canExpand, toggleZoom, zoomedGroup, type Zoom } from "./terminal/grid";
@@ -118,6 +131,7 @@ import TasksPage from "./tasks/TasksPage";
 import WorkspaceBoard from "./board/WorkspaceBoard";
 import { tasksRepo } from "./tasks/model";
 import SourceControlPanel from "./scm/SourceControlPanel";
+import { aiControlsShown } from "./scm/rules";
 import { SCM_AGENT_KEY, SCM_GROUP_ORDER_KEY, SCM_VIEW_KEY, SCM_LINKED_PR_KEY, SUMMARY_UPSTREAM_KEY, linkedPrs, withLink } from "./scm/model";
 import { markFor, paneMark, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { allSwitchedOff, DEFAULT_AGENT_KEY, defaultAgentId, FIRST_PASS, menuAgents, offeredAgents, type AgentPass } from "./launch/agents";
@@ -155,10 +169,13 @@ import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
 import { tapHit, windowTaps } from "./keys/tapHit";
 import { heldByTerminal } from "./keys/terminalPolicy";
+import { installTapReset } from "./shell/inputExtras";
 import { useAgentEvents, useAgentStatusState } from "./status/useAgentStatus";
 import { useGone } from "./status/gone";
 import { workingByDir } from "./status/working";
+import { creditedLive, launchedAgent, launchedName } from "./status/credit";
 import { useAppSettings } from "./settings/useAppSettings";
+import { applyDensity, installTabWheel } from "./shell/paneChrome";
 import { useWorkspaceActions, useWorkspaces } from "./projects/useWorkspaces";
 import { useChrome, useMenuBar } from "./chrome/useChrome";
 import { stepZoom, zoomFactor, type ZoomStep } from "./settings/zoom";
@@ -170,6 +187,7 @@ import { AgentsChat } from "./chat/ChatView";
 import { answeredElsewhere } from "./chat/ask";
 import { fileJump, linksOpenInKolux } from "./chat/chatLinks";
 import { useTeamsHost, withTeams } from "./launch/teams";
+import { deliverPrompt, startWatch } from "./launch/startWatch";
 import { answered as cardAnswered, hearStates, hearingNow, holdFor, outcomeNote, pasteToPane, setHooksOn, writeTerminal } from "./chat/send";
 import { copyPrompt, hooksAbsent, kitTickEntry, kitWait, noticeSeen, sendPrompt } from "./chat/kitPrompt";
 import { KitPromptNotices } from "./chat/KitNotice";
@@ -180,7 +198,7 @@ import { draftKey, feedbackMessage, keepDraft, showsReview, startFeedback, still
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-export type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; resumed?: boolean; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number; col?: number; side?: "old" } };
+export type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; forkOf?: string; resumed?: boolean; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number; col?: number; side?: "old" } };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 /** TERM-058: a terminal tab follows the running program's title (`live`) unless the user named it; a worker's task label (ORCH-066) comes first. */
@@ -192,7 +210,7 @@ function tabName(p: Pane, titles: Record<number, string>, label?: string, live: 
   if (p.kind === "diff") return `${baseName(p.path ?? "")} (${p.staged ? "staged" : "unstaged"})`;
   // ORCH-066 / T-129-d: a worker's task label names the tab first; then the user's own name; then the program's title (TERM-058).
   if (label) return label;
-  return followedTitle(p.title, live[p.key] ?? IDLE, p.agent !== "shell" ? programWord(p.agent) : `Terminal ${p.key}`);
+  return followedTitle(p.title, live[p.key] ?? IDLE, p.agent !== "shell" ? programWord(p.agent) : launchedName(p) ?? `Terminal ${p.key}`);
 }
 /** TERM-055: the one badge a tab carries beside its agent icon; its look and hover text come from the vocabulary (STAT-052). */
 function TabBadge({ kind }: { kind: Badge }) {
@@ -266,6 +284,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     recentTabs.current = [focused, ...recentTabs.current.filter((k) => k !== focused)].slice(0, 50);
   }, [focused]);
   // The workspace the grid shows; null is the home group (panes opened in no workspace).
+  // TERM-062: a half-finished double tap is forgotten when the window loses focus.
+  useEffect(() => installTapReset(), []);
   const [activeDir, setActiveDir] = useState<string | null>(layout?.activeDir ?? null);
   const [running, setRunning] = useState<Record<number, boolean>>({});
   // ACCT-064: the managed Codex accounts and the active one, so panes left on another are asked.
@@ -313,6 +333,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const [agentPass, setAgentPass] = useState<AgentPass>(FIRST_PASS); // SESS-002
   const [shells, setShells] = useState<ShellInfo[]>([]); // SESS-006
   const { settings, setSettings, settingsRead, setSettingsRead, classic } = useAppSettings(initial);
+  // TERM-026 pane header density from the saved setting; TERM-057 the wheel over the tab strip scrolls it sideways.
+  useEffect(() => void applyDensity(settings), [settings]);
+  useEffect(() => installTabWheel(), []);
   // SESS-018: on the New look a new session is chosen on a full-page sheet over the workspace,
   // held here rather than in the grid; Classic keeps the chooser pane (SESS-019).
   const [sheet, setSheet] = useState<Pane | null>(null);
@@ -491,6 +514,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     else if (ed && "field" in ed) document.execCommand(ed.field);
     else if (ed) focusedTerminalEdit.current?.(ed.terminal);
     else if (id === "zoom.in" || id === "zoom.out" || id === "zoom.reset") void stepZoom(id.slice(5) as ZoomStep).catch(() => {});
+    else if (id === ABOUT_MENU_ID) openAbout(); // VIEW-106
     else if (id === "app.settings") {
       setSettingsAt((a) => ({ target: null, n: a.n }));
       setSettingsOpen(true);
@@ -569,6 +593,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     const onKey = (e: KeyboardEvent) => {
       // SET-009: while Settings > Shortcuts records a chord, the press is the recorder's alone.
       if (recording.on) return;
+      // VIEW-109 (T-253): while an input method is composing every key is its own, shortcut chords included.
+      if (e.isComposing || e.keyCode === 229) return;
       // TERM-059..061 (T-220): the floating panel's keys come first, on every screen.
       if (floatingKeys.handle(e)) return;
       const kind = screen === "terminals" ? panes.find((p) => p.key === focused)?.kind : undefined;
@@ -817,10 +843,21 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           closePane(focused);
           break;
         case "tab.reopenClosed": {
-          // T-239 (BROW-019): the browser tab closed last comes back at the address it had.
-          const page = takeClosed();
-          if (!page) return;
-          openInBrowser(page.url);
+          // TERM-047 / T-239 (BROW-019): the tab closed last, terminal or browser, comes back: a terminal in
+          // its folder (or the shown workspace when that is gone), a browser page at the address it had.
+          void closedPanes.take((path) => invoke<string>("path_kind", { path }), activeDir).then((r) => {
+            if (r.kind === "browser") {
+              const page = takeClosed();
+              if (page) openInBrowser(page.url);
+            } else if (r.kind === "terminal") {
+              const key = nextKey.current++;
+              const dir = r.pane.cwd || null;
+              setPanes((ps) => [...ps, paneFor(r.pane, key, placement(ps, focused, dir))]);
+              setScreen("terminals");
+              if (!sameDir(dir, activeDir)) setActiveDir(dir);
+              setFocused(key);
+            }
+          });
           break;
         }
         case "tab.closeAll":
@@ -836,6 +873,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           openPane(k); // EDIT-041: the same jump as Open in Code
           break;
         }
+        case "tab.search": // TERM-053
+          openTabSearch();
+          break;
         case "terminal.setTitle":
         case "terminal.clearPaneTitle":
         case "tab.rename": {
@@ -1174,6 +1214,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // rules block and a handoff note made before it starts (SESS-025), in the project's main checkout
   // (or the chooser's folder outside any project), named after its worktree, or after the folder
   // and its seat number when the seats share one folder.
+  // SESS-005 (T-163): every shown agent pane is watched for a terminal process from the moment it
+  // is shown; onPty marks it seen, and a pane with none after five seconds gets a warning toast.
+  useEffect(() => {
+    const here = panesIn(panes, activeDir).filter((p) => p.agentId && p.program && !p.seats && !p.kind);
+    startWatch.prune(here.map((p) => p.key));
+    for (const p of here) startWatch.arm(p.key, agents.find((a) => a.id === p.agentId)?.name ?? String(p.agentId), setToast);
+  }, [panes, activeDir, agents]);
   const startSeats = async (key: number, seats: Seat[]) => {
     const chooser = panes.find((p) => p.key === key) ?? (sheet?.key === key ? sheet : undefined);
     if (!chooser) return;
@@ -1185,9 +1232,19 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       if (missing) throw new Error(`${missing.agent} is not installed.`);
       const separate = inGitFor(chooser) && (chooser.copies ?? defaultCopies(seats.length, inGitFor(chooser))) === "separate";
       const pid = projectOf(chooser.cwd) ?? projectFor(null);
+      // SESS-026 (T-150): a launch that makes new workspaces settles their setup before any agent
+      // starts, and is refused before anything is made when the project asks about setup each time.
+      const proj = projects.find((p) => p.id === pid);
+      const makes = picked.some(Boolean) && (separate || chooser.cwd === null);
+      const repo = makes && proj ? await invoke<{ mode?: string; wait?: boolean }>("repo_setup_get", { path: proj.path }).catch(() => null) : null;
+      const refused = bulkRefusal(proj?.name ?? "This project", setupMode(repo?.mode), makes);
+      if (refused) throw new Error(refused);
+      const madeNew: NewPlace[] = [];
+      const setupTrouble: string[] = [];
       const fresh = async (): Promise<{ cwd: string; branch: string | null }> => {
         if (!pid) throw new Error("Add a project first: an agent needs a project folder to work in.");
         const wt = await invoke<Worktree>("workspace_create_fresh", { projectId: pid });
+        madeNew.push({ cwd: wt.path, branch: wt.branch });
         return { cwd: wt.path, branch: wt.branch };
       };
       const places: { cwd: string | null; branch: string | null }[] = [];
@@ -1198,6 +1255,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         else places.push((shared ??= chooser.cwd === null ? await fresh() : { cwd: chooser.cwd, branch: chooser.branch }));
       }
       const batch = key;
+      await settleSetups(madeNew, setupMode(repo?.mode), repo?.wait === true, {
+        line: (dir) => trustedSetup(dir),
+        open: (dir, branch, line, where) => new Promise<void>((done) => startSetup(dir, branch, line, where, false, () => done())),
+        say: (m) => setupTrouble.push(m),
+      });
       for (const id of new Set(picked.flatMap((a) => (a ? [a.id] : [])))) await pretrust(id, picked.map((a, i) => (a?.id === id ? places[i].cwd : null)));
       // SESS-051: each agent's start line comes from the catalogue, prompt route included; a
       // refused line (Hermes past its limit) stops the whole Start before any pane is made.
@@ -1236,7 +1298,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       setActiveDir(made[0].cwd);
       setFocused(made[0].key);
       setRefresh((n) => n + 1);
-      setNotice(null);
+      setNotice(setupTrouble.length ? setupTrouble.join(" ") : null);
     } catch (err) {
       setNotice(String(err));
     } finally {
@@ -1260,8 +1322,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // worker's own session from a tab the user opens in the same folder.
   const openIn = async (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean, extra: string[] = [], title?: string, dispatch?: string) => {
     await pretrust(agent.id, [dir]);
-    // GIT-020: the first task names a placeholder branch (the back end skips any other).
-    void nameBranchFor(dir, prompt, settings);
+    // GIT-020 / PROJ-039 (T-107-d): the first task names a Kolux-suggested branch; the back end
+    // leaves a hand-named workspace, a pushed branch or one with a pull request alone.
+    void renameOnFirstPrompt(dir, prompt, settings);
     const line = await invoke<StartLine>("agent_start_line", { id: agent.id, extra, prompt });
     const key = nextKey.current++;
     const pane: Pane = { key, cwd: dir, branch, agent: paneMark(agent, line), agentId: agent.id, ...startFields(line, agent.program, dispatch), title };
@@ -1275,6 +1338,29 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       setFocused(key);
     }
     return key;
+  };
+  // STAT-039 (T-110-b): a prompt typed into an agent started without one names the branch too.
+  useRenameOnFirstPrompt((key) => panes.find((p) => p.key === key)?.cwd ?? undefined, settings);
+  // VIEW-085 (T-169): a past session resumed in a new tab, in the folder the plan names (the session's
+  // own worktree, else the one in front), on the agent's resume line from settings.
+  const resumeIn = async (agentId: string, plan: ResumePlan) => {
+    const agent = agents.find((a) => a.id === agentId);
+    const dir = plan.cwd ?? activeDir;
+    if (!agent || dir === null) return setNotice(agent ? "Open a workspace first, then resume the session in it." : `${agentId} is not installed here, so its session cannot be resumed.`);
+    try {
+      await pretrust(agent.id, [dir]);
+    } catch (err) {
+      return setNotice(String(err));
+    }
+    const key = nextKey.current++;
+    const line = plan.line;
+    const pane: Pane = { key, cwd: dir, branch: panesIn(panes, dir)[0]?.branch ?? null, agent: paneMark(agent, line), agentId: agent.id, resumed: true, ...startFields(line, agent.program) };
+    setPanes((ps) => {
+      const free = freeCell(cellsOf(panesIn(ps, dir)));
+      return free ? ps.map((p) => (p === free ? pane : p)) : [...ps, pane];
+    });
+    setActiveDir(dir);
+    setFocused(key);
   };
   const { afterSetup, startSetup, select, removedAll, removed, projectOf } = useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir, setStacked, nextKey, addShell, settings, screen, setScreen, setPage, owner, recentDirs, activeRef });
   // PROJ-033: a workspace made outside the composer runs its setup script in a background tab.
@@ -1322,6 +1408,19 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     shownScreen.current = screen;
     screenWriter.set(screen);
   }, [screen]);
+  // VIEW-007: another window changing its screen moves this one too, unless a page (Tasks, Automations, ...)
+  // is open here; the followed screen counts as already saved, so it is not written back.
+  useWindowSync({
+    field: LAST_SCREEN_FIELD,
+    valid: screens.map((x) => x.id),
+    screen,
+    page,
+    ready: settingsRead,
+    onScreen: (to) => {
+      shownScreen.current = to;
+      setScreen(classic && (to === "agents" || to === "board") ? "terminals" : to);
+    },
+  });
   // VIEW-107: closing the window writes what is pending first; unsaved editor text stops the quit
   // and asks, so nothing is lost without the user saying so.
   // T-182 (APP-006): agents still running are asked about too (while TERM-045's switch is on).
@@ -1418,6 +1517,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     ...(Object.keys(PAGES) as PageId[]).map((id) => ({ section: "Settings", label: PAGES[id], hint: "Settings page", run: () => openSettings(id) })),
     ...paletteRows(accountSwitcher.groups, switchAccount), // T-548: Switch Claude to ...
     { section: "Quick actions", label: "New terminal tab", run: () => void newTab(null) },
+    tabSearchCommand(() => openTabSearch()), // TERM-053
     { section: "Quick actions", label: "New session", run: () => addChooser() },
     // VIEW-042: actions on the worktree in front, not runnable while none is open
     { section: "Quick actions", label: "Source control for this workspace", needs: "worktree", run: () => showRight("scm") },
@@ -1557,11 +1657,12 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         return;
       }
       const a = p.agent ? agents.find((x) => x.id === p.agent) : undefined;
-      if (a) void cli.current.startIn(a, p.worktree.path, p.worktree.branch, p.prompt, p.activate);
-      else if (p.activate) cli.current.select(p.worktree.path, p.worktree.branch);
       // PROJ-033: a workspace made from the command line runs its setup script in a background tab
-      // unless it was told to skip it.
-      if (p.setup !== "skip") void cli.current.runSetup(p.worktree.path, p.worktree.branch);
+      // unless it was told to skip it. SESS-026 (T-150): the setup settles (asked, opened or said
+      // why not) before its agent starts.
+      const setup = p.setup !== "skip" ? cli.current.runSetup(p.worktree.path, p.worktree.branch) : Promise.resolve();
+      if (a) void setup.then(() => cli.current.startIn(a, p.worktree.path, p.worktree.branch, p.prompt, p.activate));
+      else if (p.activate) cli.current.select(p.worktree.path, p.worktree.branch);
     });
     return () => {
       off.then((f) => f()).catch(() => undefined);
@@ -1583,14 +1684,16 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     }
   };
   // GIT-004: a refused commit can be handed to the default agent with the hook's own words.
-  const fixWithAI = (output: string) => {
-    const a = agents.find((x) => x.id === defaultId && x.installed);
+  // GIT-019 (T-313-b): the fix recipe may name its own agent and extra start arguments.
+  const fixWithAI = (output: string, launch?: { agent: string; extra: string[]; prompt: string }) => {
+    const id = launch?.agent ?? defaultId;
+    const a = agents.find((x) => x.id === id && x.installed);
     if (!a || activeDir === null) {
-      setNotice(`The default agent (${defaultId}) is not installed.`);
+      setNotice(`The ${launch ? "recipe's" : "default"} agent (${id}) is not installed.`);
       return;
     }
-    const prompt = `A git action in this workspace failed. Find the cause, fix it, and finish the action.\n\nGit said:\n${output}`;
-    void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, prompt, true);
+    const prompt = launch?.prompt ?? `A git action in this workspace failed. Find the cause, fix it, and finish the action.\n\nGit said:\n${output}`;
+    void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, prompt, true, launch?.extra ?? []);
   };
   const projectFor = (projectId: string | null): string | null => projectId ?? projectOf(panes.find((p) => p.key === focused)?.cwd ?? null) ?? projects[0]?.id ?? null;
 
@@ -1744,6 +1847,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // the workspace's empty placeholder.
   // SESS-024: a pane whose session failed to start goes away, with the reason in a toast.
   const failedPane = (key: number, error: string) => {
+    startWatch.seen(key); // SESS-005: its own toast says why; no five-second warning on top
     const ask = panes.find((p) => p.key === key)?.ask;
     if (ask) cliFailed.current[ask] = error;
     const { panes: rest, batchEmpty } = withoutFailed(panes, key);
@@ -1802,7 +1906,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     // TERM-106: a tab closed on purpose is not brought back after a restart.
     keys.forEach((k) => void invoke("terminal_forget_history", { paneKey: k }).catch(() => {}));
     // T-239 (BROW-019): a browser page closed on purpose can be reopened (Reopen Closed Tab).
-    keys.forEach((k) => rememberClosed(k));
+    closedPanes.remember(panes, keys, rememberClosed); // TERM-047: terminal tabs too, in close order with the pages
     setPanes((ps) => ps.filter((p) => !gone.has(p.key)));
     setRunning((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !gone.has(Number(k)))));
     setDirty((d) => Object.fromEntries(Object.entries(d).filter(([k]) => !gone.has(Number(k)))));
@@ -1871,8 +1975,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const labelOf = (p: Pane) => workerNames[`term-${ptys.current[p.key]}`];
   // TERM-056 / T-258: the tab's text and its hover (the full title); generated titles (off by default) touch only
   // terminal panes without a name of their own.
+  // STAT-035 / T-124-b: the tab-name rule on top of the followed title: Kolux names ready and action required for agents whose own titles do not, and one shared beat animates its spinners.
+  const ruleOf = (p: Pane) => ({ named: Boolean(labelOf(p) || p.title?.trim()), agent: p.kind ? null : launchedAgent(p), name: launchedName(p) ?? programWord(p.agent), live: liveIds[p.key]?.title, state: hook[p.key] });
+  const beatFrame = useBeatFrame(panes.filter((p) => needsBeat(ruleOf(p))).map((p) => p.key));
   const tabLabel = (p: Pane) => {
-    const full = tabName(p, titles, labelOf(p), liveIds);
+    const full = statusTitle({ ...ruleOf(p), shown: tabName(p, titles, labelOf(p), liveIds), frame: beatFrame });
     const shown = p.kind ? full : tabText({ full, own: p.title, on: generatedOn(settings), generated: generatedTitle({ label: labelOf(p), word: p.agent === "shell" ? "Shell" : programWord(p.agent), branch: p.branch, cwd: p.cwd }) });
     return (
       <span className="tab-name" data-tip={tabTip(full, shown)}>
@@ -1959,7 +2066,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // STAT-001: a hook-fed state wins over the guess from the program's state.
   for (const p of panes) if (p.cwd !== null && p.kind !== "browser" && !p.seats) (byDir[p.cwd] ??= []).push(hook[p.key] ?? paneState(p.agent, running[p.key]));
   const rowStates: Record<string, RowInfo> = {};
-  const workingIn = workingByDir(panes, hook, running); // STAT-036: working agents per workspace
+  const workingIn = workingByDir(panes, hook, running, liveIds); // STAT-036: working agents per workspace
   const cacheFor = cacheMinutes(settings); // SET-059
   for (const [dir, states] of Object.entries(byDir)) {
     const state = strongest(states);
@@ -1980,13 +2087,16 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const weightKey = (axis: "col" | "row") => `${activeDir ?? ""}|${axis}|${axis === "col" ? gridCols : gridRows}`;
   const weightsOf = (axis: "col" | "row") => weights[weightKey(axis)] ?? Array<number>(axis === "col" ? gridCols : gridRows).fill(1);
   // TERM-035: Equalize drops the dragged weights of this folder's grid, so every column and row is the same size again.
-  const equalizePanes = () =>
-    setWeights((w) => {
-      const next = { ...w };
-      delete next[weightKey("col")];
-      delete next[weightKey("row")];
-      return next;
-    });
+  // TERM-008: Equalize also tidies: every dragged size of this folder goes, whatever the pane count was when it was dragged.
+  const equalizePanes = () => setWeights((w) => tidyWeights(w, activeDir ?? null));
+  // TERM-016: Move to Tab folds a pane into the cell beside it; only its group changes, so the session and its run stay.
+  const moveOutToTab = (key: number) => {
+    const r = moveToTab(panes, key);
+    if (!r) return;
+    setPanes(r.panes);
+    setActiveTab((m) => ({ ...m, [r.group]: key }));
+    setFocused(key);
+  };
   const gapUnder = (g: HTMLElement, x: number, y: number) => {
     const rects = [...g.querySelectorAll<HTMLElement>(":scope > .cell:not([hidden])")].map((c) => c.getBoundingClientRect());
     const cols = tracks(rects, "x");
@@ -2278,6 +2388,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         uiZoom={zoomFactor()}
         onScreen={setScreen} installed={installedIds} codexAccount={codex.accounts.length > 0} onSearch={() => setPalette(true)} onBack={!stepAllowed(screen === "terminals", settingsOpen) || travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={!stepAllowed(screen === "terminals", settingsOpen) || travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} onZoom={(how) => zoomTerm(focused, how)} fullPage={fullPage} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
       <div className="body" style={{ "--sidebar-w": `${leftWidth}px` } as CSSProperties}>
+        <AboutPanel />
         {palette && (
           <WorktreePalette
             projects={projects}
@@ -2308,6 +2419,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               setCreateRequest((n) => n + 1);
             }}
             onClose={() => setPalette(false)}
+            linked={linkedPrs(settings[SCM_LINKED_PR_KEY])}
+            onItem={openInBrowser}
           />
         )}
         {asking && (
@@ -2324,6 +2437,16 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           />
         )}
         <TrustPrompt />
+        {/* STAT-039 (T-110-b): after the first work renamed a branch, asks before the folder follows; a moved folder's panes and the list follow it. */}
+        <FolderRenameAsk
+          onMoved={(from, to) => {
+            setPanes((ps) => ps.map((p) => (sameDir(p.cwd, from) ? { ...p, cwd: to } : p)));
+            setActiveDir((d) => (sameDir(d, from) ? to : d));
+            setRefresh((n) => n + 1);
+          }}
+        />
+        <LinkAskHost />
+        <TabSearch tabs={() => paletteItems().filter((i) => i.section === "Open tabs")} />
         {guard.dialog}
         {quitAsk && (
           <Ask
@@ -2834,7 +2957,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                                 <Pin size={10} />
                               </span>
                             )}
-                            {p.kind === "editor" || p.kind === "preview" || p.kind === "diff" || p.kind === "changes" ? <FileCode size={12} /> : p.kind === "browser" ? <Globe size={12} /> : <VendorMark agent={shownAgent(p.agent, liveIds[p.key] ?? IDLE)} size={12} />}
+                            {p.kind === "editor" || p.kind === "preview" || p.kind === "diff" || p.kind === "changes" ? <FileCode size={12} /> : p.kind === "browser" ? <Globe size={12} /> : <VendorMark agent={shownAgent(p.agent, creditedLive(launchedAgent(p), liveIds[p.key] ?? IDLE))} size={12} />}
                             {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key), hook[p.key])} />}
                             {context[p.key] && <Ring percent={contextFill(context[p.key], capOn(settings))} size={10} title={meterText(meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) ?? {})} />}
                             {renamingTab === p.key ? (
@@ -2968,6 +3091,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     unread={unreadPanes.has(p.key)}
                     onPty={(id, account) => {
                       ptys.current[p.key] = id;
+                      startWatch.seen(p.key);
+                      // SESS-032 (T-163): an agent's opening prompt is handed over by Rust exactly once; a
+                      // prompt that does not go in is said in a toast.
+                      if (p.typed && p.agent !== "shell") void deliverPrompt(invoke, id, p.typed, agents.find((a) => a.id === p.agentId)?.name ?? p.agent).then((lost) => lost && setToast(lost));
                       report.current();
                       if (p.batch !== undefined && p.agent !== "shell") rememberLineup(p.batch);
                       // ACCT-023: a Codex pane remembers the account it began on.
@@ -2984,6 +3111,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     onSplit={(dir) => splitPane(p.key, dir)}
                     dragCell={!board && showsDragHandle(shown.length) ? { onStart: () => (dragging.current = { cell: groupOf(p) }), onEnd: () => (dragging.current = null, setDropHint(null)) } : undefined}
                     onEqualize={terminals && gridCount > 1 ? equalizePanes : undefined}
+                    onMoveToTab={terminals && gridCount > 1 && moveToTab(panes, p.key) ? () => moveOutToTab(p.key) : undefined}
                     expand={board ? undefined : { on: zoomed === groupOf(p), can: canExpand(shown.length, classic), toggle: () => expandPane(p.key) }}
                     title={p.title || nameOf(names, p.cwd)}
                     custom={!!p.title}
@@ -3017,7 +3145,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           if (done) saveRight({ width: used });
         }}>
         {scmOpen && (
-          <SourceControlPanel dir={activeDir} writer={writerOf(settings)} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text, dir) => (dir ?? activeDir) !== null && setDrafts((d) => ({ ...d, [dir ?? activeDir!]: text }))} onClose={() => saveRight({ open: false })} onFix={fixWithAI} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} onChangeBase={(base) => {
+          <SourceControlPanel dir={activeDir} writer={writerOf(settings)} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text, dir) => (dir ?? activeDir) !== null && setDrafts((d) => ({ ...d, [dir ?? activeDir!]: text }))} onClose={() => saveRight({ open: false })} onFix={fixWithAI} aiShown={aiControlsShown(settings)} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} onChangeBase={(base) => {
             const p = projects.find((x) => x.id === projectOf(activeDir));
             if (p) void invoke<Project>("project_set", { projectId: p.id, workspacesDir: p.workspacesDir ?? "", base }).then((u) => setProjects((ps) => ps.map((x) => (x.id === u.id ? u : x))));
           }} againstUpstream={settings[SUMMARY_UPSTREAM_KEY] === true} groupOrder={settings[SCM_GROUP_ORDER_KEY]} view={settings[SCM_VIEW_KEY] === "tree" ? "tree" : "list"} onView={(v) => saveSetting(SCM_VIEW_KEY, v)} onOpenDiff={(path, staged) => activeDir !== null && openDiff(`${activeDir.replace(/[\\/]+$/, "")}/${path}`, staged, true)} onAllChanges={() => void newTab("changes")} diffSplit={diffSplitOf(settings[DIFF_SPLIT_KEY])} onDiffSplit={(v) => saveSetting(DIFF_SPLIT_KEY, v)} notesSection={activeDir !== null && <LineNotes dir={activeDir} notes={notesFor(activeDir)} repoless={repoless} onOpen={(n) => (noteTarget(repoless) === "file" ? openFile(n.path, n.end ?? n.line) : openDiff(n.path, n.staged, true, n.end ?? n.line, n.side))} onDrop={(ids) => dropNotes(activeDir, ids)} onClearSent={() => saveNotes(activeDir, clearDelivered(notesFor(activeDir)))} onSend={() => sendNotes(activeDir)} />} onAgainstUpstream={(on) => saveSetting(SUMMARY_UPSTREAM_KEY, on)} fixAgent={settings[SCM_AGENT_KEY]} onFixAgent={(id) => saveSetting(SCM_AGENT_KEY, id)} linkedPr={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} onLinkPr={(url) => activeDir !== null && saveSetting(SCM_LINKED_PR_KEY, withLink(linkedPrs(settings[SCM_LINKED_PR_KEY]), activeDir, url))} onAgentAction={async (a, prompt) => {
@@ -3029,6 +3157,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               return `${a.name} did not start, so the conflicts were not handed over: ${String(err)}`;
             }
           }} agents={menuAgents(agents, defaultId)} onHand={(a, note) => activeDir !== null && void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, note, true)} />
+        )}
+        {/* VIEW-080 (T-168, T-169): the Agents tab lists past sessions of every agent in the saved scope. */}
+        {right.open && right.tab === "agents" && (
+          <AgentsPanel settings={settings} onSave={saveSetting} activeDir={activeDir} projects={projects} projectDirs={Object.entries(owner).filter(([, p]) => p === projectOf(activeDir)).map(([d]) => d)} rescanKey={panes.length} visible={terminals} shell={shells[0]?.program ?? null} onResume={(s, plan) => void resumeIn(s.agent, plan)} />
         )}
         {/* VIEW-073: the Checks tab follows the workspace of the focused terminal. */}
         {right.open && right.tab === "checks" && <ChecksPanel dir={activeDir} linked={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} visible={terminals} />}

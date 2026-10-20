@@ -19,7 +19,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { projectDrop } from "../editor/desktopDrops";
 import CacheTimer from "./CacheTimer";
-import { asksBeforeDelete, blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
+import { asksBeforeDelete, blocker, deleteTarget, isTextField, pointerDelete, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
+import ShortcodeInput from "./ShortcodeInput";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, HIDE_AUTOMATION_SETTING, PIN_COPIES_SETTING, PIN_SETTING, SHOW_SLEEPING_SETTING, SLEEP_SETTING, asleepAfter, renameTo, showSleepingFrom, SORT_SETTING, jumpUnhides, withoutAutomationMade, groupFromSetting, groupRows, pathKey, pinnedSet, recentOrder, smartOrder, sortFromSetting, type AgentState, type PrState, type RowInfo } from "./rows";
@@ -50,6 +51,12 @@ import { openKits } from "../kits/Kits";
 import { ADD_PROJECT } from "../onboarding/firstRun";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { openSettings as openSettingsPage } from "../settings/pages";
+import { BehindNote, ListButtons, OutsideCard, PickedBar } from "../shell/ProjectsExtras";
+import { dismissedOutside, jumpToCurrent, outsideOf, toggleRow, useAutoIcons, useTopButton, withDismissed, OUTSIDE_DISMISSED_SETTING } from "../shell/projectsGlue";
+import { headerLabels } from "./headers";
+import { behindHint, HINT_DISMISSED_SETTING, isBehindHint, REFRESH_SETTING, refreshesOnCreate } from "./baseHint";
+import { outsideCard } from "./outsideCard";
+import { isToggleClick } from "./selection";
 import AutomationsRow from "./AutomationsRow";
 import SkillsRow from "./SkillsRow";
 import { chromeShown } from "../chrome/chromeItems";
@@ -340,6 +347,10 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   }
   const say = (kind: "ok" | "warn" | "error", text: string) => setMessage({ kind, text });
   const [icons, setIcons] = useState<Record<string, string>>({}); // PROJ-019: icons chosen by hand, by project id
+  const autoIcons = useAutoIcons(projects.map((p) => p.id)); // PROJ-018: the icon found in each repository
+  const top = useTopButton(); // PROJ-054
+  const [picked, setPicked] = useState<string[]>([]); // PROJ-058: Ctrl/Cmd-clicked rows, by folder
+  const [behind, setBehind] = useState<string | null>(null); // PROJ-029: the "base is behind" suggestion of the last create
   const setIcon = async (p: Project, icon: string) => {
     try {
       const kept = await invoke<string | null>("project_icon_set", { projectId: p.id, icon });
@@ -788,7 +799,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         ? await invoke<Created>("workspace_open_pr", { projectId: project.id, number: pr.number, folder: typed || null, name: typed || null, parent, ticket: mine.ticket, activeFolder: from })
         : reuse
         ? await invoke<Created>("workspace_open_branch", { projectId: project.id, branch: reuse, folder: existing ? typed || null : null, parent, ticket: mine.ticket, activeFolder: from })
-        : await invoke<Created>("workspace_create", { projectId: project.id, name: typed, base: base || null, branch: branch || null, parent, ticket: mine.ticket, issue, activeFolder: from });
+        : await invoke<Created>("workspace_create", { projectId: project.id, name: typed, base: base || null, branch: branch || null, parent, ticket: mine.ticket, issue, activeFolder: from, suggested: typed === shownSuggestion.current }); // PROJ-039 (T-107-d): a suggested name left as it was may be renamed by the first work
       const lost = overtaken.current.has(mine.ticket);
       noteRecent(project.id);
       if (stopped.current.has(mine.ticket)) {
@@ -796,7 +807,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         say(n.kind, n.text);
         return void (await reload());
       }
-      const extra = [wt.note, ...wt.warnings].filter(Boolean).join(" · ");
+      setBehind(behindHint(wt.warnings, live.current.settings));
+      const extra = [wt.note, ...wt.warnings.filter((x) => !isBehindHint(x))].filter(Boolean).join(" · ");
       say(extra ? "warn" : "ok", `created ${worktreeLabel(wt)} in ${wt.path} from ${wt.base}${extra ? ` · ${extra}` : ""}`);
       await reload();
       // The agent's tab is the workspace's first; a shell is only opened when no agent runs. With
@@ -847,6 +859,23 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     const hovered = [...document.querySelectorAll<HTMLElement>("[data-path]:hover")].pop()?.dataset.path ?? null;
     const target = deleteTarget(hovered, activeDir);
     if (deleteRequest === 0 || target === null) return;
+    if (hovered !== null) {
+      // PROJ-075: the row under the pointer; nothing on a main checkout, a row already deleting, or while a text field has focus
+      const row = projects.flatMap((p) => (worktrees[p.id] ?? []).map((w) => ({ p, w }))).find(({ w }) => same(hovered, w.path));
+      const act = row ? pointerDelete(row.w, { fieldFocused: isTextField(document.activeElement), deleting: new Set(busy === "removing" && confirm ? [confirm.path] : []) }) : null;
+      if (!row || act === null) return;
+      if (act.action === "forget") {
+        invoke("workspace_forget", { projectId: row.p.id, path: act.path })
+          .then(() => {
+            onRemoved(act.path);
+            say("ok", `took ${worktreeLabel(row.w)} out of Kolux; its folder stays on disk`);
+            return reload();
+          })
+          .catch(fail);
+        return;
+      }
+      return void ask(row.p.id, row.w.path, worktreeLabel(row.w));
+    }
     for (const p of projects) {
       const w = (worktrees[p.id] ?? []).find((x) => !x.isMain && same(target, x.path));
       if (w) return void ask(p.id, w.path, worktreeLabel(w));
@@ -1534,7 +1563,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     const up = w.parent ? (worktrees[p.id] ?? []).find((x) => !x.isMain && same(x.path, w.parent as string)) : undefined;
     return (
       <div key={w.path} data-worktree={worktreeLabel(w)} data-depth={depth} data-path={w.path}>
-        <div {...rowDrag(w)} className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onContextMenu={(e) => void openMenu(e, p, w)} onClick={() => show(w)} onKeyDown={(e) => (e.key === "Enter" ? show(w) : e.key === "F2" && startRename(w))} title={hoverTitle} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
+        <div {...rowDrag(w)} className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}${picked.some((x) => same(x, w.path)) ? " picked" : ""}`} role="button" tabIndex={0} onContextMenu={(e) => void openMenu(e, p, w)} onClick={(e) => (isToggleClick(e, /mac/i.test(navigator.platform)) ? setPicked(toggleRow(picked, w.path, activeDir, same)) : (setPicked([]), show(w)))} onKeyDown={(e) => (e.key === "Enter" ? show(w) : e.key === "F2" && startRename(w))} title={hoverTitle} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
           {kids && (
             <button
               className={`fold${shut ? " shut" : ""}`}
@@ -1550,13 +1579,13 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
           )}
           <span className={`dot ${info.state}${isActive(w) ? " live" : ""}`} role="img" aria-label={isActive(w) || info.state !== "idle" ? info.state : "idle"} data-tip={VOCAB[info.state].explain} />
           {renaming === w.path ? (
-            <input
+            <ShortcodeInput
               className="rename"
               autoFocus
               aria-label="Workspace name"
               value={renameText}
               onClick={(e) => e.stopPropagation()}
-              onChange={(e) => setRenameText(e.target.value)}
+              onValue={setRenameText}
               onBlur={() => setRenaming(null)}
               onKeyDown={(e) => {
                 e.stopPropagation();
@@ -1801,6 +1830,18 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         </div>
       ));
 
+  const labels = headerLabels(projects); // PROJ-009
+  // PROJ-054: bring the open workspace into view, clearing the filters that hide it
+  const jumpHere = () => {
+    const cur = Object.values(worktrees).flat().find((w) => activeDir !== null && same(w.path, activeDir));
+    return jumpToCurrent({
+      path: activeDir,
+      hiddenByFilters: !!cur && hidden(cur),
+      clear: () => CLEAR_FILTERS.forEach(([k, v]) => onSetting(k, v)),
+      find: (path) => Array.from(document.querySelectorAll('.sb-list [data-path]')).find((el) => same(el.getAttribute('data-path') ?? '', path)) ?? null,
+      show: (row) => row.scrollIntoView({ block: 'center' }),
+    });
+  };
   const projectBlock = (p: Project) => {
       const list = worktrees[p.id] ?? [];
       const main = list.find((w) => w.isMain);
@@ -1810,8 +1851,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         <div key={p.id}>
           <div className="proj" title={p.path} {...headerDrag(p.id)}>
             <HeaderBadge colour={headerColourOf(settings, "p", p.id)} />
-            <ProjectIcon value={icons[p.id]} name={projectLabel(p)} />
-            <span className="name" title={p.displayName ? p.name : undefined}>{projectLabel(p)}</span>
+            <ProjectIcon value={icons[p.id]} name={projectLabel(p)} auto={autoIcons[p.id]} />
+            <span className="name" title={p.displayName ? p.name : undefined}>{projectLabel(p)}{labels[p.id]?.hint && <span className="sb-name-hint" title={labels[p.id].hint ?? undefined}>{labels[p.id].hintCut}</span>}</span>
             <button className={`ib${settingsFor === p.id ? " on" : ""}`} title="Project settings: its workspaces folder and base ref" aria-pressed={settingsFor === p.id} onClick={() => (settingsFor === p.id ? setSettingsFor(null) : openSettings(p))}>
               <Gear />
             </button>
@@ -1890,6 +1931,9 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
               }}
               onKept={(items) => setKept((old) => addKept(old, items))}
             />
+          )}
+          {outsideCard({ outside: outsideOf(list), dismissed: dismissedOutside(settings).includes(p.id), collapsed: false, otherRows: others.length }).show && (
+            <OutsideCard outside={outsideOf(list)} onDismiss={() => onSetting(OUTSIDE_DISMISSED_SETTING, withDismissed(settings, p.id))} />
           )}
           {(fresh[p.id] ?? []).length > 0 && review !== p.id && (
             <button className="sb-notice" onClick={() => setReview(p.id)} title="Worktrees made with plain Git or another tool since you last looked">
@@ -2059,8 +2103,22 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
           )}
         </div>
 
+        {behind && <BehindNote text={behind} refresh={refreshesOnCreate(settings)} onRefresh={(on) => onSetting(REFRESH_SETTING, on)} onDismiss={() => (onSetting(HINT_DISMISSED_SETTING, true), setBehind(null))} />}
+        <PickedBar
+          picked={picked}
+          find={(path) => {
+            const p = projects.find((x) => (worktrees[x.id] ?? []).some((y) => same(y.path, path)));
+            const w = p && (worktrees[p.id] ?? []).find((y) => same(y.path, path));
+            return p && w ? { projectId: p.id, name: worktreeLabel(w) } : undefined;
+          }}
+          onRemoved={onRemoved}
+          onLeft={setPicked}
+          onReload={reload}
+          say={say}
+        />
         <div
           className="sb-list"
+          {...top.listProps}
           onDragOver={(e) => {
             if (dragged.current === null) return;
             const r = e.currentTarget.getBoundingClientRect();
@@ -2251,6 +2309,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
             </>
           )}
         </div>
+        <ListButtons topShown={top.shown} onTop={top.toTop} canJump={activeDir !== null} onJump={() => void jumpHere()} />
 
         <div className="sb-divider" />
         <div className="sb-next">

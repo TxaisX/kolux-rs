@@ -1,5 +1,6 @@
 // SET-022 / SET-025 / SET-026: terminal options that carry a rule.
 import { expect, test } from "vitest";
+import { osc52On, osc52Save } from "./inputPrefs";
 import { gpuMode, ligaturesOn, optionIsMeta, pastesOnMiddle, pickPowerShell, pointerHidden, preferGpu, readInput, shellCardShown, yenToBackslash } from "./inputPrefs";
 import type { ShellEntry } from "./shellChoice";
 
@@ -38,7 +39,7 @@ test("SET-025: middle-click paste is on for Linux and macOS and opt-in on Window
   expect(readInput({ terminalMiddleClickPaste: true }, "win32").middleClick).toBe(true);
   const p = readInput({}, "win32");
   expect(p.osc52).toBe(true);
-  expect(readInput({ terminalOsc52: false }, "win32").osc52).toBe(false);
+  expect(readInput({ terminalOsc52: false, terminalOsc52Chosen: true }, "win32").osc52).toBe(false); // VIEW-110: an off chosen on the current page
   expect([p.hidePointer, p.focusFollowsMouse, p.yenBackslash]).toEqual([false, false, false]);
   expect(p.optionAsAlt).toBe("auto");
 });
@@ -51,11 +52,11 @@ test("SET-025: only the middle button pastes, and only when on", () => {
 });
 
 test("SET-025: the full-screen scroll speed is corrected into range", () => {
-  expect(readInput({}, "linux").fullScreenScroll).toBe(3);
+  expect(readInput({}, "linux").fullScreenScroll).toBe(1);
   expect(readInput({ terminalFullScreenScroll: 0 }, "linux").fullScreenScroll).toBe(1);
   expect(readInput({ terminalFullScreenScroll: 99 }, "linux").fullScreenScroll).toBe(20);
-  expect(readInput({ terminalFullScreenScroll: "x" }, "linux").fullScreenScroll).toBe(3);
-  expect(readInput({ terminalFullScreenScroll: "" }, "linux").fullScreenScroll).toBe(3);
+  expect(readInput({ terminalFullScreenScroll: "x" }, "linux").fullScreenScroll).toBe(1);
+  expect(readInput({ terminalFullScreenScroll: "" }, "linux").fullScreenScroll).toBe(1);
 });
 
 test("SET-025: Option acts as Alt only on macOS; automatic keeps it typing characters on layouts that use it", () => {
@@ -84,4 +85,12 @@ test("SET-026: PowerShell version: automatic favours 7, a pick that is missing f
   expect(pickPowerShell([], "auto")).toBeNull();
   expect(readInput({ powershellVersion: "9" }, "win32").powershell).toBe("auto");
   expect([shellCardShown("win32"), shellCardShown("darwin"), shellCardShown("linux")]).toEqual([true, false, false]);
+});
+
+test("VIEW-110: program clipboard access is on by default; an older saved off is overridden once, a chosen off stays", () => {
+  expect(readInput({}, "win32").osc52).toBe(true);
+  expect(readInput({ terminalOsc52: false }, "win32").osc52).toBe(true); // saved by an older build: overridden
+  expect(readInput(osc52Save(false), "win32").osc52).toBe(false); // the user turned it off on the current page
+  expect(readInput(osc52Save(true), "win32").osc52).toBe(true);
+  expect(osc52On({ terminalOsc52: false, terminalOsc52Chosen: true })).toBe(false);
 });

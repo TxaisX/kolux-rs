@@ -67,6 +67,16 @@ test("proj067: the active workspace and tab come back when they still exist, els
   expect(gone.activeTab).toEqual({ 1: 1, 2: 2 });
 });
 
+test("acct063: two saved tabs holding one session resume it once (the newest keeps it); a fork is not resumed as its source", () => {
+  const agent = (key: number, extra: Record<string, unknown>) => ({ key, cwd: "C:\\w\\a", branch: "main", agent: "claude" as const, agentId: "claude", program: "claude", args: [], ...extra });
+  const saved = { panes: [agent(2, { session: "s-1" }), agent(5, { session: "s-1" }), agent(6, { forkOf: "s-1" }), agent(7, { session: "s-1", forkOf: "s-1" })], activeTab: {}, focused: 2, activeDir: null, stacked: {} };
+  const back = restoreLayout(saved)!;
+  // key 2 and key 5 held the same session; key 7 is a fork that wrongly carries its source's id
+  expect(back.panes.map((p) => [p.key, p.session, p.forkOf])).toEqual([[2, undefined, undefined], [5, "s-1", undefined], [6, undefined, "s-1"], [7, undefined, "s-1"]]);
+  // the fork record is written down with the tab
+  expect(layoutOf([agent(6, { forkOf: "s-1", session: "s-9" })], {}, 6, null, {}).panes[0]).toMatchObject({ forkOf: "s-1", session: "s-9" });
+});
+
 test("sess030: an agent tab with a known session comes back resumed, one without comes back at its prompt, never in a picker", () => {
   const claude = { key: 2, cwd: "C:\\w\\a", branch: "main", agent: "claude" as const, agentId: "claude", program: "claude", args: ["--dangerously-skip-permissions", "fix the build"], session: "11111111-aaaa" };
   const codex = { key: 3, cwd: "C:\\w\\a", branch: "main", agent: "codex" as const, agentId: "codex", program: null, args: ["--full-auto"], session: "thr_22" };

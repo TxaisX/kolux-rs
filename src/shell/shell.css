@@ -1,0 +1,50 @@
+/* TERM-026: compact pane headers; comfortable (the default) leaves the shipped height alone. */
+html[data-pane-density="compact"] .pane-head { height: 22px; font-size: 11px; gap: 5px; }
+html[data-pane-density="compact"] .pane-head .title { font-weight: 500; }
+
+/* TERM-057: a thin bar under overflowing tabs (2px, 3px on hover). Nothing shows when the tabs fit. */
+.tabs[role="tablist"] { height: auto; min-height: 26px; align-items: flex-start; overflow-y: hidden; }
+.tabs[role="tablist"]::-webkit-scrollbar { height: 2px; }
+.tabs[role="tablist"]:hover::-webkit-scrollbar { height: 3px; }
+.tabs[role="tablist"]::-webkit-scrollbar-thumb { background: var(--line-focus); border-radius: 2px; }
+.tabs[role="tablist"]::-webkit-scrollbar-track { background: transparent; }
+
+/* VIEW-117: where nothing can hover (touch, pen) the actions a mouse user sees on hover are shown all the time. */
+@media (hover: none) {
+  html .proj .ib, html .scm-row .ib, html .keys-x, html .keys-act, html .cm-note-gutter .note-plus, html .chat-msg .chat-meta { opacity: 1; }
+  html .sess .ib { display: inline-flex; }
+}
+
+/* VIEW-072: the confirm step beside the clear buttons of review notes. */
+.confirm-clear { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.confirm-clear .confirm-q { color: var(--fg-muted); font-size: 12px; }
+
+/* VIEW-106: the About panel. */
+.about-panel { top: 20%; left: 50%; transform: translateX(-50%); z-index: 60; min-width: 320px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.about-rows { margin: 0; display: grid; gap: 6px; }
+.about-row { display: grid; grid-template-columns: 11rem 1fr; gap: 10px; font-size: 12px; }
+.about-row dt { color: var(--fg-muted); }
+.about-row dd { margin: 0; color: var(--fg); }
+
+/* TERM-133: the small dot of a colour-coded tab (tabStyle sets --tab-dot on the tab). */
+.tab[style*="--tab-dot"]::before { content: ""; flex: none; width: 7px; height: 7px; margin-right: -1px; border-radius: 50%; background: var(--tab-dot); }
+
+/* T-302-b: Projects panel extras */
+.sb-float { position: relative; height: 0; overflow: visible; z-index: 3; }
+.sb-float .sb-jump { position: absolute; left: 8px; bottom: 8px; font-size: 11px; padding: 3px 8px; }
+.sb-float .sb-top { position: absolute; right: 12px; bottom: 8px; border-radius: 50%; width: 26px; height: 26px; padding: 0; }
+.sb-outside { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; cursor: default; }
+.sb-outside .link { flex: 1; min-width: 0; text-align: left; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; }
+.sb-outside ul { flex-basis: 100%; margin: 2px 0 0; padding-left: 16px; }
+.sb-picked { display: flex; align-items: center; gap: 6px; padding: 4px 8px; font-size: 12px; }
+.sb-picked span { flex: 1; min-width: 0; }
+.sess.picked { background: var(--bg-hover, rgba(127, 127, 127, 0.2)); outline: 1px solid var(--line-focus); }
+.sb-name-hint { margin-left: 6px; color: var(--fg-muted); font-size: 11px; }
+
+/* VIEW-113: the contents panel's width follows --toc-w (set on the pane, 160 to 420px); its left edge is a drag handle; front matter is a block above the note. */
+html .pane.editor .note-toc { width: var(--toc-w, 230px); }
+html .pane.editor.toc-open .md-rich, html .pane.editor.toc-open .md-preview { padding-right: calc(var(--toc-w, 230px) + 22px); }
+html .pane.editor.rail-open.toc-open .md-rich { padding-right: calc(var(--toc-w, 230px) + 236px); }
+.pane.editor .note-toc-grip { position: absolute; z-index: 3; top: 28px; bottom: 0; right: calc(var(--toc-w, 230px) - 3px); width: 6px; cursor: col-resize; touch-action: none; }
+.pane.editor .note-toc-grip:hover, .pane.editor .note-toc-grip:focus-visible { background: var(--line-focus); opacity: 0.5; outline: none; }
+.pane.editor .note-front { flex: none; margin: 0; max-height: 30%; overflow: auto; padding: 8px 14px; background: var(--surface); border-bottom: 1px solid var(--line-subtle); color: var(--fg-muted); font: 12px var(--mono-font); white-space: pre-wrap; }

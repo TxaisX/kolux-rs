@@ -22,6 +22,10 @@ test("VIEW-056: a saved width wider than 500 is honoured; the minimum and the wo
   expect(clampWidth(500, 700, 297)).toBe(RIGHT_MIN);
 });
 
+test("VIEW-080: a saved Agents tab comes back as Agents", () => {
+  expect(readRight({ rightSidebarTab: "agents" }).tab).toBe("agents");
+});
+
 test("VIEW-073: a saved Checks tab comes back as Checks", () => {
   expect(readRight({ rightSidebarTab: "checks" }).tab).toBe("checks");
 });
@@ -48,12 +52,12 @@ test("VIEW-050: the left sidebar width is clamped into range; a width that is no
 
 test("T-146-b: when narrow, the extra tabs move into More and the active tab stays on the strip", () => {
   const all = splitTabs(RIGHT_TABS, "scm", 320);
-  expect([all.shown.map((t) => t.id), all.more]).toEqual([["explorer", "scm", "checks"], []]);
+  expect([all.shown.map((t) => t.id), all.more]).toEqual([["explorer", "scm", "checks", "agents"], []]);
   // At the minimum width the three tabs no longer fit: the active one keeps its place.
   const narrow = splitTabs(RIGHT_TABS, "checks", RIGHT_MIN);
   expect(narrow.shown.map((t) => t.id)).toContain("checks");
   expect(narrow.more.length).toBeGreaterThan(0);
-  expect([...narrow.shown, ...narrow.more].map((t) => t.id).sort()).toEqual(["checks", "explorer", "scm"]);
+  expect([...narrow.shown, ...narrow.more].map((t) => t.id).sort()).toEqual(["agents", "checks", "explorer", "scm"]);
   const used = narrow.shown.reduce((n, t) => n + tabWidth(t.label), 0) + MORE_WIDTH;
   expect(used).toBeLessThanOrEqual(RIGHT_MIN);
   // The order on the strip is the tabs' own order, whichever is active.

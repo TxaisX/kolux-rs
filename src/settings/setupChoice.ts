@@ -16,6 +16,8 @@ export interface RepoSetup {
   inherited: Choice;
   /** Whether the agent waits for setup to finish before it starts. */
   wait: boolean;
+  /** SESS-026: where setup opens in a new workspace: tab (the default), right, down or ask. */
+  mode?: string;
   /** Both scripts exist and no choice is made. */
   suggestBoth: boolean;
   /** Why the choice in force would not run on this PC (two interpreters, or `both` through cmd); null when it would. */

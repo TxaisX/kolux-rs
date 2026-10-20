@@ -1,6 +1,6 @@
 // TERM-065 (T-067): copying the selection never lies about what happened, pure so it runs without a browser.
 import { expect, test } from "vitest";
-import { copySelection } from "./copy";
+import { COPY_CAP, copySelection, tooBigNotice } from "./copy";
 
 function fakeTerm(text: string) {
   return {
@@ -55,4 +55,20 @@ test("a locked clipboard keeps the selection and says so once, not on every retr
   now += 6_000;
   await copySelection(term, fail, (m) => notices.push(m), () => now, throttle);
   expect(notices).toHaveLength(2);
+});
+
+test("VIEW-110: a copy over the limit says so clearly, writes nothing and keeps the selection; one at the limit copies", async () => {
+  const writes: string[] = [];
+  const notices: string[] = [];
+  let focused = 0;
+  const sel = (text: string) => ({ hasSelection: () => true, getSelection: () => text, focus: () => void focused++ });
+  const write = async (t: string) => void writes.push(t);
+  expect(await copySelection(sel("x".repeat(11)), write, (m) => notices.push(m), Date.now, { lastNotice: 0 }, 10)).toBe("too-big");
+  expect(writes).toEqual([]);
+  expect(notices).toHaveLength(1);
+  expect(focused).toBe(1);
+  expect(await copySelection(sel("x".repeat(10)), write, (m) => notices.push(m), Date.now, { lastNotice: 0 }, 10)).toBe("copied");
+  expect(writes).toEqual(["x".repeat(10)]);
+  expect(tooBigNotice(12 * 1024 * 1024)).toBe("The selection is too big to copy (12.0 MB of text; the limit is 10.0 MB). Select less and copy again.");
+  expect(COPY_CAP).toBe(10 * 1024 * 1024);
 });

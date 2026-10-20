@@ -4,6 +4,7 @@
 // A custom chord that collides with another binding in the same scope (or conflict group) is
 // dropped and the default stays, so an edit can never silently steal a key.
 import { actionById, actions, defaultsFor, type Action, type Platform, type Scope } from "./actions";
+import { currentLayout, layoutKeyLabel } from "../terminal/keyLayout";
 import { doubleTapLabel, doubleTapSpelling, parseDoubleTap } from "./doubleTap";
 
 export const MODIFIERS = ["Mod", "Ctrl", "Cmd", "Meta", "Alt", "Shift"] as const;
@@ -72,7 +73,8 @@ export function labelParts(chord: string, platform: Platform): string[] {
 }
 
 const keyLabels: Record<string, string> = { Comma: ",", Period: ".", Equal: "=", Minus: "-", Plus: "+", Slash: "/", Backslash: "\\", Backquote: "`", Quote: "'", Semicolon: ";", BracketLeft: "[", BracketRight: "]", ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right", NumpadAdd: "Numpad +", NumpadSubtract: "Numpad -", Escape: "Esc", PageUp: "PgUp", PageDown: "PgDn", Backspace: "Backspace", Delete: "Del", Insert: "Ins" };
-export const keyLabel = (key: string): string => keyLabels[key] ?? key;
+// VIEW-109 (T-253): a punctuation key reads as the layout in use prints it at that position (German Ctrl+/ reads Ctrl+-).
+export const keyLabel = (key: string): string => layoutKeyLabel(key, currentLayout(), keyLabels[key] ?? key);
 
 /** `dropped`: the file overrides this command but the override clashed and was dropped (SET-010). */
 export type Binding = { action: Action; chords: string[]; custom: boolean; dropped?: boolean };

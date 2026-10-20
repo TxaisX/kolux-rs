@@ -3,7 +3,7 @@
 // component, mounted into the small stand-in DOM in fakeDom.ts and clicked like a user would.
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { byLabel, byText, click, type FakeDocument, type FakeNode, installDom, mount, settle, typeInto, until, withText } from "./fakeDom";
+import { byLabel, byText, click, type FakeDocument, type FakeNode, find, installDom, mount, settle, typeInto, until, withText } from "./fakeDom";
 import type { PrPageData } from "./prModel";
 
 const h = vi.hoisted(() => ({
@@ -19,7 +19,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 // The only commands that read. Anything else a pull request page sends changes GitHub.
-const READS = ["pr_page", "pr_checks", "pr_threads", "pr_files", "github_people"];
+const READS = ["pr_page", "pr_checks", "pr_threads", "pr_files", "github_people", "scm_repo_labels", "github_repo_lineage", "pr_viewed", "pr_editors", "scm_check_log"];
 const writes = () => h.calls.filter((c) => !READS.includes(c.cmd));
 const sent = (cmd: string) => h.calls.filter((c) => c.cmd === cmd);
 
@@ -59,6 +59,10 @@ beforeEach(() => {
     pr_threads: { threads: [thread], truncated: false, limit: 500 },
     pr_files: { files: [{ filename: "src/a.ts", status: "modified", additions: 3, deletions: 1, patch: "@@" }], truncated: false, limit: 500 },
     github_people: [],
+    scm_repo_labels: [],
+    github_repo_lineage: { owner: "acme", name: "app", fork: false, parent: null, parentOwner: null },
+    pr_viewed: { files: [{ path: "src/a.ts", state: "unviewed" }], truncated: false, limit: 0 },
+    pr_editors: [],
     pr_merge: null,
     pr_reply: null,
   };
@@ -68,9 +72,9 @@ afterEach(async () => {
   unmount = async () => {};
 });
 
-async function open(over: { added?: boolean; host?: string } = {}) {
+async function open(over: { added?: boolean; host?: string; workspace?: string | null } = {}) {
   const { default: PullRequestPage } = await import("./PullRequestPage");
-  const m = await mount(createElement(PullRequestPage, { target: { host: over.host ?? "github.com", repo: "acme/app", number: 7, kind: "pull" }, added: over.added ?? true, onClose: () => {} }), doc);
+  const m = await mount(createElement(PullRequestPage, { target: { host: over.host ?? "github.com", repo: "acme/app", number: 7, kind: "pull" }, added: over.added ?? true, onClose: () => {}, workspace: over.workspace ?? null }), doc);
   unmount = m.unmount;
   await until(() => byText(m.container, "button", "Close pull request").length > 0, "the page to load");
   return m.container as FakeNode;
@@ -240,5 +244,64 @@ describe("T-232-c the pull request page only writes when told to", () => {
     await click(c, withText(c, "button", "Files changed")[0]);
     await until(() => withText(c, "summary", "src/a.ts").length > 0, "the files");
     expect(mergeBox(c)).toContain("Showing the first 250 files");
+  });
+});
+
+describe("T-232-d the page's extra reads and writes", () => {
+  const failing = { id: 5, name: "build", status: "completed", conclusion: "failure", url: "https://github.com/acme/app/actions/runs/9/job/3", runId: 9 };
+
+  it("sends a failed check's log to the workspace agent as the Fix with AI prompt, and nowhere else", async () => {
+    h.answers.pr_checks = [failing];
+    h.answers.scm_check_log = "step 3\nboom: test failed";
+    h.answers.scm_review_send = { terminal: "t1", receipt: "r1" };
+    const c = await open({ workspace: "G:/w/pr-7" });
+    await click(c, withText(c, "button", "Checks")[0]);
+    await click(c, byText(c, "button", "Fix with AI")[0]);
+    await until(() => sent("scm_review_send").length > 0, "the prompt to be sent");
+    expect(sent("scm_check_log")[0].args).toEqual({ worktree: "G:/w/pr-7", link: failing.url });
+    const out = sent("scm_review_send")[0].args as { worktree: string; text: string };
+    expect(out.worktree).toBe("G:/w/pr-7");
+    expect(out.text).toContain('The check "build" is failing on this pull request');
+    expect(out.text).toContain("boom: test failed");
+    expect(h.calls.filter((x) => !READS.includes(x.cmd) && x.cmd !== "scm_review_send")).toEqual([]);
+  });
+
+  it("without a workspace Fix with AI is off, says why and sends nothing", async () => {
+    h.answers.pr_checks = [failing];
+    const c = await open();
+    await click(c, withText(c, "button", "Checks")[0]);
+    const b = byText(c, "button", "Fix with AI")[0];
+    expect("disabled" in b.attrs).toBe(true);
+    expect(c.textContent).toContain("Start a workspace for this pull request first");
+    await click(c, b);
+    expect(sent("scm_check_log")).toHaveLength(0);
+    expect(sent("scm_review_send")).toHaveLength(0);
+  });
+
+  it("saves an edited description with scm_task_body and removes a label with scm_task_labels", async () => {
+    h.answers.pr_page = page({ labels: [{ name: "bug", color: "d73a4a" }] });
+    h.answers.scm_task_body = { body: "New text" };
+    h.answers.scm_task_labels = [];
+    const c = await open();
+    await click(c, byText(c, "button", "Edit description")[0]);
+    await typeInto(c, byLabel(c, "textarea", "Description")[0], "New text");
+    await click(c, byText(c, "button", "Save")[0]);
+    await until(() => sent("scm_task_body").length > 0, "the description to be saved");
+    expect(sent("scm_task_body")[0].args).toEqual({ host: "github.com", repo: "acme/app", number: 7, body: "New text" });
+    await click(c, find(c, (n) => n.localName === "button" && n.attrs.title === "Remove bug")[0]);
+    await until(() => sent("scm_task_labels").length > 0, "the label to be removed");
+    expect(sent("scm_task_labels")[0].args).toEqual({ host: "github.com", repo: "acme/app", number: 7, add: [], remove: ["bug"] });
+  });
+
+  it("shows the fork's owner on the branch and its parent, and reads the viewed marks with the files", async () => {
+    h.answers.pr_page = page({ headRepo: "me/app" });
+    h.answers.github_repo_lineage = { owner: "me", name: "app", fork: true, parent: "acme/app", parentOwner: "acme" };
+    const c = await open();
+    await until(() => c.textContent.includes("Fork of acme/app"), "the parent");
+    expect(c.textContent).toContain("me:fix-login into main");
+    expect(sent("github_repo_lineage").slice(-1)[0].args).toEqual({ host: "github.com", repo: "me/app" });
+    await click(c, withText(c, "button", "Files changed")[0]);
+    await until(() => c.textContent.includes("0 of 1 files viewed"), "the viewed count");
+    expect(sent("pr_viewed")).toHaveLength(1);
   });
 });

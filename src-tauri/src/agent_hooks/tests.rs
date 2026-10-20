@@ -21,7 +21,12 @@ fn stat_004_hooks_go_only_to_found_agents_and_leave_switched_off_ones() {
     // The status hooks switch is on (T-152-gate: it reads off until saved on).
     let none = json!({ "agentStatusHooks": true });
     assert_eq!(plan(&none, &ids(&["claude"]), true)[..2], [("claude", Plan::Install), ("codex", Plan::Leave)], "only Claude Code installed: only it gains hooks");
-    assert_eq!(plan(&none, &ids(&["gemini", "amp"]), true)[2..], [("gemini", Plan::Install), ("antigravity", Plan::Leave), ("amp", Plan::Install)], "T-120-b: the vendors follow the same rule");
+    assert_eq!(plan(&none, &ids(&["gemini", "amp"]), true)[2..5], [("gemini", Plan::Install), ("antigravity", Plan::Leave), ("amp", Plan::Install)], "T-120-b: the vendors follow the same rule");
+    assert_eq!(plan(&none, &ids(&["cursor", "kimi"]), true)[5..9], [("cursor", Plan::Install), ("droid", Plan::Leave), ("kimi", Plan::Install), ("copilot", Plan::Leave)], "T-121: and Cursor, Droid and Kimi too");
+    assert_eq!(plan(&none, &ids(&["copilot"]), true)[8], ("copilot", Plan::Install), "T-122: and Copilot CLI");
+    assert_eq!(plan(&none, &ids(&["grok", "devin"]), true)[9..11], [("grok", Plan::Install), ("devin", Plan::Install)], "T-122: and Grok and Devin");
+    assert_eq!(plan(&none, &ids(&["pi"]), true)[11..12], [("pi", Plan::Install)], "T-122: and Pi (STAT-021)");
+    assert_eq!(plan(&none, &ids(&["hermes"]), true)[12..], [("hermes", Plan::Install)], "T-121: and Hermes (STAT-016)");
     let off = json!({ "agentStatusHooks": true, "disabledAgents": ["codex"] });
     assert_eq!(plan(&off, &ids(&["claude", "codex"]), true)[..2], [("claude", Plan::Install), ("codex", Plan::Remove)], "a switched-off agent has its hooks taken out");
     assert_eq!(plan(&off, &[], false)[..2], [("claude", Plan::Leave), ("codex", Plan::Remove)], "detection failed: nothing installed, nothing removed for being unfound");

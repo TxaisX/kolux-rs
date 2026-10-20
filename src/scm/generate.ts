@@ -2,6 +2,7 @@
 // generation survives switching workspace and the panel being rebuilt, and its answer fills only
 // the box of the worktree that began it. A worktree's state is "running", an error to show, or null.
 import { invoke } from "@tauri-apps/api/core";
+import type { Recipe } from "./recipes";
 
 const runs = new Map<string, string>();
 const subs = new Set<() => void>();
@@ -67,10 +68,15 @@ export function writerOf(s: Record<string, unknown>): Writer {
 /** The arguments the back end takes to know who writes. */
 export const writerArgs = (w: Writer) => (w.mode === "custom" ? { command: w.command } : w.mode === "agent" ? { agent: w.agent, model: w.model, effort: w.effort } : {});
 
-export function generate(dir: string, fill: (text: string, dir: string) => void, writer: Writer = DEFAULT_WRITER) {
+/**
+ * GIT-019: with a commit recipe the recipe writes (its agent and extra arguments, or its command
+ * template, variables expanded on the Rust side); without one the single writer does, as before.
+ */
+export function generate(dir: string, fill: (text: string, dir: string) => void, writer: Writer = DEFAULT_WRITER, recipe: Recipe | null = null) {
   runs.set(dir, "running");
   bump();
-  invoke<string>("scm_commit_message", { worktree: dir, command: writer.mode === "custom" ? writer.command : null, instructions: writer.instructions, ...(writer.mode === "agent" ? { agent: writer.agent, model: writer.model, effort: writer.effort } : {}) })
+  const asked = recipe ? invoke<string>("scm_recipe_commit", { worktree: dir, recipe, instructions: writer.instructions, issue: null }) : invoke<string>("scm_commit_message", { worktree: dir, command: writer.mode === "custom" ? writer.command : null, instructions: writer.instructions, ...(writer.mode === "agent" ? { agent: writer.agent, model: writer.model, effort: writer.effort } : {}) });
+  asked
     .then((text) => {
       runs.delete(dir);
       fill(text, dir);
