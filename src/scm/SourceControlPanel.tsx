@@ -39,6 +39,8 @@ type Props = {
   onClose: () => void;
   /** GIT-004: starts an agent primed with what git and its hooks printed. */
   onFix: (output: string) => void;
+  /** VIEW-066: false when Source Control AI actions are hidden; the agent fix after a failed push goes with them. */
+  aiShown?: boolean;
   /** VIEW-068: the base pinned for the workspace's project, which the summary measures against. */
   pinnedBase: string | null;
   /** GIT-011: Change Base Ref pins a new base for the workspace's project (blank goes back to the default). */
@@ -92,12 +94,12 @@ function GraphCell({ row }: { row: GraphRow }) {
   );
 }
 
-type Failure = { title: string; output: string; fix?: string | null; policy?: boolean };
+type Failure = { title: string; output: string; fix?: string | null; policy?: boolean; behind?: boolean };
 
 type Composer = { title: string; body: string; base: string; draft: boolean; error: string | null; busy: boolean };
 
 // VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
-export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft, onDraft, onClose, onFix, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr, view = "list", onView, onOpenDiff, diffSplit = "here", onDiffSplit, onAllChanges, notesSection }: Props) {
+export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft, onDraft, onClose, onFix, aiShown = true, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr, view = "list", onView, onOpenDiff, diffSplit = "here", onDiffSplit, onAllChanges, notesSection }: Props) {
   const [asking, setAsking] = useState<Asking | null>(null);
   // GIT-003: the rows waiting for a yes before their work is thrown away.
   const [discardingRows, setDiscardingRows] = useState<Change[] | null>(null);
@@ -310,7 +312,7 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
       setFailure(null);
       setInfo(`${label}: done`);
     } else {
-      setFailure({ title: failureTitle(label, out), output: out.output, fix: out.kind === "hook" ? (out.detail ?? out.output) : !out.kind || out.kind === "other" ? out.output : null, policy: out.kind === "no-policy" });
+      setFailure({ title: failureTitle(label, out), output: out.output, fix: out.kind === "hook" ? (out.detail ?? out.output) : !out.kind || out.kind === "other" ? out.output : null, policy: out.kind === "no-policy", behind: out.kind === "non-fast-forward" });
     }
   };
   const remote = (action: RemoteAction, label: string) => guarded(() => runRemote(action, label));
@@ -1003,11 +1005,19 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
                     ))}
                   </div>
                 )}
-                {failure.fix !== null && !failure.policy && (
+                {failure.behind && (
+                  <button className="btn" disabled={busy} title="The remote has commits this copy lacks; bring them in, then push again" data-pull-first onClick={() => remote("pull", "Pull")}>
+                    Pull first
+                  </button>
+                )}
+                {aiShown && failure.fix !== null && !failure.policy && (
                   <button className="btn" onClick={() => onFix(failure.fix ?? failure.output)}>
                     Fix with AI
                   </button>
                 )}
+                <button className="btn ghost" data-dismiss-failure onClick={() => setFailure(null)}>
+                  Dismiss
+                </button>
               </div>
             )}
             {error && <div className="note error">{error}</div>}

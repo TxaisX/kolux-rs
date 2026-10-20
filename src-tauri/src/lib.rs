@@ -470,6 +470,8 @@ pub fn run() {
             term_import::term_import_warp,
             resources::resources,
             sessions::claude_workspace_sessions,
+            sessions::list::sessions_list,
+            sessions::list::session_resume_plan,
             terminal::terminal_spawn,
             terminal::terminal_write,
             terminal::terminal_service_info,

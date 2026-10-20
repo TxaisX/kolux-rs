@@ -95,6 +95,9 @@ import Explorer from "./editor/Explorer";
 import { discardDraftsOf, useFileMoves } from "./editor/useFileMoves";
 import { useCloseGuard } from "./editor/CloseDialog";
 import { trashUnusedNotes } from "./editor/trashUnused";
+import AgentsPanel from "./sessions/AgentsPanel";
+import { useWindowSync } from "./sessions/windowSync";
+import type { ResumePlan } from "./sessions/resume";
 import RightSidebar, { clampLeft, clampWidth, Grip, LEFT_KEY, readLeft, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
 import { isMarkdown } from "./editor/markdown";
 import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, resizePlan, rowsFor, splitIndex, toggleCard, blocking, freeCell, canExpand, toggleZoom, zoomedGroup, type Zoom } from "./terminal/grid";
@@ -120,6 +123,7 @@ import TasksPage from "./tasks/TasksPage";
 import WorkspaceBoard from "./board/WorkspaceBoard";
 import { tasksRepo } from "./tasks/model";
 import SourceControlPanel from "./scm/SourceControlPanel";
+import { aiControlsShown } from "./scm/rules";
 import { SCM_AGENT_KEY, SCM_GROUP_ORDER_KEY, SCM_VIEW_KEY, SCM_LINKED_PR_KEY, SUMMARY_UPSTREAM_KEY, linkedPrs, withLink } from "./scm/model";
 import { markFor, paneMark, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { allSwitchedOff, DEFAULT_AGENT_KEY, defaultAgentId, FIRST_PASS, menuAgents, offeredAgents, type AgentPass } from "./launch/agents";
@@ -183,7 +187,7 @@ import { draftKey, feedbackMessage, keepDraft, showsReview, startFeedback, still
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-export type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; resumed?: boolean; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number; col?: number; side?: "old" } };
+export type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; forkOf?: string; resumed?: boolean; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number; col?: number; side?: "old" } };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 /** TERM-058: a terminal tab follows the running program's title (`live`) unless the user named it; a worker's task label (ORCH-066) comes first. */
@@ -1306,6 +1310,27 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   };
   // STAT-039 (T-110-b): a prompt typed into an agent started without one names the branch too.
   useRenameOnFirstPrompt((key) => panes.find((p) => p.key === key)?.cwd ?? undefined, settings);
+  // VIEW-085 (T-169): a past session resumed in a new tab, in the folder the plan names (the session's
+  // own worktree, else the one in front), on the agent's resume line from settings.
+  const resumeIn = async (agentId: string, plan: ResumePlan) => {
+    const agent = agents.find((a) => a.id === agentId);
+    const dir = plan.cwd ?? activeDir;
+    if (!agent || dir === null) return setNotice(agent ? "Open a workspace first, then resume the session in it." : `${agentId} is not installed here, so its session cannot be resumed.`);
+    try {
+      await pretrust(agent.id, [dir]);
+    } catch (err) {
+      return setNotice(String(err));
+    }
+    const key = nextKey.current++;
+    const line = plan.line;
+    const pane: Pane = { key, cwd: dir, branch: panesIn(panes, dir)[0]?.branch ?? null, agent: paneMark(agent, line), agentId: agent.id, resumed: true, ...startFields(line, agent.program) };
+    setPanes((ps) => {
+      const free = freeCell(cellsOf(panesIn(ps, dir)));
+      return free ? ps.map((p) => (p === free ? pane : p)) : [...ps, pane];
+    });
+    setActiveDir(dir);
+    setFocused(key);
+  };
   const { afterSetup, startSetup, select, removedAll, removed, projectOf } = useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir, setStacked, nextKey, addShell, settings, screen, setScreen, setPage, owner, recentDirs, activeRef });
   // PROJ-033: a workspace made outside the composer runs its setup script in a background tab.
   const runSetup = (dir: string, branch: string | null) =>
@@ -1352,6 +1377,19 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     shownScreen.current = screen;
     screenWriter.set(screen);
   }, [screen]);
+  // VIEW-007: another window changing its screen moves this one too, unless a page (Tasks, Automations, ...)
+  // is open here; the followed screen counts as already saved, so it is not written back.
+  useWindowSync({
+    field: LAST_SCREEN_FIELD,
+    valid: screens.map((x) => x.id),
+    screen,
+    page,
+    ready: settingsRead,
+    onScreen: (to) => {
+      shownScreen.current = to;
+      setScreen(classic && (to === "agents" || to === "board") ? "terminals" : to);
+    },
+  });
   // VIEW-107: closing the window writes what is pending first; unsaved editor text stops the quit
   // and asks, so nothing is lost without the user saying so.
   // T-182 (APP-006): agents still running are asked about too (while TERM-045's switch is on).
@@ -3063,7 +3101,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           if (done) saveRight({ width: used });
         }}>
         {scmOpen && (
-          <SourceControlPanel dir={activeDir} writer={writerOf(settings)} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text, dir) => (dir ?? activeDir) !== null && setDrafts((d) => ({ ...d, [dir ?? activeDir!]: text }))} onClose={() => saveRight({ open: false })} onFix={fixWithAI} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} onChangeBase={(base) => {
+          <SourceControlPanel dir={activeDir} writer={writerOf(settings)} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text, dir) => (dir ?? activeDir) !== null && setDrafts((d) => ({ ...d, [dir ?? activeDir!]: text }))} onClose={() => saveRight({ open: false })} onFix={fixWithAI} aiShown={aiControlsShown(settings)} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} onChangeBase={(base) => {
             const p = projects.find((x) => x.id === projectOf(activeDir));
             if (p) void invoke<Project>("project_set", { projectId: p.id, workspacesDir: p.workspacesDir ?? "", base }).then((u) => setProjects((ps) => ps.map((x) => (x.id === u.id ? u : x))));
           }} againstUpstream={settings[SUMMARY_UPSTREAM_KEY] === true} groupOrder={settings[SCM_GROUP_ORDER_KEY]} view={settings[SCM_VIEW_KEY] === "tree" ? "tree" : "list"} onView={(v) => saveSetting(SCM_VIEW_KEY, v)} onOpenDiff={(path, staged) => activeDir !== null && openDiff(`${activeDir.replace(/[\\/]+$/, "")}/${path}`, staged, true)} onAllChanges={() => void newTab("changes")} diffSplit={diffSplitOf(settings[DIFF_SPLIT_KEY])} onDiffSplit={(v) => saveSetting(DIFF_SPLIT_KEY, v)} notesSection={activeDir !== null && <LineNotes dir={activeDir} notes={notesFor(activeDir)} repoless={repoless} onOpen={(n) => (noteTarget(repoless) === "file" ? openFile(n.path, n.end ?? n.line) : openDiff(n.path, n.staged, true, n.end ?? n.line, n.side))} onDrop={(ids) => dropNotes(activeDir, ids)} onClearSent={() => saveNotes(activeDir, clearDelivered(notesFor(activeDir)))} onSend={() => sendNotes(activeDir)} />} onAgainstUpstream={(on) => saveSetting(SUMMARY_UPSTREAM_KEY, on)} fixAgent={settings[SCM_AGENT_KEY]} onFixAgent={(id) => saveSetting(SCM_AGENT_KEY, id)} linkedPr={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} onLinkPr={(url) => activeDir !== null && saveSetting(SCM_LINKED_PR_KEY, withLink(linkedPrs(settings[SCM_LINKED_PR_KEY]), activeDir, url))} onAgentAction={async (a, prompt) => {
@@ -3075,6 +3113,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               return `${a.name} did not start, so the conflicts were not handed over: ${String(err)}`;
             }
           }} agents={menuAgents(agents, defaultId)} onHand={(a, note) => activeDir !== null && void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, note, true)} />
+        )}
+        {/* VIEW-080 (T-168, T-169): the Agents tab lists past sessions of every agent in the saved scope. */}
+        {right.open && right.tab === "agents" && (
+          <AgentsPanel settings={settings} onSave={saveSetting} activeDir={activeDir} projects={projects} projectDirs={Object.entries(owner).filter(([, p]) => p === projectOf(activeDir)).map(([d]) => d)} rescanKey={panes.length} visible={terminals} shell={shells[0]?.program ?? null} onResume={(s, plan) => void resumeIn(s.agent, plan)} />
         )}
         {/* VIEW-073: the Checks tab follows the workspace of the focused terminal. */}
         {right.open && right.tab === "checks" && <ChecksPanel dir={activeDir} linked={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} visible={terminals} />}

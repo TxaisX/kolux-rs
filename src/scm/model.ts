@@ -99,6 +99,18 @@ export type RemoteAction = "push" | "pull" | "sync" | "fetch" | "ff" | "force" |
 /** What the main button offers; `reason` is why it waits, null when it can go. */
 export type Step = { label: string; action: "stage" | "commit" | "pr" | RemoteAction; reason: string | null };
 
+/** VIEW-066: a push to a fork says so. The remote is named from the branch's upstream ("fork/feat"), so
+ * it reads the same whatever form its address takes (https, ssh, scp-style). origin is the usual case and stays unnamed. */
+// ponytail: the first path segment is the remote; a remote name containing a slash would be cut short.
+export const pushTarget = (upstream: string | null): string | null => {
+  const remote = upstream?.split("/")[0] ?? "";
+  return remote !== "" && remote !== "origin" ? remote : null;
+};
+const toRemote = (upstream: string | null): string => {
+  const t = pushTarget(upstream);
+  return t === null ? "" : ` to ${t}`;
+};
+
 /** GIT-006: the next step for the branch's state, in the card's own order. */
 export const nextStep = (s: Status | null, message: string): Step => {
   if (s === null) return { label: "Commit", action: "commit", reason: "Loading" };
@@ -110,7 +122,7 @@ export const nextStep = (s: Status | null, message: string): Step => {
   if (s.rewritten) return { label: "Force push with lease", action: "force", reason: null };
   if (s.ahead > 0 && s.behind > 0) return { label: `Sync \u2193${s.behind} \u2191${s.ahead}`, action: "sync", reason: null };
   if (s.behind > 0) return { label: `Pull ${s.behind}`, action: "pull", reason: null };
-  if (s.ahead > 0) return { label: `Push ${s.ahead}`, action: "push", reason: null };
+  if (s.ahead > 0) return { label: `Push ${s.ahead}${toRemote(s.upstream)}`, action: "push", reason: null };
   return { label: "Create pull request", action: "pr", reason: null };
 };
 
@@ -240,7 +252,7 @@ export const remoteItems = (s: Status | null): RemoteItem[] => {
   const unpublished = noBranch ?? (st.upstream === null ? "Branch unpublished" : null);
   const onBase = st.base !== null && (st.base === st.branch || st.base === `origin/${st.branch}`);
   return [
-    { id: "push", label: st.ahead > 0 ? `Push ${plural(st.ahead, "commit")}` : "Push", reason: unpublished ?? (st.ahead === 0 ? "Nothing to push" : null) },
+    { id: "push", label: st.ahead > 0 ? `Push ${plural(st.ahead, "commit")}${toRemote(st.upstream)}` : "Push", reason: unpublished ?? (st.ahead === 0 ? "Nothing to push" : null) },
     { id: "pull", label: st.behind > 0 ? `Pull ${plural(st.behind, "commit")}` : "Pull", reason: unpublished ?? (st.behind === 0 ? "Nothing to pull" : null) },
     { id: "sync", label: `Sync \u2193${st.behind} \u2191${st.ahead}`, reason: unpublished ?? (st.ahead + st.behind === 0 ? "Already current" : null) },
     { id: "fetch", label: "Fetch", reason: noBranch },

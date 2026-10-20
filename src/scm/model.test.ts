@@ -1,6 +1,6 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { describe, expect, it, test } from "vitest";
-import { LINES_SKIPPED_NOTE, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, select, discardAsk, type Section, budgetLine, budgetLow, mergeActions, mergeLabel, type MergeInfo, graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, commitUrl, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine } from "./model";
+import { LINES_SKIPPED_NOTE, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, pushTarget, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, select, discardAsk, type Section, budgetLine, budgetLow, mergeActions, mergeLabel, type MergeInfo, graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, commitUrl, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine } from "./model";
 
 const commit = (hash: string, parents: string[], subject = hash): Commit => ({ hash, short: hash, parents, author: "a", time: 0, subject, message: subject, labels: [], outgoing: false, incoming: false });
 
@@ -164,6 +164,16 @@ test("the main button follows the branch through its states", () => {
   expect(step({ ...pushed, ahead: 2, behind: 1 })).toBe("Sync \u21931 \u21912");
   expect(step({ ...pushed, ahead: 2, behind: 1, rewritten: true })).toBe("Force push with lease");
   expect(nextStep(pushed, "")).toMatchObject({ label: "Create pull request", action: "pr" });
+});
+
+test("VIEW-066: a push to a fork names the fork remote, whatever form its address takes; origin stays unnamed", () => {
+  expect(pushTarget("fork/feat")).toBe("fork");
+  expect(pushTarget("origin/feat")).toBeNull();
+  expect(pushTarget(null)).toBeNull();
+  const onFork: Status = { ...emptyStatus, branch: "feat", upstream: "fork/feat", ahead: 2, base: "origin/main" };
+  expect(nextStep(onFork, "").label).toBe("Push 2 to fork");
+  expect(remoteItems(onFork).find((i) => i.id === "push")?.label).toBe("Push 2 commits to fork");
+  expect(nextStep({ ...onFork, upstream: "origin/feat" }, "").label).toBe("Push 2");
 });
 
 test("the remote menu carries counts and gives every disabled item its reason", () => {
