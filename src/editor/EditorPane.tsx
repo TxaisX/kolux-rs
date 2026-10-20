@@ -36,6 +36,8 @@ import { richChange, splitFront } from "./frontMatter";
 import { bannerUp, beginSave, canUndo, checkOnce, endSave, forget, holdRestored, keep, POLL_MS, readFresh, reloadNow, remember, setBanner as markBanner, UNDO_TOAST_MS, type Io, type Stamp, type UndoEntry } from "./diskChange";
 import { CompareView, DiskBanner, UndoToast } from "./DiskBanner";
 import { isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
+import { SlashMenu, TableMenu } from "./SlashPanel";
+import type { SlashView } from "./slashMenu";
 import { domPick, noteDraft, selections, type Note } from "./notes";
 import { contextText, richContext } from "./copyContext";
 import NoteRail from "./NoteRail";
@@ -191,6 +193,8 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   }, [settings === null]);
   const richHost = useRef<HTMLDivElement>(null);
   const rich = useRef<ReturnType<typeof mountRich> | null>(null);
+  const [slashView, setSlashView] = useState<SlashView | null>(null);
+  const [richEditor, setRichEditor] = useState<ReturnType<typeof mountRich>["editor"] | null>(null);
   const [ready, setReady] = useState(0); // counts loads, so the rich view starts after each one
   useEffect(() => view.current?.dispatch({ effects: wrapping.reconfigure(wrap ? EditorView.lineWrapping : []) }), [wrap, ready]);
   const [mode, setMode] = useState<"rich" | "source">(md ? "rich" : "source");
@@ -447,7 +451,8 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
           pushed = now.slice(0, change.from) + change.insert + now.slice(change.to);
           cm.dispatch({ changes: change, userEvent: "input" });
         }
-      }, (t) => report.current.onToast?.(t));
+      }, (t) => report.current.onToast?.(t), setSlashView);
+      setRichEditor(rich.current.editor);
     } catch (err) {
       setRichError(String(err));
       return;
@@ -464,6 +469,8 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
       off();
       r.destroy();
       rich.current = null;
+      setRichEditor(null);
+      setSlashView(null);
     };
   }, [md, mode, ready, bigOk, richTries, path]);
 
@@ -684,6 +691,8 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
           Copied with path and lines
         </div>
       )}
+      {md && shown === "rich" && !comparing && <SlashMenu view={slashView} onPick={(id) => rich.current?.pickSlash(id)} />}
+      {md && shown === "rich" && !comparing && <TableMenu editor={richEditor} />}
       {md && <div ref={richHost} className="pane-body md-rich" onClickCapture={(e) => richHost.current && followClick(e.nativeEvent, richHost.current, path, root, onLink)} contentEditable suppressContentEditableWarning spellCheck hidden={shown !== "rich" || comparing} aria-label={`${name}, rich view`} />}
     </section>
   );
