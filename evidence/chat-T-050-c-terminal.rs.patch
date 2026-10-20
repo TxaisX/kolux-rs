@@ -1,0 +1,20 @@
+diff --git a/src-tauri/src/terminal.rs b/src-tauri/src/terminal.rs
+index 196aae3d..088496bb 100644
+--- a/src-tauri/src/terminal.rs
++++ b/src-tauri/src/terminal.rs
+@@ -935,11 +935,12 @@ impl Terminals {
+         inner.sessions.contains_key(&id).then(|| inner.marks.get(&id).and_then(|m| m.agent).or_else(|| crate::foreground::found(id)))
+     }
+ 
+-    /// ACCT-050: every shell session (no program of Kolux's own) with its process id and
+-    /// foreground process group.
++    /// ACCT-050: every session with its process id and foreground process group, for the
++    /// foreground poll. T-050-c: program sessions too, so a launch whose program changed (the
++    /// agent exited, another was typed) is seen; `program` still reads the launch record first.
+     pub fn shells(&self) -> Vec<(u32, Option<u32>, Option<i32>)> {
+         let Ok(inner) = self.inner.lock() else { return Vec::new() };
+-        inner.sessions.iter().filter(|(id, _)| !inner.marks.contains_key(id)).map(|(id, s)| (*id, s.pid(), s.foreground_group())).collect()
++        inner.sessions.iter().map(|(id, s)| (*id, s.pid(), s.foreground_group())).collect()
+     }
+ 
+     /// How long the program in `id` has printed nothing (since it started, when it never has), for

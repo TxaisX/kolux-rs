@@ -11,7 +11,7 @@ import { locale } from "../language";
 import "./chat.css";
 import { fold, isFullPath, thoughtIds as idsOf, toggled, type View } from "./steps";
 import { NoticeRow, PlanRow, StepRow, ThoughtRow } from "./StepRows";
-import { SHELL_OFFER, agentsView, handOver, handTargets, viewedFirst, capPending, chatCovers, chatOffer, combine, pickChat, typingInto, lastReply, lastReplyItem, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row } from "./model";
+import { SHELL_OFFER, agentsView, handOver, handTargets, viewedFirst, capPending, chatCovers, combine, liveOffer, pickChat, typingInto, lastReply, lastReplyItem, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row, type Support } from "./model";
 import { Composer, type ComposerHandle } from "./MessageBox";
 import { draftOf, forwardsToBox, keepDraft, nearBottom } from "./composer";
 import { sessionLabel } from "../agents/rail";
@@ -26,9 +26,9 @@ import { CANNOT_STOP_NOTE, STOPPING_NOTE } from "./stop";
 import type { Answer } from "../terminal/permissionAnswer";
 
 /** `terminal`: the program session the pane types into (the window's own pane-to-terminal map).
- * `program`: what Kolux started in the pane; null for a plain shell (T-050-b: no chat, no switch). */
+ * `program`: what Kolux started in the pane; null for a plain shell (T-050-b: no chat, no switch
+ * until an agent is detected in it, T-050-c). */
 export type ChatPane = { key: number; cwd: string | null; title?: string; terminal?: number; program?: string | null };
-type Support = { agent?: string; launching: boolean; readable: boolean };
 
 /** `hookState`: the window's hook reading for the pane (permission, waiting, working, ...), when it has
  * one; `stateOf`: the same readings read live by pane key, so a send checks its own pane at every write.
@@ -94,7 +94,8 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
       pane: key,
       session,
       hidden: paused,
-      read: () => invoke<ChatRead>("chat_read", { paneKey: key }),
+      // T-050-c: the terminal and the pane's folder serve a transcript Kolux did not start.
+      read: () => invoke<ChatRead>("chat_read", { paneKey: key, terminal: session, cwd: pane.cwd }),
       close: () => invoke("chat_close", { paneKey: key }).catch(() => {}),
       onChange: setSeen,
     });
@@ -359,15 +360,19 @@ export function AgentsChat({ panes, focused, ptyOf, hook, stateOf, onPick, taskO
   const keys = panes.map((p) => p.key).join(",");
   useEffect(() => {
     let alive = true;
+    // T-050-c: every pane is asked, a plain shell too, with its terminal: the agent detected in
+    // front of it decides (Rust chat_support), and a change in front (`pane-agent`) is asked at once.
     const check = () =>
-      Promise.all(panes.map((p) => (p.program === null ? Promise.resolve([p.key, SHELL_OFFER] as const) : invoke<Support>("chat_support", { paneKey: p.key }).then((s) => [p.key, { agent: s.agent, ...chatOffer({ credited: s.agent, title: p.title, screen: "agents", switchOn: false, showingChat: false, launching: s.launching, readable: s.readable }) }] as const).catch(() => [p.key, { chat: false, back: false, chooser: false }] as const)))).then((list) => {
+      Promise.all(panes.map((p) => invoke<Support>("chat_support", { paneKey: p.key, terminal: ptyOf?.(p.key) }).then((s) => [p.key, liveOffer(p.program, p.title, s)] as const).catch(() => [p.key, SHELL_OFFER] as const))).then((list) => {
         if (alive) setOffers(Object.fromEntries(list));
       });
     void check();
     const t = setInterval(check, 3000);
+    const front = listen("pane-agent", () => void check()).catch(() => () => {});
     return () => {
       alive = false;
       clearInterval(t);
+      void front.then((un) => un());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keys]);
