@@ -504,7 +504,11 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
         return;
       }
       if (ligatures) return;
-      void loadLigatures(() => import("@xterm/addon-ligatures")).then((a) => {
+      // MERGE 203 smoke fix: the package is not installed yet (package.json change held for Txais), and a literal
+      // specifier makes vite fail the whole pane module at transform time. A variable specifier is left alone by
+      // vite; the browser then rejects the bare name, loadLigatures catches it and the pane draws plain text.
+      const ligaturesPkg: string = "@xterm/addon-ligatures";
+      void loadLigatures(() => import(/* @vite-ignore */ ligaturesPkg) as Promise<typeof import("@xterm/addon-ligatures")>).then((a) => {
         if (!a) return;
         if (!alive || ask !== asked) return a.dispose();
         try {
