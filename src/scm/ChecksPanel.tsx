@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { Refresh } from "../chrome/icons";
 import { openInBrowser } from "../browser/BrowserPane";
 import { useSettings } from "../settings/useSettings";
+import CommentsPanel from "./CommentsPanel";
 import PrStart from "./PrStart";
 import { reviewHint, reviewWhere } from "./startPr";
 import { CHECKS_POLL_MS, checksSummary, reuseNoPr, stillRunning, type PrChecks } from "./checks";
@@ -175,6 +176,7 @@ ${reviewHint(inKolux)}`.trim()}
                 </div>
               );
             })()}
+            <CommentsPanel dir={dir} url={pr.url} visible={visible} />
           </>
         )}
       </div>

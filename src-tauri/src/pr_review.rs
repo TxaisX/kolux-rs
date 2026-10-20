@@ -178,6 +178,16 @@ pub struct Comment {
     pub bot: bool,
     pub body: String,
     pub at: String,
+    /// The reactions it has, REST names (+1, heart, ...), only those with a count.
+    pub reactions: Vec<Reaction>,
+}
+
+/// One reaction on a comment: its REST name, how many people gave it, and whether the viewer did.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct Reaction {
+    pub content: String,
+    pub count: u64,
+    pub mine: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -200,16 +210,43 @@ pub struct Review {
 
 pub const COMMENT_CAP: usize = 100;
 
-const REVIEW_QUERY: &str = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){comments(first:100){totalCount nodes{id databaseId body createdAt author{login __typename}}} reviewThreads(first:100){nodes{id isResolved path line comments(first:100){totalCount nodes{id databaseId body createdAt author{login __typename}}}}}}}}";
+const REVIEW_QUERY: &str = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){comments(first:100){totalCount nodes{id databaseId body createdAt author{login __typename} reactionGroups{content viewerHasReacted reactors{totalCount}}}} reviewThreads(first:100){nodes{id isResolved path line comments(first:100){totalCount nodes{id databaseId body createdAt author{login __typename} reactionGroups{content viewerHasReacted reactors{totalCount}}}}}}}}}";
 
 pub fn review_args(host: &str, owner: &str, repo: &str, number: u64) -> Vec<String> {
     ["api", "graphql", "--hostname", host, "-f", &format!("query={REVIEW_QUERY}"), "-f", &format!("o={owner}"), "-f", &format!("r={repo}"), "-F", &format!("n={number}")].iter().map(|s| s.to_string()).collect()
 }
 
+/// GraphQL names a reaction THUMBS_UP; the REST calls (and the buttons) say +1.
+fn rest_reaction(graphql: &str) -> Option<&'static str> {
+    Some(match graphql {
+        "THUMBS_UP" => "+1",
+        "THUMBS_DOWN" => "-1",
+        "LAUGH" => "laugh",
+        "CONFUSED" => "confused",
+        "HEART" => "heart",
+        "HOORAY" => "hooray",
+        "ROCKET" => "rocket",
+        "EYES" => "eyes",
+        _ => return None,
+    })
+}
+
 fn comment_of(v: &serde_json::Value, bots: &[String]) -> Comment {
     let login = v["author"]["login"].as_str().unwrap_or("ghost").to_string();
     let bot = v["author"]["__typename"] == "Bot" || bots.iter().any(|b| b.eq_ignore_ascii_case(&login));
-    Comment { id: v["id"].as_str().unwrap_or("").into(), db_id: v["databaseId"].as_u64(), author: login, bot, body: v["body"].as_str().unwrap_or("").into(), at: v["createdAt"].as_str().unwrap_or("").into() }
+    let reactions = v["reactionGroups"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|g| {
+                    let count = g["reactors"]["totalCount"].as_u64().unwrap_or(0);
+                    let content = rest_reaction(g["content"].as_str()?)?;
+                    (count > 0).then(|| Reaction { content: content.into(), count, mine: g["viewerHasReacted"] == true })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Comment { id: v["id"].as_str().unwrap_or("").into(), db_id: v["databaseId"].as_u64(), author: login, bot, body: v["body"].as_str().unwrap_or("").into(), at: v["createdAt"].as_str().unwrap_or("").into(), reactions }
 }
 
 /// gh's GraphQL answer read into threads and the plain conversation; `bots` are author names the
@@ -254,6 +291,8 @@ pub enum Act<'a> {
     Delete(u64),
     Resolve(&'a str, bool),
     React(u64, &'a str),
+    /// A reaction on a comment of the plain conversation (an issue comment, not a review comment).
+    ReactTalk(u64, &'a str),
 }
 
 const REACTIONS: [&str; 8] = ["+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"];
@@ -274,11 +313,12 @@ pub fn act_args(host: &str, owner: &str, repo: &str, number: u64, act: &Act) -> 
             let name = if *on { "resolveReviewThread" } else { "unresolveReviewThread" };
             s(&["api", "graphql", "-f", &format!("query=mutation($t:ID!){{{name}(input:{{threadId:$t}}){{thread{{isResolved}}}}}}"), "-f", &format!("t={thread}")])
         }
-        Act::React(id, what) => {
+        Act::React(id, what) | Act::ReactTalk(id, what) => {
             if !REACTIONS.contains(what) {
                 return Err(format!("{what} is not a reaction GitHub offers"));
             }
-            s(&["api", &format!("repos/{owner}/{repo}/pulls/comments/{id}/reactions"), "-f", &format!("content={what}")])
+            let kind = if matches!(act, Act::ReactTalk(..)) { "issues" } else { "pulls" };
+            s(&["api", &format!("repos/{owner}/{repo}/{kind}/comments/{id}/reactions"), "-f", &format!("content={what}")])
         }
     })
 }
@@ -376,7 +416,7 @@ pub async fn scm_review_read(worktree: String, url: String, bots: Vec<String>) -
 }
 
 /// GIT-030: add, reply, edit, delete, resolve or react; every change lands on GitHub.
-/// `kind` is comment, reply, edit, delete, resolve, unresolve or react.
+/// `kind` is comment, reply, edit, delete, resolve, unresolve, react or react_talk.
 #[tauri::command]
 pub async fn scm_review_act(worktree: String, url: String, kind: String, id: String, text: Option<String>) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -391,6 +431,7 @@ pub async fn scm_review_act(worktree: String, url: String, kind: String, id: Str
             "resolve" => Act::Resolve(&id, true),
             "unresolve" => Act::Resolve(&id, false),
             "react" => Act::React(num()?, &t),
+            "react_talk" => Act::ReactTalk(num()?, &t),
             other => return Err(format!("Unknown action {other}")),
         };
         let a = act_args(&h, &o, &r, n, &act)?;
@@ -506,13 +547,15 @@ mod tests {
     #[test]
     fn review_threads_and_the_conversation_are_read_with_bots_set_apart_and_long_threads_capped() {
         let json = r#"{"data":{"repository":{"pullRequest":{
-            "comments":{"totalCount":1,"nodes":[{"id":"IC1","databaseId":1,"body":"Looks good","createdAt":"2026-10-19T10:00:00Z","author":{"login":"ann","__typename":"User"}}]},
+            "comments":{"totalCount":1,"nodes":[{"id":"IC1","databaseId":1,"body":"Looks good","createdAt":"2026-10-19T10:00:00Z","author":{"login":"ann","__typename":"User"},"reactionGroups":[{"content":"THUMBS_UP","viewerHasReacted":true,"reactors":{"totalCount":2}},{"content":"HEART","viewerHasReacted":false,"reactors":{"totalCount":0}},{"content":"ROCKET","viewerHasReacted":false,"reactors":{"totalCount":1}}]}]},
             "reviewThreads":{"nodes":[{"id":"T1","isResolved":false,"path":"src/a.ts","line":7,"comments":{"totalCount":103,"nodes":[
               {"id":"C1","databaseId":11,"body":"Rename this","createdAt":"2026-10-19T11:00:00Z","author":{"login":"bob","__typename":"User"}},
               {"id":"C2","databaseId":12,"body":"CI note","createdAt":"2026-10-19T11:01:00Z","author":{"login":"ci-helper","__typename":"User"}},
               {"id":"C3","databaseId":13,"body":"Auto","createdAt":"2026-10-19T11:02:00Z","author":{"login":"dependabot","__typename":"Bot"}}]}}]}}}}}"#;
         let r = parse_review(json, &["CI-Helper".to_string()]).unwrap();
         assert_eq!(r.talk.len(), 1);
+        assert_eq!(r.talk[0].reactions, [Reaction { content: "+1".into(), count: 2, mine: true }, Reaction { content: "rocket".into(), count: 1, mine: false }]);
+        assert!(r.threads[0].comments[0].reactions.is_empty());
         assert_eq!(r.threads[0].path.as_deref(), Some("src/a.ts"));
         assert_eq!(r.threads[0].line, Some(7));
         assert_eq!(r.threads[0].more, 3);
@@ -539,6 +582,8 @@ mod tests {
         assert!(resolve[5].contains("resolveReviewThread") && resolve[7] == "t=T1");
         assert!(a(Act::Resolve("T1", false))[5].contains("unresolveReviewThread"));
         assert_eq!(a(Act::React(5, "heart"))[5], "content=heart");
+        assert_eq!(a(Act::React(5, "heart"))[3], "repos/o/r/pulls/comments/5/reactions");
+        assert_eq!(a(Act::ReactTalk(5, "+1"))[3], "repos/o/r/issues/comments/5/reactions");
         assert!(act_args("h.com", "o", "r", 7, &Act::React(5, "banana")).is_err());
     }
 

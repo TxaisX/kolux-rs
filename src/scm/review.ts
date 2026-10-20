@@ -54,7 +54,8 @@ export function relativeTime(iso: string | null | undefined, now: number): strin
   return "now";
 }
 
-export type Comment = { id: string; db_id: number | null; author: string; bot: boolean; body: string; at: string };
+export type Reaction = { content: string; count: number; mine: boolean };
+export type Comment = { id: string; db_id: number | null; author: string; bot: boolean; body: string; at: string; reactions?: Reaction[] };
 export type Thread = { id: string; path: string | null; line: number | null; resolved: boolean; comments: Comment[]; more: number };
 export type Review = { threads: Thread[]; talk: Comment[]; talk_more: number };
 
@@ -94,3 +95,51 @@ export function cleanComment(text: string): string | null {
 export function moreNote(n: number): string | null {
   return n > 0 ? `${n} more comment${n === 1 ? "" : "s"} not shown; open the pull request on GitHub to read them.` : null;
 }
+
+// ---- VIEW-075: the comments as cards ---------------------------------------------------------------
+
+/** The reactions GitHub offers, by the name the REST call takes. */
+export const REACTION_CHOICES: { content: string; emoji: string; label: string }[] = [
+  { content: "+1", emoji: "👍", label: "Thumbs up" },
+  { content: "-1", emoji: "👎", label: "Thumbs down" },
+  { content: "laugh", emoji: "😄", label: "Laugh" },
+  { content: "hooray", emoji: "🎉", label: "Hooray" },
+  { content: "confused", emoji: "😕", label: "Confused" },
+  { content: "heart", emoji: "❤️", label: "Heart" },
+  { content: "rocket", emoji: "🚀", label: "Rocket" },
+  { content: "eyes", emoji: "👀", label: "Eyes" },
+];
+
+export const emojiOf = (content: string): string => REACTION_CHOICES.find((r) => r.content === content)?.emoji ?? content;
+
+export type CardGroups = { open: Thread[]; conversation: Comment[]; resolved: Thread[] };
+
+/** Open threads, the plain conversation and resolved threads, each oldest first. */
+export function cardGroups(r: Review): CardGroups {
+  const first = (t: Thread) => Date.parse(t.comments[0]?.at ?? "") || 0;
+  const byAge = (a: Thread, b: Thread) => first(a) - first(b);
+  return {
+    open: r.threads.filter((t) => !t.resolved).sort(byAge),
+    conversation: [...r.talk].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)),
+    resolved: r.threads.filter((t) => t.resolved).sort(byAge),
+  };
+}
+
+/** How many cards the comments make: threads plus conversation comments. */
+export const cardCount = (r: Review): number => r.threads.length + r.talk.length;
+
+/** Enter sends, Shift+Enter makes a new line, and Enter while an input method is composing does neither. */
+export function sendsOnEnter(e: { key: string; shiftKey: boolean; isComposing?: boolean; keyCode?: number }): boolean {
+  if (e.key !== "Enter" || e.shiftKey) return false;
+  return !(e.isComposing === true || e.keyCode === 229);
+}
+
+/** The settings key of author names the user marked as bots. */
+export const REVIEW_BOTS_KEY = "reviewBots";
+export const botNames = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+
+/** The REST kind a reaction goes by: review comments and conversation comments use different calls. */
+export const reactKind = (inThread: boolean): "react" | "react_talk" => (inThread ? "react" : "react_talk");
+
+/** What a card says about its place: the file and line of a thread, nothing for the conversation. */
+export const placeOf = (t: Pick<Thread, "path" | "line">): string => (t.path ? (t.line ? `${t.path}:${t.line}` : t.path) : "");

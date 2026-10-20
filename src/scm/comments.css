@@ -1,0 +1,28 @@
+/* VIEW-075: the pull request's comments as cards in the Checks tab. */
+.cm-panel { margin-top: 10px; min-width: 0; }
+.cm-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.cm-options { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.cm-options .btn, .cm-row .btn { padding: 2px 8px; font-size: 12px; }
+.cm-options .btn[aria-pressed="true"] { border-color: var(--line-focus); }
+.cm-list { display: flex; flex-direction: column; gap: 6px; padding: 0 8px; min-width: 0; }
+.cm-group { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.cm-card { border: 1px solid var(--line-subtle); border-radius: 6px; padding: 6px 8px; min-width: 0; font-size: 13px; line-height: 1.45; }
+.cm-card.resolved { opacity: 0.75; }
+.cm-place { font-size: 12px; color: var(--fg-label, inherit); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 4px; }
+.cm-comment { min-width: 0; }
+.cm-comment.reply { margin: 6px 0 0 14px; padding-left: 8px; border-left: 2px solid var(--line-subtle); }
+.cm-comment.bot { opacity: 0.8; }
+.cm-meta { display: flex; align-items: baseline; gap: 6px; font-size: 12px; }
+.cm-author { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.cm-tag { font-size: 11px; border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; }
+.cm-time { color: var(--fg-label, inherit); margin-left: auto; }
+.cm-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.cm-reactions { position: relative; display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.cm-react { border: 1px solid var(--line-subtle); border-radius: 10px; background: none; color: inherit; font: inherit; font-size: 12px; padding: 0 6px; cursor: pointer; }
+.cm-react.mine { border-color: var(--line-focus); }
+.cm-picker { position: absolute; left: 0; top: 100%; z-index: 5; display: flex; gap: 2px; padding: 3px; border: 1px solid var(--line-subtle); border-radius: 6px; background: var(--surface); }
+.cm-picker button { border: 0; background: none; font-size: 15px; cursor: pointer; border-radius: 4px; }
+.cm-picker button:hover { background: rgba(128, 128, 128, 0.25); }
+.cm-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.cm-composer { display: flex; flex-direction: column; gap: 4px; margin: 6px 8px; }
+.cm-composer textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; resize: vertical; }
