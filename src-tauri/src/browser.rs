@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::webview::{Color, NewWindowResponse, PageLoadEvent, WebviewBuilder};
+use tauri::webview::{Color, DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Url, Webview, WebviewUrl};
 
 // T-195 (BROW-042, BROW-046, BROW-047): the command line's browser commands; cli.rs reaches them
@@ -28,6 +28,11 @@ pub mod profiles;
 pub mod preview;
 #[path = "browser_ports.rs"]
 pub mod ports;
+// T-238-b: BROW-004 the address bar's history suggestions and BROW-013 downloads.
+#[path = "browser_history.rs"]
+pub mod history;
+#[path = "browser_downloads.rs"]
+pub mod downloads;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
@@ -871,6 +876,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     let window_app = app.clone();
     let window_dev = dev.clone();
     let icon_dev = dev.clone();
+    let download_app = app.clone();
     let builder = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile)
         .focused(false)
         // BROW-012: zoom is the app's, in its own steps, so the engine's own zoom keys are off.
@@ -929,10 +935,38 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
                     icon_for(icon_app.clone(), icon_dev.clone(), id, at.clone(), url, near);
                 });
             }
+            if event == "finished" {
+                history::noted_load(id, payload.url().as_str()); // T-238-b (BROW-004)
+            }
             let _ = load_app.emit(LOAD_EVENT, LoadPayload { id, event, url: payload.url().to_string() });
         })
         .on_document_title_changed(move |_, title| {
+            history::noted_title(id, &title);
             let _ = app.emit(TITLE_EVENT, TitlePayload { id, title });
+        })
+        // T-238-b (BROW-013): a download goes to the system Downloads folder under a safe, unique
+        // name; the pane hears its progress and its end. No free name, or no Downloads folder,
+        // and the download is refused with a failed row instead of a loop.
+        .on_download(move |_, event| match event {
+            DownloadEvent::Requested { url, destination } => {
+                let suggested = destination.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let dir = download_app.path().download_dir().map_err(|e| e.to_string());
+                match dir.and_then(|dir| downloads::requested(&download_app, id, url.as_str(), &dir, &suggested)) {
+                    Ok(path) => {
+                        *destination = path;
+                        true
+                    }
+                    Err(why) => {
+                        downloads::refused(&download_app, id, url.as_str(), &suggested, &why);
+                        false
+                    }
+                }
+            }
+            DownloadEvent::Finished { url, path, success } => {
+                downloads::finished(&download_app, id, url.as_str(), path.as_deref(), success);
+                true
+            }
+            _ => true,
         });
     // BROW-011: until the page paints, the web view shows the pane's colour, never a white flash.
     let builder = match surface(background) {
@@ -1052,6 +1086,9 @@ pub async fn browser_close(app: AppHandle, id: u32) -> Result<(), String> {
     }
     // BROW-049: a closed tab's interception, capture and emulation go with it.
     cli::forget(id);
+    // T-238-b (BROW-013): closing the web view cancels its running downloads; the pane is told.
+    downloads::cancel_tab(&app, id);
+    history::forget_tab(id);
     view(&app, id)?.close().map_err(err)
 }
 

@@ -868,3 +868,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · shell T-247-c · coordinator call 2026-10-19 on the SET-022 font-size rule; this tree's own terminal/text.ts and theme.ts; no outside source
 > 2026-10-19 · shell T-246-d · rules from the SET-007/009/015/019 cards; this tree's own keys/, settings/search.ts and ShortcutsPage; no outside source
 > 2026-10-19 · shell T-247-d · rules from the SET-022/025/026 cards; this tree's own terminal/inputPrefs.ts, text.ts and TerminalPage; npm registry metadata for the addon's version; no outside source
+> 2026-10-19 · browser T-238-b · rules from the BROW-004/013 cards; this tree's own browser.rs, preview.rs, address.ts and BrowserPane; tauri 2.12.1 and wry 0.57.0 crate source in the local cargo registry (WebviewBuilder::on_download, DownloadEvent, PathResolver::download_dir); no outside source

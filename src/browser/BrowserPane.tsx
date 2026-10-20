@@ -17,6 +17,8 @@ import { useKeymap } from "../keys/KeymapContext";
 import { backgroundBehind } from "./colour";
 import "./browser.css";
 import { can as canGo, fresh, started, type Pending } from "./history";
+import { arrived, closed as menuClosed, fresh as freshMenu, type Hit, lines as suggestionLines, type Menu, move as menuMove, pick as menuPick, shown as menuShown, typed as menuTyped } from "./suggest";
+import { busy as downloading, dismiss, type Download, fraction, prune, reduce as reduceDownloads, type Row as DownloadRow, status as downloadStatus } from "./downloads";
 import { type Diagnosis, type Event as LoadEvent, fresh as freshHealth, type Health, type Overlay, overlayModel, overlayOf, PROBE_MS, type Probe, step } from "./loadState";
 import { nextZoom, zoomPercent } from "./zoom";
 import { iconAt, iconFound, type SiteIcon } from "./site";
@@ -101,6 +103,15 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const [open, setOpen] = useState(false);
   const opened = useRef(false);
   const [address, setAddress] = useState("");
+  // T-238-b (BROW-004): the drop-down under the bar; `typing` while the bar holds the user's own
+  // text, so a page replacing the one underneath does not overwrite it. (BROW-013): the strip of
+  // this tab's downloads.
+  const [menu, setMenu] = useState<Menu>(freshMenu());
+  const menuRef = useRef(menu);
+  menuRef.current = menu;
+  const typing = useRef(false);
+  const suggestTimer = useRef<number | undefined>(undefined);
+  const [downloads, setDownloads] = useState<DownloadRow[]>([]);
   const [note, setNote] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [can, setCan] = useState({ back: false, forward: false });
@@ -197,7 +208,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           hist.current = h;
           setCan(canGo(h));
           setLoading(true);
-          setAddress(url === BLANK ? "" : url);
+          if (!typing.current) setAddress(url === BLANK ? "" : url); // BROW-004: typed text survives
           if (!sameAddress(at.current, url)) {
             setNotes([]);
             setDraft(null);
@@ -207,6 +218,13 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           invoke<Preview | null>("browser_preview_of", { url })
             .then((p) => alive && setPreview(p ?? null))
             .catch(() => setPreview(null));
+        }),
+      );
+      // T-238-b (BROW-013): this tab's downloads, one event per change.
+      unlisteners.push(
+        await listen<Download>("browser-download", (e) => {
+          if (e.payload.id !== id) return;
+          setDownloads((rows) => reduceDownloads(rows, e.payload, Date.now()));
         }),
       );
       // BROW-014: a link the page opens as a new window, or Mod / middle click, becomes another tab
@@ -408,14 +426,41 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
       .catch((err) => setNote(String(err)));
   };
 
+  // T-238-b (BROW-013): finished rows leave the strip on their own after a while.
+  useEffect(() => {
+    if (downloads.length === 0 || downloading(downloads)) return;
+    const t = window.setInterval(() => setDownloads((rows) => prune(rows, Date.now())), 1000);
+    return () => window.clearInterval(t);
+  }, [downloads]);
+
+  // T-238-b (BROW-004): each keystroke asks the back end for ranked history hits; a late answer
+  // for text the user has moved past is dropped by the model.
+  const onTyped = (text: string) => {
+    typing.current = true;
+    setAddress(text);
+    setMenu((m) => menuTyped(m, text));
+    window.clearTimeout(suggestTimer.current);
+    if (!text.trim()) return;
+    suggestTimer.current = window.setTimeout(() => {
+      invoke<Hit[]>("browser_suggest", { text })
+        .then((hits) => setMenu((m) => arrived(m, text, hits)))
+        .catch(() => {});
+    }, 60);
+  };
+  const closeMenu = () => setMenu((m) => (m.open ? menuClosed(m) : m));
+
   // BROW-003: Enter reads the bar; an invalid address is said in the notice and the page stays.
   const navigateTo = (url: string) => {
     setNote(null);
+    typing.current = false;
+    setMenu((m) => menuClosed(m));
     pending.current = null;
     feed({ t: "navigate" }); // a new address gets its own recovery allowance (BROW-009)
     invoke("browser_navigate", { id, url }).catch((err) => setNote(String(err)));
   };
   const go = () => {
+    const picked = menuPick(menuRef.current);
+    if (picked) return navigateTo(picked.url);
     const r = resolveAddress(address);
     if ("error" in r) return setNote(r.error);
     navigateTo(r.url);
@@ -528,12 +573,30 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
             style={preview ? { display: "none" } : undefined}
             aria-label="Address"
             placeholder="Address"
-            value={address}
+            value={menuShown(menu, address)}
             autoFocus
+            role="combobox"
+            aria-expanded={menu.open && menu.items.length > 0}
+            aria-controls={`suggest-${id}`}
+            aria-autocomplete="list"
             onFocus={(e) => e.currentTarget.select()}
-            onChange={(e) => setAddress(e.currentTarget.value)}
+            onBlur={() => {
+              // BROW-004: leaving the bar (a click into the page takes the keyboard too) closes the
+              // list and keeps the typed text; once the bar is left, the next load may show its address.
+              closeMenu();
+              typing.current = false;
+            }}
+            onChange={(e) => onTyped(e.currentTarget.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") go();
+              else if (e.key === "Escape") {
+                e.preventDefault();
+                closeMenu();
+              } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                if (!menu.open) return;
+                e.preventDefault();
+                setMenu((m) => menuMove(m, e.key === "ArrowDown" ? 1 : -1));
+              }
             }}
           />
         </span>
@@ -558,6 +621,50 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           </button>
         </span>
       </header>
+      {/* BROW-004: the drop-down sits in the pane's flow (a child web view cannot be covered), so
+          the page below moves down while it is open. Mouse-down, not click, so the bar keeps focus. */}
+      {menu.open && menu.items.length > 0 && (
+        <ul className="suggest" id={`suggest-${id}`} role="listbox" aria-label="Suggestions">
+          {menu.items.map((s, i) => {
+            const [head, sub] = suggestionLines(s);
+            return (
+              <li
+                key={`${s.kind}:${s.url}`}
+                role="option"
+                aria-selected={i === menu.cursor}
+                className={`${s.kind}${i === menu.cursor ? " on" : ""}`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  navigateTo(s.url);
+                }}
+              >
+                <span className="head">{head}</span>
+                {sub && <span className="sub">{sub}</span>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {/* BROW-013: the tab's downloads, with bytes received and the total when known. */}
+      {downloads.length > 0 && (
+        <ul className="downloads" role="status" aria-label="Downloads">
+          {downloads.map((d) => {
+            const f = fraction(d);
+            return (
+              <li key={d.key} className={d.state} title={d.path}>
+                <span className="name">{d.name}</span>
+                <span className="state">{downloadStatus(d)}</span>
+                {d.state === "running" && <progress max={1} value={f ?? undefined} aria-label="Download progress" />}
+                {d.state !== "running" && (
+                  <button className="ib" onClick={() => setDownloads((rows) => dismiss(rows, d.key))} title="Dismiss" aria-label="Dismiss">
+                    <Close size={10} />
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
       {find !== null && (
         <div className="find-bar" role="search">
           <input
