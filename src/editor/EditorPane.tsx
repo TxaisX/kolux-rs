@@ -45,8 +45,11 @@ import { bannerUp, beginSave, canUndo, checkOnce, endSave, forget, holdRestored,
 import { CompareView, DiskBanner, GoneNotice, UndoToast } from "./DiskBanner";
 import { isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
 import { minimap } from "./minimap";
-import { SlashMenu, TableMenu } from "./SlashPanel";
+import { SlashMenu, TableMenu, WikiMenu } from "./SlashPanel";
+import TableControls from "./TableControls";
+import CodeLabel from "./CodeLabel";
 import type { SlashView } from "./slashMenu";
+import type { WikiView } from "./wikiPopup";
 import { domPick, noteDraft, selections, type Note } from "./notes";
 import { contextText, richContext } from "./copyContext";
 import NoteRail from "./NoteRail";
@@ -228,6 +231,8 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   const richHost = useRef<HTMLDivElement>(null);
   const rich = useRef<ReturnType<typeof mountRich> | null>(null);
   const [slashView, setSlashView] = useState<SlashView | null>(null);
+  const [wikiView, setWikiView] = useState<WikiView | null>(null);
+  const wikiFiles = useRef<string[]>([]); // the worktree's files for the [[ popup, listed once per open note
   const [richEditor, setRichEditor] = useState<ReturnType<typeof mountRich>["editor"] | null>(null);
   const [ready, setReady] = useState(0); // counts loads, so the rich view starts after each one
   useEffect(() => view.current?.dispatch({ effects: wrapping.reconfigure(wrap ? EditorView.lineWrapping : []) }), [wrap, ready]);
@@ -495,7 +500,8 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
           pushed = now.slice(0, change.from) + change.insert + now.slice(change.to);
           cm.dispatch({ changes: change, userEvent: "input" });
         }
-      }, (t) => report.current.onToast?.(t), setSlashView);
+      }, (t) => report.current.onToast?.(t), setSlashView, { files: () => wikiFiles.current, notePath: shortPath(path, root), show: setWikiView });
+      if (root) void invoke<{ files: string[] }>("file_list", { root }).then((l) => void (wikiFiles.current = l.files), () => undefined);
       setRichEditor(rich.current.editor);
     } catch (err) {
       setRichError(String(err));
@@ -515,6 +521,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
       rich.current = null;
       setRichEditor(null);
       setSlashView(null);
+      setWikiView(null);
     };
   }, [md, mode, ready, bigOk, richTries, path]);
 
@@ -829,7 +836,10 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
         </div>
       )}
       {md && shown === "rich" && !comparing && <SlashMenu view={slashView} onPick={(id) => rich.current?.pickSlash(id)} />}
+      {md && shown === "rich" && !comparing && <WikiMenu view={wikiView} onPick={(p) => rich.current?.pickWiki(p)} />}
       {md && shown === "rich" && !comparing && <TableMenu editor={richEditor} />}
+      {md && shown === "rich" && !comparing && !readOnly && <TableControls editor={richEditor} />}
+      {md && shown === "rich" && !comparing && !readOnly && <CodeLabel editor={richEditor} />}
       {md && <div ref={richHost} className="pane-body md-rich" onClickCapture={(e) => richHost.current && followClick(e.nativeEvent, richHost.current, path, root, onLink)} contentEditable suppressContentEditableWarning spellCheck={spell} hidden={shown !== "rich" || comparing} aria-label={`${name}, rich view`} />}
     </section>
   );

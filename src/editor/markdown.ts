@@ -14,7 +14,9 @@ import { $convertFromMarkdownString, $convertToMarkdownString, CHECK_LIST, regis
 import { mergeRegister } from "@lexical/utils";
 import { registerTable, TABLE, TABLE_NODES } from "./richTable";
 import { registerListKeys } from "./richFormat";
+import { registerRichKeys } from "./richKeys";
 import { createSlash, type SlashView } from "./slashMenu";
+import { createWiki, type WikiView } from "./wikiPopup";
 import { DETAILS_NODES, makeDetails, withoutSections } from "./richDetails";
 
 export const isMarkdown = (path: string) => /\.(md|markdown)$/i.test(path);
@@ -111,18 +113,24 @@ export function richRefusal(length: number, held = 0): string {
   return `Paste refused in the rich view: ${over} over the ${size(RICH_LIMIT)} it takes in one paste. Paste it in source view instead. Nothing was pasted.`;
 }
 
-export type Rich = { editor: LexicalEditor; show: (md: string) => void; destroy: () => void; pickSlash: (id?: string) => boolean };
+export type Rich = { editor: LexicalEditor; show: (md: string) => void; destroy: () => void; pickSlash: (id?: string) => boolean; pickWiki: (path?: string) => boolean };
+
+/** The [[ note popup (EDIT-014): the notes of the worktree, the note being edited, and where the popup state goes. */
+export type WikiOpts = { files: () => string[]; notePath: string; show: (v: WikiView | null) => void };
 
 /** Starts the rich view in `el`; `onEdit` gets the whole markdown after each edit by the user;
  * `onRefuse` shows the toast for a paste past the limit (EDIT-008). */
-export function mountRich(el: HTMLElement, md: string, onEdit: (md: string) => void, onRefuse: (text: string) => void = () => {}, onSlash: (v: SlashView | null) => void = () => {}): Rich {
+export function mountRich(el: HTMLElement, md: string, onEdit: (md: string) => void, onRefuse: (text: string) => void = () => {}, onSlash: (v: SlashView | null) => void = () => {}, wikiOpts?: WikiOpts): Rich {
   const editor = createEditor({ namespace: "kolux-md", nodes: NODES, onError: fail, theme: THEME });
   editor.setRootElement(el);
   let last = "";
   const slash = createSlash(editor, onSlash);
+  const wiki = wikiOpts ? createWiki(editor, wikiOpts.files, wikiOpts.notePath, wikiOpts.show) : null;
   const off = mergeRegister(
     slash.destroy,
+    wiki ? wiki.destroy : () => undefined,
     registerListKeys(editor),
+    registerRichKeys(editor),
     registerRichText(editor),
     registerHistory(editor, createEmptyHistoryState(), 300),
     registerList(editor),
@@ -151,6 +159,7 @@ export function mountRich(el: HTMLElement, md: string, onEdit: (md: string) => v
     editor,
     show,
     pickSlash: slash.pick,
+    pickWiki: (p) => wiki?.pick(p) ?? false,
     destroy: () => {
       off();
       editor.setRootElement(null);

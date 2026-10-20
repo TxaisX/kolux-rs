@@ -50,6 +50,7 @@ export const SLASH_ENTRIES: SlashEntry[] = [
   { id: "quote", label: "Quote", names: ["blockquote", "cite", ">"], hint: "An indented quotation", group: "Blocks" },
   { id: "code", label: "Code block", names: ["code", "snippet", "fence", "pre"], hint: "Monospace lines with a language label", group: "Blocks" },
   { id: "table", label: "Table", names: ["grid", "rows", "columns"], hint: "3 by 3, header row first", group: "Insert" },
+  { id: "details", label: "Collapsible section", names: ["details", "toggle", "fold", "summary", "accordion"], hint: "A heading that opens and closes", group: "Insert" },
   { id: "mermaid", label: "Diagram", names: ["mermaid", "flowchart", "graph", "chart"], hint: "A mermaid code fence", group: "Insert" },
   { id: "math", label: "Maths block", names: ["math", "latex", "equation", "formula", "katex"], hint: "A block between two dollar lines", group: "Insert" },
   ...EMOJI.map(([n, ch, other]): SlashEntry => ({ id: `emoji:${ch}`, label: `${ch} ${n}`, names: [`:${n}:`, "emoji", ...other], hint: "Emoji", group: "Emoji" })),
@@ -101,7 +102,7 @@ function $eraseSlash(trim: boolean): boolean {
   return true;
 }
 
-const FORMAT = new Set<string>(["h1", "h2", "h3", "bullet", "numbered", "check", "quote"]);
+const FORMAT = new Set<string>(["h1", "h2", "h3", "bullet", "numbered", "check", "quote", "details"]);
 
 /** Inserts one entry at the caret (the typed slash is removed first). Returns false for an unknown id. */
 export function runSlash(editor: LexicalEditor, id: string): boolean {

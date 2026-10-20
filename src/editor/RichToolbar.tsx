@@ -2,16 +2,26 @@
 // focus from the text, so the caret and selection stay where they were. Link opens a small address box
 // in the bar (the one place that must take the focus; Enter or Escape gives it back to the text);
 // Image opens the system file picker for a picture and writes its markdown at the caret.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { applyFormat, applyImage, applyLink, imageLink, linkAt, MORE_BLOCKS, RICH_BUTTONS, type RichAction } from "./richFormat";
 import type { Rich } from "./markdown";
+import { LINK_EVENT } from "./richKeys";
 
 const PICTURES = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif"];
 
 export default function RichToolbar({ get, notePath = "", onNote }: { get: () => Rich | null; notePath?: string; onNote?: (text: string) => void }) {
   const [link, setLink] = useState<string | null>(null); // the address box: null = closed
   const back = () => get()?.editor.focus();
+  // EDIT-014 (T-234-b): Ctrl/Cmd+K in this note's text opens the same address box as the Link button.
+  useEffect(() => {
+    const on = (e: Event) => {
+      const r = get();
+      if (r && (e as CustomEvent).detail === r.editor.getRootElement()) setLink(linkAt(r.editor));
+    };
+    document.addEventListener(LINK_EVENT, on);
+    return () => document.removeEventListener(LINK_EVENT, on);
+  }, [get]);
   const pickImage = async () => {
     const r = get();
     if (!r) return;
