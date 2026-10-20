@@ -5,6 +5,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import type { ActionOutcome, Pr, Status } from "./model";
+import { writerOf } from "./generate";
+import { needsOneClick, realPorts, startOneClick, useOneClick } from "./oneClick";
+import OneClickNotice from "./OneClickNotice";
 import { assess, confirmed, dismiss, errorShown, offerFor, raise, readinessKey, type ErrorBook, type Offer, type Readiness } from "./startPr";
 
 type Props = { dir: string; onCreated: (pr: Pr) => void };
@@ -18,6 +21,7 @@ export default function PrStart({ dir, onCreated }: Props) {
   const [, tick] = useState(0);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
+  const going = useOneClick(dir);
   const asking = useRef(dir);
   asking.current = dir;
 
@@ -77,6 +81,14 @@ export default function PrStart({ dir, onCreated }: Props) {
     }
   };
   const push = mine && mine.ready.reason === null ? mine.ready.push : "none";
+  // GIT-022: with work still to commit or push, one click does all of it and opens the review.
+  const oneClick = async () => {
+    errors = dismiss(errors, dir);
+    const settings = await invoke<Record<string, unknown>>("get_settings").catch(() => ({}));
+    const done = await startOneClick(dir, realPorts(writerOf(settings)));
+    if (done.state === "done" && done.pr) onCreated(done.pr);
+    void check();
+  };
 
   return (
     <div className="pr-start" data-pr-start>
@@ -87,6 +99,12 @@ export default function PrStart({ dir, onCreated }: Props) {
         </div>
       )}
       {offer.kind === "blocked" && !draft && <div className="sb-hint">{offer.reason}</div>}
+      {mine && !draft && offer.kind === "blocked" && going?.state !== "running" && needsOneClick(mine.status) && (
+        <button className="btn primary" data-pr-one-click onClick={() => void oneClick()}>
+          Commit, push and create pull request
+        </button>
+      )}
+      <OneClickNotice dir={dir} />
       {offer.kind === "check" && !failed && <div className="sb-hint">Checking whether this branch is ready…</div>}
       {(offer.kind === "create" || offer.kind === "push-create") && !draft && (
         <button className="btn primary" data-pr-open onClick={() => void open()}>
