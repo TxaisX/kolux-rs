@@ -75,7 +75,7 @@ pub fn codex_account_label(app: AppHandle, store: tauri::State<'_, Mutex<Store>>
 }
 
 pub fn load(store: &Store) -> Vec<Account> {
-    store.get(LIST_KEY).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    crate::claude_accounts::load_kept(store, LIST_KEY)
 }
 
 /// The active account, if it is still listed and its home is on disk.
@@ -821,6 +821,21 @@ mod tests {
 
     fn temp(name: &str) -> crate::test_dir::TempDir {
         crate::test_dir::temp(&format!("codex-acct-{name}"))
+    }
+
+    // Row 193 (audit-a193-1): the Codex list is kept aside when it no longer reads, never saved over.
+    #[test]
+    fn row193_an_unreadable_codex_list_is_kept_aside_and_a_label_save_cannot_wipe_it() {
+        let dir = temp("row193");
+        let store = Store::open(&dir).unwrap();
+        let broken = "[{\"id\":\"c1\",\"email\":\"sam@exa\u{0}\u{fffd} half";
+        store.set(LIST_KEY, broken).unwrap();
+        assert!(load(&store).is_empty());
+        assert_eq!(crate::claude_accounts::test_asides(&store, LIST_KEY), vec![broken.to_string()]);
+        assert!(load(&store).is_empty());
+        assert_eq!(crate::claude_accounts::test_asides(&store, LIST_KEY).len(), 1, "not set aside twice");
+        assert!(set_label(&store, "c1", "Work").is_err(), "nothing to label in the fresh list");
+        assert_eq!(crate::claude_accounts::test_asides(&store, LIST_KEY), vec![broken.to_string()], "the old bytes stay");
     }
 
     fn token(email: &str) -> String {

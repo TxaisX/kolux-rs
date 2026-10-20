@@ -302,7 +302,7 @@ fn saved(store: &Store, provider: &str) -> Option<Saved> {
     store.get(&key_saved(provider)).ok().flatten().and_then(|t| parse_saved(&t))
 }
 fn choices(store: &Store) -> serde_json::Map<String, Value> {
-    store.get(KEY_TRACKING).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    crate::claude_accounts::load_kept(store, KEY_TRACKING)
 }
 
 /// Every .jsonl file under `root`, any depth.
@@ -399,10 +399,15 @@ pub fn token_tracking_set(store: tauri::State<'_, Mutex<Store>>, provider: Strin
     if !PROVIDERS.contains(&provider.as_str()) {
         return Err(format!("unknown provider {provider}"));
     }
-    let s = store.lock().map_err(|e| e.to_string())?;
-    let mut all = choices(&s);
-    all.insert(provider, Value::Bool(on));
-    s.set(KEY_TRACKING, &Value::Object(all).to_string()).map_err(|e| e.to_string())
+    set_tracking(&*store.lock().map_err(|e| e.to_string())?, &provider, on)
+}
+
+/// Row 193: the choices are read through `claude_accounts::load_kept`, so a blob that no longer
+/// reads is kept aside before this save, never written over.
+fn set_tracking(store: &Store, provider: &str, on: bool) -> Result<(), String> {
+    let mut all = choices(store);
+    all.insert(provider.to_string(), Value::Bool(on));
+    store.set(KEY_TRACKING, &Value::Object(all).to_string()).map_err(|e| e.to_string())
 }
 
 /// Rescans one provider and saves the result; a failed scan keeps the last good rows and says why.
@@ -661,6 +666,23 @@ mod tests {
         std::fs::write(&kept, r#"{"format":1,"files":[]}"#).unwrap();
         assert!(Cache::load(&kept).0.is_empty());
         assert!(Cache::load(&t.0.join("missing.json")).0.is_empty());
+    }
+
+    // Row 193 (audit-a193-2): the tracking choices blob that no longer reads is kept aside, so the
+    // next switch cannot save over it.
+    #[test]
+    fn row193_unreadable_tracking_choices_are_kept_aside_and_a_switch_cannot_wipe_them() {
+        let t = temp("row193");
+        let store = Store::open(&t.0).unwrap();
+        let broken = "{\"claude\":tr\u{0}\u{fffd} half written";
+        store.set(KEY_TRACKING, broken).unwrap();
+        assert!(choices(&store).is_empty());
+        assert_eq!(crate::claude_accounts::test_asides(&store, KEY_TRACKING), vec![broken.to_string()]);
+        assert!(choices(&store).is_empty());
+        assert_eq!(crate::claude_accounts::test_asides(&store, KEY_TRACKING).len(), 1, "not set aside twice");
+        set_tracking(&store, "claude", true).unwrap();
+        assert_eq!(crate::claude_accounts::test_asides(&store, KEY_TRACKING), vec![broken.to_string()]);
+        assert_eq!(choices(&store).get("claude").and_then(Value::as_bool), Some(true));
     }
 
     #[test]

@@ -60,7 +60,31 @@ pub fn sign_in_files(store: &Store, profile: &Path) -> Vec<(PathBuf, PathBuf)> {
 }
 
 pub fn load(store: &Store) -> Vec<Account> {
-    store.get(LIST_KEY).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    load_kept(store, LIST_KEY)
+}
+
+/// Row 193: the saved value under `key`, or its default. A value that no longer reads is never
+/// loaded as empty and then saved over: its bytes are copied to `<key>.corrupt-<ms>` (a free name,
+/// -2, -3 on a same-millisecond clash) in the same transaction that starts `key` fresh, so the
+/// original survives and the next read does not set anything aside again. Absent and cleared
+/// (`null`) values are the default with no copy. A store that cannot be read at all gives the
+/// default and changes nothing. Coordinator default (Txais may overrule): keep aside and start
+/// fresh, rather than refusing every save.
+pub(crate) fn load_kept<T: serde::de::DeserializeOwned + serde::Serialize + Default>(store: &Store, key: &str) -> T {
+    let Some(text) = store.get(key).ok().flatten().filter(|t| t.trim() != "null") else { return T::default() };
+    if let Ok(v) = serde_json::from_str(&text) {
+        return v;
+    }
+    let fresh = T::default();
+    let (Ok(fresh_text), base) = (serde_json::to_string(&fresh), format!("{key}.corrupt-{}", crate::artifacts::now_ms())) else { return fresh };
+    let mut aside = base.clone();
+    let mut n = 1;
+    while store.get(&aside).ok().flatten().is_some() {
+        n += 1;
+        aside = format!("{base}-{n}");
+    }
+    let _ = store.set_all(&[(aside.as_str(), text.as_str()), (key, fresh_text.as_str())]);
+    fresh
 }
 
 fn save(store: &Store, list: &[Account]) -> Result<(), String> {
@@ -544,6 +568,22 @@ pub fn active_dir(store: &Store) -> Option<String> {
     load(store).into_iter().find(|a| a.id == id).map(|a| a.config_dir).filter(|d| PathBuf::from(d).is_dir())
 }
 
+/// Tests only: the bytes of every `<key>.corrupt-<ms>[-n]` copy made in the last few seconds.
+#[cfg(test)]
+pub(crate) fn test_asides(store: &Store, key: &str) -> Vec<String> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let mut out = Vec::new();
+    for ms in now.saturating_sub(10_000)..=now {
+        for n in 1..4 {
+            let k = if n == 1 { format!("{key}.corrupt-{ms}") } else { format!("{key}.corrupt-{ms}-{n}") };
+            if let Some(v) = store.get(&k).unwrap() {
+                out.push(v);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,6 +602,37 @@ mod tests {
         *s.attention.lock().unwrap() = Some(Attention::new("plan", "x"));
         assert!(!cancel(&s));
         assert!(flag.load(Ordering::SeqCst) && s.attention.lock().unwrap().is_some());
+    }
+
+    // Row 193 (audit-a193-1): an account list that no longer reads is kept aside, never saved over.
+    #[test]
+    fn row193_an_unreadable_account_list_is_kept_aside_and_the_next_save_cannot_wipe_it() {
+        let (_dir, store) = profile("row193");
+        let store = store.lock().unwrap();
+        let broken = "[{\"id\":\"a1\",\"email\":\"sam@exa\u{0}\u{fffd} half written";
+        store.set(LIST_KEY, broken).unwrap();
+        assert!(load(&store).is_empty(), "the list reads empty");
+        let kept = test_asides(&store, LIST_KEY);
+        assert_eq!(kept.len(), 1, "one copy kept aside");
+        assert_eq!(kept[0], broken, "byte for byte");
+        // A second read does not set the fresh list aside again, and a save leaves the copy alone.
+        assert!(load(&store).is_empty());
+        assert_eq!(test_asides(&store, LIST_KEY).len(), 1);
+        save(&store, &[Account { id: "n1".into(), email: None, organization: None, config_dir: "x".into(), last_sign_in: 1, stale: false }]).unwrap();
+        assert_eq!(test_asides(&store, LIST_KEY), vec![broken.to_string()]);
+        assert_eq!(load(&store).len(), 1);
+    }
+
+    #[test]
+    fn row193_an_absent_or_readable_list_is_left_alone() {
+        let (_dir, store) = profile("row193-ok");
+        let store = store.lock().unwrap();
+        assert!(load(&store).is_empty());
+        store.set(LIST_KEY, "null").unwrap();
+        assert!(load(&store).is_empty());
+        store.set(LIST_KEY, "[]").unwrap();
+        assert!(load(&store).is_empty());
+        assert!(test_asides(&store, LIST_KEY).is_empty(), "nothing was unreadable");
     }
 
     const CREDS: &str = r#"{"claudeAiOauth":{"accessToken":"fake-access","refreshToken":"fake-refresh"}}"#;
