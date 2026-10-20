@@ -1186,20 +1186,23 @@ pub fn workspace_items(store: StoreState<'_>, project_id: String, query: String)
 }
 
 /// PROJ-037: Ok when the item's repository is a remote of `project`. The user's SSH config text is
-/// read once by the caller (an alias remote counts as the host it stands for).
-fn item_is_remote_of(project: &Project, item: &WorkItem, ssh_config: &str) -> Result<(), String> {
-    if !crate::pr_checkout::has_repo_with(&crate::pr_checkout::remotes(Path::new(&project.path)), &item.host, &item.owner, &item.repo, ssh_config) {
+/// read once, through `read_ssh_config` (an alias remote counts as the host it stands for).
+fn item_is_remote_of(project: &Project, item: &WorkItem, read_ssh_config: &dyn Fn() -> String) -> Result<(), String> {
+    let ssh_config = read_ssh_config();
+    if !crate::pr_checkout::has_repo_with(&crate::pr_checkout::remotes(Path::new(&project.path)), &item.host, &item.owner, &item.repo, &ssh_config) {
         return Err(format!("That link is to {}/{}/{}, which is not a remote of {}; links here come from the chosen project's own repository.", item.host, item.owner, item.repo, project.name));
     }
     Ok(())
 }
 
-/// PROJ-037: the first project with a remote at the item's repository. The SSH config text is the
-/// caller's single read, not one read per project.
-fn project_with_remote(projects: Vec<Project>, item: &WorkItem, ssh_config: &str) -> Result<Project, String> {
+/// PROJ-037: the first project with a remote at the item's repository. The SSH config text is
+/// read once through `read_ssh_config`, before the search, never once per project (FIX-5 pins the
+/// count with a counting reader).
+fn project_with_remote(projects: Vec<Project>, item: &WorkItem, read_ssh_config: &dyn Fn() -> String) -> Result<Project, String> {
+    let ssh_config = read_ssh_config();
     projects
         .into_iter()
-        .find(|p| crate::pr_checkout::has_repo_with(&crate::pr_checkout::remotes(Path::new(&p.path)), &item.host, &item.owner, &item.repo, ssh_config))
+        .find(|p| crate::pr_checkout::has_repo_with(&crate::pr_checkout::remotes(Path::new(&p.path)), &item.host, &item.owner, &item.repo, &ssh_config))
         .ok_or_else(|| format!("No project here has {}/{}/{} as a remote; add that repository as a project first.", item.host, item.owner, item.repo))
 }
 
@@ -1210,7 +1213,7 @@ pub fn workspace_item(store: StoreState<'_>, project_id: String, item: WorkItem)
     use crate::pr_checkout::Linkable;
     let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
     let repo = Path::new(&project.path);
-    item_is_remote_of(&project, &item, &crate::scm::ssh_config())?;
+    item_is_remote_of(&project, &item, &crate::scm::ssh_config)?;
     let gh = crate::scm::gh_program()?;
     Ok(if item.kind == "pull" {
         let pr = crate::pr_checkout::view(&gh, repo, item.number)?;
@@ -1227,7 +1230,7 @@ pub fn workspace_item(store: StoreState<'_>, project_id: String, item: WorkItem)
 #[tauri::command(async)]
 pub fn workspace_from_item(app: tauri::AppHandle, git: State<'_, Git>, store: StoreState<'_>, item: WorkItem) -> Result<Created, String> {
     let projects = load_projects(&*store.lock().map_err(|e| e.to_string())?);
-    let project = project_with_remote(projects, &item, &crate::scm::ssh_config())?;
+    let project = project_with_remote(projects, &item, &crate::scm::ssh_config)?;
     if item.kind == "pull" {
         return workspace_open_pr(app, git, store, project.id, item.number, None, None, None, None);
     }
@@ -1936,10 +1939,11 @@ mod tests {
         git_in(&repo, &["remote", "add", "origin", "git@work-gh:acme/app.git"]);
         let project = project_at("p", &repo);
         let link = work_item("github.com", "acme", "app");
-        assert_eq!(item_is_remote_of(&project, &link, ALIAS), Ok(()));
-        let refused = item_is_remote_of(&project, &link, "").unwrap_err();
+        let (alias, none) = (|| ALIAS.to_string(), String::new);
+        assert_eq!(item_is_remote_of(&project, &link, &alias), Ok(()));
+        let refused = item_is_remote_of(&project, &link, &none).unwrap_err();
         assert!(refused.contains("not a remote of p"), "{refused}");
-        assert!(item_is_remote_of(&project, &work_item("github.com", "acme", "other"), ALIAS).is_err());
+        assert!(item_is_remote_of(&project, &work_item("github.com", "acme", "other"), &alias).is_err());
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -1953,9 +1957,41 @@ mod tests {
         }
         let all = || vec![project_at("plain", &plain), project_at("aliased", &aliased)];
         let link = work_item("github.com", "acme", "app");
-        assert_eq!(project_with_remote(all(), &link, ALIAS).unwrap().id, "aliased");
-        assert!(project_with_remote(all(), &link, "").unwrap_err().contains("No project here has github.com/acme/app"));
-        assert_eq!(project_with_remote(all(), &work_item("github.com", "corp", "lib"), "").unwrap().id, "plain");
+        let (alias, none) = (|| ALIAS.to_string(), String::new);
+        assert_eq!(project_with_remote(all(), &link, &alias).unwrap().id, "aliased");
+        assert!(project_with_remote(all(), &link, &none).unwrap_err().contains("No project here has github.com/acme/app"));
+        assert_eq!(project_with_remote(all(), &work_item("github.com", "corp", "lib"), &none).unwrap().id, "plain");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// FIX-5 (stand-in review FIX-SOON 1): the SSH config is read once per call, however many
+    /// projects are searched, found or not. The reader counts its own calls.
+    #[test]
+    fn fix5_the_ssh_config_is_read_once_per_call_not_once_per_project() {
+        let base = temp("fix5-reads");
+        let dirs: Vec<PathBuf> = (0..3).map(|i| base.join(format!("p{i}"))).collect();
+        for (i, dir) in dirs.iter().enumerate() {
+            init_repo(dir);
+            git_in(dir, &["remote", "add", "origin", &format!("https://github.com/other/repo{i}.git")]);
+        }
+        let all = || dirs.iter().enumerate().map(|(i, d)| project_at(&format!("p{i}"), d)).collect::<Vec<_>>();
+        let reads = std::cell::Cell::new(0);
+        let counting = || {
+            reads.set(reads.get() + 1);
+            ALIAS.to_string()
+        };
+        // not found anywhere: every one of the 3 projects is looked at, the config is still read once
+        assert!(project_with_remote(all(), &work_item("github.com", "acme", "app"), &counting).is_err());
+        assert_eq!(reads.get(), 1, "project_with_remote read the config once per project");
+        reads.set(0);
+        // found at the last project
+        assert_eq!(project_with_remote(all(), &work_item("github.com", "other", "repo2"), &counting).unwrap().id, "p2");
+        assert_eq!(reads.get(), 1, "project_with_remote read the config again after a match");
+        reads.set(0);
+        let project = project_at("p0", &dirs[0]);
+        assert_eq!(item_is_remote_of(&project, &work_item("github.com", "other", "repo0"), &counting), Ok(()));
+        assert!(item_is_remote_of(&project, &work_item("github.com", "acme", "app"), &counting).is_err());
+        assert_eq!(reads.get(), 2, "item_is_remote_of reads the config once per call");
         let _ = fs::remove_dir_all(&base);
     }
 
