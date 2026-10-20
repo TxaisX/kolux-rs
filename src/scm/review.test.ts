@@ -92,7 +92,7 @@ describe("review comments", () => {
 });
 
 // ---- VIEW-075: cards ----------------------------------------------------------------------------
-import { botNames, cardCount, cardGroups, emojiOf, placeOf, reactKind, sendsOnEnter } from "./review";
+import { botNames, cardCount, cardGroups, conflictView, emojiOf, placeOf, reactKind, repliable, reviewPrompt, sendsOnEnter } from "./review";
 
 const card = (id: string, at: string, author = "ann") => ({ id, db_id: Number(id.replace(/\D/g, "")) || null, author, bot: false, body: id, at });
 const thr = (id: string, resolved: boolean, at: string, path: string | null = "src/a.ts", line: number | null = 3) => ({ id, path, line, resolved, comments: [card(`c${id}`, at)], more: 0 });
@@ -125,4 +125,23 @@ it("VIEW-075: reactions, places and bot names read as the cards need them", () =
   expect(placeOf({ path: null, line: null })).toBe("");
   expect(botNames(["ci", 3, "x"])).toEqual(["ci", "x"]);
   expect(botNames("no")).toEqual([]);
+});
+
+it("GIT-031: the queued comments become one prompt with where each is; only repliable threads are offered", () => {
+  const mk = (id: string, author: string, body: string, db: number | null, path: string | null, line: number | null) => ({ id, path, line, resolved: false, more: 0, comments: [{ id: "c" + id, db_id: db, author, bot: false, body, at: "2026-10-19T10:00:00Z" }] });
+  const a = mk("t1", "alice", "Rename this", 11, "src/a.ts", 12);
+  const b = mk("t2", "bob", "Why?", null, null, null);
+  const p = reviewPrompt([a, b]);
+  expect(p).toContain("1. src/a.ts:12\n  alice: Rename this");
+  expect(p).toContain("2. pull request conversation\n  bob: Why?");
+  expect(repliable([a, b]).map((t) => t.id)).toEqual(["t1"]);
+});
+
+it("GIT-032: a conflict lists files; a clean local merge says GitHub may be stale and offers commands", () => {
+  const files = conflictView({ state: "conflicts", files: ["a.rs"], base: "main", note: "These files conflict", prompt: "p" });
+  expect(files).toMatchObject({ kind: "files", commands: [] });
+  const stale = conflictView({ state: "clean", files: [], base: "main", note: "", prompt: null });
+  expect(stale.kind).toBe("stale");
+  expect(stale.commands[0]).toBe("git fetch origin main");
+  expect(conflictView(null).kind).toBe("unknown");
 });

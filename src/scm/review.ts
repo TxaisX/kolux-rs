@@ -143,3 +143,31 @@ export const reactKind = (inThread: boolean): "react" | "react_talk" => (inThrea
 
 /** What a card says about its place: the file and line of a thread, nothing for the conversation. */
 export const placeOf = (t: Pick<Thread, "path" | "line">): string => (t.path ? (t.line ? `${t.path}:${t.line}` : t.path) : "");
+
+/** GIT-031: the text that asks the agent to address the queued review comments, each with where it is. */
+export function reviewPrompt(threads: Thread[]): string {
+  const parts = threads.map((t, i) => {
+    const where = t.path ? `${t.path}${t.line ? ":" + t.line : ""}` : "pull request conversation";
+    const said = t.comments.map((c) => `  ${c.author}: ${c.body.trim().slice(0, 2000)}`).join("\n");
+    return `${i + 1}. ${where}\n${said}`;
+  });
+  return `These review comments were left on this branch's pull request. Address each one in the code, run the tests, and tell me what you changed for each number.\n\n${parts.join("\n\n")}`;
+}
+
+/** The threads that can be answered from here: they need the first comment's id to reply to. */
+export function repliable(threads: Thread[]): Thread[] {
+  return threads.filter((t) => t.comments[0]?.db_id != null);
+}
+
+export type Conflicts = { state: "conflicts" | "clean" | "unknown"; files: string[]; base: string; note: string; prompt: string | null };
+
+/** GIT-032: what to tell the person when the host reports a conflict, given the local trial merge. */
+export function conflictView(c: Conflicts | null): { kind: "files" | "stale" | "unknown"; text: string; commands: string[] } {
+  if (!c || c.state === "unknown") return { kind: "unknown", text: c?.note ?? "Kolux has not tried the merge yet.", commands: [] };
+  if (c.state === "conflicts") return { kind: "files", text: c.note, commands: [] };
+  return {
+    kind: "stale",
+    text: `GitHub reports a conflict, but this branch merges with ${c.base} cleanly here. Fetch first: the host may be out of date or your copy of ${c.base} is old. If it still shows after a fetch, a new commit or reopening makes GitHub work it out again.`,
+    commands: [`git fetch origin ${c.base}`, 'git commit --allow-empty -m "Recompute mergeability"'],
+  };
+}

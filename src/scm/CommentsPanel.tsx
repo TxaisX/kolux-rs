@@ -18,6 +18,8 @@ import {
   placeOf,
   reactKind,
   relativeTime,
+  repliable,
+  reviewPrompt,
   sendsOnEnter,
   timeline,
   visibleReview,
@@ -82,6 +84,10 @@ export default function CommentsPanel({ dir, url, visible, extra }: Props) {
   const [replying, setReplying] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [picking, setPicking] = useState<string | null>(null);
+  // GIT-031: threads queued for the agent, and the ones just delivered (waiting for the one combined reply)
+  const [queue, setQueue] = useState<string[]>([]);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState<{ terminal: string; ids: string[] } | null>(null);
   const asking = useRef("");
   asking.current = `${dir}|${url}`;
 
@@ -116,6 +122,41 @@ export default function CommentsPanel({ dir, url, visible, extra }: Props) {
         throw e;
       },
     );
+  };
+
+  const queued = review ? review.threads.filter((t) => queue.includes(t.id) && !t.resolved) : [];
+  const toggleQueue = (id: string) => setQueue((q) => (q.includes(id) ? q.filter((x) => x !== id) : [...q, id]));
+
+  /** Sends the queued comments to the workspace's agent (the orchestration send). Nothing is marked done until it was submitted. */
+  const sendQueued = () => {
+    if (!queued.length || sending) return;
+    setSending(true);
+    setNote(null);
+    invoke<{ terminal: string; receipt: string }>("scm_review_send", { worktree: dir, text: reviewPrompt(queued) })
+      .then((r) => {
+        setSent({ terminal: r.terminal, ids: queued.map((t) => t.id) });
+        setQueue([]);
+      })
+      .catch((e) => setNote(String(e)))
+      .finally(() => setSending(false));
+  };
+
+  /** One reply on every sent thread that can take one, then each is resolved. Stops at the first failure and says which. */
+  const replyAndResolve = async (text: string) => {
+    const mine = (review?.threads ?? []).filter((t) => sent?.ids.includes(t.id));
+    for (const t of mine) {
+      try {
+        const first = t.comments[0]?.db_id;
+        if (first != null) await invoke("scm_review_act", { worktree: dir, url, kind: "reply", id: String(first), text });
+        await invoke("scm_review_act", { worktree: dir, url, kind: "resolve", id: t.id, text: null });
+      } catch (e) {
+        setNote(`Stopped at ${placeOf(t) || "a thread"}: ${String(e)}`);
+        load();
+        throw e;
+      }
+    }
+    setSent(null);
+    load();
   };
 
   const shown = review ? visibleReview(review, hideBots) : null;
@@ -189,6 +230,11 @@ export default function CommentsPanel({ dir, url, visible, extra }: Props) {
         <button className="btn" onClick={() => void act(t.resolved ? "unresolve" : "resolve", t.id).catch(() => {})}>
           {t.resolved ? "Reopen" : "Resolve"}
         </button>
+        {!t.resolved && (
+          <button className="btn" aria-pressed={queue.includes(t.id)} title="Collect this comment to send to the agent with others" onClick={() => toggleQueue(t.id)}>
+            {queue.includes(t.id) ? "Queued" : "Queue for agent"}
+          </button>
+        )}
         {extra?.(t)}
       </div>
       {replying === t.id && t.comments[0]?.db_id != null && (
@@ -240,6 +286,25 @@ export default function CommentsPanel({ dir, url, visible, extra }: Props) {
       </div>
       {adding && <Composer label="Write a comment on the pull request" cancel={() => setAdding(false)} send={(text) => act("comment", "0", text).then(() => setAdding(false))} />}
       {note && <div className="note error">{note}</div>}
+      {queued.length > 0 && (
+        <div className="cm-row cm-queue">
+          <button className="btn" disabled={sending} onClick={sendQueued}>
+            {sending ? "Sending…" : `Send ${queued.length} to agent`}
+          </button>
+          <button className="btn" disabled={sending} onClick={() => setQueue([])}>
+            Clear queue
+          </button>
+        </div>
+      )}
+      {sent && (
+        <div className="cm-queue">
+          <div className="note">
+            Sent {sent.ids.length} comment{sent.ids.length === 1 ? "" : "s"} to {sent.terminal}. When the agent is done, post one reply on those threads and resolve them
+            {review && repliable(review.threads.filter((t) => sent.ids.includes(t.id))).length < sent.ids.length ? " (threads that cannot take a reply are only resolved)" : ""}.
+          </div>
+          <Composer label="Reply posted on each sent thread" cancel={() => setSent(null)} send={replyAndResolve} />
+        </div>
+      )}
       {error ? (
         <div className="note error">The comments could not be read: {error}</div>
       ) : !shown ? (

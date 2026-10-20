@@ -441,6 +441,112 @@ pub async fn scm_review_act(worktree: String, url: String, kind: String, id: Str
     .map_err(|e| e.to_string())?
 }
 
+/// GIT-031: the agent session of the workspace that review comments go to: the newest open
+/// session started in that folder that runs an agent (a plain shell is not one).
+pub fn pick_agent(sessions: &[(String, String, Option<String>)], worktree: &str) -> Result<String, String> {
+    let norm = |p: &str| p.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let want = norm(worktree);
+    let mut agents: Vec<&(String, String, Option<String>)> = sessions.iter().filter(|(_, dir, prog)| prog.is_some() && norm(dir) == want).collect();
+    agents.pop().map(|(h, _, _)| h.clone()).ok_or_else(|| "No agent is running in this workspace. Start one there, or copy the text and paste it into the agent you use.".to_string())
+}
+
+/// What a finished send tells the person: delivered (the agent began its turn or queued the text)
+/// is success; text left in the box or not submitted is a failure, so nothing is marked as sent.
+pub fn delivery_verdict(result: &Result<serde_json::Value, String>) -> Result<String, String> {
+    let v = result.as_ref().map_err(|e| e.clone())?;
+    let receipt = v["receipt"].as_str().unwrap_or("unknown");
+    if v["enterHeld"].as_bool() == Some(true) || receipt == "not_submitted" {
+        return Err("The text reached the agent's box but was not submitted. Press Enter in that terminal, or send it again.".to_string());
+    }
+    if v["delivered"].as_bool() == Some(false) {
+        return Err("The agent did not take the text.".to_string());
+    }
+    Ok(receipt.to_string())
+}
+
+#[derive(Serialize)]
+pub struct Sent {
+    pub terminal: String,
+    pub receipt: String,
+}
+
+/// GIT-031: send text to the workspace's agent through the orchestration send (send-once: a
+/// repeat joins the first), the same path `kolux terminal send` takes. No second terminal writer.
+#[tauri::command]
+pub async fn scm_review_send(app: tauri::AppHandle, worktree: String, text: String) -> Result<Sent, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        let terminals = app.state::<crate::terminal::Terminals>();
+        let terminal = pick_agent(&terminals.sessions(), &worktree)?;
+        let store = app.state::<std::sync::Mutex<crate::state::Store>>();
+        let git = app.state::<crate::git::Git>();
+        let notify = |_: serde_json::Value| {};
+        let front = || -> Result<(), String> { Ok(()) };
+        let ctx = crate::cli::Ctx { claude_config: crate::trust::claude_config_file(), git: &git, store: &store, terminals: &terminals, notify: &notify, front: &front };
+        let req = crate::cli::Request {
+            id: format!("review-send-{terminal}"),
+            token: String::new(),
+            command: "terminal.send".to_string(),
+            cwd: worktree.clone(),
+            args: serde_json::json!({ "terminal": terminal, "text": text, "enter": true }),
+            pane: None,
+            cli: env!("CARGO_PKG_VERSION").to_string(),
+            arrived: None,
+        };
+        let out = crate::cli::dispatch(&ctx, &req).map_err(|f| f.message);
+        let receipt = delivery_verdict(&out)?;
+        Ok(Sent { terminal, receipt })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+pub struct Conflicts {
+    /// conflicts, clean or unknown
+    pub state: String,
+    pub files: Vec<String>,
+    pub base: String,
+    pub note: String,
+    /// the text that asks the workspace's agent to resolve them (only when there are conflicts)
+    pub prompt: Option<String>,
+}
+
+/// GIT-032: what a local trial merge of the branch with the pull request's base says.
+pub fn conflicts_of(c: scm::Clash, base: &str) -> Conflicts {
+    let prompt = if let scm::Clash::Conflict(f) = &c { Some(resolve_prompt(base, f)) } else { None };
+    let (state, files, note) = match c {
+        scm::Clash::Clean => ("clean", Vec::new(), "The branch merges with the base without conflicts here (as of your last fetch).".to_string()),
+        scm::Clash::Conflict(f) => ("conflicts", f, format!("These files conflict with {base}. Fix them before the checks can run and the pull request can merge.")),
+        scm::Clash::Unverifiable(why) => ("unknown", Vec::new(), format!("Kolux could not try the merge: {why}")),
+    };
+    Conflicts { state: state.to_string(), files, base: base.to_string(), note, prompt }
+}
+
+/// GIT-032: the prompt that asks the workspace's agent to resolve the conflicts. The agent merges the base
+/// in itself; Kolux never resolves, commits or pushes for it.
+pub fn resolve_prompt(base: &str, files: &[String]) -> String {
+    let list = if files.is_empty() { String::new() } else { format!(" Files that conflict: {}.", files.join(", ")) };
+    format!("This branch's pull request has merge conflicts with {base}.{list} Merge origin/{base} into this branch, resolve the conflicts keeping the intent of both sides, run the tests, and commit the merge. Do not push; tell me when it is done.")
+}
+
+/// GIT-032: does the branch conflict with the pull request's base? Local trial merge, no push, no change.
+#[tauri::command]
+pub async fn scm_pr_conflicts(worktree: String, url: String) -> Result<Conflicts, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        parts_of(&url)?;
+        let dir = Path::new(&worktree);
+        let base = scm::gh_run(&scm::gh_program()?, dir, &["pr", "view", &url, "--json", "baseRefName", "--jq", ".baseRefName"], None)?.trim().to_string();
+        if base.is_empty() {
+            return Err("GitHub did not name the pull request's base branch".to_string());
+        }
+        let c = scm::clash(dir, "HEAD", &format!("origin/{base}"));
+        Ok(conflicts_of(c, &base))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,5 +702,73 @@ mod tests {
         std::fs::write(dir.join(".github/pull_request_template.md"), "## What\n").unwrap();
         assert_eq!(find_template(&dir).as_deref(), Some("## What\n"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git_031_the_review_text_goes_to_the_newest_agent_of_the_workspace() {
+        let s = vec![
+            ("term-1".to_string(), r"G:\w\a".to_string(), Some("claude".to_string())),
+            ("term-2".to_string(), "G:/w/a/".to_string(), None),
+            ("term-3".to_string(), "g:/W/A".to_string(), Some("codex".to_string())),
+            ("term-4".to_string(), "G:/w/b".to_string(), Some("claude".to_string())),
+        ];
+        assert_eq!(pick_agent(&s, "G:/w/a").unwrap(), "term-3");
+        assert_eq!(pick_agent(&s, "G:/w/b").unwrap(), "term-4");
+        let none = pick_agent(&s, "G:/w/c").unwrap_err();
+        assert!(none.starts_with("No agent is running"), "{none}");
+        // a plain shell alone is not an agent
+        assert!(pick_agent(&[("term-2".to_string(), "G:/w/a".to_string(), None)], "G:/w/a").is_err());
+    }
+
+    #[test]
+    fn git_031_only_a_submitted_send_counts_as_sent() {
+        use serde_json::json;
+        assert_eq!(delivery_verdict(&Ok(json!({"delivered": true, "receipt": "turn_began"}))).unwrap(), "turn_began");
+        assert_eq!(delivery_verdict(&Ok(json!({"delivered": true, "receipt": "queued"}))).unwrap(), "queued");
+        assert!(delivery_verdict(&Ok(json!({"delivered": true, "receipt": "not_submitted"}))).is_err());
+        assert!(delivery_verdict(&Ok(json!({"delivered": true, "enterHeld": true, "receipt": "unknown"}))).is_err());
+        assert!(delivery_verdict(&Ok(json!({"delivered": false}))).is_err());
+        assert_eq!(delivery_verdict(&Err("no terminal".to_string())).unwrap_err(), "no terminal");
+    }
+
+    #[test]
+    fn git_031_a_send_to_a_missing_terminal_fails_in_words() {
+        let dir = std::env::temp_dir().join(format!("kolux-review-send-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = crate::git::Git::detect().unwrap();
+        let store = std::sync::Mutex::new(crate::state::Store::open(&dir.join("data")).unwrap());
+        let terminals = crate::terminal::Terminals::default();
+        let notify = |_: serde_json::Value| {};
+        let front = || -> Result<(), String> { Ok(()) };
+        let ctx = crate::cli::Ctx { claude_config: dir.join(".claude.json"), git: &git, store: &store, terminals: &terminals, notify: &notify, front: &front };
+        let req = crate::cli::Request {
+            id: "t".into(),
+            token: String::new(),
+            command: "terminal.send".into(),
+            cwd: dir.to_string_lossy().into_owned(),
+            args: serde_json::json!({"terminal": "term-9", "text": "hello", "enter": true}),
+            pane: None,
+            cli: env!("CARGO_PKG_VERSION").to_string(),
+            arrived: None,
+        };
+        let out = crate::cli::dispatch(&ctx, &req).map_err(|f| f.message);
+        let err = delivery_verdict(&out).unwrap_err();
+        assert!(!err.is_empty(), "a missing terminal must say why");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git_032_conflicts_are_listed_and_the_resolve_prompt_names_them() {
+        let c = conflicts_of(scm::Clash::Conflict(vec!["a.rs".into(), "b/c.ts".into()]), "main");
+        assert_eq!(c.state, "conflicts");
+        assert_eq!(c.files, vec!["a.rs", "b/c.ts"]);
+        assert!(c.note.contains("before the checks can run"), "{}", c.note);
+        assert_eq!(conflicts_of(scm::Clash::Clean, "main").state, "clean");
+        let u = conflicts_of(scm::Clash::Unverifiable("no git".into()), "main");
+        assert_eq!((u.state.as_str(), u.note.contains("no git")), ("unknown", true));
+        let p = c.prompt.clone().unwrap();
+        assert!(conflicts_of(scm::Clash::Clean, "main").prompt.is_none());
+        assert!(p.contains("a.rs, b/c.ts") && p.contains("origin/main") && p.contains("Do not push"), "{p}");
+        assert!(!resolve_prompt("dev", &[]).contains("Files that conflict"));
     }
 }

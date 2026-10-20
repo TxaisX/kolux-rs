@@ -9,6 +9,7 @@ import { Refresh } from "../chrome/icons";
 import { openInBrowser } from "../browser/BrowserPane";
 import { useSettings } from "../settings/useSettings";
 import CommentsPanel from "./CommentsPanel";
+import ConflictPanel from "./ConflictPanel";
 import PrStart from "./PrStart";
 import { reviewHint, reviewWhere } from "./startPr";
 import { CHECKS_POLL_MS, checksSummary, reuseNoPr, stillRunning, type PrChecks } from "./checks";
@@ -122,7 +123,7 @@ ${reviewHint(inKolux)}`.trim()}
                 {reviewHint(inKolux)}
               </span>
             </div>
-            {data.conflict && <div className="note warn">This pull request has merge conflicts with its base branch; it cannot merge until they are resolved.</div>}
+            {data.conflict && <ConflictPanel dir={dir} url={pr.url} />}
             <div className="sb-hint checks-sum">{checksSummary(data.checks)}</div>
             {note && <div className="note">{note}</div>}
             {(() => {

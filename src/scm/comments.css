@@ -26,3 +26,7 @@
 .cm-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .cm-composer { display: flex; flex-direction: column; gap: 4px; margin: 6px 8px; }
 .cm-composer textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; resize: vertical; }
+
+.cm-queue { margin: 6px 8px; }
+.conflict-files { margin: 4px 0; padding-left: 18px; font-size: 12px; overflow-wrap: anywhere; }
+.conflict-cmds { margin: 4px 0; font-size: 12px; overflow-x: auto; }
