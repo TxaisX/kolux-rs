@@ -33,7 +33,7 @@ import { createAutosave, covers, movingNow, prefsReader, type Autosave } from ".
 import { drafts, restoreFrom, worktreeOf } from "./drafts";
 import { confirmed } from "./fileMoved";
 import { richChange, splitFront } from "./frontMatter";
-import { bannerUp, beginSave, canUndo, checkOnce, endSave, forget, keep, POLL_MS, readFresh, reloadNow, remember, setBanner as markBanner, UNDO_TOAST_MS, type Io, type Stamp, type UndoEntry } from "./diskChange";
+import { bannerUp, beginSave, canUndo, checkOnce, endSave, forget, holdRestored, keep, POLL_MS, readFresh, reloadNow, remember, setBanner as markBanner, UNDO_TOAST_MS, type Io, type Stamp, type UndoEntry } from "./diskChange";
 import { CompareView, DiskBanner, UndoToast } from "./DiskBanner";
 import { isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
 import { domPick, noteDraft, selections, type Note } from "./notes";
@@ -287,7 +287,10 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
         if (textOf(path) === text) remember(path, loaded);
         setNoteText(shown);
         // EDIT-004: a draft over a disk copy that moved on comes back with the banner up.
-        if (draftMoved) setMoved({ stamp: loaded });
+        if (draftMoved) {
+          holdRestored(path); // T-073-d: the hold is up before autosave.resume() below can fire
+          setMoved({ stamp: loaded });
+        }
         // EDIT-032: the file is read at its new place; autosave may write again.
         confirmed(path);
         if (shown !== text) auto.resume();
