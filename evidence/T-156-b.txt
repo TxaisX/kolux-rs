@@ -82,3 +82,19 @@ LIVE PROOF PENDING (batched), on a merged build with all five patches applied
    `sk_live_` + the last four only; `--password x` shows [hidden].
 5. Reset this project's rules: its switches and rules return to the all-projects state; Reset rules for all projects:
    built-ins back on, global custom rules gone, the project's own still there. Clear empties the attempts list.
+
+2026-10-20 batch 8 (lane/hooks from 473eb215, Opus): acceptance met, wiring applied
+- Txais 2026-10-20: the own rules switch on once the attempts log masks secrets, then the wiring applies with no further ask.
+- protected_custom.rs: Attempts::paused masks the command, the rule text (a nameless rule shows its pattern) and the folder
+  through protected::mask before keeping them; Attempts::list masks all three again on the way to the page (the mask is idempotent).
+- New test t156b_the_attempts_list_masks_tokens_env_lines_pem_blocks_url_credentials_and_auth_headers: GitHub, Anthropic, AWS and
+  Slack token shapes, a .env heredoc, an RSA private key block, postgres:// and https:// credentials, Authorization Bearer and
+  Basic headers; each checked in the kept command and in the JSON the page receives; Stripe keeps sk_live_....WXYZ; rule text and
+  folder masked; one case end to end through listen(). Fixtures are the mask tests' own strings.
+- hooks.rs: evidence/hooks-T-156-b-hooks.rs.patch applied in the lane (reply_body asks through protected_custom::listen, so the
+  user's own rules, per-project scopes and the attempts list are live). Coordinator patch left: evidence/hooks-T-156-b-2-lib.rs.patch
+  (drops the #[allow(dead_code)] on mod protected_custom; clippy -D warnings 0 with and without it).
+- Gates (logs G:/Temp/hooks-v3-logs/b8-t156-*): build 0, clippy 0 (also 0 with the lib.rs patch), protected 44/0,
+  agent_hooks 102/4, hooks 121/4 (the 4 known scratch-HOME reds: t_134_b, t_152_1, t_152_b_2, vendors fix1_apply).
+- Still open from the PLAN line: the pipe-reader / brace-group / separator-inside-launcher leaks listed there (and the over-masking
+  cases) stay on the after-list; the five classes above are covered.

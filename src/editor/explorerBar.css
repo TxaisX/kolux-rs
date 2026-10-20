@@ -1,0 +1,3 @@
+/* VIEW-059 (T-224-b): the Explorer's add-project row, and a toolbar button that is busy. */
+.add-project-row { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.explorer-head .ib:disabled { opacity: 0.6; cursor: default; }
