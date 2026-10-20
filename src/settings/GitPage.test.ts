@@ -37,3 +37,18 @@ test("T-228-d: the writer picker lists the agents, shows model and effort for a 
   const off = view({ autoBranchName: false, autoBranchChosen: true });
   expect(off).not.toMatch(/aria-label="Name the branch after the work" checked=""/);
 });
+
+test("T-116-b: renaming branches after the work is on by default and switches off", () => {
+  const on = view({});
+  expect(on).toMatch(/aria-label="Rename branches after the work"[^>]*checked=""/);
+  expect(on).toContain("is renamed to a short description");
+  const off = view({ renameBranches: false });
+  expect(off).not.toMatch(/aria-label="Rename branches after the work"[^>]*checked=""/);
+  expect(off).toContain("keeps the branch name Kolux suggested");
+  expect(view({ renameBranches: true })).toContain("is renamed to a short description");
+});
+
+test("T-116-b: updating the local base first stays off by default", () => {
+  expect(view({})).not.toMatch(/aria-label="Refresh the base first"[^>]*checked=""/);
+  expect(view({ refreshBaseFirst: true })).toMatch(/aria-label="Refresh the base first"[^>]*checked=""/);
+});

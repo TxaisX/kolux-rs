@@ -257,6 +257,10 @@ pub fn save_automation(store: &Store, input: &Value, now: i64) -> Result<Value, 
         true => all[i]["precheck"].as_str().unwrap_or_default().to_string(),
         false => text("precheck"),
     };
+    let reuse = input["reuseSession"].as_bool().unwrap_or(mode == "existing" && all[i]["reuseSession"] == true);
+    if reuse && mode != "existing" {
+        return Err("a session can only be kept across runs in an existing worktree".into());
+    }
     let row = &mut all[i];
     let enabled = input["enabled"].as_bool().unwrap_or(row["enabled"].as_bool().unwrap_or(true));
     for (k, v) in [
@@ -270,6 +274,9 @@ pub fn save_automation(store: &Store, input: &Value, now: i64) -> Result<Value, 
         ("baseBranch", json!(text("baseBranch"))),
         // AUTO-010: only a new worktree runs the project setup, and only when chosen.
         ("runSetup", json!(mode == "new-per-run" && input["runSetup"].as_bool().unwrap_or(false))),
+        // AUTO-009: continuing in the last run's session is only for an existing worktree; left out
+        // on an edit keeps the old choice.
+        ("reuseSession", json!(reuse)),
         ("trigger", timing["trigger"].clone()),
         ("nextRunAt", timing["nextRunAt"].clone()),
         ("missedRunGraceMinutes", json!(grace)),
@@ -370,6 +377,76 @@ pub fn on_poll(app: &tauri::AppHandle, polled: &[crate::scm::PolledPr]) {
         if let Err(e) = launch_for(app, |l| on_event(l, "pr-opened", &path, &line, now_ms() as i64)) {
             eprintln!("automations event: {e}");
         }
+    }
+}
+
+/// AUTO-004 (T-085-d): the saved checks state of each open pull request, `<folder>#<number>` to the
+/// checks word (GIT-043: passing, running or failing). It lives in the store so that a restart
+/// does not see "failing" as a new state and fire a second time.
+const CHECKS_SEEN_KEY: &str = "automations.checksSeen";
+
+fn load_checks_seen(store: &Store) -> std::collections::HashMap<String, String> {
+    store.get(CHECKS_SEEN_KEY).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+/// AUTO-004 (T-085-d): the open pull requests whose checks went from pending (or passing) to
+/// failing since the last round. `checks` is the poll round's checks word per folder (GIT-043's
+/// words, from the scm module). The first state learned about a pull request is only a starting
+/// point; an unresolved or missing reading is no news and keeps the last known state; red checks
+/// that stay red do not fire again; a pull request that closed or was replaced is forgotten.
+pub fn checks_failed(seen: &mut std::collections::HashMap<String, String>, polled: &[crate::scm::PolledPr], checks: &std::collections::HashMap<String, String>) -> Vec<(String, crate::scm::Pr)> {
+    let mut out = Vec::new();
+    for p in polled.iter().filter(|p| p.error.is_none()) {
+        let folder = projects::name_key(&p.path);
+        let open = p.pr.as_ref().filter(|pr| pr.state.eq_ignore_ascii_case("open"));
+        let current = open.map(|pr| format!("{folder}#{}", pr.number));
+        seen.retain(|k, _| !(k.rsplit_once('#').is_some_and(|(f, _)| f == folder) && Some(k) != current.as_ref()));
+        let (Some(pr), Some(key)) = (open, current) else { continue };
+        let Some(word) = checks.get(&p.path).map(String::as_str).filter(|w| matches!(*w, "passing" | "running" | "failing")) else { continue };
+        if seen.insert(key, word.to_string()).is_some_and(|before| before != "failing") && word == "failing" {
+            out.push((p.path.clone(), pr.clone()));
+        }
+    }
+    out
+}
+
+/// AUTO-004 (T-085-d): one round's checks readings through the saved state; returns what to fire.
+pub fn checks_round(store: &Store, polled: &[crate::scm::PolledPr], checks: &std::collections::HashMap<String, String>) -> Result<Vec<(String, crate::scm::Pr)>, String> {
+    let mut seen = load_checks_seen(store);
+    let before = seen.clone();
+    let fired = checks_failed(&mut seen, polled, checks);
+    if seen != before {
+        store.set(CHECKS_SEEN_KEY, &serde_json::to_string(&seen).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    }
+    Ok(fired)
+}
+
+/// AUTO-004 (T-085-d): is any switched-on automation listening for this event? The poll looks up
+/// checks only while one is, so no automation means no extra GitHub calls.
+pub fn listens(app: &tauri::AppHandle, event: &str) -> bool {
+    launch_for(app, |l| {
+        let store = l.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        load(&store, KEY).unwrap_or_default().iter().any(|a| a["enabled"] == true && a["trigger"]["kind"] == "event" && a["trigger"]["event"] == event)
+    })
+}
+
+/// AUTO-004 (T-085-d): fed every poll round with the checks word of each open pull request, so a
+/// pull request whose checks just failed starts the automations listening for "checks failed".
+pub fn on_checks(app: &tauri::AppHandle, polled: &[crate::scm::PolledPr], checks: &std::collections::HashMap<String, String>) {
+    let fired = launch_for(app, |l| {
+        let store = l.store.lock().map_err(|e| e.to_string())?;
+        checks_round(&store, polled, checks)
+    });
+    match fired {
+        Ok(list) => {
+            for (path, pr) in list {
+                let line = format!("Event: checks failed on pull request #{} from {}: {} {}", pr.number, pr.head.as_deref().unwrap_or("its branch"), pr.title.as_deref().unwrap_or("(no title)"), pr.url);
+                if let Err(e) = launch_for(app, |l| on_event(l, "checks-failed", &path, &line, now_ms() as i64)) {
+                    eprintln!("automations event: {e}");
+                }
+            }
+        }
+        Err(e) => eprintln!("automations event: {e}"),
     }
 }
 
@@ -742,6 +819,7 @@ pub fn follow(app: &tauri::AppHandle, f: impl FnOnce(&Store) -> Result<Option<St
     match moved {
         Ok(Some(id)) => {
             keep_screen(app, &state, &id);
+            keep_said(&state, &id);
             drop(app.emit(EVENT, json!({ "runId": id })))
         }
         Ok(None) => {}
@@ -773,10 +851,16 @@ pub fn screen_text(read: &crate::terminal::Read) -> (String, bool) {
     while kept.last().is_some_and(String::is_empty) {
         kept.pop();
     }
-    let text = kept.join("\n");
+    let (text, cut) = cap_tail(kept.join("\n"));
+    (text, cut || read.dropped || read.more)
+}
+
+/// The size limit: past it only the most recent text is kept, from a whole line. Returns the text
+/// and whether anything was left out.
+fn cap_tail(text: String) -> (String, bool) {
     let n = text.chars().count();
     if n <= RUN_OUTPUT_CHARS {
-        return (text, read.dropped || read.more);
+        return (text, false);
     }
     let tail: String = text.chars().skip(n - RUN_OUTPUT_CHARS).collect();
     let tail = match tail.find('\n') {
@@ -784,6 +868,31 @@ pub fn screen_text(read: &crate::terminal::Read) -> (String, bool) {
         None => tail,
     };
     (tail, true)
+}
+
+/// T-140-b: what the agent itself said, from its transcript lines (Claude's JSON lines, Codex's
+/// rollout): the assistant's text blocks in order, a repeat of the block just before it dropped,
+/// tool calls, thinking, side chains and the user's own turns left out, under the same size limit.
+pub fn transcript_text(agent: &str, lines: &[String]) -> (String, bool) {
+    let mut said: Vec<String> = Vec::new();
+    for v in lines.iter().filter_map(|l| serde_json::from_str::<Value>(l).ok()) {
+        let (content, kinds) = match agent {
+            "codex" if v["type"] == "response_item" && v["payload"]["type"] == "message" && v["payload"]["role"] == "assistant" => (&v["payload"]["content"], ["output_text", "text"]),
+            "claude" | "openclaude" if v["type"] == "assistant" && v["isSidechain"] != true && v["isMeta"] != true => (&v["message"]["content"], ["text", "text"]),
+            _ => continue,
+        };
+        let blocks: Vec<&str> = match content {
+            Value::String(t) => vec![t.as_str()],
+            Value::Array(a) => a.iter().filter(|b| b["type"].as_str().is_some_and(|t| kinds.contains(&t))).filter_map(|b| b["text"].as_str()).collect(),
+            _ => Vec::new(),
+        };
+        for t in blocks.into_iter().map(str::trim).filter(|t| !t.is_empty()) {
+            if said.last().is_none_or(|p| p != t) {
+                said.push(t.to_string());
+            }
+        }
+    }
+    cap_tail(said.join("\n\n"))
 }
 
 /// AUTO-014: run `run_id`, now over, keeps `text` as its saved output, once: a run that already
@@ -805,7 +914,7 @@ pub fn keep_output(store: &Store, run_id: &str, text: &str, cut: bool) -> Result
 }
 
 /// The run that just moved, if it is over and has a pane still open, saves that pane's text. A pane
-/// that already closed has nothing left to read (T-140-b keeps its text through the exit).
+/// that already closed has nothing left to read (the exit keeps its text through `keep_output`).
 fn keep_screen(app: &tauri::AppHandle, state: &Mutex<Store>, run_id: &str) {
     use tauri::Manager;
     let pane = state
@@ -822,6 +931,62 @@ fn keep_screen(app: &tauri::AppHandle, state: &Mutex<Store>, run_id: &str) {
     if let Ok(s) = state.lock() {
         if let Err(e) = keep_output(&s, run_id, &text, cut) {
             eprintln!("automation run output: {e}");
+        }
+    }
+}
+
+/// T-140-b: run `run_id`, now over, keeps what the agent said (its transcript) in place of the
+/// pane's text, which stands in only when there is no transcript. A precheck's output or text that
+/// is already the transcript is left alone.
+pub fn keep_transcript(store: &Store, run_id: &str, text: &str, cut: bool) -> Result<Option<String>, String> {
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+    let mut runs = load(store, RUNS_KEY)?;
+    let open = |r: &Value| output_open(r) || r["outputFrom"] == "screen";
+    let Some(r) = runs.iter_mut().find(|r| r["id"] == run_id && !in_progress(r) && open(r)) else { return Ok(None) };
+    if let Some(row) = r.as_object_mut() {
+        row.insert("output".into(), json!(text));
+        row.insert("outputFrom".into(), json!("transcript"));
+        row.insert("outputCut".into(), json!(cut));
+    }
+    stash_output(store, r)?;
+    save(store, RUNS_KEY, &runs)?;
+    Ok(Some(run_id.to_string()))
+}
+
+/// Where a finished run's agent wrote its transcript: the file its hooks last reported while the
+/// pane lived, else the newest one its agent started in the run's folder since the run began.
+fn transcript_path(run: &Value) -> Option<std::path::PathBuf> {
+    let agent = run["provider"].as_str()?;
+    let pane = ["paneKey", "lastPaneKey"].iter().find_map(|k| run[*k].as_u64()).and_then(|p| u32::try_from(p).ok());
+    if let Some(p) = pane.and_then(crate::status::transcript_of) {
+        return Some(p.into());
+    }
+    let since = std::time::UNIX_EPOCH + std::time::Duration::from_millis(run["dispatchedAt"].as_u64()?);
+    let user_home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(std::path::PathBuf::from);
+    let homes = crate::chat::homes(agent, &[], |k| std::env::var(k).ok(), user_home);
+    crate::chat::find(agent, &homes, run["worktree"].as_str()?, since)
+}
+
+/// The run that just moved, if it is over, saves what its agent said when the transcript can be
+/// found and read. Runs after the pane's text was kept, which it then replaces.
+// ponytail: reads the transcript (at most its newest 8 MB) on the thread that moved the run; a
+// worker thread if that ever shows as a stall.
+fn keep_said(state: &Mutex<Store>, run_id: &str) {
+    let run = state
+        .lock()
+        .ok()
+        .and_then(|s| load(&s, RUNS_KEY).ok())
+        .and_then(|runs| runs.into_iter().find(|r| r["id"] == run_id))
+        .filter(|r| !in_progress(r) && (output_open(r) || r["outputFrom"] == "screen"));
+    let Some(run) = run else { return };
+    let Some(path) = transcript_path(&run) else { return };
+    let Ok((lines, _)) = crate::chat::Tail::new(path).read() else { return };
+    let (text, cut) = transcript_text(run["provider"].as_str().unwrap_or_default(), &lines);
+    if let Ok(s) = state.lock() {
+        if let Err(e) = keep_transcript(&s, run_id, &text, cut) {
+            eprintln!("automation run transcript: {e}");
         }
     }
 }
@@ -897,6 +1062,65 @@ pub struct Launch<'a> {
     pub notify: &'a dyn Fn(&str, Value),
 }
 
+/// What a run needs from the open terminals to continue in a session an earlier run left behind.
+pub trait Panes {
+    /// Is `terminal` open, still the very same pane `pane_key`, with its agent idle as its hooks tell?
+    fn idle(&self, terminal: u32, pane_key: Option<u32>) -> bool;
+    /// Types `text` into the agent in `terminal` and presses Enter.
+    fn send(&self, terminal: u32, text: &str) -> Result<(), String>;
+}
+
+/// The terminals the app runs, set when the clock starts; a run that cannot reach them (a test, or
+/// the app not up yet) opens its own session.
+static PANES: Mutex<Option<std::sync::Arc<dyn Panes + Send + Sync>>> = Mutex::new(None);
+
+pub fn use_panes(p: std::sync::Arc<dyn Panes + Send + Sync>) {
+    if let Ok(mut g) = PANES.lock() {
+        *g = Some(p);
+    }
+}
+
+fn panes() -> Option<std::sync::Arc<dyn Panes + Send + Sync>> {
+    PANES.lock().ok().and_then(|g| g.clone())
+}
+
+impl Panes for tauri::AppHandle {
+    fn idle(&self, terminal: u32, pane_key: Option<u32>) -> bool {
+        tauri::Manager::try_state::<crate::terminal::Terminals>(self).is_some_and(|t| t.idle(terminal, pane_key))
+    }
+    fn send(&self, terminal: u32, text: &str) -> Result<(), String> {
+        tauri::Manager::try_state::<crate::terminal::Terminals>(self).ok_or("no terminals")?.send(terminal, text)
+    }
+}
+
+impl Panes for crate::terminal::Terminals {
+    fn idle(&self, terminal: u32, pane_key: Option<u32>) -> bool {
+        pane_key.is_some_and(|p| self.attached(p) == Some(terminal)) && crate::status::state_of(terminal) == Some("done")
+    }
+    // ponytail: the pause between the pasted prompt and Enter blocks the caller for a quarter of a
+    // second; a thread if sends ever come in bunches.
+    fn send(&self, terminal: u32, text: &str) -> Result<(), String> {
+        self.write(terminal, &format!("\u{1b}[200~{}\u{1b}[201~", text.replace("\r\n", "\n")))?;
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        self.write(terminal, "\r")
+    }
+}
+
+/// AUTO-009: the session this run may continue in: the automation asks for reuse (existing
+/// worktree only), its newest run that had a pane was in this same worktree with this same agent,
+/// is over, no live run holds that pane, and the pane is still open, still the same pane and idle.
+fn reusable(store: &Store, auto: &Value, folder: &str, panes: &dyn Panes) -> Option<(u32, u32)> {
+    if auto["reuseSession"] != true || auto["workspaceMode"] != "existing" {
+        return None;
+    }
+    let runs = load(store, RUNS_KEY).ok()?;
+    let last = runs.iter().filter(|r| r["automationId"] == auto["id"] && r["terminal"].is_u64()).max_by_key(|r| r["at"].as_u64().unwrap_or(0))?;
+    let (terminal, pane) = (u32::try_from(last["terminal"].as_u64()?).ok()?, u32::try_from(last["paneKey"].as_u64()?).ok()?);
+    let same = !in_progress(last) && last["provider"] == auto["provider"] && last["worktree"].as_str().is_some_and(|w| same_dir(w, folder));
+    let held = runs.iter().any(|r| in_progress(r) && r["terminal"] == terminal);
+    (same && !held && panes.idle(terminal, Some(pane))).then_some((terminal, pane))
+}
+
 /// AUTO-019 Run now: begins a run at once whatever the timetable or the switch says (a paused
 /// automation runs too) and logs it as a manual run. The run is queued (`pending`) first, then
 /// placed and handed to the window as a background tab (`dispatched`, AUTO-011), or ends as
@@ -963,7 +1187,16 @@ fn run_with(l: &Launch, id: &str, trigger: &str, event: Option<&str>) -> Result<
     (l.notify)(EVENT, json!({ "runId": run_id }));
     let outcome = place_and_start(l, &auto, &run_id);
     let fields = match outcome {
-        Ok((wt, project_id)) => json!({ "status": "dispatched", "provider": auto["provider"], "dispatchedAt": now_ms(), "worktree": wt.path, "worktreeName": wt.name.clone().or(wt.branch.clone()).unwrap_or_else(|| folder_name(&wt.path)), "projectId": project_id }),
+        Ok((wt, project_id, session)) => {
+            let mut fields = json!({ "status": "dispatched", "provider": auto["provider"], "dispatchedAt": now_ms(), "worktree": wt.path, "worktreeName": wt.name.clone().or(wt.branch.clone()).unwrap_or_else(|| folder_name(&wt.path)), "projectId": project_id });
+            // AUTO-009: a run that went into the earlier session holds that pane from the start.
+            if let Some((terminal, pane)) = session {
+                fields["terminal"] = json!(terminal);
+                fields["paneKey"] = json!(pane);
+                fields["reused"] = json!(true);
+            }
+            fields
+        }
         Err(Stop::Skipped(why)) => json!({ "status": "skipped", "cause": "unavailable", "detail": why }),
         Err(Stop::Failed(why)) => json!({ "status": "failed", "detail": why }),
     };
@@ -1066,8 +1299,13 @@ fn created_event(project_id: &str, wt: &Worktree, auto: &Value) -> Value {
     json!({ "kind": "created", "projectId": project_id, "worktree": { "path": wt.path, "branch": wt.branch, "name": wt.name, "isMain": false }, "agent": Value::Null, "prompt": "", "activate": false, "setup": setup })
 }
 
+/// Where a run was placed: its worktree, its project, and the open session (terminal, pane) it went into, if any.
+type Placed = (Worktree, String, Option<(u32, u32)>);
+
 /// Finds or makes the run's workspace and asks the window to start the agent there.
-fn place_and_start(l: &Launch, auto: &Value, run_id: &str) -> Result<(Worktree, String), Stop> {
+/// AUTO-009: when the automation keeps one session and the last run's is free, the prompt is typed
+/// into it instead.
+fn place_and_start(l: &Launch, auto: &Value, run_id: &str) -> Result<Placed, Stop> {
     let agent = auto["provider"].as_str().unwrap_or_default().to_string();
     if !(l.installed)(&agent) {
         return Err(Stop::Failed(format!("{agent} is not installed")));
@@ -1101,8 +1339,14 @@ fn place_and_start(l: &Launch, auto: &Value, run_id: &str) -> Result<(Worktree, 
     if new_per_run {
         (l.notify)(crate::cli::EVENT, created_event(&project.id, &wt, auto));
     }
-    (l.notify)(crate::cli::EVENT, json!({ "kind": "start", "path": wt.path, "branch": wt.branch, "agent": agent, "prompt": auto["prompt"], "extra": [], "title": auto["name"], "runId": run_id }));
-    Ok((wt, project.id))
+    // AUTO-009: the last run's session, when it is free, takes the prompt instead of a new tab.
+    let prompt = auto["prompt"].as_str().unwrap_or_default();
+    let panes = panes();
+    let session = panes.as_deref().and_then(|ps| l.store.lock().ok().and_then(|store| reusable(&store, auto, &wt.path, ps)).filter(|(t, _)| ps.send(*t, prompt).is_ok()));
+    if session.is_none() {
+        (l.notify)(crate::cli::EVENT, json!({ "kind": "start", "path": wt.path, "branch": wt.branch, "agent": agent, "prompt": auto["prompt"], "extra": [], "title": auto["name"], "runId": run_id }));
+    }
+    Ok((wt, project.id, session))
 }
 
 // ---------------------------------------------------------------- the window's commands
@@ -1149,6 +1393,7 @@ fn launch_for<R>(app: &tauri::AppHandle, f: impl FnOnce(&Launch) -> R) -> R {
 /// Starts the clock: it looks for due automations about once a minute (every 30 seconds, so a run
 /// begins within its minute) for as long as the app runs.
 pub fn start_clock(app: tauri::AppHandle) {
+    use_panes(std::sync::Arc::new(app.clone()));
     std::thread::spawn(move || {
         // AUTO-021: a history saved too large is cut down as Kolux loads it.
         if let Err(e) = launch_for(&app, |l| tidy(&*l.store.lock().map_err(|e| e.to_string())?, now_ms())) {
@@ -1355,6 +1600,107 @@ mod tests {
         claim(&s, 11, Some(110), &repo.to_string_lossy(), Some("claude")).unwrap();
         assert!(own_pane(&load(&s, RUNS_KEY).unwrap(), Some(11), 110));
         drop(s);
+        drop(l);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn checked(pairs: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+        pairs.iter().map(|(p, w)| (p.to_string(), w.to_string())).collect()
+    }
+
+    #[test]
+    fn t085d_checks_failed_fires_once_on_the_step_into_failing_and_never_on_the_rest() {
+        let mut seen = std::collections::HashMap::new();
+        let round = |seen: &mut std::collections::HashMap<String, String>, word: Option<&str>| {
+            let checks = word.map(|w| checked(&[("C:/a", w)])).unwrap_or_default();
+            checks_failed(seen, &[polled("C:/a", Some("OPEN"))], &checks).len()
+        };
+        // The first state learned is a starting point, even a red one.
+        assert_eq!(round(&mut seen, Some("running")), 0);
+        // Pending to failing fires once; red checks that stay red do not fire again.
+        assert_eq!(round(&mut seen, Some("failing")), 1);
+        assert_eq!(round(&mut seen, Some("failing")), 0);
+        // An unknown or absent reading is no news: it neither fires nor forgets the red state.
+        assert_eq!(round(&mut seen, Some("unresolved")), 0);
+        assert_eq!(round(&mut seen, None), 0);
+        assert_eq!(round(&mut seen, Some("failing")), 0);
+        // Red to running to red (a new push failing again) fires again; running to passing never does.
+        assert_eq!(round(&mut seen, Some("running")), 0);
+        assert_eq!(round(&mut seen, Some("failing")), 1);
+        assert_eq!(round(&mut seen, Some("running")), 0);
+        assert_eq!(round(&mut seen, Some("passing")), 0);
+        // Passing to failing fires.
+        assert_eq!(round(&mut seen, Some("failing")), 1);
+        // Starting on red never fires; a closed pull request is forgotten, and a failed lookup is no news.
+        let mut fresh = std::collections::HashMap::new();
+        assert_eq!(round(&mut fresh, Some("failing")), 0);
+        assert_eq!(checks_failed(&mut seen, &[polled("C:/a", Some("CLOSED"))], &checked(&[("C:/a", "failing")])).len(), 0);
+        assert!(seen.is_empty());
+        let mut e = polled("C:/a", Some("OPEN"));
+        e.error = Some("rate limited".into());
+        assert_eq!(checks_failed(&mut seen, &[e], &checked(&[("C:/a", "failing")])).len(), 0);
+        assert!(seen.is_empty());
+        // The fired pull request is the one the poll found, under the folder the poll named.
+        let mut s2 = std::collections::HashMap::new();
+        checks_failed(&mut s2, &[polled("C:/b", Some("OPEN"))], &checked(&[("C:/b", "passing")]));
+        let fired = checks_failed(&mut s2, &[polled("C:/b", Some("OPEN"))], &checked(&[("C:/b", "failing")]));
+        assert_eq!(fired.iter().map(|(p, pr)| (p.as_str(), pr.number)).collect::<Vec<_>>(), [("C:/b", 7)]);
+    }
+
+    #[test]
+    fn t085d_a_restart_keeps_the_last_checks_state_so_red_checks_do_not_fire_again() {
+        let dir = temp("t085d");
+        let store = Store::open(&dir.join("db")).unwrap();
+        let open = [polled("C:/a", Some("OPEN"))];
+        assert!(checks_round(&store, &open, &checked(&[("C:/a", "running")])).unwrap().is_empty());
+        assert_eq!(checks_round(&store, &open, &checked(&[("C:/a", "failing")])).unwrap().len(), 1);
+        drop(store);
+        // Kolux restarts: the saved state is read back, so the same red state is no news.
+        let store = Store::open(&dir.join("db")).unwrap();
+        assert!(checks_round(&store, &open, &checked(&[("C:/a", "failing")])).unwrap().is_empty());
+        // A pull request that moved on while Kolux was shut, red again after green, still fires.
+        assert!(checks_round(&store, &open, &checked(&[("C:/a", "passing")])).unwrap().is_empty());
+        drop(store);
+        let store = Store::open(&dir.join("db")).unwrap();
+        assert_eq!(checks_round(&store, &open, &checked(&[("C:/a", "failing")])).unwrap().len(), 1);
+        // A different pull request on the same folder starts afresh.
+        let mut next = polled("C:/a", Some("OPEN"));
+        next.pr.as_mut().unwrap().number = 8;
+        assert!(checks_round(&store, &[next], &checked(&[("C:/a", "failing")])).unwrap().is_empty());
+        assert_eq!(load_checks_seen(&store).len(), 1);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn t085d_a_checks_failure_in_a_watched_worktree_starts_the_listening_automation_only() {
+        let dir = temp("t085dr");
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        for args in [&["init", "-q", "-b", "main"][..], &["config", "user.email", "t@example.com"], &["config", "user.name", "t"], &["commit", "-q", "--allow-empty", "-m", "first"]] {
+            assert!(std::process::Command::new("git").args(args).current_dir(&repo).status().unwrap().success());
+        }
+        let wt = dir.join("feat");
+        assert!(std::process::Command::new("git").args(["worktree", "add", "-q", "-b", "feat"]).arg(&wt).current_dir(&repo).status().unwrap().success());
+        let store = Mutex::new(Store::open(&dir.join("db")).unwrap());
+        {
+            let s = store.lock().unwrap();
+            s.set("projects", &json!([{ "id": "p1", "name": "repo", "path": repo.to_string_lossy() }]).to_string()).unwrap();
+            let row = |id: &str, event: &str| json!({ "id": id, "name": id, "prompt": "fix the build", "provider": "claude", "projectId": "p1", "workspaceMode": "existing", "workspace": repo.to_string_lossy(), "trigger": { "kind": "event", "event": event }, "enabled": true });
+            s.set(KEY, &json!([row("auto-red", "checks-failed"), row("auto-fin", "agent-finished")]).to_string()).unwrap();
+        }
+        let git = Git::detect().unwrap();
+        let said = RefCell::new(Vec::<(String, Value)>::new());
+        let notify = |e: &str, v: Value| said.borrow_mut().push((e.to_string(), v));
+        let yes = |_: &str| true;
+        let l = Launch { git: &git, store: &store, claude_config: dir.join("claude.json"), installed: &yes, notify: &notify };
+        let path = wt.to_string_lossy().to_string();
+        let line = "Event: checks failed on pull request #7 from feat: Fix https://github.com/o/r/pull/7";
+        let started = on_event(&l, "checks-failed", &path, line, FRI_NOON).unwrap();
+        assert_eq!(started.iter().map(|r| r["automationId"].as_str().unwrap()).collect::<Vec<_>>(), ["auto-red"]);
+        assert_eq!((started[0]["trigger"].as_str(), started[0]["eventDetail"].as_str()), (Some("event"), Some(line)));
+        assert!(on_event(&l, "checks-failed", &dir.join("elsewhere").to_string_lossy(), line, FRI_NOON + 600_000).unwrap().is_empty());
         drop(l);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
@@ -1917,6 +2263,207 @@ mod tests {
         assert_eq!(keep_output(&store, "run-1", "later text", true).unwrap(), None);
         let r = list(&store).unwrap()["runs"][0].clone();
         assert_eq!((r["output"].as_str(), r["outputFrom"].as_str(), r["outputCut"].as_bool()), (Some("Done: 3 files changed"), Some("screen"), Some(false)));
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct FakePanes {
+        /// The only terminal that is open, the same pane and idle.
+        idle: Mutex<Option<(u32, u32)>>,
+        sent: Mutex<Vec<(u32, String)>>,
+    }
+
+    impl Panes for FakePanes {
+        fn idle(&self, terminal: u32, pane_key: Option<u32>) -> bool {
+            *self.idle.lock().unwrap() == pane_key.map(|p| (terminal, p))
+        }
+        fn send(&self, terminal: u32, text: &str) -> Result<(), String> {
+            self.sent.lock().unwrap().push((terminal, text.to_string()));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn t192c_reuse_is_for_an_existing_worktree_and_an_edit_that_leaves_it_out_keeps_it() {
+        let dir = temp("t192s");
+        let store = Store::open(&dir.join("db")).unwrap();
+        seed(&store, &dir);
+        let base = json!({ "name": "Review", "prompt": "look", "provider": "claude", "projectId": "p1", "workspaceMode": "existing", "workspace": dir.to_string_lossy(), "schedule": { "preset": "hourly", "time": "00:15", "timezone": "UTC" } });
+        let plain = save_automation(&store, &base, FRI_NOON).unwrap();
+        assert_eq!(plain["reuseSession"], json!(false));
+        let mut on = base.clone();
+        on["reuseSession"] = json!(true);
+        on["id"] = plain["id"].clone();
+        assert_eq!(save_automation(&store, &on, FRI_NOON).unwrap()["reuseSession"], json!(true));
+        // An edit that does not mention it keeps it; saying false (--fresh-session) turns it off.
+        let mut quiet = base.clone();
+        quiet["id"] = plain["id"].clone();
+        assert_eq!(save_automation(&store, &quiet, FRI_NOON).unwrap()["reuseSession"], json!(true));
+        quiet["reuseSession"] = json!(false);
+        assert_eq!(save_automation(&store, &quiet, FRI_NOON).unwrap()["reuseSession"], json!(false));
+        // A new worktree for every run always opens a new session: asking to reuse is refused, and an
+        // edit into that mode that says nothing drops a reuse it held.
+        let mut fresh = base.clone();
+        fresh["workspaceMode"] = json!("new-per-run");
+        fresh["workspace"] = Value::Null;
+        fresh["reuseSession"] = json!(true);
+        assert!(save_automation(&store, &fresh, FRI_NOON).unwrap_err().contains("existing worktree"));
+        fresh["id"] = plain["id"].clone();
+        fresh["reuseSession"] = Value::Null;
+        on["reuseSession"] = json!(true);
+        save_automation(&store, &on, FRI_NOON).unwrap();
+        assert_eq!(save_automation(&store, &fresh, FRI_NOON).unwrap()["reuseSession"], json!(false));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn t192c_a_run_continues_in_the_last_runs_session_only_while_it_is_open_idle_and_the_same_pane() {
+        let dir = temp("t192r");
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let store = Mutex::new(Store::open(&dir.join("db")).unwrap());
+        seed(&store.lock().unwrap(), &ws);
+        let panes = std::sync::Arc::new(FakePanes { idle: Mutex::new(None), sent: Mutex::new(Vec::new()) });
+        use_panes(panes.clone());
+        let git = Git::detect().unwrap();
+        let said = RefCell::new(Vec::<(String, Value)>::new());
+        let notify = |e: &str, v: Value| said.borrow_mut().push((e.to_string(), v));
+        let yes = |_: &str| true;
+        let l = Launch { git: &git, store: &store, claude_config: dir.join("claude.json"), installed: &yes, notify: &notify };
+        let starts = || said.borrow().iter().filter(|(e, v)| e == crate::cli::EVENT && v["kind"] == "start").count();
+        let finish = |terminal: u32, pane: u32| {
+            let s = store.lock().unwrap();
+            claim(&s, terminal, Some(pane), &ws.to_string_lossy(), Some("claude")).unwrap();
+            on_status(&s, Some(terminal), pane, "working", false, false, 10).unwrap();
+            assert!(on_status(&s, Some(terminal), pane, "done", false, false, 11).unwrap().is_some());
+        };
+        let reuse = |on: bool| {
+            let s = store.lock().unwrap();
+            let mut autos = load(&s, KEY).unwrap();
+            autos[0]["reuseSession"] = json!(on);
+            save(&s, KEY, &autos).unwrap();
+        };
+
+        // Reuse off: every run opens a tab, even with an idle session around.
+        let first = run(&l, "auto-1", "manual").unwrap();
+        assert_eq!((starts(), first["reused"].is_null()), (1, true));
+        finish(6, 60);
+        *panes.idle.lock().unwrap() = Some((6, 60));
+        assert_eq!(run(&l, "auto-1", "manual").unwrap()["status"], "dispatched");
+        assert_eq!((starts(), panes.sent.lock().unwrap().len()), (2, 0));
+        finish(7, 70);
+
+        // Reuse on, the newest run's session (7) idle: the prompt goes into it, no new tab, and the new
+        // run holds that pane from the start, so the hooks' next finish completes it.
+        reuse(true);
+        *panes.idle.lock().unwrap() = Some((7, 70));
+        let third = run(&l, "auto-1", "manual").unwrap();
+        assert_eq!((third["terminal"].as_u64(), third["paneKey"].as_u64(), third["reused"].as_bool(), third["status"].as_str()), (Some(7), Some(70), Some(true), Some("dispatched")));
+        assert_eq!((starts(), panes.sent.lock().unwrap().clone()), (2, vec![(7, "check".to_string())]));
+        {
+            let s = store.lock().unwrap();
+            assert_eq!(on_status(&s, Some(7), 70, "done", false, false, 20).unwrap(), None, "the earlier done does not count before the agent worked");
+            on_status(&s, Some(7), 70, "working", false, false, 21).unwrap();
+            assert_eq!(on_status(&s, Some(7), 70, "done", false, false, 22).unwrap().as_deref(), third["id"].as_str());
+        }
+
+        // The agent is busy (or the tab was closed or is another pane): a new session opens.
+        *panes.idle.lock().unwrap() = None;
+        let fourth = run(&l, "auto-1", "manual").unwrap();
+        assert_eq!((starts(), fourth["reused"].is_null(), fourth["terminal"].is_null()), (3, true, true));
+        // A run still going holds the pane: even an idle report does not hand it to a second run.
+        finish(8, 80);
+        *panes.idle.lock().unwrap() = Some((8, 80));
+        let fifth = run(&l, "auto-1", "manual").unwrap();
+        assert_eq!(fifth["reused"], json!(true));
+        let sixth = run(&l, "auto-1", "manual").unwrap();
+        assert!(sixth["reused"].is_null() && starts() == 4, "{sixth}");
+        *panes.idle.lock().unwrap() = None;
+        drop(l);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn jl(vs: &[Value]) -> Vec<String> {
+        vs.iter().map(Value::to_string).collect()
+    }
+
+    #[test]
+    fn t140b_the_transcript_text_is_what_the_agent_said_and_nothing_else() {
+        let said = |t: &str| json!({ "type": "assistant", "message": { "content": [{ "type": "thinking", "thinking": "hmm" }, { "type": "text", "text": t }, { "type": "tool_use", "name": "Bash" }] } });
+        let claude = jl(&[
+            json!({ "type": "user", "message": { "content": "please look" } }),
+            said("First part."),
+            said("First part."),
+            json!({ "type": "assistant", "isSidechain": true, "message": { "content": [{ "type": "text", "text": "a helper said this" }] } }),
+            json!({ "type": "assistant", "isMeta": true, "message": { "content": [{ "type": "text", "text": "meta" }] } }),
+            json!({ "type": "assistant", "message": { "content": "A plain string reply." } }),
+            said("  Done: 3 files changed.  "),
+        ]);
+        let mut with_junk = claude.clone();
+        with_junk.insert(2, "not json at all".to_string());
+        for lines in [&claude, &with_junk] {
+            let (text, cut) = transcript_text("claude", lines);
+            assert_eq!(text, "First part.\n\nA plain string reply.\n\nDone: 3 files changed.");
+            assert!(!cut);
+        }
+        let codex = jl(&[
+            json!({ "type": "session_meta", "payload": { "cwd": "x" } }),
+            json!({ "type": "response_item", "payload": { "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "do it" }] } }),
+            json!({ "type": "response_item", "payload": { "type": "function_call", "name": "shell" } }),
+            json!({ "type": "response_item", "payload": { "type": "message", "role": "assistant", "content": [{ "type": "output_text", "text": "All green." }] } }),
+        ]);
+        assert_eq!(transcript_text("codex", &codex), ("All green.".to_string(), false));
+        // The wrong agent's format, an agent with no transcript and an empty one read as nothing.
+        assert_eq!(transcript_text("claude", &codex).0, "");
+        assert_eq!(transcript_text("gemini", &claude).0, "");
+        assert_eq!(transcript_text("claude", &[]).0, "");
+        // A long session keeps the newest part from a whole block's line and says so.
+        let long: Vec<String> = (0..40).map(|i| said(&format!("{i:02} {}", "z".repeat(900))).to_string()).collect();
+        let (text, cut) = transcript_text("claude", &long);
+        assert!(cut && text.chars().count() <= RUN_OUTPUT_CHARS && text.contains("39 zzz") && !text.contains("00 zzz"), "{}", text.len());
+    }
+
+    #[test]
+    fn t140b_a_finished_run_swaps_the_pane_text_for_the_transcript_and_nothing_else_is_touched() {
+        let dir = temp("transcript");
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let store = Store::open(&dir.join("db")).unwrap();
+        seed(&store, &ws);
+        dispatched(&store, &ws, 1, "claude");
+        claim(&store, 6, Some(60), &ws.to_string_lossy(), Some("claude")).unwrap();
+        // Still going: nothing is kept.
+        assert_eq!(keep_transcript(&store, "run-1", "said", false).unwrap(), None);
+        on_status(&store, Some(6), 60, "working", false, false, 10).unwrap();
+        on_status(&store, Some(6), 60, "done", false, false, 11).unwrap();
+        // The pane's text first, as the exit keeps it; then the transcript replaces it, once.
+        keep_output(&store, "run-1", "$ claude\nscreen noise", false).unwrap();
+        assert_eq!(list(&store).unwrap()["runs"][0]["outputFrom"], "screen");
+        assert_eq!(keep_transcript(&store, "run-1", "   ", false).unwrap(), None);
+        assert_eq!(keep_transcript(&store, "run-1", "The agent's words.", true).unwrap(), Some("run-1".to_string()));
+        let r = list(&store).unwrap()["runs"][0].clone();
+        assert_eq!((r["output"].as_str(), r["outputFrom"].as_str(), r["outputCut"].as_bool()), (Some("The agent's words."), Some("transcript"), Some(true)));
+        assert_eq!(store.get(&output_key("run-1")).unwrap().unwrap(), json!("The agent's words.").to_string());
+        // A second look, or a later pane text, cannot take it back.
+        assert_eq!(keep_transcript(&store, "run-1", "again", false).unwrap(), None);
+        assert_eq!(keep_output(&store, "run-1", "late screen", false).unwrap(), None);
+        // A run with no pane text yet takes the transcript too, and a precheck's own output stays.
+        dispatched(&store, &ws, 2, "claude");
+        claim(&store, 7, Some(70), &ws.to_string_lossy(), Some("claude")).unwrap();
+        pane_ended(&store, 7, Some(1), 20).unwrap();
+        assert!(keep_transcript(&store, "run-2", "from the transcript", false).unwrap().is_some());
+        dispatched(&store, &ws, 3, "claude");
+        let mut rows = load(&store, RUNS_KEY).unwrap();
+        let r3 = rows.iter_mut().find(|r| r["id"] == "run-3").unwrap();
+        r3["status"] = json!("skipped");
+        r3["output"] = json!("precheck said no");
+        save(&store, RUNS_KEY, &rows).unwrap();
+        assert_eq!(keep_transcript(&store, "run-3", "ignored", false).unwrap(), None);
+        // The file read the app does: a transcript on disk through Tail, then the same text.
+        let file = dir.join("session.jsonl");
+        std::fs::write(&file, jl(&[json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "From disk." }] } })]).join("\n") + "\n").unwrap();
+        let (lines, _) = crate::chat::Tail::new(file).read().unwrap();
+        assert_eq!(transcript_text("claude", &lines).0, "From disk.");
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }

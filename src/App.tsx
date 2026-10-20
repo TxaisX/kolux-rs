@@ -50,8 +50,10 @@ import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./pro
 import { nameBranchFor } from "./scm/autoBranch";
 import { navTarget, stepAllowed, travel, visit, type Place } from "./projects/nav";
 import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
-import BrowserPane, { OPEN_IN_BROWSER, openInBrowser } from "./browser/BrowserPane";
+import BrowserPane, { OPEN_IN_BROWSER, openDetail, openInBrowser, type OpenInBrowser } from "./browser/BrowserPane";
+import PreviewButton from "./browser/PreviewButton";
 import { chordPlan } from "./browser/chord";
+import { livePages, pageRows, rememberClosed, takeClosed } from "./browser/pages";
 import { writerOf } from "./scm/generate";
 import EditorPane, { editors } from "./editor/EditorPane";
 import FloatingLayer, { floatingKeys } from "./floating/FloatingLayer";
@@ -105,9 +107,10 @@ import TerminalPane, { focusedTerminalEdit, type PaneNotice } from "./terminal/T
 import { accountLabel, accountPrompt, type CodexAccount } from "./terminal/accountChange";
 import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
 import AutomationsPage from "./automations/AutomationsPage";
-import { forgetRunTab, openRunTab, paneOfTerminal, runTabEnded, touchRunTab, typedInRunTab, type RunTabs } from "./automations/runTab";
+import { forgetRunTab, openRunTab, paneOfTerminal, runPaneKey, runTabEnded, touchRunTab, typedInRunTab, type RunTabs } from "./automations/runTab";
 import RoutingPage from "./settings/RoutingPage";
 import TasksPage from "./tasks/TasksPage";
+import WorkspaceBoard from "./board/WorkspaceBoard";
 import { tasksRepo } from "./tasks/model";
 import SourceControlPanel from "./scm/SourceControlPanel";
 import { SCM_AGENT_KEY, SCM_GROUP_ORDER_KEY, SCM_VIEW_KEY, SCM_LINKED_PR_KEY, SUMMARY_UPSTREAM_KEY, linkedPrs, withLink } from "./scm/model";
@@ -174,7 +177,7 @@ export type Pane = { key: number; cwd: string | null; branch: string | null; age
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 /** TERM-058: a terminal tab follows the running program's title (`live`) unless the user named it; a worker's task label (ORCH-066) comes first. */
 function tabName(p: Pane, titles: Record<number, string>, label?: string, live: Record<number, Identity> = {}): string {
-  if (p.kind === "browser") return titles[p.key] || "New Tab";
+  if (p.kind === "browser") return p.title || titles[p.key] || "New Tab";
   if (p.kind === "editor") return baseName(p.path ?? "");
   if (p.kind === "preview") return `Preview ${baseName(p.path ?? "")}`;
   if (p.kind === "changes") return "All Changes";
@@ -222,6 +225,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>(() => startScreen(initial)); // SET-037
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [boardOpen, setBoardOpen] = useState(false); // T-142: the workspace board
   const [settingsAt, setSettingsAt] = useState<{ target: SettingsTarget | null; n: number }>({ target: null, n: 0 }); // SET-006: a link's page and section
   const [expanded, setExpanded] = useState<number | null>(null); // VIEW-026: the Board card showing its terminal
   const [zoom, setZoom] = useState<Zoom>({}); // TERM-013: each workspace's expanded cell
@@ -397,10 +401,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // GIT-036: a page asked for in the built-in browser opens as a new tab in the focused split.
   useEffect(() => {
     const show = (e: Event) => {
-      const url = (e as CustomEvent<string>).detail;
+      // T-242 (BROW-067): the Preview button names its tab "Preview host:port".
+      const { url, title } = openDetail((e as CustomEvent<OpenInBrowser>).detail);
       const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
       const key = nextKey.current++;
-      setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "browser", url }]);
+      setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "browser", url, title }]);
       setFocused(key);
     };
     window.addEventListener(OPEN_IN_BROWSER, show);
@@ -657,6 +662,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         case "sidebar.sleeping.toggle":
           saveSetting(SHOW_SLEEPING_SETTING, !showSleepingFrom(settings[SHOW_SLEEPING_SETTING]));
           break;
+        case "workspace.openBoard":
+          setBoardOpen((o) => !o);
+          break;
         case "view.inbox":
           setScreen((s) => (s === "inbox" ? "terminals" : "inbox"));
           break;
@@ -792,6 +800,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           if (!inFront) return;
           closePane(focused);
           break;
+        case "tab.reopenClosed": {
+          // T-239 (BROW-019): the browser tab closed last comes back at the address it had.
+          const page = takeClosed();
+          if (!page) return;
+          openInBrowser(page.url);
+          break;
+        }
         case "tab.closeAll":
           // TERM-044: every tab of the focused pane's strip, through one close question.
           if (!inFront) return;
@@ -1340,7 +1355,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // PROJ-057 / VIEW-037: the palette's rows besides worktrees and projects.
   const paletteItems = (): PaletteItem[] => [
     ...panes
-      .filter((p) => !p.seats)
+      .filter((p) => !p.seats && p.kind !== "browser")
       .map((p) => ({
         section: "Open tabs",
         label: tabName(p, titles),
@@ -1357,6 +1372,23 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           setFocused(p.key);
         },
       })),
+    // T-239 (BROW-022): browser pages, by title and site, the current worktree's first (browser/pages.ts).
+    ...pageRows(
+      livePages(),
+      activeDir,
+      (id) => {
+        const p = panes.find((x) => x.key === id);
+        if (!p) return false;
+        setScreen("terminals");
+        if (!sameDir(p.cwd, activeDir)) {
+          setPage(null);
+          setActiveDir(p.cwd);
+        }
+        setFocused(id);
+        return true;
+      },
+      () => setToast("That page has closed"),
+    ),
     ...(Object.keys(PAGES) as PageId[]).map((id) => ({ section: "Settings", label: PAGES[id], hint: "Settings page", run: () => openSettings(id) })),
     ...paletteRows(accountSwitcher.groups, switchAccount), // T-548: Switch Claude to ...
     { section: "Quick actions", label: "New terminal tab", run: () => void newTab(null) },
@@ -1735,6 +1767,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     setTabColors((c) => forgetColors(c, keys));
     // TERM-106: a tab closed on purpose is not brought back after a restart.
     keys.forEach((k) => void invoke("terminal_forget_history", { paneKey: k }).catch(() => {}));
+    // T-239 (BROW-019): a browser page closed on purpose can be reopened (Reopen Closed Tab).
+    keys.forEach((k) => rememberClosed(k));
     setPanes((ps) => ps.filter((p) => !gone.has(p.key)));
     setRunning((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !gone.has(Number(k)))));
     setDirty((d) => Object.fromEntries(Object.entries(d).filter(([k]) => !gone.has(Number(k)))));
@@ -1833,9 +1867,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const inboxSeen = inboxOverlay(sources, exitedPrompt.current, hook);
   exitedPrompt.current = inboxSeen.kept;
   // AUTO-013: a run's terminal counts as live only while its pane is still open in the run's worktree.
-  const runPane = (id: string, worktree?: string) => {
-    const key = runPanes.current[id];
-    return panes.find((x) => x.key === key && !!worktree && sameDir(x.cwd, worktree));
+  // T-031-b: after a restart the window remembers no pane, so the run row's re-attached terminal finds it.
+  const runPane = (r: { id: string; worktree?: string; terminal?: number | null }) => {
+    const key = runPaneKey(runPanes.current, r, ptys.current);
+    return panes.find((x) => x.key === key && !!r.worktree && sameDir(x.cwd, r.worktree));
   };
   // EDIT-041: Open in Code goes to the Code view, the pane's workspace (its sidebar row scrolled
   // into sight by ProjectsPanel) and the pane itself, its tab brought to the top.
@@ -2356,6 +2391,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           </>
         )}
         {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} target={settingsAt.target} n={settingsAt.n} />}
+        {boardOpen && <WorkspaceBoard onClose={() => setBoardOpen(false)} />}
         {(terminals || screen === "artifacts" || screen === "skills") && sidebarOpen && (
           <ProjectsPanel
             reveal={reveal}
@@ -2462,9 +2498,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           {terminals && page === "automations" && (
             <AutomationsPage
               onClose={() => setPage(null)}
-              liveRun={(r) => !!runPane(r.id, r.worktree)}
+              liveRun={(r) => !!runPane(r)}
               onViewRun={(r) => {
-                const p = runPane(r.id, r.worktree);
+                const p = runPane(r);
                 if (!p) return;
                 setPage(null);
                 openPane(p.key);
@@ -2479,7 +2515,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               }}
             />
           )}
-          {terminals && page === "tasks" && <TasksPage repo={tasksRepo(projects, activeDir)} />}
+          {terminals && page === "tasks" && <TasksPage repo={tasksRepo(projects, activeDir)} onStart={fromItem} onResume={(dir) => cli.current.select(dir, null, true)} />}
           {terminals && page === "routing" && (
             <RoutingPage
               agents={agents}
@@ -2526,7 +2562,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                   }}
                 />
               )}
-              {page === null && <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} shells={shells} onNewTab={(a) => void newTab(a)} />}
+              {page === null && <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} shells={shells} onNewTab={(a) => void newTab(a)} preview={<PreviewButton dir={activeDir} onFocus={setFocused} />} />}
               {picking === "file" && activeDir && (
                 <FilePicker
                   root={activeDir}

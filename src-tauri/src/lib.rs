@@ -289,6 +289,10 @@ pub fn run() {
             let fence = fence::Fence::load(&app.state::<Mutex<Store>>());
             app.manage(fence);
             app.manage(token_usage::Flights::default());
+            // ORCH-034: the orchestration store is brought up to today's layout before anything reads it.
+            if let Ok(store) = app.state::<Mutex<Store>>().lock() {
+                orchestration::upgrade::at_start(&store);
+            }
             // The command line reaches the app through a loopback port (PROJ-077).
             cli::serve(app.handle().clone(), &dir)?;
             // AUTO-001: the automations clock.
@@ -491,6 +495,8 @@ pub fn run() {
             projects::workspace_remove_check,
             projects::project_set,
             projects::project_display_name_set,
+            projects::workspace_rename_after_work,
+            projects::workspace_mark_suggested,
             projects::workspaces_place_get,
             projects::workspaces_place_set,
             projects::git_first_commit_preview,
@@ -544,6 +550,18 @@ pub fn run() {
             github::github_issue_state,
             github::github_issue_comment,
             github::github_issue_create,
+            github::pull_requests::pr_page,
+            github::pull_requests::pr_files,
+            github::pull_requests::pr_file_patch,
+            github::pull_requests::pr_checks,
+            github::pull_requests::pr_threads,
+            github::pull_requests::pr_set_state,
+            github::pull_requests::pr_rerun,
+            github::pull_requests::pr_reviewers,
+            github::pull_requests::pr_assignees,
+            github::pull_requests::pr_react,
+            github::pull_requests::pr_reply,
+            github::pull_requests::pr_merge,
             scm::scm_task_labels,
             scm::scm_task_body,
             scm::scm_stage,
@@ -573,6 +591,7 @@ pub fn run() {
             browser::browser_annotate,
             browser::preview::browser_preview,
             browser::preview::browser_preview_of,
+            browser::ports::browser_dev_ports,
             automations::automations_list,
             automations::automation_set_enabled,
             automations::automation_delete,
