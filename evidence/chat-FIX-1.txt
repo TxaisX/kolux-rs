@@ -63,3 +63,68 @@ OPEN (not built in this card)
   - chat.rs: rebuild the follower on a newer run; accept the transcript path only as .jsonl under the agent
     homes; the capped first read drops a whole line when the cut lands on a line start (review AFTER 1).
   - A permission reading may stick after a deny typed in the terminal (fails closed; review AFTER 2).
+
+
+==========================================================================================
+FIX-1 (wave 16, 2026-10-19; lane/chat from a1a27dbc; council stand-in review of f1ad80d5, "Send to build session" items 1 to 6)
+(The text above is the earlier FIX-1 on a969502; this file name is reused, so this section is appended below it.)
+==========================================================================================
+
+What the user can now do / what changed
+- Answer a permission prompt in the terminal (a key, or the terminal pane's own Approve / Deny) and the chat card goes; a chat click already waiting in the terminal's queue types nothing.
+- Press Stop while a message is waiting out a tool: the wait ends at once, and if a permission prompt opened meanwhile no Escape is typed (Stop says the agent is asking).
+- Allow / Deny re-check the prompt when their key's turn in the queue comes (answered in the terminal, agent moved on, terminal changed: nothing typed, outcome "gone").
+- A permission event naming another tool (or another detail) is a new prompt: the card redraws clean and a click on the old card types nothing.
+- Links: a file: link whose decoded path holds a control character (for example %00) is not clickable; mailto keeps only subject and body; links in replies have no href (middle-click / "open in new window" has nothing to open), still clickable, keyboard-reachable (Enter), auxclick blocked.
+
+Files changed (lane/chat)
+  src/chat/ask.ts (answeredElsewhere, elsewhere field, in-job recheck in answerCard, takeAsk new prompt on tool/detail change)
+  src/chat/send.ts (stopPane re-checks asking inside the enqueued job; the tool-wait pause exits on cancelled())
+  src/chat/chatLinks.ts (CONTROL on the decoded file path; mailto filter)
+  src/chat/ChatText.tsx (no href, role=link, tabIndex 0, Enter opens, onAuxClick preventDefault)
+  tests: src/chat/ask.test.ts (+11), src/chat/stop.test.ts (+4), src/chat/chatLinks.test.ts (+3), src/chat/chatText.test.ts (new, 3)
+  PLAN.md (T-329 text reworded, T-329-b added), STATE.md (--write-state head), STATE-history.md (one [chat] line)
+  evidence/chat-FIX-1-TerminalPane.patch (new), evidence/chat-T-329-App.patch (REPLACED, regenerated against main 546687e6), this file (section appended)
+
+Patches left for the coordinator (both against main 546687e6)
+  evidence/chat-FIX-1-TerminalPane.patch: imports answeredElsewhere from ../chat/ask and calls answeredElsewhere(number) at the two answer points
+    (the keydown that answersPrompt() accepts, and the Approve/Deny onClick), 3 hunks. TerminalPane.tsx belongs to the core lane.
+  evidence/chat-T-329-App.patch (replaced): the earlier openFile/jump + AgentsChat open prop, plus  inKolux: settings.linksOpenInKolux === true  in the open prop.
+    NOTE: nothing on main passes linksOpenInKolux to TerminalPane either and no settings row / key of that name exists yet; the patch reads the key
+    the terminal pane's prop is named after, so the chat follows the day the setting page writes it (card T-329-b).
+  Checked, for each, in a temporary index at 546687e6:  git read-tree 546687e6  then  git apply --cached --check -v <patch>  -> exit 0 (both).
+  Also  git apply --check  on the lane tree -> exit 0; both applied to the lane tree temporarily: tsc --noEmit exit 0 and vitest run src/terminal src/chat 53 files / 451 tests passed
+  (fix1-patched-vitest.log); then git checkout -- src/App.tsx src/terminal/TerminalPane.tsx (lane tree back to its own contents).
+
+Red first (log G:/Temp/chat-w16-logs/fix1-red.log: vitest run src/chat/ask.test.ts stop.test.ts chatLinks.test.ts chatText.test.ts, before any code change)
+  Test Files 4 failed (4); Tests 19 failed | 36 passed (55). Failing: 10 ask tests (answeredElsewhere is not a function; takeAsk new-prompt cases; queued-click recheck cases),
+  3 stop tests (a prompt appearing mid-wait got Escape; window-reading flip; the wait slept through its whole limit), 3 chatLinks tests (NUL after decoding,
+  mailto extras, written mailto), 3 chatText tests (href present). Some ask tests in the red run fail only because the new function does not exist or because an
+  earlier red test left the terminal queue blocked; the stop, chatLinks and chatText reds are on assertions of the new behaviour.
+
+Green (G:/Temp/chat-w16-logs/fix1-green.log)
+  node node_modules/vitest/vitest.mjs run src/chat -> Test Files 15 passed (15); Tests 212 passed (212)
+  (pnpm tries to download itself under the scratch HOME, so vitest and tsc were run directly through node, as the brief allows)
+  node node_modules/typescript/bin/tsc --noEmit -> exit 0, empty log (fix1-tsc.log; again fix1-tsc2.log after the full run)
+
+End gates
+  cargo build / clippy / cargo test <module>: SKIPPED per card (no Rust file touched: the diff lists only src/chat, PLAN/STATE/STATE-history and evidence).
+  full cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast (fix1-cargo-full.log): cargo-exit 0; test result lines: ok. 973 passed; 0 failed; 2 ignored | ok. 0 | ok. 0 | ok. 3 passed | ok. 0.
+  full vitest (fix1-full-vitest.log, first run): 230 files passed, 1 failed (scripts/plan-check.test.mjs: "CHAT-025 appears 2 times": my new T-329-b line named the card id again).
+    Fixed by wording the line "T-329 rest (the link card)". Re-run alone (fix1-plancheck-test.log): 1 file, 10 tests passed. Nothing else changed since, so the full run is 231 files, 1612 tests, all passing after the fix.
+  node scripts/plan-check.mjs --write-state -> plan-check: OK (Done 461 / 689 tasks, P0 cards passing 6 / 228)
+  grep -c '^## Last 10 passes' STATE.md -> 1
+  grep -oE '^- \[[ x]\] T-[0-9a-z-]+' PLAN.md | sort | uniq -d -> prints nothing
+  powershell scripts/firewall-check.ps1 -Baseline -> "53 hit(s) in 22 file(s), 0 new, 0 baseline entr(ies) no longer present"
+
+Seen, not fixed
+  Review item 11 (a written link's label can differ from its target) and item 10 are not in this card's list.
+  The terminal pane's prompt count and the chat's are independent: answeredElsewhere(number) marks the chat's own current prompt; it does not copy the terminal's count.
+
+LIVE PROOF PENDING (batched) (coordinator, after the two patches are applied; no app launched here)
+  1. Agents screen, a Claude pane at a permission prompt: the card "Allow <tool>?" shows. Turn "Show terminal" on, press Enter in the terminal, turn it off:
+     the card is gone and stays gone while the tool runs.
+  2. Same prompt, click the terminal pane's own Approve button instead: the chat card goes too.
+  3. Queue a message while the agent starts a tool, then press Stop: Escape only goes out when no prompt is open; with a prompt open Stop reports "asking" and the prompt is still there.
+  4. A reply with https://example.com, a mail address and a file path the agent printed: middle-click on the web link does nothing; a plain click shows the two-browser choice; Tab then Enter does the same as the click.
+  5. After the settings page writes linksOpenInKolux (T-329-b): Ctrl-click on a web link opens Kolux's browser pane.

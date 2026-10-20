@@ -9,13 +9,21 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { locale } from "../language";
 import "./chat.css";
-import { fold, thoughtIds as idsOf, toggled, type View } from "./steps";
+import { fold, isFullPath, thoughtIds as idsOf, toggled, type View } from "./steps";
 import { NoticeRow, PlanRow, StepRow, ThoughtRow } from "./StepRows";
-import { SHELL_OFFER, agentsView, handOver, handTargets, viewedFirst, applyRead, capPending, chatCovers, chatOffer, combine, pickChat, typingInto, lastReply, lastReplyItem, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row } from "./model";
+import { SHELL_OFFER, agentsView, handOver, handTargets, viewedFirst, capPending, chatCovers, chatOffer, combine, pickChat, typingInto, lastReply, lastReplyItem, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row } from "./model";
 import { Composer, type ComposerHandle } from "./MessageBox";
 import { draftOf, forwardsToBox, keepDraft, nearBottom } from "./composer";
 import { sessionLabel } from "../agents/rail";
-import { boxSend, hearStates, holdReading, writeTerminal } from "./send";
+import { NO_TERMINAL_NOTE, boxSend, hearStates, holdReading, stopPane, writeTerminal } from "./send";
+import { answerCard, askOf, cardOf, dismissAsk, hearAsks, subscribeAsk } from "./ask";
+import { PermissionCard } from "./PermissionCard";
+import { BrowserChoice, ChatText, LinkContext, type LinkHost } from "./ChatText";
+import { printedPaths } from "./chatLinks";
+import { ChatReader, NOTHING, watchHidden, type Seen } from "./reading";
+import type { WrittenFile } from "./steps";
+import { CANNOT_STOP_NOTE, STOPPING_NOTE } from "./stop";
+import type { Answer } from "../terminal/permissionAnswer";
 
 /** `terminal`: the program session the pane types into (the window's own pane-to-terminal map).
  * `program`: what Kolux started in the pane; null for a plain shell (T-050-b: no chat, no switch). */
@@ -28,13 +36,19 @@ type Support = { agent?: string; launching: boolean; readable: boolean };
  * `aside`: drawn at the top right (the Agents screen's Show terminal switch). `hand`: VIEW-020, the
  * sessions a finished turn's reply can be handed to, and what handing it does. */
 export type Hand = { targets: { key: number; label: string }[]; onHand: (key: number, text: string, replyId: string) => void; /** Why the last hand-over was refused (FIX-SOON 1), shown beside the menu while the reply it was for is still the one shown (FIX-5). */ note?: string | null; /** The id of that reply (FIX-6: not its words, so a newer reply with the same words does not inherit the note). */ noteFor?: string | null };
+/** CHAT-025, CHAT-023: what the window gives a chat to open things with. `onOpenLink`: Kolux's own viewer for a web page;
+ * `onOpenFile`: the editor at a line and column; `inKolux`: the setting that makes Kolux's viewer the main choice for a
+ * web link; `onReview`: opens the plan review for this pane's pending plan. Every one is optional: a chat without them
+ * hands links to the system and shows the plan inside the card. */
+export type ChatOpen = { onOpenLink?: (url: string) => void; onOpenFile?: (path: string, line?: number, column?: number) => void; inKolux?: boolean; onReview?: (key: number, plan: string, cut: boolean) => void };
+/** The card's note when the prompt it was drawn for was already answered or has gone. */
+export const GONE_NOTE = "That question was already answered. Look at the terminal.";
 /** The refusal of a hand-over and the id of the reply it was refused for. */
 export type HandNote = { text: string; forResult: string };
-export default function ChatView({ pane, agent, preview = null, pending = [], hookState, stateOf, ptyOf, target = null, aside, hand }: { pane: ChatPane; agent?: string; preview?: Preview | null; pending?: Pending[]; hookState?: string; stateOf?: (key: number) => string | undefined; ptyOf?: (key: number) => number | undefined; target?: string | null; aside?: ReactNode; hand?: Hand }) {
-  const [items, setItems] = useState<ChatItem[]>([]);
-  const [state, setState] = useState<ChatRead["state"]>("loading");
-  const [error, setError] = useState<string | null>(null);
-  const [open, setOpen] = useState(false);
+export default function ChatView({ pane, agent, preview = null, pending = [], hookState, stateOf, ptyOf, target = null, aside, hand, open: opener, hidden: hiddenProp }: { pane: ChatPane; agent?: string; preview?: Preview | null; pending?: Pending[]; hookState?: string; stateOf?: (key: number) => string | undefined; ptyOf?: (key: number) => number | undefined; target?: string | null; aside?: ReactNode; hand?: Hand; open?: ChatOpen; /** CHAT-009: true while the screen hides the chat; it reads nothing then. */ hidden?: boolean }) {
+  // CHAT-009 (T-330): what the transcript last said, kept per pane while the chat is hidden (reading.ts).
+  const [seen, setSeen] = useState<Seen>(NOTHING);
+  const { items, state, error, open } = seen;
   const [extras, setExtras] = useState<Extra[]>([]);
   // CHAT-022 (council FIX-1): the box sends only while Kolux can see the agent is not asking in its
   // terminal; a send's keys would land in a menu and its Enter would pick the default (Yes).
@@ -42,32 +56,14 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
   const [, setHeard] = useState<string | undefined>(undefined);
   const [note, setNote] = useState<string | null>(null);
   useEffect(() => void hearStates(listen).catch(() => {}), []);
+  // CHAT-023: every pane's permission prompts are counted for the whole window; the card redraws when this pane's record moves.
+  const [, setAsked] = useState(0);
+  useEffect(() => void hearAsks(listen).catch(() => {}), []);
+  useEffect(() => subscribeAsk(() => setAsked((n) => n + 1)), []);
 
   useEffect(() => {
-    let alive = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    setItems([]);
-    setState("loading");
     setHeard(undefined);
     setNote(null);
-    const look = () => {
-      invoke<ChatRead>("chat_read", { paneKey: pane.key })
-        .then((r) => {
-          if (!alive) return;
-          setItems((prev) => applyRead(prev, r));
-          setState(r.state);
-          setError(r.error ?? null);
-          setOpen(r.open);
-          timer = setTimeout(look, r.retryMs);
-        })
-        .catch((e) => {
-          if (!alive) return;
-          setState("error");
-          setError(String(e));
-          timer = setTimeout(look, 10_000);
-        });
-    };
-    look();
     // CHAT-010: what the hooks say arrives first; the transcript's version replaces it.
     const off = listen<{ paneKey: number; reply?: string; state?: string }>("agent-status", (e) => {
       if (e.payload.paneKey !== pane.key) return;
@@ -77,12 +73,7 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
       const text = e.payload.reply;
       setExtras((xs) => (xs.some((x) => x.text === text) ? xs : [...xs.slice(-20), { id: `hook-${Date.now()}`, role: "assistant", text, at: Date.now() }]));
     });
-    return () => {
-      alive = false;
-      if (timer) clearTimeout(timer);
-      void off.then((u) => u()).catch(() => {});
-      invoke("chat_close", { paneKey: pane.key }).catch(() => {});
-    };
+    return () => void off.then((u) => u()).catch(() => {});
   }, [pane.key]);
 
   // CHAT-020: what this view sent and the transcript has not confirmed yet (at most 8 per pane).
@@ -92,6 +83,24 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
   const rows = useMemo(() => combine(items, extras, previewToShow(preview, open, lastReply(items)), allPending), [items, extras, preview, open, allPending]);
   const key = pane.key;
   const terminalOf = (k: number) => (k === key && pane.terminal !== undefined ? pane.terminal : ptyOf?.(k));
+  // CHAT-009: a hidden chat (its screen left, `hidden`, or the window's page hidden) reads nothing; shown again it
+  // opens on its last good view and one new read replaces it. A new terminal behind the pane drops the kept view.
+  const session = terminalOf(key);
+  const [pageHidden, setPageHidden] = useState(() => typeof document !== "undefined" && document.visibilityState === "hidden");
+  useEffect(() => watchHidden(document, setPageHidden), []);
+  const paused = !!hiddenProp || pageHidden;
+  useLayoutEffect(() => {
+    const reader = new ChatReader({
+      pane: key,
+      session,
+      hidden: paused,
+      read: () => invoke<ChatRead>("chat_read", { paneKey: key }),
+      close: () => invoke("chat_close", { paneKey: key }).catch(() => {}),
+      onChange: setSeen,
+    });
+    setSeen(reader.seen);
+    return () => reader.hide();
+  }, [key, session, paused]);
   // Council FIX-2: a reading from the pane's earlier terminal does not count (FS4).
   const held = holdReading(key, hookState, stateOf !== undefined, terminalOf(key));
   /** False when nothing was sent, so the box keeps the text; the box then says why (council FIX-2, FS3). */
@@ -106,7 +115,49 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
         stick.current = true;
       },
       onFailed: failed,
+      // CHAT-018: Stop cancelled this send before its Enter; the waiting row goes (nothing was sent).
+      onCancelled: () => setSent((xs) => xs.filter((x) => x.id !== id)),
     });
+  };
+  // CHAT-018: Stop. The box says so once; the note goes when the turn is over.
+  const stop = () => {
+    setNote(STOPPING_NOTE);
+    stopPane(key, { terminalOf, stateOf, write: writeTerminal }).then(
+      (r) => setNote(r === "stopped" ? STOPPING_NOTE : CANNOT_STOP_NOTE),
+      () => setNote(CANNOT_STOP_NOTE),
+    );
+  };
+  useEffect(() => {
+    if (!open) setNote((n) => (n === STOPPING_NOTE ? null : n));
+  }, [open]);
+  // CHAT-023: the permission card, while the agent's hook says it is asking and the user has not answered.
+  const card = cardOf(agent, askOf(key), terminalOf(key), stateOf ? () => stateOf(key) : undefined);
+  const answer = (a: Answer) => {
+    if (!card || !agent) return;
+    answerCard(key, agent, a, card.drawnAt, { terminalOf, stateOf, write: writeTerminal }).then(
+      (r) => setNote(r === "gone" ? GONE_NOTE : r === "no-terminal" ? NO_TERMINAL_NOTE : null),
+      () => setNote(CANNOT_STOP_NOTE),
+    );
+  };
+  // CHAT-025: links in the agent's replies. Only files the agent printed recently open.
+  const [menu, setMenu] = useState<{ url: string; at: { x: number; y: number } } | null>(null);
+  useEffect(() => setMenu(null), [pane.key]);
+  const printed = useMemo(() => printedPaths(items, pane.cwd), [items, pane.cwd]);
+  const host: LinkHost = {
+    cwd: pane.cwd,
+    printed,
+    mac: /^Mac/i.test(navigator.platform),
+    inKolux: !!opener?.inKolux,
+    onOpenLink: opener?.onOpenLink,
+    onOpenFile: opener?.onOpenFile,
+    say: setNote,
+    chooseBrowser: (url, at) => setMenu({ url, at }),
+  };
+  const pickBrowser = (where: "kolux" | "system") => {
+    if (!menu) return;
+    if (where === "kolux" && opener?.onOpenLink) opener.onOpenLink(menu.url);
+    else invoke("open_external", { url: menu.url }).catch((e) => setNote(String(e)));
+    setMenu(null);
   };
   // CHAT-027: within 48 px of the bottom the view follows new output; further up it holds still.
   const list = useRef<HTMLDivElement>(null);
@@ -140,7 +191,7 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
     if (t.closest("button, a") && (e.key === " " || e.key === "Enter")) return;
     if (forwardsToBox({ key: e.key, ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey, isComposing: e.nativeEvent.isComposing })) box.current?.focus();
   };
-  const views = useMemo(() => fold(rows, open), [rows, open]);
+  const views = useMemo(() => fold(rows, open, pane.cwd), [rows, open, pane.cwd]);
   useLayoutEffect(() => {
     if (stick.current && list.current) list.current.scrollTop = list.current.scrollHeight;
   }, [views]);
@@ -151,6 +202,7 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
   const toggle = (id: string) => setThoughts((t) => toggled(t, id));
 
   return (
+    <LinkContext.Provider value={host}>
     <div className={`chat${covers ? " cover" : ""}`} aria-label="Chat" onKeyDown={onKeyDown}>
       {(aside || head.result) && (
         <div className="chat-head">
@@ -168,7 +220,7 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
       )}
       <div className="chat-list" ref={list} onScroll={onScroll}>
         {views.map((v) => (
-          <ViewRow key={`${v.row}-${v.id}`} view={v} onImage={setFull} thoughts={thoughts} onToggle={toggle} />
+          <ViewRow key={`${v.row}-${v.id}`} view={v} onImage={setFull} thoughts={thoughts} onToggle={toggle} hand={hand} />
         ))}
       </div>
       {away && (
@@ -177,17 +229,22 @@ export default function ChatView({ pane, agent, preview = null, pending = [], ho
         </button>
       )}
       {target && <div className="chat-target" role="status">{target}</div>}
-      <Composer ref={box} paneKey={pane.key} live={terminalOf(key) !== undefined} blocked={held} note={note ?? undefined} onSend={send} />
+      {card && <PermissionCard card={card} onAllow={() => answer("approve")} onDeny={() => answer("deny")} onReview={opener?.onReview ? () => opener.onReview?.(key, card.plan ?? "", !!card.planCut) : undefined} onDismiss={() => dismissAsk(key, card.drawnAt)} />}
+      {menu && <BrowserChoice url={menu.url} at={menu.at} onPick={pickBrowser} onClose={() => setMenu(null)} />}
+      <Composer ref={box} paneKey={pane.key} live={terminalOf(key) !== undefined} blocked={held} note={note ?? undefined} onSend={send} working={open} onStop={stop} />
       {full && (
         <button type="button" className="chat-full" aria-label="Close image" onClick={() => setFull(null)}>
           <img src={full} alt="Attached" />
         </button>
       )}
     </div>
+    </LinkContext.Provider>
   );
 }
 
-function ViewRow({ view, onImage, thoughts, onToggle }: { view: View; onImage: (src: string) => void; thoughts: Set<string>; onToggle: (id: string) => void }) {
+function ViewRow({ view, onImage, thoughts, onToggle, hand }: { view: View; onImage: (src: string) => void; thoughts: Set<string>; onToggle: (id: string) => void; hand?: Hand }) {
+  // CHAT-028: the files a finished turn wrote; a pick puts the path in the other agent's draft (never sent).
+  if (view.row === "files") return <FilesRow id={view.id} files={view.files} targets={hand?.targets ?? []} onSend={(to, path) => hand?.onHand(to, path, view.id)} note={hand?.noteFor === view.id ? (hand.note ?? null) : null} />;
   if (view.row !== "message") return view.row === "preview" || view.row === "pending" ? <ChatRow row={view} onImage={onImage} /> : <StepRow view={view} />;
   if (view.kind === "thought") return <ThoughtRow item={view} open={thoughts.has(view.id)} onToggle={() => onToggle(view.id)} />;
   if (view.kind === "plan") return <PlanRow item={view} />;
@@ -228,7 +285,7 @@ function ChatRow({ row, onImage }: { row: Row; onImage: (src: string) => void })
           ))}
         </div>
       )}
-      {row.text && <div className="chat-text">{row.text}</div>}
+      {row.text && <div className="chat-text">{row.role === "assistant" && row.kind === "text" ? <ChatText text={row.text} /> : row.text}</div>}
       <div className="chat-meta">
         {when && <time title={when.full}>{when.short}</time>}
         <button type="button" className="chat-copy" onClick={copy}>{copied ? "Copied" : "Copy"}</button>
@@ -288,7 +345,7 @@ export function makeHand(a: {
 /** The Agents screen's chat: the picked pane's chat when it can show one (`pickChat`). `hook`: the
  * window's hook readings by pane, for the box's note; `stateOf`: the same readings read live, so a
  * send stops on its own pane's menu even after the screen moved to another pane. */
-export function AgentsChat({ panes, focused, ptyOf, hook, stateOf, onPick, taskOf }: { panes: ChatPane[]; focused: number | null; ptyOf?: (key: number) => number | undefined; hook?: Record<number, string | undefined>; stateOf?: (key: number) => string | undefined; onPick?: (key: number) => void; taskOf?: (key: number) => string | undefined }) {
+export function AgentsChat({ panes, focused, ptyOf, hook, stateOf, onPick, taskOf, open }: { panes: ChatPane[]; focused: number | null; ptyOf?: (key: number) => number | undefined; hook?: Record<number, string | undefined>; stateOf?: (key: number) => string | undefined; onPick?: (key: number) => void; taskOf?: (key: number) => string | undefined; open?: ChatOpen }) {
   const [offers, setOffers] = useState<Record<number, Offer & { agent?: string }>>({});
   // VIEW-019 (T-050-b): the sessions the user flipped to their terminal, kept while the screen is open.
   const [forced, setForced] = useState<ReadonlySet<number>>(() => new Set());
@@ -344,7 +401,7 @@ export function AgentsChat({ panes, focused, ptyOf, hook, stateOf, onPick, taskO
   // VIEW-020: the result goes into the target's kept draft after what is typed there, then the
   // screen moves to the target, whose box opens with it.
   const hand = makeHand({ panes, key, offers, viewed, taskOf, note: handNote, setNote: setHandNote, onPick, draftOf, keepDraft });
-  return <ChatView key={key} pane={shown} agent={offers[key]?.agent} hookState={hook?.[key]} stateOf={stateOf} ptyOf={ptyOf} target={typingInto(focused, shown)} aside={<TerminalSwitch on={false} onFlip={(on) => flip(key, on)} />} hand={hand} />;
+  return <ChatView key={key} pane={shown} agent={offers[key]?.agent} hookState={hook?.[key]} stateOf={stateOf} ptyOf={ptyOf} target={typingInto(focused, shown)} aside={<TerminalSwitch on={false} onFlip={(on) => flip(key, on)} />} hand={hand} open={open} />;
 }
 
 /** VIEW-019: the Show terminal switch: on, the session's raw terminal shows in place of its chat. */
@@ -357,12 +414,33 @@ export function TerminalSwitch({ on, onFlip }: { on: boolean; onFlip: (on: boole
   );
 }
 
-/** VIEW-020: Send result to, a short list of other chat sessions (the last viewed first). */
-export function HandOff({ targets, onPick }: { targets: { key: number; label: string }[]; onPick: (key: number) => void }) {
+/** CHAT-028: the files the agent wrote in a finished turn (at most four, newest first), each with a menu to send its path to
+ * another agent's draft. Nothing reaches that agent until the user presses Enter there. `note`: why the last send was refused. */
+export function FilesRow({ id, files, targets, onSend, note }: { id: string; files: WrittenFile[]; targets: { key: number; label: string }[]; onSend: (to: number, path: string) => void; note: string | null }) {
+  const name = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
+  return (
+    <div className="chat-files" role="group" aria-label="Files the agent wrote" data-row={id}>
+      <div className="chat-files-title">Files written</div>
+      <ul>
+        {files.map((f) => (
+          <li key={f.path}>
+            <span className="chat-file" title={f.path}>{name(f.path)}</span>
+            <span className="chat-file-change">{f.change === "added" ? "new" : f.change === "renamed" ? "renamed" : "edited"}</span>
+            {targets.length > 0 && isFullPath(f.path) && <HandOff label="Send to…" what="this file" targets={targets} onPick={(k) => onSend(k, f.path)} />}
+          </li>
+        ))}
+      </ul>
+      {note && <div className="chat-hand-note" role="status">{note}</div>}
+    </div>
+  );
+}
+
+/** VIEW-020: Send result to, a short list of other chat sessions (the last viewed first). CHAT-028 reuses it for one file. */
+export function HandOff({ targets, onPick, label = "Send result to…", what = "the result" }: { targets: { key: number; label: string }[]; onPick: (key: number) => void; label?: string; what?: string }) {
   return (
     <details className="chat-hand">
-      <summary>Send result to…</summary>
-      <ul aria-label="Sessions to send the result to">
+      <summary>{label}</summary>
+      <ul aria-label={`Sessions to send ${what} to`}>
         {targets.map((t) => (
           <li key={t.key}>
             <button type="button" onClick={(e) => {

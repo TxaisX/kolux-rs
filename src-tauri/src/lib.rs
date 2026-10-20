@@ -317,6 +317,14 @@ pub fn run() {
             }
             artifacts::serve(&ctx.app_handle().state::<artifacts::Library>(), &req)
         })
+        // T-033-e (FIX-1): a reload of the main page (F5 / Ctrl+R) destroys no window, and the old
+        // page never gets to release its git watches, so they are all let go as the new page starts
+        // loading (the new page subscribes afresh); at the first load there is nothing to let go.
+        .on_page_load(|webview, payload| {
+            if webview.label() == "main" && matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                scm::watch::unwatch_all();
+            }
+        })
         .on_window_event(|window, event| {
             // The window is gone: no shell may outlive it.
             // T-546-c: only the main window holds shells, so the Tower's own window closing changes nothing;
@@ -324,6 +332,8 @@ pub fn run() {
             if let tauri::WindowEvent::Destroyed = event {
                 if window.label() == "main" {
                     window.state::<Terminals>().kill_all();
+                    // T-033-e: no git watch outlives the window either (nothing is waited for here).
+                    scm::watch::unwatch_all();
                     if let Some(t) = window.app_handle().get_webview_window("tower") {
                         let _ = t.close();
                     }
@@ -346,6 +356,7 @@ pub fn run() {
             hooks::agent_hooks::agent_hooks_file,
             hooks::agent_hooks::saved::agent_status_saved,
             hooks::agent_hooks::saved::agent_resumable,
+            protected::protected_rules,
             hooks::claude_usage,
             sysmem::process_memory,
             fonts::list_fonts,
@@ -406,9 +417,15 @@ pub fn run() {
             projects::workspace_suggest_name,
             projects::project_icons_list,
             projects::project_icon_set,
+            projects::project_auto_icon,
             setup::setup_suggestion,
             setup::setup_suggestion_save,
             setup::setup_suggestion_dismiss,
+            setup::repo_setup_get,
+            setup::repo_setup_save,
+            setup::repo_setup_remove,
+            setup::repo_setup_policy_set,
+            setup::repo_setup_wait_set,
             projects::handoff_note_prepare,
             projects::workspace_remove,
             projects::workspace_remove_check,

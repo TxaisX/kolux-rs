@@ -6,10 +6,10 @@ import { chordMatches, chordsOf, labelOf, labelParts, matchEvent, parseChord, re
 
 const key = (k: Partial<KeyLike>): KeyLike => ({ key: "", code: "", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...k });
 
-test("the table registers the 129 carried commands (VIEW-053 added one, T-546 added view.tower); 53 ship unbound (T-543-b unbound Reopen closed tab) and 6 have only a macOS chord", () => {
-  expect(actions.length).toBe(129);
+test("the table registers the 132 carried commands (VIEW-053 added one, T-546 added view.tower, T-246-c added the three ui.zoom keys); 53 ship unbound (T-543-b unbound Reopen closed tab) and 6 have only a macOS chord", () => {
+  expect(actions.length).toBe(132);
   const ids = new Set(actions.map((a) => a.id));
-  expect(ids.size).toBe(129);
+  expect(ids.size).toBe(132);
   expect(ids.has("tab.newSimulator")).toBe(false);
   expect(ids.has("tab.openQuickCommandsMenu")).toBe(false);
   expect(actions.filter((a) => a.win32.length === 0 && !a.darwin).length).toBe(53);
@@ -127,4 +127,59 @@ test("SET-010: a clash names every command on the chord, scope by scope; agents 
   expect(resolve(agent, "win32").clashes[0].ids).toEqual(["tab.newTerminal", "tab.newAgent.aider"]);
   const off = resolve(agent, "win32", ["tab.newAgent.aider"]);
   expect([off.clashes, off.errors, chordsOf(off, "tab.newAgent.aider")]).toEqual([[], [], ["Mod+T"]]);
+});
+
+test("FIX-1 AltGr: Ctrl+Alt with a typed character that is not the chord's own key is a typed symbol, never a command (Windows and Linux)", () => {
+  const ctrlAlt = { ctrlKey: true, altKey: true };
+  const map = resolve(null, "win32");
+  const hits = (e: Partial<KeyLike>, platform: "win32" | "linux" | "darwin" = "win32") => matchEvent(platform === "win32" ? map : resolve(null, platform), key(e), ["global", "tabs"])?.id ?? null;
+  // German AltGr+0 types }, AltGr+Minus (the sz key) types a backslash: neither is zoom
+  expect(chordMatches("Mod+Alt+0", key({ ...ctrlAlt, code: "Digit0", key: "}" }), "win32")).toBeNull();
+  expect(chordMatches("Mod+Alt+Minus", key({ ...ctrlAlt, code: "Minus", key: "\\" }), "win32")).toBeNull();
+  expect(hits({ ...ctrlAlt, code: "Digit0", key: "}" })).not.toBe("ui.zoomReset");
+  expect(hits({ ...ctrlAlt, code: "Minus", key: "\\" })).not.toBe("ui.zoomOut");
+  // the older chords: Polish AltGr+A types a-ogonek, German AltGr+plus types a tilde
+  expect(chordMatches("Mod+Alt+A", key({ ...ctrlAlt, code: "KeyA", key: "ą" }), "win32")).toBeNull();
+  expect(chordMatches("Mod+Alt+BracketRight", key({ ...ctrlAlt, code: "BracketRight", key: "~" }), "win32")).toBeNull();
+  expect(hits({ ...ctrlAlt, code: "KeyA", key: "ą" })).not.toBe("floatingTerminal.toggle");
+  expect(hits({ ...ctrlAlt, code: "BracketRight", key: "~" })).not.toBe("tab.nextSameType");
+  // Linux is the same
+  expect(chordMatches("Mod+Alt+0", key({ ...ctrlAlt, code: "Digit0", key: "}" }), "linux")).toBeNull();
+  // the browser's own AltGraph flag blocks the match even when the key looks right
+  const gr = (k: string) => (m: string) => m === k;
+  expect(chordMatches("Mod+Alt+0", { ...key({ ...ctrlAlt, code: "Digit0", key: "0" }), getModifierState: gr("AltGraph") }, "win32")).toBeNull();
+  expect(chordMatches("Mod+Alt+0", { ...key({ ...ctrlAlt, code: "Digit0", key: "0" }), getModifierState: () => false }, "win32")).toEqual({});
+  // an index chord is guarded the same way (AltGr+1 types a pipe on some layouts)
+  expect(chordMatches("Mod+Alt+1", key({ ...ctrlAlt, code: "Digit1", key: "|" }), "win32", true)).toBeNull();
+  expect(chordMatches("Mod+Alt+1", key({ ...ctrlAlt, code: "Digit3", key: "3" }), "win32", true)).toEqual({ index: 3 });
+});
+
+test("FIX-1 AltGr: a real Ctrl+Alt chord still fires, and so does Option on a Mac (it types characters by design)", () => {
+  const ctrlAlt = { ctrlKey: true, altKey: true };
+  expect(chordMatches("Mod+Alt+0", key({ ...ctrlAlt, code: "Digit0", key: "0" }), "win32")).toEqual({});
+  expect(chordMatches("Mod+Alt+Equal", key({ ...ctrlAlt, code: "Equal", key: "=" }), "win32")).toEqual({});
+  expect(chordMatches("Mod+Alt+Minus", key({ ...ctrlAlt, code: "Minus", key: "-" }), "win32")).toEqual({});
+  expect(chordMatches("Mod+Alt+A", key({ ...ctrlAlt, code: "KeyA", key: "a" }), "win32")).toEqual({});
+  expect(chordMatches("Mod+Alt+BracketRight", key({ ...ctrlAlt, code: "BracketRight", key: "]" }), "linux")).toEqual({});
+  expect(chordMatches("Mod+Alt+Shift+Equal", key({ ...ctrlAlt, shiftKey: true, code: "Equal", key: "+" }), "win32")).toEqual({});
+  expect(chordMatches("Mod+Alt+NumpadAdd", key({ ...ctrlAlt, code: "NumpadAdd", key: "+" }), "win32")).toEqual({});
+  expect(chordMatches("Mod+Alt+Left", key({ ...ctrlAlt, code: "Left", key: "Left" }), "win32")).toEqual({});
+  // macOS: Option+0 types a degree-like symbol, and the chord is still the zoom reset
+  expect(chordMatches("Mod+Alt+0", key({ metaKey: true, altKey: true, code: "Digit0", key: "º" }), "darwin")).toEqual({});
+});
+
+test("FIX-2 AltGr: Ctrl+Alt+letter still fires on a non-Latin layout (no AltGr layer), and darwin never reads AltGraph", () => {
+  const ctrlAlt = { ctrlKey: true, altKey: true };
+  const gr = (m: string) => m === "AltGraph";
+  // Russian, Greek, Hebrew, Arabic layouts report the layout letter in key; the physical key still decides
+  for (const k of ["ф", "α", "ש", "ش"]) {
+    expect(chordMatches("Mod+Alt+A", key({ ...ctrlAlt, code: "KeyA", key: k }), "win32"), k).toEqual({});
+    expect(chordMatches("Mod+Alt+A", key({ ...ctrlAlt, code: "KeyA", key: k }), "linux"), k).toEqual({});
+  }
+  expect(matchEvent(resolve(null, "win32"), key({ ...ctrlAlt, code: "KeyA", key: "ф" }), ["global", "tabs"])?.id).toBe("floatingTerminal.toggle");
+  // the AltGraph flag still wins on a non-Latin layout, and a Latin letter that is not the chord's own is still typed text
+  expect(chordMatches("Mod+Alt+A", { ...key({ ...ctrlAlt, code: "KeyA", key: "ф" }), getModifierState: gr }, "win32")).toBeNull();
+  expect(chordMatches("Mod+Alt+A", key({ ...ctrlAlt, code: "KeyA", key: "ą" }), "win32")).toBeNull();
+  // macOS: even if the engine reports AltGraph while Option is held, the chord still fires
+  expect(chordMatches("Mod+Alt+0", { ...key({ metaKey: true, altKey: true, code: "Digit0", key: "º" }), getModifierState: gr }, "darwin")).toEqual({});
 });

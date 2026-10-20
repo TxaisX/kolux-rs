@@ -9,6 +9,7 @@ const SOURCES: Record<string, string[]> = {
   agents: ["AgentsPage.tsx"],
   terminal: ["TerminalPage.tsx"],
   git: ["GitPage.tsx"],
+  safety: ["SafetyPage.tsx"],
   notifications: ["NotificationsPage.tsx", "SettingsPage.tsx"],
   shortcuts: ["ShortcutsPage.tsx"],
   usage: ["SettingsPage.tsx"],
@@ -49,5 +50,9 @@ describe("search all settings (SET-007)", () => {
     const ps = [{ name: "kolux", path: "G:/Dev/kolux" }, { name: "site", path: "G:/Web/site" }];
     expect(searchRepos("web", ps).map((p) => p.name)).toEqual(["site"]);
     expect(hideRule(searchSettings("sound")!)).toBe('.settings-found[data-page="notifications"] [data-section]:not([data-section="sound"]) { display: none !important; }');
+  });
+  it("finds the Protected actions section on the Safety page by its everyday words (SAFE-015)", () => {
+    for (const q of ["protected", "force push", "stripe", "terraform", "rule"]) expect(searchSettings(q)!.pages.find((p) => p.page === "safety")?.sections, q).toEqual(["protected"]);
+    expect(searchSettings("safety")!.pages[0]).toEqual({ page: "safety", sections: "all" });
   });
 });

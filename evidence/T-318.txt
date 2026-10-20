@@ -54,3 +54,4 @@ LIVE PROOF PENDING (batched; after the wiring patch is applied; the coordinator 
 2. Remove the .kolux/templates folder and press Mod+Shift+M: an empty untitled note opens at once, no picker.
 3. Choose a template, then close the note without typing: untitled.md is still on disk with its text.
 4. Press Mod+Shift+M and then Escape: no new file appears.
+Correction (editor FIX-1, 2026-10-19): the claim in the Tests list that the link skip is exercised here overclaimed: the test made symlinks only, never a junction, and passed silently when a link could not be made. It now also makes a junction with mklink /J, checks each link exists before asserting the skip, and says so and stops when none could be made (evidence/editor-FIX-1.txt).

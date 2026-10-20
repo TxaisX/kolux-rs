@@ -12,9 +12,31 @@ const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "imag
 
 export type IconView = { kind: "emoji"; emoji: string } | { kind: "icon"; name: string } | { kind: "image"; src: string } | { kind: "auto"; letter: string };
 
-/** What to draw for a project: its chosen icon, else the automatic one (the first letter of its
- *  name, until the repository's own icon is found). A damaged or empty value is no choice. */
-export function iconView(value: string | undefined, name: string): IconView {
+/** PROJ-018: what the repository offers as an icon (see `auto_icon` on the Rust side): a picture as a
+ *  data URL, or a web address the page loads itself (a picture on the web, or the owner's avatar). */
+const AUTO_TYPES = ["png", "jpeg", "gif", "webp", "svg+xml", "x-icon"];
+export type AutoIcon = { kind: "image" | "remote" | "avatar"; src: string };
+
+/** A found icon that is safe to draw: a small picture data URL, or a plain https address. Anything else is no icon. */
+export function autoIconView(auto: AutoIcon | null | undefined): IconView | null {
+  if (!auto || typeof auto.src !== "string") return null;
+  const { kind, src } = auto;
+  let ok = false;
+  if (kind === "image") {
+    const at = src.indexOf(";base64,");
+    const type = src.startsWith("data:image/") && at > 0 ? src.slice("data:image/".length, at) : "";
+    ok = AUTO_TYPES.includes(type) && src.length <= ICON_IMAGE_MAX && /^[A-Za-z0-9+/=]+$/.test(src.slice(at + ";base64,".length));
+  } else if (kind === "remote" || kind === "avatar") {
+    // plain https only: no quotes, spaces, angle brackets or backslashes
+    ok = src.startsWith("https://") && src.length <= 2048 && !/[\s"'<>\\]/.test(src);
+  }
+  return ok ? { kind: "image", src } : null;
+}
+
+/** What to draw for a project: its chosen icon; else the icon found in its repository (`auto`); else a
+ *  folder symbol once the search found nothing (`auto === null`); until then the first letter of its
+ *  name. A damaged or empty value is no choice. */
+export function iconView(value: string | undefined, name: string, auto?: AutoIcon | null): IconView {
   const at = value ? value.indexOf(":") : -1;
   const rest = value && at > 0 ? value.slice(at + 1) : "";
   if (rest) {
@@ -23,6 +45,9 @@ export function iconView(value: string | undefined, name: string): IconView {
     if (kind === "icon") return { kind, name: rest };
     if (kind === "image" && rest.startsWith("data:image/")) return { kind, src: rest };
   }
+  const found = autoIconView(auto);
+  if (found) return found;
+  if (auto === null) return { kind: "icon", name: "folder" };
   return { kind: "auto", letter: (Array.from(name.trim())[0] ?? "?").toUpperCase() };
 }
 
