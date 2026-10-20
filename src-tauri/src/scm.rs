@@ -545,19 +545,23 @@ pub fn remote(worktree: &Path, action: &str) -> Result<ActionOutcome, String> {
     let st = status(worktree)?;
     let branch = st.branch.clone().ok_or("no branch checked out")?;
     let base = st.base.clone();
+    // GIT-010: a branch taken from a fork's pull request pushes to the fork's branch of its name there.
+    let target = matches!(action, "push" | "sync" | "pullpush" | "force").then(|| crate::pr_checkout::push_target(worktree)).flatten();
+    let (plain_push, lease_push) = (crate::pr_checkout::push_args(target.as_ref(), false), crate::pr_checkout::push_args(target.as_ref(), true));
+    let (plain_push, lease_push): (Vec<&str>, Vec<&str>) = (plain_push.iter().map(String::as_str).collect(), lease_push.iter().map(String::as_str).collect());
     let steps: Vec<Vec<&str>> = match action {
-        "push" => vec![vec!["push"]],
+        "push" => vec![plain_push],
         "pull" => vec![vec!["pull"]],
-        "sync" => vec![vec!["pull"], vec!["push"]],
+        "sync" => vec![vec!["pull"], plain_push],
         // GIT-005: the last step of commit then pull and push: the new commit is rebased onto
         // what the remote gained, then pushed.
-        "pullpush" => vec![vec!["pull", "--rebase"], vec!["push"]],
+        "pullpush" => vec![vec!["pull", "--rebase"], plain_push],
         "fetch" => vec![vec!["fetch"]],
         "ff" => vec![vec!["pull", "--ff-only"]],
         // GIT-008: the pull again with the policy the user picked from the notice.
         "pullmerge" => vec![vec!["pull", "--no-rebase"]],
         "pullrebase" => vec![vec!["pull", "--rebase"]],
-        "force" => vec![vec!["push", "--force-with-lease"]],
+        "force" => vec![lease_push],
         "publish" => vec![vec!["push", "--set-upstream", "origin", &branch]],
         "rebase" => vec![vec!["fetch"], vec!["rebase", base.as_deref().ok_or("no base branch to rebase from")?]],
         other => return Err(format!("unknown remote action {other}")),

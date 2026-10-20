@@ -2,11 +2,12 @@
 // means, how checks and review states read, which workflow runs a "rerun" touches, who can be
 // suggested as a reviewer, and what the merge box allows.
 import { requestReviewers } from "./people";
+import { fixPrompt } from "../scm/review";
 import type { Person } from "./repoFacts";
 
 export type PrReviewer = { login: string; state: string };
 export type PrCheck = { id: number; name: string; status: string; conclusion: string; url: string; runId: number | null };
-export type PrPageData = { number: number; title: string; body: string; state: string; draft: boolean; url: string; author: string; headRef: string; headSha: string; baseRef: string; mergeableState: string; labels: { name: string; color: string }[]; assignees: string[]; reviewers: PrReviewer[]; reactions: { content: string; count: number }[]; additions: number; deletions: number; changedFiles: number; reviewsTruncated: boolean; reviewsLimit: number };
+export type PrPageData = { number: number; title: string; body: string; state: string; draft: boolean; url: string; author: string; headRef: string; headSha: string; baseRef: string; headRepo?: string; mergeableState: string; labels: { name: string; color: string }[]; assignees: string[]; reviewers: PrReviewer[]; reactions: { content: string; count: number }[]; additions: number; deletions: number; changedFiles: number; reviewsTruncated: boolean; reviewsLimit: number };
 /** `limit`: how many items the backend reads at most; `truncated` says there were more. */
 export type DiffLimits = { lines: number; chars: number; budget: number };
 export type PrFiles = { files: PrFile[]; truncated: boolean; limit: number; diffLimits: DiffLimits };
@@ -68,11 +69,27 @@ export function rerunTargets(checks: PrCheck[], failedOnly: boolean): number[] {
 export const REVIEW_LABEL: Record<string, string> = { requested: "Review requested", approved: "Approved", changes_requested: "Changes requested", dismissed: "Review dismissed", commented: "Commented" };
 
 /** People to suggest when asking for a review: not the author, not already on the pull request
- * (requested or reviewed), matching what was typed; a person who commented before comes first. */
-export function reviewerSuggestions(people: Person[], page: Pick<PrPageData, "author" | "reviewers">, typed: string, limit = 8): Person[] {
+ * (requested or reviewed), matching what was typed. GIT-053: recent editors of the changed files come
+ * first (even when the people list does not hold them), then a person who commented before. */
+export function reviewerSuggestions(people: Person[], page: Pick<PrPageData, "author" | "reviewers">, typed: string, limit = 8, editors: string[] = []): Person[] {
   const q = typed.trim().replace(/^@/, "").toLowerCase();
   const taken = new Set([page.author.toLowerCase(), ...page.reviewers.filter((r) => r.state !== "dismissed").map((r) => r.login.toLowerCase())]);
-  return people.filter((p) => !taken.has(p.login.toLowerCase()) && p.login.toLowerCase().includes(q)).slice(0, limit);
+  const seen = new Set<string>();
+  const out: Person[] = [];
+  const known = new Map(people.map((p) => [p.login.toLowerCase(), p]));
+  for (const login of editors) known.has(login.toLowerCase()) || known.set(login.toLowerCase(), { login, avatar: "" });
+  for (const p of [...editors.map((e) => known.get(e.toLowerCase())!), ...people]) {
+    const k = p.login.toLowerCase();
+    if (taken.has(k) || seen.has(k) || !k.includes(q)) continue;
+    seen.add(k);
+    out.push(p);
+  }
+  return out.slice(0, limit);
+}
+
+/** GIT-053: whether a suggested login came from the recent editors of the changed files. */
+export function isEditor(editors: string[], login: string): boolean {
+  return editors.some((e) => e.toLowerCase() === login.toLowerCase());
 }
 
 /** Asking `logins` for a review: the list to send, or why not (the sixteenth requested reviewer is refused). */
@@ -174,4 +191,70 @@ export function heldWords(f: Pick<PrFile, "held" | "patchLines" | "patchChars">,
     default:
       return null;
   }
+}
+
+// ---- T-232-d ----
+
+/** GIT-052: GitHub's viewed mark for a changed file; "dismissed" is a file changed since it was viewed. */
+export type ViewedState = "viewed" | "unviewed" | "dismissed";
+export type PrViewed = { files: { path: string; state: ViewedState }[]; truncated: boolean; limit: number };
+
+/** The state of `path`; a file the answer does not hold (a cut list) is unviewed. */
+export function viewedOf(v: PrViewed | null, path: string): ViewedState {
+  return v?.files.find((f) => f.path === path)?.state ?? "unviewed";
+}
+
+/** The list with `path` marked (or unmarked), before GitHub has answered; an unlisted path is added. */
+export function withViewed(v: PrViewed, path: string, on: boolean): PrViewed {
+  const state: ViewedState = on ? "viewed" : "unviewed";
+  const files = v.files.some((f) => f.path === path) ? v.files.map((f) => (f.path === path ? { ...f, state } : f)) : [...v.files, { path, state }];
+  return { ...v, files };
+}
+
+/** "3 of 12 files viewed", with how many changed since being viewed; nothing when no list is read. */
+export function viewedLine(files: Pick<PrFile, "filename">[], v: PrViewed | null): string {
+  if (!v || files.length === 0) return "";
+  const done = files.filter((f) => viewedOf(v, f.filename) === "viewed").length;
+  const changed = files.filter((f) => viewedOf(v, f.filename) === "dismissed").length;
+  return `${done} of ${files.length} files viewed${changed ? `, ${changed} changed since viewed` : ""}`;
+}
+
+const FAILING = ["failure", "timed_out", "cancelled", "action_required"];
+/** The finished checks that did not pass. */
+export function failedChecks(checks: PrCheck[]): PrCheck[] {
+  return checks.filter((c) => c.status === "completed" && FAILING.includes(c.conclusion));
+}
+
+/** GIT-051: why "Fix with AI" is off for a check, or null when it can go: only a failed check with a
+ * workflow run to read, and only with a workspace to send the prompt to. */
+export function fixBlocker(c: PrCheck, workspace: string | null): string | null {
+  if (!failedChecks([c]).length) return "Only a failed check can be fixed.";
+  if (c.runId === null || !c.url.includes("/actions/runs/")) return "This check has no workflow run to read.";
+  if (!workspace) return "Start a workspace for this pull request first, then its agent can fix the check.";
+  return null;
+}
+
+/** The prompt sent to the workspace's agent: the same words as the Git panel's Fix with AI. */
+export function fixText(c: PrCheck, log: string): string {
+  return fixPrompt({ name: c.name, outcome: "failed", link: c.url }, log);
+}
+
+/** The branch's repository as the head line shows it: `owner:branch` when it is another repository
+ * than the one the pull request is in (a fork), else just the branch. */
+export function headLabel(repo: string, p: Pick<PrPageData, "headRef" | "headRepo">): string {
+  const from = (p.headRepo ?? "").trim();
+  if (!from) return p.headRef;
+  return from.toLowerCase() === repo.toLowerCase() ? p.headRef : `${from.split("/")[0]}:${p.headRef}`;
+}
+
+/** GIT-060: the note for a fork: `fork of up/stream`, `null` for a plain repository. */
+export function lineageNote(l: { fork: boolean; parent?: string | null; parentOwner?: string | null } | null): string | null {
+  if (!l?.fork) return null;
+  return l.parent ? `Fork of ${l.parent}` : "Fork (its parent is gone)";
+}
+
+/** GIT-051: the label names a repository offers that the pull request does not carry yet. */
+export function labelsToAdd(offer: { name: string }[], have: { name: string }[]): string[] {
+  const taken = new Set(have.map((l) => l.name.toLowerCase()));
+  return offer.map((l) => l.name).filter((n) => !taken.has(n.toLowerCase()));
 }

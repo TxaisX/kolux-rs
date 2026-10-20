@@ -7,7 +7,7 @@ import { agents } from "../keys/actions";
 import { LANGUAGES } from "../language";
 import { PAGES, type PageId } from "./pages";
 
-export type Entry = { page: PageId; section: string; title: string; words: string; fold?: string };
+export type Entry = { page: PageId; section: string; title: string; words: string; fold?: string; parent?: string };
 
 export const INDEX: Entry[] = [
   { page: "general", section: "views", title: "Look and first screen", words: "start open launch home new classic look startup" },
@@ -26,8 +26,18 @@ export const INDEX: Entry[] = [
   { page: "appearance", section: "sidebar-look", title: "Left sidebar look", words: "sidebar left tint tinted colour color match terminal background wash strength", fold: "window" },
   { page: "appearance", section: "card-density", title: "Workspace cards", words: "workspace card layout default compact detailed custom details density pinned pull request note", fold: "window" },
   { page: "appearance", section: "status-bar", title: "Status bar", words: "status bar bottom items", fold: "window" },
-  { page: "accounts", section: "connections", title: "AI connections", words: "connect sign in login key api token account claude codex grok openai anthropic xai plan" },
+  // ACCT-030: each provider is its own section (parent = the section it is drawn inside), so a search for one
+  // provider word leaves only that provider's card and accounts; a word of the wrapper itself keeps all of it.
+  { page: "accounts", section: "connections", title: "AI connections", words: "connect sign in login key api token account plan" },
+  { page: "accounts", section: "connect-claude", parent: "connections", title: "Claude", words: "claude anthropic sign in login subscription pro max 1-year key token" },
+  { page: "accounts", section: "connect-codex", parent: "connections", title: "Codex", words: "codex openai chatgpt sign in login plan api key" },
+  { page: "accounts", section: "connect-grok", parent: "connections", title: "Grok", words: "grok xai api key" },
   { page: "accounts", section: "accounts-advanced", title: "Manage accounts (advanced)", words: "accounts switch several multiple advanced" },
+  { page: "accounts", section: "accounts-claude", parent: "accounts-advanced", title: "Claude accounts", words: "claude anthropic accounts managed switch several multiple" },
+  { page: "accounts", section: "accounts-codex", parent: "accounts-advanced", title: "Codex accounts", words: "codex openai chatgpt accounts managed switch several multiple" },
+  { page: "accounts", section: "agent-folders", parent: "accounts-advanced", title: "Agent folders and credentials", words: "agent folders credentials sessions config home" },
+  { page: "accounts", section: "minimax", parent: "agent-folders", title: "MiniMax", words: "minimax cookie session api key" },
+  { page: "accounts", section: "gemini", parent: "agent-folders", title: "Gemini", words: "gemini google api key" },
   { page: "agents", section: "default", title: "Default agent", words: "default agent new tab start" },
   { page: "agents", section: "permissions", title: "Agent Permissions", words: "permission allow approve yolo skip ask safety" },
   { page: "agents", section: "agents", title: "Installed agents", words: "installed install cli programs " + agents.map(([id, name]) => `${id} ${name}`).join(" ") },
@@ -43,6 +53,7 @@ export const INDEX: Entry[] = [
   { page: "git", section: "base", title: "Base branch", words: "base main master default branch" },
   { page: "git", section: "scm-groups", title: "Source Control", words: "source control scm changes staged groups order" },
   { page: "git", section: "commit-writer", title: "Commit messages", words: "commit message write generate ai summary" },
+  { page: "git", section: "review-bots", title: "Review bots", words: "review bot bots comments author dependabot renovate marked pull request" },
   { page: "git", section: "gh-budget", title: "GitHub API budget", words: "github api rate limit requests pull pr" },
   { page: "git", section: "deleting", title: "Deleting workspaces", words: "delete remove worktree branch cleanup" },
   { page: "safety", section: "protected", title: "Protected actions", words: "protected ask asks prompt claude permission dangerous force push main delete rm drop database table stripe terraform infrastructure deploy production discard uncommitted reset rule rules master switch hooks" },
@@ -71,6 +82,16 @@ const has = (text: string, ts: string[]) => {
   return ts.every((w) => t.includes(w));
 };
 
+/** ACCT-030: a match keeps its family on screen: the sections it is drawn inside (so they are not hidden)
+ *  and, when the match is a wrapper, everything drawn inside it. Order stays that of the index. */
+function withFamily(own: Entry[], found: Entry[]): Entry[] {
+  const keep = new Set(found.map((e) => e.section));
+  const parentOf = (s: string) => own.find((e) => e.section === s)?.parent;
+  for (const e of found) for (let p = e.parent; p && !keep.has(p); p = parentOf(p)) keep.add(p);
+  const inside = (e: Entry): boolean => { for (let p = e.parent; p; p = parentOf(p)) if (found.some((f) => f.section === p)) return true; return false; };
+  return own.filter((e) => keep.has(e.section) || inside(e));
+}
+
 /** The pages and sections that hold every term. A page whose title matches comes first, then the
  *  others in page order; within a page the sections keep their order. Null when nothing is searched. */
 export function searchSettings(raw: string): Hits | null {
@@ -87,7 +108,7 @@ export function searchSettings(raw: string): Hits | null {
       own.forEach((e) => e.fold && folds.add(e.fold));
       continue;
     }
-    const hit = own.filter((e) => has(`${PAGES[page]} ${e.title} ${e.words}`, ts));
+    const hit = withFamily(own, own.filter((e) => has(`${PAGES[page]} ${e.title} ${e.words}`, ts)));
     if (hit.length === 0) continue;
     hit.forEach((e) => e.fold && folds.add(e.fold));
     rest.push({ page, sections: hit.map((e) => e.section) });

@@ -1422,7 +1422,11 @@ pub fn remove_check(git: &Git, project: &Project, worktree_path: &str) -> Result
     }
     // PROJ-072: a folder that is already gone has no changes to lose; deleting it is cleanup.
     let missing = !Path::new(&target.path).exists();
-    let changes = if missing { Vec::new() } else { git.status_lines(Path::new(&target.path))? };
+    let mut changes = if missing { Vec::new() } else { git.status_lines(Path::new(&target.path))? };
+    // GIT-013: work inside the worktree's submodules goes with it, so it is named in the changes.
+    if !missing {
+        changes = crate::sub_work::annotate(changes, &crate::sub_work::unsaved(Path::new(&target.path)).unwrap_or_default());
+    }
     let here = Path::new(&target.path);
     // ponytail: only this repository's worktrees count as nested; other projects' folders inside it are not looked for.
     let nested = all.iter().filter(|w| Path::new(&w.path).ancestors().skip(1).any(|a| same_folder(a, here))).map(|w| w.path.clone()).collect();
@@ -1446,7 +1450,8 @@ pub fn removal_refused(now: &RemoveCheck, force: bool, asked: &str) -> Option<St
     }
     if !now.changes.is_empty() && !force {
         let n = now.changes.len();
-        return Some(format!("{n} uncommitted or untracked change{} would be lost. Tick Delete my changes too to delete it anyway.", if n == 1 { "" } else { "s" }));
+        let subs = crate::sub_work::note(&now.changes).map(|w| format!(" {w}")).unwrap_or_default();
+        return Some(format!("{n} uncommitted or untracked change{} would be lost.{subs} Tick Delete my changes too to delete it anyway.", if n == 1 { "" } else { "s" }));
     }
     None
 }
@@ -2521,9 +2526,9 @@ pub fn project_icon_set(store: StoreState<'_>, project_id: String, icon: String)
 // links the page source declares inside the repository, and last the avatar of the owner on the
 // hosting site. Only files inside the repository are read (never through a link or a `..`), and a
 // file over `AUTO_ICON_FILE_MAX` is passed over. FIX-4 (2026-10-19): a repository never makes the
-// app load a web address of its choosing. The manifest's web `icon`, its `homepage` favicon and
-// `https` icon links in the page source are not followed (T-302-c fetches them in Rust, behind
-// checks); the one address handed to the page is the owner's avatar on github.com, which the
+// page load a web address of its choosing. T-302-c: the manifest's web `icon`, its `homepage` favicon
+// and `https` icon links in the page source are fetched in Rust behind web_icon.rs's checks and come
+// back as data URLs; the one address handed to the page is the owner's avatar on github.com, which the
 // content policy allows and nothing else. No hit gives the folder symbol.
 
 /// The most a file may take to be used as an icon: the biggest whole number of 3-byte groups whose
@@ -2665,9 +2670,25 @@ fn owner_avatar(origin: Option<&str>, upstream: Option<&str>) -> Option<String> 
     (chosen.0 == "github.com").then(|| format!("https://github.com/{}.png", chosen.1))
 }
 
-/// The icon the repository at `repo` offers, trying the places in order; `None` means the folder symbol.
+/// The icon the repository at `repo` offers from its own files and remote only (no web fetch), for the tests.
+#[cfg(test)]
 pub fn auto_icon(repo: &Path) -> Option<AutoIcon> {
+    auto_icon_with(repo, &|_| None)
+}
+
+/// The icon the repository at `repo` offers, trying the places in order; `None` means the folder symbol.
+/// `web` fetches a checked web address (T-302-c: `web_icon::fetch`; tests pass a stand-in), at most
+/// `web_icon::WEB_TRIES_MAX` times per project.
+pub fn auto_icon_with(repo: &Path, web: &dyn Fn(&tauri::Url) -> Option<String>) -> Option<AutoIcon> {
     let image = |src: String| AutoIcon { kind: "image", src };
+    let tries = std::cell::Cell::new(0);
+    let web = |url: tauri::Url| {
+        if tries.get() >= crate::web_icon::WEB_TRIES_MAX {
+            return None;
+        }
+        tries.set(tries.get() + 1);
+        web(&url)
+    };
     for dir in FAVICON_DIRS {
         for name in FAVICON_NAMES {
             let rel = if dir.is_empty() { name.to_string() } else { format!("{dir}/{name}") };
@@ -2679,10 +2700,16 @@ pub fn auto_icon(repo: &Path) -> Option<AutoIcon> {
     if let Some(src) = BUNDLE_ICONS.iter().find_map(|rel| repo_image(repo, rel)) {
         return Some(image(src));
     }
-    // a web address in the manifest or the page source is never followed (FIX-4): `repo_image` refuses
-    // anything with a scheme, so only a path inside the repository can match
+    // `repo_image` refuses anything with a scheme, so only a path inside the repository matches there;
+    // a web address goes only through `web` (T-302-c), never to the page
     let manifest: Option<serde_json::Value> = repo_text(repo, "package.json").and_then(|t| serde_json::from_str(&t).ok());
     if let Some(src) = manifest.as_ref().and_then(|m| m["icon"].as_str()).and_then(|rel| repo_image(repo, rel)) {
+        return Some(image(src));
+    }
+    if let Some(src) = manifest.as_ref().and_then(crate::web_icon::manifest_icon_url).and_then(web) {
+        return Some(image(src));
+    }
+    if let Some(src) = manifest.as_ref().and_then(crate::web_icon::homepage_favicon_url).and_then(web) {
         return Some(image(src));
     }
     for page in PAGE_FILES {
@@ -2692,6 +2719,9 @@ pub fn auto_icon(repo: &Path) -> Option<AutoIcon> {
             let from_root = href.starts_with('/');
             let rel = if from_root || beside.is_empty() { href.clone() } else { format!("{beside}/{href}") };
             if let Some(src) = repo_image(repo, &rel).or_else(|| from_root.then(|| repo_image(repo, &format!("public/{}", href.trim_start_matches('/')))).flatten()) {
+                return Some(image(src));
+            }
+            if let Some(src) = crate::web_icon::page_icon_urls(std::slice::from_ref(&href)).into_iter().next().and_then(web) {
                 return Some(image(src));
             }
         }
@@ -2710,7 +2740,7 @@ pub fn auto_icon(repo: &Path) -> Option<AutoIcon> {
 #[tauri::command]
 pub async fn project_auto_icon(store: StoreState<'_>, project_id: String) -> Result<Option<AutoIcon>, String> {
     let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
-    tauri::async_runtime::spawn_blocking(move || auto_icon(Path::new(&project.path))).await.map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || auto_icon_with(Path::new(&project.path), &crate::web_icon::fetch)).await.map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

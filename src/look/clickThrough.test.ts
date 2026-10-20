@@ -65,8 +65,8 @@ test("PROJ-062: the Card details chooser has a real heading and a tick-box per d
   expect(head && textOf(head.props.children), "the label is a heading element").toBe("Card details");
   expect(draw().find((h) => h.props.role === "group")?.props["aria-labelledby"]).toBe(head?.props.id);
   const boxes = byTag(draw(), "input");
-  expect(boxes.map((b) => b.props["aria-label"])).toEqual(["card shows status", "card shows agent summary", "card shows pull request", "card shows changed files", "card shows note", "card shows automation"]);
-  expect(boxes.map((b) => b.props.checked), "Detailed shows all but the Automation tag, which is the user's own tick (AUTO-024)").toEqual([true, true, true, true, true, false]);
+  expect(boxes.map((b) => b.props["aria-label"])).toEqual(["card shows status", "card shows agent summary", "card shows pull request", "card shows changed files", "card shows note", "card shows ports", "card shows task", "card shows automation"]);
+  expect(boxes.map((b) => b.props.checked), "Detailed shows all but Ports, Task and the Automation tag, which are the user's own ticks (T-266-b, AUTO-024)").toEqual([true, true, true, true, true, false, false, false]);
   expect(boxes[0].props.disabled, "status cannot be switched off").toBe(true);
 
   change(byLabel(draw(), "card shows status"), { checked: false });

@@ -1,6 +1,6 @@
 // SET-038 (T-323): editor and diff preference defaults, auto-save timing and whitespace hiding.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { autoSaver, EDITOR_FIELDS, hiddenWhitespace, prefPatch, readEditorPrefs } from "./editorPrefs";
+import { allChangesStart, autoSaver, EDITOR_FIELDS, hiddenWhitespace, prefPatch, readEditorPrefs } from "./editorPrefs";
 import { appearanceVars, readAppearance } from "../theme";
 
 afterEach(() => vi.useRealTimers());
@@ -34,6 +34,14 @@ describe("SET-038 editor and diff preferences", () => {
     const s = { ...prefPatch("diffWordWrap", true) };
     expect(readEditorPrefs(s)).toMatchObject({ diffWordWrap: true, wordWrap: true });
     expect(prefPatch("autoSaveDelay", 5)).toEqual({ editorAutoSaveDelay: 200 });
+  });
+
+  it("T-323-b: All Changes starts from the diff preferences unless a layout was saved from a tab", () => {
+    const K = { split: "ac-split", wrap: "ac-wrap", spaces: "ac-spaces", tree: "ac-tree" };
+    expect(allChangesStart(null, K)).toEqual({ split: false, wrap: false, spaces: false, tree: false });
+    const prefs = { diffView: "split", diffWordWrap: true, diffShowWhitespace: true, diffFileTree: true };
+    expect(allChangesStart(prefs, K)).toEqual({ split: true, wrap: true, spaces: true, tree: true });
+    expect(allChangesStart({ ...prefs, "ac-split": false, "ac-tree": false }, K)).toEqual({ split: false, wrap: true, spaces: true, tree: false });
   });
 
   it("SET-018: an empty editor font falls back to the terminal font", () => {

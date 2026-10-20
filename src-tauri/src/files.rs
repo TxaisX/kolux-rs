@@ -595,6 +595,39 @@ pub fn dir_list(path: String, fence: tauri::State<'_, crate::fence::Fence>, stor
     list_dir(&fence.allow(&path, &store, &git, false)?)
 }
 
+/// EDIT-035: which of the names in a folder git ignores (empty outside a repository or when git is missing).
+/// A folder is asked as `name/` so a rule that only names folders counts. One `check-ignore` answers the batch.
+pub fn ignored_in(dir: &Path) -> Vec<String> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let Ok(list) = list_dir(dir) else { return Vec::new() };
+    if list.is_empty() {
+        return Vec::new();
+    }
+    let Ok(mut child) = crate::git::command(&["check-ignore", "--stdin", "-z", "-v", "-n"], Some(dir)).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn() else { return Vec::new() };
+    if let Some(mut stdin) = child.stdin.take() {
+        for e in &list {
+            let slash = if e.kind == "dir" { "/" } else { "" };
+            if stdin.write_all(format!("{}{slash}\0", e.name).as_bytes()).is_err() {
+                break;
+            }
+        }
+    }
+    let Ok(out) = child.wait_with_output() else { return Vec::new() };
+    if !matches!(out.status.code(), Some(0 | 1)) {
+        return Vec::new();
+    }
+    let names: Vec<String> = list.iter().map(|e| e.name.clone()).collect();
+    let flags = crate::scm::watch::parse_check_ignore(&String::from_utf8_lossy(&out.stdout), &names);
+    names.into_iter().zip(flags).filter(|(_, ignored)| *ignored).map(|(n, _)| n).collect()
+}
+
+/// EDIT-035: the names in a folder that git ignores, for the explorer's "hide git-ignored files" switch.
+#[tauri::command(async)]
+pub fn dir_ignored(path: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<String>, String> {
+    Ok(ignored_in(&fence.allow(&path, &store, &git, false)?))
+}
+
 /// What a path really is: "remote" (another machine, never looked up; SAFE-021), "outside" (not
 /// in a project, or out through a link; EDIT-045), else following links "dir", "file" or "missing".
 #[tauri::command]
@@ -624,6 +657,25 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn edit035_a_folder_outside_a_repository_has_no_ignored_names_and_a_repository_names_its_ignored_files_and_folders() {
+        let d = temp_dir("ignored");
+        fs::write(d.join("a.txt"), "x").unwrap();
+        assert!(ignored_in(&d).is_empty());
+        let git = |args: &[&str]| crate::git::command(args, Some(&d)).output().map(|o| o.status.success()).unwrap_or(false);
+        if !git(&["init", "-q"]) {
+            return; // no git on this machine: nothing more to prove
+        }
+        fs::write(d.join(".gitignore"), "*.log\nbuild/\n").unwrap();
+        fs::write(d.join("run.log"), "x").unwrap();
+        fs::create_dir_all(d.join("build")).unwrap();
+        fs::create_dir_all(d.join("src")).unwrap();
+        let mut got = ignored_in(&d);
+        got.sort();
+        assert_eq!(got, vec!["build".to_string(), "run.log".to_string()]);
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

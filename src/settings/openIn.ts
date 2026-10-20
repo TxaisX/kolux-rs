@@ -29,7 +29,8 @@ export function readOpenIn(s: Record<string, unknown>): OpenInApp[] {
   const seen = new Set<string>();
   return saved.flatMap((r: unknown) => {
     if (!r || typeof r !== "object") return [];
-    const { id, name, command } = r as Record<string, unknown>;
+    const { id, command, label } = r as Record<string, unknown>;
+    const name = (r as Record<string, unknown>).name ?? label; // rows saved by the first Open in list (T-237-a) used "label"
     if (typeof command !== "string" || !command.trim()) return [];
     const preset = PRESETS.find((p) => (typeof id === "string" ? p.id === id : squash(p.command) === squash(command)));
     const row: OpenInApp | null = preset ?? (typeof name === "string" && name.trim() ? { id: typeof id === "string" && id ? id : "custom:" + squash(command), name: name.trim(), command: command.trim() } : null);

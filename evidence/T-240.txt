@@ -113,3 +113,68 @@ LIVE PROOF PENDING (batched; the app launches are the proof lane's)
    site shows signed in on reload; a file with a google.com entry: the note says one Google
    sign-in was left out. (BROW-028 / BROW-029.)
 4. Import a file that is not JSON: refused with the reason; nothing changes.
+
+=====================================================================================================
+T-240 second pass · BROW-028 from Google Chrome (Txais's pick, 2026-10-20) · lane/browser from 317d2fda
+Opus standing in for Fable · routing v3 (live proof batched)
+
+Coordinator ruling followed: Chrome on Windows (v127+) seals its cookie store with app-bound
+encryption that only Chrome's own elevation service unwraps. Kolux does NOT open, copy, decrypt or
+read Chrome's profile, call that service, inject into Chrome, run elevated or attach to a debug port
+on the user's profile. "Import from Google Chrome" is a guided export: the user exports the sites
+they want to a cookies.txt file from inside Chrome with a cookies.txt export extension, then picks
+that file; the file importer below does the rest.
+
+What changed
+- src-tauri/src/browser_cookies.rs: parse() now takes either shape: a file starting with [ or { is
+  the JSON list (unchanged, now parse_json), anything else is a Netscape cookies.txt file
+  (parse_netscape): one cookie per line, seven tab-separated fields (domain, include-subdomains
+  TRUE/FALSE, path, secure TRUE/FALSE, expiry seconds with 0 = session cookie, name, value);
+  "#HttpOnly_" before the domain marks HTTP-only; other # lines and blank lines are skipped; CRLF
+  and a leading BOM are fine. Each line goes through the same checks as a JSON entry (name token,
+  value without control characters or semicolons, host name, path starting with /, expiry not
+  past). A malformed line is skipped and counted, named by line number and reason only (never its
+  value; ten reasons kept, count whole). include-subdomains TRUE gives ".host", FALSE "host". The
+  Google rule (BROW-029) applies the same way. An empty file, a file of comments only, and a file
+  whose every line fails are refused with the reason. The import command, the size cap and the
+  per-site replace with roll-back (apply) are unchanged; cookie values go only to the tab's engine
+  store (wry set_cookie into WebView2's cookie manager for the tab's profile) and are never logged.
+- src/browser/cookies.ts: CookieSource, IMPORT_SOURCES (Import from Google Chrome..., Import from a
+  file...), CHROME_STEPS (the three guided steps), pickerFor(source) (Chrome: cookies.txt; file:
+  cookies.txt or JSON).
+- src/browser/BrowserPane.tsx: the toolbar's Import cookies button opens a small menu in the pane's
+  flow (Chrome first, then a file, then the Google note); Chrome shows the steps with "Choose
+  cookies.txt..." and Cancel; the button is disabled while an import into this tab runs.
+- src/browser/browser.css: menu note row and the steps panel.
+- src-tauri/src/browser_crash.rs: build fix after merging main (the reliability lane added fields
+  to recovery::Crash): record_of() fills them (kind from the engine process kind, count 1).
+- evidence/browser-T-251-cli.rs.patch regenerated on main ee2f94c7's cli.rs (HELP line 3-way).
+- evidence/browser-T-286-b-recovery.rs.patch removed: main already keeps five crash records.
+
+Library check: context7 was out of quota; the public wry 0.57.0 crate source in the cargo registry
+(src/webview2/mod.rs set_cookie / delete_cookie through ICoreWebView2CookieManager CreateCookie,
+SetExpires, SetIsHttpOnly) confirms the Windows setter the importer already used. Note: the cookie
+crate's Cookie::domain() drops a leading dot, so host-only and domain cookies reach WebView2 the
+same way (after-list row).
+
+Readings (unit tests only; made-up fixture cookies, no real browser profile or cookie file read)
+- cargo build exit 0 · clippy --all-targets -D warnings exit 0 (Cargo patch applied, reverted
+  before the commit) · cargo test browser:: 153 passed 0 failed, including
+  brow028_a_cookies_txt_file_is_read_with_httponly_lines_comments_and_crlf,
+  brow028_malformed_cookies_txt_lines_are_counted_and_named_by_line_never_by_value, the two older
+  brow028 tests, brow029 tests and the seven t286b tests (logs v3c3-*.log)
+- tsc exit 0 · vitest src/browser 19 files 96 tests passed, including
+  "BROW-028: Chrome is a guided cookies.txt export, offered before a plain file" (v3c4-*.log);
+  privacy-audit app070 x2 red is the known pre-existing failure, not this task.
+
+LIVE PROOF PENDING (batched; supersedes step 4 above: a file that is not JSON is now read as
+cookies.txt)
+5. Toolbar Import cookies: a menu shows "Import from Google Chrome...", "Import from a file..." and
+   the Google note. Pick Chrome: three steps and "Choose cookies.txt..." show; Cancel closes them.
+6. Choose a made-up cookies.txt with two lines for a local test site (one #HttpOnly_) and one line
+   with six fields: the note says "2 cookies for 1 site imported; 1 skipped (line N: 6
+   tab-separated fields...)"; reloading the site sends both cookies (document.cookie shows only
+   the non-HTTP-only one).
+7. While an import runs the Import cookies button is disabled.
+8. A cookies.txt from a real Chrome export (Txais's own run): a site signed in in Chrome opens
+   signed in here; Google rows are reported as left out.

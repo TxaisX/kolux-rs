@@ -3,6 +3,7 @@ mod floating_trust;
 mod repo_scan;
 mod activity;
 mod agents;
+mod app_look;
 mod artifacts;
 mod automations;
 mod badge;
@@ -68,6 +69,9 @@ mod projects;
 mod prompt_answer;
 mod prompt_scan;
 mod scm;
+mod scm_open;
+mod scm_recipe;
+mod scm_stack;
 mod pr_review;
 mod skills;
 mod star;
@@ -79,12 +83,14 @@ mod routing;
 mod schedule;
 mod resume;
 mod secrets;
+mod settings_sync;
 mod sessions;
 mod shell_marks;
 mod shell_history;
 mod skill_delete;
 mod state;
 mod status;
+mod sub_work;
 mod term_import;
 mod sysmem;
 mod terminal;
@@ -96,6 +102,7 @@ mod tray;
 mod trust;
 mod update;
 mod visibility;
+mod web_icon;
 mod usage_alerts;
 
 use state::Store;
@@ -131,11 +138,14 @@ fn get_settings(store: tauri::State<'_, Mutex<Store>>) -> Result<serde_json::Val
 /// thread; typing never waits on the profile drive.
 #[tauri::command(async)]
 fn settings_patch(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, set: serde_json::Map<String, serde_json::Value>, remove: Vec<String>) -> Result<(), String> {
-    write_settings(&app, &store, |old| state::patched(old, &set, &remove))
+    // SET-035 (T-181): updates aimed at retired or secret settings are ignored; every window gets the redacted change.
+    let (set, remove) = settings_sync::accepted(&set, &remove);
+    let payload = settings_sync::broadcast(&set, &remove);
+    write_settings(&app, &store, |old| state::patched(old, &set, &remove), payload)
 }
 
 /// The settings `change` makes of what is on disk, written under one lock.
-fn write_settings(app: &tauri::AppHandle, store: &Mutex<Store>, change: impl FnOnce(serde_json::Value) -> serde_json::Value) -> Result<(), String> {
+fn write_settings(app: &tauri::AppHandle, store: &Mutex<Store>, change: impl FnOnce(serde_json::Value) -> serde_json::Value, payload: serde_json::Value) -> Result<(), String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     let old = store.settings();
     // The window cannot write a secret field; the sealed values on disk are kept as they are.
@@ -149,7 +159,7 @@ fn write_settings(app: &tauri::AppHandle, store: &Mutex<Store>, change: impl FnO
         resume::switched(app, after);
     }
     // Views that depend on a setting (the lapsed sign-in notice, ACCT-012) read again.
-    let _ = tauri::Emitter::emit(app, "settings-saved", ());
+    let _ = tauri::Emitter::emit(app, "settings-saved", payload);
     Ok(())
 }
 
@@ -274,11 +284,17 @@ pub fn run() {
                     move |id| t.try_state::<Terminals>().is_some_and(|ts| ts.started(id).is_some()),
                 );
             }
+            // T-301 (APP-012): the saved app icon variant and window blur, before the window shows.
+            app_look::apply_saved(app.handle());
             app.manage(links::Grants::default());
             // APP-041: the app's own start-and-stop record, next to what the terminals report.
             diag::write(&dir, &format!("app start {starts}, Kolux RS {}", app.package_info().version));
             // SET-004: the window starts hidden and the page shows it once its first frame has the saved
             // look; this is the backstop for a page that never gets that far.
+            // T-286-b (APP-040): the app's own view reports its engine's process failures.
+            if let Some(w) = app.get_webview_window("main") {
+                browser::engine::watch_app_failures(&w, dir.clone());
+            }
             if let Some(w) = app.get_webview_window("main") {
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_secs(5));
@@ -583,6 +599,7 @@ pub fn run() {
             tools::editors_list,
             tools::teams_host,
             awake::keep_awake_state,
+            app_look::app_look_apply,
             token_usage::token_usage,
             token_usage::token_usage_scan,
             token_usage::token_tracking_set,
@@ -607,6 +624,7 @@ pub fn run() {
             scm::scm_task_detail,
             scm::scm_repo_labels,
             github::github_repo_parent,
+            github::github_repo_lineage,
             github::github_people,
             github::github_project,
             github::github_projects,
@@ -622,12 +640,22 @@ pub fn run() {
             github::pull_requests::pr_checks,
             github::pull_requests::pr_threads,
             github::pull_requests::pr_set_state,
+            github::pull_requests::pr_viewed,
+            github::pull_requests::pr_set_viewed,
+            github::pull_requests::pr_editors,
             github::pull_requests::pr_rerun,
             github::pull_requests::pr_reviewers,
             github::pull_requests::pr_assignees,
             github::pull_requests::pr_react,
             github::pull_requests::pr_reply,
             github::pull_requests::pr_merge,
+            pr_checkout::scm_push_target,
+            scm_open::scm_open_with,
+            scm_recipe::scm_recipe_commit,
+            scm_recipe::scm_recipe_fix,
+            scm_stack::scm_stack_create,
+            scm_stack::scm_stack_record,
+            pr_review::scm_stack_prs,
             scm::scm_task_labels,
             scm::scm_task_body,
             scm::scm_stage,
@@ -657,6 +685,7 @@ pub fn run() {
             browser::browser_cookies_import,
             browser::browser_probe,
             browser::browser_diagnose,
+            browser::certs::browser_cert,
             browser::browser_tab,
             browser::browser_annotate,
             browser::preview::browser_preview,
@@ -772,6 +801,7 @@ pub fn run() {
             files::change_entries,
             files::diff_image,
             files::dir_list,
+            files::dir_ignored,
             files::path_kind,
             artifacts::artifacts_list,
             artifacts::artifact_add,
@@ -783,6 +813,7 @@ pub fn run() {
             fsops::fs_trash,
             fsops::fs_restore,
             fsops::fs_copy,
+            fsops::fs_bytes,
             fsops::fs_move,
             clipboard::clip_copy_text,
             clipboard::clip_copy_files,
@@ -821,6 +852,10 @@ pub fn run() {
         .build(context)
         .unwrap_or_else(|e| tools::startup_failed(&e.to_string()))
         .run(|app, event| {
+            // T-286-b (APP-040): engine exits once the app is quitting are not crashes.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                browser::crash::quitting();
+            }
             if let tauri::RunEvent::Exit = event {
                 // T-075 (APP-050): the final save is one barrier with a deadline: begin() stops the
                 // batched savers, each step runs on its own thread and is waited for only as long as

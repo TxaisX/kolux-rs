@@ -15,6 +15,7 @@ import { useSettings } from "./useSettings";
 import { fontStack, loadFonts, rankFonts } from "./fonts";
 import { FIELDS as STATUS_FIELDS, readStatusBar, STATUS_ITEMS, toggleItem } from "../chrome/statusItems";
 import { CHROME, chromeShown, windowSummary } from "../chrome/chromeItems";
+import AppLookCard from "../chrome/AppLookCard";
 import { PERCENT_FIELD, percentMode, type PercentMode } from "../usage/meter";
 import { Segmented } from "./GeneralPage";
 import { CardDensityBody, SidebarLookBody } from "../look/SidebarSettings";
@@ -557,6 +558,7 @@ export default function AppearancePage() {
     <>
       {error && <p className="conn-detail warn">{error}</p>}
       {look && <AppearanceView look={look} onChange={change} languagePart={status.settings && <LanguageView value={savedLanguage(status.settings[LANGUAGE_FIELD])} onPick={(v) => { applyLanguage(v); void status.save({ [LANGUAGE_FIELD]: v }); }} />} windowPart={<WindowSwitches {...status} />} windowSummary={status.settings ? windowSummary(status.settings) : ""} />}
+      {look && <AppLookCard />}
     </>
   );
 }

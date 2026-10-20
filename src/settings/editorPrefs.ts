@@ -38,6 +38,14 @@ export function readEditorPrefs(s: Record<string, unknown>): EditorPrefs {
   };
 }
 
+/** All Changes' first layout (T-323-b): the "start with this layout" choice saved from a tab wins, else the diff
+ *  preferences of Settings > General. Keys are passed in so this file stays free of the source-control model. */
+export function allChangesStart(s: Record<string, unknown> | null, keys: { split: string; wrap: string; spaces: string; tree: string }) {
+  const p = readEditorPrefs(s ?? {});
+  const pick = (k: string, base: boolean) => (typeof s?.[k] === "boolean" ? (s[k] as boolean) : base);
+  return { split: pick(keys.split, p.diffView === "split"), wrap: pick(keys.wrap, p.diffWordWrap), spaces: pick(keys.spaces, p.diffWhitespace), tree: pick(keys.tree, p.diffTree) };
+}
+
 /** A patch that changes one preference only, so the editor and diff word wraps never move together. */
 export const prefPatch = <K extends keyof EditorPrefs>(key: K, value: EditorPrefs[K]) => ({ [EDITOR_FIELDS[key]]: key === "autoSaveDelay" ? clampDelay(value) : value });
 
