@@ -3,14 +3,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { CustomScheme } from "../terminal/schemes";
 import { FIELD } from "../theme";
-import { ghosttyThemeNames, importGhostty, MAX_CUSTOM, planImport, scanWarp, type GhosttyFileIn, type GhosttyImport, type ImportPlan, type WarpFileIn, type WarpScan } from "./importSchemes";
+import { ghosttyThemeNames, importGhostty, MAX_CUSTOM, planImport, scanWarp, type GhosttyFileIn, type GhosttyImport, type ImportPlan, type ThemeRefused, type WarpFileIn, type WarpScan } from "./importSchemes";
 
 /** The Ghostty configuration on this computer, mapped; null when there is none. */
 export async function readGhostty(): Promise<GhosttyImport | null> {
   const files = await invoke<GhosttyFileIn[]>("term_import_ghostty");
   if (files.length === 0) return null;
-  const themes = new Map<string, string | null>();
-  for (const name of ghosttyThemeNames(files)) themes.set(name, await invoke<string | null>("term_import_ghostty_theme", { name }));
+  // The back end answers { text } for a theme it read, { skipped } for one it found and refused (with the
+  // reason), and null for one found nowhere (FIX-4).
+  const themes = new Map<string, string | ThemeRefused | null>();
+  for (const name of ghosttyThemeNames(files)) {
+    const got = await invoke<{ text?: string; skipped?: string } | null>("term_import_ghostty_theme", { name });
+    themes.set(name, got?.text !== undefined ? got.text : got?.skipped !== undefined ? { skipped: got.skipped } : null);
+  }
   return importGhostty(files, (n) => themes.get(n) ?? null);
 }
 

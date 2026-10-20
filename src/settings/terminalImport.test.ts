@@ -41,6 +41,15 @@ describe("TERM-099 Ghostty configuration", () => {
     expect(dodgy.invalid[0].reason).toMatch(/folder/);
   });
 
+  it("FIX-4: a theme the back end found but refused is reported with its reason, never as not found", () => {
+    const refused = importGhostty([file("theme = Night\n")], () => ({ skipped: "is outside the theme folder" }));
+    expect(refused.schemes).toEqual([]);
+    expect(refused.invalid).toEqual([{ key: "theme", value: "Night", reason: "its file is outside the theme folder" }]);
+    const big = importGhostty([file("theme = light:Day,dark:Night\n")], (n) => (n === "Day" ? { skipped: "is too large to read (over 256 KB)" } : "background = 000000\nforeground = ffffff\n"));
+    expect(big.invalid).toEqual([{ key: "theme", value: "Day", reason: "its file is too large to read (over 256 KB)" }]);
+    expect(big.schemes.map((s) => s.name)).toEqual(["Night"]);
+  });
+
   it("TERM-099 acceptance: an unknown key is listed as unsupported, and so is one Kolux has no setting for yet", () => {
     const r = importGhostty([file("font-size = 12\nfrobnicate = yes\nwindow-padding-x = 8\nmacos-option-as-alt = true\nbold-color = #ffffff\nselection-word-chars = abc\nmouse-hide-while-typing = true\nfocus-follows-mouse = true\nbackground-blur-radius = 20\nwindow-padding-x = 4\n")], NO_THEMES);
     expect(r.unsupported).toEqual(["frobnicate", "window-padding-x", "macos-option-as-alt", "bold-color", "selection-word-chars", "mouse-hide-while-typing", "focus-follows-mouse", "background-blur-radius"]);

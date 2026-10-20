@@ -253,7 +253,10 @@ export function ghosttyThemeNames(files: GhosttyFileIn[]): string[] {
   return [p.dark, p.light].filter((n): n is string => !!n);
 }
 
-export function importGhostty(files: GhosttyFileIn[], readTheme: (name: string) => string | null): GhosttyImport {
+/** A theme the back end found by name but refused to read, with the plain reason (e.g. it is outside the theme folder). */
+export type ThemeRefused = { skipped: string };
+
+export function importGhostty(files: GhosttyFileIn[], readTheme: (name: string) => string | ThemeRefused | null): GhosttyImport {
   const r: GhosttyImport = { settings: {}, schemes: [], darkScheme: null, lightScheme: null, unsupported: [], invalid: [], skipped: [], notes: [], applied: [] };
   const colours: Record<string, string> = {};
   let theme: string | null = null;
@@ -356,7 +359,12 @@ export function importGhostty(files: GhosttyFileIn[], readTheme: (name: string) 
       bad("theme", name, "a theme name cannot name a folder; use a name from Ghostty's theme folders");
       return null;
     }
-    const text = readTheme(name);
+    const got = readTheme(name);
+    if (got !== null && typeof got === "object") {
+      bad("theme", name, `its file ${got.skipped}`);
+      return null;
+    }
+    const text = got;
     if (text === null || text.length > MAX_CONFIG_CHARS) {
       bad("theme", name, "not found in Ghostty's theme folders");
       return null;

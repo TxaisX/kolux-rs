@@ -9,7 +9,9 @@
 //! not read. What is not contained: the first Ghostty config file is read as named, because a dotfiles
 //! setup may link it from elsewhere; a hard link inside a folder is read like any file in it, because
 //! it has no other path; and a setup that links every file separately (GNU stow, home-manager) loses
-//! the linked includes and themes, which are listed as outside the folder.
+//! the linked includes and themes, which are listed by name with the reason "is outside the ... folder"
+//! (a theme's reason travels with it to the page, FIX-4). Reading a checked real path narrows the window
+//! for a link swapped in after the check; it does not close it (the open is still by name).
 //!
 //! Folder names, checked 2026-10-19 against the vendors' public pages (URLs and exact folders in
 //! evidence/look-FIX-3b.txt). Warp: ~/.warp/themes (macOS), ${XDG_DATA_HOME:-~/.local/share}/warp-terminal/
@@ -44,6 +46,16 @@ pub struct GhosttyFile {
 #[derive(Serialize, Debug, PartialEq)]
 pub struct WarpFile {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<String>,
+}
+
+/// A Ghostty theme that was found by name: its text, or why it was refused (the same plain reasons as a
+/// config file, never a folder path). A theme found nowhere is `None` at the caller, not one of these.
+#[derive(Serialize, Debug, PartialEq)]
+pub struct GhosttyTheme {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -127,8 +139,10 @@ fn ghostty_config_with(candidates: &[PathBuf], canon: &dyn Fn(&Path) -> Option<P
         }
         let label = file_name(&path);
         let first_file = std::mem::replace(&mut is_first, false);
-        // The first file is the user's own entry point and is read as named. An include is read only through
-        // the real path that passed the check, so a link swapped in after the check is not followed.
+        // The first file is the user's own entry point and is read as named. An include is read through the
+        // real path that passed the check, which narrows the window for a link swapped in after the check but
+        // does not close it: the read still opens that path by name, and following a swapped-in link needs
+        // write access to the user's own config folder (FIX-4).
         let read_from = if first_file {
             path.clone()
         } else {
@@ -160,23 +174,39 @@ fn ghostty_config_with(candidates: &[PathBuf], canon: &dyn Fn(&Path) -> Option<P
 
 /// The text of the named Ghostty theme from the first folder that has it. A name that could leave the
 /// theme folder (a separator, `..`) finds nothing.
-pub(crate) fn ghostty_theme(name: &str, folders: &[PathBuf]) -> Option<String> {
+pub(crate) fn ghostty_theme(name: &str, folders: &[PathBuf]) -> Option<GhosttyTheme> {
     let clean = !name.is_empty() && name != "." && !name.contains("..") && !name.contains(['/', '\\', ':', '\0']);
     if !clean {
         return None;
     }
-    folders.iter().find_map(|d| {
+    // The first folder that has a readable copy wins; when every copy found was refused, the first refusal
+    // is the answer, so the page can say why instead of "not found" (FIX-4).
+    let mut refused: Option<String> = None;
+    for d in folders {
         let p = d.join(name);
-        if p.is_file() { read_inside(&p, d, "is outside the theme folder").ok() } else { None }
-    })
+        if !p.is_file() {
+            continue;
+        }
+        match read_inside(&p, d, "is outside the theme folder") {
+            Ok(text) => return Some(GhosttyTheme { text: Some(text), skipped: None }),
+            Err(why) => {
+                refused.get_or_insert(why);
+            }
+        }
+    }
+    refused.map(|why| GhosttyTheme { text: None, skipped: Some(why) })
 }
 
 /// The `.yaml` / `.yml` files in the Warp theme folders, by name, each with its text or why it was
 /// skipped. Past `MAX_WARP_FILES` or the scan's time budget the rest are left out and one entry says so.
 pub(crate) fn warp_themes(folders: &[PathBuf], budget: Duration) -> Vec<WarpFile> {
     let began = Instant::now();
+    // A folder named twice (XDG_DATA_HOME set to ~/.local/share, a link to another listed folder) is scanned once:
+    // folders are compared by their real place, or by the path as given when that cannot be found (FIX-4).
+    let mut seen_folders: HashSet<PathBuf> = HashSet::new();
     let mut names: Vec<(&PathBuf, PathBuf)> = folders
         .iter()
+        .filter(|d| seen_folders.insert(std::fs::canonicalize(d).unwrap_or_else(|_| (*d).clone())))
         .filter_map(|d| std::fs::read_dir(d).ok().map(|rd| (d, rd)))
         .flat_map(|(d, rd)| rd.filter_map(|e| e.ok()).map(move |e| (d, e.path())))
         .filter(|(_, p)| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("yaml") || x.eq_ignore_ascii_case("yml")))
@@ -255,7 +285,7 @@ pub async fn term_import_ghostty() -> Result<Vec<GhosttyFile>, String> {
 }
 
 #[tauri::command]
-pub async fn term_import_ghostty_theme(name: String) -> Result<Option<String>, String> {
+pub async fn term_import_ghostty_theme(name: String) -> Result<Option<GhosttyTheme>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let folders: Vec<PathBuf> = ghostty_dirs().into_iter().map(|d| d.join("themes")).collect();
         ghostty_theme(&name, &folders)
@@ -402,6 +432,11 @@ mod tests {
         assert!(files[1].text.as_deref().unwrap().contains("cursor-style = block"));
     }
 
+    /// The text of a theme that was read, whatever else the result says.
+    fn theme_text(name: &str, folders: &[PathBuf]) -> Option<String> {
+        ghostty_theme(name, folders).and_then(|t| t.text)
+    }
+
     /// A way to find a real place that fails for the one named file, as on a drive where it errs.
     fn canon_failing_on(name: &'static str) -> impl Fn(&Path) -> Option<PathBuf> {
         move |p| if p.file_name().is_some_and(|n| n == name) { None } else { std::fs::canonicalize(p).ok() }
@@ -474,12 +509,12 @@ mod tests {
             return;
         }
         let themes = [d.0.join("themes")];
-        assert_eq!(ghostty_theme("Plain", &themes).as_deref(), Some("background = 000000\n"));
-        assert_eq!(ghostty_theme("Sneaky", &themes), None, "a theme linked to a file outside its folder must not be read");
+        assert_eq!(theme_text("Plain", &themes).as_deref(), Some("background = 000000\n"));
+        assert_eq!(theme_text("Sneaky", &themes), None, "a theme linked to a file outside its folder must not be read");
         // The whole theme folder may be a link (a dotfiles setup): its files are inside its real place.
         d.put("real-themes/Night", "background = 111111\n");
         if dir_link(&d.0.join("linked-themes"), &d.0.join("real-themes")) {
-            assert_eq!(ghostty_theme("Night", &[d.0.join("linked-themes")]).as_deref(), Some("background = 111111\n"));
+            assert_eq!(theme_text("Night", &[d.0.join("linked-themes")]).as_deref(), Some("background = 111111\n"));
         } else {
             println!("SKIPPED: this account cannot create a folder link, so the linked theme folder check did not run");
         }
@@ -525,6 +560,56 @@ mod tests {
     }
 
     #[test]
+    fn term_099_fix4_a_theme_refused_for_containment_says_it_is_outside_the_theme_folder_not_that_it_was_not_found() {
+        let d = Dir::new("thwhy");
+        let outside = d.put("elsewhere/secret", "SECRET-OUTSIDE\n");
+        d.put("themes/Plain", "background = 000000\n");
+        d.put("themes/Big", &"x".repeat(MAX_BYTES as usize + 1));
+        if !file_link(&d.0.join("themes/Sneaky"), &outside) {
+            println!("SKIPPED: this account cannot create a file symlink, so the theme refusal reason check did not run");
+            return;
+        }
+        let themes = [d.0.join("themes")];
+        let sneaky = ghostty_theme("Sneaky", &themes).expect("a linked theme is found, then refused: it is not 'not found'");
+        assert_eq!(sneaky.text, None, "{sneaky:?}");
+        assert_eq!(sneaky.skipped.as_deref(), Some("is outside the theme folder"));
+        assert!(!format!("{sneaky:?}").contains("SECRET-OUTSIDE"));
+        let big = ghostty_theme("Big", &themes).unwrap();
+        assert!(big.text.is_none() && big.skipped.as_deref().unwrap().contains("too large"), "{big:?}");
+        let plain = ghostty_theme("Plain", &themes).unwrap();
+        assert_eq!((plain.text.as_deref(), plain.skipped), (Some("background = 000000\n"), None));
+        assert_eq!(ghostty_theme("Nowhere", &themes), None, "a theme found nowhere is still None");
+        // A later folder that has the theme intact wins over an earlier folder that refused it.
+        d.put("more/Sneaky", "background = 222222\n");
+        assert_eq!(theme_text("Sneaky", &[d.0.join("themes"), d.0.join("more")]).as_deref(), Some("background = 222222\n"));
+    }
+
+    #[test]
+    fn term_100_fix4_a_warp_folder_named_twice_lists_each_theme_once_even_when_the_second_name_is_another_path_to_it() {
+        let d = Dir::new("wdup");
+        let themes = d.0.join("home").join(".local").join("share").join("warp-terminal").join("themes");
+        d.put("home/.local/share/warp-terminal/themes/night.yaml", "background: '#000000'\n");
+        d.put("home/.local/share/warp-terminal/themes/day.yaml", "background: '#ffffff'\n");
+        let home = d.0.join("home");
+        let xdg = home.join(".local").join("share");
+        let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+        // XDG_DATA_HOME set to the very folder the default would name (common under home-manager).
+        let env = move |k: &str| match k {
+            k if k == home_var => Some(home.clone()),
+            "XDG_DATA_HOME" => Some(xdg.clone()),
+            _ => None,
+        };
+        let folders = warp_dirs_from(&env);
+        assert_eq!(folders.iter().filter(|p| **p == themes).count(), 2, "the setup must name the folder twice: {folders:?}");
+        let got = warp_themes(&folders, Duration::from_secs(5));
+        let names: Vec<_> = got.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(names, ["day.yaml", "night.yaml"], "each theme once: {got:?}");
+        // The same folder reached through a path with a detour in it is the same folder.
+        let detour = d.0.join("home").join(".local").join("..").join(".local").join("share").join("warp-terminal").join("themes");
+        assert_eq!(warp_themes(&[themes, detour], Duration::from_secs(5)).len(), 2);
+    }
+
+    #[test]
     fn term_099_a_theme_is_found_by_name_in_the_first_folder_that_has_it_and_a_path_is_refused() {
         let a = Dir::new("ta");
         let b = Dir::new("tb");
@@ -532,7 +617,7 @@ mod tests {
         a.put("Midnight", "background = 111111\n");
         a.put("secret.txt", "private\n");
         let folders = [b.0.clone(), a.0.clone()];
-        assert_eq!(ghostty_theme("Midnight", &folders).as_deref(), Some("background = 000000\n"));
+        assert_eq!(theme_text("Midnight", &folders).as_deref(), Some("background = 000000\n"));
         assert_eq!(ghostty_theme("Nowhere", &folders), None);
         for bad in ["", ".", "..", "../secret.txt", "sub/Midnight", "sub\\Midnight", "C:Midnight"] {
             assert_eq!(ghostty_theme(bad, &folders), None, "{bad:?}");

@@ -3,10 +3,13 @@
 // runtime (state slots, a redraw by hand), the same way useWizard.test.ts does it. What is checked is
 // what the box does: a save that did not reach the disk leaves the window unpainted and says so, and
 // the preview is the plan that Bring in saves (a scheme refused at the cap says "Will not add").
-import type { ReactNode } from "react";
+// The stand-in walks plain elements only. It fails on any element that is not a plain tag (a component
+// the walker would not render, so its lines would go unchecked) and on a button that is disabled when
+// it is clicked (the real browser would not deliver that click). FIX-4.
+import { Fragment, type ReactNode } from "react";
 import { beforeEach, expect, test, vi } from "vitest";
 
-const h = vi.hoisted(() => ({ slots: [] as unknown[], i: 0, painted: 0, disk: {} as Record<string, unknown>, files: [] as unknown[], themes: {} as Record<string, string | null>, warp: [] as unknown[], saves: [] as Record<string, unknown>[], reachesDisk: false }));
+const h = vi.hoisted(() => ({ slots: [] as unknown[], i: 0, painted: 0, disk: {} as Record<string, unknown>, files: [] as unknown[], themes: {} as Record<string, string | null | { skipped: string }>, warp: [] as unknown[], saves: [] as Record<string, unknown>[], reachesDisk: false }));
 
 vi.mock("react", async (orig) => {
   const real = await orig<typeof import("react")>();
@@ -21,7 +24,11 @@ vi.mock("react", async (orig) => {
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: async (cmd: string, args?: { name: string }) => {
     if (cmd === "term_import_ghostty") return h.files;
-    if (cmd === "term_import_ghostty_theme") return h.themes[args!.name] ?? null;
+    if (cmd === "term_import_ghostty_theme") {
+      // The shape of the real command: { text } or { skipped } when found, null when found nowhere.
+      const t = h.themes[args!.name] ?? null;
+      return typeof t === "string" ? { text: t } : t;
+    }
     if (cmd === "term_import_warp") return h.warp;
     if (cmd === "get_settings") return { ...h.disk };
     throw new Error("unexpected " + cmd);
@@ -32,22 +39,36 @@ vi.mock("../theme", async (orig) => ({ ...(await orig<typeof import("../theme")>
 const { GhosttyImportBox, WarpImportBox } = await import("./TerminalImport");
 
 type Props = Parameters<typeof GhosttyImportBox>[0];
-type El = { type?: unknown; props: { children?: ReactNode; onClick?: () => void; onChange?: (e: { target: { checked: boolean } }) => void; "aria-label"?: string } };
+type El = { type?: unknown; props: { children?: ReactNode; disabled?: boolean; onClick?: () => void; onChange?: (e: { target: { checked: boolean } }) => void; "aria-label"?: string } };
+
+/** Only plain tags (and fragments) can be walked: anything else would hide its lines from every check below. */
+function plain(e: El): El {
+  if (typeof e.type !== "string" && e.type !== Fragment) throw new Error("the render test walks plain elements only; found a non-intrinsic element type: " + String((e.type as { name?: string } | undefined)?.name ?? e.type));
+  return e;
+}
 
 const text = (n: ReactNode): string => {
   if (n === null || n === undefined || typeof n === "boolean") return "";
   if (typeof n === "string" || typeof n === "number") return String(n);
   if (Array.isArray(n)) return n.map(text).join(" ");
-  return text((n as El).props.children);
+  return text(plain(n as El).props.children);
 };
 const find = (n: ReactNode, pick: (e: El) => boolean): El | null => {
   if (n === null || typeof n !== "object") return null;
   if (Array.isArray(n)) return n.map((c) => find(c, pick)).find(Boolean) ?? null;
-  const e = n as El;
+  const e = plain(n as El);
   return pick(e) ? e : find(e.props.children, pick);
 };
 const button = (tree: ReactNode, label: string) => find(tree, (e) => e.type === "button" && text(e.props.children).replace(/\s+/g, " ").trim() === label);
 const settle = () => new Promise((r) => setTimeout(r, 0));
+
+/** Clicks the button with this label, after checking it can be clicked at all. */
+function click(tree: ReactNode, label: string) {
+  const b = button(tree, label);
+  expect(b, `a "${label}" button is shown`).not.toBeNull();
+  expect(b!.props.disabled, `"${label}" is not disabled when it is clicked`).toBeFalsy();
+  b!.props.onClick!();
+}
 
 /** Mounts a box, runs its first "Look for" button, and returns a way to redraw and click. */
 async function open(Box: (p: Props) => ReactNode, look: string, props: Props) {
@@ -56,12 +77,12 @@ async function open(Box: (p: Props) => ReactNode, look: string, props: Props) {
     h.i = 0;
     return Box(props);
   };
-  button(draw(), look)!.props.onClick!();
+  click(draw(), look);
   await settle();
   return {
     draw,
     async click(label: string) {
-      button(draw(), label)!.props.onClick!();
+      click(draw(), label);
       await settle();
     },
   };
@@ -96,7 +117,24 @@ test("Ghostty: a save that did not reach the disk leaves the window unpainted an
   const shown = text(box.draw());
   expect(shown).toContain("The import could not be saved, so nothing was changed. Try again.");
   expect(shown).not.toContain("Set ");
-  expect(button(box.draw(), "Bring in")).not.toBeNull(); // the import stays open to try again
+  // the import stays open to try again: Bring in is shown, can be clicked, and a second try reaches the save
+  expect(button(box.draw(), "Bring in")).not.toBeNull();
+  await box.click("Bring in");
+  expect(h.saves).toHaveLength(2);
+});
+
+test("Ghostty: a theme the back end refused says why, not that it was not found", async () => {
+  const settings = {};
+  h.themes = { Night: { skipped: "is outside the theme folder" } };
+  const box = await open(GhosttyImportBox, "Look for my Ghostty settings", { settings, save: makeSave(settings) });
+  const shown = text(box.draw());
+  // text() puts a space between a line's pieces, so the line is matched with the spaces loose
+  expect(shown).toMatch(/Left out:\s+theme\s+=\s+Night\s+\(\s*its file is outside the theme folder\s*\)/);
+  expect(shown).not.toContain("not found");
+  // a theme found nowhere is still reported as not found
+  h.themes = {};
+  const none = await open(GhosttyImportBox, "Look for my Ghostty settings", { settings, save: makeSave(settings) });
+  expect(text(none.draw())).toMatch(/Left out:\s+theme\s+=\s+Night\s+\(\s*not found in Ghostty's theme folders\s*\)/);
 });
 
 test("Ghostty: when the save reaches the disk the window is painted once and the result is shown", async () => {
@@ -123,8 +161,11 @@ test("Warp: a save that did not reach the disk leaves the window unpainted and s
   const box = await open(WarpImportBox, "Look for my Warp themes", { settings, save: makeSave(settings) });
   const tick = find(box.draw(), (e) => e.props["aria-label"] === "Bring in night")!;
   tick.props.onChange!({ target: { checked: true } });
+  expect(tick.props.disabled).toBeFalsy();
   await box.click("Bring in 1");
   expect(h.saves).toHaveLength(1);
   expect(h.painted).toBe(0);
   expect(text(box.draw())).toContain("The themes could not be saved, so nothing was changed. Try again.");
+  await box.click("Bring in 1"); // still offered, and a second try reaches the save
+  expect(h.saves).toHaveLength(2);
 });
