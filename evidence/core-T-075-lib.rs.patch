@@ -1,6 +1,6 @@
-# T-075 (lane/core) lib.rs patch, slices a+b. Apply after merging lane/core (which carries 'pub mod final_save;'): git apply evidence/core-T-075-lib.rs.patch. Hunks: settings_patch -> #[tauri::command(async)] (APP-048); the batched activity saver skips once final_save::quitting() (APP-050); RunEvent::Exit runs activity save, agent status, sign-in cancel and the two seals through final_save::run(QUIT_DEADLINE) and writes the report line to diag (APP-050). clippy -D warnings clean and final_save:: 3/3 with it applied (G:/Temp/core-v3-logs/b-clippy-patched.log, b-cargo-test-final_save.log).
+# T-075 (lane/core) lib.rs patch, slices a+b+c. Apply after merging lane/core (which carries 'pub mod final_save;'): git apply evidence/core-T-075-lib.rs.patch. Hunks: settings_patch -> #[tauri::command(async)] (APP-048); the batched activity saver skips once final_save::quitting() (APP-050); RunEvent::Exit runs activity save, agent status, sign-in cancel and the two seals through final_save::run(QUIT_DEADLINE) and writes the report line to diag (APP-050); terminal::terminal_service_info and terminal::terminal_attach registered in generate_handler! (APP-052; without them a pane's reattach question is rejected and the pane fails to start). clippy -D warnings clean with it applied (G:/Temp/core-v3-logs/c-clippy-patched.log).
 diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
-index 8b82a908..3eba2374 100644
+index 8b82a908..4c186d39 100644
 --- a/src-tauri/src/lib.rs
 +++ b/src-tauri/src/lib.rs
 @@ -102,7 +102,9 @@ fn get_settings(store: tauri::State<'_, Mutex<Store>>) -> Result<serde_json::Val
@@ -26,7 +26,16 @@ index 8b82a908..3eba2374 100644
              });
              // STAT-045: a working agent that prints nothing for the chosen minutes is reported once
              // per silent spell. Silence is the terminal's own output, never the hooks.
-@@ -610,23 +615,43 @@ pub fn run() {
+@@ -365,6 +370,8 @@ pub fn run() {
+             sessions::claude_workspace_sessions,
+             terminal::terminal_spawn,
+             terminal::terminal_write,
++            terminal::terminal_service_info,
++            terminal::terminal_attach,
+             chat::chat_support,
+             chat::chat_read,
+             chat::chat_close,
+@@ -610,23 +617,43 @@ pub fn run() {
          .unwrap_or_else(|e| tools::startup_failed(&e.to_string()))
          .run(|app, event| {
              if let tauri::RunEvent::Exit = event {

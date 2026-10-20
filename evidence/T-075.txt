@@ -74,3 +74,60 @@ Gates, slice b: clippy -D warnings clean with the lib.rs patch applied (b-clippy
 Honest limit: a write already inside the OS (fsync on a dead drive) cannot be interrupted; the thread is left behind and the process
    exits with it. Settings written by settings_patch (slice a, async) are atomic on their own, so a cut-off final save leaves the
    last complete file, never a half one (slice a's fallback test covers the half-written case).
+
+== Slice c · APP-052 ==
+Where the service is today: the terminal service is in-process (DT-R23; the background service of TERM-105 waits on T-067-b), so a
+   run of the service = a run of the app. What this slice builds is the contract the card asks for, over that service:
+1. terminal.rs (core-owned hard-stop, CRLF kept): PROTOCOL = 1 and generation() (one number per run, millis*1000 + pid%1000, below
+   2^53 so the window reads it as a plain number); OutputPayload carries generation; Inner.panes remembers the newest session per
+   window pane; Terminals::attached(pane_key) hands the session back only while it runs and has not ended; attach_answer(ours,
+   running, asked) -> Attach { state attached|fresh|replaced, id, generation, protocol } (pure, tested); owns(generation) refuses
+   typing meant for another run; terminal_write takes an optional generation (older callers: App.tsx and chat/send.ts pass none,
+   let through); new commands terminal_service_info and terminal_attach (async, registry lock off the window thread), both carrying
+   #[allow(dead_code)] until the lib.rs hunk registers them (precedent: projects.rs T-212/T-299, orchestration.rs T-129-c).
+2. lib.rs PATCH (evidence/core-T-075-lib.rs.patch, regenerated, now 4 hunks): the two commands in generate_handler!.
+3. src/terminal/reattach.ts: reattach(service, paneKey, known, limit = 3000 ms, clock) asks the service for its info again every
+   100 ms while it does not answer (a service still coming up), gives up at the hard limit with a plain reason instead of hanging,
+   refuses a service older than OLDEST_SERVICE = 1 (a newer one is fine: additions only), then asks for the pane's terminal with the
+   generation the pane knew -> attached (take the id back) / fresh (start one) / replaced (the pane says so and starts again on the
+   new run). fromThisService(generation, service) drops output chunks from another run.
+4. TerminalPane.tsx: before its first start a pane with a key runs reattach (refused/timeout -> the pane fails in plain words through
+   the TERM-110 path; replaced -> flash "The terminal service was replaced; the pane starts again on the new one"); an attached
+   terminal is taken back instead of spawned; every terminal_write carries the pane's service generation; the terminal-output listener
+   drops chunks from another run. codec.ts OutputEvent gains the optional generation.
+Tests:
+   terminal.rs (c-cargo-test-terminal-lane.log, terminal:: 18 passed incl. the 2 new):
+     t075_c_attach_answers_attached_fresh_or_replaced_by_generation: over fake_session (the fake writer of cli FIX-7): attached while
+       the session runs, fresh for a pane whose session is gone or never was, replaced when the pane asks with another generation
+       (no id handed out), nothing handed back once the session ended.
+     t075_c_generation_is_fixed_and_typing_from_a_replaced_run_is_refused: one number per run, JS-safe; owns(None) and owns(ours)
+       pass, another run's typing is refused with a reason naming reattach.
+   src/terminal/reattach.test.ts (8, c-vitest.log: 12 passed with codec.test.ts): attached on webview reload; fresh; replaced asks
+     with the generation the pane knew; a service coming up late is asked again (3 asks, 100 ms sleeps); a service that never answers
+     is given up on at exactly the hard limit (31 asks, attach never called, fake clock so the test does not wait); protocol 0 refused
+     with attach never called; protocol 7 accepted; fromThisService drops only another run's chunks.
+Gates, slice c: clippy -D warnings clean with the lib.rs patch applied (c-clippy-patched.log, 29.06s) and in the lane tree
+   (c-clippy-lane.log, 13.13s); cargo test --lib terminal:: 18/18; pnpm exec tsc --noEmit clean (c-tsc.log, 0 lines); vitest
+   src/terminal 40 files / 264 tests passed (c-vitest-terminal.log); full cargo test --lib: 1073 passed, 0 failed, 2 ignored, 160.48 s
+   (c-cargo-test-lib-full.log).
+Honest limits: with the in-process service the "replaced" and "attached" answers are exercised by a webview reload, not by an app
+   relaunch (every relaunch is a new run with no terminals to take back, which the pane treats as fresh and TERM-106 history replay
+   covers: that IS the card's second acceptance line). The three-relaunch marker check and the killed-service check are live proofs.
+
+== Slice d · not built: split ==
+T-097 (kolux open waits for the background service to show the window) needs the background terminal service (TERM-105 / T-067-b);
+   T-136-d (importer brings over older activity counts) is importer work with no shared code here. Both are PLAN T-075-b, the one
+   allowed split; nothing of them was started or ticked.
+
+== LIVE PROOF PENDING (batched; no app launched in this lane) ==
+1. APP-048: open two worktrees with a shell tab and an editor tab each, change the theme, quit from the menu, reopen -> same panes,
+   same editor paths, same theme; then corrupt %APPDATA%\com.txaisxiong.kolux-rs\settings.json (truncate it by half) with the app
+   closed, reopen -> the last good layout and theme are back, settings.json.corrupt-<secs> sits beside settings.json.bak, nothing
+   deleted; change a setting -> settings.json is whole again.
+2. APP-050: quit with four panes open and an agent running -> the window closes within 5 s; diag log has one "final save: N finished
+   in M ms" line with nothing timed out; activity counts and agent status read back after reopen. Stalled drive: not safely
+   reproducible live; covered by the unit test.
+3. APP-052: print a marker (echo T075-MARK) in a shell pane, quit, relaunch, three times -> the marker is visible after each launch
+   (TERM-106 replay); typing in the restored pane reaches the new shell (no "replaced" refusal, since a relaunched pane binds to the
+   new run before typing). Kill kolux-rs.exe from Task Manager with two panes open, relaunch -> both panes back from saved history.
+   Reload the webview in a dev build (Ctrl+R) with a shell running -> the pane takes the same terminal back (no new shell prompt).

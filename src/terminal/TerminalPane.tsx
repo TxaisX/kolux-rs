@@ -19,6 +19,7 @@ import { copySelection } from "./copy";
 import { HeldKeys, screenLines, shouldRefocus, watchScale } from "./recover";
 import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } from "./codec";
 import { encodeHistory, replay, restoreTail, viewTop } from "./history";
+import { fromThisService, reattach, type Attach, type Reattached, type ServiceInfo } from "./reattach";
 import { batchAcks, memoryProfile } from "./flow";
 import { explain as explainError, exitAdvice } from "./errors";
 import { DIVIDER_DONE, dragging } from "./dividers";
@@ -186,6 +187,12 @@ type Props = {
   };
 };
 
+// APP-052: the terminal service as the pane reaches it (reattach.ts is tested over a fake one).
+const tauriService = {
+  info: () => invoke<ServiceInfo>("terminal_service_info"),
+  attach: (paneKey: number, generation: number) => invoke<Attach>("terminal_attach", { paneKey, generation }),
+};
+
 // TERM-113: panes that are not on screen at mount (background tabs of a restored layout) start one
 // after another, a short beat apart, so the shown tab's programs get the first spawns and come up
 // usable first. ponytail: a timer ladder, not a queue; the visible panes never wait.
@@ -312,6 +319,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     };
   }, [cwd, hidden, focused]);
   const idRef = useRef<number | null>(null);
+  // APP-052: the run of the terminal service this pane's terminal belongs to; its typing carries it.
+  const serviceRef = useRef<ServiceInfo | null>(null);
   const isHidden = useRef(hidden);
   isHidden.current = hidden;
   const keymap = useKeymap();
@@ -515,7 +524,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
             setFlash("The terminal changed before the drop landed; nothing was typed");
             return;
           }
-          return invoke("terminal_write", { id, data });
+          return invoke("terminal_write", { id, data, generation: serviceRef.current?.generation ?? null });
         })
         .catch((e) => setFlash(`Typing could not reach the program (${explainError(String(e))})`)));
     };
@@ -614,6 +623,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
         // TERM-098: a chunk tagged with this pane's key is drawn at once, before terminal_spawn answers;
         // anything else that arrives first is held until the id is known and replayed then.
         await listen<OutputEvent>("terminal-output", (e) => {
+          // APP-052: output from a replaced run of the terminal service is dropped, never drawn.
+          if (!fromThisService(e.payload.generation, serviceRef.current)) return;
           const draw = () => {
             const bytes = decodeOutput(e.payload.data);
             term.write(bytes, () => acks.drew(bytes.length));
@@ -669,9 +680,10 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       };
       // TERM-111: start() also serves the overlay's Restart (the original start line) and the shell an
       // agent pane gets on Enter after its program ended; the buffer is kept both times.
-      const start = async (prog: string | null, argv: readonly string[], keepInView: boolean) => {
+      const start = async (prog: string | null, argv: readonly string[], keepInView: boolean, back: Reattached | null = null) => {
         try {
-          const { id, program: ran, account: used } = await invoke<{ id: number; program: string | null; account: string | null }>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program: prog, args: argv, env: env ?? null, paneKey: number, account: account ?? null });
+          // APP-052: a terminal this run of the service still runs for the pane (the window reloaded) is taken back, not started again.
+          const { id, program: ran, account: used } = back?.kind === "attached" ? { id: back.id, program: prog, account: account ?? null } : await invoke<{ id: number; program: string | null; account: string | null }>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program: prog, args: argv, env: env ?? null, paneKey: number, account: account ?? null });
           setStarted(ran);
           if (!alive) {
             invoke("terminal_kill", { id }).catch(() => {});
@@ -743,7 +755,20 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
         // TERM-113: a pane that is not on screen at mount lets the shown ones start first.
         if (el.clientWidth === 0 || el.clientHeight === 0) await stagger();
         if (!alive) return;
-        await start(program, args, keepInView);
+        // APP-052: the pane asks the terminal service for its terminal first and waits for the service
+        // to answer, up to a hard limit; no answer or too old a service fails the pane in plain words.
+        // A pane without a key (nothing saved for it) has no terminal to ask for.
+        const back = number === undefined ? null : await reattach(tauriService, number, serviceRef.current);
+        if (!alive) return;
+        if (back !== null) {
+          if (back.kind === "refused" || back.kind === "timeout") {
+            fail(back.reason);
+            return;
+          }
+          serviceRef.current = back.service;
+          if (back.kind === "replaced") setFlash("The terminal service was replaced; the pane starts again on the new one");
+        }
+        await start(program, args, keepInView, back);
       } catch (err) {
         fail(err);
       }
