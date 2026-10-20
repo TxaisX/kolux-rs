@@ -1,0 +1,20 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 51975dbf..b6dd64cf 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -1,4 +1,5 @@
+ mod folder_projects;
++mod floating_trust;
+ mod repo_scan;
+ mod activity;
+ mod agents;
+@@ -679,6 +680,9 @@ pub fn run() {
+             files::file_write,
+             files::file_stamps,
+             files::file_pick,
++            floating_trust::floating_trusted,
++            floating_trust::floating_pick,
++            floating_trust::floating_start,
+             files::md_list,
+             editor_drafts::editor_draft_set,
+             editor_drafts::editor_draft_clear,
