@@ -1,0 +1,29 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 0da06e99..81d37dbe 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -725,6 +725,10 @@ pub fn run() {
+             agent_creds::minimax_credential_forget,
+             agent_creds::minimax_options_set,
+             agent_creds::gemini_cli_credentials_set,
++            resources::provider_usage::provider_keys,
++            resources::provider_usage::provider_key_set,
++            resources::provider_usage::provider_key_forget,
++            resources::provider_usage::provider_usage_check,
+             codex_accounts::codex_accounts,
+             codex_accounts::codex_account_sign_in,
+             codex_accounts::codex_account_cancel,
+diff --git a/src-tauri/src/resources/provider_usage.rs b/src-tauri/src/resources/provider_usage.rs
+index a0be1f39..cf2f6af5 100644
+--- a/src-tauri/src/resources/provider_usage.rs
++++ b/src-tauri/src/resources/provider_usage.rs
+@@ -22,9 +22,6 @@
+ //! The network call itself is behind [`Fetch`]. The shipped transport ([`transport`]) makes no
+ //! connection until the privacy audit names these two hosts: that change is a decision outside this
+ //! lane (evidence/reliability-T-547-*.patch, BLOCKER row in kolux-rs-after.md).
+-// T-547: the commands are registered by evidence/reliability-T-547-lib.rs.patch, which also drops
+-// this line.
+-#![allow(dead_code)]
+ 
+ use crate::secrets;
+ use crate::state::Store;
