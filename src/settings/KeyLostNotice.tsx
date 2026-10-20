@@ -6,7 +6,16 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openSettings } from "./pages";
 
-const LABELS: Record<string, string> = { claudeOauthToken: "Claude 1-year key", xaiApiKey: "xAI key" };
+// One name for every field in SECRET_KEYS (settingsSync.ts), so the note never says only "a stored key".
+const LABELS: Record<string, string> = {
+  claudeOauthToken: "Claude 1-year key",
+  xaiApiKey: "xAI key",
+  httpProxy: "proxy address",
+  browserSearchSessionUrl: "browser search link",
+  minimaxCookie: "MiniMax cookie",
+  minimaxApiKey: "MiniMax key",
+  moonshotApiKey: "Moonshot key",
+};
 
 /** The note's sentence for the cleared settings fields; null when there are none. */
 export function lostText(names: string[]): string | null {
