@@ -373,6 +373,80 @@ pub fn on_poll(app: &tauri::AppHandle, polled: &[crate::scm::PolledPr]) {
     }
 }
 
+/// AUTO-004 (T-085-d): the saved checks state of each open pull request, `<folder>#<number>` to the
+/// checks word (GIT-043: passing, running or failing). It lives in the store so that a restart
+/// does not see "failing" as a new state and fire a second time.
+const CHECKS_SEEN_KEY: &str = "automations.checksSeen";
+
+fn load_checks_seen(store: &Store) -> std::collections::HashMap<String, String> {
+    store.get(CHECKS_SEEN_KEY).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+/// AUTO-004 (T-085-d): the open pull requests whose checks went from pending (or passing) to
+/// failing since the last round. `checks` is the poll round's checks word per folder (GIT-043's
+/// words, from the scm module). The first state learned about a pull request is only a starting
+/// point; an unresolved or missing reading is no news and keeps the last known state; red checks
+/// that stay red do not fire again; a pull request that closed or was replaced is forgotten.
+pub fn checks_failed(seen: &mut std::collections::HashMap<String, String>, polled: &[crate::scm::PolledPr], checks: &std::collections::HashMap<String, String>) -> Vec<(String, crate::scm::Pr)> {
+    let mut out = Vec::new();
+    for p in polled.iter().filter(|p| p.error.is_none()) {
+        let folder = projects::name_key(&p.path);
+        let open = p.pr.as_ref().filter(|pr| pr.state.eq_ignore_ascii_case("open"));
+        let current = open.map(|pr| format!("{folder}#{}", pr.number));
+        seen.retain(|k, _| !(k.rsplit_once('#').is_some_and(|(f, _)| f == folder) && Some(k) != current.as_ref()));
+        let (Some(pr), Some(key)) = (open, current) else { continue };
+        let Some(word) = checks.get(&p.path).map(String::as_str).filter(|w| matches!(*w, "passing" | "running" | "failing")) else { continue };
+        if seen.insert(key, word.to_string()).is_some_and(|before| before != "failing") && word == "failing" {
+            out.push((p.path.clone(), pr.clone()));
+        }
+    }
+    out
+}
+
+/// AUTO-004 (T-085-d): one round's checks readings through the saved state; returns what to fire.
+pub fn checks_round(store: &Store, polled: &[crate::scm::PolledPr], checks: &std::collections::HashMap<String, String>) -> Result<Vec<(String, crate::scm::Pr)>, String> {
+    let mut seen = load_checks_seen(store);
+    let before = seen.clone();
+    let fired = checks_failed(&mut seen, polled, checks);
+    if seen != before {
+        store.set(CHECKS_SEEN_KEY, &serde_json::to_string(&seen).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    }
+    Ok(fired)
+}
+
+/// AUTO-004 (T-085-d): is any switched-on automation listening for this event? The poll looks up
+/// checks only while one is, so no automation means no extra GitHub calls.
+// Called from scm_prs_poll once evidence/automations-T-085-d-scm.rs.patch lands.
+#[allow(dead_code)]
+pub fn listens(app: &tauri::AppHandle, event: &str) -> bool {
+    launch_for(app, |l| {
+        let store = l.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        load(&store, KEY).unwrap_or_default().iter().any(|a| a["enabled"] == true && a["trigger"]["kind"] == "event" && a["trigger"]["event"] == event)
+    })
+}
+
+/// AUTO-004 (T-085-d): fed every poll round with the checks word of each open pull request, so a
+/// pull request whose checks just failed starts the automations listening for "checks failed".
+// Called from scm_prs_poll once evidence/automations-T-085-d-scm.rs.patch lands.
+#[allow(dead_code)]
+pub fn on_checks(app: &tauri::AppHandle, polled: &[crate::scm::PolledPr], checks: &std::collections::HashMap<String, String>) {
+    let fired = launch_for(app, |l| {
+        let store = l.store.lock().map_err(|e| e.to_string())?;
+        checks_round(&store, polled, checks)
+    });
+    match fired {
+        Ok(list) => {
+            for (path, pr) in list {
+                let line = format!("Event: checks failed on pull request #{} from {}: {} {}", pr.number, pr.head.as_deref().unwrap_or("its branch"), pr.title.as_deref().unwrap_or("(no title)"), pr.url);
+                if let Err(e) = launch_for(app, |l| on_event(l, "checks-failed", &path, &line, now_ms() as i64)) {
+                    eprintln!("automations event: {e}");
+                }
+            }
+        }
+        Err(e) => eprintln!("automations event: {e}"),
+    }
+}
+
 /// AUTO-004 (T-085-e): does this pane's agent status count as "agent finished"? Only an ordinary
 /// completion counts: the lead agent reached done after it was seen at work in this process. A
 /// done reported at a session boundary (start, resume, clear), an interrupted turn, a sub-agent's
@@ -1355,6 +1429,107 @@ mod tests {
         claim(&s, 11, Some(110), &repo.to_string_lossy(), Some("claude")).unwrap();
         assert!(own_pane(&load(&s, RUNS_KEY).unwrap(), Some(11), 110));
         drop(s);
+        drop(l);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn checked(pairs: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+        pairs.iter().map(|(p, w)| (p.to_string(), w.to_string())).collect()
+    }
+
+    #[test]
+    fn t085d_checks_failed_fires_once_on_the_step_into_failing_and_never_on_the_rest() {
+        let mut seen = std::collections::HashMap::new();
+        let round = |seen: &mut std::collections::HashMap<String, String>, word: Option<&str>| {
+            let checks = word.map(|w| checked(&[("C:/a", w)])).unwrap_or_default();
+            checks_failed(seen, &[polled("C:/a", Some("OPEN"))], &checks).len()
+        };
+        // The first state learned is a starting point, even a red one.
+        assert_eq!(round(&mut seen, Some("running")), 0);
+        // Pending to failing fires once; red checks that stay red do not fire again.
+        assert_eq!(round(&mut seen, Some("failing")), 1);
+        assert_eq!(round(&mut seen, Some("failing")), 0);
+        // An unknown or absent reading is no news: it neither fires nor forgets the red state.
+        assert_eq!(round(&mut seen, Some("unresolved")), 0);
+        assert_eq!(round(&mut seen, None), 0);
+        assert_eq!(round(&mut seen, Some("failing")), 0);
+        // Red to running to red (a new push failing again) fires again; running to passing never does.
+        assert_eq!(round(&mut seen, Some("running")), 0);
+        assert_eq!(round(&mut seen, Some("failing")), 1);
+        assert_eq!(round(&mut seen, Some("running")), 0);
+        assert_eq!(round(&mut seen, Some("passing")), 0);
+        // Passing to failing fires.
+        assert_eq!(round(&mut seen, Some("failing")), 1);
+        // Starting on red never fires; a closed pull request is forgotten, and a failed lookup is no news.
+        let mut fresh = std::collections::HashMap::new();
+        assert_eq!(round(&mut fresh, Some("failing")), 0);
+        assert_eq!(checks_failed(&mut seen, &[polled("C:/a", Some("CLOSED"))], &checked(&[("C:/a", "failing")])).len(), 0);
+        assert!(seen.is_empty());
+        let mut e = polled("C:/a", Some("OPEN"));
+        e.error = Some("rate limited".into());
+        assert_eq!(checks_failed(&mut seen, &[e], &checked(&[("C:/a", "failing")])).len(), 0);
+        assert!(seen.is_empty());
+        // The fired pull request is the one the poll found, under the folder the poll named.
+        let mut s2 = std::collections::HashMap::new();
+        checks_failed(&mut s2, &[polled("C:/b", Some("OPEN"))], &checked(&[("C:/b", "passing")]));
+        let fired = checks_failed(&mut s2, &[polled("C:/b", Some("OPEN"))], &checked(&[("C:/b", "failing")]));
+        assert_eq!(fired.iter().map(|(p, pr)| (p.as_str(), pr.number)).collect::<Vec<_>>(), [("C:/b", 7)]);
+    }
+
+    #[test]
+    fn t085d_a_restart_keeps_the_last_checks_state_so_red_checks_do_not_fire_again() {
+        let dir = temp("t085d");
+        let store = Store::open(&dir.join("db")).unwrap();
+        let open = [polled("C:/a", Some("OPEN"))];
+        assert!(checks_round(&store, &open, &checked(&[("C:/a", "running")])).unwrap().is_empty());
+        assert_eq!(checks_round(&store, &open, &checked(&[("C:/a", "failing")])).unwrap().len(), 1);
+        drop(store);
+        // Kolux restarts: the saved state is read back, so the same red state is no news.
+        let store = Store::open(&dir.join("db")).unwrap();
+        assert!(checks_round(&store, &open, &checked(&[("C:/a", "failing")])).unwrap().is_empty());
+        // A pull request that moved on while Kolux was shut, red again after green, still fires.
+        assert!(checks_round(&store, &open, &checked(&[("C:/a", "passing")])).unwrap().is_empty());
+        drop(store);
+        let store = Store::open(&dir.join("db")).unwrap();
+        assert_eq!(checks_round(&store, &open, &checked(&[("C:/a", "failing")])).unwrap().len(), 1);
+        // A different pull request on the same folder starts afresh.
+        let mut next = polled("C:/a", Some("OPEN"));
+        next.pr.as_mut().unwrap().number = 8;
+        assert!(checks_round(&store, &[next], &checked(&[("C:/a", "failing")])).unwrap().is_empty());
+        assert_eq!(load_checks_seen(&store).len(), 1);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn t085d_a_checks_failure_in_a_watched_worktree_starts_the_listening_automation_only() {
+        let dir = temp("t085dr");
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        for args in [&["init", "-q", "-b", "main"][..], &["config", "user.email", "t@example.com"], &["config", "user.name", "t"], &["commit", "-q", "--allow-empty", "-m", "first"]] {
+            assert!(std::process::Command::new("git").args(args).current_dir(&repo).status().unwrap().success());
+        }
+        let wt = dir.join("feat");
+        assert!(std::process::Command::new("git").args(["worktree", "add", "-q", "-b", "feat"]).arg(&wt).current_dir(&repo).status().unwrap().success());
+        let store = Mutex::new(Store::open(&dir.join("db")).unwrap());
+        {
+            let s = store.lock().unwrap();
+            s.set("projects", &json!([{ "id": "p1", "name": "repo", "path": repo.to_string_lossy() }]).to_string()).unwrap();
+            let row = |id: &str, event: &str| json!({ "id": id, "name": id, "prompt": "fix the build", "provider": "claude", "projectId": "p1", "workspaceMode": "existing", "workspace": repo.to_string_lossy(), "trigger": { "kind": "event", "event": event }, "enabled": true });
+            s.set(KEY, &json!([row("auto-red", "checks-failed"), row("auto-fin", "agent-finished")]).to_string()).unwrap();
+        }
+        let git = Git::detect().unwrap();
+        let said = RefCell::new(Vec::<(String, Value)>::new());
+        let notify = |e: &str, v: Value| said.borrow_mut().push((e.to_string(), v));
+        let yes = |_: &str| true;
+        let l = Launch { git: &git, store: &store, claude_config: dir.join("claude.json"), installed: &yes, notify: &notify };
+        let path = wt.to_string_lossy().to_string();
+        let line = "Event: checks failed on pull request #7 from feat: Fix https://github.com/o/r/pull/7";
+        let started = on_event(&l, "checks-failed", &path, line, FRI_NOON).unwrap();
+        assert_eq!(started.iter().map(|r| r["automationId"].as_str().unwrap()).collect::<Vec<_>>(), ["auto-red"]);
+        assert_eq!((started[0]["trigger"].as_str(), started[0]["eventDetail"].as_str()), (Some("event"), Some(line)));
+        assert!(on_event(&l, "checks-failed", &dir.join("elsewhere").to_string_lossy(), line, FRI_NOON + 600_000).unwrap().is_empty());
         drop(l);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);

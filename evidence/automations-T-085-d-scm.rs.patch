@@ -1,0 +1,108 @@
+diff --git a/src-tauri/src/scm.rs b/src-tauri/src/scm.rs
+index 4291bd27..d219fded 100644
+--- a/src-tauri/src/scm.rs
++++ b/src-tauri/src/scm.rs
+@@ -1315,12 +1315,54 @@ pub fn prs_poll(gh: &Path, items: &[PollItem], gap: std::time::Duration) -> PrPo
+     out
+ }
+ 
++/// T-085-d (AUTO-004): the number-to-node-id table of `gh pr list --json number,id`.
++fn open_ids(text: &str) -> std::collections::HashMap<u64, String> {
++    serde_json::from_str::<Vec<serde_json::Value>>(text).unwrap_or_default().iter().filter_map(|v| Some((v["number"].as_u64()?, v["id"].as_str()?.to_string()))).collect()
++}
++
++/// T-085-d (AUTO-004): the checks word (GIT-043's `checks_of`) of every open pull request found by a
++/// poll round, by workspace path, for the "checks failed" automation trigger. One `gh pr list` per
++/// GitHub project and one GraphQL call per host; a failed read leaves that project's folders out,
++/// which the trigger reads as "no news".
++pub fn polled_checks(gh: &Path, polled: &[PolledPr]) -> std::collections::HashMap<String, String> {
++    let config = ssh_config();
++    // Per project: its host, the first folder (gh runs there) and each open pull request wanted.
++    type Wanted = Vec<(String, u64)>;
++    let mut groups: Vec<(String, String, Wanted)> = Vec::new();
++    for p in polled.iter().filter(|p| p.error.is_none()) {
++        let Some(pr) = p.pr.as_ref().filter(|pr| pr.state.eq_ignore_ascii_case("open")) else { continue };
++        let Some(g) = run(&["remote", "get-url", "origin"], Some(Path::new(&p.path))).ok().and_then(|u| github_repo(&u, &config)) else { continue };
++        match groups.iter_mut().find(|(k, _, _)| *k == g.key) {
++            Some((_, _, list)) => list.push((p.path.clone(), pr.number)),
++            None => groups.push((g.key.clone(), g.host.clone(), vec![(p.path.clone(), pr.number)])),
++        }
++    }
++    let mut out = std::collections::HashMap::new();
++    for (_, host, list) in groups {
++        let Ok(text) = gh_run(gh, Path::new(&list[0].0), &["pr", "list", "--state", "open", "--limit", "100", "--json", "number,id"], None) else { continue };
++        let ids = open_ids(&text);
++        let wanted: Vec<String> = list.iter().filter_map(|(_, n)| ids.get(n).cloned()).collect();
++        let words = checks_of(gh, &host, &wanted);
++        for (path, n) in list {
++            if let Some(w) = ids.get(&n).and_then(|id| words.get(id)) {
++                out.insert(path, w.clone());
++            }
++        }
++    }
++    out
++}
++
+ #[tauri::command]
+ pub async fn scm_prs_poll(app: tauri::AppHandle, items: Vec<PollItem>) -> Result<PrPoll, String> {
+     tauri::async_runtime::spawn_blocking(move || {
+-        let out = prs_poll(&gh_program()?, &items, std::time::Duration::from_millis(400));
++        let gh = gh_program()?;
++        let out = prs_poll(&gh, &items, std::time::Duration::from_millis(400));
+         // AUTO-004: each round is what pull-request-opened automations listen to.
+         crate::automations::on_poll(&app, &out.prs);
++        // AUTO-004 (T-085-d): checks are looked up only while a checks-failed automation is on.
++        if crate::automations::listens(&app, "checks-failed") {
++            crate::automations::on_checks(&app, &out.prs, &polled_checks(&gh, &out.prs));
++        }
+         Ok(out)
+     })
+     .await
+@@ -3656,6 +3698,47 @@ mod tests {
+         let _ = fs::remove_dir_all(&dir);
+     }
+ 
++    #[test]
++    fn t085d_the_poll_reads_each_open_pull_requests_checks_word_with_one_list_and_one_graphql_call() {
++        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-t085d-{}", std::process::id()));
++        let _ = fs::remove_dir_all(&tools);
++        fs::create_dir_all(&tools).unwrap();
++        let repo = tools.join("repo");
++        fs::create_dir_all(&repo).unwrap();
++        for args in [&["init", "-q", "-b", "main"][..], &["remote", "add", "origin", "https://github.com/o/r.git"]] {
++            assert!(quiet("git").args(args).current_dir(&repo).status().unwrap().success());
++        }
++        fs::write(tools.join("list.json"), r#"[{"number":7,"id":"PR_7"},{"number":9,"id":"PR_9"}]"#).unwrap();
++        fs::write(tools.join("checks.json"), r#"{"data":{"nodes":[{"id":"PR_7","commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}}]}}"#).unwrap();
++        let gh = if cfg!(windows) {
++            let f = tools.join("gh.cmd");
++            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%2\"==\"graphql\" (type \"%~dp0checks.json\") else (type \"%~dp0list.json\")\r\n").unwrap();
++            f
++        } else {
++            let f = tools.join("gh");
++            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\nif [ \"$2\" = graphql ]; then cat \"$(dirname \"$0\")/checks.json\"; else cat \"$(dirname \"$0\")/list.json\"; fi\n").unwrap();
++            quiet("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
++            f
++        };
++        let path = repo.to_string_lossy().to_string();
++        let pr = |n: u64, state: &str| Some(Pr { number: n, url: format!("https://github.com/o/r/pull/{n}"), state: state.into(), title: None, head: None, draft: false });
++        let row = |path: &str, pr: Option<Pr>, error: Option<&str>| PolledPr { path: path.into(), linked: false, pr, error: error.map(String::from) };
++        let polled = [row(&path, pr(7, "OPEN"), None), row("C:/closed", pr(8, "CLOSED"), None), row("C:/broken", pr(9, "OPEN"), Some("rate limited")), row("C:/none", None, None)];
++        let got = polled_checks(&gh, &polled);
++        // Only the open pull request with a readable project is asked about; the rest are left out.
++        assert_eq!(got.get(&path).map(String::as_str), Some("failing"));
++        assert_eq!(got.len(), 1, "{got:?}");
++        let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
++        assert_eq!(calls.lines().count(), 2, "{calls}");
++        assert!(calls.contains("pr list --state open") && calls.contains("api graphql --hostname github.com") && calls.contains("PR_7") && !calls.contains("PR_9"), "{calls}");
++        // Nothing open to ask about asks nothing.
++        let before = calls.lines().count();
++        assert!(polled_checks(&gh, &polled[1..]).is_empty());
++        assert_eq!(fs::read_to_string(tools.join("calls.txt")).unwrap().lines().count(), before);
++        assert_eq!(open_ids("not json"), std::collections::HashMap::new());
++        let _ = fs::remove_dir_all(&tools);
++    }
++
+     #[test]
+     fn git043_tasks_search_pages_through_github_search_with_labels_assignees_and_checks() {
+         let tools = std::env::temp_dir().join(format!("kolux-rs-scm-git043-{}", std::process::id()));
