@@ -8,6 +8,7 @@
 import type { Agent } from "../chrome/VendorMark";
 import { focusIn, panesIn } from "../workspaces";
 import { resumeId, uniqueOwners } from "../sessions/ownership";
+import { sessionOrder } from "../sessions/restoreOrder";
 
 export const LAYOUT_FIELD = "savedLayout";
 
@@ -125,7 +126,8 @@ export function restoreLayout(value: unknown): SavedLayout | null {
   if (o.stacked && typeof o.stacked === "object") {
     for (const [d, s] of Object.entries(o.stacked as Record<string, unknown>)) if (typeof s === "boolean") stacked[d] = s;
   }
-  return tidy(uniqueOwners(panes), activeTab, num(o.focused) ? o.focused : 0, strOrNull(o.activeDir) ? o.activeDir : null, stacked);
+  // VIEW-107 (T-069-c): the tabs come back in session order, in this one pass.
+  return tidy(uniqueOwners(sessionOrder(panes)), activeTab, num(o.focused) ? o.focused : 0, strOrNull(o.activeDir) ? o.activeDir : null, stacked);
 }
 
 /** Drops the tabs whose folder is gone; the active workspace and tab come back only while they exist. */

@@ -27,3 +27,35 @@ LIVE PROOF PENDING (batched)
    Pull requests with "Open · <counts>" (counts appear within a few seconds as the checks are read).
 2. Type a word of its title: the same row.
 3. Unlink / close the branch's PR on the host and wait one poll round (3 min) or refresh: the row is gone.
+
+== SECOND PIECE (2026-10-20, lane/repo from main 992cb5a6): the Explorer toolbar, row menus and search cards ==
+
+CHECKED AGAINST WHAT IS ALREADY BUILT (T-236-b, T-094-a/b/b2, T-146-b)
+- Already there: repo name in the header, collapse all, compact name filter that keeps matches with their folders (filtering leaves the
+  open folders alone), per-worktree dotfiles switch (only the opt-out is saved), a 3-second live refresh of the shown folders, keyboard
+  movement (Down with nothing selected picks row 1; keys typed in a field inside the panel are ignored), hide/show keeps the open
+  folders and another worktree starts fresh (the panel is keyed by the worktree), row menus (find in folder, open in terminal, view),
+  and VIEW-061 itself: the Explorer's search view (Mod+Shift+F wakes a hidden explorer; hits grouped by file; a folder's menu sets the
+  include pattern to that folder; "The search failed: <reason>" instead of an empty list; a hit opens by its full path under the
+  root the search ran in).
+- Built now (new files src/editor/explorerBar.ts, explorerBar.css, AddProjectRow.tsx; wired by patches):
+  expand all (levels of folders, at most 300 folders, never dot folders, node_modules or target); refresh with a spinning icon, off
+  while it runs; Windows path compare without case or slash direction and only on whole folder names (insideDir replaces Explorer's
+  own `inside`, so tops(), delete and move on a share cannot confuse a neighbour share); Collapse on an open folder's menu; Copy as
+  file on a single file's menu (clip_copy_files, an error shows as a failed note); the add-project row when there is no workspace
+  (folder chooser, then the project list's own handler).
+
+TESTS
+- src/editor/explorerBar.test.ts, 4 tests: expand-all picks and cap, wave by wave, Windows/share path rules, row-menu extras.
+- vitest src/editor src/scm src/sessions: 87 files, 595 tests, with and without the patches; tsc 0 both ways. No Rust change.
+
+PATCHES (apply in this order; Explorer.tsx belongs to the editor lane, App.tsx is shared): evidence/repo-T-224-b-explorer-Explorer.tsx.patch,
+evidence/repo-T-224-b-explorer-App.tsx.patch (AddProjectRow in place of the empty-explorer hint). The palette piece's patches are already in main.
+
+LEFT OPEN (named): a separate "Search" tab on the right sidebar's tab strip is T-146-g (blocked, the card VIEW-061 itself describes the
+Explorer's search view); the "pre-fill the query" half of searching from a folder (only the include pattern is set).
+
+LIVE PROOF PENDING (batched)
+1. Explorer toolbar: Expand all opens the folders (not node_modules, target or dot folders); Refresh spins and cannot be pressed twice.
+2. Right-click an open folder: Collapse is first and closes it. Right-click one file: Copy as file; paste into a mail or the desktop.
+3. With no workspace open, the Explorer shows Add a project; choosing a folder adds it to the project list.

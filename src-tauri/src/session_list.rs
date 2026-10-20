@@ -18,7 +18,8 @@
 // evidence/sessions-T-169-lib.rs.patch (shared file); the allow goes when the patch lands.
 #![allow(dead_code)]
 
-use serde::Serialize;
+use super::scan::{Budget, Listing, Report};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -50,7 +51,8 @@ pub struct Entry {
     pub dir: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Summary {
     pub custom: String,
     pub ai: String,
@@ -61,6 +63,9 @@ pub struct Summary {
     pub id: Option<String>,
     /// A sub-agent or worker session: left out of the list.
     pub skip: bool,
+    /// VIEW-090: the transcript could not be opened or read; it is counted as skipped, never cached.
+    pub unreadable: bool,
+    #[serde(skip)]
     seen_event: bool,
 }
 
@@ -199,7 +204,10 @@ fn slice(path: &Path, from: u64, cap: u64) -> Option<String> {
 /// [`TAIL_CAP`] bytes for a title written late (Claude).
 pub fn summarize(agent: &str, path: &Path, len: u64) -> Summary {
     let mut s = Summary::default();
-    let Some(head) = slice(path, 0, HEAD_CAP) else { return s };
+    let Some(head) = slice(path, 0, HEAD_CAP) else {
+        s.unreadable = true;
+        return s;
+    };
     let claude = agent != "codex";
     for line in head.lines() {
         if let Ok(v) = serde_json::from_str::<Value>(line) {
@@ -223,13 +231,17 @@ pub fn summarize(agent: &str, path: &Path, len: u64) -> Summary {
     s
 }
 
-fn summary_for(cache: &mut Cache, agent: &str, path: &Path, modified: u64, len: u64) -> Summary {
+fn summary_for(cache: &mut Cache, agent: &str, path: &Path, modified: u64, len: u64, report: &mut Report) -> Summary {
     if let Some((m, l, s)) = cache.get(path) {
         if *m == modified && *l == len {
             return s.clone();
         }
     }
     let s = summarize(agent, path, len);
+    if s.unreadable {
+        return s;
+    }
+    report.parsed += 1;
     cache.insert(path.to_path_buf(), (modified, len, s.clone()));
     s
 }
@@ -262,7 +274,7 @@ fn title_of(s: &Summary, indexed: Option<&String>) -> String {
 /// Claude sessions: for a folder scope the workspace's own history folder (`sessions::claude_history_dir`
 /// finds it however the drive letter is cased), for All every history folder. Sub-agent transcripts
 /// (`agent-*` files and sidechain sessions) are left out.
-fn claude_entries(roots: &[PathBuf], scope: &Scope, cache: &mut Cache) -> Vec<Entry> {
+fn claude_entries(roots: &[PathBuf], scope: &Scope, cache: &mut Cache, budget: &Budget, report: &mut Report) -> Vec<Entry> {
     let mut out = Vec::new();
     for config in roots {
         let projects = config.join("projects");
@@ -281,8 +293,19 @@ fn claude_entries(roots: &[PathBuf], scope: &Scope, cache: &mut Cache) -> Vec<En
                 if stem.is_empty() || stem.starts_with("agent-") {
                     continue;
                 }
-                let Some((modified, len)) = stat(&path) else { continue };
-                let s = summary_for(cache, "claude", &path, modified, len);
+                if budget.spent() {
+                    report.cut_short = true;
+                    return out;
+                }
+                let Some((modified, len)) = stat(&path) else {
+                    report.skipped += 1;
+                    continue;
+                };
+                let s = summary_for(cache, "claude", &path, modified, len, report);
+                if s.unreadable {
+                    report.skipped += 1;
+                    continue;
+                }
                 if s.skip {
                     continue;
                 }
@@ -315,13 +338,28 @@ pub fn codex_files(home: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn codex_entries(roots: &[PathBuf], scope: &Scope, cache: &mut Cache) -> Vec<Entry> {
+fn codex_entries(roots: &[PathBuf], scope: &Scope, cache: &mut Cache, budget: &Budget, report: &mut Report) -> Vec<Entry> {
     let mut out = Vec::new();
     for home in roots {
         let index = codex_index(home);
+        let index_file = home.join("session_index.jsonl");
+        if index_file.exists() && slice(&index_file, 0, 1).is_none() {
+            report.note_unreadable("the Codex title index");
+        }
         for path in codex_files(home) {
-            let Some((modified, len)) = stat(&path) else { continue };
-            let s = summary_for(cache, "codex", &path, modified, len);
+            if budget.spent() {
+                report.cut_short = true;
+                return out;
+            }
+            let Some((modified, len)) = stat(&path) else {
+                report.skipped += 1;
+                continue;
+            };
+            let s = summary_for(cache, "codex", &path, modified, len, report);
+            if s.unreadable {
+                report.skipped += 1;
+                continue;
+            }
             if s.skip || !in_scope(s.cwd.as_deref(), scope) {
                 continue;
             }
@@ -337,15 +375,24 @@ fn codex_entries(roots: &[PathBuf], scope: &Scope, cache: &mut Cache) -> Vec<Ent
 /// The past sessions of every readable agent in `scope`, newest first, one row per (agent, id) even
 /// when two roots hold the same session, cut to `depth` rows (None = unlimited) after the scope.
 pub fn list(roots: &Roots, scope: &Scope, cache: &mut Cache, depth: Option<usize>) -> Vec<Entry> {
-    let mut all = claude_entries(&roots.claude, scope, cache);
-    all.extend(codex_entries(&roots.codex, scope, cache));
+    list_scan(roots, scope, cache, depth, &Budget::none()).sessions
+}
+
+/// VIEW-090 / VIEW-092: the same list plus what the scan could not do (skipped transcripts, a cut-short
+/// scan, an unreadable index, no session folder at all). A transcript that cannot be read is counted
+/// and left out; it never fails the scan.
+pub fn list_scan(roots: &Roots, scope: &Scope, cache: &mut Cache, depth: Option<usize>, budget: &Budget) -> Listing {
+    let no_sources = roots.claude.iter().all(|c| !c.join("projects").is_dir()) && roots.codex.iter().all(|h| !h.join("sessions").is_dir() && !h.join("archived_sessions").is_dir());
+    let mut report = Report { no_sources, ..Report::default() };
+    let mut all = claude_entries(&roots.claude, scope, cache, budget, &mut report);
+    all.extend(codex_entries(&roots.codex, scope, cache, budget, &mut report));
     all.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms).then_with(|| a.agent.cmp(&b.agent)).then_with(|| a.id.cmp(&b.id)));
     let mut seen = HashSet::new();
     all.retain(|e| seen.insert((e.agent.clone(), e.id.clone())));
     if let Some(n) = depth {
         all.truncate(n);
     }
-    all
+    Listing { sessions: all, report }
 }
 
 // ---- roots from settings and environment ----
@@ -528,20 +575,48 @@ pub fn plan(settings: &Value, roots: &Roots, agent: &str, id: &str, workspace: O
 /// VIEW-091 / VIEW-083: the past sessions in scope. `force` is the refresh button (a full rescan);
 /// without it, files that did not change reuse their last summary.
 #[tauri::command]
-pub async fn sessions_list(store: tauri::State<'_, Mutex<crate::state::Store>>, dirs: Vec<String>, all: bool, depth: Option<usize>, force: Option<bool>) -> Result<Vec<Entry>, String> {
-    let settings = store.lock().map_err(|e| e.to_string())?.settings();
+pub async fn sessions_list(store: tauri::State<'_, Mutex<crate::state::Store>>, dirs: Vec<String>, all: bool, depth: Option<usize>, force: Option<bool>) -> Result<Listing, String> {
+    let (settings, profile) = {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        (store.settings(), store.dir())
+    };
     let force = force.unwrap_or(false);
-    tauri::async_runtime::spawn_blocking(move || {
-        let roots = live_roots(&settings);
-        let mut guard = cache().lock().unwrap_or_else(|e| e.into_inner());
-        if force {
-            guard.clear();
+    // VIEW-092: the scan runs off the window's thread, and the window gets an answer even when a disk stalls.
+    tauri::async_runtime::spawn_blocking(move || scan_now(&settings, &profile, &dirs, all, depth, force)).await.map_err(|e| e.to_string())
+}
+
+static RUNNING: super::scan::Running = super::scan::Running::new();
+static DISK_LOADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// VIEW-090 / VIEW-092: one scan under the shared cache. The first scan of the run starts from the
+/// summaries saved on disk; a forced one clears the cache unless another scan is running (it joins
+/// that one); WSL roots whose distribution is stopped are left out; the scan stops reading after
+/// [`super::scan::SCAN_BUDGET`]; new summaries are saved for the next run.
+pub fn scan_now(settings: &Value, profile: &Path, dirs: &[String], all: bool, depth: Option<usize>, force: bool) -> Listing {
+    let (_ticket, joined) = RUNNING.enter();
+    let mut roots = live_roots(settings);
+    let mut notes = Report::default();
+    roots.claude = super::scan::without_stopped_wsl(roots.claude, &mut notes, super::scan::running_distros);
+    roots.codex = super::scan::without_stopped_wsl(roots.codex, &mut notes, super::scan::running_distros);
+    let file = profile.join(super::scan::CACHE_FILE);
+    let mut guard = cache().lock().unwrap_or_else(|e| e.into_inner());
+    if !DISK_LOADED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        for (k, v) in super::scan::load_disk(&file) {
+            guard.entry(k).or_insert(v);
         }
-        let scope = if all { Scope::All } else { Scope::Dirs(&dirs) };
-        list(&roots, &scope, &mut guard, depth)
-    })
-    .await
-    .map_err(|e| e.to_string())
+    }
+    if force && !joined {
+        guard.clear();
+    }
+    let scope = if all { Scope::All } else { Scope::Dirs(dirs) };
+    let mut got = list_scan(&roots, &scope, &mut guard, depth, &Budget::within(super::scan::SCAN_BUDGET));
+    for what in notes.unreadable {
+        got.report.note_unreadable(&what);
+    }
+    if got.report.parsed > 0 {
+        let _ = super::scan::save_disk(&file, &guard);
+    }
+    got
 }
 
 /// VIEW-085: the resume plan for one listed session, written for `shell` (a shell program name or

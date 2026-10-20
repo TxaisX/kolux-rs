@@ -57,9 +57,6 @@ mod orchestration;
 mod foreground;
 mod procs;
 mod protected;
-// T-156-b: listen() and its helpers are reached from hooks.rs only once evidence/hooks-T-156-b-hooks.rs.patch
-// lands (gated by PLAN T-156-b acceptance; after-list row). Drop this allow with that patch.
-#[allow(dead_code)]
 mod protected_custom;
 mod ports;
 mod labels;
@@ -84,6 +81,7 @@ mod schedule;
 mod resume;
 mod secrets;
 mod settings_sync;
+mod session_rows;
 mod sessions;
 mod shell_marks;
 mod shell_history;
@@ -489,6 +487,8 @@ pub fn run() {
             sessions::claude_workspace_sessions,
             sessions::list::sessions_list,
             sessions::list::session_resume_plan,
+            session_rows::session_row_detail,
+            session_rows::session_name,
             terminal::terminal_spawn,
             terminal::terminal_write,
             terminal::terminal_service_info,

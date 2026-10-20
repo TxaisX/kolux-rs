@@ -104,3 +104,10 @@ test("T-066-c: the restore loop asks for an agent line only for an agent tab, ne
   expect(ask("shell", "gemini", null)).toBe(false); // an unstarted chooser
   expect(ask("claude", "claude", "claude", "editor")).toBe(false); // not a terminal tab
 });
+
+test("view107: tabs saved out of session order are restored in the order they were opened, in one pass", () => {
+  const saved = { panes: [shell(5, "C:/w/b"), shell(2, "C:/w/a"), shell(9, "C:/w/a"), shell(1, "C:/w/b")], activeTab: {}, focused: 9, activeDir: "C:/w/a", stacked: {} };
+  const l = restoreLayout(saved)!;
+  expect(l.panes.map((p) => p.key)).toEqual([1, 2, 5, 9]);
+  expect(l.focused).toBe(9);
+});
