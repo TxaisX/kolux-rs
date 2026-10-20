@@ -38,6 +38,12 @@ describe("heading anchors follow GitHub's slugs", () => {
     expect(headingLine(md, "part")).toBe(5);
     expect(headingLine(md, "part-1")).toBe(7);
     expect(headingLine(md, "nope")).toBeNull();
+    // Row 122: an underlined (setext) heading is found too, on the line of its words, and counted.
+    const st = "Intro\n====="+"\n\ntext\n\nPart\n----\n\n## Part\n";
+    expect(headingLine(st, "intro")).toBe(1);
+    expect(headingLine(st, "part")).toBe(6);
+    expect(headingLine(st, "part-1")).toBe(9);
+    expect(headingLine("a\nb\n# Win", "win")).toBe(3);
   });
 });
 

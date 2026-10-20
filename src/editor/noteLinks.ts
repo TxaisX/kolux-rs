@@ -2,7 +2,7 @@
 // view hand a clicked href to `resolveLink` and act on the answer; `[[note]]` text goes through
 // `wikiLinks` / `wikiTarget`. Slugs follow GitHub's heading anchors.
 import { keyOf } from "./buffers";
-import { outline } from "./toc";
+import { outline, outlineAt } from "./toc";
 import { fromFileUrl, resolvePath } from "../terminal/links";
 
 /** A line anchor as the card allows: #L10, #L10C5 or :10:5 (a trailing :10 is a line too). */
@@ -45,29 +45,13 @@ export function headingSlugs(md: string): string[] {
   });
 }
 
-/** The 1-based line a heading anchor points at, or null. Counts ATX headings outside code fences;
- *  ponytail: a heading drawn with an underline (setext) is skipped, so it only finds ATX ones. */
+/** The 1-based line a heading anchor points at, or null. Row 122: every heading the outline sees,
+ *  underlined (setext) ones too, numbered the same way as headingSlugs. */
 export function headingLine(md: string, slug: string): number | null {
   const want = decodeURIComponent(slug.replace(/%(?![0-9a-f]{2})/gi, "%25")).toLowerCase();
-  const seen = new Map<string, number>();
-  let fence: string | null = null;
-  const lines = md.split(/\r\n|\r|\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const f = lines[i].match(/^ {0,3}(`{3,}|~{3,})/);
-    if (f) {
-      if (fence === null) fence = f[1][0];
-      else if (f[1][0] === fence) fence = null;
-      continue;
-    }
-    if (fence !== null) continue;
-    const h = lines[i].match(/^ {0,3}#{1,6}\s+(.*?)(?:\s+#+)?\s*$/);
-    if (!h) continue;
-    const base = slugOf(h[1].replace(/[*_`~[\]]/g, ""));
-    const n = seen.get(base) ?? 0;
-    seen.set(base, n + 1);
-    if ((n === 0 ? base : `${base}-${n}`) === want) return i + 1;
-  }
-  return null;
+  const all = outlineAt(md);
+  const i = headingSlugs(md).indexOf(want);
+  return i < 0 ? null : all[i].line;
 }
 
 /** What a click on a link does. `web` goes to a browser; `here` moves within the open note; `file` opens

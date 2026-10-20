@@ -19,16 +19,24 @@ function plain(tokens: Token[] | undefined): string {
 
 /** The headings of a note, in document order (also those inside quotes and list items). */
 export function outline(md: string): Entry[] {
-  const out: Entry[] = [];
-  const walk = (tokens: Token[]) => {
+  return outlineAt(md).map(({ level, text }) => ({ level, text }));
+}
+
+/** Row 122: the headings with the 1-based line each starts on, underlined (setext) ones included.
+ *  A heading inside a quote or a list item gets the line its quote or list starts on. */
+export function outlineAt(md: string): (Entry & { line: number })[] {
+  const out: (Entry & { line: number })[] = [];
+  let line = 1;
+  const walk = (tokens: Token[], top: boolean) => {
     for (const t of tokens) {
-      if (t.type === "heading") out.push({ level: (t as Tokens.Heading).depth, text: plain((t as Tokens.Heading).tokens).replace(/\s+/g, " ").trim() });
-      else if (t.type === "blockquote") walk((t as Tokens.Blockquote).tokens);
-      else if (t.type === "list") for (const item of (t as Tokens.List).items) walk(item.tokens);
+      if (t.type === "heading") out.push({ level: (t as Tokens.Heading).depth, text: plain((t as Tokens.Heading).tokens).replace(/\s+/g, " ").trim(), line });
+      else if (t.type === "blockquote") walk((t as Tokens.Blockquote).tokens, false);
+      else if (t.type === "list") for (const item of (t as Tokens.List).items) walk(item.tokens, false);
+      if (top) line += (t.raw.match(/\n/g) ?? []).length;
     }
   };
   try {
-    walk(marked.lexer(md));
+    walk(marked.lexer(md.replace(/\r\n?/g, "\n")), true);
   } catch {
     return [];
   }

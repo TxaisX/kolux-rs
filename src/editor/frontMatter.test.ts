@@ -59,6 +59,16 @@ describe("one word changed in the rich view", () => {
   });
 });
 
+describe("row 134: a note starting with a byte order mark", () => {
+  it("still has its front matter kept out of the rich view", () => {
+    const bom = "\uFEFF" + note;
+    const s = splitFront(bom);
+    expect([s.kind, s.front, s.body]).toEqual(["yaml", "\uFEFF---\ntitle: Plan\ntags: [a, b]\n---\n", "# Heading\n\nOne paragraph with a word.\n"]);
+    const c = richChange(bom, "# Heading\n\nOne paragraph with a new word.")!;
+    expect((bom.slice(0, c.from) + c.insert + bom.slice(c.to)).startsWith(s.front)).toBe(true);
+  });
+});
+
 describe("row 135: a rich edit rewrites only what the user changed", () => {
   const apply = (t: string, c: { from: number; to: number; insert: string } | null) => (c ? t.slice(0, c.from) + c.insert + t.slice(c.to) : t);
 

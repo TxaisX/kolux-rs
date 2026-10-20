@@ -9,7 +9,8 @@ import { changeBetween } from "./markdown";
 /** The front matter block including its closing line and that line's end ("" when there is none),
  *  and the rest of the note. `front + body` is always the whole text. */
 export function splitFront(text: string): { front: string; body: string; kind: "yaml" | "toml" | null } {
-  const m = /^(---|\+\+\+)[ \t]*\r?\n/.exec(text);
+  // Row 134: a byte order mark before the opening line still opens front matter (it stays in `front`).
+  const m = /^\uFEFF?(---|\+\+\+)[ \t]*\r?\n/.exec(text);
   if (!m) return { front: "", body: text, kind: null };
   const fence = m[1];
   const closer = fence === "---" ? /^(---|\.\.\.)[ \t]*(\r?\n|$)/gm : /^\+\+\+[ \t]*(\r?\n|$)/gm;
