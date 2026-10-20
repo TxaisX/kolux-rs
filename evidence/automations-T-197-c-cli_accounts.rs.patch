@@ -1,0 +1,67 @@
+diff --git a/src-tauri/src/cli_accounts.rs b/src-tauri/src/cli_accounts.rs
+index 9eda4b2a..aafb7c4c 100644
+--- a/src-tauri/src/cli_accounts.rs
++++ b/src-tauri/src/cli_accounts.rs
+@@ -166,7 +166,29 @@ pub fn run_login(agent: &str, temp: &Path) -> Result<Option<i32>, String> {
+     } else {
+         cmd.args(["auth", "login"]).env(claude_accounts::CONFIG_ENV, temp).env_remove(crate::claude_key::ENV);
+     }
+-    cmd.status().map(|s| s.code()).map_err(|e| format!("{}'s sign-in could not start: {e}", name(agent)))
++    // CLI-004: a prompt or device code goes to standard error, so `--json` output stays parseable.
++    run_forwarding(cmd, std::io::stderr()).map_err(|e| format!("{}'s sign-in could not start: {e}", name(agent)))
++}
++
++/// Runs `cmd` in this terminal with its standard output copied to `to` as it arrives; its input and
++/// its own error output stay the user's. Gives the exit code (none when a signal ended it).
++fn run_forwarding(mut cmd: std::process::Command, mut to: impl std::io::Write + Send) -> std::io::Result<Option<i32>> {
++    use std::io::Read;
++    cmd.stdout(std::process::Stdio::piped());
++    let mut child = cmd.spawn()?;
++    let mut out = child.stdout.take();
++    let status = std::thread::scope(|s| {
++        s.spawn(|| {
++            let mut buf = [0u8; 1024];
++            while let Some(Ok(n)) = out.as_mut().map(|o| o.read(&mut buf)) {
++                if n == 0 || to.write_all(&buf[..n]).and_then(|_| to.flush()).is_err() {
++                    break;
++                }
++            }
++        });
++        child.wait()
++    })?;
++    Ok(status.code())
+ }
+ 
+ /// Refused before the app is asked when the agent is not installed.
+@@ -245,6 +267,31 @@ pub fn text(command: &str, r: &Value) -> String {
+ mod tests {
+     use super::*;
+ 
++    struct Sink(std::sync::Arc<Mutex<Vec<u8>>>);
++    impl std::io::Write for Sink {
++        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
++            self.0.lock().unwrap().extend_from_slice(b);
++            Ok(b.len())
++        }
++        fn flush(&mut self) -> std::io::Result<()> {
++            Ok(())
++        }
++    }
++
++    #[test]
++    fn t197c_a_sign_in_s_prompt_goes_to_the_stream_it_is_sent_to_and_its_exit_code_comes_back() {
++        let said = std::sync::Arc::new(Mutex::new(Vec::new()));
++        let run = |line: &str, to: Sink| {
++            let mut c = if cfg!(windows) { std::process::Command::new("cmd") } else { std::process::Command::new("sh") };
++            c.args([if cfg!(windows) { "/C" } else { "-c" }, line]);
++            run_forwarding(c, to).unwrap()
++        };
++        assert_eq!(run("echo Visit the page and enter the code ABCD-1234", Sink(said.clone())), Some(0));
++        assert!(String::from_utf8_lossy(&said.lock().unwrap()).contains("enter the code ABCD-1234"));
++        assert_eq!(run("exit 3", Sink(said.clone())), Some(3), "a failed login keeps its own status");
++        assert!(run_forwarding(std::process::Command::new("kolux-rs-no-such-program"), Sink(said)).is_err(), "a program that will not start is an error");
++    }
++
+     const CREDS: &str = r#"{"claudeAiOauth":{"accessToken":"fake-access","refreshToken":"fake-refresh"}}"#;
+     const SIGNED_IN: &str = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"sam@example.com","orgName":"Example Org"}"#;
+ 
