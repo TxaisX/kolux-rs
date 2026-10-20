@@ -1,0 +1,74 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 28a6046f..6f609a3c 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -2760,6 +2760,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+         agents={live.filter((p) => p.agent !== "shell").length}
+         names={() => Object.fromEntries(panes.flatMap((p) => (ptys.current[p.key] === undefined ? [] : [[ptys.current[p.key], tabName(p, titles)]])))}
+         workspaces={Object.keys(owner)}
++        active={activeDir}
+         hooks={settingsRead ? hooksOn(settings) : null}
+         loaded={() => windowLoaded(settingsRead, restoredKeys.current, ptys.current, panes)}
+       />
+diff --git a/src/chrome/StatusBar.tsx b/src/chrome/StatusBar.tsx
+index 7dc76990..bae4ce92 100644
+--- a/src/chrome/StatusBar.tsx
++++ b/src/chrome/StatusBar.tsx
+@@ -10,12 +10,15 @@ import { Chip, Cup, Plug } from "./icons";
+ import { STATUS_ITEMS } from "./statusItems";
+ import { BAR_EVENT, SHOW_EVENT, currentBar } from "../update/UpdateCenter";
+ import { KeepAwakeItem, useKeepAwake } from "../launch/KeepAwakeCard";
++import PortsItem from "../ports/PortsItem";
+ 
+ type Props = {
+   terminals: number;
+   agents?: number;
+   names?: () => Record<number, string>;
+   workspaces?: string[];
++  /** VIEW-078: the active workspace folder whose listening ports the Ports item shows. */
++  active?: string | null;
+   hidden?: string[];
+   onToggle?: (id: string) => void;
+   onHideBar?: () => void;
+@@ -25,7 +28,7 @@ type Props = {
+   loaded?: () => boolean;
+ };
+ 
+-export default function StatusBar({ terminals, agents = 0, names = () => ({}), workspaces = [], hidden = [], onToggle, onHideBar, hooks = null, loaded }: Props) {
++export default function StatusBar({ terminals, agents = 0, names = () => ({}), workspaces = [], active = null, hidden = [], onToggle, onHideBar, hooks = null, loaded }: Props) {
+   const [memory, setMemory] = useState<number | null>(null);
+   const [open, setOpen] = useState(false);
+   const [menu, setMenu] = useState<{ left: number; bottom: number } | null>(null);
+@@ -91,6 +94,7 @@ export default function StatusBar({ terminals, agents = 0, names = () => ({}), w
+           {agents}
+         </span>
+       )}
++      {shows("ports") && <PortsItem active={active} workspaces={workspaces} />}
+       {shows("awake") && <KeepAwakeItem held={awake} />}
+       {menu && (
+         <>
+diff --git a/src/chrome/statusItems.test.ts b/src/chrome/statusItems.test.ts
+index 31d5e95d..404514ce 100644
+--- a/src/chrome/statusItems.test.ts
++++ b/src/chrome/statusItems.test.ts
+@@ -7,7 +7,7 @@ import { readStatusBar, STATUS_ITEMS, toggleItem } from "./statusItems";
+ test("VIEW-096: everything shows until something is hidden", () => {
+   expect(readStatusBar({})).toEqual({ visible: true, hidden: [] });
+   expect(readStatusBar({ statusBarVisible: false }).visible).toBe(false);
+-  expect(STATUS_ITEMS.map((i) => i.id)).toEqual(["hooks", "memory", "terminals", "agents", "awake"]);
++  expect(STATUS_ITEMS.map((i) => i.id)).toEqual(["hooks", "memory", "terminals", "agents", "awake", "ports"]);
+ });
+ 
+ test("VIEW-096: an old saved list keeps the items it knows and drops retired or unknown ones", () => {
+diff --git a/src/chrome/statusItems.ts b/src/chrome/statusItems.ts
+index e7aaa0b1..03c85abd 100644
+--- a/src/chrome/statusItems.ts
++++ b/src/chrome/statusItems.ts
+@@ -7,6 +7,7 @@ export const STATUS_ITEMS = [
+   { id: "terminals", label: "Terminals running" },
+   { id: "agents", label: "Agents running" },
+   { id: "awake", label: "Keep awake" },
++  { id: "ports", label: "Ports" },
+ ] as const;
+ export type StatusItem = (typeof STATUS_ITEMS)[number]["id"];
+ export const FIELDS = { visible: "statusBarVisible", hidden: "statusBarHidden" } as const;
