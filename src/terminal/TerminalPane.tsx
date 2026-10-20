@@ -168,6 +168,8 @@ type Props = {
   onChoose?: () => void;
   /** TERM-006: the header split button opens a shell beside this pane, in the same folder. */
   onSplit?: (dir: "right" | "down") => void;
+  /** TERM-015: the header's drag handle, given only when the workspace holds more than one pane. */
+  dragCell?: { onStart: () => void; onEnd: () => void };
   /** TERM-035: Equalize in the pane menu; given only while the grid holds more than one pane. */
   onEqualize?: () => void;
   /** TERM-013: the grid's expand: `on` while this pane's cell fills the grid; `can` is false for a lone classic pane. */
@@ -205,7 +207,7 @@ const stagger = () =>
     }, 150 + 60 * waiting++),
   );
 
-export default function TerminalPane({ hidden = false, gpu = true, name, plan, usage, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, onEqualize, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
+export default function TerminalPane({ hidden = false, gpu = true, name, plan, usage, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, dragCell, onEqualize, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const keySettingsRef = useRef(keySettings);
   keySettingsRef.current = keySettings;
@@ -1113,6 +1115,30 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
           openMenu(e.clientX, e.clientY);
         }}
       >
+        {dragCell && (
+          <span
+            className="pane-grip"
+            role="img"
+            aria-label="Drag to move this pane"
+            title="Drag to move this pane"
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.effectAllowed = "move";
+              e.dataTransfer.setData("text/plain", title);
+              dragCell.onStart();
+            }}
+            onDragEnd={dragCell.onEnd}
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+              <circle cx="4" cy="3" r="1" />
+              <circle cx="8" cy="3" r="1" />
+              <circle cx="4" cy="6" r="1" />
+              <circle cx="8" cy="6" r="1" />
+              <circle cx="4" cy="9" r="1" />
+              <circle cx="8" cy="9" r="1" />
+            </svg>
+          </span>
+        )}
         <span className={`st ${tone || "idle"}`} role="img" aria-label={`status: ${word}`} data-tip={[explain, drawing].filter(Boolean).join(" · ")}>
           <StatusGlyph glyph={glyph} size={glyph === "spinner" ? 11 : 12} />
         </span>

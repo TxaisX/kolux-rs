@@ -844,3 +844,6 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · repo T-214-b · spec/01 PROJ-005, PROJ-008 as given in the brief; this tree's own projects.rs, setup.rs, bulk.rs; no outside code
 > 2026-10-19 · repo T-215-b · spec/01 PROJ-012, PROJ-013 as given in the brief; this tree's own groups.rs and projects.rs; no outside code
 > 2026-10-19 · worktrees T-162 · spec/01 PROJ-073/074/080 cards; this tree's own git.rs, projects.rs, cleanup.rs; git-worktree, branch and merge-base behaviour from git-scm.com docs recalled not fetched; no outside source
+> 2026-10-19 · shell T-102-b · rules from the TERM-015 and TERM-054 cards; this tree's own grid.ts (cellsOf, groupOf), App.tsx tab strip, EditorPane.tsx; HTML Drag and Drop API (developer.mozilla.org, dataTransfer, dragover, drop) recalled not fetched; no outside source
+> 2026-10-19 · shell T-102-c · rules from the TERM-049 card; this tree's own pin.ts, tabClose.ts, grid.ts (splitIndex, columnsFor) and the splitPane code in App.tsx; no outside source
+> 2026-10-19 · shell T-219 · rules from the TERM-037/042/043/050/051 cards; this tree's own pty.rs shells(), keys/actions.ts, App.tsx key handler and PaneMenu agentActions; Claude Code CLI --resume/--fork-session and Codex CLI resume/fork sub-commands from each tool's --help and public docs, recalled not fetched

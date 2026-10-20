@@ -27,6 +27,7 @@ import { isTable } from "./csv";
 import { useSettings } from "../settings/useSettings";
 import { prefPatch, readEditorPrefs } from "../settings/editorPrefs";
 import { undo } from "@codemirror/commands";
+import { clampView, keepView, takeView } from "../terminal/viewKeep";
 import { attach, baseName, detach, isDirty, isStale, loadText, relay, replaceAll, save, subscribe, textOf } from "./buffers";
 import { beginSave, canUndo, checkOnce, endSave, forget, keep, POLL_MS, readFresh, reloadNow, remember, setBanner as markBanner, UNDO_TOAST_MS, type Io, type Stamp, type UndoEntry } from "./diskChange";
 import { CompareView, DiskBanner, UndoToast } from "./DiskBanner";
@@ -237,6 +238,15 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
           }), EditorView.updateListener.of((u) => (u.selectionSet || u.docChanged || u.focusChanged || u.geometryChanged) && place.current(u.view)), EditorView.domEventHandlers({ scroll: (_e, v) => void place.current(v) })],
         });
         view.current = made;
+        // T-102-b: a pane rebuilt by a move to another cell comes back with its caret, selection and scroll.
+        const kept = takeView(id);
+        if (kept) {
+          const v = clampView(kept, made.state.doc.length);
+          made.dispatch({ selection: { anchor: v.anchor, head: v.head } });
+          requestAnimationFrame(() => {
+            made?.scrollDOM.scrollTo(v.scrollLeft, v.scrollTop);
+          });
+        }
         attach(path, made, text);
         // A twin pane already holds this file: its stamp stays the one its copy came from.
         if (textOf(path) === text) remember(path, loaded);
@@ -261,6 +271,8 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
       editors.delete(id);
       off();
       if (made) {
+        const sel = made.state.selection.main;
+        keepView(id, { anchor: sel.anchor, head: sel.head, scrollTop: made.scrollDOM.scrollTop, scrollLeft: made.scrollDOM.scrollLeft });
         detach(path, made);
         made.destroy();
       }

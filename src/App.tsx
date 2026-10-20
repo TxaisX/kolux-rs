@@ -30,7 +30,12 @@ import Ask from "./chrome/Ask";
 import TrustPrompt, { trustedSetup } from "./setup/TrustPrompt";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { returnTab, type Which } from "./terminal/tabClose";
-import { bulkCloseSet, closeOne, middleClickCloses, orderPinnedFirst, pinMenu, pinQuestion } from "./terminal/pin";
+import { bulkCloseSet, closeOne, middleClickCloses, orderPinnedFirst, pinQuestion } from "./terminal/pin";
+import { dropCell, dropTab, halfOf, showsDragHandle, zoneOf, type Zone } from "./terminal/rearrange";
+import { chosenTab, cycleTab, openSwitcher, stepSwitcher, switchOrderOf, tabByNumber, type CycleMode, type Switcher } from "./terminal/tabCycle";
+import { splitMenuState, splitTabOut } from "./terminal/tabSplit";
+import { forgetColors, setTabColor, tabMenuHead, tabStyle, TAB_COLORS, type TabColors } from "./terminal/tabColor";
+import { forgetView } from "./terminal/viewKeep";
 import { classify, removePlan, removeQuestion, shellInAgentPane } from "./terminal/remove";
 import { applyAppearance, readAppearance, showScreen, zoomTerm } from "./theme";
 import { useEscapeLeaves } from "./chrome/fullPage";
@@ -105,7 +110,7 @@ import { allSwitchedOff, DEFAULT_AGENT_KEY, defaultAgentId, FIRST_PASS, menuAgen
 import { SHOW_SLEEPING_SETTING, paneState, showSleepingFrom, strongest, type AgentState, type RowInfo } from "./projects/rows";
 import { VOCAB, nextNeedsYou } from "./terminal/status";
 import type { KindKey } from "./settings/notifications";
-import { tabBadge, tabMenu as tabMenuItems, waitingInGrid, type Badge } from "./terminal/tabs";
+import { tabBadge, waitingInGrid, type Badge } from "./terminal/tabs";
 import NameField from "./terminal/NameField";
 import { Bell, Globe, Pin, Spinner, StatusGlyph } from "./chrome/icons";
 import Tip from "./chrome/Tip";
@@ -258,7 +263,14 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const [asking, setAsking] = useState<{ keys: number[]; title: string; body: string; confirm?: string } | null>(null);
   // TERM-046: pinned tab keys live in window state, like the strip order (terminal/pin.ts).
   const [pinned, setPinned] = useState<Set<number>>(new Set());
+  const [switcher, setSwitcher] = useState<Switcher | null>(null); // TERM-050: the Ctrl+Tab list while Ctrl is held
+  const switcherRef = useRef<Switcher | null>(null);
+  switcherRef.current = switcher;
   const [tabMenu, setTabMenu] = useState<{ key: number; top: number; left: number } | null>(null); // TERM-049: the right-clicked tab
+  const [tabColors, setTabColors] = useState<TabColors>({}); // TERM-049: Tab Color, window state like pinned (terminal/tabColor.ts)
+  // TERM-015 / TERM-054: what is being dragged (a tab, or a whole cell by its pane header) and where it would land.
+  const dragging = useRef<{ tab: number } | { cell: number } | null>(null);
+  const [dropHint, setDropHint] = useState<{ group: number; zone?: Zone; tab?: number; half?: "before" | "after" } | null>(null);
   const recentTabs = useRef<number[]>([]); // TERM-044: panes focused, newest first, so a closed tab returns to the one used before it
   useEffect(() => {
     if (!tabMenu) return;
@@ -653,6 +665,31 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         case "tab.newTerminal":
           void newTab(null);
           break;
+        case "tab.nextSameType":
+        case "tab.previousSameType":
+        case "tab.nextAllTypes":
+        case "tab.previousAllTypes":
+        case "tab.nextTerminal":
+        case "tab.previousTerminal":
+        case "tab.selectByIndex": {
+          // TERM-051 / TERM-052: the tabs of the front cell in strip order.
+          const strip = orderOf(focused).map((k) => panes.find((x) => x.key === k)).filter((x): x is Pane => !!x);
+          const to =
+            hit.id === "tab.selectByIndex"
+              ? tabByNumber(strip, (hit.index ?? 0) + 1)
+              : cycleTab(strip, focused, hit.id.startsWith("tab.next") ? 1 : -1, (hit.id.endsWith("SameType") ? "same" : hit.id.endsWith("AllTypes") ? "all" : "terminals") as CycleMode);
+          if (to === null) return;
+          setFocused(to);
+          break;
+        }
+        case "tab.previousRecent": {
+          // TERM-050: the first press opens the list on the tab used just before; each press while Ctrl is held steps on, and letting go switches.
+          const open = switcherRef.current;
+          const next = open ? stepSwitcher(open, 1) : openSwitcher(panesIn(panes, activeDir).map((x) => x.key), recentTabs.current, focused, switchOrderOf(settings));
+          if (!next) return;
+          setSwitcher(next);
+          break;
+        }
         case "tab.newBrowser":
           void newTab("browser");
           break;
@@ -788,6 +825,27 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   });
+
+  // TERM-050: letting go of Ctrl switches to the chosen tab; Escape or leaving the window drops the list.
+  useEffect(() => {
+    const done = (go: boolean) => {
+      const s = switcherRef.current;
+      if (!s) return;
+      setSwitcher(null);
+      if (go) setFocused(chosenTab(s));
+    };
+    const up = (e: KeyboardEvent) => e.key === "Control" && done(true);
+    const down = (e: KeyboardEvent) => e.key === "Escape" && switcherRef.current && (e.preventDefault(), e.stopPropagation(), done(false));
+    const lost = () => done(false);
+    window.addEventListener("keyup", up, true);
+    window.addEventListener("keydown", down, true);
+    window.addEventListener("blur", lost);
+    return () => {
+      window.removeEventListener("keyup", up, true);
+      window.removeEventListener("keydown", down, true);
+      window.removeEventListener("blur", lost);
+    };
+  }, []);
 
   const addShell = (dir: string | null, branch: string | null) => {
     const key = nextKey.current++;
@@ -1627,6 +1685,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     exitedPrompt.current = onClose(exitedPrompt.current, keys);
     keys.forEach((k) => delete ptys.current[k]);
     keys.forEach((k) => (runTabs.current = forgetRunTab(runTabs.current, k)));
+    keys.forEach(forgetView); // T-102-b: a closed tab's kept editor state goes with it
+    setTabColors((c) => forgetColors(c, keys));
     // TERM-106: a tab closed on purpose is not brought back after a restart.
     keys.forEach((k) => void invoke("terminal_forget_history", { paneKey: k }).catch(() => {}));
     setPanes((ps) => ps.filter((p) => !gone.has(p.key)));
@@ -1641,6 +1701,29 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   };
 
   const dropPane = (key: number) => dropPanes([key]);
+
+  // TERM-054: a tab dropped on a tab or a cell; TERM-015: a cell dropped on another cell. A drop that
+  // would leave the layout as it is returns nothing, so nothing happens.
+  const dropTabOn = (key: number, target: Parameters<typeof dropTab>[2]) => {
+    const r = dropTab(panes, key, target);
+    if (!r) return;
+    setPanes(r.panes);
+    setActiveTab((m) => ({ ...m, [r.group]: key }));
+    setFocused(key);
+  };
+  const dropCellOn = (group: number, target: { group: number; zone: Zone }) => {
+    const next = dropCell(panes, group, target);
+    if (next) setPanes(next);
+  };
+  // TERM-049: Split Right / Down on a tab's menu moves the tab into a cell of its own.
+  const splitTab = (key: number, dir: "right" | "down") => {
+    const r = splitTabOut(panes, key, dir);
+    if (!r) return;
+    setStacked((st) => ({ ...st, [activeDir ?? ""]: r.stack }));
+    setPanes(r.panes);
+    setActiveTab((m) => ({ ...m, [key]: key }));
+    setFocused(key);
+  };
 
   // TERM-045: every close (keyboard, a tab's x, the pane header) asks first when a program would
   // stop; a tab's panes are checked together so a split tab asks once. Idle, switched off, or a
@@ -2104,6 +2187,18 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             }}
           />
         )}
+        {switcher && (
+          <div className="menu tab-switcher" role="listbox" aria-label="Switch tab">
+            {switcher.list.map((k, i) => {
+              const p = panes.find((x) => x.key === k);
+              return (
+                <div key={k} className={`menu-item${i === switcher.at ? " on" : ""}`} role="option" aria-selected={i === switcher.at}>
+                  {p ? tabName(p, titles) : `Tab ${k}`}
+                </div>
+              );
+            })}
+          </div>
+        )}
         {tabMenu && (
           // TERM-049 / TERM-044: close items only; the close question (TERM-045) covers the whole set at once.
           <>
@@ -2117,36 +2212,53 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               }}
             />
             <div className="menu" role="menu" aria-label="Tab" style={{ top: tabMenu.top, left: tabMenu.left }}>
-              {/* TERM-048: Rename tab heads the menu for terminal and agent tabs (tabs.ts tabMenu). */}
-              {tabMenuItems(panes.find((p) => p.key === tabMenu.key)?.kind)
-                .filter((i) => i.id === "rename")
-                .map((i) => (
-                  <button key={i.id} role="menuitem" className="menu-item" onClick={() => (setTabMenu(null), setRenamingTab(tabMenu.key))}>
+              {/* TERM-048 / TERM-046 / TERM-049: Change Title, Pin, Tab Color and the splits head the menu (terminal/tabColor.ts tabMenuHead). */}
+              {tabMenuHead(panes.find((p) => p.key === tabMenu.key)?.kind, pinned.has(tabMenu.key), splitMenuState(panes, tabMenu.key)).map((i) =>
+                i.id === "color" ? (
+                  <div key={i.id} className="menu-colors" role="group" aria-label={i.label}>
                     <span className="name">{i.label}</span>
-                    {i.keys && <Kbd id={i.keys} />}
-                  </button>
-                ))}
-              {/* TERM-046: Pin/Unpin sits before the close items; Close is greyed for a pinned tab (terminal/pin.ts pinMenu). */}
-              {pinMenu(panes.find((p) => p.key === tabMenu.key)?.kind, pinned.has(tabMenu.key))
-                .filter((i) => i.id === "pin")
-                .map((i) => (
+                    {TAB_COLORS.map((c) => (
+                      <button
+                        key={c.id}
+                        role="menuitemradio"
+                        aria-checked={tabColors[tabMenu.key] === c.id}
+                        className="swatch"
+                        style={{ background: c.css }}
+                        title={c.label}
+                        aria-label={c.label}
+                        onClick={() => (setTabMenu(null), setTabColors((m) => setTabColor(m, tabMenu.key, c.id)))}
+                      />
+                    ))}
+                    <button role="menuitem" className="swatch none" title="No color" aria-label="No color" onClick={() => (setTabMenu(null), setTabColors((m) => setTabColor(m, tabMenu.key, null)))}>
+                      ×
+                    </button>
+                  </div>
+                ) : (
                   <button
                     key={i.id}
                     role="menuitem"
                     className="menu-item"
+                    disabled={"disabled" in i ? i.disabled : false}
+                    title={"why" in i && i.why ? i.why : undefined}
                     onClick={() => {
+                      const key = tabMenu.key;
                       setTabMenu(null);
-                      setPinned((s) => {
-                        const n = new Set(s);
-                        if (n.has(tabMenu.key)) n.delete(tabMenu.key);
-                        else n.add(tabMenu.key);
-                        return n;
-                      });
+                      if (i.id === "rename") setRenamingTab(key);
+                      else if (i.id === "splitRight" || i.id === "splitDown") splitTab(key, i.id === "splitRight" ? "right" : "down");
+                      else
+                        setPinned((s) => {
+                          const n = new Set(s);
+                          if (n.has(key)) n.delete(key);
+                          else n.add(key);
+                          return n;
+                        });
                     }}
                   >
                     <span className="name">{i.label}</span>
+                    {i.id === "rename" && <Kbd id="tab.rename" />}
                   </button>
-                ))}
+                ),
+              )}
               {(
                 [
                   ["Close", "one"],
@@ -2487,7 +2599,30 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                 const mine = agentsScreen && c.panes.some((p) => p.key === selected);
                 const active = mine ? (selected as number) : activeOf(c);
                 return (
-                  <div key={c.group} className="cell" hidden={agentsScreen ? !mine : !board && (!sameDir(c.panes[0].cwd, activeDir) || (zoomed !== null && c.group !== zoomed))}>
+                  <div
+                    key={c.group}
+                    className="cell"
+                    data-drop={dropHint?.group === c.group && !dropHint.tab ? dropHint.zone : undefined}
+                    hidden={agentsScreen ? !mine : !board && (!sameDir(c.panes[0].cwd, activeDir) || (zoomed !== null && c.group !== zoomed))}
+                    onDragOver={(e) => {
+                      if (!dragging.current) return;
+                      e.preventDefault();
+                      setDropHint({ group: c.group, zone: zoneOf(e.clientX, e.clientY, e.currentTarget.getBoundingClientRect(), !!(e.target as Element).closest?.(".tabs")) });
+                    }}
+                    onDragLeave={(e) => {
+                      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropHint((h) => (h?.group === c.group ? null : h));
+                    }}
+                    onDrop={(e) => {
+                      const d = dragging.current;
+                      if (!d) return;
+                      e.preventDefault();
+                      const zone = zoneOf(e.clientX, e.clientY, e.currentTarget.getBoundingClientRect(), !!(e.target as Element).closest?.(".tabs"));
+                      dragging.current = null;
+                      setDropHint(null);
+                      if ("tab" in d) dropTabOn(d.tab, { kind: "cell", group: c.group, zone });
+                      else dropCellOn(d.cell, { group: c.group, zone });
+                    }}
+                  >
                     {(c.panes.length > 1 || classic) && (
                       <div className="tabs" role="tablist" aria-label="Tabs">
                         {orderPinnedFirst(c.panes.map((p) => p.key), pinned)
@@ -2499,6 +2634,33 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                             aria-selected={p.key === active}
                             className="tab"
                             tabIndex={0}
+                            style={tabStyle(tabColors, p.key)}
+                            data-drop={dropHint?.tab === p.key ? dropHint.half : undefined}
+                            draggable
+                            onDragStart={(e) => {
+                              // TERM-054: a tab drags along the strip, onto another cell's strip, or onto an edge band.
+                              dragging.current = { tab: p.key };
+                              e.dataTransfer.effectAllowed = "move";
+                              e.dataTransfer.setData("text/plain", tabName(p, titles));
+                            }}
+                            onDragEnd={() => (dragging.current = null, setDropHint(null))}
+                            onDragOver={(e) => {
+                              const d = dragging.current;
+                              if (!d || !("tab" in d)) return;
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setDropHint({ group: c.group, tab: p.key, half: halfOf(e.clientX, e.currentTarget.getBoundingClientRect()) });
+                            }}
+                            onDrop={(e) => {
+                              const d = dragging.current;
+                              if (!d || !("tab" in d)) return;
+                              e.preventDefault();
+                              e.stopPropagation();
+                              const half = halfOf(e.clientX, e.currentTarget.getBoundingClientRect());
+                              dragging.current = null;
+                              setDropHint(null);
+                              dropTabOn(d.tab, { kind: "tab", key: p.key, half });
+                            }}
                             onMouseDown={() => setFocused(p.key)}
                             onDoubleClick={() => !p.kind && setRenamingTab(p.key)}
                             onContextMenu={(e) => {
@@ -2645,6 +2807,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                       then?.();
                     }}
                     onSplit={(dir) => splitPane(p.key, dir)}
+                    dragCell={!board && showsDragHandle(shown.length) ? { onStart: () => (dragging.current = { cell: groupOf(p) }), onEnd: () => (dragging.current = null, setDropHint(null)) } : undefined}
                     onEqualize={terminals && gridCount > 1 ? equalizePanes : undefined}
                     expand={board ? undefined : { on: zoomed === groupOf(p), can: canExpand(shown.length, classic), toggle: () => expandPane(p.key) }}
                     title={p.title || nameOf(names, p.cwd)}
