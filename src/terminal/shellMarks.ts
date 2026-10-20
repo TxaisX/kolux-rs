@@ -10,6 +10,7 @@
 // command starting or finishing.
 
 import type { Agent } from "../chrome/VendorMark";
+import { titleOwner } from "../status/titleOwner";
 
 export type Mark = { kind: "prompt" } | { kind: "start" } | { kind: "end"; code: number | null } | { kind: "title"; text: string };
 
@@ -204,13 +205,11 @@ export class Startup {
   }
 }
 
-/** TERM-058: the agent a window title names, when it does. */
+/** TERM-058: the agent a window title names, when it does: only by the marks the agent itself prints (STAT-033, titleOwner), never a name inside the task text; marks that conflict name nobody. */
 export function agentFromTitle(title: string): Exclude<Agent, "shell"> | null {
-  const t = title.trim();
-  if (t === "") return null;
-  if (/(^|[^a-z])claude([^a-z]|$)/i.test(t)) return "claude";
-  if (/(^|[^a-z])codex([^a-z]|$)/i.test(t)) return "codex";
-  return null;
+  const { owners, unknown } = titleOwner(title);
+  if (unknown || owners.length !== 1) return null;
+  return owners[0] === "claude" || owners[0] === "codex" ? owners[0] : null;
 }
 
 /** What a plain shell pane knows about the program it runs, from the marks alone. */

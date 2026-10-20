@@ -1,4 +1,5 @@
 mod folder_projects;
+mod floating_trust;
 mod repo_scan;
 mod activity;
 mod agents;
@@ -740,6 +741,9 @@ pub fn run() {
             files::file_write,
             files::file_stamps,
             files::file_pick,
+            floating_trust::floating_trusted,
+            floating_trust::floating_pick,
+            floating_trust::floating_start,
             files::md_list,
             editor_drafts::editor_draft_set,
             editor_drafts::editor_draft_clear,
@@ -825,6 +829,11 @@ pub fn run() {
                 final_save::begin();
                 // T-283 (BROW-043): this run's browser helpers end with it.
                 browser::helpers::stop_all();
+                // T-122 (STAT-018): Grok's Kolux-written hook file goes, unless another running
+                // Kolux owns it; the removal is cut short after grok::QUIT_LIMIT.
+                if let Ok(dir) = app.path().app_data_dir() {
+                    hooks::agent_hooks::more::grok::at_quit(&dir);
+                }
                 // T-182 (APP-011): the same steps make the save point a restart waits for.
                 let report = final_save::run(final_save::QUIT_DEADLINE, lifecycle::quit_steps(app));
                 if let Ok(dir) = app.path().app_data_dir() {

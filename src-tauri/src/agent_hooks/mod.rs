@@ -26,7 +26,7 @@ const LOCK_STALE: Duration = Duration::from_secs(30);
 const LOCK_WAIT: Duration = Duration::from_secs(35);
 
 /// The agents whose hooks Kolux manages, by catalogue id.
-pub const MANAGED: [&str; 5] = ["claude", "codex", "gemini", "antigravity", "amp"];
+pub const MANAGED: [&str; 13] = ["claude", "codex", "gemini", "antigravity", "amp", "cursor", "droid", "kimi", "copilot", "grok", "devin", "pi", "hermes"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Plan {
@@ -583,6 +583,8 @@ fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'static s
         }
         // T-120-b: Gemini CLI, Antigravity and Amp.
         (id @ ("gemini" | "antigravity" | "amp"), Plan::Install | Plan::Remove) => vendors::apply(home, profile, id, plan),
+        // T-121: Cursor Agent, Droid, Kimi Code and Hermes; T-122: Copilot CLI, Grok, Devin and Pi.
+        (id @ ("cursor" | "droid" | "kimi" | "copilot" | "grok" | "devin" | "pi" | "hermes"), Plan::Install | Plan::Remove) => more::apply(home, profile, id, plan),
         _ => Ok("left as it was"),
     }
 }
@@ -604,7 +606,7 @@ pub fn sync(settings: &Value, profile: &Path) -> Vec<(&'static str, Result<&'sta
             return Vec::new();
         }
     };
-    for refresh in [write_claude_script, write_status_script, write_codex_script, vendors::write_gemini_script, vendors::write_antigravity_script] {
+    for refresh in [write_claude_script, write_status_script, write_codex_script, vendors::write_gemini_script, vendors::write_antigravity_script, more::write_scripts] {
         if let Err(e) = refresh(&home) {
             eprintln!("kolux-rs: agent hook script: {e}");
         }
@@ -666,6 +668,7 @@ pub fn agent_hooks_file() -> String {
     crate::hooks::claude_settings_file().display().to_string()
 }
 
+pub mod more;
 pub mod saved;
 pub mod switch;
 pub mod vendors;

@@ -19,7 +19,8 @@ import {
   clampButton, insetFor, moveBy, parseButton, parseSaved, resizeBy, SETTING_BUTTON, SETTING_PANEL, shown, startsPanelMove, toggleMaximize, toStored,
   type Edge, type Pos, type Rect, type Saved, type Win, BUTTON,
 } from "./geometry";
-import { add, answer, asked, close, closeKey, empty, hide, programExited, reorder, saveTarget, select, selectNumber, setDirty, setTitle, startFolder, step, toggle, type Kind, type Panel } from "./panel";
+import { add, answer, asked, close, closeKey, empty, hide, programExited, reorder, saveTarget, select, selectNumber, setDirty, setTitle, step, toggle, type Kind, type Panel } from "./panel";
+import { startFolderFor } from "./trusted";
 import { routeFloating } from "../shell/inputExtras";
 import "./floating.css";
 
@@ -72,12 +73,13 @@ export default function FloatingLayer({ agents = [], defaultId, home, pending = 
 
   const doAdd = (kind: Kind) => {
     setNote(null);
-    if (kind === "terminal") return run((p) => add(p, { kind, cwd: home ? startFolder(home) : undefined }));
+    // SAFE-027 (T-271): terminals and agents start only in a folder the user picked; a refusal opens nothing and says why.
+    if (kind === "terminal") return void startFolderFor(invoke).then((s) => ("cwd" in s ? run((p) => add(p, { kind, cwd: s.cwd })) : setNote(s.refused)));
     if (kind === "browser") return run((p) => add(p, { kind }));
     if (kind === "agent") {
       const a = defaultId ? agents.find((x) => x.id === defaultId && x.installed) : agents.find((x) => x.installed);
       if (!a) return setNote(defaultId ? `The default agent (${defaultId}) is not installed or is switched off.` : "No agent is installed and switched on.");
-      return run((p) => add(p, { kind, agent: a.id, title: a.name, cwd: home ? startFolder(home) : undefined }));
+      return void startFolderFor(invoke).then((s) => ("cwd" in s ? run((p) => add(p, { kind, agent: a.id, title: a.name, cwd: s.cwd })) : setNote(s.refused)));
     }
     if (!home) return setNote("A new note needs a folder to live in; open a workspace and use its Markdown tab.");
     invoke<string>("md_new", { root: home, template: null }).then(

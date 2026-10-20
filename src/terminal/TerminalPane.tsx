@@ -3,7 +3,8 @@
 // The card and its header follow design/DESIGN.md section 7: status icon, agent mark, title,
 // branch chip, program, status word; then gauge, more, expand, split, close on the right.
 import { useEffect, useRef, useState } from "react";
-import { branchChip, crewLabel, crewLine, foundAgent, headerOf, takesInband, titleState, type Crew } from "./status";
+import { branchChip, crewLabel, crewLine, foundAgent, headerOf, takesInband, type Crew } from "./status";
+import { creditedLive, launchedAgent, titleGuess } from "../status/credit";
 import { followedTitle, Gate, IDLE, printsMarks, READY_WAIT_MS, reduceIdentity, Scanner, shownAgent, Startup, type Identity } from "./shellMarks";
 import PaneMenu, { paneMenuItems } from "./PaneMenu";
 import type { Chip } from "../board/chip";
@@ -241,6 +242,10 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
   openRef.current = { linksOpenInKolux, onOpenLink, onOpenFile, cwd };
   const agentRef = useRef(agent);
   agentRef.current = agent;
+  // SESS-040: the agent launched here (its own agent, else the one its program runs) owns the title's busy state and the icon.
+  const launched = launchedAgent({ agent, program });
+  const launchedRef = useRef(launched);
+  launchedRef.current = launched;
   const [linkHint, setLinkHint] = useState<string | null>(null);
   const termRef = useRef<Terminal | null>(null);
   // STAT-033: the state the program's own terminal title last stood for; only read while no hook reports.
@@ -437,7 +442,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     // T-325-c (CHAT-010/011): the chat reads the running turn's reply off this terminal.
     const unturn = number !== undefined ? registerTurnSource(number, xtermSource(term)) : () => {};
     // STAT-033: the title the program sets stands in for its state while no hook reports.
-    term.onTitleChange((t) => setGuess((g) => titleState(t) ?? g));
+    term.onTitleChange((t) => setGuess((g) => titleGuess(launchedRef.current, t) ?? g));
     // STAT-034: a status printed in band (OSC 9999) goes to Rust; xterm never draws the sequence.
     // T-563: the pane's live terminal goes with it, for the activity lane. hooks FIX-3: a plain shell's
     // output never moves the dot; the sequence is still kept off the screen.
@@ -1343,7 +1348,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
   if (prompt.current.hook !== hook) prompt.current = { count: nextPrompt(prompt.current.count, prompt.current.hook, hook), hook };
   // TERM-058: a shell pane running an agent the user started by hand reads as that agent's session;
   // the hook's word (pane-agent) beats the title guess, and the title counts only while a command runs.
-  const shown: Agent = agent === "shell" && found ? found : shownAgent(agent, live);
+  const shown: Agent = agent === "shell" && found ? found : shownAgent(agent, creditedLive(launched, live));
   const header = headerOf(shown, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now, hook ?? guess ?? undefined);
   const { word, tone, glyph, age, needsYou } = header;
   const explain = header.state === "blocked" && stop ? `${stopLine(stop)}.` : header.explain;

@@ -85,6 +85,7 @@ import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
 import ArtifactsPage from "./artifacts/ArtifactsPage";
 import SkillsPage from "./skills/SkillsPage";
 import { generatedOn, generatedTitle, tabText, tabTip } from "./shell/tabTitle";
+import { needsBeat, statusTitle, useBeatFrame } from "./status/tabNameRule";
 import { closeSkills, toggleSkills } from "./skills/nav";
 import { KitGallery, KitSetup } from "./kits/Kits";
 import Wizard from "./onboarding/Wizard";
@@ -172,6 +173,7 @@ import { installTapReset } from "./shell/inputExtras";
 import { useAgentEvents, useAgentStatusState } from "./status/useAgentStatus";
 import { useGone } from "./status/gone";
 import { workingByDir } from "./status/working";
+import { creditedLive, launchedAgent, launchedName } from "./status/credit";
 import { useAppSettings } from "./settings/useAppSettings";
 import { applyDensity, installTabWheel } from "./shell/paneChrome";
 import { useWorkspaceActions, useWorkspaces } from "./projects/useWorkspaces";
@@ -208,7 +210,7 @@ function tabName(p: Pane, titles: Record<number, string>, label?: string, live: 
   if (p.kind === "diff") return `${baseName(p.path ?? "")} (${p.staged ? "staged" : "unstaged"})`;
   // ORCH-066 / T-129-d: a worker's task label names the tab first; then the user's own name; then the program's title (TERM-058).
   if (label) return label;
-  return followedTitle(p.title, live[p.key] ?? IDLE, p.agent !== "shell" ? programWord(p.agent) : `Terminal ${p.key}`);
+  return followedTitle(p.title, live[p.key] ?? IDLE, p.agent !== "shell" ? programWord(p.agent) : launchedName(p) ?? `Terminal ${p.key}`);
 }
 /** TERM-055: the one badge a tab carries beside its agent icon; its look and hover text come from the vocabulary (STAT-052). */
 function TabBadge({ kind }: { kind: Badge }) {
@@ -1971,8 +1973,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const labelOf = (p: Pane) => workerNames[`term-${ptys.current[p.key]}`];
   // TERM-056 / T-258: the tab's text and its hover (the full title); generated titles (off by default) touch only
   // terminal panes without a name of their own.
+  // STAT-035 / T-124-b: the tab-name rule on top of the followed title: Kolux names ready and action required for agents whose own titles do not, and one shared beat animates its spinners.
+  const ruleOf = (p: Pane) => ({ named: Boolean(labelOf(p) || p.title?.trim()), agent: p.kind ? null : launchedAgent(p), name: launchedName(p) ?? programWord(p.agent), live: liveIds[p.key]?.title, state: hook[p.key] });
+  const beatFrame = useBeatFrame(panes.filter((p) => needsBeat(ruleOf(p))).map((p) => p.key));
   const tabLabel = (p: Pane) => {
-    const full = tabName(p, titles, labelOf(p), liveIds);
+    const full = statusTitle({ ...ruleOf(p), shown: tabName(p, titles, labelOf(p), liveIds), frame: beatFrame });
     const shown = p.kind ? full : tabText({ full, own: p.title, on: generatedOn(settings), generated: generatedTitle({ label: labelOf(p), word: p.agent === "shell" ? "Shell" : programWord(p.agent), branch: p.branch, cwd: p.cwd }) });
     return (
       <span className="tab-name" data-tip={tabTip(full, shown)}>
@@ -2059,7 +2064,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // STAT-001: a hook-fed state wins over the guess from the program's state.
   for (const p of panes) if (p.cwd !== null && p.kind !== "browser" && !p.seats) (byDir[p.cwd] ??= []).push(hook[p.key] ?? paneState(p.agent, running[p.key]));
   const rowStates: Record<string, RowInfo> = {};
-  const workingIn = workingByDir(panes, hook, running); // STAT-036: working agents per workspace
+  const workingIn = workingByDir(panes, hook, running, liveIds); // STAT-036: working agents per workspace
   const cacheFor = cacheMinutes(settings); // SET-059
   for (const [dir, states] of Object.entries(byDir)) {
     const state = strongest(states);
@@ -2950,7 +2955,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                                 <Pin size={10} />
                               </span>
                             )}
-                            {p.kind === "editor" || p.kind === "preview" || p.kind === "diff" || p.kind === "changes" ? <FileCode size={12} /> : p.kind === "browser" ? <Globe size={12} /> : <VendorMark agent={shownAgent(p.agent, liveIds[p.key] ?? IDLE)} size={12} />}
+                            {p.kind === "editor" || p.kind === "preview" || p.kind === "diff" || p.kind === "changes" ? <FileCode size={12} /> : p.kind === "browser" ? <Globe size={12} /> : <VendorMark agent={shownAgent(p.agent, creditedLive(launchedAgent(p), liveIds[p.key] ?? IDLE))} size={12} />}
                             {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key), hook[p.key])} />}
                             {context[p.key] && <Ring percent={contextFill(context[p.key], capOn(settings))} size={10} title={meterText(meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) ?? {})} />}
                             {renamingTab === p.key ? (

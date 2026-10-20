@@ -1,0 +1,165 @@
+//! T-121 (STAT-016): Hermes's marked YAML blocks, its allowlist pairs and its events.
+
+use super::*;
+
+const CANNED: &str = "# my Hermes settings\nmodel:\n  default: hermes-4 # keep\nhooks:\n  # my own guard\n  pre_tool_call:\n    - matcher: \"terminal\"\n      command: \"~/.hermes/agent-hooks/block.sh\"\n      timeout: 5\n  post_tool_call:\nhooks_auto_accept: false\n";
+const ALLOW: &str = "{\n  \"approvals\": [\n    {\n      \"event\": \"post_llm_call\",\n      \"command\": \"/home/me/hook.py\"\n    }\n  ]\n}\n";
+
+fn scratch(name: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("kolux-rs-t121-hermes-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&d);
+    fs::create_dir_all(d.join(".hermes")).unwrap();
+    d
+}
+
+fn read(p: &Path) -> String {
+    fs::read_to_string(p).unwrap()
+}
+
+fn approvals(p: &Path) -> Vec<Value> {
+    serde_json::from_str::<Value>(&read(p)).unwrap()["approvals"].as_array().unwrap().clone()
+}
+
+#[test]
+fn stat_016_install_keeps_the_users_yaml_and_removal_gives_it_back_byte_for_byte() {
+    let home = scratch("keep");
+    let (file, allow) = (file(&home), allow_file(&home));
+    assert_eq!(file, home.join(".hermes").join("config.yaml"), "a scratch home keeps Hermes's home inside it");
+    fs::write(&file, CANNED).unwrap();
+    fs::write(&allow, ALLOW).unwrap();
+    assert!(install(&home, &file, &allow).unwrap());
+    let after = read(&file);
+    let cmd = command(&script_path(&home));
+    assert!(after.starts_with("# my Hermes settings\nmodel:\n  default: hermes-4 # keep\nhooks:\n"), "{after}");
+    assert!(after.contains("  pre_tool_call:\n    # >>> kolux-rs status hooks ("), "Kolux's entry opens the user's own list");
+    assert!(after.contains("    - matcher: \"terminal\"\n      command: \"~/.hermes/agent-hooks/block.sh\"\n      timeout: 5\n"), "the user's own hook stays");
+    assert!(after.contains("  post_tool_call:\n    # >>> kolux-rs status hooks ("), "an empty event key gets a list");
+    assert!(after.contains(&format!("- command: '{cmd}'\n")), "the command is quoted for Hermes's shell-style split");
+    assert!(after.ends_with("hooks_auto_accept: false\n"));
+    for e in EVENTS {
+        assert_eq!(after.matches(&format!("\n  {e}:\n")).count(), 1, "{e}: one key, under the user's hooks map");
+    }
+    assert_eq!(inspect(&home, &file, &allow), ("installed", None));
+    let list = approvals(&allow);
+    assert_eq!(list.len(), 1 + EVENTS.len());
+    assert_eq!(list[0]["command"], "/home/me/hook.py", "the user's own approval stays first");
+    assert!(EVENTS.iter().all(|e| list.iter().any(|a| a["event"] == *e && a["command"] == cmd.as_str())));
+    assert!(!install(&home, &file, &allow).unwrap(), "installing again changes nothing");
+    assert!(backup_of(&file).exists(), "a copy is kept before the first write");
+    assert!(remove(&home, &file, &allow).unwrap());
+    assert_eq!(read(&file), CANNED, "byte for byte the user's file again");
+    assert_eq!(approvals(&allow), vec![json!({ "event": "post_llm_call", "command": "/home/me/hook.py" })]);
+    assert!(!remove(&home, &file, &allow).unwrap(), "a second removal changes nothing");
+    assert_eq!(inspect(&home, &file, &allow), ("not installed", None));
+    // List items at their key's own indent, and a stale Kolux approval from another path.
+    let same = "hooks:\n  pre_tool_call:\n  - command: mine.sh\n";
+    fs::write(&file, same).unwrap();
+    fs::write(&allow, "{\"approvals\": [{\"event\": \"pre_tool_call\", \"command\": \"\\\"C:/old/.kolux-rs/agent-hooks/hermes.cmd\\\"\"}]}").unwrap();
+    assert!(install(&home, &file, &allow).unwrap());
+    assert!(read(&file).contains("  pre_tool_call:\n  # >>> kolux-rs status hooks ("), "{}", read(&file));
+    assert_eq!(approvals(&allow).len(), EVENTS.len(), "the old path's pair is replaced");
+    assert_eq!(inspect(&home, &file, &allow), ("installed", None));
+    assert!(remove(&home, &file, &allow).unwrap());
+    assert_eq!(read(&file), same);
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn stat_016_a_block_edited_by_hand_is_refused_not_overwritten() {
+    let home = scratch("hand");
+    let (file, allow) = (file(&home), allow_file(&home));
+    fs::write(&file, "model: x\n").unwrap();
+    assert!(install(&home, &file, &allow).unwrap());
+    let after = read(&file);
+    let edited = after.replacen("timeout: 10", "timeout: 99", 1);
+    fs::write(&file, &edited).unwrap();
+    assert!(install(&home, &file, &allow).unwrap_err().contains("edited by hand"));
+    assert_eq!(read(&file), edited, "install leaves it alone");
+    assert!(remove(&home, &file, &allow).is_err());
+    assert_eq!(read(&file), edited, "removal leaves it alone");
+    assert_eq!(inspect(&home, &file, &allow).0, "partial");
+    let lost = after.replacen("# <<< kolux-rs status hooks <<<\n", "", 1);
+    fs::write(&file, &lost).unwrap();
+    assert!(install(&home, &file, &allow).unwrap_err().contains("lost its end line"));
+    assert_eq!(read(&file), lost);
+    // Put right by hand: the block is Kolux's again.
+    fs::write(&file, &after).unwrap();
+    assert!(remove(&home, &file, &allow).unwrap());
+    assert_eq!(read(&file), "model: x\n");
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn stat_016_crlf_missing_and_emptied_files() {
+    let home = scratch("crlf");
+    let (file, allow) = (file(&home), allow_file(&home));
+    for text in ["# c\r\nmodel: x", "model: x\r\nhooks:", "model: x\r\nhooks:\r\n  pre_llm_call:"] {
+        fs::write(&file, text).unwrap();
+        assert!(install(&home, &file, &allow).unwrap());
+        let after = read(&file);
+        assert!(!after.replace("\r\n", "").contains('\n'), "the file's own line breaks are used: {after:?}");
+        assert_eq!(inspect(&home, &file, &allow), ("installed", None), "{text:?}");
+        assert!(remove(&home, &file, &allow).unwrap());
+        assert_eq!(read(&file), text, "byte for byte, the missing last line break too");
+        assert!(!allow.exists(), "an allowlist Kolux created goes with its pairs");
+    }
+    // An emptied file: Kolux's block goes in, and taking it out leaves the empty file.
+    fs::write(&file, "").unwrap();
+    assert!(install(&home, &file, &allow).unwrap());
+    assert!(read(&file).contains("\nhooks:\n  on_session_start:\n"));
+    assert!(remove(&home, &file, &allow).unwrap());
+    assert_eq!(read(&file), "");
+    // Emptied by the user after the install: nothing of Kolux's left to take out of it.
+    assert!(install(&home, &file, &allow).unwrap());
+    fs::write(&file, "").unwrap();
+    assert_eq!(inspect(&home, &file, &allow), ("not installed", None));
+    assert!(remove(&home, &file, &allow).unwrap(), "the allowlist pairs still come out");
+    assert_eq!(read(&file), "");
+    let _ = fs::remove_dir_all(&home);
+    // Absent: Kolux creates it, and taking its hooks out deletes it again.
+    let home = scratch("absent");
+    let (file, allow) = (super::file(&home), allow_file(&home));
+    assert!(install(&home, &file, &allow).unwrap());
+    assert!(read(&file).starts_with(BEGIN));
+    assert!(remove(&home, &file, &allow).unwrap());
+    assert!(!file.exists(), "a file Kolux created goes with its hooks");
+    assert!(!allow.exists());
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn stat_016_shapes_a_line_editor_cannot_join_are_left_alone() {
+    let home = scratch("shapes");
+    let (file, allow) = (file(&home), allow_file(&home));
+    for bad in ["hooks: {}\n", "hooks:\n  - command: x\n", "hooks:\n  pre_tool_call: []\n", "hooks:\n  pre_tool_call:\n    matcher: x\n", "hooks:\na: 1\nhooks:\n", "{model: x}\n", "x: 1\n# >>> kolux-rs status hooks (sum 00) >>>\n", "# <<< kolux-rs status hooks <<<\n"] {
+        fs::write(&file, bad).unwrap();
+        assert!(install(&home, &file, &allow).is_err(), "{bad:?}");
+        assert_eq!(read(&file), bad);
+    }
+    assert!(!allow.exists(), "a refused install approves nothing");
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn stat_016_hermes_events_drive_the_dot() {
+    use super::super::{agent_of, change, normalize_with, Memory};
+    assert_eq!(agent_of("/hermes"), Some("hermes"));
+    let mut m = Memory::default();
+    let mut state = |name: &str, extra: Value| {
+        let p = json!({ "hook_event_name": name, "session_id": "s1", "tool_name": "terminal", "tool_input": { "command": "ls" }, "extra": extra });
+        let n = normalize_with(&mut m, "hermes", &p)?;
+        assert_eq!(n["session_id"], "s1");
+        change(&n).flatten().map(|c| c.state)
+    };
+    assert_eq!(state("on_session_start", json!({})), None, "session start fires while idle");
+    assert_eq!(state("pre_llm_call", json!({ "user_message": "go" })), Some("working"));
+    assert_eq!(state("pre_tool_call", json!({})), Some("working"));
+    assert_eq!(state("post_tool_call", json!({})), Some("working"));
+    assert_eq!(state("pre_approval_request", json!({})), Some("permission"), "an approval request needs you");
+    assert_eq!(state("post_approval_response", json!({})), Some("working"), "once answered, working again");
+    assert_eq!(state("on_human_input_request", json!({ "question": "Which one?" })), Some("waiting"));
+    assert_eq!(state("on_human_input_resolved", json!({})), Some("working"));
+    for done in ["post_llm_call", "on_session_end", "on_session_finalize", "on_session_reset", "agent_loop_stopped"] {
+        assert_eq!(state(done, json!({})), Some("done"), "{done}");
+    }
+}
