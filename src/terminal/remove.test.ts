@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classify, readRemove, removePlan, removeQuestion, shellInAgentPane } from "./remove";
+import { classify, markShell, readRemove, removePlan, removeQuestion, runningOf } from "./remove";
 import { askKey } from "../chrome/Ask";
 
 describe("TERM-003 remove a started session", () => {
@@ -38,7 +38,37 @@ describe("TERM-003 remove a started session", () => {
     expect(removePlan({}, kind)).toBe("ask");
     expect(removeQuestion("claude 1", kind).body).toMatch(/still running in this shell/);
     expect(classify({ agent: "claude" }, true, false, true)).toBe("shell"); // a busy shell is never dropped as ended
-    expect(shellInAgentPane.has(7)).toBe(false);
+  });
+
+  it("FIX-2: the pane's running report is undefined while starting, true while it runs, false once ended or failed; starting still gets the question", () => {
+    expect(runningOf("starting")).toBeUndefined();
+    expect(runningOf("running")).toBe(true);
+    expect(runningOf("ended")).toBe(false);
+    expect(runningOf("failed")).toBe(false);
+    for (const agent of ["claude", "codex"]) {
+      const kind = classify({ agent }, false, runningOf("starting"));
+      expect(kind).toBe("agent");
+      expect(removePlan({}, kind)).toBe("ask");
+      expect(removePlan({ removeStartedSession: "stop" }, kind)).toBe("stop");
+    }
+    expect(classify({ agent: "claude" }, false, runningOf("running"))).toBe("agent");
+    expect(classify({ agent: "claude" }, false, runningOf("ended"))).toBe("ended");
+    expect(classify({ agent: "claude" }, false, runningOf("failed"))).toBe("ended");
+  });
+
+  it("FIX-2: markShell wires the set: an agent pane that starts a shell is added, a real restart or a shell pane removes it, no key does nothing", () => {
+    const set = new Set<number>();
+    markShell(set, 7, true, "claude");
+    expect(set.has(7)).toBe(true);
+    markShell(set, 7, false, "claude"); // a real restart of the agent: no longer a shell
+    expect(set.has(7)).toBe(false);
+    markShell(set, 8, true, "shell"); // a shell pane restarting as a shell is just a shell pane
+    expect(set.has(8)).toBe(false);
+    set.add(9);
+    markShell(set, 9, true, "shell");
+    expect(set.has(9)).toBe(false);
+    markShell(set, undefined, true, "claude"); // a pane with no key cannot be tracked
+    expect(set.size).toBe(0);
   });
 
   it("removes unstarted panes and idle shells without a prompt, asks for started sessions by default", () => {
