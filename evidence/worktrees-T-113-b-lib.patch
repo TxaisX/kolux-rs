@@ -1,0 +1,20 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index ec1b427c..3fb7ad57 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -8,6 +8,7 @@ mod chat;
+ mod chat_tools;
+ mod clipboard;
+ mod browser;
++mod cleanup;
+ mod cap;
+ pub mod cli;
+ mod cli_accounts;
+@@ -437,6 +438,7 @@ pub fn run() {
+             setup::repo_setup_wait_set,
+             projects::handoff_note_prepare,
+             projects::workspace_remove,
++            cleanup::cleanup_remove,
+             projects::workspace_remove_check,
+             projects::project_set,
+             projects::workspaces_place_get,

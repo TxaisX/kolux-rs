@@ -215,7 +215,7 @@ pub fn workspace_note_save(store: StoreState<'_>, path: String, text: String) ->
     save_workspace_note(&*store.lock().map_err(|e| e.to_string())?, &path, &text)
 }
 
-fn load_origins(store: &Store) -> serde_json::Map<String, serde_json::Value> {
+pub(crate) fn load_origins(store: &Store) -> serde_json::Map<String, serde_json::Value> {
     store.get(ORIGINS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
 
@@ -1274,7 +1274,7 @@ pub fn removal_refused(now: &RemoveCheck, force: bool, asked: &str) -> Option<St
     None
 }
 
-fn find_project(store: &Store, id: &str) -> Result<Project, String> {
+pub(crate) fn find_project(store: &Store, id: &str) -> Result<Project, String> {
     load_projects(store).into_iter().find(|p| p.id == id).ok_or_else(|| "that project is no longer registered".to_string())
 }
 
@@ -1529,12 +1529,18 @@ pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: S
         let store = store.lock().map_err(|e| e.to_string())?;
         find_project(&store, &project_id)?
     };
-    if let Some(why) = removal_refused(&remove_check(&git, &project, &path)?, force, &stamp) {
+    remove_now(&git, &store, &terminals, &project, &path, force, &stamp)
+}
+
+/// The deletion `workspace_remove` and the cleanup dialog (T-113-b) share: the same refusals, the
+/// same ending of terminals and watch, the same record clean-up afterwards.
+pub(crate) fn remove_now(git: &Git, store: &Mutex<Store>, terminals: &crate::terminal::Terminals, project: &Project, path: &str, force: bool, stamp: &str) -> Result<(), String> {
+    if let Some(why) = removal_refused(&remove_check(git, project, path)?, force, stamp) {
         return Err(why);
     }
     // ORCH-058: a shell still sitting in the folder would keep Windows from deleting it, so its
     // terminals end first; one that cannot be shown gone blocks unless the force box waives it.
-    let stopped = terminals.kill_under(Path::new(&path));
+    let stopped = terminals.kill_under(Path::new(path));
     if !force && !stopped.stuck.is_empty() {
         let n = stopped.stuck.len();
         return Err(format!("{n} process{} in this workspace did not stop. Tick Delete my changes too to delete it anyway, leaving {} running.", if n == 1 { "" } else { "es" }, if n == 1 { "it" } else { "them" }));
@@ -1542,11 +1548,11 @@ pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: S
     // FIX-2 (T-033-e review): what to keep is decided first, so the one `?` that can return early
     // runs before the watch ends; an early return after it would drop the handle below without
     // telling the page.
-    let keep = keeps_branch(&*store.lock().map_err(|e| e.to_string())?, &path);
+    let keep = keeps_branch(&*store.lock().map_err(|e| e.to_string())?, path);
     // T-033-e: the Source Control watch on this folder ends first and its folder handles are
     // closed (joined) before git deletes the folder, so nothing of ours stands in the way.
-    let watch = crate::scm::watch::unwatch_root(Path::new(&path));
-    if let Err(e) = remove_worktree(&git, &project, &path, force, keep) {
+    let watch = crate::scm::watch::unwatch_root(Path::new(path));
+    if let Err(e) = remove_worktree(git, project, path, force, keep) {
         // FIX-1: the folder stays after all, so its panel is told to watch it again.
         if let Some(w) = watch {
             w.tell_page();
@@ -1554,7 +1560,7 @@ pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: S
         return Err(e);
     }
     let store = store.lock().map_err(|e| e.to_string())?;
-    forget_workspace(&store, &path)
+    forget_workspace(&store, path)
 }
 
 /// The global workspaces settings as the sidebar shows them (PROJ-025).
@@ -1682,7 +1688,7 @@ fn forget_record(repo: &Path, path: &str) -> Result<(), String> {
 /// T-441-c: the worktrees among `all` that Kolux RS made itself, by the origin record it keeps for
 /// each one it creates (the same test as trust::made_by_kolux). Txais, 2026-10-13: "Only Kolux's
 /// own": a worktree made by Claude Code or any other tool is never forgotten, folder gone or not.
-fn kolux_made(origins: &serde_json::Map<String, serde_json::Value>, all: Vec<Worktree>) -> Vec<Worktree> {
+pub(crate) fn kolux_made(origins: &serde_json::Map<String, serde_json::Value>, all: Vec<Worktree>) -> Vec<Worktree> {
     all.into_iter().filter(|w| origins.contains_key(&name_key(&w.path))).collect()
 }
 
