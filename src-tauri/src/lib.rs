@@ -212,6 +212,9 @@ pub fn run() {
             let job_ok = procs::app_job_start();
             let dir = app.path().app_data_dir()?;
             diag::set_dir(&dir);
+            // T-283 (BROW-043): an earlier run's leftover browser helpers are closed, on a thread of
+            // its own so a hanging listing never holds up start-up.
+            browser::helpers::sweep_at_start(&dir);
             if !job_ok {
                 diag::write(&dir, "kolux-rs: the app could not be put in its own job object; child processes would survive a crash (APP-053)");
             }
@@ -612,10 +615,14 @@ pub fn run() {
             keybindings::keybindings_reload,
             keybindings::keybindings_show,
             browser::browser_open,
+            browser::preview::browser_preview_grant,
             browser::browser_bounds,
             browser::browser_navigate,
             browser::browser_go,
+            browser::history::browser_suggest,
             browser::browser_close,
+            browser::browser_viewport,
+            browser::browser_cookies_import,
             browser::browser_probe,
             browser::browser_diagnose,
             browser::browser_tab,
@@ -783,6 +790,8 @@ pub fn run() {
                 // the deadline leaves, so a stalled profile drive caps the wait and never freezes the
                 // quit. Settings need no step: every change is already on disk (APP-048).
                 final_save::begin();
+                // T-283 (BROW-043): this run's browser helpers end with it.
+                browser::helpers::stop_all();
                 // T-182 (APP-011): the same steps make the save point a restart waits for.
                 let report = final_save::run(final_save::QUIT_DEADLINE, lifecycle::quit_steps(app));
                 if let Ok(dir) = app.path().app_data_dir() {

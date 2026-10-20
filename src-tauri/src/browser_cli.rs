@@ -102,6 +102,15 @@ pub const COMMANDS: &[Command] = &[
 /// BROW-050 `kolux set device --name`: width, height, scale and whether it is a mobile device.
 /// ponytail: a short table of common devices; a settings file if people ask for their own.
 pub const DEVICES: &[(&str, f64, f64, f64, bool)] = &[
+    // T-240 (BROW-034): the toolbar's presets, names and sizes as the compat list has them; phone
+    // and tablet presets are double density with the phone identity and touch.
+    ("Mobile S", 320.0, 568.0, 2.0, true),
+    ("Mobile M", 375.0, 667.0, 2.0, true),
+    ("Mobile L", 425.0, 812.0, 2.0, true),
+    ("Tablet", 768.0, 1024.0, 2.0, true),
+    ("Laptop", 1024.0, 768.0, 1.0, false),
+    ("Laptop L", 1440.0, 900.0, 1.0, false),
+    ("Desktop", 1920.0, 1080.0, 1.0, false),
     ("iPhone SE", 375.0, 667.0, 2.0, true),
     ("iPhone 14", 390.0, 844.0, 3.0, true),
     ("iPhone 14 Pro Max", 430.0, 932.0, 3.0, true),
@@ -109,9 +118,11 @@ pub const DEVICES: &[(&str, f64, f64, f64, bool)] = &[
     ("Galaxy S23", 360.0, 780.0, 3.0, true),
     ("iPad", 810.0, 1080.0, 2.0, true),
     ("iPad Pro 12.9", 1024.0, 1366.0, 2.0, true),
-    ("Laptop", 1366.0, 768.0, 1.0, false),
     ("Desktop 1080p", 1920.0, 1080.0, 1.0, false),
 ];
+/// BROW-034: the presets the toolbar's Viewport Size menu offers, in its order (the rest of
+/// [`DEVICES`] are the command line's `set device` names).
+pub const PRESETS: usize = 7;
 /// A clipboard write larger than this is refused before anything runs (BROW-050).
 pub const CLIPBOARD_MAX: usize = 1024 * 1024;
 /// `kolux console` / `kolux network` without `--limit`.
@@ -650,6 +661,39 @@ pub fn tail(list: &[Value], limit: usize) -> Vec<Value> {
     list[list.len().saturating_sub(limit)..].to_vec()
 }
 
+/// Lays the page out at `w`x`h` (cut to the pane, BROW-050) with the phone identity when `mobile`.
+/// The size and identity go into [`EMU`] first, so a load that starts meanwhile gets them from the
+/// load hook; a size that took but an identity that did not is reported as such (BROW-034).
+fn emulate(id: u32, w: f64, h: f64, scale: Option<f64>, mobile: bool) -> Result<Value, Fail> {
+    with_emu(id, |e| {
+        e.viewport = Some((w, h));
+        e.state.insert("mobile".into(), json!(mobile));
+    });
+    super::relayout(id, scale).map_err(|m| Fail::new("failed", m))?;
+    apply_emu(id).map_err(|f| Fail::new("partial", format!("the page is laid out at {w}x{h} but its identity did not change: {}", f.message)))?;
+    Ok(json!({ "page": id, "width": w, "height": h, "scale": scale, "mobile": mobile, "summary": format!("page {id} shows {w}x{h}{}{}", scale.map(|s| format!(" at {s}x")).unwrap_or_default(), if mobile { " (mobile)" } else { "" }) }))
+}
+
+/// T-240 (BROW-034): the toolbar's Viewport Size: a preset by name, or `None` / "Default" for the
+/// pane's own size and the plain identity again.
+pub fn preset(id: u32, name: Option<&str>) -> Result<Value, Fail> {
+    match name.map(str::trim).filter(|n| !n.is_empty() && !n.eq_ignore_ascii_case("default")) {
+        None => {
+            with_emu(id, |e| {
+                e.viewport = None;
+                e.state.insert("mobile".into(), json!(false));
+            });
+            super::relayout(id, Some(1.0)).map_err(|m| Fail::new("failed", m))?;
+            apply_emu(id)?;
+            Ok(json!({ "page": id, "summary": format!("page {id} fills its pane") }))
+        }
+        Some(n) => {
+            let d = device(n).ok_or_else(|| args(format!("no preset is called {n}; one of {}", DEVICES[..PRESETS].iter().map(|d| d.0).collect::<Vec<_>>().join(", "))))?;
+            emulate(id, d.1, d.2, Some(d.3), d.4)
+        }
+    }
+}
+
 /// Sends the tab's emulation state to its page (the same script the load hook runs).
 fn apply_emu(id: u32) -> Result<(), Fail> {
     let state = emu_state(id).unwrap_or_else(|| "{}".into());
@@ -773,13 +817,7 @@ pub fn run(req: &Request, worktree: Option<&str>) -> Result<Value, Fail> {
                 let d = device(&text("name").unwrap_or_default()).ok_or_else(|| args("--name is required"))?;
                 (d.1, d.2, Some(d.3), d.4)
             };
-            with_emu(id, |e| {
-                e.viewport = Some((w, h));
-                e.state.insert("mobile".into(), json!(mobile));
-            });
-            super::relayout(id, scale).map_err(|m| Fail::new("failed", m))?;
-            apply_emu(id)?;
-            Ok(json!({ "page": id, "width": w, "height": h, "scale": scale, "mobile": mobile, "summary": format!("page {id} shows {w}x{h}{}{}", scale.map(|s| format!(" at {s}x")).unwrap_or_default(), if mobile { " (mobile)" } else { "" }) }))
+            emulate(id, w, h, scale, mobile)
         }
         "browser.geolocation" => {
             let n = |k: &str| text(k).and_then(|v| v.parse::<f64>().ok());
@@ -1257,6 +1295,11 @@ mod tests {
         assert!(check("browser.set-device", &flags(&[("name", "Nokia 3310")])).unwrap_err().message.starts_with("no device is called Nokia 3310"));
         assert!(check("browser.set-device", &flags(&[("name", "iphone-14")])).is_ok());
         assert_eq!(device("IPHONE 14").map(|d| (d.1, d.2, d.4)), Some((390.0, 844.0, true)));
+        // T-240 (BROW-034): the seven toolbar presets come first, named and sized as the compat list.
+        let presets: Vec<_> = DEVICES[..PRESETS].iter().map(|d| (d.0, d.1 as u32, d.2 as u32, d.3 as u32, d.4)).collect();
+        assert_eq!(presets, vec![("Mobile S", 320, 568, 2, true), ("Mobile M", 375, 667, 2, true), ("Mobile L", 425, 812, 2, true), ("Tablet", 768, 1024, 2, true), ("Laptop", 1024, 768, 1, false), ("Laptop L", 1440, 900, 1, false), ("Desktop", 1920, 1080, 1, false)]);
+        assert_eq!(device("mobile-m").map(|d| d.0), Some("Mobile M"));
+        assert_eq!(device("laptop l").map(|d| d.1), Some(1440.0));
         assert_eq!(check("browser.set-offline", &flags(&[("state", "maybe")])).unwrap_err().message, "--state maybe is not one of on|off");
         assert!(check("browser.set-offline", &flags(&[])).is_ok());
         assert!(check("browser.set-headers", &flags(&[("headers", "[1]")])).unwrap_err().message.contains("JSON object"));
