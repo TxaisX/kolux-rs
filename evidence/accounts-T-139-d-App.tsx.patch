@@ -1,0 +1,67 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 35ebfb6f..a72189d3 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -124,7 +124,7 @@ import { FIELDS as STATUS_FIELDS, readStatusBar, toggleItem } from "./chrome/sta
+ import { chromeShown, menuBarState, menuEdit, menuScreen, menuSettingFlip } from "./chrome/chromeItems";
+ import VendorMark, { type Agent } from "./chrome/VendorMark";
+ import TerminalPane, { focusedTerminalEdit, type PaneNotice } from "./terminal/TerminalPane";
+-import { accountLabel, accountPrompt, type CodexAccount } from "./terminal/accountChange";
++import { accountLabel, accountPrompt, codexSetup, setupChanged, type CodexAccount } from "./terminal/accountChange";
+ import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
+ import AutomationsPage from "./automations/AutomationsPage";
+ import { forgetRunTab, openRunTab, paneOfTerminal, runPaneKey, runTabEnded, touchRunTab, typedInRunTab, type RunTabs } from "./automations/runTab";
+@@ -201,7 +201,7 @@ import { draftKey, feedbackMessage, keepDraft, showsReview, startFeedback, still
+ export type ShellTarget = { dir: string | null; branch: string | null };
+ 
+ /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
+-export type Pane = { /** EDIT-026: an editor tab that follows a growing log (read-only). */ follow?: boolean; key: number; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; forkOf?: string; resumed?: boolean; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number; col?: number; side?: "old" } };
++export type Pane = { /** EDIT-026: an editor tab that follows a growing log (read-only). */ follow?: boolean; key: number; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; forkOf?: string; resumed?: boolean; env?: [string, string][]; account?: string | null; /** T-139-d: the Codex setup (command, arguments, variables, permissions) it started with. */ setup?: string; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number; col?: number; side?: "old" } };
+ 
+ /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
+ /** TERM-058: a terminal tab follows the running program's title (`live`) unless the user named it; a worker's task label (ORCH-066) comes first. */
+@@ -295,6 +295,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   const [codex, setCodex] = useState<{ active: string | null; accounts: CodexAccount[] }>({ active: null, accounts: [] });
+   // ACCT-064: per pane, the active account the user chose to keep away from (asked once per change).
+   const [kept, setKept] = useState<Record<number, string | null>>({});
++  // T-139-d: per pane, the Codex setup the user chose to keep it on (asked once per change).
++  const [keptSetup, setKeptSetup] = useState<Record<number, string>>({});
+   useEffect(() => {
+     const read = () => void invoke<{ active: string | null; accounts: CodexAccount[] }>("codex_accounts").then((v) => setCodex({ active: v.active, accounts: v.accounts })).catch(() => {});
+     read();
+@@ -1877,7 +1879,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   const restartPane = (key: number) => {
+     const fresh = nextKey.current++;
+     delete ptys.current[key];
+-    setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, key: fresh, account: undefined, typed: undefined } : p)));
++    setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, key: fresh, account: undefined, setup: undefined, typed: undefined } : p)));
+     setRunning((r) => {
+       const { [key]: _gone, ...rest } = r;
+       return rest;
+@@ -1886,7 +1888,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   };
+   const noticeFor = (p: Pane): PaneNotice | null => {
+     const prompt = accountPrompt(p, !!running[p.key], codex.active, codex.accounts, kept[p.key]);
+-    if (!prompt) return null;
++    if (!prompt) {
++      // T-139-d: the Codex command, arguments, variables or permissions changed in Settings since this pane started.
++      const now = codexSetup(settings);
++      return setupChanged(p, !!running[p.key], now, keptSetup[p.key])
++        ? { title: "The Codex setup changed", body: "This pane still runs on the old setup. Restart to use the new one, or keep it here.", primary: "Restart", onPrimary: () => restartPane(p.key), secondary: "Keep this setup", onSecondary: () => setKeptSetup((k) => ({ ...k, [p.key]: now })) }
++        : null;
++    }
+     if (prompt.kind === "removed")
+       return prompt.to === null
+         ? { title: "This pane's Codex account was removed", body: "Add or pick a Codex account in Settings, then restart this pane.", primary: "Open Settings", onPrimary: () => openSettings("accounts", "codex") }
+@@ -3118,7 +3126,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                       report.current();
+                       if (p.batch !== undefined && p.agent !== "shell") rememberLineup(p.batch);
+                       // ACCT-023: a Codex pane remembers the account it began on.
+-                      if (p.agent === "codex" && p.account !== account) setPanes((ps) => ps.map((x) => (x.key === p.key ? { ...x, account } : x)));
++                      if (p.agent === "codex") {
++                        const setup = codexSetup(settings); // T-139-d: and the setup it began on
++                        if (p.account !== account || p.setup !== setup) setPanes((ps) => ps.map((x) => (x.key === p.key ? { ...x, account, setup } : x)));
++                      }
+                     }}
+                     account={p.account}
+                     notice={noticeFor(p)}

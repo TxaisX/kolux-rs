@@ -1018,3 +1018,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · look T-302-c (web places of the project icon card) · no new outside sources: the guarded icon client, address rules and lookup are Kolux RS code already in browser.rs; URL host parsing per the url crate behaviour already used there
 > 2026-10-20 · look T-266-b (PROJ-062 ports and task on the workspace card hover) · no new outside sources: Kolux RS own ports.rs scan and Worktree.number
 > 2026-10-20 · accounts T-548-b (OD-11 per-account Codex plan figures) · no new outside sources: Kolux RS own codex_usage.rs, codex_accounts.rs, src/usage and src/tower code
+> 2026-10-20 · accounts T-139-d (Codex setup-change prompt, restored panes asked again) · no new outside sources: Kolux RS own accountChange.ts, layout.ts and App.tsx pane code
