@@ -1469,6 +1469,103 @@ pub fn workspace_rename(store: StoreState<'_>, path: String, name: String) -> Re
     rename(&*store.lock().map_err(|e| e.to_string())?, &path, &name)
 }
 
+// ---- PROJ-060: a workspace's details: shown name, linked GitHub item, comment ---------------------
+
+/// The longest comment a workspace keeps.
+pub const COMMENT_MAX: usize = 8 * 1024;
+
+/// What the details form shows and saves.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Details {
+    /// The typed name; none means the branch names the row.
+    pub name: Option<String>,
+    /// The linked item as an address (or `#12` for a bare issue number); none when unlinked.
+    pub item: Option<String>,
+    pub comment: String,
+}
+
+/// A linked GitHub item: an issue (number, address if known) or a pull request (address).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ItemLink {
+    Issue(u64, Option<String>),
+    Pr(String),
+}
+
+/// What a pasted link-field text means: blank clears; an issue or pull request address on any host
+/// (an Enterprise address counts, `/files` and the like after the number are dropped); a bare
+/// number (with or without `#`) is an issue of the project's own repository. Anything else is refused.
+pub fn parse_item(text: &str) -> Result<Option<ItemLink>, String> {
+    let t = text.trim();
+    if t.is_empty() {
+        return Ok(None);
+    }
+    let bare = t.trim_start_matches('#');
+    if !bare.is_empty() && bare.chars().all(|c| c.is_ascii_digit()) {
+        return match bare.parse::<u64>() {
+            Ok(n) if n > 0 => Ok(Some(ItemLink::Issue(n, None))),
+            _ => Err("an issue number is 1 or more".into()),
+        };
+    }
+    let rest = t.strip_prefix("https://").or_else(|| t.strip_prefix("http://")).ok_or_else(|| format!("{t} is not an issue or pull request address or number"))?;
+    let parts: Vec<&str> = rest.split(['?', '#']).next().unwrap_or("").split('/').collect();
+    if parts.len() < 5 || parts[0].is_empty() || parts[1].is_empty() || parts[2].is_empty() {
+        return Err(format!("{t} is not an issue or pull request address or number"));
+    }
+    let n = parts[4].parse::<u64>().ok().filter(|n| *n > 0).ok_or_else(|| format!("{t} has no issue or pull request number"))?;
+    let host = parts[0].to_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host);
+    match parts[3].to_lowercase().as_str() {
+        "pull" => Ok(Some(ItemLink::Pr(format!("https://{host}/{}/{}/pull/{n}", parts[1], parts[2])))),
+        "issues" => Ok(Some(ItemLink::Issue(n, Some(format!("https://{host}/{}/{}/issues/{n}", parts[1], parts[2]))))),
+        _ => Err(format!("{t} is not an issue or pull request address")),
+    }
+}
+
+/// PROJ-060: what the details form starts with for the workspace at `path`.
+pub fn details_of(store: &Store, path: &str) -> Details {
+    let o = origin(store, path).unwrap_or_default();
+    let item = o["issueUrl"].as_str().or_else(|| o["pr"].as_str()).map(String::from).or_else(|| o["issue"].as_u64().map(|n| format!("#{n}")));
+    Details { name: load_names(store).get(&name_key(path)).and_then(|v| v.as_str()).map(String::from), item, comment: o["comment"].as_str().unwrap_or_default().to_string() }
+}
+
+/// PROJ-060: saves the details. A blank name goes back to the branch name; a blank link or comment
+/// clears it. A refused link or an over-long comment writes nothing at all.
+pub fn save_details(store: &Store, path: &str, name: &str, item: &str, comment: &str) -> Result<Details, String> {
+    let link = parse_item(item)?;
+    if comment.len() > COMMENT_MAX {
+        return Err(format!("the comment is {} KB; a comment holds at most {} KB", comment.len().div_ceil(1024), COMMENT_MAX / 1024));
+    }
+    let n = name.trim();
+    set_name(store, path, if n.is_empty() { None } else { Some(n) })?;
+    let mut o = origin(store, path).filter(serde_json::Value::is_object).unwrap_or_else(|| serde_json::json!({}));
+    o["issue"] = serde_json::Value::Null;
+    o["issueUrl"] = serde_json::Value::Null;
+    o["pr"] = serde_json::Value::Null;
+    match link {
+        Some(ItemLink::Issue(num, url)) => {
+            o["issue"] = num.into();
+            o["issueUrl"] = url.map_or(serde_json::Value::Null, Into::into);
+        }
+        Some(ItemLink::Pr(url)) => o["pr"] = url.into(),
+        None => {}
+    }
+    let c = comment.trim();
+    o["comment"] = if c.is_empty() { serde_json::Value::Null } else { c.into() };
+    set_origin(store, path, Some(&o))?;
+    Ok(details_of(store, path))
+}
+
+#[tauri::command]
+pub fn workspace_details_get(store: StoreState<'_>, path: String) -> Result<Details, String> {
+    Ok(details_of(&*store.lock().map_err(|e| e.to_string())?, &path))
+}
+
+#[tauri::command]
+pub fn workspace_details_save(store: StoreState<'_>, path: String, name: String, item: String, comment: String) -> Result<Details, String> {
+    save_details(&*store.lock().map_err(|e| e.to_string())?, &path, &name, &item, &comment)
+}
+
 /// PROJ-053: putting workspaces to sleep ends their terminals; the folders and branches stay, and
 /// the sidebar keeps the list of who sleeps. Returns how many terminals were ended.
 #[tauri::command]
@@ -4161,4 +4258,43 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         let _ = fs::remove_dir_all(&parent);
     }
 
+    #[test]
+    fn proj060_a_pasted_github_address_becomes_the_linked_item_and_a_bad_one_changes_nothing() {
+        assert_eq!(parse_item("  ").unwrap(), None);
+        assert_eq!(parse_item("#12").unwrap(), Some(ItemLink::Issue(12, None)));
+        assert_eq!(parse_item("https://www.GitHub.com/acme/app/issues/34?x=1#top").unwrap(), Some(ItemLink::Issue(34, Some("https://github.com/acme/app/issues/34".into()))));
+        assert_eq!(parse_item("https://git.corp.example/acme/app/pull/9/files").unwrap(), Some(ItemLink::Pr("https://git.corp.example/acme/app/pull/9".into())));
+        assert!(parse_item("https://github.com/acme/app").is_err());
+        assert!(parse_item("https://github.com/acme/app/pull/0").is_err());
+        assert!(parse_item("not a link").is_err());
+        assert!(parse_item("0").is_err());
+        let profile = temp("proj060a");
+        let store = Store::open(&profile).unwrap();
+        let w = "C:\\ws\\one";
+        let d = save_details(&store, w, "Login page", "https://github.com/acme/app/pull/12", "## Plan\nsee [spec](https://example.com)").unwrap();
+        assert_eq!(d, Details { name: Some("Login page".into()), item: Some("https://github.com/acme/app/pull/12".into()), comment: "## Plan\nsee [spec](https://example.com)".into() });
+        assert_eq!(item_number(&origin(&store, w).unwrap()), Some(12), "the sidebar's number reads the linked pull request");
+        // a refused link writes nothing: the name and comment stay as saved
+        assert!(save_details(&store, w, "Changed", "nonsense", "other").is_err());
+        assert_eq!(details_of(&store, w), d);
+        drop(store);
+    }
+
+    #[test]
+    fn proj060_blank_fields_clear_and_an_issue_replaces_a_pull_request() {
+        let profile = temp("proj060b");
+        let store = Store::open(&profile).unwrap();
+        let w = "C:\\ws\\two";
+        save_details(&store, w, "Named", "https://github.com/acme/app/pull/12", "note").unwrap();
+        let d = save_details(&store, w, "  ", "https://github.com/acme/app/issues/5", "").unwrap();
+        assert_eq!(d, Details { name: None, item: Some("https://github.com/acme/app/issues/5".into()), comment: String::new() });
+        assert_eq!(item_number(&origin(&store, w).unwrap()), Some(5));
+        let d = save_details(&store, w, "", "", "").unwrap();
+        assert_eq!(d, Details::default());
+        assert_eq!(item_number(&origin(&store, w).unwrap()), None);
+        let long = "x".repeat(COMMENT_MAX + 1);
+        assert!(save_details(&store, w, "n", "", &long).is_err());
+        assert_eq!(details_of(&store, w).name, None, "an over-long comment writes nothing");
+        drop(store);
+    }
 }

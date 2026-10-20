@@ -850,3 +850,6 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · shell T-220 · rules from the TERM-052/059/060/061/070 cards and T-093-a; this tree's own tabCycle.ts, paste.ts, EditorPane editors map, App.tsx key handler; Pointer Events and DataTransfer items (developer.mozilla.org) and Tauri 2 raw-body IPC requests (v2.tauri.app, Calling Rust) recalled not fetched; no outside source
 > 2026-10-19 · shell T-246-b · rules from the SET-007/009/015/019 cards; this tree's own keys/keymap.ts, keys/record.ts and settings/search.ts; no outside source
 > 2026-10-19 · shell T-247-b · rules from the SET-022/025/026/043 cards; this tree's own terminal/text.ts, renderer.ts, shellChoice.ts, closing.ts, pin.ts and projects/deleting.ts; no outside source
+> 2026-10-19 · repo T-216-b · spec/01 PROJ-016, PROJ-049, PROJ-052 as given in the brief; HTML drag-and-drop events (MDN public docs); this tree's own rows.ts, groups.ts; no outside code
+> 2026-10-19 · repo T-217-b · spec/01 PROJ-056, PROJ-060, PROJ-065, T-055 as given in the brief; this tree's own openIn.ts, nav.ts, deleting.ts, projects.rs; no outside code
+> 2026-10-19 · repo T-227-d (part) · spec/11 GIT-011 as given in the brief; this tree's own scm.rs summary(); no outside code

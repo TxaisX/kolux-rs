@@ -11,8 +11,8 @@ export type PrState = "open" | "draft" | "merged" | "closed" | "suppressed" | nu
 /** `cache`: when the prompt cache of its idle Claude agents runs out (SET-059), null when none counts. */
 export type RowInfo = { state: AgentState; changed: number; pr: PrState; cache?: number | null };
 export type GroupBy = "none" | "project" | "status" | "pr";
-/** "activity" is PROJ-051's Recent; the old stored "recent" is PROJ-050's and moves to Smart once. */
-export type SortBy = "smart" | "name" | "activity";
+/** "manual" is PROJ-049's Manual order; "activity" is PROJ-051's Recent; the old stored "recent" is PROJ-050's and moves to Smart once. */
+export type SortBy = "smart" | "name" | "activity" | "manual";
 
 export const GROUP_SETTING = "workspaceGroupBy";
 export const SORT_SETTING = "workspaceSort";
@@ -89,7 +89,7 @@ export function groupRows<T>(rows: T[], by: GroupBy, info: (row: T) => RowInfo, 
 }
 
 export function sortFromSetting(v: unknown): SortBy {
-  return v === "name" || v === "activity" ? v : "smart";
+  return v === "name" || v === "activity" || v === "manual" ? v : "smart";
 }
 
 export function groupFromSetting(v: unknown): GroupBy {

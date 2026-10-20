@@ -46,7 +46,7 @@ import { cacheDue, cacheMinutes } from "./projects/cache";
 import { startFields, startTail } from "./projects/startArgs";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
 import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./projects/WorktreePalette";
-import { navTarget, travel, visit, type Place } from "./projects/nav";
+import { navTarget, stepAllowed, travel, visit, type Place } from "./projects/nav";
 import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
 import BrowserPane, { OPEN_IN_BROWSER, openInBrowser } from "./browser/BrowserPane";
 import { chordPlan } from "./browser/chord";
@@ -1286,6 +1286,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // Deleted workspaces are skipped: a place counts while some project still lists its folder.
   const stillThere = (p: Place) => p.dir === null || Object.keys(owner).some((d) => sameDir(d, p.dir));
   const step = (dir: 1 | -1) => {
+    if (!stepAllowed(screen === "terminals", settingsOpen)) return false;
     const i = travel(hist, dir, stillThere);
     if (i === null) return false;
     const p = hist.list[i];
@@ -2128,7 +2129,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         sidebarWidth={leftWidth}
         appMenu
         uiZoom={zoomFactor()}
-        onScreen={setScreen} installed={installedIds} codexAccount={codex.accounts.length > 0} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} onZoom={(how) => zoomTerm(focused, how)} fullPage={fullPage} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
+        onScreen={setScreen} installed={installedIds} codexAccount={codex.accounts.length > 0} onSearch={() => setPalette(true)} onBack={!stepAllowed(screen === "terminals", settingsOpen) || travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={!stepAllowed(screen === "terminals", settingsOpen) || travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} onZoom={(how) => zoomTerm(focused, how)} fullPage={fullPage} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
       <div className="body" style={{ "--sidebar-w": `${leftWidth}px` } as CSSProperties}>
         {palette && (
           <WorktreePalette

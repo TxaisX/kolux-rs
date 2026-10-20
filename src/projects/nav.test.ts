@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { EMPTY_HISTORY, navTarget, queryWords, scoreText, travel, visit, type Place } from "./nav";
+import { EMPTY_HISTORY, navTarget, queryWords, scoreText, stepAllowed, travel, visit, type Place } from "./nav";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { RowMark, chipFilter, dirMark, dirMonitoring, paletteAge, paletteRows, repoOptions, withRepos, worktreeItems, type PaletteItem } from "./WorktreePalette";
@@ -207,4 +207,10 @@ test("EDIT-047: the palette finds a worktree by number, link, shortcode, comment
   // an empty box: the worktree used last leads its section
   const empty = paletteRows(items, "", ["C:/ws/app/ship", "C:/ws/app/typo"]).filter((r) => r.section === "Worktrees");
   expect(empty.map((r) => r.dir)).toEqual(["C:/ws/app/ship", "C:/ws/app/typo", "C:/src/app", "C:/ws/app/pay"]);
+});
+
+test("PROJ-056 back and forward work only in the terminal view and not under settings", () => {
+  expect(stepAllowed(true, false)).toBe(true);
+  expect(stepAllowed(true, true)).toBe(false);
+  expect(stepAllowed(false, false)).toBe(false);
 });
