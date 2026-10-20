@@ -883,3 +883,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · watch T-259 · spec/04 STAT-036 as given in the brief; no outside source
 > 2026-10-19 · watch T-309-b · spec/04 STAT-038 as given in the brief; no outside source
 > 2026-10-20 · T-546-b · this tree's own TopBar, actions and tower files; no outside source
+> 2026-10-20 · T-550 · this tree's UsagePill, SettingsPage and the user guide; no outside source
