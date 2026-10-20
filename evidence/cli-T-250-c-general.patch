@@ -1,0 +1,20 @@
+diff --git a/src/settings/GeneralPage.tsx b/src/settings/GeneralPage.tsx
+index 16b5b883..6d7fba55 100644
+--- a/src/settings/GeneralPage.tsx
++++ b/src/settings/GeneralPage.tsx
+@@ -13,6 +13,7 @@ import { DELAY, prefPatch, readEditorPrefs, type DiffView } from "./editorPrefs"
+ import { addApp, addCustom, draftReady, moveApp, OPEN_IN_FIELD, presetsLeft, readOpenIn, removeApp, type OpenInApp } from "./openIn";
+ import { editApp } from "../editor/openInEdit";
+ import { applyDraft, PROXY_FIELD, readProxyRest, type ProxyDraft } from "./proxy";
++import CliCard from "./CliCard";
+ 
+ /** A row of buttons that behaves as one radio group. */
+ export function Segmented<T extends string>({ label, options, value, onPick, off = [] }: { label: string; options: Array<{ id: T; label: string }>; value: T; onPick: (v: T) => void; off?: T[] }) {
+@@ -308,6 +309,7 @@ export default function GeneralPage() {
+       {settings && <EditorCard settings={settings} onSave={save} />}
+       {settings && <OpenInCard settings={settings} onSave={save} />}
+       {settings && <ProxyCard settings={settings} onSave={save} />}
++      <CliCard />
+       <DiagnosticsCard />
+       <PrivacyCard />
+     </>

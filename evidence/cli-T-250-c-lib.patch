@@ -1,0 +1,13 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 479f1466..f83c47ea 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -664,6 +664,8 @@ pub fn run() {
+             cli::cli_register::cli_register_state,
+             cli::cli_register::cli_register,
+             cli::cli_register::cli_unregister,
++            cli::file_cli::cli_file_window,
++            cli::file_cli::cli_file_result,
+             diag::diag_bundle,
+             diag::diag_review,
+             diag::diag_review_discard,

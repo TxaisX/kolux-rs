@@ -25,7 +25,7 @@ mod local_cli;
 #[path = "cli_register.rs"]
 pub mod cli_register;
 #[path = "file_cli.rs"]
-mod file_cli;
+pub mod file_cli;
 
 /// SKILL-017: Kolux's own skill guides (name, guide text), listed on the Skills page as bundled.
 pub fn bundled_skills() -> Vec<(&'static str, &'static str)> {
