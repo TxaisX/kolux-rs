@@ -6,10 +6,10 @@ import { chordMatches, chordsOf, labelOf, labelParts, matchEvent, parseChord, re
 
 const key = (k: Partial<KeyLike>): KeyLike => ({ key: "", code: "", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...k });
 
-test("the table registers the 134 carried commands (VIEW-053 added one, T-546 added view.tower, T-246-c added the three ui.zoom keys, T-548 added the two account switches); 55 ship unbound (T-543-b unbound Reopen closed tab) and 6 have only a macOS chord", () => {
-  expect(actions.length).toBe(134);
+test("the table registers the 135 carried commands (VIEW-053 added one, T-546 added view.tower, T-246-c added the three ui.zoom keys, T-548 added the two account switches, T-146-e added view.space); 55 ship unbound (T-239 bound Reopen closed tab again; the two T-548 account switches ship unbound) and 6 have only a macOS chord", () => {
+  expect(actions.length).toBe(135);
   const ids = new Set(actions.map((a) => a.id));
-  expect(ids.size).toBe(134);
+  expect(ids.size).toBe(135);
   expect(ids.has("tab.newSimulator")).toBe(false);
   expect(ids.has("tab.openQuickCommandsMenu")).toBe(false);
   expect(actions.filter((a) => a.win32.length === 0 && !a.darwin).length).toBe(55);

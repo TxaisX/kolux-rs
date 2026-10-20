@@ -42,3 +42,17 @@ evidence/T-070-run.mjs tour own; raw log evidence/T-546-c-raw.txt)
   NOT proven live: Refresh pressed in the Tower window reading usage in the main window. The proof's counter read
      went to the first matching page, which was the Tower window (its own empty dev counter), so the reading
      "before {} after {}" measured the wrong page. The path is one emitTo + listen like the row click, which did work.
+
+ADDENDUM 2026-10-20 (v3 batch, lane/look from 17a0bd18)
+Checked against this tree (main 26e88cb2 merged): src-tauri/capabilities/default.json carries core:webview:allow-create-webview-window;
+src-tauri/capabilities/tower.json grants the window "tower" only event and close; src-tauri/src/lib.rs closes the Tower with the
+main window and ignores the Tower window's own close for shell cleanup; src/main.tsx draws TowerWindow for #tower-window;
+src/App.tsx calls useTowerBridge; TowerView.tsx has role="listbox" on .list and role="group" on each lane section;
+ownWindow.ts has OWN_WINDOW_WIRED = true. No patch is left for the resolver.
+Gates: vitest run src/keys src/tower src/chrome src/usage -> 36 files, 210 passed (G:/Temp/look-v3-logs/t546b-vitest.log, same tree
+as this task: no source changed between); tsc --noEmit exit 0. No Rust changed in this task.
+LIVE PROOF PENDING (batched): open the Tower, press Own window -> a second window opens on the other screen (main window keeps
+every shell); press Refresh in that Tower window -> the main window's usage figures re-read (watch the pill's reset/figure
+timestamp or the usage card change) and the Tower window shows the new figures; close the Tower window -> all panes still alive.
+The two-window flow cannot run in a unit test without launching the app, so the logic (snapshot change detection, screen pick,
+failure fallback, listbox roles) is unit-tested and this step stays open for the live batch.

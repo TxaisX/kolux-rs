@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { forgetRunTab, openRunTab, paneOfTerminal, runTabEnded, touchRunTab, typedInRunTab, type RunTabs } from "./runTab";
+import { forgetRunTab, openRunTab, paneOfTerminal, runPaneKey, runTabEnded, touchRunTab, typedInRunTab, type RunTabs } from "./runTab";
 
 const opened = (): RunTabs => openRunTab({}, 7, "run-1");
 
@@ -53,4 +53,17 @@ test("T-085-g only keys inside the focused pane, when that pane is a followed ta
   expect(typedInRunTab(tabs, 7, true)).toBe(true);
   expect(typedInRunTab(tabs, 7, false)).toBe(false);
   expect(typedInRunTab(tabs, 3, true)).toBe(false);
+});
+
+test("T-031-b View run finds a run's pane again after a restart through the run's own terminal", () => {
+  // Before the restart the window remembered the pane itself.
+  expect(runPaneKey({ "run-1": 7 }, { id: "run-1", terminal: 3 }, { 7: 3 })).toBe(7);
+  // After a restart the window remembers nothing, but the reconnected run row names its terminal.
+  expect(runPaneKey({}, { id: "run-1", terminal: 3 }, { 7: 3, 8: 4 })).toBe(7);
+  // A run with no terminal (never dispatched, or tidied after a restart and not reconnected) has no pane.
+  expect(runPaneKey({}, { id: "run-1" }, { 7: 3 })).toBeUndefined();
+  // A terminal no open pane holds any more is not a pane.
+  expect(runPaneKey({}, { id: "run-1", terminal: 9 }, { 7: 3 })).toBeUndefined();
+  // The window's own memory wins over the row, so a pane the run moved to is still the one opened.
+  expect(runPaneKey({ "run-1": 8 }, { id: "run-1", terminal: 3 }, { 7: 3, 8: 4 })).toBe(8);
 });

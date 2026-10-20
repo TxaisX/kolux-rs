@@ -25,6 +25,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, HIDE_AUTOMATION_SETTING, PIN_COPIES_SETTING, PIN_SETTING, SHOW_SLEEPING_SETTING, SLEEP_SETTING, asleepAfter, renameTo, showSleepingFrom, SORT_SETTING, jumpUnhides, withoutAutomationMade, groupFromSetting, groupRows, pathKey, pinnedSet, recentOrder, smartOrder, sortFromSetting, type AgentState, type PrState, type RowInfo } from "./rows";
 import { linkedPrs, pushBadge, SCM_LINKED_PR_KEY, type Pushed } from "../scm/model";
 import { mergePoll, nextDelay, pollItems, STALE_MS, type PrPoll } from "../scm/poll";
+import { recordPoll } from "../scm/prSearch";
 import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, projectLabel, splitGitSaid, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
 import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
 import AddProject from "./AddProject";
@@ -65,6 +66,7 @@ import ImportSetup, { refusedLine, type SetupImport } from "./ImportSetup";
 import { issueCommand } from "../setup/IssueCommand";
 import { trustedSetup } from "../setup/TrustPrompt";
 import { NO_GROUPS, groupChoices, groupTree, keepNewer, type Group, type Groups, type Node } from "./groups";
+import { dropBand, parentDropTarget } from "./parentDrop";
 import { HEADER_ORDER_SETTING, MANUAL_ORDER_SETTING, dragStart, dropBefore, dropOutcome, edgeScroll, idsFrom, manualOrder, moveHeader, moveRows, siblingIds } from "./order";
 import { CLEAR_FILTERS, FILTER_DEFAULT_SETTING, FILTER_PROJECTS_SETTING, filtersFrom, filtersOn, rowShown, toggleProject } from "./filter";
 import { deletePlan, rowMenu, type MenuItem } from "./menu";
@@ -412,6 +414,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         .then((answer) => {
           if (dead) return;
           setPrBy((prev) => mergePoll(prev, answer));
+          recordPoll(answer); // VIEW-043: the palette lists these pull requests
           st.failures = answer.prs.some((x) => x.error !== null) ? st.failures + 1 : 0;
           st.at = Date.now();
           st.limited = answer.limitedUntil ?? 0;
@@ -782,10 +785,10 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     }
     try {
       const wt = pr
-        ? await invoke<Created>("workspace_open_pr", { projectId: project.id, number: pr.number, folder: typed || null, name: typed || null, parent, ticket: mine.ticket })
+        ? await invoke<Created>("workspace_open_pr", { projectId: project.id, number: pr.number, folder: typed || null, name: typed || null, parent, ticket: mine.ticket, activeFolder: from })
         : reuse
-        ? await invoke<Created>("workspace_open_branch", { projectId: project.id, branch: reuse, folder: existing ? typed || null : null, parent, ticket: mine.ticket })
-        : await invoke<Created>("workspace_create", { projectId: project.id, name: typed, base: base || null, branch: branch || null, parent, ticket: mine.ticket, issue });
+        ? await invoke<Created>("workspace_open_branch", { projectId: project.id, branch: reuse, folder: existing ? typed || null : null, parent, ticket: mine.ticket, activeFolder: from })
+        : await invoke<Created>("workspace_create", { projectId: project.id, name: typed, base: base || null, branch: branch || null, parent, ticket: mine.ticket, issue, activeFolder: from });
       const lost = overtaken.current.has(mine.ticket);
       noteRecent(project.id);
       if (stopped.current.has(mine.ticket)) {
@@ -1480,6 +1483,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     draggable: true,
     onDragStart: (e: DragEvent) => {
       dragged.current = { kind: "row", id: pathKey(w.path) };
+      e.dataTransfer.setData("application/x-kolux-workspace", JSON.stringify([w.path])); // T-142: droppable on a workspace board lane
       e.dataTransfer.effectAllowed = "move";
     },
     onDragOver: (e: DragEvent) => {
@@ -1498,6 +1502,13 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       const fromEl = [...list.querySelectorAll("[data-path]")].find((n) => pathKey((n as HTMLElement).dataset.path ?? "") === d.id) ?? null;
       if (dropOutcome(groupBy, sortBy, lane(fromEl), lane(rowEl)) === "status") return; // a status lane drop changes the status only (see kolux-rs-after.md)
       const r = e.currentTarget.getBoundingClientRect();
+      // PROJ-048: the middle of a card nests the dragged workspace under it (same rules as Move to); the edges reorder.
+      const dw = everyEntry.find((x) => pathKey(x.w.path) === d.id);
+      const into = dw && projectOf(w) === dw.p.id ? parentDropTarget(worktrees[dw.p.id] ?? [], dw.w.path, w.path, dropBand(e.clientY - r.top, r.height)) : null;
+      if (dw && into) {
+        void move(dw.p, dw.w, into.path);
+        return;
+      }
       const before = dropBefore(keys, d.id, pathKey(w.path), e.clientY < r.top + r.height / 2);
       if (before === undefined) return;
       onSetting(MANUAL_ORDER_SETTING, moveRows(dragStart(sortBy, idsFrom(settings[MANUAL_ORDER_SETTING]), keys), [d.id], before));

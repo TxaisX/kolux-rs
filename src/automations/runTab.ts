@@ -54,3 +54,18 @@ export function paneOfTerminal(ptys: Record<number, number>, id: number): number
 export function typedInRunTab(tabs: RunTabs, focused: number, insideFocusedPane: boolean): boolean {
   return insideFocusedPane && focused in tabs;
 }
+
+/**
+ * AUTO-013 (T-031-b): the pane View run opens for a run. The window's own memory of the pane a run
+ * opened comes first; after a restart that memory is empty, so the run row's own terminal (the one
+ * the automations store re-attached on reconnect, T-085-h) finds the pane that holds it now. A run
+ * with no terminal, or whose terminal no open pane holds, has no pane. The caller still checks that
+ * the pane sits in the run's worktree, so a pane that now shows something else is never opened.
+ */
+export function runPaneKey(remembered: Record<string, number>, run: { id: string; terminal?: number | null }, ptys: Record<number, number>): number | undefined {
+  const own = remembered[run.id];
+  if (own !== undefined) return own;
+  if (run.terminal === undefined || run.terminal === null) return undefined;
+  const key = paneOfTerminal(ptys, run.terminal);
+  return key === null ? undefined : key;
+}

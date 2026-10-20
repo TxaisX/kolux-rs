@@ -9,6 +9,7 @@ import PaneMenu, { paneMenuItems } from "./PaneMenu";
 import type { Chip } from "../board/chip";
 import type { AgentState } from "../projects/rows";
 import { invoke } from "@tauri-apps/api/core";
+import { withMilestones } from "../onboarding/milestoneNote";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Terminal, type ITerminalAddon } from "@xterm/xterm";
@@ -19,6 +20,7 @@ import { attachRenderer, watchResume, type RendererMode } from "./renderer";
 import { copySelection } from "./copy";
 import { HeldKeys, screenLines, shouldRefocus, watchScale } from "./recover";
 import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } from "./codec";
+import { notePrinted } from "../browser/preview";
 import { encodeHistory, replay, restoreTail, viewTop } from "./history";
 import { claimsClick } from "./linkClick";
 import { modeView, resetAfterExit } from "./modeReset";
@@ -744,6 +746,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
               clearTimeout(readyWait);
               send(startup.onPrompt());
             }
+            notePrinted(openRef.current.cwd, bytes); // T-242 (BROW-067): printed dev-server addresses
             sawOutput();
           };
           if (idRef.current === null && forPane(e.payload, null, number)) draw();
@@ -1247,6 +1250,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     let text: string;
     try {
       text = await invoke<string>("terminal_diagnostics", { id, cols: term.cols, rows: term.rows, renderer: drawing || "unknown", screen });
+      text = await withMilestones(text); // ONB-011: when each first-run milestone happened
     } catch (e) {
       setFlash(`Diagnostics could not be built (${String(e)})`);
       return;
