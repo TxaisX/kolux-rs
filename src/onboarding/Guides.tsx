@@ -9,13 +9,14 @@ import "./onboarding.css";
 import { useSettings } from "../settings/useSettings";
 import { probeSetup } from "../settings/setupProbe";
 import Tours from "./Tours";
+import CliSetup, { useCliCaps } from "./CliSetup";
 import { AgentPanel, AutomatePanel, composer, IntegrationsPanel, MultitaskPanel, NotificationsPanel, StopSetup } from "./StepPanels";
 import { integrationSteps, readSeenCached, taskSourceOf } from "./integrations";
 import { guideOpenChanged } from "./actions";
 import { defaultAgentId } from "../launch/agents";
 import {
-  caps, demoFrames, doneFrom, paletteKeys, doneId, firstOpen, forward, latest, markGuide, moveOn, nextTip, OPEN_EXPLORE, OPEN_GUIDE, guideClosed, PAGE_SHOWN, railKey, ring, startTicked, STEPS, stopDone, stopOf, TWO_REPOS, withRecord, words, workflowDone, WORKFLOWS,
-  legacyProfile, type At, type Cap, type CapId, type CliStatus, type Facts, type GuideRecord, type Place, type Setup, type StepId, type TipId,
+  caps, demoFrames, doneFrom, paletteKeys, doneId, firstOpen, forward, latest, markGuide, moveOn, nextTip, OPEN_EXPLORE, OPEN_GUIDE, guideClosed, PAGE_SHOWN, railKey, ring, STEPS, stopDone, stopOf, TWO_REPOS, withRecord, words, workflowDone, WORKFLOWS,
+  legacyProfile, type At, type CliStatus, type Facts, type GuideRecord, type Place, type Setup, type StepId, type TipId,
 } from "./guide";
 
 type Scan = { skills: { name: string; source: string }[] };
@@ -108,38 +109,6 @@ export function Ring({ done, total, size = 40 }: { done: number; total: number; 
   );
 }
 
-function CliStep({ list, onCheck }: { list: Cap[]; onCheck: () => void }) {
-  const [ticked, setTicked] = useState<CapId[]>(() => startTicked(list));
-  const key = list.map((c) => `${c.id}:${c.ready}`).join();
-  useEffect(() => setTicked(startTicked(list)), [key]); // eslint-disable-line react-hooks/exhaustive-deps
-  return (
-    <>
-      <p className="guide-note">
-        Registering the CLI puts the <code>kolux</code> command in every terminal on this computer, not only inside Kolux, so an agent you start anywhere can open
-        terminals, start other agents and read Kolux's skills.
-      </p>
-      <ul className="guide-caps">
-        {list.map((c) => (
-          <li key={c.id}>
-            <label>
-              <input type="checkbox" checked={ticked.includes(c.id)} onChange={(e) => setTicked(e.target.checked ? [...ticked, c.id] : ticked.filter((t) => t !== c.id))} />
-              <span className="name">{c.label}</span>
-              <span className={`state${c.ready ? " ok" : ""}`}>{c.ready ? "Ready" : "Not set up"}</span>
-            </label>
-            <span className="about">{c.about}</span>
-          </li>
-        ))}
-      </ul>
-      <p className="guide-note dim">Kolux cannot run this setup for you yet; it arrives with the installer in a coming build. Re-check once you have set these up.</p>
-      <div className="btn-row">
-        <button className="btn" onClick={onCheck}>
-          Re-check
-        </button>
-      </div>
-    </>
-  );
-}
-
 /** Keeps a dialog's content on screen through its closing fade; opening again during the fade
  *  cancels the teardown. */
 function useClosing(open: boolean): boolean {
@@ -203,7 +172,7 @@ function SetupGuide({ ask, open, onClose }: { ask: StepId | null; open: boolean;
             </button>
           </header>
           <p>{words(step).about}</p>
-          {step.id === "cli" && <CliStep list={g.caps} onCheck={g.refresh} />}
+          {step.id === "cli" && <CliSetup list={g.caps} onChanged={g.refresh} />}
           {step.id === "multitask" && <MultitaskPanel close={onClose} />}
           {step.id === "notifications" && <NotificationsPanel />}
           {step.id === "agent" && <AgentPanel />}
@@ -364,11 +333,18 @@ function PaletteDemo() {
   );
 }
 
+/** ONB-028: the tip's own setup: the same panel as the Setup Guide's CLI step, read fresh when it opens. */
+function TipSetup() {
+  const c = useCliCaps(true);
+  return <CliSetup list={c.caps} onChanged={c.refresh} />;
+}
+
 /** ONB-027: at most one tip per launch, once settings, onboarding and the CLI status are known and
  *  no other dialog is open. A tip counts as seen the moment it appears. */
 function StartupTip() {
   const [tip, setTip] = useState<TipId | null>(null);
   const [cli, setCli] = useState<CliStatus | null>(null);
+  const [setup, setSetup] = useState(false);
   useEffect(() => {
     let live = true;
     let timer = 0;
@@ -395,7 +371,7 @@ function StartupTip() {
     };
   }, []);
   if (!tip) return null;
-  const close = () => setTip(null);
+  const close = () => (setTip(null), setSetup(false));
   return (
     <div className="ask-backdrop" onMouseDown={(e) => e.target === e.currentTarget && close()}>
       <div className="tip" role="dialog" aria-modal="true" aria-label="Tip" onKeyDown={(e) => e.key === "Escape" && close()}>
@@ -409,19 +385,16 @@ function StartupTip() {
               <li>Teach every agent Kolux's commands through its skills</li>
             </ul>
             {cli?.installed && !cli.onPath && <p className="tip-warn">Needs attention: the kolux command is installed, but terminals outside Kolux cannot find it.</p>}
+            {setup && <TipSetup />}
             <div className="btn-row">
               <button className="btn" onClick={close} autoFocus>
-                Not now
+                {setup ? "Close" : "Not now"}
               </button>
-              <button
-                className="btn primary"
-                onClick={() => {
-                  close();
-                  window.dispatchEvent(new CustomEvent(OPEN_GUIDE, { detail: "cli" }));
-                }}
-              >
-                Install CLI &amp; Skills
-              </button>
+              {!setup && (
+                <button className="btn primary" onClick={() => setSetup(true)}>
+                  Install CLI &amp; Skills
+                </button>
+              )}
             </div>
           </>
         ) : (
