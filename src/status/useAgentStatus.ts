@@ -10,7 +10,7 @@ import type { AgentState } from "../projects/rows";
 import type { Crew } from "../terminal/status";
 import { noteTitle, turnNote, type StopInfo, type Turn } from "../terminal/notify";
 import type { ContextReading } from "../usage/meter";
-import { raiseNotification, type KindKey } from "../settings/notifications";
+import { raiseNotification, suppressFocused, type KindKey } from "../settings/notifications";
 import { marksUnread } from "../terminal/tabs";
 import { folderName } from "../projects/model";
 import { sameDir } from "../workspaces";
@@ -163,7 +163,7 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
     const known = new Set(panes.map((x) => x.key));
     if (!known.has(p.key)) return;
     const title = noteTitle(tabName(p, titles), repoOf(p), what);
-    const show = () => paced(paceRef.current, p.cwd, noteId(p.key, what, at), Date.now(), { focused: winFocused, quietWhenFocused: settings.notifyQuietWhenFocused === true });
+    const show = () => paced(paceRef.current, p.cwd, noteId(p.key, what, at), Date.now(), { focused: winFocused, quietWhenFocused: suppressFocused(settings) });
     // STAT-041: every note on a pane out of view (or in an unfocused window) is a desktop
     // notification unless 'Agent Task Complete' is off (a stop goes by 'Agent Stopped', STAT-023);
     // the unread mark and the toast keep T-024's one-mark-until-viewed rule.
