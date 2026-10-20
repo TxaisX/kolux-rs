@@ -13,6 +13,8 @@ export const INPUT_FIELDS = {
   gpu: "terminalGpu", // the field renderer.ts already reads: false still means off
   middleClick: "terminalMiddleClickPaste",
   osc52: "terminalOsc52",
+  /** VIEW-110: set when the user flips the OSC 52 switch on the current page; an off saved before it is overridden once. */
+  osc52Chosen: "terminalOsc52Chosen",
   hidePointer: "terminalHidePointer",
   focusFollowsMouse: "terminalFocusFollowsMouse",
   fullScreenScroll: "terminalFullScreenScroll",
@@ -68,7 +70,7 @@ export function readInput(s: Record<string, unknown>, platform: Platform): Input
     ligatures: autoOf(s[INPUT_FIELDS.ligatures]) ?? "auto",
     gpu: gpuMode(s),
     middleClick: bool(s[INPUT_FIELDS.middleClick], platform !== "win32"),
-    osc52: s[INPUT_FIELDS.osc52] !== false,
+    osc52: osc52On(s),
     hidePointer: s[INPUT_FIELDS.hidePointer] === true,
     focusFollowsMouse: s[INPUT_FIELDS.focusFollowsMouse] === true,
     fullScreenScroll: Number.isFinite(n) && s[INPUT_FIELDS.fullScreenScroll] !== "" && s[INPUT_FIELDS.fullScreenScroll] !== null ? Math.min(FULL_SCREEN_SCROLL.max, Math.max(FULL_SCREEN_SCROLL.min, Math.round(n))) : FULL_SCREEN_SCROLL.start,
@@ -77,6 +79,13 @@ export function readInput(s: Record<string, unknown>, platform: Platform): Input
     powershell: s[INPUT_FIELDS.powershell] === "7" || s[INPUT_FIELDS.powershell] === "5" ? s[INPUT_FIELDS.powershell] : "auto",
   } as InputPrefs;
 }
+
+/** VIEW-110: programs may copy to the clipboard by default. An off saved by an older build (no "chosen" mark) is
+ *  overridden once: it reads as on until the user turns it off again on the current settings page, which saves the mark. */
+export const osc52On = (s: Record<string, unknown>): boolean => s[INPUT_FIELDS.osc52Chosen] !== true || s[INPUT_FIELDS.osc52] !== false;
+
+/** What the settings page saves when the user flips the OSC 52 switch: the value and the mark that it was chosen. */
+export const osc52Save = (on: boolean): Record<string, unknown> => ({ [INPUT_FIELDS.osc52]: on, [INPUT_FIELDS.osc52Chosen]: true });
 
 /** A mouse button press in a terminal: should it paste the primary selection? Only the middle button, only when switched on. */
 export const pastesOnMiddle = (p: InputPrefs, button: number): boolean => button === 1 && p.middleClick;

@@ -1,0 +1,13 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index f6f64502..62ebcf31 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -565,6 +565,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     const onKey = (e: KeyboardEvent) => {
+       // SET-009: while Settings > Shortcuts records a chord, the press is the recorder's alone.
+       if (recording.on) return;
++      // VIEW-109 (T-253): while an input method is composing every key is its own, shortcut chords included.
++      if (e.isComposing || e.keyCode === 229) return;
+       // TERM-059..061 (T-220): the floating panel's keys come first, on every screen.
+       if (floatingKeys.handle(e)) return;
+       const kind = screen === "terminals" ? panes.find((p) => p.key === focused)?.kind : undefined;
