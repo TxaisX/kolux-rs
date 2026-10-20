@@ -1,0 +1,27 @@
+diff --git a/src/settings/general.test.ts b/src/settings/general.test.ts
+index cd6b9ec2..abd1865f 100644
+--- a/src/settings/general.test.ts
++++ b/src/settings/general.test.ts
+@@ -80,3 +80,9 @@ test("VIEW-011: the page open at quit comes back", () => {
+   expect(openPageAt({ openPage: "skills" })).toBe(null);
+   expect(openPageAt({})).toBe(null);
+ });
++
++test("VIEW-011: Skills open at quit is shown again at start, in either look, and an unknown value is not", () => {
++  expect(startScreen({ uiLook: "new", lastScreen: "skills" })).toBe("skills");
++  expect(startScreen({ uiLook: "classic", lastScreen: "skills" })).toBe("skills");
++  expect(startScreen({ uiLook: "new", lastScreen: "skill" })).toBe("terminals");
++});
+diff --git a/src/settings/general.ts b/src/settings/general.ts
+index a077daec..a539771d 100644
+--- a/src/settings/general.ts
++++ b/src/settings/general.ts
+@@ -42,7 +42,7 @@ export const LAST_SCREEN_FIELD = "lastScreen";
+ export function startScreen(s: Record<string, unknown>): Screen {
+   const classic = readLook(s) === "classic";
+   const last = s[LAST_SCREEN_FIELD];
+-  if (last === "terminals" || last === "artifacts" || last === "inbox") return last;
++  if (last === "terminals" || last === "artifacts" || last === "inbox" || last === "skills") return last; // VIEW-011 (T-189-b): the Skills page left open at quit is shown again
+   if (last === "agents" || last === "board") return classic ? "terminals" : last;
+   return classic ? "terminals" : savedFirst(s);
+ }
