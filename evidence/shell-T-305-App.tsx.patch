@@ -1,0 +1,21 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 81dbaa77..ee0316a7 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -149,6 +149,7 @@ import { recording } from "./keys/record";
+ import { matchEvent } from "./keys/keymap";
+ import { tapHit, windowTaps } from "./keys/tapHit";
+ import { heldByTerminal } from "./keys/terminalPolicy";
++import { installTapReset } from "./shell/inputExtras";
+ import { useAgentEvents, useAgentStatusState } from "./status/useAgentStatus";
+ import { useGone } from "./status/gone";
+ import { workingByDir } from "./status/working";
+@@ -258,6 +259,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     recentTabs.current = [focused, ...recentTabs.current.filter((k) => k !== focused)].slice(0, 50);
+   }, [focused]);
+   // The workspace the grid shows; null is the home group (panes opened in no workspace).
++  // TERM-062: a half-finished double tap is forgotten when the window loses focus.
++  useEffect(() => installTapReset(), []);
+   const [activeDir, setActiveDir] = useState<string | null>(layout?.activeDir ?? null);
+   const [running, setRunning] = useState<Record<number, boolean>>({});
+   // ACCT-064: the managed Codex accounts and the active one, so panes left on another are asked.

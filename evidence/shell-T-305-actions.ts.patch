@@ -1,0 +1,13 @@
+diff --git a/src/keys/actions.ts b/src/keys/actions.ts
+index 82837dc3..d8560d5f 100644
+--- a/src/keys/actions.ts
++++ b/src/keys/actions.ts
+@@ -153,7 +153,7 @@ export const actions: Action[] = [
+   a("fileExplorer.delete", "Delete file", "explorer", ["Delete"], { darwin: ["Delete", "Mod+Backspace"] }),
+   a("settings.search", "Search Settings", "settings", ["Mod+F"]),
+   a("terminal.copySelection", "Copy terminal selection", "terminal", ["Ctrl+Shift+C", "Ctrl+C"], { terminalSafe: true }),
+-  a("terminal.selectAll", "Select all terminal text", "terminal", ["Ctrl+Shift+A"]),
++  a("terminal.selectAll", "Select all terminal text", "terminal", ["Ctrl+Shift+A"], { darwin: ["Mod+A"] }),
+   a("terminal.paste", "Paste into terminal", "terminal", ["Ctrl+V", "Ctrl+Shift+V", "Shift+Insert"], { terminalSafe: true }),
+   a("terminal.search", "Search active pane", "terminal", ["Mod+F"]),
+   a("terminal.clear", "Clear active pane", "terminal", ["Mod+K"], { keywords: ["cls", "clear screen"] }),

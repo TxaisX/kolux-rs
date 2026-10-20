@@ -907,3 +907,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · shell T-267 · spec/03 TERM-011/026/057/102 rules; MDN (developer.mozilla.org: ::-webkit-scrollbar, wheel event), xterm.js docs (xtermjs.org: minimumContrastRatio); this tree's own styles.css, theme.ts, text.ts; no outside code
 > 2026-10-20 · shell T-310 · spec/05 VIEW-039/072/106/113/117/118 rules; MDN (developer.mozilla.org: hover media feature, WebGL debug renderer info), React docs (react.dev); this tree's own WorktreePalette.tsx, LineNotes.tsx, EditorPane.tsx, menu.rs, recovery.rs; no outside code
 > 2026-10-20 · shell T-252 · spec/03 TERM-008/016 rules; this tree's own grid.ts, rearrange.ts, tabSplit.ts, PaneMenu.tsx; no outside code
+> 2026-10-20 · shell T-305 · spec/03 TERM-018/053/062/066/067/072 rules; this tree's own TerminalPane.tsx, floating/panel.ts, keys/actions.ts, newTabEntry.ts; no outside code
