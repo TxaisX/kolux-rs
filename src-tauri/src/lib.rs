@@ -19,6 +19,7 @@ mod diag;
 mod editor_search;
 mod fence;
 mod files;
+pub mod final_save;
 mod fsops;
 mod fonts;
 mod git;
