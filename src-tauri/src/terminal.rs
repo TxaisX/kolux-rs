@@ -2367,19 +2367,15 @@ pub fn terminal_history_append(app: AppHandle, pane_key: u32, data: String) -> R
 /// window is asked to move to the next installed keyboard layout, as the OS language hotkey does
 /// (WM_INPUTLANGCHANGEREQUEST with HKL_NEXT, both from Microsoft Learn). The pane keeps the chord, so nothing of it
 /// reaches the terminal.
-// lib.rs registers it through evidence/core-T-306-lib.rs.patch; until then nothing calls it
-#[allow(dead_code)]
 #[tauri::command]
 pub fn terminal_next_input_source() -> Result<(), String> {
     next_input_source()
 }
 
 /// HKL_NEXT: "the next locale identifier in the list" for a layout change request (Microsoft Learn).
-#[allow(dead_code)]
 pub const HKL_NEXT: isize = 1;
 
 #[cfg(windows)]
-#[allow(dead_code)]
 fn next_input_source() -> Result<(), String> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, PostMessageW, GUITHREADINFO,
@@ -2404,7 +2400,6 @@ fn next_input_source() -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-#[allow(dead_code)]
 fn next_input_source() -> Result<(), String> {
     Err("switching the input source is built for Windows only".into())
 }

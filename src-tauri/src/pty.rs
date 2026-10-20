@@ -891,7 +891,7 @@ mod tests {
         let sep = if cfg!(windows) { ";" } else { ":" };
         let machine = ["C:\\Windows\\system32", "C:\\Windows", ""].join(sep);
         let user = ["C:\\Users\\me\\AppData\\Local\\Programs\\newtool", "C:\\Users\\me\\.cargo\\bin"].join(sep);
-        let inherited: std::ffi::OsString = ["G:\\dev\\kolux\\node_modules\\.bin", "C:\\Windows\\system32"].join(sep).into();
+        let inherited: std::ffi::OsString = ["D:\\devtool\\node_modules\\.bin", "C:\\Windows\\system32"].join(sep).into();
         let got = terminal_path(Some(&machine), Some(&user), &last, Some(inherited));
         let dirs: Vec<PathBuf> = std::env::split_paths(&got).collect();
         assert_eq!(dirs, [PathBuf::from("C:\\Windows\\system32"), "C:\\Windows".into(), "C:\\Users\\me\\AppData\\Local\\Programs\\newtool".into(), "C:\\Users\\me\\.cargo\\bin".into()]);
