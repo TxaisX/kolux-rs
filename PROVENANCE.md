@@ -1023,3 +1023,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · hooks T-167-b batch 8 (sleep record) · spec/04 STAT-030/STAT-037 as given in PLAN; this tree's own agent_hooks/saved.rs and projects.rs workspace_sleep; no outside source
 > 2026-10-20 · editor T-235-b piece 3 (diagrams and maths in the rich view) · spec EDIT-029/EDIT-030 as given in PLAN; this tree's own diagrams.ts, richCode.ts, Lexical's public API docs; no outside source
 > 2026-10-20 · editor T-234-b pieces 6-7 (link bubble, source-view note links, data-picture check) · spec EDIT-009/EDIT-014 as given in PLAN; this tree's own linkClicks.ts, noteLinks.ts, CodeMirror and Lexical public API docs; no outside source
+> 2026-10-20 · editor T-316-b piece 2 (Jupyter notebook cells view) · spec EDIT-024 as given in PLAN; nbformat public documentation (JSON layout); this tree's own csv view; no outside source

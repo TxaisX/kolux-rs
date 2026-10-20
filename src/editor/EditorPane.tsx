@@ -23,6 +23,8 @@ import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { ChevronDown, Close, List } from "../chrome/icons";
 import FileIcon from "./FileIcon";
 import CsvTable from "./CsvTable";
+import NotebookView from "./NotebookView";
+import { isNotebook } from "./notebook";
 import { isTable } from "./csv";
 import { useSettings } from "../settings/useSettings";
 import { prefPatch, readEditorPrefs } from "../settings/editorPrefs";
@@ -213,7 +215,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   const wantFocus = useRef(focused);
   wantFocus.current = focused;
   const md = isMarkdown(path);
-  const grid = isTable(path); // EDIT-023: a CSV or TSV file opens as a table, with Source beside it
+  const grid = isTable(path) || isNotebook(path); // EDIT-023: a CSV or TSV file opens as a table, a notebook (EDIT-024) as cells, with Source beside it
   const [table, setTable] = useState(grid);
   const [changesOn, setChangesOn] = useState(false); // EDIT-056: the Changes view (last commit beside the working file)
   const tableOn = grid && table;
@@ -751,7 +753,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
           <span className="view-switch" role="group" aria-label="View">
             {views.map((v) => (
               <button key={v} aria-pressed={current === v} onClick={() => pick(v)} title={offer.why?.[v] ?? `${VIEW_LABEL[v]} view`}>
-                {VIEW_LABEL[v]}
+                {v === "rendered" && isNotebook(path) ? "Cells" : VIEW_LABEL[v]}
               </button>
             ))}
           </span>
@@ -849,7 +851,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
       {comparing && <CompareView path={path} text={textOf(path) ?? ""} read={readDisk} onReload={reload} onKeep={keepMine} onClose={() => setComparing(false)} />}
       {changesOn && <DiffPane embedded against="head" id={id} path={path} root={root} staged={false} hidden={hidden || comparing} focused={focused} onFocus={onFocus} onToast={onToast} />}
       <div ref={host} className="pane-body" hidden={shown !== "source" || comparing} />
-      {grid && <CsvTable path={path} loaded={ready} hidden={shown !== "table" || comparing} />}
+      {grid && (isNotebook(path) ? <NotebookView path={path} loaded={ready} hidden={shown !== "table" || comparing} readOnly={readOnly} onText={(t) => { const cm = view.current; if (cm) cm.dispatch({ changes: { from: 0, to: cm.state.doc.length, insert: t } }); }} /> : <CsvTable path={path} loaded={ready} hidden={shown !== "table" || comparing} />)}
       {!hidden && shown === "source" && hint && copyKey && copiedSel !== hint.sel && !flash && (
         <div className="copy-hint" style={{ left: hint.x + 8, top: hint.y + 2 }}>
           {copyKey} copies with path and lines

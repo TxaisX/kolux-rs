@@ -21,3 +21,33 @@ LIVE PROOF PENDING (batched)
    away at once and the text uses the full width. A short file shows a short picture.
 STILL OPEN IN T-316-b: EDIT-018 export a note to PDF (needs a PDF writer; the app cannot open a print dialog) and
   EDIT-024 Jupyter notebooks (kernel launch, skipped by the brief).
+
+T-316-b piece 2 (2026-10-20, lane/editor): Jupyter notebooks (EDIT-024), without the Python run.
+
+BUILT
+- src/editor/notebook.ts (pure model): parseNotebook (says why for an empty, non-JSON, cell-less or damaged file),
+  serialize (Jupyter layout: one-space indent, final newline), sourceOf/withSource (a cell stored as lines stays lines,
+  as one string stays one string), insertCell/removeCell/moveCell, setKind (code, markdown, raw: leaving code drops outputs
+  and run count, arriving gives empty ones; text, id, metadata stay), limited (a long cell shows its first 200 lines or
+  20000 characters), outputText (streams, text results, errors as plain text, pictures as a note; never HTML). Every
+  field the view does not show (metadata, kernel, ids, outputs, unknown fields) stays in the object, so an untouched
+  notebook serialises byte for byte and an edited one keeps all else.
+- src/editor/NotebookView.tsx: the cells view. A .ipynb tab opens in Cells with Source beside it (viewSwitch already
+  offered that pair); each cell is a text box with a type menu and Up, Down, Remove; "+ Code / + Markdown / + Raw" between
+  cells; saved outputs under code cells as text; a long cell shows its start and "Show all N lines". Typing is sent back
+  300 ms after the last key or on leaving the box; every change goes into the tab's own text, so Save, undo, the source
+  view and the dirty mark all work. Read-only tabs show no controls.
+- EditorPane.tsx: grid covers notebooks; the switch button reads Cells for a notebook.
+- Trust: there is no run button, so a notebook cannot run by being opened or edited; the trust prompt and run ride on the
+  Python launch and stay with the interpreter work (skipped by the brief).
+TESTS: src/editor/notebook.test.ts 13 tests (read errors, exact multi-line source, byte-for-byte round trip, unknown
+  fields kept, string vs line source, ids for 4.5 only, clamped insert, move/remove, kind switch, preview limits, output text).
+READINGS: vitest run src/editor: 63 files, 418 tests passed (g3-vit.log); tsc --noEmit exit 0 (g3-tsc.log);
+  vite build exit 0 (g3-build.log). No Rust, no shared file, no patch.
+LIVE PROOF PENDING (batched)
+1. Open a .ipynb with outputs: it opens in Cells, text boxes per cell, outputs under code cells; Source shows the JSON.
+2. Edit a cell, wait a moment: the tab is dirty; Ctrl+S; open the file in Source: only that cell's source lines changed.
+3. Add a cell between two, move it Down, switch it to markdown, remove it: each is one change in Source; Ctrl+Z undoes.
+4. A notebook with a 5000-line cell: opens at once, shows the start and "Show all 5000 lines".
+STILL OPEN IN T-316-b: EDIT-018 export a note to PDF (waits on a PDF-writing library on main; the app cannot open a print
+  dialog) and the EDIT-024 Python run with its trust prompt (needs an interpreter launch).
