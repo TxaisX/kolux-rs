@@ -1,0 +1,67 @@
+# T-248-c evidence: APP-008 tray icon, reconciled with lane/watch (lane/tray, 2026-10-19, from main d78e1b89)
+
+## What this pass found
+
+The brief for this pass described APP-008 (real tray icon, Cargo feature, lib.rs setup, minimise and
+restore) as unbuilt. It is built: this lane shipped it as T-248-d (renamed from T-248-b by FIX-1 because
+main's T-248-b is the chrome lane's card) and main's T-248-c line now says "the tray icon card is
+T-248-d, built on lane/tray". Evidence for it: evidence/T-248-d.txt, evidence/tray-FIX-1.txt,
+evidence/tray-FIX-2.txt. Nothing of T-248-c's other items is tray work (APP-010 sidebar footer is the
+projects lane's, APP-013 rides on T-219, the link rules are the chrome lane's menu/navigation), so T-248-c
+itself stays unticked and no APP-008 work is double-built.
+
+What this pass adds is the join with lane/watch, which built a second, smaller tray model for its T-125
+(Dot::window_minimised, icon(dev, dot), close_to_tray(saved), tray tests, plus badge.rs).
+
+## Tray feature name (public source)
+
+Tauri 2.12.1 Cargo.toml (local cargo registry copy of the published crate): `tray-icon = ["dep:tray-icon"]`.
+The Cargo feature to switch on is therefore `tauri/tray-icon`; this crate's `tray` feature forwards to it
+(evidence/tray-T-248-d-Cargo.toml.patch: `tray = ["tauri/tray-icon"]`, `default = ["tray"]`).
+context7 was out of quota this pass, so the crate's own manifest was the source. Cargo.lock does not change.
+
+## Patches (ordered list in evidence/tray-FIX-1.txt, plus these two)
+
+- evidence/tray-T-248-c-tray.rs.patch: unified diff that turns lane/watch's src-tauri/src/tray.rs
+  (git show lane/watch:src-tauri/src/tray.rs, 124 lines) into this lane's tray.rs. This lane's file already
+  contains watch's three additions (Dot::window_minimised, icon, close_to_tray) and its two tests
+  (stat047_*), so applying the patch on watch's version loses nothing of watch's. Checked: applied to a
+  scratch copy of watch's file, `cmp` against this lane's tray.rs says identical (G:/Temp/tray-v3/chk).
+  Use it, or take lane/tray's tray.rs whole, after lane/watch is merged.
+- evidence/tray-T-248-c-lib.rs.patch: must follow tray-T-248-d-lib.rs.patch. In the window-event
+  hook, `Resized` on "main" while minimised calls tray::window_minimised (the dot learns the window is out
+  of sight); the restore already reaches tray::window_shown through the `Focused(true)` hunk of the
+  T-248-d patch. The dot also reads the window live on every ping, so this hook is belt and braces.
+
+## Overlaps with lane/watch the resolver must settle (not fixed here: other lane's files)
+
+1. Both lanes ticked T-125 and both register a command named badge_set: watch as `badge::badge_set`
+   (src-tauri/src/badge.rs, Windows overlay disc), this lane as `notifications::badge_set` (overlay painted
+   by tray.rs paint_badge). Two entries named badge_set in one generate_handler! will not compile. Keep one
+   badge path (this lane's or watch's), drop the other's lib.rs line, and keep the page patches
+   (evidence/watch-T-125-*.patch and evidence/tray-T-125-*.patch both edit App.tsx and useAgentStatus.ts).
+2. tray.rs: both lanes changed it from main c24dfa8a; merging lane/tray after lane/watch conflicts in the
+   Dot block only. Resolution: this lane's file (it contains watch's additions).
+
+## Tests (src-tauri/src/tray.rs)
+
+- stat047_a_minimised_window_takes_the_dot_and_restoring_clears_it
+- stat047_dev_copies_keep_their_marker_on_the_attention_icon_and_close_to_tray_is_off_by_default
+- plus the 16 tray tests already there.
+
+## Gates (logs under G:/Temp/tray-v3-logs/, read back)
+
+Committed tree (no Cargo/lib patches):
+  cargo build -> exit 0 · clippy --all-targets -D warnings -> exit 0 ("Finished dev profile ... 33.57s")
+  cargo test --lib tray -> test result: ok. 18 passed; 0 failed
+With tray-T-248-d-Cargo.toml.patch + tray-T-248-d-lib.rs.patch + tray-T-248-c-lib.rs.patch applied (then reverted):
+  cargo build -> exit 0 · clippy -> exit 0 ("Finished dev profile ... 25.96s") · cargo test --lib tray -> 18 passed
+  git status after the revert: only src-tauri/src/tray.rs modified; Cargo.toml, lib.rs, Cargo.lock untouched.
+No TypeScript changed: tsc and vitest skipped.
+
+## LIVE PROOF PENDING (batched)
+
+With the three Cargo/lib patches applied, dev app on the lane identifier and scratch homes:
+1. Minimise the window, then run the page's notify command. Expected: the tray icon gains the amber dot.
+2. Restore the window from the taskbar (not the tray). Expected: the dot clears at once.
+3. Minimise, then left-click the tray icon. Expected: the window comes back focused, dot clear.

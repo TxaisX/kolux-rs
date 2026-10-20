@@ -30,8 +30,81 @@ fn blocked() -> bool {
 }
 
 /// STAT-043: one desktop notification. `sound` true lets the system's default sound play with it;
-/// false keeps the toast silent (Kolux plays its own tone or file, or the volume is 0).
+/// false keeps the toast silent (Kolux plays its own tone or file, or the volume is 0). An agent's
+/// notification also pings the tray (APP-008 / STAT-047): the dot lights while the window is out of
+/// sight, whether or not the toast itself gets through.
 pub fn show(app: &tauri::AppHandle, title: String, body: String, sound: bool) -> Result<(), String> {
+    crate::tray::ping(app, crate::tray::Ping::AgentFinished);
+    show_plain(app, title, body, sound)
+}
+
+/// STAT-044: how many event ids (with the pane each was raised for) are remembered; the oldest go
+/// first, so a burst never grows the memory.
+pub const TARGETS_MAX: usize = 64;
+
+/// The events already shown, newest last, each with the pane that raised it.
+#[derive(Default)]
+pub struct Targets(std::collections::VecDeque<(String, Option<String>)>);
+
+impl Targets {
+    /// Remembers the event; false when this id was already shown (the same event never appears twice).
+    pub fn record(&mut self, id: &str, pane: Option<&str>) -> bool {
+        if self.0.iter().any(|(i, _)| i == id) {
+            return false;
+        }
+        self.0.push_back((id.to_string(), pane.map(str::to_string)));
+        while self.0.len() > TARGETS_MAX {
+            self.0.pop_front();
+        }
+        true
+    }
+    /// The pane a shown notification was raised for.
+    pub fn pane(&self, id: &str) -> Option<String> {
+        self.0.iter().find(|(i, _)| i == id).and_then(|(_, p)| p.clone())
+    }
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+fn targets() -> &'static std::sync::Mutex<Targets> {
+    static T: std::sync::OnceLock<std::sync::Mutex<Targets>> = std::sync::OnceLock::new();
+    T.get_or_init(|| std::sync::Mutex::new(Targets::default()))
+}
+
+/// STAT-044 / STAT-047: one agent event's notification. `id` is the event's fixed identity (a repeat
+/// is dropped here as well as in the page), `pane` the pane that raised it (what a click focuses),
+/// `kind` "bell" for a terminal bell. The tray dot lights before the toast, so a blocked toast still
+/// marks the hidden window.
+#[tauri::command]
+pub fn notify_event(app: tauri::AppHandle, title: String, body: String, sound: Option<bool>, id: String, pane: Option<String>, kind: Option<String>) -> Result<Value, String> {
+    let fresh = targets().lock().map(|mut t| t.record(&id, pane.as_deref())).unwrap_or(true);
+    if !fresh {
+        return Ok(json!({ "shown": false, "duplicate": true }));
+    }
+    let ping = if kind.as_deref() == Some("bell") { crate::tray::Ping::Bell } else { crate::tray::Ping::AgentFinished };
+    crate::tray::ping(&app, ping);
+    show_plain(&app, title, body, sound.unwrap_or(true))?;
+    Ok(json!({ "shown": true, "duplicate": false }))
+}
+
+/// STAT-044: a notification was clicked: the window comes forward and the page is told which pane
+/// to focus (`notification-click`, payload `{ pane }`). The answer is that pane, or nothing when the
+/// event is unknown. The system's toast activation is what calls this once a backend reports it
+/// (T-125-b); the model and the page side are in place.
+#[tauri::command]
+pub fn notification_clicked(app: tauri::AppHandle, id: String) -> Result<Option<String>, String> {
+    let pane = targets().lock().ok().and_then(|t| t.pane(&id));
+    crate::tray::open_window(&app);
+    if let Some(p) = &pane {
+        let _ = tauri::Emitter::emit(&app, "notification-click", json!({ "pane": p }));
+    }
+    Ok(pane)
+}
+
+/// The toast alone, for the Notifications page's test button: no tray dot.
+pub(crate) fn show_plain(app: &tauri::AppHandle, title: String, body: String, sound: bool) -> Result<(), String> {
     use tauri_plugin_notification::NotificationExt;
     let mut n = app.notification().builder().title(title).body(body);
     if sound {
@@ -95,7 +168,7 @@ pub fn notification_test(app: tauri::AppHandle, sound: bool) -> Result<Value, St
     if blocked() {
         return Ok(json!({ "shown": false, "blocked": true }));
     }
-    show(&app, "Kolux".into(), "This is how a notification from Kolux looks and sounds.".into(), sound)?;
+    show_plain(&app, "Kolux".into(), "This is how a notification from Kolux looks and sounds.".into(), sound)?;
     Ok(json!({ "shown": true, "blocked": false }))
 }
 
@@ -212,6 +285,24 @@ mod tests {
         assert_eq!(welcome_step(true, Some("1")), Welcome::Answered);
         assert_eq!(welcome_step(false, None), Welcome::Unsupported);
         assert_eq!(welcome_step(false, Some("1")), Welcome::Unsupported);
+    }
+
+    #[test]
+    fn stat044_each_event_id_is_remembered_once_with_its_pane_and_the_memory_is_bounded() {
+        use super::{Targets, TARGETS_MAX};
+        let mut t = Targets::default();
+        assert!(t.record("a:1", Some("p1")));
+        assert!(!t.record("a:1", Some("p1")), "the same event never shows twice");
+        assert_eq!(t.pane("a:1"), Some("p1".into()));
+        assert_eq!(t.pane("nope"), None);
+        for i in 0..(TARGETS_MAX * 2) {
+            assert!(t.record(&format!("b:{i}"), Some("px")));
+        }
+        assert!(t.len() <= TARGETS_MAX, "a burst never grows the memory past its cap");
+        assert_eq!(t.pane("a:1"), None, "the oldest are dropped first");
+        assert_eq!(t.pane(&format!("b:{}", TARGETS_MAX * 2 - 1)), Some("px".into()), "the newest are kept");
+        assert!(t.record("a:1", None), "an id dropped from memory may show again");
+        assert_eq!(t.pane("a:1"), None, "an event without a pane has nothing to focus");
     }
 
     #[test]

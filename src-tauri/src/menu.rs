@@ -432,8 +432,12 @@ fn on_click<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
             }
         }
         Route::FullScreen => drop(view.set_fullscreen(!view.is_fullscreen().unwrap_or(false))),
-        // The same path as the window's close button, so quitting stops every pane (ACCT-051).
-        Route::Exit => drop(view.close()),
+        // The same path as the window's close button, so quitting stops every pane (ACCT-051); the quit flag
+        // keeps close-to-tray (APP-007) from hiding the window instead, so the unsaved-changes question is asked.
+        Route::Exit => {
+            crate::tray::begin_quit();
+            drop(view.close())
+        }
         Route::Page(id) => drop(view.emit_to(view.label(), EVENT, serde_json::json!({ "id": id }))),
     }
 }

@@ -319,6 +319,10 @@ pub fn run() {
             app.manage(Terminals::default());
             // T-184-b (TERM-105): panes run in the background terminal service and outlive the window.
             app.state::<Terminals>().use_service(app.handle());
+            // APP-008 / T-248-d: the tray icon with Open Kolux, Quit and the dot. Optional: a failure is logged and the app goes on.
+            if let Err(e) = tray::install(app.handle()) {
+                diag::write(&dir, &format!("tray: the icon could not be installed: {e}"));
+            }
             notifications::first_run_welcome(app.handle()); // VIEW-111: a Mac's one welcome notification
             app.manage(resources::Sampler::default());
             app.manage(resume::Registry::default());
@@ -474,6 +478,18 @@ pub fn run() {
                     }
                 }
             }
+            // APP-008 / T-248-d: the window is back on screen, so the tray's attention dot clears.
+            if let tauri::WindowEvent::Focused(true) = event {
+                if window.label() == "main" {
+                    tray::window_shown(window.app_handle());
+                }
+            }
+            // STAT-047 / T-248-c: a minimised window is out of sight, so the tray's dot may light.
+            if let tauri::WindowEvent::Resized(_) = event {
+                if window.label() == "main" && window.is_minimized().unwrap_or(false) {
+                    tray::window_minimised(window.app_handle());
+                }
+            }
             // ACCT-055: files dropped in from outside may be copied into the Explorer, nothing else.
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
                 window.state::<fence::Fence>().dropped(paths);
@@ -488,10 +504,14 @@ pub fn run() {
             badge::badge_set,
             notifications::notification_sound_load,
             notifications::open_notification_settings,
+            notifications::notify_event, // STAT-044
+            notifications::notification_clicked, // STAT-044
             hooks::agent_hooks::agent_hooks_sync,
             hooks::agent_hooks::agent_hooks_file,
             hooks::agent_hooks::saved::agent_status_saved,
             hooks::agent_hooks::saved::agent_resumable,
+            tray::tray_close_requested, // APP-007 (tray FIX-1): the page asks before the main window closes
+            tray::tray_ping, // STAT-047: the tray dot lights before any toast switch is consulted
             protected::protected_rules,
             protected_custom::protected_rule_check,
             protected_custom::protected_attempts,

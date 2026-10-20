@@ -27,6 +27,9 @@ required-features = ["release-cli"]
 
 [features]
 release-cli = []
+# APP-008 / T-248-d: the real tray icon (Open Kolux, Quit, the attention dot); on by default.
+tray = ["tauri/tray-icon"]
+default = ["tray"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

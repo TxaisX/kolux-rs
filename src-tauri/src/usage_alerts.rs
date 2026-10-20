@@ -24,6 +24,8 @@ pub fn usage_alerts_fired(store: tauri::State<'_, Mutex<Store>>) -> Result<serde
 #[tauri::command]
 pub fn usage_alert_send(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, fired: serde_json::Value, alerts: Vec<Alert>) -> Result<(), String> {
     store.lock().map_err(|e| e.to_string())?.set(KEY, &fired.to_string()).map_err(|e| e.to_string())?;
+    // USAGE-009: while the window is hidden the tray dot lights, even when the toast itself is held back.
+    crate::tray::ping(&app, crate::tray::Ping::UsageAlert);
     for a in alerts {
         app.notification().builder().title(a.title).body(a.body).show().map_err(|e| e.to_string())?;
     }

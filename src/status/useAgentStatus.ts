@@ -167,7 +167,15 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
     // STAT-041: every note on a pane out of view (or in an unfocused window) is a desktop
     // notification unless 'Agent Task Complete' is off (a stop goes by 'Agent Stopped', STAT-023);
     // the unread mark and the toast keep T-024's one-mark-until-viewed rule.
-    if (!(inView(p.key) && winFocused) && settings[gate] !== false && show()) void raiseNotification(settings, title, body).catch(() => {});
+    // STAT-044 (lane/tray): the event's identity and pane go to the backend (notify_event), so a click
+    // can focus this pane; main's pacer above stays the one that merges repeats.
+    const kind = gate === "notifyOnStopped" ? ("stop" as const) : gate === "notifyBell" ? ("bell" as const) : ("finish" as const);
+    const event = { id: noteId(p.key, what, at), worktree: p.cwd, pane: String(p.key), kind };
+    // STAT-047: the tray dot lights (while the window is hidden) before any toast switch is consulted.
+    void invoke("tray_ping", { kind: kind === "bell" ? "bell" : "finished" }).catch(() => {});
+    // STAT-044 "Stay quiet about the worktree you are looking at": only the worktree in view is held back.
+    const focusedWorktree = panes.find((x) => inView(x.key))?.cwd ?? null;
+    if (!(inView(p.key) && winFocused) && settings[gate] !== false && show()) void raiseNotification(settings, title, body, event, focusedWorktree).catch(() => {});
     if (!marksUnread(p.key, known, unreadPanes, inView(p.key), winFocused)) return;
     setUnreadPanes((u) => new Set([...u, p.key]));
     if (p.cwd !== null) markDir(p.cwd, true);
@@ -180,7 +188,8 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
   const quiet = (p: Pane, minutes: number) => {
     const title = noteTitle(tabName(p, titles), repoOf(p), `has gone quiet for ${minutes} min`);
     setToast(title);
-    void raiseNotification(settings, title, "No terminal output since then. It may be stuck.").catch(() => {});
+    const focusedWorktree = panes.find((x) => inView(x.key))?.cwd ?? null;
+    void raiseNotification(settings, title, "No terminal output since then. It may be stuck.", { id: noteId(p.key, `quiet ${minutes}`, Date.now()), worktree: p.cwd, pane: String(p.key), kind: "quiet" }, focusedWorktree).catch(() => {});
   };
   const quietRef = useRef(quiet);
   quietRef.current = quiet;

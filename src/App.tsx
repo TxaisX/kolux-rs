@@ -1502,12 +1502,21 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // flushed before the window closes, so a change made right before quitting is back on relaunch.
   const layoutSaver = useRef(layoutWriter((l: SavedLayout) => void saveLayout(l, (v) => saveChanged({}, { [LAYOUT_FIELD]: v })).catch((err) => setNotice(String(err))))).current;
   useEffect(() => {
-    const off = getCurrentWindow().onCloseRequested((e) => {
+    const off = getCurrentWindow().onCloseRequested(async (e) => {
       // T-182 (APP-006): the page answers at once; a page that cannot is closed for by the Rust side.
       void invoke("close_alive").catch(() => {});
       screenWriter.flush();
       layoutSaver.flush();
       if (quitting.current) return;
+      // APP-007: with "Closing the window keeps Kolux in the tray" on, the window hides instead (tray.rs
+      // decides: Windows, option on, tray icon present, no quit under way); nothing is lost, so the
+      // unsaved-changes question is skipped. Quit from the tray and File > Exit report `quitting` and
+      // go on to the question below, exactly as the close button does.
+      const tray = await invoke<{ hid: boolean; quitting: boolean }>("tray_close_requested").catch(() => ({ hid: false, quitting: false }));
+      if (tray.hid) {
+        e.preventDefault();
+        return;
+      }
       const l = losable(unsaved.current, busyAgents.current);
       if (!l) return;
       e.preventDefault();
@@ -2404,6 +2413,16 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   useEffect(() => report.current());
   const { noticed, panesRef } = useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, stamp, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir });
   useGone({ panes, running, hook, setHook, setTurn, setCrew }); // STAT-031 / T-275: gone agents stop reporting
+  // STAT-044: a clicked notification focuses the pane that raised it (notification_clicked emits the pane).
+  useEffect(() => {
+    const off = listen<{ pane: string }>("notification-click", (e) => {
+      const key = Number(e.payload.pane);
+      if (panesRef.current.some((x) => x.key === key)) setFocused(key);
+    });
+    return () => {
+      void off.then((f) => f());
+    };
+  }, [panesRef]);
   // The chooser, in a grid cell (SESS-007) or as the New session page (SESS-018).
   const renderChooser = (p: Pane & { seats: Seat[] }, hidden: boolean, focused: boolean, onFocus: () => void, onClose: () => void, sheetOf: { project: string; path: string } | null = null) => (
     <ChooserPane

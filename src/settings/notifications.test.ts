@@ -1,5 +1,12 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { audioTypeAllowed, AUDIO_TYPES, raiseNotification, readNotifications, SOUNDS, TONES, testPlan } from "./notifications";
+import { audioTypeAllowed, AUDIO_TYPES, CLOSE_TO_TRAY_FIELD, raiseNotification, readNotifications, resetPacer, SOUNDS, TONES, testPlan } from "./notifications";
+
+test("APP-007: close to tray is off by default and on only when saved as true", () => {
+  expect(CLOSE_TO_TRAY_FIELD).toBe("closeToTray");
+  expect(readNotifications({}).closeToTray).toBe(false);
+  expect(readNotifications({ closeToTray: "yes" }).closeToTray).toBe(false);
+  expect(readNotifications({ closeToTray: true }).closeToTray).toBe(true);
+});
 
 const calls: Array<[string, Record<string, unknown>]> = [];
 let loadFails = false;
@@ -108,6 +115,20 @@ test("STAT-043: the system sound plays through the toast and Kolux plays nothing
   expect(started).toEqual([]);
 });
 
+test("STAT-044: an event goes through notify_event with its id and pane, and the same event never shows twice", async () => {
+  resetPacer();
+  const ev = { id: "p1:s:done:x:1", worktree: "C:/w/a", pane: "1", kind: "finish" as const };
+  await raiseNotification({ notifySuppressFocused: false }, "t", "b", ev);
+  expect(calls).toEqual([["notify_event", { title: "t", body: "b", sound: true, id: ev.id, pane: "1", kind: "finish" }]]);
+  calls.length = 0;
+  await raiseNotification({ notifySuppressFocused: false }, "t", "b", ev);
+  expect(calls).toEqual([]);
+  // a second finish in the same worktree right after is merged into the first
+  await raiseNotification({ notifySuppressFocused: false }, "t", "b", { ...ev, id: "p2:s:done:y:1", pane: "2" });
+  expect(calls).toEqual([]);
+  resetPacer();
+});
+
 test("STAT-043: a custom file plays and not the system sound; a file that cannot load falls back to the system sound", async () => {
   const settings = { notificationSound: "custom", notificationCustomFile: "C:/x/a.wav", notificationVolume: 80 };
   await raiseNotification(settings, "t", "b");
@@ -119,4 +140,23 @@ test("STAT-043: a custom file plays and not the system sound; a file that cannot
   await raiseNotification(settings, "t", "b");
   expect(calls[1]).toEqual(["notify", { title: "t", body: "b", sound: true }]);
   expect(started).toEqual([]);
+});
+
+test("STAT-044 fix-1: with Kolux focused and 'Stay quiet' on (the default), only the worktree in view is held back", async () => {
+  resetPacer();
+  // these tests run without a DOM: stand in for a focused window
+  const g = globalThis as { document?: { hasFocus: () => boolean } };
+  const had = g.document;
+  g.document = { hasFocus: () => true };
+  const before = calls.length;
+  try {
+    await raiseNotification({}, "t", "b", { id: "q:1", worktree: "C:/w/a", pane: "1", kind: "finish" }, "C:/w/a");
+    expect(calls.slice(before)).toEqual([]);
+    await raiseNotification({}, "t", "b", { id: "q:2", worktree: "C:/w/b", pane: "2", kind: "finish" }, "C:/w/a");
+    expect(calls.slice(before).map(([c]) => c)).toEqual(["notify_event"]);
+  } finally {
+    if (had === undefined) delete g.document;
+    else g.document = had;
+    resetPacer();
+  }
 });
