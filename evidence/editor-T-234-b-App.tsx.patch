@@ -1,0 +1,43 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 3f941ef7..4025041a 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -54,6 +54,7 @@ import { LINE_NOTES_KEY, clearDelivered, lineNotesOf, markSent, noteBlocks, with
+ import LineNotes from "./scm/LineNotes";
+ import ChecksPanel from "./scm/ChecksPanel";
+ import PreviewPane from "./editor/PreviewPane";
++import type { Action } from "./editor/noteLinks";
+ import TemplatePicker from "./editor/TemplatePicker";
+ import ReviewNotes from "./editor/ReviewNotes";
+ import { copiers } from "./editor/EditorPane";
+@@ -916,6 +917,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     setFocused(key);
+   };
+ 
++  // EDIT-014: a Mod+clicked link in a note. Web links open in the Kolux browser (Shift: the system browser),
++  // notes inside the worktree as previews, anything else as an editor tab at its line.
++  const followLink = (a: Action, shift: boolean) => {
++    if (a.kind === "web") return shift ? void invoke("open_external", { url: a.url }).catch((err) => setToast(String(err))) : openInBrowser(a.url);
++    if (a.kind === "file") return a.how === "preview" ? openPreview(a.path) : openFile(a.path, a.line);
++  };
++
+   // EDIT-027: a changed file's diff opens as a tab beside the focused pane; its staged and
+   // unstaged diffs are separate tabs, and one already open in that cell comes to the front.
+   // GIT-037: a click in Source Control opens it as the cell's preview tab, which the next click
+@@ -2509,6 +2517,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                     onDirty={(d) => setDirty((m) => (!!m[p.key] === d ? m : { ...m, [p.key]: d }))}
+                     onToast={setToast}
+                     jump={p.jump}
++                    onLink={followLink}
+                   />
+                 ) : p.kind === "diff" && p.path ? (
+                   <DiffPane
+@@ -2530,7 +2539,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                 ) : p.kind === "changes" && p.cwd ? (
+                   <AllChangesPane key={p.key} id={p.key} root={p.cwd} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} onOpenDiff={(path, staged) => openDiff(path, staged, true)} pinnedBase={projects.find((pr) => pr.id === projectOf(p.cwd))?.base ?? null} />
+                 ) : p.kind === "preview" && p.path ? (
+-                  <PreviewPane key={p.key} id={p.key} path={p.path} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
++                  <PreviewPane key={p.key} id={p.key} path={p.path} worktree={p.cwd} onLink={followLink} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
+                 ) : p.seats ? (
+                   renderChooser(p as Pane & { seats: Seat[] }, !board && p.key !== active, p.key === focused, () => setFocused(p.key), () => closePane(p.key))
+                 ) : (
