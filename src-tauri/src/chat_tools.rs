@@ -47,6 +47,9 @@ pub struct Tool {
     /// CHAT 022: the questions of an ask-the-user call, with their options (present only for those tools).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub questions: Option<Vec<Question>>,
+    /// CHAT-015: the tokens a subagent's run used, as its Task call's result reports them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<u64>,
 }
 
 /// One question an agent put to the user (CHAT 022).

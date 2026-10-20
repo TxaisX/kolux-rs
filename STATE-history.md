@@ -3642,3 +3642,4 @@ you picked with Open a file stays readable after Kolux restarts, so a reopened t
 - 2026-10-20 [shell] T-308 DONE (Opus 5.5): TERM-104 own Unicode 16 width provider (unicodeWidth.ts + generated data from unicode.org), emoji sequences join, TerminalPane patch; live proof pending
 - 2026-10-20 [shell] T-280-b DONE (Opus 5.5): autosave and custom sound restart proofs stand; unnamed older right-sidebar key rule dropped (coordinator default); live proof pending
 - 2026-10-20 [shell] T-267 DONE (Opus 5.5): ligatures with the approved addon (literal import, GPU glyph cache rebuilt), TerminalPane patch after T-308's; live proof pending
+- 2026-10-20 [chat] T-326-b (Sonnet 5.5): subagent roster rows show the token count a finished Task call reports (Tool.tokens from the result line); rail 268/240 pinned by a test; subagent idle state has no source yet (after-list); live proof pending (batched)
