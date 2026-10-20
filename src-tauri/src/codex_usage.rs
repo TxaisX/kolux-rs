@@ -331,6 +331,8 @@ pub fn read(account_home: Option<&Path>) -> CodexUsage {
 /// T-548-b: the plan figures of ONE managed account's own Codex home, never falling back to
 /// another sign-in (the fall-back in `read` would show the system default's figures under the
 /// account's name). `program` is `None` when Codex is not installed.
+// Live once evidence/accounts-T-548-b-lib.rs.patch registers codex_usage_of (shared lib.rs).
+#[allow(dead_code)]
 pub fn read_account(home: &Path, program: Option<&Path>) -> CodexUsage {
     match sign_in_kind(&home.join("auth.json")) {
         None => CodexUsage::state("signed-out", None),
@@ -377,6 +379,8 @@ pub async fn codex_usage(app: tauri::AppHandle) -> Result<CodexUsage, String> {
 /// T-548-b: the plan figures of one account, for a pane that runs on an account other than the
 /// active one. `account` is a managed account's id; `None` is the system default sign-in
 /// (`CODEX_HOME`, then `~/.codex`). An id that is no longer listed reads as signed out.
+// Live once evidence/accounts-T-548-b-lib.rs.patch registers codex_usage_of (shared lib.rs).
+#[allow(dead_code)]
 #[tauri::command]
 pub async fn codex_usage_of(app: tauri::AppHandle, account: Option<String>) -> Result<CodexUsage, String> {
     use tauri::Manager;

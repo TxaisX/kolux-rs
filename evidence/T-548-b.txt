@@ -39,3 +39,14 @@ LIVE PROOF PENDING (batched)
 2. Switch the active account to B: the pane still shows B's; a pane on A now shows A's (after one refresh).
 3. Close the last pane on B: B's figures disappear from the Tower row and no more reads for B start.
 4. A pane on an account with an API key shows the api-key state, never another account's numbers.
+
+OPUS RE-CHECK 2026-10-20 (lane/accounts)
+- Codex half: complete as built by 28c0be75. Lane gate fix: bare lane clippy failed (-D warnings) on read_account and
+  codex_usage_of being unused until evidence/accounts-T-548-b-lib.rs.patch registers the command; both now carry
+  #[allow(dead_code)] with a note. Logs G:/Temp/accounts-v3-logs/548b-opus-*.log: clippy 0, build 0,
+  cargo test codex_ 63 passed.
+- BLOCKER (Claude half): per-account Claude figures need either
+  (a) T-547's per-account usage read: a network transport that sends stored sign-ins, a Txais blocker, NOT built; or
+  (b) per-account status-line reports: hooks.rs drops a report from another config folder (USAGE-021, hooks lane,
+      hard-stop file) and terminal_spawn answers an account for Codex panes only (terminal.rs, core lane).
+  Neither is in the accounts lane, so the card stays open.
