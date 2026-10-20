@@ -8,6 +8,7 @@ mod chat;
 mod chat_tools;
 mod clipboard;
 mod browser;
+mod cleanup;
 mod cap;
 pub mod cli;
 mod cli_accounts;
@@ -439,8 +440,10 @@ pub fn run() {
             setup::repo_setup_wait_set,
             projects::handoff_note_prepare,
             projects::workspace_remove,
+            cleanup::cleanup_remove,
             projects::workspace_remove_check,
             projects::project_set,
+            projects::project_display_name_set,
             projects::workspaces_place_get,
             projects::workspaces_place_set,
             projects::git_first_commit_preview,

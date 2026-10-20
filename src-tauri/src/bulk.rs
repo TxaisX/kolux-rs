@@ -413,7 +413,7 @@ mod tests {
 
     #[test]
     fn forgetting_is_refused_for_a_project_root_and_for_a_workspace_whose_folder_is_still_there() {
-        let project = Project { id: "p".into(), name: "app".into(), path: "C:/repo".into(), workspaces_dir: None, base: None };
+        let project = Project { id: "p".into(), name: "app".into(), path: "C:/repo".into(), workspaces_dir: None, base: None, display_name: None };
         assert!(forget_check(Some(&project), "c:\\repo", false).unwrap_err().contains("root"));
         assert!(forget_check(Some(&project), "C:/ws/a", true).unwrap_err().contains("still there"));
         assert!(forget_check(Some(&project), "C:/ws/a", false).is_ok());

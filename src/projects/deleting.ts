@@ -2,7 +2,7 @@
 // whether the question can be skipped.
 
 /** What `workspace_remove_check` returns. */
-export type RemoveCheck = { changes: string[]; locked: string | null; nested: string[]; stamp: string };
+export type RemoveCheck = { changes: string[]; locked: string | null; nested: string[]; stamp: string; missing?: boolean };
 
 /** Settings field: false skips the question for one clean workspace. */
 export const CONFIRM_DELETE_FIELD = "confirmWorkspaceDelete";

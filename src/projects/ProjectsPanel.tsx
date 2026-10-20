@@ -24,7 +24,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, HIDE_AUTOMATION_SETTING, PIN_COPIES_SETTING, PIN_SETTING, SHOW_SLEEPING_SETTING, SLEEP_SETTING, asleepAfter, renameTo, showSleepingFrom, SORT_SETTING, jumpUnhides, withoutAutomationMade, groupFromSetting, groupRows, pathKey, pinnedSet, recentOrder, smartOrder, sortFromSetting, type AgentState, type PrState, type RowInfo } from "./rows";
 import { linkedPrs, pushBadge, SCM_LINKED_PR_KEY, type Pushed } from "../scm/model";
 import { mergePoll, nextDelay, pollItems, STALE_MS, type PrPoll } from "../scm/poll";
-import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
+import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, projectLabel, splitGitSaid, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
 import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
 import AddProject from "./AddProject";
 import CardLine from "../look/CardLine";
@@ -139,6 +139,22 @@ type Props = {
 const NOT_BUILT = false;
 const RECENT_KEY = "kolux.composer.recentProjects";
 const ADD_ITEM = "+add";
+// PROJ-031: Kolux's sentence first; Git's own output stays one click away.
+function MessageNote({ kind, text }: { kind: string; text: string }) {
+  const { summary, git } = splitGitSaid(text);
+  return (
+    <div className={`note ${kind}`}>
+      {summary}
+      {git && (
+        <details>
+          <summary>Git's full output</summary>
+          <pre>{git}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
 const readRecent = (): string[] => {
   try {
     const v = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
@@ -316,7 +332,9 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const fail = (err: unknown) => say("error", String(err));
 
   const scanned = useRef<Record<string, Worktree[]>>({}); // ACCT-056: the last list each scan gave
+  const refreshSeq = useRef(0); // PROJ-068: an older refresh never replaces the result of a newer one
   const refreshWorktrees = useCallback(async (list: Project[]) => {
+    const seq = ++refreshSeq.current;
     const next: Record<string, Worktree[]> = {};
     const unseen: Record<string, Worktree[]> = {};
     for (const p of list) {
@@ -329,6 +347,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         say("warn", `Could not list the workspaces of ${p.name}, so the last known list stays: ${String(err)}`);
       }
     }
+    if (seq !== refreshSeq.current) return;
     scanned.current = next;
     setWorktrees(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => !w.hidden)])));
     setHiddenWts(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => w.hidden)])));
@@ -778,7 +797,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const projectItems = (q: string): PickItem[] => {
     const hints = pathHints(projects);
     const r = rankProjects(projects, q, readRecent());
-    const item = (group: string) => (m: ProjectMatch<Project>): PickItem => ({ key: m.p.id, label: m.p.name, hits: m.hits, group, title: m.p.path, hint: hints[m.p.id] && middle(hints[m.p.id], 28) });
+    const item = (group: string) => (m: ProjectMatch<Project>): PickItem => ({ key: m.p.id, label: projectLabel(m.p), hits: m.hits, group, title: m.p.path, hint: hints[m.p.id] && middle(hints[m.p.id], 28) });
     return [...r.recent.map(item("Recent")), ...r.rest.map(item("Projects")), { key: ADD_ITEM, label: "Add project…" }];
   };
   const pickProject = (id: string) => {
@@ -1336,7 +1355,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
             </span>
           )}
           {pushTag(w)}
-          {groupBy !== "project" && <span className="hint">{p.name}</span>}
+          {groupBy !== "project" && <span className="hint">{projectLabel(p)}</span>}
           {liveCount(w)}
           {!asking && (
             <button
@@ -1495,8 +1514,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         <div key={p.id}>
           <div className="proj" title={p.path}>
             <HeaderBadge colour={headerColourOf(settings, "p", p.id)} />
-            <ProjectIcon value={icons[p.id]} name={p.name} />
-            <span className="name">{p.name}</span>
+            <ProjectIcon value={icons[p.id]} name={projectLabel(p)} />
+            <span className="name" title={p.displayName ? p.name : undefined}>{projectLabel(p)}</span>
             <button className={`ib${settingsFor === p.id ? " on" : ""}`} title="Project settings: its workspaces folder and base ref" aria-pressed={settingsFor === p.id} onClick={() => (settingsFor === p.id ? setSettingsFor(null) : openSettings(p))}>
               <Gear />
             </button>
@@ -1849,7 +1868,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
               onRetry={() => void askCard()}
             />
           )}
-          {message && <div className={`note ${message.kind}`}>{message.text}</div>}
+          {message && <MessageNote kind={message.kind} text={message.text} />}
         </div>
 
         <div className="sb-divider" />

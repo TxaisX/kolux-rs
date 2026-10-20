@@ -2,7 +2,12 @@ import { locale } from "../language";
 // The shapes the Rust side hands over for projects and workspaces, plus the pure helpers the
 // sidebar draws from. No Tauri calls here, so it can be tested on its own.
 
-export type Project = { id: string; name: string; path: string; workspacesDir?: string | null; base?: string | null };
+export type Project = { id: string; name: string; path: string; workspacesDir?: string | null; base?: string | null; displayName?: string | null };
+
+/** SET-033: the name a project shows in the sidebar and pickers: its display name when it has one, else the folder's name. */
+export function projectLabel(p: Pick<Project, "name" | "displayName">): string {
+  return p.displayName?.trim() || p.name;
+}
 /** What a typed name becomes in a project: its branch and the folder it would get (PROJ-021, PROJ-025). */
 export type Preview = { branch: string; folder: string };
 /** A workspace just made: the worktree, the ref it started from, a note when the saved base was gone (PROJ-028), and what could not be brought along (GIT-067). */
@@ -298,4 +303,11 @@ export function stoppedNote(name: string, err: string | null): { kind: "ok" | "w
   if (!err.startsWith(lead)) return { kind: "warn", text: `${name}: ${err}` };
   const rest = err.slice(lead.length);
   return rest ? { kind: "warn", text: `Stopped creating ${name}${rest}` } : { kind: "ok", text: `Stopped creating ${name}; nothing was left behind.` };
+}
+
+/** PROJ-031: a failed create arrives as Kolux's words, then "\nGit said: " and Git's full output;
+ * the page shows the first part and keeps the second behind a details control. */
+export function splitGitSaid(text: string): { summary: string; git: string | null } {
+  const at = text.indexOf("\nGit said: ");
+  return at < 0 ? { summary: text, git: null } : { summary: text.slice(0, at), git: text.slice(at + "\nGit said: ".length) };
 }

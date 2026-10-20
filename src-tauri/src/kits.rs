@@ -778,7 +778,7 @@ mod tests {
             fs::create_dir_all(d).unwrap();
         }
         fs::write(base.join("file.txt"), "x").unwrap();
-        let projects = vec![Project { id: "1".into(), name: "shop".into(), path: project.to_string_lossy().to_uppercase(), workspaces_dir: None, base: None }];
+        let projects = vec![Project { id: "1".into(), name: "shop".into(), path: project.to_string_lossy().to_uppercase(), workspaces_dir: None, base: None, display_name: None }];
         let ok = |p: &Path| kit_folder(&p.to_string_lossy(), &projects, &samples);
         assert!(ok(&project).is_ok());
         assert!(ok(&samples.join("sales")).is_ok());
