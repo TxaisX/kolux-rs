@@ -3506,3 +3506,4 @@ you picked with Open a file stays readable after Kolux restarts, so a reopened t
 - 2026-10-20 [repo] T-230-d: review threads can be queued and sent to the workspace's agent (orchestration send), then replied to once and resolved; a conflicting pull request shows its files with AI resolve; live proof pending (batched)
 - 2026-10-20 [repo] T-294-c: a global Settings row writes setupPolicy (local, shared or both), so a repository's Same as everywhere names a value that can be set; live proof pending (batched)
 - 2026-10-20 [editor] T-236-b: the explorer has row menus, a 3-second live refresh, a git-ignored switch and a 1 GiB drop check, Mod+Shift+F wakes a hidden explorer, and a tab says when its file was deleted; live proof pending (batched)
+- 2026-10-20 [editor] T-237-b: the rich toolbar has Link, Image and a Collapsible section (a details block the rich view reads and writes); live proof pending (batched)

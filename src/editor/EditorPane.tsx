@@ -811,7 +811,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
       {noteFind && shown === "rich" && (
         <FindBar pane={id} root={richRoot} open={noteFind} onClose={() => setNoteFind(null)} replace={readOnly ? undefined : (ranges, text) => rich.current && replaceInRich(rich.current.editor, ranges, text)} />
       )}
-      {md && shown === "rich" && !comparing && !readOnly && <RichToolbar get={() => rich.current} />}
+      {md && shown === "rich" && !comparing && !readOnly && <RichToolbar get={() => rich.current} notePath={path} onNote={onToast} />}
       {railShown && <NoteRail host={richHost} notes={railed} version={noteText} onRemove={onRemoveNote} />}
       {tocShown && <Contents md={noteText} path={path} root={richRoot} onClose={() => setToc(false)} />}
       {comparing && <CompareView path={path} text={textOf(path) ?? ""} read={readDisk} onReload={reload} onKeep={keepMine} onClose={() => setComparing(false)} />}

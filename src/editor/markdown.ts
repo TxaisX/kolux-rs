@@ -10,11 +10,12 @@ import { createEmptyHistoryState, registerHistory } from "@lexical/history";
 import { ListItemNode, ListNode, registerCheckList, registerList } from "@lexical/list";
 import { LinkNode } from "@lexical/link";
 import { CodeHighlightNode, CodeNode } from "@lexical/code";
-import { $convertFromMarkdownString, $convertToMarkdownString, CHECK_LIST, registerMarkdownShortcuts, TRANSFORMERS } from "@lexical/markdown";
+import { $convertFromMarkdownString, $convertToMarkdownString, CHECK_LIST, registerMarkdownShortcuts, TRANSFORMERS, type Transformer } from "@lexical/markdown";
 import { mergeRegister } from "@lexical/utils";
 import { registerTable, TABLE, TABLE_NODES } from "./richTable";
 import { registerListKeys } from "./richFormat";
 import { createSlash, type SlashView } from "./slashMenu";
+import { DETAILS_NODES, makeDetails, withoutSections } from "./richDetails";
 
 export const isMarkdown = (path: string) => /\.(md|markdown)$/i.test(path);
 
@@ -23,8 +24,9 @@ export const RICH_LIMIT = 600 * 1024;
 
 // EDIT-010 (T-234-b): tables are read and written as markdown but not made by typing shortcuts.
 const KEYS = [CHECK_LIST, ...TRANSFORMERS];
-const MD = [TABLE, ...KEYS];
-const NODES = [HeadingNode, QuoteNode, ListNode, ListItemNode, CodeNode, CodeHighlightNode, LinkNode, ...TABLE_NODES];
+// EDIT-057 (T-237-b): the collapsible section is read and written as the note's own <details> block.
+const MD: Transformer[] = [makeDetails(() => MD), TABLE, ...KEYS];
+const NODES = [HeadingNode, QuoteNode, ListNode, ListItemNode, CodeNode, CodeHighlightNode, LinkNode, ...TABLE_NODES, ...DETAILS_NODES];
 const THEME = {
   paragraph: "md-p",
   quote: "md-quote",
@@ -53,7 +55,7 @@ const LIMITS: [RegExp, string][] = [
 
 /** Why the rich view cannot show this markdown, or null when it can. Code is not looked into. */
 export function unsupported(md: string): string | null {
-  const prose = md.replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*?^ {0,3}\1/gm, "").replace(/`[^`\n]*`/g, "");
+  const prose = withoutSections(md.replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*?^ {0,3}\1/gm, "")).replace(/`[^`\n]*`/g, "");
   for (const [re, what] of LIMITS) if (re.test(prose)) return `it has ${what}`;
   const back = roundTrip(md);
   if (back === null) return "it could not be read as markdown";
