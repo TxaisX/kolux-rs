@@ -428,9 +428,9 @@ type Gate<'a> = &'a dyn Fn(&Path, &str, &str) -> Result<(), String>;
 /// SAFE-025 / STAT-056: the store key holding one project's script trust. Keyed by the project's
 /// id, which a project added again gets new, so removing or re-adding a repository forgets it.
 pub const TRUST_PREFIX: &str = "scriptTrust:";
-/// SAFE-025: the shared scripts that need trust. The VM recipe is not carried (COMPAT 14); the
-/// default tab commands join with PROJ-034's tabs (T-149).
-pub const TRUST_KINDS: [&str; 3] = ["setup", "archive", "issue"];
+/// SAFE-025: the shared scripts that need trust. The VM recipe is not carried (COMPAT 14); "tabs"
+/// is the default tabs' commands of PROJ-034 (T-149), approved as one text.
+pub const TRUST_KINDS: [&str; 4] = ["setup", "archive", "issue", "tabs"];
 
 /// SAFE-025: one project's trust: the whole kolux.yaml, or each script's approved fingerprint.
 #[derive(serde::Serialize, serde::Deserialize, Default, Debug, PartialEq, Clone)]
@@ -509,6 +509,7 @@ fn require_trust(store: &std::sync::Mutex<crate::state::Store>, root: &Path, kin
             match kind {
                 "setup" => "setup script",
                 "archive" => "archive script",
+                "tabs" => "default tab commands",
                 _ => "issue command",
             },
             if ask.changed { "it changed since you trusted it" } else { "this repository's scripts are not trusted yet" }
@@ -532,6 +533,8 @@ fn shared_script_on(kind: &str, root: &Path, wt: &Path, local: Option<&str>, pol
         "setup" => pick_parts(local, yaml().and_then(|t| setup_script(&t)), policy).filter(|p| p.refused.is_none() && setup_line(&p.script, windows, configured, find).is_ok()).and_then(|p| p.shared),
         "archive" => yaml().and_then(|y| scripts_entry(&y, "archive")),
         "issue" => issue_command(root, wt).filter(|(_, s)| *s).map(|(c, _)| c),
+        // PROJ-034: the default tabs' commands, asked as one text (see `shared_tabs`)
+        "tabs" => shared_tabs(root, wt).ok().and_then(|tabs| tabs_trust_text(&tabs)),
         _ => None,
     }
 }
@@ -1218,6 +1221,240 @@ pub fn setup_suggestion_dismiss(store: StoreState<'_>, project_id: String) -> Re
     dismiss_card(&*store.lock().map_err(|e| e.to_string())?, &project_id)
 }
 
+// ---- PROJ-034: the default tabs of kolux.yaml (T-149)
+
+/// PROJ-034: kolux.yaml is read for its shared tabs only up to this size; a bigger file is refused unread.
+const SHARED_MAX: u64 = 64 * 1024;
+/// PROJ-034: at most this many default tabs; later ones are dropped.
+const TABS_MAX: usize = 12;
+/// PROJ-034: a tab title or command longer than this is dropped (the tab keeps its other fields).
+const TAB_TITLE_MAX: usize = 60;
+const TAB_COMMAND_MAX: usize = 2000;
+/// PROJ-034: a file using more aliases than this is refused; aliases are never expanded here.
+const ALIASES_MAX: usize = 16;
+
+/// PROJ-034 / COMPAT 5.6: one entry of `defaultTabs`; an entry with none of the three is dropped.
+#[derive(serde::Serialize, Debug, PartialEq, Clone, Default)]
+pub struct SharedTab {
+    pub title: Option<String>,
+    pub color: Option<String>,
+    pub command: Option<String>,
+}
+
+fn is_alias(t: &str) -> bool {
+    t.len() > 1 && t.starts_with('*') && t[1..].chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// A YAML scalar: trimmed, quotes removed, an anchor skipped and an alias left unexpanded (None).
+fn tab_scalar(raw: &str) -> Option<String> {
+    let t = raw.trim();
+    let t = if t.starts_with('&') { t.split_once(char::is_whitespace).map(|x| x.1.trim()).unwrap_or("") } else { t };
+    if is_alias(t) {
+        return None;
+    }
+    let quoted = |r: &str, q: char, escapes: bool| {
+        let (mut out, mut it) = (String::new(), r.chars().peekable());
+        while let Some(c) = it.next() {
+            if escapes && c == '\\' {
+                match it.next() {
+                    Some('n') => out.push('\n'),
+                    Some('t') => out.push('\t'),
+                    Some(o) => out.push(o),
+                    None => {}
+                }
+            } else if c == q {
+                if !escapes && it.peek() == Some(&q) {
+                    it.next();
+                    out.push(q);
+                } else {
+                    break;
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    };
+    let v = if let Some(r) = t.strip_prefix('"') {
+        quoted(r, '"', true)
+    } else if let Some(r) = t.strip_prefix('\'') {
+        quoted(r, '\'', false)
+    } else {
+        t.split(" #").next().unwrap_or("").to_string()
+    };
+    Some(v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
+/// `key: value` where the key is a plain word; None for any other text.
+fn tab_pair(s: &str) -> Option<(&str, &str)> {
+    let (k, v) = s.split_once(':')?;
+    (!k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')).then_some((k, v))
+}
+
+/// The comma-separated parts of a one-line `{ a: b, c: "d, e" }`, commas inside quotes kept.
+fn flow_parts(inner: &str) -> Vec<String> {
+    let (mut parts, mut cur, mut quote) = (Vec::new(), String::new(), None::<char>);
+    for c in inner.chars() {
+        match (quote, c) {
+            (None, ',') => parts.push(std::mem::take(&mut cur)),
+            (None, '"' | '\'') => {
+                quote = Some(c);
+                cur.push(c);
+            }
+            (Some(q), _) if c == q => {
+                quote = None;
+                cur.push(c);
+            }
+            _ => cur.push(c),
+        }
+    }
+    parts.push(cur);
+    parts
+}
+
+fn valid_color(c: &str) -> bool {
+    c.strip_prefix('#').is_some_and(|h| (h.len() == 3 || h.len() == 6) && h.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+fn put_tab_field(tab: &mut SharedTab, key: &str, value: Option<String>) {
+    let value = value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    match key {
+        "title" => tab.title = value.filter(|v| v.chars().count() <= TAB_TITLE_MAX),
+        "color" => tab.color = value.filter(|v| valid_color(v)),
+        "command" => tab.command = value.filter(|v| v.chars().count() <= TAB_COMMAND_MAX),
+        _ => {}
+    }
+}
+
+/// PROJ-034: kolux.yaml's `defaultTabs` (COMPAT 5.6), read by a small line scanner like the other
+/// keys. Err is why the file was refused outright (too big, or aliases out of control); then none of
+/// it applies. Values are trimmed, a colour is `#rgb` or `#rrggbb` or ignored, an entry with no title,
+/// colour or command is dropped, an over-long field is dropped, and only the first TABS_MAX stay.
+pub fn default_tabs(yaml: &str) -> Result<Vec<SharedTab>, String> {
+    if yaml.len() as u64 > SHARED_MAX {
+        return Err(format!("{} is larger than {} KB, so its shared settings are ignored", crate::include::CONFIG_FILE, SHARED_MAX / 1024));
+    }
+    let aliases = yaml.split(|c: char| c.is_whitespace() || ",[]{}".contains(c)).filter(|t| is_alias(t)).count();
+    if aliases > ALIASES_MAX {
+        return Err(format!("{} uses too many aliases, so its shared settings are ignored", crate::include::CONFIG_FILE));
+    }
+    let lines: Vec<&str> = yaml.trim_start_matches('\u{feff}').lines().map(|l| l.trim_end_matches('\r')).collect();
+    let indent = |l: &str| l.len() - l.trim_start().len();
+    let Some(at) = lines.iter().position(|l| indent(l) == 0 && l.starts_with("defaultTabs:")) else { return Ok(Vec::new()) };
+    let mut tabs: Vec<SharedTab> = Vec::new();
+    let mut cur: Option<SharedTab> = None;
+    let mut dash = 0;
+    let mut j = at + 1;
+    let finish = |cur: &mut Option<SharedTab>, tabs: &mut Vec<SharedTab>| {
+        if let Some(t) = cur.take().filter(|t| t.title.is_some() || t.color.is_some() || t.command.is_some()) {
+            if tabs.len() < TABS_MAX {
+                tabs.push(t);
+            }
+        }
+    };
+    while j < lines.len() {
+        let (line, t) = (lines[j], lines[j].trim());
+        j += 1;
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        let ind = indent(line);
+        if ind == 0 && !t.starts_with('-') {
+            break;
+        }
+        let pair = if let Some(rest) = t.strip_prefix('-') {
+            finish(&mut cur, &mut tabs);
+            cur = Some(SharedTab::default());
+            dash = ind;
+            let rest = rest.trim();
+            if let Some(inner) = rest.strip_prefix('{').and_then(|r| r.trim_end().strip_suffix('}')) {
+                let tab = cur.as_mut().unwrap();
+                for part in flow_parts(inner) {
+                    if let Some((k, v)) = tab_pair(part.trim()) {
+                        put_tab_field(tab, k, tab_scalar(v));
+                    }
+                }
+                continue;
+            }
+            tab_pair(rest)
+        } else {
+            tab_pair(t)
+        };
+        let (Some((key, value)), Some(tab)) = (pair, cur.as_mut()) else { continue };
+        let own = if t.starts_with('-') { dash } else { ind.max(dash) };
+        let v = value.trim();
+        let scalar = if v.starts_with('|') || v.starts_with('>') {
+            let body: Vec<&str> = lines[j..].iter().take_while(|l| l.trim().is_empty() || indent(l) > own).copied().collect();
+            j += body.len();
+            let cut = body.iter().filter(|l| !l.trim().is_empty()).map(|l| indent(l)).min().unwrap_or(0);
+            let kept: Vec<&str> = body.iter().map(|l| l.get(cut..).unwrap_or("")).collect();
+            Some(if v.starts_with('>') { kept.iter().map(|l| l.trim()).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ") } else { kept.join("\n").trim_end().to_string() })
+        } else {
+            tab_scalar(v)
+        };
+        put_tab_field(tab, key, scalar);
+    }
+    finish(&mut cur, &mut tabs);
+    Ok(tabs)
+}
+
+/// PROJ-034: the one text the "tabs" trust approves: every default tab command, a line each; None
+/// when no tab has a command (nothing would run, so nothing is asked).
+pub fn tabs_trust_text(tabs: &[SharedTab]) -> Option<String> {
+    let cmds: Vec<&str> = tabs.iter().filter_map(|t| t.command.as_deref()).collect();
+    (!cmds.is_empty()).then(|| cmds.join("\n"))
+}
+
+/// PROJ-034: the default tabs for a workspace at `wt` of the repository at `root`: the worktree's own
+/// kolux.yaml, else the main folder's. A missing file has none; Err is why a file was refused.
+fn shared_tabs(root: &Path, wt: &Path) -> Result<Vec<SharedTab>, String> {
+    for d in [wt, root] {
+        match read_capped(&d.join(crate::include::CONFIG_FILE), SHARED_MAX) {
+            Ok(text) => return default_tabs(&text),
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => return Err(format!("{} is larger than {} KB, so its shared settings are ignored", crate::include::CONFIG_FILE, SHARED_MAX / 1024)),
+            Err(_) => {}
+        }
+    }
+    Ok(Vec::new())
+}
+
+/// PROJ-034: what a new workspace opens as tabs, and whether the repository's trust must be asked first.
+#[derive(serde::Serialize, Debug, PartialEq, Clone)]
+pub struct DefaultTabs {
+    /// The tabs to open; while `ask` is set their commands are left out.
+    pub tabs: Vec<SharedTab>,
+    pub ask: Option<TrustAsk>,
+    /// Why the file's shared settings were ignored, when it was refused.
+    pub refused: Option<String>,
+}
+
+/// PROJ-034: the default tabs for the new workspace at `path` of the repository at `root`; with
+/// commands only once the "tabs" trust is given (SAFE-025), else `ask` carries the prompt.
+// registered by evidence/setup-T-149-lib.rs.patch; until it lands nothing calls it
+#[allow(dead_code)]
+#[tauri::command(async)]
+pub fn workspace_default_tabs(store: StoreState<'_>, root: String, path: String) -> Result<DefaultTabs, String> {
+    default_tabs_run(&root, &path, &|root, text| {
+        let store = store.lock().map_err(|_| "Kolux could not check this repository's trust, so its kolux.yaml tab commands do not run".to_string())?;
+        trust_ask(&store, root, "tabs", text)
+    })
+}
+
+/// default_tabs' trust question: the repository's main folder and the commands' text.
+type TabsAsk<'a> = &'a dyn Fn(&Path, &str) -> Result<Option<TrustAsk>, String>;
+
+fn default_tabs_run(root: &str, path: &str, ask: TabsAsk<'_>) -> Result<DefaultTabs, String> {
+    let tabs = match shared_tabs(Path::new(root), Path::new(path)) {
+        Ok(tabs) => tabs,
+        Err(why) => return Ok(DefaultTabs { tabs: Vec::new(), ask: None, refused: Some(why) }),
+    };
+    let Some(text) = tabs_trust_text(&tabs) else { return Ok(DefaultTabs { tabs, ask: None, refused: None }) };
+    Ok(match ask(Path::new(root), &text)? {
+        None => DefaultTabs { tabs, ask: None, refused: None },
+        Some(a) => DefaultTabs { tabs: tabs.into_iter().map(|t| SharedTab { command: None, ..t }).collect(), ask: Some(a), refused: None },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1584,6 +1821,101 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(5));
         crate::projects::register_project(&store, (root.clone(), root.clone())).unwrap();
         assert!(trust_ask(&store, &root, "setup", "echo shared").unwrap().is_some(), "added again, it asks again");
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn tab(title: Option<&str>, color: Option<&str>, command: Option<&str>) -> SharedTab {
+        SharedTab { title: title.map(Into::into), color: color.map(Into::into), command: command.map(Into::into) }
+    }
+
+    #[test]
+    fn proj034_default_tabs_read_block_and_one_line_entries_trimmed() {
+        let y = "scripts:\n  setup: pnpm i\ndefaultTabs:\n  - title:   Dev  \n    color: \"#0af\"\n    command: pnpm dev # watch\n  - { title: Logs, command: \"tail -f a, b\", color: '#A1B2C3' }\n  - command: |\n      echo one\n      echo two\n  - title: Plain\nissueCommand: work\n";
+        assert_eq!(
+            default_tabs(y).unwrap(),
+            vec![tab(Some("Dev"), Some("#0af"), Some("pnpm dev")), tab(Some("Logs"), Some("#A1B2C3"), Some("tail -f a, b")), tab(None, None, Some("echo one\necho two")), tab(Some("Plain"), None, None)]
+        );
+        assert_eq!(top_entry(y, "issueCommand").as_deref(), Some("work"), "the key after the list still reads");
+        assert_eq!(default_tabs("defaultTabs:\n- title: A\n  command: ls\n").unwrap(), vec![tab(Some("A"), None, Some("ls"))], "a list at the key's own indent");
+        assert_eq!(default_tabs("defaultTabs: []\n").unwrap(), vec![]);
+        assert_eq!(default_tabs("scripts:\n  setup: x\n").unwrap(), vec![], "no key, no tabs");
+    }
+
+    #[test]
+    fn proj034_an_empty_file_means_no_shared_settings() {
+        for y in ["", "\n\n", "   \r\n# only a comment\n", "\u{feff}"] {
+            assert_eq!(default_tabs(y).unwrap(), vec![]);
+            assert_eq!(setup_script(y), None);
+            assert_eq!(scripts_entry(y, "archive"), None);
+            assert_eq!(top_entry(y, "issueCommand"), None);
+        }
+        let root = tree(&[("kolux.yaml", b"")]);
+        let p = root.to_string_lossy().into_owned();
+        let out = default_tabs_run(&p, &p, &|_, _| panic!("nothing to ask")).unwrap();
+        assert_eq!(out, DefaultTabs { tabs: vec![], ask: None, refused: None });
+        assert_eq!(shared_script("tabs", &root, &root, None, None), None);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn proj034_limits_drop_fields_lists_and_refuse_big_or_alias_heavy_files() {
+        let mut y = String::from("defaultTabs:\n  - color: red\n  - title: \"x\"\n    color: \"#12\"\n  - title: ok\n    color: \"#GGG\"\n");
+        assert_eq!(default_tabs(&y).unwrap(), vec![tab(Some("x"), None, None), tab(Some("ok"), None, None)], "an entry with nothing left is dropped, a bad colour ignored");
+        y = format!("defaultTabs:\n  - title: {}\n    command: ls\n  - command: \"{}\"\n", "t".repeat(61), "c".repeat(2001));
+        assert_eq!(default_tabs(&y).unwrap(), vec![tab(None, None, Some("ls"))], "an over-long field is dropped");
+        y = String::from("defaultTabs:\n");
+        for i in 0..20 {
+            y.push_str(&format!("  - title: t{i}\n"));
+        }
+        let tabs = default_tabs(&y).unwrap();
+        assert_eq!((tabs.len(), tabs[11].title.as_deref()), (12, Some("t11")), "beyond 12 tabs are dropped");
+        let big = format!("defaultTabs:\n  - title: a\n# {}\n", "x".repeat(64 * 1024));
+        assert!(default_tabs(&big).unwrap_err().contains("larger than 64 KB"));
+        let bomb = format!("base: &b ls\ndefaultTabs:\n{}", "  - command: *b\n".repeat(17));
+        assert!(default_tabs(&bomb).unwrap_err().contains("too many aliases"));
+        let few = "base: &b ls\ndefaultTabs:\n  - command: *b\n  - title: T\n    command: &c ls -l\n";
+        assert_eq!(default_tabs(few).unwrap(), vec![tab(Some("T"), None, Some("ls -l"))], "an alias is never expanded; an anchor's value is kept");
+    }
+
+    #[test]
+    fn proj034_tab_commands_ask_once_and_a_changed_command_asks_again() {
+        let (store, dir, root) = trust_store();
+        let yaml = |cmd: &str| format!("defaultTabs:\n  - title: Dev\n    command: {cmd}\n  - title: Notes\n");
+        std::fs::write(root.join("kolux.yaml"), yaml("pnpm dev")).unwrap();
+        let p = root.to_string_lossy().into_owned();
+        let ask = |r: &Path, t: &str| trust_ask(&store, r, "tabs", t);
+        let first = default_tabs_run(&p, &p, &ask).unwrap();
+        let q = first.ask.clone().expect("the first time it asks");
+        assert_eq!((q.kind.as_str(), q.script.as_str(), q.changed), ("tabs", "pnpm dev", false));
+        assert_eq!(first.tabs, vec![tab(Some("Dev"), None, None), tab(Some("Notes"), None, None)], "no command runs before the answer");
+        assert_eq!(shared_script("tabs", &root, &root, None, None).as_deref(), Some("pnpm dev"), "the prompt shows exactly the commands");
+        trust_grant(&store, &root, "tabs", &q.script, false).unwrap();
+        let second = default_tabs_run(&p, &p, &ask).unwrap();
+        assert_eq!((second.ask, second.tabs[0].command.as_deref()), (None, Some("pnpm dev")), "trusted: the command comes with the tab");
+        std::fs::write(root.join("kolux.yaml"), yaml("pnpm dev --host")).unwrap();
+        let third = default_tabs_run(&p, &p, &ask).unwrap();
+        assert_eq!(third.ask.map(|a| a.changed), Some(true), "a changed command asks again");
+        assert_eq!(third.tabs[0].command, None);
+        std::fs::write(root.join("kolux.yaml"), "defaultTabs:\n  - title: Only\n").unwrap();
+        assert_eq!(default_tabs_run(&p, &p, &|_, _| panic!("no command, no question")).unwrap().tabs, vec![tab(Some("Only"), None, None)]);
+        let stranger = tree(&[("kolux.yaml", b"defaultTabs:\n  - command: ls\n")]);
+        let sp = stranger.to_string_lossy().into_owned();
+        assert!(default_tabs_run(&sp, &sp, &ask).unwrap_err().contains("not one of your projects"), "trust that cannot be checked runs nothing");
+        std::fs::write(stranger.join("kolux.yaml"), format!("# {}", "x".repeat(70 * 1024))).unwrap();
+        assert!(default_tabs_run(&sp, &sp, &ask).unwrap().refused.unwrap().contains("larger than 64 KB"), "a too-big file is refused before it is parsed");
+        for d in [dir, root, stranger] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj034_the_tabs_kind_is_a_known_script_and_covered_by_always_trust() {
+        let (store, dir, root) = trust_store();
+        assert!(trust_ask(&store, &root, "tabs", "ls").unwrap().is_some());
+        trust_grant(&store, &root, "issue", "work {{issue}}", true).unwrap();
+        assert_eq!(trust_ask(&store, &root, "tabs", "anything").unwrap(), None);
+        assert!(trust_ask(&store, &root, "vm", "x").is_err());
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(root);
     }
