@@ -1,0 +1,12 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index a7d0245a..49a5b6d4 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -504,6 +504,7 @@ pub fn run() {
+             scm::writers::scm_writer_options,
+             scm::writers::scm_name_branch,
+             projects::workspace_rename_on_first_prompt,
++            projects::workspace_move_folder,
+             scm::scm_task_detail,
+             scm::scm_repo_labels,
+             github::github_repo_parent,

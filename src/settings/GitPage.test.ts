@@ -52,3 +52,13 @@ test("T-228-d: the writer picker lists the agents, shows model and effort for a 
   const off = view({ autoBranchName: false, autoBranchChosen: true });
   expect(off).not.toMatch(/aria-label="Name the branch after the work" checked=""/);
 });
+
+test("T-110-b: asking to rename the folder is on by default, switches off, and goes with the branch-rename switch", () => {
+  const on = view({});
+  expect(on).toMatch(/aria-label="Ask to rename the folder too"[^>]*checked=""/);
+  expect(on).toContain("asks before renaming the folder on disk");
+  const off = view({ renameFolders: false });
+  expect(off).not.toMatch(/aria-label="Ask to rename the folder too"[^>]*checked=""/);
+  expect(off).toContain("the folder keeps its name");
+  expect(view({ renameBranches: false })).not.toContain("Ask to rename the folder too");
+});

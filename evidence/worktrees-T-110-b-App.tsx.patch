@@ -1,0 +1,27 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 46a23eff..559e03d5 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -47,6 +47,7 @@ import { startFields, startTail } from "./projects/startArgs";
+ import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
+ import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./projects/WorktreePalette";
+ import { renameOnFirstPrompt, useRenameOnFirstPrompt } from "./projects/renameOnWork";
++import FolderRenameAsk from "./projects/FolderRenameAsk";
+ import { navTarget, stepAllowed, travel, visit, type Place } from "./projects/nav";
+ import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
+ import BrowserPane, { OPEN_IN_BROWSER, openInBrowser } from "./browser/BrowserPane";
+@@ -2233,6 +2234,14 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+           />
+         )}
+         <TrustPrompt />
++        {/* STAT-039 (T-110-b): after the first work renamed a branch, asks before the folder follows; a moved folder's panes and the list follow it. */}
++        <FolderRenameAsk
++          onMoved={(from, to) => {
++            setPanes((ps) => ps.map((p) => (sameDir(p.cwd, from) ? { ...p, cwd: to } : p)));
++            setActiveDir((d) => (sameDir(d, from) ? to : d));
++            setRefresh((n) => n + 1);
++          }}
++        />
+         {quitAsk && (
+           <Ask
+             title="Quit with unsaved changes?"
