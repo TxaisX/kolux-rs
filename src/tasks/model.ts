@@ -1,12 +1,14 @@
 // VIEW-010 / GIT-043: the Tasks page, GitHub-only: issues and pull requests found by GitHub search.
 import type { Project } from "../projects/model";
 import { sameDir } from "../workspaces";
+import { wantedState } from "./edits";
 
 export type TaskLabel = { name: string; color: string };
 export type Task = { kind: string; number: number; title: string; url: string; repo: string; state: string; draft: boolean; labels: TaskLabel[]; assignees: string[]; updated: string; checks: string | null;
   /** The host that answered with this row (stamped by the page; the search itself does not know it). */
   host?: string };
-export type TaskPage = { total: number; deepest: number; items: Task[] };
+/** `failed`: repositories GitHub refused to search (GIT-045); the other repositories' items are in `items`. */
+export type TaskPage = { total: number; deepest: number; items: Task[]; failed?: { repo: string; error: string }[] };
 
 /** The checkout whose GitHub repository the page lists: the workspace on screen, else the first project. */
 export function tasksRepo(projects: Project[], activeDir: string | null): { dir: string; name: string } | null {
@@ -44,6 +46,12 @@ export function taskQueries(preset: string, typed: string, repos: string[], issu
   const q = (k: string) => [...base, ...words, ...(k === "issue" ? issueRepos : repos).map((r) => `repo:${r}`)].join(" ");
   if (named) return [q(named === "issue" ? "issue" : "pr")];
   return p.kinds.map((k) => `is:${k} ${q(k)}`);
+}
+
+/** GIT-048: the state the list is filtered to (the typed words win over the preset's), or null. */
+export function listState(preset: string, typed: string): string | null {
+  const p = PRESETS.find((x) => x.id === preset) ?? PRESETS[0];
+  return wantedState(queryWords(typed)) ?? wantedState(p.q.split(" "));
 }
 
 const STATE_WORD = /^(is|state):(open|closed|merged)$/i;
@@ -105,7 +113,7 @@ export function issueSource(settings: Record<string, unknown> | null, key: strin
   const choice = saved && typeof saved === "object" ? (saved as Record<string, unknown>)[key] : undefined;
   if (choice === "upstream" && failed) return { repo: own, warning: `Could not check this fork's upstream; issues come from ${own}.`, split: false };
   if (choice !== "upstream" || parent === undefined) return { repo: own, warning: null, split: false };
-  if (!parent) return { repo: own, warning: `The upstream repository chosen for issues is gone or no longer this fork's parent, so issues come from ${own}.`, split: false };
+  if (!parent) return { repo: own, warning: `The upstream repository you chose for ${own}'s issues is no longer set up (it is gone, or ${own} is no longer a fork of it), so issues come from ${own}.`, split: false };
   return { repo: parent, warning: null, split: true };
 }
 

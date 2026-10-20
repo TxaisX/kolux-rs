@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Task, TaskPage } from "./model";
-import { byHost, chosenRows, hostWarnings, mergePages, newIssueTargets, pickerLabel, pickerRows, repoAdded, rowKey, savedChoice, toggled } from "./repoPicker";
+import { byHost, chosenRows, hostWarnings, mergePages, newIssueTargets, pickerLabel, pickerRows, repoAdded, repoWarnings, rowKey, savedChoice, toggled } from "./repoPicker";
 
 const p = (id: string, path = `C:/dev/${id}`) => ({ id, name: id, path });
 const gh = (owner: string, name: string, host = "github.com") => ({ host, owner, name });
@@ -105,5 +105,24 @@ describe("several hosts in one list", () => {
     expect(w).toHaveLength(1);
     expect(w[0]).toContain("git.corp.example could not be reached");
     expect(w[0]).toContain("timed out after 30s");
+  });
+});
+
+describe("GIT-045 (T-281-b) one refused repository is named and the others still list", () => {
+  const item = (n: number, repo: string): Task => ({ kind: "issue", number: n, title: "t", url: `https://github.com/${repo}/issues/${n}`, repo, state: "open", draft: false, labels: [], assignees: [], updated: "2026-10-10T00:00:00Z", checks: null });
+  it("carries the refused repositories of every host's page into the merged page", () => {
+    const a: TaskPage = { total: 1, deepest: 1, items: [item(1, "o/a")], failed: [{ repo: "gone/x", error: "Validation Failed (HTTP 422)" }] };
+    const b: TaskPage = { total: 1, deepest: 1, items: [item(2, "p/b")] };
+    const merged = mergePages([a, b], ["github.com", "ghe.corp"]);
+    expect(merged.items.map((t) => t.repo).sort()).toEqual(["o/a", "p/b"]);
+    expect(merged.failed).toEqual([{ repo: "gone/x", error: "Validation Failed (HTTP 422)" }]);
+    expect(mergePages([b, b], ["a", "b"]).failed).toBeUndefined();
+  });
+  it("warns once per refused repository, in plain words, with the reason cut short", () => {
+    const w = repoWarnings([{ repo: "gone/x", error: "Validation Failed\n(HTTP 422): " + "y".repeat(400) }]);
+    expect(w).toHaveLength(1);
+    expect(w[0]).toMatch(/^gone\/x could not be searched \(Validation Failed \(HTTP 422\): y+\); the other repositories are listed without it\.$/);
+    expect(w[0].length).toBeLessThan(260);
+    expect(repoWarnings(undefined)).toEqual([]);
   });
 });

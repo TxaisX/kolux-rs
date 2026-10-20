@@ -14,8 +14,9 @@ export function actionError(error: string, what: IssueAction): string {
 }
 
 /** Sends one action, then (on success) runs `after` and waits for `refresh`; busy is set for the
- * whole run and cleared only after the refresh has come back. */
-export async function runAction(o: { send: Promise<unknown>; refresh: () => Promise<unknown>; after?: () => void; setBusy: (b: boolean) => void; setError: (e: string | null) => void; what: IssueAction }): Promise<void> {
+ * whole run and cleared only after the refresh has come back. `onFail` runs after a failure (GIT-048: the
+ * change shown at once is put back). */
+export async function runAction(o: { send: Promise<unknown>; refresh: () => Promise<unknown>; after?: () => void; setBusy: (b: boolean) => void; setError: (e: string | null) => void; what: IssueAction; onFail?: () => void }): Promise<void> {
   o.setBusy(true);
   o.setError(null);
   try {
@@ -24,6 +25,7 @@ export async function runAction(o: { send: Promise<unknown>; refresh: () => Prom
     await o.refresh();
   } catch (e) {
     o.setError(actionError(String(e), o.what));
+    o.onFail?.();
   } finally {
     o.setBusy(false);
   }

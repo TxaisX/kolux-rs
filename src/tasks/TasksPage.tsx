@@ -10,13 +10,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Refresh, Search } from "../chrome/icons";
 import GhBanner, { classify } from "./GhBanner";
+import { applyEdits, editAssign, editState, type Edits, leavesFilter, settle, undoAssign, undoState } from "./edits";
 import type { Worktree } from "../projects/model";
 import { useSettings } from "../settings/useSettings";
-import { beyondWindow, defaultPreset, FILTERS, type FilterKey, filterValue, issueSource, pageButtons, pageCount, PER_PAGE, PRESETS, setFilter, type Task, type TaskLabel, type TaskPage, taskKind, taskQueries } from "./model";
+import { beyondWindow, defaultPreset, FILTERS, type FilterKey, filterValue, issueSource, listState, pageButtons, pageCount, PER_PAGE, PRESETS, setFilter, type Task, type TaskDetail, type TaskLabel, type TaskPage, taskKind, taskQueries } from "./model";
 import NewIssueDialog from "./NewIssueDialog";
 import { closesDialog, createdHere } from "./newIssue";
 import { type GhRepo, loadRepoFacts, type ParentRead, type Person, resetFacts } from "./repoFacts";
-import { byHost, chosenRows, hostWarnings, mergePages, newIssueTargets, type PickerProject, type PickerRow, pickerLabel, pickerRows, REPOS_SETTING, type RemoteRead, repoAdded, rowKey, savedChoice, toggled } from "./repoPicker";
+import { byHost, chosenRows, hostWarnings, mergePages, newIssueTargets, type PickerProject, type PickerRow, pickerLabel, pickerRows, REPOS_SETTING, type RemoteRead, repoAdded, repoWarnings, rowKey, savedChoice, toggled } from "./repoPicker";
 import ProjectsView from "./ProjectsView";
 import PullRequestPage from "./PullRequestPage";
 import { parseGitHubUrl, type Target } from "./prModel";
@@ -113,6 +114,8 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
   const [query, setQuery] = useState(kept.query);
   const [page, setPage] = useState(kept.page);
   const [result, setResult] = useState<TaskPage | null>(null);
+  // GIT-048: edits shown at once, laid over what the search returned (edits.ts).
+  const [edits, setEdits] = useState<Edits>({});
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<Task | null>(null);
   const [newIssue, setNewIssue] = useState(false);
@@ -192,6 +195,7 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
   const groupsKey = JSON.stringify(groups);
   here.current = gh ? { host: gh.host, repos: [...new Set([own, source.repo, ...(groups[0]?.repos ?? [])])] } : null;
   const mine = opening.current;
+  const wanted = preset === null ? null : listState(preset, query);
   const savedSources = (settings?.tasksIssueSource ?? {}) as Record<string, unknown>;
   const chosenSource = savedSources[sourceKey] === "upstream" ? "upstream" : "fork";
   const load = () => {
@@ -214,7 +218,9 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
       if (answered.length === 0) return setError(failed[0]?.error ?? "Nothing answered.");
       // Each row remembers the host that answered with it (FIX-1): the dialog, the full page and
       // workspace start use it, never the first chosen repository's host.
-      setResult(mergePages(answered.map((r) => r.p), answered.map((r) => r.host)));
+      const merged = mergePages(answered.map((r) => r.p), answered.map((r) => r.host));
+      setResult(merged);
+      setEdits((e) => settle(e, merged.items, Date.now()));
     });
   };
   useEffect(load, [gh, preset, query, page, source.repo, settings === null, tab, groupsKey]);
@@ -355,7 +361,16 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
           }}>
           New issue
         </button>
-        <button className="ib" title="Refresh" disabled={!gh} onClick={load}>
+        <button
+          className="ib"
+          title="Refresh"
+          disabled={!gh}
+          onClick={() => {
+            // GIT-048: a hard refresh takes GitHub's current state again.
+            setEdits({});
+            load();
+          }}
+        >
           <Refresh />
         </button>
       </div>
@@ -387,6 +402,11 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
           </button>
         </div>
       )}
+      {repoWarnings(result?.failed).map((w) => (
+        <div key={w} className="note warn" role="status" data-repo-warning>
+          {w}
+        </div>
+      ))}
       {hostWarnings(hostFail).map((w) => (
         <div key={w} className="note warn" role="status" data-host-warning>
           {w}
@@ -424,8 +444,8 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
         <div className="autos-none tasks-none">Nothing matches.</div>
       ) : (
         <ul className="tasks-list" ref={list} onScroll={(e) => (kept.scroll = e.currentTarget.scrollTop)}>
-          {result.items.map((t) => (
-            <li key={t.url} title={t.url} data-task={`${t.kind}-${t.number}`} tabIndex={0} onClick={() => setOpen(t)} onKeyDown={(e) => e.key === "Enter" && setOpen(t)}>
+          {applyEdits(result.items, edits).map((t) => (
+            <li key={t.url} title={t.url} className={leavesFilter(t, wanted) ? "leaving" : undefined} data-task={`${t.kind}-${t.number}`} tabIndex={0} onClick={() => setOpen(t)} onKeyDown={(e) => e.key === "Enter" && setOpen(t)}>
               <span className={`dot ${t.kind} ${t.state}${t.draft ? " draft" : ""}`} title={t.draft ? "draft" : t.state} />
               <span className="tasks-title">{t.title}</span>
               {t.labels.map((l) => (
@@ -502,13 +522,21 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
       {pr && <PullRequestPage key={`${pr.host}/${pr.repo}#${pr.number}`} target={pr} added={repoAdded(rows, pr.host, pr.repo)} onClose={() => setPr(null)} />}
       {open && gh && (
         <TaskDialog
-          task={open}
+          task={applyEdits([open], edits)[0]}
+          edit={edits[open.url]}
           host={open.host ?? gh.host}
           onClose={() => setOpen(null)}
           work={open.state === "open" ? { label: workLabel(resumeDir(open), open), run: () => work(open) } : undefined}
           onPage={open.kind === "pr" ? () => { setPr({ host: open.host ?? gh.host, repo: open.repo, number: open.number, kind: "pull" }); setOpen(null); } : undefined}
           onLabels={(labels: TaskLabel[]) => setResult((r) => r && { ...r, items: r.items.map((x) => (x.url === open.url ? { ...x, labels } : x)) })}
-          onState={(state: string) => setResult((r) => r && { ...r, items: r.items.map((x) => (x.url === open.url ? { ...x, state } : x)) })}
+          onState={(d: TaskDetail) => {
+            setResult((r) => r && { ...r, items: r.items.map((x) => (x.url === open.url ? { ...x, state: d.state, assignees: d.assignees } : x)) });
+            setEdits((e) => settle(e, [{ url: open.url, state: d.state, assignees: d.assignees }], Date.now()));
+          }}
+          onAssign={(add: string[], remove: string[]) => setEdits((e) => editAssign(e, open.url, add, remove, Date.now()))}
+          onUndoAssign={(add: string[], remove: string[]) => setEdits((e) => undoAssign(e, open.url, add, remove))}
+          onShowState={(state: string) => setEdits((e) => editState(e, open.url, state, Date.now()))}
+          onUndoState={() => setEdits((e) => undoState(e, open.url))}
         />
       )}
     </div>

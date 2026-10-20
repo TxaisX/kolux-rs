@@ -95,7 +95,13 @@ export function mergePages(pages: TaskPage[], hosts?: string[]): TaskPage {
   if (pages.length === 1 && !hosts) return pages[0];
   const items: Task[] = pages.flatMap((p, i) => (hosts ? p.items.map((t) => ({ ...t, host: hosts[i] })) : p.items));
   items.sort((a, b) => (a.updated < b.updated ? 1 : a.updated > b.updated ? -1 : 0));
-  return { total: pages.reduce((n, p) => n + p.total, 0), deepest: Math.max(0, ...pages.map((p) => p.deepest)), items };
+  const failed = pages.flatMap((p) => p.failed ?? []);
+  return { total: pages.reduce((n, p) => n + p.total, 0), deepest: Math.max(0, ...pages.map((p) => p.deepest)), items, ...(failed.length ? { failed } : {}) };
+}
+
+/** GIT-045: one warning per repository GitHub refused to search, naming it; the other repositories still list. */
+export function repoWarnings(failed: { repo: string; error: string }[] | undefined): string[] {
+  return (failed ?? []).map((f) => `${f.repo} could not be searched (${f.error.replace(/\s+/g, " ").trim().slice(0, 160)}); the other repositories are listed without it.`);
 }
 
 /** One warning per host that did not answer, naming the host; an empty list when all answered. */

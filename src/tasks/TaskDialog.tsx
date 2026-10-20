@@ -12,12 +12,15 @@ import { Close } from "../chrome/icons";
 import { type IssueAction, runAction } from "./issueActions";
 import Markdown from "./MarkdownView";
 import MentionField from "./MentionField";
+import { type Edit, withAssignees } from "./edits";
 import { duplicateQuery, eventLine, issueNumber, type Task, type TaskDetail, type TaskLabel, type TaskPage, taskKind } from "./model";
 import type { Person } from "./repoFacts";
 
 const FRESH_MS = 15_000;
 
-export default function TaskDialog({ task, host, onClose, onLabels, onState, work, onPage }: { task: Task; host: string; onClose: () => void; onLabels: (labels: TaskLabel[]) => void; onState: (state: string) => void; work?: { label: string; run: () => void }; onPage?: () => void }) {
+// GIT-048 (T-281-b): `edit` is what is pending for this item (shown at once, on top of what GitHub last said); `onAssign`/`onUndoAssign`
+// and `onShowState`/`onUndoState` hand a change to the page before and after GitHub answers; `onState` carries GitHub's answer.
+export default function TaskDialog({ task, host, onClose, onLabels, onState, onAssign, onUndoAssign, onShowState, onUndoState, edit, work, onPage }: { task: Task; host: string; onClose: () => void; onLabels: (labels: TaskLabel[]) => void; onState: (d: TaskDetail) => void; onAssign?: (add: string[], remove: string[]) => void; onUndoAssign?: (add: string[], remove: string[]) => void; onShowState?: (state: string) => void; onUndoState?: () => void; edit?: Edit; work?: { label: string; run: () => void }; onPage?: () => void }) {
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
   const [offer, setOffer] = useState<TaskLabel[]>([]);
@@ -88,25 +91,30 @@ export default function TaskDialog({ task, host, onClose, onLabels, onState, wor
       .finally(() => setBusy(false));
   };
 
+  // GIT-048: shown at once; not behind `busy`, so a second edit made while the first is on its way is sent too
+  // (each write names only its own people), and a failed one puts back only itself.
   const assign = (add: string[], remove: string[]) => {
-    setBusy(true);
     setError(null);
+    onAssign?.(add, remove);
     invoke("pr_assignees", { ...args, add, remove })
       .then(refresh)
-      .catch((e) => setError(String(e)))
-      .finally(() => setBusy(false));
+      .catch((e) => {
+        setError(String(e));
+        onUndoAssign?.(add, remove);
+      });
   };
   const refresh = () =>
     invoke<TaskDetail>("scm_task_detail", args)
       .then((d) => {
         setDetail(d);
-        onState(d.state);
+        onState(d);
       })
       .catch((e) => setError(String(e)));
 
   const have = detail?.labels ?? task.labels;
   const more = offer.filter((o) => !have.some((h) => h.name === o.name));
-  const state = detail?.state ?? task.state;
+  const state = edit?.state ?? detail?.state ?? task.state;
+  const assignees = withAssignees(detail?.assignees ?? task.assignees, edit);
   return (
     <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div ref={box} tabIndex={-1} className="auto-dialog task-dialog" role="dialog" aria-modal="true" aria-label={`${taskKind(task)} ${task.title}`} onKeyDown={(e) => e.key === "Escape" && draft === null && onClose()}>
@@ -175,7 +183,7 @@ export default function TaskDialog({ task, host, onClose, onLabels, onState, wor
               ))}
               {detail && detail.events.length === 0 && <li className="muted">Nothing has happened yet.</li>}
             </ul>
-            {task.kind === "issue" && <IssueActions host={host} task={task} state={state} title={detail?.title || task.title} onDone={refresh} />}
+            {task.kind === "issue" && <IssueActions host={host} task={task} state={state} title={detail?.title || task.title} onDone={refresh} onShow={onShowState} onUndo={onUndoState} />}
           </div>
           <div className="auto-dialog-side">
             <span className="task-cap">Labels</span>
@@ -201,17 +209,17 @@ export default function TaskDialog({ task, host, onClose, onLabels, onState, wor
             </select>
             <span className="task-cap">Assignees</span>
             <div className="task-labels">
-              {(detail?.assignees ?? task.assignees).map((a) => (
+              {assignees.map((a) => (
                 <span key={a} className="tasks-who">
                   @{a}
-                  <button className="task-x" title={`Unassign ${a}`} disabled={busy} onClick={() => assign([], [a])}>
+                  <button className="task-x" title={`Unassign ${a}`} onClick={() => assign([], [a])}>
                     ×
                   </button>
                 </span>
               ))}
             </div>
-            <input className="field" aria-label="Assign someone" placeholder="Assign someone…" value={who} disabled={busy} onChange={(e) => setWho(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && who.trim()) { const a = who.trim().replace(/^@/, ""); setWho(""); assign([a], []); } }} />
-            {(detail?.assignees ?? task.assignees).length === 0 && <span className="muted">No one</span>}
+            <input className="field" aria-label="Assign someone" placeholder="Assign someone…" value={who} onChange={(e) => setWho(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && who.trim()) { const a = who.trim().replace(/^@/, ""); setWho(""); assign([a], []); } }} />
+            {assignees.length === 0 && <span className="muted">No one</span>}
           </div>
         </div>
       </div>
@@ -222,7 +230,7 @@ export default function TaskDialog({ task, host, onClose, onLabels, onState, wor
 /** GIT-047: close an issue (completed, not planned, or a duplicate of another number), reopen it, and
  * comment on it. A duplicate target is checked by github.rs before anything is sent; issues sharing
  * words of the title are offered as targets. */
-function IssueActions({ host, task, state, title, onDone }: { host: string; task: Task; state: string; title: string; onDone: () => Promise<unknown> }) {
+function IssueActions({ host, task, state, title, onDone, onShow, onUndo }: { host: string; task: Task; state: string; title: string; onDone: () => Promise<unknown>; onShow?: (state: string) => void; onUndo?: () => void }) {
   const [reason, setReason] = useState("completed");
   const [dup, setDup] = useState("");
   const [like, setLike] = useState<Task[]>([]);
@@ -242,11 +250,15 @@ function IssueActions({ host, task, state, title, onDone }: { host: string; task
     };
   }, [reason, host, task.repo, task.number, title]);
   // FIX-1 (council FS 2): busy until the refreshed issue is back; a timeout says the write may have landed.
-  const run = (what: IssueAction, send: Promise<unknown>, after?: () => void) => void runAction({ send, refresh: onDone, after, setBusy, setError, what });
+  // GIT-048: a close or reopen shows at once and is put back if GitHub refuses it.
+  const run = (what: IssueAction, send: Promise<unknown>, after?: () => void, shows?: string) => {
+    if (shows) onShow?.(shows);
+    void runAction({ send, refresh: onDone, after, setBusy, setError, what, onFail: shows ? onUndo : undefined });
+  };
   const dupNumber = issueNumber(dup);
   const close = () => {
     if (reason === "duplicate" && dupNumber === null) return setError("Give the number of the issue this one duplicates, such as 12 or #12.");
-    run("close", invoke("github_issue_state", { ...args, open: false, reason, duplicateOf: reason === "duplicate" ? dupNumber : null }));
+    run("close", invoke("github_issue_state", { ...args, open: false, reason, duplicateOf: reason === "duplicate" ? dupNumber : null }), undefined, "closed");
   };
   return (
     <div className="task-issue" data-issue-actions>
@@ -269,7 +281,7 @@ function IssueActions({ host, task, state, title, onDone }: { host: string; task
             </button>
           </>
         ) : (
-          <button className="btn" disabled={busy} onClick={() => run("reopen", invoke("github_issue_state", { ...args, open: true, reason: "", duplicateOf: null }))}>
+          <button className="btn" disabled={busy} onClick={() => run("reopen", invoke("github_issue_state", { ...args, open: true, reason: "", duplicateOf: null }), undefined, "open")}>
             Reopen issue
           </button>
         )}

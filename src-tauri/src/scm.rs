@@ -1509,6 +1509,71 @@ pub struct TaskPage {
     pub total: u64,
     pub deepest: u64,
     pub items: Vec<Task>,
+    /// GIT-045: repositories GitHub refused to search (gone, renamed, no access); the others still list.
+    pub failed: Vec<RepoFail>,
+}
+
+/// GIT-045: one repository of a multi-repository list that could not be searched, and why.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct RepoFail {
+    pub repo: String,
+    pub error: String,
+}
+
+/// What one search answered: its total and its items with their node ids.
+type Hits = (u64, Vec<(Task, String)>);
+/// A repository-by-repository retry costs one search call each; past this many the list fails as one.
+const SPLIT_MAX: usize = 20;
+
+/// GIT-045: GitHub's refusal of a search because of the repositories in it (gone, renamed or no access), not
+/// because of the account, the limit or the network: those would fail every repository alike.
+fn repo_trouble(e: &str) -> bool {
+    let t = e.to_lowercase();
+    t.contains("cannot be searched") || t.contains("validation failed") || t.contains("http 422")
+}
+
+/// GIT-045: runs a search; when GitHub refuses it because of one of its `repo:` words, each repository is
+/// searched alone, the ones that work are kept and the ones that do not are named in `failed`.
+fn search_split(q: &str, one: &mut dyn FnMut(&str) -> Result<Hits, String>, failed: &mut Vec<RepoFail>) -> Result<Hits, String> {
+    let e = match one(q) {
+        Ok(h) => return Ok(h),
+        Err(e) => e,
+    };
+    let (repos, rest): (Vec<&str>, Vec<&str>) = q.split_whitespace().partition(|w| w.starts_with("repo:"));
+    if repos.len() < 2 || repos.len() > SPLIT_MAX || !repo_trouble(&e) {
+        return Err(e);
+    }
+    let rest = rest.join(" ");
+    let (mut total, mut items, mut bad, mut first) = (0, Vec::new(), 0, None);
+    for r in &repos {
+        match one(&format!("{rest} {r}")) {
+            Ok((n, mut got)) => {
+                total += n;
+                items.append(&mut got);
+            }
+            Err(e2) => {
+                bad += 1;
+                let name = r.trim_start_matches("repo:");
+                if !failed.iter().any(|f| f.repo == name) {
+                    failed.push(RepoFail { repo: name.into(), error: e2.clone() });
+                }
+                first.get_or_insert(e2);
+            }
+        }
+    }
+    match first {
+        Some(e) if bad == repos.len() => Err(e),
+        _ => Ok((total, items)),
+    }
+}
+
+/// GIT-043: one GitHub search, one page.
+fn search_once(gh: &Path, host: &str, q: &str, page: u32) -> Result<Hits, String> {
+    let (q, per, pg) = (format!("q={q}"), format!("per_page={TASKS_PER_PAGE}"), format!("page={page}"));
+    let args = ["api", "search/issues", "--hostname", host, "-X", "GET", "-f", &q, "-f", "sort=updated", "-f", "order=desc", "-f", &per, "-f", &pg];
+    let text = gh_run(gh, &std::env::temp_dir(), &args, None).map_err(|e| format!("{host}: {}", gh_words(&e)))?;
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
+    Ok((v["total_count"].as_u64().unwrap_or(0), v["items"].as_array().into_iter().flatten().filter_map(task_from).collect()))
 }
 
 pub const TASKS_PER_PAGE: u32 = 25;
@@ -1580,14 +1645,10 @@ pub fn tasks_search(gh: &Path, host: &str, queries: &[String], page: u32) -> Res
     let mut out = TaskPage::default();
     let mut ids = Vec::new();
     for q in queries {
-        let (q, per, pg) = (format!("q={q}"), format!("per_page={TASKS_PER_PAGE}"), format!("page={page}"));
-        let args = ["api", "search/issues", "--hostname", host, "-X", "GET", "-f", &q, "-f", "sort=updated", "-f", "order=desc", "-f", &per, "-f", &pg];
-        let text = gh_run(gh, &std::env::temp_dir(), &args, None).map_err(|e| format!("{host}: {}", gh_words(&e)))?;
-        let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
-        let total = v["total_count"].as_u64().unwrap_or(0);
+        let (total, hits) = search_split(q, &mut |q| search_once(gh, host, q, page), &mut out.failed)?;
         out.total += total;
         out.deepest = out.deepest.max(total);
-        for (t, id) in v["items"].as_array().into_iter().flatten().filter_map(task_from) {
+        for (t, id) in hits {
             if out.items.iter().all(|x| x.url != t.url) {
                 if t.kind == "pr" {
                     ids.push(id);
@@ -3654,6 +3715,80 @@ mod tests {
         assert_eq!(store.settings()["uiLook"], "new");
         drop(store);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn hit(repo: &str, n: u64) -> (Task, String) {
+        let task = Task { kind: "issue".into(), number: n, title: format!("{repo} issue"), url: format!("https://github.com/{repo}/issues/{n}"), repo: repo.into(), state: "open".into(), draft: false, labels: vec![], assignees: vec![], updated: "2026-10-10T08:00:00Z".into(), checks: None };
+        (task, String::new())
+    }
+
+    #[test]
+    fn git045_one_refused_repository_does_not_blank_the_others() {
+        let refuse = "github.com: gh: Validation Failed (HTTP 422): The listed users and repositories cannot be searched either because the resources do not exist or you do not have permission to view them.";
+        let asked = std::cell::RefCell::new(Vec::<String>::new());
+        let mut one = |q: &str| -> Result<Hits, String> {
+            asked.borrow_mut().push(q.to_string());
+            if q.contains("repo:gone/x") && q.contains("repo:o/a") || q.contains("repo:gone/x") && q.contains("repo:o/b") {
+                Err(refuse.into())
+            } else if q.contains("repo:gone/x") {
+                Err("github.com: gh: Not Found (HTTP 404)".into())
+            } else if q.contains("repo:o/a") && !q.contains("repo:o/b") {
+                Ok((3, vec![hit("o/a", 1)]))
+            } else if q.contains("repo:o/b") && !q.contains("repo:o/a") {
+                Ok((2, vec![hit("o/b", 2)]))
+            } else {
+                Err(refuse.into())
+            }
+        };
+        let mut failed = Vec::new();
+        let got = search_split("is:open repo:o/a repo:gone/x repo:o/b", &mut one, &mut failed).unwrap();
+        assert_eq!(got.0, 5);
+        assert_eq!(got.1.iter().map(|h| h.0.repo.as_str()).collect::<Vec<_>>(), vec!["o/a", "o/b"]);
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].repo, "gone/x");
+        assert!(failed[0].error.contains("404"), "{:?}", failed);
+        // the whole query once, then each repository alone with the other words kept
+        assert_eq!(*asked.borrow(), ["is:open repo:o/a repo:gone/x repo:o/b", "is:open repo:o/a", "is:open repo:gone/x", "is:open repo:o/b"]);
+        // asked again for the other kind of item, the same repository is named once
+        let _ = search_split("is:pr repo:o/a repo:gone/x", &mut one, &mut failed).unwrap();
+        assert_eq!(failed.len(), 1);
+    }
+
+    #[test]
+    fn git045_nothing_is_split_for_trouble_that_is_not_about_a_repository() {
+        for said in ["github.com: API rate limit exceeded", "github.com: Sign in to GitHub first: run gh auth login", "gh did not answer within 30 seconds; try again in a moment"] {
+            let mut calls = 0;
+            let mut failed = Vec::new();
+            let mut one = |_: &str| -> Result<Hits, String> {
+                calls += 1;
+                Err(said.into())
+            };
+            assert_eq!(search_split("is:open repo:o/a repo:o/b", &mut one, &mut failed).unwrap_err(), said);
+            assert_eq!(calls, 1, "{said}");
+            assert!(failed.is_empty());
+        }
+        // one repository alone has nothing to split
+        let mut calls = 0;
+        let mut one = |_: &str| -> Result<Hits, String> {
+            calls += 1;
+            Err("Validation Failed (HTTP 422)".into())
+        };
+        assert!(search_split("is:open repo:o/a", &mut one, &mut Vec::new()).is_err());
+        assert_eq!(calls, 1);
+        // every repository refused: the list fails as one, with the first reason
+        let mut one = |_: &str| -> Result<Hits, String> { Err("Validation Failed (HTTP 422)".into()) };
+        let mut failed = Vec::new();
+        assert!(search_split("is:open repo:o/a repo:o/b", &mut one, &mut failed).is_err());
+        assert_eq!(failed.len(), 2);
+        // a very long list is not retried one by one
+        let many = (0..=SPLIT_MAX).map(|i| format!("repo:o/r{i}")).collect::<Vec<_>>().join(" ");
+        let mut calls = 0;
+        let mut one = |_: &str| -> Result<Hits, String> {
+            calls += 1;
+            Err("Validation Failed (HTTP 422)".into())
+        };
+        assert!(search_split(&many, &mut one, &mut Vec::new()).is_err());
+        assert_eq!(calls, 1);
     }
 
     #[test]

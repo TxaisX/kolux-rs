@@ -106,3 +106,4 @@
 .tasks { position: relative; }
 .gh-banner p{margin:4px 0}
 .gh-banner ol{margin:4px 0 0 18px;padding:0}
+.tasks-list li.leaving{opacity:.35;transition:opacity .4s}
