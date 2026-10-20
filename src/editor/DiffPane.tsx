@@ -6,13 +6,14 @@
 // (the git status watcher, scm/watch.ts) while the tab is in front, or when it comes to the front
 // after a move, so a change made in a terminal, or a stage made elsewhere, shows without
 // reopening. A markdown file's diff is source text, never the rich view. GIT-040: a review note
-// hangs under a line of the new side, in both layouts; the plus in the note gutter or Mod+Shift+A
-// on a selection opens the note popover.
+// hangs under a line of the new side, in both layouts; the plus in the note gutter or the Add
+// Review Note command's chord (Mod+Shift+A unless the user rebinds it) on a selection opens the
+// note popover.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
-import { Decoration, EditorView, GutterMarker, WidgetType, gutter, keymap, type DecorationSet } from "@codemirror/view";
-import { ChangeSet, Compartment, EditorState, Prec, StateEffect, StateField, type Extension } from "@codemirror/state";
+import { Decoration, EditorView, GutterMarker, WidgetType, gutter, type DecorationSet } from "@codemirror/view";
+import { ChangeSet, Compartment, EditorState, StateEffect, StateField, type Extension } from "@codemirror/state";
 import { syntaxHighlighting } from "@codemirror/language";
 import { languageFor } from "./languages";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
@@ -21,6 +22,8 @@ import { ChevronDown, Close, Dots, FileCode, TRASH_PATH } from "../chrome/icons"
 import { attach, baseName, detach, isDirty, relay, replaceAll, subscribe, textOf } from "./buffers";
 import { editors, look, saveFile, StaleNotice } from "./EditorPane";
 import { editedText, type LineNote } from "./diffNotes";
+import { noteCommand } from "./noteCommands";
+import { useKeymap } from "../keys/KeymapContext";
 import { watchStatus } from "../scm/watch";
 
 /** Next (1) or previous (-1) change, by pane key; App's F7 and Shift+F7 call the focused one. */
@@ -94,7 +97,16 @@ class Plus extends GutterMarker {
   }
 }
 const plus = new Plus();
-/** The note gutter, the shortcut and the cards, for the new side of a diff. */
+/** The popover for the lines a view has selected, under the last of them. */
+const noteAtSelection = (view: EditorView, act: NoteActions) => {
+  const sel = view.state.selection.main;
+  const doc = view.state.doc;
+  const end = doc.lineAt(sel.to).number;
+  const c = view.coordsAtPos(doc.line(end).to);
+  act.add(doc.lineAt(sel.from).number, end, { x: c?.left ?? 200, y: c?.bottom ?? 200 });
+};
+/** The note gutter and the cards, for the new side of a diff. The Add Review Note chord is read
+ * from the user's keymap by the pane (a rebinding is the one that works). */
 const noteTools = (act: NoteActions): Extension => [
   noteField(act),
   gutter({
@@ -109,21 +121,6 @@ const noteTools = (act: NoteActions): Extension => [
       },
     },
   }),
-  Prec.highest(
-    keymap.of([
-      {
-        key: "Mod-Shift-a",
-        run: (view) => {
-          const sel = view.state.selection.main;
-          const doc = view.state.doc;
-          const end = doc.lineAt(sel.to).number;
-          const c = view.coordsAtPos(doc.line(end).to);
-          act.add(doc.lineAt(sel.from).number, end, { x: c?.left ?? 200, y: c?.bottom ?? 200 });
-          return true;
-        },
-      },
-    ]),
-  ),
 ];
 type Pop = { line: number; end: number; note?: LineNote; text: string; x: number; y: number; refused?: boolean };
 
@@ -158,6 +155,16 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
     remove: (note) => noteRef.current.onDeleteNote?.(note),
   });
   const notesKey = JSON.stringify(notes);
+  const keys = useKeymap();
+  // GIT-040: the Add Review Note chord, whatever the user has bound it to, adds a note under the
+  // selected lines; holding the keys adds one note.
+  const onKeys = (e: React.KeyboardEvent) => {
+    if (noteCommand(keys, e.nativeEvent) !== "add") return;
+    e.preventDefault();
+    e.stopPropagation();
+    const b = views.current?.b;
+    if (!e.repeat && b) noteAtSelection(b, act.current);
+  };
 
   // The sides, now and whenever git state moves; a move while the tab is hidden is read on its return.
   const missed = useRef<(() => void) | null>(null);
@@ -304,7 +311,7 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
   const name = baseName(path);
   const step = (dir: 1 | -1) => diffNav.get(id)?.(dir);
   return (
-    <section className={`pane editor diff${focused ? " focused" : ""}`} hidden={hidden} aria-label={`Diff of ${name}`} onMouseDown={onFocus} data-kind="diff" data-key={id}>
+    <section className={`pane editor diff${focused ? " focused" : ""}`} hidden={hidden} aria-label={`Diff of ${name}`} onMouseDown={onFocus} onKeyDown={onKeys} data-kind="diff" data-key={id}>
       <header className="pane-head">
         <span className="agent-mark" title="Diff">
           <FileCode size={13} />
