@@ -28,7 +28,8 @@ import { look } from "./EditorPane";
 import { withoutWhitespace } from "./DiffPane";
 import { watchStatus } from "../scm/watch";
 import { useSettings } from "../settings/useSettings";
-import { AC_SPLIT_KEY, AC_TREE_KEY, AC_WHITESPACE_KEY, AC_WRAP_KEY, acLayoutOf, canCommit, isCommitShortcut, type AcLayout, type CommitOutcome, type Status } from "../scm/model";
+import { allChangesStart } from "../settings/editorPrefs";
+import { AC_SPLIT_KEY, AC_TREE_KEY, AC_WHITESPACE_KEY, AC_WRAP_KEY, canCommit, isCommitShortcut, type AcLayout, type CommitOutcome, type Status } from "../scm/model";
 
 export type Entry = { path: string; staged: boolean; code: string; lines: number | null; binary: boolean; stamp: string };
 /** The base a branch is measured against and the snapshot commit the sides are read from. */
@@ -99,7 +100,7 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
   const [outcome, setOutcome] = useState<{ text: string; bad: boolean } | null>(null);
   const { settings, save } = useSettings();
   const [over, setOver] = useState<Partial<AcLayout>>({}); // this tab's toggles over the saved defaults
-  const layout: AcLayout = { ...acLayoutOf(settings), ...over };
+  const layout: AcLayout = { ...allChangesStart(settings, { split: AC_SPLIT_KEY, wrap: AC_WRAP_KEY, spaces: AC_WHITESPACE_KEY, tree: AC_TREE_KEY }), ...over };
   const [fold, setFold] = useState<Record<string, boolean>>({});
   const [width, setWidth] = useState(260);
   const [filter, setFilter] = useState("");

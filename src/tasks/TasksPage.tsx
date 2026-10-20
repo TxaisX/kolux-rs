@@ -11,6 +11,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Refresh, Search } from "../chrome/icons";
 import GhBanner, { classify } from "./GhBanner";
 import { emptyReason } from "./emptyState";
+import { taskSource } from "./taskSource";
 import { applyEdits, editAssign, editLabels, editState, type Edits, leavesFilter, settle, undoAssign, undoLabels, undoState } from "./edits";
 import type { Worktree } from "../projects/model";
 import { useSettings } from "../settings/useSettings";
@@ -386,7 +387,7 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
         {rows.length > 0 && <RepoPicker rows={rows} chosen={chosen} onToggle={(k) => void save({ [REPOS_SETTING]: toggled(chosen.map((r) => r.key), k) })} />}
         {gh && (
           <span className="tasks-repo" title="Where the list comes from">
-            {groups.length > 1 ? groups.map((g) => g.host).join(", ") : gh.host} · {login ? `@${login}` : "not signed in"} · {chosen.length > 1 ? pickerLabel(chosen) : `${gh.owner}/${gh.name}`}
+            {groups.length > 1 ? groups.map((g) => g.host).join(", ") : gh.host} · {taskSource(settings, login).text} · {chosen.length > 1 ? pickerLabel(chosen) : `${gh.owner}/${gh.name}`}
           </span>
         )}
         <button className="btn" data-new-issue-open disabled={!gh} onClick={() => {

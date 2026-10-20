@@ -1,0 +1,283 @@
+//! T-158 (BROW-015): a page's `window.open` that asks for a size (a sign-in through another
+//! service, a payment window) opens a small window of its own instead of a tab. The window stays
+//! the opener's popup (the page keeps its `window.opener`, so the sign-in finishes in the tab), it
+//! inherits the opener's engine (profile, policies), and its title bar is the strip: the origin
+//! alone, trimmed from the left so the real domain stays readable, marked "Not secure" for plain
+//! http to another computer, then the page title. Closing the tab closes its popups; a closed
+//! popup is unlinked from its tab. Unsafe addresses are refused, and before the opener's page has
+//! finished its first load a popup goes to the system browser instead.
+use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
+use std::sync::{LazyLock, Mutex};
+use tauri::Url;
+
+/// The longest origin the strip shows whole; a longer one keeps its right end (the real domain).
+pub const STRIP_MAX: usize = 48;
+/// Label prefix of a popup window.
+pub const LABEL_PREFIX: &str = "browser-popup-";
+
+/// What the strip says about an address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Strip {
+    pub origin: String,
+    pub secure: bool,
+}
+
+/// This computer's own names and addresses (plain http to them counts as secure).
+pub fn loopback(host: &str) -> bool {
+    let h = host.trim_end_matches('.').trim_start_matches('[').trim_end_matches(']');
+    if h.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    h.parse::<IpAddr>().map(|ip| ip.is_loopback()).unwrap_or(false)
+}
+
+/// The origin alone (scheme, host, a port that is not the scheme's own), never a path, query or
+/// sign-in part; long origins are trimmed from the left.
+pub fn strip(url: &Url) -> Strip {
+    let host = url.host_str().unwrap_or_default();
+    let origin = match url.port() {
+        Some(p) => format!("{}://{}:{}", url.scheme(), host, p),
+        None => format!("{}://{}", url.scheme(), host),
+    };
+    let secure = url.scheme() == "https" || (url.scheme() == "http" && loopback(host));
+    Strip { origin: trim_left(&origin, STRIP_MAX), secure }
+}
+
+/// The last `max` characters behind an ellipsis when longer.
+pub fn trim_left(s: &str, max: usize) -> String {
+    let n = s.chars().count();
+    if n <= max {
+        return s.to_string();
+    }
+    let tail: String = s.chars().skip(n - (max - 1)).collect();
+    format!("…{tail}")
+}
+
+/// The popup window's title bar: the strip first (Kolux's own words, which no page title can push
+/// aside), then the page title.
+pub fn title(url: &Url, page_title: &str) -> String {
+    let s = strip(url);
+    let mark = if s.secure { "" } else { "Not secure · " };
+    let page = page_title.trim();
+    if page.is_empty() {
+        format!("{mark}{}", s.origin)
+    } else {
+        format!("{mark}{} — {page}", s.origin)
+    }
+}
+
+/// Where a page's new-window request goes once the tab rules allowed it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Route {
+    /// A plain `_blank` link or `window.open` without a size: another tab (BROW-014).
+    Tab,
+    /// A sized `window.open`: the small linked window.
+    Window,
+    /// The opener's page has not finished its first load: the system browser instead.
+    System,
+}
+
+/// The route for an allowed request: `sized` = the page asked for a width or height, `ready` = the
+/// opener's page finished a load.
+pub fn route(sized: bool, ready: bool) -> Route {
+    match (sized, ready) {
+        (false, _) => Route::Tab,
+        (true, true) => Route::Window,
+        (true, false) => Route::System,
+    }
+}
+
+#[derive(Default)]
+pub struct Links {
+    /// tab id -> its popup labels
+    by_tab: HashMap<u32, Vec<String>>,
+    /// tabs whose page finished a load
+    ready: HashSet<u32>,
+    next: u32,
+}
+
+impl Links {
+    /// A fresh label for a popup of `tab`, linked to it.
+    pub fn open(&mut self, tab: u32) -> String {
+        self.next += 1;
+        let label = format!("{LABEL_PREFIX}{tab}-{}", self.next);
+        self.by_tab.entry(tab).or_default().push(label.clone());
+        label
+    }
+    /// A popup closed: it is unlinked from its tab.
+    pub fn closed(&mut self, label: &str) {
+        for v in self.by_tab.values_mut() {
+            v.retain(|l| l != label);
+        }
+        self.by_tab.retain(|_, v| !v.is_empty());
+    }
+    /// The tab closed: its popups, to close with it.
+    pub fn tab_closed(&mut self, tab: u32) -> Vec<String> {
+        self.ready.remove(&tab);
+        self.by_tab.remove(&tab).unwrap_or_default()
+    }
+    pub fn mark_ready(&mut self, tab: u32) {
+        self.ready.insert(tab);
+    }
+    pub fn is_ready(&self, tab: u32) -> bool {
+        self.ready.contains(&tab)
+    }
+    #[cfg(test)]
+    pub fn popups_of(&self, tab: u32) -> &[String] {
+        self.by_tab.get(&tab).map(Vec::as_slice).unwrap_or(&[])
+    }
+}
+
+pub static LINKS: LazyLock<Mutex<Links>> = LazyLock::new(Default::default);
+
+pub fn mark_ready(tab: u32) {
+    if let Ok(mut l) = LINKS.lock() {
+        l.mark_ready(tab);
+    }
+}
+
+pub fn is_ready(tab: u32) -> bool {
+    LINKS.lock().map(|l| l.is_ready(tab)).unwrap_or(false)
+}
+
+/// Opens the popup window for `tab` on the opener's engine. `None` when the window toolkit refused.
+pub fn open(
+    app: &tauri::AppHandle,
+    tab: u32,
+    url: &Url,
+    features: tauri::webview::NewWindowFeatures,
+    dev: Option<Url>,
+) -> Option<tauri::WebviewWindow> {
+    use tauri::webview::NewWindowResponse;
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    let label = LINKS.lock().ok()?.open(tab);
+    let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url.clone()))
+        .window_features(features)
+        .title(title(url, ""))
+        .zoom_hotkeys_enabled(false)
+        .on_document_title_changed(|w, page| {
+            if let Ok(u) = w.url() {
+                let _ = w.set_title(&title(&u, &page));
+            }
+        })
+        // The popup goes only where a tab may (http, https, never the app's own hosts); the strip
+        // follows it as it navigates.
+        .on_navigation(move |u| super::allowed(u, dev.as_ref()).is_ok())
+        .on_page_load(|w, payload| {
+            let _ = w.set_title(&title(payload.url(), &w.title().unwrap_or_default()));
+        })
+        // A popup's own windows are refused: a sign-in needs none, and nothing stacks up.
+        .on_new_window(|_, _| NewWindowResponse::Deny)
+        .build();
+    match built {
+        Ok(w) => {
+            let gone = label.clone();
+            w.on_window_event(move |e| {
+                if matches!(e, tauri::WindowEvent::Destroyed) {
+                    if let Ok(mut l) = LINKS.lock() {
+                        l.closed(&gone);
+                    }
+                }
+            });
+            Some(w)
+        }
+        Err(_) => {
+            if let Ok(mut l) = LINKS.lock() {
+                l.closed(&label);
+            }
+            None
+        }
+    }
+}
+
+/// The tab closed: its popups close with it.
+pub fn close_for(app: &tauri::AppHandle, tab: u32) {
+    use tauri::Manager;
+    let labels = LINKS.lock().map(|mut l| l.tab_closed(tab)).unwrap_or_default();
+    for label in labels {
+        if let Some(w) = app.get_webview_window(&label) {
+            let _ = w.close();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn u(s: &str) -> Url {
+        Url::parse(s).unwrap()
+    }
+
+    #[test]
+    fn brow015_the_strip_is_the_origin_alone_never_path_query_or_sign_in() {
+        let s = strip(&u("https://user:pw@github.com/login/oauth/authorize?client_id=abc&state=xyz#frag"));
+        assert_eq!(s.origin, "https://github.com");
+        assert!(s.secure);
+        assert_eq!(strip(&u("https://pay.example.com:8443/checkout?id=1")).origin, "https://pay.example.com:8443");
+        // the scheme's own port is not shown
+        assert_eq!(strip(&u("https://example.com:443/x")).origin, "https://example.com");
+    }
+
+    #[test]
+    fn brow015_long_origins_are_trimmed_from_the_left_so_the_domain_stays() {
+        let long = "https://a-very-long-subdomain-name.another-long-part.login.example.com/path";
+        let s = strip(&u(long));
+        assert_eq!(s.origin.chars().count(), STRIP_MAX);
+        assert!(s.origin.starts_with('…'));
+        assert!(s.origin.ends_with("login.example.com"));
+        // exactly at the limit: kept whole
+        let at = format!("https://{}.com", "a".repeat(STRIP_MAX - "https://.com".len()));
+        assert_eq!(strip(&u(&at)).origin.chars().count(), STRIP_MAX);
+        assert!(!strip(&u(&at)).origin.starts_with('…'));
+    }
+
+    #[test]
+    fn brow015_plain_http_is_not_secure_except_to_this_computer() {
+        assert!(!strip(&u("http://example.com/")).secure);
+        assert!(strip(&u("http://localhost:3000/")).secure);
+        assert!(strip(&u("http://127.0.0.1:8080/")).secure);
+        assert!(strip(&u("http://127.4.5.6/")).secure);
+        assert!(strip(&u("http://[::1]:5173/")).secure);
+        assert!(!strip(&u("http://localhost.example.com/")).secure, "a lookalike is not this computer");
+        assert!(!strip(&u("http://10.0.0.5/")).secure, "another computer on the network is not this one");
+    }
+
+    #[test]
+    fn brow015_the_title_bar_puts_the_strip_before_the_page_title() {
+        assert_eq!(title(&u("https://github.com/login?x=1"), "Sign in to GitHub"), "https://github.com — Sign in to GitHub");
+        assert_eq!(title(&u("http://example.com/a"), "Pay"), "Not secure · http://example.com — Pay");
+        assert_eq!(title(&u("https://github.com/"), "  "), "https://github.com");
+        // a page title pretending to be an origin still comes after the real one
+        assert!(title(&u("https://evil.test/"), "https://bank.com").starts_with("https://evil.test — "));
+    }
+
+    #[test]
+    fn brow015_a_sized_request_is_a_popup_window_and_waits_for_the_openers_first_load() {
+        assert_eq!(route(false, true), Route::Tab);
+        assert_eq!(route(false, false), Route::Tab);
+        assert_eq!(route(true, true), Route::Window);
+        assert_eq!(route(true, false), Route::System);
+    }
+
+    #[test]
+    fn brow015_popups_stay_linked_to_their_tab_and_close_with_it() {
+        let mut l = Links::default();
+        let a = l.open(7);
+        let b = l.open(7);
+        let c = l.open(9);
+        assert_ne!(a, b);
+        assert!(a.starts_with(LABEL_PREFIX));
+        assert_eq!(l.popups_of(7), [a.clone(), b.clone()]);
+        // a closed popup is unlinked; its tab and the other popup stay
+        l.closed(&a);
+        assert_eq!(l.popups_of(7), std::slice::from_ref(&b));
+        // the tab closes: its remaining popups are handed back to close, the other tab's stay
+        l.mark_ready(7);
+        assert_eq!(l.tab_closed(7), vec![b]);
+        assert!(!l.is_ready(7));
+        assert_eq!(l.popups_of(9), [c]);
+        assert!(l.tab_closed(7).is_empty());
+    }
+}

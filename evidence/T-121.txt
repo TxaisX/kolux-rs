@@ -156,3 +156,26 @@ dot shows needs you, approve: working, turn ends: done. Switch Hermes off: confi
 original and the allowlist holds only the user's pairs.
 Still open on T-121: STAT-013 Droid PermissionRequest install, STAT-014 Command Code, STAT-015 Kimi limit
 fields (no public reference for any of them).
+
+== Batch 7 (2026-10-20, hooks lane, Opus 5.5; lane/hooks from ee2f94c7): owner FIX "Hermes consent = let Hermes ask" ==
+Txais decided 2026-10-20 (after-list row "Hermes consent", coordinator FIX-SOON, then DECIDED): Kolux stops
+writing Hermes's shell-hooks-allowlist.json; Hermes shows its own first-use prompt and the user answers it.
+- agent_hooks/hermes.rs: approve() and unapprove() removed; install(home, file) and remove(home, file) touch
+  config.yaml only (marked blocks, byte-for-byte removal unchanged). inspect() still READS the allowlist so the
+  status row says "partial" with the consent hint until the user has answered Hermes's prompt.
+- Cleanup of pairs an older Kolux run wrote: T-121 kept no per-pair record (only a .bak copy of the file and the
+  created-files record), and a pair for Kolux's command may since be the user's own answer, so removal leaves
+  the file alone, byte for byte (after-list AFTER row, hooks lane).
+- more.rs: the Hermes branch of the per-agent switch no longer resolves or passes the allowlist path.
+Tests (cargo test --lib agent_hooks): stat_016_install_keeps_the_users_yaml_and_removal_gives_it_back_byte_for_byte
+(allowlist byte for byte after install and after removal, no .bak of it; user answers -> installed; an older
+Kolux pair is left alone), stat_016_crlf_missing_and_emptied_files (no allowlist created; partial + consent
+hint), stat_016_shapes_a_line_editor_cannot_join_are_left_alone, stat_016_a_block_edited_by_hand_is_refused_not_overwritten,
+more::tests::t_121_rows_name_each_agent (Hermes row partial with the consent hint, no allowlist file).
+Gates (logs G:/Temp/hooks-v3-logs/b7-h-*): clippy 0, build 0, agent_hooks 102 passed / 4 failed (known:
+t_152_1, t_134_b, t_152_b_2, vendors fix1_apply), hooks 121/4 known.
+LIVE PROOF PENDING (batched), replaces the batch 6 steps: with a scratch HOME holding .hermes/config.yaml, start
+Kolux (hooks on, Hermes found): Hermes row "partial" with the consent hint, no shell-hooks-allowlist.json made
+by Kolux; run Hermes in a pane: Hermes itself asks to approve Kolux's hooks; approve: the row reads
+"installed" and the dot follows the turn. Switch Hermes off: config.yaml byte for byte the original, the
+allowlist untouched.

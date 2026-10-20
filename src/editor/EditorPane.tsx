@@ -42,11 +42,14 @@ import { drafts, restoreFrom, worktreeOf } from "./drafts";
 import { confirmed } from "./fileMoved";
 import { richChange, splitFront } from "./frontMatter";
 import { bannerUp, beginSave, canUndo, checkOnce, endSave, forget, holdRestored, keep, POLL_MS, readFresh, reloadNow, remember, setBanner as markBanner, UNDO_TOAST_MS, type Io, type Stamp, type UndoEntry } from "./diskChange";
-import { CompareView, DiskBanner, UndoToast } from "./DiskBanner";
+import { CompareView, DiskBanner, GoneNotice, UndoToast } from "./DiskBanner";
 import { isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
 import { minimap } from "./minimap";
-import { SlashMenu, TableMenu } from "./SlashPanel";
+import { SlashMenu, TableMenu, WikiMenu } from "./SlashPanel";
+import TableControls from "./TableControls";
+import CodeLabel from "./CodeLabel";
 import type { SlashView } from "./slashMenu";
+import type { WikiView } from "./wikiPopup";
 import { domPick, noteDraft, selections, type Note } from "./notes";
 import { contextText, richContext } from "./copyContext";
 import NoteRail from "./NoteRail";
@@ -195,6 +198,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   // T-073: the disk copy changed under unsaved edits (with the stamp Keep my edits keeps), the
   // Compare view, and the Undo toast after a Reload.
   const [moved, setMoved] = useState<{ stamp: Stamp | null } | null>(null);
+  const [gone, setGone] = useState(false); // EDIT-032: the file was deleted or moved away while this tab is open
   const [comparing, setComparing] = useState(false);
   const [undoable, setUndoable] = useState<UndoEntry | null>(null);
   const report = useRef({ onDirty, onToast });
@@ -230,6 +234,8 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   const richHost = useRef<HTMLDivElement>(null);
   const rich = useRef<ReturnType<typeof mountRich> | null>(null);
   const [slashView, setSlashView] = useState<SlashView | null>(null);
+  const [wikiView, setWikiView] = useState<WikiView | null>(null);
+  const wikiFiles = useRef<string[]>([]); // the worktree's files for the [[ popup, listed once per open note
   const [richEditor, setRichEditor] = useState<ReturnType<typeof mountRich>["editor"] | null>(null);
   const [ready, setReady] = useState(0); // counts loads, so the rich view starts after each one
   useEffect(() => view.current?.dispatch({ effects: wrapping.reconfigure(wrap ? EditorView.lineWrapping : []) }), [wrap, ready]);
@@ -290,6 +296,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
     setError(null);
     setStale(false);
     setMoved(null);
+    setGone(false);
     setComparing(false);
     let loaded: Stamp | null = null;
     // T-073: the stamp is taken before the text, so a write landing in between shows at the next check.
@@ -378,7 +385,13 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
   // and whenever the window gets focus.
   const io = useRef<Io>(null!);
   io.current = {
-    stamp: () => stampOne(path),
+    stamp: () =>
+      stampOne(path).then((s) => {
+        // EDIT-032: a file that is gone is said so (a failed look at a file that is still there is not).
+        if (s) setGone(false);
+        else void invoke<string>("path_kind", { path }).then((k) => setGone(k === "missing"), () => undefined);
+        return s;
+      }),
     read: () => invoke<string>("file_read", { path }),
     dirty: () => isDirty(path),
     current: () => textOf(path),
@@ -497,7 +510,8 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
           pushed = now.slice(0, change.from) + change.insert + now.slice(change.to);
           cm.dispatch({ changes: change, userEvent: "input" });
         }
-      }, (t) => report.current.onToast?.(t), setSlashView);
+      }, (t) => report.current.onToast?.(t), setSlashView, { files: () => wikiFiles.current, notePath: shortPath(path, root), show: setWikiView });
+      if (root) void invoke<{ files: string[] }>("file_list", { root }).then((l) => void (wikiFiles.current = l.files), () => undefined);
       setRichEditor(rich.current.editor);
     } catch (err) {
       setRichError(String(err));
@@ -517,6 +531,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
       rich.current = null;
       setRichEditor(null);
       setSlashView(null);
+      setWikiView(null);
     };
   }, [md, mode, ready, bigOk, richTries, path]);
 
@@ -790,6 +805,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
         />
       )}
       {stale && <StaleNotice path={path} onDone={() => setStale(false)} onToast={report.current.onToast} />}
+      {gone && <GoneNotice path={path} />}
       {moved && !stale && !comparing && !follow && <DiskBanner path={path} onReload={reload} onKeep={keepMine} onCompare={() => setComparing(true)} />}
       {undoable && !moved && <UndoToast path={path} onUndo={undoReload} onClose={() => setUndoable(null)} />}
       {banner && (
@@ -819,7 +835,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
       {noteFind && shown === "rich" && (
         <FindBar pane={id} root={richRoot} open={noteFind} onClose={() => setNoteFind(null)} replace={readOnly ? undefined : (ranges, text) => rich.current && replaceInRich(rich.current.editor, ranges, text)} />
       )}
-      {md && shown === "rich" && !comparing && !readOnly && <RichToolbar get={() => rich.current} />}
+      {md && shown === "rich" && !comparing && !readOnly && <RichToolbar get={() => rich.current} notePath={path} onNote={onToast} />}
       {railShown && <NoteRail host={richHost} notes={railed} version={noteText} onRemove={onRemoveNote} />}
       {tocShown && <Contents md={noteText} path={path} root={richRoot} onClose={() => setToc(false)} />}
       {tocShown && <TocResizer width={tocWidth} onWidth={setTocWidth} />}
@@ -838,8 +854,11 @@ export default function EditorPane({ id, path, root = null, readOnly = false, fo
         </div>
       )}
       {md && shown === "rich" && !comparing && <SlashMenu view={slashView} onPick={(id) => rich.current?.pickSlash(id)} />}
+      {md && shown === "rich" && !comparing && <WikiMenu view={wikiView} onPick={(p) => rich.current?.pickWiki(p)} />}
       {md && shown === "rich" && !comparing && <TableMenu editor={richEditor} />}
       {md && shown === "rich" && !comparing && <FrontMatterBlock front={frontText} hide={hideFront} />}
+      {md && shown === "rich" && !comparing && !readOnly && <TableControls editor={richEditor} />}
+      {md && shown === "rich" && !comparing && !readOnly && <CodeLabel editor={richEditor} />}
       {md && <div ref={richHost} className="pane-body md-rich" onClickCapture={(e) => richHost.current && followClick(e.nativeEvent, richHost.current, path, root, onLink)} contentEditable suppressContentEditableWarning spellCheck={spell} hidden={shown !== "rich" || comparing} aria-label={`${name}, rich view`} />}
     </section>
   );

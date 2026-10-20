@@ -1,7 +1,5 @@
-// src/editor/diagramLibs.ts  (T-235-b). NOT built yet: save this file under that name only AFTER the
-// package.json patch (editor-T-235-b-package.json.patch) is applied and `pnpm install` has run. It is the
-// one place that imports mermaid and katex; diagrams.ts loads it when it exists (import.meta.glob), so
-// the app builds and runs the same with or without it.
+// src/editor/diagramLibs.ts (T-235-b): the one place that imports mermaid and katex; diagrams.ts loads it
+// when it exists (import.meta.glob), so the app builds and runs the same with or without it.
 import DOMPurify from "dompurify";
 import katex from "katex";
 import "katex/dist/katex.min.css";

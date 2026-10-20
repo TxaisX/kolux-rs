@@ -7,19 +7,22 @@ import { joinPath, revealAt, searchSession, summary, type Found } from "./search
 import "./editor-extras.css";
 
 // It stays mounted while the tree is shown, so going back to it keeps the search and its results.
-type Props = { root: string; hidden: boolean; focusAsk: number; onOpen: (path: string) => void; /** EDIT-038: the text to search for, set each time a search is started from an editor. */ seed?: { text: string; at: number } };
+type Props = { root: string; hidden: boolean; focusAsk: number; onOpen: (path: string) => void; /** EDIT-038: the text to search for, set each time a search is started from an editor. */ seed?: { text: string; at: number }; /** EDIT-035: "Find in folder" limits the search to one folder through the include pattern. */ scope?: { glob: string; at: number } };
 
 // The panel is narrow, so only the words just before a hit are shown and the hit stays in sight.
 const LEAD = 20;
 const lead = (s: string) => (s.length > LEAD ? "…" + s.slice(-LEAD) : s);
 
-export default function ContentSearch({ root, hidden, focusAsk, onOpen, seed }: Props) {
+export default function ContentSearch({ root, hidden, focusAsk, onOpen, seed, scope }: Props) {
   const [query, setQuery] = useState("");
   const [matchCase, setMatchCase] = useState(false);
   const [wholeWord, setWholeWord] = useState(false);
   const [regex, setRegex] = useState(false);
   const [include, setInclude] = useState("");
   const [exclude, setExclude] = useState("");
+  useEffect(() => {
+    if (scope) setInclude(scope.glob);
+  }, [scope?.at]);
   const [found, setFound] = useState<Found | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

@@ -920,6 +920,20 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .statusbar .upd-item .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--done); }
 .statusbar .upd-item.error { color: var(--danger); }
 .statusbar .upd-item.error .dot { background: var(--meter-danger); }
+/* SKILL-027: the skill update item (spinner with a count, green check, red failure) and SKILL-025: the freshness pill. */
+.statusbar .skill-item { color: var(--fg); font: inherit; padding: 0 4px; border-radius: 4px; }
+.statusbar .skill-item:hover { background: var(--row-selected); }
+.statusbar .skill-item .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--done); }
+.statusbar .skill-item.bad { color: var(--danger); }
+.statusbar .skill-item.bad .dot { background: var(--meter-danger); }
+.statusbar .skill-item .spin { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--line-strong); border-top-color: var(--fg); animation: skill-spin 0.9s linear infinite; }
+@keyframes skill-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .statusbar .skill-item .spin { animation: none; } }
+.skills-pill { flex: none; padding: 0 6px; border-radius: 9px; font: inherit; font-size: 10.5px; border: 1px solid var(--line-strong); color: var(--fg-faint); background: transparent; }
+button.skills-pill { cursor: pointer; }
+.skills-pill.ok { color: var(--done); }
+.skills-pill.warn { color: var(--warn); }
+.skills-pill.bad { color: var(--danger); }
 .res-pop { right: 16px; bottom: 32px; width: min(460px, calc(100vw - 32px)); max-height: min(70vh, 560px); overflow-y: auto; }
 .res-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-right: 8px; }
 .res-free { font-size: 12px; color: var(--fg-muted); }
@@ -1518,3 +1532,13 @@ html[data-divider="row"], html[data-divider="row"] * { cursor: row-resize !impor
 .proj-group-kids { padding-left: 8px; }
 .tab-switcher { top: 20%; left: 50%; transform: translateX(-50%); z-index: 60; min-width: 280px; max-height: 60vh; overflow-y: auto; }
 .tab-switcher .menu-item.on { background: var(--row-selected); }
+/* T-301 (APP-012): with window blur on, the page background lets the blurred desktop show through. */
+html[data-window-blur="on"] body { background: color-mix(in srgb, var(--app-bg) 72%, transparent); }
+.app-icon-picks { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+.app-icon-pick { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 6px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+.app-icon-pick.on { border-color: var(--accent); }
+.app-icon-pick input { position: absolute; opacity: 0; pointer-events: none; }
+.app-icon-swatch { width: 18px; height: 18px; border-radius: 5px; }
+.app-icon-swatch.classic { background: linear-gradient(135deg, #2b2b33, #8a8a96); }
+.app-icon-swatch.watercolor { background: linear-gradient(135deg, #f0b8c4, #a8dcd8); }
+.app-icon-swatch.blue { background: linear-gradient(135deg, #0b2a6e, #9cd0ff); }

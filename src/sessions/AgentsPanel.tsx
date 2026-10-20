@@ -3,13 +3,17 @@
 // refocused (from cache), when the Refresh button is pressed (a full rescan) and a moment after an
 // agent starts; results are drawn only once typing has paused. Resume opens a terminal in the
 // session's folder; Copy command copies the same command for the shell the tab runs.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./sessions.css";
+import { asListing, NO_REPORT, notices, type Listing, type ScanReport } from "./notices";
+import { sameShown } from "./redraw";
 import { ago, filterSessions, groupSessions, MAX_QUERY, parseQuery, shortLabel, sortSessions, type GroupBy, type Project, type Session, type SortBy } from "./model";
 import { chooseScope, DEFAULT_VIEW, DEPTHS, differing, effectiveScope, readScope, readView, SCOPE_KEY, VIEW_KEY, type Scope, type ViewPrefs } from "./prefs";
 import { AFTER_START_MS, publishDelay, recall, remember, RescanLimiter } from "./refresh";
 import { dragPayload, planFor, resumeBlock, SESSION_DRAG, type ResumePlan } from "./resume";
+import { chatResumeBlock } from "./chatResume";
+import SessionDetail from "./SessionDetail";
 
 export type PanelProps = {
   /** The window's settings and the way to save one (the view options and the scope live there, so every window sees them). */
@@ -26,6 +30,11 @@ export type PanelProps = {
   /** The program of the shell the new tab runs, so the copied command is written for it. */
   shell: string | null;
   onResume: (s: Session, plan: ResumePlan) => void;
+  /** VIEW-086 (T-146-d): resume in a new tab and bring the Agents (chat) screen to the front; the button shows only when this is given. */
+  onResumeChat?: (s: Session, plan: ResumePlan) => void;
+  /** VIEW-084: every workspace folder open in Kolux, and the way to go to one (the row's worktree line). */
+  openDirs?: string[];
+  onJump?: (dir: string) => void;
 };
 
 /** What the back end is asked for under the saved scope and depth. */
@@ -53,8 +62,31 @@ function useLastKey() {
   return at;
 }
 
-export default function AgentsPanel(props: PanelProps) {
-  const { settings, onSave, activeDir, projectDirs, rescanKey, visible, shell, onResume } = props;
+/** The last answer for a scope, from memory. */
+const cached = (key: string): Listing | null => {
+  const c = recall<unknown>(key);
+  return c === undefined ? null : asListing(c);
+};
+
+/**
+ * VIEW-115: the panel redraws only when what it shows changes (its two settings, the folders, the
+ * shell, the visible flag, the rescan key). The callbacks the window passes are new on every render,
+ * so the memoised view reads the latest ones through stable wrappers instead of comparing them.
+ */
+function AgentsPanel(props: PanelProps) {
+  const latest = useRef(props);
+  latest.current = props;
+  const onSave = useCallback((key: string, value: unknown) => latest.current.onSave(key, value), []);
+  const onResume = useCallback((s: Session, plan: ResumePlan) => latest.current.onResume(s, plan), []);
+  const onResumeChat = useCallback((s: Session, plan: ResumePlan) => latest.current.onResumeChat?.(s, plan), []);
+  return <AgentsView {...props} onSave={onSave} onResume={onResume} onResumeChat={props.onResumeChat ? onResumeChat : undefined} />;
+}
+
+const AgentsView = memo(AgentsPanelBody, (a, b) => sameShown(a, b));
+export default AgentsPanel;
+
+function AgentsPanelBody(props: PanelProps) {
+  const { settings, onSave, activeDir, projectDirs, rescanKey, visible, shell, onResume, onResumeChat } = props;
   const projects = props.projects ?? NO_PROJECTS;
   const { dirs, all, depth, scope } = request(settings, activeDir, projectDirs);
   const view = readView(settings[VIEW_KEY]);
@@ -62,7 +94,8 @@ export default function AgentsPanel(props: PanelProps) {
   const [query, setQuery] = useState("");
   const [optionsOpen, setOptionsOpen] = useState(false);
   const key = scopeKey({ dirs, all, depth });
-  const [list, setList] = useState<Session[] | null>(() => recall<Session[]>(key) ?? null);
+  const [list, setList] = useState<Session[] | null>(() => cached(key)?.sessions ?? null);
+  const [report, setReport] = useState<ScanReport>(() => cached(key)?.report ?? NO_REPORT);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -76,14 +109,16 @@ export default function AgentsPanel(props: PanelProps) {
     (force: boolean) => {
       const asked = live.current;
       setBusy(true);
-      invoke<Session[]>("sessions_list", { dirs: asked.dirs, all: asked.all, depth: asked.depth, force })
-        .then((rows) => {
+      invoke<unknown>("sessions_list", { dirs: asked.dirs, all: asked.all, depth: asked.depth, force })
+        .then((raw) => {
+          const got = asListing(raw);
           const arrived = Date.now();
           const publish = () => {
             timer.current = null;
-            remember(asked.key, rows);
+            remember(asked.key, got);
             if (live.current.key === asked.key) {
-              setList(rows);
+              setList(got.sessions);
+              setReport(got.report);
               setError(null);
             }
             setBusy(false);
@@ -103,7 +138,8 @@ export default function AgentsPanel(props: PanelProps) {
   useEffect(() => () => void (timer.current !== null && window.clearTimeout(timer.current)), []);
   // Showing the tab, or another scope, reads from cache; the last results for that scope show at once.
   useEffect(() => {
-    setList(recall<Session[]>(key) ?? null);
+    setList(cached(key)?.sessions ?? null);
+    setReport(cached(key)?.report ?? NO_REPORT);
     if (visible) load(false);
   }, [key, visible, load]);
   useEffect(() => {
@@ -128,6 +164,13 @@ export default function AgentsPanel(props: PanelProps) {
     setNote(null);
     planFor(s, activeDir, shell).then(
       (plan) => onResume(s, plan),
+      (err) => setNote(String(err)),
+    );
+  };
+  const resumeChat = (s: Session) => {
+    setNote(null);
+    planFor(s, activeDir, shell).then(
+      (plan) => onResumeChat?.(s, plan),
       (err) => setNote(String(err)),
     );
   };
@@ -241,6 +284,12 @@ export default function AgentsPanel(props: PanelProps) {
           {note}
         </div>
       )}
+      {list !== null &&
+        notices(report, total).map((n) => (
+          <div key={n.id} className="sb-hint" role="status" data-scan-notice>
+            {n.text}
+          </div>
+        ))}
       {list !== null && total === 0 && error === null && <div className="sb-hint">No past sessions here yet. Sessions of Claude and Codex show up once they have run.</div>}
       {list !== null && total > 0 && shown.length === 0 && !parsed.tooLong && <div className="sb-hint">No session matches the search and options.</div>}
       <ul className="agents-list">
@@ -260,10 +309,19 @@ export default function AgentsPanel(props: PanelProps) {
               <div className="agents-meta">
                 {s.agent} · {ago(s.modifiedMs, now)} · {s.turns} message{s.turns === 1 ? "" : "s"}
               </div>
+              <SessionDetail session={s} activeDir={activeDir} openDirs={props.openDirs ?? projectDirs} onJump={props.onJump} />
               <div className="agents-actions">
                 <button type="button" className="btn" disabled={block !== null} title={block ?? "Open a terminal and continue this session"} onClick={() => resume(s)}>
                   Resume
                 </button>
+                {onResumeChat && (() => {
+                  const chatBlock = block ?? chatResumeBlock(s, activeDir);
+                  return (
+                    <button type="button" className="btn" disabled={chatBlock !== null} title={chatBlock ?? "Continue this session in the Agents chat"} onClick={() => resumeChat(s)}>
+                      Resume as chat
+                    </button>
+                  );
+                })()}
                 <button type="button" className="btn" title="Copy the command that resumes this session" onClick={() => copy(s)}>
                   Copy command
                 </button>

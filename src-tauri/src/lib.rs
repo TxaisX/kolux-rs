@@ -3,6 +3,7 @@ mod floating_trust;
 mod repo_scan;
 mod activity;
 mod agents;
+mod app_look;
 mod artifacts;
 mod automations;
 mod badge;
@@ -56,9 +57,6 @@ mod orchestration;
 mod foreground;
 mod procs;
 mod protected;
-// T-156-b: listen() and its helpers are reached from hooks.rs only once evidence/hooks-T-156-b-hooks.rs.patch
-// lands (gated by PLAN T-156-b acceptance; after-list row). Drop this allow with that patch.
-#[allow(dead_code)]
 mod protected_custom;
 mod ports;
 mod labels;
@@ -82,6 +80,8 @@ mod routing;
 mod schedule;
 mod resume;
 mod secrets;
+mod settings_sync;
+mod session_rows;
 mod sessions;
 mod shell_marks;
 mod shell_history;
@@ -100,6 +100,7 @@ mod tray;
 mod trust;
 mod update;
 mod visibility;
+mod web_icon;
 mod usage_alerts;
 
 use state::Store;
@@ -135,11 +136,14 @@ fn get_settings(store: tauri::State<'_, Mutex<Store>>) -> Result<serde_json::Val
 /// thread; typing never waits on the profile drive.
 #[tauri::command(async)]
 fn settings_patch(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, set: serde_json::Map<String, serde_json::Value>, remove: Vec<String>) -> Result<(), String> {
-    write_settings(&app, &store, |old| state::patched(old, &set, &remove))
+    // SET-035 (T-181): updates aimed at retired or secret settings are ignored; every window gets the redacted change.
+    let (set, remove) = settings_sync::accepted(&set, &remove);
+    let payload = settings_sync::broadcast(&set, &remove);
+    write_settings(&app, &store, |old| state::patched(old, &set, &remove), payload)
 }
 
 /// The settings `change` makes of what is on disk, written under one lock.
-fn write_settings(app: &tauri::AppHandle, store: &Mutex<Store>, change: impl FnOnce(serde_json::Value) -> serde_json::Value) -> Result<(), String> {
+fn write_settings(app: &tauri::AppHandle, store: &Mutex<Store>, change: impl FnOnce(serde_json::Value) -> serde_json::Value, payload: serde_json::Value) -> Result<(), String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     let old = store.settings();
     // The window cannot write a secret field; the sealed values on disk are kept as they are.
@@ -153,7 +157,7 @@ fn write_settings(app: &tauri::AppHandle, store: &Mutex<Store>, change: impl FnO
         resume::switched(app, after);
     }
     // Views that depend on a setting (the lapsed sign-in notice, ACCT-012) read again.
-    let _ = tauri::Emitter::emit(app, "settings-saved", ());
+    let _ = tauri::Emitter::emit(app, "settings-saved", payload);
     Ok(())
 }
 
@@ -278,11 +282,17 @@ pub fn run() {
                     move |id| t.try_state::<Terminals>().is_some_and(|ts| ts.started(id).is_some()),
                 );
             }
+            // T-301 (APP-012): the saved app icon variant and window blur, before the window shows.
+            app_look::apply_saved(app.handle());
             app.manage(links::Grants::default());
             // APP-041: the app's own start-and-stop record, next to what the terminals report.
             diag::write(&dir, &format!("app start {starts}, Kolux RS {}", app.package_info().version));
             // SET-004: the window starts hidden and the page shows it once its first frame has the saved
             // look; this is the backstop for a page that never gets that far.
+            // T-286-b (APP-040): the app's own view reports its engine's process failures.
+            if let Some(w) = app.get_webview_window("main") {
+                browser::engine::watch_app_failures(&w, dir.clone());
+            }
             if let Some(w) = app.get_webview_window("main") {
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_secs(5));
@@ -477,6 +487,8 @@ pub fn run() {
             sessions::claude_workspace_sessions,
             sessions::list::sessions_list,
             sessions::list::session_resume_plan,
+            session_rows::session_row_detail,
+            session_rows::session_name,
             terminal::terminal_spawn,
             terminal::terminal_write,
             terminal::terminal_service_info,
@@ -587,6 +599,7 @@ pub fn run() {
             tools::editors_list,
             tools::teams_host,
             awake::keep_awake_state,
+            app_look::app_look_apply,
             token_usage::token_usage,
             token_usage::token_usage_scan,
             token_usage::token_tracking_set,
@@ -672,6 +685,7 @@ pub fn run() {
             browser::browser_cookies_import,
             browser::browser_probe,
             browser::browser_diagnose,
+            browser::certs::browser_cert,
             browser::browser_tab,
             browser::browser_annotate,
             browser::preview::browser_preview,
@@ -787,6 +801,7 @@ pub fn run() {
             files::change_entries,
             files::diff_image,
             files::dir_list,
+            files::dir_ignored,
             files::path_kind,
             artifacts::artifacts_list,
             artifacts::artifact_add,
@@ -798,6 +813,7 @@ pub fn run() {
             fsops::fs_trash,
             fsops::fs_restore,
             fsops::fs_copy,
+            fsops::fs_bytes,
             fsops::fs_move,
             clipboard::clip_copy_text,
             clipboard::clip_copy_files,
@@ -836,6 +852,10 @@ pub fn run() {
         .build(context)
         .unwrap_or_else(|e| tools::startup_failed(&e.to_string()))
         .run(|app, event| {
+            // T-286-b (APP-040): engine exits once the app is quitting are not crashes.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                browser::crash::quitting();
+            }
             if let tauri::RunEvent::Exit = event {
                 // T-075 (APP-050): the final save is one barrier with a deadline: begin() stops the
                 // batched savers, each step runs on its own thread and is waited for only as long as

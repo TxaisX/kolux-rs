@@ -59,3 +59,35 @@ LIVE PROOF PENDING (batched)
     shows no unsaved dot. Enter an existing name: an error shows and nothing moves.
  4. Mod+Shift+M, close the tab without typing: untitled.md is gone from the folder (in the trash).
  5. Click Copy in a file's header, paste somewhere: the full path.
+
+FOURTH PIECE (2026-10-20, lane/editor from 80661c1b): the rest of the card. Every item on the PLAN line is now built.
+BUILT (unit-tested, no app launch)
+- EDIT-035 row menus: right-click a row (Explorer.tsx, rowMenu in explorerView.ts): a file offers View file, Rename, Delete, Copy path,
+  Copy relative path; a folder offers New file here, New folder here, Find in folder, Open in terminal, Add as project (only when the
+  sidebar's project list is mounted and the folder is not the worktree itself), Rename, Delete and the copy items. Find in folder opens the
+  content search with the include pattern <folder>/** (ContentSearch takes a scope). Open in terminal needs the App patch.
+- EDIT-035 live refresh: every shown folder (up to 40) is read again every 3 s while the window is visible, plus on focus; a folder that
+  lists the same entries keeps its old list (sameNodes), so an unchanged tree is not redrawn. This is a poll, not a file watcher.
+- EDIT-035 git-ignored switch: a toolbar button (Funnel icon, kept per worktree like the dotfiles one, shown by default) hides the names
+  git ignores. Rust: files.rs ignored_in + command dir_ignored (one git check-ignore per folder, folders asked as name/); needs the lib.rs patch.
+- EDIT-039 size check: fsops.rs total_bytes + command fs_bytes (counts through folders, stops past the cap, never follows links); the
+  explorer's desktop-drop copy asks it first and refuses a drop over 1 GiB with the message and nothing copied; needs the lib.rs patch.
+- EDIT-037: Mod+Shift+F while the explorer is hidden shows it first (onWake) and starts the search once it is on screen (App patch).
+- EDIT-032: a tab whose file was deleted or moved away says so ("<name> was deleted or moved away. Your text is still here; save to put the
+  file back."); the check is path_kind = missing, so a failed look at a file that is still there says nothing. GoneNotice in DiskBanner.tsx.
+- Already built elsewhere and checked against the card: the kolux file command (T-250-b/c, cli lane; App opens the tabs), a terminal link
+  opening its file in an editor tab (TerminalPane onOpenFile = App openFile), the explorer/chat/kit drop handlers.
+TESTS explorerView +4 (withoutIgnored, sameNodes, rowMenu, folderGlob), diskChange +2 (goneText, a missing file is never a reload),
+  Rust files::edit035 (a repository's ignored files and folders), fsops::edit039 (bytes through folders, the cap, a missing path).
+READINGS (logs G:/Temp/editor-v3-logs/e2..e6-*.log): cargo build 0, clippy -D warnings 0, files:: 39 passed, fsops:: 8 passed (with the
+  lib.rs patch applied, then reverted); tsc --noEmit 0 plain and with the App close patch + explorer patch applied; vitest src/editor src/settings 95 files, 544 passed.
+PATCHES (apply in this order): evidence/editor-T-236-b-close-App.tsx.patch, evidence/editor-T-236-b-explorer-App.tsx.patch (openTerminalIn,
+  onOpenTerminal and onWake on the Explorer), evidence/editor-T-236-b-lib.rs.patch (registers dir_ignored and fs_bytes; without it clippy -D warnings fails on dead code).
+LIVE PROOF PENDING (batched)
+ 1. Create a file from a terminal inside the worktree: within about 3 s it shows in the explorer without clicking Refresh.
+ 2. Click the funnel button: names in .gitignore (a build folder, *.log) disappear; click again, they return; reload: the choice stays for that worktree.
+ 3. Right-click a folder: Find in folder opens Search with "<folder>/**" in the include box; Open in terminal opens a shell tab with cd "<folder>" typed
+    (not run); Add as project adds it when it could be one. Right-click a file: View file opens it; Copy relative path copies it.
+ 4. Hide the explorer (Ctrl+Shift+E), press Ctrl+Shift+F: the explorer returns on the Search view with the box focused.
+ 5. Drag a desktop folder holding over 1 GiB onto an explorer folder: a message says nothing was done.
+ 6. Delete an open file from a terminal: its tab shows the "was deleted or moved away" notice; Save puts the file back and the notice goes.

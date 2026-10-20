@@ -41,6 +41,7 @@ import { forgetColors, setTabColor, tabMenuHead, tabStyle, TAB_COLORS, type TabC
 import { forgetView } from "./terminal/viewKeep";
 import { classify, removePlan, removeQuestion, shellInAgentPane } from "./terminal/remove";
 import { applyAppearance, readAppearance, showScreen, zoomTerm } from "./theme";
+import { applyWindowBlur } from "./chrome/appLook";
 import { useEscapeLeaves } from "./chrome/fullPage";
 import SignInNotice from "./settings/SignInNotice";
 import KeyLostNotice from "./settings/KeyLostNotice";
@@ -87,10 +88,12 @@ import SkillsPage from "./skills/SkillsPage";
 import { generatedOn, generatedTitle, tabText, tabTip } from "./shell/tabTitle";
 import { needsBeat, statusTitle, useBeatFrame } from "./status/tabNameRule";
 import { closeSkills, toggleSkills } from "./skills/nav";
+import { BringSkillsUp } from "./skills/SkillBarItem";
 import { KitGallery, KitSetup } from "./kits/Kits";
 import Wizard from "./onboarding/Wizard";
 import Guides from "./onboarding/Guides";
 import { ADD_PROJECT } from "./onboarding/firstRun";
+import { noteUse } from "./onboarding/features";
 import { startGridTour } from "./onboarding/tour";
 import { KITS, RECALL_KEY, remember, type Kit, type Vendor } from "./kits/catalog";
 import KitStrip from "./kits/KitStrip";
@@ -100,12 +103,19 @@ import DiffPane, { diffNav } from "./editor/DiffPane";
 import AllChangesPane from "./editor/AllChangesPane";
 import { DIFF_SPLIT_KEY, diffSplitOf, targetCell } from "./scm/split";
 import Explorer from "./editor/Explorer";
+import AddProjectRow from "./editor/AddProjectRow";
 import { discardDraftsOf, useFileMoves } from "./editor/useFileMoves";
 import { useCloseGuard } from "./editor/CloseDialog";
 import { trashUnusedNotes } from "./editor/trashUnused";
 import AgentsPanel from "./sessions/AgentsPanel";
+import { FOLDER_TAB_KEY, offeredTabs, rememberTab, tabFor } from "./sessions/folderTabs";
+import { useWorkspaceKind } from "./sessions/useWorkspaceKind";
+import { AttachedWorktreesTab, FolderChecksTab } from "./projects/AttachedTabs.tsx"; // the extension: attachedTabs.ts (logic) differs only in case
 import { useWindowSync } from "./sessions/windowSync";
 import type { ResumePlan } from "./sessions/resume";
+import type { Session } from "./sessions/model";
+import { livePane } from "./sessions/livePane";
+import { sessionNameFor, useSessionNames } from "./sessions/tabTitles";
 import RightSidebar, { clampLeft, clampWidth, Grip, LEFT_KEY, readLeft, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
 import { isMarkdown } from "./editor/markdown";
 import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, resizePlan, rowsFor, splitIndex, toggleCard, blocking, freeCell, canExpand, toggleZoom, zoomedGroup, type Zoom } from "./terminal/grid";
@@ -198,7 +208,7 @@ import { draftKey, feedbackMessage, keepDraft, showsReview, startFeedback, still
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-export type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; forkOf?: string; resumed?: boolean; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number; col?: number; side?: "old" } };
+export type Pane = { /** EDIT-026: an editor tab that follows a growing log (read-only). */ follow?: boolean; key: number; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; forkOf?: string; resumed?: boolean; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number; col?: number; side?: "old" } };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 /** TERM-058: a terminal tab follows the running program's title (`live`) unless the user named it; a worker's task label (ORCH-066) comes first. */
@@ -210,7 +220,7 @@ function tabName(p: Pane, titles: Record<number, string>, label?: string, live: 
   if (p.kind === "diff") return `${baseName(p.path ?? "")} (${p.staged ? "staged" : "unstaged"})`;
   // ORCH-066 / T-129-d: a worker's task label names the tab first; then the user's own name; then the program's title (TERM-058).
   if (label) return label;
-  return followedTitle(p.title, live[p.key] ?? IDLE, p.agent !== "shell" ? programWord(p.agent) : launchedName(p) ?? `Terminal ${p.key}`);
+  return followedTitle(p.title?.trim() ? p.title : sessionNameFor(p.key), live[p.key] ?? IDLE, p.agent !== "shell" ? programWord(p.agent) : launchedName(p) ?? `Terminal ${p.key}`);
 }
 /** TERM-055: the one badge a tab carries beside its agent icon; its look and hover text come from the vocabulary (STAT-052). */
 function TabBadge({ kind }: { kind: Badge }) {
@@ -388,6 +398,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           setSettings(s);
           setSettingsRead(true);
           applyAppearance(readAppearance(s));
+          applyWindowBlur(s);
         })
         .catch(() => setSettings({}));
     readSettings();
@@ -480,7 +491,12 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     saveChanged(settings, next).catch((err) => setNotice(String(err)));
   };
   // VIEW-056 / VIEW-057 (T-146-a): one right sidebar, its open state, tab and width kept in settings.
-  const right = readRight(settings);
+  // VIEW-057 (T-146-g): a folder workspace (a project without Git) offers Attached and PR Checks instead of the git tabs.
+  const kindProject = activeDir ? (Object.entries(owner).find(([d]) => sameDir(d, activeDir))?.[1] ?? null) : null;
+  const wsKind = useWorkspaceKind(kindProject, activeDir, refresh);
+  const offeredRight = offeredTabs(wsKind.folder);
+  const savedRight = readRight(settings);
+  const right = { ...savedRight, tab: tabFor(settings[FOLDER_TAB_KEY], activeDir, savedRight.tab, offeredRight) };
   const leftWidth = dragLeft ?? readLeft(settings);
   const explorerOpen = right.open && right.tab === "explorer";
   const scmOpen = right.open && right.tab === "scm";
@@ -997,6 +1013,16 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // TERM-040 / TERM-041: a new tab joins the focused pane's cell (or opens its own cell) and
   // starts in the workspace folder; an agent tab runs the agent's start line there. Outside any
   // workspace an agent has no folder to work in, so it gets a fresh worktree instead (SESS-004).
+  // EDIT-035: the explorer's "Open in terminal": a shell tab beside the focused pane. A pane belongs to its worktree by its folder, so a
+  // folder inside the worktree opens the shell at the worktree with a `cd` into that folder typed ahead (the quoted relative path).
+  const openTerminalIn = (dir: string) => {
+    if (!activeDir) return;
+    const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
+    const key = nextKey.current++;
+    const rel = sameDir(dir, activeDir) ? "" : dir.slice(activeDir.length).replace(/^[\\/]+/, "");
+    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], typed: rel ? `cd "${rel}"` : undefined }]);
+    setFocused(key);
+  };
   const newTab = async (what: NewTab) => {
     if (what === "diff") {
       if (!activeDir) setToast("Open a workspace to pick one of its changed files.");
@@ -1063,9 +1089,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
 
   // EDIT-001: a file opens as a tab beside the focused pane; a file already open in that cell
   // comes to the front instead of opening twice.
-  const openFile = (path: string, line?: number, column?: number) => {
+  // EDIT-026 (T-317): `follow` opens the file as a read-only log tab that keeps adding lines as the file grows (a caller such as an AI Vault "View Log" button passes true).
+  const openFile = (path: string, line?: number, column?: number, follow?: boolean) => {
     const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
-    const same = here && panes.find((p) => p.kind === "editor" && groupOf(p) === groupOf(here) && keyOf(p.path ?? "") === keyOf(path));
+    const same = here && panes.find((p) => p.kind === "editor" && groupOf(p) === groupOf(here) && keyOf(p.path ?? "") === keyOf(path) && !!p.follow === !!follow);
     // CHAT-025: a file link names a line; the pane keeps it as `jump` (the editor pane reads it once it takes that prop).
     // T-329-b: the column of path:line:column counts too (fileJump turns it into the editor's own, from 0).
     const spot = fileJump(line, column);
@@ -1075,7 +1102,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       return setFocused(same.key);
     }
     const key = nextKey.current++;
-    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "editor", path, jump }]);
+    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "editor", path, jump, ...(follow ? { follow: true } : {}) }]);
     setFocused(key);
   };
   // EDIT-039: a file dragged in from the desktop opens here; a folder on the project list is added there.
@@ -1341,6 +1368,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   };
   // STAT-039 (T-110-b): a prompt typed into an agent started without one names the branch too.
   useRenameOnFirstPrompt((key) => panes.find((p) => p.key === key)?.cwd ?? undefined, settings);
+  // VIEW-093 (T-127-b): an agent tab takes its session's name (the user's own tab name still wins).
+  useSessionNames(panes);
   // VIEW-085 (T-169): a past session resumed in a new tab, in the folder the plan names (the session's
   // own worktree, else the one in front), on the agent's resume line from settings.
   const resumeIn = async (agentId: string, plan: ResumePlan) => {
@@ -1361,6 +1390,19 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     });
     setActiveDir(dir);
     setFocused(key);
+    return true;
+  };
+  // VIEW-088 (T-127-b): a session still running in a pane (sleeping or hidden ones too) focuses that pane instead of starting a copy.
+  const resumeOrFocus = async (s: Session, plan: ResumePlan) => {
+    let key = livePane(panes, s, null);
+    if (key === null) {
+      const d = await invoke<{ prompt: string | null }>("session_row_detail", { agent: s.agent, id: s.id, dir: s.dir }).catch(() => null);
+      key = livePane(panes, s, d?.prompt ?? null);
+    }
+    const pane = key === null ? undefined : panes.find((p) => p.key === key);
+    if (!pane) return resumeIn(s.agent, plan);
+    if (pane.cwd !== null) setActiveDir(pane.cwd);
+    setFocused(pane.key);
   };
   const { afterSetup, startSetup, select, removedAll, removed, projectOf } = useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir, setStacked, nextKey, addShell, settings, screen, setScreen, setPage, owner, recentDirs, activeRef });
   // PROJ-033: a workspace made outside the composer runs its setup script in a background tab.
@@ -1384,6 +1426,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     setToast(`Making the workspace ${name}…`);
     invoke<Created>("workspace_create", { projectId, name, base: null, branch: null, parent: null, ticket: null, issue: null })
       .then((made) => {
+        noteUse("workspace-create");
         setRefresh((n) => n + 1);
         cli.current.select(made.path, made.branch, true);
         void runSetup(made.path, made.branch);
@@ -2405,10 +2448,12 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             scope={[]}
             hasWorktree={activeDir !== null && projectOf(activeDir) !== null}
             onWorktree={(w) => {
+              noteUse("palette");
               setScreen("terminals");
               select(w.path, w.branch ?? null);
             }}
             onCreate={(name, repo) => {
+              noteUse("palette");
               setScreen("terminals");
               const item = workItem(name);
               if (item) return fromItem(item);
@@ -2995,7 +3040,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     id={p.key}
                     path={p.path}
                     root={p.cwd}
-                    readOnly={p.kitPreview}
+                    readOnly={p.kitPreview || p.follow}
+                    follow={p.follow}
                     notes={notes}
                     onRemoveNote={(n) => setNotes((ns) => ns.filter((x) => x !== n))}
                     hidden={!terminals || p.key !== active}
@@ -3139,7 +3185,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             })}
           </div>
         </div>
-        <RightSidebar tab={right.tab} width={clampWidth(dragWidth ?? right.width, window.innerWidth, sidebarOpen ? leftWidth + 8 : 0)} hidden={!terminals || !right.open || fullPage} onTab={(tab) => saveRight({ tab })} onWidth={(w, done) => {
+        <RightSidebar tab={right.tab} width={clampWidth(dragWidth ?? right.width, window.innerWidth, sidebarOpen ? leftWidth + 8 : 0)} hidden={!terminals || !right.open || fullPage} offered={offeredRight} onTab={(tab) => {
+          const next = { ...settings };
+          next[RIGHT_KEYS.tab] = tab;
+          if (wsKind.folder && activeDir !== null) next[FOLDER_TAB_KEY] = rememberTab(settings[FOLDER_TAB_KEY], activeDir, tab);
+          setSettings(next);
+          saveChanged(settings, next).catch((err) => setNotice(String(err)));
+        }} onWidth={(w, done) => {
           const used = clampWidth(w, window.innerWidth, sidebarOpen ? leftWidth + 8 : 0);
           setDragWidth(done ? null : used);
           if (done) saveRight({ width: used });
@@ -3160,11 +3212,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         )}
         {/* VIEW-080 (T-168, T-169): the Agents tab lists past sessions of every agent in the saved scope. */}
         {right.open && right.tab === "agents" && (
-          <AgentsPanel settings={settings} onSave={saveSetting} activeDir={activeDir} projects={projects} projectDirs={Object.entries(owner).filter(([, p]) => p === projectOf(activeDir)).map(([d]) => d)} rescanKey={panes.length} visible={terminals} shell={shells[0]?.program ?? null} onResume={(s, plan) => void resumeIn(s.agent, plan)} />
+          <AgentsPanel settings={settings} onSave={saveSetting} activeDir={activeDir} projects={projects} projectDirs={Object.entries(owner).filter(([, p]) => p === projectOf(activeDir)).map(([d]) => d)} rescanKey={panes.length} visible={terminals} shell={shells[0]?.program ?? null} onResume={(s, plan) => void resumeOrFocus(s, plan)} onResumeChat={(s, plan) => void resumeIn(s.agent, plan).then((ok) => ok && setScreen(classic ? "terminals" : "agents"))} openDirs={[...new Set(panes.map((p) => p.cwd).filter((d): d is string => d !== null))]} onJump={(d) => setActiveDir(d)} />
         )}
+        {right.open && right.tab === "attached" && activeDir !== null && <AttachedWorktreesTab folder={activeDir} worktrees={wsKind.worktrees} />}
+        {right.open && right.tab === "prchecks" && activeDir !== null && <FolderChecksTab folder={activeDir} worktrees={wsKind.worktrees} />}
         {/* VIEW-073: the Checks tab follows the workspace of the focused terminal. */}
         {right.open && right.tab === "checks" && <ChecksPanel dir={activeDir} linked={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} visible={terminals} />}
-        {activeDir ? <Explorer key={activeDir} root={activeDir} hidden={!explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => saveRight({ open: false })} /> : explorerOpen && <div className="sb-hint">Open a workspace to browse its files.</div>}
+        {activeDir ? <Explorer key={activeDir} root={activeDir} hidden={!explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => saveRight({ open: false })} onOpenTerminal={openTerminalIn} onWake={() => showRight("explorer")} /> : explorerOpen && <AddProjectRow />}
         </RightSidebar>
       </div>
       {kits && kits.kit === null && (
@@ -3250,6 +3304,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         />
       )}
       <UpdateCenter />
+      <BringSkillsUp onShow={() => screen !== "skills" && toggleSkills(screen, setScreen)} />
       <FeedbackDialog />
       {reviewOn(settings) && (
         <ReviewNotes

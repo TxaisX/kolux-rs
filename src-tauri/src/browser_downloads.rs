@@ -10,7 +10,7 @@
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 pub const EVENT: &str = "browser-download";
@@ -160,10 +160,49 @@ fn busy_names() -> Vec<String> {
     DOWNLOADS.lock().map(|d| d.iter().filter(|x| x.state == State::Running).map(|x| clash_key(&x.name)).collect()).unwrap_or_default()
 }
 
+/// T-251 (CLI-047): how long `kolux download` waits for its click to start a download.
+pub const ARM_FOR: Duration = Duration::from_secs(10);
+
+type Arm = (u32, PathBuf, Instant);
+static ARMED: Mutex<Vec<Arm>> = Mutex::new(Vec::new());
+
+/// `kolux download`: the tab's next download goes to `path` (already placed: safe, unique, inside
+/// the worktree) instead of the Downloads folder, if it starts within ARM_FOR.
+pub fn arm(id: u32, path: PathBuf) {
+    if let Ok(mut a) = ARMED.lock() {
+        a.retain(|x| x.0 != id);
+        a.push((id, path, Instant::now() + ARM_FOR));
+    }
+}
+
+/// The click failed or started nothing: the tab's next download goes to the Downloads folder again.
+pub fn disarm(id: u32) {
+    if let Ok(mut a) = ARMED.lock() {
+        a.retain(|x| x.0 != id);
+    }
+}
+
+/// The tab's armed path, once: stale arms are dropped first. Pure, so it is tested.
+pub fn take_armed(arms: &mut Vec<Arm>, id: u32, now: Instant) -> Option<PathBuf> {
+    arms.retain(|x| x.2 > now);
+    let i = arms.iter().position(|x| x.0 == id)?;
+    Some(arms.remove(i).1)
+}
+
+/// Where a download written to `path` stands, and the bytes it has written.
+pub fn state_of(path: &Path) -> Option<(State, u64)> {
+    let p = path.display().to_string();
+    DOWNLOADS.lock().ok()?.iter().rev().find(|x| x.path == p).map(|x| (x.state, x.received.max(written(path))))
+}
+
 /// A page asked to download: the registry takes the download under its final path and the pane
-/// hears about it; `Err` when no safe name is free.
+/// hears about it; `Err` when no safe name is free. A path `kolux download` armed wins.
 pub fn requested(app: &AppHandle, id: u32, url: &str, dir: &Path, suggested: &str) -> Result<PathBuf, String> {
-    let path = place(dir, suggested, &busy_names())?;
+    let armed = ARMED.lock().ok().and_then(|mut a| take_armed(&mut a, id, Instant::now()));
+    let path = match armed {
+        Some(p) => p,
+        None => place(dir, suggested, &busy_names())?,
+    };
     let key = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     let d = Download { id, key, url: url.to_string(), name, path: path.display().to_string(), received: 0, total: None, state: State::Running };
@@ -388,5 +427,17 @@ mod tests {
         assert_eq!(busy_names(), vec![clash_key("f")]);
         DOWNLOADS.lock().unwrap().retain(|x| x.id != 7);
         assert!(!downloading(7));
+    }
+
+    #[test]
+    fn cli047_an_armed_path_is_taken_once_by_its_own_tab_and_goes_stale() {
+        let now = Instant::now();
+        let mut arms = vec![(1, PathBuf::from("w/a.zip"), now + ARM_FOR), (2, PathBuf::from("w/b.zip"), now + ARM_FOR), (3, PathBuf::from("w/c.zip"), now)];
+        assert_eq!(take_armed(&mut arms, 9, now), None);
+        assert_eq!(take_armed(&mut arms, 1, now), Some(PathBuf::from("w/a.zip")));
+        assert_eq!(take_armed(&mut arms, 1, now), None, "one download per arm");
+        assert_eq!(take_armed(&mut arms, 3, now), None, "a stale arm is dropped");
+        assert_eq!(take_armed(&mut arms, 2, now + ARM_FOR), None, "too late");
+        assert!(arms.is_empty());
     }
 }
