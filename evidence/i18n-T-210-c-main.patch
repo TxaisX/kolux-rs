@@ -1,0 +1,17 @@
+diff --git a/src/main.tsx b/src/main.tsx
+index 0998317b..c8a4f733 100644
+--- a/src/main.tsx
++++ b/src/main.tsx
+@@ -8,4 +8,5 @@ import { applyAppearance, cachedAppearance, followSystemMode, readAppearance } f
+ import { stampLook } from "./settings/general";
+ import { applyLanguage, LANGUAGE_FIELD } from "./language";
++import { registerBundledPacks } from "./i18n/packs";
+ import { applyZoom, ZOOM_FIELD } from "./settings/zoom";
+ import { followText } from "./terminal/text";
+@@ -42,4 +43,6 @@ async function start() {
+   if (stamped) void saveChanged(saved, stamped).catch(() => {});
+   if (saved) applyAppearance(readAppearance(stamped || saved));
++  // SET-017 (T-210-c): the bundled language packs are known to the lookup (fetched only when their language is needed).
++  registerBundledPacks();
+   // SET-017: the saved language is in force before the first frame draws.
+   applyLanguage(saved?.[LANGUAGE_FIELD]);
