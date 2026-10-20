@@ -1,0 +1,20 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index ec1b427c..4224204b 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -50,6 +50,7 @@ mod resources;
+ mod projects;
+ mod scm;
+ mod skills;
++mod pasted_image;
+ mod pr_checkout;
+ mod pty;
+ mod setup;
+@@ -608,6 +609,7 @@ pub fn run() {
+             clipboard::clip_copy_text,
+             clipboard::clip_copy_files,
+             clipboard::feedback_facts,
++            pasted_image::paste_image_save,
+             diag::diag_bundle,
+             diag::diag_review,
+             diag::diag_review_discard,

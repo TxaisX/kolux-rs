@@ -1,0 +1,64 @@
+diff --git a/src/terminal/TerminalPane.tsx b/src/terminal/TerminalPane.tsx
+--- a/src/terminal/TerminalPane.tsx
++++ b/src/terminal/TerminalPane.tsx
+@@ -40,6 +40,7 @@
+ import { useKeymap } from "../keys/KeymapContext";
+ import { labelOf } from "../keys/keymap";
+ import { attachPaste } from "./paste";
++import { attachScreenshotPaste, clipboardImage, pasteImage, type Deps as ShotDeps } from "./screenshotPaste";
+ import { answersPrompt, newlineAgent, routeKey } from "./shellKeys";
+ import { heldByTerminal } from "../keys/terminalPolicy";
+ import { answeredElsewhere } from "../chat/ask";
+@@ -561,6 +562,17 @@
+     };
+     // TERM-068 lives in paste.ts (tested there); the paste chords are left to the browser instead of xterm.
+     typeIn.current = (data, only) => void write(data, only);
++    // TERM-070 (T-220): a clipboard that holds an image (and no text) saves it and pastes its path. Registered
++    // before the text paste so an image paste is ours; a text paste falls through untouched.
++    const shotDeps: ShotDeps = {
++      save: (bytes, kind) => invoke<string>("paste_image_save", bytes, { headers: { "x-image-kind": kind } }),
++      send: (data) => {
++        if (term.options.scrollOnUserInput !== false) term.scrollToBottom();
++        return write(data);
++      },
++      report: setFlash,
++    };
++    const shots = attachScreenshotPaste(term.textarea, shotDeps);
+     const pasting = attachPaste(
+       term.textarea,
+       (text) => {
+@@ -808,7 +820,16 @@
+     const selected = term.onSelectionChange(() => {
+       if (currentText().copyOnSelect && term.hasSelection()) void navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
+     });
+-    pasteRef.current = () => void navigator.clipboard?.readText().then((t) => t && pasting.paste(t), (e) => sayOnce("paste-refused", `The clipboard could not be read (${e instanceof Error ? e.message : String(e)})`, setFlash));
++    // TERM-070: the menu and chord paste read the clipboard themselves; no text (or an unreadable clipboard) tries the image.
++    const pasteApi = () =>
++      void navigator.clipboard?.readText().then(
++        (t) => {
++          if (t) pasting.paste(t);
++          else void clipboardImage().then((f) => f && pasteImage(f, shotDeps));
++        },
++        (e) => clipboardImage().then((f) => (f ? pasteImage(f, shotDeps) : sayOnce("paste-refused", `The clipboard could not be read (${e instanceof Error ? e.message : String(e)})`, setFlash))),
++      );
++    pasteRef.current = pasteApi;
+     const rightClick = (e: MouseEvent) => {
+       e.preventDefault();
+       if (!currentText().rightClickPaste) {
+@@ -820,7 +841,7 @@
+       if (term.hasSelection()) {
+         void navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
+         term.clearSelection();
+-      } else void navigator.clipboard?.readText().then((t) => t && pasting.paste(t), () => {});
++      } else pasteApi();
+     };
+     el.addEventListener("contextmenu", rightClick);
+     // TERM-103 / TERM-114: after the machine slept the GPU's glyph atlas may be stale and the
+@@ -858,6 +879,7 @@
+       if (id !== null) invoke("terminal_kill", { id }).catch(() => {});
+       choice.dispose();
+       pasting.detach();
++      shots();
+       acks.stop();
+       term.dispose();
+       delete (el as DevHost).__koluxTerm;
