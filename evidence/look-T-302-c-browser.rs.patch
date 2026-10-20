@@ -1,0 +1,13 @@
+diff --git a/src-tauri/src/browser.rs b/src-tauri/src/browser.rs
+index 7a5e8e17..8c8f8327 100644
+--- a/src-tauri/src/browser.rs
++++ b/src-tauri/src/browser.rs
+@@ -831,7 +831,7 @@ async fn fetch_icon(clients: &IconClients, near: bool, url: Url, app: Option<&Ur
+ /// The fetch under one overall time limit: each request's own timeout runs until its body is
+ /// read, and the far request after a hand-off gets only what the near one left. The redirect cap
+ /// is per client, so a hand-off can take up to twice `ICON_HOPS` hops, all inside the limit.
+-async fn fetch_icon_within(clients: &IconClients, near: bool, url: Url, app: Option<&Url>, limit: Duration) -> Option<String> {
++pub(crate) async fn fetch_icon_within(clients: &IconClients, near: bool, url: Url, app: Option<&Url>, limit: Duration) -> Option<String> {
+     let start = Instant::now();
+     let mut res = if near { &clients.near } else { &clients.far }.get(url).timeout(limit).send().await.ok()?;
+     if near && res.status().is_redirection() {

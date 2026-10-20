@@ -1,0 +1,12 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 7f5e1789..7f05b7ed 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -93,6 +93,7 @@ mod tray;
+ mod trust;
+ mod update;
+ mod visibility;
++mod web_icon;
+ mod usage_alerts;
+ 
+ use state::Store;

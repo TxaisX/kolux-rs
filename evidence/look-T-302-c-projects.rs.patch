@@ -1,0 +1,84 @@
+diff --git a/src-tauri/src/projects.rs b/src-tauri/src/projects.rs
+index 2d0aa8ca..9a647b41 100644
+--- a/src-tauri/src/projects.rs
++++ b/src-tauri/src/projects.rs
+@@ -2333,9 +2333,9 @@ pub fn project_icon_set(store: StoreState<'_>, project_id: String, icon: String)
+ // links the page source declares inside the repository, and last the avatar of the owner on the
+ // hosting site. Only files inside the repository are read (never through a link or a `..`), and a
+ // file over `AUTO_ICON_FILE_MAX` is passed over. FIX-4 (2026-10-19): a repository never makes the
+-// app load a web address of its choosing. The manifest's web `icon`, its `homepage` favicon and
+-// `https` icon links in the page source are not followed (T-302-c fetches them in Rust, behind
+-// checks); the one address handed to the page is the owner's avatar on github.com, which the
++// page load a web address of its choosing. T-302-c: the manifest's web `icon`, its `homepage` favicon
++// and `https` icon links in the page source are fetched in Rust behind web_icon.rs's checks and come
++// back as data URLs; the one address handed to the page is the owner's avatar on github.com, which the
+ // content policy allows and nothing else. No hit gives the folder symbol.
+ 
+ /// The most a file may take to be used as an icon: the biggest whole number of 3-byte groups whose
+@@ -2477,9 +2477,25 @@ fn owner_avatar(origin: Option<&str>, upstream: Option<&str>) -> Option<String>
+     (chosen.0 == "github.com").then(|| format!("https://github.com/{}.png", chosen.1))
+ }
+ 
+-/// The icon the repository at `repo` offers, trying the places in order; `None` means the folder symbol.
++/// The icon the repository at `repo` offers from its own files and remote only (no web fetch), for the tests.
++#[cfg(test)]
+ pub fn auto_icon(repo: &Path) -> Option<AutoIcon> {
++    auto_icon_with(repo, &|_| None)
++}
++
++/// The icon the repository at `repo` offers, trying the places in order; `None` means the folder symbol.
++/// `web` fetches a checked web address (T-302-c: `web_icon::fetch`; tests pass a stand-in), at most
++/// `web_icon::WEB_TRIES_MAX` times per project.
++pub fn auto_icon_with(repo: &Path, web: &dyn Fn(&tauri::Url) -> Option<String>) -> Option<AutoIcon> {
+     let image = |src: String| AutoIcon { kind: "image", src };
++    let tries = std::cell::Cell::new(0);
++    let web = |url: tauri::Url| {
++        if tries.get() >= crate::web_icon::WEB_TRIES_MAX {
++            return None;
++        }
++        tries.set(tries.get() + 1);
++        web(&url)
++    };
+     for dir in FAVICON_DIRS {
+         for name in FAVICON_NAMES {
+             let rel = if dir.is_empty() { name.to_string() } else { format!("{dir}/{name}") };
+@@ -2491,12 +2507,18 @@ pub fn auto_icon(repo: &Path) -> Option<AutoIcon> {
+     if let Some(src) = BUNDLE_ICONS.iter().find_map(|rel| repo_image(repo, rel)) {
+         return Some(image(src));
+     }
+-    // a web address in the manifest or the page source is never followed (FIX-4): `repo_image` refuses
+-    // anything with a scheme, so only a path inside the repository can match
++    // `repo_image` refuses anything with a scheme, so only a path inside the repository matches there;
++    // a web address goes only through `web` (T-302-c), never to the page
+     let manifest: Option<serde_json::Value> = repo_text(repo, "package.json").and_then(|t| serde_json::from_str(&t).ok());
+     if let Some(src) = manifest.as_ref().and_then(|m| m["icon"].as_str()).and_then(|rel| repo_image(repo, rel)) {
+         return Some(image(src));
+     }
++    if let Some(src) = manifest.as_ref().and_then(crate::web_icon::manifest_icon_url).and_then(web) {
++        return Some(image(src));
++    }
++    if let Some(src) = manifest.as_ref().and_then(crate::web_icon::homepage_favicon_url).and_then(web) {
++        return Some(image(src));
++    }
+     for page in PAGE_FILES {
+         let Some(text) = repo_text(repo, page) else { continue };
+         let beside = page.rsplit_once('/').map_or("", |(d, _)| d);
+@@ -2506,6 +2528,9 @@ pub fn auto_icon(repo: &Path) -> Option<AutoIcon> {
+             if let Some(src) = repo_image(repo, &rel).or_else(|| from_root.then(|| repo_image(repo, &format!("public/{}", href.trim_start_matches('/')))).flatten()) {
+                 return Some(image(src));
+             }
++            if let Some(src) = crate::web_icon::page_icon_urls(std::slice::from_ref(&href)).into_iter().next().and_then(web) {
++                return Some(image(src));
++            }
+         }
+     }
+     // Git looks in the parent folders for a repository; a folder inside another repository is not that
+@@ -2522,7 +2547,7 @@ pub fn auto_icon(repo: &Path) -> Option<AutoIcon> {
+ #[tauri::command]
+ pub async fn project_auto_icon(store: StoreState<'_>, project_id: String) -> Result<Option<AutoIcon>, String> {
+     let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
+-    tauri::async_runtime::spawn_blocking(move || auto_icon(Path::new(&project.path))).await.map_err(|e| e.to_string())
++    tauri::async_runtime::spawn_blocking(move || auto_icon_with(Path::new(&project.path), &crate::web_icon::fetch)).await.map_err(|e| e.to_string())
+ }
+ 
+ #[cfg(test)]
