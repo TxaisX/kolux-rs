@@ -28,3 +28,15 @@ html[data-pane-density="compact"] .pane-head .title { font-weight: 500; }
 
 /* TERM-133: the small dot of a colour-coded tab (tabStyle sets --tab-dot on the tab). */
 .tab[style*="--tab-dot"]::before { content: ""; flex: none; width: 7px; height: 7px; margin-right: -1px; border-radius: 50%; background: var(--tab-dot); }
+
+/* T-302-b: Projects panel extras */
+.sb-float { position: relative; height: 0; overflow: visible; z-index: 3; }
+.sb-float .sb-jump { position: absolute; left: 8px; bottom: 8px; font-size: 11px; padding: 3px 8px; }
+.sb-float .sb-top { position: absolute; right: 12px; bottom: 8px; border-radius: 50%; width: 26px; height: 26px; padding: 0; }
+.sb-outside { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; cursor: default; }
+.sb-outside .link { flex: 1; min-width: 0; text-align: left; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; }
+.sb-outside ul { flex-basis: 100%; margin: 2px 0 0; padding-left: 16px; }
+.sb-picked { display: flex; align-items: center; gap: 6px; padding: 4px 8px; font-size: 12px; }
+.sb-picked span { flex: 1; min-width: 0; }
+.sess.picked { background: var(--bg-hover, rgba(127, 127, 127, 0.2)); outline: 1px solid var(--line-focus); }
+.sb-name-hint { margin-left: 6px; color: var(--fg-muted); font-size: 11px; }
