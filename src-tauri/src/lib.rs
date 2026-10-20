@@ -495,6 +495,8 @@ pub fn run() {
             projects::workspace_remove_check,
             projects::project_set,
             projects::project_display_name_set,
+            projects::workspace_rename_after_work,
+            projects::workspace_mark_suggested,
             projects::workspaces_place_get,
             projects::workspaces_place_set,
             projects::git_first_commit_preview,

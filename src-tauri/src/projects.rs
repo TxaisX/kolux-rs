@@ -366,10 +366,62 @@ pub fn reparent_in(store: &Store, project: &Project, scanned: Vec<Worktree>, pat
     set_parent(store, &me.path, Some(&to.path))
 }
 
+// ---- CLI-009 / CLI-019: the selector pieces `worktree set` needs (called from the cli.rs patch) ----
+
+/// `folder:<id>` where a parent worktree is expected: the folder project with that id and its
+/// folder workspace. A Git project, an unknown id and a folder project that has since got Git
+/// are refused with the reason.
+pub fn folder_parent(store: &Store, id: &str) -> Result<(Project, Worktree), String> {
+    let project = load_projects(store).into_iter().find(|p| p.id == id).ok_or_else(|| format!("no project has the id {id}"))?;
+    let folder = crate::folder_projects::folder_only(store, &project).ok_or_else(|| format!("{} is not a folder workspace; folder: takes the id of a project without Git", project.name))?;
+    Ok((project, folder))
+}
+
+/// CLI-019: the board status id `--workspace-status` names, by id or label in any case. The
+/// built-in set is todo, in-progress, in-review and completed (the spec's word for "done").
+pub fn resolve_status(store: &Store, wanted: &str) -> Result<String, String> {
+    let list = crate::bulk::statuses(store);
+    let find = |w: &str| list.iter().find(|s| s.id.eq_ignore_ascii_case(w) || s.label.eq_ignore_ascii_case(w)).map(|s| s.id.clone());
+    let w = wanted.trim();
+    find(w).or_else(|| w.eq_ignore_ascii_case("completed").then(|| find("done")).flatten()).ok_or_else(|| format!("there is no status {wanted}; the statuses are {}", list.iter().map(|s| s.id.as_str()).collect::<Vec<_>>().join(", ")))
+}
+
+/// The WSL distribution a Windows-side path belongs to (`\\wsl.localhost\<distro>\...` or
+/// `\\wsl$\<distro>\...`).
+pub fn wsl_distro_of(path: &str) -> Option<String> {
+    let p = path.replace('/', "\\");
+    let rest = p.strip_prefix("\\\\wsl.localhost\\").or_else(|| p.strip_prefix("\\\\wsl$\\"))?;
+    rest.split('\\').next().filter(|d| !d.is_empty()).map(str::to_string)
+}
+
+/// CLI-009: a path written in a WSL shell, as Windows sees it. A Windows drive mounted into Linux
+/// (`/mnt/c/...`) resolves with no distribution at all; any other Linux path belongs to the
+/// caller's own distribution, so when two distributions write the same path the caller's wins.
+/// Without a distribution a Linux path is left as written and matches nothing.
+pub fn wsl_path(path: &str, distro: Option<&str>) -> String {
+    let p = path.trim();
+    if let Some(rest) = p.strip_prefix("/mnt/") {
+        let (drive, tail) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+        if drive.len() == 1 && drive.chars().all(|c| c.is_ascii_alphabetic()) {
+            return format!("{}:{}", drive.to_ascii_uppercase(), if tail.is_empty() { "\\".to_string() } else { tail.replace('/', "\\") });
+        }
+    }
+    match distro.filter(|d| !d.is_empty()) {
+        Some(d) if p.starts_with('/') && !p.starts_with("//") => format!("\\\\wsl.localhost\\{d}{}", p.replace('/', "\\")),
+        _ => p.to_string(),
+    }
+}
+
+/// PROJ-040: the folder workspace at `path`, when that is one (the folder of a project without Git).
+fn folder_workspace_at(store: &Store, path: &str) -> Option<String> {
+    load_projects(store).iter().find_map(|p| crate::folder_projects::folder_only(store, p).filter(|f| same_folder(Path::new(&f.path), Path::new(path))).map(|f| f.path))
+}
+
 /// PROJ-040: records the composer's parent for a workspace just made. A parent removed in the
-/// meantime is dropped with a warning and the workspace sits at the top level. Git scans the
+/// meantime (or one that cannot hold it) is dropped with a warning; the workspace then sits under
+/// `active_folder` when that is a folder workspace, else at the top level. Git scans the
 /// worktrees with the store unlocked (T-442-b); only the store work holds the lock.
-pub fn nest_under(git: &Git, store: &Mutex<Store>, project: &Project, made: &mut Created, parent: Option<&str>) -> Result<(), String> {
+pub fn nest_under(git: &Git, store: &Mutex<Store>, project: &Project, made: &mut Created, parent: Option<&str>, active_folder: Option<&str>) -> Result<(), String> {
     let Some(parent) = non_blank(parent) else { return Ok(()) };
     let moved = match git.worktrees(Path::new(&project.path)) {
         Ok(all) => reparent_in(&*store.lock().map_err(|e| e.to_string())?, project, all, &made.worktree.path, Some(parent)),
@@ -377,7 +429,23 @@ pub fn nest_under(git: &Git, store: &Mutex<Store>, project: &Project, made: &mut
     };
     match moved {
         Ok(()) => made.worktree.parent = Some(parent.to_string()),
-        Err(why) => made.warnings.push(format!("not nested under the parent you picked ({why}), so it sits at the top level")),
+        Err(why) => {
+            let home = {
+                let store = store.lock().map_err(|e| e.to_string())?;
+                let home = non_blank(active_folder).and_then(|f| folder_workspace_at(&store, f));
+                if let Some(h) = &home {
+                    set_parent(&store, &made.worktree.path, Some(h))?;
+                }
+                home
+            };
+            match home {
+                Some(h) => {
+                    made.warnings.push(format!("not nested under the parent you picked ({why}), so it sits under the active folder workspace"));
+                    made.worktree.parent = Some(h);
+                }
+                None => made.warnings.push(format!("not nested under the parent you picked ({why}), so it sits at the top level")),
+            }
+        }
     }
     Ok(())
 }
@@ -1088,6 +1156,8 @@ pub fn create_fresh_workspace<S: std::ops::Deref<Target = Store>>(git: &Git, loc
     };
     let made = create_workspace(git, place, project, &name, base)?.worktree;
     note_seen(&*lock()?, project, &made.path)?;
+    // PROJ-039: Kolux invented this name, so the first work may rename the branch to fit it.
+    mark_suggested(&*lock()?, &made.path, true)?;
     Ok(made)
 }
 
@@ -1197,7 +1267,8 @@ pub fn workspace_branches(store: StoreState<'_>, project_id: String) -> Result<V
 
 // PROJ-020: off the main thread, so a newer create (and its cancel) can reach Kolux while Git works.
 #[tauri::command(async)]
-pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project_id: String, branch: String, folder: Option<String>, parent: Option<String>, ticket: Option<u64>) -> Result<Created, String> {
+#[allow(clippy::too_many_arguments)]
+pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project_id: String, branch: String, folder: Option<String>, parent: Option<String>, ticket: Option<u64>, active_folder: Option<String>) -> Result<Created, String> {
     let (project, place) = locked_place(&store, &project_id)?;
     let made = open_branch_workspace_until(&git, &place, &project, &branch, folder.as_deref(), &|| dropped(ticket));
     if let Some(t) = ticket {
@@ -1209,7 +1280,7 @@ pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project
         set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "existingBranch": true })))?;
         note_seen(&store, &project, &made.worktree.path)?;
     }
-    nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
+    nest_under(&git, &store, &project, &mut made, parent.as_deref(), active_folder.as_deref())?;
     let _ = crate::activity::touch(&*store.lock().map_err(|e| e.to_string())?, &made.worktree.path); // PROJ-051
     Ok(made)
 }
@@ -1225,7 +1296,7 @@ pub fn workspace_prs(store: StoreState<'_>, project_id: String) -> Result<Vec<cr
 /// fork is fetched through a remote for the fork, at the same kind of address as origin.
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
-pub fn workspace_open_pr(app: tauri::AppHandle, git: State<'_, Git>, store: StoreState<'_>, project_id: String, number: u64, folder: Option<String>, name: Option<String>, parent: Option<String>, ticket: Option<u64>) -> Result<Created, String> {
+pub fn workspace_open_pr(app: tauri::AppHandle, git: State<'_, Git>, store: StoreState<'_>, project_id: String, number: u64, folder: Option<String>, name: Option<String>, parent: Option<String>, ticket: Option<u64>, active_folder: Option<String>) -> Result<Created, String> {
     let (project, place) = locked_place(&store, &project_id)?;
     let repo = Path::new(&project.path);
     let pr = crate::pr_checkout::view(&crate::scm::gh_program()?, repo, number)?;
@@ -1253,7 +1324,7 @@ pub fn workspace_open_pr(app: tauri::AppHandle, git: State<'_, Git>, store: Stor
         set_name(&store, &made.worktree.path, Some(&shown))?;
         made.worktree.name = Some(shown);
     }
-    nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
+    nest_under(&git, &store, &project, &mut made, parent.as_deref(), active_folder.as_deref())?;
     let _ = crate::activity::touch(&*store.lock().map_err(|e| e.to_string())?, &made.worktree.path); // PROJ-051
     Ok(made)
 }
@@ -1306,7 +1377,7 @@ pub fn workspace_from_item(app: tauri::AppHandle, git: State<'_, Git>, store: St
         .find(|p| crate::pr_checkout::has_repo(&crate::pr_checkout::remotes(Path::new(&p.path)), &item.host, &item.owner, &item.repo))
         .ok_or_else(|| format!("No project here has {}/{}/{} as a remote; add that repository as a project first.", item.host, item.owner, item.repo))?;
     if item.kind == "pull" {
-        return workspace_open_pr(app, git, store, project.id, item.number, None, None, None, None);
+        return workspace_open_pr(app, git, store, project.id, item.number, None, None, None, None, None);
     }
     let issue = crate::pr_checkout::issue(&crate::scm::gh_program()?, Path::new(&project.path), item.number)?;
     let made = create_named(&git, &store, &project.id, &issue.title, None, None)?;
@@ -1467,6 +1538,151 @@ pub fn rename(store: &Store, path: &str, name: &str) -> Result<String, String> {
 #[tauri::command]
 pub fn workspace_rename(store: StoreState<'_>, path: String, name: String) -> Result<String, String> {
     rename(&*store.lock().map_err(|e| e.to_string())?, &path, &name)
+}
+
+// ---- PROJ-039 / GIT-020 / SET-031: the branch is renamed to fit the work -----------------------
+
+/// SET-031: branches get renamed after the work done on them; on unless this is false.
+pub const RENAME_SETTING: &str = "renameBranches";
+/// Workspaces whose name Kolux invented (keyed like the names); only these are ever renamed by
+/// themselves, and a hand rename or the first automatic rename takes the mark away.
+const SUGGESTED_KEY: &str = "workspaceSuggested";
+/// The longest slug a rename makes, cut at a word edge.
+pub const SLUG_MAX: usize = 40;
+
+pub fn rename_enabled(settings: &serde_json::Value) -> bool {
+    settings[RENAME_SETTING].as_bool() != Some(false)
+}
+
+fn suggested_map(store: &Store) -> serde_json::Map<String, serde_json::Value> {
+    store.get(SUGGESTED_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+/// PROJ-039: marks (or unmarks) the workspace at `path` as one whose name Kolux suggested.
+pub fn mark_suggested(store: &Store, path: &str, on: bool) -> Result<(), String> {
+    let mut map = suggested_map(store);
+    let changed = if on { map.insert(name_key(path), serde_json::Value::Bool(true)).is_none() } else { map.remove(&name_key(path)).is_some() };
+    if !changed {
+        return Ok(());
+    }
+    store.set(SUGGESTED_KEY, &serde_json::Value::Object(map).to_string()).map_err(|e| e.to_string())
+}
+
+/// PROJ-039: the branch name an agent's reply proposes, cleaned to a short lowercase hyphenated
+/// slug. A reply that repeats the branch prefix has it removed; a reply that is only the prefix, or
+/// nothing usable, gives `None`. Only the first line is read.
+pub fn branch_slug(reply: &str, prefix: &str) -> Option<String> {
+    let line = reply.lines().map(|l| l.trim().trim_matches(|c: char| matches!(c, '`' | '"' | '\'' | '*')).trim()).find(|l| !l.is_empty())?;
+    let mut rest = line;
+    let prefix = prefix.trim();
+    if !prefix.is_empty() {
+        let bare = prefix.trim_end_matches('/');
+        let low = line.to_lowercase();
+        let p = prefix.to_lowercase();
+        if low.starts_with(&p) && line.is_char_boundary(p.len()) {
+            rest = &line[p.len()..];
+        } else if low == bare.to_lowercase() {
+            return None;
+        }
+    }
+    let cleaned = safe_name(rest)?.replace('.', "-");
+    let mut out = String::new();
+    for part in cleaned.split('-').filter(|p| !p.is_empty()) {
+        let next = if out.is_empty() { part.len() } else { out.len() + 1 + part.len() };
+        if next > SLUG_MAX && !out.is_empty() {
+            break;
+        }
+        if !out.is_empty() {
+            out.push('-');
+        }
+        out.push_str(part);
+    }
+    let out: String = out.chars().take(SLUG_MAX).collect();
+    let out = out.trim_matches('-').to_string();
+    (!out.is_empty()).then_some(out)
+}
+
+/// PROJ-039: the readable form of a branch's last part: `fix-login-bug` shows as `Fix login bug`.
+pub fn sentence_case(slug: &str) -> String {
+    let words = slug.rsplit('/').next().unwrap_or(slug).replace(['-', '_'], " ");
+    let mut chars = words.trim().chars();
+    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
+/// What a rename after the work did: whether it ran, why not when it did not, the names, and the
+/// upstream the branch tracks (its commits and tracking stay with it).
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameAnswer {
+    pub renamed: bool,
+    pub reason: Option<String>,
+    pub old: Option<String>,
+    pub branch: Option<String>,
+    pub name: Option<String>,
+    pub tracking: Option<String>,
+}
+
+fn left_alone(why: &str) -> RenameAnswer {
+    RenameAnswer { reason: Some(why.to_string()), ..Default::default() }
+}
+
+/// PROJ-039 / GIT-020: renames the branch of the workspace at `path` after the work begun in it,
+/// from the agent's `reply`. It only ever renames (`git branch -m`: nothing is deleted or
+/// overwritten) and only when the setting is on, the workspace is a Kolux-suggested one nobody
+/// named by hand, and it is not the main checkout. The folder stays where it is (the agent holds it;
+/// T-110-b). A failed rename comes back as the full Git output. The store is not locked while Git works.
+pub fn rename_after_work(git: &Git, store: &Mutex<Store>, project: &Project, path: &str, reply: &str) -> Result<RenameAnswer, String> {
+    let (settings, eligible) = {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        (store.settings(), suggested_map(&store).contains_key(&name_key(path)) && !load_names(&store).contains_key(&name_key(path)))
+    };
+    if !rename_enabled(&settings) {
+        return Ok(left_alone("Branch renaming is off in Settings."));
+    }
+    if !eligible {
+        return Ok(left_alone("This workspace has a name of its own, so its branch keeps it."));
+    }
+    let repo = Path::new(&project.path);
+    let turn = repo_turn(repo);
+    let _turn = turn.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(w) = git.worktrees(repo)?.into_iter().find(|w| name_key(&w.path) == name_key(path)) else {
+        return Ok(left_alone("That workspace is not listed by Git."));
+    };
+    let Some(old) = w.branch.clone().filter(|_| !w.is_main) else {
+        return Ok(left_alone("Only a workspace's own branch is renamed."));
+    };
+    let prefix = place_from(project, &settings).prefix;
+    let Some(slug) = branch_slug(reply, &prefix) else {
+        return Ok(left_alone("The reply did not hold a usable branch name."));
+    };
+    let new = (1..50)
+        .map(|n| if n == 1 { format!("{prefix}{slug}") } else { format!("{prefix}{slug}-{n}") })
+        .find(|c| *c == old || !git.branch_taken(repo, c))
+        .ok_or("no free branch name")?;
+    if new == old {
+        return Ok(left_alone("The branch already has that name."));
+    }
+    // GIT-020: the upstream is read first, so the answer says what tracking the branch keeps.
+    let tracking = git.upstream_of(repo, &old);
+    git.rename_branch(repo, &old, &new)?;
+    let shown = sentence_case(&new);
+    let store = store.lock().map_err(|e| e.to_string())?;
+    set_name(&store, path, Some(&shown))?;
+    mark_suggested(&store, path, false)?;
+    Ok(RenameAnswer { renamed: true, reason: None, old: Some(old), branch: Some(new), name: Some(shown), tracking })
+}
+
+#[tauri::command(async)]
+pub fn workspace_rename_after_work(git: State<'_, Git>, store: StoreState<'_>, project_id: String, path: String, reply: String) -> Result<RenameAnswer, String> {
+    let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
+    rename_after_work(&git, &store, &project, &path, &reply)
+}
+
+/// PROJ-039: the composer calls this when the name it created a workspace with was Kolux's own
+/// suggestion left as it was, so the first work can rename it.
+#[tauri::command]
+pub fn workspace_mark_suggested(store: StoreState<'_>, path: String, suggested: bool) -> Result<(), String> {
+    mark_suggested(&*store.lock().map_err(|e| e.to_string())?, &path, suggested)
 }
 
 // ---- PROJ-060: a workspace's details: shown name, linked GitHub item, comment ---------------------
@@ -1644,7 +1860,7 @@ pub fn create_named_until(git: &Git, store: &Mutex<Store>, project_id: &str, nam
 // PROJ-020: off the main thread, so a newer create (and its cancel) can reach Kolux while Git works.
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
-pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: String, name: String, base: Option<String>, branch: Option<String>, parent: Option<String>, ticket: Option<u64>, issue: Option<crate::pr_checkout::Linkable>) -> Result<Created, String> {
+pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: String, name: String, base: Option<String>, branch: Option<String>, parent: Option<String>, ticket: Option<u64>, issue: Option<crate::pr_checkout::Linkable>, active_folder: Option<String>) -> Result<Created, String> {
     let made = create_named_until(&git, &store, &project_id, &name, base.as_deref(), branch.as_deref(), &|| dropped(ticket));
     if let Some(t) = ticket {
         settle_create(t);
@@ -1659,7 +1875,7 @@ pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: 
         }
         find_project(&store, &project_id)?
     };
-    nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
+    nest_under(&git, &store, &project, &mut made, parent.as_deref(), active_folder.as_deref())?;
     let _ = crate::activity::touch(&*store.lock().map_err(|e| e.to_string())?, &made.worktree.path); // PROJ-051
     Ok(made)
 }
@@ -3238,14 +3454,32 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         let parent_of = |p: &str| list_workspaces(&git, &store.lock().unwrap(), &project).unwrap().into_iter().find(|w| w.path == p).unwrap().parent;
         let mut made = make("late");
         remove_workspace(&git, &project, &b.path, false).unwrap();
-        nest_under(&git, &store, &project, &mut made, Some(&b.path)).unwrap();
+        nest_under(&git, &store, &project, &mut made, Some(&b.path), None).unwrap();
         assert_eq!(made.worktree.parent, None);
         assert!(made.warnings.iter().any(|w| w.contains("top level")), "{:?}", made.warnings);
         assert_eq!(parent_of(&made.worktree.path), None);
         let mut nested_ok = make("under-a");
-        nest_under(&git, &store, &project, &mut nested_ok, Some(&a.path)).unwrap();
+        nest_under(&git, &store, &project, &mut nested_ok, Some(&a.path), None).unwrap();
         assert_eq!(parent_of(&nested_ok.worktree.path).as_deref(), Some(a.path.as_str()));
         assert!(nested_ok.warnings.is_empty());
+        // PROJ-040: with a folder workspace active, the dropped parent's place is the folder workspace; any other workspace does not count.
+        let plain = temp("root-proj040-plain");
+        let folder = crate::folder_projects::add_folder(&store.lock().unwrap(), &plain).unwrap();
+        let folder_ws = crate::folder_projects::folder_only(&store.lock().unwrap(), &folder).unwrap().path;
+        let mut fell = make("fell");
+        nest_under(&git, &store, &project, &mut fell, Some(&b.path), Some(&folder_ws)).unwrap();
+        assert_eq!(fell.worktree.parent.as_deref(), Some(folder_ws.as_str()));
+        assert_eq!(parent_of(&fell.worktree.path).as_deref(), Some(folder_ws.as_str()));
+        assert!(fell.warnings.iter().any(|w| w.contains("active folder workspace")), "{:?}", fell.warnings);
+        let mut not_folder = make("not-folder");
+        nest_under(&git, &store, &project, &mut not_folder, Some(&b.path), Some(&a.path)).unwrap();
+        assert_eq!(not_folder.worktree.parent, None);
+        assert!(not_folder.warnings.iter().any(|w| w.contains("top level")), "{:?}", not_folder.warnings);
+        // a parent that is still there wins over the active folder workspace
+        let mut kept = make("kept");
+        nest_under(&git, &store, &project, &mut kept, Some(&a.path), Some(&folder_ws)).unwrap();
+        assert_eq!(parent_of(&kept.worktree.path).as_deref(), Some(a.path.as_str()));
+        let _ = fs::remove_dir_all(plain);
         drop(store);
         for d in [profile, repo, root] {
             let _ = fs::remove_dir_all(d);
@@ -3949,6 +4183,164 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         remove_workspace(&git, &project, &ws, true).unwrap();
         drop(store);
         for d in [profile, repo, place.root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj039_a_reply_becomes_a_short_slug_without_the_prefix() {
+        assert_eq!(branch_slug("Fix the login bug", "").as_deref(), Some("fix-the-login-bug"));
+        assert_eq!(branch_slug("`tx/Fix login`\nignored second line", "tx/").as_deref(), Some("fix-login"), "the prefix is removed");
+        assert_eq!(branch_slug("TX/fix-login", "tx/").as_deref(), Some("fix-login"), "any letter case");
+        assert_eq!(branch_slug("tx", "tx/"), None, "only the prefix is ignored");
+        assert_eq!(branch_slug("tx/", "tx/"), None);
+        assert_eq!(branch_slug("   \n  ", ""), None);
+        assert_eq!(branch_slug("???", ""), None);
+        let long = branch_slug("add support for importing every kind of saved layout from the old settings folder", "").unwrap();
+        assert!(long.len() <= SLUG_MAX && !long.ends_with('-'), "{long}");
+        assert_eq!(long, "add-support-for-importing-every-kind-of");
+        assert_eq!(sentence_case("fix-login-bug"), "Fix login bug");
+        assert_eq!(sentence_case("tx/fix-login"), "Fix login");
+    }
+
+    #[test]
+    fn cli009_a_wsl_path_on_a_mounted_drive_resolves_and_the_callers_distro_wins() {
+        assert_eq!(wsl_path("/mnt/c/Users/x/repo", None), "C:\\Users\\x\\repo");
+        assert_eq!(wsl_path("/mnt/d", Some("Ubuntu")), "D:\\");
+        // Not a drive: /mnt/wsl is Linux's own folder, so it belongs to the caller's distro.
+        assert_eq!(wsl_path("/mnt/wsl/x", Some("Debian")), "\\\\wsl.localhost\\Debian\\mnt\\wsl\\x");
+        // The same Linux path written from two distros reaches each caller's own.
+        assert_eq!(wsl_path("/home/u/app", Some("Ubuntu")), "\\\\wsl.localhost\\Ubuntu\\home\\u\\app");
+        assert_eq!(wsl_path("/home/u/app", Some("Debian")), "\\\\wsl.localhost\\Debian\\home\\u\\app");
+        assert_eq!(wsl_path("/home/u/app", None), "/home/u/app");
+        assert_eq!(wsl_path("C:\\work\\a", Some("Ubuntu")), "C:\\work\\a");
+        assert_eq!(wsl_distro_of("\\\\wsl.localhost\\Ubuntu\\home\\u"), Some("Ubuntu".into()));
+        assert_eq!(wsl_distro_of("//wsl$/Debian/home"), Some("Debian".into()));
+        assert_eq!(wsl_distro_of("C:\\work"), None);
+    }
+
+    #[test]
+    fn cli019_a_workspace_status_is_found_by_id_label_or_the_word_completed() {
+        let store = Store::open(&temp("status-profile")).unwrap();
+        assert_eq!(resolve_status(&store, "in-review").unwrap(), "in-review");
+        assert_eq!(resolve_status(&store, "In progress").unwrap(), "in-progress");
+        assert_eq!(resolve_status(&store, " TODO ").unwrap(), "todo");
+        assert_eq!(resolve_status(&store, "completed").unwrap(), "done");
+        let why = resolve_status(&store, "blocked").unwrap_err();
+        assert!(why.contains("no status blocked") && why.contains("in-review"), "{why}");
+    }
+
+    #[test]
+    fn cli009_folder_names_the_folder_workspace_of_a_project_without_git_only() {
+        let base = temp("folder-parent");
+        let store = Store::open(&base.join("db")).unwrap();
+        let plain = base.join("plain");
+        fs::create_dir_all(&plain).unwrap();
+        let project = crate::folder_projects::add_folder(&store, &plain).unwrap();
+        let (found, ws) = folder_parent(&store, &project.id).unwrap();
+        assert_eq!(found.id, project.id);
+        assert!(same_folder(Path::new(&ws.path), &plain));
+        assert!(folder_parent(&store, "nope").unwrap_err().contains("no project"));
+        let repo = temp_repo("folder-parent-git");
+        let git = Git::detect().unwrap();
+        let git_project = add_project(&git, &store, &repo).unwrap();
+        assert!(folder_parent(&store, &git_project.id).unwrap_err().contains("without Git"));
+    }
+
+    fn rename_fixture(name: &str, setting: Option<bool>) -> (Git, Mutex<Store>, Project, PathBuf, PathBuf, PathBuf) {
+        let git = Git::detect().unwrap();
+        let profile = temp(&format!("profile-{name}"));
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo(&format!("repo-{name}"));
+        let root = temp(&format!("root-{name}"));
+        let mut settings = store.settings();
+        settings["branchPrefix"] = serde_json::json!("custom");
+        settings["branchPrefixCustom"] = serde_json::json!("tx");
+        settings[WORKSPACES_DIR_SETTING] = serde_json::json!(root.to_string_lossy());
+        if let Some(on) = setting {
+            settings[RENAME_SETTING] = serde_json::json!(on);
+        }
+        store.save_settings(&settings).unwrap();
+        let project = add_project(&git, &store, &repo).unwrap();
+        (git, Mutex::new(store), project, profile, repo, root)
+    }
+
+    #[test]
+    fn proj039_the_first_work_renames_a_suggested_branch_once_and_keeps_its_commits() {
+        let (git, store, project, profile, repo, root) = rename_fixture("rename-ok", None);
+        let made = create_fresh_from(&git, &store, &project.id, None).unwrap();
+        let old = made.branch.clone().unwrap();
+        assert!(old.starts_with("tx/"), "{old}");
+        // work already committed on the branch must still be on it afterwards
+        fs::write(Path::new(&made.path).join("b.txt"), "b").unwrap();
+        git_in(Path::new(&made.path), &["add", "."]);
+        git_in(Path::new(&made.path), &["commit", "-q", "-m", "work"]);
+        let tip = rev(Path::new(&made.path), "HEAD");
+        let answer = rename_after_work(&git, &store, &project, &made.path, "tx/Fix the login bug").unwrap();
+        assert!(answer.renamed, "{answer:?}");
+        assert_eq!(answer.branch.as_deref(), Some("tx/fix-the-login-bug"));
+        assert_eq!(answer.old.as_deref(), Some(old.as_str()));
+        assert_eq!(answer.name.as_deref(), Some("Fix the login bug"));
+        assert_eq!(rev(&repo, "refs/heads/tx/fix-the-login-bug"), tip, "the commits moved with the branch");
+        assert!(!git.branch_taken(&repo, &old), "the old name is gone");
+        assert_eq!(git.worktrees(&repo).unwrap().iter().find(|w| name_key(&w.path) == name_key(&made.path)).and_then(|w| w.branch.clone()).as_deref(), Some("tx/fix-the-login-bug"));
+        assert_eq!(load_names(&store.lock().unwrap()).get(&name_key(&made.path)).and_then(|v| v.as_str()), Some("Fix the login bug"));
+        // a second reply changes nothing: only a name Kolux suggested is replaced
+        let again = rename_after_work(&git, &store, &project, &made.path, "something else").unwrap();
+        assert!(!again.renamed && again.reason.is_some(), "{again:?}");
+        for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj039_a_branch_is_left_alone_when_the_setting_is_off_the_name_is_yours_or_it_is_the_main_checkout() {
+        let (git, store, project, profile, repo, root) = rename_fixture("rename-off", Some(false));
+        let made = create_fresh_from(&git, &store, &project.id, None).unwrap();
+        let old = made.branch.clone().unwrap();
+        let off = rename_after_work(&git, &store, &project, &made.path, "fix login").unwrap();
+        assert!(!off.renamed && off.reason.as_deref().is_some_and(|r| r.contains("off")), "{off:?}");
+        assert!(git.branch_taken(&repo, &old));
+        // on again, but named by hand
+        let mut settings = store.lock().unwrap().settings();
+        settings[RENAME_SETTING] = serde_json::json!(true);
+        store.lock().unwrap().save_settings(&settings).unwrap();
+        rename(&store.lock().unwrap(), &made.path, "My own name").unwrap();
+        let named = rename_after_work(&git, &store, &project, &made.path, "fix login").unwrap();
+        assert!(!named.renamed, "{named:?}");
+        assert!(git.branch_taken(&repo, &old), "a hand-named workspace keeps its branch");
+        // the main checkout is never renamed, even when marked
+        mark_suggested(&store.lock().unwrap(), &project.path, true).unwrap();
+        let main = rename_after_work(&git, &store, &project, &project.path, "fix login").unwrap();
+        assert!(!main.renamed, "{main:?}");
+        assert!(git.branch_taken(&repo, "main"));
+        // a reply with nothing usable changes nothing
+        let fresh = create_fresh_from(&git, &store, &project.id, None).unwrap();
+        let none = rename_after_work(&git, &store, &project, &fresh.path, "???").unwrap();
+        assert!(!none.renamed, "{none:?}");
+        for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj039_a_taken_branch_name_gets_a_number_and_a_rename_never_overwrites() {
+        let (git, store, project, profile, repo, root) = rename_fixture("rename-taken", None);
+        let first = create_fresh_from(&git, &store, &project.id, None).unwrap();
+        let second = create_fresh_from(&git, &store, &project.id, None).unwrap();
+        // an unmerged branch that already holds the wanted name
+        git_in(&repo, &["branch", "tx/fix-login"]);
+        let tip = rev(&repo, "refs/heads/tx/fix-login");
+        let a = rename_after_work(&git, &store, &project, &first.path, "fix login").unwrap();
+        assert_eq!(a.branch.as_deref(), Some("tx/fix-login-2"), "{a:?}");
+        let b = rename_after_work(&git, &store, &project, &second.path, "fix login").unwrap();
+        assert_eq!(b.branch.as_deref(), Some("tx/fix-login-3"), "{b:?}");
+        assert_eq!(rev(&repo, "refs/heads/tx/fix-login"), tip, "the branch that held the name is untouched");
+        // the Git layer alone refuses to replace a branch and says why
+        let err = git.rename_branch(&repo, "tx/fix-login-2", "tx/fix-login").unwrap_err();
+        assert!(err.contains("already exists"), "{err}");
+        assert!(git.rename_branch(&repo, "tx/fix-login-2", "--evil").is_err());
+        for d in [profile, repo, root] {
             let _ = fs::remove_dir_all(d);
         }
     }
