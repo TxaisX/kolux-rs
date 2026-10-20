@@ -96,3 +96,8 @@
 .md-rich table.md-table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 0.6em 0; }
 .md-rich table.md-table th, .md-rich table.md-table td { border: 1px solid var(--line-subtle); padding: 4px 8px; min-width: 3em; vertical-align: top; }
 .md-rich table.md-table th { background: var(--surface); font-weight: 600; text-align: left; }
+/* EDIT-029 / EDIT-030: diagrams (a locked iframe) and maths in a note's preview. */
+.md-preview iframe.md-diagram { display: block; width: 100%; border: 0; margin: 0.8em auto; background: transparent; color-scheme: normal; }
+.md-diagram-error { margin: 0.8em 0 0.2em; padding: 4px 8px; border-left: 3px solid var(--warn); font-size: 12px; color: var(--fg-muted); }
+.md-preview .md-math-block { margin: 0.8em 0; overflow-x: auto; text-align: center; }
+.md-preview .md-math-src { font-family: var(--mono-font); }
