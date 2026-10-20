@@ -1,0 +1,18 @@
+diff --git a/src-tauri/src/projects.rs b/src-tauri/src/projects.rs
+index 9e3b9bc3..808baed4 100644
+--- a/src-tauri/src/projects.rs
++++ b/src-tauri/src/projects.rs
+@@ -1986,8 +1986,12 @@ pub fn workspace_details_save(store: StoreState<'_>, path: String, name: String,
+ 
+ /// PROJ-053: putting workspaces to sleep ends their terminals; the folders and branches stay, and
+ /// the sidebar keeps the list of who sleeps. Returns how many terminals were ended.
++/// STAT-037 (T-167-b): the agents in them that can be resumed are recorded first.
+ #[tauri::command]
+-pub fn workspace_sleep(terminals: State<'_, crate::terminal::Terminals>, paths: Vec<String>) -> usize {
++pub fn workspace_sleep(terminals: State<'_, crate::terminal::Terminals>, store: StoreState<'_>, paths: Vec<String>) -> usize {
++    if let Ok(store) = store.lock() {
++        crate::hooks::agent_hooks::saved::at_sleep(&store, &paths);
++    }
+     paths.iter().map(|p| terminals.kill_under(Path::new(p)).ended).sum()
+ }
+ 
