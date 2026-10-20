@@ -95,6 +95,32 @@ pub fn mark_sign_in_error(store: &Store, id: &str, error: bool) -> Result<bool, 
     Ok(true)
 }
 
+/// T-139-d (ACCT-023, ACCT-012): a pane on managed account `id` printed Codex's sign-in error.
+/// Only a listed account whose own home holds a sign-in is flagged (never the system default,
+/// which is not listed, nor an account Kolux cannot read); true when that changed anything.
+// Live once evidence/accounts-T-139-d-lib.rs.patch registers the command (shared lib.rs).
+#[allow(dead_code)]
+pub fn flag_printed(store: &Store, id: &str) -> Result<bool, String> {
+    let Some(a) = load(store).into_iter().find(|a| a.id == id) else {
+        return Ok(false);
+    };
+    if sign_in_kind(&Path::new(&a.home).join("auth.json")).is_none() {
+        return Ok(false);
+    }
+    mark_sign_in_error(store, id, true)
+}
+
+// Live once evidence/accounts-T-139-d-lib.rs.patch registers the command (shared lib.rs).
+#[allow(dead_code)]
+#[tauri::command]
+pub fn codex_account_sign_in_printed(app: AppHandle, store: tauri::State<'_, Mutex<Store>>, id: String) -> Result<bool, String> {
+    let changed = flag_printed(&*store.lock().map_err(|e| e.to_string())?, &id)?;
+    if changed {
+        let _ = app.emit(EVENT, ());
+    }
+    Ok(changed)
+}
+
 /// ACCT-025: each listed account's live sign-in file and its sealed copy in the vault.
 pub fn sign_in_files(store: &Store, profile: &Path) -> Vec<(PathBuf, PathBuf)> {
     load(store).into_iter().map(|a| (Path::new(&a.home).join("auth.json"), profile.join(secrets::VAULT).join(format!("codex-{}.json", a.id)))).collect()
@@ -991,6 +1017,27 @@ mod tests {
         let home = Some(r"C:\p\codex-accounts\c1".to_string());
         assert_eq!(pane_env(Some(r"C:\Program Files\nodejs\codex.cmd"), home.clone()), Some((HOME_ENV, home.clone().unwrap())));
         assert_eq!(pane_env(Some(r"C:\Program Files\Tools\notcodex.exe"), home), None);
+    }
+
+    // T-139-d: a printed sign-in error flags a listed, signed-in account once; an unknown id or an
+    // account whose home holds no sign-in is left alone.
+    #[test]
+    fn a_printed_sign_in_error_flags_only_a_listed_signed_in_account() {
+        let profile = temp("printed");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let ok = |home: &Path| {
+            fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        };
+        sign_in(&store, &profile, "c1", 1, ok).unwrap();
+        let s = store.lock().unwrap();
+        assert!(!flag_printed(&s, "nobody").unwrap(), "an unlisted id (the system default) is never flagged");
+        assert!(flag_printed(&s, "c1").unwrap());
+        assert!(load(&s)[0].sign_in_error);
+        assert!(!flag_printed(&s, "c1").unwrap(), "already flagged: no change, no write");
+        mark_sign_in_error(&s, "c1", false).unwrap();
+        fs::remove_file(Path::new(&load(&s)[0].home).join("auth.json")).unwrap();
+        assert!(!flag_printed(&s, "c1").unwrap(), "no sign-in in the home: not flagged");
     }
 
     #[test]

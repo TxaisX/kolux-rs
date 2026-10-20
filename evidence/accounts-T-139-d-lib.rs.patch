@@ -1,0 +1,12 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 366d51e..12bc973 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -739,6 +739,7 @@ pub fn run() {
+             codex_accounts::codex_account_activate,
+             codex_accounts::codex_account_remove,
+             codex_accounts::codex_account_label,
++            codex_accounts::codex_account_sign_in_printed,
+             groups::groups_get,
+             groups::group_create,
+             groups::group_rename,

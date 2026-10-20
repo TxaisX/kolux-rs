@@ -1,0 +1,21 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 0461f9d..05e244f 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -44,6 +44,7 @@ import { applyAppearance, readAppearance, showScreen, zoomTerm } from "./theme";
+ import { applyWindowBlur } from "./chrome/appLook";
+ import { useEscapeLeaves } from "./chrome/fullPage";
+ import SignInNotice from "./settings/SignInNotice";
++import { watchCodexSignIn } from "./settings/codexSignInScan";
+ import KeyLostNotice from "./settings/KeyLostNotice";
+ import RecoveryMount from "./recovery/RecoveryMount";
+ import { LAST_SCREEN_FIELD, lastWriter, OPEN_PAGE_FIELD, openPageAt, saveLayout, startScreen, stripOn } from "./settings/general";
+@@ -3154,6 +3155,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                       if (p.typed && p.agent !== "shell") void deliverPrompt(invoke, id, p.typed, agents.find((a) => a.id === p.agentId)?.name ?? p.agent).then((lost) => lost && setToast(lost));
+                       report.current();
+                       if (p.batch !== undefined && p.agent !== "shell") rememberLineup(p.batch);
++                      // T-139-d: a Codex pane on a managed account is watched for printed sign-in errors.
++                      watchCodexSignIn(id, p.agent === "codex" ? account : null);
+                       // ACCT-023: a Codex pane remembers the account it began on.
+                       if (p.agent === "codex") {
+                         const setup = codexSetup(settings); // T-139-d: and the setup it began on
