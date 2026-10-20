@@ -697,6 +697,8 @@ pub fn run() {
             automations::automation_run_now,
             automations::automation_preview,
             automations::automation_save,
+            automations::carry::session_carry_context,
+            automations::carry::agent_dir_ready,
             routing::routing_catalog,
             secrets::secret_status,
             secrets::secrets_dropped,
