@@ -1,0 +1,59 @@
+diff --git a/src/App.tsx b/src/App.tsx
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -58,7 +58,7 @@ import type { Action } from "./editor/noteLinks";
+ import TemplatePicker from "./editor/TemplatePicker";
+ import ReviewNotes from "./editor/ReviewNotes";
+ import { copiers } from "./editor/EditorPane";
+-import { notesMarkdown, reviewOn, selections, sendTargets, type Note, type Picked } from "./editor/notes";
++import { notesMarkdown, reviewOn, selections, sendTargets, startChoices, type Note, type Picked } from "./editor/notes";
+ import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
+ import ArtifactsPage from "./artifacts/ArtifactsPage";
+ import SkillsPage from "./skills/SkillsPage";
+@@ -1916,6 +1916,20 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     setToast(`The review notes were sent to ${tabName(p, titles)}.`);
+     return null;
+   };
++  // EDIT-020 (T-132-b): the Send menu can start a new agent in this worktree with the notes as its
++  // first prompt; a start that fails keeps the notes.
++  const startReview = async (id: string): Promise<string | null> => {
++    const a = agents.find((x) => x.id === id && x.installed);
++    if (!a) return "That agent is not installed, so nothing was sent. The notes are kept.";
++    if (activeDir === null) return "Open a workspace first. The notes are kept.";
++    try {
++      await openIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, notesMarkdown(notes), true);
++    } catch (err) {
++      return `${a.name} did not start, so the notes are kept: ${String(err)}`;
++    }
++    setNotes([]);
++    return `Started ${a.name} with the review notes.`;
++  };
+   const reviewPane = reviewing && panes.find((p) => p.key === reviewing.key);
+   // TERM-118: a pane is in view when its workspace is in front and it is the tab on top (the Board
+   // shows every pane); a finish or bell anywhere else marks tab, pane and workspace row unread
+@@ -2510,6 +2524,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                     path={p.path}
+                     root={p.cwd}
+                     readOnly={p.kitPreview}
++                    notes={notes}
++                    onRemoveNote={(n) => setNotes((ns) => ns.filter((x) => x !== n))}
+                     hidden={!terminals || p.key !== active}
+                     focused={p.key === focused}
+                     onFocus={() => setFocused(p.key)}
+@@ -2524,6 +2540,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                     key={p.key}
+                     id={p.key}
+                     path={p.path}
++                    root={p.cwd}
+                     staged={!!p.staged}
+                     hidden={!terminals || p.key !== active}
+                     focused={p.key === focused}
+@@ -2765,6 +2782,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+           menu={sendMenu}
+           onMenu={setSendMenu}
+           onSend={sendReview}
++          starters={activeDir === null ? [] : startChoices(agents, defaultId)}
++          onStart={startReview}
+         />
+       )}
+       {readStatusBar(settings).visible && (

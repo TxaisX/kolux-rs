@@ -21,8 +21,9 @@ import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { diff, getChunks, getOriginalDoc, goToNextChunk, goToPreviousChunk, MergeView, originalDocChangeEffect, unifiedMergeView } from "@codemirror/merge";
 import { ChevronDown, Close, Dots, FileCode, TRASH_PATH } from "../chrome/icons";
 import { attach, baseName, detach, isDirty, relay, replaceAll, subscribe, textOf } from "./buffers";
-import { editors, look, saveFile, StaleNotice } from "./EditorPane";
-import { editedText, notesOn, sideOf, where, type LineNote, type Side } from "./diffNotes";
+import { copiers, editors, look, saveFile, StaleNotice } from "./EditorPane";
+import { contextText, oldSideContext } from "./copyContext";
+import { editedText, notesOn, shortPath, sideOf, where, type LineNote, type Side } from "./diffNotes";
 import { oldSideDoc, withOldSideNote } from "./oldSide";
 import { noteCommand } from "./noteCommands";
 import { useKeymap } from "../keys/KeymapContext";
@@ -130,9 +131,9 @@ const noteTools = (act: NoteActions, side: Side = "new"): Extension => [
 ];
 type Pop = { line: number; end: number; side?: Side; note?: LineNote; text: string; x: number; y: number; refused?: boolean };
 
-type Props = { id: number; path: string; staged: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; notes?: LineNote[]; onSaveNote?: (n: LineNote) => void; onDeleteNote?: (n: LineNote) => void; jump?: { line: number; at: number; side?: "old" } };
+type Props = { id: number; path: string; staged: boolean; root?: string | null; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; notes?: LineNote[]; onSaveNote?: (n: LineNote) => void; onDeleteNote?: (n: LineNote) => void; jump?: { line: number; at: number; side?: "old" } };
 
-export default function DiffPane({ id, path, staged, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, notes = [], onSaveNote, onDeleteNote, jump }: Props) {
+export default function DiffPane({ id, path, staged, root = null, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, notes = [], onSaveNote, onDeleteNote, jump }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [sides, setSides] = useState<Sides | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -342,6 +343,25 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
     });
     return () => void diffNav.delete(id);
   }, [id]);
+
+  // EDIT-007 (T-132-b): Copy Context in a diff copies the selection of the side that has focus (the
+  // new side when neither has), headed by the path and the lines of that side.
+  useEffect(() => {
+    copiers.set(id, () => {
+      const v = views.current;
+      if (!v) return false;
+      const old = v.a !== null && v.a.hasFocus && !v.b.hasFocus;
+      const view = old && v.a ? v.a : v.b;
+      const { from, to } = view.state.selection.main;
+      const got = contextText(view.state.doc, from, to, shortPath(path, root));
+      navigator.clipboard.writeText(old ? oldSideContext(got) : got.text).then(
+        () => report.current.onToast?.("Copied with path and lines"),
+        (err) => report.current.onToast?.(`Nothing was copied: ${String(err)}`),
+      );
+      return true;
+    });
+    return () => void copiers.delete(id);
+  }, [id, path, root]);
 
   useEffect(() => {
     if (focused && !hidden) views.current?.b.focus();

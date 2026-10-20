@@ -35,8 +35,10 @@ import { richChange, splitFront } from "./frontMatter";
 import { bannerUp, beginSave, canUndo, checkOnce, endSave, forget, keep, POLL_MS, readFresh, reloadNow, remember, setBanner as markBanner, UNDO_TOAST_MS, type Io, type Stamp, type UndoEntry } from "./diskChange";
 import { CompareView, DiskBanner, UndoToast } from "./DiskBanner";
 import { isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
-import { domPick, noteDraft, selections } from "./notes";
-import { contextText } from "./copyContext";
+import { domPick, noteDraft, selections, type Note } from "./notes";
+import { contextText, richContext } from "./copyContext";
+import NoteRail from "./NoteRail";
+import { railNotes } from "./rail";
 import { shortPath } from "./diffNotes";
 import { findSupport, openFind } from "./find";
 import { conflictColours, conflictField, goConflict } from "./conflicts";
@@ -151,9 +153,9 @@ export const look = EditorView.theme(
 );
 
 /** `readOnly`: typing changes nothing (SKILL-012 previews a kit result this way). */
-type Props = { id: number; path: string; root?: string | null; readOnly?: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; jump?: { line: number; at: number }; onLink?: LinkHandler };
+type Props = { id: number; path: string; root?: string | null; readOnly?: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; jump?: { line: number; at: number }; onLink?: LinkHandler; /** EDIT-020: the Markdown review notes, shown in a rail beside the rich view. */ notes?: Note[]; onRemoveNote?: (n: Note) => void };
 
-export default function EditorPane({ id, path, root = null, readOnly = false, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, jump, onLink }: Props) {
+export default function EditorPane({ id, path, root = null, readOnly = false, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, jump, onLink, notes = [], onRemoveNote }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -515,6 +517,21 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   useEffect(() => {
     copiers.set(id, () => {
       const cm = view.current;
+      if (cm && shown === "rich") {
+        // EDIT-007 (T-132-b): the rich view copies its selection with the source lines it covers.
+        const sel = window.getSelection();
+        const got = richHost.current && sel && richHost.current.contains(sel.anchorNode) ? richContext(cm.state.doc.toString(), sel.toString(), shortPath(path, root)) : null;
+        if (!got) return false;
+        const r = sel!.getRangeAt(0).getBoundingClientRect();
+        navigator.clipboard.writeText(got.text).then(
+          () => {
+            setFlash({ x: r.right, y: r.bottom });
+            setTimeout(() => setFlash(null), 1500);
+          },
+          (err) => report.current.onToast?.(`Nothing was copied: ${String(err)}`),
+        );
+        return true;
+      }
       if (!cm || shown !== "source") return false;
       const { from, to } = cm.state.selection.main;
       const c = cm.coordsAtPos(to);
@@ -530,8 +547,10 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     });
     return () => void copiers.delete(id);
   }, [id, path, root, shown]);
+  const railed = useMemo(() => (md ? railNotes(notes, path) : []), [md, notes, path]);
+  const railShown = shown === "rich" && railed.length > 0;
   return (
-    <section className={`pane editor${focused ? " focused" : ""}${tocShown ? " toc-open" : ""}`} hidden={hidden} aria-label={`${name} pane`} onMouseDown={onFocus} onKeyDownCapture={onKeys} data-kind="editor" data-key={id}>
+    <section className={`pane editor${focused ? " focused" : ""}${tocShown ? " toc-open" : ""}${railShown ? " rail-open" : ""}`} hidden={hidden} aria-label={`${name} pane`} onMouseDown={onFocus} onKeyDownCapture={onKeys} data-kind="editor" data-key={id}>
       <header className="pane-head">
         <span className="agent-mark" title="File">
           <FileIcon name={name} size={13} />
@@ -633,6 +652,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
       {noteFind && shown === "rich" && (
         <FindBar pane={id} root={richRoot} open={noteFind} onClose={() => setNoteFind(null)} replace={readOnly ? undefined : (ranges, text) => rich.current && replaceInRich(rich.current.editor, ranges, text)} />
       )}
+      {railShown && <NoteRail host={richHost} notes={railed} version={noteText} onRemove={onRemoveNote} />}
       {tocShown && <Contents md={noteText} path={path} root={richRoot} onClose={() => setToc(false)} />}
       {comparing && <CompareView path={path} text={textOf(path) ?? ""} read={readDisk} onReload={reload} onKeep={keepMine} onClose={() => setComparing(false)} />}
       <div ref={host} className="pane-body" hidden={shown !== "source" || comparing} />
