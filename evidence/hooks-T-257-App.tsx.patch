@@ -1,0 +1,39 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 81dbaa77..e5fe3204 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -152,6 +152,7 @@ import { heldByTerminal } from "./keys/terminalPolicy";
+ import { useAgentEvents, useAgentStatusState } from "./status/useAgentStatus";
+ import { useGone } from "./status/gone";
+ import { workingByDir } from "./status/working";
++import { creditedLive, launchedAgent, launchedName } from "./status/credit";
+ import { useAppSettings } from "./settings/useAppSettings";
+ import { useWorkspaceActions, useWorkspaces } from "./projects/useWorkspaces";
+ import { useChrome, useMenuBar } from "./chrome/useChrome";
+@@ -184,7 +185,7 @@ function tabName(p: Pane, titles: Record<number, string>, label?: string, live:
+   if (p.kind === "diff") return `${baseName(p.path ?? "")} (${p.staged ? "staged" : "unstaged"})`;
+   // ORCH-066 / T-129-d: a worker's task label names the tab first; then the user's own name; then the program's title (TERM-058).
+   if (label) return label;
+-  return followedTitle(p.title, live[p.key] ?? IDLE, p.agent !== "shell" ? programWord(p.agent) : `Terminal ${p.key}`);
++  return followedTitle(p.title, live[p.key] ?? IDLE, p.agent !== "shell" ? programWord(p.agent) : launchedName(p) ?? `Terminal ${p.key}`);
+ }
+ /** TERM-055: the one badge a tab carries beside its agent icon; its look and hover text come from the vocabulary (STAT-052). */
+ function TabBadge({ kind }: { kind: Badge }) {
+@@ -1909,7 +1910,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   // STAT-001: a hook-fed state wins over the guess from the program's state.
+   for (const p of panes) if (p.cwd !== null && p.kind !== "browser" && !p.seats) (byDir[p.cwd] ??= []).push(hook[p.key] ?? paneState(p.agent, running[p.key]));
+   const rowStates: Record<string, RowInfo> = {};
+-  const workingIn = workingByDir(panes, hook, running); // STAT-036: working agents per workspace
++  const workingIn = workingByDir(panes, hook, running, liveIds); // STAT-036: working agents per workspace
+   const cacheFor = cacheMinutes(settings); // SET-059
+   for (const [dir, states] of Object.entries(byDir)) {
+     const state = strongest(states);
+@@ -2784,7 +2785,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                                 <Pin size={10} />
+                               </span>
+                             )}
+-                            {p.kind === "editor" || p.kind === "preview" || p.kind === "diff" || p.kind === "changes" ? <FileCode size={12} /> : p.kind === "browser" ? <Globe size={12} /> : <VendorMark agent={shownAgent(p.agent, liveIds[p.key] ?? IDLE)} size={12} />}
++                            {p.kind === "editor" || p.kind === "preview" || p.kind === "diff" || p.kind === "changes" ? <FileCode size={12} /> : p.kind === "browser" ? <Globe size={12} /> : <VendorMark agent={shownAgent(p.agent, creditedLive(launchedAgent(p), liveIds[p.key] ?? IDLE))} size={12} />}
+                             {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key), hook[p.key])} />}
+                             {context[p.key] && <Ring percent={contextFill(context[p.key], capOn(settings))} size={10} title={meterText(meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) ?? {})} />}
+                             {renamingTab === p.key ? (

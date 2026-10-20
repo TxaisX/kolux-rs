@@ -31,3 +31,24 @@ test("no count for none, and a sleeping or never-opened workspace is inactive (S
   expect(inactive(false, 0)).toBe(true);
   expect(inactive(false, 1)).toBe(false);
 });
+
+test("Cursor, MiMo and Pi launched in a workspace count by their launch record and their own titles (SESS-040)", () => {
+  const panes = [
+    pane(1, "C:/w/a", "shell", { agentId: "cursor", program: "cursor-agent" }),
+    pane(2, "C:/w/a", "shell", { agentId: "mimo-code", program: "mimo" }),
+    pane(3, "C:/w/b", "shell", { agentId: "pi", program: "pi" }),
+    pane(4, "C:/w/b", "shell", { program: null }),
+  ];
+  const live = { 1: { title: "⠋ Cursor Agent" }, 2: { title: "✳ MiMo Code" }, 3: { title: "π ⠹ kolux-rs" }, 4: { title: "⠋ working" } };
+  // MiMo's title says it finished; the plain shell (no launch record) is never counted from output.
+  expect(workingByDir(panes, {}, { 1: true, 2: true, 3: true, 4: true }, live)).toEqual({ "C:/w/a": 1, "C:/w/b": 1 });
+  // A hook's word still wins over the title, and an ended program never counts.
+  expect(workingByDir(panes, { 2: "working" }, { 1: false, 2: true, 3: true }, live)).toEqual({ "C:/w/a": 1, "C:/w/b": 1 });
+});
+
+test("a title naming another agent is not the launched agent's state: the program-up guess stands (SESS-040)", () => {
+  const panes = [pane(1, "C:/w/a", "shell", { agentId: "cursor", program: "cursor-agent" })];
+  // Cursor printing "✳ Claude Code" would read as done; it names Claude, so it is ignored and Cursor stays working.
+  expect(workingByDir(panes, {}, { 1: true }, { 1: { title: "✳ Claude Code" } })).toEqual({ "C:/w/a": 1 });
+  expect(workingByDir(panes, {}, { 1: true }, { 1: { title: "✳ Cursor Agent" } })).toEqual({});
+});
