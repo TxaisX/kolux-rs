@@ -86,3 +86,18 @@
 .pane.editor .rich-bar .rich-italic { font-style: italic; }
 .pane.editor .rich-bar .rich-strike { text-decoration: line-through; }
 .pane.editor .rich-bar .rich-more { height: 24px; font-size: 12px; background: transparent; color: var(--fg); border: 1px solid var(--line-subtle); border-radius: 4px; }
+/* EDIT-010: the slash menu and the table menu over the rich view. */
+.slash-menu { position: fixed; z-index: 30; width: 250px; max-height: 250px; overflow-y: auto; padding: 4px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35); font: 12px var(--ui-font); }
+.slash-item { display: flex; flex-direction: column; gap: 1px; padding: 4px 8px; border-radius: 5px; cursor: pointer; color: var(--fg); }
+.slash-item[aria-selected="true"] { background: var(--row-selected); }
+.slash-hint { font-size: 11px; color: var(--fg-faint); }
+.pane.editor .table-menu { position: absolute; z-index: 3; right: 12px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; font: 12px var(--ui-font); }
+.table-menu .btn { font-size: 11.5px; padding: 2px 8px; }
+.md-rich table.md-table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 0.6em 0; }
+.md-rich table.md-table th, .md-rich table.md-table td { border: 1px solid var(--line-subtle); padding: 4px 8px; min-width: 3em; vertical-align: top; }
+.md-rich table.md-table th { background: var(--surface); font-weight: 600; text-align: left; }
+/* EDIT-029 / EDIT-030: diagrams (a locked iframe) and maths in a note's preview. */
+.md-preview iframe.md-diagram { display: block; width: 100%; border: 0; margin: 0.8em auto; background: transparent; color-scheme: normal; }
+.md-diagram-error { margin: 0.8em 0 0.2em; padding: 4px 8px; border-left: 3px solid var(--warn); font-size: 12px; color: var(--fg-muted); }
+.md-preview .md-math-block { margin: 0.8em 0; overflow-x: auto; text-align: center; }
+.md-preview .md-math-src { font-family: var(--mono-font); }

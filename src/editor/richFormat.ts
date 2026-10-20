@@ -2,9 +2,9 @@
 // applyFormat runs it on the rich editor's current selection. Heading, quote and list buttons toggle:
 // a second press on the same block turns it back into body text. Link, image and the collapsible
 // section need a picker or a block the rich view does not have yet, so they are not offered.
-import { $createParagraphNode, $getSelection, $isElementNode, $isRangeSelection, FORMAT_TEXT_COMMAND, type ElementNode, type LexicalEditor } from "lexical";
+import { $createParagraphNode, $getSelection, $isElementNode, $isRangeSelection, COMMAND_PRIORITY_NORMAL, FORMAT_TEXT_COMMAND, INDENT_CONTENT_COMMAND, KEY_TAB_COMMAND, OUTDENT_CONTENT_COMMAND, type ElementNode, type LexicalEditor } from "lexical";
 import { $createHeadingNode, $createQuoteNode, $isHeadingNode, $isQuoteNode, type HeadingTagType } from "@lexical/rich-text";
-import { $isListNode, INSERT_CHECK_LIST_COMMAND, INSERT_ORDERED_LIST_COMMAND, INSERT_UNORDERED_LIST_COMMAND, REMOVE_LIST_COMMAND } from "@lexical/list";
+import { $isListItemNode, $isListNode, INSERT_CHECK_LIST_COMMAND, INSERT_ORDERED_LIST_COMMAND, INSERT_UNORDERED_LIST_COMMAND, REMOVE_LIST_COMMAND } from "@lexical/list";
 
 export type RichAction = "body" | "h1" | "h2" | "h3" | "h4" | "h5" | "bold" | "italic" | "strike" | "bullet" | "numbered" | "check" | "quote";
 
@@ -92,4 +92,20 @@ export function applyFormat(editor: LexicalEditor, action: RichAction): boolean 
       return true;
     }
   }
+}
+
+/** Tab inside a list item indents it one level and Shift+Tab brings it back (the rich-text handler
+ *  alone leaves lists untouched). Outside a list the key passes through. */
+export function registerListKeys(editor: LexicalEditor): () => void {
+  return editor.registerCommand(
+    KEY_TAB_COMMAND,
+    (e) => {
+      const sel = $getSelection();
+      if (!$isRangeSelection(sel)) return false;
+      if (!sel.anchor.getNode().getParents().some($isListItemNode) && !$isListItemNode(sel.anchor.getNode())) return false;
+      e.preventDefault();
+      return editor.dispatchCommand(e.shiftKey ? OUTDENT_CONTENT_COMMAND : INDENT_CONTENT_COMMAND, undefined);
+    },
+    COMMAND_PRIORITY_NORMAL,
+  );
 }
