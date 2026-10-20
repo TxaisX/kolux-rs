@@ -15,6 +15,8 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+pub mod carry;
+
 pub const KEY: &str = "automations";
 pub const RUNS_KEY: &str = "automations.runs";
 /// Told to the window whenever an automation or a run changes, so an open page updates itself.

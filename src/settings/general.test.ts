@@ -80,3 +80,9 @@ test("VIEW-011: the page open at quit comes back", () => {
   expect(openPageAt({ openPage: "skills" })).toBe(null);
   expect(openPageAt({})).toBe(null);
 });
+
+test("VIEW-011: Skills open at quit is shown again at start, in either look, and an unknown value is not", () => {
+  expect(startScreen({ uiLook: "new", lastScreen: "skills" })).toBe("skills");
+  expect(startScreen({ uiLook: "classic", lastScreen: "skills" })).toBe("skills");
+  expect(startScreen({ uiLook: "new", lastScreen: "skill" })).toBe("terminals");
+});
