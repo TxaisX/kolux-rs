@@ -24,7 +24,8 @@ import { markGuide } from "../onboarding/guide";
 import { clearReadFailure, connectFailed, firstAiConnected, readFailed } from "../onboarding/firstRun";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
-import { hideRule, MAX_REPOS_DRAWN, MAX_SEARCH, SearchFolds, searchRepos, searchSettings } from "./search";
+import { hideRule, MAX_REPOS_DRAWN, MAX_SEARCH, SearchFolds, searchRepos } from "./search";
+import { useSearchHits } from "./useSearchHits";
 
 // SET-006: a page loads the first time it is opened, so Settings itself opens quickly.
 const AppearancePage = lazy(() => import("./AppearancePage"));
@@ -268,7 +269,7 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
   const box = useRef<HTMLInputElement>(null);
   const keymap = useKeymap();
   useEffect(() => setQuery(""), [target, n]);
-  const hits = useMemo(() => searchSettings(query), [query]);
+  const { hits, folds } = useSearchHits(query); // SET-007: launch commands and advanced controls count too
   const repoHits = useMemo(() => searchRepos(query, projects), [query, projects]);
   const go = (p: Page) => {
     setQuery("");
@@ -338,7 +339,7 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
           </button>
         </header>
         {hits ? (
-          <SearchFolds.Provider value={hits.folds}>
+          <SearchFolds.Provider value={folds}>
             <style>{hideRule(hits)}</style>
             {hits.refused && <p className="conn-detail warn">That search is too long: {MAX_SEARCH} characters at most.</p>}
             {!hits.refused && hits.pages.length === 0 && repoHits.length === 0 && <p className="conn-detail">No setting matches.</p>}

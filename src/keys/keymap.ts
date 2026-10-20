@@ -4,6 +4,7 @@
 // A custom chord that collides with another binding in the same scope (or conflict group) is
 // dropped and the default stays, so an edit can never silently steal a key.
 import { actionById, actions, defaultsFor, type Action, type Platform, type Scope } from "./actions";
+import { doubleTapLabel, doubleTapSpelling, parseDoubleTap } from "./doubleTap";
 
 export const MODIFIERS = ["Mod", "Ctrl", "Cmd", "Meta", "Alt", "Shift"] as const;
 type Modifier = (typeof MODIFIERS)[number];
@@ -56,6 +57,8 @@ export function normaliseIndexChord(chord: string): string {
 
 /** How a chord reads on screen, as parts: "Mod+Shift+J" is ["Ctrl", "Shift", "J"] on Windows. */
 export function labelParts(chord: string, platform: Platform): string[] {
+  const tap = parseDoubleTap(chord);
+  if (tap) return [doubleTapLabel(tap, platform)]; // one cap: "Shift Shift"
   const c = parseChord(chord);
   if ("error" in c) return [chord];
   const parts: string[] = [];
@@ -151,6 +154,12 @@ function applySection(section: Record<string, unknown>, bindings: Map<string, Bi
     const parsed: string[] = [];
     let bad: string | null = null;
     for (const text of chords) {
+      // SET-009: a modifier tapped twice ("Double+Shift") is a shortcut of its own kind; it is kept in the file's spelling.
+      const tap = parseDoubleTap(text);
+      if (tap) {
+        parsed.push(doubleTapSpelling(tap));
+        continue;
+      }
       const c = parseChord(text);
       if ("error" in c) {
         bad = c.error;

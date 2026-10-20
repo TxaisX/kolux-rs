@@ -3,7 +3,7 @@
 // keybindings file before this arrangement keeps the reversed pairing it was used to, written into the file
 // (SET-011) once; a file that already names any of the four commands is left alone, so this never repeats
 // and never overrides a choice. Pure over the file's JSON.
-const OLD_PAIRING: Record<string, string[]> = {
+export const OLD_PAIRING: Record<string, string[]> = {
   "tab.nextSameType": ["Mod+Shift+BracketRight"],
   "tab.previousSameType": ["Mod+Shift+BracketLeft"],
   "tab.nextAllTypes": ["Mod+Alt+BracketRight"],

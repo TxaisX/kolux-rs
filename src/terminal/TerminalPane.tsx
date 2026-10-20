@@ -10,7 +10,7 @@ import type { AgentState } from "../projects/rows";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type ITerminalAddon } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
@@ -26,6 +26,8 @@ import { explain as explainError, exitAdvice } from "./errors";
 import { DIVIDER_DONE, dragging } from "./dividers";
 import { currentDark, currentTerminal, TERMINAL_EVENT, termFont } from "../theme";
 import { currentText, optionsOf, TEXT_EVENT } from "./text";
+import { currentInput, INPUT_EVENT, inputOptions, loadLigatures, middlePastes, middleSource, probeGpu, watchPointer } from "./inputWire";
+import { ligaturesOn, preferGpu, yenToBackslash } from "./inputPrefs";
 import { hookColourMode } from "./colourMode";
 import { folderName } from "../projects/model";
 import { withoutRules } from "../launch/seats";
@@ -375,6 +377,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     if (!el) return;
     const term = new Terminal({
       ...optionsOf(currentText()),
+      ...inputOptions(currentInput(), keys.current.platform, navigator.language, false, currentText().scroll), // T-247-d: Option as Meta, wheel speed
       ...termFont(number), // TERM-097 / TERM-078: saved font plus this pane's zoom (wins over the SET-022 text font fields)
       theme: currentTerminal(),
       allowProposedApi: true,
@@ -482,12 +485,38 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       openFound(hot, e);
     };
     el.addEventListener("mousedown", claim, true);
-    const choice = attachRenderer<WebglAddon>(term, () => new WebglAddon(), gpu);
+    const choice = attachRenderer<WebglAddon>(term, () => new WebglAddon(), gpu && preferGpu(currentInput().gpu, probeGpu())); // SET-022: the GPU setting (automatic, on, off)
     setRenderer(choice.mode);
     choice.onFallback(() => setRenderer("dom"));
     fit.fit();
 
     let alive = true;
+    // T-247-d: the input preferences. Wheel speed depends on the screen in use, so it is set again when the screen changes.
+    const feel = () => Object.assign(term.options, inputOptions(currentInput(), keys.current.platform, navigator.language, term.buffer.active.type === "alternate", currentText().scroll));
+    // SET-022: ligatures when the setting or the font asks for them and the addon is there; without it the text is drawn plain.
+    let ligatures: ITerminalAddon | null = null;
+    let asked = 0;
+    const settleLigatures = () => {
+      const ask = ++asked;
+      if (!ligaturesOn(currentInput().ligatures, currentText().family)) {
+        ligatures?.dispose();
+        ligatures = null;
+        return;
+      }
+      if (ligatures) return;
+      void loadLigatures(() => import("@xterm/addon-ligatures")).then((a) => {
+        if (!a) return;
+        if (!alive || ask !== asked) return a.dispose();
+        try {
+          term.loadAddon(a);
+          ligatures = a;
+        } catch {
+          a.dispose();
+        }
+      });
+    };
+    settleLigatures();
+    const screenChange = term.buffer.onBufferChange(feel);
     // ACCT-059: scrollback sized to the machine's memory profile, the same every start.
     memoryProfile().then((p) => {
       if (alive) term.options.scrollback = p.scrollback;
@@ -543,14 +572,14 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
         .catch((e) => setFlash(`Typing could not reach the program (${explainError(String(e))})`)));
     };
     term.onData((data) => {
-      write(data);
+      write(yenToBackslash(currentInput(), data)); // SET-025: a Japanese keyboard's Yen key types a backslash when asked
     });
     term.onBell(() => bell.current?.());
     // TERM-075: a program's OSC 52 copy goes to the system clipboard (while the setting allows it); a
     // read-back query gets an empty answer so the program never sees the clipboard; each way it can be
     // refused is said once per session in the header.
     term.parser.registerOscHandler(52, (data) => {
-      const d = decideOsc52(parseOsc52(data), clipboardOk.current, !isHidden.current);
+      const d = decideOsc52(parseOsc52(data), clipboardOk.current && currentInput().osc52, !isHidden.current);
       if (d.reply) void write(d.reply);
       if (d.notice) sayOnce(d.notice.key, d.notice.text, setFlash);
       if (d.write !== undefined) navigator.clipboard.writeText(d.write).catch((e) => sayOnce("osc52-unconfirmed", `A program's copy to the clipboard could not be confirmed (${e instanceof Error ? e.message : String(e)})`, setFlash));
@@ -824,9 +853,16 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     // SET-022 / SET-025: open terminals follow the text, cursor and history settings.
     const retext = () => {
       Object.assign(term.options, optionsOf(currentText()), termFont(number));
+      feel();
+      settleLigatures();
       resize();
     };
     window.addEventListener(TEXT_EVENT, retext);
+    const refeel = () => {
+      feel();
+      settleLigatures();
+    };
+    window.addEventListener(INPUT_EVENT, refeel);
     // SET-025: copy on select, and right-click paste (the menu stays away while it is on).
     const selected = term.onSelectionChange(() => {
       if (currentText().copyOnSelect && term.hasSelection()) void navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
@@ -855,6 +891,26 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       } else pasteApi();
     };
     el.addEventListener("contextmenu", rightClick);
+    // SET-025: middle-click paste (the selection, else the clipboard; a program tracking the mouse keeps its click),
+    // focus follows the mouse, and the pointer that hides while typing.
+    const middle = (e: MouseEvent) => {
+      if (!middlePastes(currentInput(), e, term.modes.mouseTrackingMode)) return;
+      e.preventDefault(); // also stops the web view's own middle-click scroll on press
+      if (e.type !== "auxclick") return;
+      const picked = term.getSelection();
+      if (middleSource(picked) === "selection") pasting.paste(picked);
+      else pasteApi();
+    };
+    el.addEventListener("mousedown", middle);
+    el.addEventListener("auxclick", middle);
+    const hover = () => {
+      if (currentInput().focusFollowsMouse && !isFocused.current && !isHidden.current) {
+        onFocus?.();
+        term.focus();
+      }
+    };
+    el.addEventListener("mouseenter", hover);
+    const unwatchPointer = watchPointer(el, currentInput);
     // TERM-103 / TERM-114: after the machine slept the GPU's glyph atlas may be stale and the
     // program's size may be behind; a late heartbeat says so. A display scale change does the same.
     const wake = () => {
@@ -876,7 +932,14 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       window.removeEventListener(DIVIDER_DONE, resize);
       window.removeEventListener(TERMINAL_EVENT, recolour);
       window.removeEventListener(TEXT_EVENT, retext);
+      window.removeEventListener(INPUT_EVENT, refeel);
       el.removeEventListener("contextmenu", rightClick);
+      el.removeEventListener("mousedown", middle);
+      el.removeEventListener("auxclick", middle);
+      el.removeEventListener("mouseenter", hover);
+      unwatchPointer();
+      screenChange.dispose();
+      ligatures?.dispose();
       selected.dispose();
       mode.dispose();
       clearInterval(beat);

@@ -141,6 +141,7 @@ import { layoutWriter } from "./terminal/layoutSave";
 import { Kbd, KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
+import { tapHit, windowTaps } from "./keys/tapHit";
 import { heldByTerminal } from "./keys/terminalPolicy";
 import { useAgentEvents, useAgentStatusState } from "./status/useAgentStatus";
 import { useAppSettings } from "./settings/useAppSettings";
@@ -550,7 +551,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       const inTree = !!document.activeElement?.closest(".explorer"); // the explorer's own keys (EDIT-034) come with T-094-b
       // EDIT-001: in an editor the editor shortcuts come first and terminal ones do not apply;
       // the ones Kolux has no action for yet are left to CodeMirror.
+      // SET-009: a modifier tapped twice runs the command bound to "Double+<modifier>" (keys/tapHit.ts).
       const hit =
+        tapHit(windowTaps, keymap, e) ||
         (kind === "browser" && matchEvent(keymap, e, ["browser"])) ||
         matchEvent(keymap, e, inTree ? ["global"] : kind === "editor" || kind === "diff" ? ["editor", "global", "tabs"] : kind === "preview" ? ["global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]) ||
         // GIT-042: a preview tab takes the one editor shortcut that applies to it.
