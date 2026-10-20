@@ -765,6 +765,8 @@ User does: closes a pane or quits Kolux.
 User sees: no agent or shell processes are left orphaned.
 Rules: panes are asked to stop first, then forced; during an immediate Windows shutdown the whole
   process tree is ended; quitting stops every pane.
+  (Kolux RS, DT-C27 as changed 2026-10-20: quitting leaves terminals running in the background
+  terminal service; closing a pane still ends its whole process tree.)
 Acceptance:
   - [ ] Run a long command in a pane and quit → no matching process is left.
   - [ ] Close a pane whose agent ignores the polite stop → the agent is forced to end.

@@ -193,6 +193,11 @@ fn dev_inject() -> Result<(), String> {
     }
 }
 
+/// T-075-b: the background terminal service process (`kolux-rs --terminal-service <identifier> <data folder>`).
+pub fn terminal_service_main(args: &[String]) -> i32 {
+    pty::service::main(args)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     diag::catch_panics();
@@ -312,6 +317,8 @@ pub fn run() {
                 });
             }
             app.manage(Terminals::default());
+            // T-184-b (TERM-105): panes run in the background terminal service and outlive the window.
+            app.state::<Terminals>().use_service(app.handle());
             notifications::first_run_welcome(app.handle()); // VIEW-111: a Mac's one welcome notification
             app.manage(resources::Sampler::default());
             app.manage(resume::Registry::default());
@@ -516,6 +523,8 @@ pub fn run() {
             terminal::terminal_next_input_source,
             terminal::terminal_layout,
             terminal::terminal_busy,
+            terminal::terminal_host_sessions,
+            terminal::terminal_host_end,
             terminal::terminal_diagnostics,
             terminal::terminal_history,
             terminal::terminal_forget_history,
@@ -745,6 +754,10 @@ pub fn run() {
             agent_creds::minimax_credential_forget,
             agent_creds::minimax_options_set,
             agent_creds::gemini_cli_credentials_set,
+            resources::provider_usage::provider_keys,
+            resources::provider_usage::provider_key_set,
+            resources::provider_usage::provider_key_forget,
+            resources::provider_usage::provider_usage_check,
             codex_accounts::codex_accounts,
             codex_accounts::codex_account_sign_in,
             codex_accounts::codex_account_cancel,
