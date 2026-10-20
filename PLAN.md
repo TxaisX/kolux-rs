@@ -284,7 +284,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P2 · theme 1 · Session-per-pane terminal grid (9 cards)
 
-- [ ] T-252 · TERM-008 Tidy the grid · TERM-016 Move a pane out into its own tab
+- [x] T-252 · TERM-008 Tidy the grid · TERM-016 Move a pane out into its own tab · done 2026-10-20 (lane/shell from ebb5b452; evidence/T-252.txt: tidyWeights drops every dragged size of the folder; moveToTab folds a pane into the neighbouring cell with its key and run unchanged; src/shell/tidy.ts, 8 vitest, 3 patches; live proof pending (batched))
 - [ ] T-253 · VIEW-109 Keyboard layouts, Option as Alt and key protocols · VIEW-110 Clipboard size limits and terminal copy
 - [ ] T-254 · ACCT-052 macOS terminals start as real login sessions · ACCT-053 Wide characters are not doubled in Windows terminals · ACCT-060 Terminal modes reset sensibly when an agent exits · ACCT-061 Terminal links open only when safe · also: terminal links go through `links::open_path` (T-060), never straight to the system · DT-C41 (Txais 2026-10-13): the macOS/Linux/WSL parts of this line are later: needs Mac/Linux; build the Windows parts as normal
 - [ ] T-255 · ORCH-042 [compat] Agent Teams teammates open as real side-by-side panes

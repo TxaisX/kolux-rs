@@ -1,0 +1,44 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 81dbaa77..f54ffcac 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -34,6 +34,7 @@ import { bulkCloseSet, closeOne, middleClickCloses, orderPinnedFirst, pinQuestio
+ import { dropCell, dropTab, halfOf, showsDragHandle, zoneOf, type Zone } from "./terminal/rearrange";
+ import { chosenTab, cycleTab, openSwitcher, stepSwitcher, switchOrderOf, tabByNumber, type CycleMode, type Switcher } from "./terminal/tabCycle";
+ import { splitMenuState, splitTabOut } from "./terminal/tabSplit";
++import { moveToTab, tidyWeights } from "./shell/tidy";
+ import { forgetColors, setTabColor, tabMenuHead, tabStyle, TAB_COLORS, type TabColors } from "./terminal/tabColor";
+ import { forgetView } from "./terminal/viewKeep";
+ import { classify, removePlan, removeQuestion, shellInAgentPane } from "./terminal/remove";
+@@ -1930,13 +1931,16 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   const weightKey = (axis: "col" | "row") => `${activeDir ?? ""}|${axis}|${axis === "col" ? gridCols : gridRows}`;
+   const weightsOf = (axis: "col" | "row") => weights[weightKey(axis)] ?? Array<number>(axis === "col" ? gridCols : gridRows).fill(1);
+   // TERM-035: Equalize drops the dragged weights of this folder's grid, so every column and row is the same size again.
+-  const equalizePanes = () =>
+-    setWeights((w) => {
+-      const next = { ...w };
+-      delete next[weightKey("col")];
+-      delete next[weightKey("row")];
+-      return next;
+-    });
++  // TERM-008: Equalize also tidies: every dragged size of this folder goes, whatever the pane count was when it was dragged.
++  const equalizePanes = () => setWeights((w) => tidyWeights(w, activeDir ?? null));
++  // TERM-016: Move to Tab folds a pane into the cell beside it; only its group changes, so the session and its run stay.
++  const moveOutToTab = (key: number) => {
++    const r = moveToTab(panes, key);
++    if (!r) return;
++    setPanes(r.panes);
++    setActiveTab((m) => ({ ...m, [r.group]: key }));
++    setFocused(key);
++  };
+   const gapUnder = (g: HTMLElement, x: number, y: number) => {
+     const rects = [...g.querySelectorAll<HTMLElement>(":scope > .cell:not([hidden])")].map((c) => c.getBoundingClientRect());
+     const cols = tracks(rects, "x");
+@@ -2934,6 +2938,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                     onSplit={(dir) => splitPane(p.key, dir)}
+                     dragCell={!board && showsDragHandle(shown.length) ? { onStart: () => (dragging.current = { cell: groupOf(p) }), onEnd: () => (dragging.current = null, setDropHint(null)) } : undefined}
+                     onEqualize={terminals && gridCount > 1 ? equalizePanes : undefined}
++                    onMoveToTab={terminals && gridCount > 1 && moveToTab(panes, p.key) ? () => moveOutToTab(p.key) : undefined}
+                     expand={board ? undefined : { on: zoomed === groupOf(p), can: canExpand(shown.length, classic), toggle: () => expandPane(p.key) }}
+                     title={p.title || nameOf(names, p.cwd)}
+                     custom={!!p.title}

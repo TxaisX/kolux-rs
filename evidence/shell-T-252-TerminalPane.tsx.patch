@@ -1,0 +1,30 @@
+diff --git a/src/terminal/TerminalPane.tsx b/src/terminal/TerminalPane.tsx
+index 83413af7..667e06be 100644
+--- a/src/terminal/TerminalPane.tsx
++++ b/src/terminal/TerminalPane.tsx
+@@ -180,6 +180,8 @@ type Props = {
+   dragCell?: { onStart: () => void; onEnd: () => void };
+   /** TERM-035: Equalize in the pane menu; given only while the grid holds more than one pane. */
+   onEqualize?: () => void;
++  /** TERM-016: Move to Tab in the pane menu. */
++  onMoveToTab?: () => void;
+   /** TERM-013: the grid's expand: `on` while this pane's cell fills the grid; `can` is false for a lone classic pane. */
+   expand?: { on: boolean; can: boolean; toggle: () => void };
+   /** VIEW-026: on the Board this pane is a card; expanded shows the live terminal inside it. */
+@@ -215,7 +217,7 @@ const stagger = () =>
+     }, 150 + 60 * waiting++),
+   );
+ 
+-export default function TerminalPane({ hidden = false, gpu = true, name, plan, usage, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, onIdentity, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, dragCell, onEqualize, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
++export default function TerminalPane({ hidden = false, gpu = true, name, plan, usage, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, onIdentity, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, dragCell, onEqualize, onMoveToTab, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
+   const host = useRef<HTMLDivElement>(null);
+   const keySettingsRef = useRef(keySettings);
+   keySettingsRef.current = keySettings;
+@@ -1450,6 +1452,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
+             agentActions: onReviewPlan ? [{ id: "reviewPlan", name: "Review plan", title: "Read the plan, comment on it, then approve or ask for changes", run: onReviewPlan }] : [],
+             onSplit,
+             onEqualize,
++            onMoveToTab,
+             onExpand,
+             onSetTitle: onRename && (() => setNaming(true)),
+             hasTitle: custom,
