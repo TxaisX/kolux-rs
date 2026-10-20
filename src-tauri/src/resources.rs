@@ -9,6 +9,8 @@ pub mod recovery;
 pub mod update_guard;
 /// T-199 (APP-028, APP-029, APP-031): install records, the restart watchdog, download problems.
 pub mod update_care;
+/// T-547 (OD-01): the Kimi balance and MiniMax usage checks, with keys kept sealed.
+pub mod provider_usage;
 
 use serde::Serialize;
 use std::collections::HashMap;

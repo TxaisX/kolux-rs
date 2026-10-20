@@ -155,3 +155,5 @@ LIVE PROOF PENDING (batched; dev build, scratch homes, patches applied)
      show the current state within one second.
   6. With a browser tab open (default profile) and safe graphics on, open a second tab -> it loads
      (the shared browser arguments are accepted).
+
+2026-10-20 tick (reliability): browser lane ProcessFailed work 2338bdb4 confirmed on main (git merge-base --is-ancestor 2338bdb4 main); sessions kept per host is N/A, remote hosts are cut (DECISIONS SESS-047, TERM-128: area 18 dropped). LIVE PROOF PENDING as listed above.
