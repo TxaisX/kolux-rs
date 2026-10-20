@@ -7,6 +7,7 @@
 use crate::cli_accounts;
 use crate::git::{Git, Worktree};
 use crate::projects::{self, Project};
+use crate::orchestration::sendonce as so;
 use crate::state::Store;
 use crate::terminal::Terminals;
 use serde_json::{json, Map, Value};
@@ -3009,7 +3010,7 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
             }
             m.once(retry, |_| {
                 if let (Some(tid), "inject") = (tid, mode) {
-                    type_brief(ctx.terminals, tid, &brief)?;
+                    type_brief(ctx, tid, &brief)?;
                 }
                 dispatches.push(json!({ "id": id, "runtime": std::process::id(), "runId": run, "taskId": task, "status": "running", "terminal": tid, "agent": agent, "mode": mode, "depth": depth, "maxDepth": cap, "brief": brief, "created": now_ms() }));
                 tasks[i]["status"] = json!("dispatched");
@@ -3167,9 +3168,9 @@ fn pane_agent(ctx: &Ctx, h: &str) -> Option<String> {
 const SUBMIT_WATCH: Duration = Duration::from_secs(3);
 /// MERGE 49: a zero wait would report an idle agent not submitted before it could start a turn.
 const WAIT_SUBMIT_ZERO: &str = "--wait-submit takes the seconds to watch, 1 or more; leave it out for the default 3 s";
-/// Receipts by terminal and `--retry-request` id: an exact retry answers without sending again.
-/// ponytail: in memory, bounded; a retry after a Kolux restart sends anew.
-static SENT: Mutex<Vec<(String, Value)>> = Mutex::new(Vec::new());
+/// `terminal send` receipts by terminal and `--retry-request` id live in the store
+/// (`orchestration::sendonce::Receipts`, ORCH-055): an exact retry, also after a restart, answers
+/// without sending again.
 const BLOCKED: [&str; 3] = ["permission", "waiting", "blocked"];
 
 /// TERM-126: what became of a prompt sent with Enter, watched for `--wait-submit` seconds.
@@ -3346,8 +3347,10 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let watch = asked.map(Duration::from_secs).unwrap_or(SUBMIT_WATCH);
             let retry = text("retryRequest").map(|r| format!("{handle}|{r}"));
             if let Some(key) = &retry {
-                if let Some(receipt) = SENT.lock().ok().and_then(|s| s.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())) {
-                    let mut again = receipt;
+                // ORCH-055: the receipt lasts in the store, so a retry after a restart sends nothing.
+                let store = ctx.store.lock().map_err(|e| e.to_string())?;
+                if let Some(receipt) = so::Receipts::load(&store).find(key) {
+                    let mut again = receipt.clone();
                     again["retried"] = json!(true);
                     return Ok(again);
                 }
@@ -3369,23 +3372,41 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 crate::status::cancel(id);
                 delivered.push("interrupt");
             }
-            if let Some(t) = &body {
-                // An agent's input box takes the text as one paste, so its line breaks do not send it early.
-                if agent.is_some() { write(&format!("\u{1b}[200~{t}\u{1b}[201~"))? } else { write(t)? }
-                delivered.push("text");
-            }
-            if enter {
-                if prompt {
-                    std::thread::sleep(Duration::from_millis(300));
+            let mut sent_ms = now_ms();
+            let mut held = None;
+            if body.is_some() {
+                // ORCH-055: the text goes in once the input box has settled, Enter once after a pause
+                // that grows with its size; nothing is pasted while a permission prompt shows.
+                let d = send_once(ctx, id, body.as_deref(), enter, agent.is_some())?;
+                match &d.outcome {
+                    so::Outcome::Blocked(why) => return Err(Fail::new("blocked", format!("{handle} shows a permission or approval prompt ({why}); nothing was pasted. Answer it first ({} terminal read --terminal {handle} --screen shows it), then send again", crate::orchestration::CLI))),
+                    so::Outcome::Gone => return Err(gone()),
+                    so::Outcome::Sent | so::Outcome::TextOnly => {}
+                    other => held = Some(other.clone()),
                 }
+                delivered.extend(d.delivered);
+                sent_ms = d.pasted_ms.unwrap_or(sent_ms);
+            } else if enter {
+                // A bare Enter answers what the agent shows; it is not a prompt, so it goes at once.
                 write("\r")?;
                 delivered.push("enter");
             }
             let mut out = json!({ "terminal": handle, "delivered": delivered, "agent": agent, "prompt": prompt });
-            if let Some(before) = before {
+            if let Some(h) = held {
+                // The text is in the box and Enter was held back: say why and what to do; no retry pastes it again.
+                out["receipt"] = json!(h.word());
+                out["submitted"] = json!(false);
+                out["enterHeld"] = json!(true);
+                out["state"] = json!(crate::status::state_of(id));
+                out["next"] = json!(format!("{} terminal read --terminal {handle} --screen", crate::orchestration::CLI));
+                out["warnings"] = json!([held_line(&handle, &h)]);
+            } else if let Some(before) = before {
                 let next = format!("kolux terminal read --terminal {handle} --screen");
                 let moved = || output_mark(ctx.terminals.read(id, None, Some(1))) != output_before;
-                let v = submit_verdict(&handle, before, watch, asked.is_some(), || crate::status::activity(id), || crate::status::state_of(id), moved);
+                // ORCH-055: a report dated before the send is the old turn's, not proof the prompt arrived.
+                let old_mark = before.map(|(m, _)| m);
+                let activity = || crate::status::activity(id).map(|(m, working)| (if so::proves_arrival(m.0, sent_ms) { m } else { old_mark.unwrap_or(m) }, working));
+                let v = submit_verdict(&handle, before, watch, asked.is_some(), activity, || crate::status::state_of(id), moved);
                 out["receipt"] = json!(v.receipt);
                 out["submitted"] = json!(v.submitted);
                 out["state"] = json!(v.state);
@@ -3402,13 +3423,10 @@ fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 out["warnings"] = json!(warnings);
             }
             if let Some(key) = retry {
-                if let Ok(mut s) = SENT.lock() {
-                    s.retain(|(k, _)| k != &key);
-                    s.push((key, out.clone()));
-                    if s.len() > 100 {
-                        s.remove(0);
-                    }
-                }
+                let store = ctx.store.lock().map_err(|e| e.to_string())?;
+                let mut receipts = so::Receipts::load(&store);
+                receipts.record(&key, now_ms(), out.clone());
+                receipts.save(&store).map_err(|e| Fail::new("failed", e))?;
             }
             Ok(out)
         }
@@ -3448,11 +3466,54 @@ fn drift(git: &Git, project: &Project, dir: &str) -> Option<(u32, String)> {
 }
 
 /// ORCH-013's inject: the brief goes in as one bracketed paste, so its line breaks do not send it
-/// early, then Enter submits it.
-fn type_brief(terminals: &Terminals, id: u32, brief: &str) -> Result<(), Fail> {
-    terminals.write(id, &format!("\u{1b}[200~{brief}\u{1b}[201~")).map_err(|e| Fail::new("failed", e))?;
-    std::thread::sleep(Duration::from_millis(300));
-    terminals.write(id, "\r").map_err(|e| Fail::new("failed", e))
+/// early, then Enter submits it, once (ORCH-055). A brief turned away as blocked or left in the box
+/// unsubmitted is a failure, so the dispatch keeps no receipt and the task is not marked dispatched.
+fn type_brief(ctx: &Ctx, id: u32, brief: &str) -> Result<(), Fail> {
+    let handle = crate::terminal::handle_of(id);
+    let d = send_once(ctx, id, Some(brief), true, true)?;
+    match d.outcome {
+        so::Outcome::Sent => Ok(()),
+        so::Outcome::Blocked(why) => Err(Fail::new("blocked", format!("{handle} shows a permission or approval prompt ({why}); the brief was not typed. Answer it first, then dispatch again"))),
+        so::Outcome::Gone => Err(Fail::new("not_found", format!("{handle} ended while the brief was typed"))),
+        other => Err(Fail::new("not_submitted", format!("{}; the brief is in {handle}'s input box, so press Enter there or send `{} terminal send --terminal {handle} --enter` instead of dispatching again", held_line(&handle, &other), crate::orchestration::CLI))),
+    }
+}
+
+/// ORCH-055: why Enter was held back after the text went in.
+fn held_line(handle: &str, o: &so::Outcome) -> String {
+    match o {
+        so::Outcome::Stale => format!("another writer typed into {handle} between the text and Enter, so Enter was held back and the send is stale"),
+        so::Outcome::Cancelled => format!("the prompt was cancelled in {handle} while Kolux checked that the text arrived, so no Enter was sent"),
+        so::Outcome::HeldPermission(why) => format!("{handle} showed a permission prompt mid-paste ({why}), so Enter was held back"),
+        other => format!("the send to {handle} ended {}", other.word()),
+    }
+}
+
+/// ORCH-055: types `text` (and Enter) into terminal `id` exactly once, behind the terminal's other
+/// senders: waits for the input box to settle, pastes, holds Enter back for the size-scaled pause and
+/// while a large paste is taken in, and never presses it when another writer, a cancel or a
+/// permission prompt comes between the text and Enter.
+fn send_once(ctx: &Ctx, id: u32, text: Option<&str>, enter: bool, agent: bool) -> Result<so::Delivery, Fail> {
+    let turn = so::lane(id);
+    let _turn = turn.lock().unwrap_or_else(|p| p.into_inner());
+    let ticket = so::claim(id);
+    let mut send = so::Send::new(text.map_or(0, str::len), enter, cfg!(windows), now_ms());
+    let handle = crate::terminal::handle_of(id);
+    let look = || {
+        let now = now_ms();
+        let tail = ctx.terminals.read(id, None, Some(8)).map(|r| r.lines.iter().map(|l| l.text.clone()).chain(std::iter::once(r.pending)).collect::<Vec<_>>().join("\n")).unwrap_or_default();
+        let seen = so::current(id);
+        so::Look {
+            now_ms: now,
+            last_output_ms: ctx.terminals.quiet_for(id).map(|q| now.saturating_sub(q.as_millis() as u64)),
+            hooks_state: crate::status::state_of(id).map(str::to_string),
+            screen_tail: tail,
+            other_writer: seen.writer != ticket.writer,
+            cancelled: seen.cancel != ticket.cancel,
+            live: ctx.terminals.live(&handle),
+        }
+    };
+    so::drive(&mut send, text, agent, look, |s| ctx.terminals.write(id, s), std::thread::sleep).map_err(|e| Fail::new("failed", e))
 }
 
 // ---------------------------------------------------------------- worker start (ORCH-016)
@@ -4817,7 +4878,14 @@ mod tests {
         // CLI-025: send needs something to send; a retry of a known request answers without a terminal.
         assert!(dispatch(&ctx, &req("terminal.send", json!({ "terminal": "term-9" }), None)).unwrap_err().message.contains("--text, --enter or --interrupt"));
         assert_eq!(dispatch(&ctx, &req("terminal.send", json!({ "terminal": "term-9", "enter": true }), None)).unwrap_err().code, "not_found");
-        SENT.lock().unwrap().push(("term-9|r1".into(), json!({ "terminal": "term-9", "receipt": "turn_began" })));
+        // ORCH-055: the receipt is kept in the store, so it answers after a restart too.
+        {
+            let s = store.lock().unwrap();
+            let mut receipts = so::Receipts::load(&s);
+            receipts.record("term-9|r1", now_ms(), json!({ "terminal": "term-9", "receipt": "turn_began" }));
+            receipts.save(&s).unwrap();
+            assert!(so::Receipts::load(&s).find("term-9|r1").is_some());
+        }
         let again = dispatch(&ctx, &req("terminal.send", json!({ "terminal": "term-9", "text": "hi", "enter": true, "retryRequest": "r1" }), None)).unwrap();
         assert_eq!((again["receipt"].as_str(), again["retried"].as_bool()), (Some("turn_began"), Some(true)));
         assert_eq!(dispatch(&ctx, &req("terminal.send", json!({ "terminal": "term-9", "text": "hi", "enter": true, "retryRequest": "r2" }), None)).unwrap_err().code, "not_found");

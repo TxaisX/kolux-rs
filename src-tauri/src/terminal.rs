@@ -1296,6 +1296,8 @@ pub async fn terminal_write(app: AppHandle, terminals: tauri::State<'_, Terminal
     }
     // USAGE-007: the user's own typing after a limit stop cancels the resume.
     crate::resume::user_typed(&app, id);
+    // ORCH-055: a prompt the command line is typing holds its Enter back once the user writes here.
+    crate::orchestration::sendonce::other_writer(id, &data);
     terminals.write(id, &data)
 }
 

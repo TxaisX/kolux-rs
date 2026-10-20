@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
+/// ORCH-055 (T-174-b): prompts typed into agents land exactly once.
+pub mod sendonce;
+
 const KEY: &str = "orchestration.mail";
 pub const KINDS: &[&str] = &["status", "dispatch", "worker_done", "merge_ready", "escalation", "handoff", "decision_gate", "question", "heartbeat"];
 
