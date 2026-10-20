@@ -722,7 +722,7 @@ impl Terminals {
             });
         }
         // CHAT-007: the agent home folders the program really got; Kolux's account variable (applied last) wins.
-        let home_env: Vec<(String, String)> = own_env.iter().chain(env.iter()).filter(|(k, _)| k == crate::claude_accounts::CONFIG_ENV || k == crate::codex_accounts::HOME_ENV).cloned().collect();
+        let home_env: Vec<(String, String)> = own_env.iter().chain(env.iter()).filter(|(k, _)| crate::chat::HOME_KEYS.contains(&k.as_str())).cloned().collect();
         let chat_cwd = cwd.clone();
         // ACCT-049: checked before the lock, so a drive that does not answer holds up only this pane.
         if let Some(dir) = cwd.as_deref() {

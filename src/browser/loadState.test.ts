@@ -156,3 +156,27 @@ describe("BROW-009: a crashed page", () => {
     expect(actions).toEqual(["reload"]);
   });
 });
+
+describe("BROW-010: pages after the computer wakes", () => {
+  // Three tabs at sleep: one fine, one that already used its automatic reload, one showing the
+  // overlay. One wake signal reaches all three.
+  it("rechecks every page, and a page that cannot recover does not stop the others", () => {
+    const fine = run(loaded()).h;
+    const spent = run([...loaded(), ...dead(), { t: "started", url: "https://example.com/" }, { t: "finished", url: "https://example.com/" }, { t: "probe", answer: "page" }]).h;
+    expect(spent.recoveries).toBe(1);
+    const failed = run([{ t: "started", url: "https://example.com/" }, { t: "finished", url: "https://example.com/" }, { t: "probe", answer: "error-page" }]).h;
+    expect(failed.phase).toBe("failed");
+    const woke = [fine, spent, failed].map((h) => step(h, { t: "woke" }));
+    expect(woke.map(([, a]) => a)).toEqual(["none", "none", "reload"]);
+    // Sleep took the second page: it gets a fresh automatic reload instead of the overlay.
+    expect(run(dead(), woke[1][0]).actions).toEqual(["reload"]);
+    // The third still cannot load: its overlay comes back, and the other two are untouched.
+    const again = run([{ t: "started", url: "https://example.com/" }, { t: "finished", url: "https://example.com/" }, { t: "probe", answer: "error-page" }], woke[2][0]);
+    expect(again.actions).toEqual(["overlay"]);
+    expect(run([{ t: "probe", answer: "page" }], woke[0][0]).h.phase).toBe("ok");
+  });
+
+  it("leaves a blank tab blank", () => {
+    expect(step(fresh(), { t: "woke" })).toEqual([fresh(), "none"]);
+  });
+});
