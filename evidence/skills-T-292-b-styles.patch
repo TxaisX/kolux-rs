@@ -1,0 +1,25 @@
+diff --git a/src/styles.css b/src/styles.css
+index 5590293e..643bb4bc 100644
+--- a/src/styles.css
++++ b/src/styles.css
+@@ -920,6 +920,20 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
+ .statusbar .upd-item .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--done); }
+ .statusbar .upd-item.error { color: var(--danger); }
+ .statusbar .upd-item.error .dot { background: var(--meter-danger); }
++/* SKILL-027: the skill update item (spinner with a count, green check, red failure) and SKILL-025: the freshness pill. */
++.statusbar .skill-item { color: var(--fg); font: inherit; padding: 0 4px; border-radius: 4px; }
++.statusbar .skill-item:hover { background: var(--row-selected); }
++.statusbar .skill-item .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--done); }
++.statusbar .skill-item.bad { color: var(--danger); }
++.statusbar .skill-item.bad .dot { background: var(--meter-danger); }
++.statusbar .skill-item .spin { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--line-strong); border-top-color: var(--fg); animation: skill-spin 0.9s linear infinite; }
++@keyframes skill-spin { to { transform: rotate(360deg); } }
++@media (prefers-reduced-motion: reduce) { .statusbar .skill-item .spin { animation: none; } }
++.skills-pill { flex: none; padding: 0 6px; border-radius: 9px; font: inherit; font-size: 10.5px; border: 1px solid var(--line-strong); color: var(--fg-faint); background: transparent; }
++button.skills-pill { cursor: pointer; }
++.skills-pill.ok { color: var(--done); }
++.skills-pill.warn { color: var(--warn); }
++.skills-pill.bad { color: var(--danger); }
+ .res-pop { right: 16px; bottom: 32px; width: min(460px, calc(100vw - 32px)); max-height: min(70vh, 560px); overflow-y: auto; }
+ .res-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-right: 8px; }
+ .res-free { font-size: 12px; color: var(--fg-muted); }

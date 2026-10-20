@@ -1,0 +1,20 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 6c0a20e9..788cd53c 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -87,6 +87,7 @@ import SkillsPage from "./skills/SkillsPage";
+ import { generatedOn, generatedTitle, tabText, tabTip } from "./shell/tabTitle";
+ import { needsBeat, statusTitle, useBeatFrame } from "./status/tabNameRule";
+ import { closeSkills, toggleSkills } from "./skills/nav";
++import { BringSkillsUp } from "./skills/SkillBarItem";
+ import { KitGallery, KitSetup } from "./kits/Kits";
+ import Wizard from "./onboarding/Wizard";
+ import Guides from "./onboarding/Guides";
+@@ -3248,6 +3249,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+         />
+       )}
+       <UpdateCenter />
++      <BringSkillsUp onShow={() => screen !== "skills" && toggleSkills(screen, setScreen)} />
+       <FeedbackDialog />
+       {reviewOn(settings) && (
+         <ReviewNotes

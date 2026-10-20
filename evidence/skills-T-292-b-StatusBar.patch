@@ -1,0 +1,21 @@
+diff --git a/src/chrome/StatusBar.tsx b/src/chrome/StatusBar.tsx
+index bae4ce92..fccf40ca 100644
+--- a/src/chrome/StatusBar.tsx
++++ b/src/chrome/StatusBar.tsx
+@@ -11,6 +11,7 @@ import { STATUS_ITEMS } from "./statusItems";
+ import { BAR_EVENT, SHOW_EVENT, currentBar } from "../update/UpdateCenter";
+ import { KeepAwakeItem, useKeepAwake } from "../launch/KeepAwakeCard";
+ import PortsItem from "../ports/PortsItem";
++import SkillBarItem from "../skills/SkillBarItem";
+ 
+ type Props = {
+   terminals: number;
+@@ -67,6 +68,8 @@ export default function StatusBar({ terminals, agents = 0, names = () => ({}), w
+           {update.text}
+         </button>
+       )}
++      {/* SKILL-027 / VIEW-100: a running skill update with its count, then a check that fades or a failure that stays until clicked. */}
++      <SkillBarItem />
+       {shows("hooks") && hooks !== null && (
+         <span className="item" title={`Agent status hooks are ${hooks ? "on" : "off"} (Settings > Agents)`}>
+           <Cup size={12} />
