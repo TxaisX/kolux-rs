@@ -5,7 +5,7 @@
 //! changes, a lock or another worktree inside it is left in place with the reason.
 
 use crate::git::{Git, Worktree};
-use crate::projects::{find_project, keeps_branch, kolux_made, load_origins, name_key, remove_check, remove_now_keeping, KeptBranch, Project};
+use crate::projects::{find_project, keeps_branch, kolux_made, load_origins, name_key, remove_check, remove_now_keeping, Kept, Project};
 use crate::state::Store;
 use std::collections::HashMap;
 use std::path::Path;
@@ -47,7 +47,7 @@ pub struct Cleaned {
     pub left: Vec<Left>,
     /// PROJ-073: branches left behind by workspaces opened on an existing branch; the dialog
     /// turns them into one review list.
-    pub kept: Vec<KeptBranch>,
+    pub kept: Vec<Kept>,
 }
 
 #[derive(Debug, PartialEq, Eq, serde::Serialize)]
@@ -316,7 +316,7 @@ fn commit_ok(commit: &str) -> bool {
 /// Deletes each ticked kept branch with force, one after another and one at a time, but only
 /// while the branch still points at the commit it had when the workspace went and no workspace
 /// has it open; a branch that moved since the question was shown is refused.
-pub fn delete_kept(git: &Git, project: &Project, items: &[KeptBranch]) -> Vec<BranchResult> {
+pub fn delete_kept(git: &Git, project: &Project, items: &[Kept]) -> Vec<BranchResult> {
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
     let _turn = locked(&ONE_AT_A_TIME);
     let repo = Path::new(&project.path);
@@ -341,7 +341,7 @@ pub fn delete_kept(git: &Git, project: &Project, items: &[KeptBranch]) -> Vec<Br
 
 /// The toast's Delete and the review list's Delete ticked: the branches a removed workspace left.
 #[tauri::command(async)]
-pub fn branch_delete_kept(git: State<'_, Git>, store: State<'_, Mutex<Store>>, project_id: String, items: Vec<KeptBranch>) -> Result<Vec<BranchResult>, String> {
+pub fn branch_delete_kept(git: State<'_, Git>, store: State<'_, Mutex<Store>>, project_id: String, items: Vec<Kept>) -> Result<Vec<BranchResult>, String> {
     let project = {
         let store = store.lock().map_err(|e| e.to_string())?;
         find_project(&store, &project_id)?
@@ -548,7 +548,7 @@ mod tests {
         let path = ours.to_string_lossy().into_owned();
         let got = remove_selected(&git, &store, &crate::terminal::Terminals::default(), &project, std::slice::from_ref(&path));
         assert_eq!(got.removed, vec![path], "{got:?}");
-        assert_eq!(got.kept, vec![KeptBranch { branch: "ours".into(), commit: tip.clone() }], "{got:?}");
+        assert_eq!(got.kept, vec![Kept { branch: "ours".into(), commit: tip.clone() }], "{got:?}");
         assert!(!ours.exists(), "the folder went");
         let at = crate::git::run(&["rev-parse", "--verify", "refs/heads/ours"], Some(&repo)).unwrap();
         assert_eq!(at, tip, "the branch still holds its commit");
@@ -665,15 +665,15 @@ mod tests {
         let old = crate::git::run(&["rev-parse", "refs/heads/theirs"], Some(&repo)).unwrap();
         // the branch moves on (a commit in the workspace that still has it open)
         commit_in(&base.join("theirs"), "more.txt");
-        let stale = vec![KeptBranch { branch: "theirs".into(), commit: old }];
+        let stale = vec![Kept { branch: "theirs".into(), commit: old }];
         let got = delete_kept(&git, &project, &stale);
         assert!(!got[0].deleted && got[0].why.as_deref().is_some_and(|w| w.contains("moved")), "{got:?}");
         // even with the right commit, a branch a workspace has checked out is left
         let now = crate::git::run(&["rev-parse", "refs/heads/theirs"], Some(&repo)).unwrap();
-        let open = delete_kept(&git, &project, &[KeptBranch { branch: "theirs".into(), commit: now }]);
+        let open = delete_kept(&git, &project, &[Kept { branch: "theirs".into(), commit: now }]);
         assert!(!open[0].deleted, "{open:?}");
         // an invented or option-like name is refused before git runs
-        let bad = delete_kept(&git, &project, &[KeptBranch { branch: "--all".into(), commit: "abcdef0".into() }, KeptBranch { branch: "nope".into(), commit: "abcdef0".into() }]);
+        let bad = delete_kept(&git, &project, &[Kept { branch: "--all".into(), commit: "abcdef0".into() }, Kept { branch: "nope".into(), commit: "abcdef0".into() }]);
         assert!(bad.iter().all(|r| !r.deleted), "{bad:?}");
         assert!(bad[1].why.as_deref().is_some_and(|w| w.contains("already gone")), "{bad:?}");
         drop(store);

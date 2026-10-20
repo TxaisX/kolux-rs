@@ -1167,9 +1167,11 @@ pub fn remove_workspace(git: &Git, project: &Project, worktree_path: &str, force
     remove_worktree(git, project, worktree_path, force, false).map(|_| ())
 }
 
-/// A branch left behind when its workspace went, with the commit it pointed at then, so a later
-/// delete (`Git::delete_branch_if_at`) removes it only while it is still there.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+/// PROJ-073: a branch left behind when its workspace went (kept by choice, or because another
+/// worktree has it), with the commit it pointed at then, so a later delete
+/// (`Git::delete_branch_if_at`) removes it only while it is still there. The one type for the
+/// remove command, the cleanup dialog and the kept-branch list (after-list row 116).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Kept {
     pub branch: String,
     pub commit: String,
@@ -1178,15 +1180,6 @@ pub struct Kept {
 /// PROJ-030: a workspace opened on a branch that already existed keeps that branch when it goes.
 pub fn keeps_branch(store: &Store, path: &str) -> bool {
     origin(store, path).is_some_and(|o| o["existingBranch"] == true)
-}
-
-/// PROJ-073: a branch left behind when its workspace went, with the commit it pointed at then.
-/// Deleting it later is refused once the branch has moved on from that commit.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct KeptBranch {
-    pub branch: String,
-    pub commit: String,
 }
 
 /// `remove_workspace`, keeping the branch when `keep_branch`.
@@ -2226,9 +2219,8 @@ pub(crate) fn remove_one(git: &Git, store: &Mutex<Store>, terminals: &crate::ter
 /// `keep_anyway` keeps the branch as if the workspace had been opened on it (the dialog does this for a
 /// branch holding commits that are in no other branch). The kept branch comes back for the kept list.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn remove_now_keeping(git: &Git, store: &Mutex<Store>, terminals: &crate::terminal::Terminals, project: &Project, path: &str, force: bool, stamp: &str, keep_anyway: bool) -> Result<Option<KeptBranch>, String> {
-    let kept = remove_one(git, store, terminals, project, path, force, stamp, keep_anyway.then_some(true))?;
-    Ok(kept.map(|k| KeptBranch { branch: k.branch, commit: k.commit }))
+pub(crate) fn remove_now_keeping(git: &Git, store: &Mutex<Store>, terminals: &crate::terminal::Terminals, project: &Project, path: &str, force: bool, stamp: &str, keep_anyway: bool) -> Result<Option<Kept>, String> {
+    remove_one(git, store, terminals, project, path, force, stamp, keep_anyway.then_some(true))
 }
 
 /// The global workspaces settings as the sidebar shows them (PROJ-025).
@@ -3482,6 +3474,14 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         for d in [profile, repo, root] {
             let _ = fs::remove_dir_all(d);
         }
+    }
+
+    #[test]
+    fn row116_one_kept_type_goes_out_and_comes_back_in_the_shape_the_page_sends() {
+        let k = Kept { branch: "feat/x".into(), commit: "abc1234".into() };
+        let json = serde_json::to_value(&k).unwrap();
+        assert_eq!(json, serde_json::json!({ "branch": "feat/x", "commit": "abc1234" }));
+        assert_eq!(serde_json::from_value::<Kept>(json).unwrap(), k);
     }
 
     #[test]
