@@ -4,6 +4,7 @@
 // a custom audio file, at the saved volume, with the toast silent whenever Kolux plays its own.
 import { invoke } from "@tauri-apps/api/core";
 import { decide, emptyPacer, type NotifyEvent } from "../notify/pacing";
+import { masterOn } from "../status/notifyMaster";
 
 /** The kinds of notification, their settings keys and what they are when nothing is saved. The
  * finish and stop keys are the ones the agent notifications read (STAT-041, STAT-023); usage alerts
@@ -158,6 +159,7 @@ export function resetPacer(): void {
  * worktree you are looking at" on, an event in `focusedWorktree` is held back while the window has
  * focus; every other worktree's event still shows (STAT-041). */
 export async function raiseNotification(settings: Record<string, unknown>, title: string, body: string, event?: Omit<NotifyEvent, "at">, focusedWorktree: string | null = null): Promise<void> {
+  if (!masterOn(settings)) return; // STAT-042 (T-124-b): the master switch silences every notification
   const prefs = readNotifications(settings);
   if (event) {
     const d = decide(pacer, { ...event, at: Date.now() }, { windowFocused: typeof document !== "undefined" && document.hasFocus(), suppressFocused: prefs.suppressFocused, focusedWorktree });

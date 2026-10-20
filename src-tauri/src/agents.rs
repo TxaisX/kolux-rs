@@ -13,6 +13,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::orchestration::sendonce as so;
+
 // ORCH-060: the session tab inventory (T-262).
 #[path = "inventory.rs"]
 pub mod inventory;
@@ -163,7 +165,7 @@ pub fn search_dirs() -> Vec<PathBuf> {
 }
 
 #[cfg(windows)]
-const MACHINE_ENVIRONMENT: &str = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
+pub(crate) const MACHINE_ENVIRONMENT: &str = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
 
 /// The search path a shell opened now would get: on Windows the machine Path then the user Path
 /// from the registry, the way the system builds a new process's PATH, expanded. A read that
@@ -189,7 +191,7 @@ fn shell_path_dirs() -> Vec<PathBuf> {
 /// One string value from the registry, a `%VAR%` reference expanded. `None` when the key or the
 /// value is missing, is not a string, or cannot be read.
 #[cfg(windows)]
-fn registry_string(root: windows_sys::Win32::System::Registry::HKEY, subkey: &str, value: &str) -> Option<String> {
+pub(crate) fn registry_string(root: windows_sys::Win32::System::Registry::HKEY, subkey: &str, value: &str) -> Option<String> {
     use windows_sys::Win32::Foundation::ERROR_MORE_DATA;
     use windows_sys::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_SZ};
     let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
@@ -646,7 +648,145 @@ fn credited_name(stem: &str, packages: bool) -> Option<&'static str> {
 pub fn agent_start_line(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, id: String, extra: Vec<String>, prompt: String, picked: Option<bool>, restore: Option<bool>, session: Option<String>) -> Result<StartLine, String> {
     let settings = store.lock().map_err(|e| e.to_string())?.settings();
     let start = if restore.unwrap_or(false) { Start::Restore(session.as_deref().map(str::trim).filter(|s| !s.is_empty())) } else { Start::Fresh };
-    start_line_as(&settings, &id, &extra, &prompt, picked.unwrap_or(false), start)
+    // SESS-005: a line that cannot be put together is refused here, before any pane is made, and
+    // the refusal names the agent.
+    let name = agent_name(&id);
+    let line = start_line_as(&settings, &id, &extra, &prompt, picked.unwrap_or(false), start).map_err(|e| named(&name, e))?;
+    command_check(&name, line.program.as_deref(), find_program)?;
+    Ok(line)
+}
+
+// ---------------------------------------------------------------- an agent that will not start (SESS-005)
+
+/// The name the menu shows for a catalogue id; an unknown id reads as itself.
+pub fn agent_name(id: &str) -> String {
+    CATALOGUE.iter().find(|e| e.0 == id).map_or_else(|| id.to_string(), |e| e.1.to_string())
+}
+
+/// SESS-005: a failure to build the start line names the agent, once (a message that already
+/// starts with the name is kept as it is).
+pub fn named(name: &str, error: String) -> String {
+    if error.starts_with(name) {
+        error
+    } else {
+        format!("{name} could not be started: {error}")
+    }
+}
+
+/// SESS-005: the user's own command for the agent (SET-027) must be something the command line
+/// could run: a runnable path, or a name found on the PATH or in the usual install folders.
+/// Anything else is refused at once, with the agent's name and the command, instead of a pane
+/// that shows nothing but the shell's own "not found". No override: nothing to check (the
+/// catalogue's program was found when the agent was listed as installed).
+pub fn command_check(name: &str, program: Option<&str>, find: impl Fn(&str) -> Option<PathBuf>) -> Result<(), String> {
+    match program.map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) if find(p).is_none() => Err(format!("{name} could not be started: its command \"{p}\" was not found. Check the command under Settings > Agents.")),
+        _ => Ok(()),
+    }
+}
+
+// ---------------------------------------------------------------- the opening prompt (SESS-032)
+
+/// SESS-032: the terminals that already took (or are taking) their opening prompt in this run of
+/// the service. A pane that mounts again on the same terminal (a window reload, StrictMode's double
+/// mount, a second caller) finds its terminal here and types nothing.
+#[allow(dead_code)] // T-163: used by agent_prompt_send, registered by the lib.rs hunk the coordinator applies (evidence/launch-T-163-lib.rs.patch)
+static OPENED: std::sync::Mutex<std::collections::BTreeSet<u32>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// True the first time terminal `id` is claimed for its opening prompt; false ever after.
+#[allow(dead_code)] // T-163: used by agent_prompt_send, registered by the lib.rs hunk the coordinator applies (evidence/launch-T-163-lib.rs.patch)
+pub fn claim_opening(id: u32) -> bool {
+    OPENED.lock().unwrap_or_else(|p| p.into_inner()).insert(id)
+}
+
+/// How the opening prompt's hand-over ended, for the window to say.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // T-163: used by agent_prompt_send, registered by the lib.rs hunk the coordinator applies (evidence/launch-T-163-lib.rs.patch)
+pub struct PromptSent {
+    /// `sent`; `duplicate` (this terminal was served already, nothing typed); `failed` (typing
+    /// failed); or the send-once word for a prompt that went in without Enter or not at all:
+    /// `blocked`, `held_permission`, `stale`, `cancelled`, `gone`.
+    pub outcome: String,
+    /// Why the prompt was not sent, in plain words; none when it was.
+    pub why: Option<String>,
+}
+
+impl PromptSent {
+    #[allow(dead_code)] // T-163: used by agent_prompt_send, registered by the lib.rs hunk the coordinator applies (evidence/launch-T-163-lib.rs.patch)
+    pub fn duplicate() -> PromptSent {
+        PromptSent { outcome: "duplicate".to_string(), why: None }
+    }
+}
+
+/// The words for a send that did not end with Enter; none for one that did.
+#[allow(dead_code)] // T-163: used by agent_prompt_send, registered by the lib.rs hunk the coordinator applies (evidence/launch-T-163-lib.rs.patch)
+pub fn prompt_why(outcome: &so::Outcome) -> Option<String> {
+    match outcome {
+        so::Outcome::Sent | so::Outcome::TextOnly => None,
+        so::Outcome::Blocked(what) => Some(format!("the agent was showing a permission prompt ({what}), so nothing was typed")),
+        so::Outcome::HeldPermission(what) => Some(format!("a permission prompt ({what}) appeared while the prompt was typed, so Enter was held back")),
+        so::Outcome::Stale => Some("something else typed into the session first, so Enter was held back".to_string()),
+        so::Outcome::Cancelled => Some("it was cancelled before Enter".to_string()),
+        so::Outcome::Gone => Some("the program ended before it could take input".to_string()),
+    }
+}
+
+/// What one send-once run means for the opening prompt.
+#[allow(dead_code)] // T-163: used by agent_prompt_send, registered by the lib.rs hunk the coordinator applies (evidence/launch-T-163-lib.rs.patch)
+pub fn prompt_result(run: Result<so::Delivery, String>) -> PromptSent {
+    match run {
+        Ok(d) => PromptSent { why: prompt_why(&d.outcome), outcome: d.outcome.word().to_string() },
+        Err(e) => PromptSent { outcome: "failed".to_string(), why: Some(e) },
+    }
+}
+
+/// SESS-032: when the agent last wrote, as the opening prompt's send sees it. An agent that has
+/// written nothing yet is still starting, not settled: it reads as "wrote just now", so the paste
+/// waits for its first output to go quiet (capped by the send's own longest wait).
+#[allow(dead_code)] // T-163: used by agent_prompt_send, registered by the lib.rs hunk the coordinator applies (evidence/launch-T-163-lib.rs.patch)
+pub fn opening_last_output(quiet_for: Option<std::time::Duration>, now_ms: u64) -> Option<u64> {
+    Some(quiet_for.map_or(now_ms, |q| now_ms.saturating_sub(q.as_millis() as u64)))
+}
+
+#[allow(dead_code)] // T-163: used by agent_prompt_send, registered by the lib.rs hunk the coordinator applies (evidence/launch-T-163-lib.rs.patch)
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// SESS-032: types the opening prompt into terminal `id` exactly once, the way `kolux terminal
+/// send` does (ORCH-055, `orchestration::sendonce`): behind the terminal's other senders, after the
+/// agent's input box has drawn and settled, as one bracketed paste so line breaks stay inside the
+/// prompt, then Enter as a separate step after a pause that grows with the prompt's size on
+/// Windows; Enter is held back when a permission prompt shows, when the user or another sender
+/// writes first, or when the program ends. A terminal already served answers `duplicate` and is
+/// not touched. Runs on a worker thread: the wait can be a few seconds.
+#[allow(dead_code)] // T-163: registered by the lib.rs hunk the coordinator applies (evidence/launch-T-163-lib.rs.patch)
+#[tauri::command(async)]
+pub fn agent_prompt_send(terminals: tauri::State<'_, crate::terminal::Terminals>, id: u32, text: String) -> PromptSent {
+    if !claim_opening(id) {
+        return PromptSent::duplicate();
+    }
+    let turn = so::lane(id);
+    let _turn = turn.lock().unwrap_or_else(|p| p.into_inner());
+    let ticket = so::claim(id);
+    let mut send = so::Send::new(text.len(), true, cfg!(windows), now_ms());
+    let handle = crate::terminal::handle_of(id);
+    let look = || {
+        let now = now_ms();
+        let tail = terminals.read(id, None, Some(8)).map(|r| r.lines.iter().map(|l| l.text.clone()).chain(std::iter::once(r.pending)).collect::<Vec<_>>().join("\n")).unwrap_or_default();
+        let seen = so::current(id);
+        so::Look {
+            now_ms: now,
+            last_output_ms: opening_last_output(terminals.quiet_for(id), now),
+            hooks_state: crate::status::state_of(id).map(str::to_string),
+            screen_tail: tail,
+            other_writer: seen.writer != ticket.writer,
+            cancelled: seen.cancel != ticket.cancel,
+            live: terminals.live(&handle),
+        }
+    };
+    prompt_result(so::drive(&mut send, Some(&text), true, look, |s| terminals.write(id, s), std::thread::sleep))
 }
 
 /// ACCT-013 "Open install page": the agent's own install page in the default browser. Only these
@@ -1172,5 +1312,93 @@ mod tests {
         for a in &list {
             assert_eq!(a.installed, a.path.is_some());
         }
+    }
+
+    // ---------------------------------------------------------------- SESS-005 / SESS-032 (T-163)
+
+    #[test]
+    fn sess005_a_missing_command_override_is_refused_with_the_agents_name() {
+        let gone = |_: &str| None;
+        let err = command_check("Claude Code", Some("claude-nope"), gone).unwrap_err();
+        assert!(err.starts_with("Claude Code could not be started"), "{err}");
+        assert!(err.contains("\"claude-nope\""), "{err}");
+        assert!(err.contains("Settings > Agents"), "{err}");
+        assert_eq!(command_check("Claude Code", Some("claude"), |_| Some(PathBuf::from("claude.cmd"))), Ok(()));
+        assert_eq!(command_check("Claude Code", None, gone), Ok(()));
+        assert_eq!(command_check("Claude Code", Some("  "), gone), Ok(()));
+        // The real finder: a path that is not there is refused; a runnable file passes.
+        let dir = temp_dir("sess005");
+        let missing = dir.join("not-here").join("agent.exe");
+        let err = command_check("Aider", Some(&missing.to_string_lossy()), find_program).unwrap_err();
+        assert!(err.starts_with("Aider could not be started: its command"), "{err}");
+        let there = dir.join("agent.exe");
+        runnable_file(&there);
+        assert_eq!(command_check("Aider", Some(&there.to_string_lossy()), find_program), Ok(()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sess005_the_refusal_names_the_agent_once() {
+        assert_eq!(agent_name("claude"), "Claude Code");
+        assert_eq!(agent_name("no-such"), "no-such");
+        assert_eq!(named("Hermes", "Hermes's start line with this prompt is too long.".to_string()), "Hermes's start line with this prompt is too long.");
+        assert_eq!(named("Aider", "no such option".to_string()), "Aider could not be started: no such option");
+    }
+
+    #[test]
+    fn sess032_a_terminal_takes_its_opening_prompt_once() {
+        assert!(claim_opening(4_000_000_163));
+        assert!(!claim_opening(4_000_000_163));
+        assert!(claim_opening(4_000_000_164));
+    }
+
+    /// The send-once machine (ORCH-055) over a fake terminal: an agent quiet since before the send,
+    /// a clock that jumps by each sleep, every write kept.
+    fn deliver(text: &str, live: bool, writes: &mut Vec<String>) -> Result<so::Delivery, String> {
+        let mut send = so::Send::new(text.len(), true, true, 10_000);
+        let clock = std::cell::Cell::new(10_000u64);
+        let look = || so::Look { now_ms: clock.get(), last_output_ms: Some(9_000), live, ..so::Look::default() };
+        so::drive(
+            &mut send,
+            Some(text),
+            true,
+            look,
+            |s| {
+                writes.push(s.to_string());
+                Ok(())
+            },
+            |d| clock.set(clock.get() + d.as_millis() as u64),
+        )
+    }
+
+    #[test]
+    fn sess032_a_multi_line_prompt_goes_in_as_one_paste_and_enter_once() {
+        let mut writes = Vec::new();
+        let sent = prompt_result(deliver("fix the build\nthen run the tests", true, &mut writes));
+        assert_eq!(sent, PromptSent { outcome: "sent".to_string(), why: None });
+        assert_eq!(writes, vec!["\u{1b}[200~fix the build\nthen run the tests\u{1b}[201~".to_string(), "\r".to_string()]);
+        assert_eq!(writes.iter().filter(|w| *w == "\r").count(), 1);
+    }
+
+    #[test]
+    fn sess032_a_prompt_that_cannot_be_delivered_says_why() {
+        let mut writes = Vec::new();
+        let gone = prompt_result(deliver("hello", false, &mut writes));
+        assert_eq!(gone.outcome, "gone");
+        assert_eq!(gone.why.as_deref(), Some("the program ended before it could take input"));
+        assert!(writes.is_empty());
+        let failed = prompt_result(Err("no such terminal".to_string()));
+        assert_eq!((failed.outcome.as_str(), failed.why.as_deref()), ("failed", Some("no such terminal")));
+        assert_eq!(PromptSent::duplicate(), PromptSent { outcome: "duplicate".to_string(), why: None });
+        assert_eq!(prompt_why(&so::Outcome::Stale).as_deref(), Some("something else typed into the session first, so Enter was held back"));
+        assert!(prompt_why(&so::Outcome::HeldPermission("x".to_string())).unwrap().contains("Enter was held back"));
+        assert_eq!(prompt_why(&so::Outcome::Sent), None);
+    }
+
+    #[test]
+    fn sess032_an_agent_that_has_not_written_yet_is_still_starting() {
+        // Nothing written yet reads as "wrote just now", so the paste waits for the first output to settle.
+        assert_eq!(opening_last_output(None, 5_000), Some(5_000));
+        assert_eq!(opening_last_output(Some(std::time::Duration::from_millis(300)), 5_000), Some(4_700));
     }
 }

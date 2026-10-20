@@ -1,18 +1,18 @@
 // The keymap: chord parsing, the built-in defaults per platform (SET-013), and how the file's
 // overrides apply (SET-011, COMPAT.md 4.1 and 4.2).
 import { expect, test } from "vitest";
-import { actions } from "./actions";
+import { actions, defaultsFor } from "./actions";
 import { chordMatches, chordsOf, labelOf, labelParts, matchEvent, parseChord, resolve, type KeyLike } from "./keymap";
 
 const key = (k: Partial<KeyLike>): KeyLike => ({ key: "", code: "", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...k });
 
-test("the table registers the 132 carried commands (VIEW-053 added one, T-546 added view.tower, T-246-c added the three ui.zoom keys); 53 ship unbound (T-543-b unbound Reopen closed tab) and 6 have only a macOS chord", () => {
-  expect(actions.length).toBe(132);
+test("the table registers the 136 carried commands (TERM-053 added tab.search, VIEW-053 added one, T-546 added view.tower, T-246-c added the three ui.zoom keys, T-548 added the two account switches, T-146-e added view.space); 55 ship unbound (T-239 bound Reopen closed tab again; the two T-548 account switches ship unbound) and 6 have only a macOS chord", () => {
+  expect(actions.length).toBe(136);
   const ids = new Set(actions.map((a) => a.id));
-  expect(ids.size).toBe(132);
+  expect(ids.size).toBe(136);
   expect(ids.has("tab.newSimulator")).toBe(false);
   expect(ids.has("tab.openQuickCommandsMenu")).toBe(false);
-  expect(actions.filter((a) => a.win32.length === 0 && !a.darwin).length).toBe(53);
+  expect(actions.filter((a) => a.win32.length === 0 && !a.darwin).length).toBe(55);
   expect(actions.filter((a) => a.win32.length === 0 && a.darwin).map((a) => a.id).sort()).toEqual(["floatingWorkspace.maximize", "sidebar.ports.toggle", "tab.newAgent", "tab.rename", "workspace.rename"].sort());
   expect(actions.filter((a) => a.id.startsWith("tab.newAgent.")).length).toBe(35);
 });
@@ -182,4 +182,24 @@ test("FIX-2 AltGr: Ctrl+Alt+letter still fires on a non-Latin layout (no AltGr l
   expect(chordMatches("Mod+Alt+A", key({ ...ctrlAlt, code: "KeyA", key: "ą" }), "win32")).toBeNull();
   // macOS: even if the engine reports AltGraph while Option is held, the chord still fires
   expect(chordMatches("Mod+Alt+0", { ...key({ metaKey: true, altKey: true, code: "Digit0", key: "º" }), getModifierState: gr }, "darwin")).toEqual({});
+});
+
+test("TERM-067: select all in a terminal is Cmd+A on macOS and Ctrl+Shift+A elsewhere, so a bare Ctrl+A stays with the shell", () => {
+  const a = actions.find((x) => x.id === "terminal.selectAll")!;
+  expect(defaultsFor(a, "darwin")).toEqual(["Mod+A"]);
+  expect(defaultsFor(a, "win32")).toEqual(["Ctrl+Shift+A"]);
+  expect(defaultsFor(a, "linux")).toEqual(["Ctrl+Shift+A"]);
+  expect(chordMatches("Ctrl+Shift+A", key({ ctrlKey: true, code: "KeyA", key: "a" }), "linux")).toBeNull();
+});
+
+test("TERM-053: Search open tabs is a tab command with its own chord, bound where a terminal has focus, shared with no other command", () => {
+  const a = actions.find((x) => x.id === "tab.search")!;
+  expect(a.title).toBe("Search open tabs");
+  expect(a.scope).toBe("tabs");
+  expect(a.terminalSafe).toBe(true);
+  const [chord] = defaultsFor(a, "win32");
+  expect(chord).toBe("Mod+Shift+K");
+  expect(chordMatches(chord, key({ ctrlKey: true, shiftKey: true, code: "KeyK", key: "K" }), "win32")).not.toBeNull();
+  const others = actions.filter((x) => x.id !== "tab.search").flatMap((x) => [...defaultsFor(x, "win32"), ...defaultsFor(x, "darwin")]);
+  expect(others).not.toContain(chord);
 });

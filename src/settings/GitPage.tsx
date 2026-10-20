@@ -7,9 +7,20 @@ import { CONFIRM_DELETE_FIELD, asksBeforeDelete } from "../projects/deleting";
 import { prefixSample, type PrefixCheck } from "../projects/model";
 import { budgetLine, budgetLow, type Budget, SCM_GROUP_ORDERS, SCM_GROUP_ORDER_KEY, scmGroups, SUMMARY_UPSTREAM_KEY } from "../scm/model";
 import { useSettings } from "./useSettings";
-import { WRITER_COMMAND_KEY, WRITER_INSTRUCTIONS_KEY, WRITER_KEY } from "../scm/generate";
+import { WRITER_INSTRUCTIONS_KEY } from "../scm/generate";
+import WriterPicker from "../scm/WriterPicker";
+import { autoBranchOn, autoBranchPatch } from "../scm/autoBranch";
+import SetupPolicyRow from "./SetupPolicyRow";
+import { RENAME_FOLDERS_KEY, renamesFolders } from "../projects/folderRename";
+import AiRecipesSection from "./AiRecipesSection";
+import { useDraft } from "./useDraft";
+import { REVIEW_BOTS_KEY } from "../scm/review";
+import { botsText, parseBots } from "./reviewBots";
 
 const REFRESH_FIELD = "refreshBaseFirst";
+/** SET-031 / PROJ-039: branches are renamed after the work; on unless saved as false. */
+export const RENAME_FIELD = "renameBranches";
+export const renamesBranches = (s: Record<string, unknown>) => s[RENAME_FIELD] !== false;
 
 type BudgetView = { rows: Budget[] | null; error: string | null; at: number };
 
@@ -25,6 +36,18 @@ type ViewProps = {
 };
 
 const modeOf = (s: Record<string, unknown>) => (typeof s.branchPrefix === "string" ? s.branchPrefix : "user");
+
+/** ACCT-058: the review authors to show as bots, a draft that saves like the other text fields. */
+function BotsField({ value, onSave }: { value: string; onSave: (text: string) => Promise<unknown> }) {
+  const { props } = useDraft(value, onSave);
+  return <input aria-label="review bot authors" className="field" maxLength={600} placeholder="e.g. reviewbot, ci-helper" {...props} />;
+}
+
+/** SET-036: the commit message instructions, a draft that saves after a pause, on leaving the field and when the page closes. */
+function InstructionsField({ value, onSave }: { value: string; onSave: (text: string) => Promise<unknown> }) {
+  const { props } = useDraft(value, onSave);
+  return <textarea aria-label="commit message instructions" className="field multi" maxLength={2000} placeholder="Your own instructions for the message, e.g. use the imperative mood (optional)" {...props} />;
+}
 
 export function GitView({ settings, save, draft, setDraft, check, budget = { rows: null, error: null, at: 0 }, onBudget }: ViewProps) {
   const mode = modeOf(settings);
@@ -61,6 +84,26 @@ export function GitView({ settings, save, draft, setDraft, check, budget = { row
           </p>
         )}
         {mode === "user" && check && !check.prefix && <p className="conn-detail">No git user name or gh login was found, or it is too long, so new branches get the bare name.</p>}
+        <label className="conn-switch">
+          <input type="checkbox" role="switch" aria-label="Rename branches after the work" checked={renamesBranches(settings)} onChange={(e) => void save({ [RENAME_FIELD]: e.target.checked })} />
+          Rename branches after the work
+        </label>
+        <p className="conn-detail" data-rename-note>
+          {renamesBranches(settings)
+            ? "When the agent starts real work in a workspace that still has the name Kolux suggested, its branch (and the name shown for it) is renamed to a short description of that work. A name you typed or edited is never replaced."
+            : "Off: a workspace keeps the branch name Kolux suggested, whatever work is done in it."}
+        </p>
+        {renamesBranches(settings) && (
+          <>
+            <label className="conn-switch">
+              <input type="checkbox" role="switch" aria-label="Ask to rename the folder too" checked={renamesFolders(settings)} onChange={(e) => void save({ [RENAME_FOLDERS_KEY]: e.target.checked })} />
+              Ask to rename the folder too
+            </label>
+            <p className="conn-detail" data-rename-folders-note>
+              {renamesFolders(settings) ? "After the branch is renamed, Kolux asks before renaming the folder on disk to match; nothing in it is removed." : "Off: the branch and the shown name change, the folder keeps its name."}
+            </p>
+          </>
+        )}
       </section>
       <section className="conn-card" data-section="base">
         <h2 className="conn-name">Base branch</h2>
@@ -93,40 +136,24 @@ export function GitView({ settings, save, draft, setDraft, check, budget = { row
           The list reads {scmGroups(settings[SCM_GROUP_ORDER_KEY]).map((g) => g[0].toUpperCase() + g.slice(1)).join(", then ")}. Conflicts always come first, since they hold up a commit.
         </p>
       </section>
+      <section className="conn-card" data-section="auto-branch">
+        <h2 className="conn-name">Branch names</h2>
+        <label className="conn-switch">
+          <input type="checkbox" role="switch" aria-label="Name the branch after the work" checked={autoBranchOn(settings)} onChange={(e) => void save(autoBranchPatch(e.target.checked))} />
+          Name the branch after the work
+        </label>
+        <p className="conn-detail">A new workspace starts on a placeholder branch. When an agent is given its first task, the branch is renamed to a short name describing that task, with your prefix. A branch that already tracks a remote branch keeps its name. With this off, the placeholder name stays.</p>
+      </section>
       <section className="conn-card" data-section="commit-writer">
         <h2 className="conn-name">Commit messages</h2>
-        <div className="look-select">
-          <span>Written by</span>
-          <select aria-label="commit message writer" className="field" value={settings[WRITER_KEY] === "custom" || settings[WRITER_KEY] === "off" ? String(settings[WRITER_KEY]) : "claude"} onChange={(e) => void save({ [WRITER_KEY]: e.target.value })}>
-            <option value="claude">Claude Code</option>
-            <option value="custom">Custom command</option>
-            <option value="off">Off: no generate button</option>
-          </select>
-        </div>
-        {settings[WRITER_KEY] === "custom" && (
-          <>
-            <input
-              key={String(settings[WRITER_COMMAND_KEY] ?? "")}
-              aria-label="custom commit message command"
-              className="field"
-              placeholder="e.g. my-writer --text {prompt}"
-              defaultValue={String(settings[WRITER_COMMAND_KEY] ?? "")}
-              onBlur={(e) => e.target.value !== String(settings[WRITER_COMMAND_KEY] ?? "") && void save({ [WRITER_COMMAND_KEY]: e.target.value })}
-              onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-            />
-            <p className="conn-detail">The prompt goes wherever <code>{"{prompt}"}</code> appears in the command, or on its standard input when it does not. Put quotes around a word with spaces in it; backslashes are kept as typed.</p>
-          </>
-        )}
-        <textarea
-          key={String(settings[WRITER_INSTRUCTIONS_KEY] ?? "")}
-          aria-label="commit message instructions"
-          className="field multi"
-          maxLength={2000}
-          placeholder="Your own instructions for the message, e.g. use the imperative mood (optional)"
-          defaultValue={String(settings[WRITER_INSTRUCTIONS_KEY] ?? "")}
-          onBlur={(e) => e.target.value !== String(settings[WRITER_INSTRUCTIONS_KEY] ?? "") && void save({ [WRITER_INSTRUCTIONS_KEY]: e.target.value })}
-        />
+        <WriterPicker settings={settings} save={save} />
+        <InstructionsField value={String(settings[WRITER_INSTRUCTIONS_KEY] ?? "")} onSave={(text) => Promise.resolve(save({ [WRITER_INSTRUCTIONS_KEY]: text }))} />
         <p className="conn-detail">The spark button beside the commit message asks for a message describing what is staged.</p>
+      </section>
+      <section className="conn-card" data-section="review-bots">
+        <h2 className="conn-name">Review bots</h2>
+        <BotsField value={botsText(settings[REVIEW_BOTS_KEY])} onSave={(text) => Promise.resolve(save({ [REVIEW_BOTS_KEY]: parseBots(text) }))} />
+        <p className="conn-detail">Authors of review comments to mark as bots, besides the ones GitHub already marks. Separate names with commas; capital letters do not matter.</p>
       </section>
       <section className="conn-card" data-section="gh-budget">
         <h2 className="conn-name">GitHub API budget</h2>
@@ -151,6 +178,8 @@ export function GitView({ settings, save, draft, setDraft, check, budget = { row
         </label>
         <p className="conn-detail">With this off, a workspace with nothing uncommitted is deleted at once. One with changes, a lock or another workspace inside it always asks.</p>
       </section>
+      <SetupPolicyRow settings={settings} save={save} />
+      <AiRecipesSection settings={settings} save={save} />
     </>
   );
 }

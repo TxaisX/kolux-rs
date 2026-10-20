@@ -1,0 +1,46 @@
+T-317 (lane/editor from 88723a4e) EDIT-025, EDIT-026, EDIT-038 built; EDIT-048 rules built, not placed; EDIT-049 and EDIT-050 not started.
+BUILT
+ - EDIT-025: a Preview button in an HTML file's tab header (and in a diff tab's header while the file is still on disk) asks the
+   back end (browser_preview, which serves the file's folder on a loopback address) and opens the address through the browser
+   pane's own openInBrowser export. A refusal shows as a toast. htmlPreview.ts (+ test).
+ - EDIT-026: EditorPane takes follow (with readOnly): once a second, while shown, it reads the file only when its stamp changed and
+   shows whole lines only (a half-written last line waits), scrolling to the end when the view was at the end; an emptied or
+   cut log starts again from the top. No disk-changed banner on such a tab. logFollow.ts (+ test).
+ - EDIT-038: Mod+Shift+F (or the explorer's search button) puts the selection of the editor in front, or the word at its caret,
+   in the search box; several lines become one. In the rich view the rich selection is used. searchSeed.ts (+ test); Explorer.tsx
+   and ContentSearch.tsx take the seed.
+ - EDIT-048: pickList(items, query, limit 50) filters by every typed word, prefix matches first, and counts the rest. Tested with
+   20000 branches. pickerSearch.ts (+ test).
+TESTS htmlPreview 2, logFollow 3, searchSeed 3, pickerSearch 2.
+LEFT (after list): nothing opens a followed log yet (AI Vault's View Log button and the pane needing a follow flag are other lanes'
+  files); the repository and base-branch pickers are plain text boxes in SCM and automations and do not use pickList yet;
+  EDIT-049 and EDIT-050 not started.
+LIVE PROOF PENDING (batched)
+ 1. Open a .html file: the header shows Preview; click it: a browser tab shows the page rendered. A .ts file shows no Preview.
+ 2. Open the diff of an .html file that was deleted: no Preview button; of an existing one: the button is there.
+ 3. In a file, select three lines and press Ctrl+Shift+F: the search box holds them as one line and results show. With only the
+    caret on a name: the name is in the box.
+ 4. (After View Log is wired) append lines to the log from a terminal: they show within a second; empty the file: the view reloads.
+
+SECOND PIECE (2026-10-20, lane/editor from 4b0f1466): the callers and the two cards that were not started.
+BUILT (unit-tested where logic; no app launch)
+ - EDIT-026 caller: patch evidence/editor-T-317-App.tsx.patch gives App openFile(path, line?, follow?): follow opens a read-only editor tab that keeps
+   adding lines (Pane.follow, passed to EditorPane as follow + readOnly); a followed and a plain tab of the same file are separate. No AI Vault "View Log"
+   button exists in this tree, so nothing calls it with true yet.
+ - EDIT-048: SearchPick.tsx (free text box + suggestions from pickList, "N more, type to narrow"); patch evidence/editor-T-317-AutomationDialog.tsx.patch
+   puts it on the automation dialog's Base branch box, filled from the existing workspace_branches command.
+ - EDIT-049: settledQuery.ts useSettled(query): the settings search filters 150 ms after the last keystroke and an emptied box at once; patch
+   evidence/editor-T-317-SettingsPage.tsx.patch uses it for the hits and repository hits. (The card's "only the active page is drawn while searching" differs
+   from SET-007, which draws each page holding a match; left as SET-007.)
+ - EDIT-050: already built by the projects lane (PROJ-018: projects.rs auto_icon looks for recognised favicon / logo / bundle icon names and image formats
+   inside the repository and refuses web addresses; projectIcon.ts autoIconView); nothing more here.
+TESTS settledQuery 1. READINGS (logs G:/Temp/editor-v3-logs/g1..g2-*.log): tsc --noEmit 0 with the App patches (close, explorer, T-317) applied and again with
+  the SettingsPage and AutomationDialog patches applied; vitest src/editor src/settings src/automations 103 files, 619 passed.
+PATCHES (any order after the T-236-b App ones): editor-T-317-App.tsx.patch (applies on top of editor-T-236-b-close-App and -explorer-App),
+  editor-T-317-SettingsPage.tsx.patch, editor-T-317-AutomationDialog.tsx.patch.
+LEFT: (1) a caller of openFile(path, undefined, true), the AI Vault "View Log" button (the AI Vault page is not in this tree); (2) the pull request
+  composer's base field (src/scm/PrStart.tsx) on SearchPick, which needs a branch list command for a worktree from the source control lane; the repository
+  picker in automations is a project list (select) and was not changed.
+LIVE PROOF PENDING (batched)
+ 1. Automations > new > A new worktree for every run: type part of a branch in Base branch: the list narrows; pick one; a name not in the list can still be typed.
+ 2. Settings: type fast into the search box: no lost keys, results appear a moment after you stop; clear the box: every setting returns at once.

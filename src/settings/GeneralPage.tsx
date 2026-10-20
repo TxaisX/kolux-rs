@@ -6,12 +6,15 @@ import { useSettings } from "./useSettings";
 import { FIRST_FIELD, LAST_SCREEN_FIELD, LOOK_FIELD, NEEDS_STRIP_FIELD, readLook, savedFirst, stripOn, type Look } from "./general";
 import { REVIEW_FIELD, reviewOn } from "../editor/notes";
 import { CONFIRM_DELETE_KEY, confirmDelete } from "../automations/model";
-import { CONFIRM_CLOSE_FIELD } from "../terminal/closing";
+import { askAgainPatch, skippedOf, skippedSentence } from "./confirmations";
 import { OUTBOUND } from "./privacy";
 import { requestFeedback } from "../feedback/FeedbackDialog";
 import { DELAY, prefPatch, readEditorPrefs, type DiffView } from "./editorPrefs";
 import { addApp, addCustom, draftReady, moveApp, OPEN_IN_FIELD, presetsLeft, readOpenIn, removeApp, type OpenInApp } from "./openIn";
+import { editApp } from "../editor/openInEdit";
 import { applyDraft, PROXY_FIELD, readProxyRest, type ProxyDraft } from "./proxy";
+import CliCard from "./CliCard";
+import { LINKS_IN_KOLUX_FIELD, linksOpenInKolux } from "../chat/chatLinks";
 
 /** A row of buttons that behaves as one radio group. */
 export function Segmented<T extends string>({ label, options, value, onPick, off = [] }: { label: string; options: Array<{ id: T; label: string }>; value: T; onPick: (v: T) => void; off?: T[] }) {
@@ -110,14 +113,8 @@ export function PrivacyCard() {
   );
 }
 
-/** SET-043: each confirmation skipped with don't ask again is kept on its own and can come back. */
-const SKIPPABLE = [
-  { field: CONFIRM_DELETE_KEY, label: "deleting an automation" },
-  { field: CONFIRM_CLOSE_FIELD, label: "closing a terminal that is running a program" },
-];
-
 function Confirmations({ settings, onSave }: { settings: Record<string, unknown>; onSave: (patch: Record<string, unknown>) => void }) {
-  const skipped = SKIPPABLE.filter((c) => settings[c.field] === false);
+  const skipped = skippedOf(settings);
   return (
     <section className="conn-card" data-section="confirmations">
       <h2 className="conn-name">Confirmations</h2>
@@ -125,8 +122,8 @@ function Confirmations({ settings, onSave }: { settings: Record<string, unknown>
         <input type="checkbox" role="switch" checked={confirmDelete(settings)} onChange={(e) => onSave({ [CONFIRM_DELETE_KEY]: e.target.checked })} />
         Ask before deleting an automation
       </label>
-      <p className="conn-detail">{skipped.length ? `Not asking before ${skipped.map((c) => c.label).join(" or ")}.` : "Every confirmation is asked."}</p>
-      <button type="button" className="btn" disabled={skipped.length === 0} onClick={() => onSave(Object.fromEntries(skipped.map((c) => [c.field, true])))}>
+      <p className="conn-detail">{skippedSentence(settings)}</p>
+      <button type="button" className="btn" disabled={skipped.length === 0} onClick={() => onSave(askAgainPatch(settings))}>
         Ask again for all
       </button>
     </section>
@@ -170,6 +167,7 @@ function EditorCard({ settings, onSave }: { settings: Record<string, unknown>; o
 function OpenInCard({ settings, onSave }: { settings: Record<string, unknown>; onSave: (patch: Record<string, unknown>) => void }) {
   const list = readOpenIn(settings);
   const [draft, setDraft] = useState({ name: "", command: "" });
+  const [editing, setEditing] = useState<string | null>(null); // the row being edited in the fields below
   const put = (next: OpenInApp[]) => onSave({ [OPEN_IN_FIELD]: next });
   const left = presetsLeft(list);
   return (
@@ -185,6 +183,9 @@ function OpenInCard({ settings, onSave }: { settings: Record<string, unknown>; o
             </button>
             <button type="button" className="btn" aria-label={`Move ${a.name} down`} disabled={i === list.length - 1} onClick={() => put(moveApp(list, a.id, 1))}>
               Down
+            </button>
+            <button type="button" className="btn" aria-label={`Edit ${a.name}`} onClick={() => (setEditing(a.id), setDraft({ name: a.name, command: a.command }))}>
+              Edit
             </button>
             <button type="button" className="btn" aria-label={`Remove ${a.name}`} onClick={() => put(removeApp(list, a.id))}>
               Remove
@@ -213,12 +214,18 @@ function OpenInCard({ settings, onSave }: { settings: Record<string, unknown>; o
           className="btn"
           disabled={!draftReady(draft)}
           onClick={() => {
-            put(addCustom(list, draft));
+            put(editing ? editApp(list, editing, draft) : addCustom(list, draft));
+            setEditing(null);
             setDraft({ name: "", command: "" });
           }}
         >
-          Add custom app
+          {editing ? "Save changes" : "Add custom app"}
         </button>
+        {editing && (
+          <button type="button" className="btn" onClick={() => (setEditing(null), setDraft({ name: "", command: "" }))}>
+            Cancel
+          </button>
+        )}
       </div>
     </section>
   );
@@ -293,6 +300,19 @@ function ProxyCard({ settings, onSave }: { settings: Record<string, unknown>; on
   );
 }
 
+/** T-329-b (TERM-092, CHAT-025): links in terminals, chat replies and pull-request checks open in Kolux's own viewer when this is on. */
+function LinksCard({ settings, onSave }: { settings: Record<string, unknown>; onSave: (patch: Record<string, unknown>) => void }) {
+  return (
+    <section className="conn-card" data-section="links">
+      <h2 className="conn-name">Links</h2>
+      <label className="conn-switch">
+        <input type="checkbox" role="switch" checked={linksOpenInKolux(settings)} onChange={(e) => onSave({ [LINKS_IN_KOLUX_FIELD]: e.target.checked })} /> Open links in Kolux
+      </label>
+      <p className="conn-detail">Off: a link goes to your system browser. On: it opens in Kolux's own browser pane, and the system browser stays one Shift-click away.</p>
+    </section>
+  );
+}
+
 export default function GeneralPage() {
   const { settings, error, save } = useSettings();
   return (
@@ -301,8 +321,10 @@ export default function GeneralPage() {
       {settings && <GeneralView settings={settings} onSave={save} />}
       {settings && <Confirmations settings={settings} onSave={save} />}
       {settings && <EditorCard settings={settings} onSave={save} />}
+      {settings && <LinksCard settings={settings} onSave={save} />}
       {settings && <OpenInCard settings={settings} onSave={save} />}
       {settings && <ProxyCard settings={settings} onSave={save} />}
+      <CliCard />
       <DiagnosticsCard />
       <PrivacyCard />
     </>

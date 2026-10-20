@@ -1,14 +1,12 @@
 diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
-index 89856f51..bd19b727 100644
 --- a/src-tauri/src/lib.rs
 +++ b/src-tauri/src/lib.rs
-@@ -342,6 +342,9 @@ pub fn run() {
-             notifications::notification_test,
+@@ -485,6 +485,8 @@
+             badge::badge_set,
              notifications::notification_sound_load,
              notifications::open_notification_settings,
 +            notifications::notify_event, // STAT-044
 +            notifications::notification_clicked, // STAT-044
-+            notifications::badge_set, // STAT-048
              hooks::agent_hooks::agent_hooks_sync,
              hooks::agent_hooks::agent_hooks_file,
              hooks::agent_hooks::saved::agent_status_saved,

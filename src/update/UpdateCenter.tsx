@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Close, Refresh, Spinner, CheckCircle } from "../chrome/icons";
 import { TICK_MS, UpdateSchedule, type Outcome } from "./schedule";
-import { barItem, cardReducer, initialCard, mainAction, tipVisible, type BarItem, type UpdateInfo } from "./card";
+import { barItem, cardReducer, initialCard, isQuiet, mainAction, SHORT_RECHECK_MS, STALE_MARK, tipVisible, type BarItem, type UpdateInfo } from "./card";
 
 interface Status {
   enabled: boolean;
@@ -38,6 +38,7 @@ export default function UpdateCenter() {
   const schedule = useRef<UpdateSchedule<UpdateInfo> | null>(null);
   const downloading = useRef<string | null>(null);
   const cardEl = useRef<HTMLDivElement | null>(null);
+  const recheck = useRef(0);
 
   const download = (info: UpdateInfo) => {
     // A requested check that finds the update already downloading shows that download.
@@ -60,7 +61,11 @@ export default function UpdateCenter() {
     if (o.ok) {
       dispatch({ type: "checkDone", requested, found: o.found });
       if (o.found) download(o.found); // APP-024/025: the download starts by itself
+    } else if (o.error === STALE_MARK) {
+      // T-199: a newer check already replaced this one; its answer is the one that counts.
     } else if (o.error !== "offline") {
+      // T-199 (APP-031): a half-published release is looked at again soon, without a word on a quiet check.
+      if (isQuiet(o.error) && !recheck.current) recheck.current = window.setTimeout(() => ((recheck.current = 0), void schedule.current?.run(false)), SHORT_RECHECK_MS);
       dispatch({ type: "checkFailed", requested, message: o.error, offline: o.offline });
     }
   };
@@ -121,6 +126,7 @@ export default function UpdateCenter() {
     window.addEventListener(EVENT, onAsk);
     return () => {
       alive = false;
+      window.clearTimeout(recheck.current);
       offs.forEach((f) => f());
       void unlisten.then((f) => f());
       window.removeEventListener(EVENT, onAsk);
@@ -165,13 +171,21 @@ export default function UpdateCenter() {
   }, [s.shown, s.collapsed, s.requested, s.phase.kind]);
 
   // On success the app ends here and the installer takes over; a failure means nothing is ready any more.
-  const restart = () => void invoke("update_restart").catch(() => dispatch({ type: "notReady" }));
+  // T-199 (APP-029): an installer that cannot start leaves the app open with the real reason.
+  const restart = () =>
+    void invoke("update_restart").catch((e) => {
+      const message = String(e);
+      dispatch(message === "No update is ready." ? { type: "notReady" } : { type: "restartFailed", message });
+    });
+  // T-199 (APP-031): compatibility mode is remembered, then the check runs again.
+  const compat = () => void invoke("update_compat", { on: true }).then(check, check);
   const act = () => {
     const a = mainAction(s.phase);
     if (a === "close") dispatch({ type: "faded" });
     else if (a === "download" && "info" in s.phase && s.phase.info) download(s.phase.info);
     else if (a === "restart") restart();
     else if (a === "retryCheck") check();
+    else if (a === "compat") compat();
     else if (a === "retryDownload" && s.phase.kind === "error" && s.phase.info) download(s.phase.info);
   };
 
@@ -189,13 +203,19 @@ export default function UpdateCenter() {
             : p.kind === "ready"
               ? `Kolux RS ${version} is ready`
               : p.kind === "error"
-                ? p.retry === "check"
+                ? p.security
+                  ? "Update refused for security"
+                  : p.calm
+                  ? "No update to install yet"
+                  : p.retry === "restart"
+                  ? `Kolux RS ${version} could not install`
+                  : p.retry === "check" || p.retry === "compat"
                   ? "The update check failed"
                   : `Kolux RS ${version} did not download`
                 : "";
   const pct = p.kind === "downloading" && p.total ? Math.min(100, Math.round((p.received / p.total) * 100)) : null;
   const action = mainAction(p);
-  const actionLabel = action === "restart" ? "Restart to update" : action === "download" ? "Download" : action === "retryCheck" || action === "retryDownload" ? "Try again" : action === "close" ? "OK" : null;
+  const actionLabel = action === "restart" ? "Restart to update" : action === "download" ? "Download" : action === "retryCheck" || action === "retryDownload" ? "Try again" : action === "close" ? "OK" : action === "compat" ? "Use compatibility mode" : null;
 
   return (
     <>

@@ -1,19 +1,10 @@
 diff --git a/src/App.tsx b/src/App.tsx
-index ee1b58d7..4ec5eff4 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
-@@ -120,6 +120,7 @@ import ChooserPane from "./launch/ChooserPane";
- import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, sheetStart, type Lineup } from "./launch/seats";
- import { folderName, NESTING_KEY, workItem, type Created, type WorkItem, type CliWorkspace, type Project, type Worktree } from "./projects/model";
- import { focusIn, panesIn, sameDir, nameOf } from "./workspaces";
-+import { badgeCount } from "./notify/badge";
- import { LAYOUT_FIELD, layoutOf, type SavedLayout } from "./terminal/layout";
- import { Kbd, KeymapProvider, useKeymap } from "./keys/KeymapContext";
- import { recording } from "./keys/record";
-@@ -1905,6 +1906,20 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
-   report.current = reportLayout;
+@@ -2379,6 +2379,16 @@
    useEffect(() => report.current());
-   const { noticed, panesRef } = useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir });
+   const { noticed, panesRef } = useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, stamp, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir });
+   useGone({ panes, running, hook, setHook, setTurn, setCrew }); // STAT-031 / T-275: gone agents stop reporting
 +  // STAT-044: a clicked notification focuses the pane that raised it (notification_clicked emits the pane).
 +  useEffect(() => {
 +    const off = listen<{ pane: string }>("notification-click", (e) => {
@@ -24,10 +15,6 @@ index ee1b58d7..4ec5eff4 100644
 +      void off.then((f) => f());
 +    };
 +  }, [panesRef]);
-+  // STAT-048: the taskbar badge counts the workspaces with unseen results; zero clears it.
-+  useEffect(() => {
-+    void invoke("badge_set", { count: badgeCount(unreadDirs) }).catch(() => {});
-+  }, [unreadDirs]);
    // The chooser, in a grid cell (SESS-007) or as the New session page (SESS-018).
    const renderChooser = (p: Pane & { seats: Seat[] }, hidden: boolean, focused: boolean, onFocus: () => void, onClose: () => void, sheetOf: { project: string; path: string } | null = null) => (
      <ChooserPane

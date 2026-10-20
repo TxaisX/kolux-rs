@@ -1,91 +1,89 @@
-T-125 · STAT-044 · STAT-047 · STAT-048 — lane/tray from main 4de08e1c, 2026-10-19
-STAT-049 and STAT-061 moved to the new open line T-125-b (with the OS toast-click hookup and a hook sequence id).
+T-125 · STAT-044 paced notifications, STAT-047 tray dot, STAT-048 badge, STAT-049 seen on view, STAT-061 Grok questions
+lane/watch from deebac56 (Routing v3, P1), 2026-10-19. No app launches: text proof by unit tests; the
+wiring is three patches for the merge resolver and live proof pending (batched).
 
-WHAT WAS BUILT
-- src/notify/pacing.ts (new): the pacer. decide(state, event, {windowFocused, suppressFocused}) -> shown |
-  duplicate | cooldown | focused. Rules: a "test" kind always shows and is never remembered; an id already
-  seen is a duplicate; focused + suppress holds the event back but still records its id; two events for
-  one worktree closer than COOLDOWN_MS = 5000 merge into the first (a finish and a bell included);
-  worktree null is never merged; seen / last / targets each keep the newest MAX_TRACKED = 64.
-  paneFor(state, id) is the click target.
-- src/notify/badge.ts (new): badgeCount(dirs) counts distinct workspaces (slashes, trailing slash and
-  case normalised like sameDir) capped at BADGE_CAP = 99.
-- src/settings/notifications.ts: raiseNotification(settings, title, body, event?) runs decide on one
-  module-level pacer (window focus from document.hasFocus(), suppress from the Notifications page) and,
-  with an event, invokes notify_event {title, body, sound, id, pane, kind}; without one it is STAT-043's
-  notify as before. resetPacer() for tests.
-- src-tauri/src/notifications.rs: Targets (VecDeque of id -> pane, TARGETS_MAX = 64, record() false on a
-  repeat), commands notify_event (duplicate -> {shown:false, duplicate:true}; tray ping Bell for kind
-  "bell" else AgentFinished, so the dot lights even when the toast is blocked; then the toast),
-  notification_clicked(id) (open_window + emit "notification-click" {pane}; answers the pane),
-  badge_set(count) (Windows: set_overlay_icon with paint_badge, None at zero; elsewhere set_badge_count;
-  errors ignored). The three carry #[allow(dead_code)] until the lib.rs patch registers them.
-- src-tauri/src/tray.rs: BADGE_SIZE = 32, badge_text (0 -> none, >99 -> "99+"), paint_badge (amber disc,
-  the digits in a 3x5 pixel font in white, scale 3 for one or two glyphs, 2 for "99+").
-- STAT-047 came free from T-248-d (first ticked as T-248-b): notifications::show already pings the tray;
-  notify_event does the same. FIX-1 adds the `tray_ping` command, called by useAgentStatus before the
-  toast switch is consulted, so the dot lights for an event whose toast kind is off.
-- FIX-1: eventId(pane, what, stamp) in pacing.ts is the id (one per report; Date.now() as the stamp until
-  a hook sequence number exists, T-125-b); the pacer's "Stay quiet" rule holds back only the worktree in
-  view (decide gets focusedWorktree; useAgentStatus passes the in-view pane's cwd), so an out-of-view
-  worktree's finish still notifies while Kolux has focus. Terminal bell: no bell event reaches
-  raiseNotification today (src/terminal is another lane's), so that wiring is T-125-b.
+1. STAT-044 merged and paced notifications (NEW src/notify/pace.ts).
+   paced(memory, worktree, id, now, options): repeats for one worktree inside COOLDOWN_MS (5 s) fold
+   into the first (a task-complete and a bell for the same event included); noteId(pane, what, at) is
+   the fixed identity so an event never shows twice, a merged repeat included; the memory keeps at
+   most MEMORY_CAP (64) identities, oldest first out; {focused, quietWhenFocused} silences everything
+   while the window has focus when the option (settings key notifyQuietWhenFocused) is on; {test}
+   ignores the pace. The useAgentStatus.ts patch gates raiseNotification in noticed() with it.
+   Tests (src/notify/notify.test.ts): two completions from one worktree inside the cooldown are one
+   notification; the same event never shows twice, a test ignores the pace, focus can silence it;
+   the memory stays bounded during a burst.
+   Clicking a notification to focus the source pane: NOT in this build (needs a click handler on
+   the OS notification in notifications.rs, the status lane's file) -> kolux-rs-after.md.
 
-PATCHES FOR THE COORDINATOR (unified diffs against main 4de08e1c, each passes `git apply --cached --check`
-on a `git read-tree 4de08e1c` index)
-- evidence/tray-T-125-lib.rs.patch: registers notifications::notify_event, notification_clicked, badge_set.
-- evidence/tray-T-125-App.tsx.patch: listen("notification-click") -> setFocused(pane key) when the pane
-  exists; useEffect on unreadDirs -> invoke("badge_set", {count: badgeCount(unreadDirs)}); the import.
-- evidence/tray-T-125-useAgentStatus.ts.patch: noticed() and quiet() pass {id, worktree: p.cwd,
-  pane: String(p.key), kind} plus focusedWorktree to raiseNotification; id = eventId(pane, what, Date.now())
-  (quiet: eventId(pane, "quiet <minutes>", Date.now())); kind stop for notifyOnStopped, bell for notifyBell,
-  else finish; invoke("tray_ping", {kind}) before the toast gate (FIX-1).
-- T-248-d's two patches (Cargo.toml tray feature, lib.rs install + Focused hook) are still required; the
-  tray_ping command is registered by evidence/tray-FIX-1-lib.rs.patch.
-- All recut by FIX-1 against main 34e7ea29 (evidence/tray-FIX-1.txt has the check log).
+2. STAT-047 tray attention dot (src-tauri/src/tray.rs).
+   Dot::window_minimised counts as out of sight like window_hidden (the dot lights on a ping, clears
+   on window_shown); icon(dev, dot) names the icon file and keeps the DEV marker on the attention
+   version (tray-dev-dot.png); close_to_tray(saved) is off unless the saved choice says on.
+   Tests (tray::tests): stat047_a_minimised_window_takes_the_dot_and_restoring_clears_it,
+   stat047_dev_copies_keep_their_marker_on_the_attention_icon_and_close_to_tray_is_off_by_default.
+   The real tray icon still needs tauri's `tray-icon` Cargo feature (T-248-b, coordinator).
 
-TESTS (all written red first, then green)
-- src/notify/pacing.test.ts (9): two completions in one worktree inside the cooldown are one, shown
-  again after it; finish + bell merge; another worktree is not held; the same id never twice; test kind
-  ignores pacing; focused + suppress holds and still records; suppress off shows; bounded burst keeps
-  the newest 64 targets; paneFor; worktree null never merged.
-- src/notify/badge.test.ts (3): two workspaces -> 2, none -> 0; three spellings of one folder -> 1; cap.
-- src/settings/notifications.test.ts (+1): STAT-044 an event goes through notify_event with id and pane,
-  the same event never shows twice, a second finish in the worktree right after is merged.
-- src-tauri/src/notifications.rs (+1): stat044_each_event_id_is_remembered_once_with_its_pane_and_the_memory_is_bounded.
-- src-tauri/src/tray.rs (+2): stat048_the_badge_text_caps_large_counts_and_zero_clears,
-  stat048_the_overlay_badge_is_an_amber_disc_with_the_count_in_white.
+3. STAT-048 badge counting workspaces (NEW src/notify/badge.ts, NEW src-tauri/src/badge.rs).
+   badgeCount(unread, panes): unread tabs count once under their workspace folder (sameDir), a
+   closed pane counts for nothing, a pane with no folder counts as its own, capped at 99. badge_set
+   (tauri command, lib.rs patch): Windows has no badge count, so the count becomes a 16x16 amber
+   taskbar overlay with the digit (1-9; a plain disc above) via set_overlay_icon; macOS and Linux
+   take set_badge_count; zero clears; any failure is ignored. The useAgentStatus.ts patch calls it
+   whenever the unread set or the panes change.
+   Tests: notify.test.ts "the badge counts workspaces, not tabs, caps and clears";
+   badge::tests::stat048_zero_clears_and_large_counts_are_capped,
+   stat048_the_overlay_is_an_amber_disc_with_the_digit_and_clear_corners.
 
-GATES (logs under G:/Temp/tray-w16-logs/T-125-*.log; every run under a build slot, scratch
-CLAUDE_CONFIG_DIR / CODEX_HOME / HOME / USERPROFILE / TEMP)
-- red run: vitest exit 1 (Cannot find module ./badge, ./pacing); cargo test --no-run exit 101
-  (badge_text, paint_badge, BADGE_SIZE, WHITE, Targets, TARGETS_MAX missing).
-- committed tree (no coordinator patches): pnpm exec vitest run src/notify src/settings -> 34 files,
-  167 tests passed; pnpm exec tsc --noEmit -> exit 0; cargo build -> exit 0;
-  cargo clippy --all-targets -- -D warnings -> exit 0; cargo test --lib tray -> 9 passed;
-  cargo test --lib notifications -> 5 passed.
-- wired tree (T-248-b + T-125 patches applied, then reverted): tsc exit 0; vitest src/notify src/settings
-  src/status -> 39 files, 211 tests passed (after the kind-key fix: 37 files, 199 tests for src/status
-  src/settings); cargo build exit 0; cargo clippy -D warnings exit 0; Cargo.lock unchanged.
+4. STAT-049 looking at a finished session marks it seen (NEW src/notify/seen.ts).
+   toAcknowledge({unread, inView, focused, manual, stampOf, acked}): a marked pane in view of a
+   focused window clears by itself (inView answers for the grid and floating panels alike); a pane
+   in `manual` (marked unread by hand) stays; a pane whose status has not arrived (stampOf
+   undefined) keeps being watched and clears once it does; acknowledgements are remembered by
+   ackKey(pane, stamp), so a turn stamped later than the local clock is acknowledged exactly once.
+   The useAgentStatus.ts patch replaces the clear-on-view effect with it (stamp handed over from
+   App.tsx, optional so the existing test fixture still compiles).
+   Tests: notify.test.ts "a finished session in view ... a hand-marked one stays unread", "a pane
+   with no status yet keeps being watched, a future turn is acknowledged once".
+   There is no per-pane Mark unread control yet (ProjectsPanel marks workspace rows), so `manual`
+   is passed empty -> kolux-rs-after.md.
 
-LIVE PROOF PENDING (batched) — steps for the proof lane, once the patches are in main
-1. Hide the window (minimise), let two agents in one worktree finish within 5 s: one toast, tray dot on.
-2. Show the window: the dot clears. Click the toast (once T-125-b wires activation; until then invoke
-   notification_clicked from the devtools console with the event id): the pane that raised it is focused.
-3. Two workspaces with unseen results: the taskbar icon carries an amber "2" overlay; open both tabs:
-   the overlay clears. 100+ unseen workspaces are not reachable by hand; "99+" is covered by the test.
-4. Notifications page test button: shows every time, no dot, no pacing.
-5. (FIX-1) Two tabs open (worktrees A and B), tab A in view, Kolux focused, "Stay quiet about the worktree
-   you are looking at" on: an agent in B finishes -> a toast; an agent in A finishes -> no toast (the
-   unread mark and the in-app toast still appear).
-6. (FIX-1) Notification click into another tab: with tab A in view, let B's agent finish, then call
-   `window.__TAURI__.core.invoke("notification_clicked", {id})` with that event's id (or click the toast
-   once T-125-b wires activation). Expected: tab B is focused.
-7. (FIX-1) Two finishes 30 s apart in one pane inside the same clock minute: two toasts (one id each).
+5. STAT-061 Grok questions (NEW src-tauri/src/grok_status.rs).
+   change(event) over the normalized hook shape: PreToolUse of Grok's ask-the-user tool (name
+   containing "ask" or "question") -> waiting with the question (tool_input.question | prompt |
+   message | text, or a plain string, cut to 300 chars); PostToolUse of it -> working, question
+   dropped; PostToolUseFailure (a cancelled question) -> working, no card; PreToolUse of any other
+   tool -> working; other events move nothing.
+   Tests (grok_status::tests): stat061_the_ask_tool_starting_means_waiting_with_the_question,
+   stat061_answering_cancelling_or_another_tool_means_working_with_no_card,
+   stat061_a_long_question_is_cut_to_card_length.
+   Routing Grok's hook events to it (a /grok route in agent_hooks/vendors.rs + hooks.rs) and a
+   `question` field on the status payload are the status lane's files -> kolux-rs-after.md.
 
-SEEN, NOT FIXED
-- tauri-plugin-notification 2.5.1 desktop show() drops the notify-rust handle, so an OS toast click
-  cannot reach notification_clicked yet (T-125-b).
-- The event id is pane+what+stamp (FIX-1); a hook sequence number would be exact (T-125-b).
-- The terminal bell never reaches raiseNotification yet (src/terminal, another lane): T-125-b.
-- macOS / Linux badge: set_badge_count is wired but unproven here (Windows machine).
+Decisions for Txais
+- Cooldown 5 s per worktree; the identity is pane + state + turn stamp.
+- The Windows badge is a digit on an amber disc (overlay icons are 16 px; two digits are not
+  readable), so 10+ workspaces show the disc alone. macOS shows the real number.
+- Grok's ask tool is matched by name ("ask" / "question") because its exact tool name is not in the
+  spec; one line in ASK_MARKS when it is known.
+
+Patches for the merge resolver (git apply --check passed on each)
+- evidence/watch-T-125-lib.rs.patch: mod badge, mod grok_status, badge::badge_set registered.
+  Apply first; badge.rs and grok_status.rs only compile with it.
+- evidence/watch-T-125-useAgentStatus.ts.patch: pace gate in noticed(), toAcknowledge in the
+  clear-on-view effect, badge_set effect, `stamp` taken as an optional dep.
+- evidence/watch-T-125-App.tsx.patch: hands `stamp` to useAgentEvents.
+  tsc exit 0, vitest src/notify + src/status 50 passed with all three applied
+  (G:/Temp/watch-v3-logs/p1-t125-tsc.log, p1-t125-vitest.log).
+
+LIVE PROOF PENDING (batched)
+1. Two Claude panes in one worktree finish within 5 s while the window is behind another app: one
+   desktop notification. A third worktree finishing: its own notification.
+2. Minimise Kolux, let an agent finish: the tray icon shows the amber dot (DEV copy keeps DEV);
+   restore the window: the dot clears. Finish with the window visible: no dot.
+3. Two workspaces finish unseen: the taskbar overlay shows 2; view both panes: the overlay is gone.
+   Three unread tabs in one workspace: it shows 1.
+4. An agent finishes in a background tab; open the tab: the unread mark clears with no click.
+5. Grok asks a multiple-choice question: the pane reads needs you with the question; answer it:
+   working, card gone; cancel it: working, no card (after the status lane routes /grok).
+
+Gates: see the commit body; logs G:/Temp/watch-v3-logs/p1-t125-*.log.

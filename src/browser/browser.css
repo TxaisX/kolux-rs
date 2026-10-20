@@ -2,6 +2,12 @@
 /* BROW-006: the slot is the address bar's place in the toolbar. In a pane under 360 px the bar is compact; while it
    has focus it floats across the whole toolbar, and the buttons under it keep their place because the slot stays in flow. */
 .pane.browser { container-type: inline-size; }
+/* T-240 (BROW-034): the Viewport Size menu sits with the toolbar's icon buttons. */
+.pane.browser .pane-head select.viewport { height: 20px; font: inherit; font-size: 11px; color: var(--fg-muted); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0 2px; max-width: 84px; }
+.pane.browser .pane-head select.viewport:hover, .pane.browser .pane-head select.viewport:focus-visible { color: var(--fg); }
+@container (max-width: 359px) {
+  .pane.browser .pane-head select.viewport, .pane.browser .pane-head .ib.cookies { display: none; }
+}
 .pane.browser .pane-head { position: relative; }
 .pane.browser .pane-head .address-slot { flex: 1; min-width: 0; display: flex; }
 .pane.browser .pane-head .address-slot .address { text-overflow: ellipsis; }
@@ -24,3 +30,49 @@
 .pane.browser .load-overlay p { margin: 0; max-width: 46ch; overflow-wrap: anywhere; }
 .pane.browser .load-overlay .btn-row { margin-top: 6px; flex-wrap: wrap; justify-content: center; }
 .pane.browser .load-overlay .connecting { color: var(--fg-icon-dim); }
+/* BROW-037: the notes tray sits under the toolbar while the user picks elements and writes notes on them. */
+.pane.browser .pane-head .ib.on { color: var(--accent, #ff5a00); }
+.pane.browser .notes-tray { display: flex; flex-direction: column; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--line-subtle); font-size: 12px; color: var(--fg-muted); max-height: 40%; overflow: auto; }
+.pane.browser .notes-tray .tray-head { display: flex; align-items: center; gap: 6px; }
+.pane.browser .notes-tray .tray-head .hint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane.browser .notes-tray code { font-size: 11px; color: var(--fg); background: var(--chip-bg); padding: 0 4px; border-radius: 3px; overflow-wrap: anywhere; }
+.pane.browser .notes-tray .draft { display: flex; align-items: flex-start; gap: 6px; }
+.pane.browser .notes-tray .draft textarea { flex: 1; min-width: 0; resize: vertical; font: inherit; }
+.pane.browser .notes-tray .notes { margin: 0; padding-left: 20px; }
+.pane.browser .notes-tray .notes li { overflow-wrap: anywhere; }
+.pane.browser .notes-tray .send-menu { list-style: none; margin: 0; padding: 2px 0; }
+.pane.browser .notes-tray .send-menu button { width: 100%; text-align: left; background: none; border: 0; color: var(--fg); padding: 3px 6px; cursor: pointer; }
+.pane.browser .notes-tray .send-menu button:hover { background: var(--chip-bg); }
+.pane.browser .notes-tray .send-menu small { color: var(--fg-muted); margin-left: 6px; }
+
+/* T-241 (BROW-039): a previewed document's folder and file stand in for the address. */
+.preview-chip { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; padding: 0 6px; font-size: 12px; overflow: hidden; white-space: nowrap; }
+.preview-folder { opacity: 0.6; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.preview-sep { opacity: 0.5; }
+.preview-copy { font-size: 11px; }
+/* T-159 (BROW-040): the outside address a preview asked for, shown whole. */
+.pane.browser .notice.preview-ask { color: var(--fg); border-color: var(--line); flex-wrap: wrap; }
+.pane.browser .notice.preview-ask span { flex: 1; min-width: 0; }
+.pane.browser .notice.preview-ask code { overflow-wrap: anywhere; user-select: text; }
+.pane.browser .notice.preview-ask .ib { margin-left: 0; }
+
+/* T-238-b (BROW-004): the address bar's drop-down, in the pane's flow above the page. */
+.pane.browser .suggest { list-style: none; margin: 0; padding: 2px 0; border-bottom: 1px solid var(--border); background: var(--bg-raised, var(--bg)); max-height: 240px; overflow-y: auto; }
+.pane.browser .suggest li { display: flex; flex-direction: column; gap: 1px; padding: 3px 10px; cursor: pointer; min-width: 0; }
+.pane.browser .suggest li.on, .pane.browser .suggest li:hover { background: var(--chip-bg); }
+.pane.browser .suggest .head { font-size: 12px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane.browser .suggest .sub { font-size: 11px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* T-240 (BROW-028): the Import Cookies menu and the guided Chrome steps. */
+.pane.browser .suggest li.sub-note { cursor: default; }
+.pane.browser .suggest li.sub-note:hover { background: none; }
+.pane.browser .cookie-steps { color: var(--fg); border-color: var(--line); flex-wrap: wrap; }
+.pane.browser .cookie-steps ol { flex: 1 1 100%; min-width: 0; margin: 0 0 4px; padding-left: 18px; }
+.pane.browser .suggest li.search .head::before { content: "Search · "; color: var(--fg-muted); }
+.pane.browser .suggest li.document .head::before { content: "Document · "; color: var(--fg-muted); }
+/* T-238-b (BROW-013): the tab's downloads, bytes received and the total when known. */
+.pane.browser .downloads { list-style: none; margin: 0; padding: 2px 8px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.pane.browser .downloads li { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pane.browser .downloads .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane.browser .downloads .state { color: var(--fg-muted); white-space: nowrap; }
+.pane.browser .downloads li.failed .state { color: var(--danger, #e5484d); }
+.pane.browser .downloads progress { width: 120px; height: 6px; }

@@ -1565,8 +1565,21 @@ mod tests {
         // 64 DWORDs = 256 bytes: room for a handful of records, none for a storm.
         start_reader(&sub, true, Spot::Refs, tx, stop.clone(), Wake::new(), 64).unwrap();
         std::thread::sleep(Duration::from_millis(200));
-        for i in 0..3000 {
-            std::fs::write(sub.join(format!("f{i}")), "x").unwrap();
+        // T-033-e (batch 2): one writer was slower than the reader on a fast disk, so the reader
+        // always re-armed in time and nothing overflowed. Long names (one record is about 212 bytes,
+        // two never fit in 256) and four writers at once leave the reader no time to re-arm.
+        let writers: Vec<_> = (0..4)
+            .map(|t| {
+                let sub = sub.clone();
+                std::thread::spawn(move || {
+                    for i in 0..1000 {
+                        std::fs::write(sub.join(format!("{}-{t}-{i}", "f".repeat(100))), "x").unwrap();
+                    }
+                })
+            })
+            .collect();
+        for w in writers {
+            w.join().unwrap();
         }
         let mut seen = Vec::new();
         let end = Instant::now() + Duration::from_secs(10);
@@ -1585,7 +1598,7 @@ mod tests {
         std::fs::write(sub.join("later"), "y").unwrap();
         let later = rx.recv_timeout(Duration::from_secs(5));
         assert!(matches!(later, Ok(Signal::Change)), "the same reader reports a later change after its overflow: {later:?}");
-        println!("FIX-1: a 3000-file storm into a 256-byte buffer: {} signals before the first overflow was seen, {n_overflows} overflow(s), then a later change", seen.len());
+        println!("FIX-1: a 4000-file storm from 4 writers into a 256-byte buffer: {} signals before the first overflow was seen, {n_overflows} overflow(s), then a later change", seen.len());
         stop.store(true, Ordering::Relaxed);
     }
 

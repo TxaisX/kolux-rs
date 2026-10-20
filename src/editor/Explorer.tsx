@@ -15,12 +15,18 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { ChevronDown, Close, Expand, FolderPlus, Plus, Search } from "../chrome/icons";
+import { ChevronDown, Close, EyeOff, Expand, FolderPlus, Funnel, Plus, Refresh, Search } from "../chrome/icons";
+import { DOTFILES_KEY, IGNORED_KEY, filterRows, folderGlob, hidesDotfiles, rowMenu, sameNodes, withDotfiles, withoutDotfiles, withoutIgnored } from "./explorerView";
+import { MAX_DROP_BYTES, projectDrop, refuseDrop } from "./desktopDrops";
 import FileIcon from "./FileIcon";
 import { loadTargets, openIn, type Target } from "./openIn";
 import ContentSearch from "./ContentSearch";
+import "./explorerBar.css";
+import { EXPAND_CAP, insideDir, menuLabel, nextWave, withExtraMenu, type AnyMenuId } from "./explorerBar";
+import { currentSeed } from "./searchSeed";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
+import { announceMoves } from "./fileMoved";
 
 export type Node = { name: string; path: string; kind: "dir" | "file" | "link" };
 export type Row = { node: Node; depth: number; parent: string | null };
@@ -60,7 +66,7 @@ export function flatten(root: string, kids: Record<string, Node[] | undefined>, 
 export const between = (rows: Row[], a: number, b: number) => rows.slice(Math.min(a, b), Math.max(a, b) + 1).map((r) => r.node.path);
 export const parentOf = (path: string) => path.slice(0, Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")));
 export const baseName = (path: string) => path.slice(Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")) + 1);
-const inside = (p: string, dir: string) => p.startsWith(dir + "\\") || p.startsWith(dir + "/");
+const inside = insideDir; // T-224-b: Windows paths compare without case, and only on whole folder names
 /** A selection to delete: a folder chosen along with things inside it goes once, as the folder. */
 export const tops = (paths: string[]) => paths.filter((p) => p !== DRAFT && !paths.some((q) => q !== p && inside(p, q)));
 /** The call that undoes an action, and the one that does it again. */
@@ -102,29 +108,59 @@ export function dirAt(rows: Row[], i: number, root: string, isDir: (n: Node) => 
 /** A drag's moves: each top-level item not already in that folder and not the folder itself. */
 export const movesInto = (paths: string[], dir: string): [string, string][] => tops(paths).filter((p) => p !== dir && parentOf(p) !== dir).map((p) => [p, dir]);
 const EDGE = 24; // px from the tree's top or bottom where a drag scrolls it
+const LIVE_MS = 3000; // EDIT-035: how often the shown folders are read again
+const LIVE_FOLDERS = 40;
 
-type Props = { root: string; hidden: boolean; focusAsk: number; onOpen: (path: string) => void; onClose: () => void };
+type Props = {
+  root: string;
+  hidden: boolean;
+  focusAsk: number;
+  onOpen: (path: string) => void;
+  onClose: () => void;
+  /** EDIT-035: opens a terminal in a folder (the "Open in terminal" row item; without it the item is left out). */
+  onOpenTerminal?: (dir: string) => void;
+  /** EDIT-037: shows the explorer when Mod+Shift+F is pressed while it is hidden. */
+  onWake?: () => void;
+};
 
-export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Props) {
+export default function Explorer({ root, hidden, focusAsk, onOpen, onClose, onOpenTerminal, onWake }: Props) {
   const keymap = useKeymap();
   // EDIT-037: the explorer shows either the file tree or the content search; Mod+Shift+F
   // brings the search forward (with its text selected) while the explorer is shown.
   const [searching, setSearching] = useState(false);
   const [searchAsk, setSearchAsk] = useState(0);
+  const [seed, setSeed] = useState<{ text: string; at: number } | undefined>(undefined); // EDIT-038: the editor's selection or word at the caret
+  const startSearch = () => {
+    const text = currentSeed();
+    if (text) setSeed({ text, at: Date.now() });
+    setSearchAsk((n) => n + 1);
+  };
   // EDIT-043: the Open in menu (null while closed) and the last launch that failed.
   const [openTargets, setOpenTargets] = useState<{ list: Target[]; x: number; y: number } | null>(null);
   const [openErr, setOpenErr] = useState<string | null>(null);
+  // EDIT-037: with the explorer hidden the key shows it first (onWake) and the search starts once it is on screen.
+  const wakeSearch = useRef(false);
   useEffect(() => {
-    if (hidden) return;
     const key = (e: KeyboardEvent) => {
       if (matchEvent(keymap, e, ["global"])?.id !== "sidebar.search.toggle") return;
+      if (hidden && !onWake) return;
       e.preventDefault();
       setSearching(true);
-      setSearchAsk((n) => n + 1);
+      if (hidden) {
+        wakeSearch.current = true;
+        onWake?.();
+      } else startSearch();
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [hidden, keymap]);
+  }, [hidden, keymap, onWake]);
+  useEffect(() => {
+    if (!hidden && wakeSearch.current) {
+      wakeSearch.current = false;
+      startSearch();
+    }
+  }, [hidden]);
+  const [scope, setScope] = useState<{ glob: string; at: number } | undefined>(undefined); // EDIT-035: "Find in folder"
   const [kids, setKids] = useState<Record<string, Node[] | undefined>>({});
   const [failed, setFailed] = useState<Record<string, string>>({});
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -145,14 +181,45 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
   const done = useRef<Op[]>([]);
   const undone = useRef<Op[]>([]);
 
+  // A read that finds the same entries keeps the old list, so the live refresh below does not redraw an unchanged tree.
   const load = (dir: string) =>
     invoke<Node[]>("dir_list", { path: dir }).then(
       (list) => {
-        setKids((k) => ({ ...k, [dir]: list }));
-        setFailed(({ [dir]: _, ...f }) => f);
+        setKids((k) => (sameNodes(k[dir], list) ? k : { ...k, [dir]: list }));
+        setFailed((f) => (dir in f ? Object.fromEntries(Object.entries(f).filter(([p]) => p !== dir)) : f));
       },
-      (err) => setFailed((f) => ({ ...f, [dir]: String(err) })),
+      (err) => setFailed((f) => (f[dir] === String(err) ? f : { ...f, [dir]: String(err) })),
     );
+  // VIEW-059 (T-224-b): refresh shows a spinner and is off while it runs; expand all opens the folders level by level.
+  const [refreshing, setRefreshing] = useState(false);
+  const [expanding, setExpanding] = useState(false);
+  const refresh = () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    void Promise.all(shownDirs.current.map((d) => load(d))).finally(() => setRefreshing(false));
+  };
+  const expandAll = async () => {
+    if (expanding) return;
+    setExpanding(true);
+    try {
+      const seen = new Set(open);
+      const lists: Record<string, Node[] | undefined> = { ...kids };
+      let room = EXPAND_CAP;
+      for (let level = 0; level < 12 && room > 0; level++) {
+        const wave = nextWave(lists, seen, room);
+        if (!wave.length) break;
+        room -= wave.length;
+        wave.forEach((d) => seen.add(d));
+        setOpen((o) => new Set([...o, ...wave]));
+        const got = await Promise.all(wave.map((d) => invoke<Node[]>("dir_list", { path: d }).then((l) => [d, l] as const, () => null)));
+        const fresh = Object.fromEntries(got.filter((x): x is readonly [string, Node[]] => x !== null));
+        Object.assign(lists, fresh);
+        setKids((k) => ({ ...k, ...fresh }));
+      }
+    } finally {
+      setExpanding(false);
+    }
+  };
   const shownDirs = useRef<string[]>([]);
   shownDirs.current = [root, ...open];
   useEffect(() => {
@@ -160,7 +227,15 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
     const again = () => shownDirs.current.forEach((d) => void load(d));
     again();
     window.addEventListener("focus", again);
-    return () => window.removeEventListener("focus", again);
+    // EDIT-035: the tree keeps up with the disk by itself: every shown folder is read again every few seconds while the
+    // window is on screen (up to 40 folders a round), and a folder that did not change costs no redraw.
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") shownDirs.current.slice(0, LIVE_FOLDERS).forEach((d) => void load(d));
+    }, LIVE_MS);
+    return () => {
+      window.removeEventListener("focus", again);
+      window.clearInterval(timer);
+    };
   }, [root, hidden]);
   const reloadAround = (paths: string[]) => new Set(paths.map(parentOf)).forEach((d) => void load(d));
 
@@ -181,7 +256,62 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
     if (focusAsk && !hidden && !searching) box.current?.focus();
   }, [focusAsk, hidden]);
 
-  const rows = flatten(root, kids, open, draft);
+  // EDIT-035: the name filter shows every match in the loaded folders with the folders above it; the
+  // dotfiles switch (per worktree) leaves dot names out.
+  const [query, setQuery] = useState("");
+  const [noDots, setNoDots] = useState(() => {
+    try {
+      return hidesDotfiles(localStorage.getItem(DOTFILES_KEY), root);
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      setNoDots(hidesDotfiles(localStorage.getItem(DOTFILES_KEY), root));
+    } catch {
+      setNoDots(false);
+    }
+  }, [root]);
+  const flipDots = () => {
+    const next = !noDots;
+    setNoDots(next);
+    try {
+      localStorage.setItem(DOTFILES_KEY, withDotfiles(localStorage.getItem(DOTFILES_KEY), root, next));
+    } catch {
+      /* the switch still works for this session */
+    }
+  };
+  // EDIT-035: git-ignored files are shown by default; the switch (kept per worktree) hides the names git ignores.
+  const [noIgnored, setNoIgnored] = useState(() => {
+    try {
+      return hidesDotfiles(localStorage.getItem(IGNORED_KEY), root);
+    } catch {
+      return false;
+    }
+  });
+  const [ign, setIgn] = useState<Record<string, string[] | undefined>>({});
+  const asked = useRef(new Map<string, Node[] | undefined>());
+  useEffect(() => {
+    if (!noIgnored) return void asked.current.clear();
+    for (const dir of Object.keys(kids)) {
+      if (asked.current.get(dir) === kids[dir]) continue;
+      asked.current.set(dir, kids[dir]);
+      void invoke<string[]>("dir_ignored", { path: dir }).then((names) => setIgn((i) => ({ ...i, [dir]: names })), () => undefined);
+    }
+  }, [noIgnored, kids]);
+  const flipIgnored = () => {
+    const next = !noIgnored;
+    setNoIgnored(next);
+    try {
+      localStorage.setItem(IGNORED_KEY, withDotfiles(localStorage.getItem(IGNORED_KEY), root, next));
+    } catch {
+      /* the switch still works for this session */
+    }
+  };
+  const shown = noDots ? withoutDotfiles(kids) : kids;
+  const visible = noIgnored ? withoutIgnored(shown, ign) : shown;
+  const rows = query.trim() ? filterRows(flatten(root, visible, new Set(Object.keys(visible)), null), query) : flatten(root, visible, open, draft);
   const index = rows.findIndex((r) => r.node.path === at);
   const isDir = (n: Node) => n.kind === "dir" || (n.kind === "link" && real[n.path] === "dir");
 
@@ -229,8 +359,8 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
     setNote(null);
   };
   const back = () => box.current?.focus();
-  const startNew = (folder: boolean) => {
-    const dir = dirAt(rows, index, root, isDir);
+  const startNew = (folder: boolean, into?: string) => {
+    const dir = into ?? dirAt(rows, index, root, isDir);
     if (dir !== root) setOpen((o) => new Set(o).add(dir));
     setRenaming(null);
     setDraft({ dir, folder });
@@ -248,6 +378,9 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
   };
   /** Open folders that moved or were renamed stay open at their new paths. */
   const follow = (moves: [string, string][], also?: string) => {
+    // EDIT-032: open tabs follow their files, unsaved text and drafts included.
+    announceMoves(moves);
+    moves.forEach(([from, to]) => void invoke("editor_draft_rename", { worktree: root, from, to }).catch(() => undefined));
     const to = (p: string) => moves.reduce((q, [a, b]) => (q === a || inside(q, a) ? b + q.slice(a.length) : q), p);
     const next = new Set([...open].map(to));
     if (also && also !== root) next.add(also);
@@ -344,7 +477,15 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
         const chosen = tops(sel.size ? [...sel] : at ? [at] : []);
         if (!chosen.length) break;
         setClip(chosen);
-        setNote({ text: `${chosen.length === 1 ? baseName(chosen[0]) : `${chosen.length} items`} ready to paste with Ctrl+V into a folder` });
+        {
+          const what = chosen.length === 1 ? baseName(chosen[0]) : `${chosen.length} items`;
+          setNote({ text: `${what} ready to paste with Ctrl+V into a folder` });
+          // T-249-c: the files also go on the system clipboard, so a paste in another program (a mail, a chat, the desktop) gets them.
+          void invoke("clip_copy_files", { paths: chosen }).then(
+            () => setNote({ text: `${what} ready to paste with Ctrl+V here or in another program` }),
+            (err) => setNote({ text: `${what} ready to paste with Ctrl+V into a folder (not on the system clipboard: ${String(err)})` }),
+          );
+        }
         break;
       }
       case "Mod+V":
@@ -460,7 +601,18 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
         const dir = over ? dirAt(live.current.rows, rowAt(y), root, live.current.isDir) : null;
         if (p.type !== "drop") return setDropAt(dir);
         setDropAt(null);
-        if (dir) void live.current.doCopy(p.paths, dir);
+        const why = refuseDrop(p.paths);
+        if (dir && why) setNote({ text: why, bad: true });
+        else if (dir) {
+          // EDIT-039: the bytes are counted before anything is copied (when they cannot be counted, the copy reports its own failure).
+          void invoke<number>("fs_bytes", { paths: p.paths, cap: MAX_DROP_BYTES })
+            .catch(() => null)
+            .then((bytes) => {
+              const big = refuseDrop(p.paths, bytes);
+              if (big) setNote({ text: big, bad: true });
+              else void live.current.doCopy(p.paths, dir);
+            });
+        }
       })
       .then((u) => (gone ? u() : (off = u)), () => {});
     return () => {
@@ -493,6 +645,48 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
     activate(n);
   };
 
+  // EDIT-035: the row menu (right-click): find in folder, open in terminal, view file, add as project, copy, and the file actions.
+  const [menu, setMenu] = useState<{ x: number; y: number; path: string; dir: boolean } | null>(null);
+  const rowContext = (e: React.MouseEvent, path: string, dir: boolean) => {
+    if (path === DRAFT || path === renaming) return;
+    e.preventDefault();
+    box.current?.focus();
+    setAt(path);
+    if (!sel.has(path)) pick(path);
+    setMenu({ x: e.clientX, y: e.clientY, path, dir });
+  };
+  const runMenu = (id: AnyMenuId, path: string, dir: boolean) => {
+    setMenu(null);
+    const folder = dir ? path : parentOf(path);
+    switch (id) {
+      case "view":
+        return onOpen(path);
+      case "collapse":
+        return fold(path);
+      case "copyFile":
+        return void invoke("clip_copy_files", { paths: [path] }).then(() => setNote({ text: `${baseName(path)} copied; paste it in another program` }), (err) => setNote({ text: `${baseName(path)} could not be copied as a file: ${String(err)}`, bad: true }));
+      case "newFile":
+      case "newFolder":
+        return startNew(id === "newFolder", path);
+      case "rename":
+        return setRenaming(path);
+      case "delete":
+        return setAsking(tops(sel.has(path) ? [...sel] : [path]));
+      case "copyPath":
+        return void copy(path);
+      case "copyRelative":
+        return void copy(relative(path));
+      case "findInFolder":
+        setSearching(true);
+        setScope({ glob: folderGlob(root, path), at: Date.now() });
+        return startSearch();
+      case "openTerminal":
+        return onOpenTerminal?.(folder);
+      case "addProject":
+        return projectDrop.add?.([path]);
+    }
+  };
+
   const first = Math.max(0, Math.floor(scroll / ROW) - SPARE);
   const last = Math.min(rows.length, Math.ceil((scroll + height) / ROW) + SPARE);
   const name = baseName(root.replace(/[\\/]+$/, "")) || root;
@@ -504,11 +698,26 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
         <span className="path" title={root}>
           {name}
         </span>
-        <button className={`ib${searching ? " on" : ""}`} onClick={() => (setSearching(!searching), setSearchAsk((n) => n + 1))} aria-pressed={searching} title="Search file contents (Ctrl+Shift+F)" aria-label="Search file contents">
+        <button className={`ib${searching ? " on" : ""}`} onClick={() => (setSearching(!searching), startSearch())} aria-pressed={searching} title="Search file contents (Ctrl+Shift+F)" aria-label="Search file contents">
           <Search size={12} />
         </button>
         <button className="ib" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); if (openTargets) setOpenTargets(null); else void loadTargets().then((list) => setOpenTargets({ list, x: r.left, y: r.bottom + 4 })); }} aria-expanded={!!openTargets} aria-haspopup="menu" title="Open this folder in another app" aria-label="Open in">
           <Expand size={12} />
+        </button>
+        <button className="ib" onClick={refresh} disabled={refreshing} aria-busy={refreshing} title="Refresh the tree" aria-label="Refresh the tree">
+          <Refresh size={12} className={refreshing ? "spin" : undefined} />
+        </button>
+        <button className="ib" onClick={() => void expandAll()} disabled={expanding} aria-busy={expanding} title="Expand all folders" aria-label="Expand all folders">
+          <ChevronDown size={12} />
+        </button>
+        <button className="ib" onClick={() => setOpen(new Set())} title="Collapse all folders" aria-label="Collapse all folders">
+          <ChevronDown size={12} style={{ transform: "rotate(180deg)" }} />
+        </button>
+        <button className={`ib${noDots ? " on" : ""}`} onClick={flipDots} aria-pressed={noDots} title={noDots ? "Dotfiles are hidden; click to show them" : "Hide dotfiles"} aria-label="Hide dotfiles">
+          <EyeOff size={12} />
+        </button>
+        <button className={`ib${noIgnored ? " on" : ""}`} onClick={flipIgnored} aria-pressed={noIgnored} title={noIgnored ? "Git-ignored files are hidden; click to show them" : "Hide git-ignored files"} aria-label="Hide git-ignored files">
+          <Funnel size={12} />
         </button>
         <button className="ib" onClick={() => startNew(false)} title="New file" aria-label="New file">
           <Plus size={12} />
@@ -528,6 +737,18 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
             </button>
           ))}
         </div>
+      )}
+      {menu && (
+        <>
+          <div className="menu-backdrop" onClick={() => setMenu(null)} onContextMenu={(e) => (e.preventDefault(), setMenu(null))} />
+          <div className="menu row-menu" role="menu" aria-label={`Actions for ${baseName(menu.path)}`} style={{ left: Math.min(menu.x, window.innerWidth - 240), top: Math.min(menu.y, window.innerHeight - 340) }} onKeyDown={(e) => e.key === "Escape" && setMenu(null)}>
+            {withExtraMenu(rowMenu({ isDir: menu.dir, hasTerminal: !!onOpenTerminal, canProject: menu.dir && menu.path !== root && projectDrop.add !== null }), { isDir: menu.dir, isOpen: open.has(menu.path), single: sel.size <= 1 }).map((id) => (
+              <button key={id} role="menuitem" className="menu-item" autoFocus={id === withExtraMenu(rowMenu({ isDir: menu.dir, hasTerminal: !!onOpenTerminal, canProject: false }), { isDir: menu.dir, isOpen: open.has(menu.path), single: sel.size <= 1 })[0]} onClick={() => runMenu(id, menu.path, menu.dir)}>
+                {menuLabel(id)}
+              </button>
+            ))}
+          </div>
+        </>
       )}
       {openErr && (
         <div className="notice load-failed" role="alert">
@@ -566,7 +787,17 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
           </button>
         </div>
       )}
-      <ContentSearch root={root} hidden={!searching} focusAsk={searchAsk} onOpen={onOpen} />
+      {!searching && (
+        <div className="ex-filter">
+          <input className="field" aria-label="Filter files by name" placeholder="Filter by name" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setQuery("")} />
+          {query && (
+            <button className="ib" onClick={() => setQuery("")} title="Clear the filter" aria-label="Clear the filter">
+              <Close size={10} />
+            </button>
+          )}
+        </div>
+      )}
+      <ContentSearch root={root} hidden={!searching} focusAsk={searchAsk} seed={seed} scope={scope} onOpen={onOpen} />
       <div
         hidden={searching}
         className={`explorer-rows${dropAt === root ? " drop" : ""}`}
@@ -580,7 +811,7 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
         onFocus={() => index < 0 && rows.length && setAt(rows[0].node.path)}
         onScroll={(e) => setScroll(e.currentTarget.scrollTop)}
       >
-        {kids[root] && !rows.length && <div className="menu-hint">This folder is empty.</div>}
+        {kids[root] && !rows.length && <div className="menu-hint">{query.trim() ? "No file name matches the filter." : "This folder is empty."}</div>}
         <div style={{ height: rows.length * ROW, position: "relative" }}>
           {rows.slice(first, last).map((r, k) => {
             const i = first + k;
@@ -600,6 +831,7 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
                 onMouseDown={(e) => editing || e.preventDefault()}
                 onPointerDown={(e) => startDrag(e, r.node.path)}
                 onClick={(e) => onRow(e, i)}
+                onContextMenu={(e) => rowContext(e, r.node.path, dir)}
                 title={editing ? undefined : r.node.path}
               >
                 <span className="ex-twist">{dir ? <ChevronDown size={10} style={isOpen ? undefined : { transform: "rotate(-90deg)" }} /> : <FileIcon name={r.node.name} size={11} />}</span>

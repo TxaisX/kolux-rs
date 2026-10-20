@@ -862,6 +862,12 @@ fn save_local(store: &crate::state::Store, root: &Path, script: &str) -> Result<
 const POLICIES_KEY: &str = "setupPolicies";
 const WAITS_KEY: &str = "setupWaits";
 const REPO_POLICIES: [&str; 3] = ["local", "shared", "both"];
+/// SESS-026: where a repository's setup script opens in each new workspace (`setupModes`): a tab
+/// beside its first pane (absent: the default), a split to the right or below, or `ask`, which asks
+/// for each workspace and so cannot be bulk-launched.
+const MODES_KEY: &str = "setupModes";
+pub const DEFAULT_MODE: &str = "tab";
+const REPO_MODES: [&str; 4] = ["tab", "right", "down", "ask"];
 
 fn repo_map<T: serde::de::DeserializeOwned>(store: &crate::state::Store, key: &str) -> std::collections::BTreeMap<String, T> {
     store.get(key).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
@@ -905,6 +911,24 @@ pub fn set_repo_wait(store: &crate::state::Store, root: &Path, wait: bool) -> Re
     put_repo_map(store, WAITS_KEY, &all)
 }
 
+/// SESS-026: the repository's setup launch mode; a new tab unless it chose otherwise.
+pub fn repo_mode(store: &crate::state::Store, root: &Path) -> String {
+    repo_map::<String>(store, MODES_KEY).get(&crate::projects::name_key(&root.to_string_lossy())).filter(|m| REPO_MODES.contains(&m.as_str())).cloned().unwrap_or_else(|| DEFAULT_MODE.to_string())
+}
+
+/// Sets the repository's setup launch mode; None (or the default) goes back to a new tab. Anything
+/// but the four choices is refused and changes nothing.
+pub fn set_repo_mode(store: &crate::state::Store, root: &Path, mode: Option<&str>) -> Result<(), String> {
+    let mut all = repo_map::<String>(store, MODES_KEY);
+    let key = crate::projects::name_key(&root.to_string_lossy());
+    match mode.map(str::trim).filter(|m| !m.is_empty()) {
+        None | Some(DEFAULT_MODE) => all.remove(&key),
+        Some(m) if REPO_MODES.contains(&m) => all.insert(key, m.to_string()),
+        Some(m) => return Err(format!("{m} is not a setup launch mode: pick tab, right, down or ask.")),
+    };
+    put_repo_map(store, MODES_KEY, &all)
+}
+
 /// PROJ-035 / SET-033: takes the repository's saved local setup away. Ok(false) when it had none.
 pub fn remove_local(store: &crate::state::Store, root: &Path) -> Result<bool, String> {
     let mut all = repo_map::<String>(store, LOCAL_KEY);
@@ -929,6 +953,8 @@ pub struct RepoSetup {
     /// What it inherits: the global setting, `local` when none is set.
     pub inherited: String,
     pub wait: bool,
+    /// SESS-026: where setup opens in a new workspace: `tab` (the default), `right`, `down` or `ask`.
+    pub mode: String,
     /// Both scripts exist and no choice is made: running both is suggested.
     pub suggest_both: bool,
     /// Why the choice in force would not run on this PC (the two scripts cannot be joined, or cmd
@@ -965,7 +991,7 @@ fn repo_setup_on(store: &crate::state::Store, root: &Path, shared: (Option<Strin
         ("both", Some(own), Some(theirs)) => both_trouble(own, theirs, windows, configured, find),
         _ => None,
     };
-    RepoSetup { local, shared: shared.0, shared_error: shared.1, policy, inherited: inherited.to_string(), wait: repo_wait(store, root), suggest_both, run_error }
+    RepoSetup { local, shared: shared.0, shared_error: shared.1, policy, inherited: inherited.to_string(), wait: repo_wait(store, root), mode: repo_mode(store, root), suggest_both, run_error }
 }
 
 #[tauri::command(async)]
@@ -995,6 +1021,12 @@ pub fn repo_setup_policy_set(store: StoreState<'_>, path: String, policy: Option
 #[tauri::command]
 pub fn repo_setup_wait_set(store: StoreState<'_>, path: String, wait: bool) -> Result<(), String> {
     set_repo_wait(&*store.lock().map_err(|e| e.to_string())?, &main_folder(Path::new(&path)), wait)
+}
+
+/// SESS-026: sets the repository's setup launch mode (`tab`, `right`, `down`, `ask`; none = tab).
+#[tauri::command]
+pub fn repo_setup_mode_set(store: StoreState<'_>, path: String, mode: Option<String>) -> Result<(), String> {
+    set_repo_mode(&*store.lock().map_err(|e| e.to_string())?, &main_folder(Path::new(&path)), mode.as_deref())
 }
 
 fn dismissed_ids(store: &crate::state::Store) -> Vec<String> {
@@ -1030,6 +1062,12 @@ pub fn prune_setup(store: &crate::state::Store, ids: &[String], roots: &[String]
     waits.retain(|k, _| !keys.contains(k));
     if waits.len() != before {
         put_repo_map(store, WAITS_KEY, &waits)?;
+    }
+    let mut modes = repo_map::<String>(store, MODES_KEY);
+    let before = modes.len();
+    modes.retain(|k, _| !keys.contains(k));
+    if modes.len() != before {
+        put_repo_map(store, MODES_KEY, &modes)?;
     }
     Ok(())
 }
@@ -2071,6 +2109,21 @@ mod tests {
         assert_eq!((repo_policy(&store, &b).as_deref(), repo_wait(&store, &b)), (Some("both"), true), "another project's choices stay");
         set_repo_wait(&store, &b, false).unwrap();
         assert!(!repo_wait(&store, &b));
+        // SESS-026: the setup launch mode is a new tab by default, kept per repository, and goes with it
+        assert_eq!((repo_mode(&store, &a), repo_mode(&store, &b)), ("tab".to_string(), "tab".to_string()), "a new tab by default");
+        set_repo_mode(&store, &a, Some("ask")).unwrap();
+        assert_eq!((repo_mode(&store, &a).as_str(), repo_mode(&store, &b).as_str()), ("ask", "tab"), "another repository is untouched");
+        assert_eq!(repo_setup_on(&store, &a, (None, None), false, None, |_| None).mode, "ask", "the settings page reads it");
+        assert!(set_repo_mode(&store, &a, Some("popup")).unwrap_err().contains("pick tab, right, down or ask"));
+        assert_eq!(repo_mode(&store, &a), "ask", "a refused value changes nothing");
+        set_repo_mode(&store, &a, Some("tab")).unwrap();
+        assert!(repo_map::<String>(&store, MODES_KEY).is_empty(), "the default is not written down");
+        set_repo_mode(&store, &a, Some("down")).unwrap();
+        store.set(MODES_KEY, &format!("{{\"{}\":\"sideways\"}}", crate::projects::name_key(&b.to_string_lossy()).replace('\\', "\\\\"))).unwrap();
+        assert_eq!(repo_mode(&store, &b), "tab", "a stray stored value reads as the default");
+        set_repo_mode(&store, &a, Some("right")).unwrap();
+        prune_setup(&store, &[], &[a.to_string_lossy().to_string()]).unwrap();
+        assert_eq!(repo_mode(&store, &a), "tab", "forgetting the project takes its mode with it");
         drop(store);
         for d in [profile, a, b] {
             let _ = std::fs::remove_dir_all(d);

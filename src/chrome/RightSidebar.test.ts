@@ -3,6 +3,9 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import RightSidebar, { clampLeft, clampWidth, LEFT_MAX, LEFT_MIN, MORE_WIDTH, PanelGuard, pickTab, readLeft, readRight, RIGHT_MIN, RIGHT_TABS, splitTabs, STRIP_PAD, tabWidth } from "./RightSidebar";
 
+// the git workspace's tabs; the folder-workspace tabs (Attached, PR Checks) are T-146-g
+const GIT_TABS = RIGHT_TABS.filter((t) => t.id !== "attached" && t.id !== "prchecks");
+
 test("VIEW-056: open by default on Explorer; open, tab and width come back as saved", () => {
   expect(readRight({})).toEqual({ open: true, tab: "explorer", width: 300 });
   expect(readRight({ rightSidebarOpen: false, rightSidebarTab: "scm", rightSidebarWidth: 640 })).toEqual({ open: false, tab: "scm", width: 640 });
@@ -20,6 +23,10 @@ test("VIEW-056: a saved width wider than 500 is honoured; the minimum and the wo
   expect(clampWidth(100, 1916, 297)).toBe(RIGHT_MIN);
   expect(clampWidth(1400, 1416, 297)).toBe(1416 - 297 - 400);
   expect(clampWidth(500, 700, 297)).toBe(RIGHT_MIN);
+});
+
+test("VIEW-080: a saved Agents tab comes back as Agents", () => {
+  expect(readRight({ rightSidebarTab: "agents" }).tab).toBe("agents");
 });
 
 test("VIEW-073: a saved Checks tab comes back as Checks", () => {
@@ -47,22 +54,22 @@ test("VIEW-050: the left sidebar width is clamped into range; a width that is no
 });
 
 test("T-146-b: when narrow, the extra tabs move into More and the active tab stays on the strip", () => {
-  const all = splitTabs(RIGHT_TABS, "scm", 320);
-  expect([all.shown.map((t) => t.id), all.more]).toEqual([["explorer", "scm", "checks"], []]);
+  const all = splitTabs(GIT_TABS, "scm", 320);
+  expect([all.shown.map((t) => t.id), all.more]).toEqual([["explorer", "scm", "checks", "agents"], []]);
   // At the minimum width the three tabs no longer fit: the active one keeps its place.
-  const narrow = splitTabs(RIGHT_TABS, "checks", RIGHT_MIN);
+  const narrow = splitTabs(GIT_TABS, "checks", RIGHT_MIN);
   expect(narrow.shown.map((t) => t.id)).toContain("checks");
   expect(narrow.more.length).toBeGreaterThan(0);
-  expect([...narrow.shown, ...narrow.more].map((t) => t.id).sort()).toEqual(["checks", "explorer", "scm"]);
+  expect([...narrow.shown, ...narrow.more].map((t) => t.id).sort()).toEqual(["agents", "checks", "explorer", "scm"]);
   const used = narrow.shown.reduce((n, t) => n + tabWidth(t.label), 0) + MORE_WIDTH;
   expect(used).toBeLessThanOrEqual(RIGHT_MIN);
   // The order on the strip is the tabs' own order, whichever is active.
-  expect(splitTabs(RIGHT_TABS, "explorer", RIGHT_MIN).shown.map((t) => t.id)).toEqual(["explorer", "scm"]);
-  expect(splitTabs(RIGHT_TABS, "checks", RIGHT_MIN).shown.map((t) => t.id)).toEqual(["explorer", "checks"]);
+  expect(splitTabs(GIT_TABS, "explorer", RIGHT_MIN).shown.map((t) => t.id)).toEqual(["explorer", "scm"]);
+  expect(splitTabs(GIT_TABS, "checks", RIGHT_MIN).shown.map((t) => t.id)).toEqual(["explorer", "checks"]);
   // The edge: exactly enough room shows every tab, one pixel less opens More.
-  const exact = RIGHT_TABS.reduce((n, t) => n + tabWidth(t.label), 0) + STRIP_PAD;
-  expect(splitTabs(RIGHT_TABS, "scm", exact).more).toEqual([]);
-  expect(splitTabs(RIGHT_TABS, "scm", exact - 1).more.length).toBeGreaterThan(0);
+  const exact = GIT_TABS.reduce((n, t) => n + tabWidth(t.label), 0) + STRIP_PAD;
+  expect(splitTabs(GIT_TABS, "scm", exact).more).toEqual([]);
+  expect(splitTabs(GIT_TABS, "scm", exact - 1).more.length).toBeGreaterThan(0);
   const html = renderToString(createElement(RightSidebar, { tab: "checks", width: RIGHT_MIN, onTab: () => {}, onWidth: () => {}, children: "body" }));
   expect(html).toMatch(/role="tab" aria-selected="true"[^>]*>Checks/);
   expect(html).toMatch(/aria-haspopup="menu"[^>]*>More/);

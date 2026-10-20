@@ -30,13 +30,14 @@ describe("Explore Kolux stops carry their own setup cards (ONB-024)", () => {
     expect(HOOKS_OFF_HELP).toMatch(/hooks/);
   });
   it("ship shows the commit message writer settings", () => {
-    expect(stopCard("ship", f({}))).toMatchObject({ kind: "writer", writer: { mode: "claude" }, hasCommand: false });
+    expect(stopCard("ship", f({}))).toMatchObject({ kind: "writer", writer: { mode: "agent", agent: "claude" }, hasCommand: false });
     expect(stopCard("ship", f({ commitWriter: "off" }))).toMatchObject({ writer: { mode: "off" } });
     expect(stopCard("ship", f({ commitWriter: "custom", commitWriterCommand: " my-writer " }))).toMatchObject({ writer: { mode: "custom" }, hasCommand: true });
   });
   it("switching the writer back on restores the earlier mode: custom stays custom, a custom with no command falls to Claude (FIX-1)", () => {
     expect(writerBack("custom", true)).toBe("custom");
     expect(writerBack("claude", true)).toBe("claude");
+    expect(writerBack("codex", false)).toBe("codex");
     expect(writerBack("custom", false)).toBe("claude");
     // nothing remembered (the card opened already off): a saved command means the user had picked custom
     expect(writerBack(null, true)).toBe("custom");

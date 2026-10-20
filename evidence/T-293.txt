@@ -1,0 +1,48 @@
+T-293 · APP-030 An update whose Windows signature does not match is stopped, with no bypass
+Lane: reliability (Opus 5.5 stand-in), built 2026-10-20 from main 348a2a7e merged at c556cba9.
+
+What is built
+- src-tauri/src/resources/update_guard.rs (new, lane-owned): the decision function `decide(running,
+  installer, pinned)`, the Windows signature reader `check_file` (Windows PowerShell from
+  %SystemRoot%\System32, never PATH; the file path goes in an environment variable, never in the
+  script text; no window), `parse_report`, `vet` (writes the downloaded bytes to a temp file, checks
+  them, deletes the file; the installer is never started), and the refused-version list
+  (`refused_add`, `refused_has`, store key update.refusedVersions, capped at 20).
+- Rules: a damaged, untrusted or unreadable installer signature is always refused; a signed copy
+  (or a build with KOLUX_RS_PUBLISHER pinned at build time) takes only an installer validly signed
+  by the same publisher (compared by certificate subject, so a renewed certificate still updates);
+  an unsigned copy (today's releases and development copies) takes an unsigned or validly signed
+  installer (the minisign key already vouched for it); a copy whose own signature is damaged or
+  unreadable refuses every installer. There is no setting, variable or argument that skips it.
+- Wiring (evidence/reliability-T-293-update.rs.patch, applies after the T-286-b patches):
+  update_download vets the bytes before keeping them as ready; a refusal stores the version as
+  refused, clears the pending update, writes a diagnostics line and returns
+  "update:refused|<reason>"; update_check drops a refused version (never offered again). The same
+  patch drops the dead_code allow on `pub mod update_guard;` in resources.rs.
+- Card (evidence/reliability-T-293-UpdateCenter.tsx.patch: card.ts, card.test.ts,
+  UpdateCenter.tsx): the marker turns the card into "Update refused for security" with the reason,
+  a next-step line, no Try again and no install button (mainAction null), status bar item
+  "Update refused", ready pop-up cleared.
+
+Tests (real readings)
+- cargo test update (patched, G:/Temp/reliability-v3-logs/t293-p-test.log): 31 passed, 0 failed,
+  including 9 resources::update_guard tests: reports_from_the_windows_tool_are_read,
+  a_signed_copy_takes_only_its_own_publisher, a_pinned_publisher_wins_over_the_running_signature,
+  an_unsigned_copy_never_takes_a_broken_signature, a_copy_that_cannot_vouch_for_itself_refuses_everything,
+  vet_checks_a_temporary_copy_and_removes_it, refused_versions_are_remembered_once_and_capped,
+  publisher_names_read_well, the_windows_tool_reports_an_unsigned_file (real Get-AuthenticodeSignature
+  on a local text file; nothing downloaded or run).
+- cargo test update unpatched (t293-u-test.log): 31 passed.
+- vitest src/update patched (t293-p-vitest.log): 2 files, 28 passed (new: "T-293 (APP-030): a
+  refused installer shows a security stop with no install or retry button").
+- clippy --all-targets -D warnings: 0 patched (t293-p-clippy.log) and unpatched (t293-u-clippy.log);
+  cargo build patched exit 0 (t293-p-build.log); tsc patched exit 0 (t293-p-tsc.log).
+
+LIVE PROOF PENDING (batched; needs a signed build and a test feed, never a real server)
+1. Build a release copy signed with certificate A, point a development copy's test feed
+   (KOLUX_RS_UPDATE_ENDPOINT / KOLUX_RS_UPDATE_PUBKEY) at a local manifest whose installer is
+   minisign-signed but Authenticode-signed with certificate B. Check for updates.
+   Expect: the card reads "Update refused for security", names both publishers, shows no Try
+   again and no install button; the status bar shows "Update refused".
+2. Check again. Expect: "Kolux RS is up to date" (the refused version is not offered again).
+3. Same with an unsigned installer against the signed copy: refused, "the installer is not signed".

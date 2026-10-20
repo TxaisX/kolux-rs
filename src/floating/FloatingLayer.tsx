@@ -1,0 +1,322 @@
+// TERM-059 / TERM-060 / TERM-061 (T-220): the floating workspace panel over the app, and its button.
+// The layer owns all its state (the panel's tabs, its place, the button's place) so the window only
+// mounts it and asks `floatingKeys.handle` first for each key. The geometry and the tab rules are in
+// geometry.ts and panel.ts (tested there). Tabs stay mounted while the panel is hidden, so a program
+// keeps running when the panel is minimized. Live proof pending (batched): evidence/T-220.txt.
+import { useEffect, useReducer, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import TerminalPane from "../terminal/TerminalPane";
+import EditorPane, { editors } from "../editor/EditorPane";
+import BrowserPane from "../browser/BrowserPane";
+import type { AgentInfo } from "../launch/PlusMenu";
+import type { Agent } from "../chrome/VendorMark";
+import { useKeymap } from "../keys/KeymapContext";
+import { matchEvent } from "../keys/keymap";
+import type { Scope } from "../keys/actions";
+import { heldByTerminal } from "../keys/terminalPolicy";
+import { useSettings } from "../settings/useSettings";
+import {
+  clampButton, insetFor, moveBy, parseButton, parseSaved, resizeBy, SETTING_BUTTON, SETTING_PANEL, shown, startsPanelMove, toggleMaximize, toStored,
+  type Edge, type Pos, type Rect, type Saved, type Win, BUTTON,
+} from "./geometry";
+import { add, answer, asked, close, closeKey, empty, hide, programExited, reorder, saveTarget, select, selectNumber, setDirty, setTitle, step, toggle, type Kind, type Panel } from "./panel";
+import { startFolderFor } from "./trusted";
+import { routeFloating } from "../shell/inputExtras";
+import "./floating.css";
+
+/**
+ * The window asks this first for every key: true means the layer handled it (a panel command, or a
+ * tab command while focus is inside the open panel) and the window must do nothing more. It works on
+ * every screen, so Mod+S in a floating editor saves outside a workspace screen too.
+ */
+export const floatingKeys = { handle: (_e: KeyboardEvent): boolean => false };
+
+type Props = {
+  agents?: AgentInfo[];
+  defaultId?: string;
+  /** The home folder floating terminals start in; left out, the terminal's own default applies. */
+  home?: string;
+  /** TERM-063: how many panel tabs wait on the user; the button shows a dot while above 0. */
+  pending?: number;
+  onToast?: (message: string) => void;
+};
+
+const EDGES: Edge[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
+const ICON: Record<Kind, string> = { terminal: ">_", agent: "*", browser: "o", markdown: "#" };
+const winSize = (): Win => ({ w: window.innerWidth, h: window.innerHeight });
+
+export default function FloatingLayer({ agents = [], defaultId, home, pending = 0, onToast }: Props) {
+  const [panel, run] = useReducer((p: Panel, f: (p: Panel) => Panel) => f(p), undefined, () => empty());
+  const { settings, save } = useSettings();
+  const keymap = useKeymap();
+  const [win, setWin] = useState<Win>(winSize);
+  const inset = insetFor(navigator.platform);
+  const [place, setPlace] = useState<Saved>(() => parseSaved(null, winSize(), inset));
+  const [btn, setBtn] = useState<Pos>(() => parseButton(null, winSize()));
+  const [note, setNote] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<number | null>(null); // TERM-062: the panel tab whose name is being edited
+  const loaded = useRef(false);
+
+  // The saved places arrive with the settings, once.
+  useEffect(() => {
+    if (!settings || loaded.current) return;
+    loaded.current = true;
+    setPlace(parseSaved(settings[SETTING_PANEL], winSize(), inset));
+    setBtn(parseButton(settings[SETTING_BUTTON], winSize()));
+  }, [settings, inset]);
+
+  useEffect(() => {
+    const on = () => setWin(winSize());
+    window.addEventListener("resize", on);
+    return () => window.removeEventListener("resize", on);
+  }, []);
+
+  const doAdd = (kind: Kind) => {
+    setNote(null);
+    // SAFE-027 (T-271): terminals and agents start only in a folder the user picked; a refusal opens nothing and says why.
+    if (kind === "terminal") return void startFolderFor(invoke).then((s) => ("cwd" in s ? run((p) => add(p, { kind, cwd: s.cwd })) : setNote(s.refused)));
+    if (kind === "browser") return run((p) => add(p, { kind }));
+    if (kind === "agent") {
+      const a = defaultId ? agents.find((x) => x.id === defaultId && x.installed) : agents.find((x) => x.installed);
+      if (!a) return setNote(defaultId ? `The default agent (${defaultId}) is not installed or is switched off.` : "No agent is installed and switched on.");
+      return void startFolderFor(invoke).then((s) => ("cwd" in s ? run((p) => add(p, { kind, agent: a.id, title: a.name, cwd: s.cwd })) : setNote(s.refused)));
+    }
+    if (!home) return setNote("A new note needs a folder to live in; open a workspace and use its Markdown tab.");
+    invoke<string>("md_new", { root: home, template: null }).then(
+      (path) => run((p) => add(p, { kind, path })),
+      (e) => setNote(String(e)),
+    );
+  };
+
+  const saveStore = (next: Saved) => void save({ [SETTING_PANEL]: toStored(next) });
+  const live = useRef({ panel, place, doAdd, settings });
+  live.current = { panel, place, doAdd, settings };
+
+  useEffect(() => {
+    floatingKeys.handle = (e) => {
+      const { panel: p, place: pl, doAdd: addTab, settings: s } = live.current;
+      const inPanel = p.open && !!document.activeElement?.closest(".float-panel");
+      const activeKind = p.tabs.find((t) => t.key === p.active)?.kind;
+      const scopes: Scope[] = inPanel && activeKind === "markdown" ? ["global", "tabs", "editor"] : ["global", "tabs"];
+      const hit = matchEvent(keymap, e, scopes);
+      if (!hit || heldByTerminal(hit.id, s)) return false;
+      const op = routeFloating(hit.id, hit.index, p.open, inPanel);
+      if (!op) return false;
+      e.preventDefault();
+      e.stopPropagation();
+      switch (op.op) {
+        case "toggle":
+          run(toggle);
+          break;
+        case "minimize":
+          run(hide);
+          break;
+        case "maximize": {
+          const next = toggleMaximize(pl);
+          setPlace(next);
+          saveStore(next);
+          break;
+        }
+        case "save": {
+          const key = saveTarget(p, inPanel);
+          if (key !== null) void editors.get(key)?.();
+          break;
+        }
+        case "close":
+          run(closeKey);
+          break;
+        case "rename":
+          if (p.active !== null) setRenaming(p.active);
+          break;
+        case "select":
+          run((q) => selectNumber(q, op.n));
+          break;
+        case "step":
+          run((q) => step(q, op.by, op.mode));
+          break;
+        case "add":
+          addTab(op.kind);
+          break;
+      }
+      return true;
+    };
+    return () => {
+      floatingKeys.handle = () => false;
+    };
+    // saveStore only reads `save`, which is stable enough for the next write to carry the same patch
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keymap]);
+
+  // Pointer drags: a session keeps the starting rectangle so the move is measured from the press.
+  const drag = (e: React.PointerEvent, move: (dx: number, dy: number) => void, end: () => void) => {
+    e.preventDefault();
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    const onMove = (m: PointerEvent) => move(m.clientX - x0, m.clientY - y0);
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      end();
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
+  const rect: Rect = shown(place, win, inset);
+  const dragPanel = (e: React.PointerEvent) => {
+    if (place.maximized || e.button !== 0 || !startsPanelMove(e.target as Element)) return;
+    const start = place.rect;
+    let latest = place;
+    drag(e, (dx, dy) => setPlace((latest = { rect: moveBy(start, dx, dy, win, inset), maximized: false })), () => saveStore(latest));
+  };
+  const resizePanel = (edge: Edge) => (e: React.PointerEvent) => {
+    if (place.maximized || e.button !== 0) return;
+    const start = place.rect;
+    let latest = place;
+    drag(e, (dx, dy) => setPlace((latest = { rect: resizeBy(start, edge, dx, dy, win, inset), maximized: false })), () => saveStore(latest));
+  };
+  const dragButton = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    const start = parseButton(btn, win);
+    let latest = start;
+    let moved = false;
+    drag(
+      e,
+      (dx, dy) => {
+        if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
+        if (moved) setBtn((latest = clampButton({ x: start.x + dx, y: start.y + dy }, win)));
+      },
+      () => (moved ? void save({ [SETTING_BUTTON]: latest }) : run(toggle)),
+    );
+  };
+
+  const at = clampButton(btn, win); // kept inside a window that shrank; the saved place is not overwritten
+  const ask = asked(panel);
+  const dragFrom = useRef<number | null>(null);
+  const hasTabs = panel.tabs.length > 0;
+
+  return (
+    <>
+      {(panel.open || hasTabs) && (
+        <div
+          className={`float-panel${place.maximized ? " max" : ""}`}
+          role="dialog"
+          aria-label="Floating workspace panel"
+          hidden={!panel.open}
+          style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
+        >
+          <div className="bar" onPointerDown={dragPanel} onDoubleClick={(e) => startsPanelMove(e.target as Element) && (setPlace(toggleMaximize(place)), saveStore(toggleMaximize(place)))}>
+            <div className="tabs" role="tablist">
+              {panel.tabs.map((t, i) => (
+                <div
+                  key={t.key}
+                  className={`tab${t.exited ? " exited" : ""}`}
+                  role="tab"
+                  data-nodrag
+                  aria-selected={t.key === panel.active}
+                  draggable
+                  onDragStart={() => (dragFrom.current = t.key)}
+                  onDragOver={(e) => dragFrom.current !== null && e.preventDefault()}
+                  onDrop={() => {
+                    if (dragFrom.current !== null) run((p) => reorder(p, dragFrom.current as number, i));
+                    dragFrom.current = null;
+                  }}
+                  onClick={() => run((p) => select(p, t.key))}
+                >
+                  <span className="ico" data-nodrag>{ICON[t.kind]}</span>
+                  {renaming === t.key ? (
+                    <input
+                      className="name"
+                      aria-label="Tab name"
+                      autoFocus
+                      defaultValue={t.title}
+                      onClick={(e) => e.stopPropagation()}
+                      onBlur={(e) => (e.currentTarget.dataset.skip || run((p) => setTitle(p, t.key, e.currentTarget.value.trim() || t.title)), setRenaming(null))}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") e.currentTarget.blur();
+                        else if (e.key === "Escape") (e.currentTarget.dataset.skip = "1", setRenaming(null));
+                      }}
+                    />
+                  ) : (
+                    <span className="name">{t.title}</span>
+                  )}
+                  {t.dirty && <span className="unsaved" title="Unsaved changes">●</span>}
+                  <button className="x" aria-label={`Close ${t.title}`} onClick={(e) => (e.stopPropagation(), run((p) => close(p, [t.key])))}>×</button>
+                </div>
+              ))}
+            </div>
+            <button className="ib" aria-label="New terminal" title="New terminal" onClick={() => doAdd("terminal")}>+</button>
+            <button className="ib" aria-label={place.maximized ? "Restore" : "Maximize"} title={place.maximized ? "Restore" : "Maximize"} onClick={() => (setPlace(toggleMaximize(place)), saveStore(toggleMaximize(place)))}>{place.maximized ? "❐" : "□"}</button>
+            <button className="ib" aria-label="Minimize" title="Minimize" onClick={() => run(hide)}>–</button>
+          </div>
+          {ask && (
+            <div className="ask" role="alertdialog">
+              <span className="msg">Save changes to {ask.title} before closing?</span>
+              <button
+                className="btn"
+                onClick={async () => {
+                  await editors.get(ask.key)?.();
+                  run((p) => (p.tabs.find((t) => t.key === ask.key)?.dirty ? p : answer(p, "discard")));
+                }}
+              >
+                Save
+              </button>
+              <button className="btn" onClick={() => run((p) => answer(p, "discard"))}>Don't save</button>
+              <button className="btn" onClick={() => run((p) => answer(p, "keep"))}>Cancel</button>
+            </div>
+          )}
+          {note && <div className="note" role="status">{note}</div>}
+          <div className="body">
+            {panel.tabs.map((t) => {
+              const show = panel.open && t.key === panel.active;
+              const wantsFocus = show;
+              const info = t.agent ? agents.find((a) => a.id === t.agent) : undefined;
+              return (
+                <div className="slot" key={t.key} hidden={!show}>
+                  {t.kind === "markdown" && t.path ? (
+                    <EditorPane id={t.key} path={t.path} hidden={!show} focused={wantsFocus} onFocus={() => run((p) => select(p, t.key))} onClose={() => run((p) => close(p, [t.key]))} onDirty={(d) => run((p) => setDirty(p, t.key, d))} onToast={onToast} />
+                  ) : t.kind === "browser" ? (
+                    <BrowserPane id={t.key} url={t.path} title={t.title} hidden={!show} focused={wantsFocus} onFocus={() => run((p) => select(p, t.key))} onClose={() => run((p) => close(p, [t.key]))} />
+                  ) : (
+                    <TerminalPane
+                      hidden={!show}
+                      focused={wantsFocus}
+                      cwd={t.cwd ?? null}
+                      agent={(info && (info.id === "claude" || info.id === "codex") ? info.id : "shell") as Agent}
+                      program={info?.program ?? null}
+                      args={info?.args ?? []}
+                      name={info?.name}
+                      onFocus={() => run((p) => select(p, t.key))}
+                      onRunning={(on) => on === false && run((p) => programExited(p, t.key))}
+                      onClose={() => run((p) => close(p, [t.key]))}
+                    />
+                  )}
+                </div>
+              );
+            })}
+            {!hasTabs && (
+              <div className="none">
+                <h3>Nothing open here</h3>
+                <div>The floating panel keeps its own terminals, agents, browser and notes over whatever you are working on.</div>
+                <div className="acts">
+                  <button className="btn" onClick={() => doAdd("terminal")}>New terminal</button>
+                  <button className="btn" onClick={() => doAdd("agent")}>New agent</button>
+                  <button className="btn" onClick={() => doAdd("browser")}>New browser</button>
+                  <button className="btn" onClick={() => doAdd("markdown")}>New note</button>
+                  <button className="btn" onClick={() => run(hide)}>Minimize</button>
+                </div>
+              </div>
+            )}
+          </div>
+          {EDGES.map((edge) => (
+            <div key={edge} className={`edge ${edge}`} onPointerDown={resizePanel(edge)} />
+          ))}
+        </div>
+      )}
+      <button className="float-btn" style={{ left: at.x, top: at.y, width: BUTTON, height: BUTTON }} aria-label="Floating workspace panel" aria-pressed={panel.open} title="Floating workspace panel" onPointerDown={dragButton} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), run(toggle))}>
+        <span aria-hidden="true">▣</span>
+        {pending > 0 && <span className="dot" aria-label={`${pending} waiting`} />}
+      </button>
+    </>
+  );
+}

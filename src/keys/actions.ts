@@ -94,8 +94,12 @@ export const actions: Action[] = [
   a("floatingWorkspace.maximize", "Maximize Floating Workspace Panel", "global", [], { darwin: ["Mod+Alt+Shift+A"] }),
   a("view.inbox", "Show Inbox", "global", []),
   a("view.tower", "Show Tower", "global", []),
+  // T-548 (OD-11): one key moves new panes to the provider's next account; unbound until Txais picks a chord.
+  a("account.switchClaude", "Switch Claude account", "global", [], { keywords: ["account", "sign in", "login"] }),
+  a("account.switchCodex", "Switch Codex account", "global", [], { keywords: ["account", "sign in", "login"] }),
   a("sidebar.sleeping.toggle", "Show or Hide Sleeping Workspaces", "global", [], { keywords: ["sleep", "asleep", "wake"] }),
   a("view.floor", "Show Floor", "global", []),
+  a("view.space", "Show Space", "global", [], { keywords: ["disk", "worktrees", "size", "reclaim"] }),
   a("view.code", "Show Code", "global", ["Mod+Shift+3"]),
   a("floatingWorkspace.minimize", "Minimize Floating Workspace Panel", "global", []),
   a("zoom.in", "Zoom In", "global", ["Mod+Equal", "Mod+Shift+Plus", "Mod+NumpadAdd"], { terminalSafe: true }),
@@ -115,9 +119,11 @@ export const actions: Action[] = [
   a("tab.close", "Close active tab", "tabs", ["Mod+W"]),
   a("tab.closeAll", "Close all editor tabs", "tabs", ["Mod+Alt+W"]),
   a("tab.rename", "Rename active tab", "tabs", [], { darwin: ["Mod+R"], group: "workspace-shell" }),
-  // T-543-b: ships unbound until T-164-b wires the closed-tab ring (src/terminal/closedTabs.ts) into the window;
-  // with Mod+Shift+T it was a shortcut that did nothing. Its default chord was ["Mod+Shift+T"].
-  a("tab.reopenClosed", "Reopen closed tab", "tabs", []),
+  // T-239 (BROW-019): bound again now that the window reopens a closed browser tab (browser/pages.ts;
+  // T-164-b adds terminal tabs through src/terminal/closedTabs.ts). T-543-b had shipped it unbound.
+  a("tab.reopenClosed", "Reopen closed tab", "tabs", ["Mod+Shift+T"]),
+  // T-305 (TERM-053): the tab search box (src/shell/TabSearch.tsx).
+  a("tab.search", "Search open tabs", "tabs", ["Mod+Shift+K"], { terminalSafe: true, keywords: ["find tab", "switch tab"] }),
   a("tab.nextSameType", "Next tab (same type)", "tabs", ["Mod+Alt+BracketRight"], { terminalSafe: true }),
   a("tab.previousSameType", "Previous tab (same type)", "tabs", ["Mod+Alt+BracketLeft"], { terminalSafe: true }),
   a("tab.nextAllTypes", "Next tab (all types)", "tabs", ["Mod+Shift+BracketRight"], { terminalSafe: true }),
@@ -134,7 +140,7 @@ export const actions: Action[] = [
   a("browser.focusAddressBar", "Focus Browser Address Bar", "browser", ["Mod+L"]),
   a("browser.grabElement", "Grab Page Element", "browser", ["Mod+C"]),
   a("editor.find", "Find in editor", "editor", ["Mod+F"]),
-  a("editor.replace", "Replace in editor", "editor", ["Mod+H"]),
+  a("editor.replace", "Replace in editor", "editor", ["Mod+H"], { darwin: ["Mod+Alt+F"] }),
   a("editor.save", "Save File", "editor", ["Mod+S"]),
   a("editor.markdownPreview", "Show Markdown Preview", "editor", ["Mod+Shift+V"]),
   a("editor.toggleWordWrap", "Toggle Word Wrap", "editor", ["Alt+Z"]),
@@ -150,7 +156,7 @@ export const actions: Action[] = [
   a("fileExplorer.delete", "Delete file", "explorer", ["Delete"], { darwin: ["Delete", "Mod+Backspace"] }),
   a("settings.search", "Search Settings", "settings", ["Mod+F"]),
   a("terminal.copySelection", "Copy terminal selection", "terminal", ["Ctrl+Shift+C", "Ctrl+C"], { terminalSafe: true }),
-  a("terminal.selectAll", "Select all terminal text", "terminal", ["Ctrl+Shift+A"]),
+  a("terminal.selectAll", "Select all terminal text", "terminal", ["Ctrl+Shift+A"], { darwin: ["Mod+A"] }),
   a("terminal.paste", "Paste into terminal", "terminal", ["Ctrl+V", "Ctrl+Shift+V", "Shift+Insert"], { terminalSafe: true }),
   a("terminal.search", "Search active pane", "terminal", ["Mod+F"]),
   a("terminal.clear", "Clear active pane", "terminal", ["Mod+K"], { keywords: ["cls", "clear screen"] }),

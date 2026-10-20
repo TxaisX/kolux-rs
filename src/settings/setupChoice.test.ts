@@ -2,7 +2,8 @@ import { expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { RepoSetupView } from "./RepoSetup";
-import { choiceOptions, choiceSave, effectiveChoice, hasSetup, runsNote, scriptSave, trustNote, type RepoSetup } from "./setupChoice";
+import { SETUP_POLICY_KEY, choiceOptions, choiceSave, effectiveChoice, globalChoice, globalOptions, hasSetup, runsNote, scriptSave, trustNote, type RepoSetup } from "./setupChoice";
+import SetupPolicyRow from "./SetupPolicyRow";
 
 const base: RepoSetup = { local: null, shared: null, sharedError: null, policy: null, inherited: "local", wait: false, suggestBoth: false, runError: null };
 
@@ -102,4 +103,22 @@ test("SET-033 / PROJ-035: the section shows the saved setup with a Remove row, t
   expect(view({ ...base, local: "make", shared: "pnpm i", policy: "both" })).toContain("The script in kolux.yaml asks first");
   expect(view({ ...base, sharedError: "kolux.yaml could not be read: x" })).toContain("kolux.yaml could not be read: x");
   expect(view(base, "that failed")).toContain("that failed");
+});
+
+test("T-294-c: the global choice is read the way setup.rs reads it", () => {
+  expect(globalChoice(undefined)).toBe("local");
+  expect(globalChoice("  ")).toBe("local");
+  expect(globalChoice("both")).toBe("both");
+  expect(globalChoice("shared")).toBe("shared");
+  expect(globalChoice("shared-first")).toBe("shared");
+  expect(globalChoice("nonsense")).toBe("local");
+});
+
+test("T-294-c: the row offers local, shared and both, shows the saved one, and the repository's Same as everywhere names it", () => {
+  expect(globalOptions().map((o) => o.value)).toEqual(["local", "shared", "both"]);
+  expect(SETUP_POLICY_KEY).toBe("setupPolicy");
+  const html = renderToString(createElement(SetupPolicyRow, { settings: { setupPolicy: "both" }, save: () => {} }));
+  expect(html).toMatch(/<option value="both" selected="">/);
+  expect(html).toContain("Which setup runs");
+  expect(choiceOptions({ ...base, inherited: globalChoice("both") })[0].label).toBe("Same as everywhere (both, yours first)");
 });

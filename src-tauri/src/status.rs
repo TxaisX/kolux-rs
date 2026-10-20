@@ -362,7 +362,7 @@ impl Session {
         let mut change = match agent {
             Agent::Claude => claude_change(event),
             Agent::Codex => codex_change(event),
-            Agent::Vendor => crate::hooks::agent_hooks::vendors::change(event),
+            Agent::Vendor => crate::hooks::agent_hooks::more::change(event).unwrap_or_else(|| crate::hooks::agent_hooks::vendors::change(event)),
         }?;
         let before = self.resolved();
         if change.boundary {
@@ -381,7 +381,9 @@ impl Session {
             }
             "Stop" => {
                 // T-120-b: Amp says itself when a turn was cancelled.
-                self.interrupted = std::mem::take(&mut self.cancelled) || event.get("kolux_interrupted").and_then(Value::as_bool) == Some(true);
+                // STAT-013: Droid's stops never count a Ctrl+C as an interruption.
+                let ctrl_c = std::mem::take(&mut self.cancelled) && event.get("kolux_no_cancel").and_then(Value::as_bool) != Some(true);
+                self.interrupted = ctrl_c || event.get("kolux_interrupted").and_then(Value::as_bool) == Some(true);
                 self.pending = None;
                 self.reply = str_of(event, "last_assistant_message").map(clean_reply);
                 // STAT-024: Claude Code's own lists of background tasks and session crons decide.

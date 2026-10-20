@@ -12,6 +12,9 @@ import { Close, Dots, Funnel, Refresh } from "../chrome/icons";
 import { locale } from "../language";
 import Ask from "../chrome/Ask";
 import SkillUpdate from "./SkillUpdate";
+import SkillPill from "./SkillPill";
+import { pillFor, type Load } from "./skillBar";
+import type { Checked } from "./updateNotice";
 import { AGENT_FILTERS, COPIED, COPY_FAILED, MAX_DELETE, ROW_ACTIONS, actionBlocked, seenBy, NO_DESCRIPTION, NO_FILTERS, QUERY_LIMIT, SOURCES, dateText, eligible, escapeCloses, filtersOn, keepChosen, outcomeText, pickOf, rootState, shortPath, sourceCounts, sumUp, viewOf, visible, whyNot, type Done, type Filters, type Planned, type RowAction, type Scan, type Skill } from "./skills";
 
 type Asking = { kind: "confirm"; plan: Planned[] } | { kind: "done"; done: Done[] } | { kind: "error"; text: string };
@@ -20,6 +23,8 @@ type Props = { workspace: string | null; onClose: () => void };
 
 export default function SkillsPage({ workspace, onClose }: Props) {
   const [scan, setScan] = useState<Scan | null>(null);
+  // SKILL-025: what the last update check found, for the freshness pills.
+  const [fresh, setFresh] = useState<{ load: Load; checked: Checked | null }>({ load: "idle", checked: null });
   const [failed, setFailed] = useState<string | null>(null);
   const [scanning, setScanning] = useState(true);
   const [f, setF] = useState<Filters>(NO_FILTERS);
@@ -276,7 +281,7 @@ export default function SkillsPage({ workspace, onClose }: Props) {
           {toast}
         </div>
       )}
-      <SkillUpdate workspace={workspace} onChanged={() => load(true)} bundled={skills.filter((s) => s.source === "bundled").map((s) => s.name)} />
+      <SkillUpdate workspace={workspace} onFreshness={(l, c) => setFresh({ load: l, checked: c })} onChanged={() => load(true)} bundled={skills.filter((s) => s.source === "bundled").map((s) => s.name)} />
       {tooLong && <div className="skills-note" role="status">That search is too long; searches are at most {QUERY_LIMIT} characters.</div>}
 
       <div className="skills-body">
@@ -332,6 +337,7 @@ export default function SkillsPage({ workspace, onClose }: Props) {
                   <span className="name">{s.name}</span>
                   <span className={`skills-tag ${s.source}`}>{s.plugin ? `Plugin: ${s.plugin}` : SOURCES.find((x) => x.id === s.source)!.label}</span>
                   <span className="spacer" />
+                  {s.source === "bundled" && <SkillPill pill={pillFor(s.name, fresh.load, fresh.checked)} />}
                   <span className={`date${s.updated == null ? " none" : ""}`}>{s.source === "bundled" ? "Built into Kolux" : dateText(s.updated, locale())}</span>
                   <div className="skills-anchor">
                     <button className="ib" title="Skill actions" aria-label={`Actions for ${s.name}`} aria-haspopup="menu" aria-expanded={rowMenu === s.path} onClick={() => setRowMenu(rowMenu === s.path ? null : s.path)}>

@@ -172,11 +172,11 @@ export function ConnectGrid({ cards }: { cards: Record<ConnectId, ReactNode> }) 
         {CONNECT.map((c) => {
           const stage = stageOf(c.id, agents, installs[c.id]);
           return stage === "installed" ? (
-            <div key={c.id} className="conn-slot">
+            <div key={c.id} className="conn-slot" data-section={`connect-${c.id}`}>
               {cards[c.id]}
             </div>
           ) : (
-            <div key={c.id} className="conn-slot">
+            <div key={c.id} className="conn-slot" data-section={`connect-${c.id}`}>
               <InstallCardView
                 id={c.id}
                 stage={stage}

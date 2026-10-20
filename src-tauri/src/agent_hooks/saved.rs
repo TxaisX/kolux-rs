@@ -5,8 +5,8 @@
 //! appends to) are folded onto them, and the result is saved again. Live sessions start fresh, so
 //! a restored permission never blocks the first live event. At quit the agents that can still be
 //! resumed (working, waiting on the user, or stopped on a limit, with their provider session id)
-//! are recorded for every worktree. Showing restored rows on their panes, unconfirmed, waits for
-//! panes that keep their identity across a restart (T-167-b).
+//! are recorded for every worktree, and a workspace's are recorded when it is put to sleep
+//! (T-167-b). Showing restored rows on their panes, unconfirmed, is still open on T-167-b.
 
 use super::super::identity;
 use crate::status::{Agent, Session, Status};
@@ -77,7 +77,7 @@ fn agent_of(route: &str) -> Option<(Agent, &'static str)> {
     match route.trim_start_matches('/') {
         "claude" => Some((Agent::Claude, "claude")),
         "codex" => Some((Agent::Codex, "codex")),
-        r => super::vendors::agent_of(r).map(|name| (Agent::Vendor, name)),
+        r => super::vendors::agent_of(r).or_else(|| super::more::agent_of(r)).map(|name| (Agent::Vendor, name)),
     }
 }
 
@@ -132,7 +132,7 @@ pub fn replay(text: &str, rows: &mut Vec<Row>, now: u64) -> usize {
         let Some((pane_key, terminal)) = identity(who) else { continue };
         let Ok(event) = serde_json::from_str::<Value>(body.trim()) else { continue };
         // T-120-b: a vendor's line holds its raw event, normalized as the listener would.
-        let event = if agent == Agent::Vendor { match super::vendors::normalize(route, &event) { Some(e) => e, None => continue } } else { event };
+        let event = if agent == Agent::Vendor { match super::more::normalize_any(route, &event) { Some(e) => e, None => continue } } else { event };
         let session = sessions.entry(pane_key).or_default();
         let Some((change, child)) = session.apply(agent, &event) else { continue };
         let status = Status { pane_key, terminal, change, children: Vec::new(), stop: session.stop.clone(), reply: None, child, interrupted: false, monitoring: session.monitoring() };
@@ -188,9 +188,63 @@ pub fn resumable(earlier: Vec<Row>, live: impl IntoIterator<Item = Row>) -> Vec<
     by_session
 }
 
+/// The record written at the last quit or sleep; another version or a damaged one reads as none.
+fn record(store: &crate::state::Store) -> Vec<Row> {
+    store.get(RESUMABLE_KEY).ok().flatten().and_then(|t| serde_json::from_str::<Saved>(&t).ok()).filter(|s| s.version == VERSION).map(|s| s.rows).unwrap_or_default()
+}
+
+/// A folder as compared here: forward slashes, no trailing slash, and on Windows any case.
+fn folder(p: &str) -> String {
+    let p = p.replace('\\', "/");
+    let p = p.trim_end_matches('/');
+    if cfg!(windows) {
+        p.to_lowercase()
+    } else {
+        p.to_owned()
+    }
+}
+
+/// Takes out of `rows` (and returns) the rows whose folder is one of `paths` or below one; a row
+/// with no folder stays, since it cannot be placed.
+#[cfg_attr(not(test), allow(dead_code))] // live once evidence/hooks-T-167-b-projects.rs.patch lands
+pub fn sleeping(rows: &mut Vec<Row>, paths: &[String]) -> Vec<Row> {
+    let roots: Vec<String> = paths.iter().map(|p| folder(p)).filter(|p| !p.is_empty()).collect();
+    let asleep = |r: &Row| r.cwd.as_deref().map(folder).is_some_and(|c| roots.iter().any(|root| c == *root || c.starts_with(&format!("{root}/"))));
+    let (taken, kept): (Vec<Row>, Vec<Row>) = std::mem::take(rows).into_iter().partition(asleep);
+    *rows = kept;
+    taken
+}
+
+/// STAT-037 at sleep (T-167-b): before a workspace's terminals are ended, the agents in it that
+/// can be resumed join the record (provider session details first), then their rows are cleared
+/// from this run's and the previous run's rows and the save is rewritten without them.
+#[cfg_attr(not(test), allow(dead_code))] // live once evidence/hooks-T-167-b-projects.rs.patch lands
+pub fn at_sleep(store: &crate::state::Store, paths: &[String]) {
+    let (mut taken, kept) = {
+        let mut live = LIVE.lock().unwrap_or_else(|p| p.into_inner());
+        let live = live.get_or_insert_with(HashMap::new);
+        let mut rows: Vec<Row> = live.values().cloned().collect();
+        let taken = sleeping(&mut rows, paths);
+        live.retain(|_, r| !taken.contains(r));
+        (taken, rows)
+    };
+    let restored = sleeping(&mut RESTORED.lock().unwrap_or_else(|p| p.into_inner()), paths);
+    if taken.is_empty() && restored.is_empty() {
+        return;
+    }
+    taken.sort_by_key(|r| r.at);
+    let rows = resumable(resumable(record(store), restored), taken);
+    if let Err(e) = store.set(RESUMABLE_KEY, &serialize(&rows)) {
+        eprintln!("kolux-rs: the agents to resume could not be recorded: {e}");
+    }
+    if let Err(e) = store.set(SAVED_KEY, &serialize(&kept)) {
+        eprintln!("kolux-rs: the agents' status could not be saved: {e}");
+    }
+}
+
 /// Called as Kolux quits, before the terminals are ended.
 pub fn at_quit(store: &crate::state::Store) {
-    let earlier: Vec<Row> = store.get(RESUMABLE_KEY).ok().flatten().and_then(|t| serde_json::from_str::<Saved>(&t).ok()).filter(|s| s.version == VERSION).map(|s| s.rows).unwrap_or_default();
+    let earlier: Vec<Row> = record(store);
     let live: Vec<Row> = LIVE.lock().unwrap_or_else(|p| p.into_inner()).as_ref().map(|m| m.values().cloned().collect()).unwrap_or_default();
     let restored = RESTORED.lock().unwrap_or_else(|p| p.into_inner()).clone();
     // The previous run's rows (no pane of theirs exists now) still count until this run's own

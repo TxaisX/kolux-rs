@@ -8,6 +8,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { AUDIO_TYPES, audioTypeAllowed, CLOSE_TO_TRAY_FIELD, CUSTOM_FIELD, KINDS, loadSound, preparePlan, readNotifications, SOUND_FIELD, SOUNDS, SUPPRESS_FOCUSED_FIELD, VOLUME_FIELD, type Sound } from "./notifications";
 import { ALERTS_FIELD, alertsOn } from "../usage/alerts";
 import { useSettings } from "./useSettings";
+import { MASTER_FIELD, masterOn, testOutcome } from "../status/notifyMaster";
 
 type Result = { shown: boolean; blocked: boolean };
 
@@ -45,8 +46,22 @@ export function NotificationsView({ settings, onSave }: { settings: Record<strin
     onSave({ [CUSTOM_FIELD]: picked, [SOUND_FIELD]: "custom" });
   };
   const fileName = n.customFile?.split(/[\\/]/).pop() ?? null;
+  // STAT-042 (T-124-b): the master switch greys out everything beneath it; a test the system did
+  // not show offers Open Settings on Windows and macOS and says "not supported" elsewhere.
+  const on = masterOn(settings);
+  const outcome = result ? testOutcome(result, navigator.platform) : null;
   return (
     <>
+      <section className="conn-card" data-section="master">
+        <label className="conn-switch">
+          <input type="checkbox" role="switch" checked={on} onChange={(e) => onSave({ [MASTER_FIELD]: e.target.checked })} />
+          <span>
+            Notifications
+            <small>Off, Kolux raises no notifications and every choice below is kept as it is.</small>
+          </span>
+        </label>
+      </section>
+      <fieldset disabled={!on} data-section="beneath-master" style={{ border: 0, padding: 0, margin: 0, minWidth: 0, opacity: on ? 1 : 0.5 }}>
       <section className="conn-card" data-section="kinds">
         <h2 className="conn-name">What notifies you</h2>
         {KINDS.map((k) => (
@@ -114,10 +129,14 @@ export function NotificationsView({ settings, onSave }: { settings: Record<strin
             System notification settings
           </button>
         </div>
-        {result && "error" in result && <p className="conn-detail warn">The test notification could not be shown: {result.error}</p>}
-        {result && "blocked" in result && result.blocked && (
+        {outcome?.kind === "failed" && (
           <p className="conn-detail warn" role="alert">
-            Notifications are switched off for apps in your system settings, so nothing can be shown. Turn them on in System notification settings.
+            {outcome.text}{" "}
+            {outcome.openSettings && (
+              <button className="btn link" onClick={() => void openSystem()}>
+                Open Settings
+              </button>
+            )}
           </p>
         )}
         {result && "shown" in result && result.shown && (
@@ -134,6 +153,7 @@ export function NotificationsView({ settings, onSave }: { settings: Record<strin
         </label>
         <p className="conn-detail">Each alert comes once per window and again only after that window resets.</p>
       </section>
+      </fieldset>
     </>
   );
 }

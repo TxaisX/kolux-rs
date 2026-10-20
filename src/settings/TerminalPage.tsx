@@ -1,7 +1,7 @@
 // Settings > Terminal & sessions. TERM-045 / SET-043: whether closing a terminal with a live program
 // asks first. TERM-005: how many panes a new workspace starts with. SET-022: terminal text and the
 // cursor, with a live sample. SET-025: history, scrolling and the clipboard. SET-026: the default
-// shell on Windows.
+// shell on Windows. TERM-099 / TERM-100: bring in Ghostty settings and Warp themes.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Terminal } from "@xterm/xterm";
@@ -14,13 +14,19 @@ import { clampNumber, CURSORS, DEFAULT_SHELL_FIELD, FIELDS, LINE_HEIGHT, options
 import { currentTerminal, TERMINAL_EVENT } from "../theme";
 import { FontField } from "./AppearancePage";
 import { Segmented } from "./GeneralPage";
+import { InputCard, PowerShellCard } from "./InputCards";
+import { detectPlatform } from "../keys/keymap";
 import { readLook } from "./general";
+import TerminalImport from "./TerminalImport";
 import { useSettings } from "./useSettings";
+import { DENSITIES, DENSITY_FIELD, readDensity } from "../shell/paneChrome";
+import { KOLUX_FIELD, switchPatch } from "../shell/linkAsk";
 
 /** TERM-119: on unless switched off; the app reads the same field when it starts a shell. */
 const SHELL_HISTORY_FIELD = "shellHistoryPerWorktree";
 type ShellInfo = { id: string; name: string };
 const onWindows = () => /Windows/.test(navigator.userAgent);
+const platform = detectPlatform();
 const SAMPLE = "\x1b[32m~/kolux\x1b[0m $ git status\r\nOn branch \x1b[36mmain\x1b[0m\r\n\x1b[1mbold\x1b[0m normal \x1b[33myellow\x1b[0m \x1b[31mred\x1b[0m \x1b[34mblue\x1b[0m\r\n=> != <= 0O 1lI\r\n$ ";
 
 /** SET-022: the sample is a real terminal that lives only while the page is open. */
@@ -140,6 +146,10 @@ export default function TerminalPage() {
           </div>
           <Switch label="Blinking cursor" checked={text.blink} onChange={(on) => save({ [FIELDS.blink]: on })} />
           <Switch label="Minimum contrast: keep text readable on any colour scheme" checked={text.contrast} onChange={(on) => save({ [FIELDS.contrast]: on })} />
+          <div className="look-select">
+            <span>Pane headers</span>
+            <Segmented label="Pane headers" options={DENSITIES.map((d) => ({ id: d, label: d[0].toUpperCase() + d.slice(1) }))} value={readDensity(settings)} onPick={(d) => save({ [DENSITY_FIELD]: d })} />
+          </div>
         </section>
       )}
       {text && (
@@ -159,12 +169,23 @@ export default function TerminalPage() {
         </section>
       )}
       {text && (
+        <section className="conn-card" data-section="links">
+          <h2 className="conn-name">Links</h2>
+          <Switch label="Open web links from the terminal in the Kolux browser" checked={settings?.[KOLUX_FIELD] === true} onChange={(on) => save(switchPatch(on))} />
+          <p className="conn-detail">Off opens them in your system browser. Hold Shift with Ctrl (Cmd on macOS) and click to use the system browser for a single link. Turning this switch yourself also stops the first-click question.</p>
+          <Switch label="Link menu on Ctrl+right-click (Cmd+right-click on macOS)" checked={text.linkMenu} onChange={(on) => save({ [FIELDS.linkMenu]: on })} />
+          <p className="conn-detail">Offers opening a link in either browser, copying it, or coming back here. Off also drops it from the hint shown over a link.</p>
+        </section>
+      )}
+      {text && (
         <section className="conn-card" data-section="clipboard">
           <h2 className="conn-name">Clipboard</h2>
           <Switch label="Copy on select" checked={text.copyOnSelect} onChange={(on) => save({ [FIELDS.copyOnSelect]: on })} />
           <Switch label="Right-click pastes (or copies the selection)" checked={text.rightClickPaste} onChange={(on) => save({ [FIELDS.rightClickPaste]: on })} />
         </section>
       )}
+      {settings && <TerminalImport settings={settings} save={save} />}
+      {settings && <InputCard settings={settings} platform={platform} onSave={save} />}
       {settings && shells && (
         <section className="conn-card" data-section="shell">
           <h2 className="conn-name">Default shell</h2>
@@ -181,6 +202,7 @@ export default function TerminalPage() {
           <p className="conn-detail">Only the shells found on this computer are listed. Open terminals keep the shell they started with.</p>
         </section>
       )}
+      {settings && <PowerShellCard settings={settings} platform={platform} onSave={save} />}
       {settings && (
         <section className="conn-card" data-section="closing">
           <h2 className="conn-name">Closing terminals</h2>

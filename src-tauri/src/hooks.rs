@@ -341,7 +341,8 @@ pub fn answer(req: &Request, token: &str) -> (u16, Option<crate::status::Status>
         "/claude" => (crate::status::Agent::Claude, event),
         "/codex" => (crate::status::Agent::Codex, event),
         // T-120-b: Gemini CLI, Antigravity and Amp, each turned into the shape the rules read.
-        p if agent_hooks::vendors::is_route(p) => match agent_hooks::vendors::normalize(p, &event) {
+        // T-121: Cursor Agent, Droid and Kimi Code too.
+        p if agent_hooks::vendors::is_route(p) || agent_hooks::more::is_route(p) => match agent_hooks::more::normalize_any(p, &event) {
             Some(e) => (crate::status::Agent::Vendor, e),
             None => return (200, None),
         },
@@ -359,19 +360,9 @@ pub fn reply_body(path: &str, body: &[u8], settings: &Value) -> String {
     if path == "/antigravity/PreToolUse" {
         return json!({ "decision": "allow" }).to_string();
     }
-    let ask = || {
-        if path != "/claude" {
-            return None;
-        }
-        let event: Value = serde_json::from_slice(body).ok()?;
-        if event.get("hook_event_name")?.as_str()? != "PreToolUse" || !matches!(event.get("tool_name")?.as_str()?, "Bash" | "PowerShell") {
-            return None;
-        }
-        let base = crate::protected::Base::from_env(event.get("cwd").and_then(Value::as_str));
-        let rule = crate::protected::check(event.get("tool_input")?.get("command")?.as_str()?, &base, settings)?;
-        Some(json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": crate::protected::reason(rule.name) } }).to_string())
-    };
-    ask().unwrap_or_else(|| "{}".into())
+    // T-156-b: the rules in force for the command's folder (built-ins, the user's own, per project)
+    // and the recent-attempts list, both in protected_custom.rs.
+    crate::protected_custom::listen(path, body, settings).unwrap_or_else(|| "{}".into())
 }
 
 /// One rate-limit window as Claude Code's status line reports it (STAT-040), reset in ms.
@@ -577,7 +568,7 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
                 crate::resume::on_stop(app, status.pane_key, status.stop.as_ref());
                 agent_hooks::saved::note(app, &req.path, &req.body, &status);
                 // AUTO-012: an automation run in this pane completes on its agent's real finish.
-                crate::automations::follow(app, |s| crate::automations::on_status(s, status.terminal, status.pane_key, status.change.state, status.change.boundary, status.child.is_some(), crate::automations::now_ms()));
+                crate::automations::follow(app, |s| crate::automations::on_status(s, status.terminal, status.pane_key, status.change.state, status.change.boundary, status.child.is_some(), status.change.session.as_deref(), crate::automations::now_ms()));
                 // AUTO-004 (T-085-e): an ordinary finish in a pane no automation opened starts the automations listening for it.
                 crate::automations::on_finish(app, status.pane_key, status.terminal, status.change.state, status.change.boundary, status.child.is_some(), status.interrupted);
                 let _ = app.emit(EVENT, status);

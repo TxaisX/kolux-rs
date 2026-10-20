@@ -1,9 +1,12 @@
 mod folder_projects;
+mod floating_trust;
 mod repo_scan;
 mod activity;
 mod agents;
+mod app_look;
 mod artifacts;
 mod automations;
+mod badge;
 mod awake;
 mod capture;
 mod chat;
@@ -20,6 +23,7 @@ mod codex_accounts;
 mod codex_usage;
 mod creatures;
 mod diag;
+mod editor_drafts;
 mod editor_search;
 mod fence;
 mod files;
@@ -35,11 +39,14 @@ mod import;
 // T-043-e: the macOS keychain rule table; the Mac wiring that calls it is T-043-f.
 #[cfg_attr(not(test), allow(dead_code))]
 mod keychain;
+mod agent_creds;
 mod grok;
+mod grok_status;
 mod install;
 mod keybindings;
 mod kits;
 mod links;
+mod lifecycle;
 mod menu;
 mod bulk;
 mod names;
@@ -50,12 +57,22 @@ mod orchestration;
 mod foreground;
 mod procs;
 mod protected;
+mod protected_custom;
 mod ports;
+mod labels;
+mod tidy;
 mod resources;
 mod projects;
+mod prompt_answer;
+mod prompt_scan;
 mod scm;
+mod scm_open;
+mod scm_recipe;
+mod scm_stack;
 mod pr_review;
 mod skills;
+mod star;
+mod pasted_image;
 mod pr_checkout;
 mod pty;
 mod setup;
@@ -63,11 +80,16 @@ mod routing;
 mod schedule;
 mod resume;
 mod secrets;
+mod settings_sync;
+mod session_rows;
 mod sessions;
+mod shell_marks;
 mod shell_history;
 mod skill_delete;
 mod state;
 mod status;
+mod sub_work;
+mod term_import;
 mod sysmem;
 mod terminal;
 #[cfg(test)]
@@ -78,6 +100,7 @@ mod tray;
 mod trust;
 mod update;
 mod visibility;
+mod web_icon;
 mod usage_alerts;
 
 use state::Store;
@@ -113,11 +136,14 @@ fn get_settings(store: tauri::State<'_, Mutex<Store>>) -> Result<serde_json::Val
 /// thread; typing never waits on the profile drive.
 #[tauri::command(async)]
 fn settings_patch(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, set: serde_json::Map<String, serde_json::Value>, remove: Vec<String>) -> Result<(), String> {
-    write_settings(&app, &store, |old| state::patched(old, &set, &remove))
+    // SET-035 (T-181): updates aimed at retired or secret settings are ignored; every window gets the redacted change.
+    let (set, remove) = settings_sync::accepted(&set, &remove);
+    let payload = settings_sync::broadcast(&set, &remove);
+    write_settings(&app, &store, |old| state::patched(old, &set, &remove), payload)
 }
 
 /// The settings `change` makes of what is on disk, written under one lock.
-fn write_settings(app: &tauri::AppHandle, store: &Mutex<Store>, change: impl FnOnce(serde_json::Value) -> serde_json::Value) -> Result<(), String> {
+fn write_settings(app: &tauri::AppHandle, store: &Mutex<Store>, change: impl FnOnce(serde_json::Value) -> serde_json::Value, payload: serde_json::Value) -> Result<(), String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     let old = store.settings();
     // The window cannot write a secret field; the sealed values on disk are kept as they are.
@@ -131,7 +157,7 @@ fn write_settings(app: &tauri::AppHandle, store: &Mutex<Store>, change: impl FnO
         resume::switched(app, after);
     }
     // Views that depend on a setting (the lapsed sign-in notice, ACCT-012) read again.
-    let _ = tauri::Emitter::emit(app, "settings-saved", ());
+    let _ = tauri::Emitter::emit(app, "settings-saved", payload);
     Ok(())
 }
 
@@ -175,28 +201,65 @@ pub fn run() {
     // failure into a plain native message instead of a panic.
     let mut context = tauri::generate_context!();
     let windows: Vec<String> = context.config().app.windows.iter().filter(|w| w.create).map(|w| w.label.clone()).collect();
+    // T-183 (APP-043): after repeated graphics crashes a saved flag puts every window in safe graphics.
+    // T-286-b (APP-017): every window is excused from background throttling (WebView2 browser
+    // arguments; later webviews on the same data folder reuse the same string).
+    let safe = resources::recovery::safe_graphics_on(&context.config().identifier, &context.package_info().version.to_string());
     for w in &mut context.config_mut().app.windows {
         w.create = false;
+        w.additional_browser_args = Some(resources::recovery::launch_browser_args(w.additional_browser_args.as_deref(), safe));
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        .setup(move |app| tools::guarded_setup(app, &windows, |app| {
+        .setup(move |app| {
+            // T-182 (APP-001): one copy at a time. A second launch hands its request to the running
+            // copy, brings its window forward and exits before any window (or WebView2 profile) is touched.
+            lifecycle::claim_or_forward(app);
+            tools::guarded_setup(app, &windows, |app| {
             // APP-053: everything the app starts from here on ends with it; outside its own job (a job the
             // launcher owns without breakaway, say) the children would outlive a crash, so that is logged.
             let job_ok = procs::app_job_start();
             let dir = app.path().app_data_dir()?;
             diag::set_dir(&dir);
+            // T-283 (BROW-043): an earlier run's leftover browser helpers are closed, on a thread of
+            // its own so a hanging listing never holds up start-up.
+            browser::helpers::sweep_at_start(&dir);
             if !job_ok {
                 diag::write(&dir, "kolux-rs: the app could not be put in its own job object; child processes would survive a crash (APP-053)");
             }
             // The config homes this process resolved (defaults included), so a launch that inherited another
             // app's environment shows up in the log.
             diag::write(&dir, &format!("kolux-rs: config: CLAUDE_CONFIG_DIR={} CODEX_HOME={}", hooks::claude_settings_file().parent().map(|d| d.display().to_string()).unwrap_or_default(), trust::codex_config_file().parent().map(|d| d.display().to_string()).unwrap_or_default()));
+            // T-183 (APP-039): a previous run that left no clean exit becomes a crash record.
+            resources::recovery::startup_scan(&dir);
+            // T-183 (APP-021): the profile folder must take a write and every install file must read; a
+            // per-user install is repaired with icacls, anything else is only named.
+            let perms = resources::recovery::startup_check_here(&dir);
+            for p in &perms.repaired {
+                diag::write(&dir, &format!("permissions repaired: {} (APP-021)", p.display()));
+            }
+            let perm_problem = perms.problem();
+            if let Some(p) = &perm_problem {
+                diag::write(&dir, &format!("{p} (APP-021)"));
+            }
+            app.manage(resources::recovery::Perms(perms));
+            app.manage(resources::recovery::Graphics(Mutex::new(resources::recovery::Burst::default())));
+            // T-183 (APP-049): a damaged state.db is set aside and the last good copy restored before the
+            // store opens; one that cannot be set aside leaves saving frozen on a scratch store.
+            let prep = resources::recovery::prepare_state(&dir, &resources::recovery::frozen_dir());
+            for n in &prep.notes {
+                diag::write(&dir, n);
+            }
+            if prep.backup_worthwhile() {
+                if let Err(e) = resources::recovery::backup_state(&dir) {
+                    diag::write(&dir, &format!("the last good copy of state.db could not be refreshed: {e} (APP-049)"));
+                }
+            }
             #[cfg(debug_assertions)]
             dev_inject()?;
-            let store = Store::open(&dir)?;
+            let store = Store::open(&prep.open_dir)?;
             // SKILL-023: an interrupted skill delete is undone or completed under the skill lock (a busy
             // lock or a lock that cannot be opened is logged; the latter still recovers).
             skill_delete::startup_recover(&dir);
@@ -208,6 +271,8 @@ pub fn run() {
             // ACCT-010: a key this computer can no longer open is cleared before the window asks.
             secrets::drop_unreadable(&store, &dir);
             app.manage(Mutex::new(store));
+            // T-183 (APP-042): the interface watch; RecoveryMount's heartbeat feeds it.
+            resources::recovery::watch_start(app.handle().clone(), perm_problem);
             // TERM-122: the keep-awake watcher reads the saved choice every tick, and counts a
             // working pane only while its terminal is still running.
             {
@@ -217,11 +282,17 @@ pub fn run() {
                     move |id| t.try_state::<Terminals>().is_some_and(|ts| ts.started(id).is_some()),
                 );
             }
+            // T-301 (APP-012): the saved app icon variant and window blur, before the window shows.
+            app_look::apply_saved(app.handle());
             app.manage(links::Grants::default());
             // APP-041: the app's own start-and-stop record, next to what the terminals report.
             diag::write(&dir, &format!("app start {starts}, Kolux RS {}", app.package_info().version));
             // SET-004: the window starts hidden and the page shows it once its first frame has the saved
             // look; this is the backstop for a page that never gets that far.
+            // T-286-b (APP-040): the app's own view reports its engine's process failures.
+            if let Some(w) = app.get_webview_window("main") {
+                browser::engine::watch_app_failures(&w, dir.clone());
+            }
             if let Some(w) = app.get_webview_window("main") {
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_secs(5));
@@ -250,6 +321,10 @@ pub fn run() {
             let fence = fence::Fence::load(&app.state::<Mutex<Store>>());
             app.manage(fence);
             app.manage(token_usage::Flights::default());
+            // ORCH-034: the orchestration store is brought up to today's layout before anything reads it.
+            if let Ok(store) = app.state::<Mutex<Store>>().lock() {
+                orchestration::upgrade::at_start(&store);
+            }
             // The command line reaches the app through a loopback port (PROJ-077).
             cli::serve(app.handle().clone(), &dir)?;
             // AUTO-001: the automations clock.
@@ -284,6 +359,23 @@ pub fn run() {
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_secs(15));
                 resume::tick(&handle, &log_dir);
+            });
+            // PROJ-069: quiet repositories get Git's own housekeeping (prune + gc, nothing deleted);
+            // PROJ-088: the workspace label addresses follow their setting (off by default).
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let resolver = handle.clone();
+                let resolve: labels::Resolve = std::sync::Arc::new(move |label: &str| labels::resolve_in(&resolver, label));
+                let mut tidy_at = std::time::Instant::now() + tidy::POLL;
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    let on = handle.state::<Mutex<Store>>().lock().map(|s| labels::enabled(&s.settings())).unwrap_or(false);
+                    labels::apply(on, &resolve);
+                    if std::time::Instant::now() >= tidy_at {
+                        tidy_at = std::time::Instant::now() + tidy::POLL;
+                        tidy::pass(&handle);
+                    }
+                }
             });
             // ACCT-050: an agent started by hand in a shell pane is recognised within a few seconds.
             let handle = app.handle().clone();
@@ -321,7 +413,8 @@ pub fn run() {
                 }
             });
             Ok(())
-        }))
+        })
+        })
         // The Artifacts viewer (SKILL-036) loads stored pages through this scheme, one entry at a time.
         // T-500: only the app's own web view may read artifacts; a Browser pane page gets nothing.
         .register_uri_scheme_protocol(artifacts::SCHEME, |ctx, req| {
@@ -342,8 +435,18 @@ pub fn run() {
             // The window is gone: no shell may outlive it.
             // T-546-c: only the main window holds shells, so the Tower's own window closing changes nothing;
             // the Tower window goes with the main one, so it never keeps the app running on its own.
+            // T-182 (APP-006): the page decides whether closing needs a question; a page that never
+            // answers (frozen or crashed) is closed for after lifecycle::ASK_LIMIT.
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if window.label() == "main" {
+                    lifecycle::close_requested(window);
+                }
+            }
             if let tauri::WindowEvent::Destroyed = event {
                 if window.label() == "main" {
+                    // T-182 (APP-006): quitting always finishes; a final save or exit wait that hangs
+                    // past lifecycle::quit_deadline() is cut short.
+                    lifecycle::quit_watchdog(window.app_handle());
                     window.state::<Terminals>().kill_all();
                     // T-033-e: no git watch outlives the window either (nothing is waited for here).
                     scm::watch::unwatch_all();
@@ -363,6 +466,7 @@ pub fn run() {
             settings_patch,
             notify,
             notifications::notification_test,
+            badge::badge_set,
             notifications::notification_sound_load,
             notifications::open_notification_settings,
             hooks::agent_hooks::agent_hooks_sync,
@@ -370,11 +474,21 @@ pub fn run() {
             hooks::agent_hooks::saved::agent_status_saved,
             hooks::agent_hooks::saved::agent_resumable,
             protected::protected_rules,
+            protected_custom::protected_rule_check,
+            protected_custom::protected_attempts,
+            protected_custom::protected_attempts_clear,
             hooks::claude_usage,
             sysmem::process_memory,
             fonts::list_fonts,
+            term_import::term_import_ghostty,
+            term_import::term_import_ghostty_theme,
+            term_import::term_import_warp,
             resources::resources,
             sessions::claude_workspace_sessions,
+            sessions::list::sessions_list,
+            sessions::list::session_resume_plan,
+            session_rows::session_row_detail,
+            session_rows::session_name,
             terminal::terminal_spawn,
             terminal::terminal_write,
             terminal::terminal_service_info,
@@ -387,6 +501,7 @@ pub fn run() {
             terminal::terminal_ack,
             terminal::terminal_memory_profile,
             terminal::terminal_kill,
+            terminal::terminal_next_input_source,
             terminal::terminal_layout,
             terminal::terminal_busy,
             terminal::terminal_diagnostics,
@@ -421,7 +536,7 @@ pub fn run() {
             projects::workspace_unseen,
             projects::workspace_seen,
             projects::workspace_hide,
-            projects::workspace_rename,
+            projects::workspace_rename, projects::workspace_details_get, projects::workspace_details_save,
             projects::workspace_sleep,
             projects::visibility_get,
             projects::visibility_set,
@@ -443,12 +558,19 @@ pub fn run() {
             setup::repo_setup_remove,
             setup::repo_setup_policy_set,
             setup::repo_setup_wait_set,
+            setup::repo_setup_mode_set,
             projects::handoff_note_prepare,
             projects::workspace_remove,
             cleanup::cleanup_remove,
+            cleanup::cleanup_scan,
+            cleanup::branch_delete_kept,
+            cleanup::cleanup_sizes,
+            labels::labels_list,
             projects::workspace_remove_check,
             projects::project_set,
             projects::project_display_name_set,
+            projects::workspace_rename_after_work,
+            projects::workspace_mark_suggested,
             projects::workspaces_place_get,
             projects::workspaces_place_set,
             projects::git_first_commit_preview,
@@ -461,20 +583,29 @@ pub fn run() {
             setup::setup_import,
             agents::agent_list,
             agents::agent_start_line,
+            agents::agent_prompt_send,
             agents::open_install_page,
             agents::inventory::session_tabs,
             orchestration::task_reset,
+            orchestration::worker_labels,
+            prompt_answer::prompt_read,
+            prompt_answer::prompt_answer,
+            prompt_scan::prompt_scan,
+            prompt_scan::prompt_scan_restored,
+            prompt_scan::prompt_scan_pruned,
             pty::shell_list,
             tools::tools_check,
             tools::tools_dismiss,
             tools::editors_list,
             tools::teams_host,
             awake::keep_awake_state,
+            app_look::app_look_apply,
             token_usage::token_usage,
             token_usage::token_usage_scan,
             token_usage::token_tracking_set,
             trust::trust_folders_cmd,
             scm::scm_status, scm::scm_reveal,
+            scm::scm_ignore_heavy,
             scm::scm_watch, scm::scm_unwatch,
             scm::scm_base_changes, scm::scm_base_sides,
             scm::scm_pushed, scm::scm_head, scm::scm_summary, scm::scm_abort,
@@ -486,9 +617,14 @@ pub fn run() {
             scm::scm_prs_poll,
             scm::scm_commit_message,
             scm::scm_commit_message_stop,
+            scm::writers::scm_writer_options,
+            scm::writers::scm_name_branch,
+            projects::workspace_rename_on_first_prompt,
+            projects::workspace_move_folder,
             scm::scm_task_detail,
             scm::scm_repo_labels,
             github::github_repo_parent,
+            github::github_repo_lineage,
             github::github_people,
             github::github_project,
             github::github_projects,
@@ -496,6 +632,30 @@ pub fn run() {
             github::github_issue_state,
             github::github_issue_comment,
             github::github_issue_create,
+            github::github_issue_types,
+            github::github_issue_type_set,
+            github::pull_requests::pr_page,
+            github::pull_requests::pr_files,
+            github::pull_requests::pr_file_patch,
+            github::pull_requests::pr_checks,
+            github::pull_requests::pr_threads,
+            github::pull_requests::pr_set_state,
+            github::pull_requests::pr_viewed,
+            github::pull_requests::pr_set_viewed,
+            github::pull_requests::pr_editors,
+            github::pull_requests::pr_rerun,
+            github::pull_requests::pr_reviewers,
+            github::pull_requests::pr_assignees,
+            github::pull_requests::pr_react,
+            github::pull_requests::pr_reply,
+            github::pull_requests::pr_merge,
+            pr_checkout::scm_push_target,
+            scm_open::scm_open_with,
+            scm_recipe::scm_recipe_commit,
+            scm_recipe::scm_recipe_fix,
+            scm_stack::scm_stack_create,
+            scm_stack::scm_stack_record,
+            pr_review::scm_stack_prs,
             scm::scm_task_labels,
             scm::scm_task_body,
             scm::scm_stage,
@@ -503,7 +663,7 @@ pub fn run() {
             scm::scm_commit, scm::scm_remote,
             scm::scm_pr, scm::scm_pr_checks, scm::scm_pr_create, scm::scm_open_pr,
             pr_review::scm_pr_find, pr_review::scm_check_rerun, pr_review::scm_check_log, pr_review::scm_pr_text,
-            pr_review::scm_review_read, pr_review::scm_review_act,
+            pr_review::scm_review_read, pr_review::scm_review_act, pr_review::scm_review_send, pr_review::scm_pr_conflicts,
             scm::scm_history, scm::scm_commit_files, scm::scm_github_repo,
             bulk::workspace_remove_many, bulk::workspace_kept_branch_delete, bulk::workspace_forget,
             bulk::workspace_statuses, bulk::workspace_statuses_set, bulk::workspace_status_set,
@@ -515,18 +675,30 @@ pub fn run() {
             keybindings::keybindings_reload,
             keybindings::keybindings_show,
             browser::browser_open,
+            browser::preview::browser_preview_grant,
             browser::browser_bounds,
             browser::browser_navigate,
             browser::browser_go,
+            browser::history::browser_suggest,
             browser::browser_close,
+            browser::browser_viewport,
+            browser::browser_cookies_import,
             browser::browser_probe,
             browser::browser_diagnose,
+            browser::certs::browser_cert,
+            browser::browser_tab,
+            browser::browser_annotate,
+            browser::preview::browser_preview,
+            browser::preview::browser_preview_of,
+            browser::ports::browser_dev_ports,
             automations::automations_list,
             automations::automation_set_enabled,
             automations::automation_delete,
             automations::automation_run_now,
             automations::automation_preview,
             automations::automation_save,
+            automations::carry::session_carry_context,
+            automations::carry::agent_dir_ready,
             routing::routing_catalog,
             secrets::secret_status,
             secrets::secrets_dropped,
@@ -554,6 +726,12 @@ pub fn run() {
             grok::grok_sign_in,
             grok::grok_cancel,
             grok::grok_key_set,
+            agent_creds::agent_creds_view,
+            agent_creds::codex_sessions_home_set,
+            agent_creds::minimax_credential_set,
+            agent_creds::minimax_credential_forget,
+            agent_creds::minimax_options_set,
+            agent_creds::gemini_cli_credentials_set,
             codex_accounts::codex_accounts,
             codex_accounts::codex_account_sign_in,
             codex_accounts::codex_account_cancel,
@@ -588,11 +766,21 @@ pub fn run() {
             onboarding::tours_get,
             onboarding::onboarding_reopen,
             onboarding::onboarding_milestone,
+            star::star_info,
+            star::star_put,
             files::file_read,
             files::file_write,
             files::file_stamps,
             files::file_pick,
+            floating_trust::floating_trusted,
+            floating_trust::floating_pick,
+            floating_trust::floating_start,
             files::md_list,
+            editor_drafts::editor_draft_set,
+            editor_drafts::editor_draft_clear,
+            editor_drafts::editor_drafts_get,
+            editor_drafts::editor_drafts_drop,
+            editor_drafts::editor_draft_rename,
             editor_search::editor_search,
             editor_search::editor_search_cancel,
             skills::skills_scan,
@@ -615,6 +803,7 @@ pub fn run() {
             files::change_entries,
             files::diff_image,
             files::dir_list,
+            files::dir_ignored,
             files::path_kind,
             artifacts::artifacts_list,
             artifacts::artifact_add,
@@ -626,14 +815,28 @@ pub fn run() {
             fsops::fs_trash,
             fsops::fs_restore,
             fsops::fs_copy,
+            fsops::fs_bytes,
             fsops::fs_move,
             clipboard::clip_copy_text,
             clipboard::clip_copy_files,
             clipboard::feedback_facts,
+            pasted_image::paste_image_save,
             cli::cli_register::cli_register_state,
             cli::cli_register::cli_register,
             cli::cli_register::cli_unregister,
+            cli::file_cli::cli_file_window,
+            cli::file_cli::cli_file_result,
             diag::diag_bundle,
+            resources::recovery::ui_heartbeat,
+            resources::recovery::graphics_crash_noted,
+            resources::recovery::graphics_keep_running,
+            resources::recovery::graphics_restart_safe,
+            resources::recovery::graphics_launch_choice,
+            resources::recovery::graphics_choose,
+            resources::recovery::crash_pending,
+            resources::recovery::crash_latest,
+            resources::recovery::crash_dismiss,
+            resources::recovery::crash_details,
             diag::diag_review,
             diag::diag_review_discard,
             update::update_status,
@@ -641,48 +844,35 @@ pub fn run() {
             update::update_check,
             update::update_download,
             update::update_restart,
+            update::update_last_attempt,
+            update::update_compat,
+            lifecycle::close_alive,
+            lifecycle::app_restart,
             usage_alerts::usage_alerts_fired,
             usage_alerts::usage_alert_send
         ])
         .build(context)
         .unwrap_or_else(|e| tools::startup_failed(&e.to_string()))
         .run(|app, event| {
+            // T-286-b (APP-040): engine exits once the app is quitting are not crashes.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                browser::crash::quitting();
+            }
             if let tauri::RunEvent::Exit = event {
                 // T-075 (APP-050): the final save is one barrier with a deadline: begin() stops the
                 // batched savers, each step runs on its own thread and is waited for only as long as
                 // the deadline leaves, so a stalled profile drive caps the wait and never freezes the
                 // quit. Settings need no step: every change is already on disk (APP-048).
                 final_save::begin();
-                let seal = |app: tauri::AppHandle, files: fn(&Store, &std::path::Path) -> Vec<(std::path::PathBuf, std::path::PathBuf)>| {
-                    move || {
-                        if let (Ok(profile), Ok(store)) = (app.path().app_data_dir(), app.state::<Mutex<Store>>().lock()) {
-                            let pairs = files(&store, &profile);
-                            drop(store);
-                            let _ = secrets::save_changed(&pairs, &profile);
-                        }
-                    }
-                };
-                let (a1, a2) = (app.clone(), app.clone());
-                let report = final_save::run(
-                    final_save::QUIT_DEADLINE,
-                    vec![
-                        // USAGE-011: open turns end and the counts are written; no batched save follows.
-                        final_save::step("activity counts", move || activity::save(&a1.state::<Mutex<Store>>(), true)),
-                        // STAT-037: the agents still mid-task are recorded before their terminals end.
-                        final_save::step("agent status", move || {
-                            if let Ok(store) = a2.state::<Mutex<Store>>().lock() {
-                                hooks::agent_hooks::saved::at_quit(&store);
-                            }
-                        }),
-                        // ACCT-015: no sign-in or install keeps running after Kolux quits.
-                        final_save::step("sign-ins cancelled", || {
-                            claude_key::cancel_all(std::time::Duration::from_secs(2));
-                        }),
-                        // ACCT-025: sign-ins the agents renewed are sealed again, Codex's then Claude's.
-                        final_save::step("codex sign-in sealed", seal(app.clone(), codex_accounts::sign_in_files)),
-                        final_save::step("claude sign-in sealed", seal(app.clone(), claude_accounts::sign_in_files)),
-                    ],
-                );
+                // T-283 (BROW-043): this run's browser helpers end with it.
+                browser::helpers::stop_all();
+                // T-122 (STAT-018): Grok's Kolux-written hook file goes, unless another running
+                // Kolux owns it; the removal is cut short after grok::QUIT_LIMIT.
+                if let Ok(dir) = app.path().app_data_dir() {
+                    hooks::agent_hooks::more::grok::at_quit(&dir);
+                }
+                // T-182 (APP-011): the same steps make the save point a restart waits for.
+                let report = final_save::run(final_save::QUIT_DEADLINE, lifecycle::quit_steps(app));
                 if let Ok(dir) = app.path().app_data_dir() {
                     diag::write(&dir, &report.line());
                 }

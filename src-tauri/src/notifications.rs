@@ -105,30 +105,6 @@ pub fn notification_clicked(app: tauri::AppHandle, id: String) -> Result<Option<
     Ok(pane)
 }
 
-/// STAT-048: the taskbar badge shows how many workspaces have unseen results; zero clears it. On
-/// Windows that is an overlay icon with the count painted on; elsewhere the badge count. A failure
-/// to set or clear it is ignored.
-#[allow(dead_code)] // registered by the lib.rs patch
-#[tauri::command]
-pub fn badge_set(app: tauri::AppHandle, count: u32) -> Result<(), String> {
-    use tauri::Manager;
-    let Some(window) = app.get_webview_window("main") else { return Ok(()) };
-    let text = crate::tray::badge_text(count);
-    #[cfg(windows)]
-    {
-        let overlay = text.map(|t| {
-            let (px, w, h) = crate::tray::paint_badge(&t);
-            tauri::image::Image::new_owned(px, w, h)
-        });
-        let _ = window.set_overlay_icon(overlay);
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = window.set_badge_count(text.map(|_| i64::from(count.min(99))));
-    }
-    Ok(())
-}
-
 /// The toast alone, for the Notifications page's test button: no tray dot.
 pub(crate) fn show_plain(app: &tauri::AppHandle, title: String, body: String, sound: bool) -> Result<(), String> {
     use tauri_plugin_notification::NotificationExt;

@@ -1,6 +1,7 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { describe, expect, it, test } from "vitest";
-import { canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, select, discardAsk, type Section, budgetLine, budgetLow, mergeActions, mergeLabel, type MergeInfo, graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, commitUrl, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine } from "./model";
+import { cutBanner, changeCount as countOf } from "./model";
+import { LINES_SKIPPED_NOTE, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, pushTarget, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, rowKeys, selectRows, spanRuns, select, discardAsk, type Section, budgetLine, budgetLow, mergeActions, mergeLabel, type MergeInfo, graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, commitUrl, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine } from "./model";
 
 const commit = (hash: string, parents: string[], subject = hash): Commit => ({ hash, short: hash, parents, author: "a", time: 0, subject, message: subject, labels: [], outgoing: false, incoming: false });
 
@@ -164,6 +165,16 @@ test("the main button follows the branch through its states", () => {
   expect(step({ ...pushed, ahead: 2, behind: 1 })).toBe("Sync \u21931 \u21912");
   expect(step({ ...pushed, ahead: 2, behind: 1, rewritten: true })).toBe("Force push with lease");
   expect(nextStep(pushed, "")).toMatchObject({ label: "Create pull request", action: "pr" });
+});
+
+test("VIEW-066: a push to a fork names the fork remote, whatever form its address takes; origin stays unnamed", () => {
+  expect(pushTarget("fork/feat")).toBe("fork");
+  expect(pushTarget("origin/feat")).toBeNull();
+  expect(pushTarget(null)).toBeNull();
+  const onFork: Status = { ...emptyStatus, branch: "feat", upstream: "fork/feat", ahead: 2, base: "origin/main" };
+  expect(nextStep(onFork, "").label).toBe("Push 2 to fork");
+  expect(remoteItems(onFork).find((i) => i.id === "push")?.label).toBe("Push 2 commits to fork");
+  expect(nextStep({ ...onFork, upstream: "origin/feat" }, "").label).toBe("Push 2");
 });
 
 test("the remote menu carries counts and gives every disabled item its reason", () => {
@@ -554,4 +565,21 @@ test("FIX-3: a file drawn in two sections is two rows, and a Shift span covers e
   // The drawn view keys rows the same way: the tree view and the group order carry the sections along.
   expect(rowKeys(s, "staged-first").map((k) => k.section + ":" + k.path)).toEqual(["Staged:p", "Staged:c", "Changes:a", "Changes:p", "Changes:b"]);
   expect(rowKeys({ ...s, conflicts: [row("x")] }, undefined, {})[0]).toEqual({ section: "Conflicts", path: "x" });
+});
+
+test("GIT-011 an enormous branch says so instead of showing line totals", () => {
+  const big = sum({ files: 30000, linesSkipped: true });
+  expect(summaryLabel("feat", big)).toBe(`feat, 1 ahead and 0 behind main, ${LINES_SKIPPED_NOTE}`);
+  expect(summaryLabel("feat", sum())).toContain("10 lines added");
+});
+
+test("T-281 (GIT-012): a cut list says how much is left out, offers its heavy folders and still counts every change", () => {
+  expect(cutBanner(null)).toBeNull();
+  expect(cutBanner({ cut: 0, heavy: [] })).toBeNull();
+  expect(cutBanner({ cut: 1, heavy: [] })).toEqual({ text: "This list is cut short: 1 more change is left out so the panel stays quick.", offer: [] });
+  const b = cutBanner({ cut: 12345, heavy: ["node_modules", "dist"] });
+  expect(b?.text).toContain("12,345 more changes are left out");
+  expect(b?.offer).toEqual(["node_modules", "dist"]);
+  const s = { ...emptyStatus, changed: [{ path: "a", status: "M" }], cut: 4 } as unknown as Status;
+  expect(countOf(s)).toBe(5);
 });

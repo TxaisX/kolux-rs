@@ -10,16 +10,25 @@ import { createEmptyHistoryState, registerHistory } from "@lexical/history";
 import { ListItemNode, ListNode, registerCheckList, registerList } from "@lexical/list";
 import { LinkNode } from "@lexical/link";
 import { CodeHighlightNode, CodeNode } from "@lexical/code";
-import { $convertFromMarkdownString, $convertToMarkdownString, CHECK_LIST, registerMarkdownShortcuts, TRANSFORMERS } from "@lexical/markdown";
+import { $convertFromMarkdownString, $convertToMarkdownString, CHECK_LIST, registerMarkdownShortcuts, TRANSFORMERS, type Transformer } from "@lexical/markdown";
 import { mergeRegister } from "@lexical/utils";
+import { registerTable, TABLE, TABLE_NODES } from "./richTable";
+import { registerListKeys } from "./richFormat";
+import { registerRichKeys } from "./richKeys";
+import { createSlash, type SlashView } from "./slashMenu";
+import { createWiki, type WikiView } from "./wikiPopup";
+import { DETAILS_NODES, makeDetails, withoutSections } from "./richDetails";
 
 export const isMarkdown = (path: string) => /\.(md|markdown)$/i.test(path);
 
 /** Files bigger than this open in source view with a banner (EDIT-012). */
 export const RICH_LIMIT = 600 * 1024;
 
-const MD = [CHECK_LIST, ...TRANSFORMERS];
-const NODES = [HeadingNode, QuoteNode, ListNode, ListItemNode, CodeNode, CodeHighlightNode, LinkNode];
+// EDIT-010 (T-234-b): tables are read and written as markdown but not made by typing shortcuts.
+const KEYS = [CHECK_LIST, ...TRANSFORMERS];
+// EDIT-057 (T-237-b): the collapsible section is read and written as the note's own <details> block.
+const MD: Transformer[] = [makeDetails(() => MD), TABLE, ...KEYS];
+const NODES = [HeadingNode, QuoteNode, ListNode, ListItemNode, CodeNode, CodeHighlightNode, LinkNode, ...TABLE_NODES, ...DETAILS_NODES];
 const THEME = {
   paragraph: "md-p",
   quote: "md-quote",
@@ -37,7 +46,6 @@ const fail = (e: Error) => {
 /** Things Lexical's markdown import would drop or garble, as a reason for the source banner. */
 const LIMITS: [RegExp, string][] = [
   [/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "front matter"],
-  [/^ {0,3}\|?.*\|.*\r?\n {0,3}\|? *:?-+:? *\|/m, "tables"],
   [/<!--/, "HTML comments"],
   [/<\/?[a-z][\w-]*(\s[^<>]*)?\/?>/i, "HTML"],
   [/!\[[^\]]*\]\(/, "images"],
@@ -49,7 +57,7 @@ const LIMITS: [RegExp, string][] = [
 
 /** Why the rich view cannot show this markdown, or null when it can. Code is not looked into. */
 export function unsupported(md: string): string | null {
-  const prose = md.replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*?^ {0,3}\1/gm, "").replace(/`[^`\n]*`/g, "");
+  const prose = withoutSections(md.replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*?^ {0,3}\1/gm, "")).replace(/`[^`\n]*`/g, "");
   for (const [re, what] of LIMITS) if (re.test(prose)) return `it has ${what}`;
   const back = roundTrip(md);
   if (back === null) return "it could not be read as markdown";
@@ -105,20 +113,30 @@ export function richRefusal(length: number, held = 0): string {
   return `Paste refused in the rich view: ${over} over the ${size(RICH_LIMIT)} it takes in one paste. Paste it in source view instead. Nothing was pasted.`;
 }
 
-export type Rich = { editor: LexicalEditor; show: (md: string) => void; destroy: () => void };
+export type Rich = { editor: LexicalEditor; show: (md: string) => void; destroy: () => void; pickSlash: (id?: string) => boolean; pickWiki: (path?: string) => boolean };
+
+/** The [[ note popup (EDIT-014): the notes of the worktree, the note being edited, and where the popup state goes. */
+export type WikiOpts = { files: () => string[]; notePath: string; show: (v: WikiView | null) => void };
 
 /** Starts the rich view in `el`; `onEdit` gets the whole markdown after each edit by the user;
  * `onRefuse` shows the toast for a paste past the limit (EDIT-008). */
-export function mountRich(el: HTMLElement, md: string, onEdit: (md: string) => void, onRefuse: (text: string) => void = () => {}): Rich {
+export function mountRich(el: HTMLElement, md: string, onEdit: (md: string) => void, onRefuse: (text: string) => void = () => {}, onSlash: (v: SlashView | null) => void = () => {}, wikiOpts?: WikiOpts): Rich {
   const editor = createEditor({ namespace: "kolux-md", nodes: NODES, onError: fail, theme: THEME });
   editor.setRootElement(el);
   let last = "";
+  const slash = createSlash(editor, onSlash);
+  const wiki = wikiOpts ? createWiki(editor, wikiOpts.files, wikiOpts.notePath, wikiOpts.show) : null;
   const off = mergeRegister(
+    slash.destroy,
+    wiki ? wiki.destroy : () => undefined,
+    registerListKeys(editor),
+    registerRichKeys(editor),
     registerRichText(editor),
     registerHistory(editor, createEmptyHistoryState(), 300),
     registerList(editor),
     registerCheckList(editor),
-    registerMarkdownShortcuts(editor, MD),
+    registerTable(editor),
+    registerMarkdownShortcuts(editor, KEYS),
     editor.registerCommand(PASTE_COMMAND, (event) => refusePaste(event, onRefuse, last.length), COMMAND_PRIORITY_CRITICAL),
     editor.registerUpdateListener(({ editorState, dirtyElements, dirtyLeaves, tags }) => {
       if (dirtyElements.size === 0 && dirtyLeaves.size === 0) return; // the caret moved, nothing more
@@ -140,6 +158,8 @@ export function mountRich(el: HTMLElement, md: string, onEdit: (md: string) => v
   return {
     editor,
     show,
+    pickSlash: slash.pick,
+    pickWiki: (p) => wiki?.pick(p) ?? false,
     destroy: () => {
       off();
       editor.setRootElement(null);

@@ -11,16 +11,72 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::{LazyLock, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::webview::{Color, NewWindowResponse, PageLoadEvent, WebviewBuilder};
+use tauri::webview::{Color, DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Url, Webview, WebviewUrl};
+
+// T-195 (BROW-042, BROW-046, BROW-047): the command line's browser commands; cli.rs reaches them
+// through evidence/browser-T-195-cli.rs.patch.
+#[path = "browser_cli.rs"]
+pub mod cli;
+// T-241: BROW-045 session profiles (a tab's own engine data folder) and BROW-039 HTML previews
+// (a worktree's document served from a loopback port).
+#[path = "browser_profiles.rs"]
+pub mod profiles;
+#[path = "browser_preview.rs"]
+pub mod preview;
+#[path = "browser_ports.rs"]
+pub mod ports;
+// T-240: BROW-028 cookies brought in from a file (BROW-029 keeps Google sign-ins out).
+#[path = "browser_cookies.rs"]
+pub mod cookies;
+// T-238-b: BROW-004 the address bar's history suggestions and BROW-013 downloads.
+#[path = "browser_history.rs"]
+pub mod history;
+#[path = "browser_downloads.rs"]
+pub mod downloads;
+// T-179: BROW-020 tabs come back after a restart on their trail, BROW-021 the memory budget.
+#[path = "browser_session.rs"]
+pub mod session;
+// T-272-d: which page holds the keyboard, from the system's focus (keyboard chord provenance).
+#[path = "browser_holder.rs"]
+pub mod holder;
+// T-283: pages are checked again after a wake (BROW-010), leftover helpers are closed (BROW-043).
+#[path = "browser_wake.rs"]
+pub mod wake;
+#[path = "browser_helpers.rs"]
+pub mod helpers;
+// T-158: BROW-015 sized popups open in a small linked window whose title bar is the origin strip;
+// BROW-024 the local dev-server certificate rules, answered from the engine's certificate event.
+#[path = "browser_popup.rs"]
+pub mod popup;
+#[allow(dead_code)] // T-158: `browser_cert` is registered by evidence/browser-T-158-b-lib.rs.patch.
+#[path = "browser_certs.rs"]
+pub mod certs;
+// T-158 / T-251 / T-272-d: the glue to WebView2's own events and calls (webview2-com).
+#[path = "browser_engine.rs"]
+pub mod engine;
+// T-286-b (APP-040): which engine process failures are real crashes, and their records.
+#[path = "browser_crash.rs"]
+pub mod crash;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
 pub const CHORD_EVENT: &str = "browser-chord";
 pub const LINK_EVENT: &str = "browser-link";
+/// T-159 (BROW-040): a document preview asked to leave its folder; the pane offers the address.
+pub const OUTBOUND_EVENT: &str = "browser-outbound";
 pub const ICON_EVENT: &str = "browser-icon";
+/// T-272-c (BROW-016): a page on screen asked for another tab and its family's allowance was used
+/// up; the pane shows "popups blocked" in its toolbar.
+pub const BLOCKED_EVENT: &str = "browser-blocked";
+/// T-239 (BROW-017): a right-click inside a page (`kind: "menu"`, with the pointer, the page's
+/// size, the link under it and whether text is selected) or an entry picked in the menu it opened
+/// (`kind: "pick"`, with the entry and its address).
+pub const MENU_EVENT: &str = "browser-menu";
+/// T-239 (BROW-018): an app shortcut pressed while the keyboard is inside a page (`k`, `c`, `m`).
+pub const KEY_EVENT: &str = "browser-key";
 
 /// Asks a finished page where its icon is (BROW-023): the first `<link rel~=icon>`, else the
 /// site's /favicon.ico. Runs as the page's own script; the answer is only ever fetched by the app.
@@ -90,7 +146,172 @@ pub const CHORD_SCRIPT: &str = r#"(() => {
   };
   addEventListener("click", link);
   addEventListener("auxclick", link);
+  // T-239 (BROW-018): the app's own shortcuts pressed while the keyboard is inside the page go to
+  // the app, never to the page. The app hands in the chords it binds (`__kxKeys`, from its keymap,
+  // so customised bindings count); until then the defaults below hold. The matching mirrors the
+  // app's (a letter by code or key, a digit by code or key, Plus, Space, else code or key; `i`
+  // takes any digit 1-9). A held-down key is taken once: repeats are swallowed, not sent.
+  let keys = [{ c: 1, k: "Tab" }, { c: 1, s: 1, k: "Tab" }, { c: 1, k: "W" }, { c: 1, s: 1, k: "T" }, { c: 1, k: "T" }, { c: 1, s: 1, k: "B" }, { c: 1, k: "PageDown" }, { c: 1, k: "PageUp" }, { a: 1, k: "1", i: 1 }];
+  window.__kxKeys = (list) => { if (Array.isArray(list)) keys = list; };
+  const keyHit = (d, e) => {
+    if (!!d.c !== e.ctrlKey || !!d.m !== e.metaKey || !!d.a !== e.altKey || !!d.s !== e.shiftKey) return false;
+    const k = d.k;
+    if (d.i) return /^Digit[1-9]$/.test(e.code) || /^[1-9]$/.test(e.key);
+    if (/^[A-Z]$/.test(k)) return e.code === "Key" + k || e.key.toUpperCase() === k;
+    if (/^[0-9]$/.test(k)) return e.code === "Digit" + k || e.key === k;
+    if (k === "Plus") return e.key === "+" || e.code === "NumpadAdd";
+    if (k === "Space") return e.code === "Space" || e.key === " ";
+    return e.code === k || e.key === k;
+  };
+  addEventListener("keydown", (e) => {
+    if (e.defaultPrevented || !(e.ctrlKey || e.metaKey || e.altKey)) return;
+    if (!keys.some((d) => keyHit(d, e))) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.repeat) return;
+    const m = (e.ctrlKey ? "c" : "") + (e.metaKey ? "m" : "") + (e.altKey ? "a" : "") + (e.shiftKey ? "s" : "") + (e.getModifierState("AltGraph") ? "g" : "");
+    send("key?k=" + encodeURIComponent(e.key) + "&c=" + encodeURIComponent(e.code) + "&m=" + m);
+  }, true);
+  // T-239 (BROW-017): a right-click opens Kolux's own menu in place of the engine's. The app
+  // decides the entries and where the menu sits (flipped to stay inside the pane near its edges)
+  // and hands them back through `__kxMenu`. A left or middle click elsewhere, or Escape, closes
+  // it; a right click elsewhere moves it. Copy and Copy Link Address run here, where the
+  // selection and the clipboard are; every other entry is the app's (`pick`).
+  let menu = null;
+  const closeMenu = () => { if (menu) { menu.remove(); menu = null; } };
+  addEventListener("contextmenu", (e) => {
+    if (!e.isTrusted) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const a = e.target instanceof Element ? e.target.closest("a[href]") : null;
+    const link = a && /^https?:/i.test(a.href) ? a.href : "";
+    const s = String(getSelection()) !== "" ? "1" : "0";
+    send("menu?x=" + Math.round(e.clientX) + "&y=" + Math.round(e.clientY) + "&vw=" + innerWidth + "&vh=" + innerHeight + "&s=" + s + "&l=" + encodeURIComponent(link));
+  }, true);
+  addEventListener("mousedown", (e) => { if (menu && e.button !== 2 && !menu.contains(e.target)) closeMenu(); }, true);
+  addEventListener("keydown", (e) => { if (menu && e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); closeMenu(); } }, true);
+  window.__kxMenu = (spec) => {
+    closeMenu();
+    const m = document.createElement("div");
+    m.setAttribute("role", "menu");
+    m.style.cssText = "position:fixed;z-index:2147483647;left:" + spec.x + "px;top:" + spec.y + "px;min-width:" + spec.w + "px;box-sizing:border-box;padding:4px 0;background:" + spec.bg + ";color:" + spec.fg + ";border:1px solid " + spec.line + ";border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.35);font:12px system-ui,sans-serif;line-height:16px;user-select:none;";
+    for (const it of spec.items) {
+      if (it.sep) { const d = document.createElement("div"); d.style.cssText = "height:1px;margin:4px 0;background:" + spec.line; m.append(d); continue; }
+      const b = document.createElement("div");
+      b.setAttribute("role", "menuitem");
+      b.textContent = it.label;
+      b.style.cssText = "padding:5px 12px;cursor:default;white-space:nowrap;" + (it.off ? "opacity:.45;" : "");
+      if (!it.off) {
+        b.onmouseenter = () => { b.style.background = spec.hover; };
+        b.onmouseleave = () => { b.style.background = ""; };
+        b.onclick = () => {
+          const u = it.url || "";
+          closeMenu();
+          if (it.id === "copy") document.execCommand("copy");
+          else if (it.id === "copy-link") { if (navigator.clipboard) navigator.clipboard.writeText(u).catch(() => {}); }
+          else send("pick?what=" + encodeURIComponent(it.id) + "&u=" + encodeURIComponent(u));
+        };
+      }
+      m.append(b);
+    }
+    (document.body || document.documentElement).append(m);
+    menu = m;
+  };
+  // T-242 (BROW-049 / BROW-050): the command line's recorder and emulation. Console messages are
+  // kept from the first script on (a bounded ring), so `kolux console` sees what the page logged;
+  // fetch and XMLHttpRequest go through one wrapper that holds requests matching the intercept
+  // patterns (released when interception is disabled), fails them while offline and adds the extra
+  // headers and credentials; geolocation, matchMedia and the dialogs answer as emulated. The app
+  // hands the state in with `__kxEmu` on every load (so it stays in force), arms one dialog answer
+  // with `__kxDialog` and reads the logs with `__kxLog`.
+  const E = { intercept: null, offline: false, headers: {}, auth: null, geo: null, media: {}, mobile: false };
+  const L = { console: [], net: [], held: [], dialogs: [], armed: [], seq: 0 };
+  const keep = (list, item) => { item.seq = ++L.seq; item.t = Date.now(); list.push(item); if (list.length > 500) list.shift(); };
+  const shown = (a) => { try { return typeof a === "string" ? a : JSON.stringify(a); } catch (_) { return String(a); } };
+  for (const level of ["log", "info", "warn", "error", "debug"]) {
+    const real = console[level];
+    console[level] = function (...args) { keep(L.console, { level, text: args.map(shown).join(" ").slice(0, 2000) }); return real.apply(this, args); };
+  }
+  addEventListener("error", (e) => keep(L.console, { level: "error", text: String(e.message || e) }));
+  addEventListener("unhandledrejection", (e) => keep(L.console, { level: "error", text: "Unhandled rejection: " + String((e.reason && e.reason.message) || e.reason) }));
+  const glob = (p, s) => new RegExp("^" + p.split("*").map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$").test(s);
+  const hit = (u) => Array.isArray(E.intercept) && E.intercept.some((p) => (p.includes("*") ? glob(p, u) : u.includes(p)));
+  const absolute = (u) => { try { return new URL(u, location.href).href; } catch (_) { return String(u); } };
+  const extra = (set) => { for (const k in E.headers) set(k, E.headers[k]); if (E.auth) set("Authorization", E.auth); };
+  const realFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    const url = absolute(input instanceof Request ? input.url : input);
+    if (E.offline) { keep(L.net, { url, kind: "fetch", failed: "offline" }); return Promise.reject(new TypeError("Failed to fetch (Kolux emulates offline)")); }
+    const go = () => {
+      const h = new Headers((init && init.headers) || (input instanceof Request ? input.headers : undefined));
+      extra((k, v) => h.set(k, v));
+      const r = realFetch(input, Object.assign({}, init, { headers: h }));
+      r.then((res) => keep(L.net, { url, kind: "fetch", status: res.status }), () => keep(L.net, { url, kind: "fetch", failed: "error" }));
+      return r;
+    };
+    if (hit(url)) return new Promise((res, rej) => { L.held.push({ url, kind: "fetch", go: () => go().then(res, rej) }); });
+    return go();
+  };
+  const X = XMLHttpRequest.prototype, realOpen = X.open, realSend = X.send;
+  X.open = function (m, u, ...rest) { this.__kxUrl = absolute(u); this.__kxMethod = m; return realOpen.call(this, m, u, ...rest); };
+  X.send = function (body) {
+    const url = this.__kxUrl || "";
+    if (E.offline) { keep(L.net, { url, kind: "xhr", failed: "offline" }); this.dispatchEvent(new Event("error")); return; }
+    const go = () => { try { extra((k, v) => this.setRequestHeader(k, v)); } catch (_) {} this.addEventListener("loadend", () => keep(L.net, { url, kind: "xhr", method: this.__kxMethod, status: this.status }), { once: true }); return realSend.call(this, body); };
+    if (hit(url)) { L.held.push({ url, kind: "xhr", go }); return; }
+    go();
+  };
+  const realOnLine = Object.getOwnPropertyDescriptor(Navigator.prototype, "onLine");
+  if (realOnLine && realOnLine.get) Object.defineProperty(navigator, "onLine", { get: () => !E.offline && realOnLine.get.call(navigator), configurable: true });
+  const G = navigator.geolocation;
+  if (G) {
+    const realGet = G.getCurrentPosition.bind(G), realWatch = G.watchPosition.bind(G);
+    const pos = () => ({ coords: { latitude: E.geo.latitude, longitude: E.geo.longitude, accuracy: E.geo.accuracy || 1, altitude: null, altitudeAccuracy: null, heading: null, speed: null }, timestamp: Date.now() });
+    G.getCurrentPosition = (ok, bad, o) => (E.geo ? setTimeout(() => ok(pos()), 0) : realGet(ok, bad, o));
+    G.watchPosition = (ok, bad, o) => (E.geo ? setTimeout(() => ok(pos()), 0) : realWatch(ok, bad, o));
+  }
+  const realMatch = window.matchMedia.bind(window);
+  window.matchMedia = (q) => {
+    const scheme = /prefers-color-scheme:\s*(dark|light)/.exec(q), motion = /prefers-reduced-motion:\s*(reduce|no-preference)/.exec(q);
+    const want = scheme && E.media.colorScheme ? scheme[1] === E.media.colorScheme : motion && E.media.reducedMotion ? motion[1] === E.media.reducedMotion : null;
+    if (want === null) return realMatch(q);
+    return { matches: want, media: q, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent() { return false; } };
+  };
+  const realDialog = { alert: window.alert.bind(window), confirm: window.confirm.bind(window), prompt: window.prompt.bind(window) };
+  const dialog = (type, message, def) => {
+    const a = L.armed.shift();
+    const answer = !a ? realDialog[type](message, def) : type === "alert" ? undefined : type === "confirm" ? !!a.accept : a.accept ? (a.text != null ? String(a.text) : def == null ? "" : String(def)) : null;
+    keep(L.dialogs, { type, message: String(message == null ? "" : message), answered: a ? (a.accept ? "accepted" : "dismissed") : "shown", answer: answer === undefined ? null : answer });
+    return answer;
+  };
+  window.alert = (m) => { dialog("alert", m); };
+  window.confirm = (m) => dialog("confirm", m);
+  window.prompt = (m, d) => dialog("prompt", m, d);
+  window.__kxDialog = (a) => { if (a && typeof a === "object") L.armed.push(a); return L.armed.length; };
+  window.__kxEmu = (s) => {
+    if (!s || typeof s !== "object") return;
+    const was = E.offline;
+    Object.assign(E, s);
+    if (E.media.colorScheme) document.documentElement.style.colorScheme = E.media.colorScheme;
+    if (E.mobile) Object.defineProperty(navigator, "maxTouchPoints", { get: () => 5, configurable: true });
+    if (!Array.isArray(E.intercept)) for (const h of L.held.splice(0)) { try { h.go(); } catch (_) {} }
+    if (was !== E.offline) dispatchEvent(new Event(E.offline ? "offline" : "online"));
+  };
+  window.__kxLog = (what, n) => {
+    const last = (list) => list.slice(-(n || 100));
+    if (what === "held") return L.held.map((h) => ({ url: h.url, kind: h.kind }));
+    if (what === "network") {
+      const perf = performance.getEntriesByType("resource").map((e) => ({ url: e.name, kind: e.initiatorType, ms: Math.round(e.duration), bytes: e.transferSize || 0 }));
+      return last(perf.concat(L.net.map((e) => ({ url: e.url, kind: e.kind, method: e.method, status: e.status, failed: e.failed, t: e.t }))));
+    }
+    return last(what === "dialogs" ? L.dialogs : L.console);
+  };
 })();"#;
+
+/// T-242: the script that hands a tab's emulation state to its page (`state` is its JSON object).
+pub fn emu_script(state: &str) -> String {
+    format!("window.__kxEmu && window.__kxEmu(JSON.parse({}))", serde_json::Value::from(state))
+}
 
 /// The chord a navigation carries, if it is one of ours and names a browser action.
 pub fn chord_of(url: &str) -> Option<&'static str> {
@@ -121,11 +342,84 @@ impl Allowance {
     }
 }
 
-// ponytail: one allowance for every browser page, so a page and the tabs it opened share it (the
-// family the spec names) along with unrelated pages. An allowance per opener alone would hand each
-// new tab a fresh five and let a self-copying page grow again; per-family windows need the opener
-// passed when the tab opens (T-272-c).
-static PAGE_TABS: Mutex<Allowance> = Mutex::new(Allowance(VecDeque::new()));
+/// How long an address a page was let open waits for its tab before the promise is dropped.
+pub const PROMISE_WINDOW: Duration = Duration::from_secs(10);
+
+/// T-272-c: every family (the tab the user opened plus every tab its pages opened) has its own
+/// allowance, so a storm in one tab leaves real clicks in the others alone. The members of a
+/// family share one allowance, so a self-copying page cannot hand each copy a fresh five. A tab a
+/// page opened joins its opener's family when it opens, matched by the address the page was let
+/// open (the pane opens exactly that address as the new tab); a tab opened any other way (by the
+/// user, restored after a restart) starts a family of its own.
+#[derive(Default)]
+pub struct Families {
+    tabs: HashMap<u32, Arc<Mutex<Allowance>>>,
+    promised: VecDeque<(String, Arc<Mutex<Allowance>>, Instant)>,
+}
+
+impl Families {
+    /// The allowance `id`'s family shares (a tab not seen yet starts a family of its own).
+    pub fn of(&mut self, id: u32) -> Arc<Mutex<Allowance>> {
+        self.tabs.entry(id).or_default().clone()
+    }
+
+    /// A page in `opener` was let open `url` as another tab: that tab will join the family.
+    pub fn promise(&mut self, opener: u32, url: &str, now: Instant) {
+        self.prune(now);
+        let family = self.of(opener);
+        self.promised.push_back((same_address(url), family, now));
+    }
+
+    /// Tab `id` opens on `url`: it joins the family whose page was let open that address, else it
+    /// starts its own. A tab already in a family stays there (opening it again resets nothing).
+    pub fn join(&mut self, id: u32, url: &str, now: Instant) {
+        if self.tabs.contains_key(&id) {
+            return;
+        }
+        self.prune(now);
+        let key = same_address(url);
+        let family = match self.promised.iter().position(|p| p.0 == key) {
+            Some(i) => self.promised.remove(i).map(|p| p.1).unwrap_or_default(),
+            None => Arc::default(),
+        };
+        self.tabs.insert(id, family);
+    }
+
+    /// A closed tab leaves its family; the allowance goes with the family's last tab.
+    pub fn leave(&mut self, id: u32) {
+        self.tabs.remove(&id);
+    }
+
+    fn prune(&mut self, now: Instant) {
+        while self.promised.front().is_some_and(|p| now.duration_since(p.2) >= PROMISE_WINDOW) {
+            self.promised.pop_front();
+        }
+    }
+}
+
+/// One spelling per address: the page's request and the pane's open both go through the
+/// web-address rules, so "HTTPS://Example.com" and "https://example.com/" are the same tab.
+fn same_address(url: &str) -> String {
+    Url::parse(url).map(|u| u.to_string()).unwrap_or_else(|_| url.to_string())
+}
+
+static FAMILIES: LazyLock<Mutex<Families>> = LazyLock::new(Mutex::default);
+
+fn families() -> std::sync::MutexGuard<'static, Families> {
+    FAMILIES.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// T-272-c: a page on screen asked to open `target` and was refused only because its family's
+/// allowance is used up (call it after a refusal): the opener's toolbar says popups were blocked.
+/// A hidden tab or an address no tab may open is refused silently, as before.
+pub fn popup_refused(target: &Url, dev: Option<&Url>, on_screen: bool) -> bool {
+    on_screen && allowed(target, dev).is_ok()
+}
+
+#[derive(Clone, Serialize)]
+struct BlockedPayload {
+    id: u32,
+}
 
 /// The tabs whose page is on screen now (BROW-002 bounds calls keep it, and the open call says
 /// whether a new tab starts on screen), so a page in a hidden tab opens no tab and sends no chord
@@ -162,6 +456,54 @@ pub enum Nav {
     Link(String, bool),
     /// A browser chord pressed inside the page (BROW-003, BROW-005).
     Chord(&'static str),
+    /// T-239 (BROW-017): a right-click in the page, or an entry picked in the menu it opened.
+    Menu(serde_json::Value),
+    /// T-239 (BROW-018): an app shortcut pressed inside the page.
+    Key(serde_json::Value),
+}
+
+/// The fields of one of our `kolux-chord:<kind>?...` navigations as a JSON object (`kind` plus
+/// each query field as a string); `None` unless `kind` is one of `kinds`.
+fn fields_of(url: &str, kinds: &[&str]) -> Option<serde_json::Value> {
+    let (kind, query) = url.strip_prefix(CHORD_SCHEME)?.split_once('?')?;
+    if !kinds.contains(&kind) {
+        return None;
+    }
+    let full = Url::parse(&format!("{CHORD_SCHEME}x?{query}")).ok()?;
+    let mut m = serde_json::Map::new();
+    m.insert("kind".to_string(), kind.into());
+    for (k, v) in full.query_pairs() {
+        m.insert(k.into_owned(), serde_json::Value::String(v.into_owned()));
+    }
+    Some(serde_json::Value::Object(m))
+}
+
+/// T-239 (BROW-017): a right-click (`menu`: x, y, vw, vh, s, l) or a picked entry (`pick`: what, u).
+pub fn menu_of(url: &str) -> Option<serde_json::Value> {
+    fields_of(url, &["menu", "pick"])
+}
+
+/// T-239 (BROW-018): an app shortcut pressed in the page (`key`: k, c, m).
+pub fn key_of(url: &str) -> Option<serde_json::Value> {
+    fields_of(url, &["key"])
+}
+
+/// The event payload for a page's navigation: its fields plus the tab's id.
+fn with_id(id: u32, mut v: serde_json::Value) -> serde_json::Value {
+    if let Some(m) = v.as_object_mut() {
+        m.insert("id".to_string(), id.into());
+    }
+    v
+}
+
+/// T-239: the page's menu renderer and shortcut list take their data as one JSON text, embedded
+/// as a string and parsed in the page, so nothing from the app ever runs there as code.
+pub fn menu_script(spec: &str) -> String {
+    format!("window.__kxMenu && window.__kxMenu(JSON.parse({}))", serde_json::Value::from(spec))
+}
+
+pub fn keys_script(list: &str) -> String {
+    format!("window.__kxKeys && window.__kxKeys(JSON.parse({}))", serde_json::Value::from(list))
 }
 
 /// Decides one navigation of a tab's page. `on_screen` is whether that tab is shown now: a tab
@@ -174,6 +516,14 @@ pub fn navigation(url: &Url, dev: Option<&Url>, tabs: &Mutex<Allowance>, on_scre
             Ok(t) if on_screen && may_open(&t, dev, tabs, now) => Nav::Link(target, front),
             _ => Nav::Load(false),
         };
+    }
+    // T-239: a right-click, a menu pick or an app shortcut from a page that is not on screen is
+    // dropped like a chord (FS1: no user is behind it).
+    if let Some(v) = menu_of(url.as_str()) {
+        return if on_screen { Nav::Menu(v) } else { Nav::Load(false) };
+    }
+    if let Some(v) = key_of(url.as_str()) {
+        return if on_screen { Nav::Key(v) } else { Nav::Load(false) };
     }
     match chord_of(url.as_str()) {
         Some(_) if !on_screen => Nav::Load(false),
@@ -494,7 +844,7 @@ async fn fetch_icon(clients: &IconClients, near: bool, url: Url, app: Option<&Ur
 /// The fetch under one overall time limit: each request's own timeout runs until its body is
 /// read, and the far request after a hand-off gets only what the near one left. The redirect cap
 /// is per client, so a hand-off can take up to twice `ICON_HOPS` hops, all inside the limit.
-async fn fetch_icon_within(clients: &IconClients, near: bool, url: Url, app: Option<&Url>, limit: Duration) -> Option<String> {
+pub(crate) async fn fetch_icon_within(clients: &IconClients, near: bool, url: Url, app: Option<&Url>, limit: Duration) -> Option<String> {
     let start = Instant::now();
     let mut res = if near { &clients.near } else { &clients.far }.get(url).timeout(limit).send().await.ok()?;
     if near && res.status().is_redirection() {
@@ -617,8 +967,23 @@ fn err(e: tauri::Error) -> String {
 /// so it is handed back for the address bar (BROW-001).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // a Tauri command takes its arguments one by one
-pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webview, id: u32, url: String, spot: Spot, background: Option<[u8; 3]>, shown: Option<bool>) -> Result<(), String> {
+pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webview, id: u32, url: String, spot: Spot, background: Option<[u8; 3]>, shown: Option<bool>, profile: Option<String>) -> Result<(), String> {
     let url = parse(&url)?;
+    families().join(id, url.as_str(), Instant::now()); // T-272-c
+    let _ = APP.set(app.clone()); // T-195: the command line's browser commands need the app
+    wake::watch(&app); // T-283 (BROW-010)
+    if let Ok(dir) = app.path().app_data_dir() {
+        helpers::sweep_at_start(&dir); // T-283 (BROW-043); the app's start-up normally ran it already
+        profiles::set_root(dir); // T-241
+    }
+    // T-179 (BROW-020): a tab that was open at the last quit comes back on its trail; one that is
+    // not on screen stays blank until it is shown. Its saved title names the tab meanwhile.
+    let opening = session::opening(id, url.as_str(), shown.unwrap_or(true));
+    let url = parse(&opening.url)?;
+    if let Some(title) = opening.title {
+        let _ = app.emit(TITLE_EVENT, TitlePayload { id, title });
+    }
+    let _ = DRIVER.set(Box::new(drive));
     let dev = app_origin(&app);
     allowed(&url, dev.as_ref())?;
     let load_app = app.clone();
@@ -626,25 +991,104 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     let window_app = app.clone();
     let window_dev = dev.clone();
     let icon_dev = dev.clone();
-    let builder = WebviewBuilder::new(label(id), WebviewUrl::External(url))
+    let download_app = app.clone();
+    // T-240 (BROW-033): every tab of every profile goes through the configured proxy; a value the
+    // engine cannot take leaves the tab unopened rather than going direct.
+    let proxy = match app.try_state::<Mutex<crate::state::Store>>() {
+        Some(store) => crate::secrets::read_setting(&*store.lock().map_err(|e| e.to_string())?, "httpProxy")?,
+        None => None,
+    };
+    #[cfg(windows)]
+    let crash_dir = app.path().app_data_dir().ok();
+    let builder = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile);
+    let builder = match proxy_of(proxy.as_deref())? {
+        Some(u) => builder.proxy_url(u),
+        None => builder,
+    };
+    let builder = builder
         .focused(false)
+        // T-286-b (APP-017): the same browser arguments as the window (throttling exemption, safe
+        // graphics), or the engine refuses a second set on the same data folder.
+        .additional_browser_args(&crate::resources::recovery::browser_args_now())
         // BROW-012: zoom is the app's, in its own steps, so the engine's own zoom keys are off.
         .zoom_hotkeys_enabled(false)
         .initialization_script(CHORD_SCRIPT)
         // BROW-014: a link or script asking for a new window becomes another Kolux tab, in front.
-        .on_new_window(move |url, _| {
-            // BROW-016: a page opening windows in a loop gets a handful of tabs, never a flood.
-            if let Some((url, front)) = new_window(&url, window_dev.as_ref(), &PAGE_TABS, is_shown(id), Instant::now()) {
-                let _ = window_app.emit(LINK_EVENT, LinkPayload { id, url, front });
+        .on_new_window(move |url, features| {
+            // T-159 (BROW-040): a document preview's popups and script-opened windows are blocked;
+            // an outside address is offered to the user once, with its full address.
+            if let Some(v) = preview::navigating(id, url.as_str()) {
+                if v == preview::Verdict::Offer {
+                    let _ = window_app.emit(OUTBOUND_EVENT, LinkPayload { id, url: url.to_string(), front: true });
+                }
+                return NewWindowResponse::Deny;
+            }
+            // BROW-016: a page opening windows in a loop gets a handful of tabs, never a flood;
+            // T-272-c: counted per family, and a refusal is shown in this tab's toolbar.
+            let (now, shown) = (Instant::now(), is_shown(id));
+            let family = families().of(id);
+            match new_window(&url, window_dev.as_ref(), &family, shown, now) {
+                Some((link, front)) => {
+                    // T-158 (BROW-015): a sized window.open is a popup window linked to this tab;
+                    // before the tab's page finished a load it goes to the system browser.
+                    match popup::route(features.size().is_some(), popup::is_ready(id)) {
+                        popup::Route::Window => {
+                            if let Some(window) = popup::open(&window_app, id, &url, features, window_dev.clone()) {
+                                return NewWindowResponse::Create { window };
+                            }
+                            return NewWindowResponse::Deny;
+                        }
+                        popup::Route::System => {
+                            let _ = crate::artifacts::open_external(link);
+                            return NewWindowResponse::Deny;
+                        }
+                        popup::Route::Tab => {}
+                    }
+                    let url = link;
+                    families().promise(id, &url, now);
+                    let _ = window_app.emit(LINK_EVENT, LinkPayload { id, url, front });
+                }
+                None if popup_refused(&url, window_dev.as_ref(), shown) => {
+                    let _ = window_app.emit(BLOCKED_EVENT, BlockedPayload { id });
+                }
+                None => {}
             }
             NewWindowResponse::Deny
         })
-        .on_navigation(move |url| match navigation(url, dev.as_ref(), &PAGE_TABS, is_shown(id), Instant::now()) {
-            Nav::Load(go) => go,
+        .on_navigation(move |url| {
+            let (now, shown) = (Instant::now(), is_shown(id));
+            let family = families().of(id);
+            let nav = navigation(url, dev.as_ref(), &family, shown, now);
+            // T-272-c: a link the page asked to open as a tab, refused only by the family's allowance.
+            if nav == Nav::Load(false) {
+                if let Some(target) = link_of(url.as_str()).and_then(|(t, _)| parse(&t).ok()) {
+                    if popup_refused(&target, dev.as_ref(), shown) {
+                        let _ = chord_app.emit(BLOCKED_EVENT, BlockedPayload { id });
+                    }
+                }
+            }
+            match nav {
+            // T-159 (BROW-040): a document preview follows its own files and what the app asked for;
+            // the first outside address is offered to the user, the rest are dropped.
+            // T-242 (BROW-050): a tab emulating offline loads nothing new, as a cut cable would.
+            Nav::Load(go) => match preview::navigating(id, url.as_str()) {
+                Some(preview::Verdict::Offer) => {
+                    let _ = chord_app.emit(OUTBOUND_EVENT, LinkPayload { id, url: url.to_string(), front: true });
+                    false
+                }
+                Some(preview::Verdict::Drop) => false,
+                _ => go && !cli::offline(id),
+            },
             Nav::Link(url, front) => {
+                families().promise(id, &url, now);
                 let _ = chord_app.emit(LINK_EVENT, LinkPayload { id, url, front });
                 false
             }
+            // T-272-d: a keyboard chord or app shortcut with no real key pressed in that very page
+            // (the engine's key events), or sent while another page holds the keyboard, was sent
+            // by this page's script, not pressed: it is dropped.
+            Nav::Chord(what) if holder::drop_chord(id, &holder::need_for_chord(what)) => false,
+            Nav::Key(ref v) if holder::drop_chord(id, &holder::need_for_key(v)) => false,
             Nav::Chord(what) => {
                 // Council FIX-3: the keyboard is not moved here. The app tells a chord pressed in
                 // the page (its own window does not hold the keyboard) from one the page's script
@@ -652,7 +1096,16 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
                 let _ = chord_app.emit(CHORD_EVENT, ChordPayload { id, what: what.to_string() });
                 false
             }
-        })
+            // T-239: the pane decides the menu (BROW-017) and replays the shortcut (BROW-018).
+            Nav::Menu(v) => {
+                let _ = chord_app.emit(MENU_EVENT, with_id(id, v));
+                false
+            }
+            Nav::Key(v) => {
+                let _ = chord_app.emit(KEY_EVENT, with_id(id, v));
+                false
+            }
+        }})
         .on_page_load(move |page, payload| {
             let event = match payload.event() {
                 PageLoadEvent::Started => "started",
@@ -660,6 +1113,11 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
             };
             // BROW-023: every finished load asks for the site's icon again, so an icon that failed
             // is tried again after a reload; the pane keeps the old one while the site is the same.
+            // T-242 (BROW-050): what the command line emulates for this tab stays in force across
+            // loads; a new document starts from the script's defaults, so the state goes in again.
+            if let Some(state) = cli::emu_state(id) {
+                let _ = page.eval(emu_script(&state));
+            }
             if event == "finished" {
                 let (icon_app, icon_dev, at) = (load_app.clone(), icon_dev.clone(), payload.url().to_string());
                 let _ = page.eval_with_callback(ICON_QUERY, move |answer| {
@@ -669,17 +1127,82 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
                     icon_for(icon_app.clone(), icon_dev.clone(), id, at.clone(), url, near);
                 });
             }
+            if event == "finished" {
+                history::noted_load(id, payload.url().as_str()); // T-238-b (BROW-004)
+                session::noted_load(id, payload.url().as_str()); // T-179 (BROW-020)
+                preview::rendered(id); // T-159 (BROW-040): agent tools may drive a preview now
+                popup::mark_ready(id); // T-158 (BROW-015): its sized popups get their own window now
+            } else {
+                preview::loading(id, payload.url().as_str()); // T-159: a preview address fences the tab
+            }
             let _ = load_app.emit(LOAD_EVENT, LoadPayload { id, event, url: payload.url().to_string() });
         })
         .on_document_title_changed(move |_, title| {
+            history::noted_title(id, &title);
+            session::noted_title(id, &title);
             let _ = app.emit(TITLE_EVENT, TitlePayload { id, title });
+        })
+        // T-238-b (BROW-013): a download goes to the system Downloads folder under a safe, unique
+        // name; the pane hears its progress and its end. No free name, or no Downloads folder,
+        // and the download is refused with a failed row instead of a loop.
+        .on_download(move |_, event| match event {
+            DownloadEvent::Requested { url, destination } => {
+                let suggested = destination.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                // T-159 (BROW-040): a document preview downloads nothing; one notice per burst.
+                if let Some(notice) = preview::download_refused(id) {
+                    if notice {
+                        downloads::refused(&download_app, id, url.as_str(), &suggested, "a document preview may not download");
+                    }
+                    return false;
+                }
+                let dir = download_app.path().download_dir().map_err(|e| e.to_string());
+                match dir.and_then(|dir| downloads::requested(&download_app, id, url.as_str(), &dir, &suggested)) {
+                    Ok(path) => {
+                        *destination = path;
+                        true
+                    }
+                    Err(why) => {
+                        downloads::refused(&download_app, id, url.as_str(), &suggested, &why);
+                        false
+                    }
+                }
+            }
+            DownloadEvent::Finished { url, path, success } => {
+                downloads::finished(&download_app, id, url.as_str(), path.as_deref(), success);
+                true
+            }
+            _ => true,
         });
     // BROW-011: until the page paints, the web view shows the pane's colour, never a white flash.
     let builder = match surface(background) {
         Some(c) => builder.background_color(c),
         None => builder,
     };
-    window.add_child(builder, LogicalPosition::new(spot.x, spot.y), LogicalSize::new(spot.w, spot.h)).map_err(err)?;
+    let page = window.add_child(builder, LogicalPosition::new(spot.x, spot.y), LogicalSize::new(spot.w, spot.h)).map_err(err)?;
+    // T-272-d: remember the page's container window, so a keyboard chord can be checked against
+    // the window that really holds the keyboard.
+    #[cfg(windows)]
+    let _ = page.with_webview(move |pw| {
+        let mut container = Default::default();
+        // SAFETY: ParentWindow only writes the controller's parent window handle into `container`.
+        if unsafe { pw.controller().ParentWindow(&mut container) }.is_ok() {
+            holder::record(id, container.0 as isize);
+        }
+        // T-283 (BROW-043): the engine's browser process behind this page is recorded for clean-up.
+        // SAFETY: CoreWebView2 hands back the page's engine; BrowserProcessId only writes the id.
+        if let Ok(core) = unsafe { pw.controller().CoreWebView2() } {
+            let mut pid = 0u32;
+            if unsafe { core.BrowserProcessId(&mut pid) }.is_ok() && pid != 0 {
+                helpers::record(pid);
+            }
+        }
+        // T-158 (BROW-024): the engine's certificate errors are answered by the certificate rules.
+        engine::attach(id, &pw);
+        // T-286-b (APP-040): the engine's process failures become crash records when real.
+        engine::watch_page_failures(id, &pw, crash_dir);
+    });
+    #[cfg(not(windows))]
+    let _ = page;
     // A new page is laid over its pane; a tab opened behind starts hidden (council FIX-2, AFTER 3),
     // and the pane's bounds keep this true from here on.
     set_shown(id, shown.unwrap_or(true));
@@ -704,14 +1227,33 @@ pub async fn browser_bounds(app: AppHandle, id: u32, spot: Spot, shown: bool, ba
     if !shown {
         return v.hide().map_err(err);
     }
-    v.set_bounds(Rect { position: LogicalPosition::new(spot.x, spot.y).into(), size: LogicalSize::new(spot.w, spot.h).into() }).map_err(err)?;
+    if let Ok(mut s) = SPOTS.lock() {
+        s.insert(id, spot);
+    }
+    place(&v, id, &spot)?;
+    // T-179 (BROW-020, BROW-021): a page left blank for later (a restart, or the memory budget)
+    // loads now that its tab is on screen.
+    if let Some(url) = session::take_pending(id) {
+        v.navigate(parse(&url)?).map_err(err)?;
+    }
     v.show().map_err(err)
+}
+
+/// The pane spot each tab was last laid out in, so an emulated viewport (BROW-050) can lay the page
+/// out again without waiting for the pane.
+static SPOTS: LazyLock<Mutex<HashMap<u32, Spot>>> = LazyLock::new(Mutex::default);
+
+/// Puts a page where its pane body is, cut down to the viewport the command line emulates, if any.
+fn place(v: &Webview, id: u32, spot: &Spot) -> Result<(), String> {
+    let (w, h) = cli::fit(id, spot.w, spot.h);
+    v.set_bounds(Rect { position: LogicalPosition::new(spot.x, spot.y).into(), size: LogicalSize::new(w, h).into() }).map_err(err)
 }
 
 #[tauri::command]
 pub async fn browser_navigate(app: AppHandle, id: u32, url: String) -> Result<(), String> {
     let url = parse(&url)?;
     allowed(&url, app_origin(&app).as_ref())?;
+    preview::expect(id); // T-159: the bar's own navigation leaves a preview freely
     view(&app, id)?.navigate(url).map_err(err)
 }
 
@@ -760,16 +1302,92 @@ pub async fn browser_go(app: AppHandle, id: u32, what: String, text: Option<Stri
         "reload" => v.reload().map_err(err),
         "zoom" => v.set_zoom(zoom_level(level.unwrap_or(1.0))).map_err(err),
         "find" | "findBack" => v.eval(find_script(text.as_deref().unwrap_or_default(), what == "findBack")).map_err(err),
+        // T-239: `text` is the menu's JSON spec (BROW-017) or the JSON list of chords the page forwards (BROW-018).
+        "menu" => v.eval(menu_script(text.as_deref().unwrap_or("{}"))).map_err(err),
+        "keys" => v.eval(keys_script(text.as_deref().unwrap_or("[]"))).map_err(err),
+        "back" | "forward" => step_history(&v, id, &what),
         _ => v.eval(script(&what).ok_or_else(|| format!("unknown browser action {what}"))?).map_err(err),
+    }
+}
+
+/// Back and forward (BROW-005), with the trail behind them (T-179, BROW-020): the engine's own list
+/// is asked first; a tab that came back from a restart (or a page the budget reloaded) has none,
+/// and then the trail's neighbour is loaded instead.
+fn step_history(v: &Webview, id: u32, what: &str) -> Result<(), String> {
+    let (probe, delta) = if what == "back" { ("!!(window.navigation && navigation.canGoBack)", -1) } else { ("!!(window.navigation && navigation.canGoForward)", 1) };
+    let page = v.clone();
+    let own = script(what).ok_or_else(|| format!("unknown browser action {what}"))?;
+    preview::expect(id); // T-159: Back and Forward leave a preview freely
+    v.eval_with_callback(probe, move |answer| {
+        if answer.trim() == "true" {
+            let _ = page.eval(own);
+        } else if let Some(url) = session::step_tab(id, delta).and_then(|u| parse(&u).ok()) {
+            let _ = page.navigate(url);
+        }
+    })
+    .map_err(err)
+}
+
+#[tauri::command]
+#[allow(dead_code)] // registered by evidence/browser-T-240-lib.rs.patch
+pub async fn browser_viewport(id: u32, name: Option<String>) -> Result<String, String> {
+    // T-240 (BROW-034): the toolbar's Viewport Size. Async: the page's answer comes on the main
+    // thread, so the wait must not happen there.
+    cli::preset(id, name.as_deref()).map(|v| v["summary"].as_str().unwrap_or_default().to_string()).map_err(|f| f.message)
+}
+
+#[tauri::command]
+#[allow(dead_code)] // registered by evidence/browser-T-240-lib.rs.patch
+pub async fn browser_cookies_import(app: AppHandle, id: u32, path: String) -> Result<cookies::Report, String> {
+    // T-240 (BROW-028): a cookie file the user picked goes into this tab's engine (its profile's
+    // cookie store), one site at a time; a site that fails gets its old cookies back.
+    let meta = std::fs::metadata(&path).map_err(|e| format!("{path}: {e}"))?;
+    if meta.len() > cookies::FILE_MAX {
+        return Err(format!("{path} is {} MB; a cookie file is read up to {} MB", meta.len() / (1024 * 1024), cookies::FILE_MAX / (1024 * 1024)));
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let (entries, mut report) = cookies::parse(&text, now)?;
+    let page = view(&app, id)?;
+    cookies::apply(&page, &entries, &mut report)?;
+    Ok(report)
+}
+
+/// BROW-033: the sealed `httpProxy` setting as the engine takes it. Empty means the system's own
+/// proxy (OD-18's default); anything else must be an http:// or socks5:// address with a host, or
+/// the tab is not opened. The value itself never goes into a message: it may carry credentials
+/// (SAFE-026 seals it for that reason).
+pub fn proxy_of(setting: Option<&str>) -> Result<Option<Url>, String> {
+    let Some(v) = setting.map(str::trim).filter(|v| !v.is_empty()) else {
+        return Ok(None);
+    };
+    match Url::parse(v) {
+        Ok(u) if matches!(u.scheme(), "http" | "socks5") && u.host_str().is_some() => Ok(Some(u)),
+        _ => Err("the HTTP proxy setting is not an http:// or socks5:// address with a host; the tab stays closed until the setting is fixed or cleared".into()),
     }
 }
 
 #[tauri::command]
 pub async fn browser_close(app: AppHandle, id: u32) -> Result<(), String> {
     set_shown(id, false);
+    families().leave(id); // T-272-c
+    holder::forget(id); // T-272-d
+    certs::closed(id); // T-158: a closed tab's waiting certificate challenge goes with it
+    forget_tab(id);
     if let Ok(mut i) = ICONS.lock() {
         i.forget(id);
     }
+    if let Ok(mut s) = SPOTS.lock() {
+        s.remove(&id);
+    }
+    // BROW-049: a closed tab's interception, capture and emulation go with it.
+    cli::forget(id);
+    // T-238-b (BROW-013): closing the web view cancels its running downloads; the pane is told.
+    downloads::cancel_tab(&app, id);
+    history::forget_tab(id);
+    session::forget(id); // T-179: a closed tab does not come back after a restart
+    preview::forget(id); // T-159
+    popup::close_for(&app, id); // T-158 (BROW-015): a tab's popups close with it
     view(&app, id)?.close().map_err(err)
 }
 
@@ -809,6 +1427,422 @@ pub async fn browser_probe(app: AppHandle, id: u32) -> Result<&'static str, Stri
     }
     let answer = tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(PROBE_WAIT).ok()).await.map_err(|e| e.to_string())?;
     Ok(answer.as_deref().map_or("no-answer", probe_result))
+}
+
+// ---------------------------------------------------------------- T-195: agents and notes drive the tab
+
+/// The app, for the browser commands of the command line (BROW-042): cli.rs answers requests on
+/// a thread of its own with no handle to the app, so the first tab opened leaves one here.
+static APP: OnceLock<AppHandle> = OnceLock::new();
+
+/// An open tab as its pane reports it (`browser_tab`): whose worktree it belongs to and whether it
+/// is the one on screen in its split. `seen` orders the tabs by when they were last on screen.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Tab {
+    pub id: u32,
+    pub worktree: Option<String>,
+    pub shown: bool,
+    pub seen: u64,
+    /// The page's address and title as the pane last reported them (BROW-044 `kolux tab list`).
+    pub url: String,
+    pub title: String,
+}
+
+static TABS: Mutex<Vec<Tab>> = Mutex::new(Vec::new());
+static TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// How long a page command may take before the tab counts as not answering (a long script
+/// answers late; `wait` asks again).
+pub const EVAL_WAIT: Duration = Duration::from_millis(3000);
+/// Two unanswered page commands in a row and the page's helper is dropped, so the next command
+/// installs a fresh one (BROW-042: a stuck helper restarts).
+const EVAL_STRIKES: u8 = 2;
+static STRIKES: Mutex<Vec<(u32, u8)>> = Mutex::new(Vec::new());
+
+pub fn tabs() -> Vec<Tab> {
+    TABS.lock().map(|t| t.clone()).unwrap_or_default()
+}
+
+/// Records a tab's worktree and whether it is on screen; a tab on screen is the most recently seen.
+pub fn note_tab(tabs: &mut Vec<Tab>, id: u32, worktree: Option<String>, shown: bool, tick: u64) {
+    let seen = if shown { tick } else { tabs.iter().find(|t| t.id == id).map_or(0, |t| t.seen) };
+    match tabs.iter_mut().find(|t| t.id == id) {
+        Some(t) => {
+            t.worktree = worktree;
+            t.shown = shown;
+            t.seen = seen;
+        }
+        None => tabs.push(Tab { id, worktree, shown, seen, url: String::new(), title: String::new() }),
+    }
+}
+
+fn forget_tab(id: u32) {
+    if let Ok(mut t) = TABS.lock() {
+        t.retain(|t| t.id != id);
+    }
+    if let Ok(mut s) = STRIKES.lock() {
+        s.retain(|s| s.0 != id);
+    }
+}
+
+/// Two spellings of one folder: the real path when it exists, else the text with slashes and
+/// case made alike (Windows paths).
+pub fn same_dir(a: &str, b: &str) -> bool {
+    fn norm(p: &str) -> String {
+        let real = std::path::Path::new(p).canonicalize().map(|r| r.to_string_lossy().to_string()).unwrap_or_else(|_| p.to_string());
+        real.replace('\\', "/").trim_end_matches('/').to_lowercase()
+    }
+    norm(a) == norm(b)
+}
+
+/// BROW-042: which tab a command goes to. `--page` names one (a tab its pane has reported);
+/// otherwise the worktree's tab on screen, else the one last on screen there. Tabs the panes have
+/// not described yet (none carry a worktree) count for any worktree.
+pub fn pick_tab(tabs: &[Tab], page: Option<u32>, worktree: Option<&str>) -> Result<u32, String> {
+    if let Some(id) = page {
+        return if tabs.iter().any(|t| t.id == id) { Ok(id) } else { Err(format!("browser tab {id} is not open")) };
+    }
+    let best = |set: &[&Tab]| set.iter().find(|t| t.shown).or_else(|| set.iter().max_by_key(|t| t.seen)).map(|t| t.id);
+    let all: Vec<&Tab> = tabs.iter().collect();
+    let Some(wt) = worktree else {
+        return best(&all).ok_or_else(|| "no browser tab is open".to_string());
+    };
+    let mine: Vec<&Tab> = tabs.iter().filter(|t| t.worktree.as_deref().is_some_and(|w| same_dir(w, wt))).collect();
+    if let Some(id) = best(&mine) {
+        return Ok(id);
+    }
+    if tabs.iter().all(|t| t.worktree.is_none()) {
+        if let Some(id) = best(&all) {
+            return Ok(id);
+        }
+    }
+    Err(format!("no browser tab is open in {wt}"))
+}
+
+/// The pane says which worktree its tab belongs to and whether it is on screen (BROW-042).
+#[tauri::command]
+pub async fn browser_tab(app: AppHandle, id: u32, worktree: Option<String>, shown: bool, url: Option<String>, title: Option<String>) -> Result<(), String> {
+    // T-241: the command line's profile store lives under the app's data folder; the app says where.
+    if let Ok(dir) = app.path().app_data_dir() {
+        profiles::set_root(dir);
+    }
+    let tick = TICK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    session::placed(id, worktree.clone()); // T-179 (BROW-020): the trail knows its worktree
+    {
+        let mut t = TABS.lock().map_err(|e| e.to_string())?;
+        note_tab(&mut t, id, worktree, shown, tick);
+        if let Some(t) = t.iter_mut().find(|t| t.id == id) {
+            if let Some(url) = url {
+                t.url = url;
+            }
+            if let Some(title) = title {
+                t.title = title;
+            }
+        }
+    }
+    // T-179 (BROW-021): a tab coming on screen is a visit to its worktree; past the budget the
+    // least recently visited hidden worktrees give up their pages (blank until shown again).
+    if shown {
+        let pages: Vec<session::Page> = tabs().into_iter().map(|t| session::Page { id: t.id, worktree: t.worktree, seen: t.seen, live: session::is_live(t.id), spared: downloads::downloading(t.id) || session::driven(t.id) }).collect();
+        for id in session::to_unload(&pages, session::BUDGET) {
+            if session::unloading(id).is_some() {
+                if let Ok(v) = view(&app, id) {
+                    let _ = v.navigate(parse(session::BLANK)?);
+                }
+            }
+        }
+    }
+    let _ = APP.set(app);
+    Ok(())
+}
+
+/// What the command line asks of a page. The code that reaches the web view sits behind this
+/// hook, set when the first tab opens, so cli.rs never links it directly: a test binary that links
+/// the window toolkit cannot load without the app's manifest (comctl32 v6), and cli.rs's tests
+/// call dispatch.
+pub enum Act<'a> {
+    Eval(u32, &'a str, Duration),
+    Navigate(u32, &'a str),
+    Go(u32, &'a str),
+    /// T-241 (BROW-044): a word to the front end, which owns the tabs (open, show, close).
+    Emit(&'a str, serde_json::Value),
+    /// T-242 (BROW-050): lay the page out again in its last pane spot (an emulated viewport came
+    /// or went) and set its zoom (the emulated scale).
+    Relayout(u32, Option<f64>),
+    /// T-251 (CLI-047): a cookie the page itself cannot set (HTTP-only) goes to the engine's store.
+    SetCookie(u32, tauri::webview::cookie::Cookie<'static>),
+    /// T-251 (CLI-047): one DevTools call on the page's engine (a picture of the page).
+    DevTools(u32, &'a str, String),
+    /// T-251 (CLI-047): the engine prints the page to a PDF file at this path.
+    Pdf(u32, &'a str),
+}
+type Driver = dyn Fn(Act) -> Result<serde_json::Value, String> + Send + Sync;
+static DRIVER: OnceLock<Box<Driver>> = OnceLock::new();
+
+fn driver() -> Result<&'static Driver, String> {
+    DRIVER.get().map(|d| d.as_ref()).ok_or_else(|| "no browser tab has been opened yet".to_string())
+}
+
+/// The driver behind the hook: the one place the command line's work touches a web view.
+fn drive(act: Act) -> Result<serde_json::Value, String> {
+    let app = APP.get().ok_or("no browser tab has been opened yet")?;
+    // T-179 (BROW-021): a page an agent drives is under agent control, never unloaded for a while.
+    if let Act::Eval(id, ..) | Act::Navigate(id, _) | Act::Go(id, _) | Act::Relayout(id, _) | Act::DevTools(id, ..) | Act::Pdf(id, _) = act {
+        preview::drivable(id)?; // T-159 (BROW-040): a preview is driven only once it has rendered
+        session::drove(id);
+    }
+    match act {
+        Act::Eval(id, script, wait) => {
+            let v = view(app, id)?;
+            let (tx, rx) = std::sync::mpsc::channel::<String>();
+            v.eval_with_callback(script, move |answer| {
+                let _ = tx.send(answer);
+            })
+            .map_err(err)?;
+            match rx.recv_timeout(wait) {
+                Ok(answer) => {
+                    if let Ok(mut s) = STRIKES.lock() {
+                        s.retain(|s| s.0 != id);
+                    }
+                    serde_json::from_str(&answer).map_err(|_| "the page answered with something that is not JSON".to_string())
+                }
+                Err(_) => {
+                    let strikes = STRIKES.lock().map(|mut s| match s.iter_mut().find(|s| s.0 == id) {
+                        Some(s) => {
+                            s.1 += 1;
+                            s.1
+                        }
+                        None => {
+                            s.push((id, 1));
+                            1
+                        }
+                    });
+                    if strikes.is_ok_and(|n| n >= EVAL_STRIKES) {
+                        let _ = v.eval("delete window.__kx; delete window.__kxa");
+                        if let Ok(mut s) = STRIKES.lock() {
+                            s.retain(|s| s.0 != id);
+                        }
+                    }
+                    Err(format!("browser tab {id} did not answer within {} ms", wait.as_millis()))
+                }
+            }
+        }
+        Act::Navigate(id, url) => {
+            // `kolux goto`: the same gate as the address bar (T-500), then the page goes there.
+            let url = parse(url)?;
+            allowed(&url, app_origin(app).as_ref())?;
+            let to = url.to_string();
+            preview::expect(id); // T-159: the command line's goto leaves a preview freely
+            view(app, id)?.navigate(url).map_err(err)?;
+            Ok(serde_json::Value::String(to))
+        }
+        Act::Go(id, what) => {
+            let v = view(app, id)?;
+            match what {
+                "reload" => v.reload().map_err(err)?,
+                "back" | "forward" => step_history(&v, id, what)?,
+                _ => v.eval(script(what).ok_or_else(|| format!("unknown browser action {what}"))?).map_err(err)?,
+            }
+            Ok(serde_json::Value::Null)
+        }
+        Act::Emit(event, payload) => {
+            app.emit(event, payload).map_err(err)?;
+            Ok(serde_json::Value::Null)
+        }
+        Act::Relayout(id, zoom) => {
+            let v = view(app, id)?;
+            if let Some(spot) = SPOTS.lock().ok().and_then(|s| s.get(&id).copied()) {
+                place(&v, id, &spot)?;
+            }
+            if let Some(z) = zoom {
+                v.set_zoom(zoom_level(z)).map_err(err)?;
+            }
+            Ok(serde_json::Value::Null)
+        }
+        Act::SetCookie(id, c) => {
+            view(app, id)?.set_cookie(c).map_err(err)?;
+            Ok(serde_json::Value::Null)
+        }
+        Act::DevTools(id, method, params) => {
+            let text = engine::devtools(&view(app, id)?, method, params, CAPTURE_WAIT)?;
+            serde_json::from_str(&text).map_err(|_| "the page's engine answered with something that is not JSON".to_string())
+        }
+        Act::Pdf(id, path) => engine::print_pdf(&view(app, id)?, path, CAPTURE_WAIT).map(serde_json::Value::Bool),
+    }
+}
+
+/// T-251 (CLI-047): how long a picture or a PDF of a page may take.
+const CAPTURE_WAIT: Duration = Duration::from_secs(30);
+
+/// `kolux screenshot|full-screenshot`: one DevTools call on the page's engine, its JSON answer.
+pub fn devtools(id: u32, method: &str, params: String) -> Result<serde_json::Value, String> {
+    driver()?(Act::DevTools(id, method, params))
+}
+
+/// `kolux pdf`: the engine prints the page to `path`; whether it succeeded.
+pub fn print_pdf(id: u32, path: &str) -> Result<bool, String> {
+    driver()?(Act::Pdf(id, path)).map(|v| v.as_bool().unwrap_or(false))
+}
+
+/// T-251 (CLI-047): where a capture goes when the command names no `--path`.
+pub fn captures_dir() -> Result<std::path::PathBuf, String> {
+    let app = APP.get().ok_or("no browser tab has been opened yet")?;
+    app.path().app_data_dir().map(|d| d.join("captures")).map_err(err)
+}
+
+/// `kolux viewport` / `kolux set device`: the page is laid out again at the emulated size and scale.
+pub fn relayout(id: u32, zoom: Option<f64>) -> Result<(), String> {
+    driver()?(Act::Relayout(id, zoom)).map(|_| ())
+}
+
+/// `kolux tab switch|create|close`, `tab profile ...`: the front end is told and acts.
+pub fn tell(event: &str, payload: serde_json::Value) -> Result<(), String> {
+    driver()?(Act::Emit(event, payload)).map(|_| ())
+}
+
+/// BROW-045: the profile the next `browser_open` runs in, left by `kolux tab create --profile`
+/// (the front end opens the tab and does not know the profile). ponytail: one slot, since tabs
+/// open one at a time from the command line; a map by url if that stops holding.
+pub static NEXT_PROFILE: Mutex<Option<String>> = Mutex::new(None);
+
+/// A tab in a profile other than the default runs in that profile's own engine data folder.
+fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>) -> WebviewBuilder<tauri::Wry> {
+    let profile = profile.or_else(|| NEXT_PROFILE.lock().ok().and_then(|mut n| n.take()));
+    let Some(p) = profile.filter(|p| p != profiles::DEFAULT) else { return b };
+    let Ok(root) = profiles::root() else { return b };
+    let mut store = profiles::load(&root);
+    if profiles::set_tab(&mut store, id, &p).is_err() {
+        return b;
+    }
+    let _ = profiles::save(&root, &store);
+    match profiles::data_dir(&root, &p) {
+        Some(dir) => b.data_directory(dir),
+        None => b,
+    }
+}
+
+/// Runs a script in a tab's page and hands back the JSON it completes with. Blocking: it waits for
+/// the page's answer, so it runs on the command line's thread or under `spawn_blocking`, never on
+/// the app's main thread (which delivers the answer).
+pub fn eval_json(id: u32, script: &str, wait: Duration) -> Result<serde_json::Value, String> {
+    driver()?(Act::Eval(id, script, wait))
+}
+
+/// `kolux goto`; the answer is the address the page was sent to.
+pub fn navigate_to(id: u32, url: &str) -> Result<String, String> {
+    driver()?(Act::Navigate(id, url)).map(|v| v.as_str().unwrap_or_default().to_string())
+}
+
+/// `kolux cookie set --httpOnly`: the engine's cookie store takes it (blocking; never called from
+/// the main thread, the command line's requests run on their own).
+pub fn set_cookie(id: u32, c: tauri::webview::cookie::Cookie<'static>) -> Result<(), String> {
+    driver()?(Act::SetCookie(id, c)).map(|_| ())
+}
+
+/// `kolux back|forward|reload`.
+pub fn go(id: u32, what: &str) -> Result<(), String> {
+    driver()?(Act::Go(id, what)).map(|_| ())
+}
+
+/// BROW-037: the picker that runs in the page while the user annotates it. A hover outlines the
+/// element under the pointer; a click is taken (the page does not get it) and queued as a pick:
+/// a selector, the element's path, its text, its data-* hints, the React component chain and
+/// source location when the page carries them, and the computed styles that matter. `poll` drains
+/// the queue; `stop` takes the picker out again.
+const ANNOTATE_START: &str = r#"(function(){
+if(window.__kxa) return {ok:true,active:true};
+const A={q:[]};
+const box=document.createElement('div'); box.setAttribute('data-kx-annotate',''); box.style.cssText='position:fixed;pointer-events:none;z-index:2147483647;border:2px solid #ff5a00;background:rgba(255,90,0,.08);border-radius:2px;transition:all .05s;display:none';
+(document.body||document.documentElement).appendChild(box);
+const sel=e=>{ if(e.id&&document.querySelectorAll('#'+CSS.escape(e.id)).length===1) return '#'+CSS.escape(e.id); const tid=e.getAttribute('data-testid'); if(tid) return '[data-testid="'+tid+'"]';
+ const parts=[]; let n=e; while(n&&n.nodeType===1&&parts.length<5){ let p=n.tagName.toLowerCase(); if(n.id){ parts.unshift('#'+CSS.escape(n.id)); break; } const sib=[...(n.parentElement?n.parentElement.children:[])].filter(c=>c.tagName===n.tagName); if(sib.length>1) p+=':nth-of-type('+(sib.indexOf(n)+1)+')'; parts.unshift(p); n=n.parentElement; } return parts.join(' > '); };
+const path=e=>{ const out=[]; let n=e; while(n&&n.nodeType===1&&out.length<8){ out.unshift(n.tagName.toLowerCase()+(n.id?'#'+n.id:'')+(n.classList.length?'.'+[...n.classList].slice(0,2).join('.'):'')); n=n.parentElement; } return out.join(' > '); };
+const react=e=>{ const k=Object.keys(e).find(k=>k.startsWith('__reactFiber$')||k.startsWith('__reactInternalInstance$')); if(!k) return {}; let f=e[k]; const chain=[]; let src=null;
+ while(f&&chain.length<6){ const t=f.type; if(t&&typeof t!=='string'){ const nm=t.displayName||t.name||(t.render&&(t.render.displayName||t.render.name)); if(nm) chain.push(nm); } if(!src&&f._debugSource) src=f._debugSource.fileName+':'+f._debugSource.lineNumber; f=f.return; }
+ return {component:chain.length?chain.join(' < '):undefined,source:src||undefined}; };
+const styles=e=>{ const s=getComputedStyle(e); const out={}; for(const k of ['color','background-color','font-size','font-family','font-weight','line-height','padding','margin','border','border-radius','display','position','width','height','opacity','z-index']){ const v=s.getPropertyValue(k); if(v&&v!=='none'&&v!=='normal'&&v!=='0px') out[k]=v; } return out; };
+const hints=e=>{ const out={}; for(const a of e.attributes){ if(a.name.startsWith('data-')||a.name.startsWith('aria-')||a.name==='role'||a.name==='name'||a.name==='href'||a.name==='type'||a.name==='class') out[a.name]=a.value.slice(0,200); } return out; };
+A.move=ev=>{ const e=ev.target; if(!(e instanceof Element)||e===box){ return; } const r=e.getBoundingClientRect(); box.style.display='block'; box.style.left=r.left+'px'; box.style.top=r.top+'px'; box.style.width=r.width+'px'; box.style.height=r.height+'px'; };
+A.click=ev=>{ ev.preventDefault(); ev.stopImmediatePropagation(); const e=ev.target; if(!(e instanceof Element)) return; const r=e.getBoundingClientRect(); const rx=react(e);
+ A.q.push({selector:sel(e),path:path(e),tag:e.tagName.toLowerCase(),text:((e.innerText||e.textContent||'').trim().replace(/\s+/g,' ')).slice(0,200),component:rx.component,source:rx.source,hints:hints(e),styles:styles(e),box:{x:Math.round(r.x),y:Math.round(r.y),width:Math.round(r.width),height:Math.round(r.height)},url:location.href}); };
+A.swallow=ev=>{ ev.preventDefault(); ev.stopImmediatePropagation(); };
+A.key=ev=>{ if(ev.key==='Escape'){ ev.preventDefault(); ev.stopImmediatePropagation(); A.q.push({escape:true}); } };
+document.addEventListener('mousemove',A.move,true); document.addEventListener('click',A.click,true); document.addEventListener('mousedown',A.swallow,true); document.addEventListener('mouseup',A.swallow,true); document.addEventListener('keydown',A.key,true);
+A.box=box; window.__kxa=A; return {ok:true,active:true};
+})()"#;
+const ANNOTATE_POLL: &str = "(function(){ const a=window.__kxa; if(!a) return {active:false,picks:[]}; return {active:true,picks:a.q.splice(0)}; })()";
+const ANNOTATE_STOP: &str = "(function(){ const a=window.__kxa; if(!a) return {ok:true,active:false}; document.removeEventListener('mousemove',a.move,true); document.removeEventListener('click',a.click,true); document.removeEventListener('mousedown',a.swallow,true); document.removeEventListener('mouseup',a.swallow,true); document.removeEventListener('keydown',a.key,true); a.box.remove(); delete window.__kxa; return {ok:true,active:false}; })()";
+
+/// The picker's script for `start`, `poll` or `stop`.
+pub fn annotate_script(what: &str) -> Option<&'static str> {
+    match what {
+        "start" => Some(ANNOTATE_START),
+        "poll" => Some(ANNOTATE_POLL),
+        "stop" => Some(ANNOTATE_STOP),
+        _ => None,
+    }
+}
+
+/// BROW-037: starts, polls or stops the page picker in a tab; `poll` answers `{active, picks}`.
+#[tauri::command]
+pub async fn browser_annotate(app: AppHandle, id: u32, what: String) -> Result<serde_json::Value, String> {
+    let _ = APP.set(app);
+    let script = annotate_script(&what).ok_or_else(|| format!("unknown annotate step {what}"))?;
+    tauri::async_runtime::spawn_blocking(move || eval_json(id, script, EVAL_WAIT)).await.map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod agent_tests {
+    use super::*;
+
+    fn tab(id: u32, worktree: Option<&str>, shown: bool, seen: u64) -> Tab {
+        Tab { id, worktree: worktree.map(str::to_string), shown, seen, url: String::new(), title: String::new() }
+    }
+
+    #[test]
+    fn brow042_the_worktrees_tab_on_screen_else_its_last_seen_else_a_clear_refusal() {
+        let tabs = vec![tab(1, Some("G:/wt/a"), false, 5), tab(2, Some("G:/wt/a"), true, 7), tab(3, Some("G:/wt/b"), false, 9)];
+        assert_eq!(pick_tab(&tabs, None, Some("G:/wt/a")), Ok(2));
+        assert_eq!(pick_tab(&tabs, None, Some("g:\\wt\\b\\")), Ok(3), "spellings of one folder match");
+        assert_eq!(pick_tab(&tabs, None, Some("G:/wt/c")), Err("no browser tab is open in G:/wt/c".into()));
+        assert_eq!(pick_tab(&tabs, None, None), Ok(2));
+        assert_eq!(pick_tab(&[tab(1, Some("G:/wt/a"), false, 5), tab(4, Some("G:/wt/a"), false, 8)], None, Some("G:/wt/a")), Ok(4), "none on screen: the last seen");
+        assert_eq!(pick_tab(&tabs, Some(3), Some("G:/wt/a")), Ok(3), "--page wins");
+        assert_eq!(pick_tab(&tabs, Some(9), None), Err("browser tab 9 is not open".into()));
+        assert_eq!(pick_tab(&[], None, None), Err("no browser tab is open".into()));
+        // Panes that have not reported a worktree yet: their tabs serve any worktree.
+        assert_eq!(pick_tab(&[tab(1, None, true, 1)], None, Some("G:/wt/a")), Ok(1));
+    }
+
+    #[test]
+    fn brow042_the_registry_keeps_one_row_per_tab_and_orders_by_last_shown() {
+        let mut tabs = Vec::new();
+        note_tab(&mut tabs, 1, Some("G:/wt/a".into()), true, 1);
+        note_tab(&mut tabs, 2, Some("G:/wt/a".into()), true, 2);
+        note_tab(&mut tabs, 1, Some("G:/wt/a".into()), false, 3);
+        assert_eq!(tabs, vec![tab(1, Some("G:/wt/a"), false, 1), tab(2, Some("G:/wt/a"), true, 2)]);
+        note_tab(&mut tabs, 2, None, false, 4);
+        assert_eq!(tabs[1], tab(2, None, false, 2), "hidden keeps the last time it was seen");
+        assert!(same_dir("G:/x/y", "g:\\x\\y\\") && !same_dir("G:/x/y", "G:/x/z"));
+    }
+
+    #[test]
+    fn brow037_the_picker_scripts_queue_picks_and_can_be_taken_out() {
+        assert!(annotate_script("start").unwrap().contains("window.__kxa=A"));
+        assert!(annotate_script("poll").unwrap().contains("a.q.splice(0)"));
+        assert!(annotate_script("stop").unwrap().contains("delete window.__kxa"));
+        assert_eq!(annotate_script("peek"), None);
+        for ev in ["mousemove", "click", "mousedown", "mouseup", "keydown"] {
+            assert!(ANNOTATE_START.contains(&format!("addEventListener('{ev}'")), "{ev} is taken while picking");
+            assert!(ANNOTATE_STOP.contains(&format!("removeEventListener('{ev}'")), "{ev} is given back");
+        }
+        for field in ["selector:", "path:", "component:", "source:", "hints:", "styles:", "box:"] {
+            assert!(ANNOTATE_START.contains(field), "a pick carries {field}");
+        }
+    }
+
+    // eval_json, navigate_to and go are not called from tests: linking them pulls the window
+    // toolkit into the test binary, which then needs the app's manifest (comctl32 v6) to load.
 }
 
 /// Why an address failed, for the overlay's wording (BROW-008).
@@ -912,6 +1946,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn brow017_a_right_click_and_a_menu_pick_arrive_as_menu_navigations() {
+        // T-239: the page reports the pointer, its size, the link under it and whether text is selected.
+        let v = menu_of("kolux-chord:menu?x=12&y=34&vw=800&vh=600&s=1&l=https%3A%2F%2Fexample.com%2Fa%3Fb%3D1%26c%3D2").unwrap();
+        assert_eq!(v["kind"], "menu");
+        assert_eq!(v["x"], "12");
+        assert_eq!(v["vh"], "600");
+        assert_eq!(v["s"], "1");
+        assert_eq!(v["l"], "https://example.com/a?b=1&c=2");
+        let p = menu_of("kolux-chord:pick?what=open-kolux&u=https%3A%2F%2Fexample.com%2F").unwrap();
+        assert_eq!(p["kind"], "pick");
+        assert_eq!(p["what"], "open-kolux");
+        assert_eq!(p["u"], "https://example.com/");
+        assert_eq!(with_id(7, p)["id"], 7);
+        assert_eq!(menu_of("kolux-chord:back"), None);
+        assert_eq!(menu_of("kolux-chord:key?k=w"), None);
+        assert_eq!(menu_of("https://example.com/kolux-chord:menu?x=1"), None);
+        // Only a page on screen gets a menu (FS1); a hidden page's request is dropped, not loaded.
+        let tabs = Mutex::new(Allowance::default());
+        let menu = Url::parse("kolux-chord:menu?x=1&y=2&vw=3&vh=4&s=0&l=").unwrap();
+        assert!(matches!(navigation(&menu, None, &tabs, true, Instant::now()), Nav::Menu(_)));
+        assert!(matches!(navigation(&menu, None, &tabs, false, Instant::now()), Nav::Load(false)));
+        // The menu's data goes into the page as a string, never as code.
+        assert_eq!(menu_script(r#"{"x":1,"items":[]}"#), r#"window.__kxMenu && window.__kxMenu(JSON.parse("{\"x\":1,\"items\":[]}"))"#);
+        for needle in ["contextmenu", "__kxMenu", "execCommand(\"copy\")", "e.button !== 2", "\"Escape\""] {
+            assert!(CHORD_SCRIPT.contains(needle), "{needle}");
+        }
+    }
+
+    #[test]
+    fn brow018_an_app_shortcut_pressed_in_the_page_arrives_as_a_key_navigation() {
+        // T-239: the key, its code and the modifiers held (c, m, a, s, and g for AltGraph).
+        let v = key_of("kolux-chord:key?k=Tab&c=Tab&m=c").unwrap();
+        assert_eq!(v["kind"], "key");
+        assert_eq!(v["k"], "Tab");
+        assert_eq!(v["c"], "Tab");
+        assert_eq!(v["m"], "c");
+        assert_eq!(key_of("kolux-chord:menu?x=1"), None);
+        assert_eq!(key_of("kolux-chord:key"), None);
+        let tabs = Mutex::new(Allowance::default());
+        let url = Url::parse("kolux-chord:key?k=w&c=KeyW&m=c").unwrap();
+        assert!(matches!(navigation(&url, None, &tabs, true, Instant::now()), Nav::Key(_)));
+        assert!(matches!(navigation(&url, None, &tabs, false, Instant::now()), Nav::Load(false)));
+        assert_eq!(keys_script("[]"), r#"window.__kxKeys && window.__kxKeys(JSON.parse("[]"))"#);
+        // The page takes a held key once, honours the app's list, and mirrors the app's key matching.
+        for needle in ["__kxKeys", "if (e.repeat) return;", "AltGraph", "\"Key\" + k", "\"Digit\" + k", "k === \"Plus\""] {
+            assert!(CHORD_SCRIPT.contains(needle), "{needle}");
+        }
+    }
+
+    #[test]
     fn brow001_tab_labels_and_addresses() {
         assert_eq!(label(7), "browser-7");
         assert_eq!(parse("about:blank").unwrap().as_str(), "about:blank");
@@ -998,6 +2082,96 @@ mod tests {
         assert_eq!(zoom_level(9.0), 5.0);
         assert_eq!(zoom_level(0.1), 0.25);
         assert_eq!(zoom_level(f64::NAN), 1.0);
+    }
+
+    // T-272-c: a storm in one family uses that family's allowance only; real clicks in an
+    // unrelated tab still open.
+    #[test]
+    fn t272c_a_storm_in_one_tab_leaves_real_clicks_in_another_tab_alone() {
+        let now = Instant::now();
+        let web = Url::parse("https://example.com/").unwrap();
+        let mut f = Families::default();
+        f.join(1, "https://storm.example/", now);
+        f.join(2, "https://docs.example/", now);
+        for _ in 0..TABS_ALLOWED {
+            assert!(new_window(&web, None, &f.of(1), true, now).is_some());
+        }
+        assert_eq!(new_window(&web, None, &f.of(1), true, now), None);
+        assert!(popup_refused(&web, None, true), "the storm's tab is told popups were blocked");
+        // The other family's whole allowance is still there.
+        for _ in 0..TABS_ALLOWED {
+            assert!(new_window(&web, None, &f.of(2), true, now).is_some());
+        }
+        assert_eq!(new_window(&web, None, &f.of(2), true, now), None);
+    }
+
+    // T-272-c: a tab a page opened shares its opener's allowance, so a page that copies itself
+    // into each new tab still gets only the allowance in all, however the address is spelled.
+    #[test]
+    fn t272c_a_self_copying_page_shares_one_allowance_across_its_family() {
+        let now = Instant::now();
+        let mut f = Families::default();
+        f.join(1, "https://copy.example/", now);
+        let mut opener = 1;
+        let mut opened = 0;
+        for next in 2..20u32 {
+            let target = Url::parse(&format!("https://copy.example/{next}")).unwrap();
+            match new_window(&target, None, &f.of(opener), true, now) {
+                Some((url, _)) => {
+                    f.promise(opener, &url, now);
+                    // The pane opens the address as typed by the page, in another spelling.
+                    f.join(next, &url.replace("https://copy.example", "HTTPS://COPY.example"), now);
+                    assert!(Arc::ptr_eq(&f.of(next), &f.of(1)), "tab {next} joined the family");
+                    opener = next;
+                    opened += 1;
+                }
+                None => break,
+            }
+        }
+        assert_eq!(opened, TABS_ALLOWED);
+        // A link navigation from the newest copy draws on the same, used-up allowance.
+        let link = Url::parse("kolux-chord:open-front?u=https%3A%2F%2Fcopy.example%2Fx").unwrap();
+        assert_eq!(navigation(&link, None, &f.of(opener), true, now), Nav::Load(false));
+    }
+
+    // T-272-c: a tab nobody promised (the user's own, a restored one), a promise past its window,
+    // and a tab opened again keep to the rules: own family, own family, same family.
+    #[test]
+    fn t272c_unpromised_late_and_reopened_tabs() {
+        let now = Instant::now();
+        let mut f = Families::default();
+        f.join(1, "https://a.example/", now);
+        f.promise(1, "https://b.example/", now);
+        f.join(2, "https://c.example/", now);
+        assert!(!Arc::ptr_eq(&f.of(1), &f.of(2)), "another address starts its own family");
+        f.join(3, "https://b.example/", now + PROMISE_WINDOW);
+        assert!(!Arc::ptr_eq(&f.of(1), &f.of(3)), "a promise past its window is dropped");
+        f.promise(1, "https://d.example/", now);
+        f.join(4, "https://d.example/", now);
+        assert!(Arc::ptr_eq(&f.of(1), &f.of(4)));
+        // Opening tab 4 again keeps its family; closing it and opening the id fresh does not.
+        f.join(4, "https://e.example/", now);
+        assert!(Arc::ptr_eq(&f.of(1), &f.of(4)));
+        f.leave(4);
+        f.join(4, "https://e.example/", now);
+        assert!(!Arc::ptr_eq(&f.of(1), &f.of(4)));
+        // Each promise opens one tab only.
+        f.promise(1, "https://g.example/", now);
+        f.join(5, "https://g.example/", now);
+        f.join(6, "https://g.example/", now);
+        assert!(Arc::ptr_eq(&f.of(1), &f.of(5)));
+        assert!(!Arc::ptr_eq(&f.of(1), &f.of(6)));
+    }
+
+    // T-272-c: only a refusal a user could have caused shows "popups blocked": not a hidden
+    // tab's, not an address no tab may open.
+    #[test]
+    fn t272c_popups_blocked_shows_only_for_a_shown_tab_and_a_web_address() {
+        let web = Url::parse("https://example.com/").unwrap();
+        assert!(popup_refused(&web, None, true));
+        assert!(!popup_refused(&web, None, false));
+        assert!(!popup_refused(&Url::parse("http://tauri.localhost/").unwrap(), None, true));
+        assert!(!popup_refused(&Url::parse("file:///C:/x").unwrap(), None, true));
     }
 
     #[test]
@@ -1589,5 +2763,27 @@ mod t074_tests {
     fn t074_the_diagnosis_serialises_for_the_pane() {
         let d = Diagnosis { kind: "refused", local: true, https: None };
         assert_eq!(serde_json::to_string(&d).unwrap(), r#"{"kind":"refused","local":true,"https":null}"#);
+    }
+
+    #[test]
+    fn brow049_050_the_page_script_records_logs_holds_requests_and_answers_dialogs() {
+        // BROW-049: console and network recorders live in the always-injected script so page-load
+        // traffic is seen; BROW-050: offline, headers, credentials, geolocation, media, dialogs.
+        for needle in ["window.__kxEmu", "window.__kxLog", "window.__kxDialog", "Kolux emulates offline", "navigator.geolocation", "matchMedia", "prefers-color-scheme", "Authorization", "L.held", "getEntriesByType", "unhandledrejection", "window.alert", "window.confirm", "window.prompt", "maxTouchPoints"] {
+            assert!(CHORD_SCRIPT.contains(needle), "{needle}");
+        }
+        assert_eq!(emu_script(r#"{"offline":true}"#), r#"window.__kxEmu && window.__kxEmu(JSON.parse("{\"offline\":true}"))"#);
+    }
+
+    #[test]
+    fn brow033_the_proxy_setting_is_empty_for_the_system_proxy_an_http_or_socks5_address_or_refused_unquoted() {
+        assert_eq!(proxy_of(None), Ok(None));
+        assert_eq!(proxy_of(Some("  ")), Ok(None));
+        assert_eq!(proxy_of(Some("http://127.0.0.1:8080")).unwrap().map(|u| u.to_string()), Some("http://127.0.0.1:8080/".into()));
+        assert_eq!(proxy_of(Some("socks5://user:pw-secret@proxy.test:1080")).unwrap().map(|u| u.port()), Some(Some(1080)));
+        for bad in ["ftp://user:pw-secret@proxy.test", "proxy.test:8080", "http://", "not a url"] {
+            let e = proxy_of(Some(bad)).unwrap_err();
+            assert!(e.contains("http:// or socks5://") && !e.contains("secret") && !e.contains("proxy.test"), "{bad}: {e}");
+        }
     }
 }

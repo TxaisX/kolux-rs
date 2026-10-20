@@ -18,12 +18,14 @@
         "minWidth": 900,
         "minHeight": 560,
         "decorations": false,
+        "transparent": true,
         "visible": false,
-        "center": true
+        "center": true,
+        "backgroundThrottling": "disabled"
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; frame-src http://kolux-artifact.localhost kolux-artifact:; object-src 'none'; base-uri 'self'",
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://github.com https://avatars.githubusercontent.com; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; frame-src http://kolux-artifact.localhost kolux-artifact:; object-src 'none'; base-uri 'self'",
       "dangerousDisableAssetCspModification": ["style-src"]
     }
   },

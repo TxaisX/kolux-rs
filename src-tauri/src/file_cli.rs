@@ -5,6 +5,8 @@
 use super::{pick_worktree, Ctx, Fail, Request};
 use serde_json::{json, Map, Value};
 use std::path::Path;
+use std::sync::{Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 pub const OPEN: &str = "file.open";
 pub const DIFF: &str = "file.diff";
@@ -168,7 +170,98 @@ fn absolute(root: &str, rel: &str) -> String {
     format!("{}/{rel}", root.replace('\\', "/").trim_end_matches('/'))
 }
 
+/// T-250-c: the window says back whether it opened each file it was told about. A window that has
+/// not said it listens (an older window, or none) is not waited for: the answer then lists what was
+/// handed over, as before. One that listens has `WAIT` to answer; a file it refused or never answered
+/// is listed as skipped, never as opened.
+pub struct Acks {
+    st: Mutex<AckState>,
+    cv: Condvar,
+}
+
+struct AckState {
+    listening: bool,
+    next: u64,
+    done: Vec<(u64, Option<String>)>,
+}
+
+pub static ACKS: Acks = Acks::new();
+pub const WAIT: Duration = Duration::from_secs(3);
+
+impl Default for Acks {
+    fn default() -> Acks {
+        Acks::new()
+    }
+}
+
+impl Acks {
+    pub const fn new() -> Acks {
+        Acks { st: Mutex::new(AckState { listening: false, next: 0, done: Vec::new() }), cv: Condvar::new() }
+    }
+    fn lock(&self) -> std::sync::MutexGuard<'_, AckState> {
+        self.st.lock().unwrap_or_else(|e| e.into_inner())
+    }
+    pub fn listen(&self, on: bool) {
+        let mut g = self.lock();
+        g.listening = on;
+        if !on {
+            g.done.clear();
+        }
+    }
+    pub fn listening(&self) -> bool {
+        self.lock().listening
+    }
+    pub fn next_id(&self) -> u64 {
+        let mut g = self.lock();
+        g.next += 1;
+        g.next
+    }
+    /// The window's answer for one request: `None` = opened, `Some(why)` = could not.
+    pub fn report(&self, id: u64, failed: Option<String>) {
+        self.lock().done.push((id, failed));
+        self.cv.notify_all();
+    }
+    /// Waits for every id to be answered (at most `within`); gives back the ids that failed or never answered, with the reason.
+    pub fn wait(&self, ids: &[u64], within: Duration) -> Vec<(u64, String)> {
+        let end = Instant::now() + within;
+        let mut g = self.lock();
+        while !ids.iter().all(|i| g.done.iter().any(|d| d.0 == *i)) {
+            let left = end.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            g = self.cv.wait_timeout(g, left).unwrap_or_else(|e| e.into_inner()).0;
+        }
+        let out = ids
+            .iter()
+            .filter_map(|i| match g.done.iter().find(|d| d.0 == *i) {
+                Some((_, Some(why))) => Some((*i, why.clone())),
+                Some((_, None)) => None,
+                None => Some((*i, "the window did not answer".to_string())),
+            })
+            .collect();
+        g.done.retain(|d| !ids.contains(&d.0));
+        out
+    }
+}
+
+/// Moves what the window could not open from the opened list to the skipped one.
+pub fn settle(opened: Vec<(u64, Value)>, skipped: &mut Vec<Value>, failures: &[(u64, String)]) -> Vec<Value> {
+    let mut kept = Vec::new();
+    for (id, o) in opened {
+        match failures.iter().find(|f| f.0 == id) {
+            Some((_, why)) => skipped.push(json!({ "path": o["path"], "kind": o["kind"], "why": why })),
+            None => kept.push(o),
+        }
+    }
+    kept
+}
+
 pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
+    dispatch_with(ctx, req, &ACKS, WAIT)
+}
+
+pub fn dispatch_with(ctx: &Ctx, req: &Request, acks: &Acks, within: Duration) -> Result<Value, Fail> {
     let a = &req.args;
     let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty());
     if req.command == CHANGED {
@@ -177,11 +270,23 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     let (_, w) = pick_worktree(ctx, text("worktree").unwrap_or("current"), &req.cwd)?;
     let root = w.path.clone();
     // The window moves to this worktree first, so the tab opens where the file lives.
-    let tell = |mut v: Value| {
+    let tell = |mut v: Value| -> u64 {
+        let id = acks.next_id();
         v["worktree"] = json!(root);
         v["branch"] = json!(w.branch);
+        v["ack"] = json!(id);
         let _ = (ctx.front)();
         (ctx.notify)(v);
+        id
+    };
+    // What the window said back (nothing is waited for when it does not listen).
+    let answered = |opened: Vec<(u64, Value)>, skipped: &mut Vec<Value>| -> Vec<Value> {
+        if !acks.listening() {
+            return opened.into_iter().map(|o| o.1).collect();
+        }
+        let ids: Vec<u64> = opened.iter().map(|o| o.0).collect();
+        let failures = acks.wait(&ids, within);
+        settle(opened, skipped, &failures)
     };
     match req.command.as_str() {
         OPEN | DIFF => {
@@ -194,8 +299,10 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 return Err(Fail::new("not_found", format!("{rel} {why} in {root}")));
             }
             let staged = a["staged"].as_bool().unwrap_or(false);
-            tell(if diff { json!({ "kind": "file-diff", "path": abs, "staged": staged }) } else { json!({ "kind": "file-open", "path": abs }) });
-            Ok(json!({ "worktree": root, "opened": [{ "path": rel, "kind": if diff { "diff" } else { "edit" }, "staged": staged }], "skipped": [] }))
+            let id = tell(if diff { json!({ "kind": "file-diff", "path": abs, "staged": staged }) } else { json!({ "kind": "file-open", "path": abs }) });
+            let mut skipped = Vec::new();
+            let opened = answered(vec![(id, json!({ "path": rel, "kind": if diff { "diff" } else { "edit" }, "staged": staged }))], &mut skipped);
+            Ok(json!({ "worktree": root, "opened": opened, "skipped": skipped }))
         }
         _ => {
             let how = mode(text("mode"))?;
@@ -203,17 +310,30 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let plan = plan(&rows_of(&st), how);
             let mut opened = Vec::new();
             for rel in &plan.edit {
-                tell(json!({ "kind": "file-open", "path": absolute(&root, rel) }));
-                opened.push(json!({ "path": rel, "kind": "edit" }));
+                let id = tell(json!({ "kind": "file-open", "path": absolute(&root, rel) }));
+                opened.push((id, json!({ "path": rel, "kind": "edit" })));
             }
             for (rel, staged) in &plan.diff {
-                tell(json!({ "kind": "file-diff", "path": absolute(&root, rel), "staged": staged }));
-                opened.push(json!({ "path": rel, "kind": "diff", "staged": staged }));
+                let id = tell(json!({ "kind": "file-diff", "path": absolute(&root, rel), "staged": staged }));
+                opened.push((id, json!({ "path": rel, "kind": "diff", "staged": staged })));
             }
-            let skipped: Vec<Value> = plan.skipped.iter().map(|(p, m, why)| json!({ "path": p, "kind": m, "why": why })).collect();
+            let mut skipped: Vec<Value> = plan.skipped.iter().map(|(p, m, why)| json!({ "path": p, "kind": m, "why": why })).collect();
+            let opened = answered(opened, &mut skipped);
             Ok(json!({ "worktree": root, "mode": match how { Mode::Diff => "diff", Mode::Edit => "edit", Mode::Both => "both" }, "opened": opened, "skipped": skipped }))
         }
     }
+}
+
+/// The window says it listens for file requests (and stops when it closes).
+#[tauri::command]
+pub fn cli_file_window(listening: bool) {
+    ACKS.listen(listening);
+}
+
+/// The window's answer to one file request: `failed` names why it could not open it.
+#[tauri::command]
+pub fn cli_file_result(id: u64, failed: Option<String>) {
+    ACKS.report(id, failed);
 }
 
 /// The lines `file ...` prints.
@@ -297,5 +417,43 @@ mod tests {
         assert!(check(CHANGED, &f(json!({ "mode": "x" }))).is_err());
         assert!(check(CHANGED, &f(json!({}))).is_ok());
         assert!(check(DIFF, &f(json!({ "path": "a.rs", "staged": true }))).is_ok());
+    }
+
+    #[test]
+    fn t250c_a_file_the_window_could_not_open_or_never_answered_is_skipped_not_opened() {
+        let acks = Acks::new();
+        let (a, b, c) = (acks.next_id(), acks.next_id(), acks.next_id());
+        acks.report(a, None);
+        acks.report(b, Some("that worktree is not in the window".to_string()));
+        let failures = acks.wait(&[a, b, c], Duration::from_millis(30));
+        assert_eq!(failures, vec![(b, "that worktree is not in the window".to_string()), (c, "the window did not answer".to_string())]);
+        let mut skipped = vec![json!({ "path": "gone.txt", "kind": "edit", "why": "deleted" })];
+        let opened = settle(vec![(a, json!({ "path": "a.rs", "kind": "diff" })), (b, json!({ "path": "b.rs", "kind": "diff" })), (c, json!({ "path": "c.rs", "kind": "edit" }))], &mut skipped, &failures);
+        assert_eq!(opened, vec![json!({ "path": "a.rs", "kind": "diff" })]);
+        assert_eq!(skipped.len(), 3);
+        assert_eq!(skipped[1], json!({ "path": "b.rs", "kind": "diff", "why": "that worktree is not in the window" }));
+        // The answers were taken: a second wait on the same ids sees none.
+        assert_eq!(acks.wait(&[a], Duration::from_millis(10)).len(), 1);
+    }
+
+    #[test]
+    fn t250c_a_late_answer_is_waited_for_and_a_window_that_stops_listening_clears_the_answers() {
+        let acks = std::sync::Arc::new(Acks::new());
+        assert!(!acks.listening());
+        acks.listen(true);
+        let id = acks.next_id();
+        let t = {
+            let acks = acks.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(40));
+                acks.report(id, None);
+            })
+        };
+        assert!(acks.wait(&[id], Duration::from_secs(5)).is_empty());
+        t.join().unwrap();
+        acks.report(99, None);
+        acks.listen(false);
+        assert!(!acks.listening());
+        assert_eq!(acks.wait(&[99], Duration::from_millis(5)).len(), 1);
     }
 }

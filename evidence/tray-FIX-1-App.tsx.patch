@@ -1,16 +1,17 @@
 diff --git a/src/App.tsx b/src/App.tsx
-index ee1b58d7..73d6d905 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
-@@ -1174,9 +1174,19 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
-   unsaved.current = panes.filter((p) => dirty[p.key]).map((p) => baseName(p.path ?? p.title ?? "Untitled"));
-   const quitting = useRef(false);
+@@ -1478,12 +1478,21 @@
+   // flushed before the window closes, so a change made right before quitting is back on relaunch.
+   const layoutSaver = useRef(layoutWriter((l: SavedLayout) => void saveLayout(l, (v) => saveChanged({}, { [LAYOUT_FIELD]: v })).catch((err) => setNotice(String(err))))).current;
    useEffect(() => {
 -    const off = getCurrentWindow().onCloseRequested((e) => {
 +    const off = getCurrentWindow().onCloseRequested(async (e) => {
+       // T-182 (APP-006): the page answers at once; a page that cannot is closed for by the Rust side.
+       void invoke("close_alive").catch(() => {});
        screenWriter.flush();
--      if (quitting.current || unsaved.current.length === 0) return;
-+      if (quitting.current) return;
+       layoutSaver.flush();
+       if (quitting.current) return;
 +      // APP-007: with "Closing the window keeps Kolux in the tray" on, the window hides instead (tray.rs
 +      // decides: Windows, option on, tray icon present, no quit under way); nothing is lost, so the
 +      // unsaved-changes question is skipped. Quit from the tray and File > Exit report `quitting` and
@@ -20,7 +21,6 @@ index ee1b58d7..73d6d905 100644
 +        e.preventDefault();
 +        return;
 +      }
-+      if (unsaved.current.length === 0) return;
+       const l = losable(unsaved.current, busyAgents.current);
+       if (!l) return;
        e.preventDefault();
-       setQuitAsk([...unsaved.current]);
-     });

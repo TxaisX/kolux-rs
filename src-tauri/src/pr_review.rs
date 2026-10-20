@@ -178,6 +178,16 @@ pub struct Comment {
     pub bot: bool,
     pub body: String,
     pub at: String,
+    /// The reactions it has, REST names (+1, heart, ...), only those with a count.
+    pub reactions: Vec<Reaction>,
+}
+
+/// One reaction on a comment: its REST name, how many people gave it, and whether the viewer did.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct Reaction {
+    pub content: String,
+    pub count: u64,
+    pub mine: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -200,16 +210,43 @@ pub struct Review {
 
 pub const COMMENT_CAP: usize = 100;
 
-const REVIEW_QUERY: &str = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){comments(first:100){totalCount nodes{id databaseId body createdAt author{login __typename}}} reviewThreads(first:100){nodes{id isResolved path line comments(first:100){totalCount nodes{id databaseId body createdAt author{login __typename}}}}}}}}";
+const REVIEW_QUERY: &str = "query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){comments(first:100){totalCount nodes{id databaseId body createdAt author{login __typename} reactionGroups{content viewerHasReacted reactors{totalCount}}}} reviewThreads(first:100){nodes{id isResolved path line comments(first:100){totalCount nodes{id databaseId body createdAt author{login __typename} reactionGroups{content viewerHasReacted reactors{totalCount}}}}}}}}}";
 
 pub fn review_args(host: &str, owner: &str, repo: &str, number: u64) -> Vec<String> {
     ["api", "graphql", "--hostname", host, "-f", &format!("query={REVIEW_QUERY}"), "-f", &format!("o={owner}"), "-f", &format!("r={repo}"), "-F", &format!("n={number}")].iter().map(|s| s.to_string()).collect()
 }
 
+/// GraphQL names a reaction THUMBS_UP; the REST calls (and the buttons) say +1.
+fn rest_reaction(graphql: &str) -> Option<&'static str> {
+    Some(match graphql {
+        "THUMBS_UP" => "+1",
+        "THUMBS_DOWN" => "-1",
+        "LAUGH" => "laugh",
+        "CONFUSED" => "confused",
+        "HEART" => "heart",
+        "HOORAY" => "hooray",
+        "ROCKET" => "rocket",
+        "EYES" => "eyes",
+        _ => return None,
+    })
+}
+
 fn comment_of(v: &serde_json::Value, bots: &[String]) -> Comment {
     let login = v["author"]["login"].as_str().unwrap_or("ghost").to_string();
     let bot = v["author"]["__typename"] == "Bot" || bots.iter().any(|b| b.eq_ignore_ascii_case(&login));
-    Comment { id: v["id"].as_str().unwrap_or("").into(), db_id: v["databaseId"].as_u64(), author: login, bot, body: v["body"].as_str().unwrap_or("").into(), at: v["createdAt"].as_str().unwrap_or("").into() }
+    let reactions = v["reactionGroups"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|g| {
+                    let count = g["reactors"]["totalCount"].as_u64().unwrap_or(0);
+                    let content = rest_reaction(g["content"].as_str()?)?;
+                    (count > 0).then(|| Reaction { content: content.into(), count, mine: g["viewerHasReacted"] == true })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Comment { id: v["id"].as_str().unwrap_or("").into(), db_id: v["databaseId"].as_u64(), author: login, bot, body: v["body"].as_str().unwrap_or("").into(), at: v["createdAt"].as_str().unwrap_or("").into(), reactions }
 }
 
 /// gh's GraphQL answer read into threads and the plain conversation; `bots` are author names the
@@ -254,6 +291,8 @@ pub enum Act<'a> {
     Delete(u64),
     Resolve(&'a str, bool),
     React(u64, &'a str),
+    /// A reaction on a comment of the plain conversation (an issue comment, not a review comment).
+    ReactTalk(u64, &'a str),
 }
 
 const REACTIONS: [&str; 8] = ["+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"];
@@ -274,11 +313,12 @@ pub fn act_args(host: &str, owner: &str, repo: &str, number: u64, act: &Act) -> 
             let name = if *on { "resolveReviewThread" } else { "unresolveReviewThread" };
             s(&["api", "graphql", "-f", &format!("query=mutation($t:ID!){{{name}(input:{{threadId:$t}}){{thread{{isResolved}}}}}}"), "-f", &format!("t={thread}")])
         }
-        Act::React(id, what) => {
+        Act::React(id, what) | Act::ReactTalk(id, what) => {
             if !REACTIONS.contains(what) {
                 return Err(format!("{what} is not a reaction GitHub offers"));
             }
-            s(&["api", &format!("repos/{owner}/{repo}/pulls/comments/{id}/reactions"), "-f", &format!("content={what}")])
+            let kind = if matches!(act, Act::ReactTalk(..)) { "issues" } else { "pulls" };
+            s(&["api", &format!("repos/{owner}/{repo}/{kind}/comments/{id}/reactions"), "-f", &format!("content={what}")])
         }
     })
 }
@@ -332,7 +372,8 @@ pub async fn scm_check_log(worktree: String, link: String) -> Result<String, Str
 /// GIT-024: the title and description an agent writes for the branch against `base`. Needs a real
 /// agent, so its live run is pending; the prompt and the parsing are unit tested.
 #[tauri::command]
-pub async fn scm_pr_text(worktree: String, base: String, command: Option<String>, instructions: Option<String>, issue: Option<Issue>, use_template: bool) -> Result<(String, String), String> {
+#[allow(clippy::too_many_arguments)] // a Tauri command takes its arguments one by one
+pub async fn scm_pr_text(worktree: String, base: String, command: Option<String>, instructions: Option<String>, issue: Option<Issue>, use_template: bool, agent: Option<String>, model: Option<String>, effort: Option<String>) -> Result<(String, String), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = Path::new(&worktree);
         // A base given with its remote (origin/main) is used as is; a bare name must match one remote.
@@ -352,15 +393,9 @@ pub async fn scm_pr_text(worktree: String, base: String, command: Option<String>
         let template = if use_template { find_template(dir) } else { None };
         let prompt = pr_text_prompt(&scm::trim_diff(&diff, scm::MESSAGE_BUDGET), issue.as_ref(), template.as_deref(), instructions.as_deref().unwrap_or(""));
         let limit = std::time::Duration::from_secs(180);
-        let answer = if let Some(line) = command.filter(|c| !c.trim().is_empty()) {
-            let words = scm::split_command(&line);
-            let (args, input) = scm::writer_args(&words[1..], &prompt);
-            let program = crate::agents::find_program(&words[0]).unwrap_or_else(|| std::path::PathBuf::from(&words[0]));
-            scm::write_message(&program, &args.iter().map(String::as_str).collect::<Vec<_>>(), dir, input.as_deref(), &worktree, limit)?
-        } else {
-            let program = crate::agents::find_program("claude").ok_or("Claude Code was not found on this computer")?;
-            scm::write_message(&program, &["-p", "--model", "sonnet"], dir, Some(&prompt), &worktree, limit)?
-        };
+        // GIT-018 / GIT-022: the same writer the commit messages use (custom command, else the chosen agent).
+        let writer = scm::writers::WriterArg { agent, model, effort, command };
+        let answer = scm::writers::ask(&writer, &prompt, dir, &worktree, limit)?;
         parse_pr_text(&answer, issue.as_ref().map(|i| i.number)).ok_or_else(|| "The agent returned no title".to_string())
     })
     .await
@@ -381,7 +416,7 @@ pub async fn scm_review_read(worktree: String, url: String, bots: Vec<String>) -
 }
 
 /// GIT-030: add, reply, edit, delete, resolve or react; every change lands on GitHub.
-/// `kind` is comment, reply, edit, delete, resolve, unresolve or react.
+/// `kind` is comment, reply, edit, delete, resolve, unresolve, react or react_talk.
 #[tauri::command]
 pub async fn scm_review_act(worktree: String, url: String, kind: String, id: String, text: Option<String>) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -396,10 +431,169 @@ pub async fn scm_review_act(worktree: String, url: String, kind: String, id: Str
             "resolve" => Act::Resolve(&id, true),
             "unresolve" => Act::Resolve(&id, false),
             "react" => Act::React(num()?, &t),
+            "react_talk" => Act::ReactTalk(num()?, &t),
             other => return Err(format!("Unknown action {other}")),
         };
         let a = act_args(&h, &o, &r, n, &act)?;
         scm::gh_run(&scm::gh_program()?, Path::new(&worktree), &a.iter().map(String::as_str).collect::<Vec<_>>(), None)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// GIT-031: the agent session of the workspace that review comments go to: the newest open
+/// session started in that folder that runs an agent (a plain shell is not one).
+pub fn pick_agent(sessions: &[(String, String, Option<String>)], worktree: &str) -> Result<String, String> {
+    let norm = |p: &str| p.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let want = norm(worktree);
+    let mut agents: Vec<&(String, String, Option<String>)> = sessions.iter().filter(|(_, dir, prog)| prog.is_some() && norm(dir) == want).collect();
+    agents.pop().map(|(h, _, _)| h.clone()).ok_or_else(|| "No agent is running in this workspace. Start one there, or copy the text and paste it into the agent you use.".to_string())
+}
+
+/// What a finished send tells the person: delivered (the agent began its turn or queued the text)
+/// is success; text left in the box or not submitted is a failure, so nothing is marked as sent.
+pub fn delivery_verdict(result: &Result<serde_json::Value, String>) -> Result<String, String> {
+    let v = result.as_ref().map_err(|e| e.clone())?;
+    let receipt = v["receipt"].as_str().unwrap_or("unknown");
+    if v["enterHeld"].as_bool() == Some(true) || receipt == "not_submitted" {
+        return Err("The text reached the agent's box but was not submitted. Press Enter in that terminal, or send it again.".to_string());
+    }
+    if v["delivered"].as_bool() == Some(false) {
+        return Err("The agent did not take the text.".to_string());
+    }
+    Ok(receipt.to_string())
+}
+
+#[derive(Serialize)]
+pub struct Sent {
+    pub terminal: String,
+    pub receipt: String,
+}
+
+/// GIT-031: send text to the workspace's agent through the orchestration send (send-once: a
+/// repeat joins the first), the same path `kolux terminal send` takes. No second terminal writer.
+#[tauri::command]
+pub async fn scm_review_send(app: tauri::AppHandle, worktree: String, text: String) -> Result<Sent, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        let terminals = app.state::<crate::terminal::Terminals>();
+        let terminal = pick_agent(&terminals.sessions(), &worktree)?;
+        let store = app.state::<std::sync::Mutex<crate::state::Store>>();
+        let git = app.state::<crate::git::Git>();
+        let notify = |_: serde_json::Value| {};
+        let front = || -> Result<(), String> { Ok(()) };
+        let ctx = crate::cli::Ctx { claude_config: crate::trust::claude_config_file(), git: &git, store: &store, terminals: &terminals, notify: &notify, front: &front };
+        let req = crate::cli::Request {
+            id: format!("review-send-{terminal}"),
+            token: String::new(),
+            command: "terminal.send".to_string(),
+            cwd: worktree.clone(),
+            args: serde_json::json!({ "terminal": terminal, "text": text, "enter": true }),
+            pane: None,
+            cli: env!("CARGO_PKG_VERSION").to_string(),
+            arrived: None,
+        };
+        let out = crate::cli::dispatch(&ctx, &req).map_err(|f| f.message);
+        let receipt = delivery_verdict(&out)?;
+        Ok(Sent { terminal, receipt })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+pub struct Conflicts {
+    /// conflicts, clean or unknown
+    pub state: String,
+    pub files: Vec<String>,
+    pub base: String,
+    pub note: String,
+    /// the text that asks the workspace's agent to resolve them (only when there are conflicts)
+    pub prompt: Option<String>,
+}
+
+/// GIT-032: what a local trial merge of the branch with the pull request's base says.
+pub fn conflicts_of(c: scm::Clash, base: &str) -> Conflicts {
+    let prompt = if let scm::Clash::Conflict(f) = &c { Some(resolve_prompt(base, f)) } else { None };
+    let (state, files, note) = match c {
+        scm::Clash::Clean => ("clean", Vec::new(), "The branch merges with the base without conflicts here (as of your last fetch).".to_string()),
+        scm::Clash::Conflict(f) => ("conflicts", f, format!("These files conflict with {base}. Fix them before the checks can run and the pull request can merge.")),
+        scm::Clash::Unverifiable(why) => ("unknown", Vec::new(), format!("Kolux could not try the merge: {why}")),
+    };
+    Conflicts { state: state.to_string(), files, base: base.to_string(), note, prompt }
+}
+
+/// GIT-032: the prompt that asks the workspace's agent to resolve the conflicts. The agent merges the base
+/// in itself; Kolux never resolves, commits or pushes for it.
+pub fn resolve_prompt(base: &str, files: &[String]) -> String {
+    let list = if files.is_empty() { String::new() } else { format!(" Files that conflict: {}.", files.join(", ")) };
+    format!("This branch's pull request has merge conflicts with {base}.{list} Merge origin/{base} into this branch, resolve the conflicts keeping the intent of both sides, run the tests, and commit the merge. Do not push; tell me when it is done.")
+}
+
+/// GIT-032: does the branch conflict with the pull request's base? Local trial merge, no push, no change.
+#[tauri::command]
+pub async fn scm_pr_conflicts(worktree: String, url: String) -> Result<Conflicts, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        parts_of(&url)?;
+        let dir = Path::new(&worktree);
+        let base = scm::gh_run(&scm::gh_program()?, dir, &["pr", "view", &url, "--json", "baseRefName", "--jq", ".baseRefName"], None)?.trim().to_string();
+        if base.is_empty() {
+            return Err("GitHub did not name the pull request's base branch".to_string());
+        }
+        let c = scm::clash(dir, "HEAD", &format!("origin/{base}"));
+        Ok(conflicts_of(c, &base))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ---- GIT-034: the open pull requests of a stack ------------------------------------------------
+
+/// One open pull request as the stack view needs it.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StackRow {
+    pub number: u64,
+    pub head: String,
+    pub base: String,
+    pub state: String,
+    pub url: String,
+    pub title: String,
+}
+
+/// The open pull requests and the repository's trunk branch.
+#[derive(Clone, Debug, Serialize)]
+pub struct StackList {
+    pub trunk: String,
+    pub prs: Vec<StackRow>,
+}
+
+/// The rows of `gh pr list --json number,url,headRefName,baseRefName,state,title`; drafts stay in (they still sit in a stack).
+pub fn stack_rows(text: &str) -> Result<Vec<StackRow>, String> {
+    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
+    let s = |x: &serde_json::Value, k: &str| x[k].as_str().unwrap_or_default().to_string();
+    Ok(v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|r| {
+                    let number = r["number"].as_u64()?;
+                    let (head, base) = (s(r, "headRefName"), s(r, "baseRefName"));
+                    (!head.is_empty() && !base.is_empty()).then(|| StackRow { number, head, base, state: s(r, "state"), url: s(r, "url"), title: s(r, "title") })
+                })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// GIT-034: the open pull requests of the repository the worktree belongs to, for the stack view.
+#[tauri::command]
+pub async fn scm_stack_prs(worktree: String) -> Result<StackList, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = Path::new(&worktree);
+        let gh = scm::gh_program()?;
+        let text = scm::gh_run(&gh, dir, &["pr", "list", "--state", "open", "--limit", "100", "--json", "number,url,headRefName,baseRefName,state,title"], None)?;
+        let trunk = scm::gh_run(&gh, dir, &["repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"], None).map(|t| t.trim().to_string()).ok().filter(|t| !t.is_empty()).unwrap_or_else(|| "main".to_string());
+        Ok(StackList { trunk, prs: stack_rows(&text)? })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -511,13 +705,15 @@ mod tests {
     #[test]
     fn review_threads_and_the_conversation_are_read_with_bots_set_apart_and_long_threads_capped() {
         let json = r#"{"data":{"repository":{"pullRequest":{
-            "comments":{"totalCount":1,"nodes":[{"id":"IC1","databaseId":1,"body":"Looks good","createdAt":"2026-10-19T10:00:00Z","author":{"login":"ann","__typename":"User"}}]},
+            "comments":{"totalCount":1,"nodes":[{"id":"IC1","databaseId":1,"body":"Looks good","createdAt":"2026-10-19T10:00:00Z","author":{"login":"ann","__typename":"User"},"reactionGroups":[{"content":"THUMBS_UP","viewerHasReacted":true,"reactors":{"totalCount":2}},{"content":"HEART","viewerHasReacted":false,"reactors":{"totalCount":0}},{"content":"ROCKET","viewerHasReacted":false,"reactors":{"totalCount":1}}]}]},
             "reviewThreads":{"nodes":[{"id":"T1","isResolved":false,"path":"src/a.ts","line":7,"comments":{"totalCount":103,"nodes":[
               {"id":"C1","databaseId":11,"body":"Rename this","createdAt":"2026-10-19T11:00:00Z","author":{"login":"bob","__typename":"User"}},
               {"id":"C2","databaseId":12,"body":"CI note","createdAt":"2026-10-19T11:01:00Z","author":{"login":"ci-helper","__typename":"User"}},
               {"id":"C3","databaseId":13,"body":"Auto","createdAt":"2026-10-19T11:02:00Z","author":{"login":"dependabot","__typename":"Bot"}}]}}]}}}}}"#;
         let r = parse_review(json, &["CI-Helper".to_string()]).unwrap();
         assert_eq!(r.talk.len(), 1);
+        assert_eq!(r.talk[0].reactions, [Reaction { content: "+1".into(), count: 2, mine: true }, Reaction { content: "rocket".into(), count: 1, mine: false }]);
+        assert!(r.threads[0].comments[0].reactions.is_empty());
         assert_eq!(r.threads[0].path.as_deref(), Some("src/a.ts"));
         assert_eq!(r.threads[0].line, Some(7));
         assert_eq!(r.threads[0].more, 3);
@@ -544,6 +740,8 @@ mod tests {
         assert!(resolve[5].contains("resolveReviewThread") && resolve[7] == "t=T1");
         assert!(a(Act::Resolve("T1", false))[5].contains("unresolveReviewThread"));
         assert_eq!(a(Act::React(5, "heart"))[5], "content=heart");
+        assert_eq!(a(Act::React(5, "heart"))[3], "repos/o/r/pulls/comments/5/reactions");
+        assert_eq!(a(Act::ReactTalk(5, "+1"))[3], "repos/o/r/issues/comments/5/reactions");
         assert!(act_args("h.com", "o", "r", 7, &Act::React(5, "banana")).is_err());
     }
 
@@ -556,5 +754,83 @@ mod tests {
         std::fs::write(dir.join(".github/pull_request_template.md"), "## What\n").unwrap();
         assert_eq!(find_template(&dir).as_deref(), Some("## What\n"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git_031_the_review_text_goes_to_the_newest_agent_of_the_workspace() {
+        let s = vec![
+            ("term-1".to_string(), r"G:\w\a".to_string(), Some("claude".to_string())),
+            ("term-2".to_string(), "G:/w/a/".to_string(), None),
+            ("term-3".to_string(), "g:/W/A".to_string(), Some("codex".to_string())),
+            ("term-4".to_string(), "G:/w/b".to_string(), Some("claude".to_string())),
+        ];
+        assert_eq!(pick_agent(&s, "G:/w/a").unwrap(), "term-3");
+        assert_eq!(pick_agent(&s, "G:/w/b").unwrap(), "term-4");
+        let none = pick_agent(&s, "G:/w/c").unwrap_err();
+        assert!(none.starts_with("No agent is running"), "{none}");
+        // a plain shell alone is not an agent
+        assert!(pick_agent(&[("term-2".to_string(), "G:/w/a".to_string(), None)], "G:/w/a").is_err());
+    }
+
+    #[test]
+    fn git_031_only_a_submitted_send_counts_as_sent() {
+        use serde_json::json;
+        assert_eq!(delivery_verdict(&Ok(json!({"delivered": true, "receipt": "turn_began"}))).unwrap(), "turn_began");
+        assert_eq!(delivery_verdict(&Ok(json!({"delivered": true, "receipt": "queued"}))).unwrap(), "queued");
+        assert!(delivery_verdict(&Ok(json!({"delivered": true, "receipt": "not_submitted"}))).is_err());
+        assert!(delivery_verdict(&Ok(json!({"delivered": true, "enterHeld": true, "receipt": "unknown"}))).is_err());
+        assert!(delivery_verdict(&Ok(json!({"delivered": false}))).is_err());
+        assert_eq!(delivery_verdict(&Err("no terminal".to_string())).unwrap_err(), "no terminal");
+    }
+
+    #[test]
+    fn git_031_a_send_to_a_missing_terminal_fails_in_words() {
+        let dir = std::env::temp_dir().join(format!("kolux-review-send-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = crate::git::Git::detect().unwrap();
+        let store = std::sync::Mutex::new(crate::state::Store::open(&dir.join("data")).unwrap());
+        let terminals = crate::terminal::Terminals::default();
+        let notify = |_: serde_json::Value| {};
+        let front = || -> Result<(), String> { Ok(()) };
+        let ctx = crate::cli::Ctx { claude_config: dir.join(".claude.json"), git: &git, store: &store, terminals: &terminals, notify: &notify, front: &front };
+        let req = crate::cli::Request {
+            id: "t".into(),
+            token: String::new(),
+            command: "terminal.send".into(),
+            cwd: dir.to_string_lossy().into_owned(),
+            args: serde_json::json!({"terminal": "term-9", "text": "hello", "enter": true}),
+            pane: None,
+            cli: env!("CARGO_PKG_VERSION").to_string(),
+            arrived: None,
+        };
+        let out = crate::cli::dispatch(&ctx, &req).map_err(|f| f.message);
+        let err = delivery_verdict(&out).unwrap_err();
+        assert!(!err.is_empty(), "a missing terminal must say why");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git_032_conflicts_are_listed_and_the_resolve_prompt_names_them() {
+        let c = conflicts_of(scm::Clash::Conflict(vec!["a.rs".into(), "b/c.ts".into()]), "main");
+        assert_eq!(c.state, "conflicts");
+        assert_eq!(c.files, vec!["a.rs", "b/c.ts"]);
+        assert!(c.note.contains("before the checks can run"), "{}", c.note);
+        assert_eq!(conflicts_of(scm::Clash::Clean, "main").state, "clean");
+        let u = conflicts_of(scm::Clash::Unverifiable("no git".into()), "main");
+        assert_eq!((u.state.as_str(), u.note.contains("no git")), ("unknown", true));
+        let p = c.prompt.clone().unwrap();
+        assert!(conflicts_of(scm::Clash::Clean, "main").prompt.is_none());
+        assert!(p.contains("a.rs, b/c.ts") && p.contains("origin/main") && p.contains("Do not push"), "{p}");
+        assert!(!resolve_prompt("dev", &[]).contains("Files that conflict"));
+    }
+
+    #[test]
+    fn git034_the_open_list_becomes_stack_rows_and_skips_rows_without_a_branch() {
+        let text = r#"[{"number":1,"url":"https://github.com/o/r/pull/1","headRefName":"a","baseRefName":"main","state":"OPEN","title":"A"},{"number":2,"url":"u","headRefName":"","baseRefName":"a","state":"OPEN","title":"x"},{"number":3,"url":"https://github.com/o/r/pull/3","headRefName":"b","baseRefName":"a","state":"OPEN","title":"B"}]"#;
+        let rows = stack_rows(text).unwrap();
+        assert_eq!(rows.iter().map(|r| (r.number, r.head.as_str(), r.base.as_str())).collect::<Vec<_>>(), [(1, "a", "main"), (3, "b", "a")]);
+        assert_eq!(rows[1].title, "B");
+        assert!(stack_rows("{}").unwrap().is_empty());
+        assert!(stack_rows("nope").unwrap_err().contains("cannot read"));
     }
 }

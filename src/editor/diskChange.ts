@@ -21,7 +21,7 @@ export const sameStamp = (a: Stamp | null, b: Stamp | null): boolean => (a && b 
  *  `kept`: the disk stamp the user answered Keep my edits for, so the banner stays away until the
  *  file changes again. `seq`: counts reads, so a read that finishes after a newer one is dropped.
  *  `banner`: shown now (T-073-d: autosave, once T-177 lands, holds back while this is true). */
-type Entry = { known?: Stamp | null; kept?: Stamp | null; seq: number; banner: boolean };
+type Entry = { known?: Stamp | null; kept?: Stamp | null; seq: number; banner: boolean; restored?: boolean };
 const entries = new Map<string, Entry>();
 const entry = (path: string): Entry => {
   const k = keyOf(path);
@@ -36,11 +36,25 @@ export function remember(path: string, stamp: Stamp | null): void {
   const e = entry(path);
   e.known = stamp;
   e.kept = undefined;
+  e.restored = false;
+}
+
+/** T-073-d: a draft typed over an older disk copy was brought back at open. The buffer already
+ *  holds the newer disk stamp as "known", so without this the first check would see nothing
+ *  changed and take the banner down, and autosave would then lay the draft over the newer disk
+ *  copy. While the draft is unsaved the verdict stays "banner" until Reload, Keep my edits or a
+ *  save (each of which ends the hold); the flag is up at once, before any autosave pause ends. */
+export function holdRestored(path: string): void {
+  const e = entry(path);
+  e.restored = true;
+  e.banner = true;
 }
 
 /** Keep my edits: the banner stays away until the disk copy changes from `stamp`. */
 export function keep(path: string, stamp: Stamp | null): void {
-  entry(path).kept = stamp;
+  const e = entry(path);
+  e.kept = stamp;
+  e.restored = false;
   setBanner(path, false);
 }
 
@@ -83,10 +97,14 @@ export type Verdict = "none" | "reload" | "banner";
 export function verdict(path: string, now: Stamp | null, dirty: boolean): Verdict {
   const e = entries.get(keyOf(path));
   if (!e || e.known === undefined || now === null) return "none";
+  if (e.restored && dirty) return "banner";
   if (sameStamp(now, e.known)) return "none";
   if (e.kept !== undefined && sameStamp(now, e.kept)) return "none";
   return dirty ? "banner" : "reload";
 }
+
+/** EDIT-032: what a tab says when its file is gone from disk (deleted outside, or moved without the explorer). The text stays in the tab. */
+export const goneText = (name: string): string => `${name} was deleted or moved away. Your text is still here; save to put the file back.`;
 
 /** Starts a read of the file; any read started before it no longer counts. */
 export function beginRead(path: string): number {
@@ -125,6 +143,11 @@ export async function checkOnce(path: string, io: Io, onBanner: (now: Stamp | nu
   if (savingNow(path)) return "none";
   const now = await io.stamp();
   if (savingNow(path)) return "none";
+  // T-073-d: a restored draft the user has typed back to the disk copy holds nothing back any more.
+  if (!io.dirty()) {
+    const r = entries.get(keyOf(path));
+    if (r) r.restored = false;
+  }
   const v = verdict(path, now, io.dirty());
   // T-073-e A2: the flag follows the verdict, so it never sticks after a flash or a put-back file.
   if (v !== "banner") setBanner(path, false);

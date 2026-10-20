@@ -74,6 +74,26 @@ struct Inner {
     flow: HashMap<u32, Arc<Flow>>,
     /// APP-052: the newest session each window pane started, so a pane takes it back after a webview reload.
     panes: HashMap<u32, u32>,
+    /// ORCH-057: each session's output count and raw tail, for a viewer's resync.
+    snaps: HashMap<u32, Snap>,
+}
+
+impl Inner {
+    /// ORCH-059: a session id about to be (re)used starts as a new incarnation: nothing an earlier
+    /// session under the same handle left behind (log, screen bits, end flag, marks, snapshot) carries over.
+    fn fresh_incarnation(&mut self, id: u32) {
+        self.dirs.remove(&id);
+        self.marks.remove(&id);
+        self.keys.remove(&id);
+        self.ended.remove(&id);
+        self.logs.remove(&id);
+        self.owned.remove(&id);
+        self.hist.remove(&id);
+        self.snaps.remove(&id);
+        if let Some(f) = self.flow.remove(&id) {
+            f.release();
+        }
+    }
 }
 
 /// ACCT-054: how far a session's output has run ahead of what its pane has drawn. Past
@@ -85,6 +105,9 @@ struct Flow {
     unacked: Mutex<u64>,
     drawn: Condvar,
     pauses: std::sync::atomic::AtomicU32,
+    /// ORCH-057: the pane stopped answering past `FLOW_WAIT` and the reader went on without it, so the
+    /// output it still has queued is stale; its next acknowledgement is answered with a snapshot.
+    behind: std::sync::atomic::AtomicBool,
 }
 
 const FLOW_HIGH: u64 = 512 * 1024;
@@ -110,6 +133,7 @@ impl Flow {
             if left.is_zero() {
                 // ponytail: a pane that never answers is taken as caught up; the next flood pauses again.
                 *n = 0;
+                self.behind.store(true, std::sync::atomic::Ordering::Relaxed);
                 break;
             }
             n = match self.drawn.wait_timeout(n, left) {
@@ -119,14 +143,15 @@ impl Flow {
         }
     }
 
-    /// The pane drew `bytes` more.
-    fn ack(&self, bytes: u64) {
+    /// The pane drew `bytes` more. True once after the reader gave up waiting for it (ORCH-057: resync due).
+    fn ack(&self, bytes: u64) -> bool {
         if let Ok(mut n) = self.unacked.lock() {
             *n = n.saturating_sub(bytes);
             if *n <= FLOW_LOW {
                 self.drawn.notify_all();
             }
         }
+        self.behind.swap(false, std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The session is ending: a paused reader goes on at once.
@@ -215,11 +240,48 @@ impl History {
     }
 }
 
+/// ORCH-057: every session's running output count and its newest `HISTORY_KEEP` raw bytes, kept under
+/// the registry lock with each chunk, so a viewer that fell behind redraws from a snapshot and drops the
+/// queued chunks the snapshot already holds (each output event carries the count after its chunk).
+#[derive(Default)]
+struct Snap {
+    seq: u64,
+    tail: std::collections::VecDeque<u8>,
+}
+
+impl Snap {
+    fn push(&mut self, chunk: &[u8]) -> u64 {
+        self.seq += chunk.len() as u64;
+        self.tail.extend(chunk);
+        let over = self.tail.len().saturating_sub(HISTORY_KEEP);
+        self.tail.drain(..over);
+        self.seq
+    }
+
+    /// The snapshot a viewer redraws from: the count it covers and the tail from a line boundary.
+    fn snapshot(&mut self) -> Snapshot {
+        let all = self.tail.make_contiguous();
+        // a tail that lost its start begins at the next line break (or character), never mid-sequence
+        let keep = if self.seq == all.len() as u64 { all.len() } else { all.len().saturating_sub(1) };
+        Snapshot { seq: self.seq, data: base64::engine::general_purpose::STANDARD.encode(trim_history(all, keep)) }
+    }
+}
+
+/// ORCH-057: what a viewer that fell behind redraws from (base64 bytes); output events up to `seq` are in it.
+#[derive(serde::Serialize, Debug, PartialEq)]
+pub struct Snapshot {
+    pub seq: u64,
+    pub data: String,
+}
+
 fn history_file(dir: &std::path::Path, key: u32) -> std::path::PathBuf {
     dir.join("history").join(format!("{key}.log"))
 }
 
 /// The newest `keep` bytes of `all`, from the next line boundary so no escape sequence is cut in two.
+/// ACCT-053: a tail without any line break (one huge line) starts at a character boundary, so a
+/// wide character is never replayed as its stray trailing bytes (each one a replacement glyph) on
+/// the redraw of a restored pane.
 fn trim_history(all: &[u8], keep: usize) -> &[u8] {
     if all.len() <= keep {
         return all;
@@ -227,7 +289,11 @@ fn trim_history(all: &[u8], keep: usize) -> &[u8] {
     let from = all.len() - keep;
     match all[from..].iter().position(|b| *b == b'\n') {
         Some(i) => &all[from + i + 1..],
-        None => &all[from..],
+        None => {
+            // UTF-8 continuation bytes are 10xxxxxx; the first byte that is not one starts a character
+            let skip = all[from..].iter().take_while(|b| **b & 0xC0 == 0x80).count();
+            &all[from + skip..]
+        }
     }
 }
 
@@ -607,12 +673,27 @@ struct OutputPayload {
     pane: Option<u32>,
     /// APP-052: the run of the terminal service that wrote it; a window drops chunks from a replaced run.
     generation: u64,
+    /// ORCH-057: the session's output count after this chunk; a viewer that redrew from a snapshot drops
+    /// the chunks it already holds (seq not past the snapshot's).
+    seq: u64,
 }
 
 #[derive(serde::Serialize, Clone)]
 struct ExitPayload {
     id: u32,
     code: Option<u32>,
+    /// ORCH-057: "exited" when the end was confirmed with an exit code, "unverifiable" when Kolux could
+    /// not learn how the program ended (viewers say so instead of calling it an exit).
+    outcome: &'static str,
+}
+
+/// ORCH-057: how a session's end reads to its viewers.
+fn outcome_of(code: Option<u32>) -> &'static str {
+    if code.is_some() {
+        "exited"
+    } else {
+        "unverifiable"
+    }
 }
 
 /// ORCH-058: what `kill_under` did: how many sessions it ended, and the pids it could not show
@@ -641,7 +722,7 @@ impl Terminals {
             });
         }
         // CHAT-007: the agent home folders the program really got; Kolux's account variable (applied last) wins.
-        let home_env: Vec<(String, String)> = own_env.iter().chain(env.iter()).filter(|(k, _)| k == crate::claude_accounts::CONFIG_ENV || k == crate::codex_accounts::HOME_ENV).cloned().collect();
+        let home_env: Vec<(String, String)> = own_env.iter().chain(env.iter()).filter(|(k, _)| crate::chat::HOME_KEYS.contains(&k.as_str())).cloned().collect();
         let chat_cwd = cwd.clone();
         // ACCT-049: checked before the lock, so a drive that does not answer holds up only this pane.
         if let Some(dir) = cwd.as_deref() {
@@ -655,6 +736,15 @@ impl Terminals {
         };
         // APP-041: each session's start and end go to the app's own log (no arguments: they may carry secrets).
         let log_dir = app.path().app_data_dir().ok();
+        // ACCT-047: a shell pane's shell prints prompt marks (its own files still run first), so the pane
+        // can hold its output until the prompt and type a startup command once, when the shell is ready.
+        if program.as_deref().map(str::trim).is_none_or(str::is_empty) {
+            if let Some(shim_dir) = log_dir.as_deref().map(|d| shell_hook_dir(&d.join("shell"))) {
+                for c in commands.iter_mut() {
+                    crate::shell_marks::apply(c, &shim_dir);
+                }
+            }
+        }
         // TERM-119: a bash, zsh or fish shell keeps its history per worktree unless the user turned that off.
         // The disk work is done here, before the lock, so a slow folder holds up only this pane.
         let history_vars = match log_dir.as_deref().filter(|_| per_worktree_history) {
@@ -664,6 +754,7 @@ impl Terminals {
         let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
         inner.next_id += 1;
         let id = inner.next_id;
+        inner.fresh_incarnation(id);
         let out_app = app.clone();
         let exit_dir = log_dir.clone();
         let history = pane_key.and_then(|k| log_dir.as_deref().and_then(|d| History::open(d, k)));
@@ -697,6 +788,15 @@ impl Terminals {
             }
             command.env("KOLUX_TERMINAL_HANDLE", handle_of(id));
             command.env("KOLUX_PANE_KEY", &key);
+            // TERM-120: a new terminal's PATH is the one Windows would give a program started from the
+            // desktop now (the machine then the user Path from the registry, expanded), so a folder added
+            // in Windows settings reaches the next pane without restarting Kolux and the folders a dev run
+            // put on Kolux's own PATH stay out; an unreadable registry keeps the last good read. The CLI
+            // folder below goes in front of it, and the user's own variables (SET-027) still win after.
+            if cfg!(windows) {
+                let fresh = crate::pty::fresh_terminal_path(command.get_env("PATH").map(std::ffi::OsStr::to_os_string));
+                command.env("PATH", fresh);
+            }
             // CLI-007: the CLI that ships with this copy of Kolux comes first, ahead of any older one
             // registered system-wide, and it is told which app folder to call. An installed copy keeps
             // its CLI in the bin folder of the install (CLI-006); a development build runs kolux-dev
@@ -704,7 +804,9 @@ impl Terminals {
             if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(std::path::Path::to_path_buf)) {
                 let bin = dir.join("bin");
                 let dir = if bin.join(if cfg!(windows) { "kolux.exe" } else { "kolux" }).is_file() { bin } else { dir };
-                let path = cli_first(&dir, command.get_env("PATH").map(std::ffi::OsStr::to_os_string));
+                // T-182 (APP-020): a tool installed after the app started is on the stored Path, not
+                // the process's; the pane gets both, the process's entries first.
+                let path = cli_first(&dir, Some(crate::lifecycle::fresh_path(command.get_env("PATH").map(std::ffi::OsStr::to_os_string))));
                 command.env("PATH", path);
             }
             if let Ok(dir) = tauri::Manager::path(&out_app).app_data_dir() {
@@ -740,7 +842,10 @@ impl Terminals {
             rows.max(1),
             move |chunk| {
                 let data = base64::engine::general_purpose::STANDARD.encode(chunk);
-                let _ = out_app.emit(OUTPUT_EVENT, OutputPayload { id, data, pane: pane_key, generation: generation() });
+                // ORCH-057: the count is taken under the registry lock with the snapshot tail, so a snapshot
+                // holds exactly the chunks whose count is not past its own.
+                let seq = out_registry.lock().map(|mut i| i.snaps.entry(id).or_default().push(chunk)).unwrap_or(0);
+                let _ = out_app.emit(OUTPUT_EVENT, OutputPayload { id, data, pane: pane_key, generation: generation(), seq });
                 if let Some(dir) = link_dir.as_deref() {
                     for url in prs.feed(chunk) {
                         let linked = out_app.state::<Mutex<crate::state::Store>>().lock().is_ok_and(|s| crate::scm::link_printed(&s, dir, &url));
@@ -786,6 +891,7 @@ impl Terminals {
                     inner.logs.remove(&id);
                     inner.owned.remove(&id);
                     inner.hist.remove(&id);
+                    inner.snaps.remove(&id);
                     if let Some(f) = inner.flow.remove(&id) {
                         f.release();
                     }
@@ -813,7 +919,7 @@ impl Terminals {
                 if let Some(d) = &exit_dir {
                     crate::diag::write(d, &format!("terminal {id} exited ({code:?})"));
                 }
-                let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code });
+                let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code, outcome: outcome_of(code) });
             },
         )?;
         inner.sessions.insert(id, session);
@@ -941,6 +1047,10 @@ impl Terminals {
         inner.marks.remove(&id);
         inner.keys.remove(&id);
         inner.hist.remove(&id);
+        // ORCH-059: the screen bits and snapshot go with the handle at once (the log stays for the
+        // waiter, which keeps an automation run's tail and then drops it; `read` already refuses it).
+        inner.owned.remove(&id);
+        inner.snaps.remove(&id);
         if let Some(f) = inner.flow.remove(&id) {
             f.release();
         }
@@ -950,12 +1060,15 @@ impl Terminals {
         Ok(())
     }
 
-    /// ACCT-054: the pane drew `bytes` more of session `id`'s output.
-    pub fn ack(&self, id: u32, bytes: u64) {
-        let flow = self.inner.lock().ok().and_then(|i| i.flow.get(&id).cloned());
-        if let Some(f) = flow {
-            f.ack(bytes);
+    /// ACCT-054: the pane drew `bytes` more of session `id`'s output. ORCH-057: when the reader gave up
+    /// waiting for this pane, the answer is a fresh snapshot to redraw from (once per give-up).
+    pub fn ack(&self, id: u32, bytes: u64) -> Option<Snapshot> {
+        let flow = self.inner.lock().ok().and_then(|i| i.flow.get(&id).cloned())?;
+        if !flow.ack(bytes) {
+            return None;
         }
+        let mut inner = self.inner.lock().ok()?;
+        Some(inner.snaps.entry(id).or_default().snapshot())
     }
 
     /// What session `id` runs: `None` when it is gone, `Some(None)` for a shell (the foreground
@@ -1093,6 +1206,7 @@ impl Terminals {
     pub(crate) fn fake_session(&self, id: u32, dir: &str, program: Option<&str>) {
         let long_ago = Instant::now() - Duration::from_secs(5);
         let mut inner = self.inner.lock().unwrap();
+        inner.fresh_incarnation(id);
         inner.sessions.insert(id, PtySession::fake(Box::new(std::io::sink())));
         inner.dirs.insert(id, dir.to_string());
         inner.logs.insert(id, OutputLog { written: Some(long_ago), ..OutputLog::default() });
@@ -1121,6 +1235,7 @@ impl Terminals {
             inner.dirs.clear();
             inner.keys.clear();
             inner.hist.clear();
+            inner.snaps.clear();
             for (_, f) in inner.flow.drain() {
                 f.release();
             }
@@ -1296,6 +1411,8 @@ pub async fn terminal_write(app: AppHandle, terminals: tauri::State<'_, Terminal
     }
     // USAGE-007: the user's own typing after a limit stop cancels the resume.
     crate::resume::user_typed(&app, id);
+    // ORCH-055: a prompt the command line is typing holds its Enter back once the user writes here.
+    crate::orchestration::sendonce::other_writer(id, &data);
     terminals.write(id, &data)
 }
 
@@ -1320,7 +1437,7 @@ pub fn terminal_resize(terminals: tauri::State<'_, Terminals>, id: u32, cols: u1
 /// ACCT-054: the pane drew `bytes` more of session `id`'s output.
 /// Council D2 MERGE 31 item 1: `async` for the same reason as `terminal_resize`.
 #[tauri::command(async)]
-pub fn terminal_ack(terminals: tauri::State<'_, Terminals>, id: u32, bytes: u64) {
+pub fn terminal_ack(terminals: tauri::State<'_, Terminals>, id: u32, bytes: u64) -> Option<Snapshot> {
     terminals.ack(id, bytes)
 }
 
@@ -1340,9 +1457,70 @@ pub fn terminal_memory_profile() -> MemoryProfile {
     MemoryProfile { profile, total_mb: total.unwrap_or(0) >> 20, scrollback }
 }
 
+/// TERM-137: this build's shell hook files live in a folder named after their contents (FNV-1a of every
+/// shim text) under `<lasting data folder>/shell`, so two builds that share the data folder never write
+/// over each other's files and a shell never mixes halves from two builds. A folder another build left
+/// there is kept untouched and never loaded (each shell is pointed at its own build's folder only);
+/// `shell_marks::apply` writes a missing file again on every pane start while the host runs.
+fn shell_hook_dir(base: &std::path::Path) -> std::path::PathBuf {
+    use crate::shell_marks::{wrap, ShellKind};
+    let texts = [ShellKind::Zsh, ShellKind::Bash, ShellKind::Fish].into_iter().flat_map(|k| wrap(k, &[], std::path::Path::new(""), None, None).files).map(|(_, t)| t);
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in texts.flat_map(String::into_bytes) {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    base.join(format!("{h:016x}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TERM-137: hook files of one build go to a folder named after their contents; a folder another build
+    /// left beside it is kept exactly as it was when this build writes its hooks again.
+    #[test]
+    fn term137_each_build_keeps_its_hook_files_in_a_content_named_folder_beside_other_builds() {
+        let base = std::env::temp_dir().join(format!("kolux-term137-{}", std::process::id())).join("shell");
+        let _ = std::fs::remove_dir_all(base.parent().unwrap());
+        let own = shell_hook_dir(&base);
+        assert_eq!(own, shell_hook_dir(&base), "the same build names the same folder");
+        let name = own.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(own.parent() == Some(base.as_path()) && name.len() == 16 && name.bytes().all(|b| b.is_ascii_hexdigit()), "{name}");
+        let foreign = base.join("0123456789abcdef").join("zsh").join(".zshrc");
+        std::fs::create_dir_all(foreign.parent().unwrap()).unwrap();
+        std::fs::write(&foreign, "older build's hooks").unwrap();
+        for _ in 0..2 {
+            let mut zsh = portable_pty::CommandBuilder::new("/bin/zsh");
+            assert_eq!(crate::shell_marks::apply(&mut zsh, &own), Some(crate::shell_marks::ShellKind::Zsh));
+            let zdotdir = zsh.get_env("ZDOTDIR").unwrap().to_string_lossy().into_owned();
+            assert!(zdotdir.contains(&name) && !zdotdir.contains("0123456789abcdef"), "zsh reads this build's folder only: {zdotdir}");
+        }
+        assert!(own.join("zsh").join(".zshrc").is_file(), "this build's hooks are on disk");
+        assert_eq!(std::fs::read_to_string(&foreign).unwrap(), "older build's hooks", "the other build's file is untouched");
+        std::fs::remove_file(own.join("zsh").join(".zshrc")).unwrap();
+        let mut zsh = portable_pty::CommandBuilder::new("zsh");
+        crate::shell_marks::apply(&mut zsh, &own);
+        assert!(own.join("zsh").join(".zshrc").is_file(), "a hook file that went missing is written again on the next pane start");
+        let _ = std::fs::remove_dir_all(base.parent().unwrap());
+    }
+
+    /// ACCT-053: the redraw buffer of a restored pane never starts inside a wide character. A tail with a
+    /// line break starts after it; one without (a single huge line) starts at the next character boundary.
+    #[test]
+    fn acct053_history_trim_never_cuts_a_wide_character_in_two() {
+        let text = "ab\n中文字 日本語 end".as_bytes();
+        let kept = trim_history(text, text.len() - 2);
+        assert_eq!(std::str::from_utf8(kept).unwrap(), "中文字 日本語 end", "a line break in the tail: start after it");
+        let line = "中文字 日本語 end".as_bytes(); // 中 = E4 B8 AD; keep lands inside it
+        for keep in [line.len() - 1, line.len() - 2] {
+            let kept = trim_history(line, keep);
+            let s = std::str::from_utf8(kept).expect("a character boundary");
+            assert_eq!(s, "文字 日本語 end", "keep={keep}");
+        }
+        assert_eq!(trim_history(line, line.len()), line);
+        assert_eq!(std::str::from_utf8(trim_history(line, 3)).unwrap(), "end");
+    }
 
     /// APP-052: a pane gets its terminal back only from the run that started it: attached while the
     /// session runs, fresh once it ended or never was, replaced when the pane asked for another run.
@@ -1446,6 +1624,83 @@ mod tests {
         flow.sent_within(FLOW_HIGH, Duration::from_secs(5));
         h.join().unwrap();
         assert!(t.elapsed() < Duration::from_secs(4));
+    }
+
+    /// ORCH-057: a viewer paused past the wait while output floods is answered, at its next acknowledgement,
+    /// with a snapshot it redraws from: the count it covers matches the output events' counts, and it starts
+    /// at a line break once the tail lost its start. One snapshot per give-up; a caught-up viewer gets none.
+    #[test]
+    fn orch057_a_viewer_that_fell_behind_resyncs_from_a_snapshot_once() {
+        let t = Terminals::default();
+        let flow = Arc::new(Flow::default());
+        t.inner.lock().unwrap().flow.insert(3, flow.clone());
+        let mut seqs = Vec::new();
+        for i in 0..20_000u32 {
+            let line = format!("line {i:05} {}\r\n", "z".repeat(40));
+            seqs.push(t.inner.lock().unwrap().snaps.entry(3).or_default().push(line.as_bytes()));
+            flow.sent_within(line.len() as u64, Duration::from_millis(1));
+        }
+        assert!(seqs.windows(2).all(|w| w[1] > w[0]), "each chunk's count is past the last");
+        assert_eq!(t.ack(3, 0), Some(t.inner.lock().unwrap().snaps.get_mut(&3).unwrap().snapshot()), "the paused viewer resyncs");
+        let snap = t.inner.lock().unwrap().snaps.get_mut(&3).unwrap().snapshot();
+        assert_eq!(snap.seq, *seqs.last().unwrap(), "the snapshot covers every chunk sent");
+        let bytes = base64::engine::general_purpose::STANDARD.decode(&snap.data).unwrap();
+        assert!(bytes.len() <= HISTORY_KEEP && bytes.len() > HISTORY_KEEP - 100, "{}", bytes.len());
+        assert!(bytes.starts_with(b"line ") && bytes.ends_with(b"line 19999 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\r\n"), "starts at a line, ends with the newest");
+        assert_eq!(t.ack(3, 0), None, "one snapshot per give-up");
+        // a viewer that keeps up is never resynced
+        let quick = Arc::new(Flow::default());
+        t.inner.lock().unwrap().flow.insert(4, quick.clone());
+        quick.sent_within(FLOW_HIGH - 1, Duration::from_millis(1));
+        assert_eq!(t.ack(4, FLOW_HIGH - 1), None);
+        // a young session's snapshot is all it printed, from its first byte
+        let mut young = Snap::default();
+        young.push(b"no line break yet");
+        assert_eq!(young.snapshot(), Snapshot { seq: 17, data: base64::engine::general_purpose::STANDARD.encode(b"no line break yet") });
+        assert_eq!(outcome_of(Some(0)), "exited");
+        assert_eq!(outcome_of(None), "unverifiable", "an end Kolux could not confirm is not called an exit");
+    }
+
+    /// ORCH-059: a closed terminal is gone from every list and lookup at once, and a session opened again
+    /// under the same handle starts as a new terminal with none of the old one's state.
+    #[test]
+    fn orch059_closing_retires_a_terminal_everywhere_and_a_reused_handle_is_a_new_incarnation() {
+        let t = Terminals::default();
+        let dir = std::env::temp_dir().to_string_lossy().into_owned();
+        t.fake_session(9, &dir, Some("claude"));
+        {
+            let mut inner = t.inner.lock().unwrap();
+            inner.keys.insert(9, "secret-9".into());
+            inner.owned.insert(9, ALT | MOUSE);
+            inner.logs.get_mut(&9).unwrap().push(b"old output\r\n");
+            inner.snaps.entry(9).or_default().push(b"old output\r\n");
+        }
+        let h = handle_of(9);
+        assert!(t.live(&h) && t.by_key("secret-9").is_some() && t.read(9, None, None).is_some());
+        t.kill(9).unwrap();
+        assert!(!t.list().iter().any(|(id, _, _)| *id == 9), "list");
+        assert!(!t.sessions().iter().any(|(x, _, _)| *x == h), "sessions");
+        assert!(!t.every().iter().any(|(x, _, _)| *x == h), "every");
+        assert_eq!(t.by_key("secret-9"), None, "by_key");
+        assert_eq!(t.dir_of(&h), None, "dir_of");
+        assert_eq!(t.program_of(&h, Duration::ZERO), None, "program_of");
+        assert!(!t.live(&h), "live");
+        assert!(t.read(9, None, None).is_none(), "read");
+        {
+            let inner = t.inner.lock().unwrap();
+            assert!(!inner.owned.contains_key(&9) && !inner.snaps.contains_key(&9), "screen bits and snapshot went with it");
+        }
+        // the waiter of the old run marked it ended and its log lingered: a reopened handle sees none of that
+        {
+            let mut inner = t.inner.lock().unwrap();
+            inner.ended.insert(9);
+            inner.owned.insert(9, ALT);
+            inner.logs.entry(9).or_default().push(b"stale\r\n");
+        }
+        t.fake_session(9, &dir, None);
+        let inner = t.inner.lock().unwrap();
+        assert!(!inner.ended.contains(&9) && !inner.owned.contains_key(&9) && !inner.keys.contains_key(&9) && !inner.marks.contains_key(&9) && !inner.snaps.contains_key(&9), "new incarnation");
+        assert_eq!(inner.logs.get(&9).map(|l| l.lines.len()), Some(0), "an empty log");
     }
 
     #[test]
@@ -1779,4 +2034,61 @@ pub fn terminal_history_append(app: AppHandle, pane_key: u32, data: String) -> R
         h.append(&bytes);
     }
     Ok(())
+}
+
+/// TERM-085 (T-306): the "switch input source" command, unbound until the user assigns it. On Windows the focused
+/// window is asked to move to the next installed keyboard layout, as the OS language hotkey does
+/// (WM_INPUTLANGCHANGEREQUEST with HKL_NEXT, both from Microsoft Learn). The pane keeps the chord, so nothing of it
+/// reaches the terminal.
+// lib.rs registers it through evidence/core-T-306-lib.rs.patch; until then nothing calls it
+#[allow(dead_code)]
+#[tauri::command]
+pub fn terminal_next_input_source() -> Result<(), String> {
+    next_input_source()
+}
+
+/// HKL_NEXT: "the next locale identifier in the list" for a layout change request (Microsoft Learn).
+#[allow(dead_code)]
+pub const HKL_NEXT: isize = 1;
+
+#[cfg(windows)]
+#[allow(dead_code)]
+fn next_input_source() -> Result<(), String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, PostMessageW, GUITHREADINFO,
+        WM_INPUTLANGCHANGEREQUEST,
+    };
+    // SAFETY: plain Win32 calls on handles the OS hands back; GUITHREADINFO is zeroed with its size set first.
+    unsafe {
+        let top = GetForegroundWindow();
+        if top.is_null() {
+            return Err("no window has the keyboard".into());
+        }
+        let mut info: GUITHREADINFO = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
+        let thread = GetWindowThreadProcessId(top, std::ptr::null_mut());
+        // The web view's own child window holds the focus; the request goes to it, else to the top window.
+        let target = if GetGUIThreadInfo(thread, &mut info) != 0 && !info.hwndFocus.is_null() { info.hwndFocus } else { top };
+        if PostMessageW(target, WM_INPUTLANGCHANGEREQUEST, 0, HKL_NEXT) == 0 {
+            return Err("Windows refused the input source change".into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[allow(dead_code)]
+fn next_input_source() -> Result<(), String> {
+    Err("switching the input source is built for Windows only".into())
+}
+
+#[cfg(test)]
+mod input_source_tests {
+    #[cfg(windows)]
+    #[test]
+    fn term085_the_request_is_the_documented_language_change_message() {
+        // Microsoft Learn: WM_INPUTLANGCHANGEREQUEST is 0x0050 and HKL_NEXT is 1.
+        assert_eq!(windows_sys::Win32::UI::WindowsAndMessaging::WM_INPUTLANGCHANGEREQUEST, 0x0050);
+        assert_eq!(super::HKL_NEXT, 1);
+    }
 }

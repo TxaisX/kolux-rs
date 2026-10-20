@@ -7,6 +7,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
+/// ORCH-055 (T-174-b): prompts typed into agents land exactly once.
+pub mod sendonce;
+/// ORCH-034 (T-173-c): the orchestration store upgrades in place from every earlier layout of its own.
+pub mod upgrade;
+/// ORCH-062..064 (T-312): the runtime commands agents call for files, git and GitHub, past sessions
+/// and automations.
+pub mod runtime;
+/// ORCH-042 (T-255): Agent Teams teammate panes, the host-neutral half. Nothing calls it yet:
+/// Claude Code documents split panes only through tmux or iTerm2 (T-255 and T-191-c stay open).
+#[allow(dead_code)]
+pub mod teams;
+
 const KEY: &str = "orchestration.mail";
 pub const KINDS: &[&str] = &["status", "dispatch", "worker_done", "merge_ready", "escalation", "handoff", "decision_gate", "question", "heartbeat"];
 
@@ -150,7 +162,7 @@ pub(crate) fn finished(d: &Value) -> bool {
 
 /// The handle of a dispatch's terminal, while it can still be that terminal: handles count up
 /// again from term-1 when Kolux restarts, so one stamped by an earlier run of the app is no one.
-fn terminal_of(d: &Value) -> Option<String> {
+pub(crate) fn terminal_of(d: &Value) -> Option<String> {
     if d["runtime"].as_u64().is_some_and(|r| r != u64::from(std::process::id())) {
         return None;
     }
@@ -301,6 +313,10 @@ pub fn report(tasks: &mut [Value], dispatches: &mut [Value], from: &str, a: &Val
         Some(t) => return Ok(json!({ "dispatchId": id, "settles": false, "why": format!("{id} runs in {t}; only a report from {t} itself counts, so this one is mail only") })),
         None => return Ok(json!({ "dispatchId": id, "settles": false, "why": format!("{id}'s worker terminal is from an earlier start of Kolux, so this report cannot be vouched for and is mail only") })),
     }
+    // ORCH-067: a dispatch with a pass settles only on reports that carry it; the mail still went.
+    if let Some(why) = pass_refusal(&dispatches[i], a) {
+        return Ok(json!({ "dispatchId": id, "settles": false, "why": format!("{why}, so this report is mail only and {} is unchanged", dispatches[i]["taskId"].as_str().unwrap_or("its task")) }));
+    }
     if kind == "heartbeat" {
         dispatches[i]["lastBeatAt"] = json!(now);
         return Ok(json!({ "dispatchId": id, "lastBeatAt": now }));
@@ -440,7 +456,8 @@ pub fn worker_list(tasks: &[Value], dispatches: &[Value], run: Option<&str>, fro
         .collect();
     let page: Vec<Value> = rows.iter().skip(start).take(limit).cloned().collect();
     let next = (start + limit < rows.len()).then(|| b64.encode(format!("{scope}|{}", start + limit)));
-    Ok(json!({ "workers": page, "nextCursor": next, "total": rows.len(), "scope": { "run": run, "from": from } }))
+    // T-129-d: the coordinator's own finished top-level work rides beside the rows (ORCH-037).
+    Ok(json!({ "workers": page, "nextCursor": next, "total": rows.len(), "scope": { "run": run, "from": from }, "finishedItems": finished_items(tasks, dispatches, run) }))
 }
 
 /// ORCH-025: keep a settled worker's terminal open on purpose. The mark lives on the stored
@@ -557,6 +574,12 @@ fn keep_open(dispatches: &[Value], d: &Value, agent_of: &dyn Fn(&str) -> Option<
     if !d["mode"].is_null() {
         return Some(format!("{h} was already open when the worker was handed it, so it is not the worker's own to close"));
     }
+    // ORCH-036 (T-155-b): typing into the worker's terminal makes it the user's; stop and release
+    // then leave it open and say so. The window's terminal_write reports the user's keystrokes to
+    // sendonce::other_writer; Kolux's own sends go through sendonce::claim and never count.
+    if d["terminal"].as_u64().and_then(|t| u32::try_from(t).ok()).is_some_and(|t| sendonce::taken_over_since(t, d["created"].as_u64().unwrap_or(0))) {
+        return Some(format!("the user typed into {h} after the worker started, so it was taken over and is theirs now, not the worker's to close"));
+    }
     let agent = d["agent"].as_str().unwrap_or("its agent");
     match agent_of(&h) {
         Some(Some(now)) if now != agent => return Some(format!("{h} now runs {now}, not the worker's {agent}, so it is not the worker's own to close")),
@@ -605,6 +628,86 @@ pub fn start_failed(receipt: &mut Value, stage: &str, setup: Value) {
     receipt["effects"] = json!(effects);
     receipt["leftovers"] = json!({ "terminals": terminals, "worktree": made });
     receipt["next"] = json!(next);
+}
+
+// ---------------------------------------------------------------- the dispatch pass (ORCH-067, T-155-b)
+
+/// The option the brief's ready-made commands carry the pass in (COMPAT: the owner's skill passes it).
+pub const PASS_OPTION: &str = "--dispatch-capability";
+/// What stands in for a pass in every read of worker output.
+// The callers live in cli.rs (evidence/orchestration-T-155-b-cli.patch); drop this allow once it lands.
+pub const PASS_HIDDEN: &str = "[dispatch pass hidden]";
+
+/// Why dispatch `d`'s pass turns the command with arguments `a` away, if it does: the dispatch has
+/// a pass (worker-start gave it one) and `a` carries none or another one. The text names the option,
+/// since the reader is usually an agent that sees only the error. A dispatch without a pass (the
+/// low-level dispatch command) is never turned away here: its reports are tied to its pane instead.
+pub fn pass_refusal(d: &Value, a: &Value) -> Option<String> {
+    let want = d["pass"].as_str()?;
+    let id = d["id"].as_str().unwrap_or("this dispatch");
+    match a["dispatchCapability"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(got) if got == want => None,
+        Some(_) => Some(format!("the {PASS_OPTION} given is not {id}'s pass (another worker's, another dispatch's, or an earlier process's); use the one in {id}'s brief")),
+        None => Some(format!("{id} reports with its dispatch pass: add {PASS_OPTION} <pass> from the ready-made commands in its brief")),
+    }
+}
+
+/// Every pass on record, for the reads that must hide them.
+// The callers live in cli.rs (evidence/orchestration-T-155-b-cli.patch); drop this allow once it lands.
+pub fn passes(dispatches: &[Value]) -> Vec<String> {
+    dispatches.iter().filter_map(|d| d["pass"].as_str()).filter(|p| !p.is_empty()).map(str::to_string).collect()
+}
+
+/// Hides every pass in every string of `v` (keys stay): live lines, a screen with text typed but not
+/// submitted, transcript payloads alike. Returns whether anything was hidden.
+// The callers live in cli.rs (evidence/orchestration-T-155-b-cli.patch); drop this allow once it lands.
+pub fn redact(v: &mut Value, passes: &[String]) -> bool {
+    match v {
+        Value::String(s) => {
+            let mut hit = false;
+            for p in passes.iter().filter(|p| !p.is_empty()) {
+                if s.contains(p.as_str()) {
+                    *s = s.replace(p, PASS_HIDDEN);
+                    hit = true;
+                }
+            }
+            hit
+        }
+        Value::Array(items) => items.iter_mut().fold(false, |hit, i| redact(i, passes) | hit),
+        Value::Object(map) => map.values_mut().fold(false, |hit, i| redact(i, passes) | hit),
+        _ => false,
+    }
+}
+
+/// A `terminal read` answer with its passes hidden and, when one was, a warning that says so.
+// The callers live in cli.rs (evidence/orchestration-T-155-b-cli.patch); drop this allow once it lands.
+pub fn redact_read(out: &mut Value, passes: &[String]) {
+    if passes.is_empty() || !redact(out, passes) {
+        return;
+    }
+    let warning = json!(format!("a dispatch pass was hidden from this output ({PASS_HIDDEN})"));
+    match out["warnings"].as_array_mut() {
+        Some(w) => w.push(warning),
+        None => out["warnings"] = json!([warning]),
+    }
+}
+
+/// Archive lines with their passes hidden; a marker line says when one was.
+// The callers live in cli.rs (evidence/orchestration-T-155-b-cli.patch); drop this allow once it lands.
+pub fn redact_lines(mut lines: Vec<String>, passes: &[String]) -> Vec<String> {
+    let mut hit = false;
+    for l in &mut lines {
+        for p in passes.iter().filter(|p| !p.is_empty()) {
+            if l.contains(p.as_str()) {
+                *l = l.replace(p, PASS_HIDDEN);
+                hit = true;
+            }
+        }
+    }
+    if hit {
+        lines.push(format!("[Kolux: a dispatch pass was hidden from this archive ({PASS_HIDDEN})]"));
+    }
+    lines
 }
 
 /// ORCH-024: where a released worker's terminal output is kept: one plain text file per dispatch
@@ -698,6 +801,49 @@ pub fn attention(d: &Value, live: &dyn Fn(&str) -> bool, hook: Option<&str>, now
     // A made-at below 1e12 is no wall clock time (worker-start stores elapsed ms), so it proves nothing.
     let last = d["lastBeatAt"].as_u64().or_else(|| d["created"].as_u64().filter(|c| *c >= 1_000_000_000_000))?;
     (now.saturating_sub(last) > STALE_MS).then(|| ("stale", format!("no heartbeat for over {} minutes", STALE_MS / 60_000)))
+}
+
+/// ORCH-037 (T-129-d): the coordinator's own top-level work that finished well, each a finished
+/// item that needs nothing: a task of `run` with no parent that is completed and was never
+/// dispatched to a worker (the coordinator did it itself). A worker's task finishing well is no
+/// item: its dispatch carries it, and `attention` raises nothing for it.
+pub fn finished_items(tasks: &[Value], dispatches: &[Value], run: Option<&str>) -> Vec<Value> {
+    tasks
+        .iter()
+        .filter(|t| run.is_none() || t["runId"].as_str() == run)
+        .filter(|t| t["status"] == "completed" && t["parent"].is_null())
+        .filter(|t| !dispatches.iter().any(|d| d["taskId"] == t["id"]))
+        .map(|t| json!({ "taskId": t["id"], "label": t["displayName"].as_str().or(t["title"].as_str()), "attention": "finished", "attentionWhy": "the coordinator's own work finished well; nothing is needed", "completedAt": t["updated"] }))
+        .collect()
+}
+
+#[cfg(test)]
+mod finished_items_tests {
+    use super::*;
+
+    #[test]
+    fn orch037_only_the_coordinators_own_top_level_work_finishing_well_is_a_finished_item() {
+        let tasks = vec![
+            json!({ "id": "task-own", "runId": "run-1", "status": "completed", "parent": null, "title": "Write the plan", "updated": 5 }),
+            json!({ "id": "task-worker", "runId": "run-1", "status": "completed", "parent": null, "title": "Build the page" }),
+            json!({ "id": "task-child", "runId": "run-1", "status": "completed", "parent": "task-own", "title": "A sub-step" }),
+            json!({ "id": "task-open", "runId": "run-1", "status": "dispatched", "parent": null }),
+            json!({ "id": "task-other-run", "runId": "run-2", "status": "completed", "parent": null, "displayName": "Elsewhere" }),
+        ];
+        let dispatches = vec![json!({ "id": "dispatch-1", "runId": "run-1", "taskId": "task-worker", "status": "completed", "terminal": 4 })];
+        let items = finished_items(&tasks, &dispatches, Some("run-1"));
+        assert_eq!(items.len(), 1, "the worker's task, the sub-step, the open task and another Run's task are no items: {items:?}");
+        assert_eq!((items[0]["taskId"].as_str(), items[0]["label"].as_str(), items[0]["attention"].as_str(), items[0]["completedAt"].as_u64()), (Some("task-own"), Some("Write the plan"), Some("finished"), Some(5)));
+        // The worker finishing well raises no attention flag of its own.
+        assert_eq!(attention(&dispatches[0], &|_| true, None, 1_700_000_000_000), None);
+        // Every Run: the other Run's own work shows too, labelled by its display name.
+        let all = finished_items(&tasks, &dispatches, None);
+        assert_eq!(all.iter().map(|i| i["label"].as_str().unwrap_or_default()).collect::<Vec<_>>(), ["Write the plan", "Elsewhere"]);
+        // worker-list carries the items beside its rows, so a coordinator reading its workers sees them.
+        let listed = worker_list(&tasks, &dispatches, Some("run-1"), "term-1", None, None, 10, &|_| true).unwrap();
+        assert_eq!(listed["finishedItems"][0]["taskId"], "task-own");
+        assert_eq!(listed["workers"].as_array().map(Vec::len), Some(1));
+    }
 }
 
 /// ORCH-066: what a worker's row reads as: the task's display name, else its title, else a one-line
@@ -1262,6 +1408,10 @@ impl Mail {
             (Some(_), Some(_)) => return Err(args("give --question or --resume, not both")),
             (None, None) => return Err(args("--question is required (or --resume <message> to wait on one already asked)")),
             (Some(q), None) => {
+                // ORCH-067: a worker with a pass asks only with it; a wrong or missing pass makes no question.
+                if let Some(why) = dispatches.iter().rev().find(|d| !finished(d) && terminal_of(d).as_deref() == Some(from) && d["pass"].is_string()).and_then(|d| pass_refusal(d, a)) {
+                    return Err(Fail::new("forbidden", format!("{why}, so no question was made")));
+                }
                 let options: Vec<String> = text("options").map(|o| o.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()).unwrap_or_default();
                 let to = text("to").or_else(|| self.run_of(from, dispatches).map(|r| format!("run:{r}")));
                 let mut q = json!({ "to": to, "run": a["run"], "subject": q, "type": "question" });
@@ -1499,9 +1649,18 @@ pub struct Brief<'a> {
 // is an agent: dispatch turns shells away and a reused terminal must run the coordinator's own
 // agent (ORCH-016), so the bare-shell "exit after reporting" line has no worker to go to.
 pub fn brief(task: &Value, b: &Brief) -> String {
+    brief_tied(task, b, None)
+}
+
+/// ORCH-067 (T-155-b): the brief with the worker's dispatch pass inside its ready-made done, failed,
+/// heartbeat and question commands (`--dispatch-capability`, the option name COMPAT keeps), never as
+/// a field of its own. worker-start gives every dispatch a fresh pass (`cli::secret`); the low-level
+/// dispatch command gives none, so its workers are tied to the pane's process instead.
+pub fn brief_tied(task: &Value, b: &Brief, pass: Option<&str>) -> String {
     let id = task["id"].as_str().unwrap_or_default();
     let to = b.run.map(|r| format!(" --to run:{r}")).or_else(|| b.coordinator.map(|c| format!(" --to {c}"))).unwrap_or_default();
-    let tie = format!("{to} --task-id {id} --dispatch-id {}", b.dispatch);
+    let pass = pass.map(|p| format!(" {PASS_OPTION} {p}")).unwrap_or_default();
+    let tie = format!("{to} --task-id {id} --dispatch-id {}{pass}", b.dispatch);
     let send = |kind: &str, subject: &str, body: &str| format!("  {CLI} orchestration send --type {kind} --subject \"{id} {subject}\" --body \"{body}\"{tie}\n");
     let run = b.run.map(|r| format!(", Run {r}")).unwrap_or_default();
     let mut s = format!("Kolux task {id} ({}{run}). You are a Kolux worker; a coordinator handed you this task.\n\n", b.dispatch);
@@ -2831,5 +2990,136 @@ mod tests {
         assert!(long.chars().count() <= 60, "{}", long.chars().count());
         // A name that is nothing but control characters falls through to the next one.
         assert_eq!(label(json!({ "id": "task-1", "displayName": "\u{1b}[0m\n", "title": "Real title" })), "Real title");
+    }
+
+    #[test]
+    fn orch067_a_brief_carries_one_dispatch_pass_in_every_ready_made_command_and_none_without_one() {
+        let task = json!({ "id": "task-4", "spec": "Fix it." });
+        let b = Brief { dispatch: "dispatch-7", run: Some("run-2"), coordinator: Some("term-1"), behind: None, levels_left: 1 };
+        let with = brief_tied(&task, &b, Some("p4ss-abc"));
+        let cmds: Vec<&str> = with.lines().filter(|l| l.contains(" orchestration send ")).collect();
+        assert_eq!(cmds.len(), 4, "{with}");
+        for l in &cmds {
+            assert!(l.contains("--dispatch-capability p4ss-abc") && l.contains("--dispatch-id dispatch-7"), "{l}");
+        }
+        // Only inside the commands, never as a field or line of its own.
+        assert_eq!(with.matches("p4ss-abc").count(), 4, "{with}");
+        let without = brief(&task, &b);
+        assert!(!without.contains("--dispatch-capability"), "{without}");
+        assert_eq!(brief_tied(&task, &b, None), without);
+    }
+
+    #[test]
+    fn orch067_b_a_report_without_the_pass_is_mail_only_and_the_right_pass_settles() {
+        let mut m = Mail::default();
+        let run = m.run_create("term-1", "work", 1)["run"]["id"].as_str().unwrap().to_string();
+        let d = vec![json!({ "id": "dispatch-1", "runId": run, "taskId": "task-1", "status": "running", "terminal": 2, "runtime": std::process::id(), "pass": "secret-1" })];
+        let to = format!("run:{run}");
+        let tasks = || vec![json!({ "id": "task-1", "runId": run, "status": "dispatched", "dispatchId": "dispatch-1" })];
+        let live = |_: &str| true;
+        for wrong in [json!({}), json!({ "dispatchCapability": "secret-2" }), json!({ "dispatchCapability": "  " })] {
+            let mut a = json!({ "to": to, "subject": "task-1 done", "type": "worker_done", "outcome": "succeeded", "taskId": "task-1", "dispatchId": "dispatch-1" });
+            a.as_object_mut().unwrap().extend(wrong.as_object().unwrap().clone());
+            let (mut t, mut dd) = (tasks(), d.clone());
+            // The mail still goes; the task does not move; the reply names the option.
+            assert!(m.send("term-2", &a, &d, &live, 2).is_ok());
+            let no = report(&mut t, &mut dd, "term-2", &a, 2).unwrap();
+            assert_eq!(no["settles"], false, "{no}");
+            assert!(no["why"].as_str().unwrap().contains(PASS_OPTION), "{no}");
+            assert_eq!(t[0]["status"], "dispatched");
+        }
+        let beat = json!({ "to": to, "subject": "b", "type": "heartbeat", "dispatchId": "dispatch-1" });
+        let (mut t, mut dd) = (tasks(), d.clone());
+        assert_eq!(report(&mut t, &mut dd, "term-2", &beat, 3).unwrap()["settles"], false);
+        assert!(dd[0].get("lastBeatAt").is_none());
+        let ok = json!({ "to": to, "subject": "task-1 done", "type": "worker_done", "outcome": "succeeded", "taskId": "task-1", "dispatchId": "dispatch-1", "dispatchCapability": "secret-1" });
+        let (mut t, mut dd) = (tasks(), d.clone());
+        let yes = report(&mut t, &mut dd, "term-2", &ok, 4).unwrap();
+        assert_eq!(t[0]["status"], "completed", "{yes}");
+        // A dispatch without a pass (the low-level dispatch command) is tied to its pane as before.
+        let mut plain = d.clone();
+        plain[0].as_object_mut().unwrap().remove("pass");
+        let (mut t, mut dd) = (tasks(), plain);
+        report(&mut t, &mut dd, "term-2", &json!({ "type": "worker_done", "outcome": "succeeded", "dispatchId": "dispatch-1", "subject": "s" }), 5).unwrap();
+        assert_eq!(t[0]["status"], "completed");
+    }
+
+    #[test]
+    fn orch067_c_a_question_with_a_wrong_or_missing_pass_is_turned_away_before_it_is_made() {
+        let mut m = Mail::default();
+        let run = m.run_create("term-1", "o", 1)["run"]["id"].as_str().unwrap().to_string();
+        let peers = vec![peer("term-1", Some("claude"), true, "G:/r"), peer("term-2", Some("claude"), true, "G:/r/w"), peer("term-3", Some("claude"), true, "G:/r/v")];
+        let me = std::process::id();
+        let d = vec![
+            json!({ "id": "dispatch-1", "runId": run, "taskId": "task-1", "status": "running", "terminal": 2, "runtime": me, "pass": "secret-1" }),
+            json!({ "id": "dispatch-2", "runId": run, "taskId": "task-2", "status": "running", "terminal": 3, "runtime": me }),
+        ];
+        let to = format!("run:{run}");
+        let before = m.messages.len();
+        for wrong in [json!({}), json!({ "dispatchCapability": "secret-9" })] {
+            let mut a = json!({ "question": "tabs or spaces?", "to": to });
+            a.as_object_mut().unwrap().extend(wrong.as_object().unwrap().clone());
+            let e = m.ask("term-2", &a, &d, &peers, 2).unwrap_err();
+            assert!(e.message.contains(PASS_OPTION) && e.message.contains("no question was made"), "{}", e.message);
+        }
+        assert_eq!(m.messages.len(), before);
+        let q = m.ask("term-2", &json!({ "question": "tabs?", "to": to, "dispatchCapability": "secret-1" }), &d, &peers, 3).unwrap();
+        assert_eq!(q["status"], "open", "{q}");
+        // A worker without a pass asks as before; a resume needs none.
+        assert_eq!(m.ask("term-3", &json!({ "question": "spaces?", "to": to }), &d, &peers, 4).unwrap()["status"], "open");
+        let id = q["messageId"].as_str().unwrap().to_string();
+        assert_eq!(m.ask("term-2", &json!({ "resume": id }), &d, &peers, 5).unwrap()["status"], "open");
+    }
+
+    #[test]
+    fn orch067_d_every_read_of_worker_output_hides_the_pass_and_says_so() {
+        let passes = passes(&[json!({ "id": "dispatch-1", "pass": "s3cret" }), json!({ "id": "dispatch-2" }), json!({ "id": "dispatch-3", "pass": "" })]);
+        assert_eq!(passes, vec!["s3cret".to_string()]);
+        let mut out = json!({ "terminal": "term-2", "lines": [{ "cursor": 1, "text": "kolux orchestration send --dispatch-capability s3cret" }], "pending": "> typing s3cret", "rows": ["s3cret s3cret"], "warnings": ["older"] });
+        redact_read(&mut out, &passes);
+        assert!(!out.to_string().contains("s3cret"), "{out}");
+        assert_eq!(out["lines"][0]["text"], format!("kolux orchestration send --dispatch-capability {PASS_HIDDEN}"));
+        assert_eq!(out["rows"][0], format!("{PASS_HIDDEN} {PASS_HIDDEN}"));
+        assert_eq!(out["warnings"].as_array().unwrap().len(), 2, "{out}");
+        assert!(out["warnings"][1].as_str().unwrap().contains("hidden"), "{out}");
+        let mut clean = json!({ "lines": [{ "text": "hello" }] });
+        redact_read(&mut clean, &passes);
+        assert!(clean["warnings"].is_null(), "{clean}");
+        let lines = redact_lines(vec!["a".into(), "pass s3cret here".into()], &passes);
+        assert_eq!(lines[1], format!("pass {PASS_HIDDEN} here"));
+        assert!(lines.len() == 3 && lines[2].contains("hidden"), "{lines:?}");
+        assert_eq!(redact_lines(vec!["a".into()], &passes), vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn orch036_typing_into_a_workers_terminal_takes_it_over_so_release_and_stop_leave_it_open() {
+        let me = std::process::id();
+        let now = wall_ms();
+        // The user typed into terminal 3636 now: dispatch-1 was made before that, dispatch-2 after.
+        sendonce::other_writer(3636, "x");
+        let typed = wall_ms();
+        let mut d = vec![
+            json!({ "id": "dispatch-1", "runId": "run-1", "taskId": "task-1", "status": "completed", "terminal": 3636, "runtime": me, "agent": "claude", "created": now.saturating_sub(10_000) }),
+            json!({ "id": "dispatch-2", "runId": "run-1", "taskId": "task-2", "status": "completed", "terminal": 3636, "runtime": me, "agent": "claude", "created": typed + 10_000 }),
+            json!({ "id": "dispatch-3", "runId": "run-1", "taskId": "task-3", "status": "running", "terminal": 3637, "runtime": me, "agent": "claude", "created": now.saturating_sub(10_000) }),
+        ];
+        let live = |_: &str| true;
+        let agent_of = |_: &str| Some(Some("claude".to_string()));
+        let (r, h) = release_with(&mut d, &live, "dispatch-1", Some("run-1"), 1, &agent_of).unwrap();
+        assert_eq!(h, None, "{r}");
+        assert!(r["terminalLeftOpen"].as_str().unwrap().contains("taken over"), "{r}");
+        assert_eq!(r["terminalState"], "released");
+        // Made after the typing, and dispatch-1's claim is released: the worker's own, so it closes.
+        let (r, h) = release_with(&mut d, &live, "dispatch-2", Some("run-1"), 2, &agent_of).unwrap();
+        assert_eq!(h.as_deref(), Some("term-3636"), "{r}");
+        // A stop leaves a taken-over terminal running and says so; the task is freed all the same.
+        sendonce::other_writer(3637, "y");
+        let mut tasks = vec![json!({ "id": "task-3", "runId": "run-1", "status": "dispatched", "dispatchId": "dispatch-3" })];
+        let (r, kill) = stop_with(&mut tasks, &mut d, "dispatch-3", Some("run-1"), 3, &agent_of).unwrap();
+        assert_eq!(kill, None, "{r}");
+        assert!(r["terminalLeftOpen"].as_str().unwrap().contains("taken over") && r["process"] == "unverifiable", "{r}");
+        assert_eq!(tasks[0]["status"], "ready");
+        // A terminal nobody typed into is nobody's but the worker's.
+        assert!(!sendonce::taken_over_since(3638, 0));
     }
 }

@@ -1,0 +1,45 @@
+
+T-323-b piece 1 (2026-10-19, lane/editor from 27a86891): the editor-lane consumers of the editor preferences. T-323-b
+stays open (other lanes' parts, and the minimap waits for T-316-b).
+
+BUILT
+- src/editor/DiffPane.tsx: diffStart(prefs) and a settings read at mount. A new diff tab starts split or inline
+  (diffView), word-wrapped or not (diffWordWrap, separate from the editor's wrap) and with whitespace-only hunks shown
+  or hidden (diffShowWhitespace). Once the person uses the tab's own Inline / Side by side button or its menu, the
+  settings no longer move that tab.
+- src/editor/EditorPane.tsx: the rich view's spellCheck attribute follows Settings > General > markdown spellcheck
+  (default on); word wrap was already read from the same file.
+- Already wired before this piece: auto-save through the settings (autosave.ts reads editorAutoSave and the delay) and
+  the editor's word wrap.
+TESTS: src/editor/DiffPane.test.ts, one new test (defaults inline / unwrapped / hidden; each field read; the editor's wrap
+  does not move the diff's).
+READINGS: vitest src/editor src/settings: 83 files, 480 tests passed (v3-t323-a.log); tsc --noEmit 0 (v3-t323-tsc.log).
+  No Rust, no shared file, no patch.
+LIVE PROOF PENDING (batched)
+1. Settings > General: diff view = Side by side, diff word wrap on, show whitespace changes on. Open a diff tab: it opens
+   in two columns, wrapped, whitespace-only changes shown. Click Inline in the tab: it switches and stays.
+2. Turn markdown spelling off: a misspelt word in a note's rich view has no red underline; back on, it has.
+STILL OPEN IN T-323-b: minimap (see T-316-b), combined diff's file tree, Open in menus, proxy settings (Rust), Warp and
+  Ghostty folder scan.
+
+PIECE 2 (lane/editor, 2026-10-20)
+BUILT
+- src/settings/editorPrefs.ts: allChangesStart(settings, keys): All Changes' first layout is the layout saved from a tab
+  when there is one, else the diff view, diff word wrap, show whitespace and file tree choices of Settings > General.
+  src/editor/AllChangesPane.tsx uses it (was: its own saved keys only, so the General choices never reached it).
+- src/editor/openIn.ts: targetsOf reads readOpenIn (src/settings/openIn.ts), so the Explorer's and the Projects panel's
+  Open in menus list the apps of Settings > General in the user's order; File Explorer is the system file manager.
+  Before this the menu read rows with a label field only, so rows saved by General settings (name field) were dropped.
+  src/settings/openIn.ts: readOpenIn accepts the older label field as the name.
+- Checked and already consumed: auto-save (autosave.ts), editor word wrap, minimap, markdown spellcheck (EditorPane.tsx),
+  diff view / wrap / whitespace (DiffPane.tsx).
+TESTS: editorPrefs.test.ts +1 (allChangesStart), openIn.test.ts +1 and one changed (defaults File Explorer then VS Code;
+  saved order; label rows; empty list).
+READINGS: vitest src/editor src/settings src/scm src/projects: 151 files, 953 passed (t1-vitest.log); with all pending
+  patches applied (then reverted): src/editor src/settings src/automations 110 files, 680 passed, tsc 0 (t3-*.log).
+  No Rust, no shared file, no new patch.
+LIVE PROOF PENDING (batched)
+1. Settings > General: diff view = Side by side, show file tree on. Open All Changes: two columns, tree open.
+2. Settings > General > Open in: reorder or add Zed. The Explorer's Open in button lists them in that order.
+STILL OPEN IN T-323-b: Open in for a single file and the keybindings file (needs a file variant of open_in in files.rs),
+  worktree menu (T-304), proxy settings (Rust), Warp and Ghostty folder scan.

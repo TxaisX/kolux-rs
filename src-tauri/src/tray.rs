@@ -211,7 +211,9 @@ pub fn paint(rgba: &[u8], w: u32, h: u32, dot: bool, dev: bool) -> Vec<u8> {
 }
 
 /// STAT-048: the taskbar badge. Windows has no badge count, so the count is painted onto an overlay
-/// icon: an amber disc with the number in white, "99+" past the cap.
+/// icon: an amber disc with the number in white, "99+" past the cap. Since the 2026-10-20 merge of
+/// main the one registered command is `badge::badge_set` (single digit, plain disc above 9); this
+/// two-digit painter is unregistered and kept only until it is folded in or dropped (kolux-rs-after.md).
 pub const BADGE_SIZE: u32 = 32;
 pub const WHITE: [u8; 4] = [255, 255, 255, 255];
 const BADGE_CAP: u32 = 99;

@@ -59,7 +59,7 @@ export default function StartGit({ folder, files, busy, onStart, onFolder, onSca
           </button>
           {onScan && (
             <button className="btn" disabled={busy} onClick={onScan} title="The folder holds several repositories: list them and bring in the ones you pick">
-              Look for repositories inside
+              Look for Git projects inside
             </button>
           )}
           {onFolder && (

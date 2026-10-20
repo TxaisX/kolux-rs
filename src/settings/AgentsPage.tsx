@@ -1,11 +1,14 @@
 // Settings > Agents (SET-027): which agents are switched on, the default one, and how each starts.
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
+import { SearchFolds } from "./search";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import type { AgentInfo } from "../launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId, disabledAgents, switchAgent } from "../launch/agents";
 import { Segmented } from "./GeneralPage";
 import { useSettings } from "./useSettings";
+import { GeneratedTitlesCard } from "../status/GeneratedTitlesCard";
+import { useDraft } from "./useDraft";
 import TeamsModeCard from "../launch/TeamsModeCard";
 import KeepAwakeCard from "../launch/KeepAwakeCard";
 import { useTeamsHost } from "../launch/teams";
@@ -22,13 +25,12 @@ const optionsOf = (s: Record<string, unknown>, id: string): Options => ((s[OPTIO
 
 /** A text field kept as a draft while typing and saved when it loses focus. */
 function Draft({ label, value, multi, placeholder, onSave }: { label: string; value: string; multi?: boolean; placeholder: string; onSave: (v: string) => void }) {
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
-  const props = { "aria-label": label, className: multi ? "field multi" : "field", placeholder, value: draft, onBlur: () => draft !== value && onSave(draft) };
+  const { props: typing } = useDraft(value, (text) => Promise.resolve(onSave(text))); // SET-036: saves after a pause, on leaving, on page change
+  const props = { "aria-label": label, className: multi ? "field multi" : "field", placeholder, ...typing };
   return (
     <label className="agent-field">
       <span>{label}</span>
-      {multi ? <textarea {...props} rows={3} onChange={(e) => setDraft(e.target.value)} /> : <input {...props} onChange={(e) => setDraft(e.target.value)} />}
+      {multi ? <textarea {...props} rows={3} /> : <input {...props} />}
     </label>
   );
 }
@@ -81,6 +83,7 @@ export function HooksSwitch({ on, onSwitch, file, problems = [] }: { on: boolean
 
 export default function AgentsPage() {
   const { settings, error, save: write } = useSettings();
+  const found = useContext(SearchFolds); // SET-007: a search that matches a launch line opens its fold
   const [written, setWritten] = useState(0);
   const save = (patch: Record<string, unknown>) => write(patch).then(() => setWritten((n) => n + 1));
   const [agents, setAgents] = useState<AgentInfo[] | null>(null);
@@ -178,7 +181,7 @@ export default function AgentsPage() {
                 <span className="agent-name">{a.name}</span>
                 {a.id === def && on && <span className="conn-chip">default</span>}
               </label>
-              <details>
+              <details open={found?.has("how-it-starts") || undefined}>
                 <summary>How it starts</summary>
                 <code className="agent-line">{lines[a.id] ?? ""}</code>
                 <Draft label="Command" value={o.command ?? ""} placeholder={a.path ?? a.program} onSave={(v) => setOption(a.id, "command", v)} />
@@ -193,6 +196,7 @@ export default function AgentsPage() {
       <AgentsPageView cap={capOn(settings ?? {})} onCap={(on) => void save({ [CAP_FIELD]: on })} />
       <TeamsModeCard settings={settings} save={save} host={teamsHost} />
       <KeepAwakeCard settings={settings} save={save} />
+      <GeneratedTitlesCard settings={settings} save={save} />
       <CachePick minutes={cacheMinutes(settings)} onPick={(m) => void save(m === null ? { [CACHE_ON]: false } : { [CACHE_ON]: true, [CACHE_LENGTH]: m })} />
     </>
   );

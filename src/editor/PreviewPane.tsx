@@ -11,15 +11,17 @@ import { baseName, subscribe, textOf } from "./buffers";
 import { domPick, selections } from "./notes";
 import { Contents, FindBar, selectedIn, type FindOpen } from "./NoteTools";
 import { outline } from "./toc";
+import { followClick, type LinkHandler } from "./linkClicks";
+import { drawDiagrams, loadRenderers, renderNote, watchRenderers } from "./diagrams";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
 import "./editor-extras.css";
 
-type Props = { id: number; path: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void };
+type Props = { id: number; path: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; worktree?: string | null; onLink?: LinkHandler };
 
 export const renderMarkdown = (md: string) => DOMPurify.sanitize(marked.parse(md, { async: false }));
 
-export default function PreviewPane({ id, path, hidden = false, focused = false, onFocus, onClose }: Props) {
+export default function PreviewPane({ id, path, hidden = false, focused = false, onFocus, onClose, worktree = null, onLink }: Props) {
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tries, setTries] = useState(0);
@@ -30,6 +32,20 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
   const section = useRef<HTMLElement>(null);
   const root = useCallback(() => page.current, []);
   const keymap = useKeymap();
+  // EDIT-029 / EDIT-030: diagrams and maths draw once the libraries are plugged in (diagrams.ts).
+  const [libs, setLibs] = useState(0);
+  useEffect(() => {
+    void loadRenderers();
+    return watchRenderers(() => setLibs((n) => n + 1));
+  }, []);
+  const html = useMemo(() => (text === null ? "" : renderNote(text, renderMarkdown)), [text, libs]);
+  useEffect(() => {
+    let alive = true;
+    if (page.current) void drawDiagrams(page.current, true, () => alive);
+    return () => {
+      alive = false;
+    };
+  }, [html]);
   const hasHeadings = useMemo(() => outline(text ?? "").length > 0, [text]);
 
   useEffect(() => {
@@ -111,9 +127,11 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
         className="pane-body md-preview"
         aria-readonly="true"
         onClick={(e) => {
+          // EDIT-014: Mod+click follows a link; a plain click never navigates.
+          if (followClick(e.nativeEvent, e.currentTarget, path, worktree, onLink)) return;
           if ((e.target as HTMLElement).closest("a")) e.preventDefault();
         }}
-        dangerouslySetInnerHTML={{ __html: text === null ? "" : renderMarkdown(text) }}
+        dangerouslySetInnerHTML={{ __html: html }}
       />
     </section>
   );

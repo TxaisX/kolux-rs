@@ -2,6 +2,8 @@
 // the source editor or the preview, and all notes copy as one Markdown block for an agent.
 
 import { ageLabel } from "../terminal/status";
+import { menuAgents } from "../launch/agents";
+import type { AgentInfo } from "../launch/PlusMenu";
 
 export type Note = { path: string; line: number; time: number; quote: string; note: string };
 export type Draft = { path: string; line: number; quote: string };
@@ -67,4 +69,12 @@ export function sendTargets<P extends { key: number; agent: string; kind?: strin
       const at = changed[p.key]?.at;
       return { key: p.key, label: name(p), since: at === undefined ? "no change yet" : `changed ${ageLabel(at, now)}` };
     });
+}
+
+/** EDIT-020 (T-132-b): one agent the Send menu can start with the notes as its first prompt. */
+export type StartChoice = { id: string; label: string };
+
+/** The installed agents the Send menu offers to start, the default agent first. */
+export function startChoices(agents: AgentInfo[], defaultId: string): StartChoice[] {
+  return menuAgents(agents, defaultId).map((a) => ({ id: a.id, label: a.name }));
 }

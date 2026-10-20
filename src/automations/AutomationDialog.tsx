@@ -9,10 +9,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { noteUse } from "../onboarding/features";
 import type { AgentInfo } from "../launch/PlusMenu";
 import { folderName, type Project, type Worktree } from "../projects/model";
-import { defaultForm, findNext, GRACE, PRECHECK, preselect, type Automation, type Preset, type ScheduleForm } from "./model";
+import { defaultForm, EVENT_CHOICES, findNext, GRACE, PRECHECK, preselect, type Automation, type Preset, type ScheduleForm } from "./model";
 import { probeSetup } from "../settings/setupProbe";
+import SearchPick from "../editor/SearchPick";
 import { clampBox, cronWords, fieldNames, from12, nudge, templates, to12, toPreset, weekdayNames, type Template } from "./timetable";
 
 type Props = {
@@ -100,7 +102,18 @@ export default function AutomationDialog({ projects, agents, editing, template, 
   const [mode, setMode] = useState<"existing" | "new-per-run">(editing?.workspaceMode ?? "existing");
   const [workspace, setWorkspace] = useState(editing?.workspace ?? "");
   const [base, setBase] = useState(editing?.baseBranch ?? "");
+  // EDIT-048: the project's branches narrow as the base branch is typed (the box stays free text when the list cannot be read).
+  const [branches, setBranches] = useState<string[]>([]);
+  useEffect(() => {
+    let live = true;
+    setBranches([]);
+    if (projectId) invoke<string[]>("workspace_branches", { projectId }).then((b) => live && setBranches(b), () => undefined);
+    return () => {
+      live = false;
+    };
+  }, [projectId]);
   const [runSetup, setRunSetup] = useState(editing?.runSetup ?? false);
+  const [reuse, setReuse] = useState(editing?.reuseSession ?? false);
   const [hasSetup, setHasSetup] = useState<boolean | null>(null);
   const [grace, setGrace] = useState(editing?.missedRunGraceMinutes ?? start?.graceMinutes ?? 0);
   const [precheck, setPrecheck] = useState(editing?.precheck ?? "");
@@ -207,9 +220,10 @@ export default function AutomationDialog({ projects, agents, editing, template, 
     if (saving || !ready) return;
     setSaving(true);
     setSaveError(null);
-    const input = { id: editing?.id, requestId, name, prompt, provider, projectId, workspaceMode: mode, workspace: mode === "existing" ? workspace : null, baseBranch: mode === "new-per-run" ? base : "", runSetup: setupShown === true, missedRunGraceMinutes: grace, precheck, precheckTimeoutSeconds: limit, schedule, trigger: timed ? undefined : { kind: "event", event: starts } };
+    const input = { id: editing?.id, requestId, name, prompt, provider, projectId, workspaceMode: mode, workspace: mode === "existing" ? workspace : null, baseBranch: mode === "new-per-run" ? base : "", runSetup: setupShown === true, reuseSession: mode === "existing" && reuse, missedRunGraceMinutes: grace, precheck, precheckTimeoutSeconds: limit, schedule, trigger: timed ? undefined : { kind: "event", event: starts } };
     invoke<Automation>("automation_save", { input })
       .then((a) => {
+        noteUse("automations");
         onSaved(a);
         onClose();
       })
@@ -302,6 +316,11 @@ export default function AutomationDialog({ projects, agents, editing, template, 
                 <input type="radio" checked={mode === "existing"} onChange={() => setMode("existing")} /> An existing worktree
               </label>
               {mode === "existing" && (
+                <label className="auto-radio">
+                  <input type="checkbox" checked={reuse} onChange={(e) => setReuse(e.target.checked)} /> Continue in the session the last run left open, when the agent is idle there
+                </label>
+              )}
+              {mode === "existing" && (
                 <select className="field" aria-label="Worktree" value={workspace} disabled={!worktrees} onChange={(e) => setWorkspace(e.target.value)}>
                   {(worktrees ?? []).map((w) => (
                     <option key={w.path} value={w.path}>
@@ -313,7 +332,7 @@ export default function AutomationDialog({ projects, agents, editing, template, 
               <label className="auto-radio">
                 <input type="radio" checked={mode === "new-per-run"} onChange={() => setMode("new-per-run")} /> A new worktree for every run
               </label>
-              {mode === "new-per-run" && <input className="field" aria-label="Base branch" value={base} onChange={(e) => setBase(e.target.value)} placeholder={`From ${project?.base || "the default branch"}`} />}
+              {mode === "new-per-run" && <SearchPick items={branches} label="Base branch" value={base} onChange={setBase} placeholder={`From ${project?.base || "the default branch"}`} />}
               {setupShown !== null && (
                 <label className="auto-radio">
                   <input type="checkbox" checked={setupShown} onChange={(e) => setRunSetup(e.target.checked)} /> Run the project setup in each new worktree
@@ -324,7 +343,11 @@ export default function AutomationDialog({ projects, agents, editing, template, 
               Starts
               <select className="field" value={starts} onChange={(e) => setStarts(e.target.value)}>
                 <option value="schedule">On a timetable</option>
-                <option value="pr-opened">When a pull request opens</option>
+                {EVENT_CHOICES.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
               </select>
             </label>
             {timed && (
@@ -408,7 +431,7 @@ export default function AutomationDialog({ projects, agents, editing, template, 
               </label>
               </>
             )}
-            {!timed && <span className="muted">A pull request opened from one of this project's worktrees starts a run, with a line about it on the end of the prompt. Kolux spots one within about 15 minutes while it is open; after a run it rests five minutes.</span>}
+            {!timed && <span className="muted">{EVENT_CHOICES.find((c) => c.value === starts)?.help}</span>}
             <label className="auto-label">
               Precheck command
               <input className="field" value={precheck} placeholder="Optional, for example: git diff --quiet" onChange={(e) => setPrecheck(e.target.value)} />

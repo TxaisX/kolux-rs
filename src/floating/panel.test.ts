@@ -1,0 +1,157 @@
+// TERM-059 / TERM-061 / TERM-052 / T-093-a: the floating panel's tabs, close rules and keys.
+import { expect, test } from "vitest";
+import { add, answer, asked, close, closeKey, empty, focused, isTrusted, KEY_BASE, programExited, reorder, route, saveTarget, select, selectNumber, setDirty, show, hide, startFolder, step, toggle, trust, type Panel } from "./panel";
+
+const three = (): Panel => {
+  let p = empty();
+  p = add(p, { kind: "terminal" });
+  p = add(p, { kind: "browser" });
+  p = add(p, { kind: "markdown", path: "C:\\notes\\a.md" });
+  return p;
+};
+const keys = (p: Panel) => p.tabs.map((t) => t.key);
+
+test("TERM-059: the toggle opens then closes the panel, and opening an empty panel makes no terminal", () => {
+  const p0 = empty();
+  const p1 = toggle(p0);
+  expect(p1.open).toBe(true);
+  expect(p1.tabs).toEqual([]);
+  expect(toggle(p1).open).toBe(false);
+  expect(hide(show(p0))).toEqual({ ...p0, open: false, focus: null });
+});
+
+test("TERM-059: opening puts typing focus in the active tab straight away", () => {
+  const p = hide(three());
+  const opened = toggle(p);
+  expect(opened.focus).toBe(opened.active);
+  expect(focused(opened).focus).toBeNull();
+});
+
+test("TERM-061: a new tab (an agent started from the panel too) is selected and focused, and opens a closed panel", () => {
+  const p = add(hide(three()), { kind: "agent", agent: "claude" });
+  expect(p.open).toBe(true);
+  expect(p.active).toBe(p.tabs[3].key);
+  expect(p.focus).toBe(p.active);
+  expect(p.tabs[3].title).toBe("claude");
+  expect(p.tabs[0].key).toBe(KEY_BASE);
+});
+
+test("TERM-061: tabs can be reordered, and cycling then follows the new order", () => {
+  let p = three();
+  const [a, b, c] = keys(p);
+  p = reorder(p, c, 0);
+  expect(keys(p)).toEqual([c, a, b]);
+  p = select(p, c);
+  expect(step(p, 1, "all").active).toBe(a);
+  expect(step(p, -1, "all").active).toBe(b);
+  expect(reorder(p, 999, 0)).toBe(p);
+  expect(keys(reorder(p, a, 99))).toEqual([c, b, a]);
+});
+
+test("TERM-052: with 3 tabs the 2 shortcut selects the middle tab and the 5 shortcut does nothing", () => {
+  const p = three();
+  const [, b] = keys(p);
+  expect(selectNumber(p, 2).active).toBe(b);
+  expect(selectNumber(p, 5)).toBe(p);
+  expect(selectNumber(p, 0)).toBe(p);
+});
+
+test("TERM-061: closing the last tab leaves the panel open on its empty state", () => {
+  let p = add(empty(), { kind: "terminal" });
+  p = close(p, [p.active as number]);
+  expect(p.open).toBe(true);
+  expect(p.tabs).toEqual([]);
+  expect(p.active).toBeNull();
+});
+
+test("TERM-061: closing the active tab selects the one that took its place, else the one before", () => {
+  const p = three();
+  const [a, b, c] = keys(p);
+  expect(close(select(p, b), [b]).active).toBe(c);
+  expect(close(p, [c]).active).toBe(b); // c was active (last added)
+  expect(close(select(p, a), [a]).active).toBe(b);
+  expect(close(select(p, a), [c]).active).toBe(a); // closing another tab leaves the selection
+});
+
+test("TERM-061: closing an unsaved markdown tab asks first; discard closes it, keep leaves everything", () => {
+  let p = three();
+  const md = keys(p)[2];
+  p = setDirty(p, md, true);
+  const asking = close(p, [md]);
+  expect(asking.tabs).toHaveLength(3);
+  expect(asked(asking)?.key).toBe(md);
+  expect(answer(asking, "keep").tabs).toHaveLength(3);
+  expect(answer(asking, "keep").asking).toEqual([]);
+  const gone = answer(asking, "discard");
+  expect(gone.tabs).toHaveLength(2);
+  expect(asked(gone)).toBeNull();
+});
+
+test("TERM-061: several unsaved markdown tabs are asked about one at a time; keep cancels the rest", () => {
+  let p = empty();
+  p = add(p, { kind: "markdown", path: "a.md" });
+  p = add(p, { kind: "terminal" });
+  p = add(p, { kind: "markdown", path: "b.md" });
+  const [m1, t, m2] = keys(p);
+  p = setDirty(setDirty(p, m1, true), m2, true);
+  p = close(p, [m1, t, m2]);
+  expect(keys(p)).toEqual([m1, m2]); // the clean terminal went at once
+  expect(asked(p)?.key).toBe(m1);
+  const next = answer(p, "discard");
+  expect(asked(next)?.key).toBe(m2);
+  expect(answer(next, "keep").tabs.map((x) => x.key)).toEqual([m2]);
+  expect(answer(empty(), "discard")).toEqual(empty());
+});
+
+test("TERM-061: a program exiting on its own keeps its tab, apart from the user closing it", () => {
+  const p = three();
+  const t = keys(p)[0];
+  const ended = programExited(p, t);
+  expect(ended.tabs).toHaveLength(3);
+  expect(ended.tabs[0].exited).toBe(true);
+  expect(close(ended, [t]).tabs).toHaveLength(2);
+});
+
+test("TERM-061: Mod+W on an empty panel minimizes it; with tabs it closes the active one", () => {
+  const e = show(empty());
+  expect(closeKey(e).open).toBe(false);
+  const p = three();
+  const after = closeKey(p);
+  expect(after.open).toBe(true);
+  expect(after.tabs).toHaveLength(2);
+});
+
+test("TERM-061: floating terminals start in the home folder, and trusted folders are remembered", () => {
+  expect(startFolder("C:\\Users\\a")).toBe("C:\\Users\\a");
+  expect(startFolder("C:\\Users\\a", "  ")).toBe("C:\\Users\\a");
+  expect(startFolder("C:\\Users\\a", "D:\\work")).toBe("D:\\work");
+  let p = empty();
+  expect(isTrusted(p, "D:\\work")).toBe(false);
+  p = trust(trust(p, "D:\\work"), "D:\\work");
+  expect(p.trusted).toEqual(["D:\\work"]);
+  expect(isTrusted(p, "D:\\work")).toBe(true);
+});
+
+test("T-093-a: Mod+S saves only the floating editor's file, only with focus in the open panel", () => {
+  const p = three(); // the markdown tab is active
+  const md = keys(p)[2];
+  expect(saveTarget(p, true)).toBe(md);
+  expect(saveTarget(p, false)).toBeNull(); // focus is in the main window: its own editor saves
+  expect(saveTarget(hide(p), true)).toBeNull();
+  expect(saveTarget(select(p, keys(p)[0]), true)).toBeNull(); // a terminal tab has nothing to save
+  expect(route("editor.save", undefined, true, true)).toEqual({ op: "save" });
+  expect(route("editor.save", undefined, true, false)).toBeNull();
+});
+
+test("TERM-059/060: the panel commands work anywhere; tab commands only inside the open panel and never fall through", () => {
+  expect(route("floatingTerminal.toggle", undefined, false, false)).toEqual({ op: "toggle" });
+  expect(route("floatingWorkspace.maximize", undefined, true, false)).toEqual({ op: "maximize" });
+  expect(route("floatingWorkspace.maximize", undefined, false, false)).toBeNull();
+  expect(route("floatingWorkspace.minimize", undefined, true, true)).toEqual({ op: "minimize" });
+  expect(route("tab.close", undefined, true, false)).toBeNull();
+  expect(route("tab.close", undefined, true, true)).toEqual({ op: "close" });
+  expect(route("tab.selectByIndex", 1, true, true)).toEqual({ op: "select", n: 2 });
+  expect(route("tab.reopenClosed", undefined, true, true)).toEqual({ op: "none" });
+  expect(route("app.settings", undefined, true, true)).toBeNull();
+  expect(route("tab.nextAllTypes", undefined, true, true)).toEqual({ op: "step", by: 1, mode: "all" });
+});

@@ -1,13 +1,12 @@
 diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
-index 89856f51..d72d2393 100644
 --- a/src-tauri/src/lib.rs
 +++ b/src-tauri/src/lib.rs
-@@ -346,6 +346,8 @@ pub fn run() {
+@@ -491,6 +491,8 @@
              hooks::agent_hooks::agent_hooks_file,
              hooks::agent_hooks::saved::agent_status_saved,
              hooks::agent_hooks::saved::agent_resumable,
 +            tray::tray_close_requested, // APP-007 (tray FIX-1): the page asks before the main window closes
 +            tray::tray_ping, // STAT-047: the tray dot lights before any toast switch is consulted
              protected::protected_rules,
-             hooks::claude_usage,
-             sysmem::process_memory,
+             protected_custom::protected_rule_check,
+             protected_custom::protected_attempts,

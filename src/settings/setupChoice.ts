@@ -16,6 +16,8 @@ export interface RepoSetup {
   inherited: Choice;
   /** Whether the agent waits for setup to finish before it starts. */
   wait: boolean;
+  /** SESS-026: where setup opens in a new workspace: tab (the default), right, down or ask. */
+  mode?: string;
   /** Both scripts exist and no choice is made. */
   suggestBoth: boolean;
   /** Why the choice in force would not run on this PC (two interpreters, or `both` through cmd); null when it would. */
@@ -106,4 +108,23 @@ export function trustNote(s: RepoSetup): string {
   if (own && theirs) return `Your own setup runs without asking. ${asks}`;
   if (own) return "Your own setup runs without asking.";
   return theirs ? asks : "";
+}
+
+/** The store key the runner reads (setup.rs POLICY_KEY). */
+export const SETUP_POLICY_KEY = "setupPolicy";
+
+/** The global choice in force: "shared" and the older "shared-first" mean the shared script only; anything else, or nothing, is "local". */
+export function globalChoice(stored: unknown): Choice {
+  const v = typeof stored === "string" ? stored.trim() : "";
+  if (v === "shared" || v === "shared-first") return "shared";
+  return v === "both" ? "both" : "local";
+}
+
+/** The global row's choices: the same three as a repository's, worded for everywhere. */
+export function globalOptions(): { value: Choice; label: string }[] {
+  return [
+    { value: "local", label: "Your saved setup (kolux.yaml's runs when there is none)" },
+    { value: "shared", label: "The shared script in kolux.yaml only" },
+    { value: "both", label: "Both: yours first, then kolux.yaml's" },
+  ];
 }

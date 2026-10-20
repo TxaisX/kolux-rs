@@ -7,6 +7,8 @@
 
 import type { Agent } from "../chrome/VendorMark";
 import { focusIn, panesIn } from "../workspaces";
+import { resumeId, uniqueOwners } from "../sessions/ownership";
+import { sessionOrder } from "../sessions/restoreOrder";
 
 export const LAYOUT_FIELD = "savedLayout";
 
@@ -24,6 +26,8 @@ export type SavedPane = {
   args: string[];
   /** SESS-030: the agent's own session id from its newest hook event; a restart resumes it. */
   session?: string;
+  /** ACCT-063: the session this tab was forked from; a fork is never resumed as its source. */
+  forkOf?: string;
   /** Never written down: main.tsx fills it from the agent's standing start line at restore. */
   env?: [string, string][];
   /** Never written down: TERM-107, whether main.tsx's restore line carries the agent's resume form. */
@@ -50,6 +54,7 @@ export function layoutOf(panes: LivePane[], activeTab: Record<number, number>, f
     const s: SavedPane = { key: p.key, cwd: p.cwd, branch: p.branch, agent: p.agent, program: p.program, args: p.agent === "shell" ? p.args : [] };
     if (p.agentId !== undefined) s.agentId = p.agentId;
     if (p.session) s.session = p.session;
+    if (p.forkOf) s.forkOf = p.forkOf;
     if (p.account !== undefined) s.account = p.account;
     if (p.title !== undefined) s.title = p.title;
     if (p.group !== undefined) s.group = p.group;
@@ -86,7 +91,9 @@ function readPane(v: unknown): SavedPane | null {
     if (o.kind !== "browser" && o.kind !== "changes" && !str(o.path)) return null;
   }
   if (str(o.agentId)) p.agentId = o.agentId;
-  if (str(o.session) && o.session !== "") p.session = o.session;
+  if (str(o.forkOf) && o.forkOf !== "") p.forkOf = o.forkOf;
+  const own = resumeId({ session: str(o.session) ? o.session : undefined, forkOf: p.forkOf });
+  if (own !== null) p.session = own;
   if (strOrNull(o.account) && o.account !== undefined) p.account = o.account;
   if (str(o.title)) p.title = o.title;
   if (num(o.group)) p.group = o.group;
@@ -119,7 +126,8 @@ export function restoreLayout(value: unknown): SavedLayout | null {
   if (o.stacked && typeof o.stacked === "object") {
     for (const [d, s] of Object.entries(o.stacked as Record<string, unknown>)) if (typeof s === "boolean") stacked[d] = s;
   }
-  return tidy(panes, activeTab, num(o.focused) ? o.focused : 0, strOrNull(o.activeDir) ? o.activeDir : null, stacked);
+  // VIEW-107 (T-069-c): the tabs come back in session order, in this one pass.
+  return tidy(uniqueOwners(sessionOrder(panes)), activeTab, num(o.focused) ? o.focused : 0, strOrNull(o.activeDir) ? o.activeDir : null, stacked);
 }
 
 /** Drops the tabs whose folder is gone; the active workspace and tab come back only while they exist. */

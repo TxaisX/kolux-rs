@@ -6,12 +6,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { Refresh } from "../chrome/icons";
+import { fixChecks } from "../agentstart/host";
 import { openInBrowser } from "../browser/BrowserPane";
 import { useSettings } from "../settings/useSettings";
+import GhBanner, { classify } from "../tasks/GhBanner";
+import CommentsPanel from "./CommentsPanel";
+import ConflictPanel from "./ConflictPanel";
 import PrStart from "./PrStart";
 import { reviewHint, reviewWhere } from "./startPr";
-import { CHECKS_POLL_MS, checksSummary, reuseNoPr, stillRunning, type PrChecks } from "./checks";
+import { CHECKS_POLL_MS, CHECKS_UNLINKED_KEY, checksSummary, reuseNoPr, showing, stillRunning, unlinkedPrs, withUnlinkedPr, type PrChecks } from "./checks";
 import { prStateWord } from "./model";
+import { recordChecks } from "./prSearch";
 import { CHECK_CAP, capped, checkGroups } from "./review";
 import type { Check } from "./checks";
 
@@ -31,7 +36,7 @@ const when = (t?: string | null) => (t ? new Date(t).toLocaleString([], { dateSt
 
 export default function ChecksPanel({ dir, linked, visible }: Props) {
   const [note, setNote] = useState<string | null>(null);
-  const { settings } = useSettings();
+  const { settings, save } = useSettings();
   const inKolux = settings?.linksOpenInKolux === true;
   const rerun = (c: Check) => {
     setNote(null);
@@ -52,6 +57,7 @@ export default function ChecksPanel({ dir, linked, visible }: Props) {
     setGot((g) => (g && g.key === key ? { ...g, loading: true } : { key, data: null, error: null, loading: true }));
     invoke<PrChecks>("scm_pr_checks", { worktree: dir, linked })
       .then((data) => {
+        recordChecks(dir, data); // VIEW-043: the palette reads the same answer
         if (asking.current !== key) return;
         if (data.pr) noPrSeen.delete(key);
         else noPrSeen.set(key, Date.now());
@@ -74,7 +80,12 @@ export default function ChecksPanel({ dir, linked, visible }: Props) {
   }, [visible, running, shown?.loading, key]);
 
   const data = shown?.data ?? null;
-  const pr = data?.pr ?? null;
+  // VIEW-073: a pull request the host reports as unlinked is hidden; one the user unlinked stays hidden behind a notice.
+  const unlinkedAll = unlinkedPrs(settings?.[CHECKS_UNLINKED_KEY]);
+  const view = data ? showing(data.pr, dir === null ? undefined : unlinkedAll[dir]) : null;
+  const pr = view?.kind === "pr" ? view.pr : null;
+  const unlink = () => dir !== null && pr && void save({ [CHECKS_UNLINKED_KEY]: withUnlinkedPr(unlinkedAll, dir, { number: pr.number, url: pr.url }) });
+  const linkAgain = () => dir !== null && void save({ [CHECKS_UNLINKED_KEY]: withUnlinkedPr(unlinkedAll, dir, null) });
   return (
     <aside className="sidebar-wrap right">
       <div className="sidebar scm checks-panel">
@@ -92,9 +103,20 @@ export default function ChecksPanel({ dir, linked, visible }: Props) {
         {dir === null ? (
           <div className="sb-hint">Open a workspace to see its pull request's checks.</div>
         ) : shown?.error ? (
-          <div className="note error">The checks could not be read: {shown.error}</div>
+          classify(shown.error) !== "other" ? (
+            <GhBanner error={shown.error} onRetry={() => load(true)} />
+          ) : (
+            <div className="note error">The checks could not be read: {shown.error}</div>
+          )
         ) : !data ? (
           <div className="sb-hint">Looking for this branch's pull request…</div>
+        ) : view?.kind === "unlinked" ? (
+          <div className="note checks-unlinked" data-unlinked>
+            Pull request #{view.pr.number} is unlinked from this workspace, so its checks and comments are hidden.{" "}
+            <button className="btn" data-link-again onClick={linkAgain}>
+              Link again
+            </button>
+          </div>
         ) : !pr ? (
           <PrStart dir={dir} onCreated={() => load(true)} />
         ) : (
@@ -118,8 +140,11 @@ ${reviewHint(inKolux)}`.trim()}
               <span className="sb-hint" data-review-hint>
                 {reviewHint(inKolux)}
               </span>
+              <button className="btn" data-unlink title="Hide this pull request from the Checks tab until you link it again" onClick={unlink}>
+                Unlink
+              </button>
             </div>
-            {data.conflict && <div className="note warn">This pull request has merge conflicts with its base branch; it cannot merge until they are resolved.</div>}
+            {data.conflict && <ConflictPanel dir={dir} url={pr.url} />}
             <div className="sb-hint checks-sum">{checksSummary(data.checks)}</div>
             {note && <div className="note">{note}</div>}
             {(() => {
@@ -136,6 +161,11 @@ ${reviewHint(inKolux)}`.trim()}
                       <section key={key} className={`check-group ${key}`} data-group={key}>
                         <h4 className="check-group-title">
                           {label} <span className="count">{groups[key].length}</span>
+                          {key === "failing" && (
+                            <button className="btn" data-fix-checks title="Start an agent on the failing checks of this pull request" onClick={() => void fixChecks({ dir, pr, checks: data.checks })}>
+                              Fix with an agent
+                            </button>
+                          )}
                         </h4>
                         {rows.map((c, i) => (
                           <details key={`${c.name}-${i}`} className="check-row" data-outcome={c.outcome}>
@@ -173,6 +203,7 @@ ${reviewHint(inKolux)}`.trim()}
                 </div>
               );
             })()}
+            <CommentsPanel dir={dir} url={pr.url} visible={visible} />
           </>
         )}
       </div>

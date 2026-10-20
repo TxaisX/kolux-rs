@@ -4,6 +4,8 @@
 // A custom chord that collides with another binding in the same scope (or conflict group) is
 // dropped and the default stays, so an edit can never silently steal a key.
 import { actionById, actions, defaultsFor, type Action, type Platform, type Scope } from "./actions";
+import { currentLayout, layoutKeyLabel } from "../terminal/keyLayout";
+import { doubleTapLabel, doubleTapSpelling, parseDoubleTap } from "./doubleTap";
 
 export const MODIFIERS = ["Mod", "Ctrl", "Cmd", "Meta", "Alt", "Shift"] as const;
 type Modifier = (typeof MODIFIERS)[number];
@@ -56,6 +58,8 @@ export function normaliseIndexChord(chord: string): string {
 
 /** How a chord reads on screen, as parts: "Mod+Shift+J" is ["Ctrl", "Shift", "J"] on Windows. */
 export function labelParts(chord: string, platform: Platform): string[] {
+  const tap = parseDoubleTap(chord);
+  if (tap) return [doubleTapLabel(tap, platform)]; // one cap: "Shift Shift"
   const c = parseChord(chord);
   if ("error" in c) return [chord];
   const parts: string[] = [];
@@ -69,7 +73,8 @@ export function labelParts(chord: string, platform: Platform): string[] {
 }
 
 const keyLabels: Record<string, string> = { Comma: ",", Period: ".", Equal: "=", Minus: "-", Plus: "+", Slash: "/", Backslash: "\\", Backquote: "`", Quote: "'", Semicolon: ";", BracketLeft: "[", BracketRight: "]", ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right", NumpadAdd: "Numpad +", NumpadSubtract: "Numpad -", Escape: "Esc", PageUp: "PgUp", PageDown: "PgDn", Backspace: "Backspace", Delete: "Del", Insert: "Ins" };
-export const keyLabel = (key: string): string => keyLabels[key] ?? key;
+// VIEW-109 (T-253): a punctuation key reads as the layout in use prints it at that position (German Ctrl+/ reads Ctrl+-).
+export const keyLabel = (key: string): string => layoutKeyLabel(key, currentLayout(), keyLabels[key] ?? key);
 
 /** `dropped`: the file overrides this command but the override clashed and was dropped (SET-010). */
 export type Binding = { action: Action; chords: string[]; custom: boolean; dropped?: boolean };
@@ -151,6 +156,12 @@ function applySection(section: Record<string, unknown>, bindings: Map<string, Bi
     const parsed: string[] = [];
     let bad: string | null = null;
     for (const text of chords) {
+      // SET-009: a modifier tapped twice ("Double+Shift") is a shortcut of its own kind; it is kept in the file's spelling.
+      const tap = parseDoubleTap(text);
+      if (tap) {
+        parsed.push(doubleTapSpelling(tap));
+        continue;
+      }
       const c = parseChord(text);
       if ("error" in c) {
         bad = c.error;

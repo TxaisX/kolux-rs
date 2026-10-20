@@ -8,6 +8,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ArrowLeft, ArrowRight, Bell, Clock, Close, Dots, Mark, Maximize, Minimize, PanelLeft, PanelRight, Restore, Search } from "./icons";
 import { Kbd } from "../keys/KeymapContext";
 import UsagePill from "../usage/UsagePill";
+import AccountSwitcher from "../switcher/AccountSwitcher";
 import { weeklyOf } from "../usage/claude";
 import { usePlan } from "../usage/plan";
 import { popAppMenu } from "./useChrome";
@@ -15,7 +16,7 @@ import { chromeLayout } from "./titleHeader";
 
 /** Artifacts is reached from the sidebar only, so it is not in the top bar's cycle. */
 /** The three switcher screens, and the Inbox behind the bell (STAT-050: its own top-level view). */
-export type Screen = "agents" | "board" | "terminals" | "artifacts" | "inbox" | "tower" | "floor" | "skills";
+export type Screen = "agents" | "board" | "terminals" | "artifacts" | "inbox" | "tower" | "floor" | "skills" | "space";
 export const screens: Array<{ id: Screen; label: string }> = [
   { id: "agents", label: "Agents" },
   { id: "board", label: "Board" },
@@ -151,6 +152,7 @@ export default function TopBar({ screen, classic = false, sidebarWidth, onScreen
         <button className="ib bell" aria-label="Notifications" title="Inbox" aria-pressed={screen === "inbox"} onClick={() => onScreen(screen === "inbox" ? "terminals" : "inbox")}>
           <Bell />
         </button>
+        <AccountSwitcher />
         <UsagePill hidden={!anyPill} claudeOn={claudeOn} codexOn={codexOn} />
         <div className="wc">
           <button title="Minimize" onClick={() => win().minimize()}>
