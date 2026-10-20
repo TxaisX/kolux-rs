@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { ArrowLeft, ArrowRight, Close, Globe, Refresh, Stop } from "../chrome/icons";
+import { ArrowLeft, ArrowRight, Close, Globe, Refresh, Stop, Target } from "../chrome/icons";
 import { BLANK, resolveAddress } from "./address";
 import { openerRefocus, windowHasFocus } from "./chord";
 import { backgroundBehind } from "./colour";
@@ -17,14 +17,34 @@ import { nextZoom, zoomPercent } from "./zoom";
 import { iconAt, iconFound, type SiteIcon } from "./site";
 import { zoomFactor } from "../settings/zoom";
 import { notePage } from "../onboarding/guide";
+import { addNote, MAX_NOTES, type Note, notesMarkdown, type Pick, readPicks, sameAddress } from "./annotate";
+import type { SendTarget } from "../editor/notes";
 
 /** `url`: the page or file the tab opens on instead of a blank page (SKILL-012 previews a kit result). */
-type Props = { id: number; url?: string; title?: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void };
+/** `cwd`: the worktree this tab belongs to (BROW-042: agents there drive it); `targets` / `onSend`: the agent panes
+ * a page note can go to and how it is pasted (BROW-037; App.tsx passes the review-notes send path). */
+type Props = { id: number; url?: string; title?: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; cwd?: string | null; targets?: () => SendTarget[]; onSend?: (key: number, text: string) => Promise<void> | void };
 
 /** The pane body's place in the window, in CSS pixels, as the back end places the page. */
 /** GIT-036: asks the window for a new browser tab at `url` in the focused split. */
 export const OPEN_IN_BROWSER = "kolux-open-in-browser";
 export const openInBrowser = (url: string) => window.dispatchEvent(new CustomEvent(OPEN_IN_BROWSER, { detail: url }));
+
+/** T-241 (BROW-039): what a tab's address previews, when it is a worktree document of ours. */
+type Preview = { folder: string; file: string; path: string };
+
+/** T-241 (BROW-044): `kolux tab create` asks the window for a tab; one listener for the whole
+ * window, started by the first pane, so a tab opens once however many panes there are. */
+let bridge = false;
+function startBridge() {
+  if (bridge) return;
+  bridge = true;
+  listen<{ action: string; url?: string }>("browser-cli", (e) => {
+    if (e.payload.action === "create") openInBrowser(e.payload.url ?? BLANK);
+  }).catch(() => {
+    bridge = false;
+  });
+}
 
 type OverlayProps = { overlay: NonNullable<Overlay>; diag: Diagnosis | null; busy: boolean; connecting: boolean; onRetry: () => void; onHttps: (url: string) => void; onOpen: (url: string) => void };
 
@@ -67,7 +87,7 @@ function spot(el: HTMLElement) {
   return { x: r.left * z, y: r.top * z, w: r.width * z, h: r.height * z };
 }
 
-export default function BrowserPane({ id, url, title, hidden = false, focused = false, onFocus, onClose }: Props) {
+export default function BrowserPane({ id, url, title, hidden = false, focused = false, onFocus, onClose, cwd = null, targets, onSend }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const bar = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
@@ -92,8 +112,18 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const [icon, setIcon] = useState<SiteIcon>(null);
   const at = useRef("");
   const findBox = useRef<HTMLInputElement>(null);
+  // BROW-037: notes on the page's elements. `picking` while the page picker runs; `draft` is a pick
+  // waiting for its note; the tray empties when the page's address changes (annotate.ts).
+  const [picking, setPicking] = useState(false);
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [draft, setDraft] = useState<Pick | null>(null);
+  const [sendMenu, setSendMenu] = useState<SendTarget[] | null>(null);
+  const draftBox = useRef<HTMLTextAreaElement>(null);
   const focusMe = useRef(onFocus);
   focusMe.current = onFocus;
+  const closeMe = useRef(onClose);
+  closeMe.current = onClose;
+  const [preview, setPreview] = useState<Preview | null>(null);
   // T-074 (BROW-008, BROW-009): the page's health. The engine says only started / finished, so the
   // pane probes the page (browser_probe) and feeds loadState's machine; the overlay it decides on
   // covers the pane body while the page itself is hidden under it (a child web view cannot be
@@ -157,8 +187,15 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           setCan(canGo(h));
           setLoading(true);
           setAddress(url === BLANK ? "" : url);
+          if (!sameAddress(at.current, url)) {
+            setNotes([]);
+            setDraft(null);
+          }
           at.current = url;
           setIcon((i) => iconAt(i, url));
+          invoke<Preview | null>("browser_preview_of", { url })
+            .then((p) => alive && setPreview(p ?? null))
+            .catch(() => setPreview(null));
         }),
       );
       // BROW-014: a link the page opens as a new window, or Mod / middle click, becomes another tab
@@ -178,6 +215,15 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           if (e.payload.id === id) setIcon((i) => iconFound(i, at.current, e.payload.page, e.payload.icon));
         }),
       );
+      // T-241 (BROW-044): `kolux tab switch|close` name this pane.
+      unlisteners.push(
+        await listen<{ action: string; page?: number }>("browser-cli", (e) => {
+          if (e.payload.page !== id) return;
+          if (e.payload.action === "switch") focusMe.current?.();
+          if (e.payload.action === "close") closeMe.current?.();
+        }),
+      );
+      startBridge();
       if (!alive) return;
       try {
         const first = url ? resolveAddress(url) : null;
@@ -255,6 +301,75 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     return () => window.clearInterval(t);
   }, [id, open, hidden, overlay]);
 
+  // BROW-042: the command line's browser commands go to the worktree's tab on screen; this pane
+  // says which worktree its tab belongs to and whether it is the one shown.
+  useEffect(() => {
+    if (!open) return;
+    invoke("browser_tab", { id, worktree: cwd, shown: !hidden, url: at.current, title: title ?? "" }).catch(() => {});
+  }, [id, open, hidden, cwd, loading, title]);
+
+  // BROW-037: while picking, the page's picker is asked four times a second what was clicked; a
+  // page that was replaced meanwhile gets the picker again. Escape in the page ends picking.
+  useEffect(() => {
+    if (!open || !picking) return;
+    let inflight = false;
+    const t = window.setInterval(async () => {
+      if (inflight) return;
+      inflight = true;
+      try {
+        const r = readPicks(await invoke("browser_annotate", { id, what: "poll" }));
+        if (!r.active) await invoke("browser_annotate", { id, what: "start" });
+        if (r.escape) setPicking(false);
+        if (r.picks.length) setDraft((d) => d ?? r.picks[0]);
+      } catch {
+        setPicking(false);
+      } finally {
+        inflight = false;
+      }
+    }, 250);
+    return () => window.clearInterval(t);
+  }, [id, open, picking]);
+  useEffect(() => {
+    if (draft) draftBox.current?.focus();
+  }, [draft]);
+  const stopPicking = () => {
+    setPicking(false);
+    invoke("browser_annotate", { id, what: "stop" }).catch(() => {});
+  };
+  const togglePicking = () => {
+    if (picking) return stopPicking();
+    if (notes.length >= MAX_NOTES) return setNote(`The tray holds ${MAX_NOTES} notes; send or clear them first`);
+    setNote(null);
+    invoke("browser_annotate", { id, what: "start" })
+      .then(() => setPicking(true))
+      .catch((err) => setNote(String(err)));
+  };
+  // Enter keeps the note (Shift+Enter is a new line); Escape drops only this pick, picking stays on.
+  const keepDraft = () => {
+    if (!draft) return;
+    const next = addNote(notes, draft, draftBox.current?.value ?? "");
+    setDraft(null);
+    if (!next) return;
+    setNotes(next);
+    if (next.length >= MAX_NOTES && picking) {
+      stopPicking();
+      setNote(`The tray is full (${MAX_NOTES} notes); send or clear them to pick more`);
+    }
+  };
+  const openSend = () => {
+    const list = targets?.() ?? [];
+    if (!list.length) return setNote("No agent sessions in this worktree");
+    setSendMenu(list);
+  };
+  const sendTo = (key: number) => {
+    setSendMenu(null);
+    const text = notesMarkdown(notes, title ?? "", at.current);
+    if (!text) return;
+    Promise.resolve(onSend?.(key, text))
+      .then(() => setNotes([]))
+      .catch((err) => setNote(String(err)));
+  };
+
   // BROW-003: Enter reads the bar; an invalid address is said in the notice and the page stays.
   const navigateTo = (url: string) => {
     setNote(null);
@@ -328,9 +443,21 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         {/* BROW-006: the slot keeps the bar's place in the toolbar; in a narrow pane the bar inside it
             is compact and, while focused, floats across the toolbar (browser.css). */}
         <span className="address-slot">
+          {preview ? (
+            // BROW-039: a previewed document shows where it is instead of its loopback address.
+            <span className="preview-chip" title={preview.path}>
+              <span className="preview-folder">{preview.folder}</span>
+              <span className="preview-sep">/</span>
+              <b>{preview.file}</b>
+              <button type="button" className="ib preview-copy" title="Copy the file's path" aria-label="Copy path" onClick={() => void navigator.clipboard?.writeText(preview.path).catch(() => {})}>
+                copy
+              </button>
+            </span>
+          ) : null}
           <input
             ref={bar}
             className="address"
+            style={preview ? { display: "none" } : undefined}
             aria-label="Address"
             placeholder="Address"
             value={address}
@@ -354,6 +481,10 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         <button hidden data-go="zoomOut" onClick={() => zoomBy("out")} />
         <button hidden data-go="zoomReset" onClick={() => zoomBy("reset")} />
         <span className="right">
+          {/* BROW-037: pick elements in the page and write notes on them for an agent. */}
+          <button className={`ib${picking ? " on" : ""}`} data-go="annotate" onClick={togglePicking} title={picking ? "Stop picking elements" : "Annotate: pick elements and write notes for an agent"} aria-label="Annotate" aria-pressed={picking}>
+            <Target size={12} />
+          </button>
           <button className="ib" onClick={onClose} title="Close tab (Ctrl+W)">
             <Close size={12} />
           </button>
@@ -382,6 +513,72 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           <button className="ib" onClick={() => setFind(null)} title="Close find (Escape)" aria-label="Close find">
             <Close size={12} />
           </button>
+        </div>
+      )}
+      {(picking || draft || notes.length > 0) && (
+        <div className="notes-tray" role="region" aria-label="Page notes">
+          <div className="tray-head">
+            <span className="hint">{picking ? "Click an element in the page" : "Notes for an agent"}</span>
+            {notes.length > 0 && <span className="count">{notes.length}/{MAX_NOTES}</span>}
+            {notes.length > 0 && (
+              <button className="btn" data-go="send-notes" onClick={openSend}>
+                Send to agent…
+              </button>
+            )}
+            {notes.length > 0 && (
+              <button className="btn" onClick={() => setNotes([])}>
+                Clear
+              </button>
+            )}
+          </div>
+          {draft && (
+            <div className="draft">
+              <code title={draft.path}>{draft.selector}</code>
+              <textarea
+                ref={draftBox}
+                aria-label="Note on this element"
+                placeholder="What about this element? Enter keeps it, Escape drops it"
+                rows={2}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    keepDraft();
+                  } else if (e.key === "Escape") setDraft(null);
+                }}
+              />
+              <button className="btn" onClick={keepDraft}>
+                Add
+              </button>
+            </div>
+          )}
+          {notes.length > 0 && (
+            <ol className="notes">
+              {notes.map((n, i) => (
+                <li key={i}>
+                  <code title={n.pick.path}>{n.pick.selector}</code> {n.text}
+                  <button className="ib" aria-label="Remove note" title="Remove note" onClick={() => setNotes(notes.filter((_, j) => j !== i))}>
+                    <Close size={10} />
+                  </button>
+                </li>
+              ))}
+            </ol>
+          )}
+          {sendMenu && (
+            <ul className="send-menu" role="menu" aria-label="Send notes to">
+              {sendMenu.map((t) => (
+                <li key={t.key}>
+                  <button role="menuitem" onClick={() => sendTo(t.key)}>
+                    {t.label} <small>{t.since}</small>
+                  </button>
+                </li>
+              ))}
+              <li>
+                <button role="menuitem" onClick={() => setSendMenu(null)}>
+                  Cancel
+                </button>
+              </li>
+            </ul>
+          )}
         </div>
       )}
       {note && (

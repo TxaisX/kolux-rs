@@ -2731,7 +2731,20 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     )}
                     {c.panes.map((p) =>
                 p.kind === "browser" ? (
-                  <BrowserPane key={p.key} id={p.key} url={p.url ?? p.path} title={titles[p.key]} hidden={!terminals || settingsOpen || kits !== null || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
+                  <BrowserPane
+                    key={p.key}
+                    id={p.key}
+                    url={p.url ?? p.path}
+                    title={titles[p.key]}
+                    hidden={!terminals || settingsOpen || kits !== null || p.key !== active}
+                    focused={p.key === focused}
+                    onFocus={() => setFocused(p.key)}
+                    onClose={() => closePane(p.key)}
+                    cwd={p.cwd}
+                    // BROW-037: notes go to an agent pane in the tab's own worktree, by the review-notes paste path.
+                    targets={() => sendTargets(panes, (x) => x.cwd !== null && p.cwd !== null && sameDir(x.cwd, p.cwd) && ptys.current[x.key] !== undefined, stamp, Date.now(), (x) => tabName(x, titles))}
+                    onSend={(key, text) => pasteInto(key, text)}
+                  />
                 ) : p.kind === "editor" && p.path ? (
                   <EditorPane
                     key={p.key}
