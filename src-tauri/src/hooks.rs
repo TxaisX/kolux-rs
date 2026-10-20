@@ -1435,9 +1435,9 @@ mod tests {
     fn the_settings_get_one_kolux_group_per_event_and_keep_everything_else() {
         let mut s = ev(r#"{"permissions":{"allow":["Bash"]},"hooks":{
             "PreToolUse":[{"matcher":"Bash|PowerShell","hooks":[{"type":"command","command":"node guard.js","timeout":5}]},
-                          {"matcher":"*","hooks":[{"type":"command","command":"C:/Users/me/.kolux/agent-hooks/claude-hook.cmd || echo {","timeout":10}]},
+                          {"matcher":"*","hooks":[{"type":"command","command":"C:/Users/someone/.other-app/agent-hooks/claude-hook.cmd || echo {","timeout":10}]},
                           {"matcher":"*","hooks":[{"type":"command","command":"C:/old/.kolux-rs/agent-hooks/claude.cmd || exit 0","timeout":10}]}],
-            "Stop":[{"hooks":[{"type":"command","command":"C:/Users/me/.kolux/agent-hooks/claude-hook.cmd || echo {","timeout":10}]}],
+            "Stop":[{"hooks":[{"type":"command","command":"C:/Users/someone/.other-app/agent-hooks/claude-hook.cmd || echo {","timeout":10}]}],
             "PreCompact":[{"hooks":[{"type":"command","command":"other"}]}]}}"#);
         let cmd = "\"C:/Users/me/.kolux-rs/agent-hooks/claude.cmd\" || exit 0";
         assert!(install_claude_hooks(&mut s, cmd));
@@ -1452,7 +1452,7 @@ mod tests {
         let pre = hooks["PreToolUse"].as_array().unwrap();
         assert_eq!(pre.len(), 3);
         assert_eq!(pre[0]["matcher"], "Bash|PowerShell");
-        assert!(pre[1]["hooks"][0]["command"].as_str().unwrap().contains(".kolux/agent-hooks"));
+        assert!(pre[1]["hooks"][0]["command"].as_str().unwrap().contains(".other-app/agent-hooks"));
         assert_eq!(pre[2]["hooks"][0]["command"], cmd, "a stale Kolux RS path is replaced in place");
         assert_eq!(hooks["Stop"].as_array().unwrap().len(), 2);
         assert_eq!(hooks["PreCompact"].as_array().unwrap().len(), 1, "PreCompact is never installed");

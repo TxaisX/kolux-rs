@@ -44,7 +44,7 @@ fn stat_005_kolux_entries_are_spotted_in_every_form() {
     assert!(names_mine(&json!({ "command": ["C:\\Users\\me\\.kolux-rs\\agent-hooks\\claude.cmd"] })), "the command as a list of words");
     assert!(names_mine(&json!({ "command": "cmd.exe", "args": ["/c", "C:/Users/me/.kolux-rs/agent-hooks/claude.cmd"] })), "the argument-list form");
     assert!(!names_mine(&json!({ "command": "node guard.js", "args": ["--fast"] })));
-    assert!(!names_mine(&json!({ "command": "C:/Users/me/.kolux/agent-hooks/claude-hook.cmd" })), "the old app's entries stay its own while both apps are installed (DT-C1)");
+    assert!(!names_mine(&json!({ "command": "C:/Users/someone/.other-app/agent-hooks/claude-hook.cmd" })), "another app's entries stay its own (DT-C1)");
 }
 
 #[test]
@@ -1027,7 +1027,7 @@ fn t_152_2_the_first_write_keeps_a_hashed_copy_and_a_failed_copy_stops_the_insta
 fn t_152_3_only_kolux_entries_change_and_invalid_json_is_refused() {
     let dir = temp("t152-merge");
     let (home, file) = (dir.join("home"), dir.join("settings.json"));
-    let older = "\"C:/Users/me/.kolux/agent-hooks/claude.cmd\" || exit 0";
+    let older = "\"C:/Users/someone/.other-app/agent-hooks/claude.cmd\" || exit 0";
     let mut user: Value = ev(&shaped());
     user["hooks"]["Stop"][0]["hooks"].as_array_mut().unwrap().push(json!({ "type": "command", "command": older }));
     let user_text = serde_json::to_string_pretty(&user).unwrap() + "\n";
@@ -1037,7 +1037,7 @@ fn t_152_3_only_kolux_entries_change_and_invalid_json_is_refused() {
     for e in CLAUDE_EVENTS {
         let groups = after["hooks"][e].as_array().unwrap();
         let theirs: Vec<&Value> = groups.iter().filter(|g| !is_mine(g)).collect();
-        assert_eq!(theirs, user["hooks"][e].as_array().unwrap().iter().collect::<Vec<_>>(), "{e}: the user's groups untouched, the old app's entry included");
+        assert_eq!(theirs, user["hooks"][e].as_array().unwrap().iter().collect::<Vec<_>>(), "{e}: the user's groups untouched, the other app's entry included");
         assert_eq!(groups.iter().filter(|g| is_mine(g)).count(), 1, "{e}");
         assert!(groups.iter().filter(|g| is_mine(g)).all(|g| g.to_string().contains(".kolux-rs/agent-hooks")));
     }
