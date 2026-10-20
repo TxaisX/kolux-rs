@@ -52,6 +52,7 @@ import BrowserPane, { OPEN_IN_BROWSER, openInBrowser } from "./browser/BrowserPa
 import { chordPlan } from "./browser/chord";
 import { writerOf } from "./scm/generate";
 import EditorPane, { editors } from "./editor/EditorPane";
+import FloatingLayer, { floatingKeys } from "./floating/FloatingLayer";
 import { baseName, keyOf } from "./editor/buffers";
 import { NOTHING_TO_SEND, sendRoute } from "./editor/noteCommands";
 import { noteTarget, plainNote, useRepoless } from "./editor/fileNotes";
@@ -534,6 +535,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     const onKey = (e: KeyboardEvent) => {
       // SET-009: while Settings > Shortcuts records a chord, the press is the recorder's alone.
       if (recording.on) return;
+      // TERM-059..061 (T-220): the floating panel's keys come first, on every screen.
+      if (floatingKeys.handle(e)) return;
       const kind = screen === "terminals" ? panes.find((p) => p.key === focused)?.kind : undefined;
       const inTree = !!document.activeElement?.closest(".explorer"); // the explorer's own keys (EDIT-034) come with T-094-b
       // EDIT-001: in an editor the editor shortcuts come first and terminal ones do not apply;
@@ -2977,6 +2980,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         loaded={() => windowLoaded(settingsRead, restoredKeys.current, ptys.current, panes)}
       />
       )}
+      <FloatingLayer agents={agents} defaultId={defaultId} />
     </div>
   );
 }

@@ -56,6 +56,7 @@ mod projects;
 mod scm;
 mod pr_review;
 mod skills;
+mod pasted_image;
 mod pr_checkout;
 mod pty;
 mod setup;
@@ -632,6 +633,7 @@ pub fn run() {
             clipboard::clip_copy_text,
             clipboard::clip_copy_files,
             clipboard::feedback_facts,
+            pasted_image::paste_image_save,
             cli::cli_register::cli_register_state,
             cli::cli_register::cli_register,
             cli::cli_register::cli_unregister,
