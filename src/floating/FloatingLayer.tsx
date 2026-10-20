@@ -19,7 +19,8 @@ import {
   clampButton, insetFor, moveBy, parseButton, parseSaved, resizeBy, SETTING_BUTTON, SETTING_PANEL, shown, startsPanelMove, toggleMaximize, toStored,
   type Edge, type Pos, type Rect, type Saved, type Win, BUTTON,
 } from "./geometry";
-import { add, answer, asked, close, closeKey, empty, hide, programExited, reorder, saveTarget, select, selectNumber, setDirty, setTitle, step, toggle, type Kind, type Panel } from "./panel";
+import { add, answer, asked, close, closeKey, empty, hide, programExited, reorder, saved, saveTarget, select, selectNumber, setDirty, setTitle, step, toggle, type Kind, type Panel } from "./panel";
+import { isDirty } from "../editor/buffers";
 import { startFolderFor } from "./trusted";
 import { routeFloating } from "../shell/inputExtras";
 import "./floating.css";
@@ -34,7 +35,7 @@ export const floatingKeys = { handle: (_e: KeyboardEvent): boolean => false };
 type Props = {
   agents?: AgentInfo[];
   defaultId?: string;
-  /** The home folder floating terminals start in; left out, the terminal's own default applies. */
+  /** The folder a New note is made in (the window passes the open workspace, as its Markdown tab does); left out, New note says why it cannot. */
   home?: string;
   /** TERM-063: how many panel tabs wait on the user; the button shows a dot while above 0. */
   pending?: number;
@@ -255,8 +256,12 @@ export default function FloatingLayer({ agents = [], defaultId, home, pending = 
               <button
                 className="btn"
                 onClick={async () => {
-                  await editors.get(ask.key)?.();
-                  run((p) => (p.tabs.find((t) => t.key === ask.key)?.dirty ? p : answer(p, "discard")));
+                  // TERM-061: close only this tab, and only when its buffer is clean after the save (panel.ts saved).
+                  const { key, path } = ask;
+                  const write = editors.get(key);
+                  if (!write) return;
+                  await write();
+                  run((p) => saved(p, key, path ? isDirty(path) : true));
                 }}
               >
                 Save

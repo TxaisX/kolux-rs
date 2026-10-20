@@ -135,6 +135,18 @@ export function answer(p: Panel, what: "discard" | "keep"): Panel {
   return drop(p, key);
 }
 
+/**
+ * TERM-061: Save in the question. The tab closes only when that same tab is still the one asked about
+ * and its file is clean now. `stillDirty` comes from the editor's own buffer after the save, not this
+ * panel's mirrored flag, which can lag the save and leave the question up. A refused or unnamed save
+ * keeps the question up; a question that moved on during the save (Don't save on this tab) is left
+ * alone, so the next unsaved tab is never closed without its own answer.
+ */
+export function saved(p: Panel, key: number, stillDirty: boolean): Panel {
+  if (p.asking[0] !== key || stillDirty) return p;
+  return drop(p, key);
+}
+
 /** Cmd/Ctrl+W in the panel: an empty panel minimizes; otherwise the active tab closes (asking first when unsaved). */
 export function closeKey(p: Panel): Panel {
   if (p.tabs.length === 0 || p.active === null) return hide(p);

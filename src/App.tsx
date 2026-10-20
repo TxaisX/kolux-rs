@@ -3402,7 +3402,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         loaded={() => windowLoaded(settingsRead, restoredKeys.current, ptys.current, panes)}
       />
       )}
-      <FloatingLayer agents={agents} defaultId={defaultId} />
+      <FloatingLayer agents={agents} defaultId={defaultId} home={activeDir ?? undefined} onToast={(m) => setToast(m)} />
     </div>
   );
 }
