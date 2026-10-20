@@ -1,7 +1,7 @@
 // GIT-041 (T-034-b): notes in a folder workspace without Git.
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { clearDelivered, lineNotesOf, markSent, noteBlocks, notesByFile, withLineNotes } from "./diffNotes";
-import { emptyNotesHint, lastLineOf, noteTarget, plainNote, repolessError } from "./fileNotes";
+import { emptyNotesHint, lastLineOf, noteTarget, plainNote, repolessError, watchRepoless } from "./fileNotes";
 
 const folder = "G:\\Notes\\Trip plans";
 const sel = (line: number, quote: string, note: string) => ({ path: "G:/Notes/Trip plans/day1.txt", line, quote, note });
@@ -50,4 +50,31 @@ test("GIT-041: without Git a note opens the file at its line, and the empty sect
   expect(emptyNotesHint(false, "Ctrl+Shift+A")).toMatch(/hover a line and click the plus/);
   // unbound: it does not name a key that does nothing
   expect(emptyNotesHint(true, "")).toMatch(/press the Add Review Note key/);
+});
+
+test("row 27: a folder outside Git is asked again until it gains Git, then no more", async () => {
+  vi.useFakeTimers();
+  try {
+    let inGit = false;
+    let asks = 0;
+    const seen: boolean[] = [];
+    const ask = () => (asks++, inGit ? Promise.resolve() : Promise.reject("not a git repository"));
+    const t = new EventTarget();
+    const stop = watchRepoless(ask, (r) => seen.push(r), t as unknown as Window, 1000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(seen).toEqual([true]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(asks).toBe(2);
+    inGit = true; // git init in a terminal
+    t.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(seen[seen.length - 1]).toBe(false);
+    const after = asks;
+    await vi.advanceTimersByTimeAsync(5000);
+    t.dispatchEvent(new Event("focus"));
+    expect(asks).toBe(after);
+    stop();
+  } finally {
+    vi.useRealTimers();
+  }
 });

@@ -642,7 +642,8 @@ pub fn repaint(win: &tauri::WebviewWindow) {
 pub const UNTHROTTLED: [&str; 3] = ["--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows"];
 
 /// The browser arguments every window gets: the config's own (or wry's defaults), the throttling
-/// exemption, and safe graphics when it is on; each switch once.
+/// exemption, and safe graphics when it is on; each switch once. T-319-b (BROW-026): the engine's
+/// identity prompt (FedCM) is switched off in the same string, so sign-in falls back to a popup.
 pub fn browser_args(current: Option<&str>, safe: bool) -> String {
     let mut s = if safe { safe_args(current) } else { current.filter(|c| !c.trim().is_empty()).unwrap_or(WRY_DEFAULT_ARGS).to_string() };
     for a in UNTHROTTLED {
@@ -651,7 +652,7 @@ pub fn browser_args(current: Option<&str>, safe: bool) -> String {
             s.push_str(a);
         }
     }
-    s
+    crate::browser::popup::fedcm_off(&s)
 }
 
 /// The arguments the windows were given at launch: every webview Kolux opens later on the same data
@@ -1935,7 +1936,8 @@ mod tests {
         let safe = browser_args(None, true);
         assert!(safe.contains(SAFE_ARG) && safe.contains(UNTHROTTLED[0]));
         assert_eq!(browser_args(Some(&a), false), a, "applying twice adds nothing");
-        assert_eq!(browser_args(Some("--x"), false), format!("--x {}", UNTHROTTLED.join(" ")));
+        assert_eq!(browser_args(Some("--x"), false), format!("--x {} --disable-features=FedCm", UNTHROTTLED.join(" ")));
+        assert!(a.split_whitespace().any(|x| x == "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,FedCm"), "BROW-026 FedCM off in the one list: {a}");
         assert_eq!(browser_args_now(), LAUNCH_ARGS.get().cloned().unwrap_or_else(|| browser_args(None, false)));
     }
 }

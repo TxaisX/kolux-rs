@@ -96,6 +96,7 @@ impl Trust {
         self.pending.remove(&tab);
     }
 
+    #[cfg(test)]
     pub fn approved(&self) -> Vec<Site> {
         self.approved.keys().cloned().collect()
     }
@@ -176,7 +177,6 @@ pub fn act(trust: &mut Trust, tab: u32, url: &str, action: &str) -> Result<CertS
 /// The app's command (never the page's): the overlay's Trust, the menu's Stop Trusting, and the
 /// state both read. A revoke also clears the engine's remembered allowances, so the next visit is
 /// asked again (other approved sites are then simply allowed again by these rules).
-#[allow(dead_code)] // registered by evidence/browser-T-158-b-lib.rs.patch
 #[tauri::command]
 pub async fn browser_cert(app: tauri::AppHandle, id: u32, url: String, action: String) -> Result<CertState, String> {
     let state = {

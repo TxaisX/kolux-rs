@@ -148,11 +148,18 @@ pub fn open(
     url: &Url,
     features: tauri::webview::NewWindowFeatures,
     dev: Option<Url>,
+    spoof: bool,
 ) -> Option<tauri::WebviewWindow> {
     use tauri::webview::NewWindowResponse;
     use tauri::{WebviewUrl, WebviewWindowBuilder};
     let label = LINKS.lock().ok()?.open(tab);
-    let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url.clone()))
+    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url.clone()));
+    // T-239-b (BROW-025): a popup opened onto a sign-in host starts as Firefox when its tab's
+    // profile is in normal mode; later hops are kept right by `engine::popup_identity`.
+    if super::profiles::firefox_at(url.as_str(), spoof) {
+        builder = builder.user_agent(&super::profiles::firefox_identity());
+    }
+    let built = builder
         .window_features(features)
         .title(title(url, ""))
         .zoom_hotkeys_enabled(false)
@@ -180,6 +187,9 @@ pub fn open(
                     }
                 }
             });
+            super::engine::popup_identity(&w, spoof);
+            // after-list 718: no engine prompt in a popup; the opener tab's permission rules answer.
+            super::engine::popup_permissions(&w, tab, app.clone());
             Some(w)
         }
         Err(_) => {
@@ -202,9 +212,60 @@ pub fn close_for(app: &tauri::AppHandle, tab: u32) {
     }
 }
 
+/// T-319-b (BROW-026): the engine's built-in identity prompt (FedCM) cannot work inside a pane, so
+/// it is switched off and sites fall back to their ordinary popup or redirect sign-in. Engine
+/// switches are one string shared by every web view on a data folder, so this adds the feature to
+/// that string's one `--disable-features=` list (a second such switch would replace the first).
+pub fn fedcm_off(args: &str) -> String {
+    const SWITCH: &str = "--disable-features=";
+    const FEDCM_FEATURE: &str = "FedCm";
+    let mut found = false;
+    let mut out: Vec<String> = Vec::new();
+    for a in args.split_whitespace() {
+        match a.strip_prefix(SWITCH) {
+            Some(list) if !found => {
+                found = true;
+                let mut names: Vec<&str> = list.split(',').filter(|n| !n.is_empty()).collect();
+                if !names.contains(&FEDCM_FEATURE) {
+                    names.push(FEDCM_FEATURE);
+                }
+                out.push(format!("{SWITCH}{}", names.join(",")));
+            }
+            _ => out.push(a.to_string()),
+        }
+    }
+    if !found {
+        out.push(format!("{SWITCH}{FEDCM_FEATURE}"));
+    }
+    out.join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn brow032_a_popup_is_answered_by_its_opener_tabs_permission_rules() {
+        // The engine hook cannot run in a unit test (no web view); the regression guard is that the
+        // popup's build path wires it with the opener's tab id, after the identity hook.
+        let src = include_str!("browser_popup.rs");
+        let open = &src[src.find("pub fn open(").unwrap()..src.find("pub fn close_for(").unwrap()];
+        let ident = open.find("engine::popup_identity(&w, spoof)").unwrap();
+        let perms = open.find(["engine::popup_permissions(&w, tab, ", "app.clone())"].concat().as_str()).expect("popup permissions hook");
+        assert!(perms > ident);
+    }
+
+    #[test]
+    fn brow026_fedcm_joins_the_one_disable_features_list_once() {
+        let wry = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-renderer-backgrounding";
+        assert_eq!(fedcm_off(wry), "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,FedCm --disable-renderer-backgrounding");
+        // Already there: the string is unchanged, so every web view keeps passing the same one.
+        assert_eq!(fedcm_off(&fedcm_off(wry)), fedcm_off(wry));
+        // No list yet: one is added; an empty string gets just the switch.
+        assert_eq!(fedcm_off("--disable-gpu"), "--disable-gpu --disable-features=FedCm");
+        assert_eq!(fedcm_off(""), "--disable-features=FedCm");
+        assert_eq!(fedcm_off("--disable-features=FedCm,X"), "--disable-features=FedCm,X");
+    }
 
     fn u(s: &str) -> Url {
         Url::parse(s).unwrap()

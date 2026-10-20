@@ -11,7 +11,8 @@ import { createTyper, type Typer } from "./cliInstall";
 
 const decoder = new TextDecoder();
 
-export default function InlineTerminal({ command, onExit }: { command: string | null; onExit: () => void }) {
+/** `height` is the terminal's pixel height: shorter inside onboarding's Explore Kolux stops (ONB-024). */
+export default function InlineTerminal({ command, onExit, height = 220 }: { command: string | null; onExit: () => void; height?: number }) {
   const id = useRef<number | null>(null);
   const exit = useRef(onExit);
   exit.current = onExit;
@@ -65,7 +66,7 @@ export default function InlineTerminal({ command, onExit }: { command: string | 
   }, [command]);
 
   return (
-    <div className="inline-term" data-testid="inline-term" style={{ height: 220 }}>
+    <div className="inline-term" data-testid="inline-term" style={{ height }}>
       <TerminalPane agent="shell" focused onPty={(pty) => bind(pty)} />
       <p className="guide-note dim">The command is typed at the prompt but not run. Press Enter in the terminal to run it.</p>
     </div>

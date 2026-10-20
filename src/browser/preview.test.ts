@@ -1,6 +1,18 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { dropPage, livePage, livePages } from "./pages";
-import { forgetPrinted, isLocalWeb, notePrinted, previewHint, previewTitle, printedFor, sameOriginPage, type Candidate } from "./preview";
+import { chipCommit, forgetPrinted, isLocalWeb, notePrinted, previewHint, previewTitle, printedFor, sameOriginPage, type Candidate } from "./preview";
+
+it("BROW-041: Enter in the chip turns the tab into a web page, swaps to another document, or does nothing for the same one", () => {
+  const doc = "G:\\Dev\\app\\docs\\guide.html";
+  expect(chipCommit("example.com", doc)).toEqual({ kind: "web", url: "https://example.com/" });
+  expect(chipCommit("http://localhost:3000", doc)).toEqual({ kind: "web", url: "http://localhost:3000/" });
+  expect(chipCommit("g:/dev/app/docs/guide.html", doc)).toEqual({ kind: "same" });
+  expect(chipCommit(`  "${doc}"  `, doc)).toEqual({ kind: "same" });
+  expect(chipCommit("", doc)).toEqual({ kind: "same" });
+  expect(chipCommit("G:\\Dev\\app\\docs\\other.html", doc)).toEqual({ kind: "document", path: "G:\\Dev\\app\\docs\\other.html" });
+  expect(chipCommit("javascript:alert(1)", doc).kind).toBe("error");
+  expect(chipCommit("file:///G:/x.html", doc).kind).toBe("error");
+});
 
 const DIR = "G:\\Dev\\app";
 

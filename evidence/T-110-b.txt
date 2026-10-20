@@ -66,3 +66,5 @@ LIVE PROOF PENDING (batched)
   4. Turn "Ask to rename the folder too" off, repeat 1. Expect: the branch and the name change, no question.
   5. Add a plain folder (no Git) as a project, start an agent, prompt "Sort the photos". Expect: the row's title changes; no
      branch, no question, the folder stays.
+
+Final (2026-10-20, lane/worktrees after STEP 0 to main b73fe0ac): both STAT-039 acceptance boxes are built (live steps 1 and 4 above). The two root-path alias variables of COMPAT 5.5 are not built: COMPAT 5.5 says only "two compatibility aliases of the root-path variable, named after other worktree tools" and no spec or COMPAT text names them. Gates: tsc 0, vitest src/projects 36 files 220 passed, no Rust changed.

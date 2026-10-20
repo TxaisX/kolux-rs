@@ -51,7 +51,6 @@ pub mod helpers;
 // BROW-024 the local dev-server certificate rules, answered from the engine's certificate event.
 #[path = "browser_popup.rs"]
 pub mod popup;
-#[allow(dead_code)] // T-158: `browser_cert` is registered by evidence/browser-T-158-b-lib.rs.patch.
 #[path = "browser_certs.rs"]
 pub mod certs;
 // T-158 / T-251 / T-272-d: the glue to WebView2's own events and calls (webview2-com).
@@ -60,6 +59,12 @@ pub mod engine;
 // T-286-b (APP-040): which engine process failures are real crashes, and their records.
 #[path = "browser_crash.rs"]
 pub mod crash;
+// T-312-b (ORCH-061): page leases for the runtime browser commands.
+#[path = "browser_lease.rs"]
+pub mod lease;
+// T-272-b (BROW-032): how a page's permission requests are answered.
+#[path = "browser_permissions.rs"]
+pub mod permissions;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
@@ -71,6 +76,8 @@ pub const ICON_EVENT: &str = "browser-icon";
 /// T-272-c (BROW-016): a page on screen asked for another tab and its family's allowance was used
 /// up; the pane shows "popups blocked" in its toolbar.
 pub const BLOCKED_EVENT: &str = "browser-blocked";
+/// T-272-b (BROW-032): a page's permission request was refused; `text` names the permission.
+pub const PERMISSION_EVENT: &str = "browser-permission";
 /// T-239 (BROW-017): a right-click inside a page (`kind: "menu"`, with the pointer, the page's
 /// size, the link under it and whether text is selected) or an entry picked in the menu it opened
 /// (`kind: "pick"`, with the entry and its address).
@@ -219,7 +226,7 @@ pub const CHORD_SCRIPT: &str = r#"(() => {
   };
   // T-242 (BROW-049 / BROW-050): the command line's recorder and emulation. Console messages are
   // kept from the first script on (a bounded ring), so `kolux console` sees what the page logged;
-  // fetch and XMLHttpRequest go through one wrapper that holds requests matching the intercept
+  // fetch and XHR go through one wrapper that holds requests matching the intercept
   // patterns (released when interception is disabled), fails them while offline and adds the extra
   // headers and credentials; geolocation, matchMedia and the dialogs answer as emulated. The app
   // hands the state in with `__kxEmu` on every load (so it stays in force), arms one dialog answer
@@ -957,6 +964,12 @@ fn view(app: &AppHandle, id: u32) -> Result<Webview, String> {
     app.get_webview(&label(id)).ok_or_else(|| format!("browser tab {id} is not open"))
 }
 
+/// after-list 91: does page `id` exist in the engine (opened, whether or not its pane has reported
+/// it yet)? False before the app is known.
+pub fn page_exists(id: u32) -> bool {
+    driver().ok().and_then(|d| d(Act::Exists(id)).ok()).and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
 fn err(e: tauri::Error) -> String {
     e.to_string()
 }
@@ -989,6 +1002,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     let load_app = app.clone();
     let chord_app = app.clone();
     let window_app = app.clone();
+    let permission_app = app.clone();
     let window_dev = dev.clone();
     let icon_dev = dev.clone();
     let download_app = app.clone();
@@ -1000,7 +1014,9 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     };
     #[cfg(windows)]
     let crash_dir = app.path().app_data_dir().ok();
-    let builder = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile);
+    // T-239-b (BROW-025): whether this tab's profile shows Firefox on the sign-in hosts.
+    let key = url.to_string();
+    let (builder, spoof) = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile, &key);
     let builder = match proxy_of(proxy.as_deref())? {
         Some(u) => builder.proxy_url(u),
         None => builder,
@@ -1033,7 +1049,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
                     // before the tab's page finished a load it goes to the system browser.
                     match popup::route(features.size().is_some(), popup::is_ready(id)) {
                         popup::Route::Window => {
-                            if let Some(window) = popup::open(&window_app, id, &url, features, window_dev.clone()) {
+                            if let Some(window) = popup::open(&window_app, id, &url, features, window_dev.clone(), spoof) {
                                 return NewWindowResponse::Create { window };
                             }
                             return NewWindowResponse::Deny;
@@ -1198,6 +1214,10 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         }
         // T-158 (BROW-024): the engine's certificate errors are answered by the certificate rules.
         engine::attach(id, &pw);
+        // T-239-b (BROW-025): Firefox on the sign-in hosts unless the profile is in native mode.
+        engine::identity(&pw, spoof);
+        // T-272-b (BROW-032): the page's permission requests are answered by the permission rules.
+        engine::permissions(id, &pw, permission_app);
         // T-286-b (APP-040): the engine's process failures become crash records when real.
         engine::watch_page_failures(id, &pw, crash_dir);
     });
@@ -1329,7 +1349,6 @@ fn step_history(v: &Webview, id: u32, what: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-#[allow(dead_code)] // registered by evidence/browser-T-240-lib.rs.patch
 pub async fn browser_viewport(id: u32, name: Option<String>) -> Result<String, String> {
     // T-240 (BROW-034): the toolbar's Viewport Size. Async: the page's answer comes on the main
     // thread, so the wait must not happen there.
@@ -1337,7 +1356,6 @@ pub async fn browser_viewport(id: u32, name: Option<String>) -> Result<String, S
 }
 
 #[tauri::command]
-#[allow(dead_code)] // registered by evidence/browser-T-240-lib.rs.patch
 pub async fn browser_cookies_import(app: AppHandle, id: u32, path: String) -> Result<cookies::Report, String> {
     // T-240 (BROW-028): a cookie file the user picked goes into this tab's engine (its profile's
     // cookie store), one site at a time; a site that fails gets its old cookies back.
@@ -1575,6 +1593,10 @@ pub enum Act<'a> {
     DevTools(u32, &'a str, String),
     /// T-251 (CLI-047): the engine prints the page to a PDF file at this path.
     Pdf(u32, &'a str),
+    /// after-list 91: does this page exist in the engine (opened, reported or not)?
+    Exists(u32),
+    /// after-list 732: is this handle an open Kolux terminal?
+    TerminalLive(&'a str),
 }
 type Driver = dyn Fn(Act) -> Result<serde_json::Value, String> + Send + Sync;
 static DRIVER: OnceLock<Box<Driver>> = OnceLock::new();
@@ -1668,6 +1690,11 @@ fn drive(act: Act) -> Result<serde_json::Value, String> {
             serde_json::from_str(&text).map_err(|_| "the page's engine answered with something that is not JSON".to_string())
         }
         Act::Pdf(id, path) => engine::print_pdf(&view(app, id)?, path, CAPTURE_WAIT).map(serde_json::Value::Bool),
+        Act::Exists(id) => Ok(serde_json::Value::Bool(view(app, id).is_ok())),
+        Act::TerminalLive(handle) => {
+            use tauri::Manager;
+            Ok(serde_json::Value::Bool(app.try_state::<crate::terminal::Terminals>().is_none_or(|t| t.live(handle))))
+        }
     }
 }
 
@@ -1700,24 +1727,48 @@ pub fn tell(event: &str, payload: serde_json::Value) -> Result<(), String> {
     driver()?(Act::Emit(event, payload)).map(|_| ())
 }
 
+/// after-list 732: is `handle` an open Kolux terminal? Before the app is known (no tab opened
+/// yet) every holder counts as live, so nothing is freed on a guess.
+pub fn terminal_live(handle: &str) -> bool {
+    // Through the driver, so the command line's code never links the window toolkit itself.
+    driver().ok().and_then(|d| d(Act::TerminalLive(handle)).ok()).and_then(|v| v.as_bool()).unwrap_or(true)
+}
+
 /// BROW-045: the profile the next `browser_open` runs in, left by `kolux tab create --profile`
 /// (the front end opens the tab and does not know the profile). ponytail: one slot, since tabs
 /// open one at a time from the command line; a map by url if that stops holding.
-pub static NEXT_PROFILE: Mutex<Option<String>> = Mutex::new(None);
+static NEXT_PROFILE: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 
-/// A tab in a profile other than the default runs in that profile's own engine data folder.
-fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>) -> WebviewBuilder<tauri::Wry> {
-    let profile = profile.or_else(|| NEXT_PROFILE.lock().ok().and_then(|mut n| n.take()));
-    let Some(p) = profile.filter(|p| p != profiles::DEFAULT) else { return b };
-    let Ok(root) = profiles::root() else { return b };
+/// after-list 154: `tab create --profile` hands its profile over keyed by the address the tab
+/// opens at, so two creates close together each get their own profile, not each other's.
+pub fn hand_profile(url: &str, profile: String) {
+    if let Ok(mut n) = NEXT_PROFILE.lock() {
+        n.push((url.to_string(), profile));
+    }
+}
+
+/// Takes the profile handed over for `url`, oldest first; none when nothing waits for it.
+pub fn take_profile(url: &str) -> Option<String> {
+    let mut n = NEXT_PROFILE.lock().ok()?;
+    let at = n.iter().position(|(u, _)| u == url)?;
+    Some(n.remove(at).1)
+}
+
+/// A tab in a profile other than the default runs in that profile's own engine data folder; the
+/// answer also says whether that profile shows Firefox on the sign-in hosts (BROW-025).
+fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>, url: &str) -> (WebviewBuilder<tauri::Wry>, bool) {
+    let profile = profile.or_else(|| take_profile(url));
+    let Some(p) = profile.filter(|p| p != profiles::DEFAULT) else { return (b, true) };
+    let Ok(root) = profiles::root() else { return (b, true) };
     let mut store = profiles::load(&root);
     if profiles::set_tab(&mut store, id, &p).is_err() {
-        return b;
+        return (b, true);
     }
     let _ = profiles::save(&root, &store);
+    let spoof = profiles::spoofs(&store, &p);
     match profiles::data_dir(&root, &p) {
-        Some(dir) => b.data_directory(dir),
-        None => b,
+        Some(dir) => (b.data_directory(dir), spoof),
+        None => (b, spoof),
     }
 }
 
@@ -1892,21 +1943,74 @@ pub fn https_twin(url: &Url) -> Option<String> {
     Some(u.to_string())
 }
 
-/// Name lookup and one TCP connection to the address (blocking): whether the name resolved, and
-/// the error kind of the last connection attempt when none succeeded.
-pub fn reach(url: &Url) -> (bool, Option<std::io::ErrorKind>) {
-    let Ok(addrs) = url.socket_addrs(|| None) else { return (false, None) };
-    if addrs.is_empty() {
-        return (false, None);
-    }
-    let mut last = None;
-    for a in addrs {
-        match std::net::TcpStream::connect_timeout(&a, DIAGNOSE_WAIT) {
-            Ok(_) => return (true, None),
-            Err(e) => last = Some(e.kind()),
+/// The addresses the address's host name looks up to (blocking); empty when the name does not resolve.
+pub fn lookup(url: &Url) -> Vec<IpAddr> {
+    url.socket_addrs(|| None).map(|a| a.into_iter().map(|s| s.ip()).collect()).unwrap_or_default()
+}
+
+/// What a HEAD request through the approved clients got back: the status and the length the
+/// answer says its body has.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Answer {
+    pub status: u16,
+    pub length: Option<u64>,
+}
+
+/// Why a HEAD request through the approved clients failed: the error chain's text, whether it ran
+/// out of time, and the socket error underneath when there is one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Failed {
+    pub text: String,
+    pub timeout: bool,
+    pub io: Option<std::io::ErrorKind>,
+}
+
+/// The socket error somewhere down an error's chain of causes.
+fn io_kind(e: &(dyn std::error::Error + 'static)) -> Option<std::io::ErrorKind> {
+    let mut cur = Some(e);
+    while let Some(x) = cur {
+        if let Some(io) = x.downcast_ref::<std::io::Error>() {
+            return Some(io.kind());
         }
+        cur = x.source();
     }
-    (true, last)
+    None
+}
+
+/// APP-070: every request Kolux itself makes outside the page (a download's size, a dev server's
+/// check, the failed-load diagnosis, the update check's installer) is one HEAD through the icon
+/// clients, the one approved way out: `near` for an address on this machine or the local network,
+/// the public-only client otherwise, both without a proxy and under the icon redirect rule. Nothing
+/// of the body is read.
+pub async fn head_with(clients: &IconClients, url: &Url, near: bool, wait: Duration) -> Result<Answer, Failed> {
+    match if near { &clients.near } else { &clients.far }.head(url.clone()).timeout(wait).send().await {
+        Ok(r) => Ok(Answer { status: r.status().as_u16(), length: r.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse().ok()) }),
+        Err(e) => Err(Failed { text: error_text(&e), timeout: e.is_timeout(), io: io_kind(&e) }),
+    }
+}
+
+/// `head_with` through the clients the app shares.
+pub async fn head(app: &AppHandle, url: &Url, near: bool, wait: Duration) -> Result<Answer, Failed> {
+    let Some(clients) = icon_client(app_origin(app)) else {
+        return Err(Failed { text: "no network client".into(), timeout: false, io: None });
+    };
+    head_with(clients, url, near, wait).await
+}
+
+/// What a failed diagnosis request says, as `failure_kind`'s connection and TLS inputs: a
+/// certificate the OS does not trust is the handshake's (strict checking, as the page's own load),
+/// a time-out or a socket error is the connection's, and anything else on https is the handshake's
+/// text; on http the server was reached.
+pub fn failed_parts(https: bool, f: &Failed) -> (Option<std::io::ErrorKind>, Option<String>) {
+    if certificate_error(&f.text) {
+        (None, Some(f.text.clone()))
+    } else if f.timeout {
+        (Some(std::io::ErrorKind::TimedOut), None)
+    } else if let Some(k) = f.io {
+        (Some(k), None)
+    } else {
+        (None, https.then(|| f.text.clone()))
+    }
 }
 
 fn error_text(e: &(dyn std::error::Error + 'static)) -> String {
@@ -1928,22 +2032,34 @@ pub async fn browser_diagnose(app: AppHandle, url: String) -> Result<Diagnosis, 
     allowed(&url, app_origin(&app).as_ref())?;
     let (local, https) = (local_host(&url), https_twin(&url));
     let probe = url.clone();
-    let (dns_ok, tcp) = tauri::async_runtime::spawn_blocking(move || reach(&probe)).await.map_err(|e| e.to_string())?;
-    let mut tls = None;
-    if dns_ok && tcp.is_none() && url.scheme() == "https" {
-        // Strict checking, as the page's own load: a certificate the OS does not trust fails here too.
-        if let Ok(client) = reqwest::Client::builder().timeout(DIAGNOSE_WAIT).no_proxy().redirect(reqwest::redirect::Policy::none()).build() {
-            if let Err(e) = client.head(url.as_str()).send().await {
-                tls = Some(error_text(&e));
-            }
+    let ips = tauri::async_runtime::spawn_blocking(move || lookup(&probe)).await.map_err(|e| e.to_string())?;
+    let (tcp, tls) = if ips.is_empty() {
+        (None, None)
+    } else {
+        // An address that looks up to this machine or the local network goes through the near client.
+        match head(&app, &url, ips.iter().any(|ip| local_ip(*ip)), DIAGNOSE_WAIT).await {
+            Ok(_) => (None, None),
+            Err(f) => failed_parts(url.scheme() == "https", &f),
         }
-    }
-    Ok(Diagnosis { kind: failure_kind(dns_ok, tcp, tls.as_deref()), local, https })
+    };
+    Ok(Diagnosis { kind: failure_kind(!ips.is_empty(), tcp, tls.as_deref()), local, https })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn two_tab_creates_close_together_each_open_in_their_own_profile() {
+        hand_profile("https://a.example/", "work".into());
+        hand_profile("https://b.example/", "home".into());
+        // The second tab opens first: it still gets its own profile, not the first create's.
+        assert_eq!(take_profile("https://b.example/"), Some("home".into()));
+        assert_eq!(take_profile("https://a.example/"), Some("work".into()));
+        // Nothing left over for a later tab at either address.
+        assert_eq!(take_profile("https://a.example/"), None);
+        assert_eq!(take_profile("https://c.example/"), None);
+    }
 
     #[test]
     fn brow017_a_right_click_and_a_menu_pick_arrive_as_menu_navigations() {
@@ -2747,16 +2863,55 @@ mod t074_tests {
         let port = gone.local_addr().unwrap().port();
         drop(gone);
         let url = parse(&format!("http://127.0.0.1:{port}/")).unwrap();
-        let (dns_ok, tcp) = reach(&url);
-        assert_eq!(failure_kind(dns_ok, tcp, None), "refused");
+        // APP-070: the check is a HEAD through the approved near client, not a socket of its own.
+        let clients = icon_clients(None, system_lookup).unwrap();
+        assert!(!lookup(&url).is_empty());
+        let f = tauri::async_runtime::block_on(head_with(&clients, &url, true, DIAGNOSE_WAIT)).unwrap_err();
+        let (tcp, tls) = failed_parts(false, &f);
+        assert_eq!(failure_kind(true, tcp, tls.as_deref()), "refused", "{f:?}");
         assert!(local_host(&url));
         assert_eq!(https_twin(&url), None);
+        // A server that answers: the HEAD gets its status and length, and the kind stays unknown.
         let open = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = parse(&format!("http://127.0.0.1:{}/", open.local_addr().unwrap().port())).unwrap();
-        assert_eq!(reach(&url), (true, None));
+        let server = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut s, _) = open.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = s.read(&mut buf);
+            s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1234\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        assert_eq!(tauri::async_runtime::block_on(head_with(&clients, &url, true, DIAGNOSE_WAIT)), Ok(Answer { status: 200, length: Some(1234) }));
+        server.join().unwrap();
         assert_eq!(failure_kind(true, None, None), "unknown");
         // A name that cannot exist (RFC 6761 .invalid) never resolves.
-        assert!(!reach(&parse("http://no-such-host.invalid/").unwrap()).0);
+        assert!(lookup(&parse("http://no-such-host.invalid/").unwrap()).is_empty());
+    }
+
+    #[test]
+    fn app070_a_failed_probe_is_split_into_the_connection_and_the_handshake() {
+        let f = |text: &str, timeout, io| Failed { text: text.into(), timeout, io };
+        use std::io::ErrorKind as K;
+        // A certificate the OS does not trust is the handshake's, even when a socket error carries it.
+        assert!(failed_parts(true, &f("error sending request / The certificate chain was issued by an authority that is not trusted", false, Some(K::Other))).1.is_some());
+        assert_eq!(failure_kind(true, None, Some("x509: certificate signed by unknown authority")), "certificate");
+        assert_eq!(failed_parts(true, &f("operation timed out", true, None)), (Some(K::TimedOut), None));
+        assert_eq!(failed_parts(false, &f("connect error", false, Some(K::ConnectionRefused))), (Some(K::ConnectionRefused), None));
+        assert_eq!(failed_parts(true, &f("handshake failure", false, None)), (None, Some("handshake failure".into())));
+        assert_eq!(failed_parts(false, &f("bad response", false, None)), (None, None));
+        let (tcp, tls) = failed_parts(true, &f("operation timed out", true, None));
+        assert_eq!(failure_kind(true, tcp, tls.as_deref()), "timeout");
+    }
+
+    #[test]
+    fn app070_a_public_only_probe_never_reaches_this_machine() {
+        // The far client's own lookup drops local addresses, so a HEAD to a loopback address through
+        // it never connects (a name rebound to this machine is caught the same way).
+        let open = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = open.local_addr().unwrap().port();
+        let clients = icon_clients(None, |_| Ok(vec![IpAddr::from([127, 0, 0, 1])])).unwrap();
+        let url = parse(&format!("http://rebound.example.com:{port}/")).unwrap();
+        assert!(tauri::async_runtime::block_on(head_with(&clients, &url, false, DIAGNOSE_WAIT)).is_err());
     }
 
     #[test]
