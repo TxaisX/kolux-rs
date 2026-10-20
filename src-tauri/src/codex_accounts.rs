@@ -962,4 +962,22 @@ mod tests {
         assert_eq!(ready_home(|| Some("a".into()), |_| false, none, none), Ok(None));
         assert_eq!(ready_home(|| None, |_| false, none, none), Ok(None));
     }
+
+    #[test]
+    fn acct_024_b_the_real_clock_ends_a_wait_that_has_time() {
+        // FIX-5: the zero-wait cases cannot tell a broken clock from a working one. Here the wait is
+        // about 20 ms and the sign-in never lands: the call must come back with the system default,
+        // and not before the wait is up. A slow machine can only make it later, never fail it. It
+        // runs on a thread with a generous deadline so a wait that never ends fails, not hangs.
+        let wait = Duration::from_millis(20);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let started = std::time::Instant::now();
+        std::thread::spawn(move || {
+            let got = ready_home(|| Some("a".into()), |_| false, wait, Duration::from_millis(1));
+            let _ = tx.send((got, started.elapsed()));
+        });
+        let (got, took) = rx.recv_timeout(Duration::from_secs(20)).expect("ready_home never gave up waiting");
+        assert_eq!(got, Ok(None));
+        assert!(took >= wait, "gave up after {took:?}, before the {wait:?} wait was up");
+    }
 }

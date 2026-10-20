@@ -52,4 +52,13 @@ describe("TERM-031 answer a permission prompt", () => {
     expect(answerKeys("codex", "approve")).toBe("y");
     expect(answerKeys("codex", "deny")).toBe("n");
   });
+
+  it("T-151-c: a third program gets no guessed y/n: no keys, no buttons, no answer", () => {
+    expect(answerKeys("gemini", "approve")).toBeNull();
+    expect(answerKeys("gemini", "deny")).toBeNull();
+    expect(answerKeys("", "approve")).toBeNull();
+    expect(buttonsShown("gemini", "permission", 0, 1, "Bash")).toBe(false);
+    expect(canAnswer("gemini", "permission", 1, 1, "Bash")).toBe(false);
+    expect(buttonsShown("codex", "permission", 0, 1, "Bash")).toBe(true);
+  });
 });

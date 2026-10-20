@@ -28,9 +28,10 @@ import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoice
 import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
 import AddProject from "./AddProject";
 import CardLine from "../look/CardLine";
-import { HeaderBadge, HeaderSwatches } from "../look/HeaderBadge";
-import { HEADER_COLOURS_SETTING, headerColourOf, pickHeaderColour } from "../look/headerColour";
-import { CARD_DETAILS, CARD_DETAILS_FIELD, cardTitle, detailsAfter, readCardDetails, type CardFacts } from "../look/cards";
+import { HeaderBadge, HeaderColourPicker } from "../look/HeaderBadge";
+import { CardDetailsChooser } from "../look/CardDetailsChooser";
+import { HEADER_COLOURS_SETTING, colourSaveAfterDelete, headerColourOf, headersGoneWithGroup } from "../look/headerColour";
+import { cardTitle, readCardDetails, type CardFacts } from "../look/cards";
 import { takeSuggestion } from "./suggest";
 import { IconPicker } from "./IconPicker";
 import { ProjectIcon } from "./IconView";
@@ -171,6 +172,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const [plusOpen, setPlusOpen] = useState(false);
   const index = useRef(onIndex);
   index.current = onIndex;
+  const live = useRef({ settings, onSetting }); // the settings as of the latest render, for steps that finish after an await
+  live.current = { settings, onSetting };
   const [listed, setWorktrees] = useState<Record<string, Worktree[]>>({}); // the ones not hidden by hand
   // AUTO-024: the switch that leaves out worktrees made by automation runs; moving to one turns it off.
   const hideAuto = settings[HIDE_AUTOMATION_SETTING] === true;
@@ -439,6 +442,14 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     setPrDraft(null);
     setLinked((l) => (creating === null ? null : keepOnSwitch(l))); // SESS-038
   }, [creating]);
+  const waitPath = projects.find((x) => x.id === creating)?.path;
+  useEffect(() => {
+    // SET-033: the repository's own choice of whether the agent waits for setup starts the checkbox
+    if (!waitPath) return;
+    let live = true;
+    invoke<{ wait: boolean }>("repo_setup_get", { path: waitPath }).then((s) => live && setSetupWait(s.wait)).catch(() => {});
+    return () => void (live = false);
+  }, [waitPath]);
   useEffect(() => {
     // SESS-036: the chosen project's own issues and pull requests matching the name, and a pasted
     // link resolved to its item (its title seeds the name). Lookups that fail for want of gh stay quiet.
@@ -624,7 +635,10 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   };
   const deleteGroup = async (g: Group, remove: boolean) => {
     try {
+      const gone = headersGoneWithGroup(groups.members, g.id, remove); // read before the delete: the answer no longer lists the members
       takeGroups(await invoke<Groups>("group_delete", { id: g.id, removeProjects: remove }));
+      const colours = colourSaveAfterDelete(live.current.settings, gone); // null when none of them had a colour: nothing is saved
+      if (colours) live.current.onSetting(HEADER_COLOURS_SETTING, colours);
       setGroupFor(null);
       setDropGroup(null);
       say("ok", remove ? `Deleted the group ${g.name} and took its projects out of Kolux; their folders are still on disk` : `Deleted the group ${g.name}; its projects are at the top level now`);
@@ -1396,7 +1410,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
             </button>
           )}
         </div>
-        <CardLine shown={cardDetails.shown} facts={facts} indent={44 + depth * 14} />
+        <CardLine shown={cardDetails.shown} facts={facts} depth={depth} />
         {paneRows(w, depth)}
         {moving === w.path && !asking && (
           <div className="sb-form" data-moving={worktreeLabel(w)}>
@@ -1510,7 +1524,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                 ))}
               </select>
               <label>Header colour</label>
-              <HeaderSwatches value={headerColourOf(settings, "p", p.id).id} onPick={(c) => onSetting(HEADER_COLOURS_SETTING, pickHeaderColour(settings, "p", p.id, c))} />
+              <HeaderColourPicker settings={settings} kind="p" id={p.id} onSetting={onSetting} />
               <IconPicker value={icons[p.id]} name={p.name} onSet={(icon) => setIcon(p, icon)} onProblem={(text) => say("warn", text)} />
               <div className="btn-row">
                 <button className="btn" onClick={() => saveProject(p)}>
@@ -1565,7 +1579,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         ))}
       </select>
       <label>Header colour</label>
-      <HeaderSwatches value={headerColourOf(settings, "g", g.id).id} onPick={(c) => onSetting(HEADER_COLOURS_SETTING, pickHeaderColour(settings, "g", g.id, c))} />
+      <HeaderColourPicker settings={settings} kind="g" id={g.id} onSetting={onSetting} />
       {dropGroup ? (
         <>
           <div className="sb-hint">
@@ -1766,13 +1780,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                 <input type="checkbox" aria-label="show sleeping workspaces" checked={showSleeping} onChange={(e) => onSetting(SHOW_SLEEPING_SETTING, e.target.checked)} />
                 Show sleeping workspaces
               </label>
-              <label>Card details</label>
-              {CARD_DETAILS.map((d) => (
-                <label key={d.id} className="check">
-                  <input type="checkbox" aria-label={`card shows ${d.label.toLowerCase()}`} checked={cardDetails.shown.includes(d.id)} disabled={d.locked} onChange={(e) => onSetting(CARD_DETAILS_FIELD, detailsAfter(settings, d.id, e.target.checked))} />
-                  {d.label}
-                </label>
-              ))}
+              <CardDetailsChooser settings={settings} onSetting={onSetting} />
             </div>
           )}
           {creating === "" && nameField(null)}
