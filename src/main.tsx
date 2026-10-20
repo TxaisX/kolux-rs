@@ -7,6 +7,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { applyAppearance, cachedAppearance, followSystemMode, readAppearance } from "./theme";
 import { stampLook } from "./settings/general";
 import { applyLanguage, LANGUAGE_FIELD } from "./language";
+import { registerBundledPacks } from "./i18n/packs";
 import { applyZoom, ZOOM_FIELD } from "./settings/zoom";
 import { followText } from "./terminal/text";
 import { installMenuWheel } from "./settings/menuWheel";
@@ -41,6 +42,8 @@ async function start() {
   const stamped = saved && stampLook(saved);
   if (stamped) void saveChanged(saved, stamped).catch(() => {});
   if (saved) applyAppearance(readAppearance(stamped || saved));
+  // SET-017 (T-210-c): the bundled language packs are known to the lookup (fetched only when their language is needed).
+  registerBundledPacks();
   // SET-017: the saved language is in force before the first frame draws.
   applyLanguage(saved?.[LANGUAGE_FIELD]);
   // SET-019: and so is the saved interface zoom.
