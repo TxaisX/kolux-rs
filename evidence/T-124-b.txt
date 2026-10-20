@@ -1,0 +1,40 @@
+T-124-b · STAT-033 (rest, part) Which agent a terminal title belongs to (LEFT OPEN)
+lane/hooks from 348a2a7e (after T-271 f5f957e7) · 2026-10-20 · Claude Opus 5.5 · Routing v3 (build first, live proof batched)
+
+Built (lane-local, in this commit)
+- src/status/titleOwner.ts (new, 3 tests in titleOwner.test.ts): titleOwner(title) -> {owners, unknown}.
+  · A name counts only where the agent prints it: the whole first part of the title, its first two words or its
+    first word (after spinner and star glyphs), or the whole last part after a separator (" - ", " | ", " · ",
+    dashes, ": "). Names: Claude [Code], Codex [CLI], Cursor [Agent], MiMo [Code], OMP / oh-my-pi, Pi / π.
+  · Vendor markers at the start of a title: Claude Code's star (✳) and the pi sign (π, both Pi-style agents).
+  · Never decided by a name inside the task text ("✳ Fix the codex login bug" = claude), a worktree name
+    ("kolux-codex-wt", "codex-tests" = nobody), a model name alone ("Claude Sonnet 4.5", "Claude 3.7",
+    "gpt-5-codex" = nobody) or a path.
+  · Conflicting marks give unknown ("Claude - Codex", "Codex - Claude", "✳ Codex", "π - Claude Code"); the order
+    of the parts never decides.
+- src/status/credit.ts (T-257): titleNames now comes from titleOwner (it matched names anywhere before, so a Claude
+  title whose task named Codex claimed nothing); titleCredit claims nothing when the marks conflict.
+  credit.test.ts / working.test.ts: three T-257 fixtures follow the new rule (a model name alone names nobody, so
+  "Claude Sonnet ⠋ working" in a Cursor pane is Cursor's working state; "✳ MiMo Code" / "✳ Cursor Agent" are now
+  conflicting marks, so the done fixtures read "MiMo Code - done" / "Cursor Agent - done").
+
+Patch for the resolver (tested applied, then reverted)
+1. evidence/hooks-T-124-b-shellMarks.ts.patch: TERM-058 agentFromTitle answers claude or codex only when titleOwner
+   names that one agent alone. Its existing tests ("✳ Claude Code", "codex – working", "CLAUDE", "preclaudeX",
+   "user@host: ~/codexes", "") all still pass.
+
+Readings (logs under G:/Temp/hooks-v3-logs/)
+- committed tree: vitest src/status/: 10 files, 66 passed (b2-t124b-vitest.log); tsc --noEmit exit 0 (b2-t124b-tsc.log).
+- shellMarks patch applied: tsc exit 0 (b2-t124b-tsc-patched.log); vitest src/terminal/ + src/status/: 60 files,
+  442 passed (b2-t124b-vitest-patched.log); vitest related shellMarks/titleOwner/credit: 6 files, 43 passed
+  (b2-t124b-vitest-related.log). Reverted; git apply --check exit 0. No Rust changed.
+
+Still open (named blockers)
+- STAT 035 rest: generated-titles switch and tab-name rule wait for open T-258 (title source).
+- STAT 042 rest: Notifications page items are src/settings lane work.
+- STAT 033 rest: Gemini CLI title symbols are in neither the spec nor this tree; they wait for a real Gemini run.
+- STAT 034 rest: the provider-session front-end hunk is src/terminal lane work.
+
+LIVE PROOF PENDING (batched; after the patch is applied)
+1. In a plain shell tab run Claude Code with a task that mentions Codex. Expect: the tab icon is Claude's.
+2. In a Cursor tab running a Claude model. Expect: the busy dot follows Cursor's spinner and the icon stays Cursor's.

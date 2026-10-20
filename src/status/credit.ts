@@ -1,8 +1,8 @@
 // T-257 (SESS-040): busy spinners and tab titles credit the agent that was LAUNCHED in a pane, read
 // from the pane's own launch record, never an agent guessed from what it prints. The terminal title
 // the agent sets still says whether it is busy (STAT-033's titleState), and the title patterns of
-// MiMo, Pi-style agents and Cursor are recognised so that a title naming a DIFFERENT agent (Cursor
-// running a Claude model, say) is not taken as anybody's state: the named agent is claimed only when
+// MiMo, Pi-style agents and Cursor are recognised (by the marks the agent itself prints, STAT-033) so
+// that a title naming a DIFFERENT agent is not taken as anybody's state: the named agent is claimed only when
 // the dot (the title) and the row (the launch record) agree. Pure, so every rule is tested here;
 // App.tsx and TerminalPane.tsx call it (evidence/hooks-T-257-*.patch).
 import type { AgentState } from "../projects/rows";
@@ -10,6 +10,7 @@ import { titleState } from "../terminal/status";
 import { creditedAgent } from "../launch/paneMark";
 import { agents as AGENT_NAMES } from "../keys/actions";
 import type { Identity } from "../terminal/shellMarks";
+import { titleOwner } from "./titleOwner";
 
 /** The parts of a pane's record that say what was launched in it. */
 export type LaunchRecord = { agent: string; agentId?: string; program?: string | null; kind?: string; seats?: unknown };
@@ -29,42 +30,19 @@ export function launchedName(p: LaunchRecord): string | null {
   return AGENT_NAMES.find(([a]) => a === id)?.[1] ?? null;
 }
 
-// Title words per agent, tried in this order; a match is cut out before the next is tried, so
-// "oh-my-pi" names OMP and not Pi as well. Pi and the agents built the Pi way share the Pi title
-// (the word "pi" or the pi sign), so it may belong to either. A word inside a longer word never counts.
-const B = "(^|[^a-z0-9])";
-const E = "(?=[^a-z0-9]|$)";
-const TITLE_WORDS: readonly (readonly [RegExp, readonly string[]])[] = [
-  [new RegExp(`${B}(oh-my-pi|omp)${E}`, "i"), ["omp"]],
-  [new RegExp(`${B}cursor(-agent| agent)?${E}`, "i"), ["cursor"]],
-  [new RegExp(`${B}mimo( code|-code)?${E}`, "i"), ["mimo-code"]],
-  [new RegExp(`${B}claude${E}`, "i"), ["claude"]],
-  [new RegExp(`${B}codex${E}`, "i"), ["codex"]],
-  [new RegExp(`${B}(pi|π)${E}`, "i"), ["pi", "omp"]],
-];
-
-const PATH = /^(~|[a-zA-Z]:[\\/]|\\\\|\.{0,2}\/)/;
-
-/** The catalogue agents a terminal title names (none for a blank title or a bare path). */
+/** The catalogue agents a terminal title names by the marks the agent itself prints (STAT-033, titleOwner.ts); none for a blank title, a bare path, or marks that conflict. */
 export function titleNames(title: string): Set<string> {
-  const out = new Set<string>();
-  let t = title.trim();
-  if (t === "" || PATH.test(t) || (/[\\/]/.test(t) && !/\s/.test(t))) return out;
-  for (const [re, ids] of TITLE_WORDS) {
-    const m = re.exec(t);
-    if (!m) continue;
-    for (const id of ids) out.add(id);
-    t = t.slice(0, m.index) + " " + t.slice(m.index + m[0].length);
-  }
-  return out;
+  return new Set(titleOwner(title).owners);
 }
 
 export type TitleCredit = { agent: string; state: AgentState | null; named: boolean };
 
-/** What a title says about the launched agent: its busy state, and whether the title named it. Null with no launch record, or when the title names only some other agent (nothing is claimed). */
+/** What a title says about the launched agent: its busy state, and whether the title named it. Null with no launch record, when the title's marks name only some other agent, or when they conflict (nothing is claimed). */
 export function titleCredit(launched: string | null, title: string): TitleCredit | null {
   if (!launched) return null;
-  const names = titleNames(title);
+  const owner = titleOwner(title);
+  if (owner.unknown) return null;
+  const names = new Set(owner.owners);
   if (names.size > 0 && !names.has(launched)) return null;
   return { agent: launched, state: titleState(title), named: names.has(launched) };
 }

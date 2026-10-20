@@ -39,8 +39,10 @@ test("the busy state credits the launched agent; a title naming another agent cl
   // MiMo's spinner with no name in it still belongs to MiMo: it was launched there.
   expect(titleCredit("mimo-code", "⠙ thinking")).toEqual({ agent: "mimo-code", state: "working", named: false });
   expect(titleCredit("pi", "π ⠹ kolux-rs")).toEqual({ agent: "pi", state: "working", named: true });
-  // Cursor running a Claude model may print "Claude" in its title: never a guess for Claude, no state taken.
-  expect(titleCredit("cursor", "Claude Sonnet ⠋ working")).toBeNull();
+  // Cursor running a Claude model may print the model in its title: a model name alone names nobody (STAT-033), so it stays Cursor's.
+  expect(titleCredit("cursor", "Claude Sonnet ⠋ working")).toEqual({ agent: "cursor", state: "working", named: false });
+  // Marks that conflict claim nothing.
+  expect(titleCredit("cursor", "Cursor Agent - Claude")).toBeNull();
   expect(titleCredit("mimo-code", "✳ Claude Code")).toBeNull();
   // No launch record: nothing is credited from output alone.
   expect(titleCredit(null, "⠋ Cursor Agent")).toBeNull();
