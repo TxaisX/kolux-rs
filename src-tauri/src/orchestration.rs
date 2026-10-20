@@ -15,6 +15,10 @@ pub mod upgrade;
 /// and automations. The allow goes once evidence/orchestration-T-312-cli.patch is applied.
 #[allow(dead_code)]
 pub mod runtime;
+/// ORCH-042 (T-255): Agent Teams teammate panes, the host-neutral half. Nothing calls it yet:
+/// Claude Code documents split panes only through tmux or iTerm2 (T-255 and T-191-c stay open).
+#[allow(dead_code)]
+pub mod teams;
 
 const KEY: &str = "orchestration.mail";
 pub const KINDS: &[&str] = &["status", "dispatch", "worker_done", "merge_ready", "escalation", "handoff", "decision_gate", "question", "heartbeat"];
