@@ -1088,6 +1088,8 @@ pub fn create_fresh_workspace<S: std::ops::Deref<Target = Store>>(git: &Git, loc
     };
     let made = create_workspace(git, place, project, &name, base)?.worktree;
     note_seen(&*lock()?, project, &made.path)?;
+    // PROJ-039: Kolux invented this name, so the first work may rename the branch to fit it.
+    mark_suggested(&*lock()?, &made.path, true)?;
     Ok(made)
 }
 
@@ -1467,6 +1469,151 @@ pub fn rename(store: &Store, path: &str, name: &str) -> Result<String, String> {
 #[tauri::command]
 pub fn workspace_rename(store: StoreState<'_>, path: String, name: String) -> Result<String, String> {
     rename(&*store.lock().map_err(|e| e.to_string())?, &path, &name)
+}
+
+// ---- PROJ-039 / GIT-020 / SET-031: the branch is renamed to fit the work -----------------------
+
+/// SET-031: branches get renamed after the work done on them; on unless this is false.
+pub const RENAME_SETTING: &str = "renameBranches";
+/// Workspaces whose name Kolux invented (keyed like the names); only these are ever renamed by
+/// themselves, and a hand rename or the first automatic rename takes the mark away.
+const SUGGESTED_KEY: &str = "workspaceSuggested";
+/// The longest slug a rename makes, cut at a word edge.
+pub const SLUG_MAX: usize = 40;
+
+pub fn rename_enabled(settings: &serde_json::Value) -> bool {
+    settings[RENAME_SETTING].as_bool() != Some(false)
+}
+
+fn suggested_map(store: &Store) -> serde_json::Map<String, serde_json::Value> {
+    store.get(SUGGESTED_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+/// PROJ-039: marks (or unmarks) the workspace at `path` as one whose name Kolux suggested.
+pub fn mark_suggested(store: &Store, path: &str, on: bool) -> Result<(), String> {
+    let mut map = suggested_map(store);
+    let changed = if on { map.insert(name_key(path), serde_json::Value::Bool(true)).is_none() } else { map.remove(&name_key(path)).is_some() };
+    if !changed {
+        return Ok(());
+    }
+    store.set(SUGGESTED_KEY, &serde_json::Value::Object(map).to_string()).map_err(|e| e.to_string())
+}
+
+/// PROJ-039: the branch name an agent's reply proposes, cleaned to a short lowercase hyphenated
+/// slug. A reply that repeats the branch prefix has it removed; a reply that is only the prefix, or
+/// nothing usable, gives `None`. Only the first line is read.
+pub fn branch_slug(reply: &str, prefix: &str) -> Option<String> {
+    let line = reply.lines().map(|l| l.trim().trim_matches(|c: char| matches!(c, '`' | '"' | '\'' | '*')).trim()).find(|l| !l.is_empty())?;
+    let mut rest = line;
+    let prefix = prefix.trim();
+    if !prefix.is_empty() {
+        let bare = prefix.trim_end_matches('/');
+        let low = line.to_lowercase();
+        let p = prefix.to_lowercase();
+        if low.starts_with(&p) && line.is_char_boundary(p.len()) {
+            rest = &line[p.len()..];
+        } else if low == bare.to_lowercase() {
+            return None;
+        }
+    }
+    let cleaned = safe_name(rest)?.replace('.', "-");
+    let mut out = String::new();
+    for part in cleaned.split('-').filter(|p| !p.is_empty()) {
+        let next = if out.is_empty() { part.len() } else { out.len() + 1 + part.len() };
+        if next > SLUG_MAX && !out.is_empty() {
+            break;
+        }
+        if !out.is_empty() {
+            out.push('-');
+        }
+        out.push_str(part);
+    }
+    let out: String = out.chars().take(SLUG_MAX).collect();
+    let out = out.trim_matches('-').to_string();
+    (!out.is_empty()).then_some(out)
+}
+
+/// PROJ-039: the readable form of a branch's last part: `fix-login-bug` shows as `Fix login bug`.
+pub fn sentence_case(slug: &str) -> String {
+    let words = slug.rsplit('/').next().unwrap_or(slug).replace(['-', '_'], " ");
+    let mut chars = words.trim().chars();
+    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
+/// What a rename after the work did: whether it ran, why not when it did not, the names, and the
+/// upstream the branch tracks (its commits and tracking stay with it).
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameAnswer {
+    pub renamed: bool,
+    pub reason: Option<String>,
+    pub old: Option<String>,
+    pub branch: Option<String>,
+    pub name: Option<String>,
+    pub tracking: Option<String>,
+}
+
+fn left_alone(why: &str) -> RenameAnswer {
+    RenameAnswer { reason: Some(why.to_string()), ..Default::default() }
+}
+
+/// PROJ-039 / GIT-020: renames the branch of the workspace at `path` after the work begun in it,
+/// from the agent's `reply`. It only ever renames (`git branch -m`: nothing is deleted or
+/// overwritten) and only when the setting is on, the workspace is a Kolux-suggested one nobody
+/// named by hand, and it is not the main checkout. The folder stays where it is (the agent holds it;
+/// T-110-b). A failed rename comes back as the full Git output. The store is not locked while Git works.
+pub fn rename_after_work(git: &Git, store: &Mutex<Store>, project: &Project, path: &str, reply: &str) -> Result<RenameAnswer, String> {
+    let (settings, eligible) = {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        (store.settings(), suggested_map(&store).contains_key(&name_key(path)) && !load_names(&store).contains_key(&name_key(path)))
+    };
+    if !rename_enabled(&settings) {
+        return Ok(left_alone("Branch renaming is off in Settings."));
+    }
+    if !eligible {
+        return Ok(left_alone("This workspace has a name of its own, so its branch keeps it."));
+    }
+    let repo = Path::new(&project.path);
+    let turn = repo_turn(repo);
+    let _turn = turn.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(w) = git.worktrees(repo)?.into_iter().find(|w| name_key(&w.path) == name_key(path)) else {
+        return Ok(left_alone("That workspace is not listed by Git."));
+    };
+    let Some(old) = w.branch.clone().filter(|_| !w.is_main) else {
+        return Ok(left_alone("Only a workspace's own branch is renamed."));
+    };
+    let prefix = place_from(project, &settings).prefix;
+    let Some(slug) = branch_slug(reply, &prefix) else {
+        return Ok(left_alone("The reply did not hold a usable branch name."));
+    };
+    let new = (1..50)
+        .map(|n| if n == 1 { format!("{prefix}{slug}") } else { format!("{prefix}{slug}-{n}") })
+        .find(|c| *c == old || !git.branch_taken(repo, c))
+        .ok_or("no free branch name")?;
+    if new == old {
+        return Ok(left_alone("The branch already has that name."));
+    }
+    // GIT-020: the upstream is read first, so the answer says what tracking the branch keeps.
+    let tracking = git.upstream_of(repo, &old);
+    git.rename_branch(repo, &old, &new)?;
+    let shown = sentence_case(&new);
+    let store = store.lock().map_err(|e| e.to_string())?;
+    set_name(&store, path, Some(&shown))?;
+    mark_suggested(&store, path, false)?;
+    Ok(RenameAnswer { renamed: true, reason: None, old: Some(old), branch: Some(new), name: Some(shown), tracking })
+}
+
+#[tauri::command(async)]
+pub fn workspace_rename_after_work(git: State<'_, Git>, store: StoreState<'_>, project_id: String, path: String, reply: String) -> Result<RenameAnswer, String> {
+    let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
+    rename_after_work(&git, &store, &project, &path, &reply)
+}
+
+/// PROJ-039: the composer calls this when the name it created a workspace with was Kolux's own
+/// suggestion left as it was, so the first work can rename it.
+#[tauri::command]
+pub fn workspace_mark_suggested(store: StoreState<'_>, path: String, suggested: bool) -> Result<(), String> {
+    mark_suggested(&*store.lock().map_err(|e| e.to_string())?, &path, suggested)
 }
 
 // ---- PROJ-060: a workspace's details: shown name, linked GitHub item, comment ---------------------
@@ -3949,6 +4096,120 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         remove_workspace(&git, &project, &ws, true).unwrap();
         drop(store);
         for d in [profile, repo, place.root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj039_a_reply_becomes_a_short_slug_without_the_prefix() {
+        assert_eq!(branch_slug("Fix the login bug", "").as_deref(), Some("fix-the-login-bug"));
+        assert_eq!(branch_slug("`tx/Fix login`\nignored second line", "tx/").as_deref(), Some("fix-login"), "the prefix is removed");
+        assert_eq!(branch_slug("TX/fix-login", "tx/").as_deref(), Some("fix-login"), "any letter case");
+        assert_eq!(branch_slug("tx", "tx/"), None, "only the prefix is ignored");
+        assert_eq!(branch_slug("tx/", "tx/"), None);
+        assert_eq!(branch_slug("   \n  ", ""), None);
+        assert_eq!(branch_slug("???", ""), None);
+        let long = branch_slug("add support for importing every kind of saved layout from the old settings folder", "").unwrap();
+        assert!(long.len() <= SLUG_MAX && !long.ends_with('-'), "{long}");
+        assert_eq!(long, "add-support-for-importing-every-kind-of");
+        assert_eq!(sentence_case("fix-login-bug"), "Fix login bug");
+        assert_eq!(sentence_case("tx/fix-login"), "Fix login");
+    }
+
+    fn rename_fixture(name: &str, setting: Option<bool>) -> (Git, Mutex<Store>, Project, PathBuf, PathBuf, PathBuf) {
+        let git = Git::detect().unwrap();
+        let profile = temp(&format!("profile-{name}"));
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo(&format!("repo-{name}"));
+        let root = temp(&format!("root-{name}"));
+        let mut settings = store.settings();
+        settings["branchPrefix"] = serde_json::json!("custom");
+        settings["branchPrefixCustom"] = serde_json::json!("tx");
+        settings[WORKSPACES_DIR_SETTING] = serde_json::json!(root.to_string_lossy());
+        if let Some(on) = setting {
+            settings[RENAME_SETTING] = serde_json::json!(on);
+        }
+        store.save_settings(&settings).unwrap();
+        let project = add_project(&git, &store, &repo).unwrap();
+        (git, Mutex::new(store), project, profile, repo, root)
+    }
+
+    #[test]
+    fn proj039_the_first_work_renames_a_suggested_branch_once_and_keeps_its_commits() {
+        let (git, store, project, profile, repo, root) = rename_fixture("rename-ok", None);
+        let made = create_fresh_from(&git, &store, &project.id, None).unwrap();
+        let old = made.branch.clone().unwrap();
+        assert!(old.starts_with("tx/"), "{old}");
+        // work already committed on the branch must still be on it afterwards
+        fs::write(Path::new(&made.path).join("b.txt"), "b").unwrap();
+        git_in(Path::new(&made.path), &["add", "."]);
+        git_in(Path::new(&made.path), &["commit", "-q", "-m", "work"]);
+        let tip = rev(Path::new(&made.path), "HEAD");
+        let answer = rename_after_work(&git, &store, &project, &made.path, "tx/Fix the login bug").unwrap();
+        assert!(answer.renamed, "{answer:?}");
+        assert_eq!(answer.branch.as_deref(), Some("tx/fix-the-login-bug"));
+        assert_eq!(answer.old.as_deref(), Some(old.as_str()));
+        assert_eq!(answer.name.as_deref(), Some("Fix the login bug"));
+        assert_eq!(rev(&repo, "refs/heads/tx/fix-the-login-bug"), tip, "the commits moved with the branch");
+        assert!(!git.branch_taken(&repo, &old), "the old name is gone");
+        assert_eq!(git.worktrees(&repo).unwrap().iter().find(|w| name_key(&w.path) == name_key(&made.path)).and_then(|w| w.branch.clone()).as_deref(), Some("tx/fix-the-login-bug"));
+        assert_eq!(load_names(&store.lock().unwrap()).get(&name_key(&made.path)).and_then(|v| v.as_str()), Some("Fix the login bug"));
+        // a second reply changes nothing: only a name Kolux suggested is replaced
+        let again = rename_after_work(&git, &store, &project, &made.path, "something else").unwrap();
+        assert!(!again.renamed && again.reason.is_some(), "{again:?}");
+        for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj039_a_branch_is_left_alone_when_the_setting_is_off_the_name_is_yours_or_it_is_the_main_checkout() {
+        let (git, store, project, profile, repo, root) = rename_fixture("rename-off", Some(false));
+        let made = create_fresh_from(&git, &store, &project.id, None).unwrap();
+        let old = made.branch.clone().unwrap();
+        let off = rename_after_work(&git, &store, &project, &made.path, "fix login").unwrap();
+        assert!(!off.renamed && off.reason.as_deref().is_some_and(|r| r.contains("off")), "{off:?}");
+        assert!(git.branch_taken(&repo, &old));
+        // on again, but named by hand
+        let mut settings = store.lock().unwrap().settings();
+        settings[RENAME_SETTING] = serde_json::json!(true);
+        store.lock().unwrap().save_settings(&settings).unwrap();
+        rename(&store.lock().unwrap(), &made.path, "My own name").unwrap();
+        let named = rename_after_work(&git, &store, &project, &made.path, "fix login").unwrap();
+        assert!(!named.renamed, "{named:?}");
+        assert!(git.branch_taken(&repo, &old), "a hand-named workspace keeps its branch");
+        // the main checkout is never renamed, even when marked
+        mark_suggested(&store.lock().unwrap(), &project.path, true).unwrap();
+        let main = rename_after_work(&git, &store, &project, &project.path, "fix login").unwrap();
+        assert!(!main.renamed, "{main:?}");
+        assert!(git.branch_taken(&repo, "main"));
+        // a reply with nothing usable changes nothing
+        let fresh = create_fresh_from(&git, &store, &project.id, None).unwrap();
+        let none = rename_after_work(&git, &store, &project, &fresh.path, "???").unwrap();
+        assert!(!none.renamed, "{none:?}");
+        for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj039_a_taken_branch_name_gets_a_number_and_a_rename_never_overwrites() {
+        let (git, store, project, profile, repo, root) = rename_fixture("rename-taken", None);
+        let first = create_fresh_from(&git, &store, &project.id, None).unwrap();
+        let second = create_fresh_from(&git, &store, &project.id, None).unwrap();
+        // an unmerged branch that already holds the wanted name
+        git_in(&repo, &["branch", "tx/fix-login"]);
+        let tip = rev(&repo, "refs/heads/tx/fix-login");
+        let a = rename_after_work(&git, &store, &project, &first.path, "fix login").unwrap();
+        assert_eq!(a.branch.as_deref(), Some("tx/fix-login-2"), "{a:?}");
+        let b = rename_after_work(&git, &store, &project, &second.path, "fix login").unwrap();
+        assert_eq!(b.branch.as_deref(), Some("tx/fix-login-3"), "{b:?}");
+        assert_eq!(rev(&repo, "refs/heads/tx/fix-login"), tip, "the branch that held the name is untouched");
+        // the Git layer alone refuses to replace a branch and says why
+        let err = git.rename_branch(&repo, "tx/fix-login-2", "tx/fix-login").unwrap_err();
+        assert!(err.contains("already exists"), "{err}");
+        assert!(git.rename_branch(&repo, "tx/fix-login-2", "--evil").is_err());
+        for d in [profile, repo, root] {
             let _ = fs::remove_dir_all(d);
         }
     }
