@@ -1,0 +1,20 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 3042b50c..67e1ea58 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -132,6 +132,7 @@ import { recording } from "./keys/record";
+ import { matchEvent } from "./keys/keymap";
+ import { heldByTerminal } from "./keys/terminalPolicy";
+ import { useAgentEvents, useAgentStatusState } from "./status/useAgentStatus";
++import { useGone } from "./status/gone";
+ import { useAppSettings } from "./settings/useAppSettings";
+ import { useWorkspaceActions, useWorkspaces } from "./projects/useWorkspaces";
+ import { useChrome, useMenuBar } from "./chrome/useChrome";
+@@ -1985,6 +1986,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   report.current = reportLayout;
+   useEffect(() => report.current());
+   const { noticed, panesRef } = useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, stamp, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir });
++  useGone({ panes, running, hook, setHook, setTurn, setCrew }); // STAT-031 / T-275: gone agents stop reporting
+   // The chooser, in a grid cell (SESS-007) or as the New session page (SESS-018).
+   const renderChooser = (p: Pane & { seats: Seat[] }, hidden: boolean, focused: boolean, onFocus: () => void, onClose: () => void, sheetOf: { project: string; path: string } | null = null) => (
+     <ChooserPane

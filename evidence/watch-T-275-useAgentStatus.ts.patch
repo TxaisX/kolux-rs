@@ -1,0 +1,21 @@
+diff --git a/src/status/useAgentStatus.ts b/src/status/useAgentStatus.ts
+index 283b2a6b..63d81ef4 100644
+--- a/src/status/useAgentStatus.ts
++++ b/src/status/useAgentStatus.ts
+@@ -17,6 +17,7 @@ import { sameDir } from "../workspaces";
+ import { newPaceMemory, noteId, paced } from "../notify/pace";
+ import { badgeCount } from "../notify/badge";
+ import { toAcknowledge } from "../notify/seen";
++import { admit, ledger } from "./gone";
+ 
+ export type TurnInfo = { tool?: string; detail?: string; ask?: string; reply?: string; wrote?: string; stop?: StopInfo; plan?: string; planCut?: boolean; monitoring?: boolean };
+ 
+@@ -207,6 +208,8 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
+     // STAT-001: the hooks report each pane's state; a turn ending out of view is noticed like an exit.
+     const off = listen<{ paneKey: number; children: Crew; tool?: string; detail?: string; ask?: string; wrote?: string; plan?: string; planCut?: boolean; session?: string; fresh?: boolean } & Turn>("agent-status", (e) => {
+       const { paneKey, state, children, tool, detail, ask, reply, wrote, boundary, stop, plan, planCut, session, monitoring, fresh } = e.payload;
++      // STAT-031 / T-275: a closed tab's late event, or a retired pane's, changes nothing.
++      if (!admit(ledger, paneKey, new Set(panesRef.current.map((x) => x.key)), { state, fresh })) return;
+       // SESS-030: the newest session id is what a restart resumes (a /clear or a resume brings a new one).
+       if (session) setPanes((ps) => (ps.some((p) => p.key === paneKey && p.session !== session) ? ps.map((p) => (p.key === paneKey ? { ...p, session } : p)) : ps));
+       setCrew((c) => (children.length === 0 && !(paneKey in c) ? c : { ...c, [paneKey]: children }));
