@@ -73,6 +73,45 @@ pub fn repo_parent(gh: &Path, host: &str, repo: &str) -> Result<Option<String>, 
     Ok(parent_of(&gh_json(gh, host, &repo_path(host, repo)?, &[])?))
 }
 
+/// T-232-d (GIT-060): a repository and, when it is a fork, its parent: a fork knows its own owner and
+/// its parent's. `parent` is `owner/name`; `parent_owner` is the owner part (the login GitHub reports,
+/// else the part of the name before the slash).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Lineage {
+    pub owner: String,
+    pub name: String,
+    pub fork: bool,
+    pub parent: Option<String>,
+    pub parent_owner: Option<String>,
+}
+
+/// GIT-060: the lineage from GitHub's repository record (the same record the parent read uses, so one call
+/// gives both owners). A name outside the owner/name rule is dropped, like the parent read.
+pub fn lineage_of(v: &serde_json::Value) -> Option<Lineage> {
+    let full = v["full_name"].as_str().filter(|s| full_name_ok(s))?;
+    let (owner, name) = full.split_once('/')?;
+    let parent = parent_of(v);
+    let parent_owner = parent.as_deref().and_then(|p| {
+        let from_name = p.split_once('/').map(|(o, _)| o.to_string());
+        match v["parent"]["owner"]["login"].as_str().filter(|l| login_ok(l)) {
+            Some(l) if from_name.as_deref().is_some_and(|o| o.eq_ignore_ascii_case(l)) => Some(l.to_string()),
+            _ => from_name,
+        }
+    });
+    Some(Lineage { owner: owner.to_string(), name: name.to_string(), fork: v["fork"].as_bool() == Some(true), parent, parent_owner })
+}
+
+/// GIT-060: the lineage of `repo` on `host`.
+pub fn repo_lineage(gh: &Path, host: &str, repo: &str) -> Result<Lineage, String> {
+    lineage_of(&gh_json(gh, host, &repo_path(host, repo)?, &[])?).ok_or_else(|| "GitHub did not describe this repository.".to_string())
+}
+
+#[tauri::command]
+pub async fn github_repo_lineage(host: String, repo: String) -> Result<Lineage, String> {
+    tauri::async_runtime::spawn_blocking(move || repo_lineage(&gh_program()?, &host, &repo)).await.map_err(|e| e.to_string())?
+}
+
 /// GIT-053: people from a GitHub user list, each once, in GitHub's order.
 pub fn people_of(v: &serde_json::Value) -> Vec<Person> {
     let mut out: Vec<Person> = Vec::new();
@@ -702,6 +741,50 @@ mod tests {
         assert_eq!(parent_of(&json!({"fork": false, "parent": {"full_name": "up/stream"}})), None);
         assert_eq!(parent_of(&json!({"fork": true})), None, "a fork whose parent is gone has no parent");
         assert_eq!(parent_of(&json!({"fork": true, "parent": {"full_name": ""}})), None);
+    }
+
+    #[test]
+    fn a_fork_knows_its_own_owner_and_its_parents() {
+        let fork = json!({"full_name": "me/app", "fork": true, "parent": {"full_name": "Up/stream", "owner": {"login": "Up"}}});
+        let l = lineage_of(&fork).unwrap();
+        assert_eq!((l.owner.as_str(), l.name.as_str(), l.fork), ("me", "app", true));
+        assert_eq!((l.parent.as_deref(), l.parent_owner.as_deref()), (Some("Up/stream"), Some("Up")));
+        // the owner comes from the name when the record has no owner object, and a mismatching login is not trusted
+        let bare = json!({"full_name": "me/app", "fork": true, "parent": {"full_name": "up/stream"}});
+        assert_eq!(lineage_of(&bare).unwrap().parent_owner.as_deref(), Some("up"));
+        let odd = json!({"full_name": "me/app", "fork": true, "parent": {"full_name": "up/stream", "owner": {"login": "other"}}});
+        assert_eq!(lineage_of(&odd).unwrap().parent_owner.as_deref(), Some("up"));
+        let plain = lineage_of(&json!({"full_name": "me/app", "fork": false})).unwrap();
+        assert_eq!((plain.fork, plain.parent, plain.parent_owner), (false, None, None));
+        let gone = lineage_of(&json!({"full_name": "me/app", "fork": true})).unwrap();
+        assert_eq!((gone.fork, gone.parent_owner), (true, None), "a fork whose parent is gone knows only itself");
+        assert!(lineage_of(&json!({"full_name": "bad name", "fork": true})).is_none());
+        assert!(lineage_of(&json!({})).is_none());
+    }
+
+    #[test]
+    fn the_lineage_read_is_one_call_for_the_repository_record() {
+        let dir = crate::test_dir::temp("gh-lineage");
+        let gh = if cfg!(windows) {
+            let f = dir.join("gh.cmd");
+            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\necho {\"full_name\":\"me/app\",\"fork\":true,\"parent\":{\"full_name\":\"up/stream\"}}\r\nexit /b 0\r\n").unwrap();
+            f
+        } else {
+            let f = dir.join("gh");
+            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\necho '{\"full_name\":\"me/app\",\"fork\":true,\"parent\":{\"full_name\":\"up/stream\"}}'\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&f, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            f
+        };
+        let l = repo_lineage(&gh, "github.com", "me/app").unwrap();
+        assert_eq!((l.owner.as_str(), l.parent_owner.as_deref()), ("me", Some("up")));
+        let calls = fs::read_to_string(dir.join("calls.txt")).unwrap();
+        assert_eq!(calls.lines().count(), 1, "{calls}");
+        assert!(calls.contains("api repos/me/app --hostname github.com"), "{calls}");
+        assert!(repo_lineage(&gh, "github.com", "bad").is_err());
     }
 
     #[test]

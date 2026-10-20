@@ -3,21 +3,25 @@
 // Merging asks first on the page itself and is only sent after the confirm button, pinned to the head
 // commit the page showed, and only for a repository added in Kolux.
 // The tab last open on a pull request is remembered (localStorage, per pull request).
-// ponytail: not here yet (T-232-d): viewed-file sync, "fix checks with AI", a fork's parent owner.
+// T-232-d: viewed marks synced with GitHub (GIT-052), "Fix with AI" on a failed check, an editable
+// description and labels, a fork's parent, Start/Resume workspace, and recent editors as reviewer picks.
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Close } from "../chrome/icons";
 import GhBanner, { classify } from "./GhBanner";
 import Markdown from "./MarkdownView";
 import { safeHref } from "./markdown";
-import { askForReview, heldWords, MERGE_METHODS, mergeBox, type PrCheck, type PrFiles, type PrPageData, type PrTab, type PrThreads, REACTION_EMOJI, REVIEW_LABEL, rerunTargets, reviewerSuggestions, saveTab, savedTab, summarizeChecks, type Target } from "./prModel";
+import MentionField from "./MentionField";
+import type { TaskLabel } from "./model";
+import { askForReview, failedChecks, fixBlocker, fixText, headLabel, heldWords, isEditor, labelsToAdd, lineageNote, MERGE_METHODS, mergeBox, type PrCheck, type PrFiles, type PrPageData, type PrTab, type PrThreads, type PrViewed, REACTION_EMOJI, REVIEW_LABEL, rerunTargets, reviewerSuggestions, saveTab, savedTab, summarizeChecks, type Target, viewedLine, viewedOf, withViewed } from "./prModel";
 import type { Person } from "./repoFacts";
 
 const NO_THREADS: PrThreads = { threads: [], truncated: false, limit: 0 };
 const say = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : "That did not work.");
 
-/** `added`: the repository is added in Kolux (a project's checkout is here); without it the page reads but does not merge. */
-export default function PullRequestPage({ target, added, onClose }: { target: Target; added: boolean; onClose: () => void }) {
+/** `added`: the repository is added in Kolux (a project's checkout is here); without it the page reads but does not merge.
+ * `workspace`: the folder of this pull request's workspace (Fix with AI sends there), else null; `work`: Start or Resume it. */
+export default function PullRequestPage({ target, added, onClose, workspace = null, work }: { target: Target; added: boolean; onClose: () => void; workspace?: string | null; work?: { label: string; run: () => void } }) {
   const args = { host: target.host, repo: target.repo, number: target.number };
   const [page, setPage] = useState<PrPageData | null>(null);
   const [tab, setTab] = useState<PrTab>(() => savedTab(window.localStorage, target));
@@ -35,6 +39,14 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
   const [loaded, setLoaded] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // T-232-d: the viewed marks (null until read), the description draft (null = not editing), the repository's labels,
+  // the fork's lineage, the recent editors of the changed files (null until asked), and the check being fixed.
+  const [viewed, setViewed] = useState<PrViewed | null>(null);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [offer, setOffer] = useState<TaskLabel[]>([]);
+  const [lineage, setLineage] = useState<string | null>(null);
+  const [editors, setEditors] = useState<string[] | null>(null);
+  const [fixing, setFixing] = useState<number | null>(null);
 
   // The head commit the page last showed. When a reload finds another one, the files read for the
   // old head are dropped and a merge confirm still open is closed, so a merge never pins a commit
@@ -52,6 +64,8 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
         headChanges.current += 1;
         setHeadEpoch(headChanges.current);
         setFiles(null);
+        setViewed(null);
+        setEditors(null);
         setSure(false);
         setNote("New commits were pushed since you opened this page; check Files changed again.");
       }
@@ -69,6 +83,31 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
     void reload();
     void invoke<Person[]>("github_people", { host: target.host, repo: target.repo }).then(setPeople, () => setPeople([]));
   }, [reload, target.host, target.repo]);
+  useEffect(() => {
+    void invoke<TaskLabel[]>("scm_repo_labels", { host: target.host, repo: target.repo }).then((o) => setOffer(Array.isArray(o) ? o : []), () => setOffer([]));
+  }, [target.host, target.repo]);
+  // GIT-060: the branch's repository (the fork, when it is one) says whose fork it is.
+  const headRepo = page?.headRepo || target.repo;
+  useEffect(() => {
+    let live = true;
+    void invoke<{ fork: boolean; parent: string | null; parentOwner: string | null }>("github_repo_lineage", { host: target.host, repo: headRepo }).then(
+      (l) => live && setLineage(lineageNote(l)),
+      () => live && setLineage(null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [target.host, headRepo]);
+  // GIT-052: the viewed marks are read with the files and again after a new head commit.
+  useEffect(() => {
+    if (tab !== "files" || viewed !== null) return;
+    const started = headChanges.current;
+    void invoke<PrViewed>("pr_viewed", args).then(
+      (v) => started === headChanges.current && setViewed(v),
+      (e) => setNote(say(e)),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, viewed, headEpoch]);
   useEffect(() => {
     if (tab !== "files" || files !== null) return;
     const started = headChanges.current;
@@ -103,6 +142,42 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
       setBusy(false);
     }
   };
+  /** GIT-052: shown at once, sent to GitHub, and put back when GitHub refuses. */
+  const mark = (path: string, on: boolean) => {
+    if (!viewed) return;
+    setViewed(withViewed(viewed, path, on));
+    invoke("pr_set_viewed", { ...args, path, viewed: on }).catch((e) => {
+      setViewed((v) => (v ? withViewed(v, path, !on) : v));
+      setNote(say(e));
+    });
+  };
+  /** GIT-051: the failing output goes to this pull request's workspace agent, with the Git panel's own prompt. */
+  const fix = async (c: PrCheck) => {
+    if (!workspace) return;
+    setFixing(c.id);
+    setNote(null);
+    try {
+      const log = await invoke<string>("scm_check_log", { worktree: workspace, link: c.url });
+      await invoke("scm_review_send", { worktree: workspace, text: fixText(c, log) });
+      setNote(`Sent the failing output of "${c.name}" to the workspace's agent.`);
+    } catch (e) {
+      setNote(say(e));
+    } finally {
+      setFixing(null);
+    }
+  };
+  const saveBody = () => {
+    if (draft === null) return;
+    void act(async () => {
+      await invoke("scm_task_body", { ...args, body: draft });
+      setDraft(null);
+    });
+  };
+  const editLabels = (add: string[], remove: string[]) =>
+    void act(async () => {
+      const l = await invoke<TaskLabel[]>("scm_task_labels", { ...args, add, remove });
+      setPage((x) => x && { ...x, labels: l });
+    });
   const pick = (t: PrTab) => {
     setTab(t);
     saveTab(window.localStorage, target, t);
@@ -125,7 +200,8 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
   const pageUrl = safeHref(page.url);
   const mine = (n: string) => ({ ...args, add: [], remove: [n] });
   const copy = () => void navigator.clipboard.writeText(page.url).then(() => setNote("Link copied."), () => setNote(page.url));
-  const suggestions = typed.trim() ? reviewerSuggestions(people, page, typed) : [];
+  const suggestions = typed.trim() || (editors && editors.length) ? reviewerSuggestions(people, page, typed, 8, editors ?? []) : [];
+  const more = labelsToAdd(offer, page.labels);
   const askFor = (login: string) => {
     const r = askForReview(page, [login]);
     if (!r.ok) return setNote(r.reason);
@@ -143,8 +219,14 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
           <span className={`task-state pull ${page.state}`}>{page.draft ? "draft" : page.state}</span> {page.title} <span className="tasks-kind">#{page.number}</span>
         </h2>
         <span className="tasks-kind">
-          {target.repo} · {page.headRef} into {page.baseRef} · +{page.additions} -{page.deletions} in {page.changedFiles} files
+          {target.repo} · {headLabel(target.repo, page)} into {page.baseRef} · +{page.additions} -{page.deletions} in {page.changedFiles} files
         </span>
+        {lineage && <span className="tasks-kind">{lineage}</span>}
+        {work && (
+          <button className="btn primary" onClick={work.run}>
+            {work.label}
+          </button>
+        )}
         <button className="btn" onClick={copy}>
           Copy link
         </button>
@@ -178,7 +260,24 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
       {tab === "conversation" && (
         <div className="pr-body">
           <div className="pr-main">
-            {page.body.trim() ? <Markdown text={page.body} /> : <p className="tasks-kind">No description.</p>}
+            {draft !== null ? (
+              <>
+                <MentionField className="task-body-edit" label="Description" value={draft} onChange={setDraft} people={people} />
+                <button className="btn primary" disabled={busy} onClick={saveBody}>
+                  Save
+                </button>
+                <button className="btn" disabled={busy} onClick={() => setDraft(null)}>
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <>
+                {page.body.trim() ? <Markdown text={page.body} /> : <p className="tasks-kind">No description.</p>}
+                <button className="btn" disabled={busy} onClick={() => setDraft(page.body)}>
+                  Edit description
+                </button>
+              </>
+            )}
             <div className="pr-reactions">
               {page.reactions.map((r) => (
                 <span key={r.content} className="pr-reaction">
@@ -237,10 +336,11 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
                 )}
               </div>
             ))}
-            <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Ask for a review..." aria-label="Ask for a review" onKeyDown={(e) => e.key === "Enter" && typed.trim() && askFor(typed.trim().replace(/^@/, ""))} />
+            <input value={typed} onChange={(e) => setTyped(e.target.value)} onFocus={() => editors === null && void invoke<string[]>("pr_editors", args).then(setEditors, () => setEditors([]))} placeholder="Ask for a review..." aria-label="Ask for a review" onKeyDown={(e) => e.key === "Enter" && typed.trim() && askFor(typed.trim().replace(/^@/, ""))} />
             {suggestions.map((p) => (
-              <button key={p.login} className="btn" disabled={busy} onClick={() => askFor(p.login)}>
+              <button key={p.login} className="btn" disabled={busy} title={isEditor(editors ?? [], p.login) ? "Recently edited these files" : undefined} onClick={() => askFor(p.login)}>
                 {p.login}
+                {isEditor(editors ?? [], p.login) ? " (edited these files)" : ""}
               </button>
             ))}
             <h3>Assignees</h3>
@@ -254,7 +354,28 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
             ))}
             <input value={assignee} onChange={(e) => setAssignee(e.target.value)} placeholder="Assign someone..." aria-label="Assign someone" onKeyDown={(e) => { if (e.key === "Enter" && assignee.trim()) { const a = assignee.trim().replace(/^@/, ""); setAssignee(""); void act(() => invoke("pr_assignees", { ...args, add: [a], remove: [] })); } }} />
             <h3>Labels</h3>
-            <div>{page.labels.length ? page.labels.map((l) => <span key={l.name} className="tasks-label" style={{ borderColor: `#${l.color}` }}>{l.name}</span>) : <span className="tasks-kind">None</span>}</div>
+            <div>
+              {page.labels.length ? (
+                page.labels.map((l) => (
+                  <span key={l.name} className="tasks-label" style={{ borderColor: `#${l.color}` }}>
+                    {l.name}
+                    <button className="task-x" title={`Remove ${l.name}`} disabled={busy} onClick={() => editLabels([], [l.name])}>
+                      ×
+                    </button>
+                  </span>
+                ))
+              ) : (
+                <span className="tasks-kind">None</span>
+              )}
+            </div>
+            <select aria-label="Add a label" value="" disabled={busy || more.length === 0} onChange={(e) => e.target.value && editLabels([e.target.value], [])}>
+              <option value="">{more.length ? "Add a label…" : "No more labels"}</option>
+              {more.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
             <h3>Merge</h3>
             <p className="tasks-kind">{box.reason}</p>
             <button className="btn" disabled={busy} onClick={() => void act(async () => {})}>
@@ -312,6 +433,12 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
                     c.name
                   )}{" "}
                   <span className="tasks-kind">{c.status === "completed" ? c.conclusion : c.status}</span>
+                  {failedChecks([c]).length > 0 && (
+                    <button className="btn" disabled={busy || fixing !== null || fixBlocker(c, workspace) !== null} title={fixBlocker(c, workspace) ?? "Send this check's failing output to the workspace's agent"} onClick={() => void fix(c)}>
+                      {fixing === c.id ? "Sending..." : "Fix with AI"}
+                    </button>
+                  )}
+                  {failedChecks([c]).length > 0 && fixBlocker(c, workspace) && <span className="tasks-kind"> {fixBlocker(c, workspace)}</span>}
                 </li>
               ))}
             </ul>
@@ -323,10 +450,12 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
           <div className="pr-main">
             {files === null && <p className="tasks-kind">Reading files...</p>}
             {files?.truncated && <p className="tasks-kind">Showing the first {files.limit} files; the rest are on GitHub.</p>}
+            {files && viewed && <p className="tasks-kind" role="status">{viewedLine(files.files, viewed)}{viewed.truncated ? ` (marks for the first ${viewed.limit} files are read)` : ""}</p>}
             {files?.files.map((f) => (
               <details key={f.filename} className="pr-file">
                 <summary>
-                  {f.filename} <span className="tasks-kind">{f.status} +{f.additions} -{f.deletions}</span>
+                  <input type="checkbox" aria-label={`Viewed ${f.filename}`} disabled={!viewed} checked={viewedOf(viewed, f.filename) === "viewed"} onChange={(e) => mark(f.filename, e.target.checked)} />{" "}
+                  {f.filename}{viewedOf(viewed, f.filename) === "dismissed" ? <span className="tasks-kind"> changed since viewed</span> : null} <span className="tasks-kind">{f.status} +{f.additions} -{f.deletions}</span>
                 </summary>
                 {f.held && loaded[f.filename] === undefined ? (
                   <div className="note warn" data-held={f.held}>
