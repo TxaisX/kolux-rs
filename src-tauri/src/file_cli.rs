@@ -109,6 +109,13 @@ pub fn inside(root: &str, cwd: &str, given: &str) -> Result<String, Fail> {
     Ok(rel.join("/"))
 }
 
+/// Row 386: `inside` reads the spelling only; this follows links the way the runtime file verbs
+/// do (runtime::within), so a link inside the worktree that leads out of it is refused too.
+fn followed_inside(root: &str, rel: &str) -> Result<(), Fail> {
+    let r = Path::new(root);
+    crate::orchestration::runtime::within(r, r, rel, false).map(|_| ())
+}
+
 /// One changed file as the status panel reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
@@ -291,6 +298,7 @@ pub fn dispatch_with(ctx: &Ctx, req: &Request, acks: &Acks, within: Duration) ->
     match req.command.as_str() {
         OPEN | DIFF => {
             let rel = inside(&root, &req.cwd, text("path").ok_or_else(|| Fail::args("a file path is required"))?)?;
+            followed_inside(&root, &rel)?;
             let abs = absolute(&root, &rel);
             let diff = req.command == DIFF;
             // A diff of a deleted file is fine; an editing tab needs the file to be there.
@@ -358,6 +366,27 @@ mod tests {
 
     fn row(path: &str, status: &str, staged: bool, conflict: bool) -> Row {
         Row { path: path.into(), status: status.into(), staged, conflict }
+    }
+
+    #[test]
+    fn row386_a_link_inside_the_worktree_that_leads_out_of_it_is_refused() {
+        let dir = crate::test_dir::temp("row386-link");
+        let root = dir.join("wt");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("secret")).unwrap();
+        std::fs::write(dir.join("secret").join("x.txt"), "s").unwrap();
+        std::fs::write(root.join("src").join("a.rs"), "a").unwrap();
+        #[cfg(windows)]
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(root.join("out")).arg(dir.join("secret")).output().unwrap().status.success();
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(dir.join("secret"), root.join("out")).is_ok();
+        assert!(made, "a directory junction or link needs no admin rights");
+        let r = root.to_string_lossy().to_string();
+        let rel = inside(&r, &r, "out/x.txt").unwrap();
+        assert_eq!(rel, "out/x.txt", "by its spelling the path is inside");
+        assert_eq!(followed_inside(&r, &rel).unwrap_err().code, "outside", "followed, it leads out");
+        followed_inside(&r, "src/a.rs").unwrap();
+        followed_inside(&r, "src/not-made-yet.rs").unwrap();
     }
 
     #[test]

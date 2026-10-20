@@ -91,9 +91,7 @@ pub fn for_socket(tabs: Vec<Tab>) -> Vec<Tab> {
 }
 
 /// The inventory for the runtime socket right now (see `for_socket`).
-// ponytail: nothing serves the inventory over the socket yet; the cli lane's T-262-b hunk does,
-// and it calls this, never `tabs`.
-#[allow(dead_code)] // the cli lane's T-262-b hunk is its first caller
+// Row 256: the CLI's terminal list and its worktree terminal rows are served from this, never `tabs`.
 pub fn tabs_for_socket(terminals: &Terminals) -> Vec<Tab> {
     for_socket(tabs(terminals))
 }

@@ -2273,7 +2273,8 @@ fn terminal_rows(ctx: &Ctx) -> Result<Vec<Value>, Fail> {
         }
     }
     // T-262-b: the rows are the session tab inventory (the same list the app and the agents read).
-    Ok(crate::agents::inventory::tabs(ctx.terminals)
+    // Row 256: as served over the socket, each program line is cut to its name (no keys or tokens).
+    Ok(crate::agents::inventory::tabs_for_socket(ctx.terminals)
         .into_iter()
         .map(|t| {
             let home = t.cwd.as_deref().and_then(|d| trees.iter().filter(|(w, _)| under(w, d)).max_by_key(|(w, _)| w.len()));
@@ -2560,7 +2561,7 @@ fn ps(ctx: &Ctx, req: &Request, only: Option<Project>, limit: Option<usize>) -> 
     }
     // Each open session goes to the innermost worktree its folder is in.
     // T-262-b: the sessions come from the session tab inventory; a tab with no start folder has no worktree.
-    let sessions: Vec<(String, String, Option<String>)> = crate::agents::inventory::tabs(ctx.terminals).into_iter().filter_map(|t| Some((t.handle, t.cwd?, t.program))).collect();
+    let sessions: Vec<(String, String, Option<String>)> = crate::agents::inventory::tabs_for_socket(ctx.terminals).into_iter().filter_map(|t| Some((t.handle, t.cwd?, t.program))).collect();
     let home = |dir: &str| lists.iter().flat_map(|(_, all, _)| all).filter(|w| under(&w.path, dir)).max_by_key(|w| w.path.len()).map(|w| w.path.clone());
     let homes: Vec<Option<String>> = sessions.iter().map(|(_, dir, _)| home(dir)).collect();
     let dispatches = load_list(&*lock()?, DISPATCHES_KEY);
@@ -8123,7 +8124,7 @@ mod tests {
         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
         let wd = repo.display().to_string();
         terminals.fake_session(21, &wd, None);
-        terminals.fake_session(22, &wd, Some("claude --permission-mode auto"));
+        terminals.fake_session(22, &wd, Some("claude --permission-mode auto --token tok-secret-256"));
         terminals.set_layout(vec![
             json!({ "handle": "term-21", "dir": wd, "cell": 1, "tab": 1, "title": "pwsh", "custom": null, "shown": false, "ask": null }),
             json!({ "handle": "term-22", "dir": wd, "cell": 1, "tab": 2, "title": "Claude", "custom": null, "shown": true, "ask": null }),
@@ -8145,6 +8146,9 @@ mod tests {
         let ps = dispatch(&ctx, &req).unwrap();
         let listed: Vec<String> = ps["worktrees"].as_array().unwrap().iter().flat_map(|w| w["sessions"].as_array().unwrap().iter().map(|s| s["terminal"].as_str().unwrap().to_string())).collect();
         assert_eq!(listed, inventory);
+        // Row 256: neither list carries the arguments of a program line (a key or token may sit there).
+        let wire = format!("{} {}", serde_json::to_string(&rows).unwrap(), ps);
+        assert!(!wire.contains("tok-secret-256"), "{wire}");
         drop(ctx);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
