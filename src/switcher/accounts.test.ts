@@ -223,6 +223,18 @@ describe("switcherLabel", () => {
     expect(b).toBe("work@example.com (b-9z9z)");
     expect(switcherLabel(same, "claude", "c-cc-1234")).toBe("work@example.com (1234)");
   });
+  // FIX-4 (review AFTER 1): one id is the tail of the other, so the short one cannot grow past itself.
+  it("tells apart two accounts whose ids are 'ab12' and 'xab12' (one id ends the other)", () => {
+    const tail = groupsOf(
+      claude({ accounts: [{ id: "ab12", email: "work@example.com", organization: null, stale: false }, { id: "xab12", email: "work@example.com", organization: null, stale: false }], active: "ab12" }),
+      null,
+    );
+    const a = switcherLabel(tail, "claude", "ab12");
+    const b = switcherLabel(tail, "claude", "xab12");
+    expect(a).toBe("work@example.com (ab12)");
+    expect(b).toBe("work@example.com (xab12)");
+    expect(a).not.toBe(b);
+  });
   it("keeps a whole id that is shorter than four characters, and never reuses a label for two accounts", () => {
     const short = groupsOf(claude({ accounts: [{ id: "a1", email: "w@example.com", organization: null, stale: false }, { id: "b2", email: "w@example.com", organization: null, stale: false }], active: "a1" }), null);
     expect(switcherLabel(short, "claude", "a1")).toBe("w@example.com (a1)");
