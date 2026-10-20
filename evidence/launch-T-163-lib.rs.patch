@@ -1,0 +1,12 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index b6626525..7e47f6d5 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -503,6 +503,7 @@ pub fn run() {
+             setup::setup_import,
+             agents::agent_list,
+             agents::agent_start_line,
++            agents::agent_prompt_send,
+             agents::open_install_page,
+             agents::inventory::session_tabs,
+             orchestration::task_reset,

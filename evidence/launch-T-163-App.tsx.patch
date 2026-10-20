@@ -1,0 +1,45 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 34172b00..3210d32e 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -160,6 +160,7 @@ import ToolNotices from "./launch/ToolNotices";
+ import { AgentsChat } from "./chat/ChatView";
+ import { answeredElsewhere } from "./chat/ask";
+ import { useTeamsHost, withTeams } from "./launch/teams";
++import { deliverPrompt, startWatch } from "./launch/startWatch";
+ import { answered as cardAnswered, hearStates, hearingNow, holdFor, outcomeNote, pasteToPane, setHooksOn, writeTerminal } from "./chat/send";
+ import { copyPrompt, hooksAbsent, kitTickEntry, kitWait, noticeSeen, sendPrompt } from "./chat/kitPrompt";
+ import { KitPromptNotices } from "./chat/KitNotice";
+@@ -1141,6 +1142,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   // rules block and a handoff note made before it starts (SESS-025), in the project's main checkout
+   // (or the chooser's folder outside any project), named after its worktree, or after the folder
+   // and its seat number when the seats share one folder.
++  // SESS-005 (T-163): every shown agent pane is watched for a terminal process from the moment it
++  // is shown; onPty marks it seen, and a pane with none after five seconds gets a warning toast.
++  useEffect(() => {
++    const here = panesIn(panes, activeDir).filter((p) => p.agentId && p.program && !p.seats && !p.kind);
++    startWatch.prune(here.map((p) => p.key));
++    for (const p of here) startWatch.arm(p.key, agents.find((a) => a.id === p.agentId)?.name ?? String(p.agentId), setToast);
++  }, [panes, activeDir, agents]);
+   const startSeats = async (key: number, seats: Seat[]) => {
+     const chooser = panes.find((p) => p.key === key) ?? (sheet?.key === key ? sheet : undefined);
+     if (!chooser) return;
+@@ -1679,6 +1687,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   // the workspace's empty placeholder.
+   // SESS-024: a pane whose session failed to start goes away, with the reason in a toast.
+   const failedPane = (key: number, error: string) => {
++    startWatch.seen(key); // SESS-005: its own toast says why; no five-second warning on top
+     const ask = panes.find((p) => p.key === key)?.ask;
+     if (ask) cliFailed.current[ask] = error;
+     const { panes: rest, batchEmpty } = withoutFailed(panes, key);
+@@ -2882,6 +2891,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                     unread={unreadPanes.has(p.key)}
+                     onPty={(id, account) => {
+                       ptys.current[p.key] = id;
++                      startWatch.seen(p.key);
++                      // SESS-032 (T-163): an agent's opening prompt is handed over by Rust exactly once; a
++                      // prompt that does not go in is said in a toast.
++                      if (p.typed && p.agent !== "shell") void deliverPrompt(invoke, id, p.typed, agents.find((a) => a.id === p.agentId)?.name ?? p.agent).then((lost) => lost && setToast(lost));
+                       report.current();
+                       if (p.batch !== undefined && p.agent !== "shell") rememberLineup(p.batch);
+                       // ACCT-023: a Codex pane remembers the account it began on.
