@@ -1,0 +1,50 @@
+diff --git a/src/chrome/VendorMark.tsx b/src/chrome/VendorMark.tsx
+index 9c100bcf..cebc4dcd 100644
+--- a/src/chrome/VendorMark.tsx
++++ b/src/chrome/VendorMark.tsx
+@@ -7,7 +7,7 @@
+ import AgentMark from "../marks/AgentMark";
+ import { Shell } from "./icons";
+ 
+-export type Agent = "claude" | "codex" | "shell";
++export type Agent = "claude" | "codex" | "copilot" | "cursor" | "shell";
+ 
+ export default function VendorMark({ agent, size = 13 }: { agent: Agent; size?: number }) {
+   if (agent === "shell") return <Shell size={size} />;
+diff --git a/src/launch/paneMark.test.ts b/src/launch/paneMark.test.ts
+index 451c2033..4675ed8a 100644
+--- a/src/launch/paneMark.test.ts
++++ b/src/launch/paneMark.test.ts
+@@ -78,6 +78,10 @@ test("FIX-3: the real catalogue ids take the mark of the program their Command n
+   expect(markFor("claude", "pwsh")).toBe("claude");
+   expect(markFor("codex", "claude")).toBe("codex");
+   expect(markFor("claude-agent-teams", "x")).toBe("claude");
++  // T-335-b: Copilot and Cursor carry their own marks without driving the Claude-only pane logic.
++  expect(markFor("copilot", "pwsh")).toBe("copilot");
++  expect(markFor("cursor", "pwsh")).toBe("cursor");
++  expect(markFor("openclaude", "pwsh")).toBe("shell");
+   expect(markForViaMenu).toBe(markFor);
+ });
+ 
+diff --git a/src/launch/paneMark.ts b/src/launch/paneMark.ts
+index 077c3722..d432402e 100644
+--- a/src/launch/paneMark.ts
++++ b/src/launch/paneMark.ts
+@@ -119,7 +119,7 @@ export function creditedProgram(program: string): string | null {
+ /** The mark a program earns: Claude or Codex when Rust would credit it to that agent, else the plain shell. */
+ export function programMark(program: string | null | undefined): Agent {
+   const id = creditedProgram(program ?? "");
+-  return id === "claude" || id === "codex" ? id : "shell";
++  return id === "claude" || id === "codex" || id === "copilot" || id === "cursor" ? id : "shell";
+ }
+ 
+ /**
+@@ -130,7 +130,7 @@ export function programMark(program: string | null | undefined): Agent {
+  */
+ export function markFor(id: string, program?: string | null): Agent {
+   if (id === "claude-agent-teams") return "claude";
+-  if (id === "claude" || id === "codex") return id;
++  if (id === "claude" || id === "codex" || id === "copilot" || id === "cursor") return id;
+   return programMark(program);
+ }
+ 
