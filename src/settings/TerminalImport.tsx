@@ -10,7 +10,7 @@ type Props = { settings: Record<string, unknown>; save: (patch: Record<string, u
 /** Saves a patch and shows it on the open window now (colours, fonts and dividers). */
 const applyNow = (settings: Record<string, unknown>, patch: Record<string, unknown>) => applyAppearance(readAppearance({ ...settings, ...patch }));
 
-function GhosttyImportBox({ settings, save }: Props) {
+export function GhosttyImportBox({ settings, save }: Props) {
   const [found, setFound] = useState<GhosttyImport | null | "none">(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState("");
@@ -90,7 +90,7 @@ function GhosttyImportBox({ settings, save }: Props) {
   );
 }
 
-function WarpImportBox({ settings, save }: Props) {
+export function WarpImportBox({ settings, save }: Props) {
   const [scan, setScan] = useState<WarpScan | null>(null);
   const [ticked, setTicked] = useState<Set<string>>(new Set()); // row keys (place + file name), not bare file names
   const [busy, setBusy] = useState(false);

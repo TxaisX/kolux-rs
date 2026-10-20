@@ -1,9 +1,23 @@
 //! TERM-099 / TERM-100 (T-307): finds the Ghostty configuration and theme files and the Warp theme files
 //! on this machine and hands their text to the settings page, which maps them (src/settings/
-//! importSchemes.ts). Nothing here writes anything. Files are read with a size cap, only inside the
-//! folders named below, and a file that cannot be used comes back with a plain reason that never
-//! carries a folder path. The folder names are from the public Ghostty configuration reference and
-//! Warp's custom-themes page.
+//! importSchemes.ts). Nothing here writes anything. Files are read with a size cap, and a file that
+//! cannot be used comes back with a plain reason that never carries a folder path.
+//!
+//! What is contained (FIX-3b): a Ghostty include, a Ghostty theme and a Warp theme file are each read
+//! only through their real path (links and junctions resolved), and only when that path is inside the
+//! real place of the folder they were found in. When either real place cannot be found, the file is
+//! not read. What is not contained: the first Ghostty config file is read as named, because a dotfiles
+//! setup may link it from elsewhere; a hard link inside a folder is read like any file in it, because
+//! it has no other path; and a setup that links every file separately (GNU stow, home-manager) loses
+//! the linked includes and themes, which are listed as outside the folder.
+//!
+//! Folder names, checked 2026-10-19 against the vendors' public pages (URLs and exact folders in
+//! evidence/look-FIX-3b.txt). Warp: ~/.warp/themes (macOS), ${XDG_DATA_HOME:-~/.local/share}/warp-terminal/
+//! themes (Linux), %APPDATA%\warp\Warp\data\themes (Windows). Ghostty: $XDG_CONFIG_HOME/ghostty (default
+//! ~/.config/ghostty) holding config or config.ghostty and a themes folder, plus ~/Library/Application
+//! Support/com.mitchellh.ghostty on macOS for the config files. Not in those pages, kept as extra places
+//! to look and not checked: Ghostty's themes folder under the macOS Application Support folder, and
+//! Ghostty's folder under %APPDATA% on Windows (Ghostty's page names no Windows folder).
 
 use serde::Serialize;
 use std::collections::HashSet;
@@ -66,16 +80,39 @@ fn include_target(dir: &Path, value: &str) -> Option<PathBuf> {
     Some(dir.join(rel))
 }
 
+/// The real path a file may be read through: it must be inside `root` (the folder's real place) once links
+/// are resolved. Fails closed: when either real place is unknown the file is not read (FIX-3b).
+fn inside(real: Option<&Path>, root: Option<&Path>, outside: &'static str) -> Result<PathBuf, &'static str> {
+    match (real, root) {
+        (Some(r), Some(root)) if r.starts_with(root) => Ok(r.to_path_buf()),
+        (Some(_), Some(_)) => Err(outside),
+        _ => Err("could not be read"),
+    }
+}
+
+/// The text of `file` read through its real path, only when that is inside `folder`'s real place.
+fn read_inside(file: &Path, folder: &Path, outside: &'static str) -> Result<String, String> {
+    let real = std::fs::canonicalize(file).ok();
+    let root = std::fs::canonicalize(folder).ok();
+    read_capped(&inside(real.as_deref(), root.as_deref(), outside)?).map_err(|e| e.to_string())
+}
+
 /// The first config file that exists in `candidates`, then the files it includes (relative paths inside
 /// its own folder, also after symlinks and junctions are resolved; at most `MAX_CONFIG_FILES` in all, each once).
 pub(crate) fn ghostty_config(candidates: &[PathBuf]) -> Vec<GhosttyFile> {
+    ghostty_config_with(candidates, &|p| std::fs::canonicalize(p).ok())
+}
+
+/// `ghostty_config` with the way a path's real place is found passed in, so a test can make that step fail.
+fn ghostty_config_with(candidates: &[PathBuf], canon: &dyn Fn(&Path) -> Option<PathBuf>) -> Vec<GhosttyFile> {
     let Some(first) = candidates.iter().find(|p| p.is_file()) else {
         return Vec::new();
     };
     let dir = first.parent().map(Path::to_path_buf).unwrap_or_default();
     // The folder's real place, links resolved: an include must still be inside it after its own links are
     // resolved (FIX-2, 2026-10-19). The first config file may itself be a link, as in a dotfiles setup.
-    let real_dir = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+    // When the folder's real place cannot be found, no include is read (FIX-3b).
+    let real_dir = canon(&dir);
     let mut out = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let mut queue = vec![first.clone()];
@@ -84,17 +121,26 @@ pub(crate) fn ghostty_config(candidates: &[PathBuf]) -> Vec<GhosttyFile> {
         if out.len() >= MAX_CONFIG_FILES {
             break;
         }
-        let real = std::fs::canonicalize(&path).ok();
+        let real = canon(&path);
         if !seen.insert(real.clone().unwrap_or_else(|| path.clone())) {
             continue;
         }
         let label = file_name(&path);
         let first_file = std::mem::replace(&mut is_first, false);
-        if !first_file && real.as_ref().is_some_and(|r| !r.starts_with(&real_dir)) {
-            out.push(GhosttyFile { label, text: None, skipped: Some("is outside the configuration folder".into()) });
-            continue;
-        }
-        match read_capped(&path) {
+        // The first file is the user's own entry point and is read as named. An include is read only through
+        // the real path that passed the check, so a link swapped in after the check is not followed.
+        let read_from = if first_file {
+            path.clone()
+        } else {
+            match inside(real.as_deref(), real_dir.as_deref(), "is outside the configuration folder") {
+                Ok(p) => p,
+                Err(why) => {
+                    out.push(GhosttyFile { label, text: None, skipped: Some(why.into()) });
+                    continue;
+                }
+            }
+        };
+        match read_capped(&read_from) {
             Ok(text) => {
                 let mut includes: Vec<PathBuf> = text
                     .lines()
@@ -119,28 +165,31 @@ pub(crate) fn ghostty_theme(name: &str, folders: &[PathBuf]) -> Option<String> {
     if !clean {
         return None;
     }
-    folders.iter().map(|d| d.join(name)).filter(|p| p.is_file()).find_map(|p| read_capped(&p).ok())
+    folders.iter().find_map(|d| {
+        let p = d.join(name);
+        if p.is_file() { read_inside(&p, d, "is outside the theme folder").ok() } else { None }
+    })
 }
 
 /// The `.yaml` / `.yml` files in the Warp theme folders, by name, each with its text or why it was
 /// skipped. Past `MAX_WARP_FILES` or the scan's time budget the rest are left out and one entry says so.
 pub(crate) fn warp_themes(folders: &[PathBuf], budget: Duration) -> Vec<WarpFile> {
     let began = Instant::now();
-    let mut names: Vec<PathBuf> = folders
+    let mut names: Vec<(&PathBuf, PathBuf)> = folders
         .iter()
-        .filter_map(|d| std::fs::read_dir(d).ok())
-        .flat_map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("yaml") || x.eq_ignore_ascii_case("yml")))
+        .filter_map(|d| std::fs::read_dir(d).ok().map(|rd| (d, rd)))
+        .flat_map(|(d, rd)| rd.filter_map(|e| e.ok()).map(move |e| (d, e.path())))
+        .filter(|(_, p)| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("yaml") || x.eq_ignore_ascii_case("yml")))
         .collect();
-    names.sort_by_key(|p| file_name(p).to_lowercase());
+    names.sort_by_key(|(_, p)| file_name(p).to_lowercase());
     let mut out = Vec::new();
-    for (i, p) in names.iter().enumerate() {
+    for (i, (folder, p)) in names.iter().enumerate() {
         if i >= MAX_WARP_FILES || began.elapsed() > budget {
             out.push(WarpFile { name: "more theme files".into(), text: None, skipped: Some(format!("{} more were not read: the scan stopped early", names.len() - i)) });
             break;
         }
         let name = file_name(p);
-        match read_capped(p) {
+        match read_inside(p, folder, "is outside the theme folder") {
             Ok(text) => out.push(WarpFile { name, text: Some(text), skipped: None }),
             Err(why) => out.push(WarpFile { name, text: None, skipped: Some(why) }),
         }
@@ -172,13 +221,25 @@ fn ghostty_dirs() -> Vec<PathBuf> {
 }
 
 fn warp_dirs() -> Vec<PathBuf> {
+    warp_dirs_from(&env_dir)
+}
+
+/// Warp's theme folders, with the environment passed in. ponytail: every system's place is tried on every system.
+fn warp_dirs_from(env: &dyn Fn(&str) -> Option<PathBuf>) -> Vec<PathBuf> {
     let mut v = Vec::new();
-    if let Some(h) = home() {
+    if let Some(h) = env(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) {
         v.push(h.join(".warp").join("themes"));
+    }
+    // Linux: ${XDG_DATA_HOME:-$HOME/.local/share}/warp-terminal/themes
+    if let Some(x) = env("XDG_DATA_HOME") {
+        v.push(x.join("warp-terminal").join("themes"));
+    }
+    if let Some(h) = env(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) {
         v.push(h.join(".local").join("share").join("warp-terminal").join("themes"));
     }
-    if let Some(l) = env_dir("LOCALAPPDATA") {
-        v.push(l.join("warp").join("Warp").join("data").join("themes"));
+    // Windows: %APPDATA%\warp\Warp\data\themes (Warp's page names APPDATA, not LOCALAPPDATA)
+    if let Some(a) = env("APPDATA") {
+        v.push(a.join("warp").join("Warp").join("data").join("themes"));
     }
     v
 }
@@ -339,6 +400,128 @@ mod tests {
         assert_eq!(files.len(), 2, "{files:?}");
         assert!(files[0].text.as_deref().unwrap().contains("font-size = 15"));
         assert!(files[1].text.as_deref().unwrap().contains("cursor-style = block"));
+    }
+
+    /// A way to find a real place that fails for the one named file, as on a drive where it errs.
+    fn canon_failing_on(name: &'static str) -> impl Fn(&Path) -> Option<PathBuf> {
+        move |p| if p.file_name().is_some_and(|n| n == name) { None } else { std::fs::canonicalize(p).ok() }
+    }
+
+    #[test]
+    fn term_099_fix3_an_include_whose_real_place_cannot_be_found_is_refused_not_read() {
+        let d = Dir::new("nocanon");
+        let cfg = d.put("ghostty/config", "config-file = flaky\nconfig-file = ok\n");
+        d.put("ghostty/flaky", "SECRET-FLAKY\n");
+        d.put("ghostty/ok", "cursor-style = bar\n");
+        let files = ghostty_config_with(&[cfg], &canon_failing_on("flaky"));
+        let labels: Vec<_> = files.iter().map(|f| f.label.as_str()).collect();
+        assert_eq!(labels, ["config", "flaky", "ok"]);
+        assert!(files[1].text.is_none(), "an include that cannot be resolved must not be read: {:?}", files[1]);
+        assert_eq!(files[1].skipped.as_deref(), Some("could not be read"));
+        assert!(files[2].text.as_deref().unwrap().contains("cursor-style = bar"), "the other include still reads");
+        assert!(!format!("{files:?}").contains("SECRET-FLAKY"));
+    }
+
+    #[test]
+    fn term_099_fix3_an_include_is_read_through_its_real_path_not_the_path_it_was_named_by() {
+        let d = Dir::new("viareal");
+        let cfg = d.put("ghostty/config", "config-file = named\n");
+        d.put("ghostty/named", "FROM-NAMED\n");
+        let swapped = d.put("ghostty/swapped", "FROM-SWAPPED\n");
+        let swapped = std::fs::canonicalize(swapped).unwrap();
+        // The named path now resolves to another file inside the folder, as if it were swapped after the check.
+        let canon = move |p: &Path| if p.file_name().is_some_and(|n| n == "named") { Some(swapped.clone()) } else { std::fs::canonicalize(p).ok() };
+        let files = ghostty_config_with(&[cfg], &canon);
+        assert_eq!(files.len(), 2, "{files:?}");
+        assert_eq!(files[1].text.as_deref(), Some("FROM-SWAPPED\n"), "the text must come from the checked real path");
+    }
+
+    #[test]
+    fn term_099_fix3_when_the_config_folder_itself_cannot_be_resolved_includes_say_so_not_outside() {
+        let d = Dir::new("nodir");
+        let cfg = d.put("ghostty/config", "config-file = ok\n");
+        d.put("ghostty/ok", "cursor-style = bar\n");
+        let dir = d.0.join("ghostty");
+        let canon = move |p: &Path| if p == dir { None } else { std::fs::canonicalize(p).ok() };
+        let files = ghostty_config_with(&[cfg], &canon);
+        assert_eq!(files.len(), 2, "{files:?}");
+        assert!(files[1].text.is_none(), "{:?}", files[1]);
+        assert_eq!(files[1].skipped.as_deref(), Some("could not be read"));
+    }
+
+    #[test]
+    fn term_099_fix3_a_hard_link_inside_the_folder_is_read_because_containment_goes_by_path() {
+        // Characterization, not a wish: a hard link has no "real place" other than its own path, so a hard
+        // link inside the folder to a file elsewhere on the same volume is read like any inside file.
+        let d = Dir::new("hard");
+        let cfg = d.put("ghostty/config", "config-file = hard\n");
+        let outside = d.put("elsewhere/notes", "VIA-HARD-LINK\n");
+        if std::fs::hard_link(&outside, d.0.join("ghostty/hard")).is_err() {
+            println!("SKIPPED: this account cannot create a hard link, so the hard-link characterization did not run");
+            return;
+        }
+        let files = ghostty_config(&[cfg]);
+        assert_eq!(files[1].text.as_deref(), Some("VIA-HARD-LINK\n"), "{files:?}");
+    }
+
+    #[test]
+    fn term_099_fix3_a_theme_that_is_a_symlink_to_a_file_outside_its_folder_is_not_read_but_a_linked_folder_is() {
+        let d = Dir::new("thlnk");
+        d.put("themes/Plain", "background = 000000\n");
+        let outside = d.put("elsewhere/secret", "SECRET-OUTSIDE\n");
+        if !file_link(&d.0.join("themes/Sneaky"), &outside) {
+            println!("SKIPPED: this account cannot create a file symlink, so the theme symlink check did not run");
+            return;
+        }
+        let themes = [d.0.join("themes")];
+        assert_eq!(ghostty_theme("Plain", &themes).as_deref(), Some("background = 000000\n"));
+        assert_eq!(ghostty_theme("Sneaky", &themes), None, "a theme linked to a file outside its folder must not be read");
+        // The whole theme folder may be a link (a dotfiles setup): its files are inside its real place.
+        d.put("real-themes/Night", "background = 111111\n");
+        if dir_link(&d.0.join("linked-themes"), &d.0.join("real-themes")) {
+            assert_eq!(ghostty_theme("Night", &[d.0.join("linked-themes")]).as_deref(), Some("background = 111111\n"));
+        } else {
+            println!("SKIPPED: this account cannot create a folder link, so the linked theme folder check did not run");
+        }
+    }
+
+    #[test]
+    fn term_100_fix3_a_warp_theme_that_is_a_symlink_to_a_file_outside_its_folder_is_skipped_by_name() {
+        let d = Dir::new("wlnk");
+        d.put("themes/night.yaml", "background: '#000000'\n");
+        let outside = d.put("elsewhere/secret.yaml", "SECRET-OUTSIDE\n");
+        if !file_link(&d.0.join("themes/sneaky.yaml"), &outside) {
+            println!("SKIPPED: this account cannot create a file symlink, so the Warp symlink check did not run");
+            return;
+        }
+        let got = warp_themes(&[d.0.join("themes")], Duration::from_secs(5));
+        let names: Vec<_> = got.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(names, ["night.yaml", "sneaky.yaml"]);
+        assert!(got[0].text.is_some());
+        assert!(got[1].text.is_none(), "{:?}", got[1]);
+        assert_eq!(got[1].skipped.as_deref(), Some("is outside the theme folder"));
+        assert!(!format!("{got:?}").contains("SECRET-OUTSIDE"));
+    }
+
+    #[test]
+    fn term_100_fix3_warp_theme_folders_match_warps_public_page_on_each_system() {
+        // https://docs.warp.dev/terminal/appearance/custom-themes (read 2026-10-19):
+        //   macOS ~/.warp/themes/ · Windows %APPDATA%, then warp, Warp, data, themes · Linux ${XDG_DATA_HOME:-$HOME/.local/share}/warp-terminal/themes/
+        let home = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+        let env = |k: &str| match k {
+            k if k == home => Some(PathBuf::from("H")),
+            "APPDATA" => Some(PathBuf::from("A")),
+            "LOCALAPPDATA" => Some(PathBuf::from("L")),
+            "XDG_DATA_HOME" => Some(PathBuf::from("X")),
+            _ => None,
+        };
+        let got = warp_dirs_from(&env);
+        let has = |p: PathBuf| assert!(got.contains(&p), "missing {p:?} in {got:?}");
+        has(PathBuf::from("H").join(".warp").join("themes"));
+        has(PathBuf::from("A").join("warp").join("Warp").join("data").join("themes"));
+        has(PathBuf::from("X").join("warp-terminal").join("themes"));
+        has(PathBuf::from("H").join(".local").join("share").join("warp-terminal").join("themes"));
+        assert!(!got.iter().any(|p| p.starts_with("L")), "LOCALAPPDATA is not a place Warp documents: {got:?}");
     }
 
     #[test]
