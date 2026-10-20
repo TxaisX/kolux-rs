@@ -60,7 +60,7 @@ export function DiagnosticsCard() {
   const run = (label: string, job: () => Promise<string>) => void job().then(setNote).catch((e: unknown) => setNote(`${label} failed: ${String(e)}`));
   const copy = async () => {
     const text = await invoke<string>("diag_bundle");
-    await invoke("clip_write", { text }).catch(() => navigator.clipboard.writeText(text));
+    await invoke("clip_copy_text", { text }).catch(() => navigator.clipboard.writeText(text));
     return "Copied to the clipboard with keys, passwords and tokens masked.";
   };
   return (

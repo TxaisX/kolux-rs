@@ -74,7 +74,12 @@ fn flag(a: &Map<String, Value>, k: &str) -> bool {
 
 pub fn req_of(command: &str, a: &Map<String, Value>) -> Req {
     let s = |k: &str| a.get(k).and_then(Value::as_str).map(str::to_string);
-    Req { update: command == "skills.update", skill: s("skill"), all: flag(a, "all"), agent: s("agent"), local: flag(a, "local"), dry_run: flag(a, "dry-run") }
+    // The CLI collects a repeated --skill into a list; a, b and a,b mean the same.
+    let skill = match a.get("skill") {
+        Some(Value::Array(v)) => Some(v.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(",")),
+        _ => s("skill"),
+    };
+    Req { update: command == "skills.update", skill, all: flag(a, "all"), agent: s("agent"), local: flag(a, "local"), dry_run: flag(a, "dry-run") }
 }
 
 /// `--json` on a real run is refused: the installer prints its own text and Kolux would have to

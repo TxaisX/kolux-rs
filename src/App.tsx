@@ -123,7 +123,7 @@ import { readoutOf } from "./terminal/headerUsage";
 import { usePlan } from "./usage/plan";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, sheetStart, type Lineup } from "./launch/seats";
-import { folderName, NESTING_KEY, workItem, type Created, type WorkItem, type CliWorkspace, type Project, type Worktree } from "./projects/model";
+import { folderName, NESTING_KEY, workItem, type Created, type WorkItem, type CliWorkspace, type CliFile, type Project, type Worktree } from "./projects/model";
 import { focusIn, panesIn, sameDir, nameOf } from "./workspaces";
 import { LAYOUT_FIELD, layoutOf, type SavedLayout } from "./terminal/layout";
 import { layoutWriter } from "./terminal/layoutSave";
@@ -1318,6 +1318,18 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     const key = keyOfHandle(handle);
     setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, title: title ?? undefined } : p)));
   };
+  // CLI-022: `file open` / `file diff` / `file open-changed` name files of some worktree; the window goes
+  // there first and opens the tabs once that worktree is the active one.
+  const [cliFiles, setCliFiles] = useState<CliFile[]>([]);
+  useEffect(() => {
+    const ready = cliFiles.filter((f) => sameDir(f.worktree, activeDir));
+    if (ready.length === 0) return;
+    setCliFiles((q) => q.filter((f) => !ready.includes(f)));
+    for (const f of ready) {
+      if (f.kind === "file-open") openFile(f.path);
+      else openDiff(f.path, f.staged);
+    }
+  }, [cliFiles, activeDir]);
   const cli = useRef({ startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, dropPane: (_k: number) => {} });
   cli.current = { startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, dropPane: (k: number) => dropPane(k) };
   // AUTO-011 (T-085-g): a run's own agent tab shuts by itself, once, when that agent exits, unless the user
@@ -1348,6 +1360,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     const off = listen<CliWorkspace>("cli-workspace", (e) => {
       const p = e.payload;
       const c = cli.current;
+      if (p.kind === "file-open" || p.kind === "file-diff") {
+        if (!sameDir(p.worktree, activeRef.current)) c.select(p.worktree, p.branch);
+        return setCliFiles((q) => [...q, p]);
+      }
       if (p.kind === "terminal-create") return c.termCreate(p);
       if (p.kind === "terminal-split") return c.splitPane(c.keyOfHandle(p.handle), p.dir, p);
       if (p.kind === "terminal-rename") return c.termRename(p.handle, p.title);

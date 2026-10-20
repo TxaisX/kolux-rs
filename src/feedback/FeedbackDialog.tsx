@@ -6,7 +6,7 @@ import { useEffect, useReducer, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AppInfo } from "../app-info";
 import type { FeedbackFacts } from "../settings/privacy";
-import { closed, issue, reduce, typedText } from "./model";
+import { closed, issue, reduce, tabTarget, typedText } from "./model";
 
 const EVENT = "kolux-feedback";
 const NOTE_MS = 8000;
@@ -79,11 +79,21 @@ export default function FeedbackDialog() {
     <div className="scrim" onMouseDown={() => dispatch({ t: "close" })}>
       <div
         role="dialog"
+        aria-modal="true"
         aria-label="Send feedback"
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key === "Escape") dispatch({ t: "close" });
           else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) send();
+          else if (e.key === "Tab") {
+            // APP-037: the box is modal; Tab never leaves it.
+            const items = [...e.currentTarget.querySelectorAll<HTMLElement>("textarea, input, button:not([disabled])")];
+            const to = tabTarget(items.length, items.indexOf(document.activeElement as HTMLElement), e.shiftKey);
+            if (to >= 0) {
+              e.preventDefault();
+              items[to].focus();
+            }
+          }
         }}
         style={{ width: "min(640px, calc(100vw - 48px))", display: "flex", flexDirection: "column", gap: 10, padding: "16px 18px", background: "var(--pane-bg)", border: "1px solid var(--line-focus)", borderRadius: 12, boxShadow: "0 12px 40px rgba(0, 0, 0, 0.5)", color: "var(--fg)" }}
       >

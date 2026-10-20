@@ -63,6 +63,20 @@ pub fn permit(paths: &[String], allow: impl Fn(&str) -> Result<PathBuf, String>)
         .collect()
 }
 
+/// The drop-effect value that makes a paste copy the files rather than move them (DROPEFFECT_COPY).
+pub const COPY_EFFECT: u32 = 1;
+
+fn plain(p: &Path) -> String {
+    let s = shown(p);
+    if cfg!(windows) { s.to_lowercase() } else { s }
+}
+
+/// Whether the clipboard holds exactly the files that were placed, in the same order (a list of the
+/// same length with other files in it is a failed copy).
+pub fn same_files(placed: &[PathBuf], back: &[PathBuf]) -> bool {
+    placed.len() == back.len() && placed.iter().zip(back).all(|(a, b)| plain(a) == plain(b))
+}
+
 /// Writes `text` with `put`, reads it back with `get`, and reports the copy as failed unless the
 /// same bytes come back.
 pub fn verified_copy(text: &str, put: impl FnOnce(&str) -> Result<(), String>, get: impl FnOnce() -> Option<String>) -> Result<(), String> {
@@ -158,7 +172,7 @@ pub mod os {
 
     /// The files as a file list plus the hint that a paste copies them rather than moves them.
     pub fn put_files(owner: Owner, paths: &[PathBuf]) -> Result<(), String> {
-        put(owner, vec![(CF_HDROP as u32, super::drop_list(paths)), (copy_effect_format(), 1u32.to_le_bytes().to_vec())])
+        put(owner, vec![(CF_HDROP as u32, super::drop_list(paths)), (copy_effect_format(), super::COPY_EFFECT.to_le_bytes().to_vec())])
     }
 
     /// The text on the clipboard up to its first NUL, as Windows keeps it.
@@ -279,33 +293,37 @@ pub async fn clip_copy_text(window: tauri::WebviewWindow, text: String) -> Resul
 /// APP-016: puts files on the clipboard as a file list, only when every path is a full path inside a
 /// permitted root; replies with how many files were placed.
 #[tauri::command]
-pub async fn clip_copy_files(
-    window: tauri::WebviewWindow,
-    store: tauri::State<'_, Mutex<crate::state::Store>>,
-    guard: tauri::State<'_, crate::fence::Fence>,
-    git: tauri::State<'_, crate::git::Git>,
-    paths: Vec<String>,
-) -> Result<usize, String> {
-    let list = permit(&paths, |p| guard.allow(p, &store, &git, false))?;
-    #[cfg(windows)]
-    {
-        let owner = owner_of(&window);
-        tauri::async_runtime::spawn_blocking(move || {
-            os::put_files(owner as os::Owner, &list)?;
-            if os::get_files().len() == list.len() {
-                Ok(list.len())
-            } else {
-                Err("The copy failed: the clipboard does not hold the files that were copied.".to_string())
-            }
-        })
-        .await
-        .map_err(|e| e.to_string())?
+pub async fn clip_copy_files(window: tauri::WebviewWindow, paths: Vec<String>) -> Result<usize, String> {
+    use tauri::Manager;
+    // The fence may walk project folders and ask git for worktrees, so the whole check runs off the async thread.
+    let app = window.app_handle().clone();
+    let owner = owner_of(&window);
+    tauri::async_runtime::spawn_blocking(move || {
+        let (store, guard, git) = (app.state::<Mutex<crate::state::Store>>(), app.state::<crate::fence::Fence>(), app.state::<crate::git::Git>());
+        let list = permit(&paths, |p| guard.allow(p, &store, &git, false))?;
+        place_files(owner, list)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(not(windows))]
+fn owner_of(_: &tauri::WebviewWindow) -> usize {
+    0
+}
+
+#[cfg(windows)]
+fn place_files(owner: usize, list: Vec<PathBuf>) -> Result<usize, String> {
+    os::put_files(owner as os::Owner, &list)?;
+    if same_files(&list, &os::get_files()) {
+        Ok(list.len())
+    } else {
+        Err("The copy failed: the clipboard does not hold the files that were copied.".to_string())
     }
-    #[cfg(not(windows))]
-    {
-        let _ = (window, list);
-        Err(UNSUPPORTED.into())
-    }
+}
+#[cfg(not(windows))]
+fn place_files(_: usize, _: Vec<PathBuf>) -> Result<usize, String> {
+    Err(UNSUPPORTED.into())
 }
 
 /// What APP-037's box adds under the user's text, besides the version the front end already has.
@@ -478,6 +496,66 @@ mod tests {
         assert_eq!(release_text(Some("19045"), None), "Windows build 19045");
         assert_eq!(release_text(None, Some("24H2")), "Windows");
         assert_eq!(release_text(Some(" "), None), "Windows");
+    }
+
+    /// APP-016 review item: a `..` that climbs out of the permitted folder, and a junction or link inside it that
+    /// leads outside, are refused even though the text of the path starts inside.
+    #[test]
+    fn t249b_a_dot_dot_and_a_junction_that_lead_outside_the_permitted_folder_are_refused() {
+        let t = temp("clip-escape");
+        let inside = t.join("proj");
+        let outside = t.join("elsewhere");
+        fs::create_dir_all(&inside).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret.txt"), "x").unwrap();
+        fs::write(inside.join("ok.txt"), "x").unwrap();
+        let allow = fenced(&inside);
+        let up = format!("{}{}..{}elsewhere{}secret.txt", inside.display(), std::path::MAIN_SEPARATOR, std::path::MAIN_SEPARATOR, std::path::MAIN_SEPARATOR);
+        let err = permit(&[up], &allow).unwrap_err();
+        assert!(err.contains("secret.txt"), "a .. out of the folder is refused: {err}");
+        // A .. that stays inside is fine.
+        let stay = format!("{}{}..{}proj{}ok.txt", inside.display(), std::path::MAIN_SEPARATOR, std::path::MAIN_SEPARATOR, std::path::MAIN_SEPARATOR);
+        assert!(permit(&[stay], &allow).is_ok());
+        // A directory link inside the folder that points outside.
+        let link = inside.join("door");
+        let made = if cfg!(windows) {
+            std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&link).arg(&outside).output().map(|o| o.status.success()).unwrap_or(false)
+        } else {
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(&outside, &link).is_ok()
+            }
+            #[cfg(not(unix))]
+            {
+                false
+            }
+        };
+        assert!(made, "the test could not make a junction or link");
+        let through = link.join("secret.txt");
+        let err = permit(&[through.to_string_lossy().into_owned()], &allow).unwrap_err();
+        assert!(err.contains("secret.txt"), "a junction out of the folder is refused: {err}");
+    }
+
+    #[test]
+    fn t249b_b_the_clipboard_must_hold_the_very_files_that_were_placed_not_just_as_many() {
+        let a = PathBuf::from(r"C:\proj\a.txt");
+        let b = PathBuf::from(r"C:\proj\b.txt");
+        let other = PathBuf::from(r"C:\proj\other.txt");
+        assert!(same_files(&[a.clone(), b.clone()], &[a.clone(), b.clone()]));
+        assert!(!same_files(&[a.clone(), b.clone()], &[a.clone(), other]), "same count, different file");
+        assert!(!same_files(&[a.clone(), b.clone()], &[b.clone(), a.clone()]), "same files, other order");
+        assert!(!same_files(std::slice::from_ref(&a), &[a.clone(), b]), "an extra file");
+        assert!(!same_files(std::slice::from_ref(&a), &[]), "nothing back");
+        // The shell hands paths back without the \?\ prefix, and Windows paths differ only in case.
+        assert!(same_files(&[PathBuf::from(r"\\?\C:\proj\a.txt")], std::slice::from_ref(&a)));
+        #[cfg(windows)]
+        assert!(same_files(&[a], &[PathBuf::from(r"c:\PROJ\A.TXT")]));
+    }
+
+    #[test]
+    fn t249b_c_the_copy_hint_is_the_copy_effect_one_in_four_little_endian_bytes() {
+        assert_eq!(COPY_EFFECT, 1);
+        assert_eq!(COPY_EFFECT.to_le_bytes(), [1, 0, 0, 0]);
     }
 
     #[cfg(windows)]
