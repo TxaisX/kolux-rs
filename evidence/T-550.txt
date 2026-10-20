@@ -32,3 +32,15 @@ real provider; node evidence/T-070-run.mjs tour pill; raw log evidence/T-550-raw
 Left open on the T-550 line (not this lane): the first-run wizard's `kolux --help` text and the kolux-dev
 hardcodes in cli.rs (cli lane), and amending STATE.md's T-043-a record ("AI connections" is now named
 "Accounts & keys"; STATE.md is --write-state only for this lane).
+
+ADDENDUM 2026-10-20 (v3 batch, lane/look from 17a0bd18)
+What changed: the pill click now calls openSettings("accounts", "connections"), so Settings opens on Accounts & keys already
+scrolled to the AI connections section (SettingsPage.tsx draws that section as data-section="connections" and scrolls to it).
+TopBar already renders UsagePill (no TopBar hunk is left). The user guide sentences that called the pill read-only now say it
+opens Settings (docs/guide/getting-started.md line 87, docs/guide/board-agents-inbox.md line 208). STATE.md's T-043-a
+record is an accounts-lane note about a live key and does not mention the pill, so it is left as it is.
+Gates: vitest related src/usage/UsagePill.tsx src/usage/UsagePill.test.ts src/chrome/TopBar.tsx -> 20 files, 134 passed
+(G:/Temp/look-v3-logs/t550-vitest.log); tsc --noEmit exit 0, empty log (t550-tsc.log). No Rust changed: cargo skipped.
+LIVE PROOF PENDING (batched): launch the app with a Claude figure showing; click the pill in the top bar -> Settings opens on
+Accounts & keys and the AI connections cards (Claude, Codex, Grok) are in view; Escape closes it. The three cli hints
+(terminal list, repo add, stop-gone) against a running release app are still the cli lane's pending proof.

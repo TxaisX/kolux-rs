@@ -19,7 +19,9 @@ export type Event =
   /** The user pressed Retry on the overlay, or any other reload trigger while it shows. */
   | { t: "retry" }
   /** The user typed an address: a new page gets its own recovery allowance. */
-  | { t: "navigate" };
+  | { t: "navigate" }
+  /** T-283 (BROW-010): the computer woke from sleep; every pane hears the one signal. */
+  | { t: "woke" };
 /** `reload`: the pane reloads the page. `overlay`: a recovery overlay goes up (see `overlayOf`). */
 export type Action = "none" | "reload" | "overlay";
 
@@ -46,6 +48,12 @@ export function step(h: Health, e: Event): [Health, Action] {
       return [{ ...h, misses: 0, recoveries: 0, recovery: false }, "reload"];
     case "navigate":
       return [{ ...h, misses: 0, recoveries: 0, recovery: false }, "none"];
+    case "woke":
+      // A page that showed the overlay is tried again; any other page keeps being probed and gets
+      // a fresh automatic reload if sleep took it. A blank tab has nothing to recheck.
+      if (h.phase === "blank") return [h, "none"];
+      if (h.phase === "failed" || h.phase === "crashed") return [{ ...h, misses: 0, recoveries: 0, recovery: false }, "reload"];
+      return [{ ...h, misses: 0, recoveries: 0 }, "none"];
     case "probe":
       return probed(h, e.answer);
   }
