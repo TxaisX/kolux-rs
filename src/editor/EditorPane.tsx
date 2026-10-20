@@ -36,6 +36,7 @@ import { richChange, splitFront } from "./frontMatter";
 import { bannerUp, beginSave, canUndo, checkOnce, endSave, forget, holdRestored, keep, POLL_MS, readFresh, reloadNow, remember, setBanner as markBanner, UNDO_TOAST_MS, type Io, type Stamp, type UndoEntry } from "./diskChange";
 import { CompareView, DiskBanner, UndoToast } from "./DiskBanner";
 import { isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
+import { minimap } from "./minimap";
 import { SlashMenu, TableMenu } from "./SlashPanel";
 import type { SlashView } from "./slashMenu";
 import { domPick, noteDraft, selections, type Note } from "./notes";
@@ -140,6 +141,7 @@ export function StaleNotice({ path, onDone, onToast }: { path: string; onDone: (
 }
 
 const lang = new Compartment();
+const minimapping = new Compartment(); // T-316-b: the minimap beside the text, off unless Settings > General turns it on
 const wrapping = new Compartment(); // EDIT-006: word wrap, on unless the setting or Alt+Z turned it off
 export const look = EditorView.theme(
   {
@@ -186,6 +188,9 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   // EDIT-006: wrapping is on by default; the saved setting decides once it has loaded, Alt+Z flips it.
   const { settings, save: saveSetting } = useSettings();
   const [wrap, setWrap] = useState(true);
+  const [mini, setMini] = useState(false);
+  const miniOn = useRef(false);
+  miniOn.current = mini;
   const [spell, setSpell] = useState(true); // SET-038: Settings > General > spelling underlines in notes
   const wrapOn = useRef(true);
   wrapOn.current = wrap;
@@ -194,6 +199,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
       const p = readEditorPrefs(settings);
       setWrap(p.wordWrap);
       setSpell(p.spellcheck);
+      setMini(p.minimap);
     }
   }, [settings === null]);
   const richHost = useRef<HTMLDivElement>(null);
@@ -202,6 +208,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   const [richEditor, setRichEditor] = useState<ReturnType<typeof mountRich>["editor"] | null>(null);
   const [ready, setReady] = useState(0); // counts loads, so the rich view starts after each one
   useEffect(() => view.current?.dispatch({ effects: wrapping.reconfigure(wrap ? EditorView.lineWrapping : []) }), [wrap, ready]);
+  useEffect(() => view.current?.dispatch({ effects: minimapping.reconfigure(mini ? minimap() : []) }), [mini, ready]);
   const [mode, setMode] = useState<"rich" | "source">(md ? "rich" : "source");
   const [banner, setBanner] = useState<{ text: string; big?: boolean } | null>(null);
   const [bigOk, setBigOk] = useState(false); // Open anyway, for this tab and this file only
@@ -272,7 +279,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
           doc: shown,
           parent: host.current!,
           // A file with Windows line ends is saved with them.
-          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), wrapping.of(wrapOn.current ? EditorView.lineWrapping : []), findSupport, conflictColours, pasteGuard((t) => report.current.onToast?.(t)), EditorView.updateListener.of((u) => {
+          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), wrapping.of(wrapOn.current ? EditorView.lineWrapping : []), minimapping.of(miniOn.current ? minimap() : []), findSupport, conflictColours, pasteGuard((t) => report.current.onToast?.(t)), EditorView.updateListener.of((u) => {
             u.transactions.forEach((tr) => relay(path, u.view, tr));
             if (u.docChanged) setConflicts(u.state.field(conflictField).list.length);
             if (u.docChanged && isMarkdown(path)) {
