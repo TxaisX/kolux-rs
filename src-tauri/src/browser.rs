@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::{LazyLock, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::webview::{Color, DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Url, Webview, WebviewUrl};
@@ -47,6 +47,9 @@ pub const LINK_EVENT: &str = "browser-link";
 /// T-159 (BROW-040): a document preview asked to leave its folder; the pane offers the address.
 pub const OUTBOUND_EVENT: &str = "browser-outbound";
 pub const ICON_EVENT: &str = "browser-icon";
+/// T-272-c (BROW-016): a page on screen asked for another tab and its family's allowance was used
+/// up; the pane shows "popups blocked" in its toolbar.
+pub const BLOCKED_EVENT: &str = "browser-blocked";
 /// T-239 (BROW-017): a right-click inside a page (`kind: "menu"`, with the pointer, the page's
 /// size, the link under it and whether text is selected) or an entry picked in the menu it opened
 /// (`kind: "pick"`, with the entry and its address).
@@ -318,11 +321,84 @@ impl Allowance {
     }
 }
 
-// ponytail: one allowance for every browser page, so a page and the tabs it opened share it (the
-// family the spec names) along with unrelated pages. An allowance per opener alone would hand each
-// new tab a fresh five and let a self-copying page grow again; per-family windows need the opener
-// passed when the tab opens (T-272-c).
-static PAGE_TABS: Mutex<Allowance> = Mutex::new(Allowance(VecDeque::new()));
+/// How long an address a page was let open waits for its tab before the promise is dropped.
+pub const PROMISE_WINDOW: Duration = Duration::from_secs(10);
+
+/// T-272-c: every family (the tab the user opened plus every tab its pages opened) has its own
+/// allowance, so a storm in one tab leaves real clicks in the others alone. The members of a
+/// family share one allowance, so a self-copying page cannot hand each copy a fresh five. A tab a
+/// page opened joins its opener's family when it opens, matched by the address the page was let
+/// open (the pane opens exactly that address as the new tab); a tab opened any other way (by the
+/// user, restored after a restart) starts a family of its own.
+#[derive(Default)]
+pub struct Families {
+    tabs: HashMap<u32, Arc<Mutex<Allowance>>>,
+    promised: VecDeque<(String, Arc<Mutex<Allowance>>, Instant)>,
+}
+
+impl Families {
+    /// The allowance `id`'s family shares (a tab not seen yet starts a family of its own).
+    pub fn of(&mut self, id: u32) -> Arc<Mutex<Allowance>> {
+        self.tabs.entry(id).or_default().clone()
+    }
+
+    /// A page in `opener` was let open `url` as another tab: that tab will join the family.
+    pub fn promise(&mut self, opener: u32, url: &str, now: Instant) {
+        self.prune(now);
+        let family = self.of(opener);
+        self.promised.push_back((same_address(url), family, now));
+    }
+
+    /// Tab `id` opens on `url`: it joins the family whose page was let open that address, else it
+    /// starts its own. A tab already in a family stays there (opening it again resets nothing).
+    pub fn join(&mut self, id: u32, url: &str, now: Instant) {
+        if self.tabs.contains_key(&id) {
+            return;
+        }
+        self.prune(now);
+        let key = same_address(url);
+        let family = match self.promised.iter().position(|p| p.0 == key) {
+            Some(i) => self.promised.remove(i).map(|p| p.1).unwrap_or_default(),
+            None => Arc::default(),
+        };
+        self.tabs.insert(id, family);
+    }
+
+    /// A closed tab leaves its family; the allowance goes with the family's last tab.
+    pub fn leave(&mut self, id: u32) {
+        self.tabs.remove(&id);
+    }
+
+    fn prune(&mut self, now: Instant) {
+        while self.promised.front().is_some_and(|p| now.duration_since(p.2) >= PROMISE_WINDOW) {
+            self.promised.pop_front();
+        }
+    }
+}
+
+/// One spelling per address: the page's request and the pane's open both go through the
+/// web-address rules, so "HTTPS://Example.com" and "https://example.com/" are the same tab.
+fn same_address(url: &str) -> String {
+    Url::parse(url).map(|u| u.to_string()).unwrap_or_else(|_| url.to_string())
+}
+
+static FAMILIES: LazyLock<Mutex<Families>> = LazyLock::new(Mutex::default);
+
+fn families() -> std::sync::MutexGuard<'static, Families> {
+    FAMILIES.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// T-272-c: a page on screen asked to open `target` and was refused only because its family's
+/// allowance is used up (call it after a refusal): the opener's toolbar says popups were blocked.
+/// A hidden tab or an address no tab may open is refused silently, as before.
+pub fn popup_refused(target: &Url, dev: Option<&Url>, on_screen: bool) -> bool {
+    on_screen && allowed(target, dev).is_ok()
+}
+
+#[derive(Clone, Serialize)]
+struct BlockedPayload {
+    id: u32,
+}
 
 /// The tabs whose page is on screen now (BROW-002 bounds calls keep it, and the open call says
 /// whether a new tab starts on screen), so a page in a hidden tab opens no tab and sends no chord
@@ -872,6 +948,7 @@ fn err(e: tauri::Error) -> String {
 #[allow(clippy::too_many_arguments)] // a Tauri command takes its arguments one by one
 pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webview, id: u32, url: String, spot: Spot, background: Option<[u8; 3]>, shown: Option<bool>, profile: Option<String>) -> Result<(), String> {
     let url = parse(&url)?;
+    families().join(id, url.as_str(), Instant::now()); // T-272-c
     let _ = APP.set(app.clone()); // T-195: the command line's browser commands need the app
     if let Ok(dir) = app.path().app_data_dir() {
         profiles::set_root(dir); // T-241
@@ -918,13 +995,35 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
                 }
                 return NewWindowResponse::Deny;
             }
-            // BROW-016: a page opening windows in a loop gets a handful of tabs, never a flood.
-            if let Some((url, front)) = new_window(&url, window_dev.as_ref(), &PAGE_TABS, is_shown(id), Instant::now()) {
-                let _ = window_app.emit(LINK_EVENT, LinkPayload { id, url, front });
+            // BROW-016: a page opening windows in a loop gets a handful of tabs, never a flood;
+            // T-272-c: counted per family, and a refusal is shown in this tab's toolbar.
+            let (now, shown) = (Instant::now(), is_shown(id));
+            let family = families().of(id);
+            match new_window(&url, window_dev.as_ref(), &family, shown, now) {
+                Some((url, front)) => {
+                    families().promise(id, &url, now);
+                    let _ = window_app.emit(LINK_EVENT, LinkPayload { id, url, front });
+                }
+                None if popup_refused(&url, window_dev.as_ref(), shown) => {
+                    let _ = window_app.emit(BLOCKED_EVENT, BlockedPayload { id });
+                }
+                None => {}
             }
             NewWindowResponse::Deny
         })
-        .on_navigation(move |url| match navigation(url, dev.as_ref(), &PAGE_TABS, is_shown(id), Instant::now()) {
+        .on_navigation(move |url| {
+            let (now, shown) = (Instant::now(), is_shown(id));
+            let family = families().of(id);
+            let nav = navigation(url, dev.as_ref(), &family, shown, now);
+            // T-272-c: a link the page asked to open as a tab, refused only by the family's allowance.
+            if nav == Nav::Load(false) {
+                if let Some(target) = link_of(url.as_str()).and_then(|(t, _)| parse(&t).ok()) {
+                    if popup_refused(&target, dev.as_ref(), shown) {
+                        let _ = chord_app.emit(BLOCKED_EVENT, BlockedPayload { id });
+                    }
+                }
+            }
+            match nav {
             // T-159 (BROW-040): a document preview follows its own files and what the app asked for;
             // the first outside address is offered to the user, the rest are dropped.
             // T-242 (BROW-050): a tab emulating offline loads nothing new, as a cut cable would.
@@ -937,6 +1036,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
                 _ => go && !cli::offline(id),
             },
             Nav::Link(url, front) => {
+                families().promise(id, &url, now);
                 let _ = chord_app.emit(LINK_EVENT, LinkPayload { id, url, front });
                 false
             }
@@ -956,7 +1056,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
                 let _ = chord_app.emit(KEY_EVENT, with_id(id, v));
                 false
             }
-        })
+        }})
         .on_page_load(move |page, payload| {
             let event = match payload.event() {
                 PageLoadEvent::Started => "started",
@@ -1196,6 +1296,7 @@ pub fn proxy_of(setting: Option<&str>) -> Result<Option<Url>, String> {
 #[tauri::command]
 pub async fn browser_close(app: AppHandle, id: u32) -> Result<(), String> {
     set_shown(id, false);
+    families().leave(id); // T-272-c
     forget_tab(id);
     if let Ok(mut i) = ICONS.lock() {
         i.forget(id);
@@ -1864,6 +1965,96 @@ mod tests {
         assert_eq!(zoom_level(9.0), 5.0);
         assert_eq!(zoom_level(0.1), 0.25);
         assert_eq!(zoom_level(f64::NAN), 1.0);
+    }
+
+    // T-272-c: a storm in one family uses that family's allowance only; real clicks in an
+    // unrelated tab still open.
+    #[test]
+    fn t272c_a_storm_in_one_tab_leaves_real_clicks_in_another_tab_alone() {
+        let now = Instant::now();
+        let web = Url::parse("https://example.com/").unwrap();
+        let mut f = Families::default();
+        f.join(1, "https://storm.example/", now);
+        f.join(2, "https://docs.example/", now);
+        for _ in 0..TABS_ALLOWED {
+            assert!(new_window(&web, None, &f.of(1), true, now).is_some());
+        }
+        assert_eq!(new_window(&web, None, &f.of(1), true, now), None);
+        assert!(popup_refused(&web, None, true), "the storm's tab is told popups were blocked");
+        // The other family's whole allowance is still there.
+        for _ in 0..TABS_ALLOWED {
+            assert!(new_window(&web, None, &f.of(2), true, now).is_some());
+        }
+        assert_eq!(new_window(&web, None, &f.of(2), true, now), None);
+    }
+
+    // T-272-c: a tab a page opened shares its opener's allowance, so a page that copies itself
+    // into each new tab still gets only the allowance in all, however the address is spelled.
+    #[test]
+    fn t272c_a_self_copying_page_shares_one_allowance_across_its_family() {
+        let now = Instant::now();
+        let mut f = Families::default();
+        f.join(1, "https://copy.example/", now);
+        let mut opener = 1;
+        let mut opened = 0;
+        for next in 2..20u32 {
+            let target = Url::parse(&format!("https://copy.example/{next}")).unwrap();
+            match new_window(&target, None, &f.of(opener), true, now) {
+                Some((url, _)) => {
+                    f.promise(opener, &url, now);
+                    // The pane opens the address as typed by the page, in another spelling.
+                    f.join(next, &url.replace("https://copy.example", "HTTPS://COPY.example"), now);
+                    assert!(Arc::ptr_eq(&f.of(next), &f.of(1)), "tab {next} joined the family");
+                    opener = next;
+                    opened += 1;
+                }
+                None => break,
+            }
+        }
+        assert_eq!(opened, TABS_ALLOWED);
+        // A link navigation from the newest copy draws on the same, used-up allowance.
+        let link = Url::parse("kolux-chord:open-front?u=https%3A%2F%2Fcopy.example%2Fx").unwrap();
+        assert_eq!(navigation(&link, None, &f.of(opener), true, now), Nav::Load(false));
+    }
+
+    // T-272-c: a tab nobody promised (the user's own, a restored one), a promise past its window,
+    // and a tab opened again keep to the rules: own family, own family, same family.
+    #[test]
+    fn t272c_unpromised_late_and_reopened_tabs() {
+        let now = Instant::now();
+        let mut f = Families::default();
+        f.join(1, "https://a.example/", now);
+        f.promise(1, "https://b.example/", now);
+        f.join(2, "https://c.example/", now);
+        assert!(!Arc::ptr_eq(&f.of(1), &f.of(2)), "another address starts its own family");
+        f.join(3, "https://b.example/", now + PROMISE_WINDOW);
+        assert!(!Arc::ptr_eq(&f.of(1), &f.of(3)), "a promise past its window is dropped");
+        f.promise(1, "https://d.example/", now);
+        f.join(4, "https://d.example/", now);
+        assert!(Arc::ptr_eq(&f.of(1), &f.of(4)));
+        // Opening tab 4 again keeps its family; closing it and opening the id fresh does not.
+        f.join(4, "https://e.example/", now);
+        assert!(Arc::ptr_eq(&f.of(1), &f.of(4)));
+        f.leave(4);
+        f.join(4, "https://e.example/", now);
+        assert!(!Arc::ptr_eq(&f.of(1), &f.of(4)));
+        // Each promise opens one tab only.
+        f.promise(1, "https://g.example/", now);
+        f.join(5, "https://g.example/", now);
+        f.join(6, "https://g.example/", now);
+        assert!(Arc::ptr_eq(&f.of(1), &f.of(5)));
+        assert!(!Arc::ptr_eq(&f.of(1), &f.of(6)));
+    }
+
+    // T-272-c: only a refusal a user could have caused shows "popups blocked": not a hidden
+    // tab's, not an address no tab may open.
+    #[test]
+    fn t272c_popups_blocked_shows_only_for_a_shown_tab_and_a_web_address() {
+        let web = Url::parse("https://example.com/").unwrap();
+        assert!(popup_refused(&web, None, true));
+        assert!(!popup_refused(&web, None, false));
+        assert!(!popup_refused(&Url::parse("http://tauri.localhost/").unwrap(), None, true));
+        assert!(!popup_refused(&Url::parse("file:///C:/x").unwrap(), None, true));
     }
 
     #[test]

@@ -27,6 +27,7 @@ import { zoomFactor } from "../settings/zoom";
 import { notePage } from "../onboarding/guide";
 import { addNote, MAX_NOTES, type Note, notesMarkdown, type Pick, readPicks, sameAddress } from "./annotate";
 import type { SendTarget } from "../editor/notes";
+import { BLOCKED_SHOW_MS, type Blocked, blockedAgain, blockedLabel } from "./popups";
 
 /** `url`: the page or file the tab opens on instead of a blank page (SKILL-012 previews a kit result). */
 /** `cwd`: the worktree this tab belongs to (BROW-042: agents there drive it); `targets` / `onSend`: the agent panes
@@ -153,6 +154,9 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const [preview, setPreview] = useState<Preview | null>(null);
   // T-159 (BROW-040): the outside address a previewed document asked to open; offered, never followed.
   const [outbound, setOutbound] = useState<string | null>(null);
+  // T-272-c (BROW-016): tabs this tab's family asked for past its allowance, said in the toolbar.
+  const [blocked, setBlocked] = useState<Blocked>(null);
+  const blockedTimer = useRef<number | undefined>(undefined);
   // T-074 (BROW-008, BROW-009): the page's health. The engine says only started / finished, so the
   // pane probes the page (browser_probe) and feeds loadState's machine; the overlay it decides on
   // covers the pane body while the page itself is hidden under it (a child web view cannot be
@@ -245,6 +249,15 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           const { front } = e.payload;
           const appHasFocus = document.hasFocus();
           void windowHasFocus().then((w) => openerRefocus(front, appHasFocus, w) && setTimeout(() => focusMe.current?.(), 0));
+        }),
+      );
+      // T-272-c: a page here asked for another tab after its family's allowance was used up.
+      unlisteners.push(
+        await listen<{ id: number }>("browser-blocked", (e) => {
+          if (e.payload.id !== id) return;
+          setBlocked((b) => blockedAgain(b, Date.now()));
+          window.clearTimeout(blockedTimer.current);
+          blockedTimer.current = window.setTimeout(() => setBlocked(null), BLOCKED_SHOW_MS);
         }),
       );
       // T-159 (BROW-040): a previewed document asked to leave its folder; the full address is
@@ -467,6 +480,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   // BROW-003: Enter reads the bar; an invalid address is said in the notice and the page stays.
   const navigateTo = (url: string) => {
     setNote(null);
+    setBlocked(null); // T-272-c: the user's own navigation clears the note
     typing.current = false;
     setMenu((m) => menuClosed(m));
     pending.current = null;
@@ -658,6 +672,11 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         {badge && (
           <span className="zoom-badge" role="status" aria-label="Zoom">
             {badge}
+          </span>
+        )}
+        {blockedLabel(blocked, blocked?.at ?? 0) && (
+          <span className="zoom-badge" data-popups-blocked role="status" title="This page tried to open more tabs than it may; the rest were blocked">
+            {blockedLabel(blocked, blocked?.at ?? 0)}
           </span>
         )}
         {/* The app runs these for a chord pressed in the app or inside the page (App's browserAction
