@@ -4,11 +4,16 @@
 // holds the address bar, which takes the cursor with its text selected as the tab opens, and
 // the back / forward / reload toolbar; what the bar makes of typed text is in address.ts.
 import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ArrowLeft, ArrowRight, Close, Globe, Refresh, Stop, Target } from "../chrome/icons";
 import { BLANK, resolveAddress } from "./address";
-import { openerRefocus, windowHasFocus } from "./chord";
+import { chordPlan, openerRefocus, windowHasFocus } from "./chord";
+import { type KeyEvent, keyEventInit, pageKeys } from "./keys";
+import { type MenuEvent, menuAt, menuColours, menuContext, menuSpec } from "./menu";
+import { dropPage, livePage } from "./pages";
+import { useKeymap } from "../keys/KeymapContext";
 import { backgroundBehind } from "./colour";
 import "./browser.css";
 import { can as canGo, fresh, started, type Pending } from "./history";
@@ -28,7 +33,10 @@ type Props = { id: number; url?: string; title?: string; hidden?: boolean; focus
 /** The pane body's place in the window, in CSS pixels, as the back end places the page. */
 /** GIT-036: asks the window for a new browser tab at `url` in the focused split. */
 export const OPEN_IN_BROWSER = "kolux-open-in-browser";
-export const openInBrowser = (url: string) => window.dispatchEvent(new CustomEvent(OPEN_IN_BROWSER, { detail: url }));
+export const openInBrowser = (url: string, title?: string) => window.dispatchEvent(new CustomEvent<OpenInBrowser>(OPEN_IN_BROWSER, { detail: title === undefined ? url : { url, title } }));
+/** The event's detail: the address alone, or with a fixed tab name (T-242: "Preview host:port"). */
+export type OpenInBrowser = string | { url: string; title: string };
+export const openDetail = (d: OpenInBrowser): { url: string; title?: string } => (typeof d === "string" ? { url: d } : d);
 
 /** T-241 (BROW-039): what a tab's address previews, when it is a worktree document of ours. */
 type Preview = { folder: string; file: string; path: string };
@@ -96,6 +104,9 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const [note, setNote] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [can, setCan] = useState({ back: false, forward: false });
+  const canRef = useRef(can);
+  canRef.current = can;
+  const keymap = useKeymap();
   // ponytail: wry has no can-go-back, so history is tracked from this tab's own actions and the
   // page loads it sees (history.ts). The chords pressed inside the page come back through the
   // app (T-012-b-fix), so the web view never goes back on its own; a page's pushState still
@@ -215,6 +226,18 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           if (e.payload.id === id) setIcon((i) => iconFound(i, at.current, e.payload.page, e.payload.icon));
         }),
       );
+      // T-239 (BROW-017): a right-click inside the page, and the menu entry picked afterwards.
+      unlisteners.push(
+        await listen<MenuEvent>("browser-menu", (e) => {
+          if (e.payload.id === id) void onMenu.current(e.payload);
+        }),
+      );
+      // T-239 (BROW-018): an app shortcut pressed while the keyboard was inside the page.
+      unlisteners.push(
+        await listen<KeyEvent>("browser-key", (e) => {
+          if (e.payload.id === id) void onKey.current(e.payload);
+        }),
+      );
       // T-241 (BROW-044): `kolux tab switch|close` name this pane.
       unlisteners.push(
         await listen<{ action: string; page?: number }>("browser-cli", (e) => {
@@ -307,6 +330,21 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     if (!open) return;
     invoke("browser_tab", { id, worktree: cwd, shown: !hidden, url: at.current, title: title ?? "" }).catch(() => {});
   }, [id, open, hidden, cwd, loading, title]);
+
+  // T-239 (BROW-018): the page is told which chords are the app's, from the live keymap (so a
+  // customised binding counts), again after each load since a new document starts from the script's
+  // own defaults.
+  useEffect(() => {
+    if (!open) return;
+    invoke("browser_go", { id, what: "keys", text: JSON.stringify(pageKeys(keymap)) }).catch(() => {});
+  }, [id, open, loading, keymap.bindings]);
+
+  // T-239 (BROW-019, BROW-022): the window's registry of live pages, which the jump palette lists
+  // and Reopen Closed Tab reads from; this pane's row leaves with it.
+  useEffect(() => {
+    livePage(id, { url: at.current, title: title ?? "", icon: icon?.src ?? null, cwd });
+  }, [id, loading, title, icon, cwd]);
+  useEffect(() => () => dropPage(id), [id]);
 
   // BROW-037: while picking, the page's picker is asked four times a second what was clicked; a
   // page that was replaced meanwhile gets the picker again. Escape in the page ends picking.
@@ -416,6 +454,36 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     if (what === "reload" && overlay) return retry();
     pending.current = what === "reload" ? "same" : what === "stop" ? null : what;
     invoke("browser_go", { id, what }).catch((err) => setNote(String(err)));
+  };
+
+  // T-239 (BROW-017): the right-click menu. The page says where the click was and what was under
+  // it; menu.ts decides the entries and the corner (flipped near the pane's edges); the page draws
+  // it and says which entry was picked. Both go through chordPlan, so a page script that fakes one
+  // while the keyboard is in the app is ignored (council FIX-3/4).
+  const onMenu = useRef(async (_p: MenuEvent) => {});
+  onMenu.current = async (p) => {
+    const plan = await chordPlan(id, p.kind);
+    if (!plan.run) return;
+    if (plan.focusPane) focusMe.current?.();
+    if (p.kind === "menu") {
+      const spec = menuSpec(menuContext(p), canRef.current, at.current, menuAt(p), menuColours(host.current));
+      void invoke("browser_go", { id, what: "menu", text: JSON.stringify(spec) }).catch(() => {});
+      return;
+    }
+    const u = /^https?:/i.test(p.u ?? "") ? p.u! : "";
+    if (p.what === "back" || p.what === "forward") act(p.what);
+    else if (p.what === "open-kolux" && u) openInBrowser(u);
+    else if (p.what === "open-default" && u) invoke("open_external", { url: u }).catch((err) => setNote(String(err)));
+  };
+  // T-239 (BROW-018): an app shortcut the page handed over is pressed again on the window, after
+  // this split has taken focus (flushSync, so the app's key handler already sees it focused), and
+  // the app's own key handling runs it, customised bindings included.
+  const onKey = useRef(async (_p: KeyEvent) => {});
+  onKey.current = async (p) => {
+    const plan = await chordPlan(id, "key");
+    if (!plan.run) return;
+    if (plan.focusPane) flushSync(() => focusMe.current?.());
+    window.dispatchEvent(new KeyboardEvent("keydown", keyEventInit(p)));
   };
 
   return (

@@ -19,6 +19,7 @@ import { attachRenderer, watchResume, type RendererMode } from "./renderer";
 import { copySelection } from "./copy";
 import { HeldKeys, screenLines, shouldRefocus, watchScale } from "./recover";
 import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } from "./codec";
+import { notePrinted } from "../browser/preview";
 import { encodeHistory, replay, restoreTail, viewTop } from "./history";
 import { claimsClick } from "./linkClick";
 import { fromThisService, reattach, type Attach, type Reattached, type ServiceInfo } from "./reattach";
@@ -724,6 +725,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
               clearTimeout(readyWait);
               send(startup.onPrompt());
             }
+            notePrinted(openRef.current.cwd, bytes); // T-242 (BROW-067): printed dev-server addresses
             sawOutput();
           };
           if (idRef.current === null && forPane(e.payload, null, number)) draw();

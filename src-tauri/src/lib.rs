@@ -573,6 +573,7 @@ pub fn run() {
             browser::browser_annotate,
             browser::preview::browser_preview,
             browser::preview::browser_preview_of,
+            browser::ports::browser_dev_ports,
             automations::automations_list,
             automations::automation_set_enabled,
             automations::automation_delete,
