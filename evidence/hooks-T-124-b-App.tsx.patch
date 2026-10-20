@@ -1,0 +1,25 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 8e54e651..b575c6dc 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -77,6 +77,7 @@ import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
+ import ArtifactsPage from "./artifacts/ArtifactsPage";
+ import SkillsPage from "./skills/SkillsPage";
+ import { generatedOn, generatedTitle, tabText, tabTip } from "./shell/tabTitle";
++import { needsBeat, statusTitle, useBeatFrame } from "./status/tabNameRule";
+ import { closeSkills, toggleSkills } from "./skills/nav";
+ import { KitGallery, KitSetup } from "./kits/Kits";
+ import Wizard from "./onboarding/Wizard";
+@@ -1876,8 +1877,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   const labelOf = (p: Pane) => workerNames[`term-${ptys.current[p.key]}`];
+   // TERM-056 / T-258: the tab's text and its hover (the full title); generated titles (off by default) touch only
+   // terminal panes without a name of their own.
++  // STAT-035 / T-124-b: the tab-name rule on top of the followed title: Kolux names ready and action required for agents whose own titles do not, and one shared beat animates its spinners.
++  const ruleOf = (p: Pane) => ({ named: Boolean(labelOf(p) || p.title?.trim()), agent: p.kind ? null : launchedAgent(p), name: launchedName(p) ?? programWord(p.agent), live: liveIds[p.key]?.title, state: hook[p.key] });
++  const beatFrame = useBeatFrame(panes.filter((p) => needsBeat(ruleOf(p))).map((p) => p.key));
+   const tabLabel = (p: Pane) => {
+-    const full = tabName(p, titles, labelOf(p), liveIds);
++    const full = statusTitle({ ...ruleOf(p), shown: tabName(p, titles, labelOf(p), liveIds), frame: beatFrame });
+     const shown = p.kind ? full : tabText({ full, own: p.title, on: generatedOn(settings), generated: generatedTitle({ label: labelOf(p), word: p.agent === "shell" ? "Shell" : programWord(p.agent), branch: p.branch, cwd: p.cwd }) });
+     return (
+       <span className="tab-name" data-tip={tabTip(full, shown)}>

@@ -1,0 +1,20 @@
+diff --git a/src/settings/notifications.ts b/src/settings/notifications.ts
+index 8f591252..872c66db 100644
+--- a/src/settings/notifications.ts
++++ b/src/settings/notifications.ts
+@@ -3,6 +3,7 @@
+ // hooks) play the same choice the test button does: the system's sound, one of nine Kolux tones, or
+ // a custom audio file, at the saved volume, with the toast silent whenever Kolux plays its own.
+ import { invoke } from "@tauri-apps/api/core";
++import { masterOn } from "../status/notifyMaster";
+ 
+ /** The kinds of notification, their settings keys and what they are when nothing is saved. The
+  * finish and stop keys are the ones the agent notifications read (STAT-041, STAT-023); usage alerts
+@@ -143,6 +144,7 @@ export async function preparePlan(n: { sound: Sound; volume: number; customFile:
+ /** STAT-043: a desktop notification with the chosen sound. The toast is silent whenever Kolux plays
+  * its own tone or file, so one sound plays; the sound starts once the toast is shown. */
+ export async function raiseNotification(settings: Record<string, unknown>, title: string, body: string): Promise<void> {
++  if (!masterOn(settings)) return; // STAT-042 (T-124-b): the master switch silences every notification
+   const { plan, play, close } = await preparePlan(readNotifications(settings));
+   try {
+     await invoke("notify", { title, body, sound: plan.toastSound });

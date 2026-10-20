@@ -1,0 +1,21 @@
+diff --git a/src/usage/alerts.ts b/src/usage/alerts.ts
+index ffb8421f..8b4728d4 100644
+--- a/src/usage/alerts.ts
++++ b/src/usage/alerts.ts
+@@ -3,6 +3,7 @@
+ // reset time; the record of what fired is kept in state.db so a restart does not repeat it.
+ import { useEffect } from "react";
+ import { invoke } from "@tauri-apps/api/core";
++import { usageAlertsAllowed } from "../status/notifyMaster";
+ import { resetWords, type UsageWindow } from "./codex";
+ import { onFigures, type ProviderUsage } from "./launchWarn";
+ 
+@@ -46,7 +47,7 @@ export const alertsOn = (s: Record<string, unknown>) => s[ALERTS_FIELD] !== fals
+ /** Watches the shared usage figures and sends what is due. Nothing goes out until settings have
+  * loaded (`settings` null) or while alerts are off. */
+ export function useUsageAlerts(settings: Record<string, unknown> | null) {
+-  const on = settings !== null && alertsOn(settings);
++  const on = settings !== null && usageAlertsAllowed(settings, alertsOn); // STAT-042: the master switch holds them back too
+   useEffect(() => {
+     if (!on) return;
+     let fired: Fired | null = null;

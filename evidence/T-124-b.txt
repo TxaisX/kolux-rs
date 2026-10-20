@@ -38,3 +38,19 @@ Still open (named blockers)
 LIVE PROOF PENDING (batched; after the patch is applied)
 1. In a plain shell tab run Claude Code with a task that mentions Codex. Expect: the tab icon is Claude's.
 2. In a Cursor tab running a Claude model. Expect: the busy dot follows Cursor's spinner and the icon stays Cursor's.
+
+== v3 batch 5 (2026-10-20, Opus 5.5; lane/hooks from d942ac47) ==
+BUILT
+- STAT 035 rest, generated-titles switch: src/status/GeneratedTitlesCard.tsx ('Auto-generate tab titles', off by default) saves generatedTabTitles, the key T-258's src/shell/tabTitle.ts reads; rendered on Settings > Agents by evidence/hooks-T-124-b-AgentsPage.tsx.patch.
+- STAT 035 rest, tab-name rule: src/status/tabNameRule.ts statusTitle(): Codex/Devin/Pi/OMP get "<Agent> ready" / "<Agent> action required" from hook status; Devin/Pi/OMP get a Kolux spinner while working unless their own title has a spinner or session details; any agent's stale action-needed title becomes "<Agent> ready" once done; a typed name or task label is never touched. Beat: one shared timer, joined per pane, stopped when the last pane leaves, frames skipped while the window is hidden; final-state titles never wait on it. Wired into the tab text by evidence/hooks-T-124-b-App.tsx.patch (useBeatFrame over the panes that need it; a closed pane leaves).
+- STAT 042 rest: src/status/notifyMaster.ts: master switch (notificationsOn, missing = on), quiet minutes (missing = 10, held to 0..600), usage alerts need master + their own switch, test outcome (Open Settings on Windows/macOS, "not supported" elsewhere). Patches: NotificationsPage.tsx (master switch, fieldset greys and disables everything beneath, failed-test Open Settings button), NotificationSwitches.tsx (quiet box disabled with master off, quietMinutes), notifications.ts (raiseNotification returns with master off), usage/alerts.ts (usageAlertsAllowed).
+TESTS: src/status/tabNameRule.test.ts (7), src/status/notifyMaster.test.ts (6).
+GATES (logs G:/Temp/hooks-v3-logs/b5-t124-*): patched (all 20 hooks patches) tsc 0; vitest src/status src/settings src/usage src/shell 76 files / 423 tests passed. No Rust changed.
+STILL OPEN: STAT 033 Gemini CLI title symbols (needs a real Gemini run; nothing guessed); STAT 034 provider-session front-end hunk (where the stored provider session lives in the front end is not settled; src/terminal lane).
+PATCHES (apply after the 14 earlier hooks patches, in this order): hooks-T-124-b-App.tsx, -AgentsPage.tsx, -NotificationsPage.tsx, -NotificationSwitches.tsx, -notifications.ts, -alerts.ts.
+
+LIVE PROOF PENDING (batched; after the patches are applied)
+3. Settings > Agents: 'Auto-generate tab titles' is off; turn it on. Expect: an unnamed agent tab shows "Claude · <branch>"; rename it by hand; the typed name stays.
+4. Run Codex, let it ask for approval. Expect: tab reads "Codex action required"; approve and let it finish: "Codex ready".
+5. Run Pi with a plain title. Expect: a braille spinner before "Pi" while working, one beat across tabs; minimise the window and restore: no stuck frame, final "Pi ready" shown.
+6. Settings > Notifications: turn the master switch off. Expect: every control below greyed and unclickable, no notification when an agent finishes. On again, block Kolux notifications in Windows settings and press the test button: the warning has an Open Settings button.

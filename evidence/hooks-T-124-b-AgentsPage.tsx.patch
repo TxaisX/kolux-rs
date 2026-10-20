@@ -1,0 +1,20 @@
+diff --git a/src/settings/AgentsPage.tsx b/src/settings/AgentsPage.tsx
+index 4bef2bac..5595299c 100644
+--- a/src/settings/AgentsPage.tsx
++++ b/src/settings/AgentsPage.tsx
+@@ -7,6 +7,7 @@ import type { AgentInfo } from "../launch/PlusMenu";
+ import { DEFAULT_AGENT_KEY, defaultAgentId, disabledAgents, switchAgent } from "../launch/agents";
+ import { Segmented } from "./GeneralPage";
+ import { useSettings } from "./useSettings";
++import { GeneratedTitlesCard } from "../status/GeneratedTitlesCard";
+ import TeamsModeCard from "../launch/TeamsModeCard";
+ import KeepAwakeCard from "../launch/KeepAwakeCard";
+ import { useTeamsHost } from "../launch/teams";
+@@ -195,6 +196,7 @@ export default function AgentsPage() {
+       <AgentsPageView cap={capOn(settings ?? {})} onCap={(on) => void save({ [CAP_FIELD]: on })} />
+       <TeamsModeCard settings={settings} save={save} host={teamsHost} />
+       <KeepAwakeCard settings={settings} save={save} />
++      <GeneratedTitlesCard settings={settings} save={save} />
+       <CachePick minutes={cacheMinutes(settings)} onPick={(m) => void save(m === null ? { [CACHE_ON]: false } : { [CACHE_ON]: true, [CACHE_LENGTH]: m })} />
+     </>
+   );

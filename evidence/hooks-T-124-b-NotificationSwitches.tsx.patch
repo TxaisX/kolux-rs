@@ -1,0 +1,27 @@
+diff --git a/src/settings/NotificationSwitches.tsx b/src/settings/NotificationSwitches.tsx
+index 3873baf6..9e76af31 100644
+--- a/src/settings/NotificationSwitches.tsx
++++ b/src/settings/NotificationSwitches.tsx
+@@ -2,17 +2,20 @@
+ // switches (STAT-041, STAT-023) are KINDS in notifications.ts. A plain settings key; the importer
+ // task carries the old app's saved choice into it.
+ import { useSettings } from "./useSettings";
++import { masterOn, quietMinutes } from "../status/notifyMaster";
+ 
+ export const QUIET_FIELD = "quietMinutes";
+ 
+ export default function Notifications() {
+   const { settings, save } = useSettings();
+   if (!settings) return null;
+-  const minutes = typeof settings[QUIET_FIELD] === "number" ? (settings[QUIET_FIELD] as number) : 10;
++  // STAT-042 (T-124-b): a missing threshold reads as 10; greyed out with the master switch off.
++  const minutes = quietMinutes(settings, QUIET_FIELD);
++  const on = masterOn(settings);
+   return (
+     <section className="conn-card" aria-label="Notifications">
+       <label className="conn-switch">
+-        <input type="number" min={0} max={600} step={1} value={minutes} aria-label="Quiet alert minutes" onChange={(e) => save({ [QUIET_FIELD]: Math.max(0, Math.floor(Number(e.target.value)) || 0) })} />
++        <input type="number" disabled={!on} min={0} max={600} step={1} value={minutes} aria-label="Quiet alert minutes" onChange={(e) => save({ [QUIET_FIELD]: Math.max(0, Math.floor(Number(e.target.value)) || 0) })} />
+         <span>
+           Quiet alert after this many minutes
+           <small>One notification when a working agent prints nothing for that long. 0 turns it off.</small>
