@@ -354,8 +354,8 @@ Rules: a background host keeps sessions alive while the app is closed; scrollbac
   quit and relaunch; restored panes accept input straight away; the focused pane and an expanded
   pane come back as they were; terminals created from the command line or by automation are restored
   too.
-  (Kolux RS, T-067: not built. Tabs, splits, focus and agent sessions come back through the saved layout
-  and session resume; the background host, scrollback and running programs wait for Txais's call.)
+  (Kolux RS, DT-C27 as changed 2026-10-20: Txais chose that terminals keep running after quit. The
+  background host is built (T-075-b); the window routing its panes through it is T-184-b.)
 Acceptance:
   - [ ] Quit with a build running; reopen; the build output continues in the same pane.
   - [ ] Restored panes accept typing at once and the pane that had focus before quitting has it

@@ -1,7 +1,7 @@
 diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
 --- a/src-tauri/src/lib.rs
 +++ b/src-tauri/src/lib.rs
-@@ -362,6 +362,12 @@ pub fn run() {
+@@ -484,6 +484,12 @@
                      tray::window_shown(window.app_handle());
                  }
              }

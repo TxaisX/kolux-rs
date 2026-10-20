@@ -1859,7 +1859,10 @@ pub fn main(words: Vec<String>) -> i32 {
             let (port, token) = read_endpoint(&data_dir())?;
             call(port, &Request { id: id.clone(), token, command: parsed.command.clone(), cwd: cwd.clone(), args: Value::Object(args.clone()), pane: pane.clone(), cli: VERSION.into(), arrived: None })
         };
-        let env = if parsed.command == "app.open" { open(&send, &launch_app, OPEN_LIMIT)? } else { send()? };
+        // CLI-011 / T-075-b: a background terminal service this build cannot pair with is a clear
+        // refusal before anything starts; a compatible one is attached to by the window open starts.
+        let launch = || crate::pty::service::before_open(&data_dir()).map_err(|why| Fail { code: "service_incompatible", message: why, data: json!({}) }).and_then(|_| launch_app());
+        let env = if parsed.command == "app.open" { open(&send, &launch, OPEN_LIMIT)? } else { send()? };
         if parsed.command == "terminal.send" {
             // TERM-126: a prompt that did not submit within the wait is reported with exit status 1.
             submit_step(&env)?;
