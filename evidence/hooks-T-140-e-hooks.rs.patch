@@ -1,0 +1,13 @@
+diff --git a/src-tauri/src/hooks.rs b/src-tauri/src/hooks.rs
+index 7d588d76..92a9171f 100644
+--- a/src-tauri/src/hooks.rs
++++ b/src-tauri/src/hooks.rs
+@@ -577,7 +577,7 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
+                 crate::resume::on_stop(app, status.pane_key, status.stop.as_ref());
+                 agent_hooks::saved::note(app, &req.path, &req.body, &status);
+                 // AUTO-012: an automation run in this pane completes on its agent's real finish.
+-                crate::automations::follow(app, |s| crate::automations::on_status(s, status.terminal, status.pane_key, status.change.state, status.change.boundary, status.child.is_some(), crate::automations::now_ms()));
++                crate::automations::follow(app, |s| crate::automations::on_status(s, status.terminal, status.pane_key, status.change.state, status.change.boundary, status.child.is_some(), status.change.session.as_deref(), crate::automations::now_ms()));
+                 // AUTO-004 (T-085-e): an ordinary finish in a pane no automation opened starts the automations listening for it.
+                 crate::automations::on_finish(app, status.pane_key, status.terminal, status.change.state, status.change.boundary, status.child.is_some(), status.interrupted);
+                 let _ = app.emit(EVENT, status);
