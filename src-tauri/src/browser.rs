@@ -1551,6 +1551,8 @@ pub enum Act<'a> {
     /// T-242 (BROW-050): lay the page out again in its last pane spot (an emulated viewport came
     /// or went) and set its zoom (the emulated scale).
     Relayout(u32, Option<f64>),
+    /// T-251 (CLI-047): a cookie the page itself cannot set (HTTP-only) goes to the engine's store.
+    SetCookie(u32, tauri::webview::cookie::Cookie<'static>),
 }
 type Driver = dyn Fn(Act) -> Result<serde_json::Value, String> + Send + Sync;
 static DRIVER: OnceLock<Box<Driver>> = OnceLock::new();
@@ -1635,6 +1637,10 @@ fn drive(act: Act) -> Result<serde_json::Value, String> {
             }
             Ok(serde_json::Value::Null)
         }
+        Act::SetCookie(id, c) => {
+            view(app, id)?.set_cookie(c).map_err(err)?;
+            Ok(serde_json::Value::Null)
+        }
     }
 }
 
@@ -1679,6 +1685,12 @@ pub fn eval_json(id: u32, script: &str, wait: Duration) -> Result<serde_json::Va
 /// `kolux goto`; the answer is the address the page was sent to.
 pub fn navigate_to(id: u32, url: &str) -> Result<String, String> {
     driver()?(Act::Navigate(id, url)).map(|v| v.as_str().unwrap_or_default().to_string())
+}
+
+/// `kolux cookie set --httpOnly`: the engine's cookie store takes it (blocking; never called from
+/// the main thread, the command line's requests run on their own).
+pub fn set_cookie(id: u32, c: tauri::webview::cookie::Cookie<'static>) -> Result<(), String> {
+    driver()?(Act::SetCookie(id, c)).map(|_| ())
 }
 
 /// `kolux back|forward|reload`.

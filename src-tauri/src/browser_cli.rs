@@ -77,6 +77,13 @@ pub const COMMANDS: &[Command] = &[
     ("storage get", "browser.storage-get", &["area", "key", "worktree", "page"]),
     ("storage set", "browser.storage-set", &["area", "key", "value", "worktree", "page"]),
     ("storage clear", "browser.storage-clear", &["area", "worktree", "page"]),
+    // T-251 (CLI-047 Compat): the area as a word, `storage local set --key a --value=`.
+    ("storage local get", "browser.storage-local-get", &["key", "worktree", "page"]),
+    ("storage local set", "browser.storage-local-set", &["key", "value", "worktree", "page"]),
+    ("storage local clear", "browser.storage-local-clear", &["worktree", "page"]),
+    ("storage session get", "browser.storage-session-get", &["key", "worktree", "page"]),
+    ("storage session set", "browser.storage-session-set", &["key", "value", "worktree", "page"]),
+    ("storage session clear", "browser.storage-session-clear", &["worktree", "page"]),
     // T-242 (BROW-049): interception, capture and the console and network logs.
     ("intercept enable", "browser.intercept-enable", &["patterns", "worktree", "page"]),
     ("intercept disable", "browser.intercept-disable", &["worktree", "page"]),
@@ -170,10 +177,28 @@ pub fn is_browser(command: &str) -> bool {
     COMMANDS.iter().any(|c| c.1 == command)
 }
 
+/// T-251 (CLI-047): `storage local|session get|set|clear` is `storage get|set|clear --area
+/// local|session`; the area and the plain command behind such a wire name.
+fn storage_word(command: &str) -> Option<(&str, String)> {
+    let (area, op) = command.strip_prefix("browser.storage-")?.split_once('-')?;
+    STORAGE_AREAS.contains(&area).then(|| (area, format!("browser.storage-{op}")))
+}
+
+/// T-251 (CLI-047): `--expires` in unix seconds; 0 keeps the cookie for the browsing session.
+fn expires_at(v: Option<&str>) -> Option<i64> {
+    v.and_then(|s| s.trim().parse::<f64>().ok()).filter(|n| n.is_finite() && *n > 0.0).map(|n| n as i64)
+}
+
 /// What a browser command needs, checked before the app is asked (the parse step's arm).
 pub fn check(command: &str, flags: &Map<String, Value>) -> Result<Map<String, Value>, Fail> {
+    if let Some((area, base)) = storage_word(command) {
+        let mut f = flags.clone();
+        f.insert("area".into(), json!(area));
+        return check(&base, &f);
+    }
     let text = |k: &str| flags.get(k).and_then(Value::as_str).map(str::trim);
-    if let Some(k) = flags.keys().find(|k| !["text", "input", "value", "expression", "command", "fn"].contains(&k.as_str()) && text(k).is_some_and(str::is_empty)) {
+    // CLI-047: a cookie value, a storage value and a password may be empty; a name or key may not.
+    if let Some(k) = flags.keys().find(|k| !["text", "input", "value", "expression", "command", "fn", "pass"].contains(&k.as_str()) && text(k).is_some_and(str::is_empty)) {
         return Err(args(format!("--{k} cannot be empty")));
     }
     let need = |k: &str| text(k).filter(|v| !v.is_empty()).ok_or_else(|| args(format!("--{k} is required")));
@@ -229,12 +254,13 @@ pub fn check(command: &str, flags: &Map<String, Value>) -> Result<Map<String, Va
         }
         "browser.scroll" => {
             need("direction")?;
-            one_of("direction", &["up", "down"])?;
+            one_of("direction", &["up", "down", "left", "right"])?;
             number("amount")?;
         }
         c if ELEMENT.contains(&c) => {
             need("element")?;
         }
+        "browser.screenshot" | "browser.full-screenshot" => one_of("format", &["png", "jpeg"])?,
         "browser.fill" | "browser.select" => {
             need("element")?;
             if text("value").is_none() {
@@ -322,8 +348,11 @@ pub fn check(command: &str, flags: &Map<String, Value>) -> Result<Map<String, Va
             if !flags.contains_key("value") {
                 return Err(args("--value is required"));
             }
-            if flags.contains_key("httpOnly") {
-                return Err(Fail::new("unsupported", "--httpOnly cookies are set by the engine's cookie manager, which this build does not reach; without the flag the page sets the cookie itself"));
+            // CLI-047: an expiry is unix seconds, a finite number from 0 up.
+            if let Some(e) = text("expires") {
+                if !e.parse::<f64>().is_ok_and(|n| n.is_finite() && n >= 0.0) {
+                    return Err(args(format!("--expires takes unix seconds, a finite number from 0 up, not {e}")));
+                }
             }
             one_of("sameSite", &["Strict", "Lax", "None"])?;
         }
@@ -371,7 +400,9 @@ pub fn check(command: &str, flags: &Map<String, Value>) -> Result<Map<String, Va
         }
         "browser.set-credentials" => {
             need("user")?;
-            need("pass")?;
+            if !flags.contains_key("pass") {
+                return Err(args("--pass is required"));
+            }
         }
         "browser.set-media" => {
             if !flags.contains_key("color-scheme") && !flags.contains_key("reduced-motion") {
@@ -530,10 +561,37 @@ fn wait(id: u32, a: &Value) -> Result<Value, Fail> {
             return Ok(json!({ "page": id, "satisfied": true, "asked": asked, "url": answer["url"] }));
         }
         if Instant::now() >= until {
-            return Err(Fail { code: "timeout", message: format!("the condition did not hold within {} ms", limit.as_millis()), data: json!({ "page": id, "asked": asked, "url": answer["url"] }) });
+            return Err(timed_out(id, asked, &answer["url"], limit));
         }
         std::thread::sleep(WAIT_STEP);
     }
+}
+
+/// CLI-046: a wait that runs out says the condition did not hold. Kolux answered, so it is never
+/// told as Kolux being down or unreachable.
+fn timed_out(id: u32, asked: u32, url: &Value, limit: Duration) -> Fail {
+    Fail { code: "timeout", message: format!("the condition did not hold within {} ms", limit.as_millis()), data: json!({ "page": id, "asked": asked, "url": url }) }
+}
+
+/// CLI-047: the HTTP-only cookie `cookie set --httpOnly` asks for, on the open page's host unless
+/// `--domain` names it or a parent of it (never another site).
+fn engine_cookie(id: u32, a: &Value, page_url: &str) -> Result<super::cookies::Entry, Fail> {
+    use tauri::webview::cookie::SameSite;
+    let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let on = |k: &str| a.get(k).is_some_and(|v| !matches!(v, Value::Null | Value::Bool(false)));
+    let host = tauri::Url::parse(page_url).ok().and_then(|u| u.host_str().map(str::to_ascii_lowercase)).ok_or_else(|| args(format!("browser tab {id} shows no site ({page_url}), so there is no site to set the cookie on")))?;
+    let domain = text("domain").map(|d| d.to_ascii_lowercase()).unwrap_or_else(|| host.clone());
+    let bare = domain.trim_start_matches('.');
+    if bare.is_empty() || !(host == bare || host.ends_with(&format!(".{bare}"))) {
+        return Err(args(format!("--domain {domain} is not the site of browser tab {id} ({host}); cookies are set on the open page's site")));
+    }
+    let same_site = match text("sameSite").as_deref() {
+        Some("Strict") => Some(SameSite::Strict),
+        Some("Lax") => Some(SameSite::Lax),
+        Some("None") => Some(SameSite::None),
+        _ => None,
+    };
+    Ok(super::cookies::Entry { name: text("name").unwrap_or_default(), value: a["value"].as_str().unwrap_or_default().to_string(), domain, path: text("path").unwrap_or_else(|| "/".into()), secure: on("secure"), http_only: true, same_site, expires: expires_at(a["expires"].as_str()) })
 }
 
 /// `kolux exec --command "<helper command>"`: the helper is Kolux itself, so the command is one
@@ -746,6 +804,12 @@ fn clipboard(cmd: &str, text: Option<&str>) -> Result<Value, Fail> {
 /// The app side of every browser command (the dispatch arm). `worktree` is the folder the command
 /// is for: `--worktree` resolved, or the caller's own worktree, or none.
 pub fn run(req: &Request, worktree: Option<&str>) -> Result<Value, Fail> {
+    if let Some((area, base)) = storage_word(&req.command) {
+        let mut r = req.clone();
+        r.args["area"] = json!(area);
+        r.command = base;
+        return run(&r, worktree);
+    }
     let a = &req.args;
     let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     let on = |k: &str| a.get(k).is_some_and(|v| !matches!(v, Value::Null | Value::Bool(false)));
@@ -890,6 +954,13 @@ pub fn run(req: &Request, worktree: Option<&str>) -> Result<Value, Fail> {
                 if !same_origin(&u, &page_url) {
                     return Err(args(format!("--url {u} is not the site of browser tab {id} ({page_url}); cookies are read and set on the open page")));
                 }
+            }
+            if cmd == "cookie-set" && on("httpOnly") {
+                // CLI-047: document.cookie cannot set an HTTP-only cookie; the engine's store can.
+                let page_url = tabs().into_iter().find(|t| t.id == id).map(|t| t.url).unwrap_or_default();
+                let e = engine_cookie(id, a, &page_url)?;
+                super::set_cookie(id, super::cookies::cookie_of(&e)).map_err(|m| Fail::new("failed", m))?;
+                return Ok(json!({ "page": id, "ok": true, "summary": format!("HTTP-only cookie {} set for {}", e.name, e.domain) }));
             }
             let mut answer = page(id, cmd, a.clone(), EVAL_WAIT)?;
             answer["page"] = json!(id);
@@ -1094,6 +1165,9 @@ fn tabs_cmd(req: &Request, worktree: Option<&str>, page_no: Option<u32>) -> Resu
 
 /// The readable form of a browser answer.
 pub fn text(command: &str, r: &Value) -> Option<String> {
+    if let Some((_, base)) = storage_word(command) {
+        return text(&base, r);
+    }
     if !is_browser(command) {
         return None;
     }
@@ -1200,7 +1274,7 @@ if(!window.__kx){
  K.run=function(q){ try{ const a=q.args||{}; switch(q.cmd){
   case 'snapshot': return K.snapshot();
   case 'eval': { const v=(0,eval)(a.expression); return {ok:true,value:v===undefined?null:v}; }
-  case 'scroll': { const n=Number(a.amount||500); window.scrollBy(0,a.direction==='up'?-n:n); return {ok:true,summary:'scrolled '+a.direction+' '+n+' px',scrollY:window.scrollY}; }
+  case 'scroll': { const n=Number(a.amount||500), d=a.direction; window.scrollBy(d==='left'?-n:d==='right'?n:0, d==='up'?-n:d==='down'?n:0); return {ok:true,summary:'scrolled '+d+' '+n+' px',scrollX:window.scrollX,scrollY:window.scrollY}; }
   case 'click': case 'dblclick': case 'check': case 'uncheck': case 'focus': case 'clear': case 'select-all': case 'hover': case 'scrollintoview': return {ok:true,summary:act(q.cmd,el(a.element))};
   case 'fill': return {ok:true,summary:act('fill',el(a.element),a.value)};
   case 'type': insert(a.input==null?'':String(a.input)); return {ok:true};
@@ -1219,7 +1293,7 @@ if(!window.__kx){
   case 'mouse-down': case 'mouse-up': { const b={left:0,middle:1,right:2}[a.button||'left']; ev(at(K.mouse.x,K.mouse.y),q.cmd==='mouse-down'?'mousedown':'mouseup',{button:b,clientX:K.mouse.x,clientY:K.mouse.y}); return {ok:true,summary:q.cmd.replace('-',' ')+' ('+(a.button||'left')+')'}; }
   case 'mouse-wheel': { const dx=Number(a.dx||0), dy=Number(a.dy||0); const e=at(K.mouse.x,K.mouse.y); e.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaX:dx,deltaY:dy,clientX:K.mouse.x,clientY:K.mouse.y})); window.scrollBy(dx,dy); return {ok:true,summary:'wheel '+dx+','+dy}; }
   case 'cookie-get': { const all=document.cookie?document.cookie.split('; ').map(c=>{ const i=c.indexOf('='); return {name:i<0?c:c.slice(0,i),value:i<0?'':decodeURIComponent(c.slice(i+1))}; }):[]; const list=a.name?all.filter(c=>c.name===a.name):all; return {ok:true,cookies:list,summary:list.length+' cookie(s) the page can read'}; }
-  case 'cookie-set': { let s=a.name+'='+encodeURIComponent(a.value==null?'':String(a.value))+'; path='+(a.path||'/'); if(a.domain) s+='; domain='+a.domain; if(a.expires){ const n=Number(a.expires); s+='; expires='+new Date(isNaN(n)?a.expires:n*1000).toUTCString(); } if(a.secure) s+='; secure'; if(a.sameSite) s+='; samesite='+a.sameSite; document.cookie=s; return {ok:true,summary:'cookie '+a.name+' set for '+location.host}; }
+  case 'cookie-set': { let s=a.name+'='+encodeURIComponent(a.value==null?'':String(a.value))+'; path='+(a.path||'/'); if(a.domain) s+='; domain='+a.domain; if(Number(a.expires)>0) s+='; expires='+new Date(Number(a.expires)*1000).toUTCString(); if(a.secure) s+='; secure'; if(a.sameSite) s+='; samesite='+a.sameSite; document.cookie=s; return {ok:true,summary:'cookie '+a.name+' set for '+location.host}; }
   case 'cookie-delete': { let s=a.name+'=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path='+(a.path||'/'); if(a.domain) s+='; domain='+a.domain; document.cookie=s; return {ok:true,summary:'cookie '+a.name+' deleted for '+location.host}; }
   case 'storage-get': { const st=a.area==='session'?sessionStorage:localStorage; if(a.key!=null&&a.key!=='') return {ok:true,value:st.getItem(String(a.key))}; const o={}; for(let i=0;i<st.length;i++){ const k=st.key(i); o[k]=st.getItem(k); } return {ok:true,value:o}; }
   case 'storage-set': { const st=a.area==='session'?sessionStorage:localStorage; st.setItem(String(a.key),a.value==null?'':String(a.value)); return {ok:true,summary:(a.area||'local')+' storage: '+a.key+' set'}; }
@@ -1275,7 +1349,8 @@ mod tests {
         assert!(check("browser.mouse-move", &flags(&[("x", "ten"), ("y", "2")])).unwrap_err().message.contains("--x takes a number"));
         assert!(check("browser.mouse-down", &flags(&[("button", "back")])).unwrap_err().message.contains("left|right|middle"));
         assert!(check("browser.find", &flags(&[("locator", "role"), ("value", "button"), ("action", "poke")])).unwrap_err().message.contains("is not one of"));
-        assert_eq!(check("browser.scroll", &flags(&[("direction", "left")])).unwrap_err().message, "--direction left is not one of up|down");
+        assert!(check("browser.scroll", &flags(&[("direction", "left")])).is_ok());
+        assert_eq!(check("browser.scroll", &flags(&[("direction", "sideways")])).unwrap_err().message, "--direction sideways is not one of up|down|left|right");
         assert_eq!(check("browser.snapshot", &flags(&[("page", "two")])).unwrap_err().message, "--page takes a tab number, not two");
         assert_eq!(check("browser.snapshot", &flags(&[("worktree", " ")])).unwrap_err().message, "--worktree cannot be empty");
         assert_eq!(check("browser.exec", &flags(&[])).unwrap_err().message, "--command is required");
@@ -1487,7 +1562,7 @@ mod tests {
         assert_eq!(check("browser.cookie-set", &flags(&[("name", "a")])).unwrap_err().message, "--value is required");
         let mut f = flags(&[("name", "a"), ("value", "1")]);
         f.insert("httpOnly".into(), json!(true));
-        assert_eq!(check("browser.cookie-set", &f).unwrap_err().code, "unsupported");
+        assert!(check("browser.cookie-set", &f).is_ok());
         assert!(check("browser.cookie-set", &flags(&[("name", "a"), ("value", "1"), ("sameSite", "loose")])).unwrap_err().message.contains("Strict|Lax|None"));
         assert!(check("browser.cookie-get", &flags(&[])).is_ok());
         assert_eq!(check("browser.cookie-delete", &flags(&[])).unwrap_err().message, "--name is required");
@@ -1511,12 +1586,65 @@ mod tests {
             let cmd = short(wire);
             // T-242: the log, emulation and dialog commands reach the page through the shared
             // 'log' and 'dialog' cases and the __kxEmu state; clipboard never reaches the page.
-            let app_side = ["tab-", "profiles-", "intercept-", "capture-", "set-", "clipboard-", "dialog-"].iter().any(|p| cmd.starts_with(p));
+            let app_side = ["tab-", "profiles-", "intercept-", "capture-", "set-", "clipboard-", "dialog-", "storage-local-", "storage-session-"].iter().any(|p| cmd.starts_with(p));
             if app_side || ["goto", "back", "forward", "reload", "wait", "exec", "screenshot", "full-screenshot", "pdf", "download", "console", "network", "viewport", "geolocation"].contains(&cmd) {
                 continue;
             }
             assert!(DRIVER.contains(&format!("case '{cmd}'")), "the driver answers {cmd}");
         }
         assert!(DRIVER.contains("case 'check-wait'"));
+    }
+
+    fn parsed(line: &str) -> Result<crate::cli::Parsed, Fail> {
+        crate::cli::parse(&line.split(' ').map(str::to_string).collect::<Vec<_>>()).1.map(|p| p.expect("not help"))
+    }
+
+    #[test]
+    fn cli047_storage_area_words_keep_an_empty_value_and_reach_the_plain_commands() {
+        let p = parsed("storage local set --key a --value=").unwrap();
+        assert_eq!((p.command.as_str(), &p.args["area"], &p.args["key"], &p.args["value"]), ("browser.storage-local-set", &json!("local"), &json!("a"), &json!("")));
+        assert_eq!(parsed("storage session get").unwrap().args["area"], "session");
+        assert_eq!(parsed("storage session clear").unwrap().command, "browser.storage-session-clear");
+        assert!(parsed("storage local set --key a").unwrap_err().message.contains("--value is required"));
+        assert!(parsed("storage local set --key= --value=b").is_err());
+        assert!(parsed("storage local clear --area session").is_err(), "the word names the area");
+        assert_eq!(storage_word("browser.storage-local-clear"), Some(("local", "browser.storage-clear".to_string())));
+        assert_eq!(storage_word("browser.storage-clear"), None);
+        assert_eq!(storage_word("browser.storage-cloud-get"), None);
+        assert_eq!(text("browser.storage-session-get", &json!({ "value": "v" })).unwrap(), "v");
+    }
+
+    #[test]
+    fn cli047_cookie_flags_as_the_card_types_them_and_a_finite_expiry_from_zero() {
+        let p = parsed("cookie set --name a --value b --domain d --path p --secure --httpOnly --sameSite Lax --expires 0").unwrap();
+        assert_eq!((p.command.as_str(), &p.args["httpOnly"], &p.args["expires"]), ("browser.cookie-set", &json!(true), &json!("0")));
+        for bad in ["-1", "inf", "NaN", "soon"] {
+            assert!(check("browser.cookie-set", &flags(&[("name", "a"), ("value", ""), ("expires", bad)])).unwrap_err().message.contains("finite number from 0 up"), "{bad}");
+        }
+        assert!(check("browser.cookie-set", &flags(&[("name", "a"), ("value", ""), ("expires", "1700000000")])).is_ok());
+        assert_eq!((expires_at(Some("0")), expires_at(Some("1700000000.9")), expires_at(None)), (None, Some(1_700_000_000), None));
+        assert!(DRIVER.contains("if(Number(a.expires)>0)"));
+        let a = json!({ "name": "sid", "value": "", "secure": true, "httpOnly": true, "sameSite": "Strict", "expires": "1700000000" });
+        let e = engine_cookie(3, &a, "https://app.example.test/x").unwrap();
+        assert_eq!((e.domain.as_str(), e.path.as_str(), e.value.as_str(), e.secure, e.http_only, e.expires), ("app.example.test", "/", "", true, true, Some(1_700_000_000)));
+        assert_eq!(e.same_site, Some(tauri::webview::cookie::SameSite::Strict));
+        assert_eq!(engine_cookie(3, &json!({ "name": "s", "value": "1", "domain": ".example.test" }), "https://app.example.test/").unwrap().domain, ".example.test");
+        assert!(engine_cookie(3, &json!({ "name": "s", "value": "1", "domain": "other.test" }), "https://app.example.test/").unwrap_err().message.contains("is not the site of browser tab 3"));
+        assert!(engine_cookie(3, &json!({ "name": "s", "value": "1", "domain": "ample.test" }), "https://app.example.test/").is_err());
+        assert!(engine_cookie(3, &json!({ "name": "s", "value": "1" }), "about:blank").is_err());
+    }
+
+    #[test]
+    fn cli046_cli047_sideways_scroll_empty_password_capture_formats_and_an_honest_wait_timeout() {
+        assert!(check("browser.scroll", &flags(&[("direction", "right"), ("amount", "200")])).is_ok());
+        assert!(DRIVER.contains("d==='left'?-n:d==='right'?n:0"));
+        assert!(parsed("set credentials --user me --pass=").is_ok());
+        assert_eq!(parsed("set credentials --user me").unwrap_err().message, "--pass is required");
+        assert!(parsed("set credentials --user= --pass=x").is_err());
+        assert!(check("browser.screenshot", &flags(&[("format", "jpeg")])).is_ok());
+        assert!(check("browser.full-screenshot", &flags(&[("format", "gif")])).unwrap_err().message.contains("png|jpeg"));
+        let f = timed_out(2, 20, &json!("https://a.test/"), Duration::from_millis(2000));
+        assert_eq!((f.code, f.message.as_str()), ("timeout", "the condition did not hold within 2000 ms"));
+        assert!(!f.message.contains("Kolux") && !f.message.contains("running"));
     }
 }

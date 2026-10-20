@@ -1,0 +1,26 @@
+diff --git a/src-tauri/src/local_cli.rs b/src-tauri/src/local_cli.rs
+index d8666c5c..9154ebc5 100644
+--- a/src-tauri/src/local_cli.rs
++++ b/src-tauri/src/local_cli.rs
+@@ -138,7 +138,7 @@ const SUMMARIES: &[(&str, &str)] = &[
+     ("reload", "Reload the browser tab's page."),
+     ("wait", "Wait for an element, text, address, load state or script in the page."),
+     ("eval", "Run a JavaScript expression in the page and print its value."),
+-    ("scroll", "Scroll the page up or down."),
++    ("scroll", "Scroll the page up, down, left or right."),
+     ("snapshot", "List the page's elements with references the other commands take."),
+     ("screenshot", "Capture the visible page (refused in this build)."),
+     ("full-screenshot", "Capture the whole page (refused in this build)."),
+@@ -188,6 +188,12 @@ const SUMMARIES: &[(&str, &str)] = &[
+     ("storage get", "Read local or session storage of the open page."),
+     ("storage set", "Write a key in local or session storage of the open page."),
+     ("storage clear", "Clear local or session storage of the open page (destructive)."),
++    ("storage local get", "Read local storage of the open page."),
++    ("storage local set", "Write a key in local storage of the open page (the value may be empty)."),
++    ("storage local clear", "Clear local storage of the open page (destructive)."),
++    ("storage session get", "Read session storage of the open page."),
++    ("storage session set", "Write a key in session storage of the open page (the value may be empty)."),
++    ("storage session clear", "Clear session storage of the open page (destructive)."),
+     ("intercept enable", "Hold the open page's requests that match the given patterns."),
+     ("intercept disable", "Stop holding requests and release the held ones."),
+     ("intercept list", "List the patterns the open page holds requests for."),
