@@ -10,7 +10,7 @@ export function decodeOutput(base64: string): Uint8Array {
   return bytes;
 }
 
-export type OutputEvent = { id: number; data: string; pane?: number | null };
+export type OutputEvent = { id: number; data: string; pane?: number | null; generation?: number };
 
 /**
  * TERM-098: whether an output chunk belongs to this pane. By terminal id once known; before the

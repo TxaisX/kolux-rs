@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { inTerminal, POLICIES, POLICY_FIELD, readPolicy } from "../keys/terminalPolicy";
 import { useSettings } from "./useSettings";
 import { useKeymap } from "../keys/KeymapContext";
+import { useNativeChords } from "../chrome/useChrome";
 import { editChords, recordKey, recording, removeChord } from "../keys/record";
 import { Segmented } from "./GeneralPage";
 import { AREAS, FILTERS, MAX_QUERY, filterRows, shortcutRows, type Filter, type Row } from "./shortcutRows";
@@ -22,7 +23,8 @@ export default function ShortcutsPage() {
   const [fileNote, setFileNote] = useState<string | null>(null);
   const status = useSettings();
   const policy = readPolicy(status.settings);
-  const rows = useMemo(() => shortcutRows(keymap), [keymap]);
+  const native = useNativeChords();
+  const rows = useMemo(() => shortcutRows(keymap, native), [keymap, native]);
   const shown = filterRows(rows, filter, query);
 
   // While recording, every key press belongs to the recorder: the window's shortcuts stand

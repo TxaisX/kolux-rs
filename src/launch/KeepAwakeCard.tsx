@@ -3,7 +3,7 @@
 // the same `keepAwake` key; an older plain `true` reads as Agent.
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
-import { hooksOn } from "../settings/AgentsPage";
+import { hooksOn } from "../onboarding/hooksOn";
 
 export const AWAKE_KEY = "keepAwake";
 export const AWAKE_MODES = ["off", "agent", "on"] as const;

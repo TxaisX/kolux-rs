@@ -2,7 +2,8 @@
 // its badges (Modified, Unassigned, Disabled, Conflicts) and, for a clash, a hint on fixing it;
 // then the filters and the search. Pure, so it is tested without a browser.
 import { defaultsFor, type Platform, type Scope } from "../keys/actions";
-import { labelParts, type Keymap } from "../keys/keymap";
+import { labelParts, parseChord, type Keymap } from "../keys/keymap";
+import type { NativeChord } from "../chrome/chromeItems";
 
 export const AREAS: Record<Scope, string> = { global: "General", tabs: "Tabs", terminal: "Terminal", browser: "Browser", editor: "Editor", explorer: "File explorer", settings: "Settings" };
 export type Badge = "Modified" | "Unassigned" | "Disabled" | "Conflicts";
@@ -16,7 +17,26 @@ export type Row = { id: string; title: string; area: string; chords: string[]; d
 const compact = (s: string) => s.toLowerCase().replace(/[\s+]/g, "");
 const names = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
 
-export function shortcutRows(map: Keymap): Row[] {
+function clashHint(clash: { chord: string; ids: string[] } | undefined, menu: NativeChord[], self: string, title: (id: string) => string, label: (c: string) => string): string {
+  const others = [...(clash ? clash.ids.filter((x) => x !== self).map(title) : []), ...menu.map((m) => m.name + " in the menu")];
+  return `${label(clash?.chord ?? menu[0].chord)} is also used by ${names(others)} here. Give one of them other keys.`;
+}
+
+/** SET-010: the native menu's chords this command is bound to. Only global commands compete with the
+ *  system menu, which sees every key before a smaller scope does. */
+function nativeHits(chords: string[], native: readonly NativeChord[]): NativeChord[] {
+  if (native.length === 0) return [];
+  // Only macOS reports native chords, and there Mod is Cmd, so Mod+Q and Cmd+Q are the same key.
+  const same = (a: string, b: string) => {
+    const x = parseChord(a);
+    const y = parseChord(b);
+    return !("error" in x) && !("error" in y) && (x.mod || x.meta) === (y.mod || y.meta) && x.ctrl === y.ctrl && x.alt === y.alt && x.shift === y.shift && x.key === y.key;
+  };
+  return native.filter((n) => chords.some((c) => same(c, n.chord)));
+}
+
+/** `native`: the chords the system menu owns (menu_sync reports them; none outside macOS). */
+export function shortcutRows(map: Keymap, native: readonly NativeChord[] = []): Row[] {
   const p = map.platform;
   const title = (id: string) => map.bindings.get(id)?.action.title ?? id;
   // T-543-b: Reopen closed tab does nothing until T-164-b wires it, so its row is not offered for a key.
@@ -25,11 +45,12 @@ export function shortcutRows(map: Keymap): Row[] {
     const disabled = custom && chords.length === 0 && defaults.length > 0;
     const modified = custom && chords.join() !== defaults.join();
     const clash = map.clashes.find((c) => c.ids.includes(action.id));
+    const menu = action.scope === "global" ? nativeHits(chords, native) : [];
     const badges: Badge[] = [];
     if (disabled) badges.push("Disabled");
     else if (chords.length === 0) badges.push("Unassigned");
     else if (modified) badges.push("Modified");
-    if (clash) badges.push("Conflicts");
+    if (clash || menu.length > 0) badges.push("Conflicts");
     const label = (c: string, on: Platform = p) => labelParts(c, on).join("+");
     const every = [...chords, ...action.win32, ...(action.darwin ?? [])];
     const find = [action.title, AREAS[action.scope], action.id, ...(action.keywords ?? [])].map((s) => s.toLowerCase());
@@ -44,7 +65,7 @@ export function shortcutRows(map: Keymap): Row[] {
       labels: chords.map((c) => label(c)),
       modified,
       badges,
-      hint: clash && `${label(clash.chord)} is also used by ${names(clash.ids.filter((x) => x !== action.id).map(title))} here. Give one of them other keys.`,
+      hint: clash || menu.length > 0 ? clashHint(clash, menu, action.id, title, label) : undefined,
       find: [...find, ...keys.map((k) => "\u0000" + k)],
     };
   });

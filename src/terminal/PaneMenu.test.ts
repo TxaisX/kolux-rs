@@ -88,12 +88,13 @@ test("TERM-035: an item's action is what the menu offers for it", () => {
   expect(ran).toEqual(["split right", "split down", "equalize", "close"]);
 });
 
-test("FIX-1: clicking an item (the button's onClick path) closes the menu first, then runs the action; Close Pane included", () => {
+test("FIX-1: chooseItem dismisses the menu first, then runs the item's action (Close Pane included); the menu renders one button per item", () => {
   const order: string[] = [];
   const items = paneMenuItems({ ...full, onSplit: (d) => order.push(`split ${d}`), onEqualize: () => order.push("equalize"), onClose: () => order.push("close") });
   for (const n of ["Split Right", "Equalize", "Close Pane"]) chooseItem(items.find((i) => i.name === n)!, () => order.push("dismiss"));
   expect(order).toEqual(["dismiss", "split right", "dismiss", "equalize", "dismiss", "close"]);
-  // The rendered button is wired to it: the menu markup holds one button per item.
+  // Markup only: one button per item. That a button's onClick calls chooseItem is read from PaneMenu.tsx, not proven here
+  // (server rendering carries no handlers); the live proof clicks Close Pane (evidence/core-FIX-1.txt step 3).
   const out = renderToString(createElement(PaneMenu, { style: {}, items, onDismiss: noop }));
   expect(out.split("<button").length - 1).toBe(items.length);
 });

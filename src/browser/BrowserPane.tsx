@@ -12,6 +12,7 @@ import { openerRefocus, windowHasFocus } from "./chord";
 import { backgroundBehind } from "./colour";
 import "./browser.css";
 import { can as canGo, fresh, started, type Pending } from "./history";
+import { type Diagnosis, type Event as LoadEvent, fresh as freshHealth, type Health, type Overlay, overlayModel, overlayOf, PROBE_MS, type Probe, step } from "./loadState";
 import { nextZoom, zoomPercent } from "./zoom";
 import { iconAt, iconFound, type SiteIcon } from "./site";
 import { zoomFactor } from "../settings/zoom";
@@ -24,6 +25,40 @@ type Props = { id: number; url?: string; title?: string; hidden?: boolean; focus
 /** GIT-036: asks the window for a new browser tab at `url` in the focused split. */
 export const OPEN_IN_BROWSER = "kolux-open-in-browser";
 export const openInBrowser = (url: string) => window.dispatchEvent(new CustomEvent(OPEN_IN_BROWSER, { detail: url }));
+
+type OverlayProps = { overlay: NonNullable<Overlay>; diag: Diagnosis | null; busy: boolean; connecting: boolean; onRetry: () => void; onHttps: (url: string) => void; onOpen: (url: string) => void };
+
+/** T-074 (BROW-008, BROW-009): what the user sees over a page that failed or crashed. */
+function LoadOverlay({ overlay, diag, busy, connecting, onRetry, onHttps, onOpen }: OverlayProps) {
+  const m = overlayModel(overlay, diag);
+  return (
+    <div className="load-overlay" role="alert" data-kind={overlay.kind}>
+      <h2>{m.title}</h2>
+      <p>{m.text}</p>
+      {m.advice && <p className="advice">{m.advice}</p>}
+      <div className="btn-row">
+        <button className="btn" data-go="retry" disabled={busy} onClick={onRetry}>
+          Retry
+        </button>
+        {m.switchHttps && (
+          <button className="btn" data-go="https" disabled={busy} onClick={() => onHttps(m.switchHttps!)}>
+            Switch to HTTPS
+          </button>
+        )}
+        {m.openExternally && (
+          <button className="btn" data-go="external" disabled={busy} onClick={() => onOpen(overlay.url)}>
+            Open Externally
+          </button>
+        )}
+      </div>
+      {connecting && (
+        <p className="connecting" role="status">
+          Connecting…
+        </p>
+      )}
+    </div>
+  );
+}
 
 function spot(el: HTMLElement) {
   // SET-019: the window places the page in unzoomed pixels, so a zoomed rect is scaled back.
@@ -59,6 +94,45 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const findBox = useRef<HTMLInputElement>(null);
   const focusMe = useRef(onFocus);
   focusMe.current = onFocus;
+  // T-074 (BROW-008, BROW-009): the page's health. The engine says only started / finished, so the
+  // pane probes the page (browser_probe) and feeds loadState's machine; the overlay it decides on
+  // covers the pane body while the page itself is hidden under it (a child web view cannot be
+  // covered by the app's own elements). `diag` is the back end's look at why the address failed.
+  const health = useRef<Health>(freshHealth());
+  const [overlay, setOverlay] = useState<Overlay>(null);
+  const [diag, setDiag] = useState<Diagnosis | null>(null);
+  // While an overlay action runs all its buttons are disabled together; the connecting indicator
+  // waits a moment so a quick retry does not flicker.
+  const [busy, setBusy] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const feed = (e: LoadEvent) => {
+    const [h, action] = step(health.current, e);
+    health.current = h;
+    setOverlay(overlayOf(h));
+    if (e.t === "started") {
+      setBusy(false);
+      setDiag(null);
+    }
+    if (action === "reload") invoke("browser_go", { id, what: "reload" }).catch(() => {});
+    if (action === "overlay") {
+      setBusy(false);
+      if (h.phase === "failed") {
+        const { url } = h;
+        invoke<Diagnosis>("browser_diagnose", { url })
+          .then((d) => health.current.url === url && setDiag(d))
+          .catch(() => {});
+      }
+    }
+  };
+  const retry = () => {
+    setBusy(true);
+    feed({ t: "retry" });
+  };
+  useEffect(() => {
+    if (!busy) return setConnecting(false);
+    const t = window.setTimeout(() => setConnecting(true), 300);
+    return () => window.clearTimeout(t);
+  }, [busy]);
 
   useEffect(() => {
     let alive = true;
@@ -67,6 +141,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
       unlisteners.push(
         await listen<{ id: number; event: string; url: string }>("browser-load", (e) => {
           if (e.payload.id !== id) return;
+          feed(e.payload.event === "started" ? { t: "started", url: e.payload.url } : { t: "finished", url: e.payload.url });
           if (e.payload.event !== "started") {
             hist.current.busy = false;
             // BROW-012: the level holds through reloads and other sites; set it again in case the
@@ -134,7 +209,8 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     if (!open) return;
     const el = host.current!;
     const send = (theme = false) => {
-      const shown = !hidden && el.clientWidth > 0 && el.clientHeight > 0;
+      // T-074: while the recovery overlay shows, the page is hidden so the overlay can cover it.
+      const shown = !hidden && !overlay && el.clientWidth > 0 && el.clientHeight > 0;
       const background = theme ? backgroundBehind(el) : undefined;
       invoke("browser_bounds", { id, spot: shown ? spot(el) : { x: 0, y: 0, w: 0, h: 0 }, shown, background }).catch(() => {});
     };
@@ -158,15 +234,48 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
       themed.disconnect();
       window.removeEventListener("resize", resized);
     };
-  }, [id, open, hidden]);
+  }, [id, open, hidden, overlay]);
+
+  // T-074: the probe, about four times a second while the page is on screen (BROW-008), paused
+  // while the tab is hidden or the overlay covers the page. One probe in flight at a time.
+  useEffect(() => {
+    if (!open || hidden || overlay) return;
+    let inflight = false;
+    const t = window.setInterval(async () => {
+      if (inflight) return;
+      inflight = true;
+      try {
+        feed({ t: "probe", answer: await invoke<Probe>("browser_probe", { id }) });
+      } catch {
+        feed({ t: "probe", answer: "no-answer" });
+      } finally {
+        inflight = false;
+      }
+    }, PROBE_MS);
+    return () => window.clearInterval(t);
+  }, [id, open, hidden, overlay]);
 
   // BROW-003: Enter reads the bar; an invalid address is said in the notice and the page stays.
+  const navigateTo = (url: string) => {
+    setNote(null);
+    pending.current = null;
+    feed({ t: "navigate" }); // a new address gets its own recovery allowance (BROW-009)
+    invoke("browser_navigate", { id, url }).catch((err) => setNote(String(err)));
+  };
   const go = () => {
     const r = resolveAddress(address);
     if ("error" in r) return setNote(r.error);
-    setNote(null);
-    pending.current = null;
-    invoke("browser_navigate", { id, url: r.url }).catch((err) => setNote(String(err)));
+    navigateTo(r.url);
+  };
+  const switchHttps = (url: string) => {
+    setBusy(true);
+    navigateTo(url);
+  };
+  const openExternally = (url: string) => {
+    setBusy(true);
+    invoke("open_external", { url })
+      .catch((err) => setNote(String(err)))
+      .finally(() => setBusy(false));
   };
   const zoomBy = (how: "in" | "out" | "reset") => {
     zoom.current = nextZoom(zoom.current, how);
@@ -188,6 +297,8 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   };
   // BROW-005: the toolbar; a reload is the same page, so it leaves the history alone.
   const act = (what: "back" | "forward" | "reload" | "stop") => {
+    // BROW-005 / BROW-008 / BROW-009: on a failed or crashed page every reload trigger is a Retry.
+    if (what === "reload" && overlay) return retry();
     pending.current = what === "reload" ? "same" : what === "stop" ? null : what;
     invoke("browser_go", { id, what }).catch((err) => setNote(String(err)));
   };
@@ -278,7 +389,9 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           {note}
         </div>
       )}
-      <div ref={host} className="pane-body" />
+      <div ref={host} className="pane-body">
+        {overlay && <LoadOverlay overlay={overlay} diag={diag} busy={busy} connecting={connecting} onRetry={retry} onHttps={switchHttps} onOpen={openExternally} />}
+      </div>
     </section>
   );
 }
