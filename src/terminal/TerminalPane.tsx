@@ -7,6 +7,8 @@ import { branchChip, crewLabel, crewLine, foundAgent, headerOf, takesInband, typ
 import { creditedLive, launchedAgent, titleGuess } from "../status/credit";
 import { followedTitle, Gate, IDLE, printsMarks, READY_WAIT_MS, reduceIdentity, Scanner, shownAgent, Startup, type Identity } from "./shellMarks";
 import PaneMenu, { paneMenuItems } from "./PaneMenu";
+import LinkActionMenu from "./LinkActionMenu";
+import { copyTextOf, destinationOf, doorOfItem, linkMenuItems, openFailed, opensMenu, planClick, type Door, type LinkItemId } from "./linkMenu";
 import type { Chip } from "../board/chip";
 import type { AgentState } from "../projects/rows";
 import { invoke } from "@tauri-apps/api/core";
@@ -64,7 +66,7 @@ import FindBar from "./FindBar";
 import { stopLine, type StopInfo } from "./notify";
 import NameField from "./NameField";
 import { copyOnSelect } from "../shell/inputExtras";
-import { askLink } from "../shell/linkAsk";
+import { askLink, linkState } from "../shell/linkAsk";
 import { handlesIn } from "./tabs";
 import { markShell, runningOf, shellInAgentPane } from "./remove";
 import { registerTurnSource, xtermSource } from "./turnRead";
@@ -333,6 +335,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
   const [menuAt, setMenuAt] = useState<{ top: number; left: number; selected: boolean } | null>(null);
   /** TERM-035: the menu also opens from a right-click inside the pane (set with the terminal). */
   const menuRef = useRef<(x: number, y: number) => void>(() => {});
+  // TERM-094 / VIEW-105: the link action menu (link modifier + right-click on a link) and the opener its rows use.
+  const [linkMenu, setLinkMenu] = useState<{ f: Found; top: number; left: number } | null>(null);
+  const linkOpenRef = useRef<(f: Found, door: Door) => void>(() => {});
   const pasteRef = useRef<() => void>(() => {});
   const [naming, setNaming] = useState(false);
   useEffect(() => {
@@ -471,17 +476,25 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     // rows is read as one; the hint under the pointer says where the click goes. The text work is in links.ts.
     // TERM-092: the link under the pointer, so a Ctrl+click on it is kept from a program that tracks the mouse.
     let hot: Found | null = null;
-    const openFound = (f: Found, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }) => {
+    const openFound = (f: Found, e: { button: number; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }) => {
       // ACCT-061: every link is checked before it is opened; a disallowed scheme or an odd target is ignored.
       if (!allowed(f)) return;
       const o = openRef.current;
-      const door = clickTarget(f, e, keys.current.platform === "darwin", o.linksOpenInKolux && !!o.onOpenLink);
-      if (door === null) return;
-      const said = (err: unknown) => setFlash(explainError(String(err)));
-      // TERM-135: the first plain web click asks where links open (Shift or Alt with the modifier already names it)
-      if (f.kind === "url" && askLink(f.target, e.shiftKey || e.altKey, (to) => (to === "kolux" && o.onOpenLink ? o.onOpenLink(f.target) : void invoke("open_external", { url: f.target }).catch(said)))) return;
-      if (door === "kolux") o.onOpenLink?.(f.target);
-      else if (door === "system") invoke("open_external", { url: f.target }).catch(said);
+      const mac = keys.current.platform === "darwin";
+      // TERM-094: the secondary button with the modifier is the menu's (opened on the press, below); a release
+      // reaching here is ignored. TERM-135: a plain web click asks first, until that was answered.
+      const plan = planClick(f, e, mac, o.linksOpenInKolux && !!o.onOpenLink, linkState(), currentText().linkMenu);
+      if (plan === null || plan.kind === "menu") return;
+      if (plan.kind === "ask" && askLink(f.target, false, (to) => openAt(f, to === "kolux" && o.onOpenLink ? "kolux" : "system"))) return;
+      openAt(f, plan.kind === "open" ? plan.door : (clickTarget(f, e, mac, o.linksOpenInKolux && !!o.onOpenLink) ?? "system"));
+    };
+    // the one opener: a click's door, the question's answer, or a pick from the link menu (which names its door)
+    const openAt = (f: Found, door: Door) => {
+      if (!allowed(f)) return;
+      const o = openRef.current;
+      const said = (err: unknown) => setFlash(openFailed(f.target, explainError(String(err)))); // VIEW-105: a failed open says so
+      if (door === "kolux" && o.onOpenLink) o.onOpenLink(f.target);
+      else if (door === "kolux" || door === "system") invoke("open_external", { url: f.target }).catch(said);
       else {
         const path = resolvePath(f.target, o.cwd);
         if (!path) setFlash(`${f.target} is a relative path and this pane has no folder`);
@@ -492,7 +505,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     const hintOf = (f: Found) => {
       const o = openRef.current;
       const where = f.kind === "file" ? (o.onOpenFile ? "editor" : "app") : o.linksOpenInKolux && o.onOpenLink ? "kolux" : "browser";
-      return hintFor(f, keys.current.platform === "darwin", where);
+      return hintFor(f, keys.current.platform === "darwin", where, currentText().linkMenu);
     };
     // the hint and the underline clear when the window loses focus (the pointer may never "leave" the link)
     const blurLinks = () => {
@@ -537,13 +550,28 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       leave: () => ((hot = null), setLinkHint(null)),
     };
     // TERM-092: xterm sends every unshifted press to a program that tracks the mouse; the link click is Kolux's.
+    linkOpenRef.current = openAt;
     const claim = (e: MouseEvent) => {
+      // TERM-094: the link modifier with right-click on a link opens the link menu (a tracking program never sees it)
+      if (hot && opensMenu(e, keys.current.platform === "darwin", currentText().linkMenu)) {
+        e.preventDefault();
+        e.stopPropagation();
+        setLinkMenu({ f: hot, top: e.clientY, left: e.clientX });
+        return;
+      }
       if (!hot || !claimsClick(e, keys.current.platform === "darwin", term.modes.mouseTrackingMode)) return;
       e.preventDefault();
       e.stopPropagation();
       openFound(hot, e);
     };
     el.addEventListener("mousedown", claim, true);
+    // TERM-094: the right-click that opened the link menu opens neither the pane menu nor right-click paste
+    const menuClick = (e: MouseEvent) => {
+      if (!hot || !opensMenu({ button: 2, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey }, keys.current.platform === "darwin", currentText().linkMenu)) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    el.addEventListener("contextmenu", menuClick, true);
     const choice = attachRenderer<WebglAddon>(term, () => new WebglAddon(), gpu && preferGpu(currentInput().gpu, probeGpu())); // SET-022: the GPU setting (automatic, on, off)
     setRenderer(choice.mode);
     choice.onFallback(() => setRenderer("dom"));
@@ -1157,6 +1185,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       delete (el as DevHost).__koluxLinks;
       window.removeEventListener("blur", blurLinks);
       el.removeEventListener("mousedown", claim, true);
+      el.removeEventListener("contextmenu", menuClick, true);
     };
   }, []);
 
@@ -1578,6 +1607,24 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
           </button>
         </span>
       </header>
+      {linkMenu && (
+        <LinkActionMenu
+          at={{ top: linkMenu.top, left: linkMenu.left }}
+          destination={destinationOf(linkMenu.f, openRef.current.cwd)}
+          items={linkMenuItems(linkMenu.f, openRef.current.linksOpenInKolux === true, !!openRef.current.onOpenLink, !!openRef.current.onOpenFile)}
+          onDismiss={() => setLinkMenu(null)}
+          onPick={(id: LinkItemId) => {
+            const f = linkMenu.f;
+            const door = doorOfItem(id);
+            if (door) return linkOpenRef.current(f, door);
+            if (id === "settings") return openSettings("terminal", "links");
+            return navigator.clipboard.writeText(copyTextOf(f, openRef.current.cwd)).then(
+              () => true,
+              () => false,
+            );
+          }}
+        />
+      )}
       {menuAt && (
         <PaneMenu
           style={{ top: menuAt.top, left: menuAt.left }}

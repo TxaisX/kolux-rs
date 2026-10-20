@@ -1,0 +1,13 @@
+diff --git a/src/settings/TerminalPage.tsx b/src/settings/TerminalPage.tsx
+index efd6adf1..e13924c2 100644
+--- a/src/settings/TerminalPage.tsx
++++ b/src/settings/TerminalPage.tsx
+@@ -173,6 +173,8 @@ export default function TerminalPage() {
+           <h2 className="conn-name">Links</h2>
+           <Switch label="Open web links from the terminal in the Kolux browser" checked={settings?.[KOLUX_FIELD] === true} onChange={(on) => save(switchPatch(on))} />
+           <p className="conn-detail">Off opens them in your system browser. Hold Shift with Ctrl (Cmd on macOS) and click to use the system browser for a single link. Turning this switch yourself also stops the first-click question.</p>
++          <Switch label="Link menu on Ctrl+right-click (Cmd+right-click on macOS)" checked={text.linkMenu} onChange={(on) => save({ [FIELDS.linkMenu]: on })} />
++          <p className="conn-detail">Offers opening a link in either browser, copying it, or coming back here. Off also drops it from the hint shown over a link.</p>
+         </section>
+       )}
+       {text && (
