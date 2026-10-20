@@ -341,7 +341,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P2 · theme 11 · Orchestration and automations (8 cards)
 
-- [ ] T-289-b · the rest of T-289's cards: printed orchestration task references (task-N) opening that task, once the window has a view of orchestration tasks
+- [ ] T-289-b · the rest of T-289's cards: printed orchestration task references (task-N) opening that task, once the window has a view of orchestration tasks · still blocked 2026-10-20 (lane/orchestration at 5d872b09): the window has no view of orchestration tasks to open yet; it only reads worker labels and resets tasks, and the agent dashboard's Runs view is a hidden card, not built
 - [ ] T-291-d · the rest of T-291-c's cards: the Automation tag as a workspace card property, which needs the card details chooser (T-266)
 - [ ] T-292-b · the rest of T-292's cards: the skill freshness pill, the status bar's running skill update with its count, the green check that fades and the failure that stays until clicked (needs the skill update flow of T-196-b, which waits on a published Kolux skills repository)
 
