@@ -1,6 +1,6 @@
 // APP-052 (T-075): a pane takes its terminal back from the run of the service that owns it, over a fake service.
 import { describe, expect, it } from "vitest";
-import { type Attach, fromThisService, LIMIT_MS, reattach, type ServiceInfo } from "./reattach";
+import { type Attach, fromThisService, LIMIT_MS, orphanOf, reattach, type ServiceInfo } from "./reattach";
 
 /** A fake terminal service: `down` failed answers before it comes up, then `info`; attach answers from `answers`. */
 function fake(info: ServiceInfo, answer: Partial<Attach> = {}, down = 0) {
@@ -91,5 +91,15 @@ describe("fromThisService", () => {
     expect(fromThisService(run.generation + 1, run)).toBe(false);
     expect(fromThisService(undefined, run)).toBe(true);
     expect(fromThisService(run.generation + 1, null)).toBe(true);
+  });
+});
+
+describe("after-list #378 (ACCT-063): a pane closed while its reattach waited", () => {
+  const info: ServiceInfo = { protocol: 1, generation: 4 } as ServiceInfo;
+  it("kills the terminal the service handed back, and only that case", () => {
+    expect(orphanOf({ kind: "attached", id: 9, service: info }, false)).toBe(9);
+    expect(orphanOf({ kind: "attached", id: 9, service: info }, true)).toBeNull();
+    expect(orphanOf({ kind: "fresh", service: info }, false)).toBeNull();
+    expect(orphanOf(null, false)).toBeNull();
   });
 });

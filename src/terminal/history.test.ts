@@ -1,6 +1,6 @@
 // TERM-106: a reopened pane shows what it printed before the restart above a fresh shell.
 import { describe, expect, it } from "vitest";
-import { encodeHistory, NOTE, placeNote, replay, RESET, restoreTail, viewTop } from "./history";
+import { encodeHistory, NOTE, placeNote, replay, replayGate, RESET, restoreTail, viewTop } from "./history";
 
 const buf = (lines: string[], baseY = 0) => ({ length: lines.length, baseY, getLine: (y: number) => (y < lines.length ? { translateToString: () => lines[y] } : undefined) });
 
@@ -54,5 +54,21 @@ describe("viewTop (TERM-106)", () => {
 
   it("never scrolls above the first row", () => {
     expect(viewTop({ baseY: 3 }, 47)).toBe(0);
+  });
+});
+
+describe("after-list #195: a title set by replayed history does not reach the status guess", () => {
+  it("drops calls made while a replay runs and passes those before and after", async () => {
+    const seen: string[] = [];
+    const gate = replayGate();
+    const onTitle = gate.live((t: string) => seen.push(t));
+    onTitle("before");
+    await gate.during(async () => {
+      onTitle("old program: working");
+      await Promise.resolve();
+      onTitle("old program: done");
+    });
+    onTitle("after");
+    expect(seen).toEqual(["before", "after"]);
   });
 });

@@ -53,3 +53,24 @@ export function viewTop(buf: { baseY: number }, rows: number): number {
 export function encodeHistory(text: string): string {
   return btoa(String.fromCharCode(...new TextEncoder().encode(text)));
 }
+
+/** after-list #195 (T-119-c): title changes parsed while saved history replays belong to a program that is gone, so
+ *  the pane's title handler runs only through `live`, and the replay's writes go through `during`. */
+export function replayGate() {
+  let depth = 0;
+  return {
+    live:
+      <A extends unknown[]>(fn: (...a: A) => void) =>
+      (...a: A) => {
+        if (depth === 0) fn(...a);
+      },
+    async during<T>(run: () => Promise<T>): Promise<T> {
+      depth++;
+      try {
+        return await run();
+      } finally {
+        depth--;
+      }
+    },
+  };
+}
