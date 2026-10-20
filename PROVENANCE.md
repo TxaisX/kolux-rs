@@ -875,3 +875,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · repo T-227-d (rest) · spec/11 GIT-017 as given in the brief; git documentation for pathspec exclude (git-scm.com/docs/gitglossary); this tree's own scm.rs; no outside code
 > 2026-10-20 · editor T-236-b piece 3 · spec/12 EDIT-031, EDIT-054 cards; this tree's own EditorPane.tsx, buffers.ts, fileMoved.ts and fsops.rs commands; no outside source
 > 2026-10-20 · editor T-237-b piece 4 · spec/12 EDIT-056 card; this tree's own DiffPane.tsx, EditorPane.tsx, buffers.ts and viewSwitch.ts; no outside source
+> 2026-10-20 · editor T-317 piece 1 · spec/12 EDIT-025, EDIT-026, EDIT-038, EDIT-048 cards; this tree's own browser_preview.rs, BrowserPane openInBrowser, buffers.ts and ContentSearch.tsx; no outside source

@@ -32,6 +32,9 @@ import { attach, baseName, detach, diskOf, hashOf, isDirty, isStale, loadText, r
 import NamePrompt from "./NamePrompt";
 import { announceMoves } from "./fileMoved";
 import { isUntitled, needsName } from "./untitled";
+import { seedSources, seedText } from "./searchSeed";
+import { followStep } from "./logFollow";
+import { offersPreview, previewHtml } from "./htmlPreview";
 import DiffPane from "./DiffPane"; // EDIT-056: the Changes view (DiffPane imports this file back; both only use each other when rendering)
 import { drawn, underRoot, VIEW_LABEL, viewsFor, type View } from "./viewSwitch";
 import { createAutosave, covers, movingNow, prefsReader, type Autosave } from "./autosave";
@@ -176,9 +179,9 @@ export const look = EditorView.theme(
 );
 
 /** `readOnly`: typing changes nothing (SKILL-012 previews a kit result this way). */
-type Props = { id: number; path: string; root?: string | null; readOnly?: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; jump?: { line: number; at: number }; onLink?: LinkHandler; /** EDIT-020: the Markdown review notes, shown in a rail beside the rich view. */ notes?: Note[]; onRemoveNote?: (n: Note) => void };
+type Props = { id: number; path: string; root?: string | null; readOnly?: boolean; /** EDIT-026: a log tab that keeps adding lines as the file grows (give it readOnly too). */ follow?: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; jump?: { line: number; at: number }; onLink?: LinkHandler; /** EDIT-020: the Markdown review notes, shown in a rail beside the rich view. */ notes?: Note[]; onRemoveNote?: (n: Note) => void };
 
-export default function EditorPane({ id, path, root = null, readOnly = false, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, jump, onLink, notes = [], onRemoveNote }: Props) {
+export default function EditorPane({ id, path, root = null, readOnly = false, follow = false, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, jump, onLink, notes = [], onRemoveNote }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -571,6 +574,8 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     e.stopPropagation();
   };
   const shown = changesOn ? "changes" : tableOn ? "table" : !md || mode === "source" ? "source" : richError ? "error" : "rich";
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
   const richRoot = useCallback(() => richHost.current, []);
   const hasHeadings = useMemo(() => md && outline(noteText).length > 0, [md, noteText]);
   const tocShown = toc && hasHeadings && shown === "rich";
@@ -587,6 +592,58 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     });
     return () => void selections.delete(id);
   }, [md, id, path, shown]);
+  // EDIT-038: a file search started from here takes the selection, or the word at the caret, as its first query.
+  useEffect(() => {
+    seedSources.set(id, () => {
+      const sel = window.getSelection();
+      if (shownRef.current === "rich" && richHost.current && sel && richHost.current.contains(sel.anchorNode)) return seedText(sel.toString(), 0, sel.toString().length);
+      const cm = view.current;
+      if (!cm) return "";
+      const r = cm.state.selection.main;
+      return seedText(cm.state.doc.toString(), r.from, r.to);
+    });
+    return () => void seedSources.delete(id);
+  }, [id]);
+  useEffect(() => {
+    if (focused && !hidden) seedSources.focus(id);
+  }, [focused, hidden, id]);
+
+  // EDIT-026: a followed log reads the file once a second while its tab shows, and only when it changed.
+  // ponytail: reads the whole file each time it changes; a tail-only read if logs of hundreds of MB matter.
+  useEffect(() => {
+    if (!follow || !ready || hidden) return;
+    let alive = true;
+    let last = "";
+    let busy = false;
+    const tick = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const st = JSON.stringify(await invoke("file_stamps", { paths: [path] }));
+        if (!alive || st === last) return;
+        const disk = await invoke<string>("file_read", { path });
+        if (!alive) return;
+        last = st;
+        const next = followStep(textOf(path) ?? "", disk);
+        if (!next) return;
+        const cm = view.current;
+        const d = cm?.scrollDOM;
+        const atEnd = !d || next.reset || d.scrollHeight - d.scrollTop - d.clientHeight < 40;
+        replaceAll(path, next.text);
+        if (cm && atEnd) cm.dispatch({ effects: EditorView.scrollIntoView(cm.state.doc.length) });
+      } catch {
+        // a read that failed is tried again on the next second
+      } finally {
+        busy = false;
+      }
+    };
+    void tick();
+    const t = window.setInterval(() => void tick(), 1000);
+    return () => {
+      alive = false;
+      window.clearInterval(t);
+    };
+  }, [follow, ready, hidden, path]);
   useEffect(() => {
     copiers.set(id, () => {
       const cm = view.current;
@@ -646,6 +703,16 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
         >
           Copy
         </button>
+        {offersPreview(path) && (
+          <button
+            className="ib"
+            title="Show this page rendered in a browser tab"
+            aria-label="Preview in a browser tab"
+            onClick={() => void previewHtml(path).then((err) => err && report.current.onToast?.(err))}
+          >
+            Preview
+          </button>
+        )}
         {views.length > 1 && (
           <span className="view-switch" role="group" aria-label="View">
             {views.map((v) => (
@@ -706,7 +773,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
         />
       )}
       {stale && <StaleNotice path={path} onDone={() => setStale(false)} onToast={report.current.onToast} />}
-      {moved && !stale && !comparing && <DiskBanner path={path} onReload={reload} onKeep={keepMine} onCompare={() => setComparing(true)} />}
+      {moved && !stale && !comparing && !follow && <DiskBanner path={path} onReload={reload} onKeep={keepMine} onCompare={() => setComparing(true)} />}
       {undoable && !moved && <UndoToast path={path} onUndo={undoReload} onClose={() => setUndoable(null)} />}
       {banner && (
         <div className="notice md-banner" role="status">

@@ -34,6 +34,7 @@ import { askText, needsAsk } from "./bigDiff";
 import { bannerUp } from "./diskChange";
 import { covers, createAutosave, movingNow, prefsReader } from "./autosave";
 import { headSides } from "./viewSwitch";
+import { fileOnDisk, isHtml, previewHtml } from "./htmlPreview";
 
 /** Next (1) or previous (-1) change, by pane key; App's F7 and Shift+F7 call the focused one. */
 /** SET-038 (T-323-b): how a new diff tab starts, from the Settings > General choices. */
@@ -177,6 +178,13 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
   }, [settings === null]);
   const [menu, setMenu] = useState(false);
   const [changes, setChanges] = useState(0);
+  const [onDisk, setOnDisk] = useState(false); // EDIT-025: a preview is offered only while the file still exists
+  useEffect(() => {
+    if (!isHtml(path)) return;
+    let alive = true;
+    void fileOnDisk(path).then((v) => alive && setOnDisk(v));
+    return () => void (alive = false);
+  }, [path, sides]);
   const [dirty, setDirty] = useState(false);
   const [stale, setStale] = useState(false); // EDIT-003 (T-073-c): the last save was refused, the file moved on
   const views = useRef<{ a: EditorView | null; b: EditorView } | null>(null);
@@ -420,6 +428,11 @@ export default function DiffPane({ id, path, staged, root = null, hidden = false
         <span className="path" title={path}>
           {path}
         </span>
+        {isHtml(path) && onDisk && (
+          <button className="ib" title="Show this page rendered in a browser tab" aria-label="Preview in a browser tab" onClick={() => void previewHtml(path).then((err) => err && report.current.onToast?.(err))}>
+            Preview
+          </button>
+        )}
         <span className="view-switch" role="group" aria-label="Layout">
           <button aria-pressed={!split} onClick={() => ((touched.current = true), setSplit(false))} title="Inline">
             Inline

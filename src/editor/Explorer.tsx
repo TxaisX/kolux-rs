@@ -21,6 +21,7 @@ import { refuseDrop } from "./desktopDrops";
 import FileIcon from "./FileIcon";
 import { loadTargets, openIn, type Target } from "./openIn";
 import ContentSearch from "./ContentSearch";
+import { currentSeed } from "./searchSeed";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
 import { announceMoves } from "./fileMoved";
@@ -114,6 +115,12 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
   // brings the search forward (with its text selected) while the explorer is shown.
   const [searching, setSearching] = useState(false);
   const [searchAsk, setSearchAsk] = useState(0);
+  const [seed, setSeed] = useState<{ text: string; at: number } | undefined>(undefined); // EDIT-038: the editor's selection or word at the caret
+  const startSearch = () => {
+    const text = currentSeed();
+    if (text) setSeed({ text, at: Date.now() });
+    setSearchAsk((n) => n + 1);
+  };
   // EDIT-043: the Open in menu (null while closed) and the last launch that failed.
   const [openTargets, setOpenTargets] = useState<{ list: Target[]; x: number; y: number } | null>(null);
   const [openErr, setOpenErr] = useState<string | null>(null);
@@ -123,7 +130,7 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
       if (matchEvent(keymap, e, ["global"])?.id !== "sidebar.search.toggle") return;
       e.preventDefault();
       setSearching(true);
-      setSearchAsk((n) => n + 1);
+      startSearch();
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
@@ -539,7 +546,7 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
         <span className="path" title={root}>
           {name}
         </span>
-        <button className={`ib${searching ? " on" : ""}`} onClick={() => (setSearching(!searching), setSearchAsk((n) => n + 1))} aria-pressed={searching} title="Search file contents (Ctrl+Shift+F)" aria-label="Search file contents">
+        <button className={`ib${searching ? " on" : ""}`} onClick={() => (setSearching(!searching), startSearch())} aria-pressed={searching} title="Search file contents (Ctrl+Shift+F)" aria-label="Search file contents">
           <Search size={12} />
         </button>
         <button className="ib" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); if (openTargets) setOpenTargets(null); else void loadTargets().then((list) => setOpenTargets({ list, x: r.left, y: r.bottom + 4 })); }} aria-expanded={!!openTargets} aria-haspopup="menu" title="Open this folder in another app" aria-label="Open in">
@@ -620,7 +627,7 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
           )}
         </div>
       )}
-      <ContentSearch root={root} hidden={!searching} focusAsk={searchAsk} onOpen={onOpen} />
+      <ContentSearch root={root} hidden={!searching} focusAsk={searchAsk} seed={seed} onOpen={onOpen} />
       <div
         hidden={searching}
         className={`explorer-rows${dropAt === root ? " drop" : ""}`}
