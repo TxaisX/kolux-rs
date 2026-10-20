@@ -251,7 +251,7 @@ pub const DEFAULT_SHELL_FIELD: &str = "defaultShell";
 /// SET-026: the list with the chosen default shell first, so the item Ctrl+T opens names it. A
 /// choice that is not installed (or "auto") leaves the automatic order.
 pub fn chosen_first(mut list: Vec<ShellInfo>, settings: &serde_json::Value) -> Vec<ShellInfo> {
-    let choice = settings.get(DEFAULT_SHELL_FIELD).and_then(serde_json::Value::as_str);
+    let choice = shell_choice(settings);
     if let Some(i) = list.iter().position(|s| Some(s.id) == choice) {
         let chosen = list.remove(i);
         list.insert(0, chosen);
@@ -261,9 +261,27 @@ pub fn chosen_first(mut list: Vec<ShellInfo>, settings: &serde_json::Value) -> V
 
 /// SET-026: the program and arguments a plain new terminal starts with, when a default is chosen.
 pub fn default_shell(settings: &serde_json::Value) -> Option<(String, Vec<String>)> {
-    settings.get(DEFAULT_SHELL_FIELD).and_then(serde_json::Value::as_str).filter(|c| *c != "auto")?;
+    let choice = shell_choice(settings)?;
     let first = chosen_first(shells(crate::agents::find_program), settings).into_iter().next()?;
-    (Some(first.id) == settings.get(DEFAULT_SHELL_FIELD).and_then(serde_json::Value::as_str)).then_some((first.program, first.args))
+    (first.id == choice).then_some((first.program, first.args))
+}
+
+/// SET-025/026 (after-list #180): the settings field of the PowerShell version card ("auto", "7" or "5").
+pub const POWERSHELL_VERSION_FIELD: &str = "powershellVersion";
+
+/// SET-026: the shell id new terminals open in, or None for the automatic order. A default shell that is not a
+/// PowerShell wins; otherwise the PowerShell version card ("7" = pwsh, "5" = Windows PowerShell) picks which
+/// PowerShell, the same rule as the settings page's pickPowerShell; "auto" keeps a chosen PowerShell as it is.
+pub fn shell_choice(settings: &serde_json::Value) -> Option<&str> {
+    let shell = settings.get(DEFAULT_SHELL_FIELD).and_then(serde_json::Value::as_str).filter(|c| *c != "auto");
+    if shell.is_some_and(|s| s != "pwsh" && s != "powershell") {
+        return shell;
+    }
+    match settings.get(POWERSHELL_VERSION_FIELD).and_then(serde_json::Value::as_str) {
+        Some("7") => Some("pwsh"),
+        Some("5") => Some("powershell"),
+        _ => shell,
+    }
 }
 
 #[tauri::command]
@@ -567,6 +585,24 @@ mod tests {
         assert_eq!(ids(chosen_first(list(), &serde_json::json!({ "defaultShell": "gitbash" }))), ["pwsh", "powershell", "cmd"]);
         assert_eq!(ids(chosen_first(list(), &serde_json::json!({}))), ["pwsh", "powershell", "cmd"]);
         assert_eq!(default_shell(&serde_json::json!({ "defaultShell": "auto" })), None);
+    }
+
+    /// after-list #180 (SET-026): the PowerShell version card picks which PowerShell a new terminal opens in when the
+    /// default shell is automatic or a PowerShell; a non-PowerShell default shell still wins.
+    #[test]
+    fn the_powershell_version_choice_picks_the_powershell_new_terminals_open_in() {
+        let info = |id: &'static str| ShellInfo { id, name: id, program: format!("{id}.exe"), args: vec![] };
+        let list = || vec![info("pwsh"), info("powershell"), info("cmd")];
+        let first = |s: serde_json::Value| chosen_first(list(), &s).first().map(|s| s.id);
+        assert_eq!(first(serde_json::json!({ "powershellVersion": "5" })), Some("powershell"));
+        assert_eq!(first(serde_json::json!({ "defaultShell": "auto", "powershellVersion": "5" })), Some("powershell"));
+        assert_eq!(first(serde_json::json!({ "defaultShell": "pwsh", "powershellVersion": "5" })), Some("powershell"));
+        assert_eq!(first(serde_json::json!({ "defaultShell": "powershell", "powershellVersion": "7" })), Some("pwsh"));
+        assert_eq!(first(serde_json::json!({ "defaultShell": "cmd", "powershellVersion": "5" })), Some("cmd"));
+        assert_eq!(first(serde_json::json!({ "defaultShell": "powershell", "powershellVersion": "auto" })), Some("powershell"));
+        assert_eq!(shell_choice(&serde_json::json!({ "powershellVersion": "7" })), Some("pwsh"));
+        assert_eq!(shell_choice(&serde_json::json!({ "powershellVersion": "auto" })), None);
+        assert_eq!(shell_choice(&serde_json::json!({ "defaultShell": "auto" })), None);
     }
 
     /// FIX-2 (council AFTER 4): the fallback note names shells as the create menu does, not by file.
@@ -891,7 +927,7 @@ mod tests {
         let sep = if cfg!(windows) { ";" } else { ":" };
         let machine = ["C:\\Windows\\system32", "C:\\Windows", ""].join(sep);
         let user = ["C:\\Users\\me\\AppData\\Local\\Programs\\newtool", "C:\\Users\\me\\.cargo\\bin"].join(sep);
-        let inherited: std::ffi::OsString = ["D:\\devtool\\node_modules\\.bin", "C:\\Windows\\system32"].join(sep).into();
+        let inherited: std::ffi::OsString = ["D:\\devtool\\node_modules\\.bin","C:\\Windows\\system32"].join(sep).into();
         let got = terminal_path(Some(&machine), Some(&user), &last, Some(inherited));
         let dirs: Vec<PathBuf> = std::env::split_paths(&got).collect();
         assert_eq!(dirs, [PathBuf::from("C:\\Windows\\system32"), "C:\\Windows".into(), "C:\\Users\\me\\AppData\\Local\\Programs\\newtool".into(), "C:\\Users\\me\\.cargo\\bin".into()]);
