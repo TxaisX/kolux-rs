@@ -51,3 +51,29 @@ LIVE PROOF PENDING (batched)
  3. Open a .md note: Source | Rich | Changes. Type in Changes, click Rich: the typed text is there. Open a .csv: Source | Table | Changes.
  4. An untitled new note, a .ipynb, and a file outside the project show no Changes button.
  5. Mod+S while in Changes saves the file; F7 / Shift+F7 step through changes.
+
+FIFTH PIECE (2026-10-20, lane/editor from d321f0c1): the rich toolbar's Link, Image and the collapsible section. Every part of the PLAN line is now built.
+BUILT (unit-tested, no app launch)
+ - EDIT-057 Link: a Link button in the bar opens a small address box in the bar (filled with the address when the caret is in a link).
+   Enter makes the selection a link (with nothing selected the address itself becomes the link text), an empty address takes the link off,
+   Escape closes the box; focus goes back to the text. A javascript:, data: or vbscript: address is refused with a toast and spaces are escaped.
+   richFormat.ts cleanUrl, linkAt, applyLink (Lexical LinkNode / toggleLink, already a dependency). The tree has no separate add-link shortcut
+   yet, so the box is the one link editing; a future shortcut should call applyLink.
+ - EDIT-057 Image: an Image button opens the system file picker (pictures only), then writes the picture's markdown at the caret, relative to
+   the note's folder when the picture is beside or under it (spaces and brackets escaped), else the full path. richFormat.ts imageLink, applyImage;
+   RichToolbar passes the tab's path. The same pickImage is what EDIT-015's insert should reuse.
+ - EDIT-057 Collapsible section: More blocks now lists Heading 4, Heading 5 and Collapsible section. Choosing it inserts a section (title selected,
+   body paragraph, a paragraph after it so the caret can leave). richDetails.ts: DetailsNode > SummaryNode (title) + BodyNode (blocks), drawn as a
+   native <details> that is always open; Enter in the title starts the body. Markdown: the note's own <details> / <summary>Title</summary> / body /
+   </details> block is read (sections nest) and written, so a note with sections now opens in rich view; other HTML (an open attribute, a
+   multi-line title) still sends the note to source view (markdown.ts unsupported() skips only the well-formed section lines).
+TESTS richDetails.test.ts 12 (section round trip, loose form, nested, source-view fallbacks, More blocks, Enter in the title, link on a word / on
+  nothing / remove / refused, imageLink forms, image text round trip), richFormat.test.ts button list updated.
+READINGS (logs G:/Temp/editor-v3-logs/f5..f7-*.log): tsc --noEmit 0; vitest src/editor src/settings 96 files, 556 passed. No Rust and no patch for this piece.
+LIVE PROOF PENDING (batched)
+ 1. Select a word in a rich note, click Link, type https://example.com, Enter: the word is a link, the caret is back in the text; click Link again on it:
+    the box shows the address; clear it and Enter: the link is gone.
+ 2. Click Link with nothing selected, type an address, Enter: the address appears as a link.
+ 3. Click Image, choose a picture beside the note: its markdown appears at the caret. (The rich view shows it as text; EDIT-015 draws pictures.)
+ 4. More > Collapsible section: a section with its title selected appears; type a title, Enter, type body text; click the title: the body folds;
+    save and reopen: the note opens in rich view with the section; source view shows the <details> block.

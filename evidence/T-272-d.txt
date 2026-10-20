@@ -39,3 +39,50 @@ LIVE PROOF PENDING (left open in PLAN: the live reading has never been seen)
 4. If step 1 still loses keys once a second, the system's focused window is not inside the page's
    container (the guard reads "cannot say"); then the engine key-event route (needs webview2-com)
    is the remaining fix.
+
+==== 2026-10-20 (lane/browser from fea63414 · Opus 5.5): the engine key-event route ====
+webview2-com is now a direct dependency (coordinator decision; evidence/browser-T-158-b-Cargo.toml.patch),
+so the route the card asks for is built: a chord counts only when a real key was pressed in that very page.
+
+What was built
+- src-tauri/src/browser_engine.rs: each page's engine hook adds a handler to the controller's
+  AcceleratorKeyPressed event. It reads the event's key kind and virtual key and records every key
+  going down (plain or with Alt) for that page; it never sets Handled, so the page still gets the
+  key. When the hook is in place the page is "watched".
+- src-tauri/src/browser_holder.rs: the pure logic. A browser chord needs a key: the address-bar
+  chord L, find F, reload R, zoom reset 0 / numpad 0 (keyboard only); back Left/[, forward Right/],
+  zoom in =/numpad +, zoom out -/numpad - (these also come from the mouse's side buttons or
+  Ctrl+wheel, which leave no key). An app shortcut needs the key of its key code or typed key
+  (either, so a remapped layout matches), or any real key when neither maps. A real press counts
+  for one second and backs one chord (used up). Verdict per chord from a watched page: a match =
+  kept (the system-focus reading is not asked); no match = dropped, except a mouse-able chord with
+  no key, which is left to the earlier checks. An unwatched page (hook failed, closed tab) is left
+  to the system-focus reading and the earlier checks, as before.
+- src-tauri/src/browser.rs: the navigation handler's guard arms pass each chord's need.
+
+Tests (cargo test browser: 147 passed, 0 failed; log G:/Temp/browser-v3-logs/t272e-cargo-test.log)
+  browser::holder::tests::t272d_engine_a_chord_with_no_real_key_in_that_page_is_dropped
+  browser::holder::tests::t272d_engine_one_press_backs_one_chord
+  browser::holder::tests::t272d_engine_a_press_older_than_the_window_backs_nothing
+  browser::holder::tests::t272d_engine_another_key_does_not_back_the_chord
+  browser::holder::tests::t272d_engine_mouse_chords_without_a_key_are_left_to_the_earlier_checks
+  browser::holder::tests::t272d_engine_an_unwatched_page_cannot_be_judged
+  browser::holder::tests::t272d_engine_app_shortcuts_need_their_own_key
+  browser::holder::tests::t272d_engine_key_names_map_to_virtual_keys
+  browser::holder::tests::t272d_engine_only_key_downs_count
+  browser::holder::tests::t272d_engine_reading_wins_and_focus_reading_is_the_fallback
+  browser::holder::tests::t272d_engine_keeps_only_the_newest_presses
+  (+ the four earlier t272d system-focus tests, still passing)
+
+Gates (Cargo patch applied, reverted before the commit)
+  cargo build exit 0 · clippy --all-targets -D warnings exit 0 · no src/** change
+
+LIVE PROOF PENDING (batched)
+5. Repeat step 1 above. Expect: no key is lost at all (before: possibly once a second); the left
+   page's address-bar chords are all dropped because the engine saw no key in the left page.
+6. Click into a page, press Ctrl+L, Ctrl+F, Ctrl+R, Ctrl+0, Alt+Left, Alt+Right, Ctrl+Tab, Ctrl+W
+   in turn. Expect: each works exactly as before (address bar takes the keyboard, find bar opens,
+   reload, zoom reset, back, forward, next tab, close tab).
+7. In a page, use the mouse's back and forward side buttons and Ctrl+wheel. Expect: back, forward
+   and zoom still work (they leave no key, so the earlier checks decide).
+8. On a French (AZERTY) layout, press the app's close-tab shortcut in a page. Expect: the tab closes.

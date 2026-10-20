@@ -8,6 +8,8 @@
 import {
   $createParagraphNode,
   $createTextNode,
+  $getNodeByKey,
+  $getRoot,
   $getSelection,
   $isElementNode,
   $isRangeSelection,
@@ -456,5 +458,79 @@ export function watchTable(editor: LexicalEditor, show: (inTable: boolean) => vo
   return editor.registerUpdateListener(({ editorState }) => {
     const now = editorState.read(() => $tableAt() !== null);
     if (now !== was) show((was = now));
+  });
+}
+
+// ---- edits by position (the hover controls and the right-click menu) ----
+
+/** One edit of a table named by its node key: a row or column added so that it becomes number `at`
+ *  (rows count from the header row at 0, so a row is never added above the header), or the row or
+ *  column numbered `at` removed. Removing the last column removes the table; the header row stays. */
+export type TableEdit = { kind: "row-add" | "row-del" | "col-add" | "col-del"; table: string; at: number };
+
+/** Applies `e` (call inside an editor update). False when the table is gone, the number is out of range or the edit is refused. */
+export function $tableEdit(e: TableEdit): boolean {
+  const t = $getNodeByKey(e.table);
+  if (!$isTableNode(t)) return false;
+  const rows = rowsOf(t);
+  const cols = t.getAlign().length;
+  if (e.kind === "row-add") {
+    const fresh = $row(Array(cols).fill(""), false);
+    const at = Math.max(1, Math.min(e.at, rows.length));
+    if (at >= rows.length) rows[rows.length - 1].insertAfter(fresh);
+    else rows[at].insertBefore(fresh);
+    return true;
+  }
+  if (e.kind === "row-del") {
+    if (e.at < 1 || e.at >= rows.length) return false; // the header row always stays
+    rows[e.at].remove();
+    return true;
+  }
+  if (e.kind === "col-add") {
+    const at = Math.max(0, Math.min(e.at, cols));
+    for (const r of rows) {
+      const cells = cellsOf(r);
+      const fresh = $cell("", r.getIndexWithinParent() === 0);
+      if (at >= cells.length) r.append(fresh);
+      else cells[at].insertBefore(fresh);
+    }
+    const a = [...t.getAlign()];
+    a.splice(at, 0, "");
+    t.setAlign(a);
+    return true;
+  }
+  if (e.at < 0 || e.at >= cols) return false;
+  if (cols <= 1) {
+    t.replace($createParagraphNode());
+    return true;
+  }
+  for (const r of rows) cellsOf(r)[e.at]?.remove();
+  const a = [...t.getAlign()];
+  a.splice(e.at, 1);
+  t.setAlign(a);
+  return true;
+}
+
+/** Runs one positional edit as a single edit (one undo step). */
+export function runTableEdit(editor: LexicalEditor, e: TableEdit): boolean {
+  let done = false;
+  editor.update(() => void (done = $tableEdit(e)), { discrete: true });
+  return done;
+}
+
+/** The tables of the note in document order, as node key and element, for the overlay that draws the hover controls. */
+export function tablesOf(editor: LexicalEditor): { key: string; el: HTMLElement }[] {
+  return editor.getEditorState().read(() => {
+    const out: { key: string; el: HTMLElement }[] = [];
+    const walk = (n: LexicalNode) => {
+      if ($isTableNode(n)) {
+        const el = editor.getElementByKey(n.getKey());
+        if (el) out.push({ key: n.getKey(), el });
+        return;
+      }
+      if ($isElementNode(n)) n.getChildren().forEach(walk);
+    };
+    walk($getRoot());
+    return out;
   });
 }
