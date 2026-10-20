@@ -1,5 +1,5 @@
 // T-550: the top bar's usage pill (USAGE-008) is one button: the Claude and Codex parts inside it
-// keep their look and hover detail, and a click opens Settings at Accounts & keys (the record of
+// keep their look and hover detail, and a click opens Settings at Accounts & keys, scrolled to AI connections (the record of
 // T-043-a: "click the usage pill in the top bar").
 import type { ReactNode } from "react";
 import { openSettings } from "../settings/pages";
@@ -9,8 +9,8 @@ import "./usage.css";
 
 export const PILL_TITLE = "Usage: open Settings › Accounts & keys";
 
-/** Settings at Accounts & keys, from the pill. */
-export const openAccounts = () => openSettings("accounts");
+/** Settings at Accounts & keys, scrolled to the AI connections section, from the pill. */
+export const openAccounts = () => openSettings("accounts", "connections");
 
 export function UsagePillView({ hidden, onOpen, children }: { hidden: boolean; onOpen: () => void; children?: ReactNode }) {
   return (

@@ -7,6 +7,7 @@ import { projectAddedNote } from "./sidebar";
 import { KITS, assignRoles, type Kit, type Vendor } from "../kits/catalog";
 import { startValues } from "../kits/Kits";
 import { startGridTour } from "./tour";
+import { starAfterClose } from "./star";
 import type { AgentInfo } from "../launch/PlusMenu";
 import { defaultAgentId, menuAgents, offeredAgents } from "../launch/agents";
 
@@ -34,7 +35,8 @@ export function useWizard({ setToast, agents, settings, activeDir, kitAIs, start
   // also tells the sidebar slot (FIX-2).
   const [wizardClose] = useState(() =>
     wizardCloser(
-      (outcome) => invoke("onboarding_close", { outcome }),
+      // ONB-007 / ONB-037 (T-208-c): a stored completed close asks the star prompt for its onboarding-finished toast.
+      (outcome) => invoke("onboarding_close", { outcome }).then((r) => (starAfterClose(outcome), r)),
       () => {
         setWizard(null);
         wizardSetup.current = false;
