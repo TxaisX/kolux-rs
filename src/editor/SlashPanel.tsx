@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { LexicalEditor } from "lexical";
 import type { SlashView } from "./slashMenu";
+import type { WikiView } from "./wikiPopup";
 import { runTableAction, TABLE_ACTIONS, watchTable, type TableActionId } from "./richTable";
 
 /** The caret's spot on screen, or null when there is none. */
@@ -46,6 +47,29 @@ export function TableMenu({ editor }: { editor: LexicalEditor | null }) {
         <button key={a.id} type="button" className="btn" onClick={() => runTableAction(editor, a.id as TableActionId)}>
           {a.label}
         </button>
+      ))}
+    </div>
+  );
+}
+
+/** The [[ popup: the notes that fit what was typed; a name shared by several notes also shows its folder and how many share it. */
+export function WikiMenu({ view, onPick }: { view: WikiView | null; onPick: (path: string) => void }) {
+  const [spot, setSpot] = useState<{ x: number; y: number } | null>(null);
+  const list = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (view) setSpot(caretSpot());
+  }, [view?.query]);
+  useEffect(() => {
+    list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest" });
+  }, [view?.index, view?.query]);
+  if (!view || !spot) return null;
+  return (
+    <div ref={list} className="slash-menu" role="listbox" aria-label="Link to a note" style={{ left: Math.min(spot.x, window.innerWidth - 260), top: Math.min(spot.y + 4, window.innerHeight - 260) }} onMouseDown={(e) => e.preventDefault()}>
+      {view.items.map((it, i) => (
+        <div key={it.path} role="option" aria-selected={i === view.index} className="slash-item" onClick={() => onPick(it.path)}>
+          <span className="slash-label">{it.name}</span>
+          <span className="slash-hint">{it.same > 1 ? `${it.path} (${it.same} notes share this name)` : it.path}</span>
+        </div>
       ))}
     </div>
   );

@@ -3,16 +3,17 @@ import { $createParagraphNode, $createTextNode, $getRoot, createEditor, KEY_ARRO
 import { HeadingNode, QuoteNode, registerRichText } from "@lexical/rich-text";
 import { ListItemNode, ListNode, registerCheckList, registerList } from "@lexical/list";
 import { CodeHighlightNode, CodeNode } from "@lexical/code";
-import { $convertFromMarkdownString, $convertToMarkdownString, CHECK_LIST, TRANSFORMERS } from "@lexical/markdown";
+import { $convertFromMarkdownString, $convertToMarkdownString, CHECK_LIST, TRANSFORMERS, type Transformer } from "@lexical/markdown";
 import { createSlash, matchSlash, runSlash, SLASH_ENTRIES, slashQuery, type SlashView } from "./slashMenu";
 import { registerTable, TABLE, TABLE_NODES } from "./richTable";
 import { registerListKeys } from "./richFormat";
+import { DETAILS_NODES, makeDetails } from "./richDetails";
 
 // EDIT-010 (T-234-b): the slash menu's matching and what each entry inserts, plus the list keys the
 // card asks for (Tab indents, Enter continues, Enter on an empty item ends the list).
-const MD = [TABLE, CHECK_LIST, ...TRANSFORMERS];
+const MD: Transformer[] = [makeDetails(() => MD), TABLE, CHECK_LIST, ...TRANSFORMERS];
 function rig(md = "") {
-  const ed = createEditor({ namespace: "s", nodes: [HeadingNode, QuoteNode, ListNode, ListItemNode, CodeNode, CodeHighlightNode, ...TABLE_NODES], onError: (e) => { throw e; } });
+  const ed = createEditor({ namespace: "s", nodes: [HeadingNode, QuoteNode, ListNode, ListItemNode, CodeNode, CodeHighlightNode, ...TABLE_NODES, ...DETAILS_NODES], onError: (e) => { throw e; } });
   registerRichText(ed);
   registerList(ed);
   registerCheckList(ed);
@@ -93,6 +94,16 @@ describe("inserting", () => {
     typed(ed, "/math");
     runSlash(ed, "math");
     expect(md(ed)).toBe("$$\n\n$$");
+  });
+
+  it("a collapsible section is offered under its other names and inserts a details block", () => {
+    expect(matchSlash("toggle")[0].id).toBe("details");
+    expect(matchSlash("collaps")[0].id).toBe("details");
+    const { ed } = rig();
+    typed(ed, "/fold");
+    runSlash(ed, "details");
+    expect(md(ed)).toContain("<details>");
+    expect(md(ed)).not.toContain("/fold");
   });
 
   it("lists and emoji", () => {

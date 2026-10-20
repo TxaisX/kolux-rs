@@ -25,6 +25,7 @@ import { clearReadFailure, connectFailed, firstAiConnected, readFailed } from ".
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
 import { hideRule, MAX_REPOS_DRAWN, MAX_SEARCH, SearchFolds, searchRepos } from "./search";
+import { useSettled } from "../editor/settledQuery";
 import { useSearchHits } from "./useSearchHits";
 
 // SET-006: a page loads the first time it is opened, so Settings itself opens quickly.
@@ -269,8 +270,10 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
   const box = useRef<HTMLInputElement>(null);
   const keymap = useKeymap();
   useEffect(() => setQuery(""), [target, n]);
-  const { hits, folds } = useSearchHits(query); // SET-007: launch commands and advanced controls count too
-  const repoHits = useMemo(() => searchRepos(query, projects), [query, projects]);
+  // EDIT-049: the filter runs after a short pause in typing; emptying the box shows every setting at once.
+  const settled = useSettled(query);
+  const { hits, folds } = useSearchHits(settled); // SET-007: launch commands and advanced controls count too
+  const repoHits = useMemo(() => searchRepos(settled, projects), [settled, projects]);
   const go = (p: Page) => {
     setQuery("");
     setPage(p);

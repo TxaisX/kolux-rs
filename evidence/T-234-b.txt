@@ -47,3 +47,29 @@ LIVE PROOF PENDING (batched)
 STILL OPEN IN T-234-b: collapsible sections, hover controls and context menu for tables, code-block language label and
   plain-text choice, spelling setting, [[ popup, hover bubble, link shortcut, missing-file toast, images, source [[note]]
   underline.
+
+PIECE 6 (lane/editor, 2026-10-20)
+BUILT
+- slashMenu.ts: "Collapsible section" entry (other names: details, toggle, fold, summary, accordion) inserts a details block.
+- tableHover.ts (pure geometry) + TableControls.tsx: a plus between two rows or columns and a cross on the row or column
+  under the pointer, drawn in the strip outside the table (never over a cell, no plus above the header, header row has no
+  cross); right-click menu with six edits. richTable.ts: TableEdit, runTableEdit (positional, one undo step), tablesOf.
+- richCode.ts + CodeLabel.tsx: language label at the top right of a code block, with a Plain text choice for an unknown language.
+- richKeys.ts: cut with nothing selected takes the paragraph, list item with its sub-list, or one visual line of a hard-wrapped
+  paragraph (never in a table, details or code block); Backspace or Delete in an empty paragraph removes it; Ctrl/Cmd+K opens
+  the toolbar link box (RichToolbar.tsx listens for the event).
+- wikiPopup.ts + SlashPanel.tsx (WikiMenu): typing [[ lists the worktree's notes (file_list, loaded once per open note),
+  narrows as you type, flags a name shared by several notes, never spans a line break; Enter, Tab or a click inserts a
+  relative link (spaces as %20); Escape closes. markdown.ts mountRich takes wikiOpts; EditorPane.tsx wires it.
+TESTS: tableHover.test.ts 12, richCode.test.ts, richKeys.test.ts, wikiPopup.test.ts 6, slashMenu.test.ts +1.
+READINGS: vitest run src/editor src/settings: 104 files, 616 tests passed (h4-vitest.log); tsc --noEmit exit 0 (h4-tsc.log).
+  No Rust, no shared file, no new patch.
+LIVE PROOF PENDING (batched)
+1. Rich view: hover the left edge of a table: a plus shows between rows and a cross on the row; click the plus, a row is
+   added; right-click a cell: the six-entry menu. Hover the top edge for columns. A click into a cell is never blocked.
+2. Click in a code block: the language label shows at its top right; pick Plain text.
+3. Caret in a paragraph, nothing selected, Ctrl+X: the whole paragraph is cut. Ctrl+K opens the link box.
+4. Type [[ in a note: the notes list; type to narrow; Enter makes a link; two notes named index show a "2 notes share
+   this name" flag.
+STILL OPEN IN T-234-b: code colouring (no tokenizer package), link hover bubble, missing-file toast (App.tsx), images
+  (showing, paste and save, data-picture size check), source-view [[note]] underline, equal-share column width.

@@ -103,6 +103,9 @@ export function verdict(path: string, now: Stamp | null, dirty: boolean): Verdic
   return dirty ? "banner" : "reload";
 }
 
+/** EDIT-032: what a tab says when its file is gone from disk (deleted outside, or moved without the explorer). The text stays in the tab. */
+export const goneText = (name: string): string => `${name} was deleted or moved away. Your text is still here; save to put the file back.`;
+
 /** Starts a read of the file; any read started before it no longer counts. */
 export function beginRead(path: string): number {
   return ++entry(path).seq;
