@@ -79,10 +79,10 @@ foundations every later card stands on; the cards they touch are finished in the
 ### P0 · theme 11 · Orchestration and automations (31 cards)
 
 - [ ] T-085-d · checks failed trigger: the pull request poll learns each pull request's checks state and fires when it goes from pending to failing (blocked on the reliability lane: scm.rs has to report each pull request's checks state first)
-- [ ] T-085-e · agent finished trigger: fire when a watched agent session ends (HAND TO FABLE: needs T-025 hooks)
+- [x] T-085-e · agent finished trigger: fire when a watched agent session ends · done 2026-10-19 (lane/automations from fe376cf9; evidence/T-085-e.txt: automations::tests 24/24 incl. t085e_* (2 new), clippy -D warnings clean, plan-check OK, firewall 0 new; the hooks.rs feed line is evidence/automations-T-085-e-hooks.rs.patch for the merge resolver; live proof pending (batched))
 - [ ] T-085-f · the automation dialog offers checks failed and agent finished as triggers once they fire (blocked on T-085-d and T-085-e)
 - [ ] T-085-g · the self-closing run tab: a background run's tab closes itself when the run ends (blocked on the coordinator: needs App.tsx and terminal.rs wiring outside the automations lane)
-- [ ] T-085-h · replay and reconnect a run after a restart (HAND TO FABLE: PTY work)
+- [x] T-085-h · replay and reconnect a run after a restart · done 2026-10-19 (lane/automations from fe376cf9; evidence/T-085-h.txt: automations::tests 26/26 incl. t085h_* (2 new), model.test.ts + AutomationsPage.test.ts 29/29, clippy -D warnings clean, tsc clean, plan-check OK, firewall 0 new; reconnect asks the terminal service through its existing API, so no terminal.rs patch; live proof pending (batched))
 - [ ] T-089-d · the rest of T-089-c: ask's older hand-back with exit status 75, worker-read (transcript pages, terminal evidence as a fallback, a released archive told apart from a live worker), worker-show waiting interactively with the pane's own hook state, and terminal commands resolving a dispatch id through terminal_for · blocked: needs T-325 transcripts, T-134 terminal output, hook state from a real agent, a packaged Windows build for exit 75 (the cli-lane wiring itself landed with MERGE 71)
 
 ### P0 · theme 8 · Release, update and CI pipeline (7 cards)
