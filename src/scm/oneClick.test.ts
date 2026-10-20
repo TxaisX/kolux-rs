@@ -1,0 +1,109 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { blocker, clearOneClick, needsOneClick, oneClickRun, pushFor, startOneClick, stepWord, STEPS, type Ports } from "./oneClick";
+import type { Status } from "./model";
+import { renderToString } from "react-dom/server";
+import { createElement } from "react";
+import { OneClickView } from "./OneClickNotice";
+
+const status = (o: Partial<Status> = {}): Status => ({ branch: "user/work", upstream: null, ahead: 0, behind: 0, rewritten: false, base: "origin/main", head: "h1", staged: [], changed: [], untracked: [], conflicts: [], operation: null, resolved: [], ...o });
+const ch = (path: string) => ({ path, status: "M", from: null });
+const ports = (over: Partial<Ports> = {}, seq: Status[] = [status({ changed: [ch("a.txt")] }), status({ head: "h2", ahead: 1, upstream: "origin/user/work" }), status({ head: "h2", ahead: 1, upstream: "origin/user/work" })]): Ports => {
+  let i = 0;
+  return {
+    status: vi.fn(async () => seq[Math.min(i++, seq.length - 1)]),
+    stage: vi.fn(async () => undefined),
+    message: vi.fn(async () => "Fix the thing"),
+    commit: vi.fn(async () => ({ id: "abc", blocked: false, output: "" })),
+    remote: vi.fn(async () => ({ ok: true, output: "" })),
+    text: vi.fn(async () => ["Title", "Body"] as [string, string]),
+    create: vi.fn(async () => ({ number: 7, url: "https://github.com/o/r/pull/7", state: "OPEN" })),
+    ...over,
+  };
+};
+
+describe("GIT-022 one click", () => {
+  beforeEach(() => clearOneClick());
+  it("commits, publishes and opens the pull request, ending in success", async () => {
+    const p = ports();
+    const run = await startOneClick("C:/w", p);
+    expect(run.state).toBe("done");
+    expect(run.pr?.number).toBe(7);
+    expect(p.stage).toHaveBeenCalledWith("C:/w", ["a.txt"]);
+    expect(p.commit).toHaveBeenCalledWith("C:/w", "Fix the thing");
+    expect(p.create).toHaveBeenCalledWith("C:/w", "Title", "Body", "main");
+    expect(oneClickRun("C:/w")?.state).toBe("done");
+  });
+  it("publishes a branch with no upstream and plain-pushes one that is ahead", () => {
+    expect(pushFor(status())).toEqual({ action: "publish" });
+    expect(pushFor(status({ upstream: "origin/x", ahead: 2 }))).toEqual({ action: "push" });
+    expect(pushFor(status({ upstream: "origin/x" }))).toEqual({ action: null });
+  });
+  it("forces with lease after a rewrite and stops when a sync is needed", () => {
+    expect(pushFor(status({ upstream: "origin/x", behind: 1, ahead: 1, rewritten: true }))).toEqual({ action: "force" });
+    expect(pushFor(status({ upstream: "origin/x", behind: 3 }))).toEqual({ stop: "Sync first: the remote has 3 commits this copy lacks" });
+  });
+  it("stops with the sync message before writing any text", async () => {
+    const p = ports({}, [status({ upstream: "origin/user/work", behind: 2 })]);
+    const run = await startOneClick("C:/w", p);
+    expect(run.state).toBe("failed");
+    expect(run.message).toMatch(/^Sync first/);
+    expect(run.step).toBe("push");
+    expect(p.text).not.toHaveBeenCalled();
+  });
+  it("stops when the branch changed while the text was being written", async () => {
+    const same = status({ upstream: "origin/user/work" });
+    const p = ports({}, [same, same, status({ upstream: "origin/user/work", head: "other" })]);
+    const run = await startOneClick("C:/w", p);
+    expect(run.state).toBe("failed");
+    expect(run.message).toMatch(/changed while the review text/);
+    expect(p.create).not.toHaveBeenCalled();
+  });
+  it("skips message and commit on a clean branch and names the push step by kind", async () => {
+    const p = ports({}, [status()]);
+    const run = await startOneClick("C:/w", p);
+    expect(run.skipped).toEqual(["message", "commit"]);
+    expect(p.commit).not.toHaveBeenCalled();
+    expect(p.remote).toHaveBeenCalledWith("C:/w", "publish");
+    expect(stepWord({ step: "push", push: "publish" })).toBe("Publishing the branch");
+    expect(stepWord({ step: "push", push: "force" })).toMatch(/force with lease/);
+  });
+  it("falls back to a plain message when the writer fails, and reports a failed push", async () => {
+    const p = ports({ message: vi.fn(async () => Promise.reject("no agent")), remote: vi.fn(async () => ({ ok: false, output: "rejected" })) });
+    const run = await startOneClick("C:/w", p);
+    expect(p.commit).toHaveBeenCalledWith("C:/w", "Work on user/work");
+    expect(run.message).toBe("The push failed, so no pull request was created: rejected");
+  });
+  it("refuses the default branch, conflicts and a blocked commit", async () => {
+    expect(blocker(status({ branch: "main", base: "origin/main" }))).toBe("Move to a feature branch first");
+    expect(blocker(status({ conflicts: [ch("x")] }))).toBe("Resolve the conflicts first");
+    const p = ports({ commit: vi.fn(async () => ({ id: null, blocked: true, output: "hook said no" })) });
+    expect((await startOneClick("C:/w", p)).message).toMatch(/hook said no/);
+  });
+  it("keeps a second start from doubling a running flow, and runs per folder", async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    const slow = ports({ message: vi.fn(async () => (await gate, "m")) });
+    const first = startOneClick("C:/a", slow);
+    await Promise.resolve();
+    expect(oneClickRun("C:/a")?.state).toBe("running");
+    expect(oneClickRun("C:/b")).toBeNull();
+    const second = await startOneClick("C:/a", ports());
+    expect(second.state).toBe("running");
+    release();
+    expect((await first).state).toBe("done");
+  });
+  it("offers the flow only when there is work to carry", () => {
+    expect(needsOneClick(status({ changed: [ch("a")] }))).toBe(true);
+    expect(needsOneClick(status({ upstream: "origin/x" }))).toBe(false);
+    expect(needsOneClick(status({ upstream: "origin/x", ahead: 1 }))).toBe(true);
+    expect(needsOneClick(status({ branch: "main" }))).toBe(false);
+    expect(needsOneClick(null)).toBe(false);
+  });
+  it("renders every step with long names cut to one line", () => {
+    const html = renderToString(createElement(OneClickView, { run: { dir: "d", step: "text", state: "running", message: null, pr: null, skipped: ["message"], push: "force" } }));
+    for (const id of STEPS) expect(html).toContain(`data-step="${id}"`);
+    expect(html).toContain("text-overflow:ellipsis");
+    expect(html).toContain('data-mark="now"');
+    expect(html).toContain("Pushing the branch (force with lease)");
+  });
+});
