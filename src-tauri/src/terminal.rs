@@ -74,6 +74,26 @@ struct Inner {
     flow: HashMap<u32, Arc<Flow>>,
     /// APP-052: the newest session each window pane started, so a pane takes it back after a webview reload.
     panes: HashMap<u32, u32>,
+    /// ORCH-057: each session's output count and raw tail, for a viewer's resync.
+    snaps: HashMap<u32, Snap>,
+}
+
+impl Inner {
+    /// ORCH-059: a session id about to be (re)used starts as a new incarnation: nothing an earlier
+    /// session under the same handle left behind (log, screen bits, end flag, marks, snapshot) carries over.
+    fn fresh_incarnation(&mut self, id: u32) {
+        self.dirs.remove(&id);
+        self.marks.remove(&id);
+        self.keys.remove(&id);
+        self.ended.remove(&id);
+        self.logs.remove(&id);
+        self.owned.remove(&id);
+        self.hist.remove(&id);
+        self.snaps.remove(&id);
+        if let Some(f) = self.flow.remove(&id) {
+            f.release();
+        }
+    }
 }
 
 /// ACCT-054: how far a session's output has run ahead of what its pane has drawn. Past
@@ -85,6 +105,9 @@ struct Flow {
     unacked: Mutex<u64>,
     drawn: Condvar,
     pauses: std::sync::atomic::AtomicU32,
+    /// ORCH-057: the pane stopped answering past `FLOW_WAIT` and the reader went on without it, so the
+    /// output it still has queued is stale; its next acknowledgement is answered with a snapshot.
+    behind: std::sync::atomic::AtomicBool,
 }
 
 const FLOW_HIGH: u64 = 512 * 1024;
@@ -110,6 +133,7 @@ impl Flow {
             if left.is_zero() {
                 // ponytail: a pane that never answers is taken as caught up; the next flood pauses again.
                 *n = 0;
+                self.behind.store(true, std::sync::atomic::Ordering::Relaxed);
                 break;
             }
             n = match self.drawn.wait_timeout(n, left) {
@@ -119,14 +143,15 @@ impl Flow {
         }
     }
 
-    /// The pane drew `bytes` more.
-    fn ack(&self, bytes: u64) {
+    /// The pane drew `bytes` more. True once after the reader gave up waiting for it (ORCH-057: resync due).
+    fn ack(&self, bytes: u64) -> bool {
         if let Ok(mut n) = self.unacked.lock() {
             *n = n.saturating_sub(bytes);
             if *n <= FLOW_LOW {
                 self.drawn.notify_all();
             }
         }
+        self.behind.swap(false, std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The session is ending: a paused reader goes on at once.
@@ -213,6 +238,40 @@ impl History {
             self.size = kept.len() as u64;
         }
     }
+}
+
+/// ORCH-057: every session's running output count and its newest `HISTORY_KEEP` raw bytes, kept under
+/// the registry lock with each chunk, so a viewer that fell behind redraws from a snapshot and drops the
+/// queued chunks the snapshot already holds (each output event carries the count after its chunk).
+#[derive(Default)]
+struct Snap {
+    seq: u64,
+    tail: std::collections::VecDeque<u8>,
+}
+
+impl Snap {
+    fn push(&mut self, chunk: &[u8]) -> u64 {
+        self.seq += chunk.len() as u64;
+        self.tail.extend(chunk);
+        let over = self.tail.len().saturating_sub(HISTORY_KEEP);
+        self.tail.drain(..over);
+        self.seq
+    }
+
+    /// The snapshot a viewer redraws from: the count it covers and the tail from a line boundary.
+    fn snapshot(&mut self) -> Snapshot {
+        let all = self.tail.make_contiguous();
+        // a tail that lost its start begins at the next line break (or character), never mid-sequence
+        let keep = if self.seq == all.len() as u64 { all.len() } else { all.len().saturating_sub(1) };
+        Snapshot { seq: self.seq, data: base64::engine::general_purpose::STANDARD.encode(trim_history(all, keep)) }
+    }
+}
+
+/// ORCH-057: what a viewer that fell behind redraws from (base64 bytes); output events up to `seq` are in it.
+#[derive(serde::Serialize, Debug, PartialEq)]
+pub struct Snapshot {
+    pub seq: u64,
+    pub data: String,
 }
 
 fn history_file(dir: &std::path::Path, key: u32) -> std::path::PathBuf {
@@ -614,12 +673,27 @@ struct OutputPayload {
     pane: Option<u32>,
     /// APP-052: the run of the terminal service that wrote it; a window drops chunks from a replaced run.
     generation: u64,
+    /// ORCH-057: the session's output count after this chunk; a viewer that redrew from a snapshot drops
+    /// the chunks it already holds (seq not past the snapshot's).
+    seq: u64,
 }
 
 #[derive(serde::Serialize, Clone)]
 struct ExitPayload {
     id: u32,
     code: Option<u32>,
+    /// ORCH-057: "exited" when the end was confirmed with an exit code, "unverifiable" when Kolux could
+    /// not learn how the program ended (viewers say so instead of calling it an exit).
+    outcome: &'static str,
+}
+
+/// ORCH-057: how a session's end reads to its viewers.
+fn outcome_of(code: Option<u32>) -> &'static str {
+    if code.is_some() {
+        "exited"
+    } else {
+        "unverifiable"
+    }
 }
 
 /// ORCH-058: what `kill_under` did: how many sessions it ended, and the pids it could not show
@@ -680,6 +754,7 @@ impl Terminals {
         let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
         inner.next_id += 1;
         let id = inner.next_id;
+        inner.fresh_incarnation(id);
         let out_app = app.clone();
         let exit_dir = log_dir.clone();
         let history = pane_key.and_then(|k| log_dir.as_deref().and_then(|d| History::open(d, k)));
@@ -765,7 +840,10 @@ impl Terminals {
             rows.max(1),
             move |chunk| {
                 let data = base64::engine::general_purpose::STANDARD.encode(chunk);
-                let _ = out_app.emit(OUTPUT_EVENT, OutputPayload { id, data, pane: pane_key, generation: generation() });
+                // ORCH-057: the count is taken under the registry lock with the snapshot tail, so a snapshot
+                // holds exactly the chunks whose count is not past its own.
+                let seq = out_registry.lock().map(|mut i| i.snaps.entry(id).or_default().push(chunk)).unwrap_or(0);
+                let _ = out_app.emit(OUTPUT_EVENT, OutputPayload { id, data, pane: pane_key, generation: generation(), seq });
                 if let Some(dir) = link_dir.as_deref() {
                     for url in prs.feed(chunk) {
                         let linked = out_app.state::<Mutex<crate::state::Store>>().lock().is_ok_and(|s| crate::scm::link_printed(&s, dir, &url));
@@ -811,6 +889,7 @@ impl Terminals {
                     inner.logs.remove(&id);
                     inner.owned.remove(&id);
                     inner.hist.remove(&id);
+                    inner.snaps.remove(&id);
                     if let Some(f) = inner.flow.remove(&id) {
                         f.release();
                     }
@@ -838,7 +917,7 @@ impl Terminals {
                 if let Some(d) = &exit_dir {
                     crate::diag::write(d, &format!("terminal {id} exited ({code:?})"));
                 }
-                let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code });
+                let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code, outcome: outcome_of(code) });
             },
         )?;
         inner.sessions.insert(id, session);
@@ -966,6 +1045,10 @@ impl Terminals {
         inner.marks.remove(&id);
         inner.keys.remove(&id);
         inner.hist.remove(&id);
+        // ORCH-059: the screen bits and snapshot go with the handle at once (the log stays for the
+        // waiter, which keeps an automation run's tail and then drops it; `read` already refuses it).
+        inner.owned.remove(&id);
+        inner.snaps.remove(&id);
         if let Some(f) = inner.flow.remove(&id) {
             f.release();
         }
@@ -975,12 +1058,15 @@ impl Terminals {
         Ok(())
     }
 
-    /// ACCT-054: the pane drew `bytes` more of session `id`'s output.
-    pub fn ack(&self, id: u32, bytes: u64) {
-        let flow = self.inner.lock().ok().and_then(|i| i.flow.get(&id).cloned());
-        if let Some(f) = flow {
-            f.ack(bytes);
+    /// ACCT-054: the pane drew `bytes` more of session `id`'s output. ORCH-057: when the reader gave up
+    /// waiting for this pane, the answer is a fresh snapshot to redraw from (once per give-up).
+    pub fn ack(&self, id: u32, bytes: u64) -> Option<Snapshot> {
+        let flow = self.inner.lock().ok().and_then(|i| i.flow.get(&id).cloned())?;
+        if !flow.ack(bytes) {
+            return None;
         }
+        let mut inner = self.inner.lock().ok()?;
+        Some(inner.snaps.entry(id).or_default().snapshot())
     }
 
     /// What session `id` runs: `None` when it is gone, `Some(None)` for a shell (the foreground
@@ -1118,6 +1204,7 @@ impl Terminals {
     pub(crate) fn fake_session(&self, id: u32, dir: &str, program: Option<&str>) {
         let long_ago = Instant::now() - Duration::from_secs(5);
         let mut inner = self.inner.lock().unwrap();
+        inner.fresh_incarnation(id);
         inner.sessions.insert(id, PtySession::fake(Box::new(std::io::sink())));
         inner.dirs.insert(id, dir.to_string());
         inner.logs.insert(id, OutputLog { written: Some(long_ago), ..OutputLog::default() });
@@ -1146,6 +1233,7 @@ impl Terminals {
             inner.dirs.clear();
             inner.keys.clear();
             inner.hist.clear();
+            inner.snaps.clear();
             for (_, f) in inner.flow.drain() {
                 f.release();
             }
@@ -1347,7 +1435,7 @@ pub fn terminal_resize(terminals: tauri::State<'_, Terminals>, id: u32, cols: u1
 /// ACCT-054: the pane drew `bytes` more of session `id`'s output.
 /// Council D2 MERGE 31 item 1: `async` for the same reason as `terminal_resize`.
 #[tauri::command(async)]
-pub fn terminal_ack(terminals: tauri::State<'_, Terminals>, id: u32, bytes: u64) {
+pub fn terminal_ack(terminals: tauri::State<'_, Terminals>, id: u32, bytes: u64) -> Option<Snapshot> {
     terminals.ack(id, bytes)
 }
 
@@ -1534,6 +1622,83 @@ mod tests {
         flow.sent_within(FLOW_HIGH, Duration::from_secs(5));
         h.join().unwrap();
         assert!(t.elapsed() < Duration::from_secs(4));
+    }
+
+    /// ORCH-057: a viewer paused past the wait while output floods is answered, at its next acknowledgement,
+    /// with a snapshot it redraws from: the count it covers matches the output events' counts, and it starts
+    /// at a line break once the tail lost its start. One snapshot per give-up; a caught-up viewer gets none.
+    #[test]
+    fn orch057_a_viewer_that_fell_behind_resyncs_from_a_snapshot_once() {
+        let t = Terminals::default();
+        let flow = Arc::new(Flow::default());
+        t.inner.lock().unwrap().flow.insert(3, flow.clone());
+        let mut seqs = Vec::new();
+        for i in 0..20_000u32 {
+            let line = format!("line {i:05} {}\r\n", "z".repeat(40));
+            seqs.push(t.inner.lock().unwrap().snaps.entry(3).or_default().push(line.as_bytes()));
+            flow.sent_within(line.len() as u64, Duration::from_millis(1));
+        }
+        assert!(seqs.windows(2).all(|w| w[1] > w[0]), "each chunk's count is past the last");
+        assert_eq!(t.ack(3, 0), Some(t.inner.lock().unwrap().snaps.get_mut(&3).unwrap().snapshot()), "the paused viewer resyncs");
+        let snap = t.inner.lock().unwrap().snaps.get_mut(&3).unwrap().snapshot();
+        assert_eq!(snap.seq, *seqs.last().unwrap(), "the snapshot covers every chunk sent");
+        let bytes = base64::engine::general_purpose::STANDARD.decode(&snap.data).unwrap();
+        assert!(bytes.len() <= HISTORY_KEEP && bytes.len() > HISTORY_KEEP - 100, "{}", bytes.len());
+        assert!(bytes.starts_with(b"line ") && bytes.ends_with(b"line 19999 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\r\n"), "starts at a line, ends with the newest");
+        assert_eq!(t.ack(3, 0), None, "one snapshot per give-up");
+        // a viewer that keeps up is never resynced
+        let quick = Arc::new(Flow::default());
+        t.inner.lock().unwrap().flow.insert(4, quick.clone());
+        quick.sent_within(FLOW_HIGH - 1, Duration::from_millis(1));
+        assert_eq!(t.ack(4, FLOW_HIGH - 1), None);
+        // a young session's snapshot is all it printed, from its first byte
+        let mut young = Snap::default();
+        young.push(b"no line break yet");
+        assert_eq!(young.snapshot(), Snapshot { seq: 17, data: base64::engine::general_purpose::STANDARD.encode(b"no line break yet") });
+        assert_eq!(outcome_of(Some(0)), "exited");
+        assert_eq!(outcome_of(None), "unverifiable", "an end Kolux could not confirm is not called an exit");
+    }
+
+    /// ORCH-059: a closed terminal is gone from every list and lookup at once, and a session opened again
+    /// under the same handle starts as a new terminal with none of the old one's state.
+    #[test]
+    fn orch059_closing_retires_a_terminal_everywhere_and_a_reused_handle_is_a_new_incarnation() {
+        let t = Terminals::default();
+        let dir = std::env::temp_dir().to_string_lossy().into_owned();
+        t.fake_session(9, &dir, Some("claude"));
+        {
+            let mut inner = t.inner.lock().unwrap();
+            inner.keys.insert(9, "secret-9".into());
+            inner.owned.insert(9, ALT | MOUSE);
+            inner.logs.get_mut(&9).unwrap().push(b"old output\r\n");
+            inner.snaps.entry(9).or_default().push(b"old output\r\n");
+        }
+        let h = handle_of(9);
+        assert!(t.live(&h) && t.by_key("secret-9").is_some() && t.read(9, None, None).is_some());
+        t.kill(9).unwrap();
+        assert!(!t.list().iter().any(|(id, _, _)| *id == 9), "list");
+        assert!(!t.sessions().iter().any(|(x, _, _)| *x == h), "sessions");
+        assert!(!t.every().iter().any(|(x, _, _)| *x == h), "every");
+        assert_eq!(t.by_key("secret-9"), None, "by_key");
+        assert_eq!(t.dir_of(&h), None, "dir_of");
+        assert_eq!(t.program_of(&h, Duration::ZERO), None, "program_of");
+        assert!(!t.live(&h), "live");
+        assert!(t.read(9, None, None).is_none(), "read");
+        {
+            let inner = t.inner.lock().unwrap();
+            assert!(!inner.owned.contains_key(&9) && !inner.snaps.contains_key(&9), "screen bits and snapshot went with it");
+        }
+        // the waiter of the old run marked it ended and its log lingered: a reopened handle sees none of that
+        {
+            let mut inner = t.inner.lock().unwrap();
+            inner.ended.insert(9);
+            inner.owned.insert(9, ALT);
+            inner.logs.entry(9).or_default().push(b"stale\r\n");
+        }
+        t.fake_session(9, &dir, None);
+        let inner = t.inner.lock().unwrap();
+        assert!(!inner.ended.contains(&9) && !inner.owned.contains_key(&9) && !inner.keys.contains_key(&9) && !inner.marks.contains_key(&9) && !inner.snaps.contains_key(&9), "new incarnation");
+        assert_eq!(inner.logs.get(&9).map(|l| l.lines.len()), Some(0), "an empty log");
     }
 
     #[test]

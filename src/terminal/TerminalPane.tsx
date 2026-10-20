@@ -31,6 +31,8 @@ import { currentText, optionsOf, TEXT_EVENT } from "./text";
 import { currentInput, INPUT_EVENT, inputOptions, loadLigatures, middlePastes, middleSource, probeGpu, watchPointer } from "./inputWire";
 import { ligaturesOn, preferGpu, yenToBackslash } from "./inputPrefs";
 import { hookColourMode } from "./colourMode";
+import { hookQueries, isGrok, paletteIsDark } from "./queries";
+import { applySnapshot, base64Bytes, resyncGate, type Snapshot } from "./resync";
 import { folderName } from "../projects/model";
 import { withoutRules } from "../launch/seats";
 import { modelOf } from "../settings/routing";
@@ -543,9 +545,19 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     });
     // ACCT-054: output is acknowledged as drawn, in running totals, so the reader pauses the
     // program when this pane falls behind rather than letting the app fall behind with it.
+    // ORCH-057: an acknowledgement answered with a snapshot means the reader went on without this pane;
+    // it redraws from the snapshot and drops the queued output the snapshot already holds.
+    const resync = resyncGate();
     const acks = batchAcks((bytes) => {
       const id = idRef.current;
-      if (id !== null) invoke("terminal_ack", { id, bytes }).catch(() => {});
+      if (id !== null)
+        invoke<Snapshot | null>("terminal_ack", { id, bytes })
+          .then((snap) => {
+            if (!snap || !alive || idRef.current !== id) return;
+            resync.took(snap);
+            applySnapshot(term, decodeOutput(snap.data));
+          })
+          .catch(() => {});
     });
     let ended = false;
     // Output can arrive before terminal_spawn hands back this pane's id (several panes starting at
@@ -717,6 +729,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
         await listen<OutputEvent>("terminal-output", (e) => {
           // APP-052: output from a replaced run of the terminal service is dropped, never drawn.
           if (!fromThisService(e.payload.generation, serviceRef.current)) return;
+          // ORCH-057: already in the snapshot this pane redrew from; acknowledged unread so the reader's count stays true
+          if (e.payload.id === idRef.current && !resync.accept(e.payload.seq)) return acks.drew(base64Bytes(e.payload.data));
           const draw = () => {
             const bytes = decodeOutput(e.payload.data);
             const marks = scanner.feed(bytes);
@@ -757,13 +771,14 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
             // ACCT-060: the modes the program turned on (mouse, bracketed paste, hidden cursor, alt screen) are turned
             // off now that it is gone, so the shell that follows works normally; a program still running is never touched.
             term.write(resetAfterExit(modeView(term.modes), term.buffer.active.type === "alternate"));
-          term.write(`\r\n\x1b[90m[process ${endedLabel(e.payload.code)}]\x1b[0m\r\n`);
+          term.write(`\r\n\x1b[90m[process ${endedLabel(e.payload.code, e.payload.outcome)}]\x1b[0m\r\n`);
             setStatus({ kind: "ended", code: e.payload.code });
             // TERM-111: a shell that exited by itself closes its pane (its neighbours take the space and
             // the tab goes with its last pane); one that died stays, with the exit code and a Restart;
             // an agent pane keeps what its program printed and Enter starts a shell in it.
             const code = e.payload.code;
             if (agent !== "shell") term.write("\x1b[90mEnter starts a shell here\x1b[0m\r\n");
+            else if (e.payload.outcome === "unverifiable") return; // ORCH-057: not known to have exited cleanly, so it stays
             else if (code === 0 || code === null) closeRef.current?.();
             else setDied(code);
           }),
@@ -895,7 +910,10 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     observer.observe(el);
     window.addEventListener(DIVIDER_DONE, resize);
     // SET-003: open terminals follow a theme change without being reopened.
-    const mode = hookColourMode(term, write, currentDark);
+    // ORCH-057: dark-or-light is the palette's own brightness (the app's mode only when it cannot be read);
+    // capability queries get the Windows answer, and a hidden Grok pane holds back only its version answers.
+    const mode = hookColourMode(term, write, () => paletteIsDark(term.options.theme?.background) ?? currentDark());
+    const queries = hookQueries(term, write, { windows: navigator.userAgent.includes("Windows"), holdVersion: () => isHidden.current && isGrok(program) });
     const recolour = () => {
       term.options.theme = currentTerminal();
       Object.assign(term.options, termFont(number));
@@ -995,6 +1013,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       ligatures?.dispose();
       selected.dispose();
       mode.dispose();
+      queries.dispose();
       clearInterval(beat);
       scale.dispose();
       window.removeEventListener("focus", refocus);
