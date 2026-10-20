@@ -57,9 +57,6 @@ mod orchestration;
 mod foreground;
 mod procs;
 mod protected;
-// T-156-b: listen() and its helpers are reached from hooks.rs only once evidence/hooks-T-156-b-hooks.rs.patch
-// lands (gated by PLAN T-156-b acceptance; after-list row). Drop this allow with that patch.
-#[allow(dead_code)]
 mod protected_custom;
 mod ports;
 mod labels;

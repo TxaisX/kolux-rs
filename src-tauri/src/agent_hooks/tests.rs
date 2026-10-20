@@ -221,6 +221,48 @@ fn stat_037_only_sessions_still_mid_task_are_recorded() {
     assert_eq!(ids, ["b", "c", "d"], "a finished session leaves the record; one without a session id cannot be resumed");
 }
 
+// ---- T-167-b: STAT-037 at workspace sleep ----
+
+fn at(pane: u32, state: &str, session: &str, cwd: &str) -> Row {
+    Row { cwd: Some(cwd.into()), ..row(pane, state, 1, Some(session)) }
+}
+
+#[test]
+fn t167b_sleeping_takes_the_rows_at_or_below_each_sleeping_folder_only() {
+    let mut rows = vec![at(1, "working", "a", "G:\\W\\t167b\\sub"), at(2, "waiting", "b", "G:/W/t167b"), at(3, "working", "c", "G:/W/t167b-other"), row(4, "working", 1, Some("d")), at(5, "working", "e", "G:/W/x")];
+    let taken = saved::sleeping(&mut rows, &["G:/W/t167b/".to_string()]);
+    let ids = |v: &[Row]| v.iter().map(|r| r.pane_key).collect::<Vec<_>>();
+    assert_eq!(ids(&taken), [1, 2], "the folder and below, either slash, a trailing slash ignored");
+    assert_eq!(ids(&rows), [3, 4, 5], "a sibling with the same prefix and a row with no folder stay");
+    #[cfg(windows)]
+    assert_eq!(ids(&saved::sleeping(&mut rows, &["g:/w/T167B-OTHER".to_string()])), [3], "Windows folders match in any case");
+    assert!(saved::sleeping(&mut rows, &[String::new()]).is_empty(), "an empty path sleeps nothing");
+}
+
+#[test]
+fn t167b_sleep_records_the_workspace_agents_before_clearing_their_rows_and_quit_keeps_them() {
+    let dir = std::env::temp_dir().join(format!("kolux-t167b-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let store = crate::state::Store::open(&dir).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    let fresh = |r: Row| Row { at: now - 1000, ..r };
+    let rows = [fresh(at(71, "working", "t167b-s1", "T:/t167b/ws1")), fresh(at(72, "done", "t167b-s2", "T:/t167b/ws1/deep")), fresh(at(73, "waiting", "t167b-s3", "T:/t167b/ws2"))];
+    store.set(saved::SAVED_KEY, &saved::serialize(&rows)).unwrap();
+    saved::startup(&store, &dir);
+    saved::at_sleep(&store, &["T:/t167b/ws1".to_string()]);
+    let record = |s: &crate::state::Store| saved::parse(s.get(saved::RESUMABLE_KEY).unwrap().as_deref(), now).into_iter().filter_map(|r| r.session_id).filter(|s| s.starts_with("t167b-")).collect::<Vec<_>>();
+    assert_eq!(record(&store), ["t167b-s1"], "the sleeping workspace's working agent is recorded; its finished one is not; the other workspace is untouched");
+    let left: Vec<u32> = saved::agent_status_saved().into_iter().map(|r| r.pane_key).filter(|k| (71..=73).contains(k)).collect();
+    assert_eq!(left, [73], "the sleeping rows are cleared after the record");
+    saved::at_quit(&store);
+    let mut both = record(&store);
+    both.sort();
+    assert_eq!(both, ["t167b-s1", "t167b-s3"], "quitting later offers both workspaces");
+    drop(store);
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[cfg(windows)]
 mod script_runs {
     use super::*;

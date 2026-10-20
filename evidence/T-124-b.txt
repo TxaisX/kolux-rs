@@ -54,3 +54,27 @@ LIVE PROOF PENDING (batched; after the patches are applied)
 4. Run Codex, let it ask for approval. Expect: tab reads "Codex action required"; approve and let it finish: "Codex ready".
 5. Run Pi with a plain title. Expect: a braille spinner before "Pi" while working, one beat across tabs; minimise the window and restore: no stuck frame, final "Pi ready" shown.
 6. Settings > Notifications: turn the master switch off. Expect: every control below greyed and unclickable, no notification when an agent finishes. On again, block Kolux notifications in Windows settings and press the test button: the warning has an Open Settings button.
+
+== v3 batch 7 (2026-10-20, Opus 5.5; lane/hooks from ee2f94c7) ==
+CHECKED ON MAIN (ee2f94c7, every earlier hooks patch applied): STAT 035 rest is live: T-258's src/shell/tabTitle.ts
+(generatedOn / generatedTitle / tabText) is the title source; src/App.tsx renders tabText with generatedOn(settings)
+and statusTitle/useBeatFrame from src/status/tabNameRule.ts; Settings > Agents renders GeneratedTitlesCard (saves
+generatedTabTitles, off by default). A typed name (p.title) always wins in tabText. STAT 042 rest patches are on main.
+BUILT
+- STAT 034 rest, provider session: src/status/inbandSession.ts. inbandState() reads an OSC 9999 payload the way
+  status.rs parse_inband does (state, else status; unknown/malformed = nothing); an in-band new turn (working) drops
+  the pane's stored provider session (Pane.session, the conversation id a restart resumes), a completion or any other
+  state keeps it. useAgentStatus.ts subscribes (onInbandTurn -> setPanes(forgetSession)); the terminal pane's OSC
+  9999 handler hands each payload over, only in an agent pane (evidence/hooks-T-124-b-TerminalPane.tsx.patch,
+  core lane). Only hooks set the session again (sessions/ownership.ts claim).
+- STAT 034 field name: status.rs parse_inband already accepts state and status (batch 1).
+TESTS: src/status/inbandSession.test.ts (5): payload reading, only working drops, only that pane forgets, the
+hand-off tells listeners on a new turn only, a completion keeps what a hook set again.
+GATES (logs G:/Temp/hooks-v3-logs/b7-t124-*): patched tsc 0, vitest inbandSession/useAgentStatus/useAgentEvents/
+terminal status 4 files 44 passed, vitest related (inbandSession, useAgentStatus, TerminalPane) 6 files 47 passed;
+reverted tsc 0, vitest related 4 files 35 passed; git apply --check exit 0. No Rust changed.
+MOVED TO T-124-d: STAT 033 Gemini CLI title symbols (in neither the spec nor public docs read; needs a real Gemini run).
+LIVE PROOF PENDING (batched; after the TerminalPane patch is applied)
+7. Start Claude Code in a pane, let one turn finish (the pane's Copy session ID works). In that pane's terminal have a
+   script print ESC ] 9999 ; {"state":"done"} BEL: the session id is still there. Print {"state":"working"}: the dot
+   shows working and Copy session ID has nothing to copy until the next Claude hook names the session again.
