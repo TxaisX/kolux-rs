@@ -1,0 +1,34 @@
+diff --git a/src-tauri/src/cli.rs b/src-tauri/src/cli.rs
+index c46a2114..2f2022dd 100644
+--- a/src-tauri/src/cli.rs
++++ b/src-tauri/src/cli.rs
+@@ -2866,6 +2866,9 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
+                 }
+                 Ok(v)
+             })?;
++            // ORCH-007 (T-030-b): an idle agent that reads this mail gets one line pointing at it.
++            let ids: Vec<String> = v["messageIds"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(str::to_string)).collect();
++            crate::orchestration::pointer::after_send(ctx.terminals, &m, &dispatches, &ids, &peers, &p);
+             if !v["settled"].is_null() {
+                 let (t, d) = (Value::Array(tasks).to_string(), Value::Array(dispatches).to_string());
+                 store.set_all(&[(TASKS_KEY, &t), (DISPATCHES_KEY, &d)]).map_err(|e| Fail::new("failed", e.to_string()))?;
+@@ -2892,7 +2895,10 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
+             if let Some(bad) = types.iter().flatten().find(|t| !crate::orchestration::KINDS.contains(&t.as_str())) {
+                 return Err(Fail::args(format!("--types does not know {bad}")));
+             }
+-            m.check(&p, &reader, &boxes, mode, types.as_deref(), text("ack").as_deref(), a["fence"].as_u64())?
++            let r = m.check(&p, &reader, &boxes, mode, types.as_deref(), text("ack").as_deref(), a["fence"].as_u64())?;
++            // ORCH-007 (T-030-b): reading its own mail drops a pointer not yet typed; a waiting check takes the mail.
++            crate::orchestration::pointer::after_check(&p, &reader, a["wait"] == true);
++            r
+         }
+         "orchestration.reply" => {
+             let p = need()?;
+@@ -2930,6 +2936,7 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
+         other => return Err(Fail::args(format!("unknown command {other}"))),
+     };
+     m.save(&store)?;
++    crate::orchestration::pointer::rebind(&m);
+     Ok(out)
+ }
+ 

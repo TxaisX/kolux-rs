@@ -9,6 +9,9 @@ use std::collections::BTreeMap;
 
 /// ORCH-055 (T-174-b): prompts typed into agents land exactly once.
 pub mod sendonce;
+/// ORCH-007 (T-030-b): the one-line mail pointer typed into an idle agent.
+#[allow(dead_code)] // T-030-b: called from cli.rs by evidence/orchestration-T-030-b-cli.patch
+pub mod pointer;
 /// ORCH-034 (T-173-c): the orchestration store upgrades in place from every earlier layout of its own.
 pub mod upgrade;
 /// ORCH-062..064 (T-312): the runtime commands agents call for files, git and GitHub, past sessions
