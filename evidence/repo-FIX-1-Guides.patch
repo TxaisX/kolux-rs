@@ -1,0 +1,21 @@
+diff --git a/src/onboarding/Guides.tsx b/src/onboarding/Guides.tsx
+index 7ede6da4..a34071d3 100644
+--- a/src/onboarding/Guides.tsx
++++ b/src/onboarding/Guides.tsx
+@@ -7,6 +7,7 @@ import { useKeymap } from "../keys/KeymapContext";
+ import { defaultsOnly, labelOf } from "../keys/keymap";
+ import "./onboarding.css";
+ import { useSettings } from "../settings/useSettings";
++import { probeSetup } from "../settings/setupProbe";
+ import Tours from "./Tours";
+ import { defaultAgentId } from "../launch/agents";
+ import {
+@@ -41,7 +42,7 @@ async function readFacts(check: ReturnType<typeof latest<boolean>>, put: (f: Par
+   if (git.length >= 2 && !twoBefore) markGuide("tried", TWO_REPOS).catch(() => {});
+   put({ workspaces: lists.filter((l): l is Place[] => l !== null), gitProjects: Math.max(git.length, twoBefore ? 2 : 0) });
+   const ticket = check.begin();
+-  const found = await Promise.all(git.map((p) => invoke<unknown>("workspace_setup", { path: p.path }).then((l) => l !== null, () => false)));
++  const found = await Promise.all(git.map((p) => probeSetup(p.path, false))); // the page's own read: no trust question, no refusal to misread
+   check.settle(ticket, found.some(Boolean));
+   await gh;
+   return found.some(Boolean);

@@ -154,7 +154,10 @@ fn configured_shell() -> Option<PathBuf> {
 /// STAT-055: where a project's setup script comes from. By default the script kept in Kolux's
 /// own settings for the repository wins even when kolux.yaml has one; the older shared-first
 /// policy (`shared`) takes kolux.yaml's only. The bool says whether the script is the shared one.
-pub fn pick_setup(local: Option<&str>, shared: Option<String>, policy: Option<&str>) -> Option<(String, bool)> {
+/// Tests only: under `both` the script is the joined text, which trust must never be asked over
+/// (use pick_parts, whose `shared` is the text to trust).
+#[cfg(test)]
+fn pick_setup(local: Option<&str>, shared: Option<String>, policy: Option<&str>) -> Option<(String, bool)> {
     pick_parts(local, shared, policy).map(|p| {
         let is_shared = p.shared.is_some();
         (p.script, is_shared)
@@ -168,36 +171,62 @@ pub fn pick_setup(local: Option<&str>, shared: Option<String>, policy: Option<&s
 pub struct Picked {
     pub script: String,
     pub shared: Option<String>,
+    /// Why the two scripts could not be joined (`both`); nothing runs then and `script` is empty.
+    pub refused: Option<String>,
 }
 
 /// SET-033: the own script and the shared one as one script that runs the first, then the second.
 /// Two plain one-line commands join with `&&` (cmd runs that too, and a failed first stops the
-/// second); anything longer joins by lines, for a POSIX shell, with the first `#!` line either has
-/// kept as the script's own (the own script's, when both have one).
-fn join_both(local: &str, shared: &str) -> String {
+/// second); anything longer joins by lines, for a POSIX shell, and a failed first part ends the
+/// script before the second runs. The two must agree on the interpreter: the same `#!` line, or one
+/// `#!` line that names a POSIX shell beside a script that names none. Otherwise one of the two
+/// would run under an interpreter it was not written for, and the join is refused with the reason.
+fn join_both(local: &str, shared: &str) -> Result<String, String> {
     let (local, shared) = (local.trim_end_matches('\n'), shared.trim_end_matches('\n'));
     let plain = |s: &str| !s.contains('\n') && !s.starts_with("#!");
     if plain(local) && plain(shared) {
-        return format!("{} && {}", local.trim(), shared.trim());
+        return Ok(format!("{} && {}", local.trim(), shared.trim()));
     }
-    let (first, rest) = shared.split_once('\n').unwrap_or((shared, ""));
-    match (local.starts_with("#!"), first.starts_with("#!")) {
-        (false, true) => format!("{first}\n{local}\n{rest}"),
-        (true, true) => format!("{local}\n{rest}"),
-        _ => format!("{local}\n{shared}"),
+    fn hashbang(s: &str) -> Option<&str> {
+        s.lines().next().map(str::trim).filter(|l| l.starts_with("#!"))
     }
+    let (own_line, shared_line) = (hashbang(local), hashbang(shared));
+    let pick_one = "Give them the same #! line, or pick just one of them on this page.";
+    match (own_line, shared_line) {
+        (Some(a), Some(b)) if a != b => return Err(format!("Your setup script starts with `{a}` and kolux.yaml's with `{b}`, so one script cannot run both. {pick_one}")),
+        (Some(a), None) if shebang(local).is_none() => return Err(format!("Your setup script starts with `{a}`, which would also run kolux.yaml's setup script. {pick_one}")),
+        (None, Some(b)) if shebang(shared).is_none() => return Err(format!("kolux.yaml's setup script starts with `{b}`, which would also run your setup script. {pick_one}")),
+        _ => {}
+    }
+    let body = |s: &str, line: Option<&str>| if line.is_some() { s.split_once('\n').map_or("", |(_, rest)| rest).to_string() } else { s.to_string() };
+    let (own, theirs) = (body(local, own_line), body(shared, shared_line));
+    let head = own_line.or(shared_line).map(|l| format!("{l}\n")).unwrap_or_default();
+    Ok(format!("{head}{}\nkolux_setup_status=$?\n[ \"$kolux_setup_status\" -eq 0 ] || exit \"$kolux_setup_status\"\n{theirs}", own.trim_end_matches('\n')))
+}
+
+/// SET-033: why `both` could not run `local` then `shared` on this PC, if it could not: the two
+/// cannot be joined, or the joined script would go through cmd, which misreads it.
+fn both_trouble(local: &str, shared: &str, windows: bool, configured: Option<&Path>, find: impl Fn(&str) -> Option<PathBuf>) -> Option<String> {
+    let joined = match join_both(local, shared) {
+        Ok(j) => j,
+        Err(why) => return Some(why),
+    };
+    setup_line(&joined, windows, configured, find).err()
 }
 
 /// SET-033: pick_setup, plus the policy `both`, which runs the user's own setup and then the shared
 /// one when both exist (the one that exists, when only one does).
 pub fn pick_parts(local: Option<&str>, shared: Option<String>, policy: Option<&str>) -> Option<Picked> {
     let local = local.map(|l| l.replace("\r\n", "\n")).filter(|l| !l.trim().is_empty());
-    let own = |l: String| Picked { script: l, shared: None };
-    let theirs = |s: String| Picked { script: s.clone(), shared: Some(s) };
+    let own = |l: String| Picked { script: l, shared: None, refused: None };
+    let theirs = |s: String| Picked { script: s.clone(), shared: Some(s), refused: None };
     match policy {
         Some("shared") | Some("shared-first") => shared.map(theirs),
         Some("both") => match (local, shared) {
-            (Some(l), Some(s)) => Some(Picked { script: join_both(&l, &s.replace("\r\n", "\n")), shared: Some(s) }),
+            (Some(l), Some(s)) => Some(match join_both(&l, &s.replace("\r\n", "\n")) {
+                Ok(script) => Picked { script, shared: Some(s), refused: None },
+                Err(why) => Picked { script: String::new(), shared: None, refused: Some(why) },
+            }),
             (Some(l), None) => Some(own(l)),
             (None, s) => s.map(theirs),
         },
@@ -275,7 +304,11 @@ pub fn workspace_setup(store: StoreState<'_>, path: String, local: Option<String
 fn setup_for(path: &str, local: Option<String>, policy: Option<String>, trust: Gate<'_>) -> Result<Option<SetupLine>, String> {
     let wt = Path::new(path);
     let shared = std::fs::read_to_string(wt.join(crate::include::CONFIG_FILE)).ok().and_then(|t| setup_script(&t));
-    let Some(Picked { script, shared }) = pick_parts(local.as_deref(), shared, policy.as_deref()) else { return Ok(None) };
+    let Some(Picked { script, shared, refused }) = pick_parts(local.as_deref(), shared, policy.as_deref()) else { return Ok(None) };
+    // SET-033: two scripts that cannot share an interpreter run nothing, and nothing is asked about trust
+    if let Some(why) = refused {
+        return Err(why);
+    }
     if let Some(theirs) = shared {
         trust(&main_folder(wt), "setup", &theirs)?;
     }
@@ -884,6 +917,9 @@ pub struct RepoSetup {
     pub wait: bool,
     /// Both scripts exist and no choice is made: running both is suggested.
     pub suggest_both: bool,
+    /// Why the choice in force would not run on this PC (the two scripts cannot be joined, or cmd
+    /// would misread the joined one); None when it runs or nothing is chosen to run.
+    pub run_error: Option<String>,
 }
 
 /// kolux.yaml's setup script at `root`, or why it could not be read (a missing file is no error).
@@ -904,7 +940,13 @@ pub fn repo_setup(store: &crate::state::Store, root: &Path, shared: (Option<Stri
         _ => "local",
     };
     let suggest_both = policy.is_none() && inherited == "local" && local.is_some() && shared.0.is_some();
-    RepoSetup { local, shared: shared.0, shared_error: shared.1, policy, inherited: inherited.to_string(), wait: repo_wait(store, root), suggest_both }
+    // SET-033: the page says when the choice in force is `both` and the joined script would be refused here
+    let in_force = policy.as_deref().unwrap_or(inherited);
+    let run_error = match (in_force, local.as_deref(), shared.0.as_deref()) {
+        ("both", Some(own), Some(theirs)) => both_trouble(own, theirs, cfg!(windows), configured_shell().as_deref(), find_posix),
+        _ => None,
+    };
+    RepoSetup { local, shared: shared.0, shared_error: shared.1, policy, inherited: inherited.to_string(), wait: repo_wait(store, root), suggest_both, run_error }
 }
 
 #[tauri::command(async)]
@@ -1064,7 +1106,7 @@ pub fn suggest(root: &Path, local: Option<&str>, policy: Option<&str>) -> SetupS
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return SetupSuggestion::Error { message: format!("{} could not be read: {e}", crate::include::CONFIG_FILE) },
     };
-    if pick_setup(local, shared, policy).is_some() {
+    if pick_parts(local, shared, policy).is_some() {
         return SetupSuggestion::None;
     }
     // Under a policy that takes only kolux.yaml's script a saved local setup would never run: no card.
@@ -1764,11 +1806,12 @@ mod tests {
         let shared = || Some("echo shared".to_string());
         let both = pick_parts(Some("echo mine\r\n"), shared(), Some("both")).unwrap();
         assert_eq!(both.script, "echo mine && echo shared", "own first, then shared; a failed first ends it");
-        assert_eq!(join_both("make\nmake test\n", "pnpm i"), "make\nmake test\npnpm i", "longer ones join by lines");
-        assert_eq!(join_both("make", "#!/bin/bash -e\npnpm i"), "#!/bin/bash -e\nmake\npnpm i", "the shared script keeps the shell it asked for when the own one names none");
-        assert_eq!(join_both("#!/bin/sh\nmake", "#!/bin/bash\npnpm i"), "#!/bin/sh\nmake\npnpm i", "the own script's shell wins; one shebang line only");
+        let stop = "kolux_setup_status=$?\n[ \"$kolux_setup_status\" -eq 0 ] || exit \"$kolux_setup_status\"";
+        assert_eq!(join_both("make\nmake test\n", "pnpm i").unwrap(), format!("make\nmake test\n{stop}\npnpm i"), "longer ones join by lines, with the own part's failure ending the script");
+        assert_eq!(join_both("make", "#!/bin/bash -e\npnpm i").unwrap(), format!("#!/bin/bash -e\nmake\n{stop}\npnpm i"), "a POSIX shell the shared script asked for also runs a plain own script");
+        assert_eq!(join_both("#!/bin/sh -e\nmake", "#!/bin/sh -e\npnpm i").unwrap(), format!("#!/bin/sh -e\nmake\n{stop}\npnpm i"), "the same interpreter line joins, once");
         assert_eq!(both.shared.as_deref(), Some("echo shared"), "trust covers the shared text alone");
-        assert_eq!(pick_parts(Some("echo mine"), None, Some("both")), Some(Picked { script: "echo mine".into(), shared: None }), "only the own one exists");
+        assert_eq!(pick_parts(Some("echo mine"), None, Some("both")), Some(Picked { script: "echo mine".into(), shared: None, refused: None }), "only the own one exists");
         assert_eq!(pick_parts(None, shared(), Some("both")).unwrap().shared.as_deref(), Some("echo shared"));
         assert_eq!(pick_parts(Some("  "), shared(), Some("both")).unwrap().script, "echo shared", "a blank own script is none");
         assert_eq!(pick_parts(None, None, Some("both")), None);
@@ -1800,6 +1843,100 @@ mod tests {
         assert_eq!(asked.borrow().len(), n);
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fix1_both_refuses_when_the_two_interpreters_differ_and_runs_nothing_untrusted() {
+        let node = "#!/usr/bin/env node\nconsole.log(1)";
+        for (local, shared, names) in [
+            ("#!/bin/sh\nmake", "#!/bin/bash\npnpm i", ["/bin/sh", "/bin/bash"]),
+            ("make", node, ["your setup", "/usr/bin/env node"]),
+            ("#!/usr/bin/env node\nbuild()", "pnpm i", ["/usr/bin/env node", "kolux.yaml"]),
+            ("#!/usr/bin/env node\nbuild()", "#!/usr/bin/env python3\nprint(1)", ["node", "python3"]),
+        ] {
+            let why = join_both(local, shared).expect_err(&format!("{local:?} + {shared:?} must not join"));
+            for n in names {
+                assert!(why.contains(n), "the refusal names {n}: {why}");
+            }
+            let picked = pick_parts(Some(local), Some(shared.into()), Some("both")).unwrap();
+            assert_eq!((picked.script.as_str(), picked.shared.as_deref(), picked.refused.as_deref()), ("", None, Some(why.as_str())), "nothing runs and nothing asks for trust");
+        }
+        // the same interpreter, or a POSIX shell beside a script that names none, still joins
+        assert!(join_both("#!/bin/sh\nmake", "#!/bin/sh\npnpm i").is_ok());
+        assert!(join_both("make\nmake test", "#!/bin/sh\npnpm i").is_ok());
+        assert!(join_both("make", "pnpm i").is_ok());
+
+        // the runner stops at the refusal before it asks about trust
+        let (store, dir, root) = trust_store();
+        std::fs::write(root.join("kolux.yaml"), "scripts:\n  setup: |\n    #!/bin/bash\n    pnpm i\n").unwrap();
+        let store = std::sync::Mutex::new(store);
+        let asked = std::cell::RefCell::new(0);
+        let gate = |r: &Path, kind: &str, script: &str| {
+            *asked.borrow_mut() += 1;
+            require_trust(&store, r, kind, script)
+        };
+        let err = setup_for(&root.to_string_lossy(), Some("#!/bin/sh\nmake".into()), Some("both".into()), &gate).unwrap_err();
+        assert!(err.contains("/bin/sh") && err.contains("/bin/bash"), "the runner says why: {err}");
+        assert_eq!(*asked.borrow(), 0, "an untrusted script is not even asked about when nothing would run");
+        assert_eq!(shared_script("setup", &root, &root, Some("#!/bin/sh\nmake"), Some("both")), None, "so the trust prompt does not appear for it either");
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fix1_a_failed_own_setup_stops_the_shared_one_in_the_joined_script() {
+        let Some(sh) = (if cfg!(windows) { find_posix("sh") } else { Some(PathBuf::from("sh")) }) else { return };
+        let dir = tree(&[]);
+        let run = |own: &str| -> bool {
+            let _ = std::fs::remove_file(dir.join("shared-ran"));
+            let script = join_both(own, "echo b > shared-ran\ntrue").unwrap();
+            let status = std::process::Command::new(&sh).arg("-c").arg(&script).current_dir(&dir).status().unwrap();
+            assert_eq!(status.success(), dir.join("shared-ran").is_file(), "the script succeeds exactly when the shared part ran: {script:?}");
+            dir.join("shared-ran").is_file()
+        };
+        assert!(!run("echo a\nfalse"), "an own setup that fails ends the script before kolux.yaml's runs");
+        assert!(!run("echo a\nexit 3"), "an own setup that exits non-zero too");
+        assert!(run("echo a\ntrue"), "an own setup that works lets the shared one run");
+        assert!(run("cd .\nexport A=1"), "what the own part sets up stays for the shared part");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn fix1_the_page_says_when_both_would_be_refused() {
+        let none = |_: &str| None::<PathBuf>;
+        let git_bash = Some(PathBuf::from("C:/Program Files/Git/bin/bash.exe"));
+        // on Windows with no POSIX shell configured, cmd runs only one line and misreads quotes, % and ^
+        let multi = both_trouble("make\nmake test", "pnpm i", true, None, none).expect("two lines through cmd");
+        assert!(multi.contains("more than one line") && multi.contains("#!/bin/sh"), "{multi}");
+        assert!(both_trouble("make", "echo \"hi\"", true, None, none).unwrap().contains("quotes"));
+        assert!(both_trouble("make", "echo 100%", true, None, none).unwrap().contains('%'));
+        assert_eq!(both_trouble("make", "pnpm i", true, None, none), None, "two plain one-liners join with && and cmd runs them");
+        assert_eq!(both_trouble("make\nmake test", "pnpm i", true, git_bash.as_deref(), none), None, "a configured POSIX shell runs the joined lines");
+        assert_eq!(both_trouble("make\nmake test", "pnpm i", false, None, none), None, "elsewhere sh runs them");
+        // two interpreters that cannot share one script are refused wherever it is
+        assert!(both_trouble("#!/bin/sh\nmake", "#!/bin/bash\npnpm i", false, None, none).unwrap().contains("/bin/bash"));
+
+        // and the repository's page carries it next to "Which runs", only when `both` is in force
+        let profile = tree(&[]);
+        let root = tree(&[("kolux.yaml", b"scripts:\n  setup: |\n    #!/bin/bash\n    pnpm i\n")]);
+        let store = crate::state::Store::open(&profile).unwrap();
+        save_local(&store, &root, "#!/bin/sh\nmake").unwrap();
+        let shown = |store: &crate::state::Store| repo_setup(store, &root, read_shared(&root));
+        assert_eq!(shown(&store).run_error, None, "yours alone runs under the default choice");
+        set_repo_policy(&store, &root, Some("both")).unwrap();
+        let why = shown(&store).run_error.expect("both with two interpreters is refused");
+        assert!(why.contains("/bin/sh") && why.contains("/bin/bash"), "{why}");
+        set_repo_policy(&store, &root, Some("shared")).unwrap();
+        assert_eq!(shown(&store).run_error, None, "the shared script alone runs");
+        set_repo_policy(&store, &root, None).unwrap();
+        store.set(POLICY_KEY, "both").unwrap();
+        assert!(shown(&store).run_error.is_some(), "a global `both` that the repository inherits counts too");
+        save_local(&store, &root, "#!/bin/bash\nmake").unwrap();
+        assert_eq!(shown(&store).run_error, None, "the same interpreter joins");
+        drop(store);
+        for d in [profile, root] {
+            let _ = std::fs::remove_dir_all(d);
+        }
     }
 
     #[test]
@@ -1860,8 +1997,6 @@ mod tests {
         assert_eq!((s.local, s.shared.as_deref(), s.policy.as_deref()), (None, Some("pnpm i"), Some("both")), "the shared script and the choice stay");
         assert_eq!(local_setup(&store, &b).as_deref(), Some("npm ci"), "another repository keeps its own");
         assert_eq!(remove_local(&store, &a), Ok(false), "nothing left to remove");
-        // with its setup gone the sidebar card may offer one again
-        assert_eq!(effective_policy(&store, None), None);
         // an unreadable kolux.yaml says so instead of looking empty
         std::fs::write(b.join("kolux.yaml"), vec![b'x'; (READ_MAX + 1) as usize]).unwrap();
         let s = shown(&b);

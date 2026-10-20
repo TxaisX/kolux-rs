@@ -18,6 +18,8 @@ export interface RepoSetup {
   wait: boolean;
   /** Both scripts exist and no choice is made. */
   suggestBoth: boolean;
+  /** Why the choice in force would not run on this PC (two interpreters, or `both` through cmd); null when it would. */
+  runError: string | null;
 }
 
 export type Choice = "local" | "shared" | "both";
@@ -73,8 +75,17 @@ function running(s: RepoSetup): { own: boolean; theirs: boolean } {
   }
 }
 
+/** Whether the repository has a setup script that would run for the choice in force: a read that
+ *  asks no trust question and starts nothing (the Guides and Automation probes use it). */
+export function hasSetup(s: RepoSetup): boolean {
+  // a kolux.yaml that cannot be read is still there to be chosen, as it was for the old probes
+  const r = running({ ...s, shared: s.shared ?? (s.sharedError ? s.sharedError : null) });
+  return r.own || r.theirs;
+}
+
 /** One sentence: what runs when a workspace is made. */
 export function runsNote(s: RepoSetup): string {
+  if (s.runError) return "Nothing runs until that is fixed.";
   const { own, theirs } = running(s);
   if (own && theirs) return "Runs your saved setup, then the setup script from kolux.yaml.";
   if (own) return effectiveChoice(s) === "local" && s.shared ? "Runs your saved setup; kolux.yaml's setup script is not used." : "Runs your saved setup.";
@@ -85,6 +96,7 @@ export function runsNote(s: RepoSetup): string {
 
 /** One sentence: which of what runs asks first (SAFE-025). Empty when nothing runs. */
 export function trustNote(s: RepoSetup): string {
+  if (s.runError) return "";
   const { own, theirs } = running(s);
   const asks = "The script in kolux.yaml asks first, once, and again if it changes.";
   if (own && theirs) return `Your own setup runs without asking. ${asks}`;
