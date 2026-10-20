@@ -1,0 +1,20 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index cf6c35cc..1e9d6e72 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -50,6 +50,7 @@ import { startFields, startTail } from "./projects/startArgs";
+ import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
+ import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./projects/WorktreePalette";
+ import AboutPanel from "./shell/AboutPanel";
++import LinkAskHost from "./shell/LinkAskDialog";
+ import { nameBranchFor } from "./scm/autoBranch";
+ import { navTarget, stepAllowed, travel, visit, type Place } from "./projects/nav";
+ import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
+@@ -2329,6 +2330,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+           />
+         )}
+         <TrustPrompt />
++        <LinkAskHost />
+         {guard.dialog}
+         {quitAsk && (
+           <Ask

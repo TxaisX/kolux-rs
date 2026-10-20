@@ -55,7 +55,7 @@ describe("TERM-049 Tab Color and menu head", () => {
   });
   it("forgets closed tabs and styles a coloured one", () => {
     expect(forgetColors({ 1: "red", 2: "blue" }, [1])).toEqual({ 2: "blue" });
-    expect(tabStyle({ 1: "red" }, 1)?.boxShadow).toContain(TAB_COLORS[0].css);
+    expect((tabStyle({ 1: "red" }, 1) as Record<string, string>)["--tab-dot"]).toBe(TAB_COLORS.find((c) => c.id === "red")!.css);
     expect(tabStyle({}, 1)).toBeUndefined();
   });
   it("heads the menu: Change Title for terminals, Pin, Tab Color, then the splits", () => {

@@ -1,0 +1,21 @@
+diff --git a/src/terminal/TerminalPane.tsx b/src/terminal/TerminalPane.tsx
+index 4d5aa780..8aa067c2 100644
+--- a/src/terminal/TerminalPane.tsx
++++ b/src/terminal/TerminalPane.tsx
+@@ -57,6 +57,7 @@ import FindBar from "./FindBar";
+ import { stopLine, type StopInfo } from "./notify";
+ import NameField from "./NameField";
+ import { copyOnSelect } from "../shell/inputExtras";
++import { askLink } from "../shell/linkAsk";
+ import { handlesIn } from "./tabs";
+ import { markShell, runningOf, shellInAgentPane } from "./remove";
+ 
+@@ -436,6 +437,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
+       const door = clickTarget(f, e, keys.current.platform === "darwin", o.linksOpenInKolux && !!o.onOpenLink);
+       if (door === null) return;
+       const said = (err: unknown) => setFlash(explainError(String(err)));
++      // TERM-135: the first plain web click asks where links open (Shift or Alt with the modifier already names it)
++      if (f.kind === "url" && askLink(f.target, e.shiftKey || e.altKey, (to) => (to === "kolux" && o.onOpenLink ? o.onOpenLink(f.target) : void invoke("open_external", { url: f.target }).catch(said)))) return;
+       if (door === "kolux") o.onOpenLink?.(f.target);
+       else if (door === "system") invoke("open_external", { url: f.target }).catch(said);
+       else {

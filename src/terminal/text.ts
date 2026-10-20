@@ -6,6 +6,8 @@ import type { ITerminalOptions } from "@xterm/xterm";
 import { monoFont, SPAN } from "../theme";
 import { fontStack } from "../settings/fonts";
 import { applyInput } from "./inputWire";
+import { drawOptions } from "../shell/termDraw";
+import { applyLinkState } from "../shell/linkAsk";
 
 export const FIELDS = {
   size: "terminalFontSize",
@@ -95,6 +97,7 @@ export const optionsOf = (t: TerminalText): ITerminalOptions => ({
   lineHeight: t.lineHeight,
   cursorStyle: t.cursor,
   cursorBlink: t.blink,
+  ...drawOptions(t.cursor), // TERM-101 hollow block only when unfocused, TERM-104 glyphs kept in their cells
   minimumContrastRatio: t.contrast ? 4.5 : 1,
   scrollback: t.scrollback,
   scrollSensitivity: t.scroll,
@@ -109,6 +112,7 @@ export const TEXT_EVENT = "kolux-terminal-text";
 export function applyText(s: Record<string, unknown> | null | undefined): void {
   current = readText(s ?? {});
   applyInput(s); // T-247-d: the input preferences ride the same settings reads
+  applyLinkState(s); // TERM-135: where terminal links open, and whether that was asked
   if (typeof window !== "undefined") window.dispatchEvent(new Event(TEXT_EVENT));
 }
 
