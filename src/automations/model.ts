@@ -20,6 +20,8 @@ export type Automation = {
   baseBranch?: string;
   /** AUTO-010: whether each new-per-run worktree runs the project setup; missing means skip. */
   runSetup?: boolean;
+  /** AUTO-009: an existing-worktree automation continues in the session its last run left open, when that is free. */
+  reuseSession?: boolean;
   /** AUTO-007: how many minutes late a missed run may still start; 0 skips it. */
   missedRunGraceMinutes?: number;
   precheck?: string;
@@ -41,7 +43,7 @@ export const defaultForm: ScheduleForm = { preset: "weekdays", time: "09:00", da
 
 /** AUTO-012's states; `cause` says why a run was skipped. */
 export type RunStatus = "pending" | "dispatching" | "dispatched" | "completed" | "skipped" | "failed";
-export type Run = { id: string; automationId: string; number: number; trigger: "manual" | "schedule" | "event"; status: RunStatus; at: number; cause?: string; detail?: string; exitCode?: number | null; timedOut?: boolean; output?: string; worktree?: string; worktreeName?: string; repeats?: number; lastAt?: number; eventDetail?: string; worktreeGone?: boolean; dispatchedAt?: number; finishedAt?: number; provider?: string; outputFrom?: "screen" | "transcript" | "replay"; outputCut?: boolean; sessionId?: string; paneEnded?: boolean; reconnected?: boolean; terminal?: number | null };
+export type Run = { id: string; reused?: boolean; automationId: string; number: number; trigger: "manual" | "schedule" | "event"; status: RunStatus; at: number; cause?: string; detail?: string; exitCode?: number | null; timedOut?: boolean; output?: string; worktree?: string; worktreeName?: string; repeats?: number; lastAt?: number; eventDetail?: string; worktreeGone?: boolean; dispatchedAt?: number; finishedAt?: number; provider?: string; outputFrom?: "screen" | "transcript" | "replay"; outputCut?: boolean; sessionId?: string; paneEnded?: boolean; reconnected?: boolean; terminal?: number | null };
 
 export type SortKey = "name" | "trigger" | "agent" | "project" | "lastRun" | "nextRun";
 export type Filters = { state: "all" | "on" | "paused"; result: "all" | "never" | RunStatus; agents: string[] };
@@ -117,6 +119,12 @@ export function sortRows(list: Automation[], runs: Run[], key: SortKey, desc: bo
 }
 
 const events: Record<string, string> = { "pr-opened": "When a pull request opens", "checks-failed": "When checks fail", "agent-finished": "When an agent finishes" };
+/** AUTO-004: the three event triggers the dialog offers, in order, each with the note shown under the choice. */
+export const EVENT_CHOICES: Array<{ value: "pr-opened" | "checks-failed" | "agent-finished"; label: string; help: string }> = [
+  { value: "pr-opened", label: events["pr-opened"], help: "A pull request opened from one of this project's worktrees starts a run, with a line about it on the end of the prompt. Kolux spots one within about 15 minutes while it is open; after a run it rests five minutes." },
+  { value: "checks-failed", label: events["checks-failed"], help: "A run starts when the checks of a pull request from one of this project's worktrees go from pending to failing, with a line about it on the end of the prompt. Kolux sees the change within about a minute while it is polling that branch; red checks that stay red start nothing more, and after a run it rests five minutes." },
+  { value: "agent-finished", label: events["agent-finished"], help: "A run starts when an agent working in one of this project's worktrees finishes its turn, with a line about it on the end of the prompt. Interrupted turns, session starts and the panes automations open themselves never count; after a run it rests five minutes." },
+];
 /** The timetable or trigger in a few words; a timetable's sentence comes from the back end. */
 export function triggerLabel(a: Automation): string {
   const t = a.trigger;
@@ -218,9 +226,10 @@ export const RUN_BATCH = 100;
 const group = (s: RunStatus): Exclude<RunFilter, "all"> => (s === "completed" ? "success" : s === "failed" ? "failed" : s === "skipped" ? "skipped" : "progress");
 export const startedBy = (r: Run): string => (r.trigger === "manual" ? "by hand" : r.trigger === "event" ? "by an event" : "by the timetable");
 
-/** AUTO-014 / T-085-h: what the saved output is: the end's text, the most recent part of it, or
+/** AUTO-014 / T-085-h: what the saved output is: the end's text, the most recent part of it, what the agent itself said, or
  * the replay of a run that Kolux reconnected to after a restart and is still following. */
 export const outputNote = (r: Run): string => {
+  if (r.outputFrom === "transcript") return r.outputCut ? "The most recent of what the agent said; older text was left out." : "What the agent said during the run, from its transcript.";
   if (r.outputFrom === "replay") return r.outputCut ? "The most recent text the agent's terminal had shown when Kolux restarted; older lines were left out. The run carries on in that terminal." : "What the agent's terminal had shown when Kolux restarted. The run carries on in that terminal.";
   return r.outputCut ? "The most recent text the agent's terminal showed; older lines were left out." : "What the agent's terminal showed when the run ended.";
 };
