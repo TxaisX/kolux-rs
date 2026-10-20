@@ -1,0 +1,17 @@
+diff --git a/src/styles.css b/src/styles.css
+index 812d6925..2b643a6a 100644
+--- a/src/styles.css
++++ b/src/styles.css
+@@ -377,6 +377,12 @@ input { font: inherit; }
+ .tab[data-drop="before"] { border-left: 3px solid var(--line-focus); }
+ .tab[data-drop="after"] { border-right: 3px solid var(--line-focus); }
+ .pane-grip { display: inline-flex; flex: none; cursor: grab; color: var(--fg-icon-dim); }
++/* TERM-049: Tab Color row in the tab menu */
++.menu-colors { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 4px 8px; }
++.menu-colors .name { flex: 1 0 100%; color: var(--fg-muted); }
++.menu-colors .swatch { width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--line-subtle); padding: 0; line-height: 14px; font-size: 11px; color: var(--fg-muted); }
++.menu-colors .swatch[aria-checked="true"] { outline: 2px solid var(--line-focus); outline-offset: 1px; }
++.menu-colors .swatch.none { background: transparent; }
+ /* VIEW-026: the Board is the same cells as cards, one per pane; the panes never move in the DOM,
+    so an expanded card shows the live terminal and a collapsed one only its header. */
+ .grid[hidden], .board[hidden], .board .tabs { display: none; }

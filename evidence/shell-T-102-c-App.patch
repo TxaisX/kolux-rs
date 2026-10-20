@@ -1,0 +1,138 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index e1b6635d..117d0ec7 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -30,8 +30,10 @@ import Ask from "./chrome/Ask";
+ import TrustPrompt, { trustedSetup } from "./setup/TrustPrompt";
+ import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
+ import { returnTab, type Which } from "./terminal/tabClose";
+-import { bulkCloseSet, closeOne, middleClickCloses, orderPinnedFirst, pinMenu, pinQuestion } from "./terminal/pin";
++import { bulkCloseSet, closeOne, middleClickCloses, orderPinnedFirst, pinQuestion } from "./terminal/pin";
+ import { dropCell, dropTab, halfOf, showsDragHandle, zoneOf, type Zone } from "./terminal/rearrange";
++import { splitMenuState, splitTabOut } from "./terminal/tabSplit";
++import { forgetColors, setTabColor, tabMenuHead, tabStyle, TAB_COLORS, type TabColors } from "./terminal/tabColor";
+ import { forgetView } from "./terminal/viewKeep";
+ import { classify, removePlan, removeQuestion, shellInAgentPane } from "./terminal/remove";
+ import { applyAppearance, readAppearance, showScreen, zoomTerm } from "./theme";
+@@ -106,7 +108,7 @@ import { allSwitchedOff, DEFAULT_AGENT_KEY, defaultAgentId, FIRST_PASS, menuAgen
+ import { SHOW_SLEEPING_SETTING, paneState, showSleepingFrom, strongest, type AgentState, type RowInfo } from "./projects/rows";
+ import { VOCAB, nextNeedsYou } from "./terminal/status";
+ import type { KindKey } from "./settings/notifications";
+-import { tabBadge, tabMenu as tabMenuItems, waitingInGrid, type Badge } from "./terminal/tabs";
++import { tabBadge, waitingInGrid, type Badge } from "./terminal/tabs";
+ import NameField from "./terminal/NameField";
+ import { Bell, Globe, Pin, Spinner, StatusGlyph } from "./chrome/icons";
+ import Tip from "./chrome/Tip";
+@@ -260,6 +262,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   // TERM-046: pinned tab keys live in window state, like the strip order (terminal/pin.ts).
+   const [pinned, setPinned] = useState<Set<number>>(new Set());
+   const [tabMenu, setTabMenu] = useState<{ key: number; top: number; left: number } | null>(null); // TERM-049: the right-clicked tab
++  const [tabColors, setTabColors] = useState<TabColors>({}); // TERM-049: Tab Color, window state like pinned (terminal/tabColor.ts)
+   // TERM-015 / TERM-054: what is being dragged (a tab, or a whole cell by its pane header) and where it would land.
+   const dragging = useRef<{ tab: number } | { cell: number } | null>(null);
+   const [dropHint, setDropHint] = useState<{ group: number; zone?: Zone; tab?: number; half?: "before" | "after" } | null>(null);
+@@ -1587,6 +1590,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     exitedPrompt.current = onClose(exitedPrompt.current, keys);
+     keys.forEach((k) => delete ptys.current[k]);
+     keys.forEach(forgetView); // T-102-b: a closed tab's kept editor state goes with it
++    setTabColors((c) => forgetColors(c, keys));
+     // TERM-106: a tab closed on purpose is not brought back after a restart.
+     keys.forEach((k) => void invoke("terminal_forget_history", { paneKey: k }).catch(() => {}));
+     setPanes((ps) => ps.filter((p) => !gone.has(p.key)));
+@@ -1615,6 +1619,15 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     const next = dropCell(panes, group, target);
+     if (next) setPanes(next);
+   };
++  // TERM-049: Split Right / Down on a tab's menu moves the tab into a cell of its own.
++  const splitTab = (key: number, dir: "right" | "down") => {
++    const r = splitTabOut(panes, key, dir);
++    if (!r) return;
++    setStacked((st) => ({ ...st, [activeDir ?? ""]: r.stack }));
++    setPanes(r.panes);
++    setActiveTab((m) => ({ ...m, [key]: key }));
++    setFocused(key);
++  };
+ 
+   // TERM-045: every close (keyboard, a tab's x, the pane header) asks first when a program would
+   // stop; a tab's panes are checked together so a split tab asks once. Idle, switched off, or a
+@@ -2091,36 +2104,53 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+               }}
+             />
+             <div className="menu" role="menu" aria-label="Tab" style={{ top: tabMenu.top, left: tabMenu.left }}>
+-              {/* TERM-048: Rename tab heads the menu for terminal and agent tabs (tabs.ts tabMenu). */}
+-              {tabMenuItems(panes.find((p) => p.key === tabMenu.key)?.kind)
+-                .filter((i) => i.id === "rename")
+-                .map((i) => (
+-                  <button key={i.id} role="menuitem" className="menu-item" onClick={() => (setTabMenu(null), setRenamingTab(tabMenu.key))}>
++              {/* TERM-048 / TERM-046 / TERM-049: Change Title, Pin, Tab Color and the splits head the menu (terminal/tabColor.ts tabMenuHead). */}
++              {tabMenuHead(panes.find((p) => p.key === tabMenu.key)?.kind, pinned.has(tabMenu.key), splitMenuState(panes, tabMenu.key)).map((i) =>
++                i.id === "color" ? (
++                  <div key={i.id} className="menu-colors" role="group" aria-label={i.label}>
+                     <span className="name">{i.label}</span>
+-                    {i.keys && <Kbd id={i.keys} />}
+-                  </button>
+-                ))}
+-              {/* TERM-046: Pin/Unpin sits before the close items; Close is greyed for a pinned tab (terminal/pin.ts pinMenu). */}
+-              {pinMenu(panes.find((p) => p.key === tabMenu.key)?.kind, pinned.has(tabMenu.key))
+-                .filter((i) => i.id === "pin")
+-                .map((i) => (
++                    {TAB_COLORS.map((c) => (
++                      <button
++                        key={c.id}
++                        role="menuitemradio"
++                        aria-checked={tabColors[tabMenu.key] === c.id}
++                        className="swatch"
++                        style={{ background: c.css }}
++                        title={c.label}
++                        aria-label={c.label}
++                        onClick={() => (setTabMenu(null), setTabColors((m) => setTabColor(m, tabMenu.key, c.id)))}
++                      />
++                    ))}
++                    <button role="menuitem" className="swatch none" title="No color" aria-label="No color" onClick={() => (setTabMenu(null), setTabColors((m) => setTabColor(m, tabMenu.key, null)))}>
++                      ×
++                    </button>
++                  </div>
++                ) : (
+                   <button
+                     key={i.id}
+                     role="menuitem"
+                     className="menu-item"
++                    disabled={"disabled" in i ? i.disabled : false}
++                    title={"why" in i && i.why ? i.why : undefined}
+                     onClick={() => {
++                      const key = tabMenu.key;
+                       setTabMenu(null);
+-                      setPinned((s) => {
+-                        const n = new Set(s);
+-                        if (n.has(tabMenu.key)) n.delete(tabMenu.key);
+-                        else n.add(tabMenu.key);
+-                        return n;
+-                      });
++                      if (i.id === "rename") setRenamingTab(key);
++                      else if (i.id === "splitRight" || i.id === "splitDown") splitTab(key, i.id === "splitRight" ? "right" : "down");
++                      else
++                        setPinned((s) => {
++                          const n = new Set(s);
++                          if (n.has(key)) n.delete(key);
++                          else n.add(key);
++                          return n;
++                        });
+                     }}
+                   >
+                     <span className="name">{i.label}</span>
++                    {i.id === "rename" && <Kbd id="tab.rename" />}
+                   </button>
+-                ))}
++                ),
++              )}
+               {(
+                 [
+                   ["Close", "one"],
+@@ -2496,6 +2526,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+                             aria-selected={p.key === active}
+                             className="tab"
+                             tabIndex={0}
++                            style={tabStyle(tabColors, p.key)}
+                             data-drop={dropHint?.tab === p.key ? dropHint.half : undefined}
+                             draggable
+                             onDragStart={(e) => {
