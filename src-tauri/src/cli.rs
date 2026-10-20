@@ -2141,15 +2141,13 @@ fn terminal_rows(ctx: &Ctx) -> Result<Vec<Value>, Fail> {
             trees.extend(projects::list_workspaces(ctx.git, &store, &p).unwrap_or_default().into_iter().map(|w| (w.path, w.branch)));
         }
     }
-    let layout = ctx.terminals.layout();
-    Ok(ctx
-        .terminals
-        .every()
+    // T-262-b: the rows are the session tab inventory (the same list the app and the agents read).
+    Ok(crate::agents::inventory::tabs(ctx.terminals)
         .into_iter()
-        .map(|(handle, dir, program)| {
-            let at = layout.iter().find(|r| r["handle"] == handle.as_str()).cloned().unwrap_or(Value::Null);
-            let home = dir.as_deref().and_then(|d| trees.iter().filter(|(w, _)| under(w, d)).max_by_key(|(w, _)| w.len()));
-            json!({ "handle": handle, "title": at["title"], "worktree": home.map(|h| h.0.clone()), "branch": home.and_then(|h| h.1.clone()), "cwd": dir, "program": program, "host": "local", "pane": at["cell"], "tab": at["tab"], "shown": at["shown"].as_bool().unwrap_or(false) })
+        .map(|t| {
+            let home = t.cwd.as_deref().and_then(|d| trees.iter().filter(|(w, _)| under(w, d)).max_by_key(|(w, _)| w.len()));
+            let (pane, tab, shown) = t.placement.as_ref().map_or((Value::Null, Value::Null, false), |p| (json!(p.pane), json!(p.tab), p.shown));
+            json!({ "handle": t.handle, "title": t.title, "worktree": home.map(|h| h.0.clone()), "branch": home.and_then(|h| h.1.clone()), "cwd": t.cwd, "program": t.program, "agent": t.agent, "host": "local", "pane": pane, "tab": tab, "shown": shown })
         })
         .collect())
 }
@@ -2430,7 +2428,8 @@ fn ps(ctx: &Ctx, req: &Request, only: Option<Project>, limit: Option<usize>) -> 
         repos.push(how);
     }
     // Each open session goes to the innermost worktree its folder is in.
-    let sessions = ctx.terminals.sessions();
+    // T-262-b: the sessions come from the session tab inventory; a tab with no start folder has no worktree.
+    let sessions: Vec<(String, String, Option<String>)> = crate::agents::inventory::tabs(ctx.terminals).into_iter().filter_map(|t| Some((t.handle, t.cwd?, t.program))).collect();
     let home = |dir: &str| lists.iter().flat_map(|(_, all, _)| all).filter(|w| under(&w.path, dir)).max_by_key(|w| w.path.len()).map(|w| w.path.clone());
     let homes: Vec<Option<String>> = sessions.iter().map(|(_, dir, _)| home(dir)).collect();
     let dispatches = load_list(&*lock()?, DISPATCHES_KEY);
@@ -3139,14 +3138,12 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
 /// ORCH-004: every open terminal with the agent Kolux started in it (none for a shell; a pane title
 /// plays no part) and whether it has been quiet for `IDLE`.
 fn peers(ctx: &Ctx) -> Vec<crate::orchestration::Peer> {
-    let credited = crate::tools::credited_program;
-    ctx.terminals
-        .sessions()
+    // T-262-b: the peer list is the session tab inventory too (its agent credit is the same rule).
+    crate::agents::inventory::tabs(ctx.terminals)
         .into_iter()
-        .map(|(handle, dir, program)| {
-            let agent = program.as_deref().filter(|p| !p.trim().is_empty()).and_then(credited).map(str::to_string);
-            let idle = ctx.terminals.program_of(&handle, IDLE).is_some();
-            crate::orchestration::Peer { handle, agent, idle, dir }
+        .map(|t| {
+            let idle = ctx.terminals.program_of(&t.handle, IDLE).is_some();
+            crate::orchestration::Peer { agent: t.agent.map(str::to_string), idle, dir: t.cwd.unwrap_or_default(), handle: t.handle }
         })
         .collect()
 }
@@ -7737,6 +7734,53 @@ mod tests {
         assert_eq!(e["skipped"], json!([{ "path": "gone.txt", "kind": "edit", "why": "deleted" }]));
         assert_eq!(e["opened"].as_array().unwrap().len(), 3);
         assert!(dispatch(&ctx, &req("file.open-changed", &one, json!({ "mode": "tabs" }))).is_err());
+        drop(ctx);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// T-262-b: the terminal list, the worktree list and the peer list read the one session tab
+    /// inventory, so a plain shell, an agent tab and the window's placement agree in all three.
+    #[test]
+    fn t262b_the_terminal_worktree_and_peer_lists_read_the_session_tab_inventory() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-cli262b-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&["init", "-q", "-b", "main"], &repo);
+        std::fs::write(repo.join("a.txt"), "base\n").unwrap();
+        git(&["add", "-A"], &repo);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a"], &repo);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        projects::add_project(&git_, &store.lock().unwrap(), &repo).unwrap();
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = repo.display().to_string();
+        terminals.fake_session(21, &wd, None);
+        terminals.fake_session(22, &wd, Some("claude --permission-mode auto"));
+        terminals.set_layout(vec![
+            json!({ "handle": "term-21", "dir": wd, "cell": 1, "tab": 1, "title": "pwsh", "custom": null, "shown": false, "ask": null }),
+            json!({ "handle": "term-22", "dir": wd, "cell": 1, "tab": 2, "title": "Claude", "custom": null, "shown": true, "ask": null }),
+        ]);
+        let inventory: Vec<String> = crate::agents::inventory::tabs(&terminals).into_iter().map(|t| t.handle).collect();
+        assert_eq!(inventory, ["term-21", "term-22"]);
+        // The terminal list: the inventory's tabs with the window's placement and the agent credit.
+        let rows = terminal_rows(&ctx).unwrap();
+        assert_eq!(rows.iter().map(|r| r["handle"].as_str().unwrap()).collect::<Vec<_>>(), inventory);
+        assert_eq!((rows[1]["title"].as_str(), rows[1]["pane"].as_u64(), rows[1]["tab"].as_u64(), rows[1]["shown"].as_bool(), rows[1]["agent"].as_str()), (Some("Claude"), Some(1), Some(2), Some(true), Some("claude")));
+        assert_eq!((rows[0]["agent"].is_null(), rows[0]["shown"].as_bool()), (true, Some(false)));
+        // The peer list: the same handles, the agent credit the inventory gives.
+        let peer_list = peers(&ctx);
+        assert_eq!(peer_list.iter().map(|p| p.handle.clone()).collect::<Vec<_>>(), inventory);
+        assert_eq!((peer_list[0].agent.clone(), peer_list[1].agent.clone()), (None, Some("claude".to_string())));
+        assert_eq!(peer_list[1].dir, wd);
+        // The worktree list: both tabs sit in the worktree their start folder is in.
+        let req = Request { id: "r".into(), token: String::new(), command: "worktree.ps".into(), cwd: wd.clone(), args: json!({}), pane: None, cli: String::new(), arrived: None };
+        let ps = dispatch(&ctx, &req).unwrap();
+        let listed: Vec<String> = ps["worktrees"].as_array().unwrap().iter().flat_map(|w| w["sessions"].as_array().unwrap().iter().map(|s| s["terminal"].as_str().unwrap().to_string())).collect();
+        assert_eq!(listed, inventory);
         drop(ctx);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
