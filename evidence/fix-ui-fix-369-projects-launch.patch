@@ -1,0 +1,84 @@
+diff --git a/src/launch/launchOrder.test.ts b/src/launch/launchOrder.test.ts
+index b62fa0bf..02047578 100644
+--- a/src/launch/launchOrder.test.ts
++++ b/src/launch/launchOrder.test.ts
+@@ -96,3 +96,13 @@ test("SESS-026: a bulk launch that makes workspaces in an ask-each-time project
+   expect(bulkRefusal("shop", "tab", true)).toBeNull();
+   expect(bulkRefusal("shop", "down", true)).toBeNull();
+ });
++
++// AFTER row 369: the New workspace dialog starts its setup-where choice at the repository's own mode.
++test("the dialog's setup-where starts at the repository's mode; ask and unknown start at a tab", async () => {
++  const { dialogWhere } = await import("./launchOrder");
++  expect(dialogWhere("right")).toBe("right");
++  expect(dialogWhere("down")).toBe("down");
++  expect(dialogWhere("tab")).toBe("tab");
++  expect(dialogWhere("ask")).toBe("tab");
++  expect(dialogWhere(setupMode("sideways"))).toBe("tab");
++});
+diff --git a/src/launch/launchOrder.ts b/src/launch/launchOrder.ts
+index f7e31a15..204791b4 100644
+--- a/src/launch/launchOrder.ts
++++ b/src/launch/launchOrder.ts
+@@ -16,6 +16,11 @@ export function setupMode(v: unknown): SetupMode {
+   return MODES.includes(v as SetupMode) ? (v as SetupMode) : DEFAULT_SETUP_MODE;
+ }
+ 
++/** Where the New workspace dialog's "setup opens in" starts: the repository's own mode; the dialog is itself the ask, so `ask` starts at a tab. */
++export function dialogWhere(mode: SetupMode): SetupWhere {
++  return mode === "ask" ? "tab" : mode;
++}
++
+ /** The error a bulk launch shows, or null when it may go ahead. Only a launch that makes new
+  *  workspaces is refused: seats in a workspace that already exists run no setup. */
+ export function bulkRefusal(project: string, mode: SetupMode, makesWorkspaces: boolean): string | null {
+diff --git a/src/projects/ProjectsPanel.tsx b/src/projects/ProjectsPanel.tsx
+index 4fc60129..0bfd2d38 100644
+--- a/src/projects/ProjectsPanel.tsx
++++ b/src/projects/ProjectsPanel.tsx
+@@ -19,6 +19,7 @@
+ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+ import { projectDrop } from "../editor/desktopDrops";
+ import CacheTimer from "./CacheTimer";
++import { dialogWhere, setupMode } from "../launch/launchOrder";
+ import { asksBeforeDelete, blocker, deleteTarget, isTextField, pointerDelete, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
+ import ShortcodeInput from "./ShortcodeInput";
+ import { invoke } from "@tauri-apps/api/core";
+@@ -295,6 +296,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+   const [setupWhere, setSetupWhere] = useState<SetupWhere>("tab");
+   const [setupWait, setSetupWait] = useState(false);
+   const waitTouched = useRef(false); // the user clicked the wait box since the project last changed
++  const whereTouched = useRef(false); // likewise the "setup opens in" choice
+   const nameRef = useRef<HTMLInputElement>(null);
+   const [preview, setPreview] = useState<Preview | null>(null);
+   const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; keep?: boolean; refusal?: string } | null>(null);
+@@ -505,11 +507,19 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+   useEffect(() => {
+     // SET-033: the repository's own choice of whether the agent waits for setup starts the checkbox
+     waitTouched.current = false;
++    whereTouched.current = false;
++    setSetupWhere("tab");
+     setSetupWait(false); // another repository's choice is not this one's while the read is out
+     if (!waitPath) return;
+     let live = true;
+     // a late reply never undoes a click: the box the user touched stays as they set it
+-    invoke<{ wait: boolean }>("repo_setup_get", { path: waitPath }).then((s) => live && !waitTouched.current && setSetupWait(s.wait)).catch(() => {});
++    invoke<{ wait: boolean; mode?: unknown }>("repo_setup_get", { path: waitPath })
++      .then((s) => {
++        if (!live) return;
++        if (!waitTouched.current) setSetupWait(s.wait);
++        if (!whereTouched.current) setSetupWhere(dialogWhere(setupMode(s.mode))); // T-150: the repository's own launch mode
++      })
++      .catch(() => {});
+     return () => void (live = false);
+   }, [waitPath]);
+   useEffect(() => {
+@@ -1004,7 +1014,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+             <option value="skip">Skip setup</option>
+           </select>
+           {!setupSkip && (
+-            <select aria-label="setup opens in" className="field" value={setupWhere} onChange={(e) => setSetupWhere(e.target.value as SetupWhere)}>
++            <select aria-label="setup opens in" className="field" value={setupWhere} onChange={(e) => ((whereTouched.current = true), setSetupWhere(e.target.value as SetupWhere))}>
+               <option value="tab">Setup in a new tab</option>
+               <option value="right">Setup in a split to the right</option>
+               <option value="down">Setup in a split below</option>

@@ -1,0 +1,88 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 36a44278..7123c1d5 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -794,6 +794,15 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+           setSwitcher(next);
+           break;
+         }
++        case "tab.nextRecent": {
++          // AFTER 119: Ctrl+Shift+Tab steps the open switcher back; with it closed it opens on the oldest tab.
++          const open = switcherRef.current;
++          const first = open ? null : openSwitcher(panesIn(panes, activeDir).map((x) => x.key), recentTabs.current, focused, switchOrderOf(settings));
++          const next = open ? stepSwitcher(open, -1) : first ? stepSwitcher({ ...first, at: 0 }, -1) : null;
++          if (!next) return;
++          setSwitcher(next);
++          break;
++        }
+         case "tab.newBrowser":
+           void newTab("browser");
+           break;
+diff --git a/src/keys/actions.ts b/src/keys/actions.ts
+index 2f6e1b47..7aef7259 100644
+--- a/src/keys/actions.ts
++++ b/src/keys/actions.ts
+@@ -129,6 +129,7 @@ export const actions: Action[] = [
+   a("tab.nextAllTypes", "Next tab (all types)", "tabs", ["Mod+Shift+BracketRight"], { terminalSafe: true }),
+   a("tab.previousAllTypes", "Previous tab (all types)", "tabs", ["Mod+Shift+BracketLeft"], { terminalSafe: true }),
+   a("tab.previousRecent", "Previous recent tab", "tabs", ["Ctrl+Tab"], { terminalSafe: true }),
++  a("tab.nextRecent", "Next recent tab", "tabs", ["Ctrl+Shift+Tab"], { terminalSafe: true }),
+   a("tab.nextTerminal", "Next terminal tab", "tabs", ["Ctrl+PageDown"], { terminalSafe: true }),
+   a("tab.previousTerminal", "Previous terminal tab", "tabs", ["Ctrl+PageUp"], { terminalSafe: true }),
+   a("tab.selectByIndex", "Select Tab 1–9", "tabs", ["Alt+1"], { darwin: ["Ctrl+1"], index: true, terminalSafe: true }),
+diff --git a/src/keys/keymap.test.ts b/src/keys/keymap.test.ts
+index db363a45..a1b2b5c0 100644
+--- a/src/keys/keymap.test.ts
++++ b/src/keys/keymap.test.ts
+@@ -7,9 +7,9 @@ import { chordMatches, chordsOf, labelOf, labelParts, matchEvent, parseChord, re
+ const key = (k: Partial<KeyLike>): KeyLike => ({ key: "", code: "", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...k });
+ 
+ test("the table registers the 136 carried commands (TERM-053 added tab.search, VIEW-053 added one, T-546 added view.tower, T-246-c added the three ui.zoom keys, T-548 added the two account switches, T-146-e added view.space); 55 ship unbound (T-239 bound Reopen closed tab again; the two T-548 account switches ship unbound) and 6 have only a macOS chord", () => {
+-  expect(actions.length).toBe(136);
++  expect(actions.length).toBe(137);
+   const ids = new Set(actions.map((a) => a.id));
+-  expect(ids.size).toBe(136);
++  expect(ids.size).toBe(137);
+   expect(ids.has("tab.newSimulator")).toBe(false);
+   expect(ids.has("tab.openQuickCommandsMenu")).toBe(false);
+   expect(actions.filter((a) => a.win32.length === 0 && !a.darwin).length).toBe(55);
+diff --git a/src/keys/recentBack.test.ts b/src/keys/recentBack.test.ts
+new file mode 100644
+index 00000000..4dc53ac3
+--- /dev/null
++++ b/src/keys/recentBack.test.ts
+@@ -0,0 +1,12 @@
++import { expect, test } from "vitest";
++import { actions } from "./actions";
++import { resolve } from "./keymap";
++
++// AFTER row 119 (T-239): Ctrl+Shift+Tab is its own command, so the Ctrl+Tab switcher can step back.
++test("Ctrl+Shift+Tab is bound to a command that steps the recent-tabs switcher backwards", () => {
++  const a = actions.find((x) => x.id === "tab.nextRecent");
++  expect(a?.win32).toEqual(["Ctrl+Shift+Tab"]);
++  const map = resolve(null, "win32");
++  expect(map.bindings.get("tab.nextRecent")?.chords).toEqual(["Ctrl+Shift+Tab"]);
++  expect(map.clashes.filter((c) => c.ids.includes("tab.nextRecent"))).toEqual([]);
++});
+diff --git a/src/settings/shortcutRows.test.ts b/src/settings/shortcutRows.test.ts
+index f3e5b969..a0df6905 100644
+--- a/src/settings/shortcutRows.test.ts
++++ b/src/settings/shortcutRows.test.ts
+@@ -12,7 +12,7 @@ const ids = (r: ReturnType<typeof rows>) => r.map((x) => x.id);
+ 
+ test("every command is listed under its area with its chords and badges", () => {
+   const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+9", "zoom.in": null, "view.tasks": "Mod+P" } });
+-  expect(all.length).toBe(134); // every command, Reopen closed tab included again (T-239), view.space added (T-146-e)
++  expect(all.length).toBe(135); // every command, Reopen closed tab included again (T-239), view.space added (T-146-e)
+   expect(ids(all)).toContain("tab.reopenClosed");
+   const by = (id: string) => all.find((r) => r.id === id)!;
+   expect(by("terminal.clear")).toMatchObject({ area: "Terminal", labels: ["Ctrl+K"], badges: [] });
+@@ -29,7 +29,7 @@ test("every command is listed under its area with its chords and badges", () =>
+ 
+ test("filters: all, modified, unassigned, conflicting", () => {
+   const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+9", "zoom.in": null, "view.tasks": "Mod+P" } });
+-  expect(filterRows(all, "all", "").length).toBe(134);
++  expect(filterRows(all, "all", "").length).toBe(135);
+   expect(ids(filterRows(all, "modified", ""))).toEqual(["zoom.in", "zoom.reset"]);
+   expect(filterRows(all, "unassigned", "").every((r) => r.labels.length === 0)).toBe(true);
+   expect(ids(filterRows(all, "unassigned", ""))).toContain("zoom.in");
