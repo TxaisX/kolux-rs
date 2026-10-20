@@ -1,0 +1,11 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -501,6 +501,7 @@ pub fn run() {
+             scm::scm_commit_message_stop,
+             scm::writers::scm_writer_options,
+             scm::writers::scm_name_branch,
++            projects::workspace_rename_on_first_prompt,
+             scm::scm_task_detail,
+             scm::scm_repo_labels,
+             github::github_repo_parent,

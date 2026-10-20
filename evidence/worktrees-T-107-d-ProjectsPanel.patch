@@ -1,0 +1,13 @@
+diff --git a/src/projects/ProjectsPanel.tsx b/src/projects/ProjectsPanel.tsx
+index 462eb3d6..7db91401 100644
+--- a/src/projects/ProjectsPanel.tsx
++++ b/src/projects/ProjectsPanel.tsx
+@@ -780,7 +780,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+         ? await invoke<Created>("workspace_open_pr", { projectId: project.id, number: pr.number, folder: typed || null, name: typed || null, parent, ticket: mine.ticket })
+         : reuse
+         ? await invoke<Created>("workspace_open_branch", { projectId: project.id, branch: reuse, folder: existing ? typed || null : null, parent, ticket: mine.ticket })
+-        : await invoke<Created>("workspace_create", { projectId: project.id, name: typed, base: base || null, branch: branch || null, parent, ticket: mine.ticket, issue });
++        : await invoke<Created>("workspace_create", { projectId: project.id, name: typed, base: base || null, branch: branch || null, parent, ticket: mine.ticket, issue, suggested: typed === shownSuggestion.current }); // PROJ-039 (T-107-d): a suggested name left as it was may be renamed by the first work
+       const lost = overtaken.current.has(mine.ticket);
+       noteRecent(project.id);
+       if (stopped.current.has(mine.ticket)) {

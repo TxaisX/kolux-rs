@@ -1655,6 +1655,17 @@ pub fn rename_after_work(git: &Git, store: &Mutex<Store>, project: &Project, pat
     let Some(old) = w.branch.clone().filter(|_| !w.is_main) else {
         return Ok(left_alone("Only a workspace's own branch is renamed."));
     };
+    // T-107-d: a branch somebody already renamed (its last part no longer names the folder) has a
+    // name of its own; a pushed branch, or one with a pull request, keeps the name the remote knows.
+    if !crate::scm::writers::is_placeholder(&old, Path::new(&w.path).file_name().and_then(|n| n.to_str()).unwrap_or("")) {
+        return Ok(left_alone("The branch already has a name of its own."));
+    }
+    if git.upstream_of(repo, &old).is_some() || git.tracks_remote(repo, &old) || git.on_remote(repo, &old) {
+        return Ok(left_alone("The branch was pushed, so it keeps the name the remote knows."));
+    }
+    if linked_pr(&*store.lock().map_err(|e| e.to_string())?, path) {
+        return Ok(left_alone("The branch has a pull request, so it keeps its name."));
+    }
     let prefix = place_from(project, &settings).prefix;
     let Some(slug) = branch_slug(reply, &prefix) else {
         return Ok(left_alone("The reply did not hold a usable branch name."));
@@ -1687,6 +1698,87 @@ pub fn workspace_rename_after_work(git: State<'_, Git>, store: StoreState<'_>, p
 #[tauri::command]
 pub fn workspace_mark_suggested(store: StoreState<'_>, path: String, suggested: bool) -> Result<(), String> {
     mark_suggested(&*store.lock().map_err(|e| e.to_string())?, &path, suggested)
+}
+
+/// Whether the workspace at `path` is linked to a pull request (PROJ-060's details), in which
+/// case its branch is never renamed by itself.
+fn linked_pr(store: &Store, path: &str) -> bool {
+    matches!(details_of(store, path).item.as_deref().map(parse_item), Some(Ok(Some(ItemLink::Pr(_)))))
+}
+
+/// T-107-d: the project a workspace at `path` belongs to: the one that saw it being made, else
+/// the one whose own folder holds it, else the one whose Git lists it as a worktree.
+pub fn project_for_path(git: &Git, store: &Store, path: &str) -> Option<Project> {
+    let key = name_key(path);
+    let projects = load_projects(store);
+    if let Some(p) = projects.iter().find(|p| seen_of(store, p).is_some_and(|s| s.contains(&key))) {
+        return Some(p.clone());
+    }
+    if let Some(p) = projects.iter().find(|p| name_key(&p.path) == key || key.starts_with(&format!("{}/", name_key(&p.path).trim_end_matches('/')))) {
+        return Some(p.clone());
+    }
+    projects.into_iter().find(|p| git.worktrees(Path::new(&p.path)).is_ok_and(|ws| ws.iter().any(|w| name_key(&w.path) == key)))
+}
+
+/// Whether the workspace at `path` may still be renamed by its first work (the cheap checks only,
+/// so no agent is asked for a name the rename would refuse anyway).
+fn rename_wanted(store: &Mutex<Store>, path: &str) -> Result<bool, String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    Ok(rename_enabled(&store.settings()) && suggested_map(&store).contains_key(&name_key(path)) && !load_names(&store).contains_key(&name_key(path)))
+}
+
+/// PROJ-039 / STAT-039 (T-107-d, T-110-b): the first prompt an agent gets in the workspace at
+/// `path` names its branch. The configured `writer` proposes the name from the task; when there is
+/// none, or it answers nothing usable, the task's own words name it. Everything that would refuse the
+/// rename is checked before any agent runs, and the rename itself is `rename_after_work` with all its
+/// guards, so a second prompt, a hand-named workspace, a pushed branch or one with a pull request
+/// changes nothing.
+pub fn rename_on_first_prompt(git: &Git, store: &Mutex<Store>, path: &str, task: &str, writer: Option<&crate::scm::writers::WriterArg>) -> Result<RenameAnswer, String> {
+    let task = task_words(task);
+    if task.is_empty() {
+        return Ok(left_alone("The prompt held nothing that could name a branch."));
+    }
+    if !rename_wanted(store, path)? {
+        return Ok(left_alone("This workspace has a name of its own, so its branch keeps it."));
+    }
+    let project = {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        project_for_path(git, &store, path)
+    };
+    let Some(project) = project else {
+        return Ok(left_alone("That folder is not a workspace Kolux knows."));
+    };
+    let reply = writer
+        .and_then(|w| crate::scm::writers::ask(w, &crate::scm::writers::name_prompt(&task), Path::new(path), &format!("name:{path}"), std::time::Duration::from_secs(60)).ok())
+        .map(|r| r.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").to_string())
+        .filter(|r| !r.is_empty())
+        .unwrap_or_else(|| task.clone());
+    rename_after_work(git, store, &project, path, &reply)
+}
+
+/// STAT-039: the task's words without stray work-item markers (`#123`, `KOL-12`, `[KOL-12]`,
+/// `(#12)`), so a marker never becomes the branch name; a prompt that is only markers gives nothing.
+pub fn task_words(task: &str) -> String {
+    let is_marker = |w: &str| {
+        let w = w.trim_matches(|c: char| matches!(c, '[' | ']' | '(' | ')' | ':' | ',' | '.'));
+        let bare = w.strip_prefix('#').unwrap_or(w);
+        if bare.is_empty() {
+            return false;
+        }
+        if bare.chars().all(|c| c.is_ascii_digit()) {
+            return true;
+        }
+        match bare.split_once('-') {
+            Some((key, num)) => key.len() >= 2 && key.chars().all(|c| c.is_ascii_uppercase()) && !num.is_empty() && num.chars().all(|c| c.is_ascii_digit()),
+            None => false,
+        }
+    };
+    task.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").split_whitespace().filter(|w| !is_marker(w)).collect::<Vec<_>>().join(" ")
+}
+
+#[tauri::command(async)]
+pub fn workspace_rename_on_first_prompt(git: State<'_, Git>, store: StoreState<'_>, path: String, task: String, writer: Option<crate::scm::writers::WriterArg>) -> Result<RenameAnswer, String> {
+    rename_on_first_prompt(&git, &store, &path, &task, writer.as_ref())
 }
 
 // ---- PROJ-060: a workspace's details: shown name, linked GitHub item, comment ---------------------
@@ -1864,7 +1956,7 @@ pub fn create_named_until(git: &Git, store: &Mutex<Store>, project_id: &str, nam
 // PROJ-020: off the main thread, so a newer create (and its cancel) can reach Kolux while Git works.
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
-pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: String, name: String, base: Option<String>, branch: Option<String>, parent: Option<String>, ticket: Option<u64>, issue: Option<crate::pr_checkout::Linkable>, active_folder: Option<String>) -> Result<Created, String> {
+pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: String, name: String, base: Option<String>, branch: Option<String>, parent: Option<String>, ticket: Option<u64>, issue: Option<crate::pr_checkout::Linkable>, active_folder: Option<String>, suggested: Option<bool>) -> Result<Created, String> {
     let made = create_named_until(&git, &store, &project_id, &name, base.as_deref(), branch.as_deref(), &|| dropped(ticket));
     if let Some(t) = ticket {
         settle_create(t);
@@ -1873,6 +1965,10 @@ pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: 
     // SESS-037: the parent picked in the composer (PROJ-047 nests it there, PROJ-040 checks it).
     let project = {
         let store = store.lock().map_err(|e| e.to_string())?;
+        // PROJ-039 (T-107-d): a name the composer suggested and the user left alone may be renamed by the first work.
+        if suggested == Some(true) && branch.is_none() {
+            mark_suggested(&store, &made.worktree.path, true)?;
+        }
         if let Some(i) = issue {
             // SESS-036: linked to the issue the composer named it from (the `issue:` selector finds it)
             set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "issue": i.number, "issueUrl": i.url })))?;
@@ -4347,6 +4443,83 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         for d in [profile, repo, root] {
             let _ = fs::remove_dir_all(d);
         }
+    }
+
+    #[test]
+    fn t107d_the_first_prompt_renames_a_suggested_branch_once_from_the_task_and_finds_the_project_by_path() {
+        let (git, store, project, profile, repo, root) = rename_fixture("first-prompt", None);
+        let made = create_fresh_from(&git, &store, &project.id, None).unwrap();
+        let old = made.branch.clone().unwrap();
+        assert_eq!(project_for_path(&git, &store.lock().unwrap(), &made.path).map(|p| p.id), Some(project.id.clone()), "the seen list names the project");
+        assert!(project_for_path(&git, &store.lock().unwrap(), "C:/nowhere/at/all").is_none());
+        // no writer: the task's own words name the branch; a work-item marker never does
+        let a = rename_on_first_prompt(&git, &store, &made.path, "Fix the login bug (#123)\nmore detail", None).unwrap();
+        assert!(a.renamed, "{a:?}");
+        assert_eq!(a.branch.as_deref(), Some("tx/fix-the-login-bug"));
+        assert_eq!(a.name.as_deref(), Some("Fix the login bug"));
+        assert!(!git.branch_taken(&repo, &old));
+        // once per workspace: the next prompt changes nothing
+        let b = rename_on_first_prompt(&git, &store, &made.path, "now do something else", None).unwrap();
+        assert!(!b.renamed && b.reason.is_some(), "{b:?}");
+        assert!(git.branch_taken(&repo, "tx/fix-the-login-bug"));
+        // an unknown folder and a prompt of only markers are left alone without touching Git
+        assert!(!rename_on_first_prompt(&git, &store, "C:/nowhere/at/all", "fix it", None).unwrap().renamed);
+        let fresh = create_fresh_from(&git, &store, &project.id, None).unwrap();
+        let m = rename_on_first_prompt(&git, &store, &fresh.path, "#12 KOL-7 [ABC-99]", None).unwrap();
+        assert!(!m.renamed && m.reason.as_deref().is_some_and(|r| r.contains("nothing")), "{m:?}");
+        assert!(git.branch_taken(&repo, fresh.branch.as_deref().unwrap()));
+        for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn t107d_a_pushed_branch_one_with_a_pull_request_or_one_renamed_by_hand_is_never_renamed() {
+        let (git, store, project, profile, repo, root) = rename_fixture("first-prompt-guards", None);
+        // pushed without tracking: a remote holds the name
+        let pushed = create_fresh_from(&git, &store, &project.id, None).unwrap();
+        let pb = pushed.branch.clone().unwrap();
+        git_in(&repo, &["update-ref", &format!("refs/remotes/origin/{pb}"), "HEAD"]);
+        assert!(git.on_remote(&repo, &pb));
+        let a = rename_on_first_prompt(&git, &store, &pushed.path, "fix login", None).unwrap();
+        assert!(!a.renamed && a.reason.as_deref().is_some_and(|r| r.contains("pushed")), "{a:?}");
+        assert!(git.branch_taken(&repo, &pb), "the pushed branch keeps its name");
+        // tracking configured
+        let tracked = create_fresh_from(&git, &store, &project.id, None).unwrap();
+        let tb = tracked.branch.clone().unwrap();
+        git_in(&repo, &["config", &format!("branch.{tb}.remote"), "origin"]);
+        git_in(&repo, &["config", &format!("branch.{tb}.merge"), &format!("refs/heads/{tb}")]);
+        let b = rename_on_first_prompt(&git, &store, &tracked.path, "fix login", None).unwrap();
+        assert!(!b.renamed && b.reason.as_deref().is_some_and(|r| r.contains("pushed")), "{b:?}");
+        assert!(git.branch_taken(&repo, &tb));
+        // linked to a pull request
+        let pr = create_fresh_from(&git, &store, &project.id, None).unwrap();
+        set_origin(&store.lock().unwrap(), &pr.path, Some(&serde_json::json!({ "madeBy": "app", "pr": "https://github.com/o/r/pull/5" }))).unwrap();
+        let c = rename_on_first_prompt(&git, &store, &pr.path, "fix login", None).unwrap();
+        assert!(!c.renamed && c.reason.as_deref().is_some_and(|r| r.contains("pull request")), "{c:?}");
+        assert!(git.branch_taken(&repo, pr.branch.as_deref().unwrap()));
+        // renamed by hand in Git: the branch's last part no longer names the folder
+        let hand = create_fresh_from(&git, &store, &project.id, None).unwrap();
+        let hb = hand.branch.clone().unwrap();
+        git_in(Path::new(&hand.path), &["branch", "-m", &hb, "tx/mine"]);
+        let d = rename_on_first_prompt(&git, &store, &hand.path, "fix login", None).unwrap();
+        assert!(!d.renamed && d.reason.as_deref().is_some_and(|r| r.contains("name of its own")), "{d:?}");
+        assert!(git.branch_taken(&repo, "tx/mine"));
+        // a workspace made from the composer with the suggested name is marked; a typed branch is not
+        let kept = create_workspace(&git, &place_from(&project, &store.lock().unwrap().settings()), &project, "amber-otter", None).unwrap().worktree;
+        assert!(!suggested_map(&store.lock().unwrap()).contains_key(&name_key(&kept.path)), "create_workspace itself marks nothing");
+        for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn stat039_task_words_drop_work_item_markers_and_keep_the_first_line() {
+        assert_eq!(task_words("Fix the login bug (#123)\nsecond line"), "Fix the login bug");
+        assert_eq!(task_words("KOL-12: fix login [ABC-7]"), "fix login");
+        assert_eq!(task_words("  #12 KOL-7 [ABC-99] "), "");
+        assert_eq!(task_words("add T-shirt sizes for x-ray"), "add T-shirt sizes for x-ray");
+        assert_eq!(task_words("\n\n  "), "");
     }
 
     #[test]
