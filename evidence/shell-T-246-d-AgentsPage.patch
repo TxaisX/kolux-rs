@@ -1,0 +1,29 @@
+diff --git a/src/settings/AgentsPage.tsx b/src/settings/AgentsPage.tsx
+index 6e126c0..4bef2ba 100644
+--- a/src/settings/AgentsPage.tsx
++++ b/src/settings/AgentsPage.tsx
+@@ -1,5 +1,6 @@
+ // Settings > Agents (SET-027): which agents are switched on, the default one, and how each starts.
+-import { useEffect, useState } from "react";
++import { useContext, useEffect, useState } from "react";
++import { SearchFolds } from "./search";
+ import { invoke } from "@tauri-apps/api/core";
+ import { emit, listen } from "@tauri-apps/api/event";
+ import type { AgentInfo } from "../launch/PlusMenu";
+@@ -81,6 +82,7 @@ export function HooksSwitch({ on, onSwitch, file, problems = [] }: { on: boolean
+ 
+ export default function AgentsPage() {
+   const { settings, error, save: write } = useSettings();
++  const found = useContext(SearchFolds); // SET-007: a search that matches a launch line opens its fold
+   const [written, setWritten] = useState(0);
+   const save = (patch: Record<string, unknown>) => write(patch).then(() => setWritten((n) => n + 1));
+   const [agents, setAgents] = useState<AgentInfo[] | null>(null);
+@@ -178,7 +180,7 @@ export default function AgentsPage() {
+                 <span className="agent-name">{a.name}</span>
+                 {a.id === def && on && <span className="conn-chip">default</span>}
+               </label>
+-              <details>
++              <details open={found?.has("how-it-starts") || undefined}>
+                 <summary>How it starts</summary>
+                 <code className="agent-line">{lines[a.id] ?? ""}</code>
+                 <Draft label="Command" value={o.command ?? ""} placeholder={a.path ?? a.program} onSave={(v) => setOption(a.id, "command", v)} />

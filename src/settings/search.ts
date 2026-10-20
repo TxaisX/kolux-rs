@@ -49,6 +49,7 @@ export const INDEX: Entry[] = [
   { page: "notifications", section: "usage-alerts", title: "Usage alerts", words: "usage limit quota alert warning" },
   { page: "notifications", section: "alerts", title: "Finished and stopped", words: "finish finished done stopped quiet agent turn" },
   { page: "shortcuts", section: "shortcuts-file", title: "Shortcuts file", words: "keybindings json file reload open folder keys" },
+  { page: "shortcuts", section: "layout-notes", title: "Keyboard layouts", words: "layout altgr german polish zoom interface rebind keyboard double tap modifier shift physical key" },
   { page: "shortcuts", section: "terminal-first", title: "Shortcuts in terminals", words: "terminal first kolux first keys chord policy" },
   { page: "shortcuts", section: "key-bindings", title: "Commands and keys", words: "keybindings keyboard hotkeys keys chords commands bindings" },
   { page: "usage", section: "activity", title: "Activity", words: "activity history sessions usage" },
