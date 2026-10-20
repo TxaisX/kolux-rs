@@ -220,7 +220,7 @@ pub fn status_at(settings: &Value, has_token: bool, now: i64) -> KeyStatus {
 /// The variable a new pane gets: only a Claude pane, only in key mode, only with a key.
 pub fn pane_env(program: Option<&str>, settings: &Value, token: Option<String>) -> Option<(&'static str, String)> {
     let program = program?;
-    if crate::agents::credited_agent(program) != Some("claude") {
+    if crate::tools::credited_program(program) != Some("claude") {
         return None;
     }
     if settings.get(MODE_FIELD).and_then(Value::as_str) != Some(KEY_MODE) {
@@ -232,7 +232,7 @@ pub fn pane_env(program: Option<&str>, settings: &Value, token: Option<String>) 
 /// ACCT-024: whether a pane drops a key variable Kolux itself was started with: every Claude pane
 /// that is not handed the key (plain and managed panes use their own login).
 pub fn strip_inherited(program: Option<&str>, env: &[(String, String)]) -> bool {
-    program.and_then(crate::agents::credited_agent) == Some("claude") && !env.iter().any(|(k, _)| k == ENV)
+    program.and_then(crate::tools::credited_program) == Some("claude") && !env.iter().any(|(k, _)| k == ENV)
 }
 
 /// Stores a fresh key: sealed, with its creation date and the key-mode marker.

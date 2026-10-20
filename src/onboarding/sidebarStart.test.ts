@@ -3,6 +3,10 @@
 // this repo, so React's three hooks these components use are swapped for a tiny runtime that keeps
 // state slots, runs an effect when its deps change and draws again while state is dirty. Children
 // are never drawn (JSX only builds elements), so only SidebarStart's own hooks run.
+// Limit (FIX-4): only useState, useRef and useEffect are swapped. If SidebarStart or useGuideState later
+// uses useCallback or useMemo, the real hook throws outside a render and this file fails loudly (it
+// fails safe); add the hook to the runtime below then. The checklist branch of the slot is covered by
+// sidebar.test.ts (sidebarSlot), not here, since children are never drawn.
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 type Effect = { deps: unknown[] | undefined; cleanup?: () => void };
@@ -40,13 +44,20 @@ vi.mock("react", async (orig) => {
 
 const calls: string[] = [];
 let record: unknown = null;
+let patchFails = false;
+const patches: unknown[] = [];
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (cmd: string) => {
+  invoke: (cmd: string, args?: unknown) => {
     calls.push(cmd);
+    if (cmd === "settings_patch") {
+      patches.push(args);
+      if (patchFails) return Promise.reject(new Error("the settings file could not be written"));
+    }
     const answers: Record<string, unknown> = {
       guide_get: record,
       get_settings: { notifyOnFinish: false },
       scm_gh_account: null,
+      settings_patch: null,
       project_list: [],
       cli_status: { installed: false, onPath: false },
       skills_scan: { skills: [] },
@@ -62,6 +73,8 @@ beforeEach(() => {
   h.slots = [];
   h.effects = [];
   calls.length = 0;
+  patches.length = 0;
+  patchFails = false;
   record = { tipsSeen: [], visited: [], tried: [], toursSeen: [], toursAuto: null, firstRun: { closed: true, outcome: "dismissed", checklistDismissed: true, milestones: {} } };
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -125,4 +138,68 @@ test("the first window focus after mount does not read the steps a second time; 
   } finally {
     spy.mockRestore();
   }
+});
+
+test("a read caused by the guide switching on resets the focus floor, so a focus soon after does not read again (VIEW-114, FIX-4)", async () => {
+  const { CHECKLIST_CHANGED } = await import("./firstRun");
+  let mono = 50_000;
+  const spy = vi.spyOn(performance, "now").mockImplementation(() => mono);
+  try {
+    // The first-run wizard is still open: the guide is not wanted, so nothing is read at mount.
+    record = { tipsSeen: [], visited: [], tried: [], toursSeen: [], toursAuto: null, firstRun: { closed: false, outcome: null, checklistDismissed: false, milestones: {} } };
+    const app = await mount();
+    expect(reads()).toBe(0);
+    // 25 s later the wizard closes; the slot now wants the guide and reads once (that read is at 75 s).
+    mono += 25_000;
+    record = { tipsSeen: [], visited: [], tried: [], toursSeen: [], toursAuto: null, firstRun: { closed: true, outcome: "dismissed", checklistDismissed: true, milestones: {} } };
+    win.dispatchEvent(new Event(CHECKLIST_CHANGED));
+    await app.settle();
+    expect(reads()).toBe(1);
+    // 10 s after that read, a focus is well inside the 30 s floor: no second read.
+    mono += 10_000;
+    win.dispatchEvent(new Event("focus"));
+    await app.settle();
+    expect(reads()).toBe(1);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+test("Hide from sidebar saves the choice and the entry goes (ONB-020)", async () => {
+  const app = await mount();
+  const root = app.out() as { props: { className: string; children: { props: { title?: string; onClick?: () => void } }[] } };
+  expect(root.props.className).toBe("onb-entry");
+  const hide = root.props.children.find((c) => c?.props?.title === "Hide from sidebar");
+  expect(hide).toBeTruthy();
+  hide!.props.onClick!();
+  await app.settle();
+  expect(calls).toContain("settings_patch");
+  expect(app.out()).toBeNull();
+});
+
+type Entry = { props: { className: string; children: { type?: string; props?: { title?: string; role?: string; children?: unknown; onClick?: () => void } }[] } };
+const hideButton = (out: unknown) => (out as Entry).props.children.find((c) => c?.props?.title === "Hide from sidebar")!;
+
+test("Hide goes through the settings save in turn: it reads what is saved, then writes only the changed key (FIX-1)", async () => {
+  const app = await mount();
+  hideButton(app.out()).props!.onClick!();
+  await app.settle();
+  expect(patches).toEqual([{ set: { setupChecklist: false }, remove: [] }]);
+  expect(calls[calls.indexOf("settings_patch") - 1]).toBe("get_settings");
+});
+
+test("a Hide that could not be saved brings the entry back with a short message (FIX-1)", async () => {
+  patchFails = true;
+  const app = await mount();
+  hideButton(app.out()).props!.onClick!();
+  await app.settle();
+  const out = app.out() as Entry;
+  expect(out?.props.className).toBe("onb-entry");
+  const note = out.props.children.find((c) => c?.props?.role === "status");
+  expect(String(note?.props?.children)).toMatch(/could not be hidden/);
+  // trying again once the save works hides it
+  patchFails = false;
+  hideButton(app.out()).props!.onClick!();
+  await app.settle();
+  expect(app.out()).toBeNull();
 });

@@ -83,38 +83,51 @@ export type CreateEvent = "busy" | "created" | "failed";
 let inFlight = false;
 // FIX-4 (council FIX-SOON 2): the last create's failure stays here, so a New issue dialog opened
 // after the create failed (the user had left Tasks) still says so instead of offering a second click.
-let lastFailure: string | null = null;
-const watchers = new Set<(e: CreateEvent, error?: string) => void>();
-const tell = (e: CreateEvent, error?: string) => watchers.forEach((w) => w(e, error));
+// FIX-5 (council AFTER 5): it belongs to the host and repository the create was sent to, so it shows
+// only in a New issue for that same place, not in every later opening in any workspace.
+export type CreateScope = { host: string; repo: string };
+let lastFailure: { error: string; scope: CreateScope } | null = null;
+const watchers = new Set<(e: CreateEvent, error?: string, scope?: CreateScope) => void>();
+const tell = (e: CreateEvent, error?: string, scope?: CreateScope) => watchers.forEach((w) => w(e, error, scope));
+/** Whether a failure sent to `a` is the one a dialog for `b` should show (host and repository, case-insensitive). */
+export const sameScope = (a: CreateScope, b: CreateScope): boolean => sameHost(a.host, b.host) && a.repo.toLowerCase() === b.repo.toLowerCase();
+
+/** FIX-6 (council AFTER 2): whether a "created" event (sent to `scope`) resets the open dialog for
+ * `host` and `repo`; a create to another place coming back must not clear what is being typed here. */
+export const createResetsDialog = (scope: CreateScope | undefined, host: string, repo: string): boolean => !!scope && sameScope(scope, { host, repo });
 
 /** True while a create is out. */
 export const createBusy = () => inFlight;
 
-/** The error of the last create when it failed and no later create has started; null otherwise. */
-export const lastCreateFailure = (): string | null => lastFailure;
+/** The error of the last create when it failed, no later create has started, and it was sent to this
+ * host and repository; null otherwise. */
+export const lastCreateFailure = (host: string, repo: string): string | null => (lastFailure && sameScope(lastFailure.scope, { host, repo }) ? lastFailure.error : null);
 
-/** Calls `w` when a create starts ("busy") and when it settles ("failed" carries gh's error, so a
- * dialog opened after the create began still tells the user what went wrong); returns the unsubscribe. */
-export function watchCreate(w: (e: CreateEvent, error?: string) => void): () => void {
+/** Calls `w` when a create starts ("busy") and when it settles ("failed" carries gh's error and the
+ * host and repository it was sent to, so a dialog opened after the create began still tells the
+ * user what went wrong, if it is the same place); returns the unsubscribe. */
+export function watchCreate(w: (e: CreateEvent, error?: string, scope?: CreateScope) => void): () => void {
   watchers.add(w);
   return () => void watchers.delete(w);
 }
 
 /** Sends one create, or nothing (null) when another is still out. */
-export async function createOnce<T>(send: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: string } | null> {
+export async function createOnce<T>(send: () => Promise<T>, scope: CreateScope): Promise<{ ok: true; value: T } | { ok: false; error: string } | null> {
   if (inFlight) return null;
   inFlight = true;
-  lastFailure = null;
-  tell("busy");
+  // FIX-6 (council AFTER 1): only the failure of this same place is superseded; a create to another
+  // repository must not hide one that may have opened its issue (a second Create would duplicate it).
+  if (lastFailure && sameScope(lastFailure.scope, scope)) lastFailure = null;
+  tell("busy", undefined, scope);
   try {
     const value = await send();
     inFlight = false;
-    tell("created");
+    tell("created", undefined, scope);
     return { ok: true, value };
   } catch (e) {
     inFlight = false;
-    lastFailure = String(e);
-    tell("failed", String(e));
+    lastFailure = { error: String(e), scope };
+    tell("failed", String(e), scope);
     return { ok: false, error: String(e) };
   }
 }

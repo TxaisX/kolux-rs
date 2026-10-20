@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { DRAFT_LIMIT } from "./composer";
 import { handTooLongText } from "./model";
-import { ChatHead, HandOff, TerminalSwitch, makeHand } from "./ChatView";
+import { ChatHead, HandOff, TerminalSwitch, headOf, makeHand } from "./ChatView";
 
 describe("the Show terminal switch", () => {
   it("is a labelled checkbox with the switch role that says whether it is on", () => {
@@ -81,5 +81,36 @@ describe("the Agents screen's Send result to wiring (FIX-5)", () => {
     hand().onHand(2, long, "m1");
     expect(renderToStaticMarkup(createElement(ChatHead, { result: long, resultId: "m1", hand: hand() }))).toContain(esc(handTooLongText("docs")));
     expect(renderToStaticMarkup(createElement(ChatHead, { result: "a newer reply", resultId: "m2", hand: hand() }))).not.toContain(esc(handTooLongText("docs")));
+  });
+
+  // FIX-7 (review of e20000d6, FIX-SOON 1 and AFTER 1): the id ChatView hands its head comes from the
+  // transcript item (headOf), and the head has no text fallback to fall back on.
+  it("headOf gives the head the last reply's id, so a second reply with the same words does not show the first one's note", () => {
+    const { log, hand } = wire("check this:");
+    const it = (id: string, role: "user" | "assistant", text: string, at: number) => ({ id, role, kind: "text" as const, text, at });
+    const first = [it("u1", "user", "go", 1), it("m1", "assistant", long, 2)];
+    const both = [...first, it("u2", "user", "again", 3), it("m2", "assistant", long, 4)];
+    expect(headOf(first, false, hand())).toEqual({ result: long, resultId: "m1" });
+    expect(headOf(both, false, hand())).toEqual({ result: long, resultId: "m2" });
+    const h1 = headOf(first, false, hand());
+    hand().onHand(2, h1.result!, h1.resultId!);
+    expect(log.note?.forResult).toBe("m1");
+    expect(renderToStaticMarkup(createElement(ChatHead, { ...headOf(first, false, hand()), hand: hand() }))).toContain(esc(handTooLongText("docs")));
+    expect(renderToStaticMarkup(createElement(ChatHead, { ...headOf(both, false, hand()), hand: hand() }))).not.toContain(esc(handTooLongText("docs")));
+  });
+
+  it("headOf shows no reply while a turn is open, with no targets, or with no hand-off at all", () => {
+    const { hand } = wire("check this:");
+    const items = [{ id: "m1", role: "assistant" as const, kind: "text" as const, text: "ok", at: 1 }];
+    const none = { result: undefined, resultId: undefined };
+    expect(headOf(items, true, hand())).toEqual(none);
+    expect(headOf(items, false, { ...hand(), targets: [] })).toEqual(none);
+    expect(headOf(items, false, undefined)).toEqual(none);
+  });
+
+  it("a head without a reply id never shows a note, even when the note was kept under the reply's words", () => {
+    const { hand } = wire("check this:");
+    const h = { ...hand(), note: handTooLongText("docs"), noteFor: long };
+    expect(renderToStaticMarkup(createElement(ChatHead, { result: long, resultId: undefined, hand: h }))).not.toContain(esc(handTooLongText("docs")));
   });
 });

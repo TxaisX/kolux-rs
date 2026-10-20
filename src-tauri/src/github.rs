@@ -203,7 +203,7 @@ enum ConfigRead {
 
 /// FIX-3 / FIX-4: one `gh config get` through the bounded runner in scm.rs, which ends the whole
 /// process tree gh started at the limit (never only gh itself). A read that cannot run or does not
-/// answer in time is `Failed`; so is a non-zero exit that is not gh's "key not found" answer.
+/// answer in time is `Failed`; so is a non-zero exit that is not gh's "could not find key" answer.
 fn gh_config(gh: &Path, args: &[&str], limit: std::time::Duration) -> ConfigRead {
     match crate::scm::gh_config_within(gh, args, limit) {
         Ok(r) => config_read(r.ok, &r.out, &r.err),
@@ -217,12 +217,22 @@ fn gh_config(gh: &Path, args: &[&str], limit: std::time::Duration) -> ConfigRead
 /// library gives; an unexpected wording fails closed to `Failed`, which refuses the host). Any other
 /// non-zero exit (a config file being rewritten, a lock, a shim error) is no answer, never "no
 /// top-level user", which would sign in a host that has none of its own.
+/// FIX-5 (council AFTER 1-2) and FIX-6: only gh's quoted `could not find key "` counts (a wider "key not found" also matches
+/// a wrapper's own error), and a value of more than one line is no answer: a login is one line, and
+/// two reads that differ only in an extra line must not compare unequal and let a host through.
 fn config_read(ok: bool, out: &str, err: &str) -> ConfigRead {
     if ok {
-        return if out.is_empty() { ConfigRead::Unset } else { ConfigRead::Value(out.to_string()) };
+        return if out.is_empty() {
+            ConfigRead::Unset
+        } else if out.contains('\n') || out.contains('\r') {
+            ConfigRead::Failed
+        } else {
+            ConfigRead::Value(out.to_string())
+        };
     }
-    let err = err.to_ascii_lowercase();
-    if err.contains("could not find key") || err.contains("key not found") { ConfigRead::Unset } else { ConfigRead::Failed }
+    // FIX-6 (council FIX-SOON 2): the quoted form, in gh's own case; a bare prefix also matched
+    // "could not find keyring entry" from a wrapper or credential helper.
+    if err.contains("could not find key \"") { ConfigRead::Unset } else { ConfigRead::Failed }
 }
 
 /// A GraphQL node id as GitHub gives them (letters, digits, `_`, `-`, `=`), so an id from the page
@@ -932,11 +942,11 @@ mod tests {
         let dir = crate::test_dir::temp(name);
         let gh = if cfg!(windows) {
             let f = dir.join("gh.cmd");
-            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%1\"==\"config\" goto config\r\necho {\"fork\":false,\"data\":{}}\r\nexit /b 0\r\n:config\r\nif /i \"%3\"==\"-h\" if /i \"%4\"==\"ghe.corp\" (echo ana& exit /b 0)\r\nif exist \"%~dp0top.txt\" (type \"%~dp0top.txt\"& exit /b 0)\r\nif exist \"%~dp0locked.txt\" (echo gh: the config file is busy 1>&2& exit /b 1)\r\necho could not find key user 1>&2\r\nexit /b 1\r\n").unwrap();
+            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%1\"==\"config\" goto config\r\necho {\"fork\":false,\"data\":{}}\r\nexit /b 0\r\n:config\r\nif /i \"%3\"==\"-h\" if /i \"%4\"==\"ghe.corp\" (echo ana& exit /b 0)\r\nif exist \"%~dp0top.txt\" (type \"%~dp0top.txt\"& exit /b 0)\r\nif exist \"%~dp0locked.txt\" (echo gh: the config file is busy 1>&2& exit /b 1)\r\necho could not find key \"user\" 1>&2\r\nexit /b 1\r\n").unwrap();
             f
         } else {
             let f = dir.join("gh");
-            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\nif [ \"$1\" = config ]; then if [ \"$3\" = -h ] && [ \"$4\" = ghe.corp ]; then echo ana; exit 0; fi; [ -f \"$(dirname \"$0\")/top.txt\" ] && cat \"$(dirname \"$0\")/top.txt\" && exit 0; if [ -f \"$(dirname \"$0\")/locked.txt\" ]; then echo 'gh: the config file is busy' >&2; exit 1; fi; echo 'could not find key user' >&2; exit 1; fi\necho '{\"fork\":false,\"data\":{}}'\n").unwrap();
+            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\nif [ \"$1\" = config ]; then if [ \"$3\" = -h ] && [ \"$4\" = ghe.corp ]; then echo ana; exit 0; fi; [ -f \"$(dirname \"$0\")/top.txt\" ] && cat \"$(dirname \"$0\")/top.txt\" && exit 0; if [ -f \"$(dirname \"$0\")/locked.txt\" ]; then echo 'gh: the config file is busy' >&2; exit 1; fi; echo 'could not find key \"user\"' >&2; exit 1; fi\necho '{\"fork\":false,\"data\":{}}'\n").unwrap();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -1032,11 +1042,56 @@ mod tests {
         };
         assert_eq!(read(true, "ana", ""), "value:ana");
         assert_eq!(read(true, "", ""), "unset", "an older gh prints nothing for a key that is not set");
-        assert_eq!(read(false, "", "Could not find key \"user\""), "unset");
-        assert_eq!(read(false, "", "gh: could not find key: user"), "unset");
+        assert_eq!(read(false, "", "could not find key \"user\""), "unset");
+        assert_eq!(read(false, "", "Could not find key \"user\""), "failed", "FIX-6: gh's own case only");
+        assert_eq!(read(false, "", "gh: could not find key: user"), "failed", "FIX-6: only the quoted-key form is gh's");
         assert_eq!(read(false, "", ""), "failed", "a bare non-zero exit says nothing about the key");
         assert_eq!(read(false, "", "gh: the config file is busy"), "failed");
         assert_eq!(read(false, "ana", "permission denied"), "failed", "output on a failed read is not an answer");
+    }
+
+    /// FIX-5 (council AFTER 1): "key not found" alone is wider than gh's wording; a wrapper or shim
+    /// saying "secret key not found" must not read as "no such key", because an unset top-level
+    /// key lets a host through.
+    #[test]
+    fn a_shim_s_key_not_found_is_no_answer_only_gh_s_could_not_find_key_is() {
+        let read = |err: &str| matches!(config_read(false, "", err), ConfigRead::Unset);
+        assert!(!read("secret key not found"));
+        assert!(!read("key not found"));
+        assert!(!read("gh: signing key not found in the keychain"));
+        assert!(read("could not find key \"user\""));
+        assert!(read("gh: could not find key \"user\" in the config"));
+    }
+
+    /// FIX-6 (council FIX-SOON 2): the bare prefix "could not find key" also matches a wrapper or
+    /// credential helper saying "could not find keyring entry", and an unset top-level key lets
+    /// a host through. Only the quoted form (`could not find key "`), in gh's own case, is "unset".
+    #[test]
+    fn a_wrapper_s_could_not_find_keyring_is_no_answer() {
+        let read = |err: &str| matches!(config_read(false, "", err), ConfigRead::Unset);
+        assert!(!read("could not find keyring entry"));
+        assert!(!read("gh: could not find keyring"));
+        assert!(!read("Could not find keychain item"));
+        assert!(!read("gh: Could Not Find Key: user"), "unquoted wording is no answer");
+        assert!(!read("Could not find key \"user\""), "case-sensitive");
+        assert!(!read("could not find key: user"));
+        assert!(read("could not find key \"user\""));
+    }
+
+    /// FIX-5 (council AFTER 2): a config answer of more than one line is no answer. A value that
+    /// carries an extra line would compare unequal to the other read and let the host through.
+    #[test]
+    fn a_config_answer_of_more_than_one_line_is_no_answer_and_refuses_the_host() {
+        for out in ["ana\nbob", "ana\r\nbob", "ana\n\nbob"] {
+            assert!(matches!(config_read(true, out, ""), ConfigRead::Failed), "{out:?}");
+        }
+        assert!(matches!(config_read(true, "ana", ""), ConfigRead::Value(ref v) if v == "ana"));
+        let gh = Path::new("fix5-multiline-gh");
+        let host = |args: &[&str]| args.contains(&"-h");
+        // Both reads print the same first line plus a different extra line: with the whole text
+        // compared they differ and the host would be let through; it is refused instead.
+        let why = host_allowed_reading(gh, "ghe.corp", None, &|a| config_read(true, if host(a) { "ana\nx" } else { "ana\ny" }, "")).unwrap_err();
+        assert!(why.contains("did not answer its config read"), "{why}");
     }
 
     /// FIX-3 (reliability review FIX-SOON 6): a gh_config read that fails or times out is no answer,

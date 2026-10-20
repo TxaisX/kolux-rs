@@ -196,7 +196,7 @@ function dropConflicts(bindings: Map<string, Binding>, errors: string[], platfor
   }
 }
 
-export type KeyLike = { key: string; code: string; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean };
+export type KeyLike = { key: string; code: string; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean; getModifierState?: (key: string) => boolean };
 export type Match = { id: string; index?: number };
 
 /** Does this chord fire for this key event? Returns the digit for index actions. */
@@ -207,11 +207,48 @@ export function chordMatches(chord: string, e: KeyLike, platform: Platform, inde
   const wantCtrl = c.ctrl || (c.mod && !mac);
   const wantMeta = c.meta || (c.mod && mac);
   if (e.ctrlKey !== wantCtrl || e.metaKey !== wantMeta || e.altKey !== c.alt || e.shiftKey !== c.shift) return null;
+  if (typesCharacter(c, e, platform, index)) return null;
   if (index && c.key === "1") {
     const d = /^Digit([1-9])$/.exec(e.code)?.[1] ?? (/^[1-9]$/.test(e.key) ? e.key : null);
     return d ? { index: Number(d) } : null;
   }
   return keyMatches(c.key, e) ? {} : null;
+}
+
+/** What a chord's own key types on a plain US-style layout, shifted forms included; null = not a typing key. */
+function ownChars(key: string): string | null {
+  if (/^[A-Z]$/.test(key)) return key.toLowerCase() + key;
+  if (/^[0-9]$/.test(key)) return key;
+  const numpad = /^Numpad([0-9])$/.exec(key);
+  if (numpad) return numpad[1];
+  const named: Record<string, string> = {
+    Equal: "=+", Minus: "-_", Plus: "+", Space: " ", BracketLeft: "[{", BracketRight: "]}", Comma: ",<", Period: ".>", Slash: "/?",
+    Backslash: "\\|", Semicolon: ";:", Quote: "'\"", Backquote: "`~", NumpadAdd: "+", NumpadSubtract: "-", NumpadMultiply: "*", NumpadDivide: "/", NumpadDecimal: ".",
+  };
+  return named[key] ?? null;
+}
+
+/**
+ * AltGr guard (FIX-1). On Windows and Linux the right-hand Alt key (AltGr) reaches the page as Ctrl+Alt,
+ * so AltGr+0 (a closing brace on a German keyboard) would look like the chord Ctrl+Alt+0 and its
+ * character would be lost. A Ctrl+Alt press that types one character other than the chord's own key is a
+ * typed symbol, never a command; so is anything the browser flags as AltGraph. macOS Option is a real
+ * modifier and is left alone before anything else is read (FIX-2: not even AltGraph is consulted there).
+ * A non-Latin letter in key is a layout without an AltGr layer, so it counts only with the AltGraph flag.
+ * Limit: on an AltGr layout (German, Polish) the zoom chords that need AltGr to type can not be pressed;
+ * rebind the interface zoom keys. Shift chords are checked by the AltGraph flag only (their typed character
+ * depends on the layout).
+ */
+function typesCharacter(c: Chord, e: KeyLike, platform: Platform, index: boolean): boolean {
+  if (platform === "darwin") return false;
+  if (e.getModifierState?.("AltGraph")) return true;
+  if (!e.ctrlKey || !e.altKey || e.shiftKey) return false;
+  if ([...e.key].length !== 1) return false;
+  // Layouts without an AltGr layer (Russian, Greek, Hebrew, Arabic) report their own letter in key while
+  // the physical key still decides the chord, so a non-Latin letter is not typed text unless AltGraph is set.
+  if (/\p{L}/u.test(e.key) && !/\p{Script=Latin}/u.test(e.key)) return false;
+  const own = index && c.key === "1" ? "123456789" : ownChars(c.key);
+  return own !== null && !own.includes(e.key);
 }
 
 function keyMatches(key: string, e: KeyLike): boolean {

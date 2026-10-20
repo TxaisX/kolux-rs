@@ -10,7 +10,7 @@ import type { AgentState } from "../projects/rows";
 import type { Crew } from "../terminal/status";
 import { noteTitle, turnNote, type StopInfo, type Turn } from "../terminal/notify";
 import type { ContextReading } from "../usage/meter";
-import type { KindKey } from "../settings/notifications";
+import { raiseNotification, type KindKey } from "../settings/notifications";
 import { marksUnread } from "../terminal/tabs";
 import { folderName } from "../projects/model";
 import { sameDir } from "../workspaces";
@@ -157,7 +157,7 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
     // STAT-041: every note on a pane out of view (or in an unfocused window) is a desktop
     // notification unless 'Agent Task Complete' is off (a stop goes by 'Agent Stopped', STAT-023);
     // the unread mark and the toast keep T-024's one-mark-until-viewed rule.
-    if (!(inView(p.key) && winFocused) && settings[gate] !== false) invoke("notify", { title, body }).catch(() => {});
+    if (!(inView(p.key) && winFocused) && settings[gate] !== false) void raiseNotification(settings, title, body).catch(() => {});
     if (!marksUnread(p.key, known, unreadPanes, inView(p.key), winFocused)) return;
     setUnreadPanes((u) => new Set([...u, p.key]));
     if (p.cwd !== null) markDir(p.cwd, true);
@@ -170,7 +170,7 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
   const quiet = (p: Pane, minutes: number) => {
     const title = noteTitle(tabName(p, titles), repoOf(p), `has gone quiet for ${minutes} min`);
     setToast(title);
-    invoke("notify", { title, body: "No terminal output since then. It may be stuck." }).catch(() => {});
+    void raiseNotification(settings, title, "No terminal output since then. It may be stuck.").catch(() => {});
   };
   const quietRef = useRef(quiet);
   quietRef.current = quiet;

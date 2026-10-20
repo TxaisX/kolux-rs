@@ -1,6 +1,7 @@
 // ONB-001..005: the first-run wizard's pure rules; Wizard.tsx draws it, onboarding.rs keeps its record.
 import { invoke } from "@tauri-apps/api/core";
 import { sameDir } from "../workspaces";
+import { isAiAgent } from "./agentKind";
 
 export const SCREENS = [
   { id: "welcome", name: "Welcome", heading: "Several AIs can work on your files at the same time", sub: "Claude, Codex and Grok each take a part of the job, side by side." },
@@ -123,9 +124,10 @@ export const reopenWizard = (reopen: () => Promise<unknown>, show: () => void, f
   );
 
 /** ONB-010: the agent the first folder after onboarding starts: the saved default only; none on
- * automatic (no default) and none for a plain terminal, which the new workspace opens anyway. */
+ * automatic (no default) and none for a plain terminal, which the new workspace opens anyway
+ * (FIX-5: the same agentKind rule the guide uses, so no spelling of "terminal" gets through). */
 export const firstFolderAgent = <A extends { id: string; installed: boolean }>(offered: A[], defaultId: string): A | null =>
-  defaultId === "" || defaultId === "terminal" ? null : (offered.find((a) => a.installed && a.id === defaultId) ?? null);
+  !isAiAgent(defaultId) ? null : (offered.find((a) => a.installed && a.id === defaultId && isAiAgent(a.id)) ?? null);
 
 /** ACCT-035: a failed connect attempt, worded so its toast names the agent it was for. */
 export function connectFailed(agent: string, err: unknown): string {
@@ -152,7 +154,9 @@ export const readFailed = (e: string | null): string => (e && e !== STATUSES_FAI
 /** ACCT-035: the AI connections page reports each card's connected state here; the first time any
  * card says connected, the first-AI milestone is sent (onboarding.rs keeps only the first time,
  * across the wizard and this page). One landed write per window: later reports change nothing, while a
- * write that failed is tried again on the next connected report (FIX-3). */
+ * write that failed is tried again on the next connected report (FIX-3). A card reports only when its
+ * connected state changes or the page is visited again (it mounts), so in the app that retry waits for
+ * the next visit to AI connections, the next connection change or the next start (FIX-4). */
 export function firstConnection(send: (name: Milestone) => Promise<boolean> = milestone) {
   let sent = false;
   return (on: boolean) => {

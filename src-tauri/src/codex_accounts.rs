@@ -112,16 +112,23 @@ pub const SIGN_IN_WAIT: Duration = Duration::from_secs(2);
 /// asked again every `step`, so an account changed while the pane waits wins. No sign-in after
 /// `wait`: the system-default login (`None`), or, when the choice changed and the new one has no
 /// sign-in either, an error asking the user to open the pane again.
-pub fn ready_home(mut active: impl FnMut() -> Option<String>, signed_in: impl Fn(&str) -> bool, wait: Duration, step: Duration) -> Result<Option<String>, String> {
+pub fn ready_home(active: impl FnMut() -> Option<String>, signed_in: impl Fn(&str) -> bool, wait: Duration, step: Duration) -> Result<Option<String>, String> {
     let started = std::time::Instant::now();
+    ready_home_by(active, signed_in, || started.elapsed() >= wait, || std::thread::sleep(step))
+}
+
+/// ACCT-024 (FIX-4): `ready_home` with its clock and its pause handed in, so a test counts polls
+/// instead of watching the wall clock (a loaded machine slowed the timed version into a false fail).
+/// `out_of_time` says the wait is over; `pause` waits one step.
+fn ready_home_by(mut active: impl FnMut() -> Option<String>, signed_in: impl Fn(&str) -> bool, mut out_of_time: impl FnMut() -> bool, mut pause: impl FnMut()) -> Result<Option<String>, String> {
     let first = active();
     let mut home = first.clone();
     loop {
         match home.as_deref() {
             None => return Ok(None),
             Some(h) if signed_in(h) => return Ok(home),
-            _ if started.elapsed() >= wait => break,
-            _ => std::thread::sleep(step),
+            _ if out_of_time() => break,
+            _ => pause(),
         }
         home = active();
     }
@@ -155,7 +162,7 @@ pub fn wait_home(store: &Mutex<Store>, id: &str) -> Result<String, String> {
 
 /// The variable a new pane gets: only a Codex pane, only with an active account.
 pub fn pane_env(program: Option<&str>, home: Option<String>) -> Option<(&'static str, String)> {
-    if crate::agents::credited_agent(program?) != Some("codex") {
+    if crate::tools::credited_program(program?) != Some("codex") {
         return None;
     }
     home.map(|h| (HOME_ENV, h))
@@ -863,6 +870,14 @@ mod tests {
         assert_eq!(pane_env(Some("claude"), active_home(&s)), None);
     }
 
+    /// launch FIX-4: a Command that is a bare path with a space starts fine, so it gets the account too.
+    #[test]
+    fn fix4_a_codex_path_with_a_space_gets_the_account() {
+        let home = Some(r"C:\p\codex-accounts\c1".to_string());
+        assert_eq!(pane_env(Some(r"C:\Program Files\nodejs\codex.cmd"), home.clone()), Some((HOME_ENV, home.clone().unwrap())));
+        assert_eq!(pane_env(Some(r"C:\Program Files\Tools\notcodex.exe"), home), None);
+    }
+
     #[test]
     fn signing_in_again_updates_the_account_in_place_and_clears_its_error() {
         let profile = temp("again");
@@ -910,26 +925,59 @@ mod tests {
 
     #[test]
     fn acct_024_a_codex_pane_waits_for_the_chosen_sign_in() {
-        use std::cell::RefCell;
-        let quick = (Duration::from_millis(40), Duration::from_millis(5));
+        use std::cell::{Cell, RefCell};
+        // FIX-4: no wall clock. The wait is counted in polls: it runs out after `budget` pauses, and a
+        // pause takes no time, so a loaded machine cannot change what these cases see.
+        let pauses = Cell::new(0u32);
+        let budget = 50;
+        let wait = |signed: &dyn Fn(&str) -> bool, active: &mut dyn FnMut() -> Option<String>| {
+            pauses.set(0);
+            ready_home_by(&mut *active, signed, || pauses.get() >= budget, || pauses.set(pauses.get() + 1))
+        };
         // already signed in: no wait
-        assert_eq!(ready_home(|| Some("a".into()), |h| h == "a", quick.0, quick.1), Ok(Some("a".into())));
+        assert_eq!(wait(&|h| h == "a", &mut || Some("a".into())), Ok(Some("a".into())));
+        assert_eq!(pauses.get(), 0);
         // no managed account: the system default, at once
-        assert_eq!(ready_home(|| None, |_| false, quick.0, quick.1), Ok(None));
-        // the sign-in lands while waiting
+        assert_eq!(wait(&|_| false, &mut || None), Ok(None));
+        assert_eq!(pauses.get(), 0);
+        // the sign-in lands while waiting (on the fifth look, so after four pauses)
         let n = RefCell::new(0);
-        assert_eq!(ready_home(|| Some("a".into()), |_| { *n.borrow_mut() += 1; *n.borrow() > 3 }, quick.0, quick.1), Ok(Some("a".into())));
-        // never lands: the pane starts on the system-default login instead of hanging
-        let asked = std::time::Instant::now();
-        assert_eq!(ready_home(|| Some("a".into()), |_| false, quick.0, quick.1), Ok(None));
-        assert!(asked.elapsed() < Duration::from_secs(1));
+        assert_eq!(wait(&|_| { *n.borrow_mut() += 1; *n.borrow() > 4 }, &mut || Some("a".into())), Ok(Some("a".into())));
+        assert_eq!(pauses.get(), 4);
+        // never lands: the pane starts on the system-default login instead of hanging, after exactly the budget
+        assert_eq!(wait(&|_| false, &mut || Some("a".into())), Ok(None));
+        assert_eq!(pauses.get(), budget);
         // the account is changed while waiting: the new one wins
         let calls = RefCell::new(0);
-        let switching = || { *calls.borrow_mut() += 1; Some(if *calls.borrow() > 2 { "b" } else { "a" }.to_string()) };
-        assert_eq!(ready_home(switching, |h| h == "b", quick.0, quick.1), Ok(Some("b".into())));
+        let mut switching = || { *calls.borrow_mut() += 1; Some(if *calls.borrow() > 2 { "b" } else { "a" }.to_string()) };
+        assert_eq!(wait(&|h| h == "b", &mut switching), Ok(Some("b".into())));
         // one choice after another without a sign-in: not started, asked to open it again
         let calls = RefCell::new(0);
-        let switching = || { *calls.borrow_mut() += 1; Some(if *calls.borrow() > 2 { "b" } else { "a" }.to_string()) };
-        assert!(ready_home(switching, |_| false, quick.0, quick.1).unwrap_err().contains("Open it again"));
+        let mut switching = || { *calls.borrow_mut() += 1; Some(if *calls.borrow() > 2 { "b" } else { "a" }.to_string()) };
+        assert!(wait(&|_| false, &mut switching).unwrap_err().contains("Open it again"));
+        assert_eq!(pauses.get(), budget);
+        // the real-clock wrapper with no time to wait: a sign-in that is there is taken, one that is not gives the system default, nothing sleeps
+        let none = Duration::ZERO;
+        assert_eq!(ready_home(|| Some("a".into()), |h| h == "a", none, none), Ok(Some("a".into())));
+        assert_eq!(ready_home(|| Some("a".into()), |_| false, none, none), Ok(None));
+        assert_eq!(ready_home(|| None, |_| false, none, none), Ok(None));
+    }
+
+    #[test]
+    fn acct_024_b_the_real_clock_ends_a_wait_that_has_time() {
+        // FIX-5: the zero-wait cases cannot tell a broken clock from a working one. Here the wait is
+        // about 20 ms and the sign-in never lands: the call must come back with the system default,
+        // and not before the wait is up. A slow machine can only make it later, never fail it. It
+        // runs on a thread with a generous deadline so a wait that never ends fails, not hangs.
+        let wait = Duration::from_millis(20);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let started = std::time::Instant::now();
+        std::thread::spawn(move || {
+            let got = ready_home(|| Some("a".into()), |_| false, wait, Duration::from_millis(1));
+            let _ = tx.send((got, started.elapsed()));
+        });
+        let (got, took) = rx.recv_timeout(Duration::from_secs(20)).expect("ready_home never gave up waiting");
+        assert_eq!(got, Ok(None));
+        assert!(took >= wait, "gave up after {took:?}, before the {wait:?} wait was up");
     }
 }

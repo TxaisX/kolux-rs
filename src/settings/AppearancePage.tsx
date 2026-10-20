@@ -17,6 +17,7 @@ import { FIELDS as STATUS_FIELDS, readStatusBar, STATUS_ITEMS, toggleItem } from
 import { CHROME, chromeShown, windowSummary } from "../chrome/chromeItems";
 import { PERCENT_FIELD, percentMode, type PercentMode } from "../usage/meter";
 import { Segmented } from "./GeneralPage";
+import { CardDensityBody, SidebarLookBody } from "../look/SidebarSettings";
 import { applyLanguage, LANGUAGE_FIELD, LANGUAGES, savedLanguage, systemLanguage, type LanguageChoice } from "../language";
 
 const MODE_LABEL: Record<Mode, string> = { system: "System", light: "Light", dark: "Dark" };
@@ -281,6 +282,9 @@ export function AppearanceView({ look, onChange, windowPart, windowSummary = "",
       <PaneLook look={look} onChange={onChange} />
       </Fold>
       <Fold id="window" title="Window & Sidebar" summary={windowSummary} {...fold("window")}>
+        <section className="conn-card" data-section="sidebar-look">
+          <SidebarLookBody look={look} onChange={onChange} />
+        </section>
         {windowPart}
       </Fold>
     </>
@@ -481,6 +485,9 @@ function WindowSwitches({ settings, error, save }: ReturnType<typeof useSettings
   const bar = readStatusBar(settings);
   return (
     <>
+      <section className="conn-card" data-section="card-density">
+        <CardDensityBody settings={settings} save={(p) => void save(p)} />
+      </section>
       <section className="conn-card" data-section="window-items">
         <h2 className="conn-name">Title bar and sidebar</h2>
         {CHROME.map((c) => (

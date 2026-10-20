@@ -10,6 +10,7 @@
 // outside editor installed (editors.ts).
 import { useState, type CSSProperties } from "react";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
+import AgentMark from "../marks/AgentMark";
 import { Kbd, useLabel } from "../keys/KeymapContext";
 import { agentRows, MAX_SEARCH, searchAgents, wantsTerminal, type AgentPass } from "./agents";
 import { openIn, openLabel, openTitle, useEditors, type Editor } from "./editors";
@@ -156,7 +157,9 @@ export default function PlusMenu({ agents, defaultId = "", onPick, onSetDefault,
                   openIn(e.id, dir).then(onClose, (err) => setOpenError(String(err)));
                 }}
               >
-                <span className="agent-mark" aria-hidden="true" />
+                <span className="agent-mark" aria-hidden="true">
+                  {e.id === "vscode" && <AgentMark id="vscode" size={13} />}
+                </span>
                 <span className="name">{openLabel(e)}</span>
               </button>
             ))}

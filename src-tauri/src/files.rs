@@ -1,30 +1,107 @@
-// Reading and saving the text of a file shown in an editor tab (EDIT-001). A save goes to a
-// temporary file beside the target and is then moved over it, so a failed write never leaves a
-// half-written file behind. Every command here takes only paths inside the user's projects and
-// worktrees (ACCT-055, fence.rs); EDIT-045's `links::fence` guards the file operations and
-// `path_kind` (inside a project or granted exactly, never out through a link); the WSL and share
-// parts of EDIT-045 are T-062; large and binary files are EDIT-046 (T-178).
+// Reading and saving the text of a file shown in an editor tab (EDIT-001, EDIT-046). A save goes
+// to a temporary file beside the target, is flushed to disk and is then moved over it, so a save
+// that fails or is cut off never leaves a half-written file behind. A read has an upper bound and
+// samples the start of a file before treating it as text. Every command here takes only paths
+// inside the user's projects and worktrees (ACCT-055, fence.rs); EDIT-045's `links::fence` guards
+// the file operations and `path_kind` (inside a project or granted exactly, never out through a
+// link); the WSL and share parts of EDIT-045 are T-062.
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 
+/// EDIT-046 (T-178): the largest file the editor opens as text. The old limit was 5 MB; a 20 MB log
+/// has to open. Bigger files are refused with a plain message (the whole text travels to the window
+/// and into a syntax tree, so the bound stays modest).
+pub const TEXT_MAX: u64 = 32 * 1024 * 1024;
+
+/// EDIT-046: how much of the start of a file is looked at to tell text from binary.
+const SAMPLE: usize = 8192;
+
+/// EDIT-046: true when the start of a file is plainly not text: a well-known binary signature, a
+/// NUL byte, or mostly control characters. A UTF-16 text file has NULs too and is also refused (the
+/// editor only reads UTF-8). "MZ" is not a signature here: it is two letters real text can start with,
+/// and a Windows program always has NUL bytes in its first 64 bytes.
+pub fn looks_binary(sample: &[u8]) -> bool {
+    const MAGIC: [&[u8]; 8] = [b"PK\x03\x04", b"\x1f\x8b", b"%PDF-", b"\x89PNG", b"GIF8", b"\x7fELF", b"\xff\xd8\xff", b"7z\xbc\xaf"];
+    if MAGIC.iter().any(|m| sample.starts_with(m)) || sample.contains(&0) {
+        return true;
+    }
+    let control = sample.iter().filter(|b| **b < 0x20 && !matches!(**b, b'\t' | b'\n' | b'\r' | 0x0c | 0x1b)).count();
+    !sample.is_empty() && control * 10 > sample.len() * 3
+}
+
 pub fn read_text(path: &Path) -> Result<String, String> {
-    let bytes = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    read_text_up_to(path, TEXT_MAX)
+}
+
+/// `read_text` with the size bound given, so the bound itself can be tested without a huge file.
+pub fn read_text_up_to(path: &Path, max: u64) -> Result<String, String> {
+    let io = |e: std::io::Error| format!("{}: {e}", path.display());
+    let mut f = fs::File::open(path).map_err(io)?;
+    let len = f.metadata().map_err(io)?.len();
+    if len > max {
+        return Err(format!("{} is too large to open ({} MB; the editor opens up to {} MB)", path.display(), len.div_ceil(1024 * 1024), max / (1024 * 1024)));
+    }
+    let mut bytes = Vec::with_capacity(len as usize);
+    // Sampled first, so a big archive is turned away after 8 KB instead of after being read whole.
+    (&mut f).take(SAMPLE as u64).read_to_end(&mut bytes).map_err(io)?;
+    if looks_binary(&bytes) {
+        return Err(format!("{} is a binary file, so it is not shown as text", path.display()));
+    }
+    f.read_to_end(&mut bytes).map_err(io)?;
     String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8 text", path.display()))
 }
 
+/// How old a leftover save copy must be before the next save of its file clears it away: far longer
+/// than any save takes, so a copy belonging to a save in progress is never touched.
+const STALE_COPY_SECS: u64 = 600;
+
 pub fn write_text(path: &Path, text: &str) -> Result<(), String> {
+    replace_with(path, |f| f.write_all(text.as_bytes()))
+}
+
+/// EDIT-046: the all-or-nothing save. `put` fills a temporary file beside `path`; the file is
+/// flushed to disk and only then moved over `path`. Any failure removes the temporary file and
+/// leaves `path` exactly as it was. A copy left by an app that died mid-save is cleared the next
+/// time that file is saved.
+fn replace_with(path: &Path, put: impl FnOnce(&mut fs::File) -> std::io::Result<()>) -> Result<(), String> {
+    static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let name = path.file_name().ok_or_else(|| format!("{} is not a file path", path.display()))?;
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let temp = dir.join(format!(".{}.kolux-save-{}", name.to_string_lossy(), std::process::id()));
+    let prefix = format!(".{}.kolux-save-", name.to_string_lossy());
+    clear_stale_copies(dir, &prefix);
+    let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp = dir.join(format!("{prefix}{}-{n}", std::process::id()));
     let fail = |e: std::io::Error| {
         let _ = fs::remove_file(&temp);
         format!("could not save {}: {e}", path.display())
     };
-    let mut f = fs::File::create(&temp).map_err(fail)?;
-    f.write_all(text.as_bytes()).and_then(|_| f.sync_all()).map_err(fail)?;
+    let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&temp).map_err(fail)?;
+    put(&mut f).and_then(|_| f.flush()).and_then(|_| f.sync_all()).map_err(fail)?;
     drop(f);
-    fs::rename(&temp, path).map_err(fail)
+    #[cfg(unix)]
+    if let Ok(meta) = fs::metadata(path) {
+        let _ = fs::set_permissions(&temp, meta.permissions());
+    }
+    fs::rename(&temp, path).map_err(fail)?;
+    #[cfg(unix)]
+    if let Ok(d) = fs::File::open(dir) {
+        let _ = d.sync_all(); // the swap itself reaches the disk
+    }
+    Ok(())
+}
+
+fn clear_stale_copies(dir: &Path, prefix: &str) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        if !e.file_name().to_string_lossy().starts_with(prefix) {
+            continue;
+        }
+        let old = e.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok()).is_some_and(|age| age.as_secs() > STALE_COPY_SECS);
+        if old && e.path().is_file() {
+            let _ = fs::remove_file(e.path());
+        }
+    }
 }
 
 type Store<'a> = tauri::State<'a, std::sync::Mutex<crate::state::Store>>;
@@ -319,25 +396,168 @@ pub fn diff_image(path: String, staged: bool, new: bool, fence: tauri::State<'_,
     Ok(tauri::ipc::Response::new(if new { now } else { old }))
 }
 
-/// Mod+Shift+M: an empty note at the worktree root named untitled.md, then untitled-2.md and
-/// onwards. It never overwrites a file and gives up after 100 taken names. Naming it on the
-/// first save is EDIT-054 (T-237).
+/// Mod+Shift+M: a note at the worktree root named untitled.md, then untitled-2.md and onwards. It
+/// never overwrites a file and gives up after 100 taken names. With a `template` (one of
+/// `md_templates`' paths, EDIT-055) the note starts with that template's text, placeholders filled;
+/// without one it is empty. Naming it on the first save is EDIT-054 (T-237).
 #[tauri::command(async)]
-pub fn md_new(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<String, String> {
-    new_note(&fence.allow(&root, &store, &git, false)?)
+pub fn md_new(root: String, template: Option<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<String, String> {
+    let root = fence.allow(&root, &store, &git, false)?;
+    match template {
+        None => new_note(&root),
+        Some(t) => new_note_from(&root, &t, &jiff::Zoned::now()),
+    }
 }
 
 pub fn new_note(root: &Path) -> Result<String, String> {
+    new_note_with(root, |_| String::new())
+}
+
+/// The first free untitled name gets `body(file name)`. The file is made new (never over another),
+/// and a body that cannot be written takes the half-made file away again.
+fn new_note_with(root: &Path, body: impl Fn(&str) -> String) -> Result<String, String> {
     for n in 1..=100 {
         let name = if n == 1 { "untitled.md".to_string() } else { format!("untitled-{n}.md") };
-        let path = root.join(name);
+        let path = root.join(&name);
         match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(_) => return Ok(path.to_string_lossy().into_owned()),
+            Ok(mut f) => {
+                let text = body(&name);
+                if let Err(e) = f.write_all(text.as_bytes()).and_then(|_| f.sync_all()) {
+                    drop(f);
+                    let _ = fs::remove_file(&path);
+                    return Err(format!("could not create a note in {}: {e}", root.display()));
+                }
+                return Ok(path.to_string_lossy().into_owned());
+            }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(format!("could not create a note in {}: {e}", root.display())),
         }
     }
     Err(format!("{} already has 100 untitled notes; rename or delete some first", root.display()))
+}
+
+// ---- EDIT-055 (T-318): new notes from the repository's own templates ----
+
+/// A markdown template found in the repository's templates folder: the readable name shown in the
+/// picker and the full path.
+#[derive(serde::Serialize, Debug, PartialEq, Clone)]
+pub struct Template {
+    pub name: String,
+    pub path: String,
+}
+
+/// The templates folder inside the repository's hidden Kolux folder (COMPAT EDIT-055).
+const TEMPLATE_DIR: [&str; 2] = [".kolux", "templates"];
+/// Dependency and tool folders a template search never goes into.
+const DEPENDENCY_DIRS: [&str; 9] = ["node_modules", "bower_components", "vendor", "target", ".git", ".venv", "venv", "__pycache__", "site-packages"];
+const TEMPLATE_CAP: usize = 200;
+const TEMPLATE_DEPTH: usize = 6;
+
+/// A template's picker name from its file name: no extension, dashes and underscores turned into
+/// spaces, and a capital first letter ("meeting-notes.md" is "Meeting notes").
+pub fn template_name(file: &str) -> String {
+    let stem = file.rsplit_once('.').filter(|(s, _)| !s.is_empty()).map_or(file, |(s, _)| s);
+    let words = stem.replace(['-', '_'], " ").split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = words.chars();
+    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or(words)
+}
+
+fn is_markdown(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
+}
+
+fn walk_templates(dir: &Path, depth: usize, out: &mut Vec<Template>) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        if out.len() >= TEMPLATE_CAP {
+            return;
+        }
+        // file_type does not follow links: a symlink or junction, to a file or a folder, is skipped.
+        let Ok(kind) = e.file_type() else { continue };
+        let path = e.path();
+        let name = e.file_name().to_string_lossy().into_owned();
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            if depth < TEMPLATE_DEPTH && !DEPENDENCY_DIRS.iter().any(|d| d.eq_ignore_ascii_case(&name)) {
+                walk_templates(&path, depth + 1, out);
+            }
+        } else if kind.is_file() && is_markdown(&path) {
+            out.push(Template { name: template_name(&name), path: path.to_string_lossy().into_owned() });
+        }
+    }
+}
+
+/// The templates of the repository at `root`, by readable name in natural order (equal names keep a
+/// fixed order by path). No templates folder, or a link where it should be, gives an empty list.
+pub fn list_templates(root: &Path) -> Vec<Template> {
+    let mut dir = root.to_path_buf();
+    for part in TEMPLATE_DIR {
+        dir.push(part);
+        if !fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
+            return Vec::new();
+        }
+    }
+    let mut out = Vec::new();
+    walk_templates(&dir, 0, &mut out);
+    out.sort_by_cached_key(|t| (natural_key(&t.name), t.path.to_lowercase()));
+    out
+}
+
+/// The value of a placeholder such as `{{ Date }}`, or None for one Kolux does not know. Names ignore
+/// case, spaces, dashes and underscores; dates are year-month-day, times 24-hour hours and minutes.
+fn placeholder(name: &str, title: &str, file_name: &str, now: &jiff::Zoned) -> Option<String> {
+    let key: String = name.chars().filter(|c| !matches!(c, ' ' | '-' | '_')).flat_map(char::to_lowercase).collect();
+    match key.as_str() {
+        "title" => Some(title.to_string()),
+        "filename" => Some(file_name.to_string()),
+        "date" => Some(now.strftime("%Y-%m-%d").to_string()),
+        "time" => Some(now.strftime("%H:%M").to_string()),
+        "datetime" => Some(now.strftime("%Y-%m-%d %H:%M").to_string()),
+        _ => None,
+    }
+}
+
+/// Fills a template's placeholders (`{{title}}`, `{{date}}`, `{{time}}`, `{{datetime}}`, `{{filename}}`,
+/// spaces allowed inside the braces); any other `{{...}}` stays exactly as typed.
+pub fn fill_template(text: &str, title: &str, file_name: &str, now: &jiff::Zoned) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("{{") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 2..];
+        match after.find("}}") {
+            Some(j) if !after[..j].contains(['{', '}', '\n']) => {
+                match placeholder(&after[..j], title, file_name, now) {
+                    Some(v) => out.push_str(&v),
+                    None => out.push_str(&rest[i..i + 2 + j + 2]),
+                }
+                rest = &after[j + 2..];
+            }
+            _ => {
+                out.push_str("{{");
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// EDIT-055: the templates of the worktree, for the picker Mod+Shift+M opens. Empty means no picker.
+#[tauri::command(async)]
+pub fn md_templates(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<Template>, String> {
+    Ok(list_templates(&fence.allow(&root, &store, &git, false)?))
+}
+
+/// The note made from one of the worktree's templates: only a path that `list_templates` itself
+/// lists is accepted, so a caller cannot make Kolux copy some other file into a note.
+pub fn new_note_from(root: &Path, template: &str, now: &jiff::Zoned) -> Result<String, String> {
+    let wanted = Path::new(template);
+    let found = list_templates(root).into_iter().find(|t| Path::new(&t.path) == wanted).ok_or_else(|| format!("{template} is not one of this repository's templates"))?;
+    let text = read_text(Path::new(&found.path))?;
+    new_note_with(root, |file| fill_template(&text, file.strip_suffix(".md").unwrap_or(file), file, now))
 }
 
 /// One row of the explorer (EDIT-033). A symlink (or junction) is `link` until it is opened, so it
@@ -364,7 +584,9 @@ pub fn list_dir(dir: &Path) -> Result<Vec<DirEntry>, String> {
             DirEntry { name: e.file_name().to_string_lossy().into_owned(), path: e.path().to_string_lossy().into_owned(), kind }
         })
         .collect();
-    out.sort_by(|a, b| (a.kind != "dir").cmp(&(b.kind != "dir")).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    // EDIT-011: folders first, then natural order (file2 before file10); names that tie settle by their exact
+    // spelling, never by the order the disk returned them.
+    out.sort_by_cached_key(|e| (e.kind != "dir", natural_key(&e.name), e.name.clone()));
     Ok(out)
 }
 
@@ -402,6 +624,20 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn edit011_numbered_names_list_in_natural_order_and_ties_settle_the_same_way_every_time() {
+        let d = temp_dir("natural");
+        for f in ["file10.txt", "file2.txt", "file1.txt", "file02.txt"] {
+            fs::write(d.join(f), "x").unwrap();
+        }
+        fs::create_dir(d.join("sub")).unwrap();
+        let names = |d: &Path| list_dir(d).unwrap().into_iter().map(|e| e.name).collect::<Vec<_>>();
+        let got = names(&d);
+        // A folder above files; 2 before 10; file02 and file2 count the same, so their exact spelling settles it.
+        assert_eq!(got, ["sub", "file1.txt", "file02.txt", "file2.txt", "file10.txt"]);
+        assert_eq!(names(&d), got);
     }
 
     #[test]
@@ -525,9 +761,314 @@ mod tests {
         let missing = d.join("nope").join("a.txt");
         assert!(read_text(&missing).unwrap_err().contains("a.txt"));
         assert!(write_text(&missing, "x").unwrap_err().starts_with("could not save"));
-        fs::write(d.join("bin"), [0xff, 0xfe, 0x00]).unwrap();
-        assert!(read_text(&d.join("bin")).unwrap_err().contains("not UTF-8"));
+        fs::write(d.join("latin"), [b'c', b'a', b'f', 0xe9]).unwrap();
+        assert!(read_text(&d.join("latin")).unwrap_err().contains("not UTF-8"));
     }
+
+    // The bound is above the old 5 MB limit (checked when this compiles).
+    const _: () = assert!(TEXT_MAX > 5 * 1024 * 1024);
+
+    fn entries(d: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn edit046_a_save_that_fails_part_way_leaves_the_original_whole_and_no_temporary() {
+        let d = temp_dir("cutsave");
+        let f = d.join("notes.txt");
+        fs::write(&f, "the original, whole\n").unwrap();
+        // The writer gets half the new text out and then the disk "fails".
+        let err = replace_with(&f, |t| {
+            t.write_all(b"half of the new te")?;
+            Err(std::io::Error::other("disk full"))
+        })
+        .unwrap_err();
+        assert!(err.starts_with("could not save") && err.contains("notes.txt"), "{err}");
+        assert_eq!(fs::read_to_string(&f).unwrap(), "the original, whole\n");
+        assert_eq!(entries(&d), vec!["notes.txt".to_string()]);
+    }
+
+    #[test]
+    fn edit046_a_swap_that_fails_leaves_the_target_and_no_temporary() {
+        let d = temp_dir("badswap");
+        // A folder in the file's place cannot be replaced by a file: the swap step fails.
+        let target = d.join("target");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("inside.txt"), "kept").unwrap();
+        let err = write_text(&target, "new text").unwrap_err();
+        assert!(err.starts_with("could not save"), "{err}");
+        assert_eq!(fs::read_to_string(target.join("inside.txt")).unwrap(), "kept");
+        assert_eq!(entries(&d), vec!["target".to_string()]);
+    }
+
+    #[test]
+    fn edit046_saves_in_a_row_leave_one_file_and_no_temporary() {
+        let d = temp_dir("twice");
+        let f = d.join("new.txt");
+        write_text(&f, "one").unwrap();
+        write_text(&f, "two, longer").unwrap();
+        assert_eq!(fs::read_to_string(&f).unwrap(), "two, longer");
+        assert_eq!(entries(&d), vec!["new.txt".to_string()]);
+    }
+
+    #[test]
+    fn edit046_a_copy_left_by_a_dead_save_is_cleared_by_the_next_save_but_a_fresh_one_is_not() {
+        let d = temp_dir("stale");
+        let f = d.join("a.txt");
+        let old = d.join(".a.txt.kolux-save-1-0");
+        let fresh = d.join(".a.txt.kolux-save-2-0");
+        let other = d.join(".b.txt.kolux-save-1-0");
+        for p in [&old, &fresh, &other] {
+            fs::write(p, "x").unwrap();
+        }
+        let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(STALE_COPY_SECS + 60);
+        for p in [&old, &other] {
+            fs::File::options().write(true).open(p).unwrap().set_modified(long_ago).unwrap();
+        }
+        write_text(&f, "saved").unwrap();
+        // Only this file's own old leftover goes; a recent copy (maybe a save in progress) and another file's stay.
+        assert_eq!(entries(&d), vec![".a.txt.kolux-save-2-0".to_string(), ".b.txt.kolux-save-1-0".to_string(), "a.txt".to_string()]);
+    }
+
+    #[test]
+    fn edit046_a_20_mb_log_opens() {
+        let d = temp_dir("biglog");
+        let f = d.join("big.log");
+        let line = "2026-10-19 12:00:00 INFO request handled in 12 ms\n";
+        let text = line.repeat(20 * 1024 * 1024 / line.len() + 1);
+        assert!(text.len() > 20 * 1024 * 1024);
+        fs::write(&f, &text).unwrap();
+        assert_eq!(read_text(&f).unwrap().len(), text.len());
+    }
+
+    #[test]
+    fn edit046_a_file_over_the_bound_is_refused_by_size_and_one_at_the_bound_opens() {
+        let d = temp_dir("bound");
+        let f = d.join("t.txt");
+        fs::write(&f, "x".repeat(100)).unwrap();
+        assert_eq!(read_text_up_to(&f, 100).unwrap().len(), 100);
+        let err = read_text_up_to(&f, 99).unwrap_err();
+        assert!(err.contains("too large to open") && err.contains("t.txt"), "{err}");
+    }
+
+    #[test]
+    fn edit046_an_archive_or_other_binary_is_never_shown_as_text() {
+        let d = temp_dir("binary");
+        // A zip starts with its signature and is mostly packed bytes.
+        let mut zip = b"PK\x03\x04\x14\x00\x00\x00".to_vec();
+        zip.extend((0u32..4000).map(|i| (i * 7 % 251) as u8));
+        fs::write(d.join("a.zip"), &zip).unwrap();
+        fs::write(d.join("noext"), [b'a', b'b', 0, b'c']).unwrap(); // a NUL in the sample
+        fs::write(d.join("ctl"), vec![0x01u8; 200]).unwrap(); // mostly control characters
+        fs::write(d.join("wide.txt"), "hi".encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>()).unwrap(); // UTF-16
+        for n in ["a.zip", "noext", "ctl", "wide.txt"] {
+            let err = read_text(&d.join(n)).unwrap_err();
+            assert!(err.contains("is a binary file"), "{n}: {err}");
+        }
+        // Text with tabs, a form feed, an escape and CRLF is still text, and so is an empty file.
+        fs::write(d.join("ok.txt"), "col\tcol\r\n\x0c\x1b[0m done\n").unwrap();
+        fs::write(d.join("empty"), "").unwrap();
+        assert!(read_text(&d.join("ok.txt")).unwrap().contains("done"));
+        assert_eq!(read_text(&d.join("empty")).unwrap(), "");
+    }
+
+    #[test]
+    fn edit046_mz_at_the_start_is_text_but_a_program_header_is_still_binary() {
+        // FIX-1: "MZ" is no signature on its own; a country-code CSV starting with it opens as text.
+        let d = temp_dir("mz");
+        fs::write(d.join("codes.csv"), "MZ,Mozambique\n").unwrap();
+        fs::write(d.join("MZ-notes.txt"), "MZ is the start of this note\n").unwrap();
+        assert_eq!(read_text(&d.join("codes.csv")).unwrap(), "MZ,Mozambique\n");
+        assert!(read_text(&d.join("MZ-notes.txt")).unwrap().starts_with("MZ is"));
+        assert!(!looks_binary(b"MZ,Mozambique\n"));
+        // A Windows program has NUL bytes in its first 64 bytes, which the NUL check catches.
+        let mut exe = b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00\xff\xff\x00\x00".to_vec();
+        exe.extend([0u8; 48]);
+        assert!(looks_binary(&exe));
+        fs::write(d.join("prog.exe"), &exe).unwrap();
+        let err = read_text(&d.join("prog.exe")).unwrap_err();
+        assert!(err.contains("is a binary file"), "{err}");
+    }
+
+    #[test]
+    fn edit046_only_the_start_is_sampled_so_a_big_binary_is_turned_away_by_its_first_bytes() {
+        let d = temp_dir("sampled");
+        let f = d.join("big.bin");
+        let mut head = vec![0u8; 100];
+        head.extend(vec![b'a'; 1024 * 1024]);
+        fs::write(&f, &head).unwrap();
+        assert!(read_text(&f).unwrap_err().contains("is a binary file"));
+        // A NUL after the sample is not seen: text with a stray NUL late on still opens.
+        let mut late = vec![b'a'; SAMPLE + 10];
+        late.push(0);
+        fs::write(d.join("late"), &late).unwrap();
+        assert_eq!(read_text(&d.join("late")).unwrap().len(), SAMPLE + 11);
+    }
+
+    fn noon() -> jiff::Zoned {
+        jiff::civil::date(2026, 10, 9).at(7, 5, 0, 0).in_tz("UTC").unwrap()
+    }
+
+    fn put(path: &Path, text: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn edit055_a_template_is_named_from_its_file_name() {
+        assert_eq!(template_name("meeting-notes.md"), "Meeting notes");
+        assert_eq!(template_name("bug_report.markdown"), "Bug report");
+        assert_eq!(template_name("daily.MD"), "Daily");
+        assert_eq!(template_name("already Fine.md"), "Already Fine");
+        assert_eq!(template_name("é-note.md"), "É note");
+        assert_eq!(template_name(".md"), ".md");
+    }
+
+    #[test]
+    fn edit055_only_markdown_counts_subfolders_are_searched_and_links_and_dependencies_are_skipped() {
+        let d = temp_dir("tpl");
+        let t = d.join(".kolux").join("templates");
+        put(&t.join("meeting-notes.md"), "m");
+        put(&t.join("notes.txt"), "no");
+        put(&t.join("sub").join("bug-report.markdown"), "b");
+        put(&t.join("node_modules").join("dep").join("readme.md"), "dep");
+        put(&t.join(".git").join("x.md"), "git");
+        put(&t.join("vendor").join("v.md"), "v");
+        put(&t.join("file10.md"), "10");
+        put(&t.join("file2.md"), "2");
+        // A link to a folder holding a template, a link to a template file and a junction to a folder
+        // are all skipped. Each link is checked to exist before the skip is asserted; when none could
+        // be made (a PC refusing links) the test says so and stops instead of passing silently.
+        let outside = d.join("elsewhere");
+        put(&outside.join("linked.md"), "l");
+        let mut made = Vec::new();
+        for (name, junction) in [("dirlink", false), ("junction", true)] {
+            if make_dir_link(&t.join(name), &outside, junction) {
+                made.push(name);
+            }
+        }
+        #[cfg(unix)]
+        let _ = std::os::unix::fs::symlink(outside.join("linked.md"), t.join("filelink.md"));
+        #[cfg(windows)]
+        let _ = std::os::windows::fs::symlink_file(outside.join("linked.md"), t.join("filelink.md"));
+        if link_exists(&t.join("filelink.md")) {
+            made.push("filelink.md");
+        }
+        if made.is_empty() {
+            println!("edit055 link skip NOT exercised: no link or junction could be made here");
+            return;
+        }
+        for name in &made {
+            assert!(link_exists(&t.join(name)), "{name} was made but is not a link");
+        }
+        println!("edit055 link skip exercised with: {made:?}");
+        let names: Vec<String> = list_templates(&d).into_iter().map(|t| t.name).collect();
+        // Take the links away again (remove_dir on a junction or folder link leaves its target alone) before asserting.
+        for name in &made {
+            let at = t.join(name);
+            fs::remove_dir(&at).or_else(|_| fs::remove_file(&at)).unwrap();
+        }
+        assert_eq!(names, ["Bug report", "File2", "File10", "Meeting notes"]);
+    }
+
+    #[test]
+    fn edit055_no_templates_folder_or_a_link_in_its_place_means_no_picker() {
+        let d = temp_dir("tplnone");
+        assert!(list_templates(&d).is_empty());
+        fs::create_dir_all(d.join(".kolux")).unwrap();
+        assert!(list_templates(&d).is_empty());
+        put(&d.join("templates").join("x.md"), "x"); // a templates folder at the wrong place does not count
+        assert!(list_templates(&d).is_empty());
+        let real = d.join("real-templates");
+        put(&real.join("a.md"), "a");
+        let at = d.join(".kolux").join("templates");
+        let mut exercised = 0;
+        for junction in [false, true] {
+            if make_dir_link(&at, &real, junction) {
+                assert!(link_exists(&at), "the link in place of templates must exist");
+                assert!(list_templates(&d).is_empty(), "a templates folder that is a link (junction: {junction}) gives no templates");
+                exercised += 1;
+                fs::remove_dir(&at).or_else(|_| fs::remove_file(&at)).unwrap();
+            }
+        }
+        if exercised == 0 {
+            println!("edit055 link-in-place NOT exercised: no link or junction could be made here");
+        }
+    }
+
+    /// True when `p` is itself a link (a symlink, or a junction on Windows), not what it points at.
+    fn link_exists(p: &Path) -> bool {
+        fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink())
+    }
+
+    /// Makes a folder link at `link` to `target`; `junction` asks for a Windows junction (made with
+    /// `mklink /J`, which needs no privilege) rather than a symlink. True only when the link exists.
+    fn make_dir_link(link: &Path, target: &Path, junction: bool) -> bool {
+        #[cfg(unix)]
+        {
+            let _ = junction;
+            let _ = std::os::unix::fs::symlink(target, link);
+        }
+        #[cfg(windows)]
+        {
+            if junction {
+                let _ = std::process::Command::new("cmd").arg("/c").arg("mklink").arg("/J").arg(link).arg(target).output();
+            } else {
+                let _ = std::os::windows::fs::symlink_dir(target, link);
+            }
+        }
+        link_exists(link)
+    }
+
+    #[test]
+    fn edit055_placeholders_are_filled_with_spaces_allowed_and_unknown_ones_stay_as_typed() {
+        let now = noon();
+        let out = fill_template("# {{title}} ({{ Date }})\nAt {{time}} / {{ date time }} / {{datetime}} in {{file name}} {{filename}}\n{{unknown}} {{ other thing }} {{ {{date}} {{", "untitled", "untitled.md", &now);
+        assert_eq!(
+            out,
+            "# untitled (2026-10-09)\nAt 07:05 / 2026-10-09 07:05 / 2026-10-09 07:05 in untitled.md untitled.md\n{{unknown}} {{ other thing }} {{ 2026-10-09 {{"
+        );
+        // Nothing to fill, braces that never close, and a lone brace are all left alone.
+        assert_eq!(fill_template("plain {x} {{open", "t", "f", &now), "plain {x} {{open");
+        // 24-hour clock: an afternoon time is 15:30, not 3:30.
+        let late = jiff::civil::date(2026, 1, 2).at(15, 30, 0, 0).in_tz("UTC").unwrap();
+        assert_eq!(fill_template("{{time}} {{date}}", "t", "f", &late), "15:30 2026-01-02");
+    }
+
+    #[test]
+    fn edit055_a_note_from_a_template_has_its_text_filled_and_is_a_file_on_disk() {
+        let d = temp_dir("tplnote");
+        let t = d.join(".kolux").join("templates").join("daily.md");
+        put(&t, "# {{title}}\nDate: {{date}}\nFile: {{filename}}\n");
+        let path = new_note_from(&d, &t.to_string_lossy(), &noon()).unwrap();
+        assert!(path.ends_with("untitled.md"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# untitled\nDate: 2026-10-09\nFile: untitled.md\n");
+        // The next note counts up and never overwrites the first; its file name is the second's.
+        let second = new_note_from(&d, &t.to_string_lossy(), &noon()).unwrap();
+        assert!(second.ends_with("untitled-2.md"));
+        assert_eq!(fs::read_to_string(&second).unwrap(), "# untitled-2\nDate: 2026-10-09\nFile: untitled-2.md\n");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# untitled\nDate: 2026-10-09\nFile: untitled.md\n");
+    }
+
+    #[test]
+    fn edit055_only_a_listed_template_can_be_used() {
+        let d = temp_dir("tplguard");
+        put(&d.join(".kolux").join("templates").join("ok.md"), "ok");
+        put(&d.join("secret.md"), "do not copy");
+        let err = new_note_from(&d, &d.join("secret.md").to_string_lossy(), &noon()).unwrap_err();
+        assert!(err.contains("not one of this repository's templates"), "{err}");
+        assert!(!d.join("untitled.md").exists());
+    }
+
+    #[test]
+    fn edit055_a_blank_note_is_still_empty() {
+        let d = temp_dir("tplblank");
+        let p = new_note(&d).unwrap();
+        assert_eq!(fs::read_to_string(p).unwrap(), "");
+    }
+
 }
 
 // ---- EDIT-043 (T-237-a): Open in another app ----
