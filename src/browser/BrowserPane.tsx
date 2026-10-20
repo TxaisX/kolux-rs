@@ -25,7 +25,7 @@ import { nextZoom, zoomPercent } from "./zoom";
 import { iconAt, iconFound, type SiteIcon } from "./site";
 import { zoomFactor } from "../settings/zoom";
 import { notePage } from "../onboarding/guide";
-import { type CookieReport, cookieReportText, GOOGLE_NOTE } from "./cookies";
+import { CHROME_STEPS, type CookieReport, cookieReportText, type CookieSource, GOOGLE_NOTE, IMPORT_SOURCES, pickerFor } from "./cookies";
 import { addNote, MAX_NOTES, type Note, notesMarkdown, type Pick, readPicks, sameAddress } from "./annotate";
 import type { SendTarget } from "../editor/notes";
 import { BLOCKED_SHOW_MS, type Blocked, blockedAgain, blockedLabel } from "./popups";
@@ -555,15 +555,24 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     setViewport(name);
     invoke<string>("browser_viewport", { id, name: name === VIEWPORTS[0] ? null : name }).catch((err) => setNote(String(err)));
   };
-  // T-240 (BROW-028): the user picks a JSON list file; the report says what came in and what did not.
-  const importCookies = async () => {
-    const picked = await openDialog({ multiple: false, directory: false, title: "Import cookies from a JSON list", filters: [{ name: "Cookie list (JSON)", extensions: ["json", "txt"] }] }).catch(() => null);
+  // T-240 (BROW-028): Import Cookies is a small menu: Google Chrome (guided: Chrome locks its own
+  // cookie store to itself, so the user exports a cookies.txt file from inside Chrome and picks it)
+  // or a file (cookies.txt or a JSON list). The entry is off while an import into this tab runs;
+  // the report says what came in and what did not.
+  const [cookieMenu, setCookieMenu] = useState<null | "menu" | "chrome">(null);
+  const [importing, setImporting] = useState(false);
+  const importCookies = async (source: CookieSource) => {
+    const picked = await openDialog({ multiple: false, directory: false, ...pickerFor(source) }).catch(() => null);
     if (typeof picked !== "string") return;
+    setCookieMenu(null);
+    setImporting(true);
     try {
       const r = await invoke<CookieReport>("browser_cookies_import", { id, path: picked });
       setNote(cookieReportText(r)); // T-158 (BROW-029): Google advice only when Google rows were left out
     } catch (err) {
       setNote(String(err));
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -724,8 +733,8 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
               </option>
             ))}
           </select>
-          {/* T-240 (BROW-028): cookies from a JSON list file go into this tab's profile. */}
-          <button className="ib cookies" onClick={importCookies} title={`Import cookies from a file (JSON list). ${GOOGLE_NOTE}`} aria-label="Import cookies">
+          {/* T-240 (BROW-028): cookies from Google Chrome (guided export) or a file go into this tab's profile. */}
+          <button className={`ib cookies${cookieMenu ? " on" : ""}`} onClick={() => setCookieMenu(cookieMenu ? null : "menu")} disabled={importing} title={importing ? "Importing cookies…" : `Import cookies from Google Chrome or a file. ${GOOGLE_NOTE}`} aria-label="Import cookies" aria-haspopup="menu" aria-expanded={cookieMenu !== null}>
             <Globe size={12} />
           </button>
           {/* BROW-037: pick elements in the page and write notes on them for an agent. */}
@@ -870,6 +879,42 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
               </li>
             </ul>
           )}
+        </div>
+      )}
+      {/* T-240 (BROW-028): in the pane's flow, like the suggestions (a child web view cannot be covered). */}
+      {cookieMenu === "menu" && (
+        <ul className="suggest cookie-menu" role="menu" aria-label="Import cookies">
+          {IMPORT_SOURCES.map((s) => (
+            <li
+              key={s.source}
+              role="menuitem"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                if (s.source === "chrome") setCookieMenu("chrome");
+                else void importCookies("file");
+              }}
+            >
+              <span className="head">{s.label}</span>
+            </li>
+          ))}
+          <li className="sub-note" aria-disabled="true">
+            <span className="sub">{GOOGLE_NOTE}</span>
+          </li>
+        </ul>
+      )}
+      {cookieMenu === "chrome" && (
+        <div className="notice cookie-steps" role="dialog" aria-label="Import from Google Chrome">
+          <ol>
+            {CHROME_STEPS.map((s) => (
+              <li key={s}>{s}</li>
+            ))}
+          </ol>
+          <button type="button" className="ib" disabled={importing} onClick={() => void importCookies("chrome")}>
+            Choose cookies.txt…
+          </button>
+          <button type="button" className="ib" onClick={() => setCookieMenu(null)}>
+            Cancel
+          </button>
         </div>
       )}
       {note && (

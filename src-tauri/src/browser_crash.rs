@@ -271,13 +271,24 @@ pub fn report(dir: &Path, f: &Failure, source: Source, tab_open: bool, memory: O
     let views = sib.as_ref().map_or(1, |l| l.views + 1);
     let text = recovery::scrub_report(&summary(f, views, memory.as_ref()));
     let mut all = recovery::crashes_read(dir);
-    let record = Crash { id: format!("{when}-engine-{}", all.len()), when, summary: text, dismissed: false };
+    let record = record_of(format!("{when}-engine-{}", all.len()), when, text, f.kind);
     let id = add_or_merge(&mut all, record, sib.as_ref().map(|l| l.id.as_str()), KEEP_REPORTS);
     let saved = write_retry(dir, &all);
     *last = Some(Last { sig: signature(f), id: id.clone(), at: now, views });
     let verb = if sib.is_some() { "merged into" } else { "added as" };
     crate::diag::write(dir, &format!("engine {} {} in {who}: crash record {verb} {id}{} (APP-040)", process_name(f.kind), reason_name(f.reason), if saved.is_ok() { "" } else { " (could not be saved)" }));
     saved.ok().map(|_| id)
+}
+
+/// A new record in the store's shape (the reliability lane's fields: one process, no dump yet;
+/// the memory reading and the module are already in the summary).
+fn record_of(id: String, when: u64, summary: String, kind: i32) -> Crash {
+    let kind = match kind {
+        KIND_GPU => recovery::Kind::Graphics,
+        KIND_BROWSER | KIND_RENDER | KIND_FRAME_RENDER => recovery::Kind::Interface,
+        _ => recovery::Kind::Child,
+    };
+    Crash { id, when, summary, dismissed: false, kind, count: 1, memory: None, module: None, siblings: Vec::new(), dumps: Vec::new() }
 }
 
 #[cfg(test)]
@@ -289,7 +300,7 @@ mod tests {
     }
 
     fn crash(id: &str) -> Crash {
-        Crash { id: id.into(), when: 1, summary: id.into(), dismissed: false }
+        record_of(id.into(), 1, id.into(), KIND_RENDER)
     }
 
     // "Exits during an expected shutdown, graphics exits at quit time, and kills the app issued

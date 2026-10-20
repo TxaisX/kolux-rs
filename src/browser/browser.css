@@ -62,6 +62,11 @@
 .pane.browser .suggest li.on, .pane.browser .suggest li:hover { background: var(--chip-bg); }
 .pane.browser .suggest .head { font-size: 12px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pane.browser .suggest .sub { font-size: 11px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* T-240 (BROW-028): the Import Cookies menu and the guided Chrome steps. */
+.pane.browser .suggest li.sub-note { cursor: default; }
+.pane.browser .suggest li.sub-note:hover { background: none; }
+.pane.browser .cookie-steps { color: var(--fg); border-color: var(--line); flex-wrap: wrap; }
+.pane.browser .cookie-steps ol { flex: 1 1 100%; min-width: 0; margin: 0 0 4px; padding-left: 18px; }
 .pane.browser .suggest li.search .head::before { content: "Search · "; color: var(--fg-muted); }
 .pane.browser .suggest li.document .head::before { content: "Document · "; color: var(--fg-muted); }
 /* T-238-b (BROW-013): the tab's downloads, bytes received and the total when known. */

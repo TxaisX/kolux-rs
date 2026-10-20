@@ -1,4 +1,5 @@
-//! T-240 (BROW-028) and BROW-029: cookies brought in from a file. The file is a JSON list in the
+//! T-240 (BROW-028) and BROW-029: cookies brought in from a file: a Netscape cookies.txt file
+//! (see parse_netscape; the guided "Import from Google Chrome" ends here) or a JSON list in the
 //! browser-extension export shape: `name`, `value`, `domain`, then optional `path`, `secure`,
 //! `httpOnly`, `sameSite` and `expirationDate` (seconds; `expiry` and `expires` are read too). A
 //! bad entry is skipped and named, a file with nothing usable is refused, and every site in the
@@ -37,9 +38,86 @@ pub struct Entry {
     pub expires: Option<i64>,
 }
 
-/// The file's text as entries plus the report of what was left out. `Err` when the file as a
-/// whole is unusable: not JSON, not a list, empty, or nothing in it passes.
+/// The file's text as entries plus the report of what was left out. A file that starts with `[`
+/// or `{` is the JSON list; anything else is read as a Netscape cookies.txt file (the shape a
+/// cookies.txt export extension writes from Chrome, which is how "Import from Google Chrome"
+/// works: Chrome's own store is never opened). `Err` when the file as a whole is unusable.
 pub fn parse(text: &str, now: i64) -> Result<(Vec<Entry>, Report), String> {
+    let body = text.trim_start_matches('\u{feff}');
+    match body.trim_start().chars().next() {
+        None => Err("the file is empty".into()),
+        Some('[' | '{') => parse_json(body, now),
+        Some(_) => parse_netscape(body, now),
+    }
+}
+
+/// A Netscape cookies.txt file: one cookie per line, seven tab-separated fields (domain,
+/// include-subdomains TRUE/FALSE, path, secure TRUE/FALSE, expiry in seconds with 0 for a session
+/// cookie, name, value). `#HttpOnly_` before the domain marks an HTTP-only cookie; other `#` lines
+/// and blank lines are skipped; CRLF line ends are fine. A malformed line is skipped and named by
+/// its line number (never by its value).
+pub fn parse_netscape(text: &str, now: i64) -> Result<(Vec<Entry>, Report), String> {
+    let mut out = Vec::new();
+    let mut report = Report::default();
+    let mut lines = 0;
+    for (i, raw) in text.split('\n').enumerate() {
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        if line.trim().is_empty() {
+            continue;
+        }
+        let (line, http_only) = match line.strip_prefix("#HttpOnly_") {
+            Some(rest) => (rest, true),
+            None if line.starts_with('#') => continue,
+            None => (line, false),
+        };
+        lines += 1;
+        match netscape_entry(line, http_only, now) {
+            Ok(e) if google_family(&e.domain) => report.google += 1,
+            Ok(e) => out.push(e),
+            Err(why) => {
+                report.skipped += 1;
+                if report.reasons.len() < REASONS_MAX {
+                    report.reasons.push(format!("line {}: {why}", i + 1));
+                }
+            }
+        }
+    }
+    if lines == 0 {
+        return Err("the file holds no cookies: it is neither a JSON list of cookies nor a cookies.txt file with cookie lines".into());
+    }
+    if out.is_empty() {
+        let google = if report.google > 0 { format!("; {} Google sign-in cookie(s) are never imported", report.google) } else { String::new() };
+        return Err(format!("none of the {lines} cookie lines could be imported: {}{google}", report.reasons.join("; ")));
+    }
+    Ok((out, report))
+}
+
+fn netscape_entry(line: &str, http_only: bool, now: i64) -> Result<Entry, String> {
+    let f: Vec<&str> = line.split('\t').collect();
+    if f.len() != 7 {
+        return Err(format!("{} tab-separated fields; a cookies.txt line has 7", f.len()));
+    }
+    let flag = |s: &str, what: &str| match s.trim().to_ascii_uppercase().as_str() {
+        "TRUE" => Ok(true),
+        "FALSE" => Ok(false),
+        _ => Err(format!("the {what} flag is not TRUE or FALSE")),
+    };
+    let subdomains = flag(f[1], "include-subdomains")?;
+    let secure = flag(f[3], "secure")?;
+    let host = f[0].trim().trim_start_matches('.');
+    let domain = if subdomains { format!(".{host}") } else { host.to_string() };
+    let expiry: i64 = f[4].trim().parse().map_err(|_| "the expiry is not a whole number of seconds".to_string())?;
+    if expiry < 0 {
+        return Err("the expiry is not a whole number of seconds".into());
+    }
+    let mut o = serde_json::json!({ "name": f[5], "value": f[6], "domain": domain, "path": f[2], "secure": secure, "httpOnly": http_only });
+    if expiry > 0 {
+        o["expirationDate"] = expiry.into();
+    }
+    entry_of(&o, now)
+}
+
+fn parse_json(text: &str, now: i64) -> Result<(Vec<Entry>, Report), String> {
     let v: Value = serde_json::from_str(text).map_err(|e| format!("the file is not JSON ({e})"))?;
     let Value::Array(list) = v else {
         return Err("the file is not a JSON list of cookies".into());
@@ -252,6 +330,57 @@ mod tests {
         let (entries, _) = parse(text, NOW).unwrap();
         let sites = by_site(&entries);
         assert_eq!(sites.iter().map(|(d, l)| (*d, l.len())).collect::<Vec<_>>(), vec![("b.test", 2), ("a.test", 1)]);
+    }
+
+    // Made-up fixture cookies only; no real browser profile or cookie file is ever read.
+    #[test]
+    fn brow028_a_cookies_txt_file_is_read_with_httponly_lines_comments_and_crlf() {
+        let text = format!(
+            "\u{feff}# Netscape HTTP Cookie File\r\n# made-up fixture\r\n\r\n.example.test\tTRUE\t/\tTRUE\t{}\tsid\tfixture-1\r\n#HttpOnly_shop.example.test\tFALSE\t/cart\tFALSE\t0\tcart\tfixture-2\r\nother.test\tTRUE\t/\tFALSE\t0\tempty\t\n",
+            NOW + 60
+        );
+        let (entries, report) = parse(&text, NOW).unwrap();
+        assert_eq!(report, Report::default());
+        assert_eq!(entries[0], Entry { name: "sid".into(), value: "fixture-1".into(), domain: ".example.test".into(), path: "/".into(), secure: true, http_only: false, same_site: None, expires: Some(NOW + 60) });
+        assert_eq!(entries[1], Entry { name: "cart".into(), value: "fixture-2".into(), domain: "shop.example.test".into(), path: "/cart".into(), secure: false, http_only: true, same_site: None, expires: None });
+        assert_eq!((entries[2].domain.as_str(), entries[2].value.as_str(), entries[2].expires), (".other.test", "", None));
+        assert_eq!(entries.len(), 3);
+    }
+
+    #[test]
+    fn brow028_malformed_cookies_txt_lines_are_counted_and_named_by_line_never_by_value() {
+        let text = format!(
+            "# Netscape HTTP Cookie File\n\
+             a.test\tTRUE\t/\tFALSE\t0\tok\tfixture-ok\n\
+             a.test\tTRUE\t/\tFALSE\t0\tshort-secret\n\
+             a.test\tMAYBE\t/\tFALSE\t0\tn\tfixture-secret-1\n\
+             a.test\tTRUE\t/\tFALSE\tsoon\tn\tfixture-secret-2\n\
+             a.test\tTRUE\t/\tFALSE\t{}\told\tfixture-secret-3\n\
+             a.test\tTRUE\tnoslash\tFALSE\t0\tn\tfixture-secret-4\n\
+             a.test\tTRUE\t/\tFALSE\t0\tbad name\tfixture-secret-5\n\
+             .google.com\tTRUE\t/\tTRUE\t0\tSID\tfixture-g\n",
+            NOW - 1
+        );
+        let (entries, report) = parse(&text, NOW).unwrap();
+        assert_eq!(entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), vec!["ok"]);
+        assert_eq!((report.skipped, report.google), (6, 1));
+        assert_eq!(
+            report.reasons,
+            vec![
+                "line 3: 6 tab-separated fields; a cookies.txt line has 7",
+                "line 4: the include-subdomains flag is not TRUE or FALSE",
+                "line 5: the expiry is not a whole number of seconds",
+                "line 6: old has expired",
+                "line 7: the path \"noslash\" must start with /",
+                "line 8: the name \"bad name\" is not a cookie name",
+            ]
+        );
+        assert!(report.reasons.iter().all(|r| !r.contains("fixture") && !r.contains("secret")), "{:?}", report.reasons);
+        let none = parse("# only a comment\r\nx.test\tTRUE\t/\tFALSE\t0\tn\n", NOW).unwrap_err();
+        assert_eq!(none, "none of the 1 cookie lines could be imported: line 2: 6 tab-separated fields; a cookies.txt line has 7");
+        assert!(parse("# Netscape HTTP Cookie File\n\n", NOW).unwrap_err().starts_with("the file holds no cookies"));
+        assert_eq!(parse("\u{feff}  \r\n", NOW).unwrap_err(), "the file is empty");
+        assert!(parse("[]", NOW).is_err(), "a JSON file still takes the JSON path");
     }
 
     #[test]
