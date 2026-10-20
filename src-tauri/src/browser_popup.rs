@@ -148,11 +148,18 @@ pub fn open(
     url: &Url,
     features: tauri::webview::NewWindowFeatures,
     dev: Option<Url>,
+    spoof: bool,
 ) -> Option<tauri::WebviewWindow> {
     use tauri::webview::NewWindowResponse;
     use tauri::{WebviewUrl, WebviewWindowBuilder};
     let label = LINKS.lock().ok()?.open(tab);
-    let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url.clone()))
+    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url.clone()));
+    // T-239-b (BROW-025): a popup opened onto a sign-in host starts as Firefox when its tab's
+    // profile is in normal mode; later hops are kept right by `engine::popup_identity`.
+    if super::profiles::firefox_at(url.as_str(), spoof) {
+        builder = builder.user_agent(&super::profiles::firefox_identity());
+    }
+    let built = builder
         .window_features(features)
         .title(title(url, ""))
         .zoom_hotkeys_enabled(false)
@@ -180,6 +187,7 @@ pub fn open(
                     }
                 }
             });
+            super::engine::popup_identity(&w, spoof);
             Some(w)
         }
         Err(_) => {

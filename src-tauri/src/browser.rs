@@ -1000,7 +1000,8 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     };
     #[cfg(windows)]
     let crash_dir = app.path().app_data_dir().ok();
-    let builder = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile);
+    // T-239-b (BROW-025): whether this tab's profile shows Firefox on the sign-in hosts.
+    let (builder, spoof) = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile);
     let builder = match proxy_of(proxy.as_deref())? {
         Some(u) => builder.proxy_url(u),
         None => builder,
@@ -1033,7 +1034,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
                     // before the tab's page finished a load it goes to the system browser.
                     match popup::route(features.size().is_some(), popup::is_ready(id)) {
                         popup::Route::Window => {
-                            if let Some(window) = popup::open(&window_app, id, &url, features, window_dev.clone()) {
+                            if let Some(window) = popup::open(&window_app, id, &url, features, window_dev.clone(), spoof) {
                                 return NewWindowResponse::Create { window };
                             }
                             return NewWindowResponse::Deny;
@@ -1198,6 +1199,8 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         }
         // T-158 (BROW-024): the engine's certificate errors are answered by the certificate rules.
         engine::attach(id, &pw);
+        // T-239-b (BROW-025): Firefox on the sign-in hosts unless the profile is in native mode.
+        engine::identity(&pw, spoof);
         // T-286-b (APP-040): the engine's process failures become crash records when real.
         engine::watch_page_failures(id, &pw, crash_dir);
     });
@@ -1705,19 +1708,21 @@ pub fn tell(event: &str, payload: serde_json::Value) -> Result<(), String> {
 /// open one at a time from the command line; a map by url if that stops holding.
 pub static NEXT_PROFILE: Mutex<Option<String>> = Mutex::new(None);
 
-/// A tab in a profile other than the default runs in that profile's own engine data folder.
-fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>) -> WebviewBuilder<tauri::Wry> {
+/// A tab in a profile other than the default runs in that profile's own engine data folder; the
+/// answer also says whether that profile shows Firefox on the sign-in hosts (BROW-025).
+fn with_profile(b: WebviewBuilder<tauri::Wry>, id: u32, profile: Option<String>) -> (WebviewBuilder<tauri::Wry>, bool) {
     let profile = profile.or_else(|| NEXT_PROFILE.lock().ok().and_then(|mut n| n.take()));
-    let Some(p) = profile.filter(|p| p != profiles::DEFAULT) else { return b };
-    let Ok(root) = profiles::root() else { return b };
+    let Some(p) = profile.filter(|p| p != profiles::DEFAULT) else { return (b, true) };
+    let Ok(root) = profiles::root() else { return (b, true) };
     let mut store = profiles::load(&root);
     if profiles::set_tab(&mut store, id, &p).is_err() {
-        return b;
+        return (b, true);
     }
     let _ = profiles::save(&root, &store);
+    let spoof = profiles::spoofs(&store, &p);
     match profiles::data_dir(&root, &p) {
-        Some(dir) => b.data_directory(dir),
-        None => b,
+        Some(dir) => (b.data_directory(dir), spoof),
+        None => (b, spoof),
     }
 }
 
