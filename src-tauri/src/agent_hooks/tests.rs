@@ -1457,6 +1457,33 @@ fn one_var(name: &'static str, value: &'static str) -> impl Fn(&str) -> Option<s
     move |n| (n == name).then(|| value.into())
 }
 
+/// Fix-phase scratch-HOME runs: the four install tests failed under `HOME=<root>\home` with TEMP
+/// left at `<root>`'s parent, because that TEMP holds the home folder. The supported layout puts
+/// TEMP at `<root>\tmp`, beside the home; the guard is unchanged and still refuses the home side.
+#[test]
+fn fix_hooks_scratch_temp_beside_home_admits_marked_temp_and_still_refuses_any_home() {
+    let root = temp("scratch-layout");
+    let (tmp, home) = (root.join("tmp"), root.join("home"));
+    let (cfg, home_claude) = (tmp.join("cfg"), home.join(".claude"));
+    for d in [&cfg, &home_claude] {
+        fs::create_dir_all(d).unwrap();
+    }
+    fs::write(cfg.join(SCRATCH_MARKER), "").unwrap();
+    fs::write(home.join(SCRATCH_MARKER), "").unwrap();
+    // TEMP beside HOME: a marked folder under TEMP is admitted.
+    assert!(scratch_only(&cfg.join("settings.json"), &tmp, &home).is_ok());
+    // The home's own settings are never under TEMP, so they are refused even with a marker there.
+    assert!(scratch_only(&home_claude.join("settings.json"), &tmp, &home).unwrap_err().contains("left alone"));
+    // A real-looking home with no marker at all is refused too.
+    let real = root.join("Users").join("someone").join(".claude");
+    fs::create_dir_all(&real).unwrap();
+    assert!(scratch_only(&real.join("settings.json"), &tmp, &home).unwrap_err().contains("left alone"));
+    // The old failing layout (TEMP one level above HOME) is still refused, marker or not.
+    let err = scratch_only(&cfg.join("settings.json"), &root, &home).unwrap_err();
+    assert!(err.contains("holds the home folder"), "{err}");
+    let _ = fs::remove_dir_all(&root);
+}
+
 #[test]
 fn t_152_c_5_a_temp_folder_too_wide_for_scratch_is_refused_and_lane_variables_fence() {
     let dir = temp("t152c-wide");
