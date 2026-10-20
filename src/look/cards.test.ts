@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { CARD_DENSITY_FIELD, CARD_DETAILS_FIELD, detailsAfter, cardLine, cardShows, cardTitle, densityPatch, detailPatch, hoverLines, readCardDetails, tidyDetails, type CardFacts } from "./cards";
+import { CARD_DENSITY_FIELD, CARD_DETAILS_FIELD, detailsAfter, cardLine, cardShows, cardTitle, densityPatch, hoverLines, presetMark, readCardDetails, tidyDetails, type CardFacts } from "./cards";
 import CardLine from "./CardLine";
 
 const facts = (o: Partial<CardFacts> = {}): CardFacts => ({ agents: 0, state: "idle", pr: null, changed: 0, note: null, ...o });
@@ -28,14 +28,8 @@ test("PROJ-062: an empty custom list follows the preset, so a preset keeps up wi
   expect(cardShows({}, "agents")).toBe(true);
 });
 
-test("SET-021: picking a preset saves it and clears any custom list; a ticked set equal to a preset is saved as that preset", () => {
+test("SET-021: picking a preset saves it and clears any custom list", () => {
   expect(densityPatch("compact")).toEqual({ workspaceCardDensity: "compact", workspaceCardDetails: [] });
-  expect(detailPatch({}, "pr", true)).toEqual({ workspaceCardDetails: ["status", "agents", "pr"] });
-  expect(detailPatch({}, "agents", false), "Default minus the summary is Compact").toEqual(densityPatch("compact"));
-  const s = { ...detailPatch({}, "pr", true) };
-  expect(detailPatch(s, "pr", false), "back to Default").toEqual(densityPatch("default"));
-  expect(detailPatch({}, "status", false), "status cannot be switched off").toEqual({});
-  expect(detailPatch({}, "mystery", true)).toEqual({});
 });
 
 test("PROJ-062: the card's second line says agents, state, pull request, changes and note, and only for what is shown", () => {
@@ -58,17 +52,52 @@ test("PROJ-062: Compact hover lists the pull request and the rest, and a long ti
 });
 
 test("PROJ-062: CardLine draws the line indented under the name, or nothing", () => {
-  const html = renderToString(createElement(CardLine, { shown: ["status", "agents"], facts: facts({ agents: 1, state: "working" }), indent: 58 }));
+  const html = renderToString(createElement(CardLine, { shown: ["status", "agents"], facts: facts({ agents: 1, state: "working" }), depth: 1 }));
   expect(html).toContain("1 agent · Working");
   expect(html).toContain("padding-left:58px");
-  expect(renderToString(createElement(CardLine, { shown: ["status"], facts: facts({ agents: 1, state: "working" }), indent: 44 }))).toBe("");
+  expect(renderToString(createElement(CardLine, { shown: ["status", "agents"], facts: facts({ agents: 1, state: "working" }) }))).toContain("padding-left:44px");
+  expect(renderToString(createElement(CardLine, { shown: ["status"], facts: facts({ agents: 1, state: "working" }), depth: 0 }))).toBe("");
 });
 
-test("PROJ-062: the sidebar chooser saves one list; status stays in, unknown ids change nothing, a preset-sized list reads as that preset", () => {
-  expect(detailsAfter({}, "pr", true)).toEqual(["status", "agents", "pr"]);
-  expect(detailsAfter({}, "agents", false)).toEqual(["status"]);
-  expect(detailsAfter({}, "status", false), "status stays on").toEqual(["status", "agents"]);
-  expect(detailsAfter({}, "mystery", true)).toEqual(["status", "agents"]);
-  const saved = { [CARD_DETAILS_FIELD]: detailsAfter({}, "agents", false) };
+test("FIX-2: an explicit indent wins over depth, and 0 is an indent too", () => {
+  const line = (extra: object) => renderToString(createElement(CardLine, { shown: ["status", "agents"], facts: facts({ agents: 1, state: "working" }), ...extra }));
+  expect(line({ depth: 2, indent: 10 })).toContain("padding-left:10px");
+  expect(line({ depth: 2, indent: 10 })).not.toContain("padding-left:72px");
+  expect(line({ depth: 3, indent: 0 }), "indent 0 is given, so it wins").toContain("padding-left:0");
+  expect(line({ depth: 2 })).toContain("padding-left:72px");
+});
+
+// FIX-1: the sidebar's chooser writes ONE setting per tick (the sidebar saves one key per call), so a
+// set that equals a preset is saved as that preset's marker, not as a literal list: the card keeps
+// following the preset when a later version adds a detail to it.
+const settle = (start: Record<string, unknown>, steps: Array<[string, boolean]>) => {
+  let s = start;
+  for (const [id, on] of steps) s = { ...s, [CARD_DETAILS_FIELD]: detailsAfter(s, id, on) };
+  return s;
+};
+
+test("PROJ-062: the sidebar chooser saves a custom list for a custom set and a preset marker for a preset-equal set", () => {
+  expect(detailsAfter({}, "pr", true), "Default plus a pull request is custom").toEqual(["status", "agents", "pr"]);
+  expect(detailsAfter({}, "agents", false), "Default minus the summary is Compact").toEqual([presetMark("compact")]);
+  expect(detailsAfter({}, "status", false), "status stays on").toEqual([presetMark("default")]);
+  expect(detailsAfter({}, "mystery", true)).toEqual([presetMark("default")]);
+});
+
+test("PROJ-062: unticking back to a preset follows the preset again (the frozen-list problem)", () => {
+  const detailed = { [CARD_DENSITY_FIELD]: "detailed" };
+  const trimmed = settle(detailed, [["pr", false], ["changes", false]]);
+  expect(readCardDetails(trimmed)).toEqual({ shown: ["status", "agents", "note"], density: "custom" });
+  const back = settle(trimmed, [["note", false]]);
+  expect(back[CARD_DETAILS_FIELD], "not a literal list").toEqual([presetMark("default")]);
+  expect(readCardDetails(back)).toEqual({ shown: ["status", "agents"], density: "default" });
+  const full = settle(back, [["pr", true], ["changes", true], ["note", true]]);
+  expect(full[CARD_DETAILS_FIELD]).toEqual([presetMark("detailed")]);
+  expect(readCardDetails(full).density).toBe("detailed");
+});
+
+test("PROJ-062: a preset marker survives the settings file, wins over the density setting, and is cleared by the Settings page", () => {
+  const saved = JSON.parse(JSON.stringify({ [CARD_DENSITY_FIELD]: "detailed", [CARD_DETAILS_FIELD]: [presetMark("compact")] }));
   expect(readCardDetails(saved)).toEqual({ shown: ["status"], density: "compact" });
+  expect(readCardDetails({ ...saved, ...densityPatch("detailed") }).density).toBe("detailed");
+  expect(readCardDetails({ [CARD_DETAILS_FIELD]: ["preset:nonsense"] }).density, "an unknown marker is just an empty list").toBe("default");
 });

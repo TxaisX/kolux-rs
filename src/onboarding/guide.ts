@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { locale } from "../language";
 import type { FirstRun } from "./newcomer";
 import { noteUse, type Features } from "./features";
+import { isAiAgent } from "./agentKind";
 
 export type StepId = "browser" | "notifications" | "agent" | "cli" | "integrations" | "multitask" | "automate" | "repos";
 type Words = { name: string; about: string };
@@ -192,6 +193,8 @@ export type Facts = {
   agent: string | null;
   /** Some git project has a workspace setup script; a check that failed settles as false. */
   setupScript: boolean | null;
+  /** ONB-015 legacy rule: an old profile (see legacyProfile); null when it could not be read. */
+  legacy?: boolean | null;
 };
 
 /** ONB-015 Multi-task: a real workspace besides the main folder. The main folder (or two entries
@@ -204,14 +207,9 @@ export const pageCounts = (url: string | null | undefined): boolean => {
   return u !== "" && u !== "about:blank" && !u.startsWith("about:");
 };
 
-/** FIX-4: the saved default agent counts for the agent step only when it is an AI agent's id: blank, or a plain terminal ("terminal"), does not. */
-const isAiAgent = (id: string | null | undefined): boolean => {
-  const v = (id ?? "").trim().toLowerCase();
-  return v !== "" && v !== "terminal";
-};
-
 /** ONB-015: the steps done, each from the thing it stands for. */
 export function doneFrom(f: Facts): Set<StepId> {
+  if (f.legacy === true) return new Set(STEPS.map((s) => s.id)); // the legacy rule, everywhere
   const done = new Set<StepId>();
   if (f.workspaces?.some(realWorkspace)) done.add("multitask");
   if (f.pageShown) done.add("browser");
@@ -219,9 +217,20 @@ export function doneFrom(f: Facts): Set<StepId> {
   if (f.integrations === "connected") done.add("integrations");
   if (f.cli) done.add("cli");
   if (f.notifications === true) done.add("notifications");
-  if (isAiAgent(f.agent)) done.add("agent");
+  if (isAiAgent(f.agent)) done.add("agent"); // FIX-4: a blank or plain-terminal default does not count (agentKind.ts)
   if (f.setupScript === true) done.add("automate");
   return done;
+}
+
+/** The tried-list id an older profile carries once it had finished the earlier steps. */
+export const LEGACY_DONE = "setup-complete";
+
+/** ONB-015 legacy rule: a profile that had finished the earlier steps, or had hidden the sidebar
+ *  checklist (setupChecklist false), counts every step as complete. A failed read of both is null and
+ *  never taken as completion; a retired step (the old split-terminal one) is not in STEPS, so it never counts. */
+export function legacyProfile(settings: Record<string, unknown> | null, tried: readonly string[] | null): boolean | null {
+  if (settings?.setupChecklist === false || tried?.includes(LEGACY_DONE)) return true;
+  return settings === null && tried === null ? null : false;
 }
 
 /** The tried-list ids that keep facts on the profile: the browser page and the lasting repo count. */

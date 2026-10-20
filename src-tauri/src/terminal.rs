@@ -16,6 +16,30 @@ pub const SCREEN_EVENT: &str = "terminal-screen-request";
 /// Lines kept per terminal for `kolux terminal read` (CLI-024); older ones are dropped.
 pub const LOG_LINES: usize = 2000;
 const SCREEN_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
+/// APP-052: the terminal service's wire protocol. Additions only bump it; the window refuses a
+/// service older than the oldest protocol it still speaks (src/terminal/reattach.ts).
+pub const PROTOCOL: u32 = 1;
+
+/// APP-052: this run of the terminal service, fixed for the life of the process. Typing carries
+/// the generation it was meant for and is refused when another run owns the terminals now
+/// (owns); output events carry it so a window drops events from a replaced run. Kept below 2^53
+/// so the window reads it as a plain number.
+pub fn generation() -> u64 {
+    static GENERATION: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *GENERATION.get_or_init(|| {
+        let millis = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(1);
+        millis * 1000 + u64::from(std::process::id() % 1000)
+    })
+}
+
+/// APP-052: typing meant for another run of the service never reaches this one's terminals
+/// (None: a caller from before generations, let through).
+pub fn owns(generation: Option<u64>) -> Result<(), String> {
+    match generation {
+        Some(g) if g != self::generation() => Err("the terminal service was replaced; the pane has to reattach before typing reaches a terminal".into()),
+        _ => Ok(()),
+    }
+}
 
 #[derive(Default, Clone)]
 pub struct Terminals {
@@ -48,6 +72,8 @@ struct Inner {
     hist: HashMap<u32, History>,
     /// ACCT-054: how far each session's output has run ahead of its pane.
     flow: HashMap<u32, Arc<Flow>>,
+    /// APP-052: the newest session each window pane started, so a pane takes it back after a webview reload.
+    panes: HashMap<u32, u32>,
 }
 
 /// ACCT-054: how far a session's output has run ahead of what its pane has drawn. Past
@@ -322,6 +348,55 @@ pub struct Read {
     pub more: bool,
 }
 
+/// T-151-d: what a line shows after its last redraw. A repaint starts over at the line's first column
+/// with a carriage return or its cursor-movement twin (CSI n G, CSI row;col H / f with the column
+/// left out, 0 or 1, zero-padded forms included); a shell that repaints what is typed that way would
+/// otherwise have every drawing run together and read as the command twice. A move to any other
+/// column keeps the text. A column-1 H / f move starts over only on the row the last such move named
+/// (or for the first one in the line); a row left out or 0 is row 1 (FIX-2), as a terminal reads it,
+/// so home followed by a move to row 2 keeps both. A move to a different row is a new line of the
+/// screen, so the earlier drawing stays (it runs on in this one log line).
+/// ponytail: no column-aware buffer. A repaint that moves to a column above 1 and overwrites in place
+/// would still read joined; unproven against real PSReadLine bytes (T-151-d live step 4).
+fn last_drawing(s: &str) -> &str {
+    // A CSI parameter as a number: empty is "left out" (None), zero-padded forms read as their value.
+    let num = |p: &str| if p.is_empty() { None } else { Some(p.bytes().fold(0u32, |n, d| n.saturating_mul(10).saturating_add(u32::from(d - b'0')))) };
+    let b = s.as_bytes();
+    let (mut start, mut i) = (0, 0);
+    let mut row: Option<u32> = None;
+    while i < b.len() {
+        if b[i] == b'\r' {
+            start = i + 1;
+        } else if b[i] == 0x1b && b.get(i + 1) == Some(&b'[') {
+            let mut j = i + 2;
+            while j < b.len() && (b[j].is_ascii_digit() || b[j] == b';') {
+                j += 1;
+            }
+            if j < b.len() && matches!(b[j], b'G' | b'H' | b'f') {
+                let params = &s[i + 2..j];
+                if b[j] == b'G' {
+                    if matches!(num(params), None | Some(0 | 1)) {
+                        start = j + 1;
+                    }
+                } else {
+                    let mut it = params.split(';');
+                    let (r, c) = (num(it.next().unwrap_or("")).unwrap_or(1).max(1), num(it.next().unwrap_or("")));
+                    if matches!(c, None | Some(0 | 1)) && row.is_none_or(|last| last == r) {
+                        start = j + 1;
+                    }
+                    row = Some(r);
+                }
+                i = j;
+            } else {
+                // Not a move: the byte that stopped the run is read again, a carriage return right after ESC[ included.
+                i = j - 1;
+            }
+        }
+        i += 1;
+    }
+    &s[start..]
+}
+
 /// Drops CSI, OSC and two-byte escape sequences, control characters other than tab.
 pub fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -376,7 +451,7 @@ impl OutputLog {
             let raw = String::from_utf8_lossy(&std::mem::replace(&mut self.pending, rest)).into_owned();
             let line = raw.trim_end_matches(['\n', '\r']);
             // A carriage return redraws the line from its start: keep what was drawn last.
-            let line = line.rsplit('\r').next().unwrap_or(line);
+            let line = last_drawing(line);
             if self.lines.is_empty() && self.oldest == 0 {
                 self.oldest = 1;
             }
@@ -420,7 +495,7 @@ impl OutputLog {
                 }
             }
         }
-        let pending = if more && after.is_some() { String::new() } else { strip_ansi(self.pending_text().rsplit('\r').next().unwrap_or_default()) };
+        let pending = if more && after.is_some() { String::new() } else { strip_ansi(last_drawing(self.pending_text())) };
         let cursor = lines.last().map_or(if from < oldest { 0 } else { from.min(self.cursor()) }, |l| l.cursor);
         Read { lines, pending, cursor, oldest, dropped: self.dropped && from + 1 < self.oldest, more }
     }
@@ -530,6 +605,8 @@ struct OutputPayload {
     /// TERM-098: the pane's own key, so output that arrives before the pane has learned its
     /// terminal id (the shell's first frame and its cursor question) is not dropped.
     pane: Option<u32>,
+    /// APP-052: the run of the terminal service that wrote it; a window drops chunks from a replaced run.
+    generation: u64,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -550,7 +627,7 @@ impl Terminals {
     /// Starts a pane. With no `program` it runs the user's shell; with one (an agent such as
     /// `claude`) it runs that program directly with `args`, in `cwd`.
     #[allow(clippy::too_many_arguments)]
-    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>, own_env: Vec<(String, String)>, env: Vec<(String, String)>, pane_key: Option<u32>, shell: Option<(String, Vec<String>)>) -> Result<u32, String> {
+    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>, own_env: Vec<(String, String)>, env: Vec<(String, String)>, pane_key: Option<u32>, shell: Option<(String, Vec<String>)>, per_worktree_history: bool) -> Result<u32, String> {
         // TERM-115: a pane's Ctrl+C must reach its program. Windows hands "ignore Ctrl+C" down to
         // every child a process starts, and this app is itself started with CREATE_NEW_PROCESS_GROUP
         // (by `kolux-dev`, and by the dev runner), so its shells never saw the interrupt: the pty got
@@ -570,12 +647,24 @@ impl Terminals {
         if let Some(dir) = cwd.as_deref() {
             check_start_dir(dir, program.as_deref().map(str::trim).is_some_and(|p| !p.is_empty() && !is_shell_program(p)))?;
         }
+        // ACCT-046: a program runs as asked; a shell pane has a line of fallbacks behind the
+        // chosen default shell (SET-026), when there is one.
+        let mut commands = match program.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+            Some(p) => vec![program_command(p, &args, cwd.as_deref())],
+            None => shell_commands(cwd.as_deref(), shell),
+        };
+        // APP-041: each session's start and end go to the app's own log (no arguments: they may carry secrets).
+        let log_dir = app.path().app_data_dir().ok();
+        // TERM-119: a bash, zsh or fish shell keeps its history per worktree unless the user turned that off.
+        // The disk work is done here, before the lock, so a slow folder holds up only this pane.
+        let history_vars = match log_dir.as_deref().filter(|_| per_worktree_history) {
+            Some(dir) => crate::shell_history::plan(&commands, dir, crate::shell_history::system_fish_dir(), &|name| own_env.iter().chain(env.iter()).any(|(k, _)| k == name)),
+            None => vec![None; commands.len()],
+        };
         let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
         inner.next_id += 1;
         let id = inner.next_id;
         let out_app = app.clone();
-        // APP-041: each session's start and end go to the app's own log (no arguments: they may carry secrets).
-        let log_dir = app.path().app_data_dir().ok();
         let exit_dir = log_dir.clone();
         let history = pane_key.and_then(|k| log_dir.as_deref().and_then(|d| History::open(d, k)));
         let label = program.clone().unwrap_or_else(|| "shell".to_string());
@@ -587,15 +676,9 @@ impl Terminals {
         // GIT-026: a pull-request link printed in any pane, hidden or parked ones too, attaches to its workspace.
         let mut prs = crate::scm::PrScan::default();
         let link_dir = cwd.clone();
-        // ACCT-046: a program runs as asked; a shell pane has a line of fallbacks behind the
-        // chosen default shell (SET-026), when there is one.
-        let mut commands = match program.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
-            Some(p) => vec![program_command(p, &args, cwd.as_deref())],
-            None => shell_commands(cwd.as_deref(), shell),
-        };
         let key = crate::cli::secret();
         let strip_key = crate::claude_key::strip_inherited(program.as_deref(), &env);
-        for command in commands.iter_mut() {
+        for (command, history_var) in commands.iter_mut().zip(history_vars) {
             // ACCT-048: an ordinary terminal's environment: none of Kolux's own runtime or build
             // variables, no conda activation that came along only in part, no prompt-theme wizard.
             for (k, _) in std::env::vars_os() {
@@ -644,6 +727,10 @@ impl Terminals {
             for (k, v) in &env {
                 command.env(k, v);
             }
+            // TERM-119: after the user's own variables, so a history they chose is kept.
+            if let Some((k, v)) = history_var {
+                command.env(k, v);
+            }
         }
         let flow = Arc::new(Flow::default());
         let out_flow = flow.clone();
@@ -653,7 +740,7 @@ impl Terminals {
             rows.max(1),
             move |chunk| {
                 let data = base64::engine::general_purpose::STANDARD.encode(chunk);
-                let _ = out_app.emit(OUTPUT_EVENT, OutputPayload { id, data, pane: pane_key });
+                let _ = out_app.emit(OUTPUT_EVENT, OutputPayload { id, data, pane: pane_key, generation: generation() });
                 if let Some(dir) = link_dir.as_deref() {
                     for url in prs.feed(chunk) {
                         let linked = out_app.state::<Mutex<crate::state::Store>>().lock().is_ok_and(|s| crate::scm::link_printed(&s, dir, &url));
@@ -735,6 +822,9 @@ impl Terminals {
             crate::diag::write(d, &format!("terminal {id} started ({label})"));
         }
         inner.keys.insert(id, key);
+        if let Some(k) = pane_key {
+            inner.panes.insert(k, id);
+        }
         if let Some(h) = history {
             inner.hist.insert(id, h);
         }
@@ -876,11 +966,12 @@ impl Terminals {
         inner.sessions.contains_key(&id).then(|| inner.marks.get(&id).and_then(|m| m.agent).or_else(|| crate::foreground::found(id)))
     }
 
-    /// ACCT-050: every shell session (no program of Kolux's own) with its process id and
-    /// foreground process group.
+    /// ACCT-050: every session with its process id and foreground process group, for the
+    /// foreground poll. T-050-c: program sessions too, so a launch whose program changed (the
+    /// agent exited, another was typed) is seen; `program` still reads the launch record first.
     pub fn shells(&self) -> Vec<(u32, Option<u32>, Option<i32>)> {
         let Ok(inner) = self.inner.lock() else { return Vec::new() };
-        inner.sessions.iter().filter(|(id, _)| !inner.marks.contains_key(id)).map(|(id, s)| (*id, s.pid(), s.foreground_group())).collect()
+        inner.sessions.iter().map(|(id, s)| (*id, s.pid(), s.foreground_group())).collect()
     }
 
     /// How long the program in `id` has printed nothing (since it started, when it never has), for
@@ -1010,6 +1101,13 @@ impl Terminals {
         }
     }
 
+    /// APP-052: the session window pane `pane_key` started in this run, if it still runs.
+    pub fn attached(&self, pane_key: u32) -> Option<u32> {
+        let inner = self.inner.lock().ok()?;
+        let id = *inner.panes.get(&pane_key)?;
+        (inner.sessions.contains_key(&id) && !inner.ended.contains(&id)).then_some(id)
+    }
+
     /// Is `handle` an open terminal?
     pub fn live(&self, handle: &str) -> bool {
         let Some(id) = id_of(handle) else { return false };
@@ -1043,6 +1141,50 @@ pub struct Spawned {
     pub account: Option<String>,
 }
 
+/// APP-052: which run of the terminal service answers, and what it speaks.
+#[derive(serde::Serialize)]
+pub struct ServiceInfo {
+    pub generation: u64,
+    pub protocol: u32,
+}
+
+#[tauri::command]
+pub fn terminal_service_info() -> ServiceInfo {
+    ServiceInfo { generation: generation(), protocol: PROTOCOL }
+}
+
+/// APP-052: what a pane gets when it asks for its terminal back.
+#[derive(serde::Serialize, Debug, PartialEq, Eq)]
+pub struct Attach {
+    /// "attached" with the id when this run still runs the pane's terminal; "fresh" when nothing
+    /// runs for the pane (start one; TERM-106 replays its history); "replaced" when the pane asked
+    /// for another run's terminal (its typing must not reach ours until it has reattached).
+    pub state: &'static str,
+    pub id: Option<u32>,
+    pub generation: u64,
+    pub protocol: u32,
+}
+
+/// APP-052: the attach answer, pure: `ours` is this run's generation, `running` the pane's live
+/// session in it, `asked` the generation the pane believes owns its terminal.
+pub fn attach_answer(ours: u64, running: Option<u32>, asked: u64) -> Attach {
+    let answer = |state, id| Attach { state, id, generation: ours, protocol: PROTOCOL };
+    if asked != ours {
+        return answer("replaced", None);
+    }
+    match running {
+        Some(id) => answer("attached", Some(id)),
+        None => answer("fresh", None),
+    }
+}
+
+/// APP-052: a pane asks for the terminal it had before the window reloaded. Async so the registry
+/// lock is taken off the window's thread.
+#[tauri::command(async)]
+pub fn terminal_attach(terminals: tauri::State<'_, Terminals>, pane_key: u32, generation: u64) -> Attach {
+    attach_answer(self::generation(), terminals.attached(pane_key), generation)
+}
+
 /// TERM-115: async for the same reason as `terminal_write`: starting a console host can take a
 /// while on a loaded machine and must not hold the window's thread.
 #[tauri::command]
@@ -1061,7 +1203,7 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
     let env_own = env.unwrap_or_default();
     let pinned = resumed.is_some();
     #[allow(clippy::type_complexity)]
-    let (env, cap, account, hooks_on, plain): (Vec<(String, String)>, bool, Option<String>, bool, Option<serde_json::Value>) = {
+    let (env, cap, account, hooks_on, plain, per_worktree_history): (Vec<(String, String)>, bool, Option<String>, bool, Option<serde_json::Value>, bool) = {
         let store = store.lock().map_err(|e| e.to_string())?;
         let settings = store.settings();
         // SET-026: a plain new terminal opens in the chosen default shell; the search for it on
@@ -1080,7 +1222,7 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
             .map(|(k, v)| (k.to_string(), v))
             .into_iter()
             .collect();
-        (env, crate::cap::on(&settings), used, crate::hooks::agent_hooks::switch::on(&settings), plain)
+        (env, crate::cap::on(&settings), used, crate::hooks::agent_hooks::switch::on(&settings), plain, crate::shell_history::enabled(&settings))
     };
     let shell = plain.and_then(|s| crate::pty::default_shell(&s));
     // ACCT-024: on a managed Claude account, the user's own settings may not sign the pane in.
@@ -1128,7 +1270,7 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
     // cli FIX-7: the last such entry in the environment names the dispatch (the window appends its own).
     // cli FIX-8: spawn_stamped reads it before the environment is handed over and stamps the new
     // session once the spawn succeeded (cli.rs fix8_d).
-    let id = crate::cli::spawn_stamped(crate::cli::dispatch_in(&env_own), || terminals.spawn(app.clone(), cols, rows, cwd, program, args, env_own, env, pane_key, shell))?;
+    let id = crate::cli::spawn_stamped(crate::cli::dispatch_in(&env_own), || terminals.spawn(app.clone(), cols, rows, cwd, program, args, env_own, env, pane_key, shell, per_worktree_history))?;
     // AUTO-012: an automation run dispatched to this worktree for this agent is followed here.
     if let Some(dir) = dir {
         crate::automations::follow(&app, |s| crate::automations::claim(s, id, pane_key, &dir, agent));
@@ -1145,7 +1287,9 @@ pub fn terminal_busy(terminals: tauri::State<'_, Terminals>, ids: Vec<u32>) -> V
 /// TERM-115: async, so a pipe write that blocks (a program not reading its input) holds a
 /// runtime worker, never the window's thread; typing elsewhere stays responsive.
 #[tauri::command]
-pub async fn terminal_write(app: AppHandle, terminals: tauri::State<'_, Terminals>, id: u32, data: String) -> Result<(), String> {
+pub async fn terminal_write(app: AppHandle, terminals: tauri::State<'_, Terminals>, id: u32, data: String, generation: Option<u64>) -> Result<(), String> {
+    // APP-052: typing carries the run of the service it was meant for; a replaced run's typing is refused.
+    owns(generation)?;
     // STAT-028: Ctrl+C or Escape on its own, while the agent works, marks the coming Stop interrupted.
     if data == "\x03" || data == "\x1b" {
         crate::status::cancel(id);
@@ -1199,6 +1343,35 @@ pub fn terminal_memory_profile() -> MemoryProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// APP-052: a pane gets its terminal back only from the run that started it: attached while the
+    /// session runs, fresh once it ended or never was, replaced when the pane asked for another run.
+    #[test]
+    fn t075_c_attach_answers_attached_fresh_or_replaced_by_generation() {
+        let t = Terminals::default();
+        t.fake_session(7, "C:/w", None);
+        t.inner.lock().unwrap().panes.insert(3, 7);
+        t.inner.lock().unwrap().panes.insert(4, 8); // pane 4's session is gone
+        let ours = generation();
+        assert_eq!(attach_answer(ours, t.attached(3), ours), Attach { state: "attached", id: Some(7), generation: ours, protocol: PROTOCOL });
+        assert_eq!(attach_answer(ours, t.attached(4), ours), Attach { state: "fresh", id: None, generation: ours, protocol: PROTOCOL });
+        assert_eq!(attach_answer(ours, t.attached(3), ours - 1), Attach { state: "replaced", id: None, generation: ours, protocol: PROTOCOL });
+        assert_eq!(t.attached(5), None, "a pane that never started anything");
+        t.inner.lock().unwrap().ended.insert(7);
+        assert_eq!(t.attached(3), None, "an ended session is not handed back");
+    }
+
+    /// APP-052: the generation is one number for the whole run, fits a JS number, and typing from
+    /// another run is refused while typing without one (older callers) still goes through.
+    #[test]
+    fn t075_c_generation_is_fixed_and_typing_from_a_replaced_run_is_refused() {
+        assert_eq!(generation(), generation());
+        assert!(generation() > 0 && generation() < (1u64 << 53));
+        assert!(owns(None).is_ok());
+        assert!(owns(Some(generation())).is_ok());
+        let err = owns(Some(generation() ^ 1)).unwrap_err();
+        assert!(err.contains("replaced") && err.contains("reattach"), "{err}");
+    }
 
     /// Council D2 MERGE 31 item 1: a pane whose program takes its input slowly (ConPTY reads a
     /// paste at ~12 KB/s) must not hold the registry while the write blocks, or every other
@@ -1381,6 +1554,45 @@ mod tests {
         assert_eq!(log.read(Some(5), None).pending, "");
         log.push(&bytes[2..]);
         assert_eq!(log.read(Some(5), None).lines[0].text, "\u{2588}>");
+    }
+
+    #[test]
+    fn log_keeps_one_drawing_of_a_repainted_line() {
+        let mut log = OutputLog::default();
+        // T-151-d: a shell that repaints what is typed shows the command once, whichever way it starts over.
+        log.push(b"PS> d\rPS> di\rPS> dir\r\n");
+        log.push(b"PS> d\x1b[1GPS> di\x1b[0G\x1b[2KPS> dir\n");
+        // FIX-2: the third one draws on row 3, then on row 1 (home): two screen rows, so both drawings are kept.
+        log.push(b"\x1b[?25l\x1b[3;1HPS> dir\x1b[H\x1b[KPS> dir\x1b[?25h\n");
+        log.push(b"PS> d\x1b[2;1fPS> dir\n");
+        let texts: Vec<String> = log.read(None, None).lines.into_iter().map(|l| l.text).collect();
+        assert_eq!(texts, ["PS> dir", "PS> dir", "PS> dirPS> dir", "PS> dir"]);
+        // The part not finished yet reads the same way.
+        log.push(b"PS> d\x1b[1GPS> dir");
+        assert_eq!(log.read(None, None).pending, "PS> dir");
+        log.push(b"\n");
+        // FIX-1: a move to a different row keeps the rows drawn before it; only the same row (or no row) starts over.
+        log.push(b"\x1b[1;1Hrow one\x1b[2;1Hrow two\x1b[3;1Hrow three\n");
+        assert_eq!(log.read(Some(5), None).lines[0].text, "row onerow tworow three");
+        log.push(b"\x1b[2;1Hold\x1b[2;1Hnew\x1b[3;1Hnext\n");
+        assert_eq!(log.read(Some(6), None).lines[0].text, "newnext");
+        // Not column-aware: a move to another column keeps the text drawn before it (not claimed to match a screen).
+        log.push(b"ab\x1b[1;5Hcd\n");
+        let l = log.read(Some(7), None).lines[0].text.clone();
+        assert!(l.starts_with("ab") && l.ends_with("cd"), "{l}");
+        // A carriage return right after ESC[ still starts over, and zero-padded column 1 is column 1.
+        log.push(b"old\x1b[\rnew\nold\x1b[01Gnew\nold\x1b[1;01Hnew\nold\x1b[2;001Hnew\n");
+        let texts: Vec<String> = log.read(Some(8), None).lines.into_iter().map(|l| l.text).collect();
+        assert_eq!(texts, ["new"; 4]);
+        // The 1-second progress line still keeps its last drawing.
+        log.push(b"10%\r\x1b[K50%\r100%\n");
+        assert_eq!(log.read(Some(12), None).lines[0].text, "100%");
+        // FIX-2: a move with the row left out (home, or ";1") is row 1. The usual start of a full-screen frame, home
+        // then a move to row 2, keeps line one; and row 2 then home keeps row two.
+        log.push(b"\x1b[Hline one\x1b[2;1Hline two\n");
+        assert_eq!(log.read(Some(13), None).lines[0].text, "line oneline two");
+        log.push(b"\x1b[2;1Hrow two\x1b[;1Hrow one\n");
+        assert_eq!(log.read(Some(14), None).lines[0].text, "row tworow one");
     }
 
     #[test]

@@ -168,7 +168,11 @@ export type CliWorkspace =
   | { kind: "terminal-split"; handle: string; dir: "right" | "down"; command: string | null; ask: string }
   | { kind: "terminal-rename"; handle: string; title: string | null }
   | { kind: "terminal-switch"; handle: string }
-  | { kind: "terminal-close"; handles: string[] };
+  | { kind: "terminal-close"; handles: string[] }
+  // CLI-022: a file to open as an editing tab or as a diff, in the named worktree.
+  | CliFile;
+
+export type CliFile = { kind: "file-open"; path: string; worktree: string; branch: string | null } | { kind: "file-diff"; path: string; staged: boolean; worktree: string; branch: string | null };
 
 // SESS-035: the composer's project search. The typed letters in order inside `text`: one run when
 // they appear together, else the first letters that fit; null when they are not all there.

@@ -43,6 +43,7 @@ export const INDEX: Entry[] = [
   { page: "git", section: "commit-writer", title: "Commit messages", words: "commit message write generate ai summary" },
   { page: "git", section: "gh-budget", title: "GitHub API budget", words: "github api rate limit requests pull pr" },
   { page: "git", section: "deleting", title: "Deleting workspaces", words: "delete remove worktree branch cleanup" },
+  { page: "safety", section: "protected", title: "Protected actions", words: "protected ask asks prompt claude permission dangerous force push main delete rm drop database table stripe terraform infrastructure deploy production discard uncommitted reset rule rules master switch hooks" },
   { page: "notifications", section: "kinds", title: "What notifies you", words: "notify notification alert toast desktop" },
   { page: "notifications", section: "sound", title: "Sound", words: "sound audio chime volume mute beep" },
   { page: "notifications", section: "usage-alerts", title: "Usage alerts", words: "usage limit quota alert warning" },

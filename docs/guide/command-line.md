@@ -142,12 +142,72 @@ Orchestration lets one agent (a coordinator) hand work to others (workers) and e
 |---|---|
 | Runs | `run-create`, `run-use`, `run-current`, `run-list`, `run-show` |
 | Messages | `send`, `check`, `reply`, `inbox`, `ask` |
-| Tasks | `task-create`, `task-list`, `task-update`, `dispatch`, `dispatch-show` |
+| Tasks | `task-create`, `task-list`, `task-update`, `dispatch`, `dispatch-show` (see [Held tasks](#held-tasks)) |
 | Decision gates (a question that holds a task until answered) | `gate-create`, `gate-resolve`, `gate-list` |
-| Workers | `worker-start`, `worker-list`, `worker-stop`, `worker-abandon`, `worker-retain` |
+| Workers | `worker-start`, `worker-list`, `worker-show`, `worker-stop`, `worker-abandon`, `worker-retain`, `worker-release` (see [Worker commands](#worker-commands)) |
 | Housekeeping | `request-show` (what became of a change whose answer was lost), `reset --all\|--tasks\|--messages` |
 
 Changes can be retried safely: pass the same `--retry-request <id>` and the work is not done twice.
+
+### Held tasks
+
+A task whose worker has failed three times is held back: Kolux no longer hands it out. `task-list` shows its status as "held" instead of "ready", and `--ready` leaves it out. `--status held` lists only held tasks. With `--json`, a held task also carries `failures` (the count) and `held` ("held (3 failures)"). The plain-text line shows only the word "held", not the count.
+
+There is no command-line way to free a held task yet. The reset action exists inside the app (`task_reset`, which clears the failure count), but no button or command calls it today.
+
+### Worker commands
+
+A worker is an agent a coordinator started for one task. Each worker has a dispatch id such as `dispatch-2`, and most worker commands take `--dispatch <id>`. The "next:" commands in the answers start with `kolux-dev`, like the help text. Type `kolux`.
+
+| Command | What it does |
+|---|---|
+| `worker-list` | One row per worker with what is left of its terminal: active, reclaimable, retained, release_pending, release_unknown or released. `--terminal-state` narrows it; `--limit` and `--cursor` page through it. A row ends with "next: " and the command to run |
+| `worker-show --dispatch <id>` | Shows one worker: its terminal state, task status, terminal, workspace folder and whether it is waiting on a person |
+| `worker-stop --dispatch <id>` | Ends the worker's agent terminal and keeps its workspace folder |
+| `worker-abandon --dispatch <id>` | Gives up on the worker; its task goes back to ready |
+| `worker-retain --dispatch <id>` | Keeps a settled worker's terminal open on purpose, across restarts. Answers "kept: its terminal ... stays open until it is released" |
+| `worker-release --dispatch <id>` | Saves a settled worker's output to a text file, then closes its terminal. The workspace folder stays. A worker still working is turned away: stop it first |
+
+**Release.** Kolux marks the worker, saves its terminal output, and only then closes the terminal. The output goes to one file per worker, `worker-archives\<dispatch id>.txt`, in Kolux's data folder. If the file cannot be written, nothing is closed. Releasing a worker twice answers "was already released".
+
+| You see | What it means | What to do |
+|---|---|---|
+| `release_pending` in `worker-list` | A release started and did not finish, for example because Kolux quit in the middle | Run `worker-release` again; the row's "next:" says so |
+| `release_unknown` in `worker-list`, or "release unknown: ..." | The release stopped half-way: the output could not be saved so the terminal was left open, or it was saved but the terminal would not close | Run `worker-release` again. `--json` gives the reason in `error` and the saved file in `archive` |
+| "released: its output is saved at <file> and its terminal is closed; the worktree <folder> stays" | The release finished | Nothing |
+
+**A terminal that is not the worker's own stays open.** Release closes only a terminal the worker started itself. It leaves the terminal open, and still counts the worker as released, when:
+
+- the worker was handed a terminal that was already open;
+- another worker still working, or kept, uses the same terminal;
+- the terminal now runs a different agent than the worker's, or only a shell.
+
+Both answers give the reason. With `--json` it is in `terminalLeftOpen`. The plain-text line reads "<dispatch id> released: its terminal term-N is left open (<reason>); the worktree <folder> stays". "Its terminal was already gone" is printed only when the terminal really was gone.
+
+**Waiting on a person.** `worker-show` answers yes, no or unknown, with a reason in parentheses. "No" appears only when Kolux can tell: the worker has settled, or its terminal has ended. A live worker reads unknown: "Kolux has not read a prompt off its screen, so it cannot say nothing is waiting". The command line does not pass a pane's status hooks into `worker-show` yet, so it never answers yes.
+
+**Attention flags.** With `--json`, `worker-show` adds `attention` and `attentionWhy`. These can be raised today:
+
+| Flag | When |
+|---|---|
+| failure | The worker's task failed |
+| interruption | The agent ended before it reported done, its terminal ended, or Kolux restarted under it |
+| stale | A working worker sent no heartbeat for over 10 minutes |
+
+Input and approval flags (an agent waiting for a person) need the pane's status hooks, which this command does not read yet. A worker that has settled raises nothing.
+
+**Stop warning.** `worker-stop` adds a line starting "warning: " when the worker's process may still be running. It has two forms:
+
+- "the worker's process was kept alive: Kolux could not end <terminal>, so it may still be running; close it by hand if it is" appears when Kolux has no terminal to end for the worker, or tried to end it and could not;
+- "the worker's process was left running: <reason>; close it by hand if it should stop" appears when Kolux chose not to end the terminal because it is not the worker's own (the same reasons as for release, above). The stop itself still counts, and the task goes back to ready.
+
+**How Kolux finds the worker's terminal.** The window puts the dispatch id into the first session it starts for the worker, and Kolux counts only that stamped session as the worker's. A tab you open yourself in the same folder is never taken for the worker, so `worker-stop` and `worker-release` cannot end it. The start counts as ready once the stamped session has written something and then been quiet for one second. A worker started through a custom command (a wrapper, a `.cmd` file or `npx`) is found the same way, by its stamp, not by the program it runs.
+
+**A worker start that does not come up.** If the window has not stamped a session for the dispatch in time (a slow start, for example on a busy PC), `worker-start` exits 1 with "the worker did not come up within N ms; it may still be starting in the background (<dispatch id> in <folder>); if it does, worker-show and worker-stop find its session". Nothing is closed for you. With `--json` the answer names the stage reached ("worker"), what was done (task handed over, workspace folder made, terminal opened), what is left over, and the commands to clean up or retry: `worker-stop --dispatch <id>`, `worker-start --task <task>`, and `worktree rm` for a folder it made. The plain-text form prints the message and the `worktree rm` hint only. A failure in the workspace's setup script is not named as a "setup" stage yet.
+
+**Late agents.** After a start gives up, Kolux keeps the dispatch open to a late session for 10 minutes (while Kolux stays running). If the window does start the agent in that time, the session is tied to the dispatch and recorded on its row the next time any worker command runs, so `worker-show`, `worker-stop` and `worker-release` can find and end it. `worker-list` and `worker-show` rows then end with "its agent came up late"; with `--json` they carry `lateStamp`, and `worker-list` also `latePending`.
+
+If the dispatch had already been stopped, abandoned, released, completed or failed when the agent came up, the row keeps that status in `lateAfter` and Kolux raises an alarm. A stopped, abandoned or released dispatch says "<id> was already <status> when its agent came up late; the agent in <terminal> is running on a task that was handed back". A completed or failed one says the agent is "a second agent on a finished task". The alarm is added to every worker answer for that Run (a terminal tied to no Run sees all Runs): as a `lateWorker` note with `--json`, and as a "warning: ...; next: ... worker-release --dispatch <id>" line in plain text. It does not go away when you read it once. A second `worker-show` of the row stops the alarm, and a `worker-release` that closes the late terminal ends it for good. If that release leaves the terminal open, the note says "the late agent's terminal <terminal> is left open (<reason>), so that agent is still running on a task that was handed back" and points to `terminal close`.
 
 One Windows quirk: the `kolux.cmd` helper refuses `kolux orchestration send` and `kolux orchestration reply` (exit code 2), because the Windows command prompt reads their text a second time and can change it. Run `kolux.exe orchestration send ...` instead.
 
@@ -190,6 +250,6 @@ A mistyped command is caught before Kolux is contacted, with a suggestion: "no c
 
 ## Not built yet
 
-These do not exist, so do not look for them: opening or comparing files from the command line, a `tab` command, and registering `kolux` on the PATH for the whole computer.
+These do not exist, so do not look for them: opening or comparing files from the command line, a `tab` command, registering `kolux` on the PATH for the whole computer, `worker-read`, `ask`'s older hand-back with exit status 75, and a command to reset a held task.
 
-<!-- verified against: src-tauri/src/cli.rs, src-tauri/src/bin/kolux.rs, src-tauri/src/bin/kolux-dev.rs, src-tauri/Cargo.toml, src-tauri/cli/kolux.cmd, src-tauri/src/terminal.rs, src-tauri/src/resources.rs, src/status/ResourceManager.tsx, PLAN.md (T-262-c, T-250-a, T-250-b, T-076-c, T-287-c, MERGE-49) at 73f5e38 -->
+<!-- verified against: src-tauri/src/cli.rs, src-tauri/src/bin/kolux.rs, src-tauri/src/bin/kolux-dev.rs, src-tauri/Cargo.toml, src-tauri/cli/kolux.cmd, src-tauri/src/terminal.rs, src-tauri/src/resources.rs, src/status/ResourceManager.tsx, PLAN.md (T-262-c, T-250-a, T-250-b, T-076-c, T-287-c, MERGE-49) at 73f5e38; worker and held-task sections (src-tauri/src/orchestration.rs, src-tauri/src/local_cli.rs, T-089-c, T-129-c, T-172-c, T-279-c) at 5e6726c2 -->

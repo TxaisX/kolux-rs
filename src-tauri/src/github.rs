@@ -217,7 +217,7 @@ fn gh_config(gh: &Path, args: &[&str], limit: std::time::Duration) -> ConfigRead
 /// library gives; an unexpected wording fails closed to `Failed`, which refuses the host). Any other
 /// non-zero exit (a config file being rewritten, a lock, a shim error) is no answer, never "no
 /// top-level user", which would sign in a host that has none of its own.
-/// FIX-5 (council AFTER 1-2): only "could not find key" counts (a wider "key not found" also matches
+/// FIX-5 (council AFTER 1-2) and FIX-6: only gh's quoted `could not find key "` counts (a wider "key not found" also matches
 /// a wrapper's own error), and a value of more than one line is no answer: a login is one line, and
 /// two reads that differ only in an extra line must not compare unequal and let a host through.
 fn config_read(ok: bool, out: &str, err: &str) -> ConfigRead {
@@ -230,7 +230,9 @@ fn config_read(ok: bool, out: &str, err: &str) -> ConfigRead {
             ConfigRead::Value(out.to_string())
         };
     }
-    if err.to_ascii_lowercase().contains("could not find key") { ConfigRead::Unset } else { ConfigRead::Failed }
+    // FIX-6 (council FIX-SOON 2): the quoted form, in gh's own case; a bare prefix also matched
+    // "could not find keyring entry" from a wrapper or credential helper.
+    if err.contains("could not find key \"") { ConfigRead::Unset } else { ConfigRead::Failed }
 }
 
 /// A GraphQL node id as GitHub gives them (letters, digits, `_`, `-`, `=`), so an id from the page
@@ -940,11 +942,11 @@ mod tests {
         let dir = crate::test_dir::temp(name);
         let gh = if cfg!(windows) {
             let f = dir.join("gh.cmd");
-            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%1\"==\"config\" goto config\r\necho {\"fork\":false,\"data\":{}}\r\nexit /b 0\r\n:config\r\nif /i \"%3\"==\"-h\" if /i \"%4\"==\"ghe.corp\" (echo ana& exit /b 0)\r\nif exist \"%~dp0top.txt\" (type \"%~dp0top.txt\"& exit /b 0)\r\nif exist \"%~dp0locked.txt\" (echo gh: the config file is busy 1>&2& exit /b 1)\r\necho could not find key user 1>&2\r\nexit /b 1\r\n").unwrap();
+            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%1\"==\"config\" goto config\r\necho {\"fork\":false,\"data\":{}}\r\nexit /b 0\r\n:config\r\nif /i \"%3\"==\"-h\" if /i \"%4\"==\"ghe.corp\" (echo ana& exit /b 0)\r\nif exist \"%~dp0top.txt\" (type \"%~dp0top.txt\"& exit /b 0)\r\nif exist \"%~dp0locked.txt\" (echo gh: the config file is busy 1>&2& exit /b 1)\r\necho could not find key \"user\" 1>&2\r\nexit /b 1\r\n").unwrap();
             f
         } else {
             let f = dir.join("gh");
-            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\nif [ \"$1\" = config ]; then if [ \"$3\" = -h ] && [ \"$4\" = ghe.corp ]; then echo ana; exit 0; fi; [ -f \"$(dirname \"$0\")/top.txt\" ] && cat \"$(dirname \"$0\")/top.txt\" && exit 0; if [ -f \"$(dirname \"$0\")/locked.txt\" ]; then echo 'gh: the config file is busy' >&2; exit 1; fi; echo 'could not find key user' >&2; exit 1; fi\necho '{\"fork\":false,\"data\":{}}'\n").unwrap();
+            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\nif [ \"$1\" = config ]; then if [ \"$3\" = -h ] && [ \"$4\" = ghe.corp ]; then echo ana; exit 0; fi; [ -f \"$(dirname \"$0\")/top.txt\" ] && cat \"$(dirname \"$0\")/top.txt\" && exit 0; if [ -f \"$(dirname \"$0\")/locked.txt\" ]; then echo 'gh: the config file is busy' >&2; exit 1; fi; echo 'could not find key \"user\"' >&2; exit 1; fi\necho '{\"fork\":false,\"data\":{}}'\n").unwrap();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -1040,8 +1042,9 @@ mod tests {
         };
         assert_eq!(read(true, "ana", ""), "value:ana");
         assert_eq!(read(true, "", ""), "unset", "an older gh prints nothing for a key that is not set");
-        assert_eq!(read(false, "", "Could not find key \"user\""), "unset");
-        assert_eq!(read(false, "", "gh: could not find key: user"), "unset");
+        assert_eq!(read(false, "", "could not find key \"user\""), "unset");
+        assert_eq!(read(false, "", "Could not find key \"user\""), "failed", "FIX-6: gh's own case only");
+        assert_eq!(read(false, "", "gh: could not find key: user"), "failed", "FIX-6: only the quoted-key form is gh's");
         assert_eq!(read(false, "", ""), "failed", "a bare non-zero exit says nothing about the key");
         assert_eq!(read(false, "", "gh: the config file is busy"), "failed");
         assert_eq!(read(false, "ana", "permission denied"), "failed", "output on a failed read is not an answer");
@@ -1057,7 +1060,22 @@ mod tests {
         assert!(!read("key not found"));
         assert!(!read("gh: signing key not found in the keychain"));
         assert!(read("could not find key \"user\""));
-        assert!(read("gh: Could Not Find Key: user"));
+        assert!(read("gh: could not find key \"user\" in the config"));
+    }
+
+    /// FIX-6 (council FIX-SOON 2): the bare prefix "could not find key" also matches a wrapper or
+    /// credential helper saying "could not find keyring entry", and an unset top-level key lets
+    /// a host through. Only the quoted form (`could not find key "`), in gh's own case, is "unset".
+    #[test]
+    fn a_wrapper_s_could_not_find_keyring_is_no_answer() {
+        let read = |err: &str| matches!(config_read(false, "", err), ConfigRead::Unset);
+        assert!(!read("could not find keyring entry"));
+        assert!(!read("gh: could not find keyring"));
+        assert!(!read("Could not find keychain item"));
+        assert!(!read("gh: Could Not Find Key: user"), "unquoted wording is no answer");
+        assert!(!read("Could not find key \"user\""), "case-sensitive");
+        assert!(!read("could not find key: user"));
+        assert!(read("could not find key \"user\""));
     }
 
     /// FIX-5 (council AFTER 2): a config answer of more than one line is no answer. A value that

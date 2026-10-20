@@ -17,6 +17,8 @@ import { Segmented } from "./GeneralPage";
 import { readLook } from "./general";
 import { useSettings } from "./useSettings";
 
+/** TERM-119: on unless switched off; the app reads the same field when it starts a shell. */
+const SHELL_HISTORY_FIELD = "shellHistoryPerWorktree";
 type ShellInfo = { id: string; name: string };
 const onWindows = () => /Windows/.test(navigator.userAgent);
 const SAMPLE = "\x1b[32m~/kolux\x1b[0m $ git status\r\nOn branch \x1b[36mmain\x1b[0m\r\n\x1b[1mbold\x1b[0m normal \x1b[33myellow\x1b[0m \x1b[31mred\x1b[0m \x1b[34mblue\x1b[0m\r\n=> != <= 0O 1lI\r\n$ ";
@@ -148,6 +150,12 @@ export default function TerminalPage() {
             <NumberField label="Scroll sensitivity" value={text.scroll} min={0.1} max={5} step={0.1} onSave={(n) => save({ [FIELDS.scroll]: n })} />
             <NumberField label="Fast scroll (with Alt)" value={text.fastScroll} min={1} max={20} onSave={(n) => save({ [FIELDS.fastScroll]: n })} />
           </div>
+          {settings && (
+            <>
+              <Switch label="Keep shell history separate for each worktree" checked={settings[SHELL_HISTORY_FIELD] !== false} onChange={(on) => save({ [SHELL_HISTORY_FIELD]: on })} />
+              <p className="conn-detail">The up arrow in bash, zsh and fish then shows the commands run in that worktree only. Command Prompt and PowerShell are left as they are, and a history file you set yourself is kept. Applies to terminals opened after the change.</p>
+            </>
+          )}
         </section>
       )}
       {text && (

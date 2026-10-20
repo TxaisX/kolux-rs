@@ -577,12 +577,14 @@ impl Session {
 
 /// VIEW-025: the keys that answer an approval at the agent's own prompt. Claude Code's dialog
 /// takes Enter for its first option (Yes) and Esc for No; Codex's approval modal takes y and n.
-pub fn answer_keys(agent: Agent, approve: bool) -> &'static str {
+/// T-151-c: no other agent's keys are guessed; a vendor agent has none.
+pub fn answer_keys(agent: Agent, approve: bool) -> Option<&'static str> {
     match (agent, approve) {
-        (Agent::Claude, true) => "\r",
-        (Agent::Claude, false) => "\x1b",
-        (Agent::Codex | Agent::Vendor, true) => "y",
-        (Agent::Codex | Agent::Vendor, false) => "n",
+        (Agent::Claude, true) => Some("\r"),
+        (Agent::Claude, false) => Some("\x1b"),
+        (Agent::Codex, true) => Some("y"),
+        (Agent::Codex, false) => Some("n"),
+        (Agent::Vendor, _) => None,
     }
 }
 
@@ -600,7 +602,7 @@ pub fn agent_answer(terminals: tauri::State<'_, crate::terminal::Terminals>, pan
     if !answerable {
         return Err("no hook permission to answer".into());
     }
-    terminals.write(terminal, answer_keys(agent, approve))?;
+    terminals.write(terminal, answer_keys(agent, approve).ok_or("not an agent pane")?)?;
     // Council FIX-3 (FS2): the window takes the resolved state, never a blanket "working".
     Ok(with_sessions(|s| s.get_mut(&pane_key).map(Session::answer_state)).unwrap_or("working").to_string())
 }
@@ -928,8 +930,10 @@ mod tests {
         // Another tool carrying on is no longer refused as "a different tool than the pending one".
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash"}"#), Some("working"));
         assert_eq!(s.history.back().map(|e| e.state), Some("working"));
-        assert_eq!((answer_keys(Agent::Claude, true), answer_keys(Agent::Claude, false)), ("\r", "\x1b"));
-        assert_eq!((answer_keys(Agent::Codex, true), answer_keys(Agent::Codex, false)), ("y", "n"));
+        assert_eq!((answer_keys(Agent::Claude, true), answer_keys(Agent::Claude, false)), (Some("\r"), Some("\x1b")));
+        assert_eq!((answer_keys(Agent::Codex, true), answer_keys(Agent::Codex, false)), (Some("y"), Some("n")));
+        // T-151-c: a vendor agent's keys are never guessed.
+        assert_eq!((answer_keys(Agent::Vendor, true), answer_keys(Agent::Vendor, false)), (None, None));
     }
 
     #[test]

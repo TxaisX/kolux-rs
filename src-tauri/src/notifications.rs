@@ -1,6 +1,8 @@
 //! SET-034: the Notifications page's test button and its link to the system's own notification
 //! settings. The page chooses the sound: a tone Kolux plays itself (the toast is then silent so only
-//! one sound plays), the system's default sound, or silence when the volume is 0.
+//! one sound plays), the system's default sound, or silence when the volume is 0. STAT-043: the same
+//! choice covers the real notifications (`show`), and a custom sound file is read here after its
+//! type is checked.
 
 use serde_json::{json, Value};
 
@@ -27,19 +29,73 @@ fn blocked() -> bool {
     }
 }
 
+/// STAT-043: one desktop notification. `sound` true lets the system's default sound play with it;
+/// false keeps the toast silent (Kolux plays its own tone or file, or the volume is 0).
+pub fn show(app: &tauri::AppHandle, title: String, body: String, sound: bool) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    let mut n = app.notification().builder().title(title).body(body);
+    if sound {
+        n = n.sound("Default");
+    }
+    n.show().map_err(|e| e.to_string())
+}
+
+/// The audio types a custom sound may be, with the byte check each one must pass.
+const SOUND_TYPES: [&str; 8] = ["wav", "mp3", "ogg", "oga", "opus", "m4a", "aac", "flac"];
+/// A custom sound is a short alert; anything bigger than this is not one.
+const SOUND_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
+/// STAT-043: does this file name's type, and the file's first bytes, say it is an allowed audio file?
+pub fn sound_file_ok(name: &str, head: &[u8]) -> Result<(), String> {
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    if !SOUND_TYPES.contains(&ext.as_str()) {
+        return Err(format!("not an allowed sound type; use one of: {}", SOUND_TYPES.join(", ")));
+    }
+    let sync = head.len() >= 2 && head[0] == 0xFF && head[1] & 0xE0 == 0xE0; // an MPEG or AAC frame
+    let ok = match ext.as_str() {
+        "wav" => head.len() >= 12 && &head[..4] == b"RIFF" && &head[8..12] == b"WAVE",
+        "mp3" => head.starts_with(b"ID3") || sync,
+        "aac" => sync || head.starts_with(b"ID3"),
+        "ogg" | "oga" | "opus" => head.starts_with(b"OggS"),
+        "flac" => head.starts_with(b"fLaC"),
+        "m4a" => head.len() >= 8 && &head[4..8] == b"ftyp",
+        _ => false,
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("the file does not look like a .{ext} sound"))
+    }
+}
+
+/// STAT-043: the bytes of the user's custom sound file (base64), after the type and size checks.
+/// The page decodes and plays it; nothing else is ever read through this command.
+#[tauri::command]
+pub fn notification_sound_load(path: String) -> Result<String, String> {
+    use base64::Engine;
+    use std::io::Read;
+    let f = std::fs::File::open(&path).map_err(|e| format!("the sound file cannot be opened: {e}"))?;
+    let meta = f.metadata().map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err("that is not a file".into());
+    }
+    if meta.len() > SOUND_MAX_BYTES {
+        return Err("the sound file is larger than 10 MB".into());
+    }
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    f.take(SOUND_MAX_BYTES).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    sound_file_ok(&path, &bytes[..bytes.len().min(16)])?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
 /// Shows the sample notification. `sound` false makes the toast silent (Kolux's own tone plays, or
 /// the volume is 0); true lets the system's default sound play with it.
 #[tauri::command]
 pub fn notification_test(app: tauri::AppHandle, sound: bool) -> Result<Value, String> {
-    use tauri_plugin_notification::NotificationExt;
     if blocked() {
         return Ok(json!({ "shown": false, "blocked": true }));
     }
-    let mut n = app.notification().builder().title("Kolux").body("This is how a notification from Kolux looks and sounds.");
-    if sound {
-        n = n.sound("Default");
-    }
-    n.show().map_err(|e| e.to_string())?;
+    show(&app, "Kolux".into(), "This is how a notification from Kolux looks and sounds.".into(), sound)?;
     Ok(json!({ "shown": true, "blocked": false }))
 }
 
@@ -112,7 +168,42 @@ pub fn first_run_welcome(app: &tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::toasts_off;
+    use super::{sound_file_ok, toasts_off};
+
+    #[test]
+    fn stat043_a_custom_sound_must_be_an_allowed_audio_type_and_look_like_one() {
+        let wav = b"RIFF\x24\x00\x00\x00WAVEfmt ";
+        assert!(sound_file_ok("C:\\sounds\\Ding.WAV", wav).is_ok());
+        assert!(sound_file_ok("a.mp3", b"ID3\x04\x00").is_ok());
+        assert!(sound_file_ok("a.mp3", &[0xFF, 0xFB, 0x90]).is_ok());
+        assert!(sound_file_ok("a.ogg", b"OggS\x00").is_ok());
+        assert!(sound_file_ok("a.flac", b"fLaC\x00").is_ok());
+        assert!(sound_file_ok("a.m4a", b"\x00\x00\x00\x18ftypM4A ").is_ok());
+        // a disallowed type, no type, a renamed file and an empty read are all refused
+        assert!(sound_file_ok("a.exe", wav).is_err());
+        assert!(sound_file_ok("noext", wav).is_err());
+        assert!(sound_file_ok("a.wav", b"MZ\x90\x00").is_err());
+        assert!(sound_file_ok("a.mp3", b"").is_err());
+        assert!(sound_file_ok("a.flac", wav).is_err());
+    }
+
+    #[test]
+    fn stat043_the_load_command_refuses_a_missing_file_a_folder_and_a_wrong_type() {
+        let dir = std::env::temp_dir().join(format!("kolux-stat043-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let good = dir.join("ding.wav");
+        std::fs::write(&good, b"RIFF\x04\x00\x00\x00WAVEdata").unwrap();
+        let bad = dir.join("evil.wav");
+        std::fs::write(&bad, b"MZ not audio").unwrap();
+        let txt = dir.join("note.txt");
+        std::fs::write(&txt, b"RIFF....WAVE").unwrap();
+        assert!(super::notification_sound_load(good.to_string_lossy().into()).is_ok());
+        assert!(super::notification_sound_load(bad.to_string_lossy().into()).is_err());
+        assert!(super::notification_sound_load(txt.to_string_lossy().into()).is_err());
+        assert!(super::notification_sound_load(dir.join("gone.wav").to_string_lossy().into()).is_err());
+        assert!(super::notification_sound_load(dir.to_string_lossy().into()).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn view111_only_a_mac_that_never_answered_is_asked_once() {

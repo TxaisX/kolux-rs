@@ -71,8 +71,20 @@ describe("BROW-003 focus-moving chords are rate-limited per tab", () => {
     const last = new Map<number, number>();
     for (let t = 0; t < 1000; t += 100) expect(limitChord("zoomIn", pageChord("zoomIn", true), last, 3, t)).toEqual({ focusPane: false, run: true, takeKeyboard: false });
     expect(last.has(3)).toBe(false);
-    expect(limitChord("reload", pageChord("reload", false, true), last, 3, 0)).toEqual({ focusPane: true, run: true, takeKeyboard: false });
-    expect(limitChord("reload", pageChord("reload", false, true), last, 3, 10)).toEqual({ focusPane: false, run: true, takeKeyboard: false });
-    expect(limitChord("find", pageChord("find", false, true), last, 3, 20)).toEqual({ focusPane: false, run: false, takeKeyboard: false });
+  });
+
+  // Council FIX-5 (review AFTER 1): only a chord that takes the keyboard uses the allowance, so a
+  // real Alt+Left, Ctrl+R or Ctrl+F right before a real Ctrl+L no longer eats the Ctrl+L.
+  it("chords that do not take the keyboard pass unlimited and leave the allowance unused", () => {
+    const last = new Map<number, number>();
+    for (const [what, t] of [["back", 0], ["reload", 10], ["find", 20], ["back", 30]] as const) {
+      expect(limitChord(what, pageChord(what, false, true), last, 3, t)).toEqual({ focusPane: true, run: true, takeKeyboard: false });
+    }
+    expect(last.has(3)).toBe(false);
+    expect(limitChord("focusAddressBar", pageChord("focusAddressBar", false, true), last, 3, 40)).toEqual({ focusPane: true, run: true, takeKeyboard: true });
+    expect(last.get(3)).toBe(40);
+    // After a Ctrl+L, the next back still acts; a second Ctrl+L inside the second is refused.
+    expect(limitChord("back", pageChord("back", false, true), last, 3, 50)).toEqual({ focusPane: true, run: true, takeKeyboard: false });
+    expect(limitChord("focusAddressBar", pageChord("focusAddressBar", false, true), last, 3, 60)).toEqual({ focusPane: false, run: false, takeKeyboard: false });
   });
 });

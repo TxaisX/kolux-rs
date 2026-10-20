@@ -412,7 +412,6 @@ struct Watch {
     /// caller joining later is told the truth.
     watching: Arc<AtomicBool>,
     /// The reader threads; joined only where the folder must be free of handles (`unwatch_root`).
-    #[cfg_attr(not(test), allow(dead_code))] // read by unwatch_root, see there
     readers: Vec<std::thread::JoinHandle<()>>,
     /// FIX-1: tells the page the watch ended on its own, so it watches again.
     ended: Ended,
@@ -430,7 +429,6 @@ impl Watch {
 static WATCHES: Mutex<BTreeMap<String, Watch>> = Mutex::new(BTreeMap::new());
 
 /// Takes watch `k` out of the table (and its ignore answers); the caller halts or joins it.
-#[cfg_attr(not(test), allow(dead_code))] // used by unwatch_root, see there
 fn take(k: &str) -> Option<Watch> {
     take_from(&mut WATCHES.lock().unwrap_or_else(|e| e.into_inner()), k)
 }
@@ -464,9 +462,7 @@ pub type Ended = Arc<dyn Fn(u64) + Send + Sync>;
 const BUF_WORDS: usize = 64 * 1024;
 
 /// Starts (or joins) the watch of the worktree holding `path`; nobody is told when it ends.
-/// scm.rs calls it until `evidence/watch-FIX-1-scm.rs.patch` lands (then `watch_with`); the tests
-/// keep calling it, so it stays (FIX-2: the three patches compiled together showed the warning).
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)] // the app calls watch_with since MERGE 169; the tests still use this short form
 pub fn watch(path: &Path, sink: impl Fn(u64) -> Sink, log: Log) -> Result<WatchStart, String> {
     watch_with(path, sink, Arc::new(|_| {}), log)
 }
@@ -550,14 +546,13 @@ fn watch_in(gen: u64, p: Places, sink: impl Fn(u64) -> Sink, ended: Ended, log: 
 /// the folder, say), `tell_page` has the page watch the folder again; after a removal that
 /// succeeded it is dropped unused, since the workspace and its panel are gone.
 #[must_use = "a removal that failed must call tell_page, or the panel stays silent"]
-#[cfg_attr(not(test), allow(dead_code))] // used by projects.rs once evidence/watch-T-033-e-projects.rs.patch lands
 pub struct Stopped {
     id: u64,
     ended: Ended,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // see Stopped
 impl Stopped {
+    #[cfg(test)] // only the tests read it
     pub fn id(&self) -> u64 {
         self.id
     }
@@ -588,12 +583,10 @@ pub fn unwatch(id: u64) {
 /// readers are waited for, so no folder handle of ours stands in the way of git deleting the
 /// folder. `root` is the worktree as the caller has it (any slashes or case); the handle to tell
 /// the page with when there was a watch (FIX-1). It joins threads, so it runs on a background
-/// command's thread (the caller, `workspace_remove`, is an `async` command once the coordinator
-/// hunk `evidence/watch-T-033-e-projects.rs.patch` lands; until then nothing in the app calls it).
+/// command's thread (the caller, `workspace_remove`, is an `async` command since MERGE 169).
 /// Only the watch of that very folder is ended (FIX-1): when the key misses, git is asked from the
 /// folder, and its answer counts only if it is the same folder (a gone workspace, or a plain folder
 /// inside the project, would otherwise end the project's own watch).
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn unwatch_root(root: &Path) -> Option<Stopped> {
     let k = key(&root.to_string_lossy());
     let w = take(&k).or_else(|| {
@@ -614,11 +607,10 @@ pub fn unwatch_root(root: &Path) -> Option<Stopped> {
 
 /// T-033-e: the window is gone (closed, or its page torn down): every watch ends at once, none is
 /// waited for (this is called from the window's own thread). Returns how many were open.
-/// Its callers are the main window's Destroyed handler and the main page's load-started handler
-/// (a reload, FIX-1) in lib.rs, a coordinator hunk (`evidence/watch-T-033-e-lib.rs.patch`); until
-/// that lands nothing in the app calls it. FIX-2 (review AFTER 5): it also moves the page
-/// generation on, so a watch call the old page started and that finishes after this is refused.
-#[cfg_attr(not(test), allow(dead_code))]
+/// Its callers are in lib.rs (since MERGE 169): the main window's Destroyed handler, and
+/// `on_page_load` when the main page starts loading (a reload destroys no window). FIX-2 (review
+/// AFTER 5): it also moves the page generation on, so a watch call the old page started and that
+/// finishes after this is refused.
 pub fn unwatch_all() -> usize {
     let all: Vec<Watch> = {
         let mut all = WATCHES.lock().unwrap_or_else(|e| e.into_inner());

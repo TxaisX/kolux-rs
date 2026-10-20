@@ -1,107 +1,51 @@
-chat FIX-3 (council review 4 of lane/chat e5412ff: FIX-BEFORE 1, FIX-SOON 1-3, AFTER 1-3)
-Lane chat, from BEFORE e5412ff, after STEP 0 merge 0040c17 (main f9d888b). 2026-10-14.
+chat FIX-3 (wave 16: stand-in review of lane/chat 0538a66b, "Send to build session" items 5 and 6) · lane/chat from BEFORE 9e63435d (= main; lane fast-forwarded from 0538a66b)
+(This file name was used by an older wave-8 FIX-3 (council review 4 of e5412ff, 2026-10-14); that text stays in git history, as FIX-1 and FIX-2 did for their names.)
 
-WHAT CHANGED
-(1) FIX-BEFORE 1, kit role prompt (src/chat/kitPrompt.ts, src/chat/KitNotice.tsx, App side in
-    evidence/chat-FIX-2-App.patch, regenerated against f9d888b). Each waiting kit entry now carries
-    dueAt (first tick its role is due), noticed (the notice showing), toasted, and the role's and
-    agent's names (kitWait). Per tick, kitStep(w, now, holdFor(key, stateOf, terminal), hooksAbsent):
-      hooks known absent (hooks off, or an agent with no hook route; Codex counts as hookless until
-        T-025-e writes its hooks): the notice at once, "<Role> is ready for its prompt, but Kolux
-        can't see whether <agent> is asking something." [Send prompt] [Copy prompt]; never pasted
-        by the timer.
-      UNSEEN: retried quietly for 60 s from dueAt, then the same notice and one toast; retrying
-        goes on, and a clear reading pastes the prompt and closes the notice.
-      ASKING: waits with no limit; after 60 s "<Role>'s prompt is waiting: <agent> is asking
-        something in its terminal. Answer it there." [Copy prompt] only.
-      stopped (a menu opened mid-paste): never pasted again by the timer; notice "<Role>'s prompt
-        stopped before its Enter: <agent> began asking something. Answer it in its terminal, then
-        send the prompt." [Send prompt] [Copy prompt]. (Ruling 4 says "the notice"; the ready
-        wording would claim Kolux cannot see, which is untrue here, so this one names the cause.)
-      too long: notice with Copy only (never retried).
-    Send prompt = pasteUnchecked: the user's own click, Ctrl+U, one bracketed paste, Enter, no
-    state gate. The notices render under the kit strip (KitPromptNotices, mount in the App patch).
-(2) FIX-SOON 1 (send.ts): toolAt per pane, set by any working event that names a tool (the lead's
-    or, with the status patch, a sub-agent's), cleared only by permission, waiting or done; a
-    tool-less event no longer ends the 1 s hold. Kept per terminal (an earlier run's tool start
-    holds nothing in the new one).
-(3) FIX-SOON 2: answered(key, state, since) (send.ts) takes the state Kolux resolved after the
-    answer and applies it only when nothing newer was heard since the answer started (hearingNow);
-    it returns false otherwise and the App patch then leaves the window's reading alone too.
-    Rust side (evidence/chat-FIX-3-status.patch, status.rs only; lib.rs needs no change, agent_answer
-    is already registered): a child's PreToolUse Change carries its tool; Session::answer_state()
-    = answered() then resolved(); agent_answer returns that state (Result<String, String>). The App
-    patch reads a non-string reply as "working", so the two patches land in either order.
-(4) hold.test.ts describe renamed "pasteToPane (the helper App's pastes use)"; new test that
-    answered() leaves a newer permission alone.
-(5) AFTER: Codex picker commands get Tab as a space (composer.ts); the send.ts holdFor comment now
-    says what the window really does (App drops hook[key] when the pane's program stops, which a
-    restart does first; App.tsx onRunning at main f9d888b). [Corrected in chat wave 2 FIX-SOON 2:
-    the window does NOT drop readings when hooks are turned off; send.ts setHooksOn covers it, see
-    evidence/chat-W2-FIX-SOON.txt.] A
-    stopped kit prompt is never re-pasted every 10 s (kitStep, above).
-(6) HOLD: slash commands only at rest is Txais's decision (c); not built.
+WHAT CHANGED FOR THE USER
+  - Under "Files written", a file the agent wrote at a home-relative path (~/x, ~\x) is no longer listed under a wrong full path inside the pane's folder, and neither is a path whose .. climbs above the drive (or network share) root of the pane's folder. Such a file is left out of the list. A normal ../x that stays inside the drive still resolves and is offered as before.
+  - No visible change for the chat reading order (item 5 is a test change only; the code was already right).
 
-TESTS ADDED / CHANGED
- src/chat/hold.test.ts
-  + council FIX-3 (FS1): a sub-agent's tool ending 200 ms after the lead's tool start does not end the hold, so a menu at 600 ms stops the send
-  + a sub-agent's tool start (working with its tool named) starts the hold too
-  + the end of the turn (done) ends the hold at once
-  + a tool start heard from the pane's earlier terminal holds nothing in its new one
-  - a tool that already finished (PostToolUse: working with no tool) holds nothing (removed: the ruling keeps the hold over tool-less events)
-  ~ after Approve or Deny on a card the chat no longer holds on the old permission (new answered signature)
-  + council FIX-3 (FS2): the reading becomes the state Kolux resolved after the answer, so a second sub-agent still asking keeps holding
-  + council FIX-3 (FS2): answered() leaves a newer permission alone
-  ~ describe renamed "pasteToPane (the helper App's pastes use)"
- src/chat/composer.test.ts
-  + council FIX-3 (AFTER 1): a Codex picker command typed key by key sends a Tab as a space too
- src/chat/kitPrompt.test.ts (new, 8 tests): hooks absent cases; notice at once with no paste;
-  UNSEEN 60 s then notice + one toast + retry + close on send; clear inside 60 s; held paste;
-  ASKING with no limit then the waiting notice; stopped never re-pasted; Send prompt writes.
- status.rs (in the patch): fix3_a_sub_agents_tool_start_names_its_tool_and_its_end_names_none,
-  fix3_a_card_answer_reports_permission_while_a_second_sub_agent_still_asks
+FILES CHANGED (all inside src/chat, plus bookkeeping)
+  steps.ts          new exported unreachable(path, cwd); writtenFiles skips a relative path it reports true for before resolving.
+  written.test.ts   9 new tests (describe "FIX-3: paths that cannot be resolved are skipped").
+  reading.test.ts   1 new test, "a read is never taken while the close is out: the stub would answer it with a delta"; the older "the kept conversation is not replaced by a delta read that raced the close" is renamed "the first snapshot after the close becomes the view in place of the kept one" because it only fed a snapshot after the close and never raced anything.
+  PLAN.md           FIX-3 sentence on the T-330 and T-332 lines.   STATE-history.md one "- [chat] FIX-3" line.   evidence/chat-FIX-3.txt this file.
+  No Rust, no App.tsx / TerminalPane, no coordinator patch.
 
-RED FIRST (tests written before the code, run on the old code)
- vitest src/chat (G:/Temp/chat-w1-logs/w6-red.log): Test Files 3 failed | 5 passed (8); Tests 5 failed | 74 passed (79)
-  x AFTER 1 Codex Tab: AssertionError: expected [ '\u0015', '/', 'm', 'o', 'd', ...(9) ] to not include '\t'
-  x FS1 sub-agent 200 ms: AssertionError: expected 'sent' to be 'stopped'
-  x the three answered() tests: TypeError: hearingNow is not a function (the old answered(key) had no since/state and set "working" unconditionally)
-  x kitPrompt.test.ts: Cannot find module './kitPrompt' (the old App loop just retried silently)
- cargo test --lib status::tests::fix3 on f9d888b with only the first Rust test added (w6-rust-red.log):
-  FAILED: left ("working", None), right ("working", Some("Bash")); test result: FAILED. 0 passed; 1 failed
-  (the second Rust test calls answer_state, which did not exist.)
+DECISION (item 6 wording)
+  "Climbs above the working folder" is read as "climbs above the ROOT of the pane's folder" (C:\ , / , or \\server\share), which is the review's own case (links.ts clamps there and lists a wrong file). A ../x from C:\work\x that lands in the sibling C:\work\y stays resolved: the FIX-2 test "..\y\b.ts from C:\work\x -> C:\work\y\b.ts" says that is wanted. Skipping ~ paths applies even with no folder known.
 
-GREEN
- vitest src/chat (w6-green.log): Test Files 8 passed (8); Tests 87 passed (87)
- pnpm test (w6-vitest-final.log): Test Files 166 passed (166); Tests 1048 passed (1048)  [STEP 0 base: 165 / 1034]
- pnpm exec tsc --noEmit (lane): exit 0
- Lane Rust: untouched this card (status.rs lives only in the patch), so no lane cargo run after STEP 0
-  (STEP 0: cargo test 695 + 3 passed, 0 failed; clippy -D warnings exit 0).
+ITEM 5: THE READING TEST CAN FAIL (proof)
+  The new test stands in for the transcript: a read taken while the close is still out is answered with a delta holding only the newest message (what the follower about to be dropped would serve); a read after the close gets the whole conversation from the top. It asserts the read stub was called 0 times and answered early 0 times while the close is out, then once, with the full a,b,c view, after the close ends.
+  Break the order once (src/chat/reading.ts look(): `const read = wait ? wait.then(run) : run();` replaced by `const read = run(); void wait;`), run src/chat/reading.test.ts:
+    G:/Temp/chat-w16-logs/fix3-reading-broken.log: 3 failed | 22 passed, among them
+      x a read is never taken while the close is out: the stub would answer it with a delta   -> AssertionError: expected 1 to be +0  (the read was taken early)
+      x a chat shown again reads only after the close of the one it replaces has finished
+      x a chat hidden again before its wait is over never starts the read
+  reading.ts restored from a copy taken before the edit (git status shows it unmodified); then green.
 
-PATCHES, proven on scratch worktree G:/Temp/chat-w6-wt at f9d888b (removed after)
- evidence/chat-FIX-2-App.patch: made with `git diff f9d888b -- src/App.tsx` after applying the
-  FIX-2 hunks and the FIX-3 edits; 93 +/- lines; 0 CR bytes.
-  `git apply --check evidence/chat-FIX-2-App.patch` on clean f9d888b: exit 0.
-  `pnpm exec tsc --noEmit` on f9d888b + this tree's src/chat + the App patch: exit 0 (w6-wt-tsc.log).
- evidence/chat-FIX-3-status.patch: `git diff -- src-tauri/src/status.rs`; 59 +/- lines; 0 CR bytes.
-  `git apply --check` on clean f9d888b: exit 0.
-  cargo check: Finished, exit 0 (w6-wt-check.log).
-  cargo test --lib status: test result: ok. 38 passed; 0 failed (both fix3 tests ok) (w6-wt-status.log).
-  cargo clippy --all-targets -- -D warnings: exit 0 (w6-wt-clippy.log).
- The App patch needs this lane's src/chat (send.ts hearingNow/holdFor/answered(key, state, since),
- kitPrompt.ts, KitNotice.tsx): apply it after merging lane/chat.
+ITEM 6: RED FIRST, THEN GREEN
+  Red (code unchanged), G:/Temp/chat-w16-logs/fix3-red.log: 7 failed | 46 passed, every failure an AssertionError on the new written tests:
+    ~/x from C:\work -> got [ 'C:\work\x' ];  ~\x -> got [ 'C:\work\~\x' ];  ~/x and ~ with no folder -> got [ '~', '~/x' ]
+    ../../x from C:\work -> got [ 'C:\x' ];  from /home -> got [ '/x' ];  a/../../../x from C:\work -> got [ 'C:\x' ]
+    the mixed list kept the wrong entries too.
+  The "normal ../x still resolves" test and the FIX-2 tests passed before the change and still pass (that is the control). The network-share test was added after the red run (it went green with the code).
+  Green, G:/Temp/chat-w16-logs/fix3-green1.log: written.test.ts + reading.test.ts 2 files, 54 passed.
 
-LIVE PROOF PENDING (batched; never run by the lane: NO APP LAUNCHES)
- A. Hooks off (Settings > Agents, status hooks off). Start a kit whose second role waits on the first.
-    When the first role writes its marker, the strip shows at once: "<Role> is ready for its prompt,
-    but Kolux can't see whether <agent> is asking something." with Send prompt and Copy prompt. Nothing
-    is typed into the waiting pane by itself. Send prompt: the prompt lands in that pane and the notice
-    closes; the role shows as sent. Copy prompt: a toast says it is copied; the clipboard holds it.
- B. A Codex seat with hooks on: same notice at once (Codex counts as hookless until T-025-e).
- C. A Claude seat with hooks on but its hooks not firing (no reading): no notice for 60 s, then the
-    notice plus one toast; let a hook arrive (any prompt in that pane) and the prompt goes in by itself.
- D. A Claude seat showing a permission menu when its role is due: nothing typed; after 60 s
-    "<Role>'s prompt is waiting: <agent> is asking something in its terminal. Answer it there." Answer
-    it in the terminal: the next 10 s tick types the prompt.
- E. Approve on a card while a second sub-agent also asks: the pane still reads as asking; a chat send
-    stays held with "The agent is asking something in its terminal. Answer there."
+GATES (scratch HOME, CLAUDE_CONFIG_DIR, CODEX_HOME, TEMP under G:/Temp/chat-w16; every heavy line inside a slot)
+  vitest run src/chat           fix3-chat.log   15 files, 243 passed (was 233: +9 written, +1 reading)
+  tsc --noEmit                  fix3-tsc.log    exit 0, empty
+  vitest run (all)              fix3-full.log   244 files, 1760 passed
+  cargo test --no-fail-fast     fix3-cargo-full.log   exit 0; lib 1043 passed 2 ignored, 3 passed, three 0-test targets, every "test result" ok. No Rust touched; cargo build/clippy skipped.
+  plan-check --write-state      plan-check: OK; STATE.md head unchanged by this round
+  grep -c '^## Last 10 passes' STATE.md   1
+  duplicate task ids in PLAN.md           none
+  firewall-check.ps1 -Baseline            53 hit(s) in 22 file(s), 0 new
+
+LIVE PROOF PENDING (batched)
+  1. In a chat pane whose agent (Codex) wrote a file with a home-relative path (for example a patch to ~/notes.md) the Files written box does not list it. A file written with an ordinary relative path (src/app.ts) is still listed with its full path, and Send to... still works.
+  2. Hide a chat (switch to another screen), show it again: the earlier conversation stays up and is replaced by one full read with nothing missing (unchanged behaviour; only its test was strengthened).
+
+SEEN, NOT FIXED
+  - resolvePath in src/terminal/links.ts (core lane, not owned) still strips a leading ~/ and treats the rest as cwd-relative, and clamps .. at the root; other callers (terminal links) keep that. writtenFiles no longer reaches it for those cases.
+  - A close or read promise that never settles still stalls that pane's next read (no timeout), carried from the review's UNKNOWN list.

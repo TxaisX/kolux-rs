@@ -748,6 +748,10 @@ pub fn zoom_level(level: f64) -> f64 {
 pub async fn browser_go(app: AppHandle, id: u32, what: String, text: Option<String>, level: Option<f64>) -> Result<(), String> {
     if what == "focusApp" {
         // A focusAddressBar chord pressed in the page: the bar lives in the app's own web view.
+        // Council FIX-5: the label "main" is hard-coded here (both lines below), while browser_open
+        // adds a page to whichever window called it. That holds today because tauri.conf.json
+        // defines one app window with the default label; if a second app window ever hosts a
+        // browser pane, pass the calling window in instead.
         focus_app_ok(app.get_window("main").ok_or("no app window")?.is_focused().map_err(err)?)?;
         return app.get_webview("main").ok_or("no app view")?.set_focus().map_err(err);
     }
@@ -767,6 +771,140 @@ pub async fn browser_close(app: AppHandle, id: u32) -> Result<(), String> {
         i.forget(id);
     }
     view(&app, id)?.close().map_err(err)
+}
+
+/// T-074 (BROW-008, BROW-009): the probe the pane runs about four times a second while a page is
+/// on screen. wry reports only that a load started and finished (its NavigationCompleted handler
+/// drops the success flag), so the page itself is asked where it is: WebView2's own error page
+/// answers `chrome-error://chromewebdata/`, a live page answers its address, and a page whose
+/// process died answers nothing (or nothing that is a string). The pane's state machine
+/// (src/browser/loadState.ts) turns the answers into the overlay and the one automatic reload.
+const PROBE_QUERY: &str = "location.href";
+/// How long a probe waits for the page before it counts as unanswered. A page running a long
+/// script answers late, not never; three unanswered probes in a row count as a dead page.
+const PROBE_WAIT: Duration = Duration::from_millis(1500);
+/// How long the diagnosis waits for a connection or a TLS answer from a failed address.
+const DIAGNOSE_WAIT: Duration = Duration::from_secs(4);
+
+/// What the probe's answer (the JSON `eval_with_callback` hands back) says about the page.
+pub fn probe_result(answer: &str) -> &'static str {
+    match serde_json::from_str::<serde_json::Value>(answer) {
+        Ok(serde_json::Value::String(href)) if href.starts_with("chrome-error://") => "error-page",
+        Ok(serde_json::Value::String(_)) => "page",
+        _ => "no-answer",
+    }
+}
+
+/// Asks a tab's page where it is: `"page"`, `"error-page"` or `"no-answer"` (see `probe_result`).
+#[tauri::command]
+pub async fn browser_probe(app: AppHandle, id: u32) -> Result<&'static str, String> {
+    let v = view(&app, id)?;
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    if v.eval_with_callback(PROBE_QUERY, move |answer| {
+        let _ = tx.send(answer);
+    })
+    .is_err()
+    {
+        return Ok("no-answer");
+    }
+    let answer = tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(PROBE_WAIT).ok()).await.map_err(|e| e.to_string())?;
+    Ok(answer.as_deref().map_or("no-answer", probe_result))
+}
+
+/// Why an address failed, for the overlay's wording (BROW-008).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Diagnosis {
+    /// `unknown-host`, `refused`, `timeout`, `unreachable`, `certificate` or `unknown`.
+    pub kind: &'static str,
+    /// The address is this computer's (local-server advice makes sense).
+    pub local: bool,
+    /// The same address over https when the switch makes sense: a failed http address that is not
+    /// this computer's, with nothing but the scheme changed.
+    pub https: Option<String>,
+}
+
+/// The TLS error text names a certificate problem (native-tls and the OS wording vary).
+pub fn certificate_error(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    ["certificate", "self-signed", "self signed", "x509", "cert_", "untrusted root"].iter().any(|w| t.contains(w))
+}
+
+/// Names what failed from the three checks: name lookup, a TCP connection, and (https only) the
+/// TLS handshake's error text when the connection itself worked.
+pub fn failure_kind(dns_ok: bool, tcp: Option<std::io::ErrorKind>, tls: Option<&str>) -> &'static str {
+    use std::io::ErrorKind as K;
+    if !dns_ok {
+        return "unknown-host";
+    }
+    match tcp {
+        Some(K::ConnectionRefused) => "refused",
+        Some(K::TimedOut | K::WouldBlock) => "timeout",
+        Some(_) => "unreachable",
+        None => match tls {
+            Some(t) if certificate_error(t) => "certificate",
+            _ => "unknown",
+        },
+    }
+}
+
+/// The https twin of a failed http address (BROW-008): scheme only, and never for this
+/// computer's addresses, where https is rarely served.
+pub fn https_twin(url: &Url) -> Option<String> {
+    if url.scheme() != "http" || local_host(url) {
+        return None;
+    }
+    let mut u = url.clone();
+    u.set_scheme("https").ok()?;
+    Some(u.to_string())
+}
+
+/// Name lookup and one TCP connection to the address (blocking): whether the name resolved, and
+/// the error kind of the last connection attempt when none succeeded.
+pub fn reach(url: &Url) -> (bool, Option<std::io::ErrorKind>) {
+    let Ok(addrs) = url.socket_addrs(|| None) else { return (false, None) };
+    if addrs.is_empty() {
+        return (false, None);
+    }
+    let mut last = None;
+    for a in addrs {
+        match std::net::TcpStream::connect_timeout(&a, DIAGNOSE_WAIT) {
+            Ok(_) => return (true, None),
+            Err(e) => last = Some(e.kind()),
+        }
+    }
+    (true, last)
+}
+
+fn error_text(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut out = e.to_string();
+    let mut cur = e.source();
+    while let Some(s) = cur {
+        out.push_str(" / ");
+        out.push_str(&s.to_string());
+        cur = s.source();
+    }
+    out
+}
+
+/// Looks at why `url` failed to load, for the overlay's wording. The address passes the same
+/// check as a page load (`allowed`), so a page cannot aim this at the user's own network.
+#[tauri::command]
+pub async fn browser_diagnose(app: AppHandle, url: String) -> Result<Diagnosis, String> {
+    let url = parse(&url)?;
+    allowed(&url, app_origin(&app).as_ref())?;
+    let (local, https) = (local_host(&url), https_twin(&url));
+    let probe = url.clone();
+    let (dns_ok, tcp) = tauri::async_runtime::spawn_blocking(move || reach(&probe)).await.map_err(|e| e.to_string())?;
+    let mut tls = None;
+    if dns_ok && tcp.is_none() && url.scheme() == "https" {
+        // Strict checking, as the page's own load: a certificate the OS does not trust fails here too.
+        if let Ok(client) = reqwest::Client::builder().timeout(DIAGNOSE_WAIT).no_proxy().redirect(reqwest::redirect::Policy::none()).build() {
+            if let Err(e) = client.head(url.as_str()).send().await {
+                tls = Some(error_text(&e));
+            }
+        }
+    }
+    Ok(Diagnosis { kind: failure_kind(dns_ok, tcp, tls.as_deref()), local, https })
 }
 
 #[cfg(test)]
@@ -1339,10 +1477,12 @@ mod tests {
         server.join().unwrap();
     }
 
-    // Council FIX-4, item 3: a page cannot pull the keyboard while the app's window is not the
-    // one the user is typing in.
+    // Council FIX-4, item 3; renamed in FIX-5: this checks only how focus_app_ok maps the window's
+    // focus reading to allow or refuse. The wiring in browser_go and Tauri's cached focus state (true
+    // while any web view of the window holds the keyboard) are proven by the batched live proof
+    // (evidence/browser-FIX-4.txt steps 2-3), not by this test.
     #[test]
-    fn fix4_1_focus_app_only_while_the_apps_window_holds_the_keyboard() {
+    fn fix4_1_focus_app_ok_allows_a_focused_window_and_refuses_an_unfocused_one() {
         assert_eq!(focus_app_ok(true), Ok(()));
         assert!(focus_app_ok(false).is_err());
     }
@@ -1384,5 +1524,70 @@ mod tests {
         assert_eq!(time_left(Duration::from_millis(7999), s(8)), Some(Duration::from_millis(1)));
         assert_eq!(time_left(s(8), s(8)), None);
         assert_eq!(time_left(s(9), s(8)), None);
+    }
+}
+
+#[cfg(test)]
+mod t074_tests {
+    use super::*;
+
+    #[test]
+    fn brow008_the_probe_tells_the_engines_error_page_from_a_page_and_from_silence() {
+        assert_eq!(probe_result("\"chrome-error://chromewebdata/\""), "error-page");
+        assert_eq!(probe_result("\"https://example.com/a\""), "page");
+        assert_eq!(probe_result("\"about:blank\""), "page");
+        // A dead page's callback (if it comes at all) carries no string.
+        assert_eq!(probe_result("null"), "no-answer");
+        assert_eq!(probe_result(""), "no-answer");
+        assert_eq!(probe_result("{}"), "no-answer");
+    }
+
+    #[test]
+    fn brow008_the_failure_kind_names_what_failed() {
+        use std::io::ErrorKind as K;
+        assert_eq!(failure_kind(false, None, None), "unknown-host");
+        assert_eq!(failure_kind(false, Some(K::ConnectionRefused), None), "unknown-host");
+        assert_eq!(failure_kind(true, Some(K::ConnectionRefused), None), "refused");
+        assert_eq!(failure_kind(true, Some(K::TimedOut), None), "timeout");
+        assert_eq!(failure_kind(true, Some(K::Other), None), "unreachable");
+        assert_eq!(failure_kind(true, None, Some("error sending request / certificate verify failed: self signed")), "certificate");
+        assert_eq!(failure_kind(true, None, Some("The certificate chain was issued by an authority that is not trusted.")), "certificate");
+        assert_eq!(failure_kind(true, None, Some("connection reset by peer")), "unknown");
+        assert_eq!(failure_kind(true, None, None), "unknown");
+    }
+
+    #[test]
+    fn brow008_the_https_switch_changes_the_scheme_only_and_never_for_local_or_https() {
+        assert_eq!(https_twin(&parse("http://example.com/a?b=1#c").unwrap()), Some("https://example.com/a?b=1#c".into()));
+        assert_eq!(https_twin(&parse("http://example.com:8080/").unwrap()), Some("https://example.com:8080/".into()));
+        assert_eq!(https_twin(&parse("https://example.com/").unwrap()), None);
+        assert_eq!(https_twin(&parse("http://localhost:3000/").unwrap()), None);
+        assert_eq!(https_twin(&parse("http://127.0.0.1:9/").unwrap()), None);
+        assert_eq!(https_twin(&parse("http://[::1]:9/").unwrap()), None);
+    }
+
+    #[test]
+    fn brow008_a_closed_local_port_is_refused_and_local_and_an_open_one_is_reached() {
+        // Real sockets on this machine: a port nothing listens on, then one that does.
+        let gone = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = gone.local_addr().unwrap().port();
+        drop(gone);
+        let url = parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let (dns_ok, tcp) = reach(&url);
+        assert_eq!(failure_kind(dns_ok, tcp, None), "refused");
+        assert!(local_host(&url));
+        assert_eq!(https_twin(&url), None);
+        let open = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = parse(&format!("http://127.0.0.1:{}/", open.local_addr().unwrap().port())).unwrap();
+        assert_eq!(reach(&url), (true, None));
+        assert_eq!(failure_kind(true, None, None), "unknown");
+        // A name that cannot exist (RFC 6761 .invalid) never resolves.
+        assert!(!reach(&parse("http://no-such-host.invalid/").unwrap()).0);
+    }
+
+    #[test]
+    fn t074_the_diagnosis_serialises_for_the_pane() {
+        let d = Diagnosis { kind: "refused", local: true, https: None };
+        assert_eq!(serde_json::to_string(&d).unwrap(), r#"{"kind":"refused","local":true,"https":null}"#);
     }
 }
