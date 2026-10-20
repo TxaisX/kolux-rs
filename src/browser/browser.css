@@ -50,6 +50,9 @@
 .preview-folder { opacity: 0.6; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .preview-sep { opacity: 0.5; }
 .preview-copy { font-size: 11px; }
+/* T-319-b: the chip opens for typing (BROW-041); the import-logins hint (BROW-030). */
+.preview-chip { cursor: text; }
+.import-hint { display: inline-flex; align-items: center; font-size: 11px; white-space: nowrap; }
 /* T-159 (BROW-040): the outside address a preview asked for, shown whole. */
 .pane.browser .notice.preview-ask { color: var(--fg); border-color: var(--line); flex-wrap: wrap; }
 .pane.browser .notice.preview-ask span { flex: 1; min-width: 0; }

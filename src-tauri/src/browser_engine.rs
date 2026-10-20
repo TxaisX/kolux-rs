@@ -16,6 +16,11 @@
 //!   own view, becomes a crash record when it is a real crash (browser_crash.rs decides).
 //! - T-272-d: the engine's accelerator-key event records each real key pressed in a page, so a
 //!   keyboard chord that page's script sends counts only after a real press there (browser_holder.rs).
+//! - T-239-b (BROW-025): at every navigation start a page (and a popup) is given desktop Firefox
+//!   with no client hints on the sign-in hosts, its own identity elsewhere, unless its profile is
+//!   in native mode (`profiles::firefox_at` decides).
+//! - T-272-b (BROW-032): a page's permission requests are answered by `permissions::answer`; a
+//!   refusal is told to its pane (PERMISSION_EVENT) with the permission named.
 use std::path::PathBuf;
 use std::time::Duration;
 use tauri::{AppHandle, Webview};
@@ -25,10 +30,11 @@ mod imp {
     use crate::browser::certs;
     use webview2_com::Microsoft::Web::WebView2::Win32::*;
     use std::sync::mpsc::Sender;
-    use crate::browser::{crash, holder};
+    use crate::browser::{crash, holder, permissions, profiles};
+    use tauri::Emitter;
     use std::path::PathBuf;
-    use webview2_com::{AcceleratorKeyPressedEventHandler, CallDevToolsProtocolMethodCompletedHandler, ClearServerCertificateErrorActionsCompletedHandler, PrintToPdfCompletedHandler, ProcessFailedEventHandler, ServerCertificateErrorDetectedEventHandler};
-    use windows::core::{Interface, HSTRING, PWSTR};
+    use webview2_com::{AcceleratorKeyPressedEventHandler, CallDevToolsProtocolMethodCompletedHandler, ClearServerCertificateErrorActionsCompletedHandler, NavigationStartingEventHandler, PermissionRequestedEventHandler, PrintToPdfCompletedHandler, ProcessFailedEventHandler, ServerCertificateErrorDetectedEventHandler, WebResourceRequestedEventHandler};
+    use windows::core::{w, Interface, HSTRING, PWSTR};
     use windows::Win32::System::Com::CoTaskMemFree;
 
     /// A string the engine hands over in memory the caller frees; empty when it hands none.
@@ -139,6 +145,99 @@ mod imp {
         }
     }
 
+    /// The engine's own identity, read from the first page before anything changes it (every page
+    /// runs on the same engine, so one reading serves all).
+    static STOCK: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+    /// T-239-b (BROW-025): a page in a profile's normal mode shows desktop Firefox with no client
+    /// hints on the sign-in hosts and its own identity everywhere else. Decided again at every
+    /// navigation start (each redirect hop starts one) by `profiles::firefox_at`.
+    pub fn identity(controller: &ICoreWebView2Controller, spoof: bool) {
+        // SAFETY: CoreWebView2 and Settings hand back the page's engine and its settings.
+        let Ok(core) = (unsafe { controller.CoreWebView2() }) else { return };
+        let Ok(settings) = (unsafe { core.Settings() }).and_then(|s| s.cast::<ICoreWebView2Settings2>()) else { return };
+        // SAFETY: UserAgent writes a CoTaskMem string `take` frees.
+        let here = unsafe { take(|p| settings.UserAgent(p)) };
+        let firefox = profiles::firefox_identity();
+        let stock = STOCK.get_or_init(|| if here == firefox { String::new() } else { here.clone() }).clone();
+        if !spoof || stock.is_empty() {
+            return;
+        }
+        let (fx, own) = (HSTRING::from(firefox.as_str()), HSTRING::from(stock.as_str()));
+        let nav = NavigationStartingEventHandler::create(Box::new(move |_sender, args| {
+            let Some(args) = args else { return Ok(()) };
+            // SAFETY: Uri writes a CoTaskMem string `take` frees.
+            let uri = unsafe { take(|p| args.Uri(p)) };
+            let on = profiles::firefox_at(&uri, true);
+            let ua = if on { &fx } else { &own };
+            // SAFETY: SetUserAgent and the header calls only record values on the engine and on
+            // this navigation's request.
+            unsafe {
+                let _ = settings.SetUserAgent(ua);
+                if let Ok(h) = args.RequestHeaders() {
+                    let _ = h.SetHeader(w!("User-Agent"), ua);
+                    if on {
+                        for name in profiles::CLIENT_HINTS {
+                            let _ = h.RemoveHeader(&HSTRING::from(*name));
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }));
+        let mut token = 0i64;
+        // SAFETY: the handler lives as long as the engine holds it; the token is written once.
+        let _ = unsafe { core.add_NavigationStarting(&nav, &mut token) };
+        // The sign-in hosts' own requests (scripts, frames, fetches) lose their client hints too.
+        for host in profiles::SIGN_IN_HOSTS {
+            // SAFETY: the filter only names which requests the event below reports.
+            let _ = unsafe { core.AddWebResourceRequestedFilter(&HSTRING::from(format!("https://{host}/*")), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL) };
+        }
+        let req = WebResourceRequestedEventHandler::create(Box::new(move |_sender, args| {
+            let Some(args) = args else { return Ok(()) };
+            // SAFETY: Request and Uri hand back the request and a CoTaskMem string `take` frees;
+            // RemoveHeader only edits the outgoing request's headers.
+            unsafe {
+                let Ok(r) = args.Request() else { return Ok(()) };
+                if profiles::sign_in_host(&take(|p| r.Uri(p))) {
+                    if let Ok(h) = r.Headers() {
+                        for name in profiles::CLIENT_HINTS {
+                            let _ = h.RemoveHeader(&HSTRING::from(*name));
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }));
+        let mut token = 0i64;
+        // SAFETY: the handler lives as long as the engine holds it; the token is written once.
+        let _ = unsafe { core.add_WebResourceRequested(&req, &mut token) };
+        let script = HSTRING::from(profiles::no_hints_script());
+        // SAFETY: the script is copied by the engine; no completion handler is needed.
+        let _ = unsafe { core.AddScriptToExecuteOnDocumentCreated(&script, None::<&ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>) };
+    }
+
+    /// T-272-b (BROW-032): answers each permission request of a page by `permissions::answer`; a
+    /// refusal reaches the page's pane as a notice naming the permission.
+    pub fn permissions(id: u32, controller: &ICoreWebView2Controller, app: tauri::AppHandle) {
+        // SAFETY: CoreWebView2 hands back the page's engine object.
+        let Ok(core) = (unsafe { controller.CoreWebView2() }) else { return };
+        let handler = PermissionRequestedEventHandler::create(Box::new(move |_sender, args| {
+            let Some(args) = args else { return Ok(()) };
+            let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
+            // SAFETY: PermissionKind only writes a plain value; SetState only records the answer.
+            unsafe { args.PermissionKind(&mut kind) }?;
+            if let permissions::Answer::Deny(text) = permissions::answer(kind.0) {
+                unsafe { args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY) }?;
+                let _ = app.emit(crate::browser::PERMISSION_EVENT, serde_json::json!({ "id": id, "text": text }));
+            }
+            Ok(())
+        }));
+        let mut token = 0i64;
+        // SAFETY: the handler lives as long as the engine holds it; the token is written once.
+        let _ = unsafe { core.add_PermissionRequested(&handler, &mut token) };
+    }
+
     /// One DevTools call on the page's engine; its JSON answer (or why not) goes to `tx`.
     pub fn devtools(controller: &ICoreWebView2Controller, method: &str, params: &str, tx: Sender<Result<String, String>>) {
         let fail = tx.clone();
@@ -182,6 +281,39 @@ pub fn attach(id: u32, pw: &tauri::webview::PlatformWebview) {
     imp::attach(id, &pw.controller());
 }
 
+/// T-239-b (BROW-025): a page shows desktop Firefox on the sign-in hosts unless its profile is in
+/// native mode (main thread, from `browser_open`'s web view callback).
+#[cfg(windows)]
+pub fn identity(pw: &tauri::webview::PlatformWebview, spoof: bool) {
+    imp::identity(&pw.controller(), spoof);
+}
+
+/// T-272-b (BROW-032): a page's permission requests are answered by the permission rules (main
+/// thread, from `browser_open`'s web view callback).
+#[cfg(windows)]
+pub fn permissions(id: u32, pw: &tauri::webview::PlatformWebview, app: AppHandle) {
+    imp::permissions(id, &pw.controller(), app);
+}
+
+/// T-272-b (BROW-032, after-list 718): a popup's permission requests are answered by the same
+/// rules as its opener tab's page, and a refusal's notice goes to the opener's pane (`tab`).
+pub fn popup_permissions(w: &tauri::WebviewWindow, tab: u32, app: AppHandle) {
+    #[cfg(windows)]
+    let _ = w.with_webview(move |pw| imp::permissions(tab, &pw.controller(), app));
+    #[cfg(not(windows))]
+    let _ = (w, tab, app);
+}
+
+/// T-239-b (BROW-025): a popup follows the mode of its tab's profile. A popup opened straight onto
+/// a sign-in host already starts as Firefox (its builder sets that); this keeps every later hop
+/// right.
+pub fn popup_identity(w: &tauri::WebviewWindow, spoof: bool) {
+    #[cfg(windows)]
+    let _ = w.with_webview(move |pw| imp::identity(&pw.controller(), spoof));
+    #[cfg(not(windows))]
+    let _ = (w, spoof);
+}
+
 /// T-286-b (APP-040): a browser page's engine reports its process failures (main thread, from
 /// `browser_open`'s web view callback); `dir` is the profile folder holding the crash store.
 #[cfg(windows)]
@@ -193,7 +325,6 @@ pub fn watch_page_failures(id: u32, pw: &tauri::webview::PlatformWebview, dir: O
 
 /// T-286-b (APP-040): the app's own view reports its engine's process failures (an interface
 /// process crash is a crash). Called once at startup.
-#[allow(dead_code)] // wired by evidence/browser-T-286-b-lib.rs.patch
 pub fn watch_app_failures(w: &tauri::WebviewWindow, dir: PathBuf) {
     #[cfg(windows)]
     let _ = w.with_webview(move |pw| imp::watch_failures(super::crash::Source::App, &pw.controller(), dir));

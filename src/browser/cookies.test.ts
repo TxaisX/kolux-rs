@@ -1,5 +1,26 @@
 import { expect, it } from "vitest";
-import { CHROME_STEPS, cookieReportText, GOOGLE_NOTE, IMPORT_SOURCES, pickerFor } from "./cookies";
+import { CHROME_STEPS, cookieReportText, dismissHint, GOOGLE_NOTE, HINT_KEY, hintDismissed, importHintText, IMPORT_SOURCES, pickerFor } from "./cookies";
+
+it("BROW-030: the hint names the supported sources until browsers are found, then shortens long lists", () => {
+  expect(importHintText(null)).toBe("Import logins from Google Chrome or a file");
+  expect(importHintText([])).toBe("Import logins from Google Chrome or a file");
+  expect(importHintText(["Microsoft Edge"])).toBe("Import logins from Microsoft Edge");
+  expect(importHintText(["Google Chrome", "Microsoft Edge"])).toBe("Import logins from Google Chrome, Microsoft Edge");
+  expect(importHintText(["Google Chrome", "Microsoft Edge", "Brave", "Firefox"])).toBe("Import logins from Google Chrome, Microsoft Edge +2");
+});
+
+it("BROW-030: dismissing hides the hint for good; storage that refuses never breaks the pane", () => {
+  const kept = new Map<string, string>();
+  const store = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v) };
+  expect(hintDismissed(store)).toBe(false); // fresh install: visible
+  dismissHint(store);
+  expect(kept.get(HINT_KEY)).toBe("1");
+  expect(hintDismissed(store)).toBe(true); // a restart reads the same store
+  const broken = { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); } };
+  expect(hintDismissed(broken)).toBe(false);
+  expect(() => dismissHint(broken)).not.toThrow();
+  expect(hintDismissed(undefined)).toBe(false);
+});
 
 it("BROW-029: the toast gives Google advice only when Google rows really were left out", () => {
   const none = cookieReportText({ imported: 12, sites: 3, skipped: 0, google: 0, reasons: [] });

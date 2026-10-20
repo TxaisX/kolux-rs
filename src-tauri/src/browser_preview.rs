@@ -266,7 +266,6 @@ pub fn browser_preview_of(url: String) -> Option<Value> {
 /// T-159 (BROW-040): the user allows the folder of the preview the tab is on (`url`), from the
 /// chip's Allow folder button; the pane reloads the page afterwards.
 #[tauri::command]
-#[allow(dead_code)] // registered by evidence/browser-T-159-lib.rs.patch
 pub fn browser_preview_grant(url: String) -> Result<(), String> {
     grant(&url)
 }

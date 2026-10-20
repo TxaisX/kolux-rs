@@ -42,3 +42,32 @@ export function pickerFor(source: CookieSource): { title: string; filters: { nam
   if (source === "chrome") return { title: "Choose the cookies.txt file exported from Chrome", filters: [{ name: "cookies.txt export", extensions: ["txt"] }] };
   return { title: "Import cookies from a file", filters: [{ name: "Cookie file (cookies.txt or JSON list)", extensions: ["txt", "json"] }] };
 }
+
+/** T-319-b (BROW-030): the toolbar hint offering to bring logins over. Before the app has looked for
+ *  installed browsers (or when it found none) it names the supported sources; a long list of found
+ *  browsers is shortened with a trailing count. */
+export function importHintText(found: readonly string[] | null): string {
+  if (!found?.length) return "Import logins from Google Chrome or a file";
+  const more = found.length > 2 ? ` +${found.length - 2}` : "";
+  return `Import logins from ${found.slice(0, 2).join(", ")}${more}`;
+}
+
+/** The hint is gone for good once dismissed or once cookies came in. Read synchronously on the
+ *  pane's first render, so it never flashes; without storage it simply shows again next start. */
+export const HINT_KEY = "kolux.browser.importHint.dismissed";
+type Store = Pick<Storage, "getItem" | "setItem">;
+const local = (): Store | undefined => (typeof localStorage === "undefined" ? undefined : localStorage);
+export function hintDismissed(store: Store | undefined = local()): boolean {
+  try {
+    return store?.getItem(HINT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+export function dismissHint(store: Store | undefined = local()): void {
+  try {
+    store?.setItem(HINT_KEY, "1");
+  } catch {
+    // storage refused: the hint shows again next start
+  }
+}

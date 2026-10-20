@@ -229,7 +229,6 @@ pub fn forget_tab(id: u32) {
 }
 
 /// The address bar's suggestions for typed text (BROW-004), strongest first.
-#[allow(dead_code)] // registered by evidence/browser-T-238-b-lib.rs.patch (a coordinator patch)
 #[tauri::command]
 pub fn browser_suggest(text: String) -> Vec<Suggestion> {
     history().lock().map(|h| rank(&h, &text, now())).unwrap_or_default()
