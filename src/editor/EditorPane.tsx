@@ -38,6 +38,7 @@ import { isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
 import { domPick, noteDraft, selections, type Note } from "./notes";
 import { contextText, richContext } from "./copyContext";
 import NoteRail from "./NoteRail";
+import RichToolbar from "./RichToolbar";
 import { railNotes } from "./rail";
 import { shortPath } from "./diffNotes";
 import { findSupport, openFind } from "./find";
@@ -652,6 +653,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
       {noteFind && shown === "rich" && (
         <FindBar pane={id} root={richRoot} open={noteFind} onClose={() => setNoteFind(null)} replace={readOnly ? undefined : (ranges, text) => rich.current && replaceInRich(rich.current.editor, ranges, text)} />
       )}
+      {md && shown === "rich" && !comparing && !readOnly && <RichToolbar get={() => rich.current} />}
       {railShown && <NoteRail host={richHost} notes={railed} version={noteText} onRemove={onRemoveNote} />}
       {tocShown && <Contents md={noteText} path={path} root={richRoot} onClose={() => setToc(false)} />}
       {comparing && <CompareView path={path} text={textOf(path) ?? ""} read={readDisk} onReload={reload} onKeep={keepMine} onClose={() => setComparing(false)} />}

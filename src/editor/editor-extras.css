@@ -79,3 +79,10 @@
 /* EDIT-035 (T-236-b): the explorer's name filter */
 .explorer .ex-filter { flex: none; display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line-subtle); }
 .explorer .ex-filter .field { flex: 1; min-width: 0; font-size: 12px; padding: 3px 7px; }
+/* EDIT-057 (T-237-b): the rich view's formatting toolbar */
+.pane.editor .rich-bar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 3px 8px; border-bottom: 1px solid var(--line-subtle); background: var(--bg-raised, var(--bg)); }
+.pane.editor .rich-bar .ib { min-width: 26px; height: 24px; font-size: 12px; }
+.pane.editor .rich-bar .rich-bold { font-weight: 700; }
+.pane.editor .rich-bar .rich-italic { font-style: italic; }
+.pane.editor .rich-bar .rich-strike { text-decoration: line-through; }
+.pane.editor .rich-bar .rich-more { height: 24px; font-size: 12px; background: transparent; color: var(--fg); border: 1px solid var(--line-subtle); border-radius: 4px; }

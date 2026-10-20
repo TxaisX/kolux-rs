@@ -1,0 +1,50 @@
+diff --git a/src/settings/GeneralPage.tsx b/src/settings/GeneralPage.tsx
+--- a/src/settings/GeneralPage.tsx
++++ b/src/settings/GeneralPage.tsx
+@@ -11,6 +11,7 @@ import { OUTBOUND } from "./privacy";
+ import { requestFeedback } from "../feedback/FeedbackDialog";
+ import { DELAY, prefPatch, readEditorPrefs, type DiffView } from "./editorPrefs";
+ import { addApp, addCustom, draftReady, moveApp, OPEN_IN_FIELD, presetsLeft, readOpenIn, removeApp, type OpenInApp } from "./openIn";
++import { editApp } from "../editor/openInEdit";
+ import { applyDraft, PROXY_FIELD, readProxyRest, type ProxyDraft } from "./proxy";
+ 
+ /** A row of buttons that behaves as one radio group. */
+@@ -170,6 +171,7 @@ function EditorCard({ settings, onSave }: { settings: Record<string, unknown>; o
+ function OpenInCard({ settings, onSave }: { settings: Record<string, unknown>; onSave: (patch: Record<string, unknown>) => void }) {
+   const list = readOpenIn(settings);
+   const [draft, setDraft] = useState({ name: "", command: "" });
++  const [editing, setEditing] = useState<string | null>(null); // the row being edited in the fields below
+   const put = (next: OpenInApp[]) => onSave({ [OPEN_IN_FIELD]: next });
+   const left = presetsLeft(list);
+   return (
+@@ -186,6 +188,9 @@ function OpenInCard({ settings, onSave }: { settings: Record<string, unknown>; o
+             <button type="button" className="btn" aria-label={`Move ${a.name} down`} disabled={i === list.length - 1} onClick={() => put(moveApp(list, a.id, 1))}>
+               Down
+             </button>
++            <button type="button" className="btn" aria-label={`Edit ${a.name}`} onClick={() => (setEditing(a.id), setDraft({ name: a.name, command: a.command }))}>
++              Edit
++            </button>
+             <button type="button" className="btn" aria-label={`Remove ${a.name}`} onClick={() => put(removeApp(list, a.id))}>
+               Remove
+             </button>
+@@ -213,12 +218,18 @@ function OpenInCard({ settings, onSave }: { settings: Record<string, unknown>; o
+           className="btn"
+           disabled={!draftReady(draft)}
+           onClick={() => {
+-            put(addCustom(list, draft));
++            put(editing ? editApp(list, editing, draft) : addCustom(list, draft));
++            setEditing(null);
+             setDraft({ name: "", command: "" });
+           }}
+         >
+-          Add custom app
++          {editing ? "Save changes" : "Add custom app"}
+         </button>
++        {editing && (
++          <button type="button" className="btn" onClick={() => (setEditing(null), setDraft({ name: "", command: "" }))}>
++            Cancel
++          </button>
++        )}
+       </div>
+     </section>
+   );
