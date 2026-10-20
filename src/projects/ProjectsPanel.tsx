@@ -16,7 +16,7 @@
 // ponytail: which rows are folded lasts until the window closes; nothing saves it.
 // T-022: rows carry the strongest live agent state and an unread mark (PROJ-063), the list can be
 // grouped by project, status or pull request and sorted Smart or by name (PROJ-045, PROJ-050).
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import CacheTimer from "./CacheTimer";
 import { blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
 import { invoke } from "@tauri-apps/api/core";
@@ -59,6 +59,8 @@ import ImportSetup, { refusedLine, type SetupImport } from "./ImportSetup";
 import { issueCommand } from "../setup/IssueCommand";
 import { trustedSetup } from "../setup/TrustPrompt";
 import { NO_GROUPS, groupChoices, groupTree, keepNewer, type Group, type Groups, type Node } from "./groups";
+import { HEADER_ORDER_SETTING, MANUAL_ORDER_SETTING, dragStart, dropBefore, dropOutcome, edgeScroll, idsFrom, manualOrder, moveHeader, moveRows, siblingIds } from "./order";
+import { CLEAR_FILTERS, FILTER_DEFAULT_SETTING, FILTER_PROJECTS_SETTING, filtersFrom, filtersOn, rowShown, toggleProject } from "./filter";
 
 /** The pages that open over the content column from the sidebar footer. */
 export type Page = "automations" | "routing" | "tasks";
@@ -1252,7 +1254,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   type Entry = { p: Project; w: Worktree };
   const seenAt = (path: string) => activity[pathKey(path)] ?? 0;
   const order = (xs: Entry[]) =>
-    sortBy === "smart" ? smartOrder(xs, (x) => infoOf(x.w)) : sortBy === "activity" ? recentOrder(orderWorktrees(xs.map((x) => x.w)).map((w) => xs.find((x) => x.w === w) as Entry), (x) => seenAt(x.w.path)) : orderWorktrees(xs.map((x) => x.w)).map((w) => xs.find((x) => x.w === w) as Entry);
+    sortBy === "manual" ? manualOrder(orderWorktrees(xs.map((x) => x.w)).map((w) => xs.find((x) => x.w === w) as Entry), (x) => pathKey(x.w.path), idsFrom(settings[MANUAL_ORDER_SETTING])) : sortBy === "smart" ? smartOrder(xs, (x) => infoOf(x.w)) : sortBy === "activity" ? recentOrder(orderWorktrees(xs.map((x) => x.w)).map((w) => xs.find((x) => x.w === w) as Entry), (x) => seenAt(x.w.path)) : orderWorktrees(xs.map((x) => x.w)).map((w) => xs.find((x) => x.w === w) as Entry);
   // PROJ-051: under Recent the projects follow their latest workspace too, so a new one is first.
   const projectOrder = sortBy === "activity" ? recentOrder(projects, (p) => Math.max(seenAt(p.path), ...(worktrees[p.id] ?? []).map((w) => seenAt(w.path)))) : projects;
   // PROJ-046: pinned rows (and the workspaces made from them) sit in a section at the top, and
@@ -1267,7 +1269,10 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const asleep: string[] = Array.isArray(settings[SLEEP_SETTING]) ? (settings[SLEEP_SETTING] as unknown[]).filter((x): x is string => typeof x === "string") : [];
   const isAsleep = (w: Worktree) => !w.isMain && asleep.includes(pathKey(w.path));
   const showSleeping = showSleepingFrom(settings[SHOW_SLEEPING_SETTING]);
-  const hidden = (w: Worktree) => !showSleeping && isAsleep(w);
+  const filters = filtersFrom(settings);
+  const projectOf = (w: Worktree) => projects.find((p) => (worktrees[p.id] ?? []).some((x) => x.path === w.path))?.id ?? "";
+  // PROJ-052: hide-sleeping (the show-sleeping switch), the default-branch row and the project filter.
+  const hidden = (w: Worktree) => !rowShown(filters, { projectId: projectOf(w), isMain: w.isMain, branch: w.branch, asleep: asleep.includes(pathKey(w.path)) });
   const inList = (w: Worktree) => elsewhere(w) && !hidden(w); // the lane's listed(), renamed: main's listed is the worktree state
   function sleep(w: Worktree) {
     const next = asleepAfter(asleep, everyEntry.map((x) => x.w).filter((x) => !x.isMain), w.path, true);
@@ -1295,6 +1300,72 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       say("error", `${worktreeLabel(w)} was not renamed: ${String(err)}`);
     }
   }
+  // PROJ-016: a project or group header dragged among its siblings; the order is saved as a setting.
+  const dragged = useRef<{ kind: "header" | "row"; id: string } | null>(null);
+  const headerTree = groupBy === "project" ? groupTree(groups, projectOrder.filter((p) => filters.projects.length === 0 || filters.projects.includes(p.id)), sortBy === "activity" ? undefined : idsFrom(settings[HEADER_ORDER_SETTING])) : [];
+  const headerDrag = (id: string) => ({
+    draggable: true,
+    onDragStart: (e: DragEvent) => {
+      e.stopPropagation();
+      dragged.current = { kind: "header", id };
+      e.dataTransfer.effectAllowed = "move";
+    },
+    onDragOver: (e: DragEvent) => {
+      const d = dragged.current;
+      if (d?.kind !== "header") return;
+      const sibs = siblingIds(headerTree, d.id);
+      if (sibs && sibs.includes(id) && id !== d.id) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    },
+    onDrop: (e: DragEvent) => {
+      const d = dragged.current;
+      dragged.current = null;
+      if (d?.kind !== "header") return;
+      e.preventDefault();
+      e.stopPropagation();
+      const sibs = siblingIds(headerTree, d.id);
+      const r = e.currentTarget.getBoundingClientRect();
+      const before = sibs ? dropBefore(sibs, d.id, id, e.clientY < r.top + r.height / 2) : undefined;
+      if (sibs && before !== undefined) onSetting(HEADER_ORDER_SETTING, moveHeader(idsFrom(settings[HEADER_ORDER_SETTING]), sibs, d.id, before));
+    },
+    onDragEnd: () => {
+      dragged.current = null;
+    },
+  });
+  // PROJ-049: a workspace row dragged to a new place; the first drag keeps the order on screen as the Manual order.
+  const rowDrag = (w: Worktree) => ({
+    draggable: true,
+    onDragStart: (e: DragEvent) => {
+      dragged.current = { kind: "row", id: pathKey(w.path) };
+      e.dataTransfer.effectAllowed = "move";
+    },
+    onDragOver: (e: DragEvent) => {
+      if (dragged.current?.kind === "row") e.preventDefault();
+    },
+    onDrop: (e: DragEvent) => {
+      const d = dragged.current;
+      dragged.current = null;
+      if (d?.kind !== "row") return;
+      e.preventDefault();
+      const rowEl = e.currentTarget.closest("[data-path]") as HTMLElement | null;
+      const list = e.currentTarget.closest(".sb-list");
+      if (!list) return;
+      const keys = [...new Set([...list.querySelectorAll("[data-path]")].map((n) => pathKey((n as HTMLElement).dataset.path ?? "")))];
+      const lane = (n: Element | null) => n?.closest("[data-group]")?.getAttribute("data-group") ?? "";
+      const fromEl = [...list.querySelectorAll("[data-path]")].find((n) => pathKey((n as HTMLElement).dataset.path ?? "") === d.id) ?? null;
+      if (dropOutcome(groupBy, sortBy, lane(fromEl), lane(rowEl)) === "status") return; // a status lane drop changes the status only (see kolux-rs-after.md)
+      const r = e.currentTarget.getBoundingClientRect();
+      const before = dropBefore(keys, d.id, pathKey(w.path), e.clientY < r.top + r.height / 2);
+      if (before === undefined) return;
+      onSetting(MANUAL_ORDER_SETTING, moveRows(dragStart(sortBy, idsFrom(settings[MANUAL_ORDER_SETTING]), keys), [d.id], before));
+      if (sortBy !== "manual") onSetting(SORT_SETTING, "manual");
+    },
+    onDragEnd: () => {
+      dragged.current = null;
+    },
+  });
   const togglePin = (w: Worktree) => onSetting(PIN_SETTING, isPinned(w) ? pins.filter((x) => pathKey(x) !== pathKey(w.path)) : [...pins, w.path]);
   const toggleFold = (title: string) => setFolded((f) => new Set(f.has(title) ? [...f].filter((t) => t !== title) : [...f, title]));
 
@@ -1311,7 +1382,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     const up = w.parent ? (worktrees[p.id] ?? []).find((x) => !x.isMain && same(x.path, w.parent as string)) : undefined;
     return (
       <div key={w.path} data-worktree={worktreeLabel(w)} data-depth={depth} data-path={w.path}>
-        <div className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onClick={() => show(w)} onKeyDown={(e) => (e.key === "Enter" ? show(w) : e.key === "F2" && startRename(w))} title={hoverTitle} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
+        <div {...rowDrag(w)} className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onClick={() => show(w)} onKeyDown={(e) => (e.key === "Enter" ? show(w) : e.key === "F2" && startRename(w))} title={hoverTitle} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
           {kids && (
             <button
               className={`fold${shut ? " shut" : ""}`}
@@ -1522,7 +1593,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       const opening = creating === p.id;
       return (
         <div key={p.id}>
-          <div className="proj" title={p.path}>
+          <div className="proj" title={p.path} {...headerDrag(p.id)}>
             <HeaderBadge colour={headerColourOf(settings, "p", p.id)} />
             <ProjectIcon value={icons[p.id]} name={p.name} />
             <span className="name">{p.name}</span>
@@ -1674,7 +1745,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
       projectBlock(n.project)
     ) : (
       <div key={n.group.id} className="proj-group" data-project-group={n.group.id}>
-        <div className="sb-group-row">
+        <div className="sb-group-row" {...headerDrag(n.group.id)}>
           <button className="sb-group" aria-expanded={!folded.has(n.group.id)} onClick={() => toggleFold(n.group.id)}>
             <HeaderBadge colour={headerColourOf(settings, "g", n.group.id)} />
             {n.group.name}
@@ -1759,7 +1830,14 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
           )}
         </div>
 
-        <div className="sb-list">
+        <div
+          className="sb-list"
+          onDragOver={(e) => {
+            if (dragged.current === null) return;
+            const r = e.currentTarget.getBoundingClientRect();
+            e.currentTarget.scrollTop += edgeScroll(e.clientY, r.top, r.bottom);
+          }}
+        >
           {showAdd && (
             <div className="sb-form">
               <label>Add project</label>
@@ -1823,6 +1901,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                 <option value="smart">Smart: what needs you first</option>
                 <option value="name">Name</option>
                 <option value="activity">Recent: latest activity first</option>
+                <option value="manual">Manual: drag rows into your own order</option>
               </select>
               <label className="check">
                 <input type="checkbox" checked={hideAuto} onChange={(e) => onSetting(HIDE_AUTOMATION_SETTING, e.target.checked)} /> Hide workspaces made by automations
@@ -1835,6 +1914,29 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                 <input type="checkbox" aria-label="show sleeping workspaces" checked={showSleeping} onChange={(e) => onSetting(SHOW_SLEEPING_SETTING, e.target.checked)} />
                 Show sleeping workspaces
               </label>
+              <label className="check">
+                <input type="checkbox" aria-label="hide the default-branch rows" checked={filters.hideDefault} onChange={(e) => onSetting(FILTER_DEFAULT_SETTING, e.target.checked)} />
+                Hide the default-branch row
+              </label>
+              {projects.length > 1 && (
+                <div data-filter-projects>
+                  <label>Show only these projects</label>
+                  {projects.map((p) => (
+                    <label className="check" key={p.id}>
+                      <input
+                        type="checkbox"
+                        aria-label={`show ${p.name}`}
+                        checked={filters.projects.length === 0 || filters.projects.includes(p.id)}
+                        onChange={() => onSetting(FILTER_PROJECTS_SETTING, toggleProject(filters, projects.map((x) => x.id), p.id))}
+                      />
+                      {p.name}
+                    </label>
+                  ))}
+                </div>
+              )}
+              <button className="btn" aria-label="clear filters" disabled={filtersOn(filters) === 0} onClick={() => CLEAR_FILTERS.forEach(([k, v]) => onSetting(k, v))}>
+                Clear filters{filtersOn(filters) > 0 ? ` (${filtersOn(filters)})` : ""}
+              </button>
               <CardDetailsChooser settings={settings} onSetting={onSetting} />
             </div>
           )}
@@ -1854,7 +1956,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                 nestRows(order(everyEntry.filter((x) => pinned.has(pathKey(x.w.path)) && !hidden(x.w))).map((x) => x.w), nest, shutKids, (ws) => ws).map((r) => row({ p: everyEntry.find((x) => x.w === r.w)?.p as Project, w: r.w }, r.depth, r.kids))}
             </div>
           )}
-          {groupBy === "project" && groupTree(groups, projectOrder).map(drawNode)}
+          {groupBy === "project" && headerTree.map(drawNode)}
 
           {/* PROJ-045: one list across projects, flat or under Status / Pull request headers that fold. */}
           {groupBy !== "project" && creating && nameField(projects.find((p) => p.id === creating) ?? null)}

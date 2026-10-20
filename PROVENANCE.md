@@ -833,3 +833,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · repo T-226 · spec/05 VIEW-071, VIEW-074, VIEW-078 as given in the brief; Windows netstat public docs (listening table columns); this tree's own scm and terminal modules; no outside code
 > 2026-10-19 · repo T-214-b · spec/01 PROJ-005, PROJ-008 as given in the brief; this tree's own projects.rs, setup.rs, bulk.rs; no outside code
 > 2026-10-19 · repo T-215-b · spec/01 PROJ-012, PROJ-013 as given in the brief; this tree's own groups.rs and projects.rs; no outside code
+> 2026-10-19 · repo T-216-b · spec/01 PROJ-016, PROJ-049, PROJ-052 as given in the brief; HTML drag-and-drop events (MDN public docs); this tree's own rows.ts, groups.ts; no outside code
