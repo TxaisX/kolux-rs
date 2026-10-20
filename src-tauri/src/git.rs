@@ -110,6 +110,80 @@ pub(crate) fn output(args: &[&str], cwd: Option<&Path>) -> Result<Vec<u8>, Strin
     }
 }
 
+/// PROJ-072: Git's complaint about a Windows path past its length limit.
+pub(crate) fn path_too_long(err: &str) -> bool {
+    let t = err.to_lowercase();
+    t.contains("filename too long") || t.contains("path too long") || t.contains("file name too long")
+}
+
+/// PROJ-072: the form of `p` that Windows accepts past 260 characters (`\?\` in front); unchanged elsewhere.
+pub(crate) fn long_path(p: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let s = p.to_string_lossy();
+        if p.is_absolute() && !s.starts_with(r"\\?\") {
+            return PathBuf::from(format!(r"\\?\{}", s.replace('/', r"\")));
+        }
+    }
+    p.to_path_buf()
+}
+
+/// PROJ-027: how long a worktree add may take before Kolux stops waiting. Cloud-synced folders
+/// can stall git for minutes; the default is 3 minutes. COMPAT: `KOLUX_WORKTREE_ADD_TIMEOUT_MS`
+/// (milliseconds) overrides it, clamped to 3 to 30 minutes; anything unreadable keeps the default.
+pub(crate) fn add_timeout(env: Option<&str>) -> std::time::Duration {
+    const MIN: u64 = 3 * 60_000;
+    const MAX: u64 = 30 * 60_000;
+    std::time::Duration::from_millis(env.and_then(|v| v.trim().parse::<u64>().ok()).map_or(MIN, |ms| ms.clamp(MIN, MAX)))
+}
+
+/// PROJ-027: the wait for reads that precede a removal or a listing (status, worktree list).
+pub(crate) const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// `run` with a deadline. On timeout the git process and its children are ended and the error
+/// names the wait and the usual cause (a folder a cloud service is syncing).
+pub(crate) fn run_within(args: &[&str], cwd: Option<&Path>, limit: std::time::Duration) -> Result<String, String> {
+    run_within_raw(args, cwd, limit).map(|s| s.trim().to_string())
+}
+
+/// run_within keeping leading spaces (status lines).
+fn run_within_raw(args: &[&str], cwd: Option<&Path>, limit: std::time::Duration) -> Result<String, String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = command(args, cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("could not run git: {e}"))?;
+    let drain = |mut r: Box<dyn Read + Send>| std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = r.read_to_end(&mut buf);
+        buf
+    });
+    let out = drain(Box::new(child.stdout.take().expect("piped")));
+    let err = drain(Box::new(child.stderr.take().expect("piped")));
+    let start = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if start.elapsed() >= limit => {
+                crate::procs::kill_tree(child.id());
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "Git did not finish in {} seconds, so Kolux stopped waiting. A folder that a cloud service (OneDrive, Dropbox, iCloud) is syncing is the usual cause: move the project or the workspaces folder outside it.",
+                    limit.as_secs()
+                ));
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(25)),
+            Err(e) => return Err(format!("could not wait for git: {e}")),
+        }
+    };
+    let (out, err) = (out.join().unwrap_or_default(), err.join().unwrap_or_default());
+    if status.success() {
+        Ok(String::from_utf8_lossy(&out).to_string())
+    } else {
+        let err = String::from_utf8_lossy(&err).trim().to_string();
+        Err(if err.is_empty() { format!("git {} failed ({status})", args.join(" ")) } else { err })
+    }
+}
+
 /// Runs git and returns its stdout, trimmed; a non-zero exit becomes an error carrying stderr.
 pub(crate) fn run(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
     run_untrimmed(args, cwd).map(|s| s.trim().to_string())
@@ -228,32 +302,60 @@ impl Git {
     }
 
     pub fn worktrees(&self, repo: &Path) -> Result<Vec<Worktree>, String> {
-        let text = run(&["worktree", "list", "--porcelain"], Some(repo))?;
+        let text = run_within(&["worktree", "list", "--porcelain"], Some(repo), READ_TIMEOUT)?;
         Ok(parse_worktrees(&text))
     }
 
     /// `git worktree add -b <branch> <dest> <base>`: a new branch in a folder of its own.
     pub fn worktree_add(&self, repo: &Path, dest: &Path, branch: &str, base: &str) -> Result<(), String> {
         let dest = dest.to_string_lossy();
-        run(&["worktree", "add", "-b", branch, &dest, base], Some(repo)).map(|_| ())
+        let limit = add_timeout(std::env::var("KOLUX_WORKTREE_ADD_TIMEOUT_MS").ok().as_deref());
+        run_within(&["worktree", "add", "-b", branch, &dest, base], Some(repo), limit).map(|_| ())
     }
 
     /// Removes the worktree folder and then deletes its branch. The folder goes first; a branch
     /// that will not delete (never the case for `-D`) leaves a clear error rather than a half state.
     /// A branch another worktree still has checked out is kept: the result then carries the
     /// commit it points at, for `delete_branch_if_at` later.
+    ///
+    /// PROJ-072: a folder already gone while Git still lists it is cleaned up (Git's own record
+    /// for it goes, never anything else); a Windows path too long for Git is deleted locally and
+    /// its record dropped; a folder left behind after Git let go of it is deleted too. A
+    /// registration Git still reports afterwards is an error, never forced out from under it.
     pub fn worktree_remove(&self, repo: &Path, dest: &Path, branch: Option<&str>) -> Result<Option<String>, String> {
         let dest_s = dest.to_string_lossy();
-        // Windows may still hold the folder for a moment after a program in it was ended.
-        let mut attempt = 0;
-        loop {
-            match run(&["worktree", "remove", "--force", &dest_s], Some(repo)) {
-                Ok(_) => break,
-                Err(e) if attempt < 5 && e.contains("Permission denied") => {
-                    attempt += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(250));
+        if !dest.exists() {
+            let _ = crate::projects::forget_record(repo, &dest_s);
+        } else {
+            // Windows may still hold the folder for a moment after a program in it was ended.
+            let mut attempt = 0;
+            loop {
+                match run(&["worktree", "remove", "--force", &dest_s], Some(repo)) {
+                    Ok(_) => break,
+                    Err(e) if attempt < 5 && e.contains("Permission denied") => {
+                        attempt += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                    }
+                    Err(e) if path_too_long(&e) => {
+                        std::fs::remove_dir_all(long_path(dest)).map_err(|err| format!("{e}; deleting the folder directly failed too: {err}"))?;
+                        let _ = crate::projects::forget_record(repo, &dest_s);
+                        break;
+                    }
+                    Err(e) => return Err(e),
                 }
-                Err(e) => return Err(e),
+            }
+        }
+        let key = crate::projects::name_key(&dest_s);
+        if self.worktrees(repo)?.iter().any(|w| crate::projects::name_key(&w.path) == key) {
+            return Err(format!("Git still lists {} as a workspace, so Kolux left its record alone", dest.display()));
+        }
+        if dest.exists() {
+            // What Kolux made and Git let go of: leftovers (files a program held open) go too.
+            for _ in 0..4 {
+                if std::fs::remove_dir_all(long_path(dest)).is_ok() || !dest.exists() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250));
             }
         }
         if dest.exists() {
@@ -289,13 +391,13 @@ impl Git {
 
     /// PROJ-070: the checkout's uncommitted and untracked changes, one `git status --porcelain` line each.
     pub fn status_lines(&self, worktree: &Path) -> Result<Vec<String>, String> {
-        run_untrimmed(&["status", "--porcelain"], Some(worktree)).map(|s| s.lines().filter(|l| !l.is_empty()).map(str::to_string).collect())
+        run_within_raw(&["status", "--porcelain"], Some(worktree), READ_TIMEOUT).map(|s| s.lines().filter(|l| !l.is_empty()).map(str::to_string).collect())
     }
 
     /// Does the checkout hold changes Git does not have yet (modified or untracked files, and
     /// work inside a submodule)?
     pub fn dirty(&self, worktree: &Path) -> Result<bool, String> {
-        run(&["status", "--porcelain", "--ignore-submodules=none"], Some(worktree)).map(|s| !s.is_empty())
+        run_within(&["status", "--porcelain", "--ignore-submodules=none"], Some(worktree), READ_TIMEOUT).map(|s| !s.is_empty())
     }
 
     /// Could `rev` be a ref spelling at all? Anything git might read as an option or a range is
@@ -632,6 +734,31 @@ mod tests {
         run(&["add", "."], Some(&dir)).unwrap();
         run(&["commit", "-q", "-m", "first"], Some(&dir)).unwrap();
         dir
+    }
+
+    #[test]
+    fn proj027_the_add_wait_defaults_to_three_minutes_and_the_override_is_clamped() {
+        let min = std::time::Duration::from_secs(180);
+        assert_eq!(add_timeout(None), min);
+        assert_eq!(add_timeout(Some("nonsense")), min);
+        assert_eq!(add_timeout(Some("1000")), min, "below the floor");
+        assert_eq!(add_timeout(Some("600000")), std::time::Duration::from_secs(600));
+        assert_eq!(add_timeout(Some(" 600000 ")), std::time::Duration::from_secs(600));
+        assert_eq!(add_timeout(Some("99999999")), std::time::Duration::from_secs(1800), "above the ceiling");
+    }
+
+    #[test]
+    fn proj027_a_git_that_stalls_is_stopped_with_a_message_naming_the_wait_and_the_cause() {
+        ISOLATED.with(|i| i.set(true));
+        let dir = temp_repo("proj027-stall");
+        let started = std::time::Instant::now();
+        let err = run_within(&["-c", "alias.stall=!sleep 20", "stall"], Some(&dir), std::time::Duration::from_millis(400)).unwrap_err();
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "stopped at the limit, not at the end of the stall");
+        assert!(err.contains("did not finish") && err.contains("cloud service"), "{err}");
+        // A quick git still answers, with output trimmed; a failing one carries its stderr.
+        assert_eq!(run_within(&["rev-parse", "--abbrev-ref", "HEAD"], Some(&dir), std::time::Duration::from_secs(30)).unwrap(), "main");
+        assert!(run_within(&["rev-parse", "--verify", "nope"], Some(&dir), std::time::Duration::from_secs(30)).is_err());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -300,3 +300,10 @@ export function stoppedNote(name: string, err: string | null): { kind: "ok" | "w
   const rest = err.slice(lead.length);
   return rest ? { kind: "warn", text: `Stopped creating ${name}${rest}` } : { kind: "ok", text: `Stopped creating ${name}; nothing was left behind.` };
 }
+
+/** PROJ-031: a failed create arrives as Kolux's words, then "\nGit said: " and Git's full output;
+ * the page shows the first part and keeps the second behind a details control. */
+export function splitGitSaid(text: string): { summary: string; git: string | null } {
+  const at = text.indexOf("\nGit said: ");
+  return at < 0 ? { summary: text, git: null } : { summary: text.slice(0, at), git: text.slice(at + "\nGit said: ".length) };
+}

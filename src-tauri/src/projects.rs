@@ -774,6 +774,51 @@ fn clear_failed_add(repo: &Path, dest: &Path, made: Option<&str>) {
     }
 }
 
+/// PROJ-031: what kind of problem a failed create was, so the message can say what to do.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CreateKind {
+    Stalled,
+    MissingBase,
+    NameInUse,
+    Permissions,
+    GitFailure,
+}
+
+pub fn create_kind(raw: &str) -> CreateKind {
+    let t = raw.to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| t.contains(w));
+    if has(&["did not finish in"]) {
+        CreateKind::Stalled
+    } else if has(&["invalid reference", "not a valid object name", "unknown revision", "not a commit", "not a valid ref"]) {
+        CreateKind::MissingBase
+    } else if has(&["already exists", "already checked out", "already used by worktree", "is already registered"]) {
+        CreateKind::NameInUse
+    } else if has(&["permission denied", "access is denied", "operation not permitted", "read-only file system"]) {
+        CreateKind::Permissions
+    } else {
+        CreateKind::GitFailure
+    }
+}
+
+/// Separator the page splits on to show Git's own words in a details block.
+pub const GIT_SAID: &str = "\nGit said: ";
+
+/// PROJ-031: the failed create in Kolux's words (what kind of problem, what to do), followed by
+/// Git's full output after `GIT_SAID`. A cancelled create passes through unchanged.
+pub fn explain_create_error(raw: String) -> String {
+    if raw.starts_with(OVERTAKEN) {
+        return raw;
+    }
+    let (summary, next) = match create_kind(&raw) {
+        CreateKind::Stalled => return raw, // already in Kolux's words
+        CreateKind::MissingBase => ("The workspace could not start: the commit or branch it was to start from is missing.", "Pick another start point, or fetch the project and try again."),
+        CreateKind::NameInUse => ("The workspace could not be made: that name or branch is already in use.", "Choose a different name, or open the existing branch from the New workspace menu."),
+        CreateKind::Permissions => ("The workspace could not be made: Windows refused access to the folder.", "Check the workspaces folder is writable and that no program has it open, then try again."),
+        CreateKind::GitFailure => ("Git could not create the workspace.", "Try again; if it keeps failing, the details below say why."),
+    };
+    format!("{summary} {next}{GIT_SAID}{raw}")
+}
+
 /// `add` (a `git worktree add` into `dest`, creating branch `made` if any) under the retry
 /// policy: each failed try is cleared away first, and a cancel stops the waiting.
 pub fn add_retrying(repo: &Path, dest: &Path, made: Option<&str>, overtaken: &dyn Fn() -> bool, add: impl Fn() -> Result<(), String>) -> Result<(), String> {
@@ -806,7 +851,7 @@ pub fn create_workspace_until(git: &Git, place: &Place, project: &Project, typed
     if overtaken() {
         return Err(OVERTAKEN.to_string());
     }
-    let (from, note) = resolve_base(git, repo, project, start)?;
+    let (from, note) = resolve_base(git, repo, project, start).map_err(|e| format!("The workspace could not start: {e}."))?;
     let refreshed = refresh_base(git, repo, &from, place.refresh);
     // PROJ-021: a name taken by a branch (local or on a remote) or a folder gets a number.
     let (safe, dest) = (1..)
@@ -821,7 +866,7 @@ pub fn create_workspace_until(git: &Git, place: &Place, project: &Project, typed
         std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
     let new_branch = format!("{}{safe}", place.prefix);
-    add_retrying(repo, &dest, Some(&new_branch), overtaken, || git.worktree_add(repo, &dest, &new_branch, &from))?;
+    add_retrying(repo, &dest, Some(&new_branch), overtaken, || git.worktree_add(repo, &dest, &new_branch, &from)).map_err(explain_create_error)?;
     let mut warnings: Vec<String> = place.prefix_warning.iter().cloned().chain(refreshed).collect();
     warnings.extend(crate::include::bring_along(repo, &dest));
     if overtaken() {
@@ -1052,7 +1097,7 @@ pub fn remove_worktree(git: &Git, project: &Project, worktree_path: &str, force:
     if target.is_main {
         return Err("the main checkout cannot be removed; remove the project instead".to_string());
     }
-    if !force && git.dirty(Path::new(&target.path))? {
+    if !force && Path::new(&target.path).exists() && git.dirty(Path::new(&target.path))? {
         return Err(format!("{} has uncommitted changes", target.branch.as_deref().unwrap_or(worktree_path)));
     }
     crate::include::unlink_shared(repo, Path::new(&target.path));
@@ -1088,7 +1133,8 @@ pub fn open_branch_workspace_until(git: &Git, place: &Place, project: &Project, 
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
-    add_retrying(repo, &dest, None, overtaken, || crate::git::run(&["worktree", "add", &dest.to_string_lossy(), branch], Some(repo)).map(drop))?;
+    let limit = crate::git::add_timeout(std::env::var("KOLUX_WORKTREE_ADD_TIMEOUT_MS").ok().as_deref());
+    add_retrying(repo, &dest, None, overtaken, || crate::git::run_within(&["worktree", "add", &dest.to_string_lossy(), branch], Some(repo), limit).map(drop)).map_err(explain_create_error)?;
     let warnings = crate::include::bring_along(repo, &dest);
     if overtaken() {
         return Err(undo_create(git, repo, &dest, None));
@@ -1241,6 +1287,8 @@ pub struct RemoveCheck {
     pub nested: Vec<String>,
     /// What the workspace looked like when asked; a delete carrying another stamp is refused.
     pub stamp: String,
+    /// PROJ-072: the folder is already gone while Git still lists it; deleting only tidies the record.
+    pub missing: bool,
 }
 
 pub fn remove_check(git: &Git, project: &Project, worktree_path: &str) -> Result<RemoveCheck, String> {
@@ -1249,12 +1297,14 @@ pub fn remove_check(git: &Git, project: &Project, worktree_path: &str) -> Result
     if target.is_main {
         return Err("the main checkout cannot be removed; remove the project instead".to_string());
     }
-    let changes = git.status_lines(Path::new(&target.path))?;
+    // PROJ-072: a folder that is already gone has no changes to lose; deleting it is cleanup.
+    let missing = !Path::new(&target.path).exists();
+    let changes = if missing { Vec::new() } else { git.status_lines(Path::new(&target.path))? };
     let here = Path::new(&target.path);
     // ponytail: only this repository's worktrees count as nested; other projects' folders inside it are not looked for.
     let nested = all.iter().filter(|w| Path::new(&w.path).ancestors().skip(1).any(|a| same_folder(a, here))).map(|w| w.path.clone()).collect();
     let stamp = format!("{}|{}", target.head, changes.join("|"));
-    Ok(RemoveCheck { changes, locked: target.locked.clone(), nested, stamp })
+    Ok(RemoveCheck { changes, locked: target.locked.clone(), nested, stamp, missing })
 }
 
 /// Why a delete must not go ahead (PROJ-070), or `None` when it may: the workspace changed
@@ -1702,7 +1752,7 @@ pub fn forget_gone(repo: &Path, all: &[Worktree], busy: &[String], on_forgotten:
 }
 
 /// The `<git common dir>/worktrees/<id>` entry whose `gitdir` points into `path`, removed.
-fn forget_record(repo: &Path, path: &str) -> Result<(), String> {
+pub(crate) fn forget_record(repo: &Path, path: &str) -> Result<(), String> {
     let common = crate::git::run(&["rev-parse", "--git-common-dir"], Some(repo))?;
     let admin = repo.join(common.trim()).join("worktrees");
     for entry in std::fs::read_dir(&admin).map_err(|e| e.to_string())?.flatten() {
@@ -2490,6 +2540,145 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         assert_eq!(create_workspace_until(&git, &place, &project, "again", None, &cancel_after_first).unwrap_err(), OVERTAKEN);
         assert!(!workspace_path(&place, &project, "again").exists());
         drop(store);
+        for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    /// A project with two made workspaces ("one", "two") for the PROJ-068 / PROJ-072 tests.
+    fn project_with_workspaces(tag: &str) -> (Git, Store, Project, PathBuf, Vec<PathBuf>, Place) {
+        let git = Git::detect().unwrap();
+        let profile = temp(tag);
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo(&format!("{tag}-r"));
+        let root = temp(&format!("{tag}-root"));
+        let project = add_project(&git, &store, &repo).unwrap();
+        let place = nested(&root);
+        for n in ["one", "two"] {
+            let made = create_workspace(&git, &place, &project, n, None).unwrap();
+            set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app" }))).unwrap();
+        }
+        (git, store, project, repo, vec![profile, root], place)
+    }
+
+    #[test]
+    fn proj072_a_folder_deleted_by_hand_is_cleaned_up_without_an_error() {
+        let (git, _store, project, repo, junk, place) = project_with_workspaces("gone072");
+        let dest = workspace_path(&place, &project, "one");
+        fs::remove_dir_all(&dest).unwrap();
+        assert!(git.worktrees(&repo).unwrap().iter().any(|w| name_key(&w.path) == name_key(&dest.to_string_lossy())), "Git still tracks it");
+        let check = remove_check(&git, &project, &dest.to_string_lossy()).unwrap();
+        assert!(check.missing && check.changes.is_empty(), "{check:?}");
+        assert_eq!(removal_refused(&check, false, &check.stamp), None);
+        remove_worktree(&git, &project, &dest.to_string_lossy(), false, false).unwrap();
+        let left: Vec<String> = git.worktrees(&repo).unwrap().iter().map(|w| name_key(&w.path)).collect();
+        assert!(!left.iter().any(|p| p.ends_with("one")) && left.iter().any(|p| p.ends_with("two")), "{left:?}");
+        assert!(!git.branch_taken(&repo, "one"), "its branch went with it");
+        for d in junk.into_iter().chain([repo]) {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj072_a_registration_git_still_reports_is_never_removed_underneath_it() {
+        let (git, _store, project, repo, junk, place) = project_with_workspaces("locked072");
+        let dest = workspace_path(&place, &project, "two");
+        git_in(&repo, &["worktree", "lock", "--reason", "on a stick", &dest.to_string_lossy()]);
+        fs::remove_dir_all(&dest).unwrap();
+        let err = remove_worktree(&git, &project, &dest.to_string_lossy(), true, false).unwrap_err();
+        assert!(err.contains("still lists"), "{err}");
+        assert!(git.worktrees(&repo).unwrap().iter().any(|w| name_key(&w.path) == name_key(&dest.to_string_lossy())), "the record is untouched");
+        for d in junk.into_iter().chain([repo]) {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj072_a_too_long_path_failure_is_recognised_and_gits_other_failures_are_not() {
+        for e in ["error: unable to delete 'x': Filename too long", "fatal: cannot remove: Path too long", "File name too long"] {
+            assert!(crate::git::path_too_long(e), "{e}");
+        }
+        assert!(!crate::git::path_too_long("fatal: validation failed, cannot remove working tree: contains modified files"));
+        assert_eq!(crate::git::long_path(Path::new("relative/x")), PathBuf::from("relative/x"));
+        #[cfg(windows)]
+        assert!(crate::git::long_path(Path::new("C:/a/b")).to_string_lossy().starts_with(r"\\?\C:"));
+    }
+
+    #[test]
+    fn proj072_a_leftover_folder_after_git_let_go_is_cleaned_up() {
+        let (git, _store, project, repo, junk, place) = project_with_workspaces("left072");
+        let dest = workspace_path(&place, &project, "one");
+        // Locked files cannot be faked portably; a read-only-free stand-in: an ignored deep tree Git itself removes.
+        fs::create_dir_all(dest.join("a/b/c")).unwrap();
+        fs::write(dest.join("a/b/c/f.txt"), "x").unwrap();
+        fs::write(dest.join("stray.log"), "x").unwrap();
+        remove_worktree(&git, &project, &dest.to_string_lossy(), true, false).unwrap();
+        assert!(!dest.exists());
+        for d in junk.into_iter().chain([repo]) {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj068_refreshing_twice_changes_no_row_and_names_and_parents_stay_with_their_workspace() {
+        let (git, store, project, repo, junk, place) = project_with_workspaces("rows068");
+        let (one, two) = (workspace_path(&place, &project, "one").to_string_lossy().into_owned(), workspace_path(&place, &project, "two").to_string_lossy().into_owned());
+        set_name(&store, &one, Some("Alpha")).unwrap();
+        set_parent(&store, &two, Some(&one)).unwrap();
+        let first = list_workspaces(&git, &store, &project).unwrap();
+        let second = list_workspaces(&git, &store, &project).unwrap();
+        assert_eq!(first, second, "nothing changed, so nothing moved");
+        let find = |all: &[Worktree], p: &str| all.iter().find(|w| name_key(&w.path) == name_key(p)).cloned().unwrap();
+        assert_eq!(find(&second, &one).name.as_deref(), Some("Alpha"));
+        assert_eq!(find(&second, &two).parent.as_deref().map(name_key), Some(name_key(&one)));
+        // A name change on one workspace leaves the other's record and the order alone.
+        set_name(&store, &one, Some("Beta")).unwrap();
+        let third = list_workspaces(&git, &store, &project).unwrap();
+        let order = |all: &[Worktree]| all.iter().map(|w| name_key(&w.path)).collect::<Vec<_>>();
+        assert_eq!(order(&second), order(&third));
+        assert_eq!(find(&third, &two).parent.as_deref().map(name_key), Some(name_key(&one)));
+        for d in junk.into_iter().chain([repo]) {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj031_a_failed_create_says_what_kind_of_problem_it_was_and_keeps_gits_words() {
+        let said = |raw: &str| explain_create_error(raw.to_string());
+        for (raw, kind, word) in [
+            ("fatal: invalid reference: origin/gone", CreateKind::MissingBase, "missing"),
+            ("fatal: not a valid object name: 'x'", CreateKind::MissingBase, "missing"),
+            ("fatal: a branch named 'x' already exists", CreateKind::NameInUse, "already in use"),
+            ("fatal: 'x' is already checked out at 'C:/r'", CreateKind::NameInUse, "already in use"),
+            ("error: unable to create file: Permission denied", CreateKind::Permissions, "refused access"),
+            ("fatal: something odd", CreateKind::GitFailure, "Git could not"),
+        ] {
+            assert_eq!(create_kind(raw), kind, "{raw}");
+            let out = said(raw);
+            assert!(out.contains(word), "{out}");
+            assert!(out.ends_with(&format!("{GIT_SAID}{raw}")), "Git's full output rides along: {out}");
+        }
+        assert_eq!(said(OVERTAKEN), OVERTAKEN, "a cancel is not rewritten");
+        let stalled = "Git did not finish in 180 seconds, so Kolux stopped waiting.";
+        assert_eq!(said(stalled), stalled);
+    }
+
+    #[test]
+    fn proj031_opening_a_branch_that_is_already_checked_out_names_the_problem() {
+        let git = Git::detect().unwrap();
+        let profile = temp("explain");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("explain-r");
+        let root = temp("explain-root");
+        let project = add_project(&git, &store, &repo).unwrap();
+        let place = nested(&root);
+        git_in(&repo, &["branch", "kept"]);
+        open_branch_workspace_until(&git, &place, &project, "kept", None, &|| false).unwrap();
+        let err = open_branch_workspace_until(&git, &place, &project, "kept", Some("again"), &|| false).unwrap_err();
+        assert!(err.starts_with("The workspace could not be made: that name or branch is already in use."), "{err}");
+        assert!(err.contains(GIT_SAID), "{err}");
+        let err = create_workspace_until(&git, &place, &project, "x", Some("no-such-ref"), &|| false).unwrap_err();
+        assert!(err.starts_with("The workspace could not start: no-such-ref is not a branch"), "{err}");
         for d in [profile, repo, root] {
             let _ = fs::remove_dir_all(d);
         }
