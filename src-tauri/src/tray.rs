@@ -50,8 +50,29 @@ pub struct Dot {
     hidden: bool,
 }
 
+/// STAT-047: the icon file the tray shows; a development copy keeps its DEV marker when the
+/// attention version is swapped in.
+pub fn icon(dev: bool, dot: bool) -> &'static str {
+    match (dev, dot) {
+        (false, false) => "tray.png",
+        (false, true) => "tray-dot.png",
+        (true, false) => "tray-dev.png",
+        (true, true) => "tray-dev-dot.png",
+    }
+}
+
+/// STAT-047: closing the window hides it to the tray only when the user turned that on; the saved
+/// choice carries over, the default is off.
+pub fn close_to_tray(saved: Option<bool>) -> bool {
+    saved == Some(true)
+}
+
 impl Dot {
     pub fn window_hidden(&mut self) {
+        self.hidden = true;
+    }
+    /// STAT-047: a minimised window is out of sight like a hidden one.
+    pub fn window_minimised(&mut self) {
         self.hidden = true;
     }
     pub fn window_shown(&mut self) {
@@ -104,5 +125,24 @@ mod tests {
         assert!(!d.on);
         d.window_hidden();
         assert!(d.ping(Ping::Bell));
+    }
+
+    #[test]
+    fn stat047_a_minimised_window_takes_the_dot_and_restoring_clears_it() {
+        let mut d = Dot::default();
+        d.window_minimised();
+        assert!(d.ping(Ping::AgentFinished) && d.on);
+        d.window_shown();
+        assert!(!d.on);
+        assert!(!d.ping(Ping::AgentFinished), "visible again: a finish leaves no dot");
+    }
+
+    #[test]
+    fn stat047_dev_copies_keep_their_marker_on_the_attention_icon_and_close_to_tray_is_off_by_default() {
+        assert_eq!(icon(false, true), "tray-dot.png");
+        assert_eq!(icon(true, false), "tray-dev.png");
+        assert_eq!(icon(true, true), "tray-dev-dot.png");
+        assert!(!close_to_tray(None) && !close_to_tray(Some(false)));
+        assert!(close_to_tray(Some(true)), "a saved choice carries over");
     }
 }

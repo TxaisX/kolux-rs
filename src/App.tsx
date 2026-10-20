@@ -164,13 +164,14 @@ export type ShellTarget = { dir: string | null; branch: string | null };
 export type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; resumed?: boolean; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number; side?: "old" } };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
-function tabName(p: Pane, titles: Record<number, string>): string {
+function tabName(p: Pane, titles: Record<number, string>, label?: string): string {
   if (p.kind === "browser") return titles[p.key] || "New Tab";
   if (p.kind === "editor") return baseName(p.path ?? "");
   if (p.kind === "preview") return `Preview ${baseName(p.path ?? "")}`;
   if (p.kind === "changes") return "All Changes";
   if (p.kind === "diff") return `${baseName(p.path ?? "")} (${p.staged ? "staged" : "unstaged"})`;
-  return p.title || (p.agent !== "shell" ? programWord(p.agent) : `Terminal ${p.key}`);
+  // ORCH-066 / T-129-d: a worker's task label names the tab before the generic program word.
+  return p.title || label || (p.agent !== "shell" ? programWord(p.agent) : `Terminal ${p.key}`);
 }
 /** TERM-055: the one badge a tab carries beside its agent icon; its look and hover text come from the vocabulary (STAT-052). */
 function TabBadge({ kind }: { kind: Badge }) {
@@ -1765,15 +1766,17 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const floor = screen === "floor";
   const agentsScreen = screen === "agents";
   // T-050-b: an orchestrator-started session with no name or title is named after its worker's task
-  // (orchestration worker_labels, by terminal handle), looked up while the Agents screen is open.
+  // (orchestration worker_labels, by terminal handle), looked up while the Agents screen, the Board or
+  // the tab strip is open (ORCH-066 / T-129-d: Board rows and generated titles read the same label).
   const [workerNames, setWorkerNames] = useState<Record<string, string>>({});
+  const labelOf = (p: Pane) => workerNames[`term-${ptys.current[p.key]}`];
   useEffect(() => {
-    if (!agentsScreen) return;
+    if (!agentsScreen && !board && !terminals) return;
     const look = () => void invoke<Record<string, string>>("worker_labels").then(setWorkerNames, () => {});
     look();
     const t = window.setInterval(look, 5000);
     return () => window.clearInterval(t);
-  }, [agentsScreen]);
+  }, [agentsScreen, board, terminals]);
   // STAT-050: the Inbox and the Board read the panes the window already tracks; the clock ticks while one is open.
   const [now, setNow] = useState(Date.now());
   const timed = inbox || board || tower;
@@ -2096,7 +2099,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const report = useRef(reportLayout);
   report.current = reportLayout;
   useEffect(() => report.current());
-  const { noticed, panesRef } = useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir });
+  const { noticed, panesRef } = useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, stamp, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir });
   // The chooser, in a grid cell (SESS-007) or as the New session page (SESS-018).
   const renderChooser = (p: Pane & { seats: Seat[] }, hidden: boolean, focused: boolean, onFocus: () => void, onClose: () => void, sheetOf: { project: string; path: string } | null = null) => (
     <ChooserPane
@@ -2719,7 +2722,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                             {renamingTab === p.key ? (
                               <NameField value={tabName(p, titles)} label="Tab name" onSave={(name) => (setRenamingTab(null), renamePane(p.key, name))} onCancel={() => setRenamingTab(null)} />
                             ) : (
-                              <span className="tab-name">{tabName(p, titles)}</span>
+                              <span className="tab-name">{tabName(p, titles, labelOf(p))}</span>
                             )}
                             {dirty[p.key] && <span className="unsaved" title="Unsaved changes" aria-label="Unsaved changes" />}
                             <button className="tab-x" aria-label={`Close ${tabName(p, titles)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>
@@ -2801,7 +2804,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     cwd={p.cwd}
                     branch={p.branch}
                     agent={p.agent}
-                    name={savedName(p)}
+                    name={savedName(p) ?? labelOf(p)}
                     plan={agentsScreen ? planLine(p) : undefined}
                     program={p.program}
                     args={p.args}
