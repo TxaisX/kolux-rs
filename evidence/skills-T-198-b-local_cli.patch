@@ -1,0 +1,70 @@
+diff --git a/src-tauri/src/local_cli.rs b/src-tauri/src/local_cli.rs
+index 9858ba6b..aed70dc9 100644
+--- a/src-tauri/src/local_cli.rs
++++ b/src-tauri/src/local_cli.rs
+@@ -23,6 +23,8 @@ pub const COMMANDS: &[super::Command] = &[
+     ("skills get", "skills.get", &["topic", "full", "references", "reference"]),
+     ("skills show", "skills.get", &["topic", "full", "references", "reference"]),
+     ("skills coverage", "skills.coverage", &[]),
++    ("skills install", "skills.install", &["skill", "all", "agent", "local", "dry-run"]),
++    ("skills update", "skills.update", &["skill", "all", "local", "dry-run"]),
+     ("agent hooks status", "agent.hooks.status", &[]),
+     ("agent hooks on", "agent.hooks.on", &[]),
+     ("agent hooks off", "agent.hooks.off", &[]),
+@@ -104,6 +106,18 @@ pub fn coverage(home: &std::path::Path, local_app: Option<&std::path::Path>, age
+         .collect()
+ }
+ 
++/// SKILL-031: install or update Kolux skills through the community skills installer. The rules live
++/// in skills/cli_install.rs; this only hands over the arguments and the data folder.
++fn skills_install(p: &Parsed) -> Result<Value, Fail> {
++    use crate::skills::cli_install as ci;
++    let fail = |f: ci::Failure| Fail { code: f.code, message: f.message, data: f.data };
++    if let Some(f) = ci::json_refusal(&p.command, &p.args) {
++        return Err(fail(f));
++    }
++    let dir = super::data_dir();
++    ci::run(&ci::req_of(&p.command, &p.args), &ci::live_ctx(&dir), &crate::skills::installer::Real).map_err(fail)
++}
++
+ fn skills_coverage() -> Value {
+     let env = |v: &str| std::env::var_os(v).filter(|x| !x.is_empty()).map(std::path::PathBuf::from);
+     let home = env(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).unwrap_or_default();
+@@ -185,6 +199,8 @@ const SUMMARIES: &[(&str, &str)] = &[
+     ("skills list", "List the skill guides bundled with this CLI."),
+     ("skills get", "Print a bundled skill guide, in short, in full, or one reference."),
+     ("skills coverage", "Show which installed agents have the orchestration skill installed for the whole computer."),
++    ("skills install", "Install Kolux skills into the AI agents on this computer with the community skills installer."),
++    ("skills update", "Update the installed Kolux skills the community skills installer recorded and nobody changed."),
+     ("claude-teams", "Run Claude Code with Agent Teams in Kolux panes; arguments go to Claude untouched."),
+     ("agent hooks status", "Show whether each agent's status hooks are installed, partly installed or missing."),
+     ("agent hooks on", "Switch the agent status hooks on and put Kolux's entries back into every agent."),
+@@ -353,6 +369,7 @@ pub fn run(p: &Parsed) -> Option<Result<Value, Fail>> {
+         "skills.list" => Ok(json!({ "skills": SKILLS.iter().map(|s| json!({ "name": s.name, "description": split(s.guide).0, "aliases": s.aliases, "references": s.refs.iter().map(|r| r.0).collect::<Vec<_>>() })).collect::<Vec<_>>() })),
+         "skills.get" => skills_get(&p.args),
+         "skills.coverage" => Ok(skills_coverage()),
++        "skills.install" | "skills.update" => skills_install(p),
+         // STAT-003: read from the files themselves, so Kolux may be closed.
+         "agent.hooks.status" => Ok(switch::report(&profile_settings())),
+         "agent.hooks.on" => switch::set(&super::data_dir(), true).map_err(Fail::from),
+@@ -367,6 +384,7 @@ pub fn text(command: &str, r: &Value) -> Option<String> {
+         "agent-context" => format!("{} commands; {} agent-context --json prints the whole document", r["commandCount"], crate::orchestration::CLI),
+         "skills.list" => r["skills"].as_array().into_iter().flatten().map(|s| format!("{:<15}{}", s["name"].as_str().unwrap_or_default(), s["description"].as_str().unwrap_or_default())).collect::<Vec<_>>().join("\n"),
+         "skills.get" => r["markdown"].as_str().unwrap_or_default().to_string(),
++        "skills.install" | "skills.update" => crate::skills::cli_install::text(r),
+         "skills.coverage" => {
+             let rows = r["agents"].as_array().into_iter().flatten().map(|a| {
+                 let state = if a["covered"] == true { format!("covered      {}", a["foundIn"].as_str().unwrap_or_default()) } else if a["known"] == true { "not covered".into() } else { "not covered  (no known skills folder for it)".into() };
+@@ -497,6 +515,12 @@ mod tests {
+         assert_eq!(local("skills get orchestration --reference references/gates.md").unwrap(), gates);
+         assert!(gates["markdown"].as_str().unwrap().starts_with("# Decision gates"));
+         assert_eq!(local("skills get kolux-cli --references").unwrap()["markdown"], "- automations\n- json\n- worktrees");
++        // SKILL-031: a dry run prints the command and starts nothing; JSON is refused on a real run.
++        let dry = local("skills install --skill orchestration --agent universal --dry-run").unwrap();
++        assert_eq!(dry["command"], "npx --yes skills add kolux/skills --skill orchestration --agent universal -y -g");
++        assert_eq!(dry["ran"], false);
++        assert!(local("skills install --all --skill orchestration --dry-run").unwrap_err().message.contains("cannot be combined"));
++        assert!(local("skills install --local --all --agent universal --dry-run").unwrap()["command"].as_str().unwrap().ends_with("universal -y"));
+         let nope = local("skills get nope").unwrap_err();
+         assert_eq!(nope.code, "not_found");
+         assert!(nope.message.contains("kolux-cli, koluxsecurity, koluxward, orchestration"), "{}", nope.message);

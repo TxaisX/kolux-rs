@@ -302,7 +302,7 @@ fn locked<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-fn fresh(env: &Env, workspace: Option<&Path>) -> Report {
+pub fn fresh(env: &Env, workspace: Option<&Path>) -> Report {
     check(env, &super::scan(env, workspace), &crate::cli::bundled_skills())
 }
 
