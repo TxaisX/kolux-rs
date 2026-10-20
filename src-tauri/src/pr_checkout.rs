@@ -111,23 +111,13 @@ pub fn issue(gh: &Path, repo: &Path, number: u64) -> Result<Issue, String> {
 }
 
 /// PROJ-037: whether any remote in `remotes` (`git config --get-regexp` lines: key, then the
-/// address as the user wrote it) is the GitHub repository `host/owner/name`.
-pub fn has_repo(remotes: &str, host: &str, owner: &str, name: &str) -> bool {
-    has_repo_with(remotes, host, owner, name, &user_ssh_config())
-}
-
-/// `has_repo` with the SSH config text given: an SSH alias remote (`git@work-gh:acme/app.git`) is the
-/// host the alias stands for, the same reading the page's `scm_github_repo` gives, so the merge gate
-/// and the page agree (stand-in review FIX-SOON 1).
+/// address as the user wrote it) is the GitHub repository `host/owner/name`. `ssh_config` is the
+/// user's SSH config text, read once by the caller: an SSH alias remote (`git@work-gh:acme/app.git`)
+/// is the host the alias stands for, the same reading the page's `scm_github_repo` gives, so the
+/// merge gate and the page agree (stand-in review FIX-SOON 1).
 pub fn has_repo_with(remotes: &str, host: &str, owner: &str, name: &str, ssh_config: &str) -> bool {
     let want = format!("{host}/{owner}/{name}").to_lowercase();
     remotes.lines().filter_map(|l| l.split_once(' ')).any(|(_, url)| crate::scm::github_repo(url, ssh_config).is_some_and(|g| g.key == want))
-}
-
-/// The user's SSH config text, empty when there is none (the twin of scm.rs's private reader).
-pub fn user_ssh_config() -> String {
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
-    home.and_then(|h| std::fs::read_to_string(Path::new(&h).join(".ssh").join("config")).ok()).unwrap_or_default()
 }
 
 /// The remote addresses of the repository at `repo` as written (an insteadOf rewrite is not
@@ -291,11 +281,12 @@ mod tests {
     #[test]
     fn proj037_the_project_is_the_one_with_a_remote_at_the_item_repository() {
         let remotes = "remote.origin.url https://github.com/Acme/App.git\nremote.fork.url git@github.com:me/app.git\n";
-        assert!(has_repo(remotes, "github.com", "acme", "app"), "case does not matter");
-        assert!(has_repo(remotes, "github.com", "me", "app"), "any remote counts");
-        assert!(!has_repo(remotes, "github.com", "acme", "other"));
-        assert!(!has_repo(remotes, "ghe.corp.example", "acme", "app"), "the host counts");
-        assert!(!has_repo("", "github.com", "acme", "app"));
+        // an empty SSH config: the user's real ~/.ssh/config cannot change these answers
+        assert!(has_repo_with(remotes, "github.com", "acme", "app", ""), "case does not matter");
+        assert!(has_repo_with(remotes, "github.com", "me", "app", ""), "any remote counts");
+        assert!(!has_repo_with(remotes, "github.com", "acme", "other", ""));
+        assert!(!has_repo_with(remotes, "ghe.corp.example", "acme", "app", ""), "the host counts");
+        assert!(!has_repo_with("", "github.com", "acme", "app", ""));
         // an ssh alias is the host it stands for (the page reads remotes the same way)
         let aliased = "remote.origin.url git@work-gh:acme/app.git\n";
         assert!(has_repo_with(aliased, "github.com", "acme", "app", "Host work-gh\n  HostName github.com\n"));

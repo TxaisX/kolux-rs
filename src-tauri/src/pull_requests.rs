@@ -544,7 +544,7 @@ pub async fn pr_reply(host: String, repo: String, number: u64, comment: u64, bod
 #[tauri::command]
 pub async fn pr_merge(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, host: String, repo: String, number: u64, method: String, confirmed: bool, sha: String) -> Result<String, String> {
     let paths = added_paths(&store)?;
-    blocking(move |gh| merge_in_paths(gh, (&paths, &crate::pr_checkout::user_ssh_config()), (&host, &repo), number, &method, confirmed, &sha)).await
+    blocking(move |gh| merge_in_paths(gh, (&paths, &crate::scm::ssh_config()), (&host, &repo), number, &method, confirmed, &sha)).await
 }
 
 #[cfg(test)]

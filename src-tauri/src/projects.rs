@@ -1185,6 +1185,24 @@ pub fn workspace_items(store: StoreState<'_>, project_id: String, query: String)
     crate::pr_checkout::find(&crate::scm::gh_program()?, Path::new(&project.path), &query)
 }
 
+/// PROJ-037: Ok when the item's repository is a remote of `project`. The user's SSH config text is
+/// read once by the caller (an alias remote counts as the host it stands for).
+fn item_is_remote_of(project: &Project, item: &WorkItem, ssh_config: &str) -> Result<(), String> {
+    if !crate::pr_checkout::has_repo_with(&crate::pr_checkout::remotes(Path::new(&project.path)), &item.host, &item.owner, &item.repo, ssh_config) {
+        return Err(format!("That link is to {}/{}/{}, which is not a remote of {}; links here come from the chosen project's own repository.", item.host, item.owner, item.repo, project.name));
+    }
+    Ok(())
+}
+
+/// PROJ-037: the first project with a remote at the item's repository. The SSH config text is the
+/// caller's single read, not one read per project.
+fn project_with_remote(projects: Vec<Project>, item: &WorkItem, ssh_config: &str) -> Result<Project, String> {
+    projects
+        .into_iter()
+        .find(|p| crate::pr_checkout::has_repo_with(&crate::pr_checkout::remotes(Path::new(&p.path)), &item.host, &item.owner, &item.repo, ssh_config))
+        .ok_or_else(|| format!("No project here has {}/{}/{} as a remote; add that repository as a project first.", item.host, item.owner, item.repo))
+}
+
 /// SESS-036: the issue or pull request a link pasted in the composer names, when it belongs to
 /// the chosen project's own repository (never another one, so no repository is asked for).
 #[tauri::command(async)]
@@ -1192,9 +1210,7 @@ pub fn workspace_item(store: StoreState<'_>, project_id: String, item: WorkItem)
     use crate::pr_checkout::Linkable;
     let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
     let repo = Path::new(&project.path);
-    if !crate::pr_checkout::has_repo(&crate::pr_checkout::remotes(repo), &item.host, &item.owner, &item.repo) {
-        return Err(format!("That link is to {}/{}/{}, which is not a remote of {}; links here come from the chosen project's own repository.", item.host, item.owner, item.repo, project.name));
-    }
+    item_is_remote_of(&project, &item, &crate::scm::ssh_config())?;
     let gh = crate::scm::gh_program()?;
     Ok(if item.kind == "pull" {
         let pr = crate::pr_checkout::view(&gh, repo, item.number)?;
@@ -1211,10 +1227,7 @@ pub fn workspace_item(store: StoreState<'_>, project_id: String, item: WorkItem)
 #[tauri::command(async)]
 pub fn workspace_from_item(app: tauri::AppHandle, git: State<'_, Git>, store: StoreState<'_>, item: WorkItem) -> Result<Created, String> {
     let projects = load_projects(&*store.lock().map_err(|e| e.to_string())?);
-    let project = projects
-        .into_iter()
-        .find(|p| crate::pr_checkout::has_repo(&crate::pr_checkout::remotes(Path::new(&p.path)), &item.host, &item.owner, &item.repo))
-        .ok_or_else(|| format!("No project here has {}/{}/{} as a remote; add that repository as a project first.", item.host, item.owner, item.repo))?;
+    let project = project_with_remote(projects, &item, &crate::scm::ssh_config())?;
     if item.kind == "pull" {
         return workspace_open_pr(app, git, store, project.id, item.number, None, None, None, None);
     }
@@ -1903,6 +1916,47 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn work_item(host: &str, owner: &str, repo: &str) -> WorkItem {
+        WorkItem { host: host.into(), owner: owner.into(), repo: repo.into(), kind: "issue".into(), number: 3 }
+    }
+    fn project_at(id: &str, dir: &Path) -> Project {
+        Project { id: id.into(), name: id.into(), path: dir.to_string_lossy().into_owned(), workspaces_dir: None, base: None }
+    }
+    const ALIAS: &str = "Host work-gh
+  HostName github.com
+";
+
+    #[test]
+    fn proj037_workspace_item_accepts_a_remote_through_an_ssh_alias_only_when_the_config_names_it() {
+        let base = temp("proj037-item-alias");
+        let repo = base.join("r");
+        init_repo(&repo);
+        git_in(&repo, &["remote", "add", "origin", "git@work-gh:acme/app.git"]);
+        let project = project_at("p", &repo);
+        let link = work_item("github.com", "acme", "app");
+        assert_eq!(item_is_remote_of(&project, &link, ALIAS), Ok(()));
+        let refused = item_is_remote_of(&project, &link, "").unwrap_err();
+        assert!(refused.contains("not a remote of p"), "{refused}");
+        assert!(item_is_remote_of(&project, &work_item("github.com", "acme", "other"), ALIAS).is_err());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn proj037_workspace_from_item_finds_the_project_whose_remote_is_an_ssh_alias() {
+        let base = temp("proj037-from-alias");
+        let (plain, aliased) = (base.join("plain"), base.join("aliased"));
+        for (dir, url) in [(&plain, "https://github.com/Corp/Lib.git"), (&aliased, "git@work-gh:acme/app.git")] {
+            init_repo(dir);
+            git_in(dir, &["remote", "add", "origin", url]);
+        }
+        let all = || vec![project_at("plain", &plain), project_at("aliased", &aliased)];
+        let link = work_item("github.com", "acme", "app");
+        assert_eq!(project_with_remote(all(), &link, ALIAS).unwrap().id, "aliased");
+        assert!(project_with_remote(all(), &link, "").unwrap_err().contains("No project here has github.com/acme/app"));
+        assert_eq!(project_with_remote(all(), &work_item("github.com", "corp", "lib"), "").unwrap().id, "plain");
+        let _ = fs::remove_dir_all(&base);
     }
 
     fn git_in(dir: &Path, args: &[&str]) {

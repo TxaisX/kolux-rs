@@ -561,7 +561,7 @@ pub fn github_repo(url: &str, ssh_config: &str) -> Option<GhRepo> {
 }
 
 /// The user's SSH config text, empty when there is none.
-fn ssh_config() -> String {
+pub(crate) fn ssh_config() -> String {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
     home.and_then(|h| std::fs::read_to_string(Path::new(&h).join(".ssh").join("config")).ok()).unwrap_or_default()
 }

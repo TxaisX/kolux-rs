@@ -56,42 +56,40 @@ const fenceMark = (line: string) => (line.startsWith("```") ? "```" : line.start
  * written, so prose that merely mentions the opener cannot hide the rest of a description.
  */
 function withoutComments(lines: string[]): string[] {
-  const literal = new Set<string>(); // openers (line:column) known to have no closer
-  for (;;) {
-    let fence: string | null = null;
-    let open: string | null = null; // where the comment now open began
-    const out = lines.map((line, i) => {
-      const mark = fenceMark(line);
-      if (mark && (fence === null || fence === mark)) {
-        fence = fence === null ? mark : null;
-        return line;
+  // One pass pairs each opener with the next closer. If a comment is still open at the end, no
+  // closer follows its opener, so none follows any later opener either: that opener and everything
+  // after it show as written, and nothing after it needs another look (the text is copied as is).
+  let fence: string | null = null;
+  let open = null as { line: number; column: number; kept: string } | null; // the comment now open
+  const out = lines.map((line, i) => {
+    const mark = fenceMark(line);
+    if (mark && (fence === null || fence === mark)) {
+      fence = fence === null ? mark : null;
+      return line;
+    }
+    if (fence !== null) return line;
+    let rest = line;
+    let kept = "";
+    for (;;) {
+      if (open !== null) {
+        const end = rest.indexOf("-->");
+        if (end < 0) return kept;
+        rest = rest.slice(end + 3);
+        open = null;
       }
-      if (fence !== null) return line;
-      let rest = line;
-      let kept = "";
-      for (;;) {
-        if (open !== null) {
-          const end = rest.indexOf("-->");
-          if (end < 0) return kept;
-          rest = rest.slice(end + 3);
-          open = null;
-        }
-        const start = rest.indexOf("<!--");
-        if (start < 0) return kept + rest;
-        const at = `${i}:${line.length - rest.length + start}`;
-        if (literal.has(at)) {
-          kept += rest.slice(0, start + 4);
-          rest = rest.slice(start + 4);
-          continue;
-        }
-        kept += rest.slice(0, start);
-        rest = rest.slice(start + 4);
-        open = at;
-      }
-    });
-    if (open === null) return out;
-    literal.add(open);
+      const start = rest.indexOf("<!--");
+      if (start < 0) return kept + rest;
+      kept += rest.slice(0, start);
+      open = { line: i, column: line.length - rest.length + start, kept };
+      rest = rest.slice(start + 4);
+    }
+  });
+  if (open !== null) {
+    const { line, column, kept } = open as { line: number; column: number; kept: string };
+    out[line] = kept + lines[line].slice(column);
+    for (let i = line + 1; i < lines.length; i++) out[i] = lines[i];
   }
+  return out;
 }
 
 export function parseMarkdown(source: string): Block[] {

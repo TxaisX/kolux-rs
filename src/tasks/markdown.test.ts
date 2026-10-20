@@ -36,6 +36,28 @@ describe("GIT-050 rendered descriptions", () => {
     // two openers, the first closed by the only terminator: the second shows
     expect(words(parseMarkdown("x <!-- one\nstill one --> y <!-- two\nz"))).toEqual(["x y <!-- two z"]);
   });
+  it("reads a description full of unclosed comment openers in one pass (stand-in review FIX-BEFORE 1)", () => {
+    const run = (text: string) => {
+      const t0 = performance.now();
+      const blocks = parseMarkdown(text);
+      return { blocks, ms: performance.now() - t0 };
+    };
+    // 16000 openers on one line (about GitHub's body cap), then 8000 lines with one each: the old
+    // one-opener-per-pass loop took 38 s and 7.6 s here
+    const openers = "<!--".repeat(16000);
+    const one = run(openers);
+    expect(words(one.blocks)).toEqual([openers]);
+    expect(one.ms).toBeLessThan(500);
+    const many = run(Array(8000).fill("a <!-- b").join("\n"));
+    expect(words(many.blocks)).toEqual([Array(8000).fill("a <!-- b").join(" ")]);
+    expect(many.ms).toBeLessThan(500);
+    // a closed comment before them is still left out; every opener after the last closer shows
+    const mixed = run(`keep <!-- gone --> after\n${"<!-- x\n".repeat(3000)}`);
+    expect(words(mixed.blocks)).toEqual([`keep  after ${Array(3000).fill("<!-- x").join(" ")}`]);
+    expect(mixed.ms).toBeLessThan(500);
+    // an opener closed by a later line's terminator still pairs with it, then the stray ones show
+    expect(words(parseMarkdown("<!-- a\n<!-- b\nc --> d\n<!-- e"))).toEqual(["d <!-- e"]);
+  });
   it("treats a tilde fence like a backtick fence, so a comment inside it is kept", () => {
     const blocks = parseMarkdown("Before\n\n~~~\n<!-- kept in tildes -->\n~~~\n\nAfter <!-- hint -->\n");
     expect(blocks.map((b) => b.t)).toEqual(["para", "code", "para"]);
