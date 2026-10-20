@@ -1,0 +1,9 @@
+T-280-b (shell, from 697121ea, 2026-10-20) PARTIAL, left OPEN
+BUILT: editor autosave on/off and its pause survive a restart. The autosave from the editor lane's autosave work is on main; its two settings
+(editorAutoSave, editorAutoSaveDelay) already live in the settings file, written by prefPatch and read by readEditorPrefs. Added the restart proof as
+tests: src/shell/autosaveRestart.test.ts (3 vitest: on + pause come back as chosen; off stays off and a fresh profile starts off at 1000 ms; another
+preference changing leaves them alone, a damaged pause is clamped). No product code changed.
+STILL OPEN: a custom notification sound file keeps its location (needs custom sound files, Notifications offers built-in tones only); the older
+right-sidebar-default setting is still read (the spec does not name the older key; Txais to name it or drop the rule).
+GATES: t280b-vitest.log 3 passed; plan-check OK.
+LIVE PROOF PENDING (batched): Settings > General: turn "Save files by themselves" on, set the pause to 3 s, quit and reopen: both are as left; typing in a file saves after 3 s.
