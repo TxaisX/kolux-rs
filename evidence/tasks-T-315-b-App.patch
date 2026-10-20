@@ -1,0 +1,13 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index c64c3772..02a3f654 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -2208,6 +2208,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+               setCreateRequest((n) => n + 1);
+             }}
+             onClose={() => setPalette(false)}
++            linked={linkedPrs(settings[SCM_LINKED_PR_KEY])}
++            onItem={openInBrowser}
+           />
+         )}
+         {asking && (

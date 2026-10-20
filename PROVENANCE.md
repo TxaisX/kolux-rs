@@ -867,3 +867,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · tasks T-176-d · spec/11 GIT-028 and GIT-039 as given in the brief; this tree's own scm.rs gh_words, pull_requests.rs and src/editor/bigDiff.ts limits; no outside code
 > 2026-10-19 · tasks T-281-b · spec/11 GIT-045 and GIT-048 as given in the brief; this tree's own scm.rs tasks_search, src/tasks and TaskDialog; no outside code
 > 2026-10-20 · tasks T-314-d · spec/11 GIT-056 as given in the brief; this tree's own github.rs, pull_requests.rs assignees, src/tasks and src/projects/AddProject.tsx; no outside code
+> 2026-10-20 · tasks T-315-b · spec/11 GIT-058 and GIT-069 as given in the brief; this tree's own src/projects/WorktreePalette.tsx, src/scm/paste.ts and cli.rs; no outside code
