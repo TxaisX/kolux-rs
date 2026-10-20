@@ -1,0 +1,28 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 30906026..c04faef0 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -2,6 +2,7 @@ mod activity;
+ mod agents;
+ mod artifacts;
+ mod automations;
++mod badge;
+ mod awake;
+ mod capture;
+ mod chat;
+@@ -33,6 +34,7 @@ mod import;
+ #[cfg_attr(not(test), allow(dead_code))]
+ mod keychain;
+ mod grok;
++mod grok_status;
+ mod install;
+ mod keybindings;
+ mod kits;
+@@ -359,6 +361,7 @@ pub fn run() {
+             settings_patch,
+             notify,
+             notifications::notification_test,
++            badge::badge_set,
+             notifications::notification_sound_load,
+             notifications::open_notification_settings,
+             hooks::agent_hooks::agent_hooks_sync,

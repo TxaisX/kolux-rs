@@ -1,0 +1,13 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index b905992d..3e3d5f51 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1981,7 +1981,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   const report = useRef(reportLayout);
+   report.current = reportLayout;
+   useEffect(() => report.current());
+-  const { noticed, panesRef } = useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir });
++  const { noticed, panesRef } = useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, stamp, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir });
+   // The chooser, in a grid cell (SESS-007) or as the New session page (SESS-018).
+   const renderChooser = (p: Pane & { seats: Seat[] }, hidden: boolean, focused: boolean, onFocus: () => void, onClose: () => void, sheetOf: { project: string; path: string } | null = null) => (
+     <ChooserPane

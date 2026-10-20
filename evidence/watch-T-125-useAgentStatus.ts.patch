@@ -1,0 +1,75 @@
+diff --git a/src/status/useAgentStatus.ts b/src/status/useAgentStatus.ts
+index 6a6e6514..283b2a6b 100644
+--- a/src/status/useAgentStatus.ts
++++ b/src/status/useAgentStatus.ts
+@@ -14,6 +14,9 @@ import { raiseNotification, type KindKey } from "../settings/notifications";
+ import { marksUnread } from "../terminal/tabs";
+ import { folderName } from "../projects/model";
+ import { sameDir } from "../workspaces";
++import { newPaceMemory, noteId, paced } from "../notify/pace";
++import { badgeCount } from "../notify/badge";
++import { toAcknowledge } from "../notify/seen";
+ 
+ export type TurnInfo = { tool?: string; detail?: string; ask?: string; reply?: string; wrote?: string; stop?: StopInfo; plan?: string; planCut?: boolean; monitoring?: boolean };
+ 
+@@ -134,7 +137,7 @@ export function useAgentStatusState(running: Record<number, boolean>) {
+ 
+ type Status = ReturnType<typeof useAgentStatusState>;
+ 
+-type EventsDeps = Pick<Status, "setCrew" | "setTurn" | "setStale" | "hookRef" | "setHook" | "setStamp" | "setContext" | "unreadPanes" | "setUnreadPanes" | "winFocused" | "markDir"> & {
++type EventsDeps = Pick<Status, "setCrew" | "setTurn" | "setStale" | "hookRef" | "setHook" | "setStamp" | "setContext" | "unreadPanes" | "setUnreadPanes" | "winFocused" | "markDir"> & Partial<Pick<Status, "stamp">> & {
+   panes: Pane[];
+   setPanes: Dispatch<SetStateAction<Pane[]>>;
+   titles: Record<number, string>;
+@@ -144,20 +147,23 @@ type EventsDeps = Pick<Status, "setCrew" | "setTurn" | "setStale" | "hookRef" |
+   tabName: (p: Pane, titles: Record<number, string>) => string;
+ };
+ 
+-export function useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir }: EventsDeps) {
++export function useAgentEvents({ panes, setPanes, titles, settings, inView, setToast, tabName, setCrew, setTurn, setStale, hookRef, setHook, stamp, setStamp, setContext, unreadPanes, setUnreadPanes, winFocused, markDir }: EventsDeps) {
+   // STAT-041: the note names the repository when more than one has agents running.
+   const repoOf = (p: Pane): string | null => {
+     const repos = new Set(panes.filter((x) => x.agent !== "shell" && x.cwd !== null).map((x) => folderName(x.cwd as string)));
+     return repos.size > 1 && p.cwd !== null ? folderName(p.cwd) : null;
+   };
+-  const noticed = (p: Pane, what: string, body = "", gate: KindKey = "notifyOnFinish") => {
++  // STAT-044 / T-125: what was notified, so repeats for one worktree merge and an event never shows twice.
++  const paceRef = useRef(newPaceMemory());
++  const noticed = (p: Pane, what: string, body = "", gate: KindKey = "notifyOnFinish", at = Date.now()) => {
+     const known = new Set(panes.map((x) => x.key));
+     if (!known.has(p.key)) return;
+     const title = noteTitle(tabName(p, titles), repoOf(p), what);
++    const show = () => paced(paceRef.current, p.cwd, noteId(p.key, what, at), Date.now(), { focused: winFocused, quietWhenFocused: settings.notifyQuietWhenFocused === true });
+     // STAT-041: every note on a pane out of view (or in an unfocused window) is a desktop
+     // notification unless 'Agent Task Complete' is off (a stop goes by 'Agent Stopped', STAT-023);
+     // the unread mark and the toast keep T-024's one-mark-until-viewed rule.
+-    if (!(inView(p.key) && winFocused) && settings[gate] !== false) void raiseNotification(settings, title, body).catch(() => {});
++    if (!(inView(p.key) && winFocused) && settings[gate] !== false && show()) void raiseNotification(settings, title, body).catch(() => {});
+     if (!marksUnread(p.key, known, unreadPanes, inView(p.key), winFocused)) return;
+     setUnreadPanes((u) => new Set([...u, p.key]));
+     if (p.cwd !== null) markDir(p.cwd, true);
+@@ -288,14 +294,22 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
+       offUsage.then((f) => f());
+     };
+   }, []);
++  // STAT-049 / T-125: the acknowledgements made, by pane and turn stamp, so a future-stamped turn clears once.
++  const ackedRef = useRef(new Set<string>());
+   useEffect(() => {
+-    // Viewing a marked pane in a focused window clears its mark.
++    // Viewing a marked pane in a focused window clears its mark (STAT-049: a pane with no status yet
++    // keeps being watched; a pane marked unread by hand would stay, none can be yet).
+     if (!winFocused || unreadPanes.size === 0) return;
+-    const seen = [...unreadPanes].filter(inView);
++    const { panes: seen, acks } = toAcknowledge({ unread: unreadPanes, inView, focused: winFocused, manual: new Set(), stampOf: (k) => (hookRef.current[k] === undefined ? undefined : (stamp?.[k]?.at ?? 0)), acked: ackedRef.current });
+     if (seen.length === 0) return;
++    for (const a of acks) ackedRef.current.add(a);
+     setUnreadPanes((u) => new Set([...u].filter((k) => !seen.includes(k))));
+     for (const p of panes) if (seen.includes(p.key) && p.cwd !== null) markDir(p.cwd, false);
+   });
++  useEffect(() => {
++    // STAT-048: the taskbar or dock badge counts the workspaces with unseen results; zero clears it.
++    void invoke("badge_set", { count: badgeCount(unreadPanes, panes) }).catch(() => {});
++  }, [unreadPanes, panes]);
+   useEffect(() => {
+     // USAGE-001: closing a pane forgets its reading.
+     const open = new Set(panes.map((p) => p.key));
