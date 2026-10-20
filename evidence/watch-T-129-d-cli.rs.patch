@@ -1,0 +1,20 @@
+diff --git a/src-tauri/src/cli.rs b/src-tauri/src/cli.rs
+index 92bea7ca..e68ea49b 100644
+--- a/src-tauri/src/cli.rs
++++ b/src-tauri/src/cli.rs
+@@ -3102,10 +3102,13 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
+             m.once(retry, |_| release_worker(&mut dispatches, &id, run.as_deref(), &live, &agent_of, &dir, &save, &read, &kill))?
+         }
+         WORKER_SHOW => {
+-            // CLI-036: no pane hook state reaches this path yet, so a live pane reads unknown.
++            // CLI-036 / T-129-d: the pane's own hook state, else a prompt read off its newest output
++            // (ORCH-056), decides whether the worker waits on a person; a quiet pane reads unknown.
+             let id = text("dispatch").ok_or_else(|| Fail::args("--dispatch is required"))?;
+             let live = |h: &str| ctx.terminals.live(h);
+-            let mut shown = o::worker_show(&tasks, &dispatches, &id, run.as_deref(), &live, None)?;
++            let tid = dispatches.iter().find(|d| d["id"] == id.as_str() && d["runId"].as_str() == run.as_deref()).and_then(o::terminal_of).and_then(|h| h.strip_prefix("term-")?.parse::<u32>().ok());
++            let attention = tid.and_then(|t| crate::prompt_scan::worker_attention(t, || ctx.terminals.read(t, None, Some(crate::prompt_scan::FRAME_LINES))));
++            let mut shown = o::worker_show(&tasks, &dispatches, &id, run.as_deref(), &live, attention)?;
+             // cli FIX-9: a session recorded after the start gave up, and the status the row already had then.
+             if let Some(d) = dispatches.iter().find(|d| d["id"] == id.as_str() && d["runId"].as_str() == run.as_deref()) {
+                 for k in ["lateStamp", "lateAfter"] {
