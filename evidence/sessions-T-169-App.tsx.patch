@@ -1,0 +1,51 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 8176ccab..91a330f3 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -88,6 +88,8 @@ import AllChangesPane from "./editor/AllChangesPane";
+ import { DIFF_SPLIT_KEY, diffSplitOf, targetCell } from "./scm/split";
+ import Explorer from "./editor/Explorer";
+ import { discardDraftsOf, useFileMoves } from "./editor/useFileMoves";
++import AgentsPanel from "./sessions/AgentsPanel";
++import type { ResumePlan } from "./sessions/resume";
+ import RightSidebar, { clampLeft, clampWidth, Grip, LEFT_KEY, readLeft, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
+ import { isMarkdown } from "./editor/markdown";
+ import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, resizePlan, rowsFor, splitIndex, toggleCard, blocking, freeCell, canExpand, toggleZoom, zoomedGroup, type Zoom } from "./terminal/grid";
+@@ -1253,6 +1255,26 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     }
+     return key;
+   };
++  // VIEW-085 (T-169): a past session resumed in a new tab, in the folder the plan names (the session's
++  // own worktree, else the one in front), on the agent's resume line from settings.
++  const resumeIn = async (agentId: string, plan: ResumePlan) => {
++    const agent = agents.find((a) => a.id === agentId);
++    const dir = plan.cwd ?? activeDir;
++    if (!agent || dir === null) return setNotice(agent ? "Open a workspace first, then resume the session in it." : `${agentId} is not installed here, so its session cannot be resumed.`);
++    try {
++      await pretrust(agent.id, [dir]);
++    } catch (err) {
++      return setNotice(String(err));
++    }
++    const key = nextKey.current++;
++    const pane: Pane = { key, cwd: dir, branch: panesIn(panes, dir)[0]?.branch ?? null, agent: paneMark(agent, plan.line), agentId: agent.id, resumed: true, ...startFields(plan.line, agent.program) };
++    setPanes((ps) => {
++      const free = freeCell(cellsOf(panesIn(ps, dir)));
++      return free ? ps.map((p) => (p === free ? pane : p)) : [...ps, pane];
++    });
++    setActiveDir(dir);
++    setFocused(key);
++  };
+   const { afterSetup, startSetup, select, removedAll, removed, projectOf } = useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir, setStacked, nextKey, addShell, settings, screen, setScreen, setPage, owner, recentDirs, activeRef });
+   // PROJ-033: a workspace made outside the composer runs its setup script in a background tab.
+   const runSetup = (dir: string, branch: string | null) =>
+@@ -2973,6 +2995,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+             }
+           }} agents={menuAgents(agents, defaultId)} onHand={(a, note) => activeDir !== null && void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, note, true)} />
+         )}
++        {/* VIEW-080 (T-168, T-169): the Agents tab lists past sessions of every agent in the saved scope. */}
++        {right.open && right.tab === "agents" && (
++          <AgentsPanel settings={settings} onSave={saveSetting} activeDir={activeDir} projectDirs={Object.entries(owner).filter(([, p]) => p === projectOf(activeDir)).map(([d]) => d)} rescanKey={panes.length} visible={terminals} shell={shells[0]?.program ?? null} onResume={(s, plan) => void resumeIn(s.agent, plan)} />
++        )}
+         {/* VIEW-073: the Checks tab follows the workspace of the focused terminal. */}
+         {right.open && right.tab === "checks" && <ChecksPanel dir={activeDir} linked={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} visible={terminals} />}
+         {activeDir ? <Explorer key={activeDir} root={activeDir} hidden={!explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => saveRight({ open: false })} /> : explorerOpen && <div className="sb-hint">Open a workspace to browse its files.</div>}
