@@ -1,0 +1,27 @@
+// SET-017 (T-210-c): the Japanese pack. Machine-translated 2026-10-20 (Txais approved machine translation);
+// a human review pass is in the after-list. Product names (Kolux, Claude, Codex, ChatGPT, Git) stay as they are.
+import type { TextKey } from "../en";
+import type { PackMeta } from "../packs";
+
+export const META: PackMeta = { language: "ja", machineTranslated: true, translatedOn: "2026-10-20", humanReviewed: false };
+
+const pack = {
+  "glossary.repository.plain": "プロジェクト",
+  "glossary.repository.hover": "ここでのプロジェクトは、Git が管理するフォルダです（Git リポジトリ）",
+  "glossary.clone.plain": "Web アドレスからコピー",
+  "glossary.clone.hover": "Web アドレスからコピー：git clone は、URL から Git リポジトリをダウンロードします",
+  "glossary.worktree.plain": "ワークスペース",
+  "glossary.worktree.hover": "ワークスペースは、専用のフォルダにあるブランチです（Git worktree）",
+  "glossary.checkout.plain": "メインフォルダ",
+  "glossary.checkout.hover": "プロジェクトのメインフォルダ（メインのチェックアウト）",
+  "glossary.shell.plain": "ターミナル",
+  "glossary.shell.hover": "ターミナル：AI の入っていない、ふつうのシェルです",
+  "glossary.cli.plain": "プログラム",
+  "glossary.cli.hover": "この PC 上にある AI 専用のプログラム（CLI）",
+  "glossary.pty.plain": "ターミナル",
+  "glossary.pty.hover": "ターミナル（PTY、つまり疑似端末）",
+  "connect.claude": "「接続」を押すと、ブラウザーで Claude のサインインページが一度開き、1 年間有効なキーが保存されます。",
+  "connect.codex": "「接続」を押すと、Kolux 専用の Codex ホームに ChatGPT アカウントが追加されます。お使いの Codex フォルダはそのまま変わりません。",
+} satisfies Record<TextKey, string>;
+
+export default pack;

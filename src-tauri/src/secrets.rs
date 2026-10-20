@@ -23,9 +23,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// Settings fields that hold secrets (SAFE-026): the Claude 1-year key (ACCT-004), the xAI key
-/// (ACCT-008), and the HTTP proxy address and browser search-session link, which have no screen
+/// (ACCT-008), the Moonshot key for the Kimi balance (T-547), and the HTTP proxy address and browser search-session link, which have no screen
 /// yet (OD-18; their settings come with T-240 and T-323 under these names).
-pub const SECRET_SETTINGS: &[&str] = &["claudeOauthToken", "xaiApiKey", "httpProxy", "browserSearchSessionUrl", "minimaxCookie", "minimaxApiKey"];
+pub const SECRET_SETTINGS: &[&str] = &["claudeOauthToken", "xaiApiKey", "httpProxy", "browserSearchSessionUrl", "minimaxCookie", "minimaxApiKey", "moonshotApiKey"];
 /// SAFE-026: what a save says while the system's secret store is not answering.
 const STORE_DOWN: &str = "the system secret store is not answering";
 /// Marks a sealed value; the part after it is base64 of the sealed bytes.
@@ -613,7 +613,7 @@ mod tests {
         // On disk no secret is ever in the clear, and the window gets none of them.
         let disk = fs::read_to_string(dir.join("settings.json")).unwrap();
         assert!(!disk.contains("-FIRST") && !disk.contains("SECOND"), "{disk}");
-        assert_eq!(SECRET_SETTINGS.len(), 6);
+        assert_eq!(SECRET_SETTINGS.len(), 7);
         let shown = without_secrets(store.settings());
         assert!(SECRET_SETTINGS.iter().all(|k| shown.get(*k).is_none()), "{shown}");
         drop(store);

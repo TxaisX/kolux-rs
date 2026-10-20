@@ -68,6 +68,7 @@ export function useWorkspaceActions({ panes, setPanes, setFocused, setActiveDir,
       setActiveDir(dir);
       setFocused(key);
     }
+    return key;
   };
 
   // PROJ-066: a click on a workspace row shows that workspace on the same click. Its panes were

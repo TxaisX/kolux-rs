@@ -316,7 +316,8 @@ pub fn activity_get(store: StoreState<'_>) -> Result<BTreeMap<String, u64>, Stri
 /// that runs in its terminal belongs to a task with a parent task (same Run) and a dispatch of that
 /// parent task ran in the terminal of another lane. Dispatches stamped by an earlier start of Kolux
 /// are ignored (terminal ids count up again), the newest dispatch of the parent that has a lane
-/// wins, and a lane is never its own ancestor.
+/// wins, and a lane is never its own ancestor. A worker whose task names no parent task nests under
+/// the pane whose terminal the dispatch records as having started it (`fromTerminal`, T-260-d).
 pub fn nest_lanes(lanes: &mut [Track], tasks: &[serde_json::Value], dispatches: &[serde_json::Value], runtime: u64) {
     let mine = |d: &&serde_json::Value| d["runtime"].as_u64().is_none_or(|r| r == runtime);
     let pane_of = |terminal: u64| lanes.iter().find(|l| l.terminal.is_some_and(|t| u64::from(t) == terminal)).map(|l| l.pane);
@@ -324,8 +325,13 @@ pub fn nest_lanes(lanes: &mut [Track], tasks: &[serde_json::Value], dispatches: 
         .iter()
         .map(|l| {
             let own = dispatches.iter().rev().filter(mine).find(|d| d["terminal"].as_u64().is_some() && d["terminal"].as_u64() == l.terminal.map(u64::from))?;
+            // T-260-d: a task with no parent task nests under the pane whose terminal started it.
+            let named = tasks.iter().find(|t| t["id"] == own["taskId"] && t["runId"] == own["runId"]);
+            if named.is_none_or(|t| t["parent"].as_str().is_none()) {
+                return own["fromTerminal"].as_u64().and_then(pane_of).filter(|p| *p != l.pane);
+            }
             // A record with no runId (null == null in Value equality) is never "the same Run".
-            let task = tasks.iter().find(|t| t["id"] == own["taskId"] && t["runId"].is_string() && t["runId"] == own["runId"])?;
+            let task = named.filter(|t| t["runId"].is_string())?;
             let up = task["parent"].as_str()?;
             dispatches
                 .iter()
@@ -753,6 +759,41 @@ mod tests {
         let mut lanes = vec![lane(1, Some(10)), lane(2, Some(11))];
         nest_lanes(&mut lanes, &tasks, &ds, me);
         assert_eq!(parents(&lanes), vec![(1, None), (2, Some(1))]);
+    }
+
+    #[test]
+    fn t260d_a_worker_with_no_parent_task_nests_under_the_pane_that_started_it() {
+        use serde_json::json;
+        let me = u64::from(std::process::id());
+        let tasks = vec![json!({ "id": "task-1", "runId": "run-1" }), json!({ "id": "task-2", "runId": "run-1", "parent": "task-9" })];
+        // The coordinator (terminal 10, pane 4) has no task of its own; its workers ran in 11 and 12.
+        let ds = vec![
+            json!({ "id": "d-1", "runtime": me, "runId": "run-1", "taskId": "task-1", "terminal": 11, "fromTerminal": 10 }),
+            json!({ "id": "d-2", "runtime": me, "runId": "run-1", "taskId": "task-1", "terminal": 12 }),
+        ];
+        let mut lanes = vec![lane(4, Some(10)), lane(5, Some(11)), lane(6, Some(12))];
+        nest_lanes(&mut lanes, &tasks, &ds, me);
+        assert_eq!(parents(&lanes), vec![(4, None), (5, Some(4)), (6, None)], "a dispatch with a starting terminal nests, one without stays on top");
+        // A starting terminal with no lane, the worker's own terminal, or a dispatch from another start leaves it on top.
+        for (from, runtime) in [(json!(99), me), (json!(11), me), (json!(10), me + 1), (json!(null), me)] {
+            let ds = vec![json!({ "id": "d-1", "runtime": runtime, "runId": "run-1", "taskId": "task-1", "terminal": 11, "fromTerminal": from })];
+            let mut lanes = vec![lane(4, Some(10)), lane(5, Some(11))];
+            nest_lanes(&mut lanes, &tasks, &ds, me);
+            assert_eq!(parents(&lanes), vec![(4, None), (5, None)], "fromTerminal {from} runtime {runtime}");
+        }
+        // A task that names a parent task follows the parent task, never the starting terminal.
+        let ds = vec![json!({ "id": "d-2", "runtime": me, "runId": "run-1", "taskId": "task-2", "terminal": 11, "fromTerminal": 10 })];
+        let mut lanes = vec![lane(4, Some(10)), lane(5, Some(11))];
+        nest_lanes(&mut lanes, &tasks, &ds, me);
+        assert_eq!(parents(&lanes), vec![(4, None), (5, None)], "the parent task has no lane, so the worker stays on top");
+        // Two coordinators that started each other never make a lane its own ancestor.
+        let ds = vec![
+            json!({ "id": "d-1", "runtime": me, "runId": "run-1", "taskId": "task-1", "terminal": 11, "fromTerminal": 10 }),
+            json!({ "id": "d-3", "runtime": me, "runId": "run-1", "taskId": "task-1", "terminal": 10, "fromTerminal": 11 }),
+        ];
+        let mut lanes = vec![lane(4, Some(10)), lane(5, Some(11))];
+        nest_lanes(&mut lanes, &tasks, &ds, me);
+        assert!(lanes.iter().all(|l| l.parent.is_none()), "{:?}", parents(&lanes));
     }
 
     #[test]

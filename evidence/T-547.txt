@@ -1,0 +1,65 @@
+T-547 · OD-01 / DT-C32 provider usage services · reliability lane · 2026-10-20 · LEFT OPEN
+Coordinator default (Txais may overrule): build only the services whose usage/balance calls are
+publicly documented (Kimi Open Platform balance, MiniMax M Plan remains); keys in the existing
+sealed secrets store; no keyring dependency; Claude, Codex and Gemini stay on the figures their
+own sessions report; fixtures only, no real keys, no calls to the real services.
+
+Docs read first-hand 2026-10-20 (public vendor docs only):
+- https://platform.kimi.ai/docs/api/balance : GET api.moonshot.ai/v1/users/me/balance, Bearer
+  Moonshot API key; reply code / data.{available_balance, voucher_balance, cash_balance} / scode /
+  status; 401 = invalid or missing key; error body {error:{message,type,code}}; 429 not documented.
+- https://platform.minimax.io/docs/m-plan/faq.md and https://platform.minimax.io/docs/token-plan/faq.md :
+  GET www.minimax.io/v1/token_plan/remains, Authorization: Bearer <API Key>. NO reply format is
+  published, and which key (Subscription Key or pay-as-you-go API Key) is not said.
+- https://platform.minimax.io/docs/m-plan/usage-rules.md and token-plan/minimax-cli.md : 5-hour and
+  weekly windows; the console page and `mmx quota`; no field names published.
+
+BUILT (committed):
+- src-tauri/src/resources/provider_usage.rs: host list (api.moonshot.ai, www.minimax.io), the
+  address check (https, default port, no user info, host on the list), the Fetch seam, the Kimi
+  balance parse, MiniMax "answered" (no invented figures), MiniMax mainland = nothing asked (no
+  published address), error mapping 401/403 bad key, 429 rate limit, no connection offline, other
+  status failed (provider error text never passed on), Secret prints as stars, masked view (dots +
+  last 4, dots only under 16 characters), key set (trimmed, one line, no spaces/control/non-ASCII,
+  refused keys store nothing) and forget through the sealed secrets store; commands provider_keys,
+  provider_key_set, provider_key_forget, provider_usage_check (store lock dropped before the call;
+  a check only on Check now, no background traffic).
+- secrets.rs SECRET_SETTINGS + settingsSync.ts SECRET_KEYS gain moonshotApiKey (sealed, never sent
+  to the page, never exported). MiniMax reuses the Accounts page's minimaxApiKey (ACCT-028).
+- src/settings/ProviderUsage.tsx (+ test) mounted under Settings > AI connections: per provider a
+  password field, Add key / Replace, Remove, Check now, "Kept: ••••1234", one plain sentence per reading.
+
+NOT BUILT (why T-547 stays open):
+- The network transport. Writing it was refused by this session's auto-mode safety classifier
+  ("code that leaks when run": a client that sends a stored key to an outside host), and it would
+  also need the privacy audit (scripts/privacy-audit.test.mjs) widened, which the coordinator
+  brief forbids a builder to do. So the shipped transport makes no connection; every Check now
+  reads "Not checked: checking with the provider is not switched on in this build."
+  What the transport must be (for whoever is cleared to write it, after a security review):
+  one file of its own holding the only client; https only; redirects off so the key never leaves
+  the listed host; the address check above re-run before sending; the key in a sensitive bearer
+  header; a ten-second wait; a size cap on the reply; connection and timeout failures mapped to
+  offline; no key, address or provider text in any error. Then the privacy audit gains that one
+  file as an allowed single-client entry and the privacy statement (src/settings/privacy.ts) a
+  line naming Kimi (api.moonshot.ai) and MiniMax (www.minimax.io) "only when you press Check now
+  with a key you added". The capabilities files need no change: Tauri capabilities govern what the
+  window may call, not Rust-side requests, and no HTTP plugin is used.
+- MiniMax figures: no published reply format (after-list).
+
+Patch for the resolver (safe to apply now, independent of the BLOCKER):
+- evidence/reliability-T-547-lib.rs.patch: registers the four commands in lib.rs and drops the
+  module-wide dead-code allow in provider_usage.rs. Checked: patched clippy -D warnings 0,
+  cargo test provider_usage/secrets/settings_sync/agent_creds 22 passed.
+
+Gates (logs G:/Temp/reliability-v3-logs/t547-*.log):
+- cargo build: Finished, exit 0 · clippy --all-targets -D warnings: exit 0
+- cargo test provider_usage secrets:: settings_sync agent_creds: 22 passed, 0 failed
+  (7 t547_* tests incl. fixture JSON from the Kimi page)
+- tsc --noEmit: exit 0 · vitest related (33 files): 221 passed, 2 failed = the 2 known app070 tests;
+  their findings list is byte-identical to the pre-change baseline (t547-audit-base.log)
+- vitest ProviderUsage + settingsSync + plainWords: 14 passed
+
+LIVE PROOF PENDING (once the transport lands): Settings > AI connections > Provider usage. Paste a
+Moonshot key, Add key: field empties, row reads "Kept: ••••" + last 4. Check now: "Balance $x
+(vouchers $y, cash $z)". Paste a wrong key: "The key was refused". Network off: "No connection to
+the provider." Remove: row reads "No key". settings.json never holds the key in the clear.
