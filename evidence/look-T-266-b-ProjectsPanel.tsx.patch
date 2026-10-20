@@ -1,0 +1,37 @@
+diff --git a/src/projects/ProjectsPanel.tsx b/src/projects/ProjectsPanel.tsx
+index 54c2e098..de5808b7 100644
+--- a/src/projects/ProjectsPanel.tsx
++++ b/src/projects/ProjectsPanel.tsx
+@@ -38,6 +38,7 @@ import { HeaderBadge, HeaderColourPicker } from "../look/HeaderBadge";
+ import { CardDetailsChooser } from "../look/CardDetailsChooser";
+ import { HEADER_COLOURS_SETTING, colourSaveAfterDelete, headerColourOf, headersGoneWithGroup } from "../look/headerColour";
+ import { cardTitle, readCardDetails, type CardFacts } from "../look/cards";
++import { useCardPorts } from "../look/cardPorts";
+ import { takeSuggestion } from "./suggest";
+ import { IconPicker } from "./IconPicker";
+ import { ProjectIcon } from "./IconView";
+@@ -313,6 +314,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+   const [dropGroup, setDropGroup] = useState<{ remove: boolean } | null>(null); // PROJ-015: the delete question
+   const seen = useRef<Record<string, AgentState>>({});
+   const groupBy = groupFromSetting(settings[GROUP_SETTING]);
++  const cardPorts = useCardPorts(); // PROJ-062 (T-266-b): the hover lists the ports, scanned when the pointer enters a card
+   const cardDetails = readCardDetails(settings); // PROJ-062, SET-021: Compact, Default, Detailed or a chosen set
+ 
+   const sortBy = sortFromSetting(settings[SORT_SETTING]);
+@@ -1545,14 +1547,14 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
+     const asking = confirm?.path === w.path;
+     const info = infoOf(w);
+     // PROJ-062: what the card shows under its name, and what a hover adds for the rest.
+-    const facts: CardFacts = { agents: liveIn(w).length, state: info.state, pr: info.pr, changed: info.changed, note: w.comment ?? null };
++    const facts: CardFacts = { agents: liveIn(w).length, state: info.state, pr: info.pr, changed: info.changed, note: w.comment ?? null, ports: cardPorts.portsFor(w.path), task: w.number ?? null };
+     const hoverTitle = cardTitle(worktreeLabel(w), w.branch, cardDetails.shown, facts, `Show ${w.path}${isAsleep(w) ? " (asleep: showing it wakes it)" : ""}`);
+     const un = isUnread(w);
+     const shut = shutKids.has(w.path);
+     const up = w.parent ? (worktrees[p.id] ?? []).find((x) => !x.isMain && same(x.path, w.parent as string)) : undefined;
+     return (
+       <div key={w.path} data-worktree={worktreeLabel(w)} data-depth={depth} data-path={w.path}>
+-        <div {...rowDrag(w)} className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onContextMenu={(e) => void openMenu(e, p, w)} onClick={() => show(w)} onKeyDown={(e) => (e.key === "Enter" ? show(w) : e.key === "F2" && startRename(w))} title={hoverTitle} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
++        <div {...rowDrag(w)} className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onContextMenu={(e) => void openMenu(e, p, w)} onClick={() => show(w)} onPointerEnter={() => cardPorts.load(w.path, pollPaths)} onKeyDown={(e) => (e.key === "Enter" ? show(w) : e.key === "F2" && startRename(w))} title={hoverTitle} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
+           {kids && (
+             <button
+               className={`fold${shut ? " shut" : ""}`}
