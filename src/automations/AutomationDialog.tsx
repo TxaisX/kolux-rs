@@ -11,7 +11,7 @@ import type { KeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentInfo } from "../launch/PlusMenu";
 import { folderName, type Project, type Worktree } from "../projects/model";
-import { defaultForm, findNext, GRACE, PRECHECK, preselect, type Automation, type Preset, type ScheduleForm } from "./model";
+import { defaultForm, EVENT_CHOICES, findNext, GRACE, PRECHECK, preselect, type Automation, type Preset, type ScheduleForm } from "./model";
 import { probeSetup } from "../settings/setupProbe";
 import { clampBox, cronWords, fieldNames, from12, nudge, templates, to12, toPreset, weekdayNames, type Template } from "./timetable";
 
@@ -324,7 +324,11 @@ export default function AutomationDialog({ projects, agents, editing, template, 
               Starts
               <select className="field" value={starts} onChange={(e) => setStarts(e.target.value)}>
                 <option value="schedule">On a timetable</option>
-                <option value="pr-opened">When a pull request opens</option>
+                {EVENT_CHOICES.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
               </select>
             </label>
             {timed && (
@@ -408,7 +412,7 @@ export default function AutomationDialog({ projects, agents, editing, template, 
               </label>
               </>
             )}
-            {!timed && <span className="muted">A pull request opened from one of this project's worktrees starts a run, with a line about it on the end of the prompt. Kolux spots one within about 15 minutes while it is open; after a run it rests five minutes.</span>}
+            {!timed && <span className="muted">{EVENT_CHOICES.find((c) => c.value === starts)?.help}</span>}
             <label className="auto-label">
               Precheck command
               <input className="field" value={precheck} placeholder="Optional, for example: git diff --quiet" onChange={(e) => setPrecheck(e.target.value)} />

@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
 import AutomationDialog, { setupChoice } from "./AutomationDialog";
-import type { Automation } from "./model";
+import { EVENT_CHOICES, type Automation } from "./model";
 import { templates } from "./timetable";
 
 const projects = [{ id: "p1", name: "shop", path: "C:\\src\\shop", base: "main" }];
@@ -95,4 +95,22 @@ test("AUTO-010: the setup choice shows only for a new worktree per run in a proj
   expect(setupChoice("new-per-run", null, true), "not known yet: no option").toBeNull();
   expect(setupChoice("existing", true, true), "an existing worktree never runs setup again").toBeNull();
   expect(render(null)).not.toContain("Run the project setup");
+});
+
+test("T-085-f: the dialog offers pull request opens, checks fail and an agent finishes, each with its own note", () => {
+  const fresh = render(null);
+  for (const [value, label] of [["pr-opened", "When a pull request opens"], ["checks-failed", "When checks fail"], ["agent-finished", "When an agent finishes"]]) {
+    expect(fresh).toContain(`<option value="${value}">${label}</option>`);
+  }
+  expect(EVENT_CHOICES.map((c) => c.value)).toEqual(["pr-opened", "checks-failed", "agent-finished"]);
+  const row = (event: "pr-opened" | "checks-failed" | "agent-finished"): Automation => ({ id: "auto-3", name: "On event", prompt: "look", provider: "claude", projectId: "p1", enabled: true, workspaceMode: "existing", trigger: { kind: "event", event } });
+  const red = render(row("checks-failed"));
+  expect(red).toMatch(/<option value="checks-failed" selected="">When checks fail/);
+  expect(red).toContain("go from pending to failing");
+  expect(red).not.toContain("Time zone");
+  const done = render(row("agent-finished"));
+  expect(done).toMatch(/<option value="agent-finished" selected="">When an agent finishes/);
+  expect(done).toContain("finishes its turn");
+  expect(done).not.toContain("go from pending to failing");
+  expect(render(row("pr-opened"))).toContain("A pull request opened from one of this project");
 });
