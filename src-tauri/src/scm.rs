@@ -487,7 +487,7 @@ pub struct Pr {
 }
 
 /// What every lookup asks gh for.
-const PR_FIELDS: &str = "number,url,state,title,headRefName,isDraft";
+pub(crate) const PR_FIELDS: &str = "number,url,state,title,headRefName,isDraft";
 
 /// The GitHub CLI, which carries the user's sign-in and works with GitHub Enterprise Server too.
 /// GIT-060: a GitHub (or GitHub Enterprise) repository named by a remote. `api` is the REST
@@ -918,7 +918,9 @@ fn check_outcome(v: &serde_json::Value) -> &'static str {
         return "running";
     }
     match word("conclusion").as_str() {
-        "SUCCESS" | "NEUTRAL" => "passed",
+        "SUCCESS" => "passed",
+        // GIT-029: a neutral check is not counted as passed.
+        "NEUTRAL" => "neutral",
         "FAILURE" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => "failed",
         "SKIPPED" | "STALE" => "skipped",
         "CANCELLED" => "cancelled",
@@ -1781,7 +1783,7 @@ pub struct MergeInfo {
 const MERGE_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed autoMergeAllowed pullRequest(number:$number){state isDraft mergeable mergeStateStatus reviewDecision isInMergeQueue isMergeQueueEnabled autoMergeRequest{mergeMethod} commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}";
 
 /// `host`, `owner`, `repo` and the number of a pull request link.
-fn pr_parts(url: &str) -> Option<(String, String, String, u64)> {
+pub(crate) fn pr_parts(url: &str) -> Option<(String, String, String, u64)> {
     let clean = pr_url_in(url.trim())?;
     let parts: Vec<&str> = clean.strip_prefix("https://")?.split('/').collect();
     Some((parts[0].into(), parts[1].into(), parts[2].into(), parts[4].parse().ok()?))
@@ -2902,6 +2904,15 @@ mod tests {
         // A PR without checks, or mergeable, reads as none and no conflict.
         let bare = checks_from(r#"{"number":3,"url":"https://github.com/o/r/pull/3","state":"OPEN","mergeable":"MERGEABLE","statusCheckRollup":[]}"#).unwrap();
         assert!(!bare.conflict && bare.checks.is_empty());
+    }
+
+    #[test]
+    fn a_neutral_check_is_not_counted_as_passed_and_one_needing_action_is_failing() {
+        // GIT-029
+        let run = |c: &str| check_outcome(&serde_json::json!({"__typename":"CheckRun","status":"COMPLETED","conclusion":c}));
+        assert_eq!(run("NEUTRAL"), "neutral");
+        assert_eq!(run("ACTION_REQUIRED"), "failed");
+        assert_eq!(run("SUCCESS"), "passed");
     }
 
     #[test]

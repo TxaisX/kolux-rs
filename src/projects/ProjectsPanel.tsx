@@ -255,7 +255,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const waitTouched = useRef(false); // the user clicked the wait box since the project last changed
   const nameRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
-  const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; refusal?: string } | null>(null);
+  const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; keep?: boolean; refusal?: string } | null>(null);
   const [busy, setBusy] = useState("");
   const [startGit, setStartGit] = useState<{ folder: string; files: FirstFile[] } | null>(null);
   const [importing, setImporting] = useState<{ project: string; path: string; list: SetupImport[] } | null>(null);
@@ -955,9 +955,9 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     if (!c) return;
     setBusy("removing");
     try {
-      await invoke("workspace_remove", { projectId: c.projectId, path: c.path, force: c.force, stamp: c.check.stamp });
+      const kept = await invoke<{ branch: string; commit: string } | null>("workspace_remove", { projectId: c.projectId, path: c.path, force: c.force, stamp: c.check.stamp, keepBranch: c.keep });
       onRemoved(c.path);
-      say("ok", `removed ${c.branch} and its folder`);
+      say("ok", kept ? `removed ${c.branch}'s folder; kept the branch ${kept.branch}` : `removed ${c.branch} and its folder`);
       setConfirm(null);
       await reload();
     } catch (err) {
@@ -1449,6 +1449,12 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
               <label className="del-force">
                 <input type="checkbox" checked={confirm.force} onChange={(e) => setConfirm({ ...confirm, force: e.target.checked })} />
                 Delete my changes too
+              </label>
+            )}
+            {!blocker(confirm.check) && (
+              <label className="del-force">
+                <input type="checkbox" checked={confirm.keep === true} onChange={(e) => setConfirm({ ...confirm, keep: e.target.checked })} />
+                Keep the branch
               </label>
             )}
             <div className="btn-row">

@@ -1033,7 +1033,15 @@ pub fn create_fresh_workspace<S: std::ops::Deref<Target = Store>>(git: &Git, loc
 /// branch goes with the folder unless another worktree still has it checked out.
 #[cfg(test)]
 pub fn remove_workspace(git: &Git, project: &Project, worktree_path: &str, force: bool) -> Result<(), String> {
-    remove_worktree(git, project, worktree_path, force, false)
+    remove_worktree(git, project, worktree_path, force, false).map(|_| ())
+}
+
+/// A branch left behind when its workspace went, with the commit it pointed at then, so a later
+/// delete (`Git::delete_branch_if_at`) removes it only while it is still there.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Kept {
+    pub branch: String,
+    pub commit: String,
 }
 
 /// PROJ-030: a workspace opened on a branch that already existed keeps that branch when it goes.
@@ -1042,7 +1050,7 @@ pub fn keeps_branch(store: &Store, path: &str) -> bool {
 }
 
 /// `remove_workspace`, keeping the branch when `keep_branch`.
-pub fn remove_worktree(git: &Git, project: &Project, worktree_path: &str, force: bool, keep_branch: bool) -> Result<(), String> {
+pub fn remove_worktree(git: &Git, project: &Project, worktree_path: &str, force: bool, keep_branch: bool) -> Result<Option<Kept>, String> {
     let repo = Path::new(&project.path);
     let target = git.worktrees(repo)?.into_iter().find(|w| same_folder(Path::new(&w.path), Path::new(worktree_path))).ok_or_else(|| format!("{worktree_path} is not a worktree of {}", project.name))?;
     if target.is_main {
@@ -1052,7 +1060,16 @@ pub fn remove_worktree(git: &Git, project: &Project, worktree_path: &str, force:
         return Err(format!("{} has uncommitted changes", target.branch.as_deref().unwrap_or(worktree_path)));
     }
     crate::include::unlink_shared(repo, Path::new(&target.path));
-    git.worktree_remove(repo, Path::new(&target.path), target.branch.as_deref().filter(|_| !keep_branch)).map(|_| ())
+    let left = git.worktree_remove(repo, Path::new(&target.path), target.branch.as_deref().filter(|_| !keep_branch))?;
+    // The branch stayed: because the user chose to keep it, or because another worktree has it.
+    Ok(match (target.branch, keep_branch, left) {
+        (Some(branch), true, _) => {
+            let commit = crate::git::run(&["rev-parse", "--verify", &format!("refs/heads/{branch}")], Some(repo))?;
+            Some(Kept { branch, commit })
+        }
+        (Some(branch), false, Some(commit)) => Some(Kept { branch, commit }),
+        _ => None,
+    })
 }
 
 /// PROJ-030: a workspace on a branch that exists already, locally or only on a remote (Git then
@@ -1274,7 +1291,7 @@ pub fn removal_refused(now: &RemoveCheck, force: bool, asked: &str) -> Option<St
     None
 }
 
-fn find_project(store: &Store, id: &str) -> Result<Project, String> {
+pub(crate) fn find_project(store: &Store, id: &str) -> Result<Project, String> {
     load_projects(store).into_iter().find(|p| p.id == id).ok_or_else(|| "that project is no longer registered".to_string())
 }
 
@@ -1522,19 +1539,27 @@ pub fn workspace_remove_check(git: State<'_, Git>, store: StoreState<'_>, projec
 /// PROJ-070: deletes the workspace only when the check made just now still matches `stamp` (what
 /// the question showed) and nothing refuses it; `force` loses uncommitted changes. Async (T-033-e
 /// FIX-1): it joins the watch's reader threads and runs git, never on the window's thread.
+/// `keep_branch` is the remove form's choice; none means what the workspace's own record says.
+/// The branch that stayed, if any, comes back so it can be deleted later.
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
-pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: State<'_, crate::terminal::Terminals>, project_id: String, path: String, force: bool, stamp: String) -> Result<(), String> {
+pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: State<'_, crate::terminal::Terminals>, project_id: String, path: String, force: bool, stamp: String, keep_branch: Option<bool>) -> Result<Option<Kept>, String> {
     let project = {
         let store = store.lock().map_err(|e| e.to_string())?;
         find_project(&store, &project_id)?
     };
-    if let Some(why) = removal_refused(&remove_check(&git, &project, &path)?, force, &stamp) {
+    remove_one(&git, &store, &terminals, &project, &path, force, &stamp, keep_branch)
+}
+
+/// One delete, as the command and the batch (PROJ-071) both run it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn remove_one(git: &Git, store: &Mutex<Store>, terminals: &crate::terminal::Terminals, project: &Project, path: &str, force: bool, stamp: &str, keep_branch: Option<bool>) -> Result<Option<Kept>, String> {
+    if let Some(why) = removal_refused(&remove_check(git, project, path)?, force, stamp) {
         return Err(why);
     }
     // ORCH-058: a shell still sitting in the folder would keep Windows from deleting it, so its
     // terminals end first; one that cannot be shown gone blocks unless the force box waives it.
-    let stopped = terminals.kill_under(Path::new(&path));
+    let stopped = terminals.kill_under(Path::new(path));
     if !force && !stopped.stuck.is_empty() {
         let n = stopped.stuck.len();
         return Err(format!("{n} process{} in this workspace did not stop. Tick Delete my changes too to delete it anyway, leaving {} running.", if n == 1 { "" } else { "es" }, if n == 1 { "it" } else { "them" }));
@@ -1542,19 +1567,23 @@ pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: S
     // FIX-2 (T-033-e review): what to keep is decided first, so the one `?` that can return early
     // runs before the watch ends; an early return after it would drop the handle below without
     // telling the page.
-    let keep = keeps_branch(&*store.lock().map_err(|e| e.to_string())?, &path);
+    let keep = keep_branch.unwrap_or(keeps_branch(&*store.lock().map_err(|e| e.to_string())?, path));
     // T-033-e: the Source Control watch on this folder ends first and its folder handles are
     // closed (joined) before git deletes the folder, so nothing of ours stands in the way.
-    let watch = crate::scm::watch::unwatch_root(Path::new(&path));
-    if let Err(e) = remove_worktree(&git, &project, &path, force, keep) {
-        // FIX-1: the folder stays after all, so its panel is told to watch it again.
-        if let Some(w) = watch {
-            w.tell_page();
+    let watch = crate::scm::watch::unwatch_root(Path::new(path));
+    let kept = match remove_worktree(git, project, path, force, keep) {
+        Ok(k) => k,
+        Err(e) => {
+            // FIX-1: the folder stays after all, so its panel is told to watch it again.
+            if let Some(w) = watch {
+                w.tell_page();
+            }
+            return Err(e);
         }
-        return Err(e);
-    }
+    };
     let store = store.lock().map_err(|e| e.to_string())?;
-    forget_workspace(&store, &path)
+    forget_workspace(&store, path)?;
+    Ok(kept)
 }
 
 /// The global workspaces settings as the sidebar shows them (PROJ-025).
@@ -2480,6 +2509,42 @@ mod tests {
         assert!(keeps_branch(&store, &made.worktree.path));
         remove_worktree(&git, &project, &made.worktree.path, false, keeps_branch(&store, &made.worktree.path)).unwrap();
         assert_eq!(rev(&repo, "feat/x"), tip, "the branch stays when the workspace goes");
+        drop(store);
+        for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn a_branch_kept_at_removal_is_reported_and_deleted_later_only_while_it_has_not_moved() {
+        let git = Git::detect().unwrap();
+        let profile = temp("kept");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("kept-r");
+        let root = temp("kept-root");
+        let project = add_project(&git, &store, &repo).unwrap();
+        let a = create_workspace(&git, &nested(&root), &project, "keep-me", None).unwrap();
+        let branch = a.worktree.branch.clone().unwrap();
+        let tip = rev(&repo, &branch);
+        // Keep chosen in the remove form: the folder goes, the branch stays, and we are told where it was.
+        let kept = remove_worktree(&git, &project, &a.worktree.path, false, true).unwrap().unwrap();
+        assert_eq!(kept, Kept { branch: branch.clone(), commit: tip.clone() });
+        assert!(git.delete_branch_if_at(Path::new(&project.path), &kept.branch, &kept.commit).unwrap(), "unmoved: deleted");
+        assert!(!branches(&repo).unwrap().contains(&branch));
+        // Without the choice the branch goes with the workspace and nothing is kept.
+        let b = create_workspace(&git, &nested(&root), &project, "drop-me", None).unwrap();
+        assert_eq!(remove_worktree(&git, &project, &b.worktree.path, false, false).unwrap(), None);
+        // A kept branch that moved on since is left alone.
+        let c = create_workspace(&git, &nested(&root), &project, "moved-on", None).unwrap();
+        let cb = c.worktree.branch.clone().unwrap();
+        let kept = remove_worktree(&git, &project, &c.worktree.path, false, true).unwrap().unwrap();
+        git_in(&repo, &["checkout", "-q", &cb]);
+        fs::write(repo.join("n.txt"), "n").unwrap();
+        git_in(&repo, &["add", "."]);
+        git_in(&repo, &["commit", "-q", "-m", "more"]);
+        git_in(&repo, &["checkout", "-q", "main"]);
+        assert!(!git.delete_branch_if_at(Path::new(&project.path), &kept.branch, &kept.commit).unwrap(), "moved: left alone");
+        assert!(branches(&repo).unwrap().contains(&cb));
         drop(store);
         for d in [profile, repo, root] {
             let _ = fs::remove_dir_all(d);

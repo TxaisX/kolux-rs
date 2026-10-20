@@ -38,6 +38,7 @@ mod keybindings;
 mod kits;
 mod links;
 mod menu;
+mod bulk;
 mod names;
 mod newproject;
 mod notifications;
@@ -49,6 +50,7 @@ mod protected;
 mod resources;
 mod projects;
 mod scm;
+mod pr_review;
 mod skills;
 mod pr_checkout;
 mod pty;
@@ -492,7 +494,12 @@ pub fn run() {
             scm::scm_discard,
             scm::scm_commit, scm::scm_remote,
             scm::scm_pr, scm::scm_pr_checks, scm::scm_pr_create, scm::scm_open_pr,
+            pr_review::scm_pr_find, pr_review::scm_check_rerun, pr_review::scm_check_log, pr_review::scm_pr_text,
+            pr_review::scm_review_read, pr_review::scm_review_act,
             scm::scm_history, scm::scm_commit_files, scm::scm_github_repo,
+            bulk::workspace_remove_many, bulk::workspace_kept_branch_delete, bulk::workspace_forget,
+            bulk::workspace_statuses, bulk::workspace_statuses_set, bulk::workspace_status_set,
+            bulk::space_scan, bulk::space_saved,
             keybindings::keybindings_read,
             menu::menu_sync, menu::menu_popup,
             keybindings::keybindings_write,

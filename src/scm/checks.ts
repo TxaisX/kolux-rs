@@ -2,7 +2,7 @@
 // short grace period that reuses a recent "no pull request" answer.
 import type { Pr } from "./model";
 
-export type Check = { name: string; outcome: "passed" | "failed" | "running" | "skipped" | "cancelled" | "unresolved"; workflow?: string | null; link?: string | null; started?: string | null; finished?: string | null; description?: string | null };
+export type Check = { name: string; outcome: "passed" | "failed" | "running" | "skipped" | "cancelled" | "unresolved" | "neutral"; workflow?: string | null; link?: string | null; started?: string | null; finished?: string | null; description?: string | null };
 export type PrChecks = { pr: Pr | null; conflict: boolean; checks: Check[] };
 
 /** How often running checks are asked about again while the panel is in view. */
@@ -10,7 +10,7 @@ export const CHECKS_POLL_MS = 15_000;
 /** How long a "no pull request" answer for a worktree is trusted before gh is asked again. */
 export const NO_PR_GRACE_MS = 60_000;
 
-const ORDER: Check["outcome"][] = ["failed", "unresolved", "running", "cancelled", "skipped", "passed"];
+const ORDER: Check["outcome"][] = ["failed", "unresolved", "running", "cancelled", "skipped", "neutral", "passed"];
 
 export function checksSummary(checks: Check[]): string {
   if (checks.length === 0) return "No checks have reported on this pull request.";
