@@ -5,7 +5,7 @@ export type FieldOption = { id: string; name: string; start: string; days: numbe
 export type ProjectField = { id: string; name: string; kind: string; options: FieldOption[] };
 export type ProjectView = { number: number; name: string; layout: string };
 export type Cell = { text: string; id: string; start: string; days: number };
-export type ProjectItem = { id: string; kind: string; title: string; number: number | null; url: string; repo: string; state: string; labels: string[]; assignees: string[]; values: Record<string, Cell> };
+export type ProjectItem = { id: string; kind: string; title: string; number: number | null; url: string; repo: string; state: string; labels: string[]; assignees: string[]; issueType: string; values: Record<string, Cell> };
 export type Project = { id: string; owner: string; number: number; title: string; url: string; closed: boolean; views: ProjectView[]; fields: ProjectField[]; items: ProjectItem[]; more: boolean };
 /** A remembered project (pinned or recent). */
 export type ProjectRef = { host: string; owner: string; number: number; title: string };
@@ -92,8 +92,12 @@ export function refsFrom(v: unknown): ProjectRef[] {
 
 /** Kinds whose cell is edited through the project's own field (github_project_set). */
 export const EDITABLE = new Set(["text", "number", "date", "single_select", "iteration"]);
-/** Labels are the issue's own and are edited on the issue (scm_task_labels). */
-export const cellEditable = (item: ProjectItem, f: ProjectField) => item.kind !== "restricted" && (EDITABLE.has(f.kind) || (f.kind === "labels" && item.kind !== "draft" && !!item.repo && item.number !== null));
+/** T-314-d: columns that are the issue's own fields, edited on the issue and not through the project:
+ * labels (scm_task_labels), assignees (pr_assignees: GitHub keeps both under issues) and the issue
+ * type (github_issue_type_set, issues only: a pull request has none). */
+const onIssue = (item: ProjectItem) => item.kind !== "draft" && item.kind !== "restricted" && !!item.repo && item.number !== null;
+export const cellEditable = (item: ProjectItem, f: ProjectField) =>
+  item.kind !== "restricted" && (EDITABLE.has(f.kind) || ((f.kind === "labels" || f.kind === "assignees") && onIssue(item)) || (f.kind === "issue_type" && item.kind === "issue" && onIssue(item)));
 
 /** What a cell shows. */
 export function cellText(item: ProjectItem, f: ProjectField): string {
@@ -105,6 +109,8 @@ export function cellText(item: ProjectItem, f: ProjectField): string {
       return item.assignees.map((a) => `@${a}`).join(", ");
     case "labels":
       return item.labels.join(", ");
+    case "issue_type":
+      return item.issueType;
     case "repository":
       return item.repo;
     default:
@@ -171,6 +177,34 @@ export function labelChange(before: string[], typed: string): { add: string[]; r
   const was = low(before);
   const now = low(after);
   return { add: after.filter((l) => !was.has(l.toLowerCase())), remove: before.filter((l) => !now.has(l.toLowerCase())) };
+}
+
+/** T-314-d: an assignee edit as GitHub's add / remove lists, from the typed comma list (`@ana, bo`).
+ * Logins compare without regard to case; a typed name that is not a GitHub login is listed in `bad`
+ * and nothing is sent while there is one. */
+export function assigneeChange(before: string[], typed: string): { add: string[]; remove: string[]; bad: string[] } {
+  const named = typed.split(",").map((s) => s.trim().replace(/^@/, "")).filter(Boolean);
+  const after = [...new Map(named.map((n) => [n.toLowerCase(), n])).values()];
+  const bad = after.filter((n) => !LOGIN.test(n) || n.length > 79);
+  const was = new Set(before.map((x) => x.toLowerCase()));
+  const now = new Set(after.map((x) => x.toLowerCase()));
+  return { add: after.filter((l) => !was.has(l.toLowerCase())), remove: before.filter((l) => !now.has(l.toLowerCase())), bad };
+}
+
+/** T-314-d: the address a repository is cloned from when a row offers to add it (GIT-056): https on a
+ * plain host name and a plain owner/name, otherwise null. */
+export function cloneAddress(host: string, repo: string): string | null {
+  const part = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+  const [owner, name, ...rest] = repo.split("/");
+  if (!/^[A-Za-z0-9][A-Za-z0-9.-]*(?::\d{1,5})?$/.test(host) || rest.length > 0 || !owner || !name || !part.test(owner) || !part.test(name)) return null;
+  return `https://${host}/${owner}/${name}.git`;
+}
+
+/** T-314-d: the assignees a row shows once an edit succeeded. */
+export function applyAssignees(before: string[], change: { add: string[]; remove: string[] }): string[] {
+  const gone = new Set(change.remove.map((x) => x.toLowerCase()));
+  const kept = before.filter((x) => !gone.has(x.toLowerCase()));
+  return [...kept, ...change.add.filter((a) => !kept.some((k) => k.toLowerCase() === a.toLowerCase()))];
 }
 
 /** The view's address on GitHub, only for a project GitHub gave an https address. */

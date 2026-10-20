@@ -1,0 +1,51 @@
+diff --git a/src-tauri/src/github.rs b/src-tauri/src/github.rs
+index 03eaee4c..66f16fa9 100644
+--- a/src-tauri/src/github.rs
++++ b/src-tauri/src/github.rs
+@@ -699,11 +699,9 @@ pub async fn github_issue_comment(host: String, repo: String, number: u64, body:
+ // from GraphQL; the change goes to the issue's REST update with the name on standard input, and an
+ // empty name clears the type.
+ 
+-#[allow(dead_code)] // until evidence/tasks-T-314-d-lib.patch lists the commands
+ const ISSUE_TYPES: &str = "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){issueTypes(first:50){nodes{name}}}}";
+ 
+ /// The issue types `repo` offers (empty when its owner has none).
+-#[allow(dead_code)] // until evidence/tasks-T-314-d-lib.patch lists the commands
+ pub fn issue_types(gh: &Path, host: &str, repo: &str) -> Result<Vec<String>, String> {
+     repo_path(host, repo)?;
+     let (owner, name) = repo.split_once('/').unwrap_or_default();
+@@ -712,7 +710,6 @@ pub fn issue_types(gh: &Path, host: &str, repo: &str) -> Result<Vec<String>, Str
+ }
+ 
+ /// Set (or, with an empty `name`, clear) issue `number`'s type; answers the type GitHub now shows.
+-#[allow(dead_code)] // until evidence/tasks-T-314-d-lib.patch lists the commands
+ pub fn set_issue_type(gh: &Path, host: &str, repo: &str, number: u64, name: &str) -> Result<String, String> {
+     let path = format!("{}/issues/{number}", repo_path(host, repo)?);
+     let name = name.trim();
+@@ -727,13 +724,11 @@ pub fn set_issue_type(gh: &Path, host: &str, repo: &str, number: u64, name: &str
+ }
+ 
+ #[tauri::command]
+-#[allow(dead_code)] // until evidence/tasks-T-314-d-lib.patch lists the commands
+ pub async fn github_issue_types(host: String, repo: String) -> Result<Vec<String>, String> {
+     tauri::async_runtime::spawn_blocking(move || issue_types(&gh_program()?, &host, &repo)).await.map_err(|e| e.to_string())?
+ }
+ 
+ #[tauri::command]
+-#[allow(dead_code)] // until evidence/tasks-T-314-d-lib.patch lists the commands
+ pub async fn github_issue_type_set(host: String, repo: String, number: u64, name: String) -> Result<String, String> {
+     tauri::async_runtime::spawn_blocking(move || set_issue_type(&gh_program()?, &host, &repo, number, &name)).await.map_err(|e| e.to_string())?
+ }
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 754c010b..39cb7625 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -509,6 +509,8 @@ pub fn run() {
+             github::github_issue_state,
+             github::github_issue_comment,
+             github::github_issue_create,
++            github::github_issue_types,
++            github::github_issue_type_set,
+             scm::scm_task_labels,
+             scm::scm_task_body,
+             scm::scm_stage,

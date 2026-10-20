@@ -320,6 +320,8 @@ pub struct ProjectItem {
     pub state: String,
     pub labels: Vec<String>,
     pub assignees: Vec<String>,
+    /// T-314-d: an issue's own type (Bug, Task, ...); empty for pull requests and issues without one.
+    pub issue_type: String,
     /// Field id to cell, for the fields that have a value on this item.
     pub values: std::collections::BTreeMap<String, Cell>,
 }
@@ -341,12 +343,14 @@ pub struct Project {
 }
 
 const PROJECT_PAGES: usize = 5;
+/// Longest issue type name Kolux reads or sends (GitHub's own names are far shorter).
+const ISSUE_TYPE_MAX: usize = 100;
 
 const PROJECT_QUERY: &str = "query($owner:String!,$number:Int!,$after:String){repositoryOwner(login:$owner){login ...on Organization{projectV2(number:$number){...P}} ...on User{projectV2(number:$number){...P}}}} \
 fragment P on ProjectV2{id title url number closed views(first:30){nodes{number name layout}} \
 fields(first:50){nodes{...on ProjectV2Field{id name dataType} ...on ProjectV2IterationField{id name dataType configuration{iterations{id title startDate duration} completedIterations{id title startDate duration}}} ...on ProjectV2SingleSelectField{id name dataType options{id name}}}} \
 items(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{id type content{__typename ...on DraftIssue{title} \
-...on Issue{number title url state repository{nameWithOwner} labels(first:20){nodes{name}} assignees(first:10){nodes{login}}} \
+...on Issue{number title url state issueType{name} repository{nameWithOwner} labels(first:20){nodes{name}} assignees(first:10){nodes{login}}} \
 ...on PullRequest{number title url state repository{nameWithOwner} labels(first:20){nodes{name}} assignees(first:10){nodes{login}}}} \
 fieldValues(first:50){nodes{__typename ...on ProjectV2ItemFieldTextValue{text field{...F}} ...on ProjectV2ItemFieldNumberValue{number field{...F}} \
 ...on ProjectV2ItemFieldDateValue{date field{...F}} ...on ProjectV2ItemFieldSingleSelectValue{name optionId field{...F}} \
@@ -442,6 +446,7 @@ pub fn items_of(p: &serde_json::Value) -> Vec<ProjectItem> {
             item.state = s(&c["state"]).to_ascii_lowercase();
             item.labels = names(&c["labels"], "name");
             item.assignees = names(&c["assignees"], "login").into_iter().filter(|l| login_ok(l)).collect();
+            item.issue_type = s(&c["issueType"]["name"]).chars().filter(|ch| !ch.is_control()).take(ISSUE_TYPE_MAX).collect();
             for v in n["fieldValues"]["nodes"].as_array().into_iter().flatten() {
                 let Some(field) = v["field"]["id"].as_str() else { continue };
                 let cell = match v["__typename"].as_str().unwrap_or("") {
@@ -690,6 +695,49 @@ pub async fn github_issue_comment(host: String, repo: String, number: u64, body:
     tauri::async_runtime::spawn_blocking(move || comment_issue(&gh_program()?, &host, &repo, number, &body)).await.map_err(|e| e.to_string())?
 }
 
+// T-314-d (GIT-056): the issue's own type in the Projects table. The types a repository offers come
+// from GraphQL; the change goes to the issue's REST update with the name on standard input, and an
+// empty name clears the type.
+
+#[allow(dead_code)] // until evidence/tasks-T-314-d-lib.patch lists the commands
+const ISSUE_TYPES: &str = "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){issueTypes(first:50){nodes{name}}}}";
+
+/// The issue types `repo` offers (empty when its owner has none).
+#[allow(dead_code)] // until evidence/tasks-T-314-d-lib.patch lists the commands
+pub fn issue_types(gh: &Path, host: &str, repo: &str) -> Result<Vec<String>, String> {
+    repo_path(host, repo)?;
+    let (owner, name) = repo.split_once('/').unwrap_or_default();
+    let data = graphql(gh, host, ISSUE_TYPES, serde_json::json!({ "owner": owner, "name": name }))?;
+    Ok(names(&data["repository"]["issueTypes"], "name").into_iter().filter(|n| !n.is_empty() && n.chars().count() <= ISSUE_TYPE_MAX).collect())
+}
+
+/// Set (or, with an empty `name`, clear) issue `number`'s type; answers the type GitHub now shows.
+#[allow(dead_code)] // until evidence/tasks-T-314-d-lib.patch lists the commands
+pub fn set_issue_type(gh: &Path, host: &str, repo: &str, number: u64, name: &str) -> Result<String, String> {
+    let path = format!("{}/issues/{number}", repo_path(host, repo)?);
+    let name = name.trim();
+    if number == 0 || name.chars().count() > ISSUE_TYPE_MAX || name.chars().any(|c| c.is_control()) {
+        return Err("That issue type cannot be set".into());
+    }
+    host_allowed(gh, host)?;
+    let input = serde_json::json!({ "type": if name.is_empty() { serde_json::Value::Null } else { name.into() } }).to_string();
+    let text = gh_run(gh, &std::env::temp_dir(), &["api", "-X", "PATCH", &path, "--hostname", host, "--input", "-"], Some(&input)).map_err(|e| format!("{host}: {}", gh_words(&e)))?;
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
+    Ok(s(&v["type"]["name"]))
+}
+
+#[tauri::command]
+#[allow(dead_code)] // until evidence/tasks-T-314-d-lib.patch lists the commands
+pub async fn github_issue_types(host: String, repo: String) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || issue_types(&gh_program()?, &host, &repo)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+#[allow(dead_code)] // until evidence/tasks-T-314-d-lib.patch lists the commands
+pub async fn github_issue_type_set(host: String, repo: String, number: u64, name: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || set_issue_type(&gh_program()?, &host, &repo, number, &name)).await.map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -827,7 +875,7 @@ mod tests {
                 {}
             ] },
             "items": { "pageInfo": { "hasNextPage": more, "endCursor": "Y3Vyc29y" }, "nodes": [
-                { "id": "PVTI_a", "type": "ISSUE", "content": { "__typename": "Issue", "number": 7, "title": "Fix login", "url": "https://github.com/acme/app/issues/7", "state": "OPEN",
+                { "id": "PVTI_a", "type": "ISSUE", "content": { "__typename": "Issue", "number": 7, "title": "Fix login", "url": "https://github.com/acme/app/issues/7", "state": "OPEN", "issueType": { "name": "Bug" },
                     "repository": { "nameWithOwner": "acme/app" }, "labels": { "nodes": [{ "name": "bug" }] }, "assignees": { "nodes": [{ "login": "ana" }, { "login": "bad login" }] } },
                   "fieldValues": { "nodes": [
                     { "__typename": "ProjectV2ItemFieldSingleSelectValue", "name": "Todo", "optionId": "o1", "field": { "id": "F_status" } },
@@ -857,6 +905,7 @@ mod tests {
         let a = &items[0];
         assert_eq!((a.repo.as_str(), a.state.as_str(), a.number), ("acme/app", "open", Some(7)));
         assert_eq!(a.assignees, ["ana"], "a login outside GitHub's characters is dropped");
+        assert_eq!((a.issue_type.as_str(), items[2].issue_type.as_str()), ("Bug", ""), "an issue's type is read; a draft has none");
         assert_eq!(a.values["F_status"], Cell { text: "Todo".into(), id: "o1".into(), ..Default::default() });
         assert_eq!(a.values["F_sprint"].start, "2026-10-12");
         assert_eq!(a.values["F_due"], Cell { text: "2026-10-20".into(), start: "2026-10-20".into(), ..Default::default() });
@@ -1196,5 +1245,34 @@ mod tests {
 
         let (gh, _keep) = graphql_stand_in("github-issue-create-odd", &json!({ "message": "?" }));
         assert!(create_issue(&gh, "github.com", "acme/app", "t", "", &[], &[]).unwrap_err().contains("refresh"));
+    }
+
+    #[test]
+    fn an_issue_type_is_offered_from_the_repository_and_set_or_cleared_with_the_name_on_stdin() {
+        let (gh, dir) = graphql_stand_in("github-issue-types", &json!({ "data": { "repository": { "issueTypes": { "nodes": [{ "name": "Bug" }, { "name": "" }, { "name": "Task" }] } } } }));
+        assert_eq!(issue_types(&gh, "github.com", "acme/app").unwrap(), ["Bug", "Task"]);
+        assert!(issue_types(&gh, "github.com", "acme/../app").is_err());
+        let calls = fs::read_to_string(dir.join("calls.txt")).unwrap();
+        assert_eq!(calls.lines().count(), 1, "the refused repository sent nothing: {calls}");
+
+        let (gh, dir) = graphql_stand_in("github-issue-type-set", &json!({ "type": { "name": "Bug" } }));
+        assert_eq!(set_issue_type(&gh, "github.com", "acme/app", 7, " Bug ").unwrap(), "Bug");
+        let calls = fs::read_to_string(dir.join("calls.txt")).unwrap();
+        assert!(calls.contains("api -X PATCH repos/acme/app/issues/7 --hostname github.com --input -"), "{calls}");
+        assert!(!calls.contains("Bug"), "the name goes on stdin, never on the command line: {calls}");
+        let body: serde_json::Value = serde_json::from_str(fs::read_to_string(dir.join("body.txt")).unwrap().trim()).unwrap();
+        assert_eq!(body, json!({ "type": "Bug" }));
+
+        let (gh, dir) = graphql_stand_in("github-issue-type-clear", &json!({ "type": null }));
+        assert_eq!(set_issue_type(&gh, "github.com", "acme/app", 7, "").unwrap(), "");
+        let body: serde_json::Value = serde_json::from_str(fs::read_to_string(dir.join("body.txt")).unwrap().trim()).unwrap();
+        assert_eq!(body, json!({ "type": null }), "an empty name clears the type");
+
+        let (gh, dir) = graphql_stand_in("github-issue-type-refused", &json!({}));
+        assert!(set_issue_type(&gh, "github.com", "acme/app", 0, "Bug").is_err());
+        assert!(set_issue_type(&gh, "github.com", "acme/app", 7, "Bu\u{7}g").is_err());
+        assert!(set_issue_type(&gh, "github.com", "acme/app", 7, &"x".repeat(ISSUE_TYPE_MAX + 1)).is_err());
+        assert!(set_issue_type(&gh, "github.com", "acme/../app", 7, "Bug").is_err());
+        assert!(!dir.join("calls.txt").exists(), "nothing was sent for a refused change");
     }
 }
