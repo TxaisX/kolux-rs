@@ -285,8 +285,14 @@ fn t_121_rows_name_each_agent() {
     super::grok::install(&home, &super::grok::file(&home)).unwrap();
     super::devin::install(&home, &super::devin::file(&home)).unwrap();
     super::pi::install(&home, &super::pi::file(&home)).unwrap();
-    super::hermes::install(&home, &super::hermes::file(&home), &super::hermes::allow_file(&home)).unwrap();
-    assert!(super::rows(&home).iter().all(|r| r["state"] == "installed"), "{:?}", super::rows(&home));
+    super::hermes::install(&home, &super::hermes::file(&home)).unwrap();
+    let rows = super::rows(&home);
+    assert!(rows.iter().filter(|r| r["agent"] != "hermes").all(|r| r["state"] == "installed"), "{rows:?}");
+    // Hermes consent = let Hermes ask (Txais, 2026-10-20): no allowlist is written, so the row
+    // says the first-use prompt is still to come.
+    let hermes = rows.iter().find(|r| r["agent"] == "hermes").unwrap();
+    assert_eq!((hermes["state"].as_str(), hermes["reason"].as_str()), (Some("partial"), Some(super::hermes::CONSENT)));
+    assert!(!super::hermes::allow_file(&home).exists());
 }
 
 #[test]

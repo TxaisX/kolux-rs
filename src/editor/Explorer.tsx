@@ -16,11 +16,13 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ChevronDown, Close, EyeOff, Expand, FolderPlus, Funnel, Plus, Refresh, Search } from "../chrome/icons";
-import { DOTFILES_KEY, IGNORED_KEY, MENU_LABEL, filterRows, folderGlob, hidesDotfiles, rowMenu, sameNodes, withDotfiles, withoutDotfiles, withoutIgnored, type MenuId } from "./explorerView";
+import { DOTFILES_KEY, IGNORED_KEY, filterRows, folderGlob, hidesDotfiles, rowMenu, sameNodes, withDotfiles, withoutDotfiles, withoutIgnored } from "./explorerView";
 import { MAX_DROP_BYTES, projectDrop, refuseDrop } from "./desktopDrops";
 import FileIcon from "./FileIcon";
 import { loadTargets, openIn, type Target } from "./openIn";
 import ContentSearch from "./ContentSearch";
+import "./explorerBar.css";
+import { EXPAND_CAP, insideDir, menuLabel, nextWave, withExtraMenu, type AnyMenuId } from "./explorerBar";
 import { currentSeed } from "./searchSeed";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
@@ -64,7 +66,7 @@ export function flatten(root: string, kids: Record<string, Node[] | undefined>, 
 export const between = (rows: Row[], a: number, b: number) => rows.slice(Math.min(a, b), Math.max(a, b) + 1).map((r) => r.node.path);
 export const parentOf = (path: string) => path.slice(0, Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")));
 export const baseName = (path: string) => path.slice(Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")) + 1);
-const inside = (p: string, dir: string) => p.startsWith(dir + "\\") || p.startsWith(dir + "/");
+const inside = insideDir; // T-224-b: Windows paths compare without case, and only on whole folder names
 /** A selection to delete: a folder chosen along with things inside it goes once, as the folder. */
 export const tops = (paths: string[]) => paths.filter((p) => p !== DRAFT && !paths.some((q) => q !== p && inside(p, q)));
 /** The call that undoes an action, and the one that does it again. */
@@ -188,6 +190,36 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose, onOp
       },
       (err) => setFailed((f) => (f[dir] === String(err) ? f : { ...f, [dir]: String(err) })),
     );
+  // VIEW-059 (T-224-b): refresh shows a spinner and is off while it runs; expand all opens the folders level by level.
+  const [refreshing, setRefreshing] = useState(false);
+  const [expanding, setExpanding] = useState(false);
+  const refresh = () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    void Promise.all(shownDirs.current.map((d) => load(d))).finally(() => setRefreshing(false));
+  };
+  const expandAll = async () => {
+    if (expanding) return;
+    setExpanding(true);
+    try {
+      const seen = new Set(open);
+      const lists: Record<string, Node[] | undefined> = { ...kids };
+      let room = EXPAND_CAP;
+      for (let level = 0; level < 12 && room > 0; level++) {
+        const wave = nextWave(lists, seen, room);
+        if (!wave.length) break;
+        room -= wave.length;
+        wave.forEach((d) => seen.add(d));
+        setOpen((o) => new Set([...o, ...wave]));
+        const got = await Promise.all(wave.map((d) => invoke<Node[]>("dir_list", { path: d }).then((l) => [d, l] as const, () => null)));
+        const fresh = Object.fromEntries(got.filter((x): x is readonly [string, Node[]] => x !== null));
+        Object.assign(lists, fresh);
+        setKids((k) => ({ ...k, ...fresh }));
+      }
+    } finally {
+      setExpanding(false);
+    }
+  };
   const shownDirs = useRef<string[]>([]);
   shownDirs.current = [root, ...open];
   useEffect(() => {
@@ -623,12 +655,16 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose, onOp
     if (!sel.has(path)) pick(path);
     setMenu({ x: e.clientX, y: e.clientY, path, dir });
   };
-  const runMenu = (id: MenuId, path: string, dir: boolean) => {
+  const runMenu = (id: AnyMenuId, path: string, dir: boolean) => {
     setMenu(null);
     const folder = dir ? path : parentOf(path);
     switch (id) {
       case "view":
         return onOpen(path);
+      case "collapse":
+        return fold(path);
+      case "copyFile":
+        return void invoke("clip_copy_files", { paths: [path] }).then(() => setNote({ text: `${baseName(path)} copied; paste it in another program` }), (err) => setNote({ text: `${baseName(path)} could not be copied as a file: ${String(err)}`, bad: true }));
       case "newFile":
       case "newFolder":
         return startNew(id === "newFolder", path);
@@ -668,8 +704,11 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose, onOp
         <button className="ib" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); if (openTargets) setOpenTargets(null); else void loadTargets().then((list) => setOpenTargets({ list, x: r.left, y: r.bottom + 4 })); }} aria-expanded={!!openTargets} aria-haspopup="menu" title="Open this folder in another app" aria-label="Open in">
           <Expand size={12} />
         </button>
-        <button className="ib" onClick={() => shownDirs.current.forEach((d) => void load(d))} title="Refresh the tree" aria-label="Refresh the tree">
-          <Refresh size={12} />
+        <button className="ib" onClick={refresh} disabled={refreshing} aria-busy={refreshing} title="Refresh the tree" aria-label="Refresh the tree">
+          <Refresh size={12} className={refreshing ? "spin" : undefined} />
+        </button>
+        <button className="ib" onClick={() => void expandAll()} disabled={expanding} aria-busy={expanding} title="Expand all folders" aria-label="Expand all folders">
+          <ChevronDown size={12} />
         </button>
         <button className="ib" onClick={() => setOpen(new Set())} title="Collapse all folders" aria-label="Collapse all folders">
           <ChevronDown size={12} style={{ transform: "rotate(180deg)" }} />
@@ -703,9 +742,9 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose, onOp
         <>
           <div className="menu-backdrop" onClick={() => setMenu(null)} onContextMenu={(e) => (e.preventDefault(), setMenu(null))} />
           <div className="menu row-menu" role="menu" aria-label={`Actions for ${baseName(menu.path)}`} style={{ left: Math.min(menu.x, window.innerWidth - 240), top: Math.min(menu.y, window.innerHeight - 340) }} onKeyDown={(e) => e.key === "Escape" && setMenu(null)}>
-            {rowMenu({ isDir: menu.dir, hasTerminal: !!onOpenTerminal, canProject: menu.dir && menu.path !== root && projectDrop.add !== null }).map((id) => (
-              <button key={id} role="menuitem" className="menu-item" autoFocus={id === rowMenu({ isDir: menu.dir, hasTerminal: !!onOpenTerminal, canProject: false })[0]} onClick={() => runMenu(id, menu.path, menu.dir)}>
-                {MENU_LABEL[id]}
+            {withExtraMenu(rowMenu({ isDir: menu.dir, hasTerminal: !!onOpenTerminal, canProject: menu.dir && menu.path !== root && projectDrop.add !== null }), { isDir: menu.dir, isOpen: open.has(menu.path), single: sel.size <= 1 }).map((id) => (
+              <button key={id} role="menuitem" className="menu-item" autoFocus={id === withExtraMenu(rowMenu({ isDir: menu.dir, hasTerminal: !!onOpenTerminal, canProject: false }), { isDir: menu.dir, isOpen: open.has(menu.path), single: sel.size <= 1 })[0]} onClick={() => runMenu(id, menu.path, menu.dir)}>
+                {menuLabel(id)}
               </button>
             ))}
           </div>
