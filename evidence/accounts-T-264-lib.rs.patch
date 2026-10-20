@@ -1,0 +1,25 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 5d134431..d3f82063 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -35,6 +35,7 @@ mod import;
+ // T-043-e: the macOS keychain rule table; the Mac wiring that calls it is T-043-f.
+ #[cfg_attr(not(test), allow(dead_code))]
+ mod keychain;
++mod agent_creds;
+ mod grok;
+ mod install;
+ mod keybindings;
+@@ -554,6 +555,12 @@ pub fn run() {
+             grok::grok_sign_in,
+             grok::grok_cancel,
+             grok::grok_key_set,
++            agent_creds::agent_creds_view,
++            agent_creds::codex_sessions_home_set,
++            agent_creds::minimax_credential_set,
++            agent_creds::minimax_credential_forget,
++            agent_creds::minimax_options_set,
++            agent_creds::gemini_cli_credentials_set,
+             codex_accounts::codex_accounts,
+             codex_accounts::codex_account_sign_in,
+             codex_accounts::codex_account_cancel,
