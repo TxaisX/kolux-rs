@@ -2339,6 +2339,13 @@ pub fn forget_gone(repo: &Path, all: &[Worktree], busy: &[String], on_forgotten:
 
 /// The `<git common dir>/worktrees/<id>` entry whose `gitdir` points into `path`, removed.
 pub(crate) fn forget_record(repo: &Path, path: &str) -> Result<(), String> {
+    let record = find_record(repo, path)?;
+    std::fs::remove_dir_all(record).map_err(|e| e.to_string())
+}
+
+/// The `<git common dir>/worktrees/<id>` entry whose `gitdir` points into `path`. A locked one is
+/// never offered.
+fn find_record(repo: &Path, path: &str) -> Result<PathBuf, String> {
     let common = crate::git::run(&["rev-parse", "--git-common-dir"], Some(repo))?;
     let admin = repo.join(common.trim()).join("worktrees");
     for entry in std::fs::read_dir(&admin).map_err(|e| e.to_string())?.flatten() {
@@ -2348,10 +2355,48 @@ pub(crate) fn forget_record(repo: &Path, path: &str) -> Result<(), String> {
         }
         let Ok(gitdir) = std::fs::read_to_string(entry.path().join("gitdir")) else { continue };
         if Path::new(gitdir.trim()).parent().is_some_and(|p| name_key(&p.to_string_lossy()) == name_key(path)) {
-            return std::fs::remove_dir_all(entry.path()).map_err(|e| e.to_string());
+            return Ok(entry.path());
         }
     }
     Err(format!("no record of {path}"))
+}
+
+/// After-list row 127: Git's record of a worktree moved aside instead of deleted, so an undo puts
+/// it back whole. It sits in `<git common dir>/kolux-set-aside/` (same disk, one rename), where
+/// Git does not look; `discard` deletes it once the removal is confirmed.
+#[derive(Debug)]
+pub(crate) struct SetAside {
+    from: PathBuf,
+    to: PathBuf,
+}
+
+impl SetAside {
+    /// Puts the record back where Git reads it.
+    pub(crate) fn restore(&self) -> Result<(), String> {
+        std::fs::rename(&self.to, &self.from).map_err(|e| format!("Git's record of the workspace could not be put back ({e}); it is kept at {}", self.to.display()))
+    }
+
+    /// The removal is confirmed: the record goes for good.
+    pub(crate) fn discard(self) {
+        let _ = std::fs::remove_dir_all(&self.to);
+        if let Some(dir) = self.to.parent() {
+            let _ = std::fs::remove_dir(dir);
+        }
+    }
+}
+
+/// Row 127: `forget_record`, but undoable (see `SetAside`).
+pub(crate) fn set_aside_record(repo: &Path, path: &str) -> Result<SetAside, String> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let from = find_record(repo, path)?;
+    let common = from.parent().and_then(Path::parent).ok_or_else(|| format!("no record folder for {path}"))?;
+    let aside = common.join("kolux-set-aside");
+    std::fs::create_dir_all(&aside).map_err(|e| e.to_string())?;
+    let id = from.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let to = aside.join(format!("{:x}-{:x}-{id}", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed)));
+    std::fs::rename(&from, &to).map_err(|e| e.to_string())?;
+    Ok(SetAside { from, to })
 }
 
 /// T-441-c: the worktrees among `all` that Kolux RS made itself, by the origin record it keeps for
@@ -2391,9 +2436,15 @@ pub fn forget_gone_at_start(app: tauri::AppHandle) {
         let dir = app.path().app_data_dir().ok();
         // PROJ-074: trash folders a run left behind are cleared (this is off the startup path).
         let folders = trash_folders(&app.state::<Mutex<Store>>(), &app.state::<Git>(), &projects, &origins);
-        for gone in folders.iter().flat_map(|f| crate::git::sweep_trash(f)) {
+        for swept in folders.iter().map(|f| crate::git::sweep_trash(f)) {
             if let Some(dir) = dir.as_deref() {
-                crate::diag::write(dir, &format!("cleared the leftover trash folder {}", gone.display()));
+                for gone in &swept.gone {
+                    crate::diag::write(dir, &format!("cleared the leftover trash folder {}", gone.display()));
+                }
+                // After-list row 128: never deleted without a confirmed removal; the user decides.
+                for kept in &swept.kept {
+                    crate::diag::write(dir, &format!("kept the trash folder {}: its removal was never confirmed, so it may hold work; delete it by hand once checked", kept.display()));
+                }
             }
         }
         for path in sweep_all_gone(&app.state::<Mutex<Store>>(), &app.state::<Git>(), &projects, &origins, &busy, dir.as_deref()) {

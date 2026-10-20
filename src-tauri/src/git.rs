@@ -244,13 +244,34 @@ pub(crate) fn long_path(p: &Path) -> PathBuf {
 }
 
 /// PROJ-074: the name every trash folder starts with (hidden by the leading dot, and on Windows
-/// by the hidden attribute). A folder from before the unique-name step is `.kolux-trash-<name>`
-/// and still matches; so does the older `<name>.kolux-trash`. The sweep touches nothing else.
+/// by the hidden attribute). After-list row 130: only the exact `.kolux-trash-<hex>-<hex>-<name>`
+/// shape `move_to_trash` makes counts; the older forms are left alone.
 pub(crate) const TRASH_PREFIX: &str = ".kolux-trash-";
-const TRASH_SUFFIX: &str = ".kolux-trash";
+
+/// After-list rows 127/128: the file a trash folder carries once its removal is confirmed (Git's
+/// record of the worktree is gone and Git's list agrees). The launch sweep deletes only folders
+/// that carry it. A folder without it (a move back that failed, a removal that stopped half way,
+/// a run that ended mid-removal, a folder from an older build) may hold work the user still
+/// needs, so it is kept and named in the diagnostics log instead.
+pub(crate) const TRASH_CONFIRMED: &str = ".kolux-trash-confirmed";
 
 pub(crate) fn is_trash_name(name: &str) -> bool {
-    (name.starts_with(TRASH_PREFIX) && name.len() > TRASH_PREFIX.len()) || (name.ends_with(TRASH_SUFFIX) && name.len() > TRASH_SUFFIX.len())
+    let Some(rest) = name.strip_prefix(TRASH_PREFIX) else { return false };
+    let mut parts = rest.splitn(3, '-');
+    let hex = |s: Option<&str>| s.is_some_and(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit()));
+    hex(parts.next()) && hex(parts.next()) && parts.next().is_some_and(|n| !n.is_empty())
+}
+
+/// Rows 127/128: marks a trash folder as confirmed for deletion (see `TRASH_CONFIRMED`). Only a
+/// real folder is marked, never through a link.
+pub(crate) fn confirm_trash(trash: &Path) {
+    if std::fs::symlink_metadata(trash).is_ok_and(|m| m.is_dir()) {
+        let _ = std::fs::write(long_path(&trash.join(TRASH_CONFIRMED)), b"removal confirmed; Kolux deletes this folder\n");
+    }
+}
+
+fn trash_confirmed(trash: &Path) -> bool {
+    std::fs::symlink_metadata(trash.join(TRASH_CONFIRMED)).is_ok_and(|m| m.is_file())
 }
 
 /// PROJ-074: moves `dest` into a hidden trash folder beside it (same volume, so it is one rename
@@ -268,9 +289,22 @@ pub(crate) fn move_to_trash(dest: &Path) -> Result<PathBuf, String> {
     Ok(trash)
 }
 
-/// PROJ-074: the undo of `move_to_trash`: the folder goes back to where Git expects it.
+/// PROJ-074: the undo of `move_to_trash`: the folder goes back to where Git expects it. A folder
+/// a program holds for a moment gets a few more tries. After-list row 128: when it still will not
+/// move, it stays in the trash untouched (unconfirmed, so the launch sweep keeps it) and the error
+/// says where it is.
 pub(crate) fn move_back(trash: &Path, dest: &Path) -> Result<(), String> {
-    std::fs::rename(long_path(trash), long_path(dest)).map_err(|e| format!("{} could not be moved back from the trash: {e}", dest.display()))
+    let mut last = String::new();
+    for attempt in 0..4 {
+        match std::fs::rename(long_path(trash), long_path(dest)) {
+            Ok(()) => return Ok(()),
+            Err(e) => last = e.to_string(),
+        }
+        if attempt < 3 {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+    }
+    Err(format!("{} could not be moved back from the trash ({last}); nothing was deleted: the folder is kept as it was at {}", dest.display(), trash.display()))
 }
 
 #[cfg(windows)]
@@ -286,13 +320,28 @@ fn hide_folder(_: &Path) {}
 pub(crate) fn empty_trash(trash: &Path) -> bool {
     let is_link = std::fs::symlink_metadata(trash).is_ok_and(|m| m.file_type().is_symlink());
     for _ in 0..4 {
-        let done = if is_link { std::fs::remove_file(trash).or_else(|_| std::fs::remove_dir(trash)).is_ok() } else { std::fs::remove_dir_all(long_path(trash)).is_ok() };
+        let done = if is_link { std::fs::remove_file(trash).or_else(|_| std::fs::remove_dir(trash)).is_ok() } else { clear_confirmed_last(trash) };
         if done || !trash.exists() {
             return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(250));
     }
     false
+}
+
+/// Rows 127/128: everything in the folder goes before its confirmation mark, so a delete cut short
+/// (the app quit, a file held open) leaves a folder the next launch sweep still recognises.
+fn clear_confirmed_last(trash: &Path) -> bool {
+    if let Ok(entries) = std::fs::read_dir(long_path(trash)) {
+        for e in entries.flatten() {
+            if e.file_name() == TRASH_CONFIRMED {
+                continue;
+            }
+            let p = e.path();
+            let _ = if e.file_type().is_ok_and(|t| t.is_dir()) { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p).or_else(|_| std::fs::remove_dir(&p)) };
+        }
+    }
+    std::fs::remove_dir_all(long_path(trash)).is_ok()
 }
 
 /// PROJ-074: the deleting happens off the caller's thread; the space returns shortly after.
@@ -309,20 +358,53 @@ fn spawn_empty_trash(trash: PathBuf) -> std::thread::JoinHandle<bool> {
     std::thread::spawn(move || empty_trash(&trash))
 }
 
-/// PROJ-074: deletes every trash folder directly inside `parent` (left by a run that ended before
-/// the background pass finished) and returns the ones removed. Only names that `is_trash_name`
-/// accepts are touched, and never a file.
-pub(crate) fn sweep_trash(parent: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(parent) else { return Vec::new() };
-    let mut gone = Vec::new();
+/// After-list row 129: deletes `refs/heads/<branch>` in one compare-and-delete step that Git
+/// refuses when the branch no longer points at `commit` (it moved after the check). Ok(false)
+/// means it was left alone.
+pub(crate) fn delete_ref_if_at(repo: &Path, branch: &str, commit: &str) -> Result<bool, String> {
+    if commit.is_empty() || !commit.chars().all(|c| c.is_ascii_hexdigit()) || branch.starts_with('-') {
+        return Ok(false);
+    }
+    let reference = format!("refs/heads/{branch}");
+    match run(&["update-ref", "-d", &reference, commit], Some(repo)) {
+        Ok(_) => Ok(true),
+        Err(e) => match run(&["rev-parse", "--verify", "--quiet", &reference], Some(repo)) {
+            // still there, now somewhere else: it moved, so it stays
+            Ok(at) if at != commit => Ok(false),
+            _ => Err(e),
+        },
+    }
+}
+
+/// What one launch sweep did in one folder.
+#[derive(Debug, Default)]
+pub(crate) struct Swept {
+    /// Trash folders deleted (confirmed ones, and links, which hold nothing themselves).
+    pub gone: Vec<PathBuf>,
+    /// Trash folders kept because their removal was never confirmed (rows 127/128).
+    pub kept: Vec<PathBuf>,
+}
+
+/// PROJ-074: deletes every confirmed trash folder directly inside `parent` (left by a run that
+/// ended before the background pass finished). Only names that `is_trash_name` accepts are
+/// touched, and never a file. After-list row 128: a trash folder without the confirmation mark (a
+/// failed move back, a removal cut short) is never deleted; it is reported as kept.
+pub(crate) fn sweep_trash(parent: &Path) -> Swept {
+    let mut swept = Swept::default();
+    let Ok(entries) = std::fs::read_dir(parent) else { return swept };
     for e in entries.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
         let Ok(kind) = e.file_type() else { continue };
-        if is_trash_name(&name) && (kind.is_dir() || kind.is_symlink()) && empty_trash(&e.path()) {
-            gone.push(e.path());
+        if !is_trash_name(&name) || !(kind.is_dir() || kind.is_symlink()) {
+            continue;
+        }
+        if kind.is_dir() && !trash_confirmed(&e.path()) {
+            swept.kept.push(e.path());
+        } else if empty_trash(&e.path()) {
+            swept.gone.push(e.path());
         }
     }
-    gone
+    swept
 }
 
 /// PROJ-027: how long a worktree add may take before Kolux stops waiting. Cloud-synced folders
@@ -536,16 +618,18 @@ impl Git {
         let dest_s = dest.to_string_lossy();
         // PROJ-074: the folder is moved into a hidden trash beside it first and Git's record for
         // it dropped, so the workspace is gone at once; the slow delete happens in the background.
-        let mut trashed: Option<PathBuf> = None;
+        // After-list row 127: Git's record is only set aside until the removal is confirmed, so an
+        // undo puts back both the folder and the record.
+        let mut trashed: Option<(PathBuf, crate::projects::SetAside)> = None;
         if !dest.exists() {
             let _ = crate::projects::forget_record(repo, &dest_s);
         } else if let Ok(trash) = move_to_trash(dest) {
-            if crate::projects::forget_record(repo, &dest_s).is_ok() {
-                trashed = Some(trash);
-            } else {
+            match crate::projects::set_aside_record(repo, &dest_s) {
+                Ok(record) => trashed = Some((trash, record)),
                 // Git's record could not be dropped (a lock, say): the folder goes back and the
-                // ordinary removal below runs and gives its own answer.
-                move_back(&trash, dest)?;
+                // ordinary removal below runs and gives its own answer. Should the folder not
+                // move back, it stays unconfirmed in the trash, which the launch sweep keeps.
+                Err(_) => move_back(&trash, dest)?,
             }
         }
         if trashed.is_none() && dest.exists() {
@@ -568,14 +652,22 @@ impl Git {
             }
         }
         let key = crate::projects::name_key(&dest_s);
-        if self.worktrees(repo)?.iter().any(|w| crate::projects::name_key(&w.path) == key) {
-            if let Some(trash) = &trashed {
-                // The removal is undone: the folder goes back to where Git expects it.
+        // A listing Git cannot give counts as "still listed": the removal is undone, never left half way.
+        let listed = self.worktrees(repo).map(|all| all.iter().any(|w| crate::projects::name_key(&w.path) == key));
+        if listed != Ok(false) {
+            if let Some((trash, record)) = &trashed {
+                // The removal is undone: Git's record and then the folder go back where they were.
+                let restored = record.restore();
                 move_back(trash, dest)?;
+                restored?;
             }
-            return Err(format!("Git still lists {} as a workspace, so Kolux left its record alone", dest.display()));
+            return Err(listed.err().unwrap_or_else(|| format!("Git still lists {} as a workspace, so Kolux left its record alone", dest.display())));
         }
-        if let Some(trash) = trashed {
+        if let Some((trash, record)) = trashed {
+            // Confirmed: the record goes for good and the folder is marked for the sweep, which
+            // finishes the delete should this run end before the background pass does.
+            record.discard();
+            confirm_trash(&trash);
             empty_trash_in_background(trash);
         }
         if dest.exists() {
@@ -615,7 +707,7 @@ impl Git {
         if at != commit || self.checked_out_somewhere(repo, branch)? {
             return Ok(false);
         }
-        run(&["branch", "-D", branch], Some(repo)).map(|_| true)
+        delete_ref_if_at(repo, branch, commit)
     }
 
     /// PROJ-080: when the checkout's HEAD commit was made (seconds since 1970), for "gone quiet".
@@ -1248,22 +1340,121 @@ mod tests {
     }
 
     #[test]
-    fn proj074_the_sweep_clears_trash_folders_old_and_new_and_nothing_else() {
+    fn row128_a_trash_folder_whose_move_back_failed_is_kept_by_the_launch_sweep() {
+        let base = std::env::temp_dir().join(format!("kolux-rs-git-r128-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let dest = base.join("work");
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("notes.txt"), "work the user still needs").unwrap();
+        let trash = move_to_trash(&dest).unwrap();
+        // something took the folder's place meanwhile, so moving it back fails
+        fs::create_dir_all(dest.join("other")).unwrap();
+        let err = move_back(&trash, &dest).unwrap_err();
+        let _ = sweep_trash(&base);
+        assert!(trash.join("notes.txt").is_file(), "the launch sweep must never delete a folder whose move back failed");
+        assert!(err.contains(&trash.display().to_string()), "the error says where the folder is kept: {err}");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn proj074_the_sweep_clears_confirmed_trash_of_the_exact_shape_and_nothing_else() {
         let base = std::env::temp_dir().join(format!("kolux-rs-git-sweep-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
-        for dir in [".kolux-trash-1a-2b-otter", ".kolux-trash-otter", "otter.kolux-trash", "otter", ".kolux-trash-", ".git", "trash", "keep.kolux-trash-x"] {
+        // row 130: only `.kolux-trash-<hex>-<hex>-<name>` counts; the old forms are left alone
+        for dir in [".kolux-trash-1a-2b-otter", ".kolux-trash-1a-2c-work", ".kolux-trash-otter", "otter.kolux-trash", ".kolux-trash-zz-2b-otter", ".kolux-trash-1a-2b-", "otter", ".kolux-trash-", ".git", "trash", "keep.kolux-trash-x"] {
             fs::create_dir_all(base.join(dir)).unwrap();
             fs::write(base.join(dir).join("f.txt"), "x").unwrap();
         }
-        fs::write(base.join(".kolux-trash-a-file"), "a file with a trash name is not a folder").unwrap();
-        let mut gone: Vec<String> = sweep_trash(&base).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
-        gone.sort();
-        assert_eq!(gone, vec![".kolux-trash-1a-2b-otter", ".kolux-trash-otter", "otter.kolux-trash"]);
-        for kept in ["otter", ".kolux-trash-", ".git", "trash", "keep.kolux-trash-x", ".kolux-trash-a-file"] {
+        confirm_trash(&base.join(".kolux-trash-1a-2b-otter"));
+        fs::write(base.join(".kolux-trash-1a-2b-file"), "a file with a trash name is not a folder").unwrap();
+        let swept = sweep_trash(&base);
+        let names = |v: &[PathBuf]| v.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert_eq!(names(&swept.gone), vec![".kolux-trash-1a-2b-otter"]);
+        // row 128: a trash folder whose removal was never confirmed is kept and reported
+        assert_eq!(names(&swept.kept), vec![".kolux-trash-1a-2c-work"]);
+        for kept in [".kolux-trash-1a-2c-work", ".kolux-trash-otter", "otter.kolux-trash", ".kolux-trash-zz-2b-otter", ".kolux-trash-1a-2b-", "otter", ".kolux-trash-", ".git", "trash", "keep.kolux-trash-x", ".kolux-trash-1a-2b-file"] {
             assert!(base.join(kept).exists(), "{kept} must stay");
         }
-        assert!(sweep_trash(&base.join("no-such-folder")).is_empty());
+        assert!(sweep_trash(&base.join("no-such-folder")).gone.is_empty());
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn row128_a_confirmed_delete_cut_short_keeps_its_mark_until_the_last_file_goes() {
+        let base = std::env::temp_dir().join(format!("kolux-rs-git-r128c-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let trash = base.join(".kolux-trash-1-2-big");
+        fs::create_dir_all(trash.join("deep")).unwrap();
+        fs::write(trash.join("deep/f.txt"), "x").unwrap();
+        confirm_trash(&trash);
+        assert!(clear_confirmed_last(&trash) && !trash.exists());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn row127_undoing_a_removal_puts_back_the_folder_and_gits_record_whole() {
+        let git = Git::detect().unwrap();
+        let repo = temp_repo("r127");
+        let dest = std::env::temp_dir().join(format!("kolux-rs-git-r127-ws-{}", std::process::id())).join("undo-me");
+        let _ = fs::remove_dir_all(dest.parent().unwrap());
+        git.worktree_add(&repo, &dest, "undo-me", "HEAD").unwrap();
+        fs::write(dest.join("work.txt"), "uncommitted work").unwrap();
+        let dest_s = dest.to_string_lossy().into_owned();
+        // the removal's first half: folder to the trash, Git's record set aside
+        let trash = move_to_trash(&dest).unwrap();
+        let record = crate::projects::set_aside_record(&repo, &dest_s).unwrap();
+        assert_eq!(git.worktrees(&repo).unwrap().len(), 1, "Git no longer lists it");
+        // the undo
+        record.restore().unwrap();
+        move_back(&trash, &dest).unwrap();
+        assert_eq!(git.worktrees(&repo).unwrap().len(), 2, "Git lists it again");
+        assert!(git.dirty(&dest).unwrap(), "Git reads the restored workspace and its uncommitted file");
+        assert!(dest.join("work.txt").is_file());
+        // and a confirmed removal leaves nothing set aside
+        git.worktree_remove(&repo, &dest, Some("undo-me")).unwrap();
+        let common = repo.join(".git");
+        assert!(!common.join("kolux-set-aside").exists(), "nothing left set aside once the removal is confirmed");
+        let _ = fs::remove_dir_all(dest.parent().unwrap());
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn row110_removing_a_locked_worktree_leaves_folder_and_record_in_place() {
+        let git = Git::detect().unwrap();
+        let repo = temp_repo("r110");
+        let dest = std::env::temp_dir().join(format!("kolux-rs-git-r110-ws-{}", std::process::id())).join("on-usb");
+        let _ = fs::remove_dir_all(dest.parent().unwrap());
+        git.worktree_add(&repo, &dest, "on-usb", "HEAD").unwrap();
+        fs::write(dest.join("work.txt"), "work").unwrap();
+        run(&["worktree", "lock", &dest.to_string_lossy()], Some(&repo)).unwrap();
+        assert!(git.worktree_remove(&repo, &dest, Some("on-usb")).is_err(), "a locked worktree is refused");
+        assert!(dest.join("work.txt").is_file(), "its folder is back in place");
+        assert_eq!(git.worktrees(&repo).unwrap().len(), 2, "Git still lists it");
+        let left: Vec<String> = fs::read_dir(dest.parent().unwrap()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(left, vec!["on-usb".to_string()], "no trash folder left behind");
+        run(&["worktree", "unlock", &dest.to_string_lossy()], Some(&repo)).unwrap();
+        let _ = git.worktree_remove(&repo, &dest, Some("on-usb"));
+        let _ = fs::remove_dir_all(dest.parent().unwrap());
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn row129_a_kept_branch_is_deleted_only_while_it_still_points_where_it_did() {
+        let repo = temp_repo("r129");
+        run(&["branch", "kept"], Some(&repo)).unwrap();
+        let old = run(&["rev-parse", "refs/heads/kept"], Some(&repo)).unwrap();
+        // the branch moves on after the check: the compare-and-delete refuses it
+        fs::write(repo.join("more.txt"), "more").unwrap();
+        run(&["add", "."], Some(&repo)).unwrap();
+        run(&["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "more"], Some(&repo)).unwrap();
+        let new = run(&["rev-parse", "HEAD"], Some(&repo)).unwrap();
+        run(&["update-ref", "refs/heads/kept", &new], Some(&repo)).unwrap();
+        assert_eq!(delete_ref_if_at(&repo, "kept", &old), Ok(false));
+        assert_eq!(run(&["rev-parse", "refs/heads/kept"], Some(&repo)).unwrap(), new, "a moved branch stays");
+        assert_eq!(delete_ref_if_at(&repo, "kept", "--all"), Ok(false), "an option-like commit never reaches Git");
+        assert_eq!(delete_ref_if_at(&repo, "kept", &new), Ok(true));
+        assert!(run(&["rev-parse", "--verify", "--quiet", "refs/heads/kept"], Some(&repo)).is_err(), "deleted while it pointed where it did");
+        let _ = fs::remove_dir_all(&repo);
     }
 
     #[test]

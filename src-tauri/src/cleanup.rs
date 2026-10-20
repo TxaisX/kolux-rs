@@ -689,12 +689,20 @@ mod tests {
         // a run ended before its background pass finished: one trash folder, plus a folder that is not trash
         fs::create_dir_all(base.join(".kolux-trash-ab-cd-old/deep")).unwrap();
         fs::write(base.join(".kolux-trash-ab-cd-old/deep/f.txt"), "x").unwrap();
+        crate::git::confirm_trash(&base.join(".kolux-trash-ab-cd-old"));
+        // after-list row 128: one whose removal was never confirmed (a failed move back) stays
+        fs::create_dir_all(base.join(".kolux-trash-ab-ce-work")).unwrap();
+        fs::write(base.join(".kolux-trash-ab-ce-work/notes.txt"), "x").unwrap();
         fs::create_dir_all(base.join("keep-me")).unwrap();
         let folders = crate::projects::trash_folders(&store, &git, std::slice::from_ref(&project), &origins);
         assert!(folders.iter().any(|f| name_key(&f.to_string_lossy()) == name_key(&base.to_string_lossy())), "the parent of a workspace Kolux made is swept: {folders:?}");
-        let gone: Vec<_> = folders.iter().flat_map(|f| crate::git::sweep_trash(f)).collect();
+        let swept: Vec<_> = folders.iter().map(|f| crate::git::sweep_trash(f)).collect();
+        let gone: Vec<_> = swept.iter().flat_map(|s| s.gone.clone()).collect();
+        let kept: Vec<_> = swept.iter().flat_map(|s| s.kept.clone()).collect();
         assert_eq!(gone.len(), 1, "{gone:?}");
+        assert_eq!(kept.len(), 1, "{kept:?}");
         assert!(!base.join(".kolux-trash-ab-cd-old").exists() && base.join("keep-me").exists() && base.join("ours").exists());
+        assert!(base.join(".kolux-trash-ab-ce-work/notes.txt").is_file(), "an unconfirmed trash folder is never deleted");
         drop(store);
         let _ = fs::remove_dir_all(&base);
     }
