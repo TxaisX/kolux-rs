@@ -51,6 +51,7 @@ import { labelOf } from "../keys/keymap";
 import { attachPaste } from "./paste";
 import { attachScreenshotPaste, clipboardImage, pasteImage, type Deps as ShotDeps } from "./screenshotPaste";
 import { answersPrompt, newlineAgent, routeKey } from "./shellKeys";
+import { INPUT_SOURCE_ACTION, KittyKeyboard, latinControl } from "./kittyKeys";
 import { heldByTerminal } from "../keys/terminalPolicy";
 import { answeredElsewhere } from "../chat/ask";
 import { allowed, clickTarget, findLinks, hintFor, linkFor, rangeOf, resolvePath, safeLinks, spanOf, type Found } from "./links";
@@ -609,6 +610,20 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       write(yenToBackslash(currentInput(), data)); // SET-025: a Japanese keyboard's Yen key types a backslash when asked
     });
     term.onBell(() => bell.current?.());
+    // TERM-082 / VIEW-109 (T-306): the enhanced keyboard protocol a program asks for (CSI > / < / = / ? u), per screen;
+    // a terminal reset (ESC c) or the program ending turns it off again.
+    const kitty = new KittyKeyboard();
+    const onAlt = () => term.buffer.active.type === "alternate";
+    for (const prefix of [">", "<", "=", "?"] as const)
+      term.parser.registerCsiHandler({ prefix, final: "u" }, (params) => {
+        const reply = kitty.apply(prefix, params.map((p) => (typeof p === "number" ? p : p[0])), onAlt());
+        if (reply) void write(reply);
+        return true;
+      });
+    term.parser.registerEscHandler({ final: "c" }, () => {
+      kitty.reset();
+      return false;
+    });
     // TERM-075: a program's OSC 52 copy goes to the system clipboard (while the setting allows it); a
     // read-back query gets an empty answer so the program never sees the clipboard; each way it can be
     // refused is said once per session in the header.
@@ -691,7 +706,17 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
     // TERM-065: the copy chord copies a selection and gives the keyboard back; Ctrl+C with nothing
     // selected is the program's interrupt and goes through untouched. Nothing selected under
     // Ctrl+Shift+C does nothing and says nothing.
+    // TERM-082: while a program has the enhanced keyboard protocol on, the keys that reach it are encoded by
+    // kittyKeys.ts (releases too when it asked for them); TERM-086: Ctrl+letter on a non-Latin layout sends the
+    // Latin control byte. AltGr (Ctrl+Alt on Windows) still types its character.
+    const keyFor = (e: KeyboardEvent) => ({ type: e.type, key: e.key, code: e.code, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey, repeat: e.repeat, isComposing: e.isComposing, keyCode: e.keyCode, altGraph: e.getModifierState?.("AltGraph") ?? false, capsLock: e.getModifierState?.("CapsLock") ?? false, numLock: e.getModifierState?.("NumLock") ?? false });
     term.attachCustomKeyEventHandler((e) => {
+      if (e.type === "keyup") {
+        const up = kitty.encode(keyFor(e), onAlt());
+        if (up === null) return true;
+        if (up) void write(up);
+        return false;
+      }
       if (e.type !== "keydown") return true;
       const route = routeKey(keys.current, e, term.hasSelection(), newlineAgent(startedRef.current, agentRef.current), (id) => heldByTerminal(id, keySettingsRef.current));
       // T-151-b (council D2 MERGE 47 S2): a real key that goes to the program answers the permission prompt as
@@ -700,7 +725,16 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
         setAnswered(prompt.current.count);
         if (number !== undefined) answeredElsewhere(number); // FIX-1: the chat card for this prompt goes too
       }
-      if (route.kind === "ime" || route.kind === "shell") return true;
+      if (route.kind === "ime") return true;
+      // A program on the enhanced protocol reads Shift+Enter as its own encoded key, not the agent newline bytes.
+      if (route.kind === "shell" || (route.kind === "send" && e.key === "Enter" && kitty.flags(onAlt()) !== 0)) {
+        const k = keyFor(e);
+        const out = kitty.encode(k, onAlt()) ?? (kitty.flags(onAlt()) ? null : latinControl(k));
+        if (out === null) return true;
+        e.preventDefault();
+        if (out) void write(out);
+        return false;
+      }
       if (route.kind === "send") {
         e.preventDefault(); // Alt+Left is the webview's own "back" otherwise
         void write(route.data);
@@ -720,6 +754,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
       else if (id === "terminal.copySelection") void copySelection(term, (text) => navigator.clipboard.writeText(text), setFlash);
       else if (id === "terminal.clear") clearRef.current();
       else if (id === "terminal.search") findRef.current();
+      // TERM-085: the assigned switch-input-source chord changes the OS keyboard layout; the key stays out of the terminal.
+      else if (id === INPUT_SOURCE_ACTION) void invoke("terminal_next_input_source").catch((err) => setFlash(`The input source could not be switched (${explainError(String(err))})`));
       // Any other Kolux chord (the window's own actions) is the window's; the shell never sees it.
       return false;
     });
@@ -774,6 +810,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
             // ACCT-060: the modes the program turned on (mouse, bracketed paste, hidden cursor, alt screen) are turned
             // off now that it is gone, so the shell that follows works normally; a program still running is never touched.
             term.write(resetAfterExit(modeView(term.modes), term.buffer.active.type === "alternate"));
+            kitty.reset(); // VIEW-109: the key protocol resets cleanly after the program exits
           term.write(`\r\n\x1b[90m[process ${endedLabel(e.payload.code, e.payload.outcome)}]\x1b[0m\r\n`);
             setStatus({ kind: "ended", code: e.payload.code });
             // TERM-111: a shell that exited by itself closes its pane (its neighbours take the space and

@@ -1,0 +1,12 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 3c5ffdc8..390dc37f 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -460,6 +460,7 @@ pub fn run() {
+             terminal::terminal_ack,
+             terminal::terminal_memory_profile,
+             terminal::terminal_kill,
++            terminal::terminal_next_input_source,
+             terminal::terminal_layout,
+             terminal::terminal_busy,
+             terminal::terminal_diagnostics,

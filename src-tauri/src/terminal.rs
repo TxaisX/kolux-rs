@@ -2035,3 +2035,60 @@ pub fn terminal_history_append(app: AppHandle, pane_key: u32, data: String) -> R
     }
     Ok(())
 }
+
+/// TERM-085 (T-306): the "switch input source" command, unbound until the user assigns it. On Windows the focused
+/// window is asked to move to the next installed keyboard layout, as the OS language hotkey does
+/// (WM_INPUTLANGCHANGEREQUEST with HKL_NEXT, both from Microsoft Learn). The pane keeps the chord, so nothing of it
+/// reaches the terminal.
+// lib.rs registers it through evidence/core-T-306-lib.rs.patch; until then nothing calls it
+#[allow(dead_code)]
+#[tauri::command]
+pub fn terminal_next_input_source() -> Result<(), String> {
+    next_input_source()
+}
+
+/// HKL_NEXT: "the next locale identifier in the list" for a layout change request (Microsoft Learn).
+#[allow(dead_code)]
+pub const HKL_NEXT: isize = 1;
+
+#[cfg(windows)]
+#[allow(dead_code)]
+fn next_input_source() -> Result<(), String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, PostMessageW, GUITHREADINFO,
+        WM_INPUTLANGCHANGEREQUEST,
+    };
+    // SAFETY: plain Win32 calls on handles the OS hands back; GUITHREADINFO is zeroed with its size set first.
+    unsafe {
+        let top = GetForegroundWindow();
+        if top.is_null() {
+            return Err("no window has the keyboard".into());
+        }
+        let mut info: GUITHREADINFO = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
+        let thread = GetWindowThreadProcessId(top, std::ptr::null_mut());
+        // The web view's own child window holds the focus; the request goes to it, else to the top window.
+        let target = if GetGUIThreadInfo(thread, &mut info) != 0 && !info.hwndFocus.is_null() { info.hwndFocus } else { top };
+        if PostMessageW(target, WM_INPUTLANGCHANGEREQUEST, 0, HKL_NEXT) == 0 {
+            return Err("Windows refused the input source change".into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[allow(dead_code)]
+fn next_input_source() -> Result<(), String> {
+    Err("switching the input source is built for Windows only".into())
+}
+
+#[cfg(test)]
+mod input_source_tests {
+    #[cfg(windows)]
+    #[test]
+    fn term085_the_request_is_the_documented_language_change_message() {
+        // Microsoft Learn: WM_INPUTLANGCHANGEREQUEST is 0x0050 and HKL_NEXT is 1.
+        assert_eq!(windows_sys::Win32::UI::WindowsAndMessaging::WM_INPUTLANGCHANGEREQUEST, 0x0050);
+        assert_eq!(super::HKL_NEXT, 1);
+    }
+}
