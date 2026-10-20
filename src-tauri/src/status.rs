@@ -45,6 +45,11 @@ static RETIRED: Mutex<Option<Retired>> = Mutex::new(None);
 const RETIRED_KEEP: usize = 16;
 /// hooks FIX-5: how many ended terminals are remembered on their own, whatever pane they had.
 const ENDED_KEEP: usize = 256;
+/// hooks FIX-6 (stand-in review FIX-SOON 1): the tests that lean on `ended` alone (a terminal
+/// ended, then its hook expected to be dropped) take this before anything else, so the race
+/// test's two thousand ends never flush the ring under them on a loaded PC.
+#[cfg(test)]
+static ENDED_TESTS: Mutex<()> = Mutex::new(());
 
 /// T-563's per-pane retirements and, hooks FIX-5 (stand-in review AFTER 3), the last ended
 /// terminals on their own: an agent that crashes right after its first hook left its pane no
@@ -572,12 +577,14 @@ impl Session {
 
 /// VIEW-025: the keys that answer an approval at the agent's own prompt. Claude Code's dialog
 /// takes Enter for its first option (Yes) and Esc for No; Codex's approval modal takes y and n.
-pub fn answer_keys(agent: Agent, approve: bool) -> &'static str {
+/// T-151-c: no other agent's keys are guessed; a vendor agent has none.
+pub fn answer_keys(agent: Agent, approve: bool) -> Option<&'static str> {
     match (agent, approve) {
-        (Agent::Claude, true) => "\r",
-        (Agent::Claude, false) => "\x1b",
-        (Agent::Codex | Agent::Vendor, true) => "y",
-        (Agent::Codex | Agent::Vendor, false) => "n",
+        (Agent::Claude, true) => Some("\r"),
+        (Agent::Claude, false) => Some("\x1b"),
+        (Agent::Codex, true) => Some("y"),
+        (Agent::Codex, false) => Some("n"),
+        (Agent::Vendor, _) => None,
     }
 }
 
@@ -595,7 +602,7 @@ pub fn agent_answer(terminals: tauri::State<'_, crate::terminal::Terminals>, pan
     if !answerable {
         return Err("no hook permission to answer".into());
     }
-    terminals.write(terminal, answer_keys(agent, approve))?;
+    terminals.write(terminal, answer_keys(agent, approve).ok_or("not an agent pane")?)?;
     // Council FIX-3 (FS2): the window takes the resolved state, never a blanket "working".
     Ok(with_sessions(|s| s.get_mut(&pane_key).map(Session::answer_state)).unwrap_or("working").to_string())
 }
@@ -923,8 +930,10 @@ mod tests {
         // Another tool carrying on is no longer refused as "a different tool than the pending one".
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash"}"#), Some("working"));
         assert_eq!(s.history.back().map(|e| e.state), Some("working"));
-        assert_eq!((answer_keys(Agent::Claude, true), answer_keys(Agent::Claude, false)), ("\r", "\x1b"));
-        assert_eq!((answer_keys(Agent::Codex, true), answer_keys(Agent::Codex, false)), ("y", "n"));
+        assert_eq!((answer_keys(Agent::Claude, true), answer_keys(Agent::Claude, false)), (Some("\r"), Some("\x1b")));
+        assert_eq!((answer_keys(Agent::Codex, true), answer_keys(Agent::Codex, false)), (Some("y"), Some("n")));
+        // T-151-c: a vendor agent's keys are never guessed.
+        assert_eq!((answer_keys(Agent::Vendor, true), answer_keys(Agent::Vendor, false)), (None, None));
     }
 
     #[test]
@@ -1427,6 +1436,7 @@ mod tests {
     /// terminal and that terminal's exit ends it (and, through panes_of, the activity lane).
     #[test]
     fn t563_a_late_hook_from_a_retired_terminal_never_takes_the_pane_back() {
+        let _serial = ENDED_TESTS.lock().unwrap_or_else(|p| p.into_inner());
         const PANE: u32 = 956_301;
         const OLD: u32 = 956_303;
         const NEW: u32 = 956_304;
@@ -1460,11 +1470,18 @@ mod tests {
     /// dead terminal. No session is seeded here.
     #[test]
     fn fix_5_a_panes_first_hook_handled_after_its_terminals_exit_is_dropped() {
+        let _serial = ENDED_TESTS.lock().unwrap_or_else(|p| p.into_inner());
         const PANE: u32 = 958_101;
         const DEAD: u32 = 958_103;
         let go = ev(r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
         assert_eq!(terminal_of(PANE), None, "no session before");
         terminal_ended(DEAD);
+        // hooks FIX-6: HOOKS_TEST_GAP_MS widens the window between the end and the hook, so a run
+        // without ENDED_TESTS shows the race test's burst evicting DEAD from the ring:
+        // `HOOKS_TEST_GAP_MS=1000 cargo test status::tests::fix_ -- --test-threads=2`.
+        if let Some(ms) = std::env::var("HOOKS_TEST_GAP_MS").ok().and_then(|v| v.parse().ok()) {
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+        }
         assert!(report(PANE, Some(DEAD), Agent::Claude, &go).is_none(), "the first hook of a terminal that already ended is dropped");
         assert!(with_sessions(|s| !s.contains_key(&PANE)), "and makes no session");
         assert!(report(PANE, Some(DEAD + 1), Agent::Claude, &go).is_some(), "the pane's next terminal reports as usual");
@@ -1478,6 +1495,7 @@ mod tests {
     /// the retired check and the retiring happen under the one sessions lock.
     #[test]
     fn fix_4_a_hook_racing_its_terminals_exit_never_keeps_the_dead_terminal() {
+        let _serial = ENDED_TESTS.lock().unwrap_or_else(|p| p.into_inner());
         use std::sync::{Arc, Barrier};
         const BASE: u32 = 957_100_000;
         // Before the fix about half the rounds kept the dead terminal (10008 of 20000 in the red

@@ -173,8 +173,21 @@ Terminals do not keep running while Kolux is closed. When you reopen, Kolux rest
 - the earlier output of each terminal, shown above a new shell with the note "── restored after a restart · the shell below is new ──" (it keeps the last 256 KB per pane);
 - the screen you left: Agents, Board, Terminals, the Inbox or Artifacts.
 
-Claude and Codex tabs with a known session resume it. Other agents return at their prompt. Browser tabs reopen fresh. A tab whose folder is gone is dropped, and a damaged saved entry is dropped on its own without losing the rest. A tab you closed on purpose does not come back. A slow start never drops saved tabs.
+Agent tabs try to resume their conversation (see below). Browser tabs reopen fresh. A tab whose folder is gone is dropped, and a damaged saved entry is dropped on its own without losing the rest. A tab you closed on purpose does not come back. A slow start never drops saved tabs.
+
+### Agent sessions after a restart
+
+A restored agent tab starts the agent again with that agent's own "resume" form added to its start line, so it opens in its earlier conversation. This happens only on a restore, never on a new tab, and never twice. Kolux needs the agent's session ID for this; it learns it from the agent's status hooks (see [Board, Agents and Inbox](board-agents-inbox.md#status-words)). If Kolux holds no session ID, the agent starts at its prompt, and its pane wears the mark "restored without resume" instead of "restored". A session ID with odd characters in it is treated as no ID.
+
+| Agents | What comes back |
+|---|---|
+| Claude Code, Codex | The session Kolux last saw |
+| Kiro | The session Kolux last saw; with none, the last conversation in that folder |
+| Aider | The last conversation in that folder (its chat history), with or without an ID |
+| Copilot, Cursor, Gemini CLI, Devin, Droid, Mistral Vibe, Qwen Code, Hermes, Grok, Antigravity, Kimi, Pi, Goose, Amp, OpenClaw | The session Kolux last saw. The resume is built in; with no session ID the tab comes back at its prompt |
+
+Your own extra start arguments, such as a model choice, stay in front of the resume form. Whether a given agent's hooks report a session ID is not the same for every agent: the plan still lists a session-ID source for the agents in the last row as open work (T-066-d), so expect "restored without resume" for them until their hooks supply one. Agents not in the table come back at their prompt.
 
 Quitting with unsaved editor text asks "Quit with unsaved changes?" with "Quit without saving" or "Keep working".
 
-<!-- verified against: src/projects/ProjectsPanel.tsx, src/projects/AddProject.tsx, src/glossary.ts, src/scm/SourceControlPanel.tsx, src/scm/split.ts, src/scm/watch.ts, src-tauri/src/scm_watch.rs, src/scm/model.ts, src/chrome/RightSidebar.tsx, src/terminal/layout.ts, src/keys/actions.ts, src/App.tsx, src-tauri/src/setup.rs, src/setup/IssueCommand.tsx, src-tauri/src/scm.rs, src/tasks/TasksPage.tsx, src/tasks/model.ts, src-tauri/src/github.rs at 2c8b9d8 -->
+<!-- verified against: src/projects/ProjectsPanel.tsx, src/projects/AddProject.tsx, src/glossary.ts, src/scm/SourceControlPanel.tsx, src/scm/split.ts, src/scm/watch.ts, src-tauri/src/scm_watch.rs, src/scm/model.ts, src/chrome/RightSidebar.tsx, src/terminal/layout.ts, src/keys/actions.ts, src/App.tsx, src-tauri/src/setup.rs, src/setup/IssueCommand.tsx, src-tauri/src/scm.rs, src/tasks/TasksPage.tsx, src/tasks/model.ts, src-tauri/src/github.rs at 2c8b9d8; agent sessions section (src-tauri/src/agents.rs, src/main.tsx, src/terminal/layout.ts, src/terminal/TerminalPane.tsx, T-066-b, T-066-c) at 950ba36 -->

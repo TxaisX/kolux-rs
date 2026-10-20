@@ -153,6 +153,8 @@ Tasks not yet ticked off in the build plan are not listed.
 |---|---|---|
 | T-065 | Workspace tabs and layout are saved and restored. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-066 | Agent sessions resume after a quit or a crash. | [Projects and worktrees](projects-and-worktrees.md) |
+| T-066-b | Resume forms are built in for 17 more agents, each used only when an agent tab is restored. | [Projects and worktrees](projects-and-worktrees.md#agent-sessions-after-a-restart) |
+| T-066-c | A restored agent tab asks for its resume form and is marked "restored without resume" when it has none. Kiro and Aider resume their folder's last conversation; the other agents resume when Kolux knows their session ID. | [Projects and worktrees](projects-and-worktrees.md#agent-sessions-after-a-restart) |
 | T-067 | Panes keep their identity across layout changes; copying never happens silently. | [Terminals](terminals.md) |
 | T-068 | Terminal output is restored after the background host or computer died. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-069-a | The app reopens on the screen and page you left, saving on quit. | [Projects and worktrees](projects-and-worktrees.md) |
@@ -187,6 +189,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-088 | The kolux command works in every Kolux terminal with no setup. | [Command line](command-line.md) |
 | T-089-a | Command-line tasks and dispatch, and worker-start for launching workers. | [Command line](command-line.md) |
 | T-089-b | The command line can ask a question and wait for the answer. | [Command line](command-line.md) |
+| T-089-c | The command line can show one worker (worker-show) and release a settled one, saving its output before closing its terminal; worker-stop warns when it cannot end the process. | [Command line](command-line.md#worker-commands) |
 
 ### P0 · theme 8 · Release, update and CI pipeline (7 cards)
 
@@ -293,6 +296,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-128-a | Kolux recognises which agent runs in each pane. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-129-a | kolux worktree ps sums up orchestration across worktrees. | [Command line](command-line.md) |
 | T-129-b | List workers by state to see what can be cleaned up. | [Board, Agents and Inbox](board-agents-inbox.md) |
+| T-129-c | Worker rows can read release_pending and release_unknown, and worker-show flags failure, interruption and stale. | [Command line](command-line.md#worker-commands) |
 | T-130 | A Runs dashboard covers every automation. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-131 | Unsent plan-review comments are kept; very long plans are cut down. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-131-b | The plan sheet goes read-only once the plan is approved in the terminal. | [Board, Agents and Inbox](board-agents-inbox.md) |
@@ -374,6 +378,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-339 | Accounts page cleanup: one confirm dialog and one switch per notification kind. | [Settings](settings.md) |
 | T-172-a | Waiting mail outlives a restart without repeating keystrokes. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-172-b | Waiting mail survives restart without typing its pointer twice. | [Board, Agents and Inbox](board-agents-inbox.md) |
+| T-172-c | Release leaves open a terminal that is not the worker's own, and a worker start that does not come up lists what is left over and how to clean up. | [Command line](command-line.md#worker-commands) |
 | T-173-a | Retrying a command after a timeout never does the work twice. | [Command line](command-line.md) |
 | T-173-b | The orchestration store is limited to your user and upgrades safely. | [Safety](safety.md) |
 | T-174-a | The command line reaches the open app through a local channel. | [Command line](command-line.md) |
@@ -504,6 +509,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-278-c | Big pastes arrive whole and in order without slowing other panes; Ctrl+C or Esc stops one. | [Terminals](terminals.md) |
 | T-278-d | Control characters inside a paste are removed, so pasted text cannot run on its own. | [Terminals](terminals.md) |
 | T-279 | A task that fails three times running is no longer handed to agents, and a terminal still busy with a task is not given another. | internal |
+| T-279-c | A task that failed three times lists as held; a reset action exists in the app but no command or button reaches it yet. | [Command line](command-line.md#held-tasks) |
 | T-280 | Saved settings come back valid after a restart. | [Settings](settings.md) |
 | T-284 | An interrupted skill delete is undone or finished on restart. | [Troubleshooting](troubleshooting.md) |
 | T-286 | Startup failures and stray background errors never silently kill the app. | [Troubleshooting](troubleshooting.md) |
@@ -552,4 +558,4 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-325 | The Agents page shows a Claude Code, OpenClaude or Codex session as a live chat with each message once and in order. | [Board, Agents and Inbox](board-agents-inbox.md#chat-on-the-agents-page) |
 | T-326 | Chat folds the agent's work: Thought rows, steps, file edits as diff cards, a subagent row and busy timers. | [Board, Agents and Inbox](board-agents-inbox.md#chat-on-the-agents-page) |
 | T-327 | A chat message box that types into the agent's terminal and follows the newest message; it holds a send while the agent is asking, and Request changes on a plan waits until the agent leaves its menu. | [Board, Agents and Inbox](board-agents-inbox.md#chat-on-the-agents-page) |
-<!-- generated from PLAN.md at fb0a9d4 -->
+<!-- generated from PLAN.md at 950ba36 -->

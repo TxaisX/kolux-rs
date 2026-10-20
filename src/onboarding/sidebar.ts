@@ -17,20 +17,29 @@ export const projectAddedNote = () => {
 /** Window focus re-reads at most this often: each read asks gh, the CLI and every workspace. */
 export const FOCUS_FLOOR_MS = 30_000;
 
+/** VIEW-114 (FIX-4): when the entry last read its steps, kept apart from the event wiring so the reads
+ *  that do not come from an event (useGuideState's read when the guide switches on) can stamp it too.
+ *  It starts stamped: subscribing counts as a read, since the entry reads on mount. */
+export type RereadFloor = { stamp: () => void; due: () => boolean };
+export function rereadFloor(now: () => number = () => performance.now()): RereadFloor {
+  let last = now();
+  return { stamp: () => void (last = now()), due: () => now() - last >= FOCUS_FLOOR_MS };
+}
+
 /** VIEW-114 (FIX-2 FIX-SOON 2, FIX-3): the events that make the sidebar entry read its steps again:
  *  every Setup Guide close and every added project, and window focus only once FOCUS_FLOOR_MS has
  *  passed since the last read of any kind (so a step done in Settings or outside the app ticks when the
- *  user comes back). Subscribing counts as a read, since the entry reads on mount, so the first focus
+ *  user comes back). A read the guide made by itself, when it switched on, counts too once it stamps the
+ *  floor passed in (FIX-4). Subscribing counts as a read, since the entry reads on mount, so the first focus
  *  after startup does not read twice. The clock is the monotonic one: a wall clock stepped back never
  *  holds focus re-reads off. Returns the cleanup. */
-export function onReread(target: EventTarget, bump: () => void, now: () => number = () => performance.now()): () => void {
-  let last = now();
+export function onReread(target: EventTarget, bump: () => void, now: () => number = () => performance.now(), floor: RereadFloor = rereadFloor(now)): () => void {
   const read = () => {
-    last = now();
+    floor.stamp();
     bump();
   };
   const focus = () => {
-    if (now() - last < FOCUS_FLOOR_MS) return;
+    if (!floor.due()) return;
     read();
   };
   target.addEventListener("focus", focus);

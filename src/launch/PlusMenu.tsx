@@ -10,17 +10,16 @@
 // outside editor installed (editors.ts).
 import { useState, type CSSProperties } from "react";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
+import AgentMark from "../marks/AgentMark";
 import { Kbd, useLabel } from "../keys/KeymapContext";
 import { agentRows, MAX_SEARCH, searchAgents, wantsTerminal, type AgentPass } from "./agents";
 import { openIn, openLabel, openTitle, useEditors, type Editor } from "./editors";
+import { markFor } from "./paneMark";
 
 export type AgentInfo = { id: string; name: string; program: string; args: string[]; installed: boolean; path: string | null; docs?: boolean };
 
-/** Which vendor mark an agent id draws; anything unknown gets the plain-shell glyph. */
-export function markFor(id: string): Agent {
-  if (id === "claude-agent-teams") return "claude";
-  return id === "claude" || id === "codex" ? id : "shell";
-}
+// FIX-3: markFor, paneMark and the credit rule live in paneMark.ts (one rule shared with Rust); re-exported so every caller keeps its import.
+export { markFor, paneMark } from "./paneMark";
 
 /** ACCT-046: the pane-header word for the shell an automatic pane actually started. */
 export function shellWord(path: string): string {
@@ -158,7 +157,9 @@ export default function PlusMenu({ agents, defaultId = "", onPick, onSetDefault,
                   openIn(e.id, dir).then(onClose, (err) => setOpenError(String(err)));
                 }}
               >
-                <span className="agent-mark" aria-hidden="true" />
+                <span className="agent-mark" aria-hidden="true">
+                  {e.id === "vscode" && <AgentMark id="vscode" size={13} />}
+                </span>
                 <span className="name">{openLabel(e)}</span>
               </button>
             ))}

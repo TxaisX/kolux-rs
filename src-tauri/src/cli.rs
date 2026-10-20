@@ -1129,8 +1129,17 @@ fn request_id() -> String {
     format!("{:x}-{:x}", std::process::id(), t)
 }
 
-/// What a success looks like without `--json`.
+/// What a success looks like without `--json`. cli FIX-9: a late worker note (`lateWorker`) is
+/// printed under any answer that carries one, with the command that closes it.
 fn text_of(command: &str, r: &Value) -> String {
+    let mut text = text_core(command, r);
+    for n in r["lateWorker"].as_array().into_iter().flatten() {
+        text.push_str(&format!("\nwarning: {}; next: {}", n["note"].as_str().unwrap_or_default(), n["next"].as_str().unwrap_or_default()));
+    }
+    text
+}
+
+fn text_core(command: &str, r: &Value) -> String {
     if let Some(t) = local_cli::text(command, r) {
         return t;
     }
@@ -1310,7 +1319,18 @@ fn text_of(command: &str, r: &Value) -> String {
             for w in &rows {
                 let g = |k: &str| w[k].as_str().unwrap_or("-").to_string();
                 let next = w["next"].as_str().map(|n| format!("; next: {n}")).unwrap_or_default();
-                out.push(format!("{} {} (task {}) terminal {} {}{next}", g("dispatchId"), g("terminalState"), g("taskStatus"), g("terminal"), g("worktree")));
+                // cli FIX-12 (council FIX-SOON 3 on 28f3eb7a): a left-open terminal is closed with terminal close
+                // (a release would leave it open again); any other pending row is closed by worker-release.
+                // worker-show only ends the alarm, on a later show, and never names the way out.
+                let left_open = w["terminalLeftOpen"].as_str().filter(|why| !why.is_empty());
+                let late = match (w["latePending"] == true, w["lateAfter"].as_str(), left_open) {
+                    (true, Some(status), Some(why)) => format!("; its agent came up late, after the dispatch was {status}, and its terminal is left open ({why}): close it with {} terminal close --terminal {}", crate::orchestration::CLI, g("terminal")),
+                    (true, Some(status), None) => format!("; its agent came up late, after the dispatch was {status}: close it with {} orchestration worker-release --dispatch {}", crate::orchestration::CLI, g("dispatchId")),
+                    (false, Some(status), _) => format!("; its agent came up late, after the dispatch was {status}"),
+                    _ if w["lateStamp"] == true => "; its agent came up late".to_string(),
+                    _ => String::new(),
+                };
+                out.push(format!("{} {} (task {}) terminal {} {}{late}{next}", g("dispatchId"), g("terminalState"), g("taskStatus"), g("terminal"), g("worktree")));
             }
             if let Some(c) = r["nextCursor"].as_str() {
                 out.push(format!("more: --cursor {c}"));
@@ -1325,7 +1345,15 @@ fn text_of(command: &str, r: &Value) -> String {
             Some("released") => format!("{} released: its terminal was already gone; the worktree {} stays", s("dispatchId"), s("worktree")),
             _ => format!("{} release unknown: {}; next: {}", s("dispatchId"), s("error"), s("next")),
         },
-        WORKER_SHOW => format!("{} {} (task {}) terminal {} {}; waiting on a person: {} ({})", s("dispatchId"), s("terminalState"), s("taskStatus"), s("terminal"), s("worktree"), s("waiting"), s("waitingWhy")),
+        WORKER_SHOW => {
+            // cli FIX-9: a session recorded after the start gave up, and the status the row had when it came.
+            let late = match (r["lateStamp"] == true, r["lateAfter"].as_str()) {
+                (_, Some(status)) => format!("; its agent came up late, after the dispatch was {status}"),
+                (true, None) => "; its agent came up late".to_string(),
+                _ => String::new(),
+            };
+            format!("{} {} (task {}) terminal {} {}; waiting on a person: {} ({}){late}", s("dispatchId"), s("terminalState"), s("taskStatus"), s("terminal"), s("worktree"), s("waiting"), s("waitingWhy"))
+        }
         RETAIN => match r["alreadyRetained"] == true {
             true => format!("{} was already kept", s("dispatchId")),
             false => format!("{} kept: its terminal {} stays open until it is released", s("dispatchId"), s("terminal")),
@@ -2866,10 +2894,19 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
     let mut tasks = load_list(store, TASKS_KEY);
     o::promote(&mut tasks);
     let mut dispatches = load_list(store, DISPATCHES_KEY);
+    // cli FIX-8: a session the window started after its start gave up is recorded on its row first, so
+    // worker-show, worker-stop and worker-release see (and can end) it.
+    reconcile_late(&mut dispatches, &|t| ctx.terminals.live(&crate::terminal::handle_of(t)).then(|| mark_program(ctx.terminals, t)));
+    // cli FIX-12: and one whose late terminal is gone (closed by hand) is spent before any arm reads it.
+    spend_gone_late(&mut dispatches, &|h| ctx.terminals.live(h));
     // ORCH-033: a pane acts in its own Run; another Run can be named to read it, never to change it.
     let own = pane.and_then(|p| m.run_of(p, &dispatches));
     let run = named.clone().or_else(|| own.clone());
     let caps = caps(store, a);
+    // cli FIX-10: the dispatch worker-show reads, kept before the arms use up `run`.
+    let shown_row = (req.command == WORKER_SHOW).then(|| (text("dispatch"), run.clone()));
+    // cli FIX-11: the Run this answer speaks for, kept for the late notes (the arms use `run` up).
+    let scope = run.clone();
     let changes = !READS.contains(&req.command.as_str()) && a["dryRun"] != true;
     if let (true, Some(n), Some(p)) = (changes, &named, pane) {
         in_run(m, p, n, &dispatches)?;
@@ -2989,7 +3026,7 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
             let from = if named.is_some() { "named" } else if own.is_some() { "tied" } else { "all" };
             let limit = text("limit").and_then(|v| v.parse::<usize>().ok()).unwrap_or(50);
             let live = |h: &str| ctx.terminals.live(h);
-            o::worker_list(&tasks, &dispatches, run.as_deref(), from, text("terminalState").as_deref(), text("cursor").as_deref(), limit, &live)?
+            late_rows(o::worker_list(&tasks, &dispatches, run.as_deref(), from, text("terminalState").as_deref(), text("cursor").as_deref(), limit, &live)?, &dispatches)
         }
         RETAIN => {
             let id = text("dispatch").ok_or_else(|| Fail::args("--dispatch is required"))?;
@@ -3019,26 +3056,42 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
             // CLI-036: no pane hook state reaches this path yet, so a live pane reads unknown.
             let id = text("dispatch").ok_or_else(|| Fail::args("--dispatch is required"))?;
             let live = |h: &str| ctx.terminals.live(h);
-            o::worker_show(&tasks, &dispatches, &id, run.as_deref(), &live, None)?
+            let mut shown = o::worker_show(&tasks, &dispatches, &id, run.as_deref(), &live, None)?;
+            // cli FIX-9: a session recorded after the start gave up, and the status the row already had then.
+            if let Some(d) = dispatches.iter().find(|d| d["id"] == id.as_str() && d["runId"].as_str() == run.as_deref()) {
+                for k in ["lateStamp", "lateAfter"] {
+                    if !d[k].is_null() {
+                        shown[k] = d[k].clone();
+                    }
+                }
+            }
+            shown
         }
         "orchestration.gate-create" => m.once(retry, |m| m.gate_create(run.as_deref(), &mut tasks, &dispatches, a, now_ms()))?,
         "orchestration.gate-resolve" => m.once(retry, |m| m.gate_resolve(run.as_deref(), &mut tasks, a, now_ms()))?,
         "orchestration.gate-list" => m.gate_list(run.as_deref(), a)?,
         other => return Err(Fail::args(format!("unknown command {other}"))),
     };
+    // cli FIX-10: every late note not yet read goes with this answer; worker-show on a dispatch reads its own.
+    // cli FIX-12: an arm may have closed one (a stop): spent again before the notes are made.
+    spend_gone_late(&mut dispatches, &|h| ctx.terminals.live(h));
+    let late = pending_late_notes(&dispatches, scope.as_deref());
+    if let Some((Some(id), shown_run)) = shown_row {
+        if let Some(d) = dispatches.iter_mut().find(|d| d["id"] == id.as_str() && d["runId"].as_str() == shown_run.as_deref()) {
+            let open = d["terminal"].as_u64().and_then(|t| u32::try_from(t).ok()).is_some_and(|t| ctx.terminals.live(&crate::terminal::handle_of(t)));
+            read_late(d, open);
+        }
+    }
     // ORCH-012: a task and its dispatch change together or not at all.
     let (t, d) = (Value::Array(tasks).to_string(), Value::Array(dispatches).to_string());
     store.set_all(&[(TASKS_KEY, &t), (DISPATCHES_KEY, &d)]).map_err(|e| Fail::new("failed", e.to_string()))?;
-    Ok(out)
+    Ok(with_late_notes(out, late))
 }
 
 /// ORCH-004: every open terminal with the agent Kolux started in it (none for a shell; a pane title
 /// plays no part) and whether it has been quiet for `IDLE`.
 fn peers(ctx: &Ctx) -> Vec<crate::orchestration::Peer> {
-    let credited = |p: &str| match p.starts_with('"') {
-        true => crate::agents::credited_agent(p),
-        false => crate::agents::credited_agent(&format!("\"{p}\"")),
-    };
+    let credited = crate::tools::credited_program;
     ctx.terminals
         .sessions()
         .into_iter()
@@ -3467,42 +3520,265 @@ pub(crate) fn dispatch_in(env: &[(String, String)]) -> Option<String> {
     env.iter().rfind(|(k, _)| k == DISPATCH_ENV).map(|(_, v)| v.clone())
 }
 
-/// The starts waiting for their session's stamp: dispatch id, and the session once it is stamped.
-static STAMPS: Mutex<Vec<(String, Option<u32>)>> = Mutex::new(Vec::new());
+/// A start waiting for its session's stamp: the dispatch id, the session once it is stamped, and
+/// (cli FIX-8) the moment a start that gave up waiting stops being told about a late session.
+struct Stamp {
+    dispatch: String,
+    session: Option<u32>,
+    late_until: Option<Instant>,
+}
 
-fn stamps() -> std::sync::MutexGuard<'static, Vec<(String, Option<u32>)>> {
+/// The starts waiting for their session's stamp, and those that timed out and still may be told.
+/// Lock order (cli FIX-9): STAMPS is always taken BEFORE the terminals lock, never while holding it
+/// (`reconcile_late` reads a session with STAMPS held; `tabs` and `spawn_stamped` never hold both).
+static STAMPS: Mutex<Vec<Stamp>> = Mutex::new(Vec::new());
+
+fn stamps() -> std::sync::MutexGuard<'static, Vec<Stamp>> {
     STAMPS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// A start is about to ask the window for its session: only a dispatch registered here can be stamped.
 pub(crate) fn expect_stamp(dispatch: &str) {
     let mut s = stamps();
-    s.retain(|(d, _)| d != dispatch);
-    s.push((dispatch.to_string(), None));
+    s.retain(|e| e.dispatch != dispatch);
+    s.push(Stamp { dispatch: dispatch.to_string(), session: None, late_until: None });
     if s.len() > 64 {
         s.remove(0);
     }
 }
 
 /// The window started session `id` with `dispatch` in its environment (`terminal_spawn`). Only the
-/// first session of a start that is still waiting is stamped; any other call changes nothing.
+/// first session of a start that is still waiting (or timed out less than `LATE_WINDOW` ago) is
+/// stamped; any other call changes nothing.
 pub(crate) fn stamp_session(dispatch: &str, id: u32) -> bool {
     let mut s = stamps();
-    match s.iter_mut().find(|(d, t)| d == dispatch && t.is_none()) {
-        Some((_, t)) => {
-            *t = Some(id);
+    let now = Instant::now();
+    match s.iter_mut().find(|e| e.dispatch == dispatch && e.session.is_none() && e.late_until.is_none_or(|u| now < u)) {
+        Some(e) => {
+            e.session = Some(id);
             true
         }
         None => false,
     }
 }
 
+/// cli FIX-8: spawns a session and stamps it. `dispatch` is the id read from the spawn's own
+/// environment (`dispatch_in`) before the environment is handed to the spawn; a spawn that fails
+/// stamps nothing. `terminal_spawn` runs every session through this.
+pub(crate) fn spawn_stamped<E>(dispatch: Option<String>, spawn: impl FnOnce() -> Result<u32, E>) -> Result<u32, E> {
+    let id = spawn()?;
+    if let Some(d) = dispatch {
+        stamp_session(&d, id);
+    }
+    Ok(id)
+}
+
 fn stamped(dispatch: &str) -> Option<u32> {
-    stamps().iter().find(|(d, _)| d == dispatch).and_then(|(_, t)| *t)
+    stamps().iter().find(|e| e.dispatch == dispatch).and_then(|e| e.session)
 }
 
 fn forget_stamp(dispatch: &str) {
-    stamps().retain(|(d, _)| d != dispatch);
+    stamps().retain(|e| e.dispatch != dispatch);
+}
+
+/// cli FIX-8 (council FIX-SOON 2 on 800b8a94): how long after a start gave up waiting its session,
+/// if the window starts it after all (a loaded PC), is still tied to the dispatch.
+const LATE_WINDOW: Duration = Duration::from_secs(600);
+
+/// A start that ended `unknown` with no session stamped keeps its place for `window`, so a session
+/// the window starts later is stamped to it and `reconcile_late` can record it on the row.
+fn keep_late(dispatch: &str, window: Duration) {
+    let mut s = stamps();
+    if let Some(e) = s.iter_mut().find(|e| e.dispatch == dispatch) {
+        e.late_until = Some(Instant::now() + window);
+    }
+}
+
+/// cli FIX-8: what a start does with its stamp entry once its wait is over: a session was found, so
+/// the entry is done; none was, so it stays for `window` and a late session can still be tied to it.
+fn finish_stamp(dispatch: &str, found: Option<u32>, window: Duration) {
+    if found.is_some() {
+        forget_stamp(dispatch);
+    } else {
+        keep_late(dispatch, window);
+    }
+}
+
+/// cli FIX-8: records the late sessions on their rows. A row of this run whose terminal was never
+/// recorded and whose dispatch was stamped after the start gave up gets the session (and the
+/// program Kolux started in it, `mark`) while that session is still open; the row's status is left
+/// as the start reported it. Entries past their window are dropped; one is kept until then (a
+/// refused call may not save the row), and a row that has its terminal is never changed again.
+/// `session(t)` is None when `t` is gone, else its mark. Returns how many rows changed and, for the
+/// rows that were already stopped, abandoned or released when the session came (cli FIX-9, council
+/// FIX-SOON 1 on 529c53e2; completed and failed rows too, cli FIX-10), the row is marked `latePending`:
+/// that agent is running on a task already handed back, and worker-release closes it. The row keeps
+/// the status it had in `lateAfter`; `pending_late_notes` makes the notes, on every answer until a later worker-show
+/// reads the row or a release closes the terminal (cli FIX-11).
+/// Lock order: STAMPS is taken here before the terminals lock (`session` reads a session); nothing
+/// takes the two the other way round (`tabs` lets go of STAMPS before it reads a session), so keep it so.
+fn reconcile_late(dispatches: &mut [Value], session: &dyn Fn(u32) -> Option<Option<String>>) -> usize {
+    let now = Instant::now();
+    let me = u64::from(std::process::id());
+    let mut changed = 0;
+    let mut s = stamps();
+    s.retain(|e| e.late_until.is_none_or(|u| now < u));
+    for d in dispatches.iter_mut() {
+        if !d["terminal"].is_null() || d["runtime"].as_u64() != Some(me) {
+            continue;
+        }
+        let Some(i) = s.iter().position(|e| e.late_until.is_some() && d["id"].as_str() == Some(e.dispatch.as_str()) && e.session.is_some()) else { continue };
+        let t = s[i].session.unwrap_or_default();
+        if let Some(mark) = session(t) {
+            d["terminal"] = json!(t);
+            d["terminalProgram"] = json!(mark);
+            d["lateStamp"] = json!(true);
+            if let Some(status) = ended_status(d) {
+                // cli FIX-10: the note is kept pending on the row until worker-show or worker-release reads it.
+                d["lateAfter"] = json!(status);
+                d["latePending"] = json!(true);
+            }
+            changed += 1;
+        }
+    }
+    changed
+}
+
+/// cli FIX-9: the status a row had when the coordinator already ended it (stopped, abandoned or
+/// released, completed or failed), else None.
+fn ended_status(d: &Value) -> Option<&'static str> {
+    match (d["released"] == true, d["status"].as_str()) {
+        (true, _) | (_, Some("released")) => Some("released"),
+        (_, Some("stopped")) => Some("stopped"),
+        (_, Some("abandoned")) => Some("abandoned"),
+        (_, Some("completed")) => Some("completed"),
+        (_, Some("failed")) => Some("failed"),
+        _ => None,
+    }
+}
+
+/// cli FIX-9: what a late session on an ended row tells the caller, and how to close it.
+fn late_note(d: &Value, status: &str) -> Value {
+    let id = d["id"].as_str().unwrap_or_default();
+    let handle = d["terminal"].as_u64().and_then(|t| u32::try_from(t).ok()).map(crate::terminal::handle_of);
+    let place = handle.as_deref().unwrap_or("a terminal");
+    // cli FIX-10: a finished row (completed, failed) is a second agent on a done task, the others a task handed back.
+    let note = match status {
+        "completed" | "failed" => format!("{id} had already {status} when its agent came up late; the agent in {place} is a second agent on a finished task, and it is recorded on the row"),
+        _ => format!("{id} was already {status} when its agent came up late; the agent in {place} is running on a task that was handed back, and it is recorded on the row"),
+    };
+    json!({ "dispatchId": id, "terminal": handle, "status": status, "note": note, "next": format!("{} orchestration worker-release --dispatch {id}", crate::orchestration::CLI) })
+}
+
+/// cli FIX-10: the receipt of a release that left the late agent's terminal open says so, and names
+/// the command that closes a terminal, instead of a release that promises a close.
+fn left_open(mut note: Value, why: &str) -> Value {
+    let id = note["dispatchId"].as_str().unwrap_or_default().to_string();
+    let handle = note["terminal"].as_str().unwrap_or("its terminal").to_string();
+    note["note"] = json!(format!("{id}: the late agent's terminal {handle} is left open ({why}), so that agent is still running on a task that was handed back"));
+    note["next"] = json!(format!("{} terminal close --terminal {handle}", crate::orchestration::CLI));
+    note
+}
+
+/// cli FIX-10 (council FIX-SOON 1 on 081bbfab): the late notes of every row not yet read, so an
+/// answer that was lost or went to another agent does not hide a second agent on a handed-back task.
+/// cli FIX-11 (council FIX-SOON 3 on 9afdd308, decision): the notes follow ORCH-033. An answer for a
+/// Run carries that Run's notes and those of rows with no Run; an answer for no Run (a caller tied to
+/// none, who sees every Run's workers in worker-list too) carries all. A row whose release left the
+/// late terminal open is told as that (terminal close), not as a release that would leave it open again.
+fn pending_late_notes(dispatches: &[Value], run: Option<&str>) -> Vec<Value> {
+    dispatches
+        .iter()
+        .filter(|d| d["latePending"] == true && (run.is_none() || d["runId"].is_null() || d["runId"].as_str() == run))
+        .filter_map(|d| {
+            let note = late_note(d, d["lateAfter"].as_str()?);
+            Some(match d["terminalLeftOpen"].as_str().filter(|w| !w.is_empty() && d["released"] == true) {
+                Some(why) => left_open(note, why),
+                None => note,
+            })
+        })
+        .collect()
+}
+
+/// cli FIX-10: the late fields on each worker-list row, so a listing shows the fact and the open alarm.
+fn late_rows(mut listed: Value, dispatches: &[Value]) -> Value {
+    for w in listed["workers"].as_array_mut().into_iter().flatten() {
+        let Some(d) = dispatches.iter().find(|d| d["id"] == w["dispatchId"] && d["runId"] == w["runId"]) else { continue };
+        // cli FIX-12: terminalLeftOpen too, so the row text can name terminal close for a left-open terminal.
+        for k in ["lateStamp", "lateAfter", "latePending", "terminalLeftOpen"] {
+            if !d[k].is_null() {
+                w[k] = d[k].clone();
+            }
+        }
+    }
+    listed
+}
+
+/// cli FIX-11 (council FIX-BEFORE 1 on 9afdd308): worker-show does not clear the alarm on the first
+/// read, because that answer may be the one that is lost. The first show marks the row `lateShown`
+/// (and the alarm stays on every answer); a later show, whose caller has asked again, clears it.
+/// cli FIX-12 (council FIX-SOON 1 on 28f3eb7a, decision): not while the row's release left the late
+/// terminal open and that terminal (`terminal_live`) is still running; that agent is still on a task
+/// handed back, so showing the row twice does not silence it. It ends when the terminal is closed.
+fn read_late(d: &mut Value, terminal_live: bool) {
+    if d["latePending"] != true {
+        return;
+    }
+    let held = terminal_live && d["released"] == true && d["terminalLeftOpen"].as_str().is_some_and(|w| !w.is_empty());
+    if d["lateShown"] == true && !held {
+        if let Some(o) = d.as_object_mut() {
+            o.remove("latePending");
+            o.remove("lateShown");
+        }
+    } else {
+        d["lateShown"] = json!(true);
+    }
+}
+
+/// cli FIX-11 (council FIX-BEFORE 1 on 9afdd308): the late agent is gone (its terminal is closed), so
+/// the alarm stops; until then a release keeps it on the row.
+/// cli FIX-12 (council AFTER 1 on 28f3eb7a, decision): the fact (`lateAfter`, what the dispatch was
+/// when the agent came up) stays for worker-show on every path that spends the alarm.
+fn spend_late(d: &mut Value) {
+    if let Some(o) = d.as_object_mut() {
+        o.remove("latePending");
+        o.remove("lateShown");
+    }
+}
+
+/// cli FIX-12 (council FIX-SOON 2 on 28f3eb7a): a row whose late terminal is already gone (closed by
+/// hand, or by anything else) has nothing running to warn about; the alarm is spent, `lateAfter` stays.
+/// `live(h)` says whether terminal `h` is open. A row with no recorded terminal is left alone.
+fn spend_gone_late(dispatches: &mut [Value], live: &dyn Fn(&str) -> bool) {
+    for d in dispatches.iter_mut().filter(|d| d["latePending"] == true) {
+        let open = d["terminal"].as_u64().and_then(|t| u32::try_from(t).ok()).is_some_and(|t| live(&crate::terminal::handle_of(t)));
+        if d["terminal"].as_u64().is_some() && !open {
+            spend_late(d);
+        }
+    }
+}
+
+/// cli FIX-11: a release receipt that says the terminal is gone (released, and nothing left open).
+fn terminal_closed(receipt: &Value) -> bool {
+    receipt["terminalState"] == "released" && receipt["terminalLeftOpen"].as_str().is_none_or(str::is_empty)
+}
+
+/// cli FIX-9: puts the late worker notes in an answer, once per dispatch. An answer that is not an
+/// object is handed back as it was (the notes stay pending on their rows, cli FIX-10).
+fn with_late_notes(mut out: Value, notes: Vec<Value>) -> Value {
+    if notes.is_empty() {
+        return out;
+    }
+    if let Some(o) = out.as_object_mut() {
+        let mut all = o.get("lateWorker").and_then(Value::as_array).cloned().unwrap_or_default();
+        for n in notes {
+            if !all.iter().any(|a| a["dispatchId"] == n["dispatchId"]) {
+                all.push(n);
+            }
+        }
+        o.insert("lateWorker".into(), Value::Array(all));
+    }
+    out
 }
 
 /// One open session as a start sees it: its id, and how long it has been quiet.
@@ -3511,9 +3787,10 @@ struct Tab {
     quiet: Option<Duration>,
 }
 
-/// Every session in the terminals.
-fn tabs(terminals: &Terminals) -> Vec<Tab> {
-    terminals.list().into_iter().map(|(id, _, _)| Tab { id, quiet: terminals.quiet_for(id) }).collect()
+/// cli FIX-8: the dispatch's stamped session when it is still open, and nothing else. The wait polls
+/// every 100 ms and only ever reads that one, so no other session is looked at or locked.
+fn tabs(terminals: &Terminals, dispatch: &str) -> Vec<Tab> {
+    stamped(dispatch).filter(|id| terminals.live(&crate::terminal::handle_of(*id))).map(|id| Tab { id, quiet: terminals.quiet_for(id) }).into_iter().collect()
 }
 
 /// Waits for the worker's terminal: ready once it has written and is still there `SETTLE` later;
@@ -3524,7 +3801,7 @@ fn tabs(terminals: &Terminals) -> Vec<Tab> {
 /// stamp never arrives (the window did not start the session) ends `unknown` with the terminal
 /// unrecorded, and the offered commands clean up from there.
 pub(crate) fn wait_ready(terminals: &Terminals, dispatch: &str, since: Instant, timeout: Duration) -> (Option<u32>, bool) {
-    wait_ready_over(&|| tabs(terminals), dispatch, since, timeout)
+    wait_ready_over(&|| tabs(terminals, dispatch), dispatch, since, timeout)
 }
 
 fn wait_ready_over(open: &dyn Fn() -> Vec<Tab>, dispatch: &str, since: Instant, timeout: Duration) -> (Option<u32>, bool) {
@@ -3787,8 +4064,48 @@ fn archive_lines(r: crate::terminal::Read) -> Vec<String> {
 #[allow(clippy::too_many_arguments)]
 fn release_worker(dispatches: &mut [Value], id: &str, run: Option<&str>, live: &dyn Fn(&str) -> bool, agent_of: &dyn Fn(&str) -> Option<Option<String>>, dir: &Path, save: &dyn Fn(&[Value]) -> Result<(), Fail>, read: &dyn Fn(u32) -> Option<crate::terminal::Read>, kill: &dyn Fn(u32) -> bool) -> Result<Value, Fail> {
     use crate::orchestration as o;
+    // cli FIX-9: a session that came up after the dispatch was stopped or released is closed by the
+    // release; a row released before it came is opened again for that, once, and the receipt says so.
+    // cli FIX-11: the alarm (latePending) and the fact (lateAfter) stay on the row through the reopen and
+    // are spent only once the receipt says the terminal is closed, so a release that leaves it open or
+    // ends release_unknown, and a receipt that is lost, still leave the running agent on record.
+    let late = dispatches.iter_mut().find(|d| d["id"] == id && d["runId"].as_str() == run).and_then(|d| {
+        let status = d["lateAfter"].as_str()?.to_string();
+        let open = d["terminal"].as_u64().and_then(|t| u32::try_from(t).ok()).is_some_and(|t| live(&crate::terminal::handle_of(t)));
+        if !open {
+            // Nothing is running any more: the alarm is spent, the fact stays for worker-show (cli FIX-12:
+            // released or not, a late terminal that is gone is not told as a running agent).
+            spend_late(d);
+            return None;
+        }
+        let note = late_note(d, &status);
+        d["released"] = Value::Null;
+        // The reopen asks keep_open again; a left-open reason from an earlier release must not outlive it.
+        if let Some(o) = d.as_object_mut() {
+            o.remove("terminalLeftOpen");
+        }
+        Some(note)
+    });
+    // cli FIX-10: a release that leaves the terminal open (terminalLeftOpen) says so in the note.
+    let noted = |r: Value| {
+        let note = late.clone().map(|n| match r["terminalLeftOpen"].as_str() {
+            Some(why) if !why.is_empty() => left_open(n, why),
+            _ => n,
+        });
+        with_late_notes(r, note.into_iter().collect())
+    };
+    let spent = |dispatches: &mut [Value], r: &Value| {
+        if late.is_some() && terminal_closed(r) {
+            if let Some(d) = dispatches.iter_mut().find(|d| d["id"] == id && d["runId"].as_str() == run) {
+                spend_late(d);
+            }
+        }
+    };
     let (receipt, handle) = o::release_with(dispatches, live, id, run, now_ms(), agent_of)?;
-    let Some(h) = handle else { return Ok(receipt) };
+    let Some(h) = handle else {
+        spent(dispatches, &receipt);
+        return Ok(noted(receipt));
+    };
     save(dispatches)?;
     let tid = h.trim_start_matches("term-").parse::<u32>().ok();
     let saved = match tid.and_then(read) {
@@ -3796,7 +4113,9 @@ fn release_worker(dispatches: &mut [Value], id: &str, run: Option<&str>, live: &
         None => Err(format!("{h}'s output could not be read")),
     };
     let closed = saved.is_ok() && tid.is_some_and(kill);
-    o::release_done(dispatches, id, run, saved, closed, now_ms())
+    let receipt = o::release_done(dispatches, id, run, saved, closed, now_ms())?;
+    spent(dispatches, &receipt);
+    Ok(noted(receipt))
 }
 
 /// ORCH-026 (cli FIX-2, council S3): a worker-start dispatch row, stamped with this app's process
@@ -4013,7 +4332,9 @@ fn worker_start_as(ctx: &Ctx, req: &Request, coordinator: Option<String>) -> Res
     expect_stamp(&dispatch_id);
     (ctx.notify)(json!({ "kind": "start", "path": worktree.path, "branch": worktree.branch, "agent": agent_id, "prompt": brief, "extra": extra, "title": task["title"], "dispatch": dispatch_id }));
     let (terminal, ready) = wait_ready(ctx.terminals, &dispatch_id, since, timeout);
-    forget_stamp(&dispatch_id);
+    // cli FIX-8: a start that found no session keeps its place, so a session the window starts after
+    // the timeout is still tied to this dispatch (reconcile_late records it on the row).
+    finish_stamp(&dispatch_id, terminal, LATE_WINDOW);
     let status = if ready { "ready" } else { "unknown" };
 
     let mut receipt = json!({
@@ -4042,7 +4363,7 @@ fn worker_start_as(ctx: &Ctx, req: &Request, coordinator: Option<String>) -> Res
         let setup = receipt["setup"].clone();
         crate::orchestration::start_failed(&mut receipt, "worker", setup);
         start_failed_run(&mut receipt, run_id.as_deref());
-        Err(Fail { code: "timeout", message: format!("the worker did not come up within {} ms; it may still be starting in the background ({dispatch_id} in {})", timeout.as_millis(), worktree.path), data: receipt })
+        Err(Fail { code: "timeout", message: format!("the worker did not come up within {} ms; it may still be starting in the background ({dispatch_id} in {}); if it does, worker-show and worker-stop find its session", timeout.as_millis(), worktree.path), data: receipt })
     }
 }
 
@@ -6356,7 +6677,7 @@ mod tests {
     #[test]
     fn fix7_a_no_stamp_takes_no_tab() {
         let t = Instant::now();
-        let got = wait_ready_over(&|| vec![tab(5, 5000), tab(6, 5000)], "dispatch-fix7-a", t, Duration::from_millis(900));
+        let got = wait_ready_over(&|| vec![tab(5, 5000)], "dispatch-fix7-a", t, Duration::from_millis(900));
         assert_eq!(got, (None, false));
         assert!(t.elapsed() >= Duration::from_millis(900), "waited the whole timeout: {:?}", t.elapsed());
         // Registered but never stamped: the same.
@@ -6426,10 +6747,12 @@ mod tests {
         terminals.fake_session(8, &wd, None);
         terminals.fake_session(9, &wd, Some("npx"));
         terminals.fake_session(10, &wd, Some("npx"));
+        // 11: a tab the user opened that a row names, but marked with another program than the row recorded.
+        terminals.fake_session(11, &wd, Some("node"));
         let row = |n: u32, status: &str, term: u32| worker_row(json!({ "id": format!("dispatch-{n}"), "runId": null, "taskId": format!("task-{n}"), "status": status, "worktree": wd, "agent": "claude", "terminal": term, "terminalProgram": "npx" }));
         let task = |n: u32| json!({ "id": format!("task-{n}"), "status": "dispatched", "dispatchId": format!("dispatch-{n}") });
-        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[row(1, "ready", 7), row(2, "ready", 8), row(3, "stopped", 10), row(4, "stopped", 8)]).unwrap();
-        save_list(&store.lock().unwrap(), TASKS_KEY, &[task(1), task(2), task(3), task(4)]).unwrap();
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[row(1, "ready", 7), row(2, "ready", 8), row(3, "stopped", 10), row(4, "stopped", 8), row(5, "ready", 11), row(6, "stopped", 11)]).unwrap();
+        save_list(&store.lock().unwrap(), TASKS_KEY, &[task(1), task(2), task(3), task(4), task(5), task(6)]).unwrap();
         let call = |command: &str, id: &str| {
             let req = Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args: json!({ "dispatch": id }), pane: None, cli: String::new(), arrived: None };
             dispatch(&ctx, &req)
@@ -6450,11 +6773,674 @@ mod tests {
         let r = call(RELEASE, "dispatch-4").unwrap();
         assert!(r["terminalLeftOpen"].is_string(), "{r}");
         assert!(terminals.live("term-8") && terminals.live("term-9"), "a shell and the user's tab stay open");
-        for t in [8, 9] {
+        // cli FIX-8: a session a row names whose mark is not the row's recorded program is the user's, not the
+        // worker's (runs_now's mark check): stop and release both leave it open and say why.
+        let r = call(STOP, "dispatch-5").unwrap();
+        assert!(r["terminalLeftOpen"].is_string(), "{r}");
+        assert!(terminals.live("term-11"), "stop left the differently-marked session open");
+        let r = call(RELEASE, "dispatch-6").unwrap();
+        assert!(r["terminalLeftOpen"].is_string(), "{r}");
+        assert!(terminals.live("term-11"), "release left it open");
+        for t in [8, 9, 11] {
             let _ = terminals.kill(t);
         }
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The Ctx pieces a dispatch-level test needs: a scratch folder, its store and the git runner.
+    fn fix8_world(tag: &str) -> (std::path::PathBuf, Git, Mutex<Store>) {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-clifix8-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        (dir, Git::detect().unwrap(), store)
+    }
+
+    /// cli FIX-8 item 2 (council FIX-SOON 2 on 800b8a94): a worker the window starts after the start
+    /// gave up (a loaded PC) is not lost. Its session is stamped to the dispatch inside the late
+    /// window, the next worker-show / stop / release call records it on the row, and a stop then
+    /// ends it, and only it. Without this a stop freed the task but killed nothing and the retry made
+    /// a second agent on the same task.
+    #[test]
+    fn fix8_a_a_late_stamp_lands_on_the_row_and_a_stop_ends_it() {
+        let (dir, git_, store) = fix8_world("a");
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = dir.display().to_string();
+        let row = |n: u32, status: &str| worker_row(json!({ "id": format!("dispatch-fix8-a{n}"), "runId": null, "taskId": format!("task-fix8-a{n}"), "status": status, "worktree": wd, "agent": "claude", "terminal": null, "terminalProgram": null }));
+        let task = |n: u32| json!({ "id": format!("task-fix8-a{n}"), "status": "dispatched", "dispatchId": format!("dispatch-fix8-a{n}") });
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[row(1, "unknown"), row(2, "unknown"), row(3, "unknown")]).unwrap();
+        save_list(&store.lock().unwrap(), TASKS_KEY, &[task(1), task(2), task(3)]).unwrap();
+        let call = |command: &str, id: &str| {
+            let req = Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args: json!({ "dispatch": id }), pane: None, cli: String::new(), arrived: None };
+            dispatch(&ctx, &req)
+        };
+        let saved = |id: &str| load_list(&store.lock().unwrap(), DISPATCHES_KEY).into_iter().find(|d| d["id"] == id).unwrap();
+        // Both starts ended `unknown` without a session; they keep their place for the window.
+        for n in [1, 2] {
+            let d = format!("dispatch-fix8-a{n}");
+            expect_stamp(&d);
+            finish_stamp(&d, None, LATE_WINDOW);
+        }
+        // Nothing has arrived yet: a call changes nothing.
+        call(WORKER_SHOW, "dispatch-fix8-a1").unwrap();
+        assert!(saved("dispatch-fix8-a1")["terminal"].is_null());
+        // The window starts both agents late (7 and 8) and the user opens a tab (9) with the same program.
+        terminals.fake_session(7, &wd, Some("npx"));
+        terminals.fake_session(8, &wd, Some("npx"));
+        terminals.fake_session(9, &wd, Some("npx"));
+        assert!(stamp_session("dispatch-fix8-a1", 7), "a start that timed out can still be stamped");
+        assert!(!stamp_session("dispatch-fix8-a1", 9), "once");
+        // worker-show records it on the row.
+        call(WORKER_SHOW, "dispatch-fix8-a1").unwrap();
+        let d1 = saved("dispatch-fix8-a1");
+        assert_eq!((d1["terminal"].as_u64(), d1["terminalProgram"].as_str(), d1["lateStamp"].as_bool()), (Some(7), Some("npx"), Some(true)), "{d1}");
+        assert_eq!(d1["status"], "unknown", "the status stays as the start reported it");
+        // A stop now ends that session, not the user's tab or the other worker's.
+        let r = call(STOP, "dispatch-fix8-a1").unwrap();
+        assert_eq!(r["process"], "ended", "{r}");
+        assert!(!terminals.live("term-7"), "the late worker ended");
+        assert!(terminals.live("term-8") && terminals.live("term-9"), "the other worker and the user's tab stay");
+        // The stop came first for the second dispatch (nothing recorded, so it kills nothing and says so).
+        let r = call(STOP, "dispatch-fix8-a2").unwrap();
+        assert_eq!(r["process"], "unverifiable", "{r}");
+        assert!(terminals.live("term-8"));
+        // Its session arrives after the stop: it is recorded, so the offered release can close it.
+        assert!(stamp_session("dispatch-fix8-a2", 8));
+        call(WORKER_SHOW, "dispatch-fix8-a2").unwrap();
+        assert_eq!(saved("dispatch-fix8-a2")["terminal"].as_u64(), Some(8));
+        let r = call(RELEASE, "dispatch-fix8-a2").unwrap();
+        assert_eq!(r["terminalState"], "released", "{r}");
+        assert!(!terminals.live("term-8"), "release closed the late worker");
+        assert!(terminals.live("term-9"), "the user's tab stays");
+        // A third start whose session is gone before anything reads it records nothing.
+        let d3 = "dispatch-fix8-a3";
+        expect_stamp(d3);
+        finish_stamp(d3, None, LATE_WINDOW);
+        terminals.fake_session(11, &wd, Some("npx"));
+        assert!(stamp_session(d3, 11));
+        terminals.kill(11).unwrap();
+        call(WORKER_SHOW, d3).unwrap();
+        assert!(saved(d3)["terminal"].is_null());
+        forget_stamp(d3);
+        let _ = terminals.kill(9);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cli FIX-8 item 2: the late window is bounded and a found session ends the entry. A start that
+    /// found its session forgets the entry; one that found none keeps it for the window only; and a
+    /// row of an earlier run, or one that already has a terminal, is never changed.
+    #[test]
+    fn fix8_b_the_late_window_is_bounded() {
+        let d = "dispatch-fix8-b";
+        expect_stamp(d);
+        finish_stamp(d, Some(4), LATE_WINDOW);
+        assert!(!stamp_session(d, 5), "a start that found its session is done");
+        // Kept for a window that has already passed: nothing can be stamped any more.
+        expect_stamp(d);
+        finish_stamp(d, None, Duration::ZERO);
+        assert!(!stamp_session(d, 5), "past the window");
+        // A late session is recorded once, on this run's row without a terminal only.
+        let me = u64::from(std::process::id());
+        expect_stamp(d);
+        finish_stamp(d, None, LATE_WINDOW);
+        assert!(stamp_session(d, 6));
+        let open = |t: u32| (t == 6).then(|| Some("npx".to_string()));
+        let mut rows = vec![
+            json!({ "id": d, "runtime": me + 1, "terminal": null }),
+            json!({ "id": d, "runtime": me, "terminal": 3 }),
+            json!({ "id": "dispatch-fix8-b-other", "runtime": me, "terminal": null }),
+        ];
+        assert_eq!(reconcile_late(&mut rows, &open), 0, "an earlier run's row, a recorded row and another dispatch stay: {rows:?}");
+        rows.push(json!({ "id": d, "runtime": me, "terminal": null }));
+        assert_eq!(reconcile_late(&mut rows, &open), 1);
+        assert_eq!(rows[3]["terminal"], 6);
+        assert_eq!(reconcile_late(&mut rows, &open), 0, "recorded once");
+        forget_stamp(d);
+    }
+
+    /// cli FIX-8 AFTER 4: the wait reads only the stamped session. With no stamp, or a stamped
+    /// session that has gone, it sees nothing; with one it sees that session and no other.
+    #[test]
+    fn fix8_c_tabs_reads_only_the_stamped_session() {
+        let terminals = Terminals::default();
+        terminals.fake_session(5, "C:/w", Some("npx"));
+        terminals.fake_session(6, "C:/w", Some("npx"));
+        let d = "dispatch-fix8-c";
+        assert!(tabs(&terminals, d).is_empty(), "no entry");
+        expect_stamp(d);
+        assert!(tabs(&terminals, d).is_empty(), "no stamp yet");
+        assert!(stamp_session(d, 6));
+        let seen = tabs(&terminals, d);
+        assert_eq!(seen.iter().map(|t| t.id).collect::<Vec<_>>(), vec![6]);
+        assert!(seen[0].quiet.is_some_and(|q| q >= SETTLE));
+        terminals.kill(6).unwrap();
+        assert!(tabs(&terminals, d).is_empty(), "the stamped session is gone");
+        let _ = terminals.kill(5);
+        forget_stamp(d);
+    }
+
+    /// cli FIX-8 AFTER 1: the step terminal_spawn runs around a spawn. The id comes from the
+    /// environment before it is handed over, the new session is stamped only once the spawn
+    /// succeeded, and the user's own value (an entry no start registered) stamps nothing.
+    #[test]
+    fn fix8_d_spawn_stamped_stamps_the_new_session_on_success_only() {
+        let e = |k: &str, v: &str| (k.to_string(), v.to_string());
+        let env = [e(DISPATCH_ENV, "dispatch-fix8-user"), e("A", "1"), e(DISPATCH_ENV, "dispatch-fix8-d")];
+        expect_stamp("dispatch-fix8-d");
+        let id: Result<u32, String> = spawn_stamped(dispatch_in(&env), || Ok(21));
+        assert_eq!(id, Ok(21));
+        assert_eq!(stamped("dispatch-fix8-d"), Some(21));
+        forget_stamp("dispatch-fix8-d");
+        // A spawn that fails stamps nothing and its error comes back.
+        expect_stamp("dispatch-fix8-d2");
+        let id: Result<u32, String> = spawn_stamped(Some("dispatch-fix8-d2".into()), || Err("no pty".into()));
+        assert_eq!(id, Err("no pty".to_string()));
+        assert_eq!(stamped("dispatch-fix8-d2"), None);
+        assert!(stamp_session("dispatch-fix8-d2", 1), "still waiting: the failed spawn used no stamp");
+        forget_stamp("dispatch-fix8-d2");
+        // No dispatch in the environment, or the user's alone: nothing to stamp, the id still comes back.
+        assert_eq!(spawn_stamped::<String>(dispatch_in(&[e("A", "1")]), || Ok(22)), Ok(22));
+        assert_eq!(spawn_stamped::<String>(dispatch_in(&[e(DISPATCH_ENV, "dispatch-fix8-user")]), || Ok(23)), Ok(23));
+        assert_eq!(stamped("dispatch-fix8-user"), None);
+    }
+
+    /// cli FIX-9 item 1 (council FIX-SOON 1 on 529c53e2): a session that arrives late for a dispatch
+    /// the coordinator already stopped (or released) is not attached in silence. The call that
+    /// records it says so (`lateWorker`: the dispatch, the session, its status, and worker-release as
+    /// the next step), worker-show keeps saying it (`lateStamp`, `lateAfter`), and worker-release
+    /// closes that session, also on a row released before it came, with the same note in its receipt.
+    /// A row still running takes the session as before and says nothing.
+    #[test]
+    fn fix9_a_a_late_session_on_a_stopped_or_released_row_is_said_so() {
+        let (dir, git_, store) = fix8_world("fix9a");
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = dir.display().to_string();
+        let row = |n: u32, status: &str, released: bool| worker_row(json!({ "id": format!("dispatch-fix9-a{n}"), "runId": null, "taskId": format!("task-fix9-a{n}"), "status": status, "released": released, "worktree": wd, "agent": "claude", "terminal": null, "terminalProgram": null }));
+        let task = |n: u32| json!({ "id": format!("task-fix9-a{n}"), "status": "dispatched", "dispatchId": format!("dispatch-fix9-a{n}") });
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[row(1, "stopped", false), row(2, "stopped", true), row(3, "unknown", false)]).unwrap();
+        save_list(&store.lock().unwrap(), TASKS_KEY, &[task(1), task(2), task(3)]).unwrap();
+        let call = |command: &str, n: u32| {
+            let req = Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args: json!({ "dispatch": format!("dispatch-fix9-a{n}") }), pane: None, cli: String::new(), arrived: None };
+            dispatch(&ctx, &req).unwrap()
+        };
+        let late = |n: u32, session: u32| {
+            let d = format!("dispatch-fix9-a{n}");
+            expect_stamp(&d);
+            finish_stamp(&d, None, LATE_WINDOW);
+            terminals.fake_session(session, &wd, Some("npx"));
+            assert!(stamp_session(&d, session));
+        };
+        // 1: stopped first, then its agent comes up.
+        late(1, 7);
+        let r = call(WORKER_SHOW, 1);
+        let note = &r["lateWorker"][0];
+        assert_eq!((note["dispatchId"].as_str(), note["terminal"].as_str(), note["status"].as_str()), (Some("dispatch-fix9-a1"), Some("term-7"), Some("stopped")), "{r}");
+        assert!(note["next"].as_str().is_some_and(|n| n.contains("worker-release --dispatch dispatch-fix9-a1")), "{r}");
+        assert!(r["lateWorker"].as_array().is_some_and(|a| a.len() == 1), "only the row the session came for: {r}");
+        // worker-show keeps saying it on later calls; the note goes with the show that clears the alarm (cli FIX-11), then stops.
+        let r = call(WORKER_SHOW, 1);
+        assert_eq!((r["lateStamp"].as_bool(), r["lateAfter"].as_str()), (Some(true), Some("stopped")), "{r}");
+        assert_eq!(r["lateWorker"][0]["dispatchId"], "dispatch-fix9-a1", "the second show still tells it, then clears: {r}");
+        let r = call(WORKER_SHOW, 1);
+        assert!(r["lateWorker"].is_null(), "said until a later show cleared it: {r}");
+        let r = call(RELEASE, 1);
+        assert_eq!(r["terminalState"], "released", "{r}");
+        assert_eq!(r["lateWorker"][0]["terminal"], "term-7", "{r}");
+        assert!(!terminals.live("term-7"), "release closed the late worker");
+        // 2: released before its agent came up; the release is opened again and closes it.
+        late(2, 8);
+        let r = call(WORKER_SHOW, 2);
+        assert_eq!(r["lateWorker"][0]["status"], "released", "{r}");
+        let r = call(RELEASE, 2);
+        assert_eq!((r["terminalState"].as_str(), r["alreadyReleased"].as_bool()), (Some("released"), Some(false)), "{r}");
+        assert_eq!(r["lateWorker"][0]["terminal"], "term-8", "{r}");
+        assert!(!terminals.live("term-8"), "release closed the session that came after the release");
+        let r = call(RELEASE, 2);
+        assert_eq!(r["alreadyReleased"], true, "closed once, then it stays released: {r}");
+        // 3: still running; the session is recorded as before and nothing is said.
+        late(3, 9);
+        let r = call(WORKER_SHOW, 3);
+        assert!(r["lateWorker"].is_null(), "{r}");
+        assert_eq!((r["lateStamp"].as_bool(), r["lateAfter"].is_null()), (Some(true), true), "{r}");
+        let _ = terminals.kill(9);
+        for n in 1..=3 {
+            forget_stamp(&format!("dispatch-fix9-a{n}"));
+        }
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cli FIX-9 item 4: worker-show says a late agent in words, and any answer prints its late worker
+    /// notes with the way to close them.
+    #[test]
+    fn fix9_b_the_text_says_a_late_agent_and_prints_late_worker_notes() {
+        let base = json!({ "dispatchId": "dispatch-1", "terminalState": "reclaimable", "taskStatus": "dispatched", "terminal": "term-3", "worktree": "C:/w", "waiting": "unknown", "waitingWhy": "x" });
+        assert!(!text_of(WORKER_SHOW, &base).contains("late"));
+        let mut shown = base.clone();
+        shown["lateStamp"] = json!(true);
+        assert!(text_of(WORKER_SHOW, &shown).ends_with("; its agent came up late"));
+        shown["lateAfter"] = json!("stopped");
+        assert!(text_of(WORKER_SHOW, &shown).ends_with("; its agent came up late, after the dispatch was stopped"));
+        let warned = json!({ "dispatchId": "dispatch-1", "terminalState": "released", "lateWorker": [{ "note": "dispatch-1 was already stopped when its agent came up late", "next": "kolux orchestration worker-release --dispatch dispatch-1" }] });
+        assert!(text_of(RELEASE, &warned).ends_with("\nwarning: dispatch-1 was already stopped when its agent came up late; next: kolux orchestration worker-release --dispatch dispatch-1"));
+    }
+
+    /// cli FIX-10 item 1 and 3 (council FIX-SOON 1 and 3 on 081bbfab): a late-worker note is not one
+    /// answer's luck. It stays on every answer (the list rows too: lateStamp, lateAfter, latePending)
+    /// until worker-show or worker-release reads that dispatch; completed and failed rows get it too.
+    #[test]
+    fn fix10_a_the_late_note_stays_until_the_dispatch_is_read_and_covers_finished_rows() {
+        let (dir, git_, store) = fix8_world("fix10a");
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = dir.display().to_string();
+        let row = |n: u32, status: &str| worker_row(json!({ "id": format!("dispatch-fix10-a{n}"), "runId": null, "taskId": format!("task-fix10-a{n}"), "status": status, "released": false, "worktree": wd, "agent": "claude", "terminal": null, "terminalProgram": null }));
+        // cli FIX-11 (council FIX-SOON 2 on 9afdd308): the tasks of the completed and failed rows are finished and hold a result.
+        let task = |n: u32| match n {
+            2 => json!({ "id": "task-fix10-a2", "status": "completed", "result": "built it", "dispatchId": "dispatch-fix10-a2" }),
+            3 => json!({ "id": "task-fix10-a3", "status": "failed", "result": "broke", "dispatchId": "dispatch-fix10-a3" }),
+            _ => json!({ "id": format!("task-fix10-a{n}"), "status": "dispatched", "dispatchId": format!("dispatch-fix10-a{n}") }),
+        };
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[row(1, "stopped"), row(2, "completed"), row(3, "failed")]).unwrap();
+        save_list(&store.lock().unwrap(), TASKS_KEY, &[task(1), task(2), task(3)]).unwrap();
+        let call = |command: &str, n: u32| {
+            let req = Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args: json!({ "dispatch": format!("dispatch-fix10-a{n}") }), pane: None, cli: String::new(), arrived: None };
+            dispatch(&ctx, &req).unwrap()
+        };
+        let late = |n: u32, session: u32| {
+            let d = format!("dispatch-fix10-a{n}");
+            expect_stamp(&d);
+            finish_stamp(&d, None, LATE_WINDOW);
+            terminals.fake_session(session, &wd, Some("npx"));
+            assert!(stamp_session(&d, session));
+        };
+        late(1, 17);
+        late(2, 18);
+        late(3, 19);
+        let notes = |r: &Value| {
+            let mut ids: Vec<String> = r["lateWorker"].as_array().into_iter().flatten().filter_map(|n| n["dispatchId"].as_str()).map(str::to_string).collect();
+            ids.sort();
+            ids
+        };
+        let all = vec!["dispatch-fix10-a1".to_string(), "dispatch-fix10-a2".to_string(), "dispatch-fix10-a3".to_string()];
+        // A list is the first call to see them, and says it for stopped, completed and failed alike.
+        let r = call(WORKER_LIST, 1);
+        assert_eq!(notes(&r), all, "{r}");
+        let row_of = |r: &Value, n: u32| r["workers"].as_array().unwrap().iter().find(|w| w["dispatchId"] == format!("dispatch-fix10-a{n}")).cloned().unwrap();
+        for (n, status) in [(1, "stopped"), (2, "completed"), (3, "failed")] {
+            let w = row_of(&r, n);
+            assert_eq!((w["lateStamp"].as_bool(), w["lateAfter"].as_str(), w["latePending"].as_bool()), (Some(true), Some(status), Some(true)), "{w}");
+        }
+        assert!(text_of(WORKER_LIST, &r).contains("its agent came up late"), "{}", text_of(WORKER_LIST, &r));
+        // It is not said once: the next answer, a list or any other, says it again.
+        let r = call(WORKER_LIST, 1);
+        assert_eq!(notes(&r), all, "durable: {r}");
+        // worker-show on one dispatch reads it: told in the show, and (cli FIX-11) dropped by a later show.
+        let r = call(WORKER_SHOW, 1);
+        assert_eq!(r["lateAfter"], "stopped", "{r}");
+        let r = call(WORKER_SHOW, 1);
+        assert_eq!(r["lateWorker"][0]["dispatchId"], "dispatch-fix10-a1", "{r}");
+        let r = call(WORKER_LIST, 1);
+        assert_eq!(notes(&r), vec!["dispatch-fix10-a2".to_string(), "dispatch-fix10-a3".to_string()], "{r}");
+        let w = row_of(&r, 1);
+        assert_eq!((w["lateAfter"].as_str(), w["latePending"].as_bool().unwrap_or(false)), (Some("stopped"), false), "the list keeps the fact, not the alarm: {w}");
+        // A release of a completed row closes the late agent and reads it.
+        let tasks_before = load_list(&store.lock().unwrap(), TASKS_KEY);
+        let r = call(RELEASE, 2);
+        assert_eq!(r["terminalState"], "released", "{r}");
+        assert!(!terminals.live("term-18"), "release closed the late agent on the completed row");
+        let r = call(WORKER_LIST, 1);
+        assert_eq!(notes(&r), vec!["dispatch-fix10-a3".to_string()], "{r}");
+        // cli FIX-11: and the failed row's; neither release touches a finished task or its result.
+        call(RELEASE, 3);
+        assert!(!terminals.live("term-19"), "release closed the late agent on the failed row");
+        let tasks_after = load_list(&store.lock().unwrap(), TASKS_KEY);
+        assert_eq!(tasks_after, tasks_before, "a release changes no task");
+        assert_eq!((tasks_after[1]["status"].as_str(), tasks_after[1]["result"].as_str()), (Some("completed"), Some("built it")));
+        assert_eq!((tasks_after[2]["status"].as_str(), tasks_after[2]["result"].as_str()), (Some("failed"), Some("broke")));
+        let _ = terminals.kill(17);
+        for n in 1..=3 {
+            forget_stamp(&format!("dispatch-fix10-a{n}"));
+        }
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cli FIX-10 item 2 (council FIX-SOON 2 on 081bbfab): when a release leaves the late agent's
+    /// terminal open (it was handed to the worker already open), the note says it is still open and
+    /// names the command that closes a terminal, not a release that promises a close.
+    #[test]
+    fn fix10_b_a_release_that_leaves_the_late_terminal_open_says_so() {
+        let (dir, git_, store) = fix8_world("fix10b");
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = dir.display().to_string();
+        let row = worker_row(json!({ "id": "dispatch-fix10-b1", "runId": null, "taskId": "task-fix10-b1", "status": "stopped", "released": false, "mode": "existing", "worktree": wd, "agent": "claude", "terminal": null, "terminalProgram": null }));
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[row]).unwrap();
+        save_list(&store.lock().unwrap(), TASKS_KEY, &[json!({ "id": "task-fix10-b1", "status": "dispatched", "dispatchId": "dispatch-fix10-b1" })]).unwrap();
+        expect_stamp("dispatch-fix10-b1");
+        finish_stamp("dispatch-fix10-b1", None, LATE_WINDOW);
+        terminals.fake_session(21, &wd, Some("npx"));
+        assert!(stamp_session("dispatch-fix10-b1", 21));
+        let req = Request { id: "r".into(), token: String::new(), command: RELEASE.into(), cwd: wd.clone(), args: json!({ "dispatch": "dispatch-fix10-b1" }), pane: None, cli: String::new(), arrived: None };
+        let r = dispatch(&ctx, &req).unwrap();
+        assert!(r["terminalLeftOpen"].is_string(), "{r}");
+        assert!(terminals.live("term-21"), "the release did not close it");
+        let note = &r["lateWorker"][0];
+        assert!(note["note"].as_str().is_some_and(|n| n.contains("left open") && n.contains("term-21")), "{r}");
+        let next = note["next"].as_str().unwrap_or_default();
+        assert!(next.contains("terminal close --terminal term-21") && !next.contains("worker-release"), "{next}");
+        let _ = terminals.kill(21);
+        forget_stamp("dispatch-fix10-b1");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cli FIX-10 item 4 (council AFTER 2 on 081bbfab): a release that reopens a released row for a
+    /// late agent and then cannot close the terminal leaves an unknown release, and the retry takes
+    /// the ordinary path and closes it. An answer that is not an object keeps its shape.
+    #[test]
+    fn fix10_c_a_reopen_whose_kill_fails_is_retried_the_ordinary_way() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-clifix10c-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut rows = vec![json!({ "id": "dispatch-1", "runId": null, "taskId": "task-1", "status": "stopped", "released": true, "lateStamp": true, "lateAfter": "released", "latePending": true, "terminal": 7, "agent": "claude", "worktree": "w" })];
+        let live = |h: &str| h == "term-7";
+        let agent_of = |_: &str| None;
+        let save = |_: &[Value]| Ok(());
+        let read = |_: u32| Some(crate::terminal::Read::default());
+        let kills = std::cell::Cell::new(0);
+        let failing = |_: u32| {
+            kills.set(kills.get() + 1);
+            false
+        };
+        let r = release_worker(&mut rows, "dispatch-1", None, &live, &agent_of, &dir, &save, &read, &failing).unwrap();
+        assert_eq!(r["terminalState"], "release_unknown", "{r}");
+        assert_eq!(r["lateWorker"][0]["terminal"], "term-7", "{r}");
+        assert_eq!((rows[0]["lateAfter"].as_str(), rows[0]["latePending"].as_bool()), (Some("released"), Some(true)), "cli FIX-11: the agent is still running, so the alarm and the fact stay: {}", rows[0]);
+        let closing = |_: u32| {
+            kills.set(kills.get() + 1);
+            true
+        };
+        let r = release_worker(&mut rows, "dispatch-1", None, &live, &agent_of, &dir, &save, &read, &closing).unwrap();
+        assert_eq!((r["terminalState"].as_str(), r["alreadyReleased"].as_bool()), (Some("released"), Some(false)), "{r}");
+        assert_eq!(r["lateWorker"][0]["terminal"], "term-7", "cli FIX-11: the retry still tells it, the agent runs until it closes: {r}");
+        // cli FIX-12 (council AFTER 1 on 28f3eb7a): the alarm is spent, the fact stays, as on the found-gone path.
+        assert!(rows[0]["latePending"].is_null() && rows[0]["lateAfter"] == "released", "closed: the alarm is spent, the fact stays: {}", rows[0]);
+        assert_eq!(kills.get(), 2);
+        // A non-object answer is handed back as it was.
+        let note = json!({ "dispatchId": "dispatch-1" });
+        assert_eq!(with_late_notes(json!([1, 2]), vec![note.clone()]), json!([1, 2]));
+        assert_eq!(with_late_notes(json!("x"), vec![note]), json!("x"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cli FIX-11 item 1 (council FIX-BEFORE 1 on 9afdd308): a release that leaves the late agent's
+    /// terminal open keeps the alarm and the fact on the row, so a receipt that is lost still leaves the
+    /// running agent on record; the list and every answer say it, and name terminal close. Once the
+    /// terminal is closed another release spends the alarm.
+    #[test]
+    fn fix11_a_a_left_open_release_keeps_the_alarm_until_the_terminal_is_closed() {
+        let (dir, git_, store) = fix8_world("fix11a");
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = dir.display().to_string();
+        let row = worker_row(json!({ "id": "dispatch-fix11-a1", "runId": null, "taskId": "task-fix11-a1", "status": "stopped", "released": false, "mode": "existing", "worktree": wd, "agent": "claude", "terminal": null, "terminalProgram": null }));
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[row]).unwrap();
+        save_list(&store.lock().unwrap(), TASKS_KEY, &[json!({ "id": "task-fix11-a1", "status": "dispatched", "dispatchId": "dispatch-fix11-a1" })]).unwrap();
+        expect_stamp("dispatch-fix11-a1");
+        finish_stamp("dispatch-fix11-a1", None, LATE_WINDOW);
+        terminals.fake_session(31, &wd, Some("npx"));
+        assert!(stamp_session("dispatch-fix11-a1", 31));
+        let call = |command: &str| {
+            let req = Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args: json!({ "dispatch": "dispatch-fix11-a1" }), pane: None, cli: String::new(), arrived: None };
+            dispatch(&ctx, &req).unwrap()
+        };
+        let r = call(RELEASE);
+        assert!(r["terminalLeftOpen"].is_string() && terminals.live("term-31"), "{r}");
+        // The receipt could be lost: the row still says the agent runs, in the list and on the next answer.
+        let r = call(WORKER_LIST);
+        let w = &r["workers"][0];
+        assert_eq!((w["lateAfter"].as_str(), w["latePending"].as_bool()), (Some("stopped"), Some(true)), "{w}");
+        let next = r["lateWorker"][0]["next"].as_str().unwrap_or_default();
+        assert!(next.contains("terminal close --terminal term-31") && !next.contains("worker-release"), "{r}");
+        // Releasing again leaves it open the same way and says the same.
+        let r = call(RELEASE);
+        assert!(r["lateWorker"][0]["next"].as_str().is_some_and(|n| n.contains("terminal close")), "{r}");
+        // Closed by the person: the next release finds nothing running and spends the alarm.
+        terminals.kill(31).unwrap();
+        let r = call(RELEASE);
+        assert_eq!(r["terminalState"], "released", "{r}");
+        assert!(r["lateWorker"].is_null(), "{r}");
+        let r = call(WORKER_LIST);
+        assert!(r["lateWorker"].is_null() && r["workers"][0]["latePending"].is_null(), "{r}");
+        forget_stamp("dispatch-fix11-a1");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cli FIX-11 item 2 (council FIX-BEFORE 1, worker-show half): the first worker-show of a late row
+    /// does not clear the alarm, because that answer may be the one that is lost; the show after it does.
+    #[test]
+    fn fix11_b_worker_show_clears_the_alarm_on_a_later_show() {
+        let mut d = json!({ "id": "dispatch-1", "latePending": true, "lateAfter": "stopped", "lateStamp": true });
+        read_late(&mut d, true);
+        assert_eq!((d["latePending"].as_bool(), d["lateShown"].as_bool()), (Some(true), Some(true)), "the first read leaves the alarm: {d}");
+        assert_eq!(pending_late_notes(&[d.clone()], None).len(), 1, "and every answer still tells it");
+        read_late(&mut d, true);
+        assert!(d["latePending"].is_null() && d["lateShown"].is_null(), "a later show clears it: {d}");
+        assert_eq!(d["lateAfter"], "stopped", "the fact stays");
+        assert!(pending_late_notes(&[d.clone()], None).is_empty());
+        let mut quiet = json!({ "id": "dispatch-2" });
+        read_late(&mut quiet, true);
+        assert_eq!(quiet, json!({ "id": "dispatch-2" }), "a row with no alarm is left alone");
+    }
+
+    /// cli FIX-11 items 4 and 5 (council FIX-SOON 3 and AFTER 1 on 9afdd308): pending notes follow
+    /// ORCH-033: an answer for a Run carries that Run's notes and those of rows with no Run, an answer
+    /// for no Run carries all; a worker-show of another Run's row is not found and clears nothing.
+    #[test]
+    fn fix11_c_late_notes_stay_in_their_run_and_a_show_from_another_run_is_not_found() {
+        let (dir, git_, store) = fix8_world("fix11c");
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = dir.display().to_string();
+        let (run_a, run_b) = {
+            let mut m = crate::orchestration::Mail::default();
+            let a = m.run_create("term-1", "run a", 1)["binding"]["runId"].as_str().unwrap().to_string();
+            let b = m.run_create("term-2", "run b", 2)["binding"]["runId"].as_str().unwrap().to_string();
+            m.save(&store.lock().unwrap()).unwrap();
+            (a, b)
+        };
+        let row = |n: u32, run: Value| worker_row(json!({ "id": format!("dispatch-fix11-c{n}"), "runId": run, "taskId": format!("task-fix11-c{n}"), "status": "stopped", "released": false, "worktree": wd, "agent": "claude", "terminal": null, "terminalProgram": null }));
+        let task = |n: u32, run: Value| json!({ "id": format!("task-fix11-c{n}"), "runId": run, "status": "dispatched", "dispatchId": format!("dispatch-fix11-c{n}") });
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &[row(1, json!(run_a)), row(2, json!(run_b)), row(3, Value::Null)]).unwrap();
+        save_list(&store.lock().unwrap(), TASKS_KEY, &[task(1, json!(run_a)), task(2, json!(run_b)), task(3, Value::Null)]).unwrap();
+        for (n, session) in [(1, 41), (2, 42), (3, 43)] {
+            let d = format!("dispatch-fix11-c{n}");
+            expect_stamp(&d);
+            finish_stamp(&d, None, LATE_WINDOW);
+            terminals.fake_session(session, &wd, Some("npx"));
+            assert!(stamp_session(&d, session));
+        }
+        let call = |command: &str, run: Option<&str>, dispatch_id: Option<&str>| {
+            let mut args = json!({});
+            if let Some(r) = run {
+                args["run"] = json!(r);
+            }
+            if let Some(d) = dispatch_id {
+                args["dispatch"] = json!(d);
+            }
+            dispatch(&ctx, &Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args, pane: None, cli: String::new(), arrived: None })
+        };
+        let notes = |r: &Value| {
+            let mut ids: Vec<String> = r["lateWorker"].as_array().into_iter().flatten().filter_map(|n| n["dispatchId"].as_str()).map(|d| d.trim_start_matches("dispatch-fix11-").to_string()).collect();
+            ids.sort();
+            ids
+        };
+        // The first call records the late sessions; each Run hears its own and the Run-less row's.
+        assert_eq!(notes(&call(WORKER_LIST, Some(&run_a), None).unwrap()), ["c1", "c3"]);
+        assert_eq!(notes(&call(WORKER_LIST, Some(&run_b), None).unwrap()), ["c2", "c3"]);
+        assert_eq!(notes(&call(WORKER_LIST, None, None).unwrap()), ["c1", "c2", "c3"], "a caller tied to no Run hears all");
+        // A show of Run A's row from Run B is not found, and clears nothing, however often.
+        for _ in 0..3 {
+            let e = call(WORKER_SHOW, Some(&run_b), Some("dispatch-fix11-c1")).unwrap_err();
+            assert_eq!(e.code, "not_found", "{e:?}");
+        }
+        assert_eq!(notes(&call(WORKER_LIST, Some(&run_a), None).unwrap()), ["c1", "c3"], "Run A's alarm is still up");
+        // cli FIX-12 (council AFTER 2 on 28f3eb7a): the other answers of Run B never carry Run A's note either.
+        assert_eq!(notes(&call(WORKER_SHOW, Some(&run_b), Some("dispatch-fix11-c2")).unwrap()), ["c2", "c3"], "a worker-show of Run B");
+        let r = call(RELEASE, Some(&run_b), Some("dispatch-fix11-c2")).unwrap();
+        assert_eq!(notes(&r), ["c2", "c3"], "a worker-release of Run B: {r}");
+        assert_eq!(notes(&call(WORKER_LIST, Some(&run_a), None).unwrap()), ["c1", "c3"], "Run A's alarm is still up after Run B's release");
+        // Shows in the right Run clear that row only.
+        call(WORKER_SHOW, Some(&run_a), Some("dispatch-fix11-c1")).unwrap();
+        call(WORKER_SHOW, Some(&run_a), Some("dispatch-fix11-c1")).unwrap();
+        assert_eq!(notes(&call(WORKER_LIST, Some(&run_a), None).unwrap()), ["c3"]);
+        assert_eq!(notes(&call(WORKER_LIST, Some(&run_b), None).unwrap()), ["c3"], "Run B's own row was released above; the Run-less row stays");
+        for t in [41, 42, 43] {
+            let _ = terminals.kill(t);
+        }
+        for n in 1..=3 {
+            forget_stamp(&format!("dispatch-fix11-c{n}"));
+        }
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A world with late-agent rows `dispatch-<tag><n>` (n = 1..=sessions.len()), each stopped, its late
+    /// session `sessions[n-1]` stamped to it and (when `existing`) started on an existing worktree, so a
+    /// release leaves that terminal open.
+    fn fix12_late_world(tag: &str, sessions: &[u32], existing: bool) -> (std::path::PathBuf, Git, Mutex<Store>, Terminals) {
+        let (dir, git_, store) = fix8_world(tag);
+        let terminals = Terminals::default();
+        let wd = dir.display().to_string();
+        let mut rows = vec![];
+        let mut tasks = vec![];
+        for (i, session) in sessions.iter().enumerate() {
+            let n = i + 1;
+            let (d, t) = (format!("dispatch-{tag}{n}"), format!("task-{tag}{n}"));
+            let mut row = worker_row(json!({ "id": d, "runId": null, "taskId": t, "status": "stopped", "released": false, "worktree": wd, "agent": "claude", "terminal": null, "terminalProgram": null }));
+            if existing {
+                row["mode"] = json!("existing");
+            }
+            rows.push(row);
+            tasks.push(json!({ "id": t, "status": "dispatched", "dispatchId": d }));
+            expect_stamp(&d);
+            finish_stamp(&d, None, LATE_WINDOW);
+            terminals.fake_session(*session, &wd, Some("npx"));
+            assert!(stamp_session(&d, *session));
+        }
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &rows).unwrap();
+        save_list(&store.lock().unwrap(), TASKS_KEY, &tasks).unwrap();
+        (dir, git_, store, terminals)
+    }
+
+    /// cli FIX-12 item 1 (council FIX-SOON 1 on 28f3eb7a, decision): showing a row twice, or ten times,
+    /// does not silence the alarm while its release left the late terminal open and that terminal still
+    /// runs; the alarm ends when the terminal is closed (item 2: by hand too), and the fact stays.
+    #[test]
+    fn fix12_a_shows_do_not_silence_a_live_left_open_terminal_and_closing_it_spends_the_alarm() {
+        let mut held = json!({ "id": "dispatch-1", "released": true, "terminalLeftOpen": "x", "latePending": true, "lateAfter": "stopped", "lateShown": true });
+        read_late(&mut held, true);
+        assert_eq!(held["latePending"], true, "a live left-open terminal keeps it: {held}");
+        read_late(&mut held, false);
+        assert!(held["latePending"].is_null(), "a terminal that is gone does not: {held}");
+        let mut plain = json!({ "id": "dispatch-1", "released": false, "latePending": true, "lateAfter": "stopped", "lateShown": true });
+        read_late(&mut plain, true);
+        assert!(plain["latePending"].is_null(), "a row that was not left open clears on the later show as before: {plain}");
+
+        let (dir, git_, store, terminals) = fix12_late_world("fix12a", &[51], true);
+        let notify = |_: Value| {};
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = dir.display().to_string();
+        let call = |command: &str| {
+            let req = Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args: json!({ "dispatch": "dispatch-fix12a1" }), pane: None, cli: String::new(), arrived: None };
+            dispatch(&ctx, &req).unwrap()
+        };
+        let r = call(RELEASE);
+        assert!(r["terminalLeftOpen"].is_string() && terminals.live("term-51"), "{r}");
+        for i in 0..4 {
+            let r = call(WORKER_SHOW);
+            assert_eq!(r["lateWorker"][0]["dispatchId"], "dispatch-fix12a1", "show {i} still tells the running agent: {r}");
+        }
+        let r = call(WORKER_LIST);
+        assert_eq!((r["workers"][0]["latePending"].as_bool(), r["workers"][0]["terminalLeftOpen"].is_string()), (Some(true), true), "{r}");
+        // Closed by the person: the next answer spends the alarm and keeps the fact.
+        terminals.kill(51).unwrap();
+        let r = call(WORKER_LIST);
+        assert!(r["lateWorker"].is_null() && r["workers"][0]["latePending"].is_null(), "{r}");
+        assert_eq!(r["workers"][0]["lateAfter"], "stopped", "the fact stays: {r}");
+        let rows = load_list(&store.lock().unwrap(), DISPATCHES_KEY);
+        assert!(rows[0]["latePending"].is_null() && rows[0]["lateShown"].is_null() && rows[0]["lateAfter"] == "stopped", "{}", rows[0]);
+        forget_stamp("dispatch-fix12a1");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cli FIX-12 item 2 (council FIX-SOON 2 on 28f3eb7a): a late terminal closed by hand spends the
+    /// alarm on any row, whether or not it was ever released; a release of such a row tells no running
+    /// agent. The fact (lateAfter) stays for worker-show.
+    #[test]
+    fn fix12_b_a_late_terminal_that_is_gone_spends_the_alarm_and_keeps_the_fact() {
+        let (dir, git_, store, terminals) = fix12_late_world("fix12b", &[52, 53], false);
+        let notify = |_: Value| {};
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let wd = dir.display().to_string();
+        let call = |command: &str, n: u32| {
+            let req = Request { id: "r".into(), token: String::new(), command: command.into(), cwd: wd.clone(), args: json!({ "dispatch": format!("dispatch-fix12b{n}") }), pane: None, cli: String::new(), arrived: None };
+            dispatch(&ctx, &req).unwrap()
+        };
+        let r = call(WORKER_LIST, 1);
+        assert_eq!(r["lateWorker"].as_array().map(Vec::len), Some(2), "{r}");
+        terminals.kill(52).unwrap();
+        terminals.kill(53).unwrap();
+        // Releasing a row whose agent is already gone does not say an agent is running.
+        let r = call(RELEASE, 1);
+        assert!(r["lateWorker"].is_null(), "{r}");
+        let r = call(WORKER_LIST, 1);
+        assert!(r["lateWorker"].is_null(), "the other row's alarm is spent by the list: {r}");
+        for w in r["workers"].as_array().unwrap() {
+            assert!(w["latePending"].is_null() && w["lateAfter"] == "stopped", "{w}");
+        }
+        forget_stamp("dispatch-fix12b1");
+        forget_stamp("dispatch-fix12b2");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cli FIX-12 item 3 (council FIX-SOON 3 on 28f3eb7a): the worker-list line of a pending row names
+    /// the way out that works: terminal close for a left-open terminal, worker-release otherwise, and
+    /// never worker-show, which only ends the alarm. late_rows carries terminalLeftOpen.
+    #[test]
+    fn fix12_c_the_worker_list_text_names_the_way_out_that_works() {
+        let row = |left_open: Option<&str>| {
+            let mut w = json!({ "dispatchId": "dispatch-1", "terminalState": "released", "taskStatus": "dispatched", "terminal": "term-3", "worktree": "C:/w", "latePending": true, "lateAfter": "stopped", "lateStamp": true });
+            if let Some(why) = left_open {
+                w["terminalLeftOpen"] = json!(why);
+            }
+            text_of(WORKER_LIST, &json!({ "workers": [w], "scope": { "run": null, "from": "all" } }))
+        };
+        let plain = row(None);
+        assert!(plain.contains("after the dispatch was stopped") && plain.contains("worker-release --dispatch dispatch-1"), "{plain}");
+        assert!(!plain.contains("worker-show") && !plain.contains("left open"), "{plain}");
+        let open = row(Some("term-3 was already open when it was handed to the worker"));
+        assert!(open.contains("terminal is left open (term-3 was already open when it was handed to the worker)") && open.contains("terminal close --terminal term-3"), "{open}");
+        assert!(!open.contains("worker-show") && !open.contains("worker-release"), "{open}");
+        // The late fields on a listed row include the left-open reason.
+        let d = json!({ "id": "dispatch-1", "runId": null, "released": true, "terminalLeftOpen": "why", "latePending": true, "lateAfter": "stopped" });
+        let out = late_rows(json!({ "workers": [{ "dispatchId": "dispatch-1", "runId": null }] }), &[d]);
+        assert_eq!(out["workers"][0]["terminalLeftOpen"], "why", "{out}");
     }
 
     /// cli FIX-7 (earlier AFTER on c5fb49c): the receipt says what the window does about setup, and

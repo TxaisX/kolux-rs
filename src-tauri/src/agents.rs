@@ -552,8 +552,10 @@ pub fn start_line_as(settings: &serde_json::Value, id: &str, extra: &[String], p
 // program name, or a package folder such as `claude-code`, credits the agent. Widen if a
 // foreground poll is ever built (DT-C11: there is none; the pane's own program and the hooks
 // decide who is in front).
-// Callers: the account and key variables a new pane gets (`claude_accounts`, `claude_key`,
-// `codex_accounts`), which credit the pane by the program Kolux starts in it.
+// Callers: `tools::credited_program` (the one reader of a spawn program: the pane mark, the account
+// and key variables, the peers list, the inventory and the context cap all go through it) and
+// `foreground.rs` (a running process's image name or command line). Nothing else calls it; a test
+// in tools.rs fails if another file does.
 pub fn credited_agent(command_line: &str) -> Option<&'static str> {
     let line = command_line.trim_start();
     let (first, rest) = match line.strip_prefix('"').and_then(|r| r.split_once('"')) {

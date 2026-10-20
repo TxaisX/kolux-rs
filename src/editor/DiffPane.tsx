@@ -13,8 +13,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
 import { Decoration, EditorView, GutterMarker, WidgetType, gutter, keymap, type DecorationSet } from "@codemirror/view";
 import { ChangeSet, Compartment, EditorState, Prec, StateEffect, StateField, type Extension } from "@codemirror/state";
-import { LanguageDescription, syntaxHighlighting } from "@codemirror/language";
-import { languages } from "@codemirror/language-data";
+import { syntaxHighlighting } from "@codemirror/language";
+import { languageFor } from "./languages";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { diff, getChunks, getOriginalDoc, goToNextChunk, goToPreviousChunk, MergeView, originalDocChangeEffect, unifiedMergeView } from "@codemirror/merge";
 import { ChevronDown, Close, Dots, FileCode, TRASH_PATH } from "../chrome/icons";
@@ -221,7 +221,7 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
     b.dispatch({ effects: setNotes.of(noteRef.current.notes) });
     count(b.state);
     if (!staged) attach(path, b, s.modified);
-    LanguageDescription.matchFilename(languages, baseName(path))
+    languageFor(baseName(path))
       ?.load()
       .then((support) => [a, b].forEach((v) => v?.dispatch({ effects: lang.current.reconfigure(support) })))
       .catch(() => undefined);

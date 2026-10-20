@@ -8,7 +8,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { Refresh } from "../chrome/icons";
 import type { Project as KoluxProject } from "../projects/model";
 import Timeline from "./RoadmapTimeline";
-import { applyCellEdit, cellEditable, cellKey, cellText, endSave, isNewest, isSaving, type Saving, startSave, GROUPABLE, groupItems, labelChange, openingView, parseProjectRef, type Project, projectHostRefused, type ProjectField, type ProjectItem, projectKey, type ProjectRef, pushRecent, refsFrom, type Scope, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
+import { applyCellEdit, cellEditable, cellKey, cellText, endSave, isSaving, newBook, readBackFresh, readBackLost, readBackStart, sendEdit, settleEdit, type Saving, startSave, GROUPABLE, groupItems, labelChange, openingView, parseProjectRef, type Project, projectHostRefused, type ProjectField, type ProjectItem, projectKey, type ProjectRef, pushRecent, refsFrom, type Scope, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
 
 type Settings = Record<string, unknown> | null;
 type Save = (patch: Record<string, unknown>) => Promise<unknown> | void;
@@ -80,7 +80,7 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
   // FIX-1 (council FS 1): the cells whose edit is still on its way to GitHub (a call can take 30 s).
   // FIX-2 (council AFTER 3): one entry per edit, so a second edit of the same cell keeps its mark.
   const [saving, setSaving] = useState<Saving[]>([]);
-  const editIds = useRef({ next: 1, newest: new Map<string, number>() });
+  const editIds = useRef({ next: 1, book: newBook() });
   Object.assign(kept, { ref, sort, group, scope });
 
   useEffect(() => setBrowseOwner(owner), [owner]);
@@ -148,25 +148,50 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
     const cell = cellKey(item.id, field.id);
     const id = editIds.current.next++;
     const begin = () => {
-      editIds.current.newest.set(cell, id);
+      sendEdit(editIds.current.book, cell, id);
       setSaving((s) => startSave(s, id, cell));
     };
     const end = () => setSaving((s) => endSave(s, id));
-    const newest = () => isNewest(editIds.current.newest, cell, id);
+    // FIX-4 (review AFTER 6): after a burst of edits to one cell GitHub may not have applied them in
+    // the order sent, so the project is read back and shown as GitHub holds it.
+    const readBack = () => {
+      const book = editIds.current.book;
+      // FIX-5: not while another edit is out, and not shown if one was sent since (it would put
+      // GitHub's older value of that cell back over the newer edit).
+      // FIX-6: a read held back or dropped stays due; the settle of the last edit out (or, when none
+      // is out, a read sent again at once) delivers it, so the correction is never lost.
+      const token = readBackStart(book);
+      if (token === null) return;
+      invoke<Project>("github_project", { host: ref.host, owner: ref.owner, number: ref.number })
+        .then((p) => {
+          if (readBackFresh(book, token)) setProject((cur) => (cur && cur.id === p.id ? p : cur));
+          else if (readBackLost(book)) readBack();
+        })
+        .catch(() => {});
+    };
+    const settle = (ok: boolean, apply: () => void) => {
+      if (settleEdit(editIds.current.book, cell, id, ok, apply)) readBack();
+    };
     if (field.kind === "labels") {
       const { add, remove } = labelChange(item.labels, value);
       if (add.length + remove.length === 0) return;
       begin();
       invoke<{ name: string }[]>("scm_task_labels", { host: ref.host, repo: item.repo, number: item.number, add, remove })
-        .then((l) => newest() && put({ labels: l.map((x) => x.name) }))
-        .catch((e) => setCellError(`${item.title}: ${String(e)}`))
+        .then((l) => settle(true, () => put({ labels: l.map((x) => x.name) })))
+        .catch((e) => {
+          setCellError(`${item.title}: ${String(e)}`);
+          settle(false, () => {});
+        })
         .finally(end);
       return;
     }
     begin();
     invoke("github_project_set", { host: ref.host, project: project.id, item: item.id, field: field.id, kind: field.kind, value })
-      .then(() => newest() && setProject((p) => p && applyCellEdit(p, item.id, field, value)))
-      .catch((e) => setCellError(`${item.title}: ${String(e)}`))
+      .then(() => settle(true, () => setProject((p) => p && applyCellEdit(p, item.id, field, value))))
+      .catch((e) => {
+        setCellError(`${item.title}: ${String(e)}`);
+        settle(false, () => {});
+      })
       .finally(end);
   };
 

@@ -30,7 +30,7 @@ ITEMS
     taskkill /T needs the root process alive, so once gh has exited a leftover is reachable only through the
     job; without a job the fallback is best effort there (checked: the leftover kept running in this test).
     The test therefore asserts the fallback was asked once and the call answered inside its limit, not that
-    the leftover died. Unix: not run here (no Unix host); process_group(0) is compile-checked by cfg only.
+    the leftover died. Unix: not run here (no Unix host); process_group(0) is Unix-only code that was never compiled or run here (corrected in reliability-FIX-5.txt).
 (4) Stale comments: the two "stopping gh.cmd leaves a child running" ponytail lines are removed.
 (5) Weak assertions: fix3_a_gh_that_leaves_a_program_holding_its_output_still_answers_in_time now asserts
     elapsed < limit + 1 s and that the leftover (a marker-writing program) never leaves its mark. That

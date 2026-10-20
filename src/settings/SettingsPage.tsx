@@ -35,6 +35,8 @@ const ShortcutsPage = lazy(() => import("./ShortcutsPage"));
 const TerminalPage = lazy(() => import("./TerminalPage"));
 const GitPage = lazy(() => import("./GitPage"));
 const AgentsPage = lazy(() => import("./AgentsPage"));
+// SAFE-015: the Protected actions section (T-059-b).
+const SafetyPage = lazy(() => import("./SafetyPage"));
 const TokenAnalytics = lazy(() => import("../usage/TokenAnalytics"));
 const Activity = lazy(() => import("../usage/Activity"));
 
@@ -215,14 +217,7 @@ function PageBody({ page, repo, onSaved }: { page: Page; repo?: Project; onSaved
           </div>
         </>
       )}
-      {page === "safety" && (
-        <p className="conn-detail">
-          Protected commands are advisory and cover Claude only: Claude asks before a command that trips a built-in rule
-          (force-push to main, throwing away uncommitted work, deleting database objects, Stripe changes, infrastructure
-          changes, production deploys). This is not a safety control: a command can be written around it, and Codex is not
-          covered.
-        </p>
-      )}
+      {page === "safety" && <SafetyPage />}
       {repo && <RepoPage project={repo} onSaved={onSaved} />}
     </>
   );

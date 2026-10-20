@@ -594,11 +594,30 @@ fn gh_account(program: &Path, host: &str) -> Option<String> {
 /// FIX-R2: `gh_account` with a time limit: Ok(None) when gh says it is signed out on `host`, Err
 /// when gh cannot run or has not answered by `limit` (it is stopped then).
 fn gh_account_within(program: &Path, host: &str, limit: std::time::Duration) -> Result<Option<String>, String> {
+    let read = gh_config_within(program, &["config", "get", "-h", host, "user"], limit)?;
+    Ok((read.ok && !read.out.is_empty()).then_some(read.out))
+}
+
+/// FIX-4 (tasks): what one finished `gh config get ...` printed: whether gh exited 0, its standard
+/// output and its standard error, both trimmed. The host gate in github.rs tells gh's own "key not
+/// found" answer from any other failure by these.
+pub(crate) struct GhConfigRead {
+    pub ok: bool,
+    pub out: String,
+    pub err: String,
+}
+
+/// FIX-3 / FIX-4 (tasks): one `gh config get ...` through the bounded runner (the whole process
+/// tree ends at the limit): Ok with what gh printed and whether it exited 0, Err when it cannot
+/// run or has not answered by `limit`. It runs in the temp folder, so a gh that cannot find that
+/// folder fails (gh_login and gh_account then answer None). The host gate in github.rs reads gh's
+/// config through this, refuses the host on an Err, and counts a non-zero exit as "not set" only
+/// when the error text is gh's own "key not found".
+pub(crate) fn gh_config_within(program: &Path, args: &[&str], limit: std::time::Duration) -> Result<GhConfigRead, String> {
     let mut cmd = quiet(program);
-    cmd.args(["config", "get", "-h", host, "user"]).envs(crate::git::NO_PROMPT).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
-    let (ok, out, _) = run_within(cmd, None, limit)?;
-    let login = out.trim().to_string();
-    Ok((ok && !login.is_empty()).then_some(login))
+    cmd.args(args).current_dir(std::env::temp_dir()).envs(crate::git::NO_PROMPT).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
+    let (ok, out, err) = run_within(cmd, None, limit)?;
+    Ok(GhConfigRead { ok, out: out.trim().to_string(), err: err.trim().to_string() })
 }
 
 /// FIX-2 / FIX-3: a pull request request goes only to a host Kolux may talk to (github.com, the host
@@ -665,25 +684,83 @@ fn gh_run_for(program: &Path, worktree: &Path, args: &[&str], input: Option<&str
     if ok { Ok(out.trim().to_string()) } else { Err(plain(&said)) }
 }
 
-/// GIT-028 / FIX-R2: runs a gh command, `input` on standard input, and waits at most `limit`:
+/// GIT-028 / FIX-R2: runs a gh command, `input` on standard input, and waits about `limit`:
 /// (succeeded, standard output, standard error), or Err when it cannot start or has not finished in
-/// time (it is stopped then, with everything it started).
+/// time (it is stopped then, with everything it started). The call can end a little after `limit`: a
+/// finished gh's output gets a grace of at least 200 ms, then up to two 200 ms waits for the last
+/// of it, and without a job the tree kill takes its own time (FIX-5).
+/// On Windows gh runs in a kill-on-close job, so when the call ends it also ends background helpers
+/// a gh child auto-started (a git fsmonitor daemon, say); that costs only a restart of the helper,
+/// and no gh call here opens a browser, so nothing the user sees is cut.
 fn run_within(cmd: std::process::Command, input: Option<&str>, limit: std::time::Duration) -> Result<(bool, String, String), String> {
-    run_within_in(cmd, input, limit, true, &crate::procs::kill_tree)
+    run_within_in(cmd, input, limit, true, &crate::procs::kill_tree, &kill_leftover)
 }
 
-/// The body of `run_within`: `with_job` false starts gh with no job (the fallback path), and
-/// `tree_kill` is what ends a tree when there is no job.
-fn run_within_in(mut cmd: std::process::Command, input: Option<&str>, limit: std::time::Duration, with_job: bool, tree_kill: &dyn Fn(u32)) -> Result<(bool, String, String), String> {
+/// FIX-5: what ends a program a finished gh left holding its output, when no job holds gh. gh has
+/// been reaped by then (on Unix `try_wait` is a waitpid), so its pid may already belong to another
+/// program: only the process group is signalled (the group id stays reserved while any member
+/// lives), never the bare pid. That greatly narrows the window for a stray kill; it does not close
+/// it: a leftover that moved into its own session leaves the group empty, and the id could then
+/// have been taken by a new group leader inside the grace (a pid wrap in 500 ms at most, very
+/// unlikely). Closing it needs gh kept as a zombie until after the group kill (waitid with
+/// WNOWAIT, which needs libc; recorded, not done). The Unix-only parts (the `kill` program, the
+/// group signal) are compiled nowhere on this PC and run nowhere (FIX-6); the runner that starts
+/// the program is shared code and is run by a test here (FIX-7). Windows has no group; taskkill needs the root alive, so there this
+/// is best effort and the job is what reaches a leftover.
+fn kill_leftover(pid: u32) {
+    #[cfg(unix)]
+    {
+        kill_leftover_with(pid, &run_program);
+    }
+    #[cfg(not(unix))]
+    crate::procs::kill_tree(pid);
+}
+
+/// The arguments of the group-only signal: the group form (`-pid`), never the bare pid. The `--`
+/// ends the options first, so a negative process-group id is never read as one (FIX-6).
+#[cfg_attr(not(unix), allow(dead_code))]
+fn group_kill_args(pid: u32) -> Vec<String> {
+    vec!["-9".into(), "--".into(), format!("-{pid}")]
+}
+
+/// FIX-6 (review AFTER 2): the whole leftover kill with the program runner passed in, so a test
+/// can see exactly what `kill_leftover` asks for without a Unix host: the program `kill` and the
+/// group arguments, nothing else.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn kill_leftover_with(pid: u32, run: &dyn Fn(&str, &[String])) {
+    run("kill", &group_kill_args(pid));
+}
+
+/// FIX-7 (review AFTER 1): the real runner behind `kill_leftover`: starts the program with its
+/// arguments through `quiet` (no console window), drops its output and waits for it to end. It is
+/// shared code, not behind `cfg(unix)`, so a Windows test runs it.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn run_program(program: &str, args: &[String]) {
+    let _ = run_program_output(program, args);
+}
+
+/// The one line `run_program` stands on, with the result kept so a test can read it.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn run_program_output(program: &str, args: &[String]) -> std::io::Result<std::process::Output> {
+    quiet(program).args(args).output()
+}
+
+/// The body of `run_within`: `with_job` false starts gh with no job (the fallback path), `tree_kill`
+/// is what ends a tree when there is no job and gh is still running (a timeout: gh is not reaped,
+/// so its pid is still its own), and `leftover_kill` is what ends the program a gh that already
+/// finished left holding its output (gh is reaped: its pid must not be signalled, FIX-5).
+fn run_within_in(mut cmd: std::process::Command, input: Option<&str>, limit: std::time::Duration, with_job: bool, tree_kill: &dyn Fn(u32), leftover_kill: &dyn Fn(u32)) -> Result<(bool, String, String), String> {
     use std::io::Read;
     use std::process::Stdio;
     cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("could not run gh: {e}"))?;
     let pid = child.id();
-    // Everything gh starts joins this job and ends with it (Windows kill-on-close); the job is the
-    // precise way to end the tree. Where there is no job (not Windows, or the assignment failed) the
-    // tree kill is the fallback, and only then: it walks by parent pid, which can reach a program
-    // gh never started.
+    // What gh starts after the assignment below joins this job and ends with it (Windows
+    // kill-on-close); the job is the precise way to end the tree. A child gh.cmd starts in the
+    // instants between `spawn` and the assignment is not in the job, and nothing ends it on a
+    // timeout (FIX-5: a rare leak, not a safety problem; closing it needs a suspended spawn). Where
+    // there is no job (not Windows, or the assignment failed) the tree kill is the fallback, and
+    // only then: it walks by parent pid, which can reach a program gh never started.
     let job = if with_job && cfg!(windows) { crate::procs::Job::new().ok().filter(|j| j.assign_pid(pid).is_ok()) } else { None };
     let deadline = std::time::Instant::now() + limit;
     let secs = limit.as_secs();
@@ -739,14 +816,15 @@ fn run_within_in(mut cmd: std::process::Command, input: Option<&str>, limit: std
         std::thread::sleep(std::time::Duration::from_millis(50));
     };
     // gh is done. Its output normally closes at once; a program it left behind that still holds the
-    // pipes gets a short grace, then goes with the job, and the call still answers inside its limit.
+    // pipes gets a short grace, then goes with the job, and the call still answers (a little past its
+    // limit at worst, see the doc on `run_within`).
     let grace = grace_after(std::time::Instant::now(), deadline);
     let until = std::time::Instant::now() + grace;
     let closed = [&stdout, &stderr].map(|(_, rx)| rx.recv_timeout(until.saturating_duration_since(std::time::Instant::now())).is_ok());
     if closed.contains(&false) {
         match job {
             Some(j) => drop(j),
-            None => tree_kill(pid),
+            None => leftover_kill(pid),
         }
         // The leftover is gone now, so its pipes close; give the drains a moment to hand over the
         // last of what gh printed before it is read.
@@ -759,7 +837,8 @@ fn run_within_in(mut cmd: std::process::Command, input: Option<&str>, limit: std
 }
 
 /// How long a finished gh's output gets to close: what is left of the limit up to 500 ms, but never
-/// under 200 ms, so a gh that ends just as the limit runs out is not read before its last chunk.
+/// under 200 ms, so a gh that ends just as the limit runs out is not read before its last chunk
+/// (the floor is why a call can end a little after its limit).
 fn grace_after(now: std::time::Instant, deadline: std::time::Instant) -> std::time::Duration {
     std::time::Duration::from_millis(500).min(deadline.saturating_duration_since(now)).max(std::time::Duration::from_millis(200))
 }
@@ -2306,11 +2385,16 @@ pub async fn scm_base_sides(worktree: String, path: String, since: String) -> Re
 }
 
 /// GIT-001 (T-033-b): starts or joins the watch of the worktree holding `path`; its status arrives
-/// as the `scm-status-<id>` event, the same shape `scm_status` returns.
+/// as the `scm-status-<id>` event, the same shape `scm_status` returns. FIX-1 (T-033-e review): a
+/// watch that ends on its own says so as `scm-watch-ended-<id>`, and the page subscribes again.
 #[tauri::command]
 pub async fn scm_watch(app: tauri::AppHandle, path: String) -> Result<watch::WatchStart, String> {
     use tauri::{Emitter, Manager};
     let dir = app.path().app_data_dir().ok();
+    let ended = {
+        let app = app.clone();
+        std::sync::Arc::new(move |id: u64| drop(app.emit(&format!("scm-watch-ended-{id}"), ()))) as watch::Ended
+    };
     let sink = move |id: u64| {
         let (app, event) = (app.clone(), format!("scm-status-{id}"));
         std::sync::Arc::new(move |st: &Status| drop(app.emit(&event, st))) as std::sync::Arc<dyn Fn(&Status) + Send + Sync>
@@ -2320,7 +2404,7 @@ pub async fn scm_watch(app: tauri::AppHandle, path: String) -> Result<watch::Wat
             crate::diag::write(d, line);
         }
     });
-    watch::watch(Path::new(&path), sink, log)
+    watch::watch_with(Path::new(&path), sink, ended, log)
 }
 
 #[tauri::command]
@@ -2857,14 +2941,14 @@ mod tests {
                 "echo https://github.com/o/r/pull/7",
                 "exit /b 0",
                 ":config",
-                "if \"%4\"==\"nobody.example\" exit /b 1",
+                "if \"%4\"==\"nobody.example\" (echo could not find key \"user\" 1>&2 & exit /b 1)",
                 "if \"%3\"==\"-h\" echo octo",
             ];
             fs::write(&file, script.join("\r\n")).unwrap();
             file
         } else {
             let file = dir.join("gh");
-            let script = "#!/bin/sh\nd=$(dirname \"$0\")\necho \"$*\" >> \"$d/calls.txt\"\nif [ \"$1\" = config ]; then [ \"$4\" = nobody.example ] && exit 1; [ \"$3\" = -h ] && echo octo; exit 0; fi\ncase \"$3\" in https*) echo '{\"number\":12,\"url\":\"https://github.com/o/r/pull/12\",\"state\":\"MERGED\",\"title\":\"Other work\",\"headRefName\":\"other\",\"isDraft\":false}'; exit 0;; esac\nif [ \"$2\" = create ]; then cat > \"$d/body.txt\"; touch \"$d/made\"; echo https://github.com/o/r/pull/7; exit 0; fi\nif [ -f \"$d/made\" ]; then echo '{\"number\":7,\"url\":\"https://github.com/o/r/pull/7\",\"state\":\"OPEN\"}'; exit 0; fi\necho 'no pull requests found for branch \"feat\"' >&2\nexit 1\n";
+            let script = "#!/bin/sh\nd=$(dirname \"$0\")\necho \"$*\" >> \"$d/calls.txt\"\nif [ \"$1\" = config ]; then [ \"$4\" = nobody.example ] && { echo 'could not find key \"user\"' >&2; exit 1; }; [ \"$3\" = -h ] && echo octo; exit 0; fi\ncase \"$3\" in https*) echo '{\"number\":12,\"url\":\"https://github.com/o/r/pull/12\",\"state\":\"MERGED\",\"title\":\"Other work\",\"headRefName\":\"other\",\"isDraft\":false}'; exit 0;; esac\nif [ \"$2\" = create ]; then cat > \"$d/body.txt\"; touch \"$d/made\"; echo https://github.com/o/r/pull/7; exit 0; fi\nif [ -f \"$d/made\" ]; then echo '{\"number\":7,\"url\":\"https://github.com/o/r/pull/7\",\"state\":\"OPEN\"}'; exit 0; fi\necho 'no pull requests found for branch \"feat\"' >&2\nexit 1\n";
             fs::write(&file, script).unwrap();
             #[cfg(unix)]
             {
@@ -3821,9 +3905,9 @@ mod tests {
         let _ = fs::remove_dir_all(&tools);
         let gh = stand_in_gh(&tools);
         let url = "https://nobody.example/o/r/pull/3";
-        assert!(merge_info(&gh, &tools, url).unwrap_err().contains("is not one of them"));
-        assert!(merge_act(&gh, &tools, url, "close", None).unwrap_err().contains("is not one of them"));
-        assert!(pr_link(&gh, &tools, url).unwrap_err().contains("is not one of them"));
+        for e in [merge_info(&gh, &tools, url).unwrap_err(), merge_act(&gh, &tools, url, "close", None).unwrap_err(), pr_link(&gh, &tools, url).unwrap_err()] {
+            assert!(e.contains("is not one of them") && !e.contains("did not answer"), "{e}");
+        }
         let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
         assert!(calls.lines().all(|c| c.trim().starts_with("config get -h nobody.example")), "{calls}");
         let _ = fs::remove_dir_all(&tools);
@@ -3842,7 +3926,8 @@ mod tests {
             assert!(pr_checks_linked(&gh, &tools, bad).unwrap_err().contains("not a pull request link"), "{bad}");
         }
         assert_eq!(calls(), "", "a malformed link reaches no gh at all");
-        assert!(pr_checks_linked(&gh, &tools, "https://nobody.example/o/r/pull/3").unwrap_err().contains("is not one of them"));
+        let e = pr_checks_linked(&gh, &tools, "https://nobody.example/o/r/pull/3").unwrap_err();
+        assert!(e.contains("is not one of them") && !e.contains("did not answer"), "{e}");
         assert!(calls().lines().all(|c| c.trim().starts_with("config get -h nobody.example")), "{}", calls());
         let got = pr_checks_linked(&gh, &tools, " https://github.com/o/r/pull/12/files#diff-1 ").unwrap();
         assert_eq!(got.pr.map(|p| p.number), Some(12));
@@ -3874,10 +3959,9 @@ mod tests {
         let gh = stand_in_gh(&tools);
         let url = "https://nobody.example/octo/repo.name/pull/3";
         assert!(pr_url_in(url).is_some(), "the link itself is well formed");
-        assert!(merge_info(&gh, &tools, url).unwrap_err().contains("is not one of them"));
-        assert!(merge_act(&gh, &tools, url, "close", None).unwrap_err().contains("is not one of them"));
-        assert!(pr_link(&gh, &tools, url).unwrap_err().contains("is not one of them"));
-        assert!(pr_checks_linked(&gh, &tools, url).unwrap_err().contains("is not one of them"));
+        for e in [merge_info(&gh, &tools, url).unwrap_err(), merge_act(&gh, &tools, url, "close", None).unwrap_err(), pr_link(&gh, &tools, url).unwrap_err(), pr_checks_linked(&gh, &tools, url).unwrap_err()] {
+            assert!(e.contains("is not one of them") && !e.contains("did not answer"), "{e}");
+        }
         let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
         assert_eq!(calls.lines().count(), 4, "{calls}");
         assert!(calls.lines().all(|c| c.trim().starts_with("config get -h nobody.example user")), "{calls}");
@@ -3966,69 +4050,262 @@ mod tests {
         let _ = fs::remove_dir_all(&tools);
     }
 
+    /// FIX-8 (review FIX-SOON 3): the programs alive right now whose image or command line is under
+    /// `dir` (Windows), as "name pid" lines. A fixture copy of ping (see `fix8_fixture`) is the only
+    /// way a wait left behind by a half-done kill can be told from any other ping on the PC.
+    #[cfg(windows)]
+    fn processes_under(dir: &std::path::Path) -> Vec<String> {
+        let script = "$d = $env:KOLUX_RS_TEST_DIR; Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and ( ($_.ExecutablePath -and $_.ExecutablePath.IndexOf($d, [StringComparison]::OrdinalIgnoreCase) -ge 0) -or ($_.CommandLine -and $_.CommandLine.IndexOf($d, [StringComparison]::OrdinalIgnoreCase) -ge 0) ) } | ForEach-Object { $_.Name + ' ' + $_.ProcessId }";
+        let out = quiet("powershell").args(["-NoProfile", "-NonInteractive", "-Command", script]).env("KOLUX_RS_TEST_DIR", dir).output().expect("powershell did not start");
+        assert!(out.status.success(), "the process check failed, so it proves nothing: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
+    }
+
+    /// FIX-8: the fixture of the two timeout halves: gh.cmd starts late.cmd at once. late.cmd says it
+    /// started, waits about five seconds with its OWN copy of ping (so a wait left alive is found by
+    /// its path) and leaves a mark only if that wait ran to the end (`&&`: a tree kill ends the wait
+    /// with exit code 1 a moment before the batch above it, and the batch must not read that as the
+    /// wait being over). Returns gh.cmd.
+    #[cfg(windows)]
+    fn fix8_fixture(tools: &std::path::Path) -> PathBuf {
+        let system = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\Windows"));
+        fs::copy(system.join("System32").join("PING.EXE"), tools.join("ping.exe")).unwrap();
+        fs::write(tools.join("late.cmd"), "@echo off\r\necho started>\"%~dp0started.txt\"\r\n\"%~dp0ping.exe\" -n 6 127.0.0.1 >nul && echo late>\"%~dp0late.txt\"\r\n").unwrap();
+        let gh = tools.join("gh.cmd");
+        fs::write(&gh, "@echo off\r\ncmd /c \"%~dp0late.cmd\"\r\n").unwrap();
+        gh
+    }
+
+    /// FIX-8: the process check is not blind: it sees a program started from a folder and sees none
+    /// once that program has ended or in a folder where nothing ran.
+    #[cfg(windows)]
+    #[test]
+    fn fix8_the_process_check_sees_a_program_under_a_folder_and_none_after_it_ends() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fix8-probe-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        fix8_fixture(&tools);
+        assert!(processes_under(&tools).is_empty(), "nothing ran yet: {:?}", processes_under(&tools));
+        let mut waiter = quiet(tools.join("ping.exe")).args(["-n", "30", "127.0.0.1"]).spawn().unwrap();
+        let seen = processes_under(&tools);
+        assert!(seen.iter().any(|l| l.to_lowercase().starts_with("ping.exe ")), "the running copy was not found: {seen:?}");
+        waiter.kill().unwrap();
+        waiter.wait().unwrap();
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !processes_under(&tools).is_empty() && std::time::Instant::now() < end {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        assert!(processes_under(&tools).is_empty(), "the ended copy is still listed: {:?}", processes_under(&tools));
+        let _ = fs::remove_dir_all(&tools);
+    }
+
     /// FIX-4 (review FIX-SOON 1): a timeout ends the tree through the job that holds gh; the tree
     /// kill (a parent-pid walk that can reach a program gh never started) is asked only when there
-    /// is no job.
+    /// is no job. FIX-8: neither half can pass having proved nothing: the job half checks that the
+    /// program gh started really started (and tries again, up to three times, when a loaded PC made
+    /// the limit run out first), and both halves check that nothing started from the test's own
+    /// folder is still alive, so a half-done kill (the batch ended, its wait left running) fails.
     #[cfg(windows)]
     #[test]
     fn fix4_a_timeout_ends_the_tree_through_the_job_and_uses_the_tree_kill_only_without_one() {
         let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fix4-job-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tools);
         fs::create_dir_all(&tools).unwrap();
-        // gh.cmd starts a second program that would leave a mark about five seconds later.
-        fs::write(tools.join("late.cmd"), "@echo off\r\nping -n 6 127.0.0.1 >nul\r\necho late>\"%~dp0late.txt\"\r\n").unwrap();
-        let gh = tools.join("gh.cmd");
-        fs::write(&gh, "@echo off\r\ncmd /c \"%~dp0late.cmd\"\r\n").unwrap();
+        let gh = fix8_fixture(&tools);
         let limit = std::time::Duration::from_secs(1);
         let asked = std::sync::Mutex::new(Vec::new());
+        let mut tried = 0;
+        loop {
+            tried += 1;
+            for mark in ["started.txt", "late.txt"] {
+                fs::remove_file(tools.join(mark)).ok();
+            }
+            asked.lock().unwrap().clear();
+            let mut cmd = quiet(&gh);
+            cmd.current_dir(&tools);
+            let err = run_within_in(cmd, None, limit, true, &|p| asked.lock().unwrap().push(p), &|p| asked.lock().unwrap().push(p)).unwrap_err();
+            assert!(err.contains("did not answer within 1 second"), "{err}");
+            assert!(asked.lock().unwrap().is_empty(), "the tree kill ran although a job held gh: {:?}", asked.lock().unwrap());
+            std::thread::sleep(std::time::Duration::from_secs(8));
+            if tools.join("started.txt").exists() {
+                assert!(!tools.join("late.txt").exists(), "a program gh started outlived its time limit");
+                assert!(processes_under(&tools).is_empty(), "the job left a program alive: {:?}", processes_under(&tools));
+                break;
+            }
+            assert!(tried < 3, "fixture did not start: late.cmd never wrote started.txt in {tried} tries, so the job half proved nothing");
+        }
+        // Without a job the tree kill is the fallback and is asked for gh's pid. gh starts its
+        // second program only after about two seconds, as a loaded PC would, so the limit runs out
+        // before it exists; the tree kill waits (up to 10 s) for its started.txt (FIX-7), so the
+        // walk finds it.
+        fs::remove_file(tools.join("started.txt")).ok();
+        fs::write(&gh, "@echo off\r\nping -n 3 127.0.0.1 >nul\r\ncmd /c \"%~dp0late.cmd\"\r\n").unwrap();
+        let started = tools.join("started.txt");
+        let saw_it = std::sync::atomic::AtomicBool::new(false);
         let mut cmd = quiet(&gh);
         cmd.current_dir(&tools);
-        let err = run_within_in(cmd, None, limit, true, &|p| asked.lock().unwrap().push(p)).unwrap_err();
-        assert!(err.contains("did not answer within 1 second"), "{err}");
-        assert!(asked.lock().unwrap().is_empty(), "the tree kill ran although a job held gh: {:?}", asked.lock().unwrap());
-        std::thread::sleep(std::time::Duration::from_secs(8));
-        assert!(!tools.join("late.txt").exists(), "a program gh started outlived its time limit");
-        // Without a job the tree kill is the fallback and is asked for gh's pid.
-        let mut cmd = quiet(&gh);
-        cmd.current_dir(&tools);
+        asked.lock().unwrap().clear();
         let err = run_within_in(cmd, None, limit, false, &|p| {
             asked.lock().unwrap().push(p);
+            // The limit has run out, but the walk by parent pid only finds a program that exists.
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !started.exists() && std::time::Instant::now() < end {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            saw_it.store(started.exists(), std::sync::atomic::Ordering::SeqCst);
             crate::procs::kill_tree(p);
-        })
+        }, &|_| {})
         .unwrap_err();
         assert!(err.contains("did not answer within 1 second"), "{err}");
         assert_eq!(asked.lock().unwrap().len(), 1, "the fallback tree kill is asked once");
+        assert!(saw_it.load(std::sync::atomic::Ordering::SeqCst), "fixture did not start: gh's second program never wrote started.txt within 10 s");
         std::thread::sleep(std::time::Duration::from_secs(8));
         assert!(!tools.join("late.txt").exists(), "the fallback left the program gh started running");
+        assert!(processes_under(&tools).is_empty(), "the fallback tree kill left a program alive: {:?}", processes_under(&tools));
         let _ = fs::remove_dir_all(&tools);
     }
 
-    /// FIX-4 (review AFTER 2): when no job holds gh, a finished gh that left a program holding its
-    /// output gets the tree-kill fallback asked once, and the call still returns gh's answer inside
-    /// its limit. (On Windows taskkill needs the root alive, so only a job reaches such a leftover;
-    /// the fallback is best effort there and complete with the process group on Unix.)
+    /// FIX-5 (review FIX-SOON 1 and 2): when no job holds gh, a finished gh that left a program
+    /// holding its output is handed to the leftover kill once and NEVER to the tree kill (gh is
+    /// reaped, so on Unix its pid may belong to another program by then), and the call still returns
+    /// gh's answer inside its limit. (On Windows taskkill needs the root alive, so only a job reaches
+    /// such a leftover; the leftover kill is best effort there and the group signal on Unix.) The
+    /// test waits for the leftover to finish, so it leaves no program behind.
     #[cfg(windows)]
     #[test]
-    fn fix4_without_a_job_a_program_left_holding_the_output_goes_with_the_fallback_kill() {
+    fn fix5_without_a_job_a_finished_gh_with_a_holder_asks_only_the_leftover_kill_once_and_still_answers_in_time() {
         let tools = std::env::temp_dir().join(format!("kolux-rs-scm-fix4-nojob-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tools);
         fs::create_dir_all(&tools).unwrap();
         fs::write(tools.join("late.cmd"), "@echo off\r\nping -n 6 127.0.0.1 >nul\r\necho late>\"%~dp0late.txt\"\r\n").unwrap();
         let gh = tools.join("gh.cmd");
         fs::write(&gh, "@echo off\r\nstart \"\" /b cmd /c \"%~dp0late.cmd\"\r\necho octo\r\n").unwrap();
-        let asked = std::sync::Mutex::new(Vec::new());
+        let tree = std::sync::Mutex::new(Vec::new());
+        let leftover = std::sync::Mutex::new(Vec::new());
         let mut cmd = quiet(&gh);
         cmd.current_dir(&tools);
         let started = std::time::Instant::now();
-        let got = run_within_in(cmd, None, std::time::Duration::from_secs(3), false, &|p| {
-            asked.lock().unwrap().push(p);
+        let got = run_within_in(cmd, None, std::time::Duration::from_secs(3), false, &|p| tree.lock().unwrap().push(p), &|p| {
+            leftover.lock().unwrap().push(p);
             crate::procs::kill_tree(p);
         })
         .unwrap();
         assert_eq!(got.1.trim(), "octo");
         assert!(started.elapsed() < std::time::Duration::from_secs(4), "took {:?}", started.elapsed());
-        assert_eq!(asked.lock().unwrap().len(), 1, "the fallback kill ran once for the holder");
+        assert!(tree.lock().unwrap().is_empty(), "the tree kill was asked for a pid gh had already given up: {:?}", tree.lock().unwrap());
+        assert_eq!(leftover.lock().unwrap().len(), 1, "the leftover kill runs once for the holder");
+        // Windows cannot end the leftover without a job, so it is still running: wait (bounded) for
+        // its mark before the folder goes, instead of leaving it behind.
+        let mark = tools.join("late.txt");
+        for _ in 0..100 {
+            if mark.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
         let _ = fs::remove_dir_all(&tools);
+    }
+
+    /// FIX-5 (review FIX-SOON 1): the Unix leftover kill names the process group (`-pid`) and never
+    /// the bare pid, which may already belong to another program once gh has been reaped.
+    #[test]
+    fn fix5_the_leftover_kill_names_the_group_and_never_the_bare_pid() {
+        let args = group_kill_args(4242);
+        assert_eq!(args, ["-9", "--", "-4242"]);
+        assert!(!args.iter().any(|a| a == "4242"), "{args:?}");
+    }
+
+    /// FIX-6 (review AFTER 1): a negative process-group id is never read as an option: the `--`
+    /// ends the options before it.
+    #[test]
+    fn fix6_the_group_id_comes_after_the_end_of_options_marker() {
+        let args = group_kill_args(4242);
+        let dashdash = args.iter().position(|a| a == "--").expect("no -- in the arguments");
+        let group = args.iter().position(|a| a == "-4242").expect("no group id in the arguments");
+        assert!(dashdash < group, "{args:?}");
+        assert_eq!(group, args.len() - 1, "{args:?}");
+    }
+
+    /// FIX-6 (review AFTER 2): `kill_leftover` itself (through its runner seam) runs the program
+    /// `kill` once with the group arguments, and never with the bare pid.
+    #[test]
+    fn fix6_the_leftover_kill_runs_kill_once_with_the_group_arguments() {
+        let seen = std::cell::RefCell::new(Vec::<(String, Vec<String>)>::new());
+        kill_leftover_with(4242, &|program, args| seen.borrow_mut().push((program.to_string(), args.to_vec())));
+        let seen = seen.into_inner();
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert_eq!(seen[0].0, "kill");
+        assert_eq!(seen[0].1, ["-9", "--", "-4242"]);
+        assert!(!seen[0].1.iter().any(|a| a == "4242"), "{seen:?}");
+    }
+
+    /// FIX-7 (review AFTER 1): the real runner starts the program with its arguments and waits for it
+    /// to end, and a program that cannot start is not an error (the leftover kill is best effort).
+    #[test]
+    fn fix7_the_real_runner_runs_the_program_with_its_arguments_and_waits() {
+        #[cfg(windows)]
+        let (program, args) = ("cmd", vec!["/C".to_string(), "echo ran & exit 7".to_string()]);
+        #[cfg(not(windows))]
+        let (program, args) = ("sh", vec!["-c".to_string(), "echo ran; exit 7".to_string()]);
+        // It started the program with those arguments and waited for the end: the exit code and the
+        // whole output are in hand when it returns.
+        let out = run_program_output(program, &args).unwrap();
+        assert_eq!(out.status.code(), Some(7));
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "ran");
+        run_program(program, &args);
+        // A program that cannot start is dropped without a panic.
+        run_program("kolux-rs-no-such-program-fix7", &["-9".to_string()]);
+    }
+
+    /// FIX-8 (review FIX-SOON 1): reads `kill_leftover` out of `src` and says whether its Unix block
+    /// hands the shared runner to the seam. The call must be live code, alone inside a block that
+    /// follows the `cfg(unix)` attribute: a call in a comment, outside the block, under no attribute
+    /// or replaced by an inline closure is an error.
+    fn leftover_wiring(src: &str) -> Result<(), String> {
+        let src = src.replace("\r\n", "\n");
+        let head = ["fn kill_leftover", "(pid: u32) {"].concat();
+        let from = src.find(&head).ok_or("kill_leftover not found")?;
+        let body = &src[from..from + src[from..].find("\n}").ok_or("kill_leftover has no end")?];
+        let live: Vec<&str> = body.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("//")).collect();
+        let want = ["#[cfg(unix)]", "{", "kill_leftover_with(pid, &run_program);", "}"];
+        if live.windows(4).any(|w| w.iter().zip(&want).all(|(a, b)| a == b)) {
+            Ok(())
+        } else {
+            Err(format!("the Unix block does not hand run_program to kill_leftover_with: {live:?}"))
+        }
+    }
+
+    /// FIX-8 (review FIX-SOON 1): the wiring check is not blind. Each wrong shape fails it (the old
+    /// inline closure, a call only in a comment, a call outside the block, a block with no
+    /// attribute) and the right one passes.
+    #[test]
+    fn fix8_the_wiring_check_fails_the_wrong_shapes_and_passes_the_right_one() {
+        let head = ["fn kill_leftover", "(pid: u32) {"].concat();
+        let call = ["kill_leftover_with(pid, &", "run_program);"].concat();
+        let attr = ["#[cfg(", "unix)]"].concat();
+        let tail = "    #[cfg(not(unix))]\n    crate::procs::kill_tree(pid);\n}\n";
+        let make = |inner: &str| format!("fn other() {{}}\n{head}\n{inner}{tail}");
+        let good = make(&format!("    {attr}\n    {{\n        {call}\n    }}\n"));
+        assert_eq!(leftover_wiring(&good), Ok(()));
+        assert_eq!(leftover_wiring(&good.replace('\n', "\r\n")), Ok(()), "CRLF must read the same");
+        let old_closure = make(&format!("    {attr}\n    {{\n        kill_leftover_with(pid, &|program, args| {{\n            let _ = quiet(program).args(args).output();\n        }});\n    }}\n"));
+        assert!(leftover_wiring(&old_closure).is_err(), "the old inline closure passed");
+        let commented = make(&format!("    {attr}\n    {{\n        // {call}\n    }}\n"));
+        assert!(leftover_wiring(&commented).is_err(), "a call in a comment passed");
+        let outside = make(&format!("    {attr}\n    {{\n    }}\n    {call}\n"));
+        assert!(leftover_wiring(&outside).is_err(), "a call outside the block passed");
+        let no_attr = make(&format!("    {{\n        {call}\n    }}\n"));
+        assert!(leftover_wiring(&no_attr).is_err(), "a block with no attribute passed");
+        assert!(leftover_wiring("fn nothing() {}\n").is_err());
+    }
+
+    /// FIX-7 (review AFTER 1): `kill_leftover` hands the shared runner to the seam, so the code a
+    /// Unix host runs is the code the runner test above runs (read from this file because Windows
+    /// cannot compile the Unix body). FIX-8: the check is `leftover_wiring`, which the test above
+    /// shows fails the wrong shapes.
+    #[test]
+    fn fix7_kill_leftover_uses_the_shared_runner() {
+        assert_eq!(leftover_wiring(include_str!("scm.rs")), Ok(()));
     }
 
     /// FIX-4 (review AFTER 1): a gh that finishes just as the limit runs out still gets a short

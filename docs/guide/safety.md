@@ -31,7 +31,7 @@ The rules look inside wrappers: chained commands, `$( )` substitutions (four lev
 - A command that matches nothing gets no opinion, and a determined command can be written to slip past. The project's own review found four ways to do so.
 - It becomes a real control only when the project owner decides so.
 
-The master switch and a list of rules to turn off live in `settings.json` as `protectedAsk` (on unless saved otherwise) and `protectedOff`. There is no switch for them in the Settings pages. The Safety page in Settings carries a short note saying the same. Changes apply on the next command.
+**Switching rules on and off.** Settings, Safety has a "Protected actions" section: one master switch, "Ask before protected actions", and under it one switch for each rule above, each with two example commands. Switch a rule off and Claude stops asking about that kind of command; switch the master off and no rule asks, whatever its own switch says. All of them are on until you change them. The page also tells you when the agent status hooks are off, because Claude cannot ask without them (Settings, Agents). The switches are saved in `settings.json` as `protectedAsk` (on unless saved otherwise) and `protectedOff` (the rules switched off), and changes apply on the next command. If a switch cannot be saved, the page shows what is saved, not what you clicked.
 
 ## Where Kolux asks first
 

@@ -23,6 +23,25 @@ export const names = (s: string) => [...new Set(s.split(",").map((x) => x.trim()
 
 export const emptyDraft = (host: string, repo: string): IssueDraft => ({ host, repo, title: "", body: "", labels: [], assignees: [] });
 
+/** GitHub's longest issue title. */
+export const TITLE_MAX = 256;
+
+/** A title's length the way GitHub counts it: characters (an emoji is one), not UTF-16 units. */
+export const titleLength = (t: string): number => [...t.trim()].length;
+
+/** FIX-3 (review FIX-SOON 1): an issue created after the workspace changed belongs to the host and
+ * repository it was sent to, not to whatever Tasks shows now; it joins the list and opens only when
+ * both match the workspace on screen. */
+export const createdHere = (here: { host: string; repos: string[] } | null | undefined, host: string, repo: string): boolean => !!here && sameHost(here.host, host) && here.repos.some((r) => r.toLowerCase() === repo.toLowerCase());
+
+/** FIX-4 (review AFTER 5): whether a finished create closes the New issue dialog on screen. It does
+ * when the issue belongs to the workspace on screen, or when that dialog is the opening that sent
+ * the create; a create from an older opening never closes a dialog opened since. */
+export const closesDialog = (belongsHere: boolean, sentBy: number, onScreen: number): boolean => belongsHere || sentBy === onScreen;
+
+/** Label names the field can hold: it splits on commas, so a suggestion with one could never be picked whole. */
+export const pickableLabels = (labels: string[]): string[] => labels.filter((l) => !l.includes(","));
+
 /** The repositories a new issue can go to: the ones the list shows, issues' repository first. */
 export const issueTargets = (issues: string, own: string): string[] => [...new Set([issues, own].filter(Boolean))];
 
@@ -62,31 +81,53 @@ export function draftFrom(v: unknown): IssueDraft | null {
 // dialog while "Creating…" and opening it again can never send the same issue twice.
 export type CreateEvent = "busy" | "created" | "failed";
 let inFlight = false;
-const watchers = new Set<(e: CreateEvent) => void>();
-const tell = (e: CreateEvent) => watchers.forEach((w) => w(e));
+// FIX-4 (council FIX-SOON 2): the last create's failure stays here, so a New issue dialog opened
+// after the create failed (the user had left Tasks) still says so instead of offering a second click.
+// FIX-5 (council AFTER 5): it belongs to the host and repository the create was sent to, so it shows
+// only in a New issue for that same place, not in every later opening in any workspace.
+export type CreateScope = { host: string; repo: string };
+let lastFailure: { error: string; scope: CreateScope } | null = null;
+const watchers = new Set<(e: CreateEvent, error?: string, scope?: CreateScope) => void>();
+const tell = (e: CreateEvent, error?: string, scope?: CreateScope) => watchers.forEach((w) => w(e, error, scope));
+/** Whether a failure sent to `a` is the one a dialog for `b` should show (host and repository, case-insensitive). */
+export const sameScope = (a: CreateScope, b: CreateScope): boolean => sameHost(a.host, b.host) && a.repo.toLowerCase() === b.repo.toLowerCase();
+
+/** FIX-6 (council AFTER 2): whether a "created" event (sent to `scope`) resets the open dialog for
+ * `host` and `repo`; a create to another place coming back must not clear what is being typed here. */
+export const createResetsDialog = (scope: CreateScope | undefined, host: string, repo: string): boolean => !!scope && sameScope(scope, { host, repo });
 
 /** True while a create is out. */
 export const createBusy = () => inFlight;
 
-/** Calls `w` when a create starts ("busy") and when it settles; returns the unsubscribe. */
-export function watchCreate(w: (e: CreateEvent) => void): () => void {
+/** The error of the last create when it failed, no later create has started, and it was sent to this
+ * host and repository; null otherwise. */
+export const lastCreateFailure = (host: string, repo: string): string | null => (lastFailure && sameScope(lastFailure.scope, { host, repo }) ? lastFailure.error : null);
+
+/** Calls `w` when a create starts ("busy") and when it settles ("failed" carries gh's error and the
+ * host and repository it was sent to, so a dialog opened after the create began still tells the
+ * user what went wrong, if it is the same place); returns the unsubscribe. */
+export function watchCreate(w: (e: CreateEvent, error?: string, scope?: CreateScope) => void): () => void {
   watchers.add(w);
   return () => void watchers.delete(w);
 }
 
 /** Sends one create, or nothing (null) when another is still out. */
-export async function createOnce<T>(send: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: string } | null> {
+export async function createOnce<T>(send: () => Promise<T>, scope: CreateScope): Promise<{ ok: true; value: T } | { ok: false; error: string } | null> {
   if (inFlight) return null;
   inFlight = true;
-  tell("busy");
+  // FIX-6 (council AFTER 1): only the failure of this same place is superseded; a create to another
+  // repository must not hide one that may have opened its issue (a second Create would duplicate it).
+  if (lastFailure && sameScope(lastFailure.scope, scope)) lastFailure = null;
+  tell("busy", undefined, scope);
   try {
     const value = await send();
     inFlight = false;
-    tell("created");
+    tell("created", undefined, scope);
     return { ok: true, value };
   } catch (e) {
     inFlight = false;
-    tell("failed");
+    lastFailure = { error: String(e), scope };
+    tell("failed", String(e), scope);
     return { ok: false, error: String(e) };
   }
 }

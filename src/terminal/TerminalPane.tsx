@@ -4,7 +4,7 @@
 // branch chip, program, status word; then gauge, more, expand, split, close on the right.
 import { useEffect, useRef, useState } from "react";
 import { branchChip, crewLabel, crewLine, foundAgent, headerOf, takesInband, titleState, type Crew } from "./status";
-import PaneMenu from "./PaneMenu";
+import PaneMenu, { paneMenuItems } from "./PaneMenu";
 import type { Chip } from "../board/chip";
 import type { AgentState } from "../projects/rows";
 import { invoke } from "@tauri-apps/api/core";
@@ -32,7 +32,8 @@ import { openSettings } from "../settings/pages";
 import { answerKeys, buttonsShown, canAnswer, nextPrompt } from "./permissionAnswer";
 import { Close, Dots, Expand, Plus, SplitRight, StatusGlyph } from "../chrome/icons";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
-import Ring from "../usage/Ring";
+import { ContextGauge, HeaderUsage } from "./UsageReadout";
+import type { Readout } from "./headerUsage";
 import { meterText, shortTokens, tone as toneOf, type Meter } from "../usage/meter";
 import PlusMenu, { programWord, shellWord, type AgentInfo } from "../launch/PlusMenu";
 import { useKeymap } from "../keys/KeymapContext";
@@ -40,6 +41,7 @@ import { labelOf } from "../keys/keymap";
 import { attachPaste } from "./paste";
 import { answersPrompt, newlineAgent, routeKey } from "./shellKeys";
 import { heldByTerminal } from "../keys/terminalPolicy";
+import { answeredElsewhere } from "../chat/ask";
 import { clickTarget, findLinks, hintFor, linkFor, rangeOf, resolvePath, spanOf, type Found } from "./links";
 import { dropSummary, dropText, overRect, shellKind } from "./drop";
 import { decideOsc52, parseOsc52, sayOnce } from "./osc52";
@@ -48,7 +50,7 @@ import FindBar from "./FindBar";
 import { stopLine, type StopInfo } from "./notify";
 import NameField from "./NameField";
 import { handlesIn } from "./tabs";
-import { Kbd, useLabel } from "../keys/KeymapContext";
+import { markShell, runningOf, shellInAgentPane } from "./remove";
 
 // TERM-036: the pane menu's copy items; Copy Session ID shows only once the session is known.
 const COPY_IDS = [["session", "Copy Session ID"], ["terminal", "Copy Terminal ID"], ["pane", "Copy Pane ID"]] as const;
@@ -81,7 +83,8 @@ type Props = {
   args?: string[];
   /** SET-027: the user's environment variables for this agent. */
   env?: [string, string][];
-  onRunning?: (running: boolean) => void;
+  /** T-151-c: undefined while the program is still starting, true while it runs, false once it ended or failed. */
+  onRunning?: (running: boolean | undefined) => void;
   /** TERM-030: true while this pane waits on the user, so the window can cycle to it. */
   onNeedsYou?: (needs: boolean) => void;
   /** STAT-001: the pane's last hook-fed state; wins over the title guess while the program runs. */
@@ -98,8 +101,12 @@ type Props = {
   /** STAT-040: how full the agent's context is, 0 to 100, from its last status-line report;
    * null or left out while no reading has come in yet (USAGE-001: a greyed 0%). */
   context?: number | null;
-  /** USAGE-004: the agent's plan figures beside the gauge on the Agents screen. */
+  /** USAGE-004: the agent's plan figures beside the gauge on the Agents screen. Shown only while `usage`
+   * is left out; with it the header's full readout carries the plan figures on every screen. */
   plan?: string;
+  /** USAGE-034: the pane's reading for the full usage readout (tokens against the effective window,
+   * cost, used-or-left); left out for a shell, which shows the plain gauge. */
+  usage?: Readout;
   /** TERM-118: the program rang the terminal bell. */
   onBell?: () => void;
   /** TERM-118: finished or rang while not in view; the pane carries the mark until viewed. */
@@ -160,6 +167,8 @@ type Props = {
   onChoose?: () => void;
   /** TERM-006: the header split button opens a shell beside this pane, in the same folder. */
   onSplit?: (dir: "right" | "down") => void;
+  /** TERM-035: Equalize in the pane menu; given only while the grid holds more than one pane. */
+  onEqualize?: () => void;
   /** TERM-013: the grid's expand: `on` while this pane's cell fills the grid; `can` is false for a lone classic pane. */
   expand?: { on: boolean; can: boolean; toggle: () => void };
   /** VIEW-026: on the Board this pane is a card; expanded shows the live terminal inside it. */
@@ -189,7 +198,7 @@ const stagger = () =>
     }, 150 + 60 * waiting++),
   );
 
-export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
+export default function TerminalPane({ hidden = false, gpu = true, name, plan, usage, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, onEqualize, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const keySettingsRef = useRef(keySettings);
   keySettingsRef.current = keySettings;
@@ -281,11 +290,11 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   const inbandRef = useRef(false);
   inbandRef.current = takesInband(agent, program, found);
   // TERM-025 / TERM-027: the pane menu, opened by "..." or a right-click on the header, and the inline name field.
-  const [menuAt, setMenuAt] = useState<{ top: number; left: number } | null>(null);
+  const [menuAt, setMenuAt] = useState<{ top: number; left: number; selected: boolean } | null>(null);
+  /** TERM-035: the menu also opens from a right-click inside the pane (set with the terminal). */
+  const menuRef = useRef<(x: number, y: number) => void>(() => {});
+  const pasteRef = useRef<() => void>(() => {});
   const [naming, setNaming] = useState(false);
-  // The menu shows a shortcut only once one is assigned (both start with none).
-  const setKey = useLabel("terminal.setTitle").length > 0;
-  const clearKey = useLabel("terminal.clearPaneTitle").length > 0;
   useEffect(() => {
     if (renameAsk > 0 && onRename) setNaming(true);
   }, [renameAsk]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -321,9 +330,11 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   failed.current = onFailed;
 
   useEffect(() => {
-    report.current?.(status.kind === "running");
+    report.current?.(runningOf(status.kind));
     if (status.kind === "running") pty.current?.(status.id, status.account);
   }, [status.kind]);
+  // FIX-1: the pane key leaves the "agent pane running a shell" set when the pane goes (restart.current sets it).
+  useEffect(() => () => void (number !== undefined && shellInAgentPane.delete(number)), [number]);
   // ACCT-064: the question takes the keyboard only in the active, visible pane.
   const noticeButton = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -570,7 +581,10 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       const route = routeKey(keys.current, e, term.hasSelection(), newlineAgent(startedRef.current, agentRef.current), (id) => heldByTerminal(id, keySettingsRef.current));
       // T-151-b (council D2 MERGE 47 S2): a real key that goes to the program answers the permission prompt as
       // far as the buttons are concerned; xterm's own focus / mouse / cursor replies (onData) no longer do.
-      if (answersPrompt(route, e.key)) setAnswered(prompt.current.count);
+      if (answersPrompt(route, e.key)) {
+        setAnswered(prompt.current.count);
+        if (number !== undefined) answeredElsewhere(number); // FIX-1: the chat card for this prompt goes too
+      }
       if (route.kind === "ime" || route.kind === "shell") return true;
       if (route.kind === "send") {
         e.preventDefault(); // Alt+Left is the webview's own "back" otherwise
@@ -688,6 +702,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         idRef.current = null;
         early = [];
         setDied(null);
+        // FIX-1: an agent pane that got a shell on Enter is asked about as a shell (terminal/remove.ts classify).
+        markShell(shellInAgentPane, number, shell, agent);
         setStatus({ kind: "starting" });
         void start(shell ? null : program, shell ? [] : args, false);
       };
@@ -765,9 +781,15 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     const selected = term.onSelectionChange(() => {
       if (currentText().copyOnSelect && term.hasSelection()) void navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
     });
+    pasteRef.current = () => void navigator.clipboard?.readText().then((t) => t && pasting.paste(t), (e) => sayOnce("paste-refused", `The clipboard could not be read (${e instanceof Error ? e.message : String(e)})`, setFlash));
     const rightClick = (e: MouseEvent) => {
-      if (!currentText().rightClickPaste) return;
       e.preventDefault();
+      if (!currentText().rightClickPaste) {
+        // TERM-035: a program that tracks the mouse keeps its right-click (Shift takes it back for the menu).
+        if (term.modes.mouseTrackingMode !== "none" && !e.shiftKey) return;
+        menuRef.current(e.clientX, e.clientY);
+        return;
+      }
       if (term.hasSelection()) {
         void navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
         term.clearSelection();
@@ -1052,7 +1074,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   const expanded = card ? card.expanded : !!expand?.on;
   const canExpand = card ? true : !!expand?.can;
   const expandKey = labelOf(keymap, "terminal.expandPane").join("+") || "no shortcut";
-  const openMenu = (x: number, y: number) => setMenuAt({ top: Math.min(y, window.innerHeight - 160), left: Math.min(x, window.innerWidth - 240) });
+  // PaneMenu moves itself back inside the window once it knows its own size.
+  const openMenu = (x: number, y: number) => setMenuAt({ top: y, left: x, selected: !!termRef.current?.hasSelection() });
+  menuRef.current = openMenu;
 
   return (
     <section ref={box} className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={shown} data-dropping={dropping || undefined} style={{ ...(card?.column ? { gridColumn: card.column } : {}), ...(dropping ? { outline: "2px solid var(--line-focus)", outlineOffset: -2 } : {}) }}>
@@ -1115,6 +1139,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
                   onClick={() => {
                     const keys = answerKeys(shown, answer);
                     setAnswered(drawnAt); // T-151-b: the first click answers; the buttons go until the next prompt
+                    if (number !== undefined) answeredElsewhere(number); // FIX-1: the chat card for this prompt goes too
                     if (keys !== null && canAnswer(shown, hook, drawnAt, prompt.current.count, pendingTool)) typeIn.current(keys);
                     else setFlash("The prompt has gone; nothing was sent");
                   }}
@@ -1151,7 +1176,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
           </span>
         )}
         <span className="right">
-          {plan && (
+          {plan && !usage && (
             <span className="meter-plan" title="This agent's plan: its 5-hour and weekly windows">
               {plan}
             </span>
@@ -1161,7 +1186,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
               Review plan
             </button>
           )}
-          <ContextGauge context={context} agent={agent} />
+          {usage ? <HeaderUsage context={context} agent={agent} readout={usage} /> : <ContextGauge context={context} agent={agent} />}
           <button
             className="ib"
             title="Pane menu"
@@ -1207,85 +1232,42 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         </span>
       </header>
       {menuAt && (
-        <PaneMenu style={menuAt} expanded={expanded} canExpand={canExpand} onExpand={onExpand} onSplit={onSplit} onClose={close} onDismiss={() => setMenuAt(null)}>
-          {onRename && (
-            <button
-              role="menuitem"
-              className="menu-item"
-              onClick={() => {
-                setMenuAt(null);
-                setNaming(true);
-              }}
-            >
-              <span className="name">Set Title…</span>
-              {setKey && <Kbd id="terminal.setTitle" />}
-            </button>
-          )}
-          {onRename && custom && (
-            <button
-              role="menuitem"
-              className="menu-item"
-              onClick={() => {
-                setMenuAt(null);
-                onRename(undefined);
-              }}
-            >
-              <span className="name">Clear Pane Title</span>
-              {clearKey && <Kbd id="terminal.clearPaneTitle" />}
-            </button>
-          )}
-          {onCopyId &&
-            COPY_IDS.filter(([what]) => sessionKnown || what !== "session").map(([what, label]) => (
-              <button
-                key={what}
-                role="menuitem"
-                className="menu-item"
-                onClick={() => {
-                  setMenuAt(null);
-                  onCopyId(what);
-                }}
-              >
-                <span className="name">{label}</span>
-              </button>
-            ))}
-          <button
-            role="menuitem"
-            className="menu-item"
-            title="Clears the screen and the scrollback of this pane"
-            onClick={() => {
-              setMenuAt(null);
+        <PaneMenu
+          style={{ top: menuAt.top, left: menuAt.left }}
+          onDismiss={() => setMenuAt(null)}
+          items={paneMenuItems({
+            selected: menuAt.selected,
+            expanded,
+            canExpand,
+            onCopy: () => {
+              const term = termRef.current;
+              if (term) void copySelection(term, (text) => navigator.clipboard.writeText(text), setFlash);
+            },
+            onSelectAll: () => {
+              termRef.current?.selectAll();
+              termRef.current?.focus();
+            },
+            onPaste: () => {
+              pasteRef.current();
+              termRef.current?.focus();
+            },
+            agentActions: onReviewPlan ? [{ id: "reviewPlan", name: "Review plan", title: "Read the plan, comment on it, then approve or ask for changes", run: onReviewPlan }] : [],
+            onSplit,
+            onEqualize,
+            onExpand,
+            onSetTitle: onRename && (() => setNaming(true)),
+            hasTitle: custom,
+            onClearTitle: onRename && (() => onRename(undefined)),
+            copyIds: onCopyId ? COPY_IDS.filter(([what]) => sessionKnown || what !== "session").map(([what, label]) => ({ id: what, name: label, run: () => onCopyId(what) })) : [],
+            onDiagnostics: () => void copyDiagnostics(),
+            onClose: onClose && close,
+            onClear: () => {
               clearRef.current();
               termRef.current?.focus();
-            }}
-          >
-            <span className="name">Clear Screen</span>
-            <Kbd id="terminal.clear" />
-          </button>
-          <button
-            role="menuitem"
-            className="menu-item"
-            title="Find text in this pane's screen and scrollback"
-            onClick={() => {
-              setMenuAt(null);
-              findRef.current();
-            }}
-          >
-            <span className="name">Find…</span>
-            <Kbd id="terminal.search" />
-          </button>
-          <button
-            role="menuitem"
-            className="menu-item"
-            title="A scrubbed snapshot of this pane for a bug report, to the clipboard"
-            onClick={() => {
-              setMenuAt(null);
-              void copyDiagnostics();
-            }}
-          >
-            <span className="agent-mark" />
-            <span className="name">Copy terminal diagnostics</span>
-          </button>
-        </PaneMenu>
+            },
+            onFind: () => findRef.current(),
+          })}
+        />
       )}
       {plusAt && (
         <PlusMenu
@@ -1463,21 +1445,5 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   );
 }
 
-/** USAGE-001: the header's context ring and percentage. Always there; a greyed 0% until the
- * first reading (a real 0% is a reading), then tinted yellow from 70% and red beyond 90%. Only
- * Claude's status line reports context, so a Codex pane's hover says so instead of promising a
- * figure (stand-in review of lane/marks ee2bfbc, FIX-SOON 6). */
-export function ContextGauge({ context, agent }: { context?: number | null; agent: string }) {
-  const none = context === null || context === undefined;
-  const percent = none ? 0 : Math.round(context);
-  const waiting = agent === "codex" ? "Context used: Codex does not report its context to Kolux, so there is no figure to show." : "Context used: nothing received yet. The figure appears with the agent's first status report.";
-  const title = none ? (agent === "shell" ? "Context used (agents only)" : waiting) : `Context used: ${percent}% of the agent's context window`;
-  // The tint reads the real figure: 90.4% is beyond 90 though it shows as 90% (stand-in review of
-  // lane/marks 243736d, AFTER 9).
-  return (
-    <span className={none ? "gauge none" : `gauge ${toneOf(context ?? 0)}`.trim()} title={title}>
-      <Ring percent={percent} />
-      {percent}%
-    </span>
-  );
-}
+// USAGE-001: the gauge lives with the rest of the header readout (UsageReadout.tsx); kept importable from here.
+export { ContextGauge };

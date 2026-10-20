@@ -79,7 +79,7 @@ pub fn upkeep_left_to_claude(settings: &Value) -> bool {
 /// The variable a new pane gets for the managed account: only a Claude pane, only when the 1-year
 /// key is not the connection (key mode wins), only with an active account.
 pub fn pane_env(program: Option<&str>, key_mode: bool, active_dir: Option<String>) -> Option<(&'static str, String)> {
-    if key_mode || crate::agents::credited_agent(program?) != Some("claude") {
+    if key_mode || crate::tools::credited_program(program?) != Some("claude") {
         return None;
     }
     active_dir.map(|d| (CONFIG_ENV, d))
@@ -699,6 +699,14 @@ mod tests {
         assert_eq!(pane_env(Some("codex"), false, d.clone()), None);
         assert_eq!(pane_env(None, false, d), None);
         assert_eq!(pane_env(Some("claude"), false, None), None);
+    }
+
+    /// launch FIX-4: a Command that is a bare path with a space starts fine, so it gets the account too.
+    #[test]
+    fn fix4_a_claude_path_with_a_space_gets_the_account() {
+        let d = Some(r"C:\p\claude-accounts\a1".to_string());
+        assert_eq!(pane_env(Some(r"C:\Program Files\Claude\claude.exe"), false, d.clone()), Some((CONFIG_ENV, d.clone().unwrap())));
+        assert_eq!(pane_env(Some(r"C:\Program Files\Tools\notclaude.exe"), false, d), None);
     }
 
     #[test]

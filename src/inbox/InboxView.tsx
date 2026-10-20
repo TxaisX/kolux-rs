@@ -4,7 +4,7 @@
 // source-control status through the commands the window already has.
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { GROUPS, moveSelection, openLabel, settle, type Item } from "./inbox";
+import { exitNote, GROUPS, moveSelection, openLabel, settle, type Item } from "./inbox";
 import { VOCAB } from "../terminal/status";
 import { StatusGlyph } from "../chrome/icons";
 import type { Agent } from "../chrome/VendorMark";
@@ -108,6 +108,7 @@ function Detail({ item, onOpen }: { item: Item; onOpen: () => void }) {
           </>
         )}
       </dl>
+      {exitNote(item) && <p className="exited">{exitNote(item)}</p>}
       <div className="actions">
         <button className="btn primary" onClick={onOpen} title="Go to the tab and pane where this agent runs (Enter)">
           {openLabel(item)}

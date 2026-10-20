@@ -14,7 +14,7 @@ export type TourStep = {
   /** The real control is what to click, so there is no Next. */
   noNext?: boolean;
 };
-export type TourId = "tasks" | "automations" | "parallel" | "grid";
+export type TourId = "tasks" | "automations" | "parallel" | "grid" | "create";
 export type Tour = { id: TourId; name: string; trigger: string; steps: TourStep[]; ring?: boolean };
 
 /** The split button of the focused terminal pane (browser panes have no split). */
@@ -23,6 +23,10 @@ export type Tour = { id: TourId; name: string; trigger: string; steps: TourStep[
 export const GRID_PANE = ".pane.focused:not(.browser)";
 export const GRID_STATUS = ".sb-list .dot.live";
 export const GRID_RESULTS = "[data-results]";
+/** ONB-016: the new-workspace composer's name, agent and note fields. */
+export const CREATE_NAME = ".composer input[aria-label='workspace name']";
+export const CREATE_AGENT = ".composer select[aria-label=agent]";
+export const CREATE_NOTE = ".composer textarea[aria-label=note]";
 export const FOCUSED_SPLIT = ".pane.focused:not(.browser) .pane-head button[title^='Split right']";
 
 /** ONB-033, the surfaces Kolux RS has today; the board, browser, floating-workspace and
@@ -68,6 +72,17 @@ export const TOURS: Tour[] = [
       { target: GRID_RESULTS, side: "right", en: { title: "Your results", body: "What a kit makes is gathered here, ready to open." }, ko: { title: "결과", body: "키트가 만든 것이 여기에 모여 바로 열 수 있습니다." } },
     ],
   },
+  {
+    // ONB-016: started by the Setup Guide's Multi-task action once the composer is open; never by itself.
+    id: "create",
+    name: "New workspace",
+    trigger: CREATE_NAME,
+    steps: [
+      { target: CREATE_NAME, side: "right", en: { title: "Name the workspace", body: "Type a short name. Kolux makes a branch and a folder for it." }, ko: { title: "작업 공간 이름", body: "짧은 이름을 입력하세요. Kolux가 브랜치와 폴더를 만듭니다." } },
+      { target: CREATE_AGENT, side: "right", en: { title: "Pick an agent", body: "Choose which agent starts in it, or none for a plain terminal." }, ko: { title: "에이전트 선택", body: "시작할 에이전트를 고르거나, 일반 터미널을 쓰려면 고르지 않습니다." } },
+      { target: CREATE_NOTE, side: "right", en: { title: "Say what to do", body: "An optional note becomes the agent's first prompt. Press Enter to create." }, ko: { title: "할 일 적기", body: "선택 사항인 메모가 에이전트의 첫 프롬프트가 됩니다. Enter를 눌러 만듭니다." } },
+    ],
+  },
 ];
 
 export const stepWords = (s: TourStep): Words => (locale() === "ko" ? s.ko : s.en);
@@ -89,7 +104,7 @@ export function prevShown(present: readonly boolean[], i: number): number | null
 /** Whether a tour may start by itself this launch (replay buttons skip every one of these). */
 export function autoStarts(o: { id: TourId; auto: boolean | null; seen: readonly string[]; slotUsed: boolean; blocked: boolean; tried: readonly string[] }): boolean {
   // ONB-012: the grid tour never starts by itself; only the first run's end starts it.
-  if (o.id === "grid") return false;
+  if (o.id === "grid" || o.id === "create") return false;
   if (!o.auto || o.slotUsed || o.blocked || o.seen.includes(o.id)) return false;
   // ONB-033: the parallel tour only for someone who has never split a pane.
   return !(o.id === "parallel" && o.tried.includes("split"));
@@ -137,6 +152,6 @@ export const startGridTour = () => window.dispatchEvent(new CustomEvent(START_GR
 export const gridStarts = (how: "kit" | "session" | "skip" | "folder", seen: readonly string[]) => (how === "kit" || how === "session") && !seen.includes("grid");
 /** ONB-042: the tours whose surface is a feature the profile keeps a use of. The grid tour is a
  *  tour of the whole first screen, not a feature on the fixed list, so opening it notes nothing. */
-export const tourFeature = (id: TourId): boolean => id !== "grid";
+export const tourFeature = (id: TourId): boolean => id !== "grid" && id !== "create";
 /** A kit start can take a while to open its panes: the grid tour waits this many looks for its first target. */
 export const GRID_TRIES = 4 * FIRST_TARGET_TRIES;

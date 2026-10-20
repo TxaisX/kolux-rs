@@ -11,6 +11,7 @@ use crate::git::{Git, Worktree};
 use crate::names::safe_name;
 use crate::state::Store;
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use tauri::State;
@@ -110,8 +111,18 @@ pub(crate) fn forget_projects(store: &Store, ids: &[String]) -> Result<(), Strin
         return Ok(());
     }
     let mut projects = load_projects(store);
+    let gone: Vec<String> = projects.iter().filter(|p| ids.contains(&p.id)).map(|p| p.path.clone()).collect();
     projects.retain(|p| !ids.contains(&p.id));
-    save_projects(store, &projects)
+    save_projects(store, &projects)?;
+    // PROJ-019: a forgotten project's icon choice goes with it.
+    let mut icons = project_icons(store);
+    let before = icons.len();
+    icons.retain(|id, _| !ids.contains(id));
+    if icons.len() != before {
+        save_icons(store, &icons)?;
+    }
+    // PROJ-035: and so do its dismissed setup card and its saved local setup.
+    crate::setup::prune_setup(store, ids, &gone)
 }
 
 fn load_names(store: &Store) -> serde_json::Map<String, serde_json::Value> {
@@ -145,11 +156,25 @@ pub fn set_parent(store: &Store, path: &str, parent: Option<&str>) -> Result<(),
 /// Drops what Kolux remembers about a removed workspace, so a later one in the same folder starts
 /// clean: its typed name, its parent and its origin.
 pub fn forget_workspace(store: &Store, path: &str) -> Result<(), String> {
+    retire_workspace_names(store, path)?;
     set_name(store, path, None)?;
     set_parent(store, path, None)?;
     // EDIT-040: a later workspace in the same folder starts with an empty note.
     store.set(&format!("{NOTE_PREFIX}{}", name_key(path)), "").map_err(|e| e.to_string())?;
     set_origin(store, path, None)
+}
+
+/// PROJ-024: the folder the workspace at `path` lived in is the scope; a suggested name, folder or
+/// typed, is not offered again there. Used by every way a workspace goes: removed by the user
+/// (`forget_workspace`) and found gone from disk (`forget_gone`).
+pub fn retire_workspace_names(store: &Store, path: &str) -> Result<(), String> {
+    let folder = Path::new(path);
+    let scope = name_key(&folder.parent().unwrap_or(folder).to_string_lossy());
+    let typed = load_names(store).get(&name_key(path)).and_then(|v| v.as_str().map(String::from));
+    for name in folder.file_name().map(|n| n.to_string_lossy().to_string()).into_iter().chain(typed) {
+        retire_name(store, &scope, &name)?;
+    }
+    Ok(())
 }
 
 /// EDIT-040: the handoff note of one workspace, stored under its own key (one write each, so a
@@ -816,6 +841,10 @@ pub fn names_in_use(git: &Git, projects: &[Project]) -> Vec<String> {
                 names.push(folder.to_string_lossy().to_string());
             }
             if let Some(branch) = w.branch {
+                // A branch under a prefix (`kolux/amber-otter`) uses its last part as a name too.
+                if let Some((_, tail)) = branch.rsplit_once('/') {
+                    names.push(tail.to_string());
+                }
                 names.push(branch);
             }
         }
@@ -823,31 +852,163 @@ pub fn names_in_use(git: &Git, projects: &[Project]) -> Vec<String> {
     names
 }
 
-/// Every creature name ever handed out (SESS-023): a retired worktree's name is never reused.
-const RETIRED_KEY: &str = "creatureNamesUsed";
-
-pub fn retired_names(store: &Store) -> Vec<String> {
-    store.get(RETIRED_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+/// PROJ-023: the names workspaces were given by hand (the shown name can differ from the folder).
+fn typed_names(store: &Store) -> Vec<String> {
+    load_names(store).values().filter_map(|v| v.as_str().map(String::from)).collect()
 }
 
-pub fn remember_retired(store: &Store, name: &str) -> Result<(), String> {
-    let mut names = retired_names(store);
-    if !names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
-        names.push(name.to_string());
-        store.set(RETIRED_KEY, &serde_json::to_string(&names).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+/// PROJ-023: a creature name for the create flow's name field, free in every registered project
+/// (case ignored) and never a retired one. Nothing is recorded: a suggestion nobody uses costs no
+/// name. `lock` hands over the store only for the store work (T-442-b).
+pub fn suggest_name<S: std::ops::Deref<Target = Store>>(git: &Git, lock: impl Fn() -> Result<S, String>, place: &Place, project: &Project, seed: u64) -> Result<String, String> {
+    let projects = load_projects(&*lock()?);
+    let taken = names_in_use(git, &projects);
+    let store = lock()?;
+    Ok(pick_name(&store, &retired_scope(place, project), taken, seed))
+}
+
+#[allow(dead_code)] // T-212: registered by the lib.rs hunk the coordinator applies
+#[tauri::command(async)]
+pub fn workspace_suggest_name(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<String, String> {
+    let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let (project, place) = locked_place(&store, &project_id)?;
+    suggest_name(&git, || store.lock().map_err(|e| e.to_string()), &place, &project, seed)
+}
+
+/// PROJ-024: the suggested names of workspaces that were deleted, kept so they are not suggested
+/// again, restarts included. The record is per scope: the folder the workspace lived in, so with the
+/// flat layout every project sharing the workspaces folder shares it, and with the nested layout each
+/// project's own subfolder keeps its own. Names compare ignoring case and spaces; only names from the
+/// suggestion list are kept, never ones typed freely; the record is bounded (oldest names, then
+/// oldest scopes, go first) and a damaged one counts as empty.
+const RETIRED_KEY: &str = "retiredNames";
+const RETIRED_PER_SCOPE: usize = 400;
+const RETIRED_SCOPES: usize = 100;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Retired {
+    scope: String,
+    names: Vec<String>,
+}
+
+/// SESS-023's record: one flat list of every name handed out, kept under this key before PROJ-024.
+const LEGACY_KEY: &str = "creatureNamesUsed";
+/// The scope the old names are kept under: a name there is retired in every scope. (No folder is
+/// ever named this, so it cannot meet a real scope.)
+const GLOBAL_SCOPE: &str = "*";
+/// The most old names carried over.
+const LEGACY_MAX: usize = 4000;
+
+/// The record. Until the first retirement writes "retiredNames", the old flat list stands in for it
+/// as a global scope, so a name already handed out stays out of the suggestions without a separate
+/// migration step; once the new key exists the old one is no longer read.
+fn retired_all(store: &Store) -> Vec<Retired> {
+    match store.get(RETIRED_KEY).ok().flatten() {
+        Some(v) => serde_json::from_str(&v).unwrap_or_default(),
+        None => {
+            let old: Vec<String> = store.get(LEGACY_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+            let mut names: Vec<String> = Vec::new();
+            for n in old {
+                let form = name_form(&n);
+                if !form.is_empty() && !names.contains(&form) {
+                    names.push(form);
+                }
+            }
+            let extra = names.len().saturating_sub(LEGACY_MAX);
+            names.drain(..extra);
+            if names.is_empty() {
+                Vec::new()
+            } else {
+                vec![Retired { scope: GLOBAL_SCOPE.to_string(), names }]
+            }
+        }
     }
-    Ok(())
+}
+
+/// Case and spaces do not tell two names apart.
+fn name_form(name: &str) -> String {
+    name.chars().filter(|c| !c.is_whitespace()).flat_map(char::to_lowercase).collect()
+}
+
+/// Where a workspace of `project` would be kept under `place`, as the record's scope.
+pub fn retired_scope(place: &Place, project: &Project) -> String {
+    let folder = workspace_path(place, project, "x");
+    name_key(&folder.parent().unwrap_or(&folder).to_string_lossy())
+}
+
+pub fn retired_names(store: &Store, scope: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for r in retired_all(store) {
+        if r.scope == scope || r.scope == GLOBAL_SCOPE {
+            for n in r.names {
+                if !out.contains(&n) {
+                    out.push(n);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Every name the suggestion list can make, read back through the public picker (one pair per seed).
+fn suggestion_list() -> &'static std::collections::HashSet<String> {
+    static LIST: OnceLock<std::collections::HashSet<String>> = OnceLock::new();
+    LIST.get_or_init(|| (0..4096u64).map(|seed| creature_name(&[], seed)).collect())
+}
+
+/// Is `name` one the suggestion list made (a numbered round, `amber-otter-2`, included)?
+fn from_suggestions(name: &str) -> bool {
+    let form = name_form(name);
+    let base = match form.rsplit_once('-') {
+        Some((b, n)) if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) => b,
+        _ => form.as_str(),
+    };
+    suggestion_list().contains(base)
+}
+
+/// Keeps `name` as retired in `scope` when the suggestion list made it; any other name is left alone.
+pub fn retire_name(store: &Store, scope: &str, name: &str) -> Result<(), String> {
+    if !from_suggestions(name) {
+        return Ok(());
+    }
+    let form = name_form(name);
+    let mut all = retired_all(store);
+    let at = match all.iter().position(|r| r.scope == scope) {
+        Some(i) => i,
+        None => {
+            all.push(Retired { scope: scope.to_string(), names: Vec::new() });
+            all.len() - 1
+        }
+    };
+    if all[at].names.contains(&form) {
+        return Ok(());
+    }
+    all[at].names.push(form);
+    let extra = all[at].names.len().saturating_sub(RETIRED_PER_SCOPE);
+    all[at].names.drain(..extra);
+    // the oldest scopes go first; the old global names are never one of them
+    while all.iter().filter(|r| r.scope != GLOBAL_SCOPE).count() > RETIRED_SCOPES {
+        match all.iter().position(|r| r.scope != GLOBAL_SCOPE) {
+            Some(i) => {
+                all.remove(i);
+            }
+            None => break,
+        }
+    }
+    store.set(RETIRED_KEY, &serde_json::to_string(&all).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
 /// A creature name in use nowhere, now or before (SESS-023).
 #[cfg(test)]
-pub fn fresh_name(git: &Git, store: &Store, projects: &[Project], seed: u64) -> String {
-    pick_name(store, names_in_use(git, projects), seed)
+pub fn fresh_name(git: &Git, store: &Store, projects: &[Project], scope: &str, seed: u64) -> String {
+    pick_name(store, scope, names_in_use(git, projects), seed)
 }
 
-/// A creature name outside `taken` (the names Git has in use) and every retired one.
-fn pick_name(store: &Store, mut taken: Vec<String>, seed: u64) -> String {
-    taken.extend(retired_names(store));
+/// A creature name outside `taken` (the names Git has in use), the hand-typed ones and every name
+/// retired in `scope`.
+fn pick_name(store: &Store, scope: &str, mut taken: Vec<String>, seed: u64) -> String {
+    taken.extend(retired_names(store, scope));
+    taken.extend(typed_names(store));
     creature_name(&taken, seed)
 }
 
@@ -861,9 +1022,7 @@ pub fn create_fresh_workspace<S: std::ops::Deref<Target = Store>>(git: &Git, loc
     let taken = names_in_use(git, projects);
     let name = {
         let store = lock()?;
-        let name = pick_name(&store, taken, seed);
-        remember_retired(&store, &name)?;
-        name
+        pick_name(&store, &retired_scope(place, project), taken, seed)
     };
     let made = create_workspace(git, place, project, &name, base)?.worktree;
     note_seen(&*lock()?, project, &made.path)?;
@@ -1361,8 +1520,9 @@ pub fn workspace_remove_check(git: State<'_, Git>, store: StoreState<'_>, projec
 }
 
 /// PROJ-070: deletes the workspace only when the check made just now still matches `stamp` (what
-/// the question showed) and nothing refuses it; `force` loses uncommitted changes.
-#[tauri::command]
+/// the question showed) and nothing refuses it; `force` loses uncommitted changes. Async (T-033-e
+/// FIX-1): it joins the watch's reader threads and runs git, never on the window's thread.
+#[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: State<'_, crate::terminal::Terminals>, project_id: String, path: String, force: bool, stamp: String) -> Result<(), String> {
     let project = {
@@ -1379,8 +1539,17 @@ pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: S
         let n = stopped.stuck.len();
         return Err(format!("{n} process{} in this workspace did not stop. Tick Delete my changes too to delete it anyway, leaving {} running.", if n == 1 { "" } else { "es" }, if n == 1 { "it" } else { "them" }));
     }
+    // T-033-e: the Source Control watch on this folder ends first and its folder handles are
+    // closed (joined) before git deletes the folder, so nothing of ours stands in the way.
+    let watch = crate::scm::watch::unwatch_root(Path::new(&path));
     let keep = keeps_branch(&*store.lock().map_err(|e| e.to_string())?, &path);
-    remove_worktree(&git, &project, &path, force, keep)?;
+    if let Err(e) = remove_worktree(&git, &project, &path, force, keep) {
+        // FIX-1: the folder stays after all, so its panel is told to watch it again.
+        if let Some(w) = watch {
+            w.tell_page();
+        }
+        return Err(e);
+    }
     let store = store.lock().map_err(|e| e.to_string())?;
     forget_workspace(&store, &path)
 }
@@ -1468,8 +1637,9 @@ pub fn handoff_note_prepare(root: String, name: String) -> Result<String, String
 /// folders sessions run in) uses are dropped from Git's list. Only Git's own record goes, never a
 /// folder or a branch. A folder counts as gone only when its drive or share is there and the
 /// folder is not: storage that cannot be reached (a drive unplugged, a share offline) keeps it.
-/// The paths forgotten.
-pub fn forget_gone(repo: &Path, all: &[Worktree], busy: &[String]) -> Vec<String> {
+/// The paths forgotten; `on_forgotten` hears each one (the caller retires its suggested name, which
+/// only the caller can do without holding the store through the git work).
+pub fn forget_gone(repo: &Path, all: &[Worktree], busy: &[String], on_forgotten: impl Fn(&str)) -> Vec<String> {
     let used = |w: &Worktree| {
         let k = name_key(&w.path);
         busy.iter().map(|b| name_key(b)).any(|b| b == k || b.starts_with(&format!("{k}\\")))
@@ -1482,7 +1652,10 @@ pub fn forget_gone(repo: &Path, all: &[Worktree], busy: &[String]) -> Vec<String
     all.iter()
         .filter(|w| !w.is_main && !used(w) && gone(Path::new(&w.path)))
         .filter(|w| forget_record(repo, &w.path).is_ok())
-        .map(|w| w.path.clone())
+        .map(|w| {
+            on_forgotten(&w.path);
+            w.path.clone()
+        })
         .collect()
 }
 
@@ -1510,6 +1683,23 @@ fn kolux_made(origins: &serde_json::Map<String, serde_json::Value>, all: Vec<Wor
     all.into_iter().filter(|w| origins.contains_key(&name_key(&w.path))).collect()
 }
 
+/// The sweep over one project's worktrees: `forget_gone`, and what Kolux remembers about each one
+/// it forgets goes too, the same as when the user removes the workspace. The store is locked only
+/// for each forgotten path, never while Git works. When what Kolux remembers cannot be cleared (the
+/// store is locked up or a write failed) the line goes to the diagnostics log in `diag_dir`, so the
+/// leftover note or origin that a later worktree at the same path would inherit can be traced.
+fn sweep_gone(store: &Mutex<Store>, repo: &Path, all: &[Worktree], busy: &[String], diag_dir: Option<&Path>) -> Vec<String> {
+    forget_gone(repo, all, busy, |path| {
+        let cleared = match store.lock() {
+            Ok(store) => forget_workspace(&store, path),
+            Err(_) => Err("the store is locked up by a failed task".to_string()),
+        };
+        if let (Err(why), Some(dir)) = (cleared, diag_dir) {
+            crate::diag::write(dir, &format!("forgot the worktree {path} from Git but could not clear what Kolux remembers about it: {why}"));
+        }
+    })
+}
+
 /// APP-051 at launch, off the startup path: every project's gone worktrees that Kolux RS made are
 /// forgotten.
 pub fn forget_gone_at_start(app: tauri::AppHandle) {
@@ -1521,17 +1711,313 @@ pub fn forget_gone_at_start(app: tauri::AppHandle) {
         };
         let busy: Vec<String> = app.state::<crate::terminal::Terminals>().list().into_iter().filter_map(|(_, _, dir)| dir).collect();
         let git = app.state::<Git>();
+        let dir = app.path().app_data_dir().ok();
         for p in projects {
             let repo = Path::new(&p.path);
             if let Ok(all) = git.worktrees(repo) {
-                for path in forget_gone(repo, &kolux_made(&origins, all), &busy) {
-                    if let Ok(dir) = app.path().app_data_dir() {
-                        crate::diag::write(&dir, &format!("forgot the worktree {path}: its folder is gone and no session uses it"));
+                for path in sweep_gone(&app.state::<Mutex<Store>>(), repo, &kolux_made(&origins, all), &busy, dir.as_deref()) {
+                    if let Some(dir) = dir.as_deref() {
+                        crate::diag::write(dir, &format!("forgot the worktree {path}: its folder is gone and no session uses it"));
                     }
                 }
             }
         }
     });
+}
+
+// ---- PROJ-019: a project's icon, chosen by hand
+//
+// The choice is kept beside the project list (not in it), by project id. Three kinds are accepted:
+// "emoji:<emoji>", "icon:<built-in icon name>" and "image:<data URL of a small picture>". Reset
+// removes the entry, which brings the automatic icon back. An icon name nobody knows is kept as it
+// is (the drawing side shows a folder for it); anything that is none of the three is refused.
+
+const ICONS_KEY: &str = "projectIcons";
+/// The most an image icon may take, as the whole value.
+pub const ICON_IMAGE_MAX: usize = 64 * 1024;
+const ICON_IMAGE_TYPES: &[&str] = &["png", "jpeg", "gif", "webp", "svg+xml"];
+
+/// What a typed or picked icon becomes: `None` for empty (reset), the cleaned value, or why not.
+pub fn clean_icon(raw: &str) -> Result<Option<String>, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let refuse = || "An icon is an emoji, a built-in icon or a small picture.".to_string();
+    let (kind, rest) = raw.split_once(':').ok_or_else(refuse)?;
+    match kind {
+        "emoji" => {
+            let one = !rest.is_empty() && rest.len() <= 32 && rest.chars().all(|c| !c.is_ascii() && !c.is_alphanumeric() && !c.is_whitespace() && !c.is_control());
+            if one { Ok(Some(raw.to_string())) } else { Err("That is not an emoji.".to_string()) }
+        }
+        "icon" => {
+            let name = rest.trim().to_lowercase();
+            if !name.is_empty() && name.len() <= 32 && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+                Ok(Some(format!("icon:{name}")))
+            } else {
+                Err("That is not a built-in icon name.".to_string())
+            }
+        }
+        "image" => {
+            let bad = || "A picture icon has to be a PNG, JPEG, GIF, WebP or SVG image.".to_string();
+            let body = rest.strip_prefix("data:image/").ok_or_else(bad)?;
+            let (mime, data) = body.split_once(";base64,").ok_or_else(bad)?;
+            if !ICON_IMAGE_TYPES.contains(&mime) || data.is_empty() || !data.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=')) {
+                return Err(bad());
+            }
+            if raw.len() > ICON_IMAGE_MAX {
+                return Err(format!("That picture is too large; an icon may take {} KB at most.", ICON_IMAGE_MAX / 1024));
+            }
+            Ok(Some(raw.to_string()))
+        }
+        _ => Err(refuse()),
+    }
+}
+
+type Icons = std::collections::BTreeMap<String, String>;
+
+/// Every project's chosen icon by project id. A damaged record, or an entry that no longer passes
+/// `clean_icon`, simply gives nothing, so that project shows its automatic icon.
+pub fn project_icons(store: &Store) -> Icons {
+    let all: Icons = store.get(ICONS_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+    all.into_iter().filter(|(_, v)| matches!(clean_icon(v), Ok(Some(c)) if &c == v)).collect()
+}
+
+fn save_icons(store: &Store, icons: &Icons) -> Result<(), String> {
+    store.set(ICONS_KEY, &serde_json::to_string(icons).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+/// Saves (or with an empty `raw`, resets) the icon of project `id`; returns what is now kept.
+pub fn set_icon(store: &Store, id: &str, raw: &str) -> Result<Option<String>, String> {
+    find_project(store, id)?;
+    let icon = clean_icon(raw)?;
+    let mut icons = project_icons(store);
+    match &icon {
+        Some(i) => icons.insert(id.to_string(), i.clone()),
+        None => icons.remove(id),
+    };
+    save_icons(store, &icons)?;
+    Ok(icon)
+}
+
+#[tauri::command]
+#[allow(dead_code)] // T-299: registered by the lib.rs hunk the coordinator applies
+pub fn project_icons_list(store: StoreState<'_>) -> Result<Icons, String> {
+    Ok(project_icons(&*store.lock().map_err(|e| e.to_string())?))
+}
+
+#[tauri::command]
+#[allow(dead_code)] // T-299: registered by the lib.rs hunk the coordinator applies
+pub fn project_icon_set(store: StoreState<'_>, project_id: String, icon: String) -> Result<Option<String>, String> {
+    set_icon(&*store.lock().map_err(|e| e.to_string())?, &project_id, &icon)
+}
+
+// ---- PROJ-018: an icon found in the repository
+//
+// Places are tried in this order, the first hit wins: a small favicon inside the repository, icons
+// of desktop app bundles, an image the package manifest names on the web, the favicon of the
+// homepage the manifest names, the icon links declared in the page source, and last the avatar of
+// the owner on the hosting site. Only files inside the repository are read (never through a link
+// or a `..`), and a file over `AUTO_ICON_FILE_MAX` is passed over. Nothing is fetched here: a web
+// address is handed to the page, which loads it like any picture. No hit gives the folder symbol.
+
+/// The most a file may take to be used as an icon (a 64 KB data URL once encoded).
+pub const AUTO_ICON_FILE_MAX: u64 = 48 * 1024;
+const FAVICON_DIRS: &[&str] = &["", "public", "static", "assets", "src", "app", "web", "www", "docs", "site"];
+const FAVICON_NAMES: &[&str] = &["favicon.ico", "favicon.png", "favicon.svg"];
+const BUNDLE_ICONS: &[&str] = &[
+    "src-tauri/icons/icon.png",
+    "src-tauri/icons/128x128.png",
+    "build/icon.png",
+    "build/icons/512x512.png",
+    "electron/icon.png",
+    "resources/icon.png",
+    "assets/icon.png",
+    "app-icon.png",
+    "icon.png",
+];
+const PAGE_FILES: &[&str] = &["index.html", "public/index.html", "src/index.html", "app/index.html", "static/index.html", "web/index.html"];
+const PAGE_READ_MAX: u64 = 256 * 1024;
+
+/// What a project shows when the repository holds an icon: a picture as a data URL (`image`), or a
+/// web address the page loads itself (`remote` for a picture on the web, `avatar` for the owner's).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct AutoIcon {
+    pub kind: &'static str,
+    pub src: String,
+}
+
+/// The picture type of `bytes`, by what the file starts with (the name only decides for SVG).
+fn image_mime(bytes: &[u8], name: &str) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF8") {
+        Some("image/gif")
+    } else if bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else if bytes.starts_with(&[0, 0, 1, 0]) {
+        Some("image/x-icon")
+    } else if name.to_ascii_lowercase().ends_with(".svg") && String::from_utf8_lossy(&bytes[..bytes.len().min(2048)]).contains("<svg") {
+        Some("image/svg+xml")
+    } else {
+        None
+    }
+}
+
+/// The picture at `rel` inside `repo` as a data URL; nothing for a path that leaves the repository,
+/// goes through a link, is not a plain small picture file, or does not exist.
+fn repo_image(repo: &Path, rel: &str) -> Option<String> {
+    let rel = rel.split(['?', '#']).next().unwrap_or("").trim().trim_start_matches(['/', '\\']);
+    if rel.is_empty() || rel.contains(':') || rel.split(['/', '\\']).any(|p| p.is_empty() || p == ".." || p == ".") {
+        return None;
+    }
+    let path = rel.split(['/', '\\']).fold(repo.to_path_buf(), |p, part| p.join(part));
+    let meta = fs::symlink_metadata(&path).ok()?;
+    if !meta.is_file() || meta.len() == 0 || meta.len() > AUTO_ICON_FILE_MAX {
+        return None;
+    }
+    // a folder on the way may be a link out of the repository
+    if !fs::canonicalize(&path).ok()?.starts_with(fs::canonicalize(repo).ok()?) {
+        return None;
+    }
+    let bytes = fs::read(&path).ok()?;
+    use base64::Engine as _;
+    let mime = image_mime(&bytes, rel)?;
+    Some(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes)))
+}
+
+/// `https://host[:port]` of a web address, and only that: a plain host, no login, no odd characters.
+fn web_origin(url: &str) -> Option<String> {
+    let rest = url.trim().strip_prefix("https://")?;
+    let host = rest.split(['/', '?', '#']).next()?;
+    let ok = !host.is_empty() && host.len() <= 253 && host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'));
+    ok.then(|| format!("https://{host}"))
+}
+
+/// A web address kept only when it is plain `https` with no spaces or quotes.
+fn web_address(url: &str) -> Option<String> {
+    let url = url.trim();
+    (web_origin(url).is_some() && url.len() <= 2048 && !url.chars().any(|c| c.is_whitespace() || c.is_control() || matches!(c, '"' | '\'' | '<' | '>' | '\\'))).then(|| url.to_string())
+}
+
+/// The `href` of every icon link (`rel` holding "icon") in the page text.
+fn icon_links(page: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let lower = page.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(at) = lower[from..].find("<link") {
+        let start = from + at;
+        let end = lower[start..].find('>').map_or(lower.len(), |e| start + e);
+        let tag = &page[start..end];
+        let attr = |name: &str| {
+            let low = tag.to_ascii_lowercase();
+            let at = low.find(&format!("{name}="))?;
+            let rest = &tag[at + name.len() + 1..];
+            let quote = rest.chars().next().filter(|c| *c == '"' || *c == '\'');
+            match quote {
+                Some(q) => rest[1..].split(q).next().map(str::to_string),
+                None => rest.split(|c: char| c.is_whitespace() || c == '>').next().map(str::to_string),
+            }
+        };
+        if attr("rel").is_some_and(|r| r.to_ascii_lowercase().contains("icon")) {
+            found.extend(attr("href"));
+        }
+        from = end.max(start + 5);
+    }
+    found
+}
+
+/// (host, owner, repository) of a remote address on the forms Git accepts, host in lower case.
+fn remote_parts(url: &str) -> Option<(String, String, String)> {
+    let url = url.trim();
+    let path = if let Some(rest) = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).or_else(|| url.strip_prefix("ssh://")).or_else(|| url.strip_prefix("git://")) {
+        let (host, path) = rest.split_once('/')?;
+        (host.rsplit('@').next()?.split(':').next()?.to_string(), path.to_string())
+    } else {
+        let rest = url.split_once('@').map_or(url, |(_, r)| r);
+        let (host, path) = rest.split_once(':')?;
+        (host.to_string(), path.to_string())
+    };
+    let mut parts = path.1.trim_matches('/').split('/');
+    let (owner, repo) = (parts.next()?, parts.next()?);
+    let repo = repo.strip_suffix(".git").unwrap_or(repo);
+    let plain = |s: &str| !s.is_empty() && s.len() <= 100 && !s.chars().all(|c| c == '.') && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    (path.0.contains('.') && plain(owner) && plain(repo) && parts.next().is_none()).then(|| (path.0.to_ascii_lowercase(), owner.to_string(), repo.to_string()))
+}
+
+/// The avatar address of the repository's owner on the hosting site. A fork shows the upstream
+/// owner's avatar; a fork that was renamed (its name differs from upstream's) shows its own owner's.
+fn owner_avatar(origin: Option<&str>, upstream: Option<&str>) -> Option<String> {
+    let own = origin.and_then(remote_parts);
+    let up = upstream.and_then(remote_parts);
+    let chosen = match (&own, &up) {
+        (Some(o), Some(u)) if u.0 == o.0 && u.2.eq_ignore_ascii_case(&o.2) => u,
+        (Some(o), _) => o,
+        (None, Some(u)) => u,
+        (None, None) => return None,
+    };
+    (chosen.0 == "github.com").then(|| format!("https://github.com/{}.png", chosen.1))
+}
+
+/// The icon the repository at `repo` offers, trying the places in order; `None` means the folder symbol.
+pub fn auto_icon(repo: &Path) -> Option<AutoIcon> {
+    let image = |src: String| AutoIcon { kind: "image", src };
+    let remote = |src: String| AutoIcon { kind: "remote", src };
+    for dir in FAVICON_DIRS {
+        for name in FAVICON_NAMES {
+            let rel = if dir.is_empty() { name.to_string() } else { format!("{dir}/{name}") };
+            if let Some(src) = repo_image(repo, &rel) {
+                return Some(image(src));
+            }
+        }
+    }
+    if let Some(src) = BUNDLE_ICONS.iter().find_map(|rel| repo_image(repo, rel)) {
+        return Some(image(src));
+    }
+    let manifest: Option<serde_json::Value> = fs::metadata(repo.join("package.json"))
+        .ok()
+        .filter(|m| m.is_file() && m.len() <= PAGE_READ_MAX)
+        .and_then(|_| fs::read_to_string(repo.join("package.json")).ok())
+        .and_then(|t| serde_json::from_str(&t).ok());
+    let icon_field = manifest.as_ref().and_then(|m| m["icon"].as_str());
+    if let Some(src) = icon_field.and_then(web_address) {
+        return Some(remote(src));
+    }
+    if let Some(src) = icon_field.and_then(|rel| repo_image(repo, rel)) {
+        return Some(image(src));
+    }
+    if let Some(origin) = manifest.as_ref().and_then(|m| m["homepage"].as_str()).and_then(web_origin) {
+        return Some(remote(format!("{origin}/favicon.ico")));
+    }
+    for page in PAGE_FILES {
+        let Ok(meta) = fs::metadata(repo.join(page)) else { continue };
+        if !meta.is_file() || meta.len() > PAGE_READ_MAX {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(repo.join(page)) else { continue };
+        let beside = page.rsplit_once('/').map_or("", |(d, _)| d);
+        for href in icon_links(&text) {
+            if let Some(src) = web_address(&href) {
+                return Some(remote(src));
+            }
+            let from_root = href.starts_with('/');
+            let rel = if from_root || beside.is_empty() { href.clone() } else { format!("{beside}/{href}") };
+            if let Some(src) = repo_image(repo, &rel).or_else(|| from_root.then(|| repo_image(repo, &format!("public/{}", href.trim_start_matches('/')))).flatten()) {
+                return Some(image(src));
+            }
+        }
+    }
+    let url = |name: &str| crate::git::run(&["remote", "get-url", name], Some(repo)).ok();
+    owner_avatar(url("origin").as_deref(), url("upstream").as_deref()).map(|src| AutoIcon { kind: "avatar", src })
+}
+
+/// The automatic icon of project `project_id` (PROJ-018). Reads files off the thread that holds the store.
+#[tauri::command]
+pub async fn project_auto_icon(store: StoreState<'_>, project_id: String) -> Result<Option<AutoIcon>, String> {
+    let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
+    Ok(auto_icon(Path::new(&project.path)))
 }
 
 #[cfg(test)]
@@ -1558,7 +2044,7 @@ mod tests {
             away.path = format!("{letter}:/unplugged/wt");
             all.push(away);
         }
-        let forgot = forget_gone(&repo, &all, &busy);
+        let forgot = forget_gone(&repo, &all, &busy, |_| {});
         assert_eq!(forgot.len(), 1, "{forgot:?}");
         assert!(name_key(&forgot[0]).ends_with("gone"));
         let left: Vec<String> = git.worktrees(&repo).unwrap().iter().map(|w| name_key(&w.path)).collect();
@@ -1583,7 +2069,7 @@ mod tests {
         fs::remove_dir_all(base.join("theirs")).unwrap();
         let git = Git::detect().unwrap();
         let all = git.worktrees(&repo).unwrap();
-        let forgot = forget_gone(&repo, &kolux_made(&load_origins(&store), all), &[]);
+        let forgot = forget_gone(&repo, &kolux_made(&load_origins(&store), all), &[], |_| {});
         assert_eq!(forgot.len(), 1, "{forgot:?}");
         assert!(name_key(&forgot[0]).ends_with("ours"));
         let left: Vec<String> = git.worktrees(&repo).unwrap().iter().map(|w| name_key(&w.path)).collect();
@@ -1605,7 +2091,7 @@ mod tests {
         fs::remove_dir_all(&wt).unwrap();
         let git = Git::detect().unwrap();
         let all = git.worktrees(&repo).unwrap();
-        assert_eq!(forget_gone(&repo, &all, &[]), Vec::<String>::new());
+        assert_eq!(forget_gone(&repo, &all, &[], |_| {}), Vec::<String>::new());
         let admin = repo.join(".git").join("worktrees");
         let kept: Vec<_> = fs::read_dir(&admin).unwrap().flatten().filter(|e| e.path().join("locked").exists()).collect();
         assert_eq!(kept.len(), 1, "the locked record under {} is still there", admin.display());
@@ -2274,6 +2760,426 @@ mod tests {
     }
 
     #[test]
+    fn proj023_a_suggestion_skips_every_name_in_use_in_any_project_whatever_its_case() {
+        let git = Git::detect().unwrap();
+        let profile = temp("suggest-profile");
+        let store = Store::open(&profile).unwrap();
+        let (repo_a, repo_b) = (temp_repo("suggest-a"), temp_repo("suggest-b"));
+        let (root_a, root_b) = (temp("suggest-root-a"), temp("suggest-root-b"));
+        let a = add_project(&git, &store, &repo_a).unwrap();
+        let b = add_project(&git, &store, &repo_b).unwrap();
+        let place_a = nested(&root_a);
+        let ask = |seed: u64| suggest_name(&git, || Ok(&store), &place_a, &a, seed).unwrap();
+
+        let first = ask(11);
+        assert_eq!(first, first.to_lowercase(), "lowercase");
+        assert_eq!(ask(11), first, "asking records nothing: the same name is offered again");
+        assert!(retired_names(&store, &retired_scope(&place_a, &a)).is_empty(), "a suggestion nobody uses costs no name");
+
+        // The name is in use by a workspace of the OTHER project: never offered to this one.
+        create_workspace(&git, &nested(&root_b), &b, &first, None).unwrap();
+        let second = ask(11);
+        assert_ne!(second, first);
+
+        // Under a branch prefix the folder differs, but the last part of the branch still counts.
+        let third_dir = root_a.join("wt3");
+        git_in(&repo_a, &["worktree", "add", "-q", "-b", &format!("kolux/{second}"), &third_dir.to_string_lossy()]);
+        let third = ask(11);
+        assert!(![&first, &second].contains(&&third), "{third}");
+
+        // A shown name typed by hand counts too, whatever its case.
+        let made = create_workspace(&git, &nested(&root_a), &a, "plain", None).unwrap().worktree;
+        set_name(&store, &made.path, Some(&third.to_uppercase())).unwrap();
+        let fourth = ask(11);
+        assert!(![&first, &second, &third].contains(&&fourth), "{fourth}");
+
+        drop(store);
+        for d in [profile, repo_a, repo_b, root_a, root_b] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj024_only_suggested_names_are_retired_per_scope_ignoring_case_and_spaces() {
+        let profile = temp("retire-profile");
+        let store = Store::open(&profile).unwrap();
+        let (flat_a, flat_b) = (Project { id: "a".into(), name: "alpha".into(), path: "C:/alpha".into(), workspaces_dir: None, base: None }, Project { id: "b".into(), name: "beta".into(), path: "C:/beta".into(), workspaces_dir: None, base: None });
+        let flat = Place { root: PathBuf::from("C:/ws"), flat: true, prefix: String::new(), prefix_warning: None, refresh: false };
+        let nest = Place { root: PathBuf::from("C:/ws"), flat: false, prefix: String::new(), prefix_warning: None, refresh: false };
+        let (fa, fb) = (retired_scope(&flat, &flat_a), retired_scope(&flat, &flat_b));
+        assert_eq!(fa, fb, "flat layout: projects sharing the workspaces folder share their retired names");
+        let (na, nb) = (retired_scope(&nest, &flat_a), retired_scope(&nest, &flat_b));
+        assert_ne!(na, nb, "nested layout: each project keeps its own");
+
+        // Delete a suggested name, a numbered one, and a freely typed one.
+        let first = creature_name(&[], 3);
+        forget_workspace(&store, &format!("C:/ws/alpha/{first}")).unwrap();
+        forget_workspace(&store, "C:/ws/alpha/login-fix").unwrap();
+        let numbered = creature_name(&(0..676).map(|s| creature_name(&[], s)).collect::<Vec<_>>(), 3);
+        assert!(numbered.ends_with("-2"));
+        forget_workspace(&store, &format!("C:/ws/alpha/{numbered}")).unwrap();
+        assert_eq!(retired_names(&store, &na), vec![first.clone(), numbered.clone()], "login-fix was typed freely: not kept");
+        assert!(retired_names(&store, &nb).is_empty(), "another project's nested folder is untouched");
+
+        // Retired names survive a restart and are skipped for any seed, case and spaces ignored.
+        drop(store);
+        let store = Store::open(&profile).unwrap();
+        retire_name(&store, &na, &first.to_uppercase().replace('-', " - ")).unwrap();
+        assert_eq!(retired_names(&store, &na).len(), 2, "same name once: spaces differ, hyphen is the name");
+        for seed in 0..700u64 {
+            let pick = pick_name(&store, &na, vec![], seed);
+            assert_ne!(pick, first, "seed {seed}");
+        }
+        // The shown (typed) name of the deleted workspace counts too when it is a suggested one.
+        let other = creature_name(std::slice::from_ref(&first), 3);
+        set_name(&store, "C:/ws/alpha/folder-x", Some(&other.to_uppercase())).unwrap();
+        forget_workspace(&store, "C:/ws/alpha/folder-x").unwrap();
+        assert!(retired_names(&store, &na).contains(&other));
+
+        // Flat layout: both projects see the one record.
+        forget_workspace(&store, &format!("C:/ws/{first}")).unwrap();
+        assert_eq!(retired_names(&store, &fa), vec![first.clone()]);
+        assert_eq!(retired_names(&store, &fb), retired_names(&store, &fa));
+        drop(store);
+        let _ = fs::remove_dir_all(profile);
+    }
+
+    #[test]
+    fn proj019_an_icon_is_an_emoji_a_built_in_icon_or_a_small_picture() {
+        assert_eq!(clean_icon("  ").unwrap(), None, "empty resets");
+        assert_eq!(clean_icon("emoji:\u{1F680}").unwrap().as_deref(), Some("emoji:\u{1F680}"));
+        assert_eq!(clean_icon("emoji:\u{1F9D1}\u{200D}\u{1F4BB}").unwrap().as_deref(), Some("emoji:\u{1F9D1}\u{200D}\u{1F4BB}"), "a joined emoji is one emoji");
+        let long = format!("emoji:{}", "\u{1F680}".repeat(9));
+        for bad in ["emoji:", "emoji:rocket", "emoji:\u{e9}", "emoji:\u{1F680} \u{1F680}", long.as_str(), "rocket", "html:<b>", "icon:", "icon:Rock et", "icon:../x"] {
+            assert!(clean_icon(bad).is_err(), "{bad}");
+        }
+        assert_eq!(clean_icon("icon:Rocket").unwrap().as_deref(), Some("icon:rocket"));
+        assert_eq!(clean_icon("icon:no-such-icon-9").unwrap().as_deref(), Some("icon:no-such-icon-9"), "an unknown name is kept: the drawing side shows a folder");
+        assert!(clean_icon("image:data:image/png;base64,iVBORw0KGgo=").unwrap().is_some());
+        for bad in ["image:https://example.com/a.png", "image:data:text/html;base64,PGI+", "image:data:image/png;base64,", "image:data:image/png;base64,<script>", "image:data:image/bmp;base64,AAAA"] {
+            assert!(clean_icon(bad).is_err(), "{bad}");
+        }
+        // The size limit is about the whole value, at its edge.
+        let head = "image:data:image/png;base64,";
+        let fits = format!("{head}{}", "A".repeat(ICON_IMAGE_MAX - head.len()));
+        let over = format!("{fits}A");
+        assert!(clean_icon(&fits).is_ok());
+        assert!(clean_icon(&over).unwrap_err().contains("too large"));
+    }
+
+    #[test]
+    fn proj019_a_chosen_icon_stays_after_a_restart_and_reset_brings_the_automatic_one_back() {
+        let git = Git::detect().unwrap();
+        let profile = temp("icon-profile");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("icon-repo");
+        let project = add_project(&git, &store, &repo).unwrap();
+        assert!(project_icons(&store).is_empty(), "no choice yet: the automatic icon");
+        assert_eq!(set_icon(&store, &project.id, "icon:rocket").unwrap().as_deref(), Some("icon:rocket"));
+        assert!(set_icon(&store, &project.id, "emoji:abc").is_err());
+        assert!(set_icon(&store, "no-such", "icon:rocket").is_err());
+        drop(store);
+        let store = Store::open(&profile).unwrap();
+        assert_eq!(project_icons(&store).get(&project.id).map(String::as_str), Some("icon:rocket"), "still there after a restart");
+        // A damaged record, or an entry that no longer passes, gives the automatic icon.
+        store.set(ICONS_KEY, "[1,2").unwrap();
+        assert!(project_icons(&store).is_empty());
+        store.set(ICONS_KEY, &format!("{{\"{}\": \"emoji:x\", \"keep\": \"icon:bug\"}}", project.id)).unwrap();
+        assert_eq!(project_icons(&store).len(), 1);
+        set_icon(&store, &project.id, "icon:rocket").unwrap();
+        assert_eq!(set_icon(&store, &project.id, "").unwrap(), None);
+        assert!(!project_icons(&store).contains_key(&project.id), "reset removes the choice");
+        set_icon(&store, &project.id, "emoji:\u{1F680}").unwrap();
+        forget_projects(&store, std::slice::from_ref(&project.id)).unwrap();
+        assert!(!project_icons(&store).contains_key(&project.id), "a forgotten project's choice goes with it");
+        drop(store);
+        for d in [profile, repo] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn fix1_a_worktree_deleted_outside_kolux_retires_its_name_when_the_sweep_forgets_it() {
+        let base = temp("fix1-gone");
+        let repo = base.join("r");
+        init_repo(&repo);
+        let name = creature_name(&[], 3);
+        let folder = base.join("ws").join(&name);
+        git_in(&repo, &["worktree", "add", "-q", &folder.to_string_lossy(), "-b", &name]);
+        fs::remove_dir_all(&folder).unwrap();
+        let store = Store::open(&base.join("db")).unwrap();
+        let git = Git::detect().unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        let forgot = forget_gone(&repo, &all, &[], |p| retire_workspace_names(&store, p).unwrap());
+        assert_eq!(forgot.len(), 1, "{forgot:?}");
+        let scope = name_key(&base.join("ws").to_string_lossy());
+        assert_eq!(retired_names(&store, &scope), vec![name_form(&name)], "the name is retired in the folder it lived in");
+        assert_ne!(pick_name(&store, &scope, vec![], 3), name, "and is not suggested again");
+        // a worktree a session still uses (busy) is left alone: nothing is forgotten or retired
+        let busy = base.join("ws").join("kept");
+        git_in(&repo, &["worktree", "add", "-q", &busy.to_string_lossy(), "-b", "kept"]);
+        fs::remove_dir_all(&busy).unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        let forgot = forget_gone(&repo, &all, &[busy.to_string_lossy().into_owned()], |p| retire_workspace_names(&store, p).unwrap());
+        assert!(forgot.is_empty());
+        assert_eq!(retired_names(&store, &scope).len(), 1);
+        drop(store);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn fix2_the_sweep_clears_the_same_record_as_a_removal_by_the_user() {
+        let base = temp("fix2-sweep");
+        let repo = base.join("r");
+        init_repo(&repo);
+        let git = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&base.join("db")).unwrap());
+        let creature = creature_name(&[], 3);
+        let (gone, kept) = (base.join("ws").join(&creature), base.join("ws").join("kept-one"));
+        for f in [&gone, &kept] {
+            let branch = f.file_name().unwrap().to_string_lossy().to_string();
+            git_in(&repo, &["worktree", "add", "-q", &f.to_string_lossy(), "-b", &branch]);
+        }
+        let (gone_p, kept_p) = (gone.to_string_lossy().to_string(), kept.to_string_lossy().to_string());
+        {
+            let s = store.lock().unwrap();
+            for p in [&gone_p, &kept_p] {
+                set_name(&s, p, Some("typed name")).unwrap();
+                set_parent(&s, p, Some("C:/ws/parent")).unwrap();
+                save_workspace_note(&s, p, "handoff text").unwrap();
+                set_origin(&s, p, Some(&serde_json::json!({"issue": 7}))).unwrap();
+            }
+        }
+        fs::remove_dir_all(&gone).unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        assert_eq!(sweep_gone(&store, &repo, &all, &[], None), vec![gone_p.clone()]);
+        let s = store.lock().unwrap();
+        // the swept workspace leaves no record, so a new one made at the same path starts clean
+        assert!(!load_names(&s).contains_key(&name_key(&gone_p)), "typed name");
+        let parents: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&s.get(PARENTS_KEY).unwrap().unwrap()).unwrap();
+        assert!(!parents.contains_key(&name_key(&gone_p)) && parents.contains_key(&name_key(&kept_p)), "parent: {parents:?}");
+        assert_eq!(workspace_note(&s, &gone_p).text, "", "note");
+        assert!(!load_origins(&s).contains_key(&name_key(&gone_p)), "origin");
+        // its suggested folder name is still retired in the folder it lived in
+        let scope = name_key(&base.join("ws").to_string_lossy());
+        assert_eq!(retired_names(&s, &scope), vec![name_form(&creature)]);
+        // the one that is still there keeps everything
+        assert!(load_names(&s).contains_key(&name_key(&kept_p)));
+        assert_eq!(workspace_note(&s, &kept_p).text, "handoff text");
+        assert!(load_origins(&s).contains_key(&name_key(&kept_p)));
+        drop(s);
+        drop(store);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Every key a workspace record can live under, for one path, read back as text.
+    fn record_of(store: &Store, path: &str) -> Vec<(String, Option<String>)> {
+        let note = format!("{NOTE_PREFIX}{}", name_key(path));
+        [NAMES_KEY, PARENTS_KEY, ORIGINS_KEY, RETIRED_KEY, LEGACY_KEY, note.as_str()]
+            .iter()
+            .map(|k| (k.to_string(), store.get(k).unwrap()))
+            .collect()
+    }
+
+    fn full_record(store: &Store, path: &str) {
+        set_name(store, path, Some("typed name")).unwrap();
+        set_parent(store, path, Some("C:/ws/parent")).unwrap();
+        save_workspace_note(store, path, "handoff text").unwrap();
+        set_origin(store, path, Some(&serde_json::json!({"issue": 7}))).unwrap();
+    }
+
+    #[test]
+    fn fix3_the_sweep_leaves_the_same_store_as_a_removal_by_the_user_on_a_twin_worktree() {
+        let base = temp("fix3-twin");
+        let repo = base.join("r");
+        init_repo(&repo);
+        let git = Git::detect().unwrap();
+        let creature = creature_name(&[], 5);
+        let folder = base.join("ws").join(&creature);
+        git_in(&repo, &["worktree", "add", "-q", &folder.to_string_lossy(), "-b", &creature]);
+        let path = folder.to_string_lossy().to_string();
+        // two stores hold the identical record for the same worktree; one is swept, one is removed by hand
+        let swept = Mutex::new(Store::open(&base.join("db-swept")).unwrap());
+        let removed = Store::open(&base.join("db-removed")).unwrap();
+        full_record(&swept.lock().unwrap(), &path);
+        full_record(&removed, &path);
+        // (the note carries its save time, so the twins differ there until the record is cleared)
+        let start = record_of(&swept.lock().unwrap(), &path);
+        assert_eq!(start[..3], record_of(&removed, &path)[..3], "names, parents and origins start equal");
+        assert!(start.iter().filter(|(k, _)| k != RETIRED_KEY && k != LEGACY_KEY).all(|(_, v)| v.is_some()), "{start:?}");
+        fs::remove_dir_all(&folder).unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        assert_eq!(sweep_gone(&swept, &repo, &all, &[], None), vec![path.clone()]);
+        forget_workspace(&removed, &path).unwrap();
+        let (a, b) = (record_of(&swept.lock().unwrap(), &path), record_of(&removed, &path));
+        assert_eq!(a, b, "the sweep and a removal leave the same keys behind");
+        assert!(a.iter().any(|(k, v)| k == RETIRED_KEY && v.is_some()), "and the comparison saw a retired name: {a:?}");
+        drop(swept);
+        drop(removed);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn fix3_a_busy_worktree_with_a_full_record_survives_the_sweep_though_its_folder_is_gone() {
+        let base = temp("fix3-busy");
+        let repo = base.join("r");
+        init_repo(&repo);
+        let git = Git::detect().unwrap();
+        let folder = base.join("ws").join("in-use");
+        git_in(&repo, &["worktree", "add", "-q", &folder.to_string_lossy(), "-b", "in-use"]);
+        let path = folder.to_string_lossy().to_string();
+        let store = Mutex::new(Store::open(&base.join("db")).unwrap());
+        full_record(&store.lock().unwrap(), &path);
+        let before = record_of(&store.lock().unwrap(), &path);
+        fs::remove_dir_all(&folder).unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        // a session still runs in a folder inside it, so the sweep must leave Git's record and ours alone
+        let busy = [folder.join("src").to_string_lossy().to_string()];
+        assert!(sweep_gone(&store, &repo, &all, &busy, None).is_empty());
+        assert_eq!(record_of(&store.lock().unwrap(), &path), before, "typed name, parent, note, origin and retired names untouched");
+        assert_eq!(git.worktrees(&repo).unwrap().len(), 2, "Git still lists it");
+        drop(store);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn fix3_a_record_that_cannot_be_cleared_is_written_to_the_diag_file() {
+        let base = temp("fix3-diag");
+        let repo = base.join("r");
+        init_repo(&repo);
+        let git = Git::detect().unwrap();
+        let folder = base.join("ws").join("gone-one");
+        git_in(&repo, &["worktree", "add", "-q", &folder.to_string_lossy(), "-b", "gone-one"]);
+        let path = folder.to_string_lossy().to_string();
+        let profile = base.join("profile");
+        let store = std::sync::Arc::new(Mutex::new(Store::open(&base.join("db")).unwrap()));
+        full_record(&store.lock().unwrap(), &path);
+        // a task that panicked holding the store leaves it poisoned: the record cannot be cleared
+        let held = store.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = held.lock().unwrap();
+            panic!("a task that died holding the store");
+        })
+        .join();
+        assert!(store.lock().is_err(), "the store is poisoned");
+        fs::remove_dir_all(&folder).unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        // Git's record still goes; the failure is not dropped
+        assert_eq!(sweep_gone(&store, &repo, &all, &[], Some(&profile)), vec![path.clone()]);
+        let log = fs::read_to_string(profile.join("logs").join("kolux.log")).unwrap();
+        assert!(log.contains("could not clear what Kolux remembers") && log.contains("gone-one"), "{log}");
+        // and a sweep with nothing wrong writes nothing of the kind
+        let fine = Mutex::new(Store::open(&base.join("db2")).unwrap());
+        let folder2 = base.join("ws").join("gone-two");
+        git_in(&repo, &["worktree", "add", "-q", &folder2.to_string_lossy(), "-b", "gone-two"]);
+        fs::remove_dir_all(&folder2).unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        let profile2 = base.join("profile2");
+        assert_eq!(sweep_gone(&fine, &repo, &all, &[], Some(&profile2)).len(), 1);
+        assert!(!profile2.join("logs").join("kolux.log").exists());
+        drop(fine);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn fix1_names_the_old_list_held_stay_retired_without_a_migration_step() {
+        let profile = temp("fix1-legacy");
+        let store = Store::open(&profile).unwrap();
+        let (old_a, old_b) = (creature_name(&[], 1), creature_name(&[], 2));
+        store.set("creatureNamesUsed", &serde_json::to_string(&[old_a.to_uppercase(), old_b.clone(), old_a.clone()]).unwrap()).unwrap();
+        assert!(store.get(RETIRED_KEY).unwrap().is_none());
+        for scope in ["any-scope", "another"] {
+            let got = retired_names(&store, scope);
+            assert!(got.contains(&name_form(&old_a)) && got.contains(&name_form(&old_b)), "{scope}: {got:?}");
+            assert_eq!(got.len(), 2, "the same name once: {got:?}");
+            assert_ne!(pick_name(&store, scope, vec![], 1), old_a, "{scope}: not suggested again");
+        }
+        // the first new retirement writes the record; the old names go with it into the new key
+        let fresh = creature_name(&[old_a.clone(), old_b.clone()], 9);
+        retire_name(&store, "any-scope", &fresh).unwrap();
+        assert!(store.get(RETIRED_KEY).unwrap().is_some());
+        let got = retired_names(&store, "any-scope");
+        assert_eq!(got.len(), 3, "{got:?}");
+        assert!(retired_names(&store, "another").contains(&name_form(&old_a)), "old names count in every scope");
+        assert!(!retired_names(&store, "another").contains(&name_form(&fresh)), "a new one only in its own");
+        // once the new key exists the old list is not read again
+        store.set("creatureNamesUsed", "[\"zebra-moth\"]").unwrap();
+        assert!(!retired_names(&store, "another").contains(&"zebra-moth".to_string()));
+        // a damaged old list is no list
+        let profile2 = temp("fix1-legacy2");
+        let store2 = Store::open(&profile2).unwrap();
+        store2.set("creatureNamesUsed", "{oops").unwrap();
+        assert!(retired_names(&store2, "x").is_empty());
+        // the scope cap never drops the old names
+        for i in 0..(RETIRED_SCOPES + 5) {
+            retire_name(&store, &format!("s{i}"), &creature_name(&[], 1)).unwrap();
+        }
+        assert!(retired_names(&store, "another").contains(&name_form(&old_a)), "the oldest scope goes, not the old names");
+        drop((store, store2));
+        for d in [profile, profile2] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn fix1_forgetting_a_project_also_forgets_its_setup_card_state() {
+        let git = Git::detect().unwrap();
+        let profile = temp("fix1-forget");
+        let store = Store::open(&profile).unwrap();
+        let (a, b) = (temp_repo("fix1-forget-a"), temp_repo("fix1-forget-b"));
+        for r in [&a, &b] {
+            fs::write(r.join("package.json"), r#"{"packageManager":"pnpm@9"}"#).unwrap();
+        }
+        let (pa, pb) = (add_project(&git, &store, &a).unwrap(), add_project(&git, &store, &b).unwrap());
+        for p in [&pa, &pb] {
+            crate::setup::dismiss_card(&store, &p.id).unwrap();
+            crate::setup::save_suggestion(&store, Path::new(&p.path), "install", "pnpm install", None).unwrap();
+        }
+        forget_projects(&store, std::slice::from_ref(&pa.id)).unwrap();
+        assert!(!crate::setup::card_dismissed(&store, &pa.id) && crate::setup::card_dismissed(&store, &pb.id));
+        assert_eq!(crate::setup::local_setup(&store, Path::new(&pa.path)), None, "the forgotten project's saved setup goes");
+        assert_eq!(crate::setup::local_setup(&store, Path::new(&pb.path)).as_deref(), Some("pnpm install"), "the other stays");
+        drop(store);
+        for d in [profile, a, b] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj024_the_record_is_bounded_and_a_damaged_one_retires_nothing() {
+        let profile = temp("retire-bound");
+        let store = Store::open(&profile).unwrap();
+        // More numbered rounds than the record holds: it stops growing at its limit, newest kept.
+        let mut used: Vec<String> = Vec::new();
+        for _ in 0..(RETIRED_PER_SCOPE + 300) {
+            let n = creature_name(&used, 0);
+            retire_name(&store, "scope", &n).unwrap();
+            used.push(n);
+        }
+        let kept = retired_names(&store, "scope");
+        assert_eq!(kept.len(), RETIRED_PER_SCOPE);
+        assert_eq!(kept.last(), used.last());
+        // Many-scopes: the oldest go.
+        for i in 0..(RETIRED_SCOPES + 20) {
+            retire_name(&store, &format!("s{i}"), &creature_name(&[], 1)).unwrap();
+        }
+        assert!(retired_names(&store, "s0").is_empty() && !retired_names(&store, &format!("s{}", RETIRED_SCOPES + 19)).is_empty());
+        assert!(retired_all(&store).len() <= RETIRED_SCOPES);
+
+        // A damaged record: nothing counts as retired and suggestions carry on; the next retire repairs it.
+        store.set(RETIRED_KEY, "{not json").unwrap();
+        assert!(retired_names(&store, "scope").is_empty());
+        let pick = pick_name(&store, "scope", vec![], 5);
+        assert_eq!(pick, creature_name(&[], 5));
+        store.set(RETIRED_KEY, "[{\"scope\": 4}]").unwrap();
+        assert!(retired_names(&store, "scope").is_empty());
+        retire_name(&store, "scope", &pick).unwrap();
+        assert_eq!(retired_names(&store, "scope"), vec![pick]);
+        drop(store);
+        let _ = fs::remove_dir_all(profile);
+    }
+
+    #[test]
     fn a_fresh_workspace_gets_a_creature_name_that_is_not_in_use() {
         let git = Git::detect().unwrap();
         let profile = temp("profile4");
@@ -2295,15 +3201,17 @@ mod tests {
         }
         let in_use = names_in_use(&git, &projects);
         assert!(in_use.contains(&name_of(&first)) && in_use.contains(&name_of(&second)));
-        // SESS-023: a retired name never comes back, even from the same seed.
+        // SESS-023 / PROJ-024: a deleted workspace's name never comes back, even from the same seed.
+        let scope = retired_scope(&nested(&root), &project);
         remove_workspace(&git, &project, &first.path, false).unwrap();
+        forget_workspace(&store, &first.path).unwrap();
         assert!(!names_in_use(&git, &projects).contains(&name_of(&first)));
         for seed in [0u64, 7, 4242] {
-            assert_ne!(fresh_name(&git, &store, &projects, seed), name_of(&first), "seed {seed}");
+            assert_ne!(fresh_name(&git, &store, &projects, &scope, seed), name_of(&first), "seed {seed}");
         }
-        let x = fresh_name(&git, &store, &projects, 0);
-        remember_retired(&store, &x).unwrap();
-        assert_ne!(fresh_name(&git, &store, &projects, 0), x);
+        let x = fresh_name(&git, &store, &projects, &scope, 0);
+        retire_name(&store, &scope, &x).unwrap();
+        assert_ne!(fresh_name(&git, &store, &projects, &scope, 0), x);
 
         drop(store);
         for d in [profile, repo, root] {
@@ -2588,4 +3496,134 @@ mod tests {
         drop(store);
         fs::remove_dir_all(profile).unwrap();
     }
+    // ---- T-302 / PROJ-018: an icon from the repository
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\nfake-small-picture";
+
+    fn put(root: &Path, rel: &str, bytes: &[u8]) {
+        let p = root.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, bytes).unwrap();
+    }
+
+    fn src_of(i: Option<AutoIcon>, kind: &str) -> String {
+        let i = i.unwrap_or_else(|| panic!("an icon of kind {kind}"));
+        assert_eq!(i.kind, kind, "{i:?}");
+        i.src
+    }
+
+    #[test]
+    fn t302_a_small_favicon_in_the_repository_becomes_the_project_icon() {
+        let repo = temp("t302-fav");
+        put(&repo, "public/favicon.png", PNG);
+        // a later place never beats an earlier one
+        put(&repo, "icon.png", b"\x89PNG\r\n\x1a\nother");
+        let src = src_of(auto_icon(&repo), "image");
+        assert!(src.starts_with("data:image/png;base64,"), "{src}");
+        use base64::Engine as _;
+        let body = src.trim_start_matches("data:image/png;base64,");
+        assert_eq!(base64::engine::general_purpose::STANDARD.decode(body).unwrap(), PNG);
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn t302_places_are_tried_in_the_order_the_card_gives() {
+        let repo = temp("t302-order");
+        // 5th: a link in the page source; 4th: the homepage; 3rd: an image on the web; 2nd: an app bundle
+        put(&repo, "index.html", b"<html><head><link rel=\"icon\" href=\"/img/page.png\"></head></html>");
+        put(&repo, "img/page.png", PNG);
+        assert!(src_of(auto_icon(&repo), "image").starts_with("data:image/png"), "the page link is the last place before the avatar");
+        put(&repo, "package.json", br#"{"homepage":"https://example.org/site/","icon":"https://cdn.example.org/logo.png"}"#);
+        assert_eq!(src_of(auto_icon(&repo), "remote"), "https://cdn.example.org/logo.png", "an image on the web beats the page link");
+        put(&repo, "package.json", br#"{"homepage":"https://example.org/site/"}"#);
+        assert_eq!(src_of(auto_icon(&repo), "remote"), "https://example.org/favicon.ico", "the homepage's favicon beats the page link");
+        put(&repo, "src-tauri/icons/icon.png", PNG);
+        assert!(src_of(auto_icon(&repo), "image").starts_with("data:image/png"), "an app bundle icon beats the web");
+        put(&repo, "favicon.ico", &[0, 0, 1, 0, 1, 0]);
+        assert!(src_of(auto_icon(&repo), "image").starts_with("data:image/x-icon"), "a favicon in the repository beats a bundle");
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn t302_icon_links_in_the_page_source_are_followed_inside_the_repository_only() {
+        let repo = temp("t302-links");
+        put(&repo, "public/index.html", b"<link rel='shortcut icon' href='logo.png'><link rel=\"stylesheet\" href=\"a.css\">");
+        put(&repo, "public/logo.png", PNG);
+        assert!(src_of(auto_icon(&repo), "image").starts_with("data:image/png"));
+        // a link that climbs out of the repository is not followed
+        let repo2 = temp("t302-links2");
+        // the picture sits where the link points: beside the repository, not in it
+        let outside = repo2.parent().unwrap().join(format!("t302-secret-{}.png", std::process::id()));
+        fs::write(&outside, PNG).unwrap();
+        let climb = format!("../{}", outside.file_name().unwrap().to_string_lossy());
+        put(&repo2, "index.html", format!("<link rel=\"icon\" href=\"{climb}\"><link rel=\"icon\" href=\"C:/x/secret.png\">").as_bytes());
+        assert_eq!(auto_icon(&repo2), None);
+        assert_eq!(repo_image(&repo2, &climb), None);
+        assert_eq!(repo_image(&repo2, &climb.replace('/', "\\")), None);
+        // a web address that is not plain https is not used
+        put(&repo2, "index.html", b"<link rel=\"icon\" href=\"http://example.org/a.png\"><link rel=\"icon\" href=\"javascript:alert(1)\">");
+        assert_eq!(auto_icon(&repo2), None);
+        for d in [repo, repo2] {
+            let _ = fs::remove_dir_all(d);
+        }
+        let _ = fs::remove_file(outside);
+    }
+
+    #[test]
+    fn t302_a_file_that_is_too_large_or_not_a_picture_is_passed_over() {
+        let repo = temp("t302-big");
+        let mut big = PNG.to_vec();
+        big.resize(AUTO_ICON_FILE_MAX as usize + 1, 0);
+        put(&repo, "favicon.png", &big);
+        put(&repo, "public/favicon.ico", b"this is not a picture at all");
+        assert_eq!(auto_icon(&repo), None, "both are passed over");
+        // the next place is tried instead
+        put(&repo, "icon.png", PNG);
+        assert!(src_of(auto_icon(&repo), "image").starts_with("data:image/png"));
+        // exactly at the limit still counts
+        let mut edge = PNG.to_vec();
+        edge.resize(AUTO_ICON_FILE_MAX as usize, 0);
+        let repo2 = temp("t302-edge");
+        put(&repo2, "favicon.png", &edge);
+        assert!(src_of(auto_icon(&repo2), "image").starts_with("data:image/png"));
+        // an SVG is told by its text
+        let repo3 = temp("t302-svg");
+        put(&repo3, "favicon.svg", b"<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\"/>");
+        assert!(src_of(auto_icon(&repo3), "image").starts_with("data:image/svg+xml"));
+        for d in [repo, repo2, repo3] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn t302_no_icon_in_the_repository_shows_the_owners_avatar_or_the_folder_symbol() {
+        let repo = temp_repo("t302-avatar");
+        assert_eq!(auto_icon(&repo), None, "no remote: the folder symbol");
+        git_in(&repo, &["remote", "add", "origin", "https://github.com/octo/widget.git"]);
+        assert_eq!(src_of(auto_icon(&repo), "avatar"), "https://github.com/octo.png");
+        // a fork: the upstream owner's avatar wins
+        git_in(&repo, &["remote", "add", "upstream", "git@github.com:original/widget.git"]);
+        assert_eq!(src_of(auto_icon(&repo), "avatar"), "https://github.com/original.png");
+        // a fork that was renamed uses its own owner's avatar
+        git_in(&repo, &["remote", "set-url", "origin", "https://github.com/octo/widget-fork.git"]);
+        assert_eq!(src_of(auto_icon(&repo), "avatar"), "https://github.com/octo.png");
+        // a host without a known avatar address gives the folder symbol
+        git_in(&repo, &["remote", "remove", "upstream"]);
+        git_in(&repo, &["remote", "set-url", "origin", "https://git.example.org/octo/widget.git"]);
+        assert_eq!(auto_icon(&repo), None);
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn t302_remote_addresses_are_read_on_every_form_git_accepts_and_odd_ones_refused() {
+        let want = Some(("github.com".to_string(), "o".to_string(), "r".to_string()));
+        for url in ["https://github.com/o/r.git", "https://user@github.com/o/r", "git@github.com:o/r.git", "ssh://git@github.com/o/r.git", "https://GitHub.com/o/r/"] {
+            assert_eq!(remote_parts(url), want, "{url}");
+        }
+        for url in ["", "https://github.com/o", "https://github.com/o/r/extra", "https://github.com/o%20x/r", "https://github.com/../r", "C:/some/folder"] {
+            assert_eq!(remote_parts(url), None, "{url}");
+        }
+        assert_eq!(owner_avatar(Some("https://github.com/a b/r"), None), None);
+    }
+
 }
