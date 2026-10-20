@@ -37,3 +37,21 @@ Readings (raw, one line per step; the dot is section.pane[data-agent*="claude"] 
 01:26:57.523 close: window close over CDP; app pid 50500 exited
 01:27:00.570 cleanup: no process left running from the temp folder
 01:27:00.570 RESULT: every reading matched
+
+
+--- audit-9 re-run (appended) ---
+T-123-d audit-9 re-run reading (2026-10-20, lane/fix-audit at 1f2307e9, scratch HOME/USERPROFILE/CLAUDE_CONFIG_DIR/CODEX_HOME/KOLUX_KEYBINDINGS_HOME under a throwaway folder, build slot held)
+Task commit(s): 0bd6729f
+Scope: the unit tests that commit added or changed, run again on this lane. Live behaviour is not re-proved here; where the task line says "live proof pending" that stays pending.
+
+Command 1: cargo test --lib -- stat_027
+Exit code: 0
+Reading: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1861 filtered out; finished in 0.00s
+  ok status::tests::stat_027_waiting_carries_the_plan_or_the_question_and_clears_when_tool_work_resumes
+
+Command 2: pnpm exec vitest run src/board/chip.test.ts
+Exit code: 0
+Reading: Test Files 1 passed (1); Tests 8 passed (8)
+  src/board/chip.test.ts
+
+Result: PASS

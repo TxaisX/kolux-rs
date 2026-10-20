@@ -87,3 +87,20 @@ C. a pane spawned on B's answer (terminal_spawn paneKey 7 -> id 2, program cmd.e
    the lane that owns main.tsx should confirm with layout.test.ts.
 
 5. Gates: see the commit body.
+
+
+--- audit-9 re-run (appended) ---
+T-066-b audit-9 re-run reading (2026-10-20, lane/fix-audit at 1f2307e9, scratch HOME/USERPROFILE/CLAUDE_CONFIG_DIR/CODEX_HOME/KOLUX_KEYBINDINGS_HOME under a throwaway folder, build slot held)
+Task commit(s): c7d48aa9
+Scope: the unit tests that commit added or changed, run again on this lane. Live behaviour is not re-proved here; where the task line says "live proof pending" that stays pending.
+
+Command 1: cargo test --lib -- sess030_every_wired_agent_resumes_on_its_own_form_after_its_standing_line sess030_without_a_session_id_only_the_folder_scoped_forms_resume sess030_a_plain_new_tab_never_carries_a_resume_form sess030_an_id_or_folder_with_a_space_stays_one_argument_for_the_pty sess030_a_resume_already_in_the_extra_arguments_is_never_added_twice sess030_agents_without_a_documented_resume_form_come_back_at_their_prompt
+Exit code: 0
+Reading: test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1857 filtered out; finished in 0.00s
+  ok agents::tests::sess030_a_plain_new_tab_never_carries_a_resume_form
+  ok agents::tests::sess030_without_a_session_id_only_the_folder_scoped_forms_resume
+  ok agents::tests::sess030_agents_without_a_documented_resume_form_come_back_at_their_prompt
+  ok agents::tests::sess030_an_id_or_folder_with_a_space_stays_one_argument_for_the_pty
+  ok agents::tests::sess030_every_wired_agent_resumes_on_its_own_form_after_its_standing_line
+
+Result: PASS
