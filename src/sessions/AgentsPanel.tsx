@@ -3,9 +3,11 @@
 // refocused (from cache), when the Refresh button is pressed (a full rescan) and a moment after an
 // agent starts; results are drawn only once typing has paused. Resume opens a terminal in the
 // session's folder; Copy command copies the same command for the shell the tab runs.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./sessions.css";
+import { asListing, NO_REPORT, notices, type Listing, type ScanReport } from "./notices";
+import { sameShown } from "./redraw";
 import { ago, filterSessions, groupSessions, MAX_QUERY, parseQuery, shortLabel, sortSessions, type GroupBy, type Project, type Session, type SortBy } from "./model";
 import { chooseScope, DEFAULT_VIEW, DEPTHS, differing, effectiveScope, readScope, readView, SCOPE_KEY, VIEW_KEY, type Scope, type ViewPrefs } from "./prefs";
 import { AFTER_START_MS, publishDelay, recall, remember, RescanLimiter } from "./refresh";
@@ -53,7 +55,29 @@ function useLastKey() {
   return at;
 }
 
-export default function AgentsPanel(props: PanelProps) {
+/** The last answer for a scope, from memory. */
+const cached = (key: string): Listing | null => {
+  const c = recall<unknown>(key);
+  return c === undefined ? null : asListing(c);
+};
+
+/**
+ * VIEW-115: the panel redraws only when what it shows changes (its two settings, the folders, the
+ * shell, the visible flag, the rescan key). The callbacks the window passes are new on every render,
+ * so the memoised view reads the latest ones through stable wrappers instead of comparing them.
+ */
+function AgentsPanel(props: PanelProps) {
+  const latest = useRef(props);
+  latest.current = props;
+  const onSave = useCallback((key: string, value: unknown) => latest.current.onSave(key, value), []);
+  const onResume = useCallback((s: Session, plan: ResumePlan) => latest.current.onResume(s, plan), []);
+  return <AgentsView {...props} onSave={onSave} onResume={onResume} />;
+}
+
+const AgentsView = memo(AgentsPanelBody, (a, b) => sameShown(a, b));
+export default AgentsPanel;
+
+function AgentsPanelBody(props: PanelProps) {
   const { settings, onSave, activeDir, projectDirs, rescanKey, visible, shell, onResume } = props;
   const projects = props.projects ?? NO_PROJECTS;
   const { dirs, all, depth, scope } = request(settings, activeDir, projectDirs);
@@ -62,7 +86,8 @@ export default function AgentsPanel(props: PanelProps) {
   const [query, setQuery] = useState("");
   const [optionsOpen, setOptionsOpen] = useState(false);
   const key = scopeKey({ dirs, all, depth });
-  const [list, setList] = useState<Session[] | null>(() => recall<Session[]>(key) ?? null);
+  const [list, setList] = useState<Session[] | null>(() => cached(key)?.sessions ?? null);
+  const [report, setReport] = useState<ScanReport>(() => cached(key)?.report ?? NO_REPORT);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -76,14 +101,16 @@ export default function AgentsPanel(props: PanelProps) {
     (force: boolean) => {
       const asked = live.current;
       setBusy(true);
-      invoke<Session[]>("sessions_list", { dirs: asked.dirs, all: asked.all, depth: asked.depth, force })
-        .then((rows) => {
+      invoke<unknown>("sessions_list", { dirs: asked.dirs, all: asked.all, depth: asked.depth, force })
+        .then((raw) => {
+          const got = asListing(raw);
           const arrived = Date.now();
           const publish = () => {
             timer.current = null;
-            remember(asked.key, rows);
+            remember(asked.key, got);
             if (live.current.key === asked.key) {
-              setList(rows);
+              setList(got.sessions);
+              setReport(got.report);
               setError(null);
             }
             setBusy(false);
@@ -103,7 +130,8 @@ export default function AgentsPanel(props: PanelProps) {
   useEffect(() => () => void (timer.current !== null && window.clearTimeout(timer.current)), []);
   // Showing the tab, or another scope, reads from cache; the last results for that scope show at once.
   useEffect(() => {
-    setList(recall<Session[]>(key) ?? null);
+    setList(cached(key)?.sessions ?? null);
+    setReport(cached(key)?.report ?? NO_REPORT);
     if (visible) load(false);
   }, [key, visible, load]);
   useEffect(() => {
@@ -241,6 +269,12 @@ export default function AgentsPanel(props: PanelProps) {
           {note}
         </div>
       )}
+      {list !== null &&
+        notices(report, total).map((n) => (
+          <div key={n.id} className="sb-hint" role="status" data-scan-notice>
+            {n.text}
+          </div>
+        ))}
       {list !== null && total === 0 && error === null && <div className="sb-hint">No past sessions here yet. Sessions of Claude and Codex show up once they have run.</div>}
       {list !== null && total > 0 && shown.length === 0 && !parsed.tooLong && <div className="sb-hint">No session matches the search and options.</div>}
       <ul className="agents-list">
