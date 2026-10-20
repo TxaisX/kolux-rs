@@ -1,0 +1,20 @@
+diff --git a/src/terminal/TerminalPane.tsx b/src/terminal/TerminalPane.tsx
+index cfbc2a02..e31c5362 100644
+--- a/src/terminal/TerminalPane.tsx
++++ b/src/terminal/TerminalPane.tsx
+@@ -67,6 +67,7 @@ import { stopLine, type StopInfo } from "./notify";
+ import NameField from "./NameField";
+ import { copyOnSelect } from "../shell/inputExtras";
+ import { askLink, linkState } from "../shell/linkAsk";
++import { applyKoluxUnicode } from "../shell/unicodeWidth";
+ import { handlesIn } from "./tabs";
+ import { markShell, runningOf, shellInAgentPane } from "./remove";
+ import { registerTurnSource, xtermSource } from "./turnRead";
+@@ -442,6 +443,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, u
+     });
+     const fit = new FitAddon();
+     term.loadAddon(fit);
++    applyKoluxUnicode(term); // T-308 / TERM-104: Unicode 16 widths and emoji sequences (xterm alone knows Unicode 6)
+     term.open(el);
+     termRef.current = term;
+     // T-325-c (CHAT-010/011): the chat reads the running turn's reply off this terminal.
