@@ -28,31 +28,50 @@ export function printedUrls(text: string): Printed[] {
   return out;
 }
 
-/** The addresses terminals printed, by port; a later print of a port replaces an earlier one. A web address cut by a chunk edge is joined from the tail kept per terminal. */
+/** A printed address with the terminal that printed it and, once a scan has seen the port, the program holding it. */
+type Entry = { url: string; terminal: number; pid?: number };
+
+/**
+ * The addresses terminals printed, by port; a later print of a port replaces an earlier one. A web
+ * address cut by a chunk edge is joined from the tail kept per terminal. Each address stays tied to
+ * the terminal that printed it and to the program first seen on its port, so neither a later
+ * program on the port nor another terminal inherits it.
+ */
 export class UrlBook {
-  private byPort = new Map<number, string>();
+  private byPort = new Map<number, Entry>();
   private tails = new Map<number, string>();
 
   feed(terminal: number, chunk: string) {
     const text = (this.tails.get(terminal) ?? "") + chunk;
-    for (const p of printedUrls(text)) this.byPort.set(p.port, p.url);
+    for (const p of printedUrls(text)) this.byPort.set(p.port, { url: p.url, terminal });
     // only the unfinished last word can still become a longer address
     const cut = Math.max(text.lastIndexOf("\n"), text.lastIndexOf(" "), text.lastIndexOf("\r"));
     this.tails.set(terminal, text.slice(cut + 1).slice(-300));
   }
 
+  /** The terminal ended: its unfinished tail and every address it printed go with it. */
   forget(terminal: number) {
     this.tails.delete(terminal);
+    for (const [port, e] of [...this.byPort]) if (e.terminal === terminal) this.byPort.delete(port);
   }
 
   get(port: number): string | undefined {
-    return this.byPort.get(port);
+    return this.byPort.get(port)?.url;
   }
 
-  /** Addresses of ports nothing listens on any more are dropped, so a later program on that port is not given a stale one. */
-  keepOnly(listening: Iterable<number>) {
-    const live = new Set(listening);
-    for (const p of [...this.byPort.keys()]) if (!live.has(p)) this.byPort.delete(p);
+  /**
+   * After each scan: an address whose port nothing listens on is dropped; the first scan after a
+   * print ties the address to the program on the port; when another program (another pid) holds
+   * the port later, the address is dropped rather than handed to it.
+   */
+  sync(listening: Iterable<{ port: number; pid: number }>) {
+    const live = new Map<number, number>();
+    for (const l of listening) live.set(l.port, l.pid);
+    for (const [port, e] of [...this.byPort]) {
+      const pid = live.get(port);
+      if (pid === undefined || (e.pid !== undefined && e.pid !== pid)) this.byPort.delete(port);
+      else if (e.pid === undefined) e.pid = pid;
+    }
   }
 }
 

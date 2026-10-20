@@ -1,0 +1,12 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index d77f6321..07b4c968 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -2697,6 +2697,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+         agents={live.filter((p) => p.agent !== "shell").length}
+         names={() => Object.fromEntries(panes.flatMap((p) => (ptys.current[p.key] === undefined ? [] : [[ptys.current[p.key], tabName(p, titles)]])))}
+         workspaces={Object.keys(owner)}
++        active={activeDir ?? undefined}
+         hooks={settingsRead ? hooksOn(settings) : null}
+         loaded={() => windowLoaded(settingsRead, restoredKeys.current, ptys.current, panes)}
+       />

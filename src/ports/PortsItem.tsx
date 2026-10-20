@@ -5,7 +5,7 @@
 import { useRef, useState, type MouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openInBrowser } from "../browser/BrowserPane";
-import { countOf, folderName, openTarget, sections, type PortRow } from "./rows";
+import { countOf, folderName, openTarget, sections, stopRequest, type PortRow } from "./rows";
 import { openUrl } from "./urls";
 import { usePorts } from "./usePorts";
 
@@ -45,7 +45,9 @@ export default function PortsItem({ workspaces, active }: Props) {
   const stop = async (row: PortRow) => {
     setBusy(row.port);
     try {
-      const done = await invoke<string>("ports_stop", { worktrees: workspaces, port: row.port });
+      // the program the user saw, licensed by the active workspace only; the Rust side checks the
+      // folder against the project store and refuses if another program holds the port by now
+      const done = await invoke<string>("ports_stop", stopRequest(row, active));
       setNote(done === "gone" ? `Port ${row.port} had already stopped` : `Stopped port ${row.port}`);
     } catch (err) {
       setNote(String(err));

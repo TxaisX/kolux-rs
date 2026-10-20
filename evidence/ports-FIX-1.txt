@@ -1,0 +1,82 @@
+ports FIX-1 (lane/ports from a871a9d5) · stand-in review ports-a871a9d5, Send-to-build items 1-7 + AFTER 8/10/11/12
+Card: VIEW-078 Ports in the status bar (task T-226 stays ticked; this is a fix pass, no new feature)
+Built 2026-10-19 by four builders in turn (the last one finished the red runs, gates and commit).
+
+WHAT CHANGED (what the user gets)
+- Stop can end only the program the row showed: the port's holders are re-read at the click and must
+  be exactly the shown process number, and that process's start time is re-read right before the kill,
+  so a reused process number is never stopped.
+- Stop is licensed only by a workspace the project store knows (saved projects + their git worktrees),
+  that is deep enough (never a drive root or a top-level folder), not the home folder or anything above
+  it, and that is a real git folder. Kolux itself, Kolux helpers no pane started (WebView2) and system
+  process numbers (0-4) are never stopped; system listeners show as external.
+- The status bar lists other workspaces' ports as external instead of dropping them, and only the
+  active workspace's rows get a Stop (App.tsx hunk: evidence/ports-FIX-1-App.patch).
+- Reading another program's working folder trusts its string length only when even, non-empty and at
+  most 32 KiB; the SAFETY comment says what is relied on; a 32-bit Windows build is refused at compile time.
+- A printed address is tied to the terminal that printed it and to the program first seen on its port;
+  each terminal has its own streaming text decoder, so a non-ASCII address split across chunks survives.
+- The real-server test fails (not passes) when node is missing.
+
+FILES: src-tauri/src/ports.rs, src/ports/{rows.ts,urls.ts,usePorts.ts,PortsItem.tsx,ports.test.ts},
+evidence/ports-T-226-lib.rs.patch (regenerated), evidence/ports-FIX-1-App.patch (new), this file,
+PLAN.md (T-226 line), STATE.md (--write-state), STATE-history.md (one line), PROVENANCE.md (one line).
+
+TESTS ADDED (Rust, cargo test --lib ports::, 15 total, 6 new):
+  view_078_fix1_a_working_folder_length_is_trusted_only_when_it_is_utf16_sized
+  view_078_fix1_the_depth_rule_keeps_out_drive_roots_and_top_level_folders
+  view_078_fix1_the_home_folder_and_every_folder_above_it_never_license_a_stop
+  view_078_fix1_a_stop_is_licensed_only_by_workspaces_the_project_store_knows
+  view_078_fix1_kolux_itself_and_its_helpers_no_pane_started_are_never_stopped
+  view_078_fix1_a_stop_ends_only_the_program_the_user_saw_and_never_a_reused_process_number
+TESTS ADDED (vitest, src/ports/ports.test.ts, 13 total, 4 new + 2 rewritten):
+  "(FIX-1): a printed address belongs to the program first seen on its port and to the terminal that printed it"
+  "(FIX-1): terminal output is decoded as a stream per terminal, so a non-ASCII address split across chunks keeps its letters"
+  "(FIX-1): with an active workspace, other workspaces' ports are listed as external, never dropped, and never get a Stop"
+  "(FIX-1): Stop names the program the user saw and is licensed by the active workspace alone"
+  TS red first (G:/Temp/ports-w16-logs/vitest-red.log): Tests 6 failed | 7 passed (13).
+
+RED RUNS: one Stop guard switched off per run (`if false && ...`), cargo test --lib ports::, file
+restored from a saved copy before the next run (G:/Temp/ports-w16-logs/red-guards.log, per-run logs red-<guard>.log).
+Every guard turns at least one test red; none is untested.
+  guard    rule                                                   red tests
+  size     string length even/non-empty/<=32 KiB                  fix1_a_working_folder_length_is_trusted_only_when_it_is_utf16_sized (14 ok / 1 failed; re-run after the clippy rewrite, same result)
+  depth    no drive root / top-level folder                       fix1_the_depth_rule_keeps_out_drive_roots_and_top_level_folders (14/1)
+  home     not the home folder or above                           fix1_the_home_folder_and_every_folder_above_it_never_license_a_stop (14/1)
+  git      folder must be a git folder                            fix1_the_depth_rule..., a_folder_that_is_not_a_worktree_or_is_a_root_cannot_license_a_stop (13/2)
+  store    only workspaces the project store knows                fix1_a_stop_is_licensed_only_by_workspaces_the_project_store_knows (14/1)
+  inside   holder's folder inside a licensed workspace            a_port_held_outside_the_workspaces_is_never_stopped, a_folder_that_is_not_a_worktree..., fix1_a_stop_is_licensed_only_by..., fix1_the_home_folder..., a_server_started_in_a_worktree_is_listed_and_stopped_and_one_outside_is_refused (10/5)
+  system   process numbers 0-4 never stopped                      a_port_held_outside_the_workspaces_is_never_stopped (14/1)
+  self     Kolux itself never stopped                             fix1_kolux_itself_and_its_helpers_no_pane_started_are_never_stopped (14/1)
+  helper   Kolux helpers no pane started never stopped            fix1_kolux_itself_and_its_helpers..., a_server_started_in_a_worktree... (13/2)
+  pid      holders now must be exactly the shown process number   fix1_a_stop_ends_only_the_program_the_user_saw_and_never_a_reused_process_number, a_server_started_in_a_worktree... (13/2)
+  started  start time re-read right before the kill must match    fix1_a_stop_ends_only_the_program_the_user_saw... (14/1)
+
+GATES (2026-10-19, logs G:/Temp/ports-w16-logs/g6-*.log; lib.rs registration applied temporarily, then reverted)
+  cargo build                                   exit 0
+  cargo test --lib ports::                      test result: ok. 15 passed; 0 failed
+  cargo clippy --all-targets -- -D warnings     exit 0 (first run found manual_is_multiple_of + type_complexity in ports.rs; fixed)
+  cargo clippy, lib.rs NOT applied (commit tree) exit 0 (g6-clippy-nolib.log)
+  tsc --noEmit (node)                           exit 0
+  vitest src/ports src/chrome (node)            Test Files 7 passed (7), Tests 48 passed (48)
+  full cargo test --no-fail-fast                exit 0; test result: ok. 991 passed; 0 failed; 2 ignored (lib) + 3 passed + 3 empty
+  full vitest (node)                            Test Files 227 passed (227), Tests 1548 passed (1548)
+  plan-check --write-state                      plan-check: OK (Done 459 / 689, P0 6 / 228)
+  duplicate T- id grep                          prints nothing
+  firewall-check -Baseline                      53 hit(s) in 22 file(s), 0 new
+  patches on main 9e63435d (temp index, git apply --cached --check):
+    evidence/ports-T-226-lib.rs.patch exit 0 · evidence/ports-FIX-1-App.patch exit 0
+
+PATCHES FOR THE COORDINATOR (not lane files)
+  evidence/ports-T-226-lib.rs.patch   adds `mod ports;` and registers ports_scan and ports_stop in lib.rs
+  evidence/ports-FIX-1-App.patch      passes the active workspace to the Ports item in App.tsx
+
+LIVE PROOF PENDING (batched) - the coordinator runs these on the merged app, dark, new look, 1920:
+  1. Open a throwaway repo under G:/Temp as a project; in its pane run a dev server (e.g. `node -e`
+     http server on 5173 that prints http://localhost:5173/). The status bar Ports item counts 1; the
+     popover lists port 5173 under the workspace with the printed address, Open and Stop.
+  2. Start a second server outside every workspace (G:/Temp/outside). It shows under External with no Stop.
+  3. Switch the active workspace to another project: the first port moves to External, no Stop.
+  4. Switch back, click Stop on 5173: the server ends, the row leaves on the next scan; the outside
+     server keeps running.
+  5. Close both servers, remove the throwaway repo and its project entry.
