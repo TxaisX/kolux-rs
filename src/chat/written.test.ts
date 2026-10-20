@@ -134,3 +134,40 @@ describe("FIX-2: written paths are resolved against the pane's folder", () => {
     expect(html).toContain("src/app.ts");
   });
 });
+
+// FIX-3 (stand-in review of 0538a66b, item 6): a written path that cannot be resolved to the file it names is skipped, not
+// listed under a wrong full path. `~/x` and `~\x` name the home folder, which the pane's folder knows nothing about; a path
+// whose `..` climbs above the root of the pane's folder has no such file; a `..` that stays inside the drive still resolves.
+describe("FIX-3: paths that cannot be resolved are skipped", () => {
+  const list = (paths: string[], cwd: string | null) => writtenFiles(paths.map((p, i) => wrote(`w${i}`, i + 1, p) as ChatItem), 4, cwd).map((f) => f.path);
+  it("skips a home-relative path with a slash", () => {
+    expect(list(["~/x"], "C:\\work")).toEqual([]);
+  });
+  it("skips a home-relative path with a backslash", () => {
+    expect(list(["~\\x"], "C:\\work")).toEqual([]);
+  });
+  it("skips a home-relative path with no folder known, and a bare tilde", () => {
+    expect(list(["~/x", "~"], null)).toEqual([]);
+  });
+  it("skips ../../x from a one-level folder: it climbs above the drive", () => {
+    expect(list(["../../x"], "C:\\work")).toEqual([]);
+  });
+  it("skips a climb above the root of a posix folder", () => {
+    expect(list(["../../x"], "/home")).toEqual([]);
+  });
+  it("skips a path that dips down and climbs out above the root", () => {
+    expect(list(["a/../../../x"], "C:\\work")).toEqual([]);
+  });
+  it("counts the share as the root of a network folder", () => {
+    expect(list(["../../x"], "\\\\srv\\share\\w")).toEqual([]);
+    expect(list(["../x"], "\\\\srv\\share\\w")).toEqual(["\\\\srv\\share\\x"]);
+  });
+  it("still resolves a normal ../x that stays inside", () => {
+    expect(list(["../x"], "C:\\work")).toEqual(["C:\\x"]);
+    expect(list(["a/../b/c.ts"], "C:\\work")).toEqual(["C:\\work\\b\\c.ts"]);
+    expect(list(["../x"], "/home/u")).toEqual(["/home/x"]);
+  });
+  it("keeps the other written files of the turn when one is skipped", () => {
+    expect(list(["src/a.ts", "~/b.ts", "../../c.ts", "../d.ts"], "C:\\work")).toEqual(["C:\\d.ts", "C:\\work\\src\\a.ts"]);
+  });
+});
