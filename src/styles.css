@@ -1517,3 +1517,13 @@ html[data-divider="row"], html[data-divider="row"] * { cursor: row-resize !impor
 .proj-group-kids { padding-left: 8px; }
 .tab-switcher { top: 20%; left: 50%; transform: translateX(-50%); z-index: 60; min-width: 280px; max-height: 60vh; overflow-y: auto; }
 .tab-switcher .menu-item.on { background: var(--row-selected); }
+/* T-301 (APP-012): with window blur on, the page background lets the blurred desktop show through. */
+html[data-window-blur="on"] body { background: color-mix(in srgb, var(--app-bg) 72%, transparent); }
+.app-icon-picks { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+.app-icon-pick { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 6px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+.app-icon-pick.on { border-color: var(--accent); }
+.app-icon-pick input { position: absolute; opacity: 0; pointer-events: none; }
+.app-icon-swatch { width: 18px; height: 18px; border-radius: 5px; }
+.app-icon-swatch.classic { background: linear-gradient(135deg, #2b2b33, #8a8a96); }
+.app-icon-swatch.watercolor { background: linear-gradient(135deg, #f0b8c4, #a8dcd8); }
+.app-icon-swatch.blue { background: linear-gradient(135deg, #0b2a6e, #9cd0ff); }

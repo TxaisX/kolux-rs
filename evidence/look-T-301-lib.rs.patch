@@ -1,0 +1,29 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 7f5e1789..da340e4b 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -2,6 +2,7 @@ mod folder_projects;
+ mod repo_scan;
+ mod activity;
+ mod agents;
++mod app_look;
+ mod artifacts;
+ mod automations;
+ mod badge;
+@@ -271,6 +272,8 @@ pub fn run() {
+                     move |id| t.try_state::<Terminals>().is_some_and(|ts| ts.started(id).is_some()),
+                 );
+             }
++            // T-301 (APP-012): the saved app icon variant and window blur, before the window shows.
++            app_look::apply_saved(app.handle());
+             app.manage(links::Grants::default());
+             // APP-041: the app's own start-and-stop record, next to what the terminals report.
+             diag::write(&dir, &format!("app start {starts}, Kolux RS {}", app.package_info().version));
+@@ -556,6 +559,7 @@ pub fn run() {
+             tools::editors_list,
+             tools::teams_host,
+             awake::keep_awake_state,
++            app_look::app_look_apply,
+             token_usage::token_usage,
+             token_usage::token_usage_scan,
+             token_usage::token_tracking_set,
