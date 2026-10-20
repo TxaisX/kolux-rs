@@ -2466,7 +2466,7 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         WorkItem { host: host.into(), owner: owner.into(), repo: repo.into(), kind: "issue".into(), number: 3 }
     }
     fn project_at(id: &str, dir: &Path) -> Project {
-        Project { id: id.into(), name: id.into(), path: dir.to_string_lossy().into_owned(), workspaces_dir: None, base: None }
+        Project { id: id.into(), name: id.into(), path: dir.to_string_lossy().into_owned(), workspaces_dir: None, base: None, display_name: None }
     }
     const ALIAS: &str = "Host work-gh
   HostName github.com

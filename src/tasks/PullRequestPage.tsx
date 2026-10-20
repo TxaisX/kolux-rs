@@ -7,9 +7,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Close } from "../chrome/icons";
+import GhBanner, { classify } from "./GhBanner";
 import Markdown from "./MarkdownView";
 import { safeHref } from "./markdown";
-import { askForReview, MERGE_METHODS, mergeBox, type PrCheck, type PrFiles, type PrPageData, type PrTab, type PrThreads, REACTION_EMOJI, REVIEW_LABEL, rerunTargets, reviewerSuggestions, saveTab, savedTab, summarizeChecks, type Target } from "./prModel";
+import { askForReview, heldWords, MERGE_METHODS, mergeBox, type PrCheck, type PrFiles, type PrPageData, type PrTab, type PrThreads, REACTION_EMOJI, REVIEW_LABEL, rerunTargets, reviewerSuggestions, saveTab, savedTab, summarizeChecks, type Target } from "./prModel";
 import type { Person } from "./repoFacts";
 
 const NO_THREADS: PrThreads = { threads: [], truncated: false, limit: 0 };
@@ -30,6 +31,9 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
   const [method, setMethod] = useState<"merge" | "squash" | "rebase">("squash");
   const [sure, setSure] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  // GIT-039: diffs the user asked for after they were held back (by file name), and the ones being read.
+  const [loaded, setLoaded] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   // The head commit the page last showed. When a reload finds another one, the files read for the
@@ -71,10 +75,19 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
     const current = () => started === headChanges.current;
     void invoke<PrFiles>("pr_files", args).then(
       (f) => current() && setFiles(f),
-      (e) => current() && (setFiles({ files: [], truncated: false, limit: 0 }), setNote(say(e))),
+      (e) => current() && (setFiles({ files: [], truncated: false, limit: 0, diffLimits: { lines: 0, chars: 0, budget: 0 } }), setNote(say(e))),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, files, headEpoch]);
+
+  /** GIT-039: reads one held-back file's diff when the user asks. */
+  const loadPatch = (filename: string) => {
+    setLoading(filename);
+    invoke<string>("pr_file_patch", { ...args, filename }).then(
+      (p) => setLoaded((l) => ({ ...l, [filename]: p || "No text diff." })),
+      (e) => setNote(say(e)),
+    ).finally(() => setLoading(null));
+  };
 
   /** One write, then read the page again; its error shows in the note. */
   const act = async (f: () => Promise<unknown>, done?: string) => {
@@ -146,10 +159,14 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
           </button>
         )}
       </div>
-      {note && (
-        <div className="note warn" role="status">
-          {note}
-        </div>
+      {note && classify(note) !== "other" ? (
+        <GhBanner error={note} host={target.host} />
+      ) : (
+        note && (
+          <div className="note warn" role="status">
+            {note}
+          </div>
+        )
       )}
       <div className="pr-tabs" role="tablist">
         {(["conversation", "checks", "files"] as PrTab[]).map((t) => (
@@ -311,7 +328,16 @@ export default function PullRequestPage({ target, added, onClose }: { target: Ta
                 <summary>
                   {f.filename} <span className="tasks-kind">{f.status} +{f.additions} -{f.deletions}</span>
                 </summary>
-                <pre className="md-code">{f.patch || "No text diff (binary, renamed or too large)."}</pre>
+                {f.held && loaded[f.filename] === undefined ? (
+                  <div className="note warn" data-held={f.held}>
+                    <p>{heldWords(f, files.diffLimits)}</p>
+                    <button className="btn" disabled={loading === f.filename} onClick={() => loadPatch(f.filename)}>
+                      {loading === f.filename ? "Loading..." : "Load this diff"}
+                    </button>
+                  </div>
+                ) : (
+                  <pre className="md-code">{loaded[f.filename] ?? (f.patch || "No text diff (binary or renamed).")}</pre>
+                )}
               </details>
             ))}
           </div>

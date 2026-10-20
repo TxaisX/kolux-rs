@@ -864,3 +864,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · accounts T-171-c · spec/07 ACCT-021, ACCT-024 as given in the brief; Codex CLI public docs (the CODEX_HOME folder holds config.toml, AGENTS.md, prompts, skills, auth.json, sessions); this tree's own codex_accounts.rs and terminal.rs; no outside code
 > 2026-10-19 · accounts T-264 · spec/07 ACCT-022, ACCT-028, ACCT-029 and spec/06 USAGE-027 as given in the brief; this tree's own secrets.rs, codex_accounts.rs and settings components; no outside code
 > 2026-10-19 · tasks T-142 · spec/01 PROJ-085 and spec/05 VIEW-027 as given in the brief; this tree's own bulk.rs workspace status commands and src/projects; no outside code
+> 2026-10-19 · tasks T-176-d · spec/11 GIT-028 and GIT-039 as given in the brief; this tree's own scm.rs gh_words, pull_requests.rs and src/editor/bigDiff.ts limits; no outside code

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { askForReview, mergeBox, parseGitHubUrl, type PrCheck, rerunTargets, reviewerSuggestions, savedTab, saveTab, summarizeChecks } from "./prModel";
+import { askForReview, heldWords, mergeBox, parseGitHubUrl, type PrCheck, rerunTargets, reviewerSuggestions, savedTab, saveTab, sizeWords, summarizeChecks } from "./prModel";
 
 const check = (name: string, status: string, conclusion: string, runId: number | null): PrCheck => ({ id: 1, name, status, conclusion, url: "", runId });
 
@@ -76,5 +76,20 @@ describe("GIT-051 the pull request page's rules", () => {
     const broken = { getItem: () => { throw new Error("no"); }, setItem: () => { throw new Error("no"); } };
     expect(savedTab(broken, t)).toBe("conversation");
     expect(() => saveTab(broken, t, "files")).not.toThrow();
+  });
+});
+
+describe("GIT-039 (T-176-d) a held-back file diff names the limit that held it", () => {
+  const limits = { lines: 20_000, chars: 2 * 1024 * 1024, budget: 8 * 1024 * 1024 };
+  it("words each reason from the backend's own numbers", () => {
+    expect(heldWords({ held: "lines", patchLines: 31_500, patchChars: 900_000 }, limits)).toBe("Held back: this diff is 31,500 lines, over the limit of 20,000 lines.");
+    expect(heldWords({ held: "size", patchLines: 100, patchChars: 3 * 1024 * 1024 }, limits)).toBe("Held back: this diff is 3.0 MB, over the limit of 2.0 MB.");
+    expect(heldWords({ held: "budget", patchLines: 100, patchChars: 1.5 * 1024 * 1024 }, limits)).toBe("Held back: the diffs of this pull request are over the 8.0 MB Kolux sends at once, so this one (1.5 MB) waits until you load it.");
+    expect(heldWords({ held: null }, limits)).toBeNull();
+    expect(heldWords({}, limits)).toBeNull();
+  });
+  it("sizes read in KB under a megabyte", () => {
+    expect(sizeWords(1)).toBe("1 KB");
+    expect(sizeWords(150 * 1024)).toBe("150 KB");
   });
 });

@@ -9,6 +9,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Refresh, Search } from "../chrome/icons";
+import GhBanner, { classify } from "./GhBanner";
 import type { Worktree } from "../projects/model";
 import { useSettings } from "../settings/useSettings";
 import { beyondWindow, defaultPreset, FILTERS, type FilterKey, filterValue, issueSource, pageButtons, pageCount, PER_PAGE, PRESETS, setFilter, type Task, type TaskLabel, type TaskPage, taskKind, taskQueries } from "./model";
@@ -409,9 +410,14 @@ export default function TasksPage({ repo, onStart, onResume }: { repo: { dir: st
       ) : gh === null ? (
         <div className="autos-none tasks-none">{repo.name} has no GitHub remote, so there are no issues or pull requests to list.</div>
       ) : error !== null ? (
-        <div className="note warn" role="status">
-          {error}
-        </div>
+        // GIT-028: GitHub out of reach (limit, outage, slow, signed out, no gh) gets a banner and, when it is the user to fix, the sign-in help.
+        classify(error, login === null ? false : undefined) !== "other" ? (
+          <GhBanner error={error} signedIn={login === null ? false : undefined} host={gh?.host} onRetry={load} />
+        ) : (
+          <div className="note warn" role="status">
+            {error}
+          </div>
+        )
       ) : result === null ? (
         <div className="autos-none tasks-none">Loading…</div>
       ) : result.items.length === 0 ? (

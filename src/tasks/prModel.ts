@@ -8,9 +8,11 @@ export type PrReviewer = { login: string; state: string };
 export type PrCheck = { id: number; name: string; status: string; conclusion: string; url: string; runId: number | null };
 export type PrPageData = { number: number; title: string; body: string; state: string; draft: boolean; url: string; author: string; headRef: string; headSha: string; baseRef: string; mergeableState: string; labels: { name: string; color: string }[]; assignees: string[]; reviewers: PrReviewer[]; reactions: { content: string; count: number }[]; additions: number; deletions: number; changedFiles: number; reviewsTruncated: boolean; reviewsLimit: number };
 /** `limit`: how many items the backend reads at most; `truncated` says there were more. */
-export type PrFiles = { files: PrFile[]; truncated: boolean; limit: number };
+export type DiffLimits = { lines: number; chars: number; budget: number };
+export type PrFiles = { files: PrFile[]; truncated: boolean; limit: number; diffLimits: DiffLimits };
 export type PrThreads = { threads: PrThread[]; truncated: boolean; limit: number };
-export type PrFile = { filename: string; status: string; additions: number; deletions: number; patch: string };
+/** `held`: why `patch` was left empty (over the line or size limit, or past the budget of one read); `patchLines` and `patchChars` are the full diff's size. */
+export type PrFile = { filename: string; status: string; additions: number; deletions: number; patch: string; held?: "lines" | "size" | "budget" | null; patchLines?: number; patchChars?: number };
 export type PrComment = { id: number; author: string; body: string; at: string };
 export type PrThread = { id: number; path: string; line: number | null; comments: PrComment[] };
 
@@ -124,5 +126,27 @@ export function saveTab(store: Pick<Storage, "setItem">, t: Pick<Target, "host" 
     store.setItem(`${TAB_KEY}${t.host}/${t.repo}#${t.number}`, tab);
   } catch {
     /* a private window keeps nothing; the next visit opens on the conversation */
+  }
+}
+
+/** GIT-039 (T-176-d): how a held-back file diff is worded; the numbers come from the backend (`diffLimits`), never from here. */
+export function sizeWords(chars: number): string {
+  if (chars >= 1024 * 1024) return `${(chars / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(chars / 1024))} KB`;
+}
+
+/** Why a file's diff was not sent, with the limit that held it; null when it was sent. */
+export function heldWords(f: Pick<PrFile, "held" | "patchLines" | "patchChars">, limits: DiffLimits): string | null {
+  const lines = f.patchLines ?? 0;
+  const chars = f.patchChars ?? 0;
+  switch (f.held) {
+    case "lines":
+      return `Held back: this diff is ${lines.toLocaleString("en-US")} lines, over the limit of ${limits.lines.toLocaleString("en-US")} lines.`;
+    case "size":
+      return `Held back: this diff is ${sizeWords(chars)}, over the limit of ${sizeWords(limits.chars)}.`;
+    case "budget":
+      return `Held back: the diffs of this pull request are over the ${sizeWords(limits.budget)} Kolux sends at once, so this one (${sizeWords(chars)}) waits until you load it.`;
+    default:
+      return null;
   }
 }

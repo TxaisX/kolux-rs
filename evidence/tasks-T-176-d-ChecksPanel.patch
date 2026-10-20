@@ -1,0 +1,27 @@
+NOTE FOR THE COORDINATOR (git apply ignores text before the first diff line):
+src/scm/ChecksPanel.tsx belongs to another lane. This patch makes its "checks could not be read" error use the same GitHub-unavailable banner and sign-in help as Tasks (GhBanner and classify come from src/tasks/GhBanner.tsx, which this commit adds). Apply with git apply; tsc was clean with it applied.
+diff --git a/src/scm/ChecksPanel.tsx b/src/scm/ChecksPanel.tsx
+index 0aaea00b..648d7fab 100644
+--- a/src/scm/ChecksPanel.tsx
++++ b/src/scm/ChecksPanel.tsx
+@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
+ import { Refresh } from "../chrome/icons";
+ import { openInBrowser } from "../browser/BrowserPane";
+ import { useSettings } from "../settings/useSettings";
++import GhBanner, { classify } from "../tasks/GhBanner";
+ import PrStart from "./PrStart";
+ import { reviewHint, reviewWhere } from "./startPr";
+ import { CHECKS_POLL_MS, checksSummary, reuseNoPr, stillRunning, type PrChecks } from "./checks";
+@@ -92,7 +93,11 @@ export default function ChecksPanel({ dir, linked, visible }: Props) {
+         {dir === null ? (
+           <div className="sb-hint">Open a workspace to see its pull request's checks.</div>
+         ) : shown?.error ? (
+-          <div className="note error">The checks could not be read: {shown.error}</div>
++          classify(shown.error) !== "other" ? (
++            <GhBanner error={shown.error} onRetry={() => load(true)} />
++          ) : (
++            <div className="note error">The checks could not be read: {shown.error}</div>
++          )
+         ) : !data ? (
+           <div className="sb-hint">Looking for this branch's pull request…</div>
+         ) : !pr ? (

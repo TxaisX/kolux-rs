@@ -1,0 +1,14 @@
+NOTE FOR THE COORDINATOR (git apply ignores text before the first diff line):
+Apply AFTER evidence/tasks-T-232-c-lib.patch. It registers the new T-176-d command pr_file_patch (loads one held-back file diff). Without it the Load button on the PR Files tab answers that the command is unknown, and clippy reports pr_file_patch as never used once the allow(dead_code) on mod pull_requests is removed.
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index b1772b94..fa5298f5 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -511,6 +511,7 @@ pub fn run() {
+             github::github_issue_create,
+             github::pull_requests::pr_page,
+             github::pull_requests::pr_files,
++            github::pull_requests::pr_file_patch,
+             github::pull_requests::pr_checks,
+             github::pull_requests::pr_threads,
+             github::pull_requests::pr_set_state,

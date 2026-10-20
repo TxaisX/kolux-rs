@@ -104,3 +104,5 @@
 .pr-checks li.running::before { content: "… "; }
 .pr-file summary { cursor: pointer; overflow-wrap: anywhere; }
 .tasks { position: relative; }
+.gh-banner p{margin:4px 0}
+.gh-banner ol{margin:4px 0 0 18px;padding:0}

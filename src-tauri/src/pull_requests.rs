@@ -12,8 +12,15 @@ use std::path::Path;
 
 /// GitHub's limit on reviewers requested at once (people.ts keeps the same number).
 const MAX_REVIEWERS: usize = 15;
-/// A file's diff is cut at this many characters before it crosses to the page.
-const PATCH_MAX: usize = 20_000;
+/// GIT-039 (T-176-d): a file's diff over this many lines is held back (the editor's diff view asks at the
+/// same numbers: src/editor/bigDiff.ts), and so is one over BIG_CHARS characters.
+pub const BIG_LINES: usize = 20_000;
+pub const BIG_CHARS: usize = 2 * 1024 * 1024;
+/// GIT-039: the most diff text one files read sends to the window; files past it wait to be loaded
+/// (smaller files first, so the budget keeps as many files as it can).
+pub const DIFF_BUDGET: usize = 8 * 1024 * 1024;
+/// GIT-039: the most one asked-for file diff sends; beyond it the diff ends with a note.
+const LOAD_MAX: usize = 8 * 1024 * 1024;
 /// One page of files, checks or comments (GitHub's largest page).
 const PER_PAGE: usize = 100;
 /// Files, reviews and review comments are read this many pages deep (500 each); past that the page
@@ -74,12 +81,24 @@ pub struct PrPage {
 
 /// A pull request's files; `truncated` when GitHub has more than the page reads.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PrFiles {
     pub files: Vec<PrFile>,
     pub truncated: bool,
     /// How many files are read at most (the page says "the first N" from this, not its own copy).
     pub limit: usize,
+    /// GIT-039: the limits that hold a file's diff back, so the page names them from here.
+    pub diff_limits: DiffLimits,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct DiffLimits {
+    pub lines: usize,
+    pub chars: usize,
+    pub budget: usize,
+}
+
+pub const DIFF_LIMITS: DiffLimits = DiffLimits { lines: BIG_LINES, chars: BIG_CHARS, budget: DIFF_BUDGET };
 
 /// A pull request's review threads; `truncated` when GitHub has more comments than the page reads.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -91,12 +110,18 @@ pub struct PrThreads {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PrFile {
     pub filename: String,
     pub status: String,
     pub additions: u64,
     pub deletions: u64,
     pub patch: String,
+    /// GIT-039: why the diff text was not sent: "lines" or "size" (over the per-file limits) or
+    /// "budget" (the files read had used up what one read may send). `patch` is empty then.
+    pub held: Option<&'static str>,
+    pub patch_lines: usize,
+    pub patch_chars: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -218,19 +243,62 @@ pub fn page_of(pull: &Value, reviews: &Value, issue: &Value) -> Result<PrPage, S
     })
 }
 
+/// GIT-039: the files with their diff text, except the ones held back: over BIG_LINES lines or
+/// BIG_CHARS characters, or past DIFF_BUDGET in all (the smallest files are kept first). A held file
+/// keeps its size so the page can say how big it is.
 pub fn files_of(v: &Value) -> Vec<PrFile> {
-    v.as_array()
+    let mut files: Vec<PrFile> = v
+        .as_array()
         .into_iter()
         .flatten()
-        .map(|f| PrFile {
-            filename: s(&f["filename"]),
-            status: s(&f["status"]),
-            additions: n(&f["additions"]),
-            deletions: n(&f["deletions"]),
-            patch: s(&f["patch"]).chars().take(PATCH_MAX).collect(),
+        .map(|f| {
+            let patch = s(&f["patch"]);
+            PrFile {
+                filename: s(&f["filename"]),
+                status: s(&f["status"]),
+                additions: n(&f["additions"]),
+                deletions: n(&f["deletions"]),
+                patch_lines: patch.lines().count(),
+                patch_chars: patch.chars().count(),
+                held: None,
+                patch,
+            }
         })
         .filter(|f| !f.filename.is_empty())
-        .collect()
+        .collect();
+    let mut order: Vec<usize> = (0..files.len()).collect();
+    order.sort_by_key(|&i| files[i].patch_chars);
+    let mut used = 0usize;
+    for i in order {
+        let f = &mut files[i];
+        f.held = if f.patch_lines > BIG_LINES {
+            Some("lines")
+        } else if f.patch_chars > BIG_CHARS {
+            Some("size")
+        } else if used + f.patch_chars > DIFF_BUDGET {
+            Some("budget")
+        } else {
+            None
+        };
+        if f.held.is_some() {
+            f.patch = String::new();
+        } else {
+            used += f.patch_chars;
+        }
+    }
+    files
+}
+
+/// GIT-039: one file's diff text on request, whatever held it back, cut at LOAD_MAX characters with a note.
+pub fn patch_of(v: &Value, filename: &str) -> Option<String> {
+    let text = s(&v.as_array()?.iter().find(|f| s(&f["filename"]) == filename)?["patch"]);
+    if text.chars().count() <= LOAD_MAX {
+        return Some(text);
+    }
+    let kept: String = text.chars().take(LOAD_MAX).collect();
+    let cut = kept.rfind('\n').map_or(kept.len(), |e| e + 1);
+    let left = text[cut..].lines().count();
+    Some(format!("{}[{} more lines of this file left out]\n", &kept[..cut], left))
 }
 
 /// The workflow run in a check's address (`.../actions/runs/<run>/job/<job>`).
@@ -316,7 +384,13 @@ pub fn read_page(gh: &Path, host: &str, repo: &str, number: u64) -> Result<PrPag
 
 pub fn read_files(gh: &Path, host: &str, repo: &str, number: u64) -> Result<PrFiles, String> {
     let (all, truncated) = read_all(gh, host, &pull_path(host, repo, number, "files")?)?;
-    Ok(PrFiles { files: files_of(&all), truncated, limit: READ_LIMIT })
+    Ok(PrFiles { files: files_of(&all), truncated, limit: READ_LIMIT, diff_limits: DIFF_LIMITS })
+}
+
+/// GIT-039: the diff text of one file the page held back, asked for by the user.
+pub fn read_file_patch(gh: &Path, host: &str, repo: &str, number: u64, filename: &str) -> Result<String, String> {
+    let (all, _) = read_all(gh, host, &pull_path(host, repo, number, "files")?)?;
+    patch_of(&all, filename).ok_or_else(|| format!("{filename} is not among the first {READ_LIMIT} files of this pull request"))
 }
 
 /// A commit id as GitHub prints it: 7 to 64 hex digits.
@@ -501,6 +575,11 @@ pub async fn pr_files(host: String, repo: String, number: u64) -> Result<PrFiles
 }
 
 #[tauri::command]
+pub async fn pr_file_patch(host: String, repo: String, number: u64, filename: String) -> Result<String, String> {
+    blocking(move |gh| read_file_patch(gh, &host, &repo, number, &filename)).await
+}
+
+#[tauri::command]
 pub async fn pr_checks(host: String, repo: String, sha: String) -> Result<Vec<PrCheck>, String> {
     blocking(move |gh| read_checks(gh, &host, &repo, &sha)).await
 }
@@ -624,10 +703,54 @@ mod tests {
     }
 
     #[test]
+    fn big_diffs_are_held_back_with_their_size_and_a_budget_caps_what_is_sent() {
+        let lines = "+a\n".repeat(BIG_LINES + 1);
+        let size = "x".repeat(BIG_CHARS + 1);
+        let held = files_of(&json!([
+            { "filename": "lines.txt", "patch": lines },
+            { "filename": "size.txt", "patch": size },
+            { "filename": "ok.txt", "patch": "+a\n" }
+        ]));
+        assert_eq!(held[0].held, Some("lines"));
+        assert_eq!((held[0].patch.as_str(), held[0].patch_lines, held[0].patch_chars), ("", BIG_LINES + 1, 3 * (BIG_LINES + 1)));
+        assert_eq!(held[1].held, Some("size"));
+        assert_eq!(held[1].patch_chars, BIG_CHARS + 1);
+        assert_eq!(held[2].held, None);
+        // the limit itself is allowed
+        let edge = files_of(&json!([{ "filename": "e", "patch": "+\n".repeat(BIG_LINES) }]));
+        assert_eq!(edge[0].held, None);
+
+        // 5 files of 1.9 MB: the budget (8 MB) keeps four, the fifth waits; the smallest are kept first
+        let chunk = "y".repeat(BIG_CHARS - 150_000);
+        let many = files_of(&json!([
+            { "filename": "a", "patch": chunk }, { "filename": "b", "patch": chunk }, { "filename": "c", "patch": chunk },
+            { "filename": "d", "patch": chunk }, { "filename": "e", "patch": chunk }, { "filename": "tiny", "patch": "+z\n" }
+        ]));
+        let sent: usize = many.iter().map(|f| f.patch.chars().count()).sum();
+        assert!(sent <= DIFF_BUDGET, "sent {sent}");
+        assert_eq!(many.iter().filter(|f| f.held == Some("budget")).count(), 1);
+        assert_eq!(many[5].held, None);
+        assert_eq!(many[4].held, Some("budget"));
+        assert!(many[4].patch.is_empty() && many[4].patch_chars == chunk.len());
+        assert_eq!(DIFF_LIMITS, DiffLimits { lines: 20_000, chars: 2 * 1024 * 1024, budget: 8 * 1024 * 1024 });
+    }
+
+    #[test]
+    fn a_held_diff_loads_on_request_and_a_huge_one_ends_with_a_note() {
+        let v = json!([{ "filename": "a.rs", "patch": "+one\n+two\n" }, { "filename": "b.rs", "patch": "é\n".repeat(LOAD_MAX) }]);
+        assert_eq!(patch_of(&v, "a.rs").as_deref(), Some("+one\n+two\n"));
+        assert_eq!(patch_of(&v, "nope.rs"), None);
+        let big = patch_of(&v, "b.rs").unwrap();
+        assert!(big.chars().count() <= LOAD_MAX + 60, "{}", big.chars().count());
+        assert!(big.ends_with(" more lines of this file left out]\n"));
+        assert!(big.contains("[") && !big.starts_with('['));
+    }
+
+    #[test]
     fn files_checks_and_threads_are_read_from_githubs_answers() {
-        let files = files_of(&json!([{ "filename": "a.rs", "status": "modified", "additions": 3, "deletions": 1, "patch": "x".repeat(PATCH_MAX + 5) }, { "status": "added" }]));
+        let files = files_of(&json!([{ "filename": "a.rs", "status": "modified", "additions": 3, "deletions": 1, "patch": "x\ny\n" }, { "status": "added" }]));
         assert_eq!(files.len(), 1);
-        assert_eq!(files[0].patch.chars().count(), PATCH_MAX);
+        assert_eq!((files[0].patch.as_str(), files[0].held, files[0].patch_lines), ("x\ny\n", None, 2));
 
         assert_eq!(run_id_of("https://github.com/acme/app/actions/runs/123456/job/789"), Some(123456));
         assert_eq!(run_id_of("https://github.com/acme/app/runs/55"), None);
