@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ArrowLeft, ArrowRight, Close, Globe, Refresh, Stop, Target } from "../chrome/icons";
 import { BLANK, resolveAddress } from "./address";
 import { chordPlan, openerRefocus, windowHasFocus } from "./chord";
@@ -17,6 +18,8 @@ import { useKeymap } from "../keys/KeymapContext";
 import { backgroundBehind } from "./colour";
 import "./browser.css";
 import { can as canGo, fresh, started, type Pending } from "./history";
+import { arrived, closed as menuClosed, fresh as freshMenu, type Hit, lines as suggestionLines, type Menu, move as menuMove, pick as menuPick, shown as menuShown, typed as menuTyped } from "./suggest";
+import { busy as downloading, dismiss, type Download, fraction, prune, reduce as reduceDownloads, type Row as DownloadRow, status as downloadStatus } from "./downloads";
 import { type Diagnosis, type Event as LoadEvent, fresh as freshHealth, type Health, type Overlay, overlayModel, overlayOf, PROBE_MS, type Probe, step } from "./loadState";
 import { nextZoom, zoomPercent } from "./zoom";
 import { iconAt, iconFound, type SiteIcon } from "./site";
@@ -24,6 +27,7 @@ import { zoomFactor } from "../settings/zoom";
 import { notePage } from "../onboarding/guide";
 import { addNote, MAX_NOTES, type Note, notesMarkdown, type Pick, readPicks, sameAddress } from "./annotate";
 import type { SendTarget } from "../editor/notes";
+import { BLOCKED_SHOW_MS, type Blocked, blockedAgain, blockedLabel } from "./popups";
 
 /** `url`: the page or file the tab opens on instead of a blank page (SKILL-012 previews a kit result). */
 /** `cwd`: the worktree this tab belongs to (BROW-042: agents there drive it); `targets` / `onSend`: the agent panes
@@ -39,7 +43,11 @@ export type OpenInBrowser = string | { url: string; title: string };
 export const openDetail = (d: OpenInBrowser): { url: string; title?: string } => (typeof d === "string" ? { url: d } : d);
 
 /** T-241 (BROW-039): what a tab's address previews, when it is a worktree document of ours. */
-type Preview = { folder: string; file: string; path: string };
+type Preview = { folder: string; file: string; path: string; granted: boolean };
+/** T-240 (BROW-034): the Viewport Size menu; the names are the compat list's, the sizes live in browser_cli.rs DEVICES. */
+export const VIEWPORTS = ["Default", "Mobile S", "Mobile M", "Mobile L", "Tablet", "Laptop", "Laptop L", "Desktop"] as const;
+/** T-240 (BROW-028): what a cookie import reports. */
+type CookieReport = { imported: number; sites: number; skipped: number; google: number; reasons: string[] };
 
 /** T-241 (BROW-044): `kolux tab create` asks the window for a tab; one listener for the whole
  * window, started by the first pane, so a tab opens once however many panes there are. */
@@ -101,6 +109,15 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const [open, setOpen] = useState(false);
   const opened = useRef(false);
   const [address, setAddress] = useState("");
+  // T-238-b (BROW-004): the drop-down under the bar; `typing` while the bar holds the user's own
+  // text, so a page replacing the one underneath does not overwrite it. (BROW-013): the strip of
+  // this tab's downloads.
+  const [menu, setMenu] = useState<Menu>(freshMenu());
+  const menuRef = useRef(menu);
+  menuRef.current = menu;
+  const typing = useRef(false);
+  const suggestTimer = useRef<number | undefined>(undefined);
+  const [downloads, setDownloads] = useState<DownloadRow[]>([]);
   const [note, setNote] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [can, setCan] = useState({ back: false, forward: false });
@@ -135,6 +152,11 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const closeMe = useRef(onClose);
   closeMe.current = onClose;
   const [preview, setPreview] = useState<Preview | null>(null);
+  // T-159 (BROW-040): the outside address a previewed document asked to open; offered, never followed.
+  const [outbound, setOutbound] = useState<string | null>(null);
+  // T-272-c (BROW-016): tabs this tab's family asked for past its allowance, said in the toolbar.
+  const [blocked, setBlocked] = useState<Blocked>(null);
+  const blockedTimer = useRef<number | undefined>(undefined);
   // T-074 (BROW-008, BROW-009): the page's health. The engine says only started / finished, so the
   // pane probes the page (browser_probe) and feeds loadState's machine; the overlay it decides on
   // covers the pane body while the page itself is hidden under it (a child web view cannot be
@@ -179,6 +201,8 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     let alive = true;
     const unlisteners: UnlistenFn[] = [];
     (async () => {
+      // T-283 (BROW-010): one wake signal for every pane; each rechecks its own page.
+      unlisteners.push(await listen("browser-wake", () => feed({ t: "woke" })));
       unlisteners.push(
         await listen<{ id: number; event: string; url: string }>("browser-load", (e) => {
           if (e.payload.id !== id) return;
@@ -197,7 +221,8 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           hist.current = h;
           setCan(canGo(h));
           setLoading(true);
-          setAddress(url === BLANK ? "" : url);
+          setOutbound(null);
+          if (!typing.current) setAddress(url === BLANK ? "" : url); // BROW-004: typed text survives
           if (!sameAddress(at.current, url)) {
             setNotes([]);
             setDraft(null);
@@ -207,6 +232,13 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           invoke<Preview | null>("browser_preview_of", { url })
             .then((p) => alive && setPreview(p ?? null))
             .catch(() => setPreview(null));
+        }),
+      );
+      // T-238-b (BROW-013): this tab's downloads, one event per change.
+      unlisteners.push(
+        await listen<Download>("browser-download", (e) => {
+          if (e.payload.id !== id) return;
+          setDownloads((rows) => reduceDownloads(rows, e.payload, Date.now()));
         }),
       );
       // BROW-014: a link the page opens as a new window, or Mod / middle click, becomes another tab
@@ -219,6 +251,22 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           const { front } = e.payload;
           const appHasFocus = document.hasFocus();
           void windowHasFocus().then((w) => openerRefocus(front, appHasFocus, w) && setTimeout(() => focusMe.current?.(), 0));
+        }),
+      );
+      // T-272-c: a page here asked for another tab after its family's allowance was used up.
+      unlisteners.push(
+        await listen<{ id: number }>("browser-blocked", (e) => {
+          if (e.payload.id !== id) return;
+          setBlocked((b) => blockedAgain(b, Date.now()));
+          window.clearTimeout(blockedTimer.current);
+          blockedTimer.current = window.setTimeout(() => setBlocked(null), BLOCKED_SHOW_MS);
+        }),
+      );
+      // T-159 (BROW-040): a previewed document asked to leave its folder; the full address is
+      // offered once and nothing opens until Open is clicked.
+      unlisteners.push(
+        await listen<{ id: number; url: string }>("browser-outbound", (e) => {
+          if (e.payload.id === id) setOutbound(e.payload.url);
         }),
       );
       unlisteners.push(
@@ -408,14 +456,42 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
       .catch((err) => setNote(String(err)));
   };
 
+  // T-238-b (BROW-013): finished rows leave the strip on their own after a while.
+  useEffect(() => {
+    if (downloads.length === 0 || downloading(downloads)) return;
+    const t = window.setInterval(() => setDownloads((rows) => prune(rows, Date.now())), 1000);
+    return () => window.clearInterval(t);
+  }, [downloads]);
+
+  // T-238-b (BROW-004): each keystroke asks the back end for ranked history hits; a late answer
+  // for text the user has moved past is dropped by the model.
+  const onTyped = (text: string) => {
+    typing.current = true;
+    setAddress(text);
+    setMenu((m) => menuTyped(m, text));
+    window.clearTimeout(suggestTimer.current);
+    if (!text.trim()) return;
+    suggestTimer.current = window.setTimeout(() => {
+      invoke<Hit[]>("browser_suggest", { text })
+        .then((hits) => setMenu((m) => arrived(m, text, hits)))
+        .catch(() => {});
+    }, 60);
+  };
+  const closeMenu = () => setMenu((m) => (m.open ? menuClosed(m) : m));
+
   // BROW-003: Enter reads the bar; an invalid address is said in the notice and the page stays.
   const navigateTo = (url: string) => {
     setNote(null);
+    setBlocked(null); // T-272-c: the user's own navigation clears the note
+    typing.current = false;
+    setMenu((m) => menuClosed(m));
     pending.current = null;
     feed({ t: "navigate" }); // a new address gets its own recovery allowance (BROW-009)
     invoke("browser_navigate", { id, url }).catch((err) => setNote(String(err)));
   };
   const go = () => {
+    const picked = menuPick(menuRef.current);
+    if (picked) return navigateTo(picked.url);
     const r = resolveAddress(address);
     if ("error" in r) return setNote(r.error);
     navigateTo(r.url);
@@ -449,6 +525,28 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
     if (text) invoke("browser_go", { id, what: back ? "findBack" : "find", text }).catch((err) => setNote(String(err)));
   };
   // BROW-005: the toolbar; a reload is the same page, so it leaves the history alone.
+  // T-240 (BROW-034): the chosen preset; it holds across loads because the backend re-applies it
+  // on every load's start (cli::emu_state), so the pane only remembers the name.
+  const [viewport, setViewport] = useState<string>(VIEWPORTS[0]);
+  const pickViewport = (name: string) => {
+    setViewport(name);
+    invoke<string>("browser_viewport", { id, name: name === VIEWPORTS[0] ? null : name }).catch((err) => setNote(String(err)));
+  };
+  // T-240 (BROW-028): the user picks a JSON list file; the report says what came in and what did not.
+  const importCookies = async () => {
+    const picked = await openDialog({ multiple: false, directory: false, title: "Import cookies from a JSON list", filters: [{ name: "Cookie list (JSON)", extensions: ["json", "txt"] }] }).catch(() => null);
+    if (typeof picked !== "string") return;
+    try {
+      const r = await invoke<CookieReport>("browser_cookies_import", { id, path: picked });
+      const parts = [`${r.imported} cookie${r.imported === 1 ? "" : "s"} for ${r.sites} site${r.sites === 1 ? "" : "s"} imported`];
+      if (r.skipped) parts.push(`${r.skipped} skipped (${r.reasons.join("; ")})`);
+      if (r.google) parts.push(`${r.google} Google sign-in cookie${r.google === 1 ? "" : "s"} left out`);
+      setNote(parts.join("; "));
+    } catch (err) {
+      setNote(String(err));
+    }
+  };
+
   const act = (what: "back" | "forward" | "reload" | "stop") => {
     // BROW-005 / BROW-008 / BROW-009: on a failed or crashed page every reload trigger is a Retry.
     if (what === "reload" && overlay) return retry();
@@ -520,6 +618,24 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
               <button type="button" className="ib preview-copy" title="Copy the file's path" aria-label="Copy path" onClick={() => void navigator.clipboard?.writeText(preview.path).catch(() => {})}>
                 copy
               </button>
+              {!preview.granted && (
+                // T-159 (BROW-040): until allowed, the preview reads only its own document.
+                <button
+                  type="button"
+                  className="ib preview-copy"
+                  title={`Let this preview read the other files in ${preview.folder} (styles, scripts, images); it reads only its own document until then`}
+                  onClick={() => {
+                    invoke("browser_preview_grant", { url: at.current })
+                      .then(() => {
+                        setPreview((p) => (p ? { ...p, granted: true } : p));
+                        return invoke("browser_go", { id, what: "reload" });
+                      })
+                      .catch((err) => setNote(String(err)));
+                  }}
+                >
+                  Allow folder
+                </button>
+              )}
             </span>
           ) : null}
           <input
@@ -528,18 +644,41 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
             style={preview ? { display: "none" } : undefined}
             aria-label="Address"
             placeholder="Address"
-            value={address}
+            value={menuShown(menu, address)}
             autoFocus
+            role="combobox"
+            aria-expanded={menu.open && menu.items.length > 0}
+            aria-controls={`suggest-${id}`}
+            aria-autocomplete="list"
             onFocus={(e) => e.currentTarget.select()}
-            onChange={(e) => setAddress(e.currentTarget.value)}
+            onBlur={() => {
+              // BROW-004: leaving the bar (a click into the page takes the keyboard too) closes the
+              // list and keeps the typed text; once the bar is left, the next load may show its address.
+              closeMenu();
+              typing.current = false;
+            }}
+            onChange={(e) => onTyped(e.currentTarget.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") go();
+              else if (e.key === "Escape") {
+                e.preventDefault();
+                closeMenu();
+              } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                if (!menu.open) return;
+                e.preventDefault();
+                setMenu((m) => menuMove(m, e.key === "ArrowDown" ? 1 : -1));
+              }
             }}
           />
         </span>
         {badge && (
           <span className="zoom-badge" role="status" aria-label="Zoom">
             {badge}
+          </span>
+        )}
+        {blockedLabel(blocked, blocked?.at ?? 0) && (
+          <span className="zoom-badge" data-popups-blocked role="status" title="This page tried to open more tabs than it may; the rest were blocked">
+            {blockedLabel(blocked, blocked?.at ?? 0)}
           </span>
         )}
         {/* The app runs these for a chord pressed in the app or inside the page (App's browserAction
@@ -549,6 +688,18 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         <button hidden data-go="zoomOut" onClick={() => zoomBy("out")} />
         <button hidden data-go="zoomReset" onClick={() => zoomBy("reset")} />
         <span className="right">
+          {/* T-240 (BROW-034): the page at a device size; Default is the pane's own size again. */}
+          <select className="viewport" value={viewport} onChange={(e) => pickViewport(e.target.value)} title="Viewport size" aria-label="Viewport size">
+            {VIEWPORTS.map((v) => (
+              <option key={v} value={v}>
+                {v}
+              </option>
+            ))}
+          </select>
+          {/* T-240 (BROW-028): cookies from a JSON list file go into this tab's profile. */}
+          <button className="ib cookies" onClick={importCookies} title="Import cookies from a file (JSON list)" aria-label="Import cookies">
+            <Globe size={12} />
+          </button>
           {/* BROW-037: pick elements in the page and write notes on them for an agent. */}
           <button className={`ib${picking ? " on" : ""}`} data-go="annotate" onClick={togglePicking} title={picking ? "Stop picking elements" : "Annotate: pick elements and write notes for an agent"} aria-label="Annotate" aria-pressed={picking}>
             <Target size={12} />
@@ -558,6 +709,50 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           </button>
         </span>
       </header>
+      {/* BROW-004: the drop-down sits in the pane's flow (a child web view cannot be covered), so
+          the page below moves down while it is open. Mouse-down, not click, so the bar keeps focus. */}
+      {menu.open && menu.items.length > 0 && (
+        <ul className="suggest" id={`suggest-${id}`} role="listbox" aria-label="Suggestions">
+          {menu.items.map((s, i) => {
+            const [head, sub] = suggestionLines(s);
+            return (
+              <li
+                key={`${s.kind}:${s.url}`}
+                role="option"
+                aria-selected={i === menu.cursor}
+                className={`${s.kind}${i === menu.cursor ? " on" : ""}`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  navigateTo(s.url);
+                }}
+              >
+                <span className="head">{head}</span>
+                {sub && <span className="sub">{sub}</span>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {/* BROW-013: the tab's downloads, with bytes received and the total when known. */}
+      {downloads.length > 0 && (
+        <ul className="downloads" role="status" aria-label="Downloads">
+          {downloads.map((d) => {
+            const f = fraction(d);
+            return (
+              <li key={d.key} className={d.state} title={d.path}>
+                <span className="name">{d.name}</span>
+                <span className="state">{downloadStatus(d)}</span>
+                {d.state === "running" && <progress max={1} value={f ?? undefined} aria-label="Download progress" />}
+                {d.state !== "running" && (
+                  <button className="ib" onClick={() => setDownloads((rows) => dismiss(rows, d.key))} title="Dismiss" aria-label="Dismiss">
+                    <Close size={10} />
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
       {find !== null && (
         <div className="find-bar" role="search">
           <input
@@ -652,6 +847,27 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
       {note && (
         <div className="notice" role="alert">
           {note}
+        </div>
+      )}
+      {outbound && (
+        <div className="notice preview-ask" role="alertdialog" aria-label="Open an outside address?">
+          <span>
+            This preview wants to open <code>{outbound}</code>
+          </span>
+          <button
+            type="button"
+            className="ib"
+            onClick={() => {
+              const url = outbound;
+              setOutbound(null);
+              navigateTo(url);
+            }}
+          >
+            Open
+          </button>
+          <button type="button" className="ib" onClick={() => setOutbound(null)}>
+            Cancel
+          </button>
         </div>
       )}
       <div ref={host} className="pane-body">

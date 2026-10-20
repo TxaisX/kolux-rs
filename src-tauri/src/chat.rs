@@ -12,7 +12,11 @@
 //! (`type`, `uuid`, `timestamp`, `isSidechain`, `isMeta`, `message.{id, role, content,
 //! stop_reason}`); Codex writes a session rollout under `<home>/sessions/YYYY/MM/DD/*.jsonl`
 //! (`timestamp`, `type`, `payload`; the first line's payload carries the session's `cwd`).
-//! Grok and omp readers wait for a public description of their files (T-420).
+//! omp (oh-my-pi, T-325-b) writes `<agent dir>/sessions/<folder>/<timestamp>_<id>.jsonl`: a
+//! `session` header line (`cwd`), then `message` entries (`message.role` user, assistant,
+//! toolResult; content blocks `text`, `thinking`, `toolCall`, `image`) and bookkeeping entries.
+//! Grok's session files are not described in its public documentation (it names only
+//! `~/.grok/sessions/`), so there is no Grok reader yet.
 
 use std::collections::HashMap;
 use std::fs;
@@ -23,7 +27,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::Value;
 
-use crate::chat_tools::{cap, claude_step, codex_output, codex_step, Step, MAX_OUTPUT};
+use crate::chat_tools::{cap, claude_step, codex_output, codex_step, omp_step, Step, MAX_OUTPUT};
 
 /// T-050-c: the live-agent decision and the follower for transcripts Kolux did not start
 /// (declared here so the shared module list in lib.rs is untouched).
@@ -32,7 +36,7 @@ pub mod live;
 
 /// CHAT-002: the agents whose sessions can be shown as chat. Grok and omp are offered once their
 /// readers exist (T-420); until then they stay terminals.
-pub const SUPPORTED: [&str; 3] = ["claude", "openclaude", "codex"];
+pub const SUPPORTED: [&str; 4] = ["claude", "openclaude", "codex", "omp"];
 /// CHAT-006: a missing transcript shows an error only after this long.
 const GIVE_UP: Duration = Duration::from_secs(60);
 /// While attached, how often the file is checked for new lines (catches what a watcher misses).
@@ -94,6 +98,7 @@ impl Item {
 enum Format {
     Claude,
     Codex,
+    Omp,
 }
 
 /// Turns transcript lines into items, keeping the conversation so a later line can extend one.
@@ -222,11 +227,13 @@ fn str_at<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
 fn image_url(block: &Value) -> Option<String> {
     // Claude: { type: image, source: { type: base64, media_type, data } }; Codex: { type: input_image, image_url }.
     let url = match str_at(block, "type")? {
-        "image" => {
+        "image" if block.get("source").is_some() => {
             let src = block.get("source")?;
             format!("data:{};base64,{}", str_at(src, "media_type").unwrap_or("image/png"), str_at(src, "data")?)
         }
         "input_image" => str_at(block, "image_url")?.to_string(),
+        // omp (and Pi): { type: image, data (base64), mimeType }.
+        "image" if block.get("source").is_none() => format!("data:{};base64,{}", str_at(block, "mimeType").unwrap_or("image/png"), str_at(block, "data")?),
         _ => return None,
     };
     (url.len() <= MAX_IMAGE && url.starts_with("data:image/")).then_some(url)
@@ -276,6 +283,7 @@ impl Parser {
         match self.format {
             Format::Claude => self.claude(&v),
             Format::Codex => self.codex(&v),
+            Format::Omp => self.omp(&v),
         }
     }
 
@@ -496,6 +504,91 @@ impl Parser {
     }
 }
 
+impl Parser {
+    /// omp's session log (T-325-b): `message` entries in order; the entry's `id` names the item.
+    fn omp(&mut self, v: &Value) -> Vec<String> {
+        let at = str_at(v, "timestamp").and_then(crate::capture::parse_time);
+        match str_at(v, "type").unwrap_or("") {
+            "compaction" => return self.compacted(at),
+            "message" => {}
+            _ => return Vec::new(), // the header, model and title changes, usage, session_init (the system prompt)…
+        }
+        let Some(msg) = v.get("message") else { return Vec::new() };
+        let id = str_at(v, "id").map(str::to_string).unwrap_or_else(|| format!("line-{}", self.line_no));
+        let blocks: Vec<Value> = match msg.get("content") {
+            Some(Value::String(s)) => vec![serde_json::json!({ "type": "text", "text": s })],
+            Some(Value::Array(a)) => a.clone(),
+            _ => Vec::new(),
+        };
+        let texts: Vec<&str> = blocks.iter().filter(|b| str_at(b, "type") == Some("text")).filter_map(|b| str_at(b, "text")).collect();
+        match str_at(msg, "role").unwrap_or("") {
+            "user" => {
+                let images: Vec<String> = blocks.iter().filter_map(image_url).collect();
+                let Some((kind, words)) = user_words(&texts.join("
+")).or_else(|| (!images.is_empty()).then(|| ("text", String::new()))) else { return Vec::new() };
+                let words = if images.is_empty() { words } else { drop_image_markers(&words) };
+                if words.is_empty() && images.is_empty() {
+                    return Vec::new();
+                }
+                self.open = true;
+                self.turn += 1;
+                vec![self.put(Item { images, ..Item::of(id, "user", kind, words, at) }, false)]
+            }
+            "toolResult" => {
+                let out = texts.join("
+");
+                let failed = msg.get("isError").and_then(Value::as_bool) == Some(true);
+                self.result(str_at(msg, "toolCallId").unwrap_or(""), out, failed, at).into_iter().collect()
+            }
+            "assistant" => {
+                let stop = str_at(msg, "stopReason").unwrap_or("");
+                if !stop.is_empty() && stop != "toolUse" {
+                    self.open = false;
+                }
+                let mut changed = Vec::new();
+                // Prose and tool steps from the same message stay apart, as Claude's do (CHAT-013).
+                let (mut part, mut prose) = (0u32, true);
+                for b in &blocks {
+                    match str_at(b, "type").unwrap_or("") {
+                        "text" => {
+                            let text = clean(str_at(b, "text").unwrap_or("")).trim().to_string();
+                            if text.is_empty() {
+                                continue;
+                            }
+                            if !prose {
+                                part += 1;
+                                prose = true;
+                            }
+                            let item = if part == 0 { id.clone() } else { format!("{id}#{part}") };
+                            changed.push(self.put(Item::of(item, "assistant", "text", text, at), true));
+                        }
+                        "thinking" => {
+                            prose = false;
+                            let text = clean(str_at(b, "thinking").unwrap_or("")).trim().to_string();
+                            if !text.is_empty() {
+                                changed.push(self.put(Item::of(format!("thought-{}-{}", self.line_no, changed.len()), "assistant", "thought", text, at), false));
+                            }
+                        }
+                        "toolCall" => {
+                            prose = false;
+                            let step = omp_step(str_at(b, "id").unwrap_or(""), str_at(b, "name").unwrap_or(""), b.get("arguments").unwrap_or(&Value::Null));
+                            changed.push(self.step(step, at));
+                        }
+                        _ => {}
+                    }
+                }
+                match stop {
+                    "aborted" => changed.push(self.put(Item::of(format!("abort-{}", self.line_no), "status", "interrupted", "Interrupted".into(), at), false)),
+                    "error" => changed.extend(self.notice(str_at(msg, "errorMessage").unwrap_or("The agent stopped with an error."), at)),
+                    _ => {}
+                }
+                changed
+            }
+            _ => Vec::new(), // developer prompts, bash and python runs, file mentions
+        }
+    }
+}
+
 /// Follows one file as it grows. Only whole lines come out; a line still being written waits.
 /// The most of a transcript the first read takes in (its newest part), so a very long session
 /// opens quickly; paging back to older turns is T-334's.
@@ -582,18 +675,32 @@ fn env_of<'a>(pane_env: &'a [(String, String)], key: &str) -> Option<&'a str> {
     pane_env.iter().rev().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str()).filter(|v| !v.trim().is_empty())
 }
 
+/// The environment variables whose value decides where an agent keeps its transcripts. A pane's
+/// own copies of these (the account it was started with) come first in `homes`.
+#[allow(dead_code)] // used by terminal.rs once evidence/chat-T-325-b-terminal.rs.patch is applied
+pub const HOME_KEYS: [&str; 5] = [crate::claude_accounts::CONFIG_ENV, crate::codex_accounts::HOME_ENV, crate::grok::HOME_ENV, "OMP_CODING_AGENT_DIR", "PI_CODING_AGENT_DIR"];
+
 /// CHAT-007: the home folders to look in, in order. Claude (and OpenClaude, read the same way):
 /// the config folder the pane was started with, then Kolux's own CLAUDE_CONFIG_DIR, then
 /// `~/.claude`. Codex: the managed account's home the pane was started with, then CODEX_HOME,
-/// then `~/.codex`.
+/// then `~/.codex`. Grok: GROK_HOME, then `~/.grok`. omp: its agent directory variable (the
+/// public environment-variable page names `PI_CODING_AGENT_DIR`; `OMP_CODING_AGENT_DIR` is the
+/// name this app's spec uses), then `<home>/<PI_CONFIG_DIR, default .omp>/agent`.
 pub fn homes(agent: &str, pane_env: &[(String, String)], process_env: impl Fn(&str) -> Option<String>, user_home: Option<PathBuf>) -> Vec<PathBuf> {
-    let (key, dot) = match agent {
-        "claude" | "openclaude" => (crate::claude_accounts::CONFIG_ENV, ".claude"),
-        "codex" => (crate::codex_accounts::HOME_ENV, ".codex"),
+    let (keys, dot): (&[&str], PathBuf) = match agent {
+        "claude" | "openclaude" => (&[crate::claude_accounts::CONFIG_ENV], PathBuf::from(".claude")),
+        "codex" => (&[crate::codex_accounts::HOME_ENV], PathBuf::from(".codex")),
+        "grok" => (&[crate::grok::HOME_ENV], PathBuf::from(".grok")),
+        "omp" => {
+            let root = process_env("PI_CONFIG_DIR").filter(|v| !v.trim().is_empty()).unwrap_or_else(|| ".omp".to_string());
+            (&["OMP_CODING_AGENT_DIR", "PI_CODING_AGENT_DIR"], PathBuf::from(root.trim()).join("agent"))
+        }
         _ => return Vec::new(),
     };
+    let mut candidates: Vec<Option<PathBuf>> = keys.iter().map(|k| env_of(pane_env, k).map(PathBuf::from)).collect();
+    candidates.extend(keys.iter().map(|k| process_env(k).filter(|v| !v.trim().is_empty()).map(PathBuf::from)));
+    candidates.push(user_home.map(|h| h.join(dot)));
     let mut out: Vec<PathBuf> = Vec::new();
-    let candidates = [env_of(pane_env, key).map(PathBuf::from), process_env(key).filter(|v| !v.trim().is_empty()).map(PathBuf::from), user_home.map(|h| h.join(dot))];
     for c in candidates.into_iter().flatten() {
         if !out.contains(&c) {
             out.push(c);
@@ -625,6 +732,23 @@ fn codex_cwd(path: &Path) -> Option<String> {
     v.pointer("/payload/cwd").and_then(Value::as_str).map(str::to_string)
 }
 
+/// omp writes a `session` header line first; its `cwd` names the folder the session runs in.
+fn omp_cwd(path: &Path) -> Option<String> {
+    let mut f = fs::File::open(path).ok()?;
+    let mut head = vec![0u8; 64 * 1024];
+    let n = f.read(&mut head).ok()?;
+    let first = String::from_utf8_lossy(&head[..n]).lines().next()?.to_string();
+    let v: Value = serde_json::from_str(&first).ok()?;
+    (str_at(&v, "type") == Some("session")).then(|| str_at(&v, "cwd").map(str::to_string)).flatten()
+}
+
+/// Every omp session log under `home` written since `since`: `sessions/<folder>/*.jsonl` (the
+/// nested `<session>/<agent>.jsonl` files are subagents' and stay out).
+pub(crate) fn omp_sessions(home: &Path, since: SystemTime) -> Vec<PathBuf> {
+    let folders = fs::read_dir(home.join("sessions")).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir());
+    folders.flat_map(|d| jsonl_in(&d).collect::<Vec<_>>()).filter(|f| modified(f).is_some_and(|m| m >= since)).collect()
+}
+
 pub(crate) fn jsonl_in(dir: &Path) -> impl Iterator<Item = PathBuf> {
     fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
 }
@@ -651,6 +775,7 @@ pub fn find(agent: &str, homes: &[PathBuf], cwd: &str, since: SystemTime) -> Opt
         let hit = match agent {
             "claude" | "openclaude" => newest(jsonl_in(&h.join("projects").join(claude_folder(cwd))), since),
             "codex" => newest(codex_rollouts(h, since).into_iter().filter(|f| codex_cwd(f).is_some_and(|c| same_dir(&c, cwd))), since),
+            "omp" => newest(omp_sessions(h, since).into_iter().filter(|f| omp_cwd(f).is_some_and(|c| same_dir(&c, cwd))), since),
             _ => None,
         };
         if hit.is_some() {
@@ -696,7 +821,11 @@ pub struct Follow {
 
 impl Follow {
     pub fn new(agent: &'static str, cwd: String, homes: Vec<PathBuf>, since: SystemTime, now: Instant) -> Self {
-        let format = if agent == "codex" { Format::Codex } else { Format::Claude };
+        let format = match agent {
+            "codex" => Format::Codex,
+            "omp" => Format::Omp,
+            _ => Format::Claude,
+        };
         Follow { agent, cwd, homes, since, tail: None, parser: Parser::new(format), opened: now, attempts: 0, next_try: now, sent_first: false, loose: false }
     }
 
@@ -1237,5 +1366,116 @@ mod tests {
         let d = follow_for(pane, "codex", false, make("codex", false));
         assert!(!Arc::ptr_eq(&c, &d), "the same agent launched by Kolux instead is followed strictly again");
         FOLLOWS.lock().unwrap().as_mut().unwrap().remove(&pane);
+    }
+
+    // T-325-b: omp (synthetic lines shaped by omp's public session and message-type pages).
+    fn omp_msg(id: &str, message: Value) -> Value {
+        json!({ "type": "message", "id": id, "parentId": null, "timestamp": "2026-03-01T10:00:00Z", "message": message })
+    }
+
+    #[test]
+    fn chat007_omp_turns_come_out_in_order_with_steps_thoughts_and_results() {
+        let mut p = Parser::new(Format::Omp);
+        feed(&mut p, &[
+            json!({ "type": "session", "version": 3, "id": "s1", "timestamp": "2026-03-01T10:00:00Z", "cwd": "C:\\work" }),
+            json!({ "type": "session_init", "id": "i1", "systemPrompt": "never shown" }),
+            json!({ "type": "model_change", "id": "m0", "model": "x" }),
+            omp_msg("d1", json!({ "role": "developer", "content": "hidden prompt" })),
+            omp_msg("u1", json!({ "role": "user", "content": "<system-reminder>hidden</system-reminder>Fix the\u{7} bug", "timestamp": 1 })),
+            omp_msg("a1", json!({ "role": "assistant", "stopReason": "toolUse", "content": [
+                { "type": "thinking", "thinking": "plan it", "thinkingSignature": "opaque" },
+                { "type": "text", "text": "Looking." },
+                { "type": "toolCall", "id": "c1", "name": "read", "arguments": { "path": "src/main.rs" } },
+                { "type": "text", "text": "Next." },
+            ] })),
+            omp_msg("r1", json!({ "role": "toolResult", "toolCallId": "c1", "toolName": "read", "content": [{ "type": "text", "text": "fn main() {}" }], "isError": false })),
+            omp_msg("b1", json!({ "role": "bashExecution", "command": "ls" })),
+        ]);
+        assert!(p.open, "a tool-use stop leaves the turn open");
+        let rows: Vec<(String, &str, String)> = p.items().iter().map(|i| (i.role.to_string(), i.kind, i.text.clone())).collect();
+        assert_eq!(rows, vec![
+            ("user".into(), "text", "Fix the bug".into()),
+            ("assistant".into(), "thought", "plan it".into()),
+            ("assistant".into(), "text", "Looking.".into()),
+            ("assistant".into(), "tool", String::new()),
+            ("assistant".into(), "text", "Next.".into()),
+        ]);
+        let tool = p.items()[3].tool.as_ref().unwrap();
+        assert_eq!((tool.group, tool.preview.as_str(), tool.done, tool.output.as_deref()), ("read", "main.rs", true, Some("fn main() {}")));
+        assert_eq!(p.items()[0].at, Some(1_772_359_200_000));
+        feed(&mut p, &[omp_msg("a2", json!({ "role": "assistant", "stopReason": "stop", "content": [{ "type": "text", "text": "Done." }] }))]);
+        assert!(!p.open);
+    }
+
+    #[test]
+    fn chat007_omp_aborted_and_failed_turns_close_and_say_so() {
+        let mut p = Parser::new(Format::Omp);
+        feed(&mut p, &[
+            omp_msg("u1", json!({ "role": "user", "content": [{ "type": "text", "text": "go" }, { "type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png" }] })),
+            omp_msg("a1", json!({ "role": "assistant", "stopReason": "aborted", "content": [] })),
+        ]);
+        assert!(!p.open, "a turn that was cut short does not look busy");
+        assert_eq!(p.items()[0].images, vec!["data:image/png;base64,iVBORw0KGgo=".to_string()]);
+        assert_eq!((p.items()[1].kind, p.items()[1].text.as_str()), ("interrupted", "Interrupted"));
+        feed(&mut p, &[
+            omp_msg("u2", json!({ "role": "user", "content": "again" })),
+            omp_msg("a2", json!({ "role": "assistant", "stopReason": "error", "errorMessage": "rate limited", "content": [] })),
+            omp_msg("r2", json!({ "role": "toolResult", "toolCallId": "none", "content": [] })),
+        ]);
+        assert!(!p.open);
+        let last = p.items().last().unwrap();
+        assert_eq!((last.kind, last.text.as_str()), ("notice", "rate limited"));
+        // a bash call and its failing result
+        feed(&mut p, &[
+            omp_msg("a3", json!({ "role": "assistant", "stopReason": "toolUse", "content": [{ "type": "toolCall", "id": "c9", "name": "bash", "arguments": { "command": "make test" } }] })),
+            omp_msg("r3", json!({ "role": "toolResult", "toolCallId": "c9", "toolName": "bash", "content": [{ "type": "text", "text": "boom" }], "isError": true })),
+        ]);
+        let t = p.items().last().unwrap().tool.as_ref().unwrap();
+        assert_eq!((t.group, t.preview.as_str(), t.failed, t.done), ("shell", "make test", true, true));
+    }
+
+    #[test]
+    fn chat007_omp_homes_follow_its_environment_variables_then_the_default() {
+        let user = Some(PathBuf::from("C:\\u"));
+        let none = |_: &str| None;
+        assert_eq!(homes("omp", &[], none, user.clone()), vec![PathBuf::from("C:\\u").join(".omp").join("agent")]);
+        let env = vec![("PI_CODING_AGENT_DIR".to_string(), "C:\\pane".to_string())];
+        let process = |k: &str| match k {
+            "OMP_CODING_AGENT_DIR" => Some("C:\\omp".to_string()),
+            "PI_CONFIG_DIR" => Some(".ompx".to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            homes("omp", &env, process, user.clone()),
+            vec![PathBuf::from("C:\\pane"), PathBuf::from("C:\\omp"), PathBuf::from("C:\\u").join(".ompx").join("agent")],
+            "the pane's own, then this app's variable, then the default under the config root"
+        );
+        assert_eq!(homes("grok", &[("GROK_HOME".into(), "C:\\g".into())], none, user.clone()), vec![PathBuf::from("C:\\g"), PathBuf::from("C:\\u").join(".grok")]);
+        assert!(HOME_KEYS.contains(&"PI_CODING_AGENT_DIR") && HOME_KEYS.contains(&"GROK_HOME"));
+    }
+
+    #[test]
+    fn chat007_omp_is_found_by_the_folder_in_its_header_and_subagent_logs_are_skipped() {
+        let d = temp("chat-omp");
+        let bucket = d.join("sessions").join("--C--work--");
+        let other = d.join("sessions").join("--C--other--");
+        fs::create_dir_all(bucket.join("2026-10-20_abc")).unwrap();
+        fs::create_dir_all(&other).unwrap();
+        let header = |cwd: &str| json!({ "type": "session", "version": 3, "id": "s", "cwd": cwd }).to_string() + "\n";
+        fs::write(bucket.join("2026-10-20_abc.jsonl"), header("c:/work/")).unwrap();
+        fs::write(bucket.join("2026-10-20_abc").join("Sub.jsonl"), header("c:/work/")).unwrap();
+        fs::write(other.join("2026-10-20_def.jsonl"), header("C:\\other")).unwrap();
+        fs::write(other.join("noheader.jsonl"), "{\"type\":\"message\"}\n").unwrap();
+        let since = SystemTime::now() - Duration::from_secs(5);
+        assert_eq!(find("omp", std::slice::from_ref(&d.0), "C:\\work", since), Some(bucket.join("2026-10-20_abc.jsonl")));
+        assert_eq!(find("omp", std::slice::from_ref(&d.0), "C:\\none", since), None);
+        assert_eq!(find("omp", std::slice::from_ref(&d.0), "C:\\work", SystemTime::now() + Duration::from_secs(60)), None, "written before the session began: not its log");
+        assert_eq!(chat_agent(Some("omp")), Some("omp"));
+        assert_eq!(chat_agent(Some("grok")), None, "no public description of Grok's session files yet");
+        // a follower of an omp session builds the omp reader
+        let mut f = Follow::new("omp", "C:\\work".into(), vec![d.0.clone()], since, Instant::now());
+        fs::write(bucket.join("2026-10-20_abc.jsonl"), header("c:/work/") + &omp_msg("u1", json!({ "role": "user", "content": "hi" })).to_string() + "\n").unwrap();
+        let r = f.poll(Instant::now(), None, true, false);
+        assert_eq!((r.state, r.items.len(), r.open), ("ready", 1, true));
     }
 }
