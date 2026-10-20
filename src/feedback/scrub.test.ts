@@ -139,3 +139,134 @@ test("fix1: the new rules are idempotent too", () => {
   const messy = "see C:\\Users\\Jane Doe\\x.txt\n-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\ntool --password hunter2 `D:\\w\\a.ts` file:///home/jane/x/y glpat-FAKEFAKEFAKE12345678";
   expect(scrub(scrub(messy))).toBe(scrub(messy));
 });
+
+// FIX-2 (council review of c75c2b61). All names and secrets are made up.
+test("fix2: a user folder is found in any letter case and in the Git Bash and WSL spellings, with a space in the name", () => {
+  const paths = [
+    "C:\\users\\Jane Doe\\x.txt",
+    "c:\\USERS\\jane doe\\x",
+    "/c/Users/Jane Doe/x",
+    "/C/users/jane doe/x",
+    "/mnt/c/Users/Jane Doe/x",
+    "/mnt/d/users/jane doe/x",
+    "/cygdrive/c/Users/Jane Doe/x",
+    "//wsl$/Ubuntu/home/jane doe/x",
+    "//wsl$/Ubuntu-22.04/home/Jane Doe/x",
+    "\\\\wsl$\\Ubuntu\\home\\jane doe\\x",
+    "\\\\wsl.localhost\\Ubuntu\\home\\jane doe\\x",
+    "\\\\wsl.localhost\\Debian\\mnt\\c\\Users\\Jane Doe\\x",
+    "/HOME/jane doe/x",
+  ];
+  for (const p of paths) {
+    for (const text of [`see ${p}`, `failed to open "${p} y.txt" twice`, `run \`${p} y\` now`]) {
+      const out = scrub(text);
+      for (const gone of ["Jane", "jane", "Doe", "doe"]) expect(out, text).not.toContain(gone);
+      expect(out, text).toContain("[path]");
+    }
+    expect(scrub(`see ${p}`), p).toBe("see [path]");
+  }
+});
+
+test("fix2: web addresses with home or users in them are still left alone", () => {
+  for (const keep of ["see https://example.org/home/page and https://example.org/Users/list", "see http://c/Users is a host", "git clone https://wsl.localhost/home/a"]) {
+    expect(scrub(keep), keep).toBe(keep);
+  }
+});
+
+test("fix2: the long-path prefixes (backslash backslash, question mark or dot, backslash) and the UNC form are masked whole", () => {
+  const paths = [
+    "\\\\?\\UNC\\fileserver\\home$\\jane\\x",
+    "\\\\?\\UNC\\fileserver\\Users\\Jane Doe\\x",
+    "\\\\?\\UNC\\fileserver\\share\\client\\a.ts",
+    "\\\\?\\C:\\Users\\jane\\x.txt",
+    "\\\\?\\C:\\Users\\Jane Doe\\x.txt",
+    "\\\\?\\D:\\work\\client\\a.ts",
+    "\\\\.\\D:\\work\\client\\a.ts",
+    "\\\\?\\Volume{0f1e2d3c}\\work\\client\\a.ts",
+    "\\\\?\\unc\\fileserver\\home$\\jane\\x",
+  ];
+  for (const p of paths) {
+    const out = scrub(`see ${p}`);
+    for (const gone of ["jane", "Jane", "Doe", "client", "fileserver", "work", "0f1e2d3c"]) expect(out, p).not.toContain(gone);
+    expect(out, p).toBe("see [path]");
+    expect(scrub(out), p).toBe(out);
+  }
+  expect(scrub("error \\\\?\\D:\\work\\client\\a.ts, retry")).toBe("error [path], retry");
+  expect(scrub("error:\\\\?\\D:\\work\\client\\a.ts")).toBe("error:[path]");
+});
+
+test("fix2: webhook addresses, hf_, AccountKey, sig, MYSQL_PWD, --pass, 'pass is', backtick values and 'Authorization: token' are masked", () => {
+  const cases: Array<[string, string]> = [
+    ["post https://hooks.slack.com/services/T000FAKE/B000FAKE/XXXXFAKEFAKE now", "T000FAKE"],
+    ["post https://hooks.slack.com/services/T000FAKE/B000FAKE/XXXXFAKEFAKE now", "XXXXFAKE"],
+    ["post https://discord.com/api/webhooks/123456789/abcFAKE-token_x now", "abcFAKE"],
+    ["post https://discordapp.com/api/v10/webhooks/123456789/abcFAKE-token_x now", "abcFAKE"],
+    ["hf_FAKEFAKEFAKEFAKE12345678", "hf_FAKE"],
+    ["DefaultEndpointsProtocol=https;AccountName=acme;AccountKey=ZmFrZWZha2VrZXk=;EndpointSuffix=core", "ZmFrZWZha2VrZXk"],
+    ["https://acme.blob.core/x?sv=2020&sig=FAKEsig%2Bvalue%3D&se=2030", "FAKEsig"],
+    ["MYSQL_PWD=hunter2 mysql -u me", "hunter2"],
+    ["mysql --pass hunter2 db", "hunter2"],
+    ["mysql --pwd hunter2 db", "hunter2"],
+    ["my pass is hunter2", "hunter2"],
+    ["my pwd was hunter2", "hunter2"],
+    ["token: `abc def`", "def"],
+    ["secret = `hunter2 and more`", "more"],
+    ["Authorization: token ghp_short", "ghp_short"],
+    ["Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"],
+  ];
+  for (const [text, leak] of cases) {
+    const out = scrub(text);
+    expect(out, text).not.toContain(leak);
+    expect(out, text).toContain("[masked]");
+    expect(scrub(out), text).toBe(out); // masking twice changes nothing
+  }
+  expect(scrub("Authorization: token ghp_short")).toBe("Authorization: token [masked]");
+  expect(scrub("mysql --pass hunter2 db")).toBe("mysql --pass [masked] db");
+  expect(scrub("DefaultEndpointsProtocol=https;AccountName=acme;AccountKey=ZmFrZWZha2VrZXk=;EndpointSuffix=core")).toContain("AccountName=acme;");
+  expect(scrub("post https://hooks.slack.com/services/T000FAKE/B000FAKE/XXXXFAKEFAKE now")).toBe("post [masked] now");
+  // look-alikes stay
+  for (const keep of ["the sig file and a signal: 5", "a bypass is fine", "he passed is odd", "run --pass-through x", "see https://hooks.slack.com/ for docs", "see https://discord.com/api/docs for it", "hf_trainer is a name", "cwd: here and pwd"]) {
+    expect(scrub(keep), keep).toBe(keep);
+  }
+});
+
+// FIX-2 (FIX-SOON 2): a long single-line paste (a minified file, a base64 blob) must not freeze the window.
+// On c75c2b61 these took 5 to 11 seconds each.
+{
+  const shapes: Record<string, string> = {
+    letters: "a".repeat(40_000),
+    flags: "--x-".repeat(10_000),
+    dots: "C:\\" + ".".repeat(40_000),
+    dotsThenWord: "C:\\" + ".".repeat(40_000) + "x",
+    quotedClosed: 'open "C:\\Users\\Jane Doe\\a b.txt" '.repeat(5_000),
+    quotedOpen: '"C:\\Users\\Jane Doe\\a '.repeat(5_000),
+    keywords: "password".repeat(5_000),
+    dashes: "-".repeat(40_000),
+    dotWords: "a.".repeat(20_000),
+    schemes: "ab+".repeat(13_000) + "://",
+    slashes: "/a".repeat(20_000),
+    pairs: "key=".repeat(10_000),
+    sentence: "word ".repeat(8_000),
+  };
+  for (const [name, text] of Object.entries(shapes)) {
+    test(`fix2: a ${text.length} character single line (${name}) is scrubbed in well under a second`, { timeout: 60_000 }, () => {
+      const t0 = performance.now();
+      const out = scrub(text);
+      const ms = performance.now() - t0;
+      expect(ms, `${name} took ${ms.toFixed(0)} ms`).toBeLessThan(800);
+      expect(out.length, name).toBeGreaterThan(0);
+    });
+  }
+}
+
+test("fix2: a bounded rule still masks a long key name, a long flag and a long path", () => {
+  const key = "MY_VERY_" + "LONG_".repeat(8) + "PASSWORD";
+  expect(scrub(`${key}=hunter2`)).toBe(`${key}=[masked]`);
+  expect(scrub("tool --my-own-auth-token swordfish")).toBe("tool --my-own-auth-token [masked]");
+  const deep = "C:\\work\\" + "folder\\".repeat(300) + "a.ts";
+  expect(scrub(`see ${deep}, then`)).toBe("see [path], then");
+  // a quoted profile path of 3000 characters still hides the name and the rest (a path over the cap is masked to the end of its line)
+  const quoted = `"C:\\Users\\Jane Doe\\${"deep folder\\".repeat(250)}x.txt" and more`;
+  const out = scrub(quoted);
+  for (const gone of ["Jane", "Doe", "deep", "x.txt"]) expect(out, gone).not.toContain(gone);
+});

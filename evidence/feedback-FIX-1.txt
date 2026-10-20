@@ -53,7 +53,7 @@ Tests added
 Not fixed / accepted (seen)
 - Non-profile paths with a space still cut at the first space ('C:\Program Files (x86)\...' -> '[path] Files (x86)\...'): earlier ponytail.
 - `pass: 12 tests` becomes `pass: [masked] tests` (the brief asks for pass:).
-- \\?\C:\Users\... prefix is not covered (the start set lacks a backslash).
+- CORRECTED BY FIX-2: the long-path prefixes (backslash backslash question-mark backslash, then C:\Users\...) were wrongly listed here as not covered; FIX-2 masks them whole, see evidence/feedback-FIX-2.txt.
 - Review smaller items moved to T-249-b: equality check of get_files() against the list, guard.allow into spawn_blocking,
   copy-effect value assert, aria-modal and focus trap.
 

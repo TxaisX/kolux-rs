@@ -341,6 +341,26 @@ mod tests {
         }
     }
 
+    /// What a real-clipboard test does when it cannot run here. Normally it prints SKIPPED and passes;
+    /// with `CLIPBOARD_TESTS_MUST_RUN` set (the hand run that proves the round trip) a skip is a failure,
+    /// so "2 passed" can never hide a test that did nothing. (`must_run` comes from that variable.)
+    fn skip_verdict(must_run: bool, name: &str, why: &str) -> Result<(), String> {
+        let line = format!("SKIPPED {name}: {why}");
+        if must_run {
+            return Err(line);
+        }
+        println!("{line}");
+        Ok(())
+    }
+
+    #[test]
+    fn fix2_a_skipped_real_clipboard_test_fails_when_the_run_must_prove_the_round_trip() {
+        let hold = skip_verdict(true, "app016 text round trip", "the clipboard cannot be opened here");
+        let msg = hold.expect_err("a skip must fail when the run must prove the round trip");
+        assert!(msg.contains("SKIPPED") && msg.contains("app016 text round trip") && msg.contains("cannot be opened"), "{msg}");
+        assert!(skip_verdict(false, "app016 text round trip", "the clipboard cannot be opened here").is_ok(), "a normal run only prints it");
+    }
+
     #[test]
     fn fix1_the_restore_guard_runs_when_a_test_body_ends_and_when_it_panics() {
         let ran = std::cell::Cell::new(0);
@@ -468,6 +488,13 @@ mod tests {
         /// One test at a time on the one real clipboard.
         static ONE: Mutex<()> = Mutex::new(());
 
+        /// A skip: printed, or a panic when `CLIPBOARD_TESTS_MUST_RUN` is set (the hand run that proves the round trip).
+        fn skip(name: &str, why: &str) {
+            if let Err(m) = skip_verdict(std::env::var_os("CLIPBOARD_TESTS_MUST_RUN").is_some(), name, why) {
+                panic!("{m}");
+            }
+        }
+
         /// Runs `body` with the real clipboard, then puts its earlier text back, also when `body`
         /// panics (a guard restores it on the way out). SKIPPED (printed) when the clipboard cannot
         /// be opened here or holds something other than text, which could not be put back.
@@ -475,16 +502,16 @@ mod tests {
         /// Both tests below are `#[ignore]`: a default `cargo test` on any lane never touches the
         /// desktop clipboard, because two test processes at once would each snapshot the other's text
         /// as the earlier one (an in-process lock cannot stop that). Run them by hand, one at a time:
-        /// `cargo test --lib clipboard -- --ignored --test-threads=1`.
+        /// `cargo test --lib clipboard -- --ignored --test-threads=1 --nocapture`; with `CLIPBOARD_TESTS_MUST_RUN=1` a skip fails.
         fn guarded(name: &str, body: impl FnOnce()) {
             let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
             let Some(formats) = os::formats() else {
-                println!("SKIPPED {name}: the clipboard cannot be opened here");
+                skip(name, "the clipboard cannot be opened here");
                 return;
             };
             // text, OEM text, Unicode text, locale: what a text copy leaves
             if formats.iter().any(|f| ![1, 7, 13, 16].contains(f)) {
-                println!("SKIPPED {name}: the clipboard holds something other than text, which a test could not put back");
+                skip(name, "the clipboard holds something other than text, which a test could not put back");
                 return;
             }
             let prior = if formats.contains(&13) { os::get_text() } else { None };
