@@ -12,6 +12,8 @@
 //! - T-251 (CLI-047): `kolux screenshot` / `full-screenshot` take a picture through the engine's
 //!   DevTools call (Page.captureScreenshot), `kolux pdf` prints through the engine's PrintToPdf.
 //!   Both are started on the main thread and waited for on the command line's own thread.
+//! - T-272-d: the engine's accelerator-key event records each real key pressed in a page, so a
+//!   keyboard chord that page's script sends counts only after a real press there (browser_holder.rs).
 use std::time::Duration;
 use tauri::{AppHandle, Webview};
 
@@ -20,7 +22,8 @@ mod imp {
     use crate::browser::certs;
     use webview2_com::Microsoft::Web::WebView2::Win32::*;
     use std::sync::mpsc::Sender;
-    use webview2_com::{CallDevToolsProtocolMethodCompletedHandler, ClearServerCertificateErrorActionsCompletedHandler, PrintToPdfCompletedHandler, ServerCertificateErrorDetectedEventHandler};
+    use crate::browser::holder;
+    use webview2_com::{AcceleratorKeyPressedEventHandler, CallDevToolsProtocolMethodCompletedHandler, ClearServerCertificateErrorActionsCompletedHandler, PrintToPdfCompletedHandler, ServerCertificateErrorDetectedEventHandler};
     use windows::core::{Interface, HSTRING, PWSTR};
     use windows::Win32::System::Com::CoTaskMemFree;
 
@@ -40,6 +43,23 @@ mod imp {
 
     /// Hooks a new page's engine events (called once, on the main thread, as the page is made).
     pub fn attach(id: u32, controller: &ICoreWebView2Controller) {
+        // T-272-d: every real key the engine reports in this page (before the page sees it) is
+        // recorded, so a chord the page's script sends counts only after a real press there.
+        let keys = AcceleratorKeyPressedEventHandler::create(Box::new(move |_sender, args| {
+            let Some(args) = args else { return Ok(()) };
+            let (mut kind, mut vk) = (COREWEBVIEW2_KEY_EVENT_KIND::default(), 0u32);
+            // SAFETY: KeyEventKind and VirtualKey only write plain values; Handled is left alone,
+            // so the page still gets the key.
+            if unsafe { args.KeyEventKind(&mut kind) }.is_ok() && unsafe { args.VirtualKey(&mut vk) }.is_ok() {
+                holder::engine_key(id, kind.0, vk);
+            }
+            Ok(())
+        }));
+        let mut key_token = 0i64;
+        // SAFETY: the handler lives as long as the engine holds it; the token is written once.
+        if unsafe { controller.add_AcceleratorKeyPressed(&keys, &mut key_token) }.is_ok() {
+            holder::watch(id);
+        }
         // SAFETY: CoreWebView2 hands back the page's engine object.
         let Ok(core) = (unsafe { controller.CoreWebView2() }) else { return };
         if let Ok(core14) = core.cast::<ICoreWebView2_14>() {

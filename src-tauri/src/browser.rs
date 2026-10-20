@@ -1076,9 +1076,11 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
                 let _ = chord_app.emit(LINK_EVENT, LinkPayload { id, url, front });
                 false
             }
-            // T-272-d: a keyboard chord or app shortcut from a page while another page holds the
-            // keyboard was sent by this page's script, not pressed: it is dropped.
-            Nav::Chord(_) | Nav::Key(_) if holder::drop_chord(id) => false,
+            // T-272-d: a keyboard chord or app shortcut with no real key pressed in that very page
+            // (the engine's key events), or sent while another page holds the keyboard, was sent
+            // by this page's script, not pressed: it is dropped.
+            Nav::Chord(what) if holder::drop_chord(id, &holder::need_for_chord(what)) => false,
+            Nav::Key(ref v) if holder::drop_chord(id, &holder::need_for_key(v)) => false,
             Nav::Chord(what) => {
                 // Council FIX-3: the keyboard is not moved here. The app tells a chord pressed in
                 // the page (its own window does not hold the keyboard) from one the page's script
