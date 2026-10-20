@@ -9,11 +9,10 @@ export type CursorLook = "block" | "bar" | "underline";
  *  underline keeps its own shape (it is already thin, so there is nothing to hollow out). */
 export const inactiveCursor = (style: CursorLook): "outline" | "bar" | "underline" => (style === "block" ? "outline" : style);
 
-/** TERM-104: wide characters take two cells (xterm's width table), the cursor follows the cell
- *  count, and a glyph the font draws wider than its cell is squeezed back into it so the right
- *  edge of a table stays clean (emoji and Nerd Font glyphs are never rescaled; WebGL renderer only).
- *  Not built: widths for characters newer than Unicode 6, grapheme clusters and Arabic shaping
- *  (see AFTER rows; they need a Unicode provider or addon). */
+/** TERM-104: wide characters take two cells (Unicode 16 widths and emoji sequences come from our
+ *  own provider, unicodeWidth.ts), the cursor follows the cell count, and a glyph the font draws
+ *  wider than its cell is squeezed back into it so the right edge of a table stays clean (emoji and
+ *  Nerd Font glyphs are never rescaled; WebGL renderer only). Arabic shaping is the font's job. */
 export const drawOptions = (style: CursorLook): Pick<ITerminalOptions, "cursorInactiveStyle" | "rescaleOverlappingGlyphs"> => ({
   cursorInactiveStyle: inactiveCursor(style),
   rescaleOverlappingGlyphs: true,

@@ -110,3 +110,4 @@ tray-T-125-useAgentStatus.ts, tray-T-324-usage_alerts.rs, tray-FIX-1-lib.rs, tra
 Dropped: tray-T-248-c-tray.rs.patch (moot: tray.rs now arrives by the merge itself).
 - Round 3 (main ab28acc6, T-184-b moved lib.rs setup): tray-T-248-d-lib.rs and tray-T-248-c-lib.rs regenerated; the ten patches apply in the order above; gates green merged and wired (logs m3-*.log: tests 25 / 48, vitest 389 / 390).
 - Round 4 (main ddfea208, MERGE 251-252): bookkeeping-only conflicts; all ten patches apply unchanged in the order above; gates green merged and wired (logs m4-*.log: tests 25 / 48, vitest 397 / 398).
+- Round 5 (main 909b190b, MERGE 253, TS-only): bookkeeping-only conflicts; ten patches apply unchanged; Rust inputs identical to round 4; tsc 0 and vitest notify/settings/status/shell 505 merged / 506 wired (logs m5-*.log).
