@@ -271,6 +271,18 @@ pub fn run() {
             // ACCT-010: a key this computer can no longer open is cleared before the window asks.
             secrets::drop_unreadable(&store, &dir);
             app.manage(Mutex::new(store));
+            // APP-004 (T-213): settings saved under the former product name carry over once, through the
+            // importer's allow-list, in the background after the window shows; the page re-reads them.
+            {
+                let (h, profile) = (app.handle().clone(), dir.clone());
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(8));
+                    let Some(store) = h.try_state::<Mutex<Store>>() else { return };
+                    if import::first_launch(&profile, &store).is_some_and(|p| !p.add.is_empty()) {
+                        let _ = tauri::Emitter::emit(&h, "settings-saved", ());
+                    }
+                });
+            }
             // T-183 (APP-042): the interface watch; RecoveryMount's heartbeat feeds it.
             resources::recovery::watch_start(app.handle().clone(), perm_problem);
             // TERM-122: the keep-awake watcher reads the saved choice every tick, and counts a
@@ -588,6 +600,7 @@ pub fn run() {
             agents::inventory::session_tabs,
             orchestration::task_reset,
             orchestration::worker_labels,
+            orchestration::setup_gate::worker_setup_settled,
             prompt_answer::prompt_read,
             prompt_answer::prompt_answer,
             prompt_scan::prompt_scan,
@@ -697,6 +710,8 @@ pub fn run() {
             automations::automation_run_now,
             automations::automation_preview,
             automations::automation_save,
+            automations::carry::session_carry_context,
+            automations::carry::agent_dir_ready,
             routing::routing_catalog,
             secrets::secret_status,
             secrets::secrets_dropped,

@@ -1,0 +1,27 @@
+// SET-017 (T-210-c): the Simplified Chinese pack. Machine-translated 2026-10-20 (Txais approved machine translation);
+// a human review pass is in the after-list. Product names (Kolux, Claude, Codex, ChatGPT, Git) stay as they are.
+import type { TextKey } from "../en";
+import type { PackMeta } from "../packs";
+
+export const META: PackMeta = { language: "zh-CN", machineTranslated: true, translatedOn: "2026-10-20", humanReviewed: false };
+
+const pack = {
+  "glossary.repository.plain": "项目",
+  "glossary.repository.hover": "这里的项目是 Git 跟踪的文件夹（Git 仓库）",
+  "glossary.clone.plain": "从网址复制",
+  "glossary.clone.hover": "从网址复制：git clone 会从网址下载 Git 仓库",
+  "glossary.worktree.plain": "工作区",
+  "glossary.worktree.hover": "工作区是位于独立文件夹中的分支（Git worktree）",
+  "glossary.checkout.plain": "主文件夹",
+  "glossary.checkout.hover": "项目的主文件夹（即主检出）",
+  "glossary.shell.plain": "终端",
+  "glossary.shell.hover": "终端：不含 AI 的普通 shell",
+  "glossary.cli.plain": "程序",
+  "glossary.cli.hover": "AI 在这台电脑上的专属程序（即 CLI）",
+  "glossary.pty.plain": "终端",
+  "glossary.pty.hover": "终端（PTY，即伪终端）",
+  "connect.claude": "点击“连接”会在浏览器中打开一次 Claude 的登录页面，并保存一个有效期为一年的密钥。",
+  "connect.codex": "点击“连接”会在 Kolux 专属的 Codex 目录中添加一个 ChatGPT 账户；你的 Codex 文件夹保持不变。",
+} satisfies Record<TextKey, string>;
+
+export default pack;

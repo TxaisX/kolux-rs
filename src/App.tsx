@@ -28,6 +28,7 @@ import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import SettingsPage from "./settings/SettingsPage";
 import Ask from "./chrome/Ask";
 import TrustPrompt, { trustedSetup } from "./setup/TrustPrompt";
+import { gatedSetup, settleSetup, setupRequestOf } from "./orchestration/workerSetup";
 import { bulkRefusal, settleSetups, setupMode, type NewPlace } from "./launch/launchOrder";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { losable, quitQuestion, runningAgents, type Losable } from "./shell/closeAsk";
@@ -75,6 +76,7 @@ import { NOTHING_TO_SEND, sendRoute } from "./editor/noteCommands";
 import { noteTarget, plainNote, useRepoless } from "./editor/fileNotes";
 import { LINE_NOTES_KEY, clearDelivered, lineNotesOf, markSent, noteBlocks, withLineNotes, type LineNote } from "./editor/diffNotes";
 import LineNotes from "./scm/LineNotes";
+import AgentStartHost from "./agentstart/AgentStartHost";
 import ChecksPanel from "./scm/ChecksPanel";
 import PreviewPane from "./editor/PreviewPane";
 import type { Action } from "./editor/noteLinks";
@@ -1410,6 +1412,23 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     trustedSetup(dir)
       .then((line) => line && cli.current.startSetup(dir, branch, line, "tab", false))
       .catch((err) => setNotice(String(err)));
+  // ORCH-017 (T-172-d): a worker start's setup: the trust question, one run in a background Setup
+  // tab, and how it ended (its exit code, or null a second after the tab stopped without one)
+  // reported to the worker-start waiting under `request`.
+  const setupExits = useRef<Record<number, (code: number | null) => void>>({});
+  const gateSetup = (request: string, dir: string, branch: string | null) =>
+    gatedSetup(dir, (line) =>
+      new Promise<number | null>((done) => {
+        let key = -1;
+        key = cli.current.startSetup(dir, branch, line, "tab", false, () => void setTimeout(() => setupExits.current[key]?.(null), 1000));
+        setupExits.current[key] = (code) => {
+          delete setupExits.current[key];
+          done(code);
+        };
+      }),
+    )
+      .then((a) => settleSetup(request, a))
+      .catch((err) => setNotice(String(err)));
   // PROJ-037: a workspace straight from an issue or pull request address, shown once made.
   const fromItem = (item: WorkItem) => {
     setToast(`Making a workspace from ${item.kind === "pull" ? "pull request" : "issue"} #${item.number}…`);
@@ -1641,8 +1660,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
     void invoke("cli_file_window", { listening: true }).catch(() => undefined);
     return () => void invoke("cli_file_window", { listening: false }).catch(() => undefined);
   }, []);
-  const cli = useRef({ startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, dropPane: (_k: number) => {} });
-  cli.current = { startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, dropPane: (k: number) => dropPane(k) };
+  const cli = useRef({ startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, gateSetup, dropPane: (_k: number) => {} });
+  cli.current = { startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, gateSetup, dropPane: (k: number) => dropPane(k) };
   // AUTO-011 (T-085-g): a run's own agent tab shuts by itself, once, when that agent exits, unless the user
   // clicked (the pane's mouse-down above) or typed in it (a key inside the focused pane) or pinned it.
   const focusedNow = useRef(focused);
@@ -1655,9 +1674,10 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       if (typedInRunTab(runTabs.current, focusedNow.current, inside)) runTabs.current = touchRunTab(runTabs.current, focusedNow.current);
     };
     document.addEventListener("keydown", typed, true);
-    const off = listen<{ id: number }>("terminal-exit", (e) => {
+    const off = listen<{ id: number; code?: number | null }>("terminal-exit", (e) => {
       const key = paneOfTerminal(ptys.current, e.payload.id);
       if (key === null) return;
+      setupExits.current[key]?.(e.payload.code ?? null);
       const ended = runTabEnded(runTabs.current, key, pinnedNow.current.has(key));
       runTabs.current = ended.tabs;
       if (ended.verdict === "close") cli.current.dropPane(key);
@@ -1703,7 +1723,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       // PROJ-033: a workspace made from the command line runs its setup script in a background tab
       // unless it was told to skip it. SESS-026 (T-150): the setup settles (asked, opened or said
       // why not) before its agent starts.
-      const setup = p.setup !== "skip" ? cli.current.runSetup(p.worktree.path, p.worktree.branch) : Promise.resolve();
+      // ORCH-017 (T-172-d): a worker-start's notice carries a request; worker-start waits for its answer.
+      const request = setupRequestOf(p);
+      const setup = p.setup === "skip" ? Promise.resolve() : request ? cli.current.gateSetup(request, p.worktree.path, p.worktree.branch) : cli.current.runSetup(p.worktree.path, p.worktree.branch);
       if (a) void setup.then(() => cli.current.startIn(a, p.worktree.path, p.worktree.branch, p.prompt, p.activate));
       else if (p.activate) cli.current.select(p.worktree.path, p.worktree.branch);
     });
@@ -3218,6 +3240,27 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         {right.open && right.tab === "prchecks" && activeDir !== null && <FolderChecksTab folder={activeDir} worktrees={wsKind.worktrees} />}
         {/* VIEW-073: the Checks tab follows the workspace of the focused terminal. */}
         {right.open && right.tab === "checks" && <ChecksPanel dir={activeDir} linked={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} visible={terminals} />}
+        {/* T-187-b / T-189-b: the dialog and helpers behind "Continue with…", "Fix with an agent" and "Start with an agent". */}
+        <AgentStartHost
+          agents={agents}
+          defaultId={defaultId}
+          saved={settings[SCM_AGENT_KEY]}
+          workspace={activeDir}
+          notify={(text, failed) => (failed ? setNotice(text) : setToast(text))}
+          launch={async (id, dir, prompt, extra) => {
+            const a = agents.find((x) => x.id === id);
+            if (!a) throw new Error(`${id} is not installed here.`);
+            await openIn(a, dir, panesIn(panes, dir)[0]?.branch ?? null, prompt, true, extra);
+            return { handed: true };
+          }}
+          makeWorkspace={async (item) => {
+            const made = await invoke<Created>("workspace_from_item", { item });
+            setRefresh((n) => n + 1);
+            cli.current.select(made.path, made.branch, true);
+            void runSetup(made.path, made.branch);
+            return made;
+          }}
+        />
         {activeDir ? <Explorer key={activeDir} root={activeDir} hidden={!explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => saveRight({ open: false })} onOpenTerminal={openTerminalIn} onWake={() => showRight("explorer")} /> : explorerOpen && <AddProjectRow />}
         </RightSidebar>
       </div>
