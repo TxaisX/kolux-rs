@@ -1,0 +1,31 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 51975dbf..1d3dd9eb 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -188,12 +188,12 @@ pub fn run() {
+     let mut context = tauri::generate_context!();
+     let windows: Vec<String> = context.config().app.windows.iter().filter(|w| w.create).map(|w| w.label.clone()).collect();
+     // T-183 (APP-043): after repeated graphics crashes a saved flag puts every window in safe graphics.
++    // T-286-b (APP-017): every window is excused from background throttling (WebView2 browser
++    // arguments; later webviews on the same data folder reuse the same string).
+     let safe = resources::recovery::safe_graphics_on(&context.config().identifier, &context.package_info().version.to_string());
+     for w in &mut context.config_mut().app.windows {
+         w.create = false;
+-        if safe {
+-            w.additional_browser_args = Some(resources::recovery::safe_args(w.additional_browser_args.as_deref()));
+-        }
++        w.additional_browser_args = Some(resources::recovery::launch_browser_args(w.additional_browser_args.as_deref(), safe));
+     }
+     tauri::Builder::default()
+         .plugin(tauri_plugin_dialog::init())
+diff --git a/src-tauri/src/resources/recovery.rs b/src-tauri/src/resources/recovery.rs
+--- a/src-tauri/src/resources/recovery.rs
++++ b/src-tauri/src/resources/recovery.rs
+@@ -660,7 +660,6 @@ static LAUNCH_ARGS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+ 
+ /// In `run`, once per window config before the builder starts: the window's arguments, remembered
+ /// for later webviews.
+-#[allow(dead_code)] // until evidence/reliability-T-286-b-lib.rs.patch wires it (that patch drops this line)
+ pub fn launch_browser_args(current: Option<&str>, safe: bool) -> String {
+     let s = browser_args(current, safe);
+     let _ = LAUNCH_ARGS.set(s.clone());

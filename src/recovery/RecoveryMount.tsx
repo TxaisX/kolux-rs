@@ -6,7 +6,9 @@
 // APP-039: the crash report dialog.
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import CrashReportDialog from "./CrashReportDialog";
+import { repaint, WOKE_EVENT } from "./hidden";
 import { afterBurst, HEARTBEAT_MS, launchPrompt, type GraphicsPrompt } from "./model";
 
 export default function RecoveryMount() {
@@ -17,6 +19,12 @@ export default function RecoveryMount() {
     beat();
     const t = setInterval(beat, HEARTBEAT_MS);
     return () => clearInterval(t);
+  }, []);
+
+  // T-286-b (APP-017): after the computer wakes the page replays held updates and repaints.
+  useEffect(() => {
+    const off = listen(WOKE_EVENT, () => repaint());
+    return () => void off.then((u) => u()).catch(() => {});
   }, []);
 
   useEffect(() => {

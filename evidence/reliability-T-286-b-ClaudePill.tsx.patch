@@ -1,0 +1,31 @@
+diff --git a/src/usage/ClaudePill.tsx b/src/usage/ClaudePill.tsx
+index d917628f..e84d2036 100644
+--- a/src/usage/ClaudePill.tsx
++++ b/src/usage/ClaudePill.tsx
+@@ -5,7 +5,7 @@
+ // still running is kept, because an empty answer never replaces figures already shown.
+ import { useEffect } from "react";
+ import { invoke } from "@tauri-apps/api/core";
+-import { listen } from "@tauri-apps/api/event";
++import { heldListen } from "../recovery/hidden";
+ import VendorMark from "../chrome/VendorMark";
+ import { StatusGlyph } from "../chrome/icons";
+ import { pillDetail, pillText, weeklyOf, type ClaudeLimit } from "./claude";
+@@ -70,9 +70,14 @@ export default function ClaudePill({ installed }: { installed?: boolean }) {
+   useEffect(() => {
+     const r = runner<ClaudeLimit[]>({ name: "claude", fetch: () => invoke<ClaudeLimit[]>("claude_usage").then(claudeFetched), onOk: publishStored });
+     r.start();
+-    const off = listen<{ limits: ClaudeLimit[]; carried?: string[] }>("claude-usage", (e) => {
+-      if (e.payload.limits.length) publishLive(e.payload.limits, Date.now(), e.payload.carried);
+-    });
++    // T-286-b (APP-017): held while the window is hidden, the newest figures replayed when it is shown.
++    const off = heldListen<{ limits: ClaudeLimit[]; carried?: string[] }>(
++      "claude-usage",
++      (e) => {
++        if (e.payload.limits.length) publishLive(e.payload.limits, Date.now(), e.payload.carried);
++      },
++      { latestOnly: true },
++    );
+     return () => {
+       r.stop();
+       void off.then((u) => u()).catch(() => {});

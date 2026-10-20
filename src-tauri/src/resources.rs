@@ -3,6 +3,7 @@
 
 /// T-183: the recovery module (damaged state file, folder permissions, interface watch, safe
 /// graphics, crash reports) lives beside the Resource Manager so this lane's own file declares it.
+pub mod crashdump;
 pub mod recovery;
 
 use serde::Serialize;

@@ -1,0 +1,14 @@
+diff --git a/src-tauri/tauri.conf.json b/src-tauri/tauri.conf.json
+index adac3c27..18ce359d 100644
+--- a/src-tauri/tauri.conf.json
++++ b/src-tauri/tauri.conf.json
+@@ -19,7 +19,8 @@
+         "minHeight": 560,
+         "decorations": false,
+         "visible": false,
+-        "center": true
++        "center": true,
++        "backgroundThrottling": "disabled"
+       }
+     ],
+     "security": {

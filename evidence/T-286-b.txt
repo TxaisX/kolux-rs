@@ -1,0 +1,97 @@
+T-286-b evidence (lane reliability, 2026-10-20, Opus stand-in; lane/reliability from 348a2a7e)
+
+Built (unit-tested; live proof pending, batched):
+  APP-040 crash records
+    - Only real crashes count (recovery::is_crash): a clean end, an exit while Kolux was quitting
+      (the final save's line), a graphics or engine exit at quit time (a dump inside a quit span),
+      and Kolux ending itself (the new "kolux ended itself:" log line before every restart and the
+      update install) are not crashes; an interface process crash and an unknown child crash are.
+    - Newest five kept (KEEP 5, was 20). Reports within 30 s of the newest are one crash: they merge
+      (count, the siblings' own summaries, one pending prompt). A crash dump up to 10 min late joins
+      its report; a dump already merged changes nothing.
+    - The last host memory reading (free / total physical, Kolux's own working set, its age) is
+      saved every 30 s by the interface watch thread (memory-last.json) and attached to the next
+      report; never disk space.
+    - The faulting module: resources/crashdump.rs reads a minidump's exception and module-list
+      streams (Microsoft's published layout) and names the module holding the faulting address,
+      by file name only; the report also gives the exception code in words.
+    - Interface crashes are found from the browser engine's crash dumps
+      (%LOCALAPPDATA%\<identifier>\EBWebView\Crashpad, scanned at start and every 30 s while
+      running; the first look ever takes what is already there as seen).
+    - The store survives a damaged file (starts empty) and retries a save up to 5 times, 100 ms
+      apart, when Windows briefly locks the file (access denied, sharing or lock violation).
+    - The report details now carry "Faulting module", "Memory before the crash" and the merged
+      process count.
+  APP-017 repaint after sleep, held updates
+    - The watch thread notices sleep from a wall-clock jump of 10 s or more between its one-second
+      ticks, logs "the computer woke: every window repaints (APP-017)", sends every window
+      "app-woke" and nudges a plain window (shown, not minimised / maximised / full screen) one
+      pixel taller and back so the engine redraws the whole surface.
+    - src/recovery/hidden.ts: Hold / heldListen hold live updates while the page is hidden and
+      replay them in order (or only the newest) when it is shown, 200 per frame so a backlog never
+      freezes it, capped at 5000; repaint() replays every hold, sends a resize and forces a fresh
+      paint pass. RecoveryMount listens for "app-woke". The Claude usage pill's "claude-usage"
+      stream is held (latest only) via a patch. The agent-status listener is deliberately NOT held:
+      it raises desktop notifications, which must fire while the window is hidden.
+  APP-017 background-throttling exemption
+    - Every window gets --disable-background-timer-throttling --disable-renderer-backgrounding
+      --disable-backgrounding-occluded-windows in its WebView2 browser arguments (after wry's own
+      defaults, safe graphics added when on, each switch once). Browser tabs pass the same string,
+      because WebView2 refuses a second argument set on the same data folder (this also covers
+      safe graphics for tabs, which T-183 left out). tauri.conf.json gets
+      "backgroundThrottling": "disabled" (Tauri honours it on macOS 14+ only).
+
+Still open (PLAN line stays open):
+  1. The WebView2 process-failed event: Tauri 2.12.1 / wry 0.57.0 do not expose it, and its
+     handler type lives in webview2-com, which is not a direct dependency (no new dependencies);
+     the crash-dump scan and the existing webglcontextlost path stand in for it.
+  2. Sessions kept per host (APP-051): no remote hosts exist yet (T-197-c waits on them too).
+
+Patches for the resolver, apply in this order (all `git apply --check` clean on this commit):
+  1. evidence/reliability-T-286-b-lib.rs.patch        lib.rs: every window gets launch_browser_args;
+                                                      also drops the dead_code allow on it in recovery.rs
+  2. evidence/reliability-T-286-b-browser.rs.patch    browser.rs: tabs pass browser_args_now();
+                                                      also drops its dead_code allow in recovery.rs
+  3. evidence/reliability-T-286-b-update.rs.patch     update.rs: note_self_end before the update install
+  4. evidence/reliability-T-286-b-tauri.conf.json.patch  "backgroundThrottling": "disabled"
+  5. evidence/reliability-T-286-b-ClaudePill.tsx.patch    claude-usage via heldListen (latest only)
+
+Gates (logs under G:/Temp/reliability-v3-logs/)
+  without patches: cargo build exit 0 (t286b-build); clippy --all-targets -D warnings exit 0, 0
+    warnings (t286b-clippy); cargo test --lib -- resources:: 31 passed 0 failed (t286b-test);
+    tsc --noEmit exit 0 (t286b-tsc); vitest src/recovery src/usage/ClaudePill.test.ts 3 files,
+    13 tests passed (t286b-vitest)
+  with the five patches applied: clippy exit 0 (t286b-patched-clippy); cargo test --lib --
+    resources:: browser:: update:: 112 passed (t286b-patched-test); tsc exit 0
+    (t286b-patched-tsc); vitest src/recovery src/usage 17 files, 99 tests passed
+    (t286b-patched-vitest); then reverted in reverse order
+  Rust tests: crashdump::tests::{t286b_the_faulting_module_is_named_by_file_name_only,
+    t286b_an_address_outside_every_module_or_a_broken_dump_names_none,
+    t286b_dumps_are_found_one_or_two_folders_down_oldest_first};
+    recovery::tests::{t286b_only_real_crashes_count,
+    t286b_seven_interface_crashes_leave_five_reports_and_siblings_merge,
+    t286b_a_late_dump_merges_and_names_the_module_once,
+    t286b_the_store_survives_damage_and_retries_a_locked_file,
+    t286b_the_report_carries_the_last_memory_reading_and_never_disk_space,
+    t286b_dumps_become_interface_reports_unless_written_while_quitting,
+    t286b_quit_spans_cover_the_quit_and_end_at_the_next_start,
+    t286b_a_jump_in_the_wall_clock_is_a_wake_and_only_plain_windows_are_nudged,
+    t286b_every_window_is_excused_from_background_throttling_once}
+  vitest: src/recovery/hidden.test.ts (5 tests)
+
+LIVE PROOF PENDING (batched; dev build, scratch homes, patches applied)
+  1. Quit normally ten times (File > Quit / tray Quit), relaunching each time -> no crash prompt;
+     kolux.log shows "final save:" and "app exit" each run; crashes.json unchanged.
+  2. Help > Restart in safe graphics path (or Restart to update) -> the next start shows no crash
+     prompt; kolux.log has "kolux ended itself: ...".
+  3. Crash the interface process seven times, a minute apart (a real crash writes a dump; ending
+     the process from Task Manager does not, so use a renderer crash in a browser tab if the
+     engine allows one, or a debug build that faults on purpose) -> crashes.json holds five
+     records; each dump's record names its module; Help > Report Crash shows
+     "Memory before the crash: ... free of ...".
+  4. Sleep the computer for a few minutes and wake it -> the window has no blank or stale areas;
+     kolux.log shows "the computer woke: every window repaints (APP-017)".
+  5. Minimise for 10 minutes with an agent running, restore -> the status and the Claude pill
+     show the current state within one second.
+  6. With a browser tab open (default profile) and safe graphics on, open a second tab -> it loads
+     (the shared browser arguments are accepted).
