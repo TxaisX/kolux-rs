@@ -971,7 +971,9 @@ pub fn add(all: &mut Vec<Crash>, mut inc: Crash) -> String {
 
 /// Reads the store, merges `inc` and saves it (retrying a briefly locked file); the report it landed in.
 pub fn record(dir: &Path, inc: Crash) -> Crash {
-    let mut all = crashes_read(dir);
+    // Row 589: a file held by a scanner is read again, a damaged one is kept aside, and one that
+    // still cannot be read is left alone (this report is not saved) rather than saved over.
+    let Ok(mut all) = crashes_load(dir) else { return inc };
     let fallback = inc.clone();
     let id = add(&mut all, inc);
     let _ = crashes_write(dir, &all);
@@ -1050,6 +1052,38 @@ pub fn previous_run_crash(log: &str) -> Option<String> {
 
 pub fn crashes_read(dir: &Path) -> Vec<Crash> {
     fs::read(dir.join(CRASHES)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+/// Row 589: the crash list for a save. A briefly held file is read again (as `write_retry` writes
+/// again); a damaged one is copied to `crashes.json.corrupt-<ms>` and the list starts empty; a
+/// file that still cannot be read is an error, so the caller does not save over it.
+fn crashes_load(dir: &Path) -> Result<Vec<Crash>, String> {
+    let path = dir.join(CRASHES);
+    let mut last = String::new();
+    for attempt in 0..SAVE_TRIES {
+        match fs::read(&path) {
+            Ok(b) => {
+                if let Ok(all) = serde_json::from_slice(&b) {
+                    return Ok(all);
+                }
+                let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+                fs::write(dir.join(format!("{CRASHES}.corrupt-{ms}")), &b).map_err(|e| e.to_string())?;
+                return Ok(Vec::new());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => {
+                let locked = e.kind() == std::io::ErrorKind::PermissionDenied || e.raw_os_error() == Some(32) || e.raw_os_error() == Some(33);
+                last = e.to_string();
+                if !locked {
+                    break;
+                }
+                if attempt + 1 < SAVE_TRIES {
+                    std::thread::sleep(SAVE_PAUSE);
+                }
+            }
+        }
+    }
+    Err(last)
 }
 
 /// APP-040: the store survives damaged files (crashes_read starts empty) and a save retries when
@@ -1792,6 +1826,15 @@ mod tests {
         assert!(crashes_read(&dir).is_empty(), "a damaged file starts empty");
         let c = record(&dir, Crash::new(Kind::App, 5, "boom"));
         assert_eq!(crashes_read(&dir), vec![c], "and takes new reports");
+        // Row 589: the damaged file was kept aside byte for byte, not saved over.
+        let kept: Vec<_> = fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().starts_with(&format!("{CRASHES}.corrupt-"))).collect();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(fs::read(kept[0].path()).unwrap(), b"{ not json");
+        // Row 589: a crash list that cannot be read (here a folder where the file goes) is not saved over.
+        let held = temp("store-held");
+        fs::create_dir_all(held.join(CRASHES)).unwrap();
+        let _ = record(&held, Crash::new(Kind::App, 6, "unsaved"));
+        assert!(held.join(CRASHES).is_dir(), "left alone");
         // two sharing violations, then the save goes through
         let mut calls = 0;
         let r = write_retry(&dir.join("x.json"), b"1", &mut |p, b| {

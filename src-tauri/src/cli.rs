@@ -4114,9 +4114,16 @@ fn session_now(terminals: &Terminals, t: u32) -> (Option<Option<String>>, Option
 /// start; a pane that acts in another Run is turned away by each of them (ORCH-033: it may read
 /// that Run, never change it).
 fn start_failed_run(receipt: &mut Value, run: Option<&str>) {
+    start_failed_run_for(receipt, run, cfg!(windows));
+}
+
+/// Row 343: the offered lines quote a value the way the shell they will be pasted into reads it
+/// (automations_cli::shell_word: double quotes on Windows, single quotes elsewhere).
+fn start_failed_run_for(receipt: &mut Value, run: Option<&str>, windows: bool) {
     let lead = format!("{} orchestration worker-", crate::orchestration::CLI);
     let retry = format!("{lead}start ");
-    let word = |v: &str| if v.chars().any(|c| c.is_whitespace() || "@,=".contains(c)) { format!("\"{v}\"") } else { v.to_string() };
+    // `safe` below keeps every value shell_word refuses out of the offered lines.
+    let word = |v: &str| automations_cli::shell_word(v, windows).unwrap_or_default();
     let tiered = receipt["tier"].as_str().is_some_and(|t| !t.trim().is_empty());
     let mut who = String::new();
     let flags: &[&str] = if tiered { &["agent", "tier"] } else { &["agent", "model", "effort"] };
@@ -6939,6 +6946,12 @@ mod tests {
         let line = r["next"][1].as_str().unwrap().to_string();
         assert!(line.contains("--model \"my model\" --effort high --run run-1"), "{line}");
         assert_eq!(request(&line).args["model"], "my model");
+        // Row 343: on a POSIX shell the same value is single-quoted.
+        let mut r = json!({ "dispatchId": "dispatch-4", "taskId": "task-2", "agent": "claude", "model": "my model", "effort": "high", "tier": null, "terminals": [], "worktree": { "path": "/w", "created": false } });
+        crate::orchestration::start_failed(&mut r, "worker", json!("not_configured"));
+        start_failed_run_for(&mut r, Some("run 1"), false);
+        let line = r["next"][1].as_str().unwrap().to_string();
+        assert!(line.contains("--model 'my model' --effort high --run 'run 1'"), "{line}");
         // cli FIX-5 (council AFTER 1): a value a shell would act on is never offered; the stop and
         // release lines still are.
         for bad in ["m\"x", "m;rm", "a&b", "a|b", "$env:X", "a`b", "a>b"] {

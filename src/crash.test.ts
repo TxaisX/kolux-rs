@@ -27,6 +27,17 @@ describe("crashText", () => {
   });
 });
 
+describe("row 566: crashText is scrubbed", () => {
+  it("masks a local source path in a frame and a profile path in the message", () => {
+    const e = new Error("cannot read C:\\Users\\someone\\proj\\x.json");
+    e.stack = "Error: bad\n    at render (C:\\Users\\someone\\proj\\src\\App.tsx:1:2)\n    at mount (index.js:3:4)";
+    const t = crashText(e);
+    expect(t).not.toContain("someone");
+    expect(t).toContain("[path]");
+    expect(t).toContain("  at mount (index.js:3:4)");
+  });
+});
+
 describe("reportCrash / ReportButton", () => {
   it("hands requestFeedback the crash text", () => {
     const got: string[] = [];
