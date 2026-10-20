@@ -830,3 +830,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · worktrees T-113-b · spec/07 ACCT-056 card; this tree's own projects.rs origin records (T-441-c kolux_made) and workspace_remove; git-worktree docs (git-scm.com) recalled not fetched; no outside source
 > 2026-10-19 · worktrees T-116-c-c · spec/17 SET-033 card; this tree's own visibility.rs sources/set_choice, projects.rs project_set, RepoPage.tsx; no outside source
 > 2026-10-19 · worktrees T-161 · spec/01 PROJ-027/031/064/068/072 cards; this tree's own git.rs, projects.rs, scm.rs (GIT-065); git-worktree and alias behaviour from git-scm.com docs recalled not fetched; no outside source
+> 2026-10-19 · worktrees T-162 · spec/01 PROJ-073/074/080 cards; this tree's own git.rs, projects.rs, cleanup.rs; git-worktree, branch and merge-base behaviour from git-scm.com docs recalled not fetched; no outside source

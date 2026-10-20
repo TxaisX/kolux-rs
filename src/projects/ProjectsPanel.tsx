@@ -27,6 +27,9 @@ import { mergePoll, nextDelay, pollItems, STALE_MS, type PrPoll } from "../scm/p
 import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, projectLabel, splitGitSaid, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
 import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
 import AddProject from "./AddProject";
+import CleanupDialog from "./CleanupDialog";
+import KeptBranches from "./KeptBranches";
+import { addKept, type KeptBranch, type KeptItem } from "./cleanup";
 import CardLine from "../look/CardLine";
 import { HeaderBadge, HeaderColourPicker } from "../look/HeaderBadge";
 import { CardDetailsChooser } from "../look/CardDetailsChooser";
@@ -282,6 +285,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const [folded, setFolded] = useState<Set<string>>(new Set()); // group titles folded away
   const [groups, setGroups] = useState<Groups>(NO_GROUPS); // PROJ-014: project groups
   const [activity, setActivity] = useState<Record<string, number>>({}); // PROJ-051: path key -> last activity
+  const [cleanupFor, setCleanupFor] = useState<string | null>(null); // PROJ-080: project id whose cleanup dialog is open
+  const [kept, setKept] = useState<KeptItem[]>([]); // PROJ-073: branches that stayed when their workspaces went
   const [renaming, setRenaming] = useState<string | null>(null); // PROJ-059: the row being renamed
   const [renameText, setRenameText] = useState("");
   const [groupFor, setGroupFor] = useState<string | null>(null); // the group whose settings form is open
@@ -974,7 +979,8 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
     if (!c) return;
     setBusy("removing");
     try {
-      await invoke("workspace_remove", { projectId: c.projectId, path: c.path, force: c.force, stamp: c.check.stamp });
+      const left = await invoke<KeptBranch | null>("workspace_remove", { projectId: c.projectId, path: c.path, force: c.force, stamp: c.check.stamp });
+      if (left) setKept((old) => addKept(old, [{ ...left, projectId: c.projectId }]));
       onRemoved(c.path);
       say("ok", `removed ${c.branch} and its folder`);
       setConfirm(null);
@@ -1549,6 +1555,9 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
               <label>Header colour</label>
               <HeaderColourPicker settings={settings} kind="p" id={p.id} onSetting={onSetting} />
               <IconPicker value={icons[p.id]} name={p.name} onSet={(icon) => setIcon(p, icon)} onProblem={(text) => say("warn", text)} />
+              <button className="link" onClick={() => setCleanupFor(p.id)} title="Scan for workspaces that have gone quiet or are merged">
+                Clean up workspaces…
+              </button>
               <div className="btn-row">
                 <button className="btn" onClick={() => saveProject(p)}>
                   Save
@@ -1558,6 +1567,17 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
                 </button>
               </div>
             </div>
+          )}
+          {cleanupFor === p.id && (
+            <CleanupDialog
+              project={p}
+              onClose={() => setCleanupFor(null)}
+              onRemoved={(paths) => {
+                paths.forEach(onRemoved);
+                void reload();
+              }}
+              onKept={(items) => setKept((old) => addKept(old, items))}
+            />
           )}
           {(fresh[p.id] ?? []).length > 0 && review !== p.id && (
             <button className="sb-notice" onClick={() => setReview(p.id)} title="Worktrees made with plain Git or another tool since you last looked">
@@ -1862,6 +1882,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
               onRetry={() => void askCard()}
             />
           )}
+          <KeptBranches items={kept} onChange={setKept} onSay={say} onDeleted={() => void reload()} />
           {message && <MessageNote kind={message.kind} text={message.text} />}
         </div>
 

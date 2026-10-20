@@ -1,0 +1,13 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 499fd96c..507c0771 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -439,6 +439,8 @@ pub fn run() {
+             projects::handoff_note_prepare,
+             projects::workspace_remove,
+             cleanup::cleanup_remove,
++            cleanup::cleanup_scan,
++            cleanup::branch_delete_kept,
+             projects::workspace_remove_check,
+             projects::project_set,
+             projects::project_display_name_set,
