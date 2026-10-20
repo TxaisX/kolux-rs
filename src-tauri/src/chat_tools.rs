@@ -287,6 +287,26 @@ pub fn claude_step(call: &str, name: &str, input: &Value) -> Step {
     Step::Tool(t)
 }
 
+/// An omp (oh-my-pi) `toolCall` block: `read`, `write`, `edit`, `bash` and the search tools take a
+/// `path`, `content`, `command` or `pattern` argument (PROVENANCE §5, T-325-b: omp's public
+/// message-types page shows `read` with `path` and `bash` as a tool name). The Claude shapes do the
+/// work once the arguments are renamed; an `edit` whose arguments the docs do not describe is a
+/// plain row without a diff card.
+pub fn omp_step(call: &str, name: &str, args: &Value) -> Step {
+    match name.to_ascii_lowercase().as_str() {
+        "read" => claude_step(call, "Read", &serde_json::json!({ "file_path": s(args, "path") })),
+        "write" => claude_step(call, "Write", &serde_json::json!({ "file_path": s(args, "path"), "content": s(args, "content") })),
+        "edit" => Step::Tool(tool(call, name, "edit", base(s(args, "path")))),
+        "bash" => claude_step(call, "Bash", &serde_json::json!({ "command": s(args, "command") })),
+        "grep" | "find" | "glob" | "search" => Step::Tool(tool(call, name, "read", short(if s(args, "pattern").is_empty() { s(args, "path") } else { s(args, "pattern") }))),
+        "ls" => Step::Tool(tool(call, name, "read", base(s(args, "path")))),
+        _ => match name.strip_prefix("mcp__").and_then(|r| r.split_once("__")) {
+            Some((server, t)) => Step::Tool(Tool { server: Some(server.to_string()), ..tool(call, t, "mcp", first_text(args)) }),
+            None => Step::Tool(tool(call, name, "other", first_text(args))),
+        },
+    }
+}
+
 /// The command a Codex shell call runs, as the user would type it: `["bash", "-lc", "ls"]` is `ls`.
 fn command_line(cmd: &Value) -> String {
     match cmd {

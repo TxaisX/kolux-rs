@@ -87,6 +87,7 @@ fn any_in(agent: &str, home: &Path, since: SystemTime) -> Option<PathBuf> {
             crate::chat::newest(folders.flat_map(|d| crate::chat::jsonl_in(&d).collect::<Vec<_>>()), since)
         }
         "codex" => crate::chat::newest(crate::chat::codex_rollouts(home, since).into_iter(), since),
+        "omp" => crate::chat::newest(crate::chat::omp_sessions(home, since).into_iter(), since),
         _ => None,
     }
 }

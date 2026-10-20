@@ -3470,3 +3470,4 @@ you picked with Open a file stays readable after Kolux restarts, so a reopened t
 > 2026-10-19 [watch] T-275: gone.ts (retire dead agents, closed-tab ledger, genuine-new-turn rule) + 2 patches for the resolver; unit-proven, live proof pending (batched).
 > 2026-10-19 [watch] T-259: status/working.ts (working agents per workspace, split panes apart) + 3 patches (rows.ts, App.tsx, ProjectsPanel.tsx); unit-proven, live proof pending (batched).
 > 2026-10-19 [watch] T-309-b: status/finished.ts (one early pull request round per finish, skipped hidden/unlisted/limited) + 2 patches (useAgentStatus.ts, ProjectsPanel.tsx); unit-proven, live proof pending (batched).
+> 2026-10-20 [chat] T-325-b: omp chat reader (session log, home variables, finder, tool rows) + CHAT-002 support, terminal.rs patch for the resolver; Grok left open (no public session-file format); unit-proven, live proof pending (batched).
