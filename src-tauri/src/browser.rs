@@ -844,7 +844,7 @@ async fn fetch_icon(clients: &IconClients, near: bool, url: Url, app: Option<&Ur
 /// The fetch under one overall time limit: each request's own timeout runs until its body is
 /// read, and the far request after a hand-off gets only what the near one left. The redirect cap
 /// is per client, so a hand-off can take up to twice `ICON_HOPS` hops, all inside the limit.
-async fn fetch_icon_within(clients: &IconClients, near: bool, url: Url, app: Option<&Url>, limit: Duration) -> Option<String> {
+pub(crate) async fn fetch_icon_within(clients: &IconClients, near: bool, url: Url, app: Option<&Url>, limit: Duration) -> Option<String> {
     let start = Instant::now();
     let mut res = if near { &clients.near } else { &clients.far }.get(url).timeout(limit).send().await.ok()?;
     if near && res.status().is_redirection() {

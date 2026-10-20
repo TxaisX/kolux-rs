@@ -3,6 +3,7 @@ mod floating_trust;
 mod repo_scan;
 mod activity;
 mod agents;
+mod app_look;
 mod artifacts;
 mod automations;
 mod badge;
@@ -101,6 +102,7 @@ mod tray;
 mod trust;
 mod update;
 mod visibility;
+mod web_icon;
 mod usage_alerts;
 
 use state::Store;
@@ -282,6 +284,8 @@ pub fn run() {
                     move |id| t.try_state::<Terminals>().is_some_and(|ts| ts.started(id).is_some()),
                 );
             }
+            // T-301 (APP-012): the saved app icon variant and window blur, before the window shows.
+            app_look::apply_saved(app.handle());
             app.manage(links::Grants::default());
             // APP-041: the app's own start-and-stop record, next to what the terminals report.
             diag::write(&dir, &format!("app start {starts}, Kolux RS {}", app.package_info().version));
@@ -595,6 +599,7 @@ pub fn run() {
             tools::editors_list,
             tools::teams_host,
             awake::keep_awake_state,
+            app_look::app_look_apply,
             token_usage::token_usage,
             token_usage::token_usage_scan,
             token_usage::token_tracking_set,

@@ -41,6 +41,7 @@ import { forgetColors, setTabColor, tabMenuHead, tabStyle, TAB_COLORS, type TabC
 import { forgetView } from "./terminal/viewKeep";
 import { classify, removePlan, removeQuestion, shellInAgentPane } from "./terminal/remove";
 import { applyAppearance, readAppearance, showScreen, zoomTerm } from "./theme";
+import { applyWindowBlur } from "./chrome/appLook";
 import { useEscapeLeaves } from "./chrome/fullPage";
 import SignInNotice from "./settings/SignInNotice";
 import KeyLostNotice from "./settings/KeyLostNotice";
@@ -389,6 +390,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           setSettings(s);
           setSettingsRead(true);
           applyAppearance(readAppearance(s));
+          applyWindowBlur(s);
         })
         .catch(() => setSettings({}));
     readSettings();
