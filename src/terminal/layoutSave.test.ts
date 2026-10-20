@@ -54,4 +54,26 @@ describe("T-075 (APP-048): the layout writer", () => {
     w.flush();
     expect(writes[0].panes[1]).toMatchObject({ kind: "editor", path: "C:\\w\\a\\README.md", cwd: "C:\\w\\a" });
   });
+
+  it("after-list #37/#39: a failed write stays pending and goes again; flush settles once the write lands", async () => {
+    const tried: number[] = [];
+    let fail = true;
+    const w = layoutWriter((l) => {
+      tried.push(l.focused);
+      return fail ? Promise.reject(new Error("disk full")) : Promise.resolve();
+    }, 400);
+    w.set(layout(3));
+    await w.flush();
+    expect(tried).toEqual([3]);
+    expect(w.pending()).toBe(true); // the failed layout is not counted as written
+    fail = false;
+    let landed = false;
+    const done = w.flush().then(() => (landed = true));
+    expect(tried).toEqual([3, 3]); // the same layout is written again, not skipped as "already written"
+    await done;
+    expect(landed).toBe(true);
+    expect(w.pending()).toBe(false);
+    await w.flush();
+    expect(tried).toEqual([3, 3]);
+  });
 });
