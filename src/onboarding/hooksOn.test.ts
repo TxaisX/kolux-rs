@@ -12,10 +12,9 @@ describe("hooksOn (FIX-2)", () => {
     expect(hooksOn({ [HOOKS_FIELD]: "true" })).toBe(false);
     expect(hooksOn({ [HOOKS_FIELD]: 1 })).toBe(false);
   });
-  it("reads the same saved key as the Settings page, so the two cannot drift apart", () => {
-    expect(HOOKS_FIELD).toBe(pageField);
-    for (const s of [{ agentStatusHooks: true }, { agentStatusHooks: false }, {}, { agentStatusHooks: "yes" }]) {
-      expect(hooksOn(s)).toBe(pageHooksOn(s));
-    }
+  it("the Settings page and the onboarding module share one hooksOn and one key (the same function, not a copy)", () => {
+    expect(pageHooksOn).toBe(hooksOn);
+    expect(pageField).toBe(HOOKS_FIELD);
+    expect(HOOKS_FIELD).toBe("agentStatusHooks");
   });
 });
