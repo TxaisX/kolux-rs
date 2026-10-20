@@ -88,6 +88,10 @@ pub struct Link {
     generation: u64,
     table: Mutex<Table>,
     alive: AtomicBool,
+    /// after-list 726: this window's mark in the `meta` of every terminal it starts, so a start
+    /// still in flight (the service has it, the window has not stored it yet) counts as this
+    /// window's and is never listed or ended as a background session no window owns.
+    window: String,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -107,7 +111,7 @@ impl Link {
         let answer = events.request(json!({ "op": "attach" }), &mut Vec::new())?;
         let generation = answer["generation"].as_u64().unwrap_or(ep.generation);
         let rows = answer["terminals"].as_array().cloned().unwrap_or_default();
-        let link = Arc::new(Link { ep, generation, table: Mutex::new(Table::default()), alive: AtomicBool::new(true) });
+        let link = Arc::new(Link { ep, generation, table: Mutex::new(Table::default()), alive: AtomicBool::new(true), window: crate::cli::secret() });
         let reader = link.clone();
         std::thread::Builder::new()
             .name("terminal-service-events".into())
@@ -209,7 +213,10 @@ impl Link {
 
     /// Starts a terminal in the service from the commands the window built (first that starts
     /// wins), at `cols` x `rows`, storing `meta` with it for the window that adopts it later.
-    pub fn spawn(self: &Arc<Self>, commands: &[CommandBuilder], cols: u16, rows: u16, meta: Value) -> Result<Remote, String> {
+    pub fn spawn(self: &Arc<Self>, commands: &[CommandBuilder], cols: u16, rows: u16, mut meta: Value) -> Result<Remote, String> {
+        if meta.is_null() || meta.is_object() {
+            meta["window"] = json!(self.window);
+        }
         let mut client = Client::connect(&self.ep, CONTROL_WAIT)?;
         let list: Vec<Value> = commands.iter().map(command_json).collect();
         let row = client.request(json!({ "op": "spawn", "commands": list, "cols": cols, "rows": rows, "meta": meta }), &mut Vec::new())?;
@@ -225,9 +232,15 @@ impl Link {
     /// service id is not in `owned` (the window's own terminals), each with what Manage Sessions
     /// needs to decide whether it may offer it.
     pub fn unowned(&self, owned: &HashSet<u32>) -> Result<Vec<HostSession>, String> {
+        Ok(self.listed(owned)?.1)
+    }
+
+    /// The service's rows, and those no window owns (`owned`, or a start of this window in flight).
+    fn listed(&self, owned: &HashSet<u32>) -> Result<(Vec<Value>, Vec<HostSession>), String> {
         let list = self.control(json!({ "op": "list" }))?;
         let rows = list["terminals"].as_array().cloned().unwrap_or_default();
-        Ok(host_sessions(&rows, owned, &|pid| pid.and_then(crate::procs::has_children).unwrap_or(true)))
+        let free = host_sessions(&rows, owned, &self.window, &|pid| pid.and_then(crate::procs::has_children).unwrap_or(true));
+        Ok((rows, free))
     }
 
     /// T-153-f (VIEW-099): ends terminal `id` that the service holds and no window owns, after a
@@ -237,7 +250,10 @@ impl Link {
         if owned.contains(&id) {
             return Err(format!("background session {id} belongs to a pane; close the pane instead"));
         }
-        let now = self.unowned(owned)?;
+        let (rows, now) = self.listed(owned)?;
+        if rows.iter().any(|r| r["id"].as_u64() == Some(u64::from(id)) && started_by(r, &self.window)) {
+            return Err(format!("background session {id} is still starting for a pane; close the pane instead"));
+        }
         let Some(row) = now.iter().find(|r| r.id == id) else { return Ok(false) };
         if row.agent {
             return Err(format!("background session {id} runs an agent ({}); agent sessions are never ended from here", row.program));
@@ -273,13 +289,14 @@ pub struct HostSession {
 
 /// T-153-f: the service's `rows` that are not in `owned`, by id. `children` says whether a process
 /// has programs running under it (true when it cannot tell).
-pub fn host_sessions(rows: &[Value], owned: &HashSet<u32>, children: &dyn Fn(Option<u32>) -> bool) -> Vec<HostSession> {
+/// after-list 726: `window` is the asking window's mark; its own starts still in flight are left out.
+pub fn host_sessions(rows: &[Value], owned: &HashSet<u32>, window: &str, children: &dyn Fn(Option<u32>) -> bool) -> Vec<HostSession> {
     let text = |v: &Value| v.as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     let mut out: Vec<HostSession> = rows
         .iter()
         .filter_map(|row| {
             let id = row["id"].as_u64().and_then(|i| u32::try_from(i).ok())?;
-            if owned.contains(&id) {
+            if owned.contains(&id) || started_by(row, window) {
                 return None;
             }
             let pid = row["pid"].as_u64().and_then(|p| u32::try_from(p).ok());
@@ -293,6 +310,11 @@ pub fn host_sessions(rows: &[Value], owned: &HashSet<u32>, children: &dyn Fn(Opt
         .collect();
     out.sort_by_key(|h| h.id);
     out
+}
+
+/// after-list 726: the row's terminal was started by the window with mark `window`.
+fn started_by(row: &Value, window: &str) -> bool {
+    !window.is_empty() && row["meta"]["window"].as_str() == Some(window)
 }
 
 /// A command the window built, as the service reads it back (`command_from`).
@@ -421,13 +443,47 @@ pub fn adopted_id(had: Option<u32>, taken: &dyn Fn(u32) -> bool, next: u32) -> u
 
 /// TERM-105: the output a terminal printed while no window was attached, to add to its pane's
 /// saved output before the pane replays it: the newest `now - seen` bytes of the service's tail
-/// (all of the tail when more than that was missed). Nothing when the window never recorded what
-/// it had seen (it did not quit cleanly), or the tail is not newer.
-pub fn missed(seen: Option<u64>, now: u64, tail: &[u8]) -> &[u8] {
-    let Some(seen) = seen else { return &[] };
+/// (all of the tail when more than that was missed).
+///
+/// after-list 698: when the last window did not quit cleanly (a crash, no `seen`), the pane's saved
+/// output itself says where it stopped: `saved` is its newest bytes, and what follows the last
+/// place the tail holds their final `PROBE` bytes is what was missed. The last place, so a repeat
+/// never doubles output (coordinator default; Txais may overrule). All of the tail when the saved
+/// output is empty or its end is not in the tail (more was missed than the tail keeps).
+pub fn missed<'a>(seen: Option<u64>, now: u64, tail: &'a [u8], saved: &[u8]) -> &'a [u8] {
+    let Some(seen) = seen else { return after_saved(saved, tail) };
     let gap = now.saturating_sub(seen);
     let take = usize::try_from(gap).unwrap_or(usize::MAX).min(tail.len());
     &tail[tail.len() - take..]
+}
+
+/// after-list 698: how much of a pane's saved output `missed` matches against the service's tail.
+pub const PROBE: usize = 1024;
+/// after-list 698: the least overlap that counts when the tail starts inside the probe, so a lone
+/// shared line break is not taken for the place the saved output stopped.
+const LEAST_OVERLAP: usize = 16;
+
+/// The part of `tail` after the end of `saved`: after the last place the tail holds the probe,
+/// else after the longest start of the tail that ends the probe (the tail began inside it).
+fn after_saved<'a>(saved: &[u8], tail: &'a [u8]) -> &'a [u8] {
+    let probe = &saved[saved.len().saturating_sub(PROBE)..];
+    if probe.is_empty() {
+        return tail;
+    }
+    if let Some(at) = tail.windows(probe.len()).rposition(|w| w == probe) {
+        return &tail[at + probe.len()..];
+    }
+    let most = probe.len().min(tail.len());
+    let overlap = (1..=most).rev().find(|&j| probe.ends_with(&tail[..j]) && (j == tail.len() || j >= LEAST_OVERLAP)).unwrap_or(0);
+    &tail[overlap..]
+}
+
+/// after-list 698: what the last window recorded at a clean quit, read once: the file is removed,
+/// so a later window that crashes is never matched against an older window's record.
+pub fn take_seen(dir: &std::path::Path, generation: u64) -> HashMap<u32, u64> {
+    let seen = read_seen(dir, generation);
+    let _ = std::fs::remove_file(dir.join(SEEN_FILE));
+    seen
 }
 
 /// The file the window writes at quit: which run of the service, and each terminal's output count
@@ -624,7 +680,10 @@ pub(crate) mod tests {
         // Reopen: a new window gets it back with its meta and recent output, and can type again.
         let (second, rows) = link(&r);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["meta"], meta);
+        let mut kept = rows[0]["meta"].clone();
+        assert!(kept["window"].as_str().is_some_and(|w| !w.is_empty()), "after-list 726: the starting window's mark rides along");
+        kept.as_object_mut().unwrap().remove("window");
+        assert_eq!(kept, meta);
         assert!(String::from_utf8_lossy(&row_tail(&rows[0])).contains("routed"));
         let back = Remote::from_row(&second, &rows[0], None).unwrap();
         let (again, gone) = pane(&second, &back);
@@ -688,15 +747,38 @@ pub(crate) mod tests {
     #[test]
     fn t184b_the_saved_output_gets_only_what_was_printed_while_no_window_was_open() {
         let tail = b"0123456789";
-        assert_eq!(missed(Some(100), 103, tail), b"789");
-        assert_eq!(missed(Some(100), 100, tail), b"");
-        assert_eq!(missed(Some(10), 500, tail), tail, "more missed than kept: all of the tail");
-        assert_eq!(missed(None, 500, tail), b"", "no clean quit: nothing is guessed");
+        assert_eq!(missed(Some(100), 103, tail, b"whatever"), b"789");
+        assert_eq!(missed(Some(100), 100, tail, b""), b"");
+        assert_eq!(missed(Some(10), 500, tail, b""), tail, "more missed than kept: all of the tail");
         let dir = std::env::temp_dir().join(format!("kolux-t184b-seen-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         write_seen(&dir, 77, &[(4, 1200), (9, 5)]);
         assert_eq!(read_seen(&dir, 77), HashMap::from([(4, 1200), (9, 5)]));
         assert!(read_seen(&dir, 78).is_empty(), "another run of the service: nothing carries over");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// after-list 698: a window that crashed recorded nothing, so the pane's saved output says where
+    /// it stopped; and a clean quit's record is read once, never matched against a later crash.
+    #[test]
+    fn after698_a_crashed_window_still_gets_what_was_printed_after_its_last_drawn_byte() {
+        let saved = b"PS C:\\w> echo one\r\none\r\nPS C:\\w> ";
+        let tail = b"\x1b[0mPS C:\\w> echo one\r\none\r\nPS C:\\w> echo two\r\ntwo\r\n";
+        assert_eq!(missed(None, 999, tail, saved), b"echo two\r\ntwo\r\n", "only what follows the saved end");
+        assert_eq!(missed(None, 999, saved, saved), b"", "nothing printed since: nothing added");
+        assert_eq!(missed(None, 999, tail, b""), tail, "nothing saved yet: the whole tail");
+        assert_eq!(missed(None, 999, b"brand new output", b"older lines nowhere in the tail\r\n"), b"brand new output", "more missed than the tail keeps");
+        let long: Vec<u8> = (0..3000u32).flat_map(|i| format!("line {i}\r\n").into_bytes()).collect();
+        let (saved, tail) = (&long[..20_000], &long[19_500..]);
+        assert_eq!(missed(None, 999, tail, saved), &long[20_000..], "the tail began inside the saved end");
+        let mut cut = tail.to_vec();
+        cut.extend_from_slice(b"line 1\r\n");
+        assert_eq!(missed(None, 999, &cut, &long[..20_000]), &cut[500..], "a repeat after the end is still added once");
+        let dir = std::env::temp_dir().join(format!("kolux-after698-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        write_seen(&dir, 5, &[(1, 40)]);
+        assert_eq!(take_seen(&dir, 5), HashMap::from([(1, 40)]));
+        assert!(take_seen(&dir, 5).is_empty(), "a record is used by one window only");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -713,7 +795,7 @@ pub(crate) mod tests {
         let owned = HashSet::from([6]);
         // pid 30 has a program running under it; an unknown pid cannot be checked (counts as busy).
         let children = |pid: Option<u32>| pid.is_none_or(|p| p == 30);
-        let got = host_sessions(&rows, &owned, &children);
+        let got = host_sessions(&rows, &owned, "w1", &children);
         assert_eq!(got.iter().map(|h| h.id).collect::<Vec<_>>(), vec![1, 2, 3, 4, 5], "sorted, the window's own terminal left out");
         let by = |id: u32| got.iter().find(|h| h.id == id).unwrap().clone();
         assert_eq!(by(1), HostSession { id: 1, pid: Some(10), program: "pwsh.exe".into(), dir: Some("C:\\p".into()), agent: false, busy: false });
@@ -723,7 +805,7 @@ pub(crate) mod tests {
         assert_eq!(by(3).dir.as_deref(), Some("C:\\a"));
         assert!(!by(4).agent && by(4).busy, "a program that is not a shell");
         assert!(by(5).busy, "no process id: cannot check, left alone");
-        assert!(host_sessions(&rows, &HashSet::from([1, 2, 3, 4, 5, 6]), &children).is_empty());
+        assert!(host_sessions(&rows, &HashSet::from([1, 2, 3, 4, 5, 6]), "w1", &children).is_empty());
     }
 
     #[test]
@@ -750,6 +832,12 @@ pub(crate) mod tests {
         wait("the ended terminal to leave the service", 30, || r.service.counts().0 == 1);
         assert!(window.unowned(&owned).unwrap().is_empty(), "the count drops by one");
         assert_eq!(window.end_unowned(foreign, &owned), Ok(false), "already gone: nothing to ask, nothing failed");
+        // after-list 726: a start the window has not stored yet (not in `owned`) is still the window's own.
+        let none = HashSet::new();
+        assert!(window.unowned(&none).unwrap().is_empty(), "a start in flight is never a background session");
+        assert!(window.end_unowned(mine.id, &none).is_err(), "and is never ended from here");
+        let (other, _) = link(&r);
+        assert_eq!(other.unowned(&none).unwrap().iter().map(|h| h.id).collect::<Vec<_>>(), vec![mine.id], "another window sees it as no window's");
         mine.kill();
         drop(r);
         let _ = std::fs::remove_dir_all(dir);
