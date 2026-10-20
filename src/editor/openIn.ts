@@ -5,6 +5,7 @@
 // The folder is opened by the open_in command (files.rs), which refuses relative or missing paths
 // and reports a launch that fails. Managing the list in General settings is T-237-b.
 import { invoke } from "@tauri-apps/api/core";
+import { readOpenIn } from "../settings/openIn";
 
 export type App = { label: string; command: string };
 export type Target = App & { files?: true };
@@ -25,8 +26,11 @@ export function cleanApps(raw: unknown): App[] {
   return rows.slice(0, MAX_APPS);
 }
 
-/** What the Open in menu offers: the apps, then the file manager. */
-export const targetsOf = (settings: Record<string, unknown> | null | undefined): Target[] => [...cleanApps(settings?.[SETTING]), FILE_MANAGER];
+/** What the Open in menu offers (T-323-b): the apps of General settings in the user's order, File Explorer being the system file manager. */
+export const targetsOf = (settings: Record<string, unknown> | null | undefined): Target[] =>
+  readOpenIn(settings ?? {})
+    .map((a): Target => (a.id === "explorer" ? FILE_MANAGER : { label: a.name, command: a.command }))
+    .slice(0, MAX_APPS);
 
 /** The command a target launches with; an app with none falls back to VS Code's; the file manager has none. */
 export const commandOf = (t: Target): string | null => (t.files ? null : t.command.trim() || VS_CODE.command);

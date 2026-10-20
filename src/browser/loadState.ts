@@ -88,6 +88,14 @@ export const overlayOf = (h: Health): Overlay => (h.phase === "failed" || h.phas
 export type Kind = "unknown-host" | "refused" | "timeout" | "unreachable" | "certificate" | "unknown";
 export type Diagnosis = { kind: Kind; local: boolean; https: string | null };
 
+/** T-158 (BROW-024): `browser_cert`'s answer for an address in this tab. `offer` is true only while
+ *  the engine's certificate challenge for this computer's own https site is waiting in this tab;
+ *  `site` is its `host:port`. Public sites never get an offer, so they have no bypass. */
+export type CertState = { offer: boolean; trusted: boolean; site: string | null };
+
+/** The overlay's Trust button, or null when it must not show. */
+export const trustLabel = (c: CertState | null): string | null => (c?.offer && c.site ? `Trust This Certificate On ${c.site} For This Run` : null);
+
 export type OverlayModel = {
   title: string;
   text: string;

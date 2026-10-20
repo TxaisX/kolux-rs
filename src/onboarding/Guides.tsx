@@ -15,6 +15,7 @@ import StarPrompt from "./StarPrompt";
 import { AgentPanel, AutomatePanel, composer, IntegrationsPanel, MultitaskPanel, NotificationsPanel, StopSetup } from "./StepPanels";
 import { integrationSteps, readSeenCached, taskSourceOf } from "./integrations";
 import { guideOpenChanged } from "./actions";
+import { MOVED, splitCredit } from "./moved";
 import { defaultAgentId } from "../launch/agents";
 import {
   caps, demoFrames, doneFrom, paletteKeys, doneId, firstOpen, forward, latest, markGuide, moveOn, nextTip, OPEN_EXPLORE, OPEN_GUIDE, guideClosed, PAGE_SHOWN, railKey, ring, STEPS, stopDone, stopOf, TWO_REPOS, withRecord, words, workflowDone, WORKFLOWS,
@@ -33,7 +34,7 @@ const UNREAD: Read = { workspaces: null, gitProjects: null, pageShown: false, in
 async function readFacts(check: ReturnType<typeof latest<boolean>>, put: (f: Partial<Read>) => void, alive: () => boolean): Promise<boolean | null> {
   const [settings, g] = await Promise.all([invoke<Record<string, unknown>>("get_settings").catch(() => null), invoke<GuideRecord>("guide_get").catch(() => null)]);
   if (!alive()) return null;
-  put({ notifications: settings ? settings.notifyOnFinish !== false : null, agent: settings ? defaultAgentId(settings) : null, pageShown: !!g?.tried.includes(PAGE_SHOWN), legacy: legacyProfile(settings, g?.tried ?? null) });
+  put({ notifications: settings ? settings.notifyOnFinish !== false : null, agent: settings ? defaultAgentId(settings) : null, pageShown: !!g?.tried.includes(PAGE_SHOWN), legacy: legacyProfile(settings, g?.tried ?? null), splitCredit: splitCredit(g?.tried, g?.features) });
   put({ integrations: "checking" });
   // ONB-018: connected means signed in and the token accepted, not only a cached sign-in.
   const gh = readSeenCached(invoke).then(
@@ -357,7 +358,7 @@ function StartupTip() {
       invoke<CliStatus>("cli_status").catch(() => "error" as const),
       invoke("get_settings"),
     ]).then(([onb, g, c]) => {
-      const t = nextTip({ seen: g.tipsSeen, tried: g.tried, cli: c, onboarding: onb !== null });
+      const t = nextTip({ seen: g.tipsSeen, tried: g.tried, cli: c, onboarding: onb !== null, features: g.features });
       if (!t) return;
       const show = () => {
         if (!live) return;
@@ -379,7 +380,18 @@ function StartupTip() {
     <div className="ask-backdrop" onMouseDown={(e) => e.target === e.currentTarget && close()}>
       <div className="tip" role="dialog" aria-modal="true" aria-label="Tip" onKeyDown={(e) => e.key === "Escape" && close()}>
         <span className="tip-badge">Tip</span>
-        {tip === "cli" ? (
+        {tip !== "cli" && tip !== "palette" ? (
+          <>
+            <h3>{MOVED.find((m) => m.id === tip)?.title}</h3>
+            <p>{MOVED.find((m) => m.id === tip)?.text}</p>
+            <div className="btn-row">
+              <span className="spacer" />
+              <button className="btn primary" onClick={close} autoFocus>
+                Got it
+              </button>
+            </div>
+          </>
+        ) : tip === "cli" ? (
           <>
             <h3>Let your agents drive Kolux</h3>
             <ul>

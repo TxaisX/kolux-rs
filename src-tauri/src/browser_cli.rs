@@ -12,6 +12,7 @@
 use super::{eval_json, pick_tab, preview, profiles, same_dir, tabs, tell, Tab, EVAL_WAIT, NEXT_PROFILE};
 use crate::cli::{Fail, Request};
 use serde_json::{json, Map, Value};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub type Command = (&'static str, &'static str, &'static [&'static str]);
@@ -27,9 +28,9 @@ pub const COMMANDS: &[Command] = &[
     ("eval", "browser.eval", &["expression", "worktree", "page"]),
     ("scroll", "browser.scroll", &["direction", "amount", "worktree", "page"]),
     ("snapshot", "browser.snapshot", &["worktree", "page"]),
-    ("screenshot", "browser.screenshot", &["format", "worktree", "page"]),
-    ("full-screenshot", "browser.full-screenshot", &["format", "worktree", "page"]),
-    ("pdf", "browser.pdf", &["worktree", "page"]),
+    ("screenshot", "browser.screenshot", &["format", "path", "worktree", "page"]),
+    ("full-screenshot", "browser.full-screenshot", &["format", "path", "worktree", "page"]),
+    ("pdf", "browser.pdf", &["path", "worktree", "page"]),
     ("click", "browser.click", &["element", "worktree", "page"]),
     ("dblclick", "browser.dblclick", &["element", "worktree", "page"]),
     ("check", "browser.check", &["element", "worktree", "page"]),
@@ -77,6 +78,13 @@ pub const COMMANDS: &[Command] = &[
     ("storage get", "browser.storage-get", &["area", "key", "worktree", "page"]),
     ("storage set", "browser.storage-set", &["area", "key", "value", "worktree", "page"]),
     ("storage clear", "browser.storage-clear", &["area", "worktree", "page"]),
+    // T-251 (CLI-047 Compat): the area as a word, `storage local set --key a --value=`.
+    ("storage local get", "browser.storage-local-get", &["key", "worktree", "page"]),
+    ("storage local set", "browser.storage-local-set", &["key", "value", "worktree", "page"]),
+    ("storage local clear", "browser.storage-local-clear", &["worktree", "page"]),
+    ("storage session get", "browser.storage-session-get", &["key", "worktree", "page"]),
+    ("storage session set", "browser.storage-session-set", &["key", "value", "worktree", "page"]),
+    ("storage session clear", "browser.storage-session-clear", &["worktree", "page"]),
     // T-242 (BROW-049): interception, capture and the console and network logs.
     ("intercept enable", "browser.intercept-enable", &["patterns", "worktree", "page"]),
     ("intercept disable", "browser.intercept-disable", &["worktree", "page"]),
@@ -132,16 +140,6 @@ const CAPTURE_MAX: usize = 2000;
 const COLOR_SCHEMES: &[&str] = &["dark", "light"];
 const MOTIONS: &[&str] = &["reduce", "no-preference"];
 
-/// The commands that need the engine's picture or printer. Tauri's public API has no page capture
-/// or print on Windows (that is WebView2's CapturePreview / PrintToPdf, reached only through the
-/// webview2-com crate, not a dependency of this build), so they are refused with a clear message.
-const UNSUPPORTED: &[(&str, &str)] = &[
-    ("browser.screenshot", "screenshot needs the engine's page capture, which this build does not reach; use snapshot for the page's content"),
-    ("browser.full-screenshot", "full-screenshot needs the engine's page capture, which this build does not reach; use snapshot for the page's content"),
-    ("browser.pdf", "pdf needs the engine's printer, which this build does not reach"),
-    ("browser.download", "download needs the engine's download handler, which this build does not reach; the page's own link can still be clicked"),
-];
-
 /// Reference-based element commands (BROW-047).
 const ELEMENT: &[&str] = &["browser.click", "browser.dblclick", "browser.check", "browser.uncheck", "browser.focus", "browser.clear", "browser.select-all", "browser.hover", "browser.scrollintoview"];
 const WAIT_CONDITIONS: &[&str] = &["selector", "text", "url", "load", "fn", "state"];
@@ -170,10 +168,28 @@ pub fn is_browser(command: &str) -> bool {
     COMMANDS.iter().any(|c| c.1 == command)
 }
 
+/// T-251 (CLI-047): `storage local|session get|set|clear` is `storage get|set|clear --area
+/// local|session`; the area and the plain command behind such a wire name.
+fn storage_word(command: &str) -> Option<(&str, String)> {
+    let (area, op) = command.strip_prefix("browser.storage-")?.split_once('-')?;
+    STORAGE_AREAS.contains(&area).then(|| (area, format!("browser.storage-{op}")))
+}
+
+/// T-251 (CLI-047): `--expires` in unix seconds; 0 keeps the cookie for the browsing session.
+fn expires_at(v: Option<&str>) -> Option<i64> {
+    v.and_then(|s| s.trim().parse::<f64>().ok()).filter(|n| n.is_finite() && *n > 0.0).map(|n| n as i64)
+}
+
 /// What a browser command needs, checked before the app is asked (the parse step's arm).
 pub fn check(command: &str, flags: &Map<String, Value>) -> Result<Map<String, Value>, Fail> {
+    if let Some((area, base)) = storage_word(command) {
+        let mut f = flags.clone();
+        f.insert("area".into(), json!(area));
+        return check(&base, &f);
+    }
     let text = |k: &str| flags.get(k).and_then(Value::as_str).map(str::trim);
-    if let Some(k) = flags.keys().find(|k| !["text", "input", "value", "expression", "command", "fn"].contains(&k.as_str()) && text(k).is_some_and(str::is_empty)) {
+    // CLI-047: a cookie value, a storage value and a password may be empty; a name or key may not.
+    if let Some(k) = flags.keys().find(|k| !["text", "input", "value", "expression", "command", "fn", "pass"].contains(&k.as_str()) && text(k).is_some_and(str::is_empty)) {
         return Err(args(format!("--{k} cannot be empty")));
     }
     let need = |k: &str| text(k).filter(|v| !v.is_empty()).ok_or_else(|| args(format!("--{k} is required")));
@@ -229,12 +245,13 @@ pub fn check(command: &str, flags: &Map<String, Value>) -> Result<Map<String, Va
         }
         "browser.scroll" => {
             need("direction")?;
-            one_of("direction", &["up", "down"])?;
+            one_of("direction", &["up", "down", "left", "right"])?;
             number("amount")?;
         }
         c if ELEMENT.contains(&c) => {
             need("element")?;
         }
+        "browser.screenshot" | "browser.full-screenshot" => one_of("format", &["png", "jpeg"])?,
         "browser.fill" | "browser.select" => {
             need("element")?;
             if text("value").is_none() {
@@ -322,8 +339,11 @@ pub fn check(command: &str, flags: &Map<String, Value>) -> Result<Map<String, Va
             if !flags.contains_key("value") {
                 return Err(args("--value is required"));
             }
-            if flags.contains_key("httpOnly") {
-                return Err(Fail::new("unsupported", "--httpOnly cookies are set by the engine's cookie manager, which this build does not reach; without the flag the page sets the cookie itself"));
+            // CLI-047: an expiry is unix seconds, a finite number from 0 up.
+            if let Some(e) = text("expires") {
+                if !e.parse::<f64>().is_ok_and(|n| n.is_finite() && n >= 0.0) {
+                    return Err(args(format!("--expires takes unix seconds, a finite number from 0 up, not {e}")));
+                }
             }
             one_of("sameSite", &["Strict", "Lax", "None"])?;
         }
@@ -371,7 +391,9 @@ pub fn check(command: &str, flags: &Map<String, Value>) -> Result<Map<String, Va
         }
         "browser.set-credentials" => {
             need("user")?;
-            need("pass")?;
+            if !flags.contains_key("pass") {
+                return Err(args("--pass is required"));
+            }
         }
         "browser.set-media" => {
             if !flags.contains_key("color-scheme") && !flags.contains_key("reduced-motion") {
@@ -530,10 +552,37 @@ fn wait(id: u32, a: &Value) -> Result<Value, Fail> {
             return Ok(json!({ "page": id, "satisfied": true, "asked": asked, "url": answer["url"] }));
         }
         if Instant::now() >= until {
-            return Err(Fail { code: "timeout", message: format!("the condition did not hold within {} ms", limit.as_millis()), data: json!({ "page": id, "asked": asked, "url": answer["url"] }) });
+            return Err(timed_out(id, asked, &answer["url"], limit));
         }
         std::thread::sleep(WAIT_STEP);
     }
+}
+
+/// CLI-046: a wait that runs out says the condition did not hold. Kolux answered, so it is never
+/// told as Kolux being down or unreachable.
+fn timed_out(id: u32, asked: u32, url: &Value, limit: Duration) -> Fail {
+    Fail { code: "timeout", message: format!("the condition did not hold within {} ms", limit.as_millis()), data: json!({ "page": id, "asked": asked, "url": url }) }
+}
+
+/// CLI-047: the HTTP-only cookie `cookie set --httpOnly` asks for, on the open page's host unless
+/// `--domain` names it or a parent of it (never another site).
+fn engine_cookie(id: u32, a: &Value, page_url: &str) -> Result<super::cookies::Entry, Fail> {
+    use tauri::webview::cookie::SameSite;
+    let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let on = |k: &str| a.get(k).is_some_and(|v| !matches!(v, Value::Null | Value::Bool(false)));
+    let host = tauri::Url::parse(page_url).ok().and_then(|u| u.host_str().map(str::to_ascii_lowercase)).ok_or_else(|| args(format!("browser tab {id} shows no site ({page_url}), so there is no site to set the cookie on")))?;
+    let domain = text("domain").map(|d| d.to_ascii_lowercase()).unwrap_or_else(|| host.clone());
+    let bare = domain.trim_start_matches('.');
+    if bare.is_empty() || !(host == bare || host.ends_with(&format!(".{bare}"))) {
+        return Err(args(format!("--domain {domain} is not the site of browser tab {id} ({host}); cookies are set on the open page's site")));
+    }
+    let same_site = match text("sameSite").as_deref() {
+        Some("Strict") => Some(SameSite::Strict),
+        Some("Lax") => Some(SameSite::Lax),
+        Some("None") => Some(SameSite::None),
+        _ => None,
+    };
+    Ok(super::cookies::Entry { name: text("name").unwrap_or_default(), value: a["value"].as_str().unwrap_or_default().to_string(), domain, path: text("path").unwrap_or_else(|| "/".into()), secure: on("secure"), http_only: true, same_site, expires: expires_at(a["expires"].as_str()) })
 }
 
 /// `kolux exec --command "<helper command>"`: the helper is Kolux itself, so the command is one
@@ -559,12 +608,10 @@ fn exec(req: &Request, worktree: Option<&str>, line: &str) -> Result<Value, Fail
     run(&inner, worktree)
 }
 
-/// What stands between a request and the page: a command this build cannot do, then the tab it
-/// goes to (BROW-042). Pure, so it is tested without the app.
-pub fn gate(command: &str, page_no: Option<u32>, worktree: Option<&str>, tabs: &[super::Tab]) -> Result<u32, Fail> {
-    if let Some((_, why)) = UNSUPPORTED.iter().find(|(c, _)| *c == command) {
-        return Err(Fail { code: "unsupported", message: (*why).to_string(), data: Value::Null });
-    }
+/// What stands between a request and the page: the tab it goes to (BROW-042). Pure, so it is
+/// tested without the app. Every command reaches the page since the capture, print and download
+/// commands went to the engine (T-251).
+pub fn gate(_command: &str, page_no: Option<u32>, worktree: Option<&str>, tabs: &[super::Tab]) -> Result<u32, Fail> {
     pick_tab(tabs, page_no, worktree).map_err(|m| Fail { code: "not_found", message: m, data: json!({ "hint": "open a browser tab in the worktree (Ctrl+T, Browser) or name one with --page <n>" }) })
 }
 
@@ -746,6 +793,12 @@ fn clipboard(cmd: &str, text: Option<&str>) -> Result<Value, Fail> {
 /// The app side of every browser command (the dispatch arm). `worktree` is the folder the command
 /// is for: `--worktree` resolved, or the caller's own worktree, or none.
 pub fn run(req: &Request, worktree: Option<&str>) -> Result<Value, Fail> {
+    if let Some((area, base)) = storage_word(&req.command) {
+        let mut r = req.clone();
+        r.args["area"] = json!(area);
+        r.command = base;
+        return run(&r, worktree);
+    }
     let a = &req.args;
     let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     let on = |k: &str| a.get(k).is_some_and(|v| !matches!(v, Value::Null | Value::Bool(false)));
@@ -891,6 +944,13 @@ pub fn run(req: &Request, worktree: Option<&str>) -> Result<Value, Fail> {
                     return Err(args(format!("--url {u} is not the site of browser tab {id} ({page_url}); cookies are read and set on the open page")));
                 }
             }
+            if cmd == "cookie-set" && on("httpOnly") {
+                // CLI-047: document.cookie cannot set an HTTP-only cookie; the engine's store can.
+                let page_url = tabs().into_iter().find(|t| t.id == id).map(|t| t.url).unwrap_or_default();
+                let e = engine_cookie(id, a, &page_url)?;
+                super::set_cookie(id, super::cookies::cookie_of(&e)).map_err(|m| Fail::new("failed", m))?;
+                return Ok(json!({ "page": id, "ok": true, "summary": format!("HTTP-only cookie {} set for {}", e.name, e.domain) }));
+            }
             let mut answer = page(id, cmd, a.clone(), EVAL_WAIT)?;
             answer["page"] = json!(id);
             if cmd == "cookie-delete" {
@@ -904,6 +964,8 @@ pub fn run(req: &Request, worktree: Option<&str>) -> Result<Value, Fail> {
             answer["destructive"] = json!(true);
             Ok(answer)
         }
+        "browser.screenshot" | "browser.full-screenshot" | "browser.pdf" => capture(id, cmd, a, worktree, &req.cwd),
+        "browser.download" => download(id, a, worktree, &req.cwd),
         "browser.upload" => {
             let files = files_of(&text("files").unwrap_or_default())?;
             let mut answer = page(id, cmd, json!({ "element": a["element"], "files": files }), EVAL_WAIT)?;
@@ -915,6 +977,115 @@ pub fn run(req: &Request, worktree: Option<&str>) -> Result<Value, Fail> {
             answer["page"] = json!(id);
             Ok(answer)
         }
+    }
+}
+
+/// T-251 (CLI-047): where a capture or a download is written. `--path` must sit inside the
+/// worktree (the caller's folder when it is in none), by the same rule as `kolux file`; without it
+/// a capture goes to `fallback` (the app's captures folder). A file is never overwritten: a taken
+/// name gets a number, as downloads do, and the name is made safe the same way.
+pub fn out_path(worktree: Option<&str>, cwd: &str, given: Option<&str>, fallback: &Path, name: &str) -> Result<PathBuf, Fail> {
+    let (dir, file) = match given {
+        Some(g) => {
+            let root = worktree.unwrap_or(cwd);
+            let full = Path::new(root).join(crate::cli::file_cli::inside(root, cwd, g)?);
+            let file = full.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            (full.parent().map(Path::to_path_buf).unwrap_or_default(), file)
+        }
+        None => (fallback.to_path_buf(), name.to_string()),
+    };
+    std::fs::create_dir_all(&dir).map_err(|e| Fail::new("failed", format!("{}: {e}", dir.display())))?;
+    super::downloads::place(&dir, &file, &[]).map_err(|m| Fail::new("failed", m))
+}
+
+/// The largest side, in pixels, a whole-page picture is taken at (the engine's own limit).
+const PICTURE_MAX: f64 = 16384.0;
+
+/// The DevTools parameters for a picture: the visible page, or, given the page's layout metrics,
+/// the whole page.
+pub fn shot_params(format: &str, whole: Option<&Value>) -> String {
+    let mut p = json!({ "format": format, "fromSurface": true });
+    if let Some(m) = whole {
+        let size = if m["cssContentSize"].is_object() { &m["cssContentSize"] } else { &m["contentSize"] };
+        let side = |k: &str| size[k].as_f64().unwrap_or(0.0).clamp(1.0, PICTURE_MAX);
+        p["captureBeyondViewport"] = json!(true);
+        p["clip"] = json!({ "x": 0, "y": 0, "width": side("width"), "height": side("height"), "scale": 1 });
+    }
+    p.to_string()
+}
+
+/// The picture's bytes from the engine's base64 answer, so sizes are reported decoded.
+pub fn picture(answer: &Value) -> Result<Vec<u8>, Fail> {
+    use base64::Engine as _;
+    let data = answer["data"].as_str().filter(|d| !d.is_empty()).ok_or_else(|| Fail::new("failed", "the page's engine sent no picture"))?;
+    base64::engine::general_purpose::STANDARD.decode(data).map_err(|_| Fail::new("failed", "the page's engine sent a picture that is not base64"))
+}
+
+/// `kolux screenshot|full-screenshot|pdf`: the engine's picture or PDF of the page, written to a
+/// file; the answer names the file and its size in bytes.
+fn capture(id: u32, cmd: &str, a: &Value, worktree: Option<&str>, cwd: &str) -> Result<Value, Fail> {
+    let failed = |m: String| Fail::new("failed", m);
+    let format = a["format"].as_str().map(str::trim).filter(|f| !f.is_empty()).unwrap_or("png");
+    let ext = match cmd {
+        "pdf" => "pdf",
+        _ if format == "jpeg" => "jpg",
+        _ => "png",
+    };
+    let given = a["path"].as_str().map(str::trim).filter(|p| !p.is_empty());
+    let fallback = if given.is_none() { super::captures_dir().map_err(failed)? } else { PathBuf::new() };
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let path = out_path(worktree, cwd, given, &fallback, &format!("page-{id}-{cmd}-{stamp}.{ext}"))?;
+    let shown = path.display().to_string();
+    let bytes = if cmd == "pdf" {
+        if !super::print_pdf(id, &shown).map_err(failed)? {
+            return Err(failed(format!("the engine could not print page {id}")));
+        }
+        std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+    } else {
+        let whole = if cmd == "full-screenshot" { Some(super::devtools(id, "Page.getLayoutMetrics", "{}".into()).map_err(failed)?) } else { None };
+        let data = picture(&super::devtools(id, "Page.captureScreenshot", shot_params(format, whole.as_ref())).map_err(failed)?)?;
+        std::fs::write(&path, &data).map_err(|e| failed(format!("{shown}: {e}")))?;
+        data.len() as u64
+    };
+    let what = match cmd {
+        "pdf" => "PDF",
+        "full-screenshot" => "whole-page picture",
+        _ => "picture",
+    };
+    Ok(json!({ "page": id, "path": shown, "bytes": bytes, "format": ext, "summary": format!("{what} of page {id} written to {shown} ({bytes} bytes)") }))
+}
+
+/// How long `kolux download` watches a started download before it answers "still downloading".
+const DOWNLOAD_WAIT: Duration = Duration::from_secs(120);
+
+/// `kolux download`: the tab's next download is armed to the confined path, the element is
+/// clicked, and the download is watched until it ends (or DOWNLOAD_WAIT passes).
+fn download(id: u32, a: &Value, worktree: Option<&str>, cwd: &str) -> Result<Value, Fail> {
+    use super::downloads::{self, State};
+    let given = a["path"].as_str().map(str::trim).filter(|p| !p.is_empty()).ok_or_else(|| args("--path is required"))?;
+    let path = out_path(worktree, cwd, Some(given), Path::new(""), "")?;
+    downloads::arm(id, path.clone());
+    if let Err(f) = page(id, "find", json!({ "locator": "selector", "value": a["selector"], "action": "click" }), EVAL_WAIT) {
+        downloads::disarm(id);
+        return Err(f);
+    }
+    let shown = path.display().to_string();
+    let started = Instant::now();
+    loop {
+        match downloads::state_of(&path) {
+            Some((State::Done, bytes)) => return Ok(json!({ "page": id, "path": shown, "bytes": bytes, "summary": format!("downloaded {bytes} bytes to {shown}") })),
+            Some((State::Running, bytes)) if started.elapsed() >= DOWNLOAD_WAIT => {
+                return Ok(json!({ "page": id, "path": shown, "bytes": bytes, "running": true, "summary": format!("still downloading to {shown} ({bytes} bytes so far); the browser pane shows when it ends") }))
+            }
+            Some((State::Running, _)) => {}
+            Some((state, _)) => return Err(Fail::new("failed", format!("the download to {shown} {}", if state == State::Cancelled { "was cancelled" } else { "failed" }))),
+            None if started.elapsed() >= downloads::ARM_FOR => {
+                downloads::disarm(id);
+                return Err(Fail::new("failed", format!("clicking {} started no download within {} s", a["selector"], downloads::ARM_FOR.as_secs())));
+            }
+            None => {}
+        }
+        std::thread::sleep(Duration::from_millis(200));
     }
 }
 
@@ -1094,6 +1265,9 @@ fn tabs_cmd(req: &Request, worktree: Option<&str>, page_no: Option<u32>) -> Resu
 
 /// The readable form of a browser answer.
 pub fn text(command: &str, r: &Value) -> Option<String> {
+    if let Some((_, base)) = storage_word(command) {
+        return text(&base, r);
+    }
     if !is_browser(command) {
         return None;
     }
@@ -1200,7 +1374,7 @@ if(!window.__kx){
  K.run=function(q){ try{ const a=q.args||{}; switch(q.cmd){
   case 'snapshot': return K.snapshot();
   case 'eval': { const v=(0,eval)(a.expression); return {ok:true,value:v===undefined?null:v}; }
-  case 'scroll': { const n=Number(a.amount||500); window.scrollBy(0,a.direction==='up'?-n:n); return {ok:true,summary:'scrolled '+a.direction+' '+n+' px',scrollY:window.scrollY}; }
+  case 'scroll': { const n=Number(a.amount||500), d=a.direction; window.scrollBy(d==='left'?-n:d==='right'?n:0, d==='up'?-n:d==='down'?n:0); return {ok:true,summary:'scrolled '+d+' '+n+' px',scrollX:window.scrollX,scrollY:window.scrollY}; }
   case 'click': case 'dblclick': case 'check': case 'uncheck': case 'focus': case 'clear': case 'select-all': case 'hover': case 'scrollintoview': return {ok:true,summary:act(q.cmd,el(a.element))};
   case 'fill': return {ok:true,summary:act('fill',el(a.element),a.value)};
   case 'type': insert(a.input==null?'':String(a.input)); return {ok:true};
@@ -1219,7 +1393,7 @@ if(!window.__kx){
   case 'mouse-down': case 'mouse-up': { const b={left:0,middle:1,right:2}[a.button||'left']; ev(at(K.mouse.x,K.mouse.y),q.cmd==='mouse-down'?'mousedown':'mouseup',{button:b,clientX:K.mouse.x,clientY:K.mouse.y}); return {ok:true,summary:q.cmd.replace('-',' ')+' ('+(a.button||'left')+')'}; }
   case 'mouse-wheel': { const dx=Number(a.dx||0), dy=Number(a.dy||0); const e=at(K.mouse.x,K.mouse.y); e.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaX:dx,deltaY:dy,clientX:K.mouse.x,clientY:K.mouse.y})); window.scrollBy(dx,dy); return {ok:true,summary:'wheel '+dx+','+dy}; }
   case 'cookie-get': { const all=document.cookie?document.cookie.split('; ').map(c=>{ const i=c.indexOf('='); return {name:i<0?c:c.slice(0,i),value:i<0?'':decodeURIComponent(c.slice(i+1))}; }):[]; const list=a.name?all.filter(c=>c.name===a.name):all; return {ok:true,cookies:list,summary:list.length+' cookie(s) the page can read'}; }
-  case 'cookie-set': { let s=a.name+'='+encodeURIComponent(a.value==null?'':String(a.value))+'; path='+(a.path||'/'); if(a.domain) s+='; domain='+a.domain; if(a.expires){ const n=Number(a.expires); s+='; expires='+new Date(isNaN(n)?a.expires:n*1000).toUTCString(); } if(a.secure) s+='; secure'; if(a.sameSite) s+='; samesite='+a.sameSite; document.cookie=s; return {ok:true,summary:'cookie '+a.name+' set for '+location.host}; }
+  case 'cookie-set': { let s=a.name+'='+encodeURIComponent(a.value==null?'':String(a.value))+'; path='+(a.path||'/'); if(a.domain) s+='; domain='+a.domain; if(Number(a.expires)>0) s+='; expires='+new Date(Number(a.expires)*1000).toUTCString(); if(a.secure) s+='; secure'; if(a.sameSite) s+='; samesite='+a.sameSite; document.cookie=s; return {ok:true,summary:'cookie '+a.name+' set for '+location.host}; }
   case 'cookie-delete': { let s=a.name+'=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path='+(a.path||'/'); if(a.domain) s+='; domain='+a.domain; document.cookie=s; return {ok:true,summary:'cookie '+a.name+' deleted for '+location.host}; }
   case 'storage-get': { const st=a.area==='session'?sessionStorage:localStorage; if(a.key!=null&&a.key!=='') return {ok:true,value:st.getItem(String(a.key))}; const o={}; for(let i=0;i<st.length;i++){ const k=st.key(i); o[k]=st.getItem(k); } return {ok:true,value:o}; }
   case 'storage-set': { const st=a.area==='session'?sessionStorage:localStorage; st.setItem(String(a.key),a.value==null?'':String(a.value)); return {ok:true,summary:(a.area||'local')+' storage: '+a.key+' set'}; }
@@ -1275,7 +1449,8 @@ mod tests {
         assert!(check("browser.mouse-move", &flags(&[("x", "ten"), ("y", "2")])).unwrap_err().message.contains("--x takes a number"));
         assert!(check("browser.mouse-down", &flags(&[("button", "back")])).unwrap_err().message.contains("left|right|middle"));
         assert!(check("browser.find", &flags(&[("locator", "role"), ("value", "button"), ("action", "poke")])).unwrap_err().message.contains("is not one of"));
-        assert_eq!(check("browser.scroll", &flags(&[("direction", "left")])).unwrap_err().message, "--direction left is not one of up|down");
+        assert!(check("browser.scroll", &flags(&[("direction", "left")])).is_ok());
+        assert_eq!(check("browser.scroll", &flags(&[("direction", "sideways")])).unwrap_err().message, "--direction sideways is not one of up|down|left|right");
         assert_eq!(check("browser.snapshot", &flags(&[("page", "two")])).unwrap_err().message, "--page takes a tab number, not two");
         assert_eq!(check("browser.snapshot", &flags(&[("worktree", " ")])).unwrap_err().message, "--worktree cannot be empty");
         assert_eq!(check("browser.exec", &flags(&[])).unwrap_err().message, "--command is required");
@@ -1420,12 +1595,51 @@ mod tests {
     }
 
     #[test]
-    fn capture_and_print_commands_say_why_they_are_refused() {
+    fn cli047_capture_print_and_download_reach_the_page_instead_of_being_refused() {
         for c in ["browser.screenshot", "browser.full-screenshot", "browser.pdf", "browser.download"] {
             let f = gate(c, Some(1), None, &[]).unwrap_err();
-            assert_eq!(f.code, "unsupported", "{c}");
-            assert!(f.message.contains("this build does not reach"), "{c}: {}", f.message);
+            assert_eq!(f.code, "not_found", "{c}: only a missing tab stops it");
         }
+        let tabs = [super::super::Tab { id: 4, worktree: None, shown: true, seen: 1, url: String::new(), title: String::new() }];
+        assert_eq!(gate("browser.screenshot", Some(4), None, &tabs).unwrap(), 4);
+        assert!(check("browser.pdf", &flags(&[("path", "out/page.pdf")])).is_ok());
+        assert_eq!(check("browser.download", &flags(&[("selector", "a.zip")])).unwrap_err().message, "--path is required");
+    }
+
+    #[test]
+    fn cli047_capture_paths_stay_inside_the_worktree_and_never_overwrite() {
+        let root = std::env::temp_dir().join(format!("kx-cli047-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let wt = root.join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let w = wt.to_string_lossy().replace('\\', "/");
+        let p = out_path(Some(&w), &w, Some("shots/a.png"), Path::new(""), "").unwrap();
+        assert_eq!(p, wt.join("shots").join("a.png"));
+        assert!(wt.join("shots").is_dir(), "the folder is made");
+        std::fs::write(&p, b"x").unwrap();
+        assert_eq!(out_path(Some(&w), &w, Some("shots/a.png"), Path::new(""), "").unwrap(), wt.join("shots").join("a (2).png"));
+        assert_eq!(out_path(Some(&w), &w, Some("../escape.png"), Path::new(""), "").unwrap_err().code, "outside");
+        assert_eq!(out_path(Some(&w), &w, Some("C:/Windows/x.png"), Path::new(""), "").unwrap_err().code, "outside");
+        assert_eq!(out_path(Some(&w), &w, Some("."), Path::new(""), "").unwrap_err().code, "not_a_file");
+        let caps = root.join("captures");
+        assert_eq!(out_path(Some(&w), &w, None, &caps, "page-1-screenshot-9.png").unwrap(), caps.join("page-1-screenshot-9.png"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cli047_pictures_are_the_visible_page_or_the_whole_layout_and_sizes_are_decoded_bytes() {
+        let v: Value = serde_json::from_str(&shot_params("jpeg", None)).unwrap();
+        assert_eq!(v, json!({ "format": "jpeg", "fromSurface": true }));
+        let m = json!({ "cssContentSize": { "x": 0, "y": 0, "width": 1280.0, "height": 99999.0 }, "contentSize": { "width": 1.0, "height": 1.0 } });
+        let v: Value = serde_json::from_str(&shot_params("png", Some(&m))).unwrap();
+        assert_eq!(v["captureBeyondViewport"], json!(true));
+        assert_eq!(v["clip"], json!({ "x": 0, "y": 0, "width": 1280.0, "height": PICTURE_MAX, "scale": 1 }));
+        let old = json!({ "contentSize": { "width": 800.0, "height": 2000.0 } });
+        let v: Value = serde_json::from_str(&shot_params("png", Some(&old))).unwrap();
+        assert_eq!(v["clip"]["height"], json!(2000.0));
+        assert_eq!(picture(&json!({ "data": "iVBORw0KGgo=" })).unwrap().len(), 8, "8 decoded bytes, not 12 base64 characters");
+        assert_eq!(picture(&json!({})).unwrap_err().code, "failed");
+        assert!(picture(&json!({ "data": "not base64!" })).unwrap_err().message.contains("not base64"));
     }
 
     #[test]
@@ -1487,7 +1701,7 @@ mod tests {
         assert_eq!(check("browser.cookie-set", &flags(&[("name", "a")])).unwrap_err().message, "--value is required");
         let mut f = flags(&[("name", "a"), ("value", "1")]);
         f.insert("httpOnly".into(), json!(true));
-        assert_eq!(check("browser.cookie-set", &f).unwrap_err().code, "unsupported");
+        assert!(check("browser.cookie-set", &f).is_ok());
         assert!(check("browser.cookie-set", &flags(&[("name", "a"), ("value", "1"), ("sameSite", "loose")])).unwrap_err().message.contains("Strict|Lax|None"));
         assert!(check("browser.cookie-get", &flags(&[])).is_ok());
         assert_eq!(check("browser.cookie-delete", &flags(&[])).unwrap_err().message, "--name is required");
@@ -1511,12 +1725,65 @@ mod tests {
             let cmd = short(wire);
             // T-242: the log, emulation and dialog commands reach the page through the shared
             // 'log' and 'dialog' cases and the __kxEmu state; clipboard never reaches the page.
-            let app_side = ["tab-", "profiles-", "intercept-", "capture-", "set-", "clipboard-", "dialog-"].iter().any(|p| cmd.starts_with(p));
+            let app_side = ["tab-", "profiles-", "intercept-", "capture-", "set-", "clipboard-", "dialog-", "storage-local-", "storage-session-"].iter().any(|p| cmd.starts_with(p));
             if app_side || ["goto", "back", "forward", "reload", "wait", "exec", "screenshot", "full-screenshot", "pdf", "download", "console", "network", "viewport", "geolocation"].contains(&cmd) {
                 continue;
             }
             assert!(DRIVER.contains(&format!("case '{cmd}'")), "the driver answers {cmd}");
         }
         assert!(DRIVER.contains("case 'check-wait'"));
+    }
+
+    fn parsed(line: &str) -> Result<crate::cli::Parsed, Fail> {
+        crate::cli::parse(&line.split(' ').map(str::to_string).collect::<Vec<_>>()).1.map(|p| p.expect("not help"))
+    }
+
+    #[test]
+    fn cli047_storage_area_words_keep_an_empty_value_and_reach_the_plain_commands() {
+        let p = parsed("storage local set --key a --value=").unwrap();
+        assert_eq!((p.command.as_str(), &p.args["area"], &p.args["key"], &p.args["value"]), ("browser.storage-local-set", &json!("local"), &json!("a"), &json!("")));
+        assert_eq!(parsed("storage session get").unwrap().args["area"], "session");
+        assert_eq!(parsed("storage session clear").unwrap().command, "browser.storage-session-clear");
+        assert!(parsed("storage local set --key a").unwrap_err().message.contains("--value is required"));
+        assert!(parsed("storage local set --key= --value=b").is_err());
+        assert!(parsed("storage local clear --area session").is_err(), "the word names the area");
+        assert_eq!(storage_word("browser.storage-local-clear"), Some(("local", "browser.storage-clear".to_string())));
+        assert_eq!(storage_word("browser.storage-clear"), None);
+        assert_eq!(storage_word("browser.storage-cloud-get"), None);
+        assert_eq!(text("browser.storage-session-get", &json!({ "value": "v" })).unwrap(), "v");
+    }
+
+    #[test]
+    fn cli047_cookie_flags_as_the_card_types_them_and_a_finite_expiry_from_zero() {
+        let p = parsed("cookie set --name a --value b --domain d --path p --secure --httpOnly --sameSite Lax --expires 0").unwrap();
+        assert_eq!((p.command.as_str(), &p.args["httpOnly"], &p.args["expires"]), ("browser.cookie-set", &json!(true), &json!("0")));
+        for bad in ["-1", "inf", "NaN", "soon"] {
+            assert!(check("browser.cookie-set", &flags(&[("name", "a"), ("value", ""), ("expires", bad)])).unwrap_err().message.contains("finite number from 0 up"), "{bad}");
+        }
+        assert!(check("browser.cookie-set", &flags(&[("name", "a"), ("value", ""), ("expires", "1700000000")])).is_ok());
+        assert_eq!((expires_at(Some("0")), expires_at(Some("1700000000.9")), expires_at(None)), (None, Some(1_700_000_000), None));
+        assert!(DRIVER.contains("if(Number(a.expires)>0)"));
+        let a = json!({ "name": "sid", "value": "", "secure": true, "httpOnly": true, "sameSite": "Strict", "expires": "1700000000" });
+        let e = engine_cookie(3, &a, "https://app.example.test/x").unwrap();
+        assert_eq!((e.domain.as_str(), e.path.as_str(), e.value.as_str(), e.secure, e.http_only, e.expires), ("app.example.test", "/", "", true, true, Some(1_700_000_000)));
+        assert_eq!(e.same_site, Some(tauri::webview::cookie::SameSite::Strict));
+        assert_eq!(engine_cookie(3, &json!({ "name": "s", "value": "1", "domain": ".example.test" }), "https://app.example.test/").unwrap().domain, ".example.test");
+        assert!(engine_cookie(3, &json!({ "name": "s", "value": "1", "domain": "other.test" }), "https://app.example.test/").unwrap_err().message.contains("is not the site of browser tab 3"));
+        assert!(engine_cookie(3, &json!({ "name": "s", "value": "1", "domain": "ample.test" }), "https://app.example.test/").is_err());
+        assert!(engine_cookie(3, &json!({ "name": "s", "value": "1" }), "about:blank").is_err());
+    }
+
+    #[test]
+    fn cli046_cli047_sideways_scroll_empty_password_capture_formats_and_an_honest_wait_timeout() {
+        assert!(check("browser.scroll", &flags(&[("direction", "right"), ("amount", "200")])).is_ok());
+        assert!(DRIVER.contains("d==='left'?-n:d==='right'?n:0"));
+        assert!(parsed("set credentials --user me --pass=").is_ok());
+        assert_eq!(parsed("set credentials --user me").unwrap_err().message, "--pass is required");
+        assert!(parsed("set credentials --user= --pass=x").is_err());
+        assert!(check("browser.screenshot", &flags(&[("format", "jpeg")])).is_ok());
+        assert!(check("browser.full-screenshot", &flags(&[("format", "gif")])).unwrap_err().message.contains("png|jpeg"));
+        let f = timed_out(2, 20, &json!("https://a.test/"), Duration::from_millis(2000));
+        assert_eq!((f.code, f.message.as_str()), ("timeout", "the condition did not hold within 2000 ms"));
+        assert!(!f.message.contains("Kolux") && !f.message.contains("running"));
     }
 }

@@ -273,6 +273,47 @@ pub fn copy_into(from: &Path, dir: &Path) -> Result<(PathBuf, usize), String> {
     Err(format!("could not find a free name for {name}"))
 }
 
+/// EDIT-039: the bytes in a file or folder, counted only until they pass `cap` (links are not followed or counted).
+pub fn total_bytes(path: &Path, cap: u64) -> u64 {
+    let mut sum = 0u64;
+    let mut todo = vec![path.to_path_buf()];
+    while let Some(p) = todo.pop() {
+        let Ok(md) = fs::symlink_metadata(&p) else { continue };
+        if is_link(&md) {
+            continue;
+        }
+        if md.is_dir() {
+            if let Ok(rd) = fs::read_dir(&p) {
+                todo.extend(rd.filter_map(Result::ok).map(|e| e.path()));
+            }
+        } else {
+            sum = sum.saturating_add(md.len());
+        }
+        if sum > cap {
+            return sum;
+        }
+    }
+    sum
+}
+
+/// EDIT-039: how many bytes a desktop drop holds, so a drop that is too big is refused before anything is copied.
+#[tauri::command]
+pub async fn fs_bytes(store: Store<'_>, guard: Guard<'_>, git: GitState<'_>, paths: Vec<String>, cap: u64) -> Result<u64, String> {
+    let allowed = paths.iter().map(|p| guard.allow_source(p, &store, &git)).collect::<Result<Vec<_>, _>>()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut sum = 0u64;
+        for p in allowed {
+            sum = sum.saturating_add(total_bytes(&p, cap.saturating_sub(sum)));
+            if sum > cap {
+                break;
+            }
+        }
+        sum
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// Moves an entry into another folder; refused when that folder already holds the name, or when a
 /// folder would go inside itself.
 pub fn move_into(from: &Path, dir: &Path) -> Result<PathBuf, String> {
@@ -342,6 +383,19 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn edit039_a_drops_bytes_are_counted_through_folders_and_stop_once_past_the_cap() {
+        let d = temp_dir("bytes");
+        fs::create_dir_all(d.join("sub")).unwrap();
+        fs::write(d.join("a.bin"), vec![0u8; 100]).unwrap();
+        fs::write(d.join("sub").join("b.bin"), vec![0u8; 50]).unwrap();
+        assert_eq!(total_bytes(&d, u64::MAX), 150);
+        assert_eq!(total_bytes(&d.join("a.bin"), u64::MAX), 100);
+        assert!(total_bytes(&d, 120) > 120, "past the cap it reports more than the cap");
+        assert_eq!(total_bytes(&d.join("missing"), 10), 0);
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[cfg(windows)]

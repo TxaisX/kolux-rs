@@ -75,8 +75,8 @@ describe("EDIT-057 (T-237-b): the formatting toolbar", () => {
   });
 
   test("the toolbar offers the buttons in order and More blocks adds headings 4 and 5", () => {
-    expect(RICH_BUTTONS.map((b) => b.id)).toEqual(["body", "h1", "h2", "h3", "bold", "italic", "strike", "bullet", "numbered", "check", "quote"]);
+    expect(RICH_BUTTONS.map((b) => b.id)).toEqual(["body", "h1", "h2", "h3", "bold", "italic", "strike", "bullet", "numbered", "check", "quote", "link", "image"]);
     expect(RICH_BUTTONS.every((b) => b.tip.length > 0)).toBe(true);
-    expect(MORE_BLOCKS.map((b) => b.id)).toEqual(["h4", "h5"]);
+    expect(MORE_BLOCKS.map((b) => b.id)).toEqual(["h4", "h5", "details"]);
   });
 });

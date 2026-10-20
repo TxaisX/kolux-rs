@@ -12,7 +12,16 @@ import { syntaxHighlighting } from "@codemirror/language";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { MergeView } from "@codemirror/merge";
 import { baseName } from "./buffers";
+import { goneText } from "./diskChange";
 import { look } from "./EditorPane";
+
+export function GoneNotice({ path }: { path: string }) {
+  return (
+    <div className="notice save-stale file-gone" role="alert" aria-label="File gone from disk">
+      <span>{goneText(baseName(path))}</span>
+    </div>
+  );
+}
 
 export function DiskBanner({ path, onReload, onKeep, onCompare }: { path: string; onReload: () => void; onKeep: () => void; onCompare: () => void }) {
   return (

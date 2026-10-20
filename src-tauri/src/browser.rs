@@ -47,6 +47,19 @@ pub mod holder;
 pub mod wake;
 #[path = "browser_helpers.rs"]
 pub mod helpers;
+// T-158: BROW-015 sized popups open in a small linked window whose title bar is the origin strip;
+// BROW-024 the local dev-server certificate rules, answered from the engine's certificate event.
+#[path = "browser_popup.rs"]
+pub mod popup;
+#[allow(dead_code)] // T-158: `browser_cert` is registered by evidence/browser-T-158-b-lib.rs.patch.
+#[path = "browser_certs.rs"]
+pub mod certs;
+// T-158 / T-251 / T-272-d: the glue to WebView2's own events and calls (webview2-com).
+#[path = "browser_engine.rs"]
+pub mod engine;
+// T-286-b (APP-040): which engine process failures are real crashes, and their records.
+#[path = "browser_crash.rs"]
+pub mod crash;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
@@ -831,7 +844,7 @@ async fn fetch_icon(clients: &IconClients, near: bool, url: Url, app: Option<&Ur
 /// The fetch under one overall time limit: each request's own timeout runs until its body is
 /// read, and the far request after a hand-off gets only what the near one left. The redirect cap
 /// is per client, so a hand-off can take up to twice `ICON_HOPS` hops, all inside the limit.
-async fn fetch_icon_within(clients: &IconClients, near: bool, url: Url, app: Option<&Url>, limit: Duration) -> Option<String> {
+pub(crate) async fn fetch_icon_within(clients: &IconClients, near: bool, url: Url, app: Option<&Url>, limit: Duration) -> Option<String> {
     let start = Instant::now();
     let mut res = if near { &clients.near } else { &clients.far }.get(url).timeout(limit).send().await.ok()?;
     if near && res.status().is_redirection() {
@@ -985,6 +998,8 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         Some(store) => crate::secrets::read_setting(&*store.lock().map_err(|e| e.to_string())?, "httpProxy")?,
         None => None,
     };
+    #[cfg(windows)]
+    let crash_dir = app.path().app_data_dir().ok();
     let builder = with_profile(WebviewBuilder::new(label(id), WebviewUrl::External(url)), id, profile);
     let builder = match proxy_of(proxy.as_deref())? {
         Some(u) => builder.proxy_url(u),
@@ -999,7 +1014,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         .zoom_hotkeys_enabled(false)
         .initialization_script(CHORD_SCRIPT)
         // BROW-014: a link or script asking for a new window becomes another Kolux tab, in front.
-        .on_new_window(move |url, _| {
+        .on_new_window(move |url, features| {
             // T-159 (BROW-040): a document preview's popups and script-opened windows are blocked;
             // an outside address is offered to the user once, with its full address.
             if let Some(v) = preview::navigating(id, url.as_str()) {
@@ -1013,7 +1028,23 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
             let (now, shown) = (Instant::now(), is_shown(id));
             let family = families().of(id);
             match new_window(&url, window_dev.as_ref(), &family, shown, now) {
-                Some((url, front)) => {
+                Some((link, front)) => {
+                    // T-158 (BROW-015): a sized window.open is a popup window linked to this tab;
+                    // before the tab's page finished a load it goes to the system browser.
+                    match popup::route(features.size().is_some(), popup::is_ready(id)) {
+                        popup::Route::Window => {
+                            if let Some(window) = popup::open(&window_app, id, &url, features, window_dev.clone()) {
+                                return NewWindowResponse::Create { window };
+                            }
+                            return NewWindowResponse::Deny;
+                        }
+                        popup::Route::System => {
+                            let _ = crate::artifacts::open_external(link);
+                            return NewWindowResponse::Deny;
+                        }
+                        popup::Route::Tab => {}
+                    }
+                    let url = link;
                     families().promise(id, &url, now);
                     let _ = window_app.emit(LINK_EVENT, LinkPayload { id, url, front });
                 }
@@ -1053,9 +1084,11 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
                 let _ = chord_app.emit(LINK_EVENT, LinkPayload { id, url, front });
                 false
             }
-            // T-272-d: a keyboard chord or app shortcut from a page while another page holds the
-            // keyboard was sent by this page's script, not pressed: it is dropped.
-            Nav::Chord(_) | Nav::Key(_) if holder::drop_chord(id) => false,
+            // T-272-d: a keyboard chord or app shortcut with no real key pressed in that very page
+            // (the engine's key events), or sent while another page holds the keyboard, was sent
+            // by this page's script, not pressed: it is dropped.
+            Nav::Chord(what) if holder::drop_chord(id, &holder::need_for_chord(what)) => false,
+            Nav::Key(ref v) if holder::drop_chord(id, &holder::need_for_key(v)) => false,
             Nav::Chord(what) => {
                 // Council FIX-3: the keyboard is not moved here. The app tells a chord pressed in
                 // the page (its own window does not hold the keyboard) from one the page's script
@@ -1098,6 +1131,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
                 history::noted_load(id, payload.url().as_str()); // T-238-b (BROW-004)
                 session::noted_load(id, payload.url().as_str()); // T-179 (BROW-020)
                 preview::rendered(id); // T-159 (BROW-040): agent tools may drive a preview now
+                popup::mark_ready(id); // T-158 (BROW-015): its sized popups get their own window now
             } else {
                 preview::loading(id, payload.url().as_str()); // T-159: a preview address fences the tab
             }
@@ -1162,6 +1196,10 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
                 helpers::record(pid);
             }
         }
+        // T-158 (BROW-024): the engine's certificate errors are answered by the certificate rules.
+        engine::attach(id, &pw);
+        // T-286-b (APP-040): the engine's process failures become crash records when real.
+        engine::watch_page_failures(id, &pw, crash_dir);
     });
     #[cfg(not(windows))]
     let _ = page;
@@ -1334,6 +1372,7 @@ pub async fn browser_close(app: AppHandle, id: u32) -> Result<(), String> {
     set_shown(id, false);
     families().leave(id); // T-272-c
     holder::forget(id); // T-272-d
+    certs::closed(id); // T-158: a closed tab's waiting certificate challenge goes with it
     forget_tab(id);
     if let Ok(mut i) = ICONS.lock() {
         i.forget(id);
@@ -1348,6 +1387,7 @@ pub async fn browser_close(app: AppHandle, id: u32) -> Result<(), String> {
     history::forget_tab(id);
     session::forget(id); // T-179: a closed tab does not come back after a restart
     preview::forget(id); // T-159
+    popup::close_for(&app, id); // T-158 (BROW-015): a tab's popups close with it
     view(&app, id)?.close().map_err(err)
 }
 
@@ -1529,6 +1569,12 @@ pub enum Act<'a> {
     /// T-242 (BROW-050): lay the page out again in its last pane spot (an emulated viewport came
     /// or went) and set its zoom (the emulated scale).
     Relayout(u32, Option<f64>),
+    /// T-251 (CLI-047): a cookie the page itself cannot set (HTTP-only) goes to the engine's store.
+    SetCookie(u32, tauri::webview::cookie::Cookie<'static>),
+    /// T-251 (CLI-047): one DevTools call on the page's engine (a picture of the page).
+    DevTools(u32, &'a str, String),
+    /// T-251 (CLI-047): the engine prints the page to a PDF file at this path.
+    Pdf(u32, &'a str),
 }
 type Driver = dyn Fn(Act) -> Result<serde_json::Value, String> + Send + Sync;
 static DRIVER: OnceLock<Box<Driver>> = OnceLock::new();
@@ -1541,7 +1587,7 @@ fn driver() -> Result<&'static Driver, String> {
 fn drive(act: Act) -> Result<serde_json::Value, String> {
     let app = APP.get().ok_or("no browser tab has been opened yet")?;
     // T-179 (BROW-021): a page an agent drives is under agent control, never unloaded for a while.
-    if let Act::Eval(id, ..) | Act::Navigate(id, _) | Act::Go(id, _) | Act::Relayout(id, _) = act {
+    if let Act::Eval(id, ..) | Act::Navigate(id, _) | Act::Go(id, _) | Act::Relayout(id, _) | Act::DevTools(id, ..) | Act::Pdf(id, _) = act {
         preview::drivable(id)?; // T-159 (BROW-040): a preview is driven only once it has rendered
         session::drove(id);
     }
@@ -1613,7 +1659,35 @@ fn drive(act: Act) -> Result<serde_json::Value, String> {
             }
             Ok(serde_json::Value::Null)
         }
+        Act::SetCookie(id, c) => {
+            view(app, id)?.set_cookie(c).map_err(err)?;
+            Ok(serde_json::Value::Null)
+        }
+        Act::DevTools(id, method, params) => {
+            let text = engine::devtools(&view(app, id)?, method, params, CAPTURE_WAIT)?;
+            serde_json::from_str(&text).map_err(|_| "the page's engine answered with something that is not JSON".to_string())
+        }
+        Act::Pdf(id, path) => engine::print_pdf(&view(app, id)?, path, CAPTURE_WAIT).map(serde_json::Value::Bool),
     }
+}
+
+/// T-251 (CLI-047): how long a picture or a PDF of a page may take.
+const CAPTURE_WAIT: Duration = Duration::from_secs(30);
+
+/// `kolux screenshot|full-screenshot`: one DevTools call on the page's engine, its JSON answer.
+pub fn devtools(id: u32, method: &str, params: String) -> Result<serde_json::Value, String> {
+    driver()?(Act::DevTools(id, method, params))
+}
+
+/// `kolux pdf`: the engine prints the page to `path`; whether it succeeded.
+pub fn print_pdf(id: u32, path: &str) -> Result<bool, String> {
+    driver()?(Act::Pdf(id, path)).map(|v| v.as_bool().unwrap_or(false))
+}
+
+/// T-251 (CLI-047): where a capture goes when the command names no `--path`.
+pub fn captures_dir() -> Result<std::path::PathBuf, String> {
+    let app = APP.get().ok_or("no browser tab has been opened yet")?;
+    app.path().app_data_dir().map(|d| d.join("captures")).map_err(err)
 }
 
 /// `kolux viewport` / `kolux set device`: the page is laid out again at the emulated size and scale.
@@ -1659,6 +1733,12 @@ pub fn navigate_to(id: u32, url: &str) -> Result<String, String> {
     driver()?(Act::Navigate(id, url)).map(|v| v.as_str().unwrap_or_default().to_string())
 }
 
+/// `kolux cookie set --httpOnly`: the engine's cookie store takes it (blocking; never called from
+/// the main thread, the command line's requests run on their own).
+pub fn set_cookie(id: u32, c: tauri::webview::cookie::Cookie<'static>) -> Result<(), String> {
+    driver()?(Act::SetCookie(id, c)).map(|_| ())
+}
+
 /// `kolux back|forward|reload`.
 pub fn go(id: u32, what: &str) -> Result<(), String> {
     driver()?(Act::Go(id, what)).map(|_| ())
@@ -1680,7 +1760,7 @@ const path=e=>{ const out=[]; let n=e; while(n&&n.nodeType===1&&out.length<8){ o
 const react=e=>{ const k=Object.keys(e).find(k=>k.startsWith('__reactFiber$')||k.startsWith('__reactInternalInstance$')); if(!k) return {}; let f=e[k]; const chain=[]; let src=null;
  while(f&&chain.length<6){ const t=f.type; if(t&&typeof t!=='string'){ const nm=t.displayName||t.name||(t.render&&(t.render.displayName||t.render.name)); if(nm) chain.push(nm); } if(!src&&f._debugSource) src=f._debugSource.fileName+':'+f._debugSource.lineNumber; f=f.return; }
  return {component:chain.length?chain.join(' < '):undefined,source:src||undefined}; };
-const styles=e=>{ const s=getComputedStyle(e); const out={}; for(const k of ['color','background-color','font-size','font-family','font-weight','padding','margin','border','display']){ const v=s.getPropertyValue(k); if(v&&v!=='none'&&v!=='normal'&&v!=='0px') out[k]=v; } return out; };
+const styles=e=>{ const s=getComputedStyle(e); const out={}; for(const k of ['color','background-color','font-size','font-family','font-weight','line-height','padding','margin','border','border-radius','display','position','width','height','opacity','z-index']){ const v=s.getPropertyValue(k); if(v&&v!=='none'&&v!=='normal'&&v!=='0px') out[k]=v; } return out; };
 const hints=e=>{ const out={}; for(const a of e.attributes){ if(a.name.startsWith('data-')||a.name.startsWith('aria-')||a.name==='role'||a.name==='name'||a.name==='href'||a.name==='type'||a.name==='class') out[a.name]=a.value.slice(0,200); } return out; };
 A.move=ev=>{ const e=ev.target; if(!(e instanceof Element)||e===box){ return; } const r=e.getBoundingClientRect(); box.style.display='block'; box.style.left=r.left+'px'; box.style.top=r.top+'px'; box.style.width=r.width+'px'; box.style.height=r.height+'px'; };
 A.click=ev=>{ ev.preventDefault(); ev.stopImmediatePropagation(); const e=ev.target; if(!(e instanceof Element)) return; const r=e.getBoundingClientRect(); const rx=react(e);

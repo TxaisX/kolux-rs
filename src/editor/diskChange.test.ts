@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { attach, detach, hashOf, isDirty, type View } from "./buffers";
-import { bannerUp, beginSave, canUndo, checkOnce, endSave, forget, keep, readFresh, reloadNow, remember, sameStamp, verdict, type Io, type Stamp } from "./diskChange";
+import { bannerUp, beginSave, canUndo, checkOnce, endSave, forget, keep, readFresh, goneText, reloadNow, remember, sameStamp, verdict, type Io, type Stamp } from "./diskChange";
 
 // EDIT-003 (T-073): the disk-change check behind the banner. The stamp (modified time + size) is
 // advisory; the save's hash check (T-073-a) is the guard, and the last block proves it still
@@ -188,5 +188,18 @@ describe("what the tab shows (EDIT-003)", async () => {
     const html = renderToString(createElement(StaleNotice, { path: P, onDone: noop }));
     expect(html).toContain(">Reload</button>");
     expect(html).toContain(">Keep mine</button>");
+  });
+});
+
+describe("EDIT-032: a tab whose file is gone", () => {
+  it("says the file was deleted or moved and that the text is kept", () => {
+    expect(goneText("plan.md")).toContain("plan.md was deleted or moved away");
+    expect(goneText("plan.md")).toContain("Your text is still here");
+  });
+  it("is not a reload or a banner: a missing file never overwrites the tab", () => {
+    remember("C:/w/gone.md", { mtime: 1, size: 2 });
+    expect(verdict("C:/w/gone.md", null, true)).toBe("none");
+    expect(verdict("C:/w/gone.md", null, false)).toBe("none");
+    forget("C:/w/gone.md");
   });
 });
