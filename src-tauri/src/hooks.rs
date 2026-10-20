@@ -674,7 +674,7 @@ pub(crate) const SPOOL_LINE: &str = concat!(
     r#"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -Command ""#,
     r#"$ErrorActionPreference='Stop'; try { $t=[IO.File]::ReadAllText($env:KF,[Text.Encoding]::UTF8); $o=[ordered]@{}; $ok=$true; "#,
     r#"try { $e=ConvertFrom-Json -InputObject $t; "#,
-    r#"foreach ($k in 'hook_event_name','tool_name','session_id','agent_id','agent_type','model','source','trigger','error','is_interrupt','cwd','conversationId','fullyIdle') "#,
+    r#"foreach ($k in 'hook_event_name','tool_name','session_id','agent_id','agent_type','model','source','trigger','error','is_interrupt','cwd','conversationId','conversation_id','fullyIdle') "#,
     r#"{ $v=$e.$k; if ($v -is [string]) { $o[$k]=$v.Substring(0,[Math]::Min($v.Length,300)) } elseif ($v -is [bool]) { $o[$k]=$v } }; "#,
     r#"$n=$e.toolCall.name; if ($n -is [string]) { $o['toolCall']=@{name=$n.Substring(0,[Math]::Min($n.Length,300))} }; "#,
     r#"foreach ($k in 'background_tasks','session_crons') { if ($null -ne $e.$k -and @($e.$k).Count -gt 0) { $o[$k]=@(1) } } } "#,

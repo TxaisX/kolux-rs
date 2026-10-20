@@ -494,6 +494,22 @@ mod script_runs {
         let _ = fs::remove_dir_all(&data);
     }
 
+    /// After-list row 485: Cursor names its session `conversation_id`; the held line keeps it, so a
+    /// Cursor event replayed after Kolux was closed still carries its session.
+    #[test]
+    fn row_485_the_held_line_keeps_cursors_conversation_id() {
+        let (spool, data, env) = closed_kolux("r485-conv", 14);
+        let dir = scripts("r485-conv");
+        let out = run(&dir, &env, r#"{"hook_event_name":"stop","conversation_id":"c-485","status":"completed"}"#);
+        assert!(out.status.success(), "{out:?}");
+        let held = fs::read_to_string(&spool).unwrap_or_default();
+        let lines: Vec<_> = held.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines.len(), 1, "{held:?}");
+        let body = ev(lines[0].splitn(4, '|').nth(3).unwrap());
+        assert_eq!(body["conversation_id"].as_str(), Some("c-485"), "{body}");
+        let _ = fs::remove_dir_all(&data);
+    }
+
     /// hooks FIX-7 (stand-in review FIX-SOON 1): where the held-append test aims the release. A
     /// real retry proves itself only when the release falls between HELD_PASS_LEAD_MS after the
     /// stamp (earlier, a script with no retry could pass) and the end of the script's retries
