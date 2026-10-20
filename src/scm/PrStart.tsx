@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import type { ActionOutcome, Pr, Status } from "./model";
 import { writerOf } from "./generate";
+import SearchPick from "../editor/SearchPick";
 import { needsOneClick, realPorts, startOneClick, useOneClick } from "./oneClick";
 import OneClickNotice from "./OneClickNotice";
 import { assess, confirmed, dismiss, errorShown, offerFor, raise, readinessKey, type ErrorBook, type Offer, type Readiness } from "./startPr";
@@ -21,6 +22,7 @@ export default function PrStart({ dir, onCreated }: Props) {
   const [, tick] = useState(0);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
+  const [branches, setBranches] = useState<string[]>([]); // EDIT-048: the Base box suggests from these
   const going = useOneClick(dir);
   const asking = useRef(dir);
   asking.current = dir;
@@ -62,6 +64,7 @@ export default function PrStart({ dir, onCreated }: Props) {
     if (!now || !confirmed(now.ready, readinessKey(dir, now.status), Date.now())) now = await check();
     if (!now || now.ready.reason !== null) return tick((n) => n + 1);
     setDraft({ title: "", body: "", base: (now.status.base ?? "").replace(/^origin\//, ""), draft: false });
+    invoke<string[]>("worktree_branches", { path: dir }).then((b) => asking.current === dir && setBranches(b), () => setBranches([]));
   };
   const create = async (d: Draft, push: "none" | "publish" | "push") => {
     setBusy(true);
@@ -117,7 +120,7 @@ export default function PrStart({ dir, onCreated }: Props) {
           <textarea className="field multi" aria-label="pull request description" placeholder="Description" value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
           <label className="scm-pr-base">
             <span>Base</span>
-            <input className="field" aria-label="base branch" value={draft.base} onChange={(e) => setDraft({ ...draft, base: e.target.value })} />
+            <SearchPick items={branches} label="base branch" value={draft.base} onChange={(base) => setDraft({ ...draft, base })} />
           </label>
           <label className="conn-switch">
             <input type="checkbox" checked={draft.draft} onChange={(e) => setDraft({ ...draft, draft: e.target.checked })} />

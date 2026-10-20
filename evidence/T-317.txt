@@ -44,3 +44,16 @@ LEFT: (1) a caller of openFile(path, undefined, true), the AI Vault "View Log" b
 LIVE PROOF PENDING (batched)
  1. Automations > new > A new worktree for every run: type part of a branch in Base branch: the list narrows; pick one; a name not in the list can still be typed.
  2. Settings: type fast into the search box: no lost keys, results appear a moment after you stop; clear the box: every setting returns at once.
+
+THIRD PIECE (2026-10-20, lane/editor)
+BUILT
+ - EDIT-048, pull request composer: its Base box is SearchPick (the same suggestions and "N more" as the automation dialog), filled when the
+   composer opens from a new read-only command worktree_branches(path) (files.rs: the folder passes the fence like open_in, then
+   projects::branches lists local then remote branches). Patches, apply in this order after the T-234-b/T-235-b ones:
+   evidence/editor-T-317-files.rs.patch, editor-T-317-lib.rs.patch (registers the command), editor-T-317-PrStart.tsx.patch.
+READINGS (patched tree, then reverted; logs G:/Temp/editor-v3-logs/j-*.log): cargo build 0; clippy --all-targets -D warnings 0;
+  cargo test files:: 43 passed; tsc --noEmit 0; vitest src/scm src/editor 87 files, 633 passed. The six pending patches apply in sequence.
+  No new unit test: the command is a fence check plus the existing projects::branches; the filter rules are pickerSearch's tests.
+LIVE PROOF PENDING (batched)
+ 1. In a worktree with a ready branch, open Create pull request: click the Base box: branches are suggested; type "ma": main first; a name not in the list can still be typed.
+STILL OPEN IN T-317: nothing opens a followed log (the AI Vault View Log button is not in this tree).

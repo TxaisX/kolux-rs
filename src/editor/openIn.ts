@@ -41,3 +41,26 @@ export const openIn = (folder: string, t: Target): Promise<void> => invoke<void>
 /** The menu's targets, read from the settings now. */
 export const loadTargets = (): Promise<Target[]> =>
   invoke<Record<string, unknown>>("get_settings").then(targetsOf, () => targetsOf(null));
+
+/** T-323-b: the apps a single file can be opened in, as the Open in list holds them (the file manager is not one: the row menu has its own Reveal). */
+export const fileTargetsOf = (settings: Record<string, unknown> | null | undefined): App[] =>
+  readOpenIn(settings ?? {})
+    .filter((a) => a.id !== "explorer")
+    .map((a) => ({ label: a.name, command: a.command }))
+    .slice(0, MAX_APPS);
+
+/** `file` as a path relative to `root` (slashes forward), or null when it is not inside it. */
+export function relInside(root: string, file: string): string | null {
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const [r, f] = [norm(root), norm(file)];
+  const same = (a: string, b: string) => (/^[A-Za-z]:/.test(r) ? a.toLowerCase() === b.toLowerCase() : a === b);
+  if (!r || f.length <= r.length + 1 || f[r.length] !== "/" || !same(f.slice(0, r.length), r)) return null;
+  const rel = f.slice(r.length + 1);
+  return rel.split("/").some((s) => s === "" || s === "..") ? null : rel;
+}
+
+/** Opens one file of the worktree `root` in `app` (scm_open_with: the app must be one of the saved list, the file a plain path inside root). */
+export const openFileIn = (root: string, file: string, app: App): Promise<void> => {
+  const rel = relInside(root, file);
+  return rel === null ? Promise.reject(new Error(`${file} is not inside ${root}`)) : invoke<void>("scm_open_with", { worktree: root, path: rel, command: commandOf(app) });
+};

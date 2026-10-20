@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { richChange, splitFront } from "./frontMatter";
+import { keepRaw, richChange, splitFront } from "./frontMatter";
 import { roundTrip, unsupported } from "./markdown";
 
 // EDIT-019 (T-177): front matter stays out of the rich view and untouched on disk.
@@ -56,5 +56,33 @@ describe("one word changed in the rich view", () => {
     const out = (note.slice(0, c.from) + c.insert + note.slice(c.to)).split("\n");
     expect(out.length).toBe(lines.length);
     expect(out.filter((l, i) => l !== lines[i])).toHaveLength(1);
+  });
+});
+
+describe("row 135: a rich edit rewrites only what the user changed", () => {
+  const apply = (t: string, c: { from: number; to: number; insert: string } | null) => (c ? t.slice(0, c.from) + c.insert + t.slice(c.to) : t);
+
+  it("bytes the rich view spells its own way stay as the file had them, before and after the edit", () => {
+    const body = "* one\n* two\n\nSome _soft_ words.\n\n* last\n";
+    const prev = roundTrip(body)!;
+    expect(prev).not.toBe(body.trimEnd()); // the rich view respells this note
+    const out = roundTrip("* one\n* two\n\nSome _soft_ words and more.\n\n* last\n")!;
+    const c = richChange(body, out, prev)!;
+    expect(apply(body, c)).toBe("* one\n* two\n\nSome _soft_ words and more.\n\n* last\n");
+    expect(c.insert).toBe(" and more");
+  });
+
+  it("typing at the very end keeps the file's last line end after the new text", () => {
+    expect(keepRaw("* a\n* b\n\ntext here\n", "- a\n- b\n\ntext here!", "- a\n- b\n\ntext here")).toBe("* a\n* b\n\ntext here!\n");
+  });
+
+  it("an edit that touches a respelt bit replaces that bit, and only that bit", () => {
+    expect(keepRaw("* a\n* b\n", "- a\n- bc", "- a\n- b")).toBe("* a\n* bc\n");
+    // The second item made plain text: its marker goes, however the file spelt it.
+    expect(keepRaw("* a\n* b\n", "- a\nb", "- a\n- b")).toBe("* a\nb\n");
+  });
+
+  it("with no earlier spelling it falls back to the whole rich text, as before", () => {
+    expect(keepRaw("x\n", "y", undefined)).toBe("y");
   });
 });

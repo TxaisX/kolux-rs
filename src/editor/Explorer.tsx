@@ -19,7 +19,7 @@ import { ChevronDown, Close, EyeOff, Expand, FolderPlus, Funnel, Plus, Refresh, 
 import { DOTFILES_KEY, IGNORED_KEY, filterRows, folderGlob, hidesDotfiles, rowMenu, sameNodes, withDotfiles, withoutDotfiles, withoutIgnored } from "./explorerView";
 import { MAX_DROP_BYTES, projectDrop, refuseDrop } from "./desktopDrops";
 import FileIcon from "./FileIcon";
-import { loadTargets, openIn, type Target } from "./openIn";
+import { fileTargetsOf, loadTargets, openFileIn, openIn, type App, type Target } from "./openIn";
 import ContentSearch from "./ContentSearch";
 import "./explorerBar.css";
 import { EXPAND_CAP, insideDir, menuLabel, nextWave, withExtraMenu, type AnyMenuId } from "./explorerBar";
@@ -138,6 +138,8 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose, onOp
   // EDIT-043: the Open in menu (null while closed) and the last launch that failed.
   const [openTargets, setOpenTargets] = useState<{ list: Target[]; x: number; y: number } | null>(null);
   const [openErr, setOpenErr] = useState<string | null>(null);
+  // T-323-b: a file row's menu also lists the Open in apps (read from the settings when the menu opens).
+  const [fileApps, setFileApps] = useState<App[]>([]);
   // EDIT-037: with the explorer hidden the key shows it first (onWake) and the search starts once it is on screen.
   const wakeSearch = useRef(false);
   useEffect(() => {
@@ -655,6 +657,14 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose, onOp
     if (!sel.has(path)) pick(path);
     setMenu({ x: e.clientX, y: e.clientY, path, dir });
   };
+  useEffect(() => {
+    if (!menu || menu.dir) return;
+    let live = true;
+    void invoke<Record<string, unknown>>("get_settings").then((s) => live && setFileApps(fileTargetsOf(s)), () => live && setFileApps(fileTargetsOf(null)));
+    return () => {
+      live = false;
+    };
+  }, [menu?.path, menu?.dir]);
   const runMenu = (id: AnyMenuId, path: string, dir: boolean) => {
     setMenu(null);
     const folder = dir ? path : parentOf(path);
@@ -747,6 +757,12 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose, onOp
                 {menuLabel(id)}
               </button>
             ))}
+            {!menu.dir &&
+              fileApps.map((a) => (
+                <button key={"open-in:" + a.label} role="menuitem" className="menu-item" data-row-action="open-in" onClick={() => (setMenu(null), setOpenErr(null), void openFileIn(root, menu.path, a).catch((err) => setOpenErr(`${a.label} did not open: ${err instanceof Error ? err.message : err}`)))}>
+                  Open in {a.label}
+                </button>
+              ))}
           </div>
         </>
       )}
