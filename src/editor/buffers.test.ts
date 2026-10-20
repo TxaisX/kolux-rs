@@ -151,4 +151,12 @@ describe("loading (EDIT-001)", () => {
     n = 0;
     await expect(loadText(async () => Promise.reject(new Error(`no ${++n}`)), 3, 1)).rejects.toThrow("no 3");
   });
+
+  it("edit046: gives up at once on a binary, oversize or non-UTF-8 file instead of retrying", async () => {
+    for (const msg of ["C:/r/a.zip is a binary file, so it is not shown as text", "C:/r/x.log is too large to open (40 MB; the editor opens up to 32 MB)", "C:/r/l.txt is not UTF-8 text"]) {
+      let n = 0;
+      await expect(loadText(async () => Promise.reject(`${msg} #${++n}`), 3, 1)).rejects.toContain("#1");
+      expect(n).toBe(1);
+    }
+  });
 });

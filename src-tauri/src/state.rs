@@ -71,7 +71,7 @@ impl Store {
             Err(e) => return Err(e),
         };
         match serde_json::from_slice::<serde_json::Value>(&bytes) {
-            Ok(v) if v.is_object() => Ok(Some((bytes, v))),
+            Ok(v) if v.is_object() => Ok(Some((bytes, crate::import::without_retired(v)))), // HID-036
             Ok(_) => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "it is not a JSON object")),
             Err(e) => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
         }
@@ -115,7 +115,7 @@ impl Store {
             }
         }
         let tmp = self.settings_path.with_extension("json.tmp");
-        write_synced(&tmp, &serde_json::to_vec_pretty(value)?)?;
+        write_synced(&tmp, &serde_json::to_vec_pretty(&crate::import::without_retired(value.clone()))?)?; // HID-036: never written back
         fs::rename(&tmp, &self.settings_path)
     }
 

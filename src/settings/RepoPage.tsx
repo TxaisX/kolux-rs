@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Project } from "../projects/model";
+import RepoSetupSection from "./RepoSetup";
 
 /** What a field's draft saves: null when it says what is saved already (viewing writes nothing). */
 export function draftSave(saved: string | null | undefined, draft: string): string | null {
@@ -43,7 +44,7 @@ export function RepoView({ project, globalDir, onSave }: { project: Project; glo
       <p className="conn-detail">Folder: {project.path}</p>
       <DraftField label="New workspaces start from" saved={project.base} inherited="the default branch" onSave={(v) => onSave("base", v)} />
       <DraftField label="Workspaces folder" saved={project.workspacesDir} inherited={globalDir ? `${globalDir} (the global folder)` : "the global folder (Git & worktrees)"} onSave={(v) => onSave("workspacesDir", v)} />
-      <p className="conn-detail">Empty uses the value shown in grey. Setup scripts, the display name and the icon come later.</p>
+      <p className="conn-detail">Empty uses the value shown in grey. The display name, showing worktrees made outside Kolux and the icon come later.</p>
     </section>
   );
 }
@@ -68,6 +69,7 @@ export default function RepoPage({ project, onSaved }: { project: Project; onSav
   return (
     <>
       <RepoView project={project} globalDir={globalDir} onSave={save} />
+      <RepoSetupSection path={project.path} />
       {error && (
         <p className="conn-detail warn" role="alert">
           {error}

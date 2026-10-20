@@ -57,9 +57,9 @@ pub const CATALOGUE: [Entry; 34] = [
     ("pi", "Pi", &["pi"], &[]),
     ("omp", "OMP", &["omp"], &[]),
     ("prime-agent", "Prime Agent", &["prime-agent"], &[]),
-    ("gemini", "Gemini CLI", &["gemini"], &[]),
+    ("gemini", "Gemini CLI", &["gemini"], &["--yolo"]),
     ("antigravity", "Antigravity", &["agy"], &[]),
-    ("aider", "Aider", &["aider"], &[]),
+    ("aider", "Aider", &["aider"], &["--yes-always"]),
     ("goose", "Goose", &["goose"], &[]),
     ("amp", "Amp", &["amp"], &[]),
     ("kilo", "Kilo Code", &["kilo"], &[]),
@@ -405,15 +405,53 @@ pub fn resume_args(id: &str, session: Option<&str>) -> Vec<String> {
     }
 }
 
-/// SET-027: the built-in arguments that skip an agent's permission prompts; Manual leaves them out.
-/// ponytail: only the agents whose CLI already starts this way here; the others' switches wait
-/// with the no-prompt task in PLAN.md.
+/// SET-027, SESS-027: the built-in arguments that skip an agent's permission prompts; Manual leaves
+/// them out. Claude Code, Codex (sandboxed, DT-C46), Gemini CLI (`--yolo`) and Aider (`--yes-always`).
+// ponytail: Goose gets its mode through an environment variable, not a flag; the variable's name
+// waits on a firewall-allowlist entry only the coordinator adds (COMPAT.md 6.1), so Goose starts
+// without a no-prompt mode until that lands (PLAN.md T-056-b).
 fn prompt_skips(id: &str) -> &'static [&'static str] {
     match id {
         "claude" => &["--permission-mode", "auto"],
         "codex" => CODEX_YOLO,
+        "gemini" => &["--yolo"],
+        "aider" => &["--yes-always"],
         _ => &[],
     }
+}
+
+/// SESS-027: switches an agent does not accept, as (switch, takes a value). They are removed from the
+/// start line before launch, with their value. Kilo Code takes none of the other agents' no-prompt
+/// switches, so those are dropped when they arrive as built-in or extra arguments.
+// ponytail: the user's own default arguments are never filtered (they replace the built-ins as typed).
+fn unaccepted(id: &str) -> &'static [(&'static str, bool)] {
+    match id {
+        "kilo" => &[("--yolo", false), ("--yes-always", false), ("--permission-mode", true), ("--sandbox", true), ("--ask-for-approval", true)],
+        _ => &[],
+    }
+}
+
+/// `args` without the switches `id` does not accept: `--switch value` and `--switch=value` both go;
+/// a value that starts with a dash is another switch, not a value, and stays.
+fn drop_unaccepted(id: &str, args: Vec<String>) -> Vec<String> {
+    let table = unaccepted(id);
+    if table.is_empty() {
+        return args;
+    }
+    let mut out = Vec::with_capacity(args.len());
+    let mut it = args.into_iter().peekable();
+    while let Some(a) = it.next() {
+        let name = a.split_once('=').map_or(a.as_str(), |(n, _)| n);
+        match table.iter().find(|(f, _)| *f == name) {
+            Some((_, takes)) => {
+                if *takes && !a.contains('=') && it.peek().is_some_and(|v| !v.starts_with('-')) {
+                    it.next();
+                }
+            }
+            None => out.push(a),
+        }
+    }
+    out
 }
 
 /// `start_args` with the user's own default arguments (`own`, which replace the built-in ones and
@@ -425,8 +463,9 @@ fn line_for(id: &str, own: Option<&[String]>, yolo: bool, extra: &[String], resu
     let skips = if yolo { &[][..] } else { prompt_skips(id) };
     let mut args: Vec<String> = match own {
         Some(own) => own.to_vec(),
-        None => fixed.iter().filter(|a| !skips.contains(a)).map(|a| a.to_string()).collect(),
+        None => drop_unaccepted(id, fixed.iter().filter(|a| !skips.contains(a)).map(|a| a.to_string()).collect()),
     };
+    let extra = &drop_unaccepted(id, extra.to_vec());
     let mut typed = None;
     match route(id) {
         Route::Hermes => {
@@ -552,8 +591,10 @@ pub fn start_line_as(settings: &serde_json::Value, id: &str, extra: &[String], p
 // program name, or a package folder such as `claude-code`, credits the agent. Widen if a
 // foreground poll is ever built (DT-C11: there is none; the pane's own program and the hooks
 // decide who is in front).
-// Callers: the account and key variables a new pane gets (`claude_accounts`, `claude_key`,
-// `codex_accounts`), which credit the pane by the program Kolux starts in it.
+// Callers: `tools::credited_program` (the one reader of a spawn program: the pane mark, the account
+// and key variables, the peers list, the inventory and the context cap all go through it) and
+// `foreground.rs` (a running process's image name or command line). Nothing else calls it; a test
+// in tools.rs fails if another file does.
 pub fn credited_agent(command_line: &str) -> Option<&'static str> {
     let line = command_line.trim_start();
     let (first, rest) = match line.strip_prefix('"').and_then(|r| r.split_once('"')) {
@@ -723,6 +764,54 @@ mod tests {
     }
 
     #[test]
+    fn sess_027_gemini_and_aider_start_in_their_no_prompt_modes_and_manual_drops_them() {
+        let none = serde_json::json!({});
+        let manual = serde_json::json!({ "agentPermissions": "manual" });
+        assert_eq!(start_line(&none, "gemini", &[], "go", true).unwrap().args, s(&["--yolo", "--prompt-interactive", "go"]));
+        assert_eq!(start_line(&none, "aider", &s(&["--model", "x"]), "", true).unwrap().args, s(&["--yes-always", "--model", "x"]));
+        assert_eq!(start_line(&manual, "gemini", &[], "go", true).unwrap().args, s(&["--prompt-interactive", "go"]));
+        assert_eq!(start_line(&manual, "aider", &[], "", true).unwrap().args, Vec::<String>::new());
+        // the catalogue (the Agents page's "built-in" column) shows the same switches
+        let list = catalogue();
+        let by = |id: &str| list.iter().find(|a| a.id == id).unwrap().args.clone();
+        assert_eq!((by("gemini"), by("aider")), (s(&["--yolo"]), s(&["--yes-always"])));
+        // an agent that is not listed here stays without a no-prompt switch (Goose waits on its variable)
+        for id in ["goose", "kilo", "amp", "cursor", "grok"] {
+            assert!(by(id).is_empty(), "{id}");
+        }
+    }
+
+    #[test]
+    fn sess_027_the_users_default_arguments_replace_the_built_in_no_prompt_switch() {
+        for (id, built_in) in [("gemini", "--yolo"), ("aider", "--yes-always")] {
+            // Manual or not, the user's own line is used as typed and the built-in switch is not added
+            for set in [
+                serde_json::json!({ "agentOptions": { id: { "args": "--model m" } } }),
+                serde_json::json!({ "agentPermissions": "manual", "agentOptions": { id: { "args": "--model m" } } }),
+            ] {
+                assert_eq!(start_line(&set, id, &[], "", true).unwrap().args, s(&["--model", "m"]), "{id}");
+            }
+            // the user may type the switch themselves; it is kept exactly once
+            let typed = serde_json::json!({ "agentOptions": { id: { "args": built_in } } });
+            assert_eq!(start_line(&typed, id, &[], "", true).unwrap().args, s(&[built_in]), "{id}");
+        }
+    }
+
+    #[test]
+    fn sess_027_kilo_code_loses_the_switches_it_does_not_accept() {
+        let none = serde_json::json!({});
+        // switches of other agents arriving as extra arguments are removed, with their value
+        let extra = s(&["--yolo", "--model", "m", "--permission-mode", "auto", "--sandbox=workspace-write", "--ask-for-approval", "never", "--yes-always"]);
+        assert_eq!(start_line(&none, "kilo", &extra, "", true).unwrap().args, s(&["--model", "m"]));
+        // the same extras reach an agent that does accept them untouched
+        assert_eq!(start_line(&none, "aider", &s(&["--model", "m"]), "", true).unwrap().args, s(&["--yes-always", "--model", "m"]));
+        assert_eq!(start_line(&none, "claude", &s(&["--yolo"]), "", true).unwrap().args, s(&["--permission-mode", "auto", "--yolo"]));
+        // the edge: a switch at the very end with no value, and a value that looks like a switch
+        assert_eq!(start_line(&none, "kilo", &s(&["--ask-for-approval"]), "", true).unwrap().args, Vec::<String>::new());
+        assert_eq!(start_line(&none, "kilo", &s(&["--model", "--yolo-model"]), "", true).unwrap().args, s(&["--model", "--yolo-model"]));
+    }
+
+    #[test]
     fn sess029_unpicked_claude_gets_its_top_model_at_high_effort() {
         let none = serde_json::json!({});
         let line = start_line(&none, "claude", &[], "go", false).unwrap();
@@ -774,7 +863,7 @@ mod tests {
     #[test]
     fn sess051_flag_routes_copilot_interactive_gemini_antigravity_prompt_interactive_mimo_prompt() {
         assert_eq!(start_args("copilot", &[], "Tidy up").unwrap().args, s(&["-i", "Tidy up"]));
-        assert_eq!(start_args("gemini", &[], "Tidy up").unwrap().args, s(&["--prompt-interactive", "Tidy up"]));
+        assert_eq!(start_args("gemini", &[], "Tidy up").unwrap().args, s(&["--yolo", "--prompt-interactive", "Tidy up"]));
         assert_eq!(start_args("antigravity", &[], "Tidy up").unwrap().args, s(&["--prompt-interactive", "Tidy up"]));
         assert_eq!(start_args("mimo-code", &[], "Tidy up").unwrap().args, s(&["--prompt", "Tidy up"]));
     }
@@ -794,7 +883,7 @@ mod tests {
     #[test]
     fn sess051_typed_route_starts_bare_and_hands_the_prompt_over_for_later() {
         let aider = start_args("aider", &s(&["--model", "x"]), "Add tests").unwrap();
-        assert_eq!(aider.args, s(&["--model", "x"]));
+        assert_eq!(aider.args, s(&["--yes-always", "--model", "x"]));
         assert_eq!(aider.typed.as_deref(), Some("Add tests"));
         let kiro = start_args("kiro", &[], "Hi").unwrap();
         assert_eq!(kiro.args, s(&["chat", "--tui"]));
@@ -953,7 +1042,7 @@ mod tests {
                 // Kiro's `chat --resume` and Aider's history restore pick up the folder's own last
                 // conversation and start fresh when there is none.
                 "kiro" => assert_eq!(restored, s(&["chat", "--tui", "--resume"])),
-                "aider" => assert_eq!(restored, s(&["--restore-chat-history"])),
+                "aider" => assert_eq!(restored, s(&["--yes-always", "--restore-chat-history"])),
                 // Everyone else would open a picker or someone else's latest session: start fresh.
                 _ => assert_eq!(restored, plain, "{id}: no id, no resume"),
             }
@@ -973,7 +1062,7 @@ mod tests {
         }
         // The command's defaults: no `restore` means Fresh even when a session id is passed along.
         let fresh = start_line_as(&none, "gemini", &[], "", true, Start::Fresh).unwrap().args;
-        assert_eq!(fresh, Vec::<String>::new());
+        assert_eq!(fresh, s(&["--yolo"]));
     }
 
     #[test]

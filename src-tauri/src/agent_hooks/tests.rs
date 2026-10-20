@@ -455,10 +455,18 @@ mod script_runs {
     /// hooks FIX-8 (stand-in review AFTER 3): the 600 ms of room each side is NOMINAL, what the
     /// constants give. Where the release really falls varies by up to ~500 ms either way from run
     /// to run: the leads of the aimed attempts measured 1481-1596 ms in the FIX-7 runs (early-side
-    /// room 300-420 ms against the 1900 ms reach) and 606-1175 ms in the FIX-8 runs. A discarded
-    /// warm-up run of the script before attempt 0 did not narrow that (leads 1329, 1643, 1968 and
-    /// one miss, evidence/hooks-FIX-8.txt), so none is kept. An overshoot is safe: nothing lands,
-    /// the hold shrinks by 700 ms and there are still tries left.
+    /// room 300-420 ms against the 1900 ms reach) and 606-1175 ms in the FIX-8 runs without a
+    /// warm-up (w13-before-warmup-1..3.log). The late side came closest to its edge there: a lead
+    /// of 606 ms leaves only 206 ms above the 400 ms pass line, against 600 ms nominal.
+    ///
+    /// hooks FIX-9 (stand-in review AFTER 1): a discarded warm-up run of the script before
+    /// attempt 0 did not narrow that. Its four runs (w13-after-warmup-1..4.log) gave a first
+    /// aimed lead of 1329 ms, 1643 ms, then -410 ms (re-aimed) followed by 1968 ms, and in run 4
+    /// two attempts where nothing landed followed by 1824 ms. A lead of 1968 ms landed, so the
+    /// reach seen is at least 1968 ms: the 1900 ms above is nominal too, the pauses without the
+    /// time each try takes. The warm-up spread the leads wider from the aim (+868 / -1510 ms),
+    /// so none is kept. An overshoot is safe: nothing lands, the hold shrinks by 700 ms and
+    /// there are still tries left. An undershoot is safe too: a lead under 400 ms re-aims.
     const HELD_AIM_PAST_STAMP_MS: i64 = 1100;
     const HELD_PASS_LEAD_MS: i64 = 400;
 
@@ -474,7 +482,8 @@ mod script_runs {
     }
 
     #[test]
-    fn fix_7_the_held_append_aim_keeps_600_ms_of_room_each_side() {
+    fn fix_7_the_held_append_aim_constants_leave_600_ms_nominal_room_each_side() {
+        // Checks the constants only; the room a run really has is in the doc comment above.
         let reach = retries_reach_ms();
         assert_eq!(reach, 1900, "20 tries with 19 pauses of 100 ms");
         let (aim, pass) = (std::hint::black_box(HELD_AIM_PAST_STAMP_MS), HELD_PASS_LEAD_MS);
@@ -572,6 +581,79 @@ mod script_runs {
         let _ = fs::remove_dir_all(&data);
     }
 
+    /// hooks FIX-10 (stand-in review hooks-891b834f FIX-SOON 1): what the timed rounds of the
+    /// missing-folder test say. Every round times the held path and then the missing-folder path
+    /// back to back, so a load swing lands on both and cancels in their difference; each round's
+    /// verdict is that difference against the margin. `Retried`: at least three rounds in four came
+    /// in a margin or more slower on the missing folder, which is what a script that retries costs.
+    /// `Fine`: at most one round in eight did, so the missing folder costs what the held path does
+    /// (a lucky round on either side moves one count, never the verdict). `Noisy`: in between, so
+    /// the load swung the pairs and no verdict is safe (time more rounds); never a pass.
+    #[derive(Debug, PartialEq)]
+    enum Reading {
+        Noisy,
+        Retried,
+        Fine,
+    }
+
+    fn judge_missing_folder(held: &[Duration], missing: &[Duration], margin: Duration) -> Reading {
+        assert!(!held.is_empty() && held.len() == missing.len(), "one missing-folder round for every held round");
+        let over = held.iter().zip(missing).filter(|(h, m)| **m >= **h + margin).count();
+        if over * 4 >= held.len() * 3 {
+            Reading::Retried
+        } else if over * 8 <= held.len() {
+            Reading::Fine
+        } else {
+            Reading::Noisy
+        }
+    }
+
+    #[test]
+    fn fix_9_a_load_swing_bigger_than_the_margin_is_noisy_not_a_retry() {
+        let secs = |v: &[f64]| v.iter().map(|s| Duration::from_secs_f64(*s)).collect::<Vec<_>>();
+        let margin = Duration::from_millis(1000);
+        // The rounds of the false red in w13-merge-cargo.log (a full cargo test with other builders running).
+        let (held, missing) = (secs(&[11.384, 7.717, 9.879, 11.621]), secs(&[9.904, 10.568, 11.408, 9.288]));
+        assert_eq!(judge_missing_folder(&held, &missing, margin), Reading::Noisy);
+        // The raw rounds of a script that retries on every error (w14-red-R3.log, round order as printed:
+        // 1.413, 1.523, 1.573 and 0.989 s apart): one round came in a hair under the margin, three did not.
+        let (held, missing) = (secs(&[2.592, 2.339, 2.540, 3.301]), secs(&[4.005, 3.862, 4.113, 4.290]));
+        assert_eq!(judge_missing_folder(&held, &missing, margin), Reading::Retried);
+        // A correct script on a calm PC: the two paths differ by well under the margin.
+        let (held, missing) = (secs(&[0.52, 0.49, 0.55, 0.50]), secs(&[0.47, 0.51, 0.46, 0.50]));
+        assert_eq!(judge_missing_folder(&held, &missing, margin), Reading::Fine);
+        // stand-in review hooks-891b834f FIX-SOON 1: ONE lucky missing-folder round (2.9 s against
+        // 2.4 s held) must not clear a script that retries; the old quickest-against-quickest rule
+        // read this Fine.
+        let (held, missing) = (secs(&[2.5, 2.4, 2.6, 2.5]), secs(&[4.0, 2.9, 4.1, 4.0]));
+        assert_eq!(judge_missing_folder(&held, &missing, margin), Reading::Retried);
+        // Nor may two lucky rounds clear it: the review's swinging numbers (a retry that two quick
+        // missing rounds make look calm) are undecided, so more rounds are timed, never Fine.
+        let (held, missing) = (secs(&[3.20, 3.44, 3.49, 3.60]), secs(&[3.80, 4.39, 4.54, 4.65]));
+        assert_eq!(judge_missing_folder(&held, &missing, margin), Reading::Noisy);
+        // A difference of exactly the margin counts as a retry-sized one, a ms under it does not.
+        let flat = secs(&[2.0, 2.0, 2.0, 2.0]);
+        assert_eq!(judge_missing_folder(&flat, &secs(&[3.0, 3.0, 3.0, 3.0]), margin), Reading::Retried);
+        assert_eq!(judge_missing_folder(&flat, &secs(&[2.999, 2.999, 2.999, 2.999]), margin), Reading::Fine);
+        // How many of 4 rounds sit a margin above decides: 0 is Fine, 1 and 2 are undecided, 3 and 4 are a retry.
+        let reading = |over: usize| {
+            let missing: Vec<f64> = (0..4).map(|i| if i < over { 3.5 } else { 2.0 }).collect();
+            judge_missing_folder(&flat, &secs(&missing), margin)
+        };
+        assert_eq!([reading(0), reading(1), reading(2), reading(3), reading(4)], [Reading::Fine, Reading::Noisy, Reading::Noisy, Reading::Retried, Reading::Retried]);
+        // The pool grows over attempts: of 8 rounds one over the margin is still Fine, of 16 two are,
+        // and 3 of 16 is undecided. A slow round on its own (the PC's spike) is not a retry.
+        let flat8 = secs(&[2.0; 8]);
+        let flat16 = secs(&[2.0; 16]);
+        let with_over = |n: usize, over: usize| secs(&(0..n).map(|i| if i < over { 3.5 } else { 2.0 }).collect::<Vec<_>>());
+        assert_eq!(judge_missing_folder(&flat8, &with_over(8, 1), margin), Reading::Fine);
+        assert_eq!(judge_missing_folder(&flat8, &with_over(8, 2), margin), Reading::Noisy);
+        assert_eq!(judge_missing_folder(&flat16, &with_over(16, 2), margin), Reading::Fine);
+        assert_eq!(judge_missing_folder(&flat16, &with_over(16, 3), margin), Reading::Noisy);
+        assert_eq!(judge_missing_folder(&flat16, &with_over(16, 12), margin), Reading::Retried);
+        assert_eq!(judge_missing_folder(&flat16, &with_over(16, 11), margin), Reading::Noisy);
+    }
+
     /// hooks FIX-4 (stand-in review AFTER 2): only another writer holding the file is waited out.
     /// A holding folder that is gone fails at once instead of costing the agent 2 s of retries.
     #[test]
@@ -581,32 +663,65 @@ mod script_runs {
         let gone = data.join("gone").join(super::super::super::ENDPOINT_FILE);
         let gone_env: Vec<(&str, String)> = env.iter().map(|(k, v)| (*k, if *k == "KOLUX_HOOK_ENDPOINT" { gone.display().to_string() } else { v.clone() })).collect();
         // hooks FIX-7 (stand-in review AFTER 5b): the two paths are timed in turns (held, missing,
-        // held, missing, ...), so a load swing lands on both alike, and each keeps its quickest of
-        // ROUNDS, so one slow PowerShell start does not decide it. The two paths do the same work
+        // held, missing, ...), so a load swing lands on both alike. The two paths do the same work
         // but for the one append (it lands, or it fails at once on the missing folder), so what
         // sets them apart is the script's retries: (tries - 1) x its pause, 1900 ms, read from
         // the script. The allowed difference sits well under that, and a missing-folder run that
-        // retried would cost about that much more than the held one (hooks FIX-8, stand-in review
-        // AFTER 2: measured 1.5-1.9 s, so about 0.5 s of headroom over the 1000 ms margin).
+        // retried would cost about that much more than the held one (hooks FIX-9, stand-in review
+        // AFTER 3: three raw recaptures of a script that retries on every error, quickest to
+        // quickest 1.52, 1.79 and 1.49 s, w14-red-R3.log, w14-red-R3-2.log, w14-red-R3-3.log; those
+        // three ran the earlier per-attempt rule, see evidence/hooks-FIX-10.txt for the reruns of
+        // this rule, w15-red-R3*.log).
+        //
+        // hooks FIX-9: with other builds running, the same script took 7.7-11.6 s a round and the
+        // quickest held and missing times came 1.57 s apart, which read as a retry
+        // (w13-merge-cargo.log), so a swing that big must not be judged. hooks FIX-10 (stand-in
+        // review hooks-891b834f FIX-SOON 1): the FIX-9 rule compared the two quickest times of each
+        // path, so one lucky missing round (the retry costs only about 0.5 s more than the margin
+        // allows) cleared a script that retries. Now every round is judged on its own held-to-missing
+        // difference (judge_missing_folder): a retry-sized difference in three rounds of four is
+        // Retried, in at most one round of eight is Fine, anything between is Noisy and more rounds
+        // are timed into the pool, up to TRIES attempts of ROUNDS rounds, like fix_3_a's re-aim.
+        // Only a decided reading judges: a script that retries on every error fails on its first
+        // decided reading, and a PC that never gets one fails too (never passes unjudged).
+        // How often a correct script gets a decided reading under builder load is not claimed here:
+        // see the --nocapture rounds in evidence/hooks-FIX-10.txt.
         const ROUNDS: usize = 4;
+        const TRIES: usize = 4;
         const MARGIN_MS: u64 = 1000;
+        let margin = Duration::from_millis(MARGIN_MS);
         let timed = |env: &[(&str, String)]| {
             let t = Instant::now();
             assert!(run(&dir, env, STOP).status.success());
             t.elapsed()
         };
-        let (mut held, mut missing) = (Duration::MAX, Duration::MAX);
-        for round in 0..ROUNDS {
-            let (h, m) = (timed(&env), timed(&gone_env));
-            println!("round {round}: held path {h:?}, missing folder {m:?}");
-            held = held.min(h);
-            missing = missing.min(m);
-        }
-        println!("quickest: held path {held:?}, missing folder {missing:?}; retries would add {} ms", retries_reach_ms());
         assert!(MARGIN_MS as i64 + 500 <= retries_reach_ms(), "the allowed difference stays well under what the retries would cost");
-        assert_eq!(fs::read_to_string(&spool).unwrap().lines().filter(|l| !l.is_empty()).count(), ROUNDS, "the folder that is there takes every event");
+        let (mut held, mut missing): (Vec<Duration>, Vec<Duration>) = (Vec::new(), Vec::new());
+        let mut reading = Reading::Noisy;
+        for attempt in 0..TRIES {
+            for round in 0..ROUNDS {
+                let (h, m) = (timed(&env), timed(&gone_env));
+                println!("attempt {attempt} round {round}: held path {h:?}, missing folder {m:?}");
+                held.push(h);
+                missing.push(m);
+            }
+            reading = judge_missing_folder(&held, &missing, margin);
+            let over = held.iter().zip(&missing).filter(|(h, m)| **m >= **h + margin).count();
+            println!(
+                "after attempt {attempt}: {over} of {} rounds a margin or more slower on the missing folder (quickest held {:?}, missing {:?}); retries would add {} ms: {reading:?}",
+                held.len(),
+                held.iter().min().unwrap(),
+                missing.iter().min().unwrap(),
+                retries_reach_ms()
+            );
+            if reading != Reading::Noisy {
+                break;
+            }
+        }
+        assert_eq!(fs::read_to_string(&spool).unwrap().lines().filter(|l| !l.is_empty()).count(), held.len(), "the folder that is there takes every event");
         assert!(!data.join("gone").exists(), "a missing holding folder is not made");
-        assert!(missing < held + Duration::from_millis(MARGIN_MS), "no retries for a missing folder: {missing:?} against {held:?}");
+        assert_ne!(reading, Reading::Noisy, "{TRIES} attempts of {ROUNDS} rounds never gave a decided reading (neither at most 1 round in 8 nor at least 3 in 4 a {MARGIN_MS} ms margin slower on the missing folder): the PC is too loaded to judge");
+        assert_eq!(reading, Reading::Fine, "no retries for a missing folder: held {held:?}, missing {missing:?}");
         let _ = fs::remove_dir_all(&data);
     }
 
@@ -1578,5 +1693,117 @@ fn fix_5_codex_a_failed_trust_write_keeps_its_own_error_when_the_rollback_fails_
     assert!(err.ends_with(CHANGED), "and the rollback's follows it: {err}");
     assert_eq!(fs::read_to_string(&file).unwrap(), "{ \"saved\": true }\n", "the save in the window is kept");
     assert!(!home.join("config.toml").exists(), "no trust was written");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// T-134-b (CLI-040 rest, COMPAT 3.4): `kolux agent hooks off` runs `clear`, which takes Kolux's
+/// own entries out of every managed agent's file and nothing else. This drives the same remove
+/// path `clear` takes, agent by agent, on scratch files that hold the user's own entries beside
+/// Kolux's: afterwards each file is byte for byte the user's again, a sibling file of the user's
+/// is untouched, status reads "not installed", a second off writes nothing, and a file that never
+/// held Kolux's entries is never written and gets no copy.
+#[test]
+fn t_134_b_off_takes_only_kolux_out_of_every_agents_file_and_nothing_else() {
+    let dir = temp("t134b-off");
+    fs::write(dir.join(SCRATCH_MARKER), "").unwrap();
+    let home = dir.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let profile = Path::new("kolux-rs-test-profile");
+    let read = |p: &Path| fs::read_to_string(p).unwrap();
+    let show = |agent: &str, when: &str, p: &Path| println!("{agent} {when}: {} ({} bytes)", p.display(), fs::metadata(p).map(|m| m.len()).unwrap_or(0));
+
+    // Claude Code: other hooks under every event and the user's own status line (`shaped`).
+    let claude = dir.join("claude").join("settings.json");
+    fs::create_dir_all(claude.parent().unwrap()).unwrap();
+    fs::write(&claude, shaped()).unwrap();
+    let claude_prev = target_dir(&home, &claude).join(STATUS_PREV);
+    install_claude_at(&home, &claude).unwrap();
+    assert_eq!(switch::inspect(&claude, &CLAUDE_EVENTS).0, "installed");
+    assert_ne!(read(&claude), shaped(), "Kolux's entries went in");
+    show("claude", "before off", &claude);
+
+    // Codex: a managed home of Kolux's, the user's own entry beside Kolux's under Stop.
+    let codex_home = dir.join("codex-home");
+    fs::create_dir_all(&codex_home).unwrap();
+    let codex = codex_home.join("hooks.json");
+    let codex_user = "{\n  \"hooks\": {\n    \"Stop\": [{ \"hooks\": [{ \"type\": \"command\", \"command\": \"keep.cmd\" }] }]\n  }\n}\n";
+    fs::write(&codex, codex_user).unwrap();
+    let mut v: Value = ev(codex_user);
+    assert!(write_codex_groups(&codex, Some(codex_user), &mut v, MINE).unwrap());
+    assert_eq!(switch::inspect(&codex, &CODEX_EVENTS).0, "installed");
+    show("codex", "before off", &codex);
+
+    // Gemini CLI: the user's theme and his own BeforeTool hook, plus a sibling file of his.
+    let gemini = vendors::gemini_file(&home);
+    fs::create_dir_all(gemini.parent().unwrap()).unwrap();
+    let gemini_user = "{\n  \"theme\": \"dark\",\n  \"hooks\": {\n    \"BeforeTool\": [{ \"matcher\": \"write_file\", \"hooks\": [{ \"type\": \"command\", \"command\": \"my-check\" }] }]\n  }\n}\n";
+    fs::write(&gemini, gemini_user).unwrap();
+    let gemini_sibling = gemini.with_file_name("GEMINI.md");
+    fs::write(&gemini_sibling, "# mine\n").unwrap();
+    assert_eq!(apply(&home, profile, "gemini", Plan::Install), Ok("installed"));
+    show("gemini", "before off", &gemini);
+
+    // Antigravity: a bundle of the user's own beside Kolux's.
+    let antigravity = vendors::antigravity_file(&home);
+    fs::create_dir_all(antigravity.parent().unwrap()).unwrap();
+    let antigravity_user = "{\n  \"my-bundle\": {\n    \"Stop\": [{ \"type\": \"command\", \"command\": \"my-stop.cmd\" }]\n  }\n}\n";
+    fs::write(&antigravity, antigravity_user).unwrap();
+    assert_eq!(apply(&home, profile, "antigravity", Plan::Install), Ok("installed"));
+    assert!(read(&antigravity).contains(vendors::NAME) && read(&antigravity).contains("my-stop.cmd"));
+    show("antigravity", "before off", &antigravity);
+
+    // Amp: Kolux's plugin file beside a plugin of the user's.
+    let amp = vendors::amp_file(&home);
+    fs::create_dir_all(amp.parent().unwrap()).unwrap();
+    let amp_sibling = amp.with_file_name("mine.js");
+    fs::write(&amp_sibling, "export default () => {}\n").unwrap();
+    assert_eq!(apply(&home, profile, "amp", Plan::Install), Ok("installed"));
+    assert!(amp.exists());
+    show("amp", "before off", &amp);
+    assert!(vendors::rows(&home).iter().all(|r| r["state"] == "installed"), "{:?}", vendors::rows(&home));
+
+    // A Claude settings file that never held Kolux's entries: off must not write it at all.
+    let plain = dir.join("plain").join("settings.json");
+    fs::create_dir_all(plain.parent().unwrap()).unwrap();
+    let plain_user = "{\n  \"hooks\": { \"Stop\": [{ \"hooks\": [{ \"type\": \"command\", \"command\": \"node mine.js\" }] }] }\n}\n";
+    fs::write(&plain, plain_user).unwrap();
+
+    // Off: the same calls `clear` makes for each managed agent (`apply(.., Plan::Remove)`).
+    assert_eq!(remove_claude(&claude, &claude_prev), Ok(true));
+    assert_eq!(remove_codex(&codex_home), Ok(true));
+    for id in ["gemini", "antigravity", "amp"] {
+        assert_eq!(apply(&home, profile, id, Plan::Remove), Ok("removed"), "{id}");
+    }
+    assert_eq!(remove_claude(&plain, &target_dir(&home, &plain).join(STATUS_PREV)), Ok(false));
+    for (agent, file) in [("claude", &claude), ("codex", &codex), ("gemini", &gemini), ("antigravity", &antigravity)] {
+        show(agent, "after off", file);
+    }
+
+    // Each file is byte for byte the user's again; nothing beside them moved.
+    assert_eq!(read(&claude), shaped(), "Claude Code: the user's settings back exactly, his status line included");
+    assert_eq!(read(&codex), codex_user, "Codex: the user's hooks.json back exactly");
+    assert_eq!(read(&gemini), gemini_user, "Gemini CLI: the user's settings back exactly");
+    assert_eq!(read(&gemini_sibling), "# mine\n", "a sibling file of the user's untouched");
+    assert_eq!(read(&antigravity), antigravity_user, "Antigravity: the user's bundle back exactly");
+    assert!(!amp.exists(), "Amp: Kolux's plugin file is gone");
+    assert_eq!(read(&amp_sibling), "export default () => {}\n", "the user's own plugin untouched");
+    assert_eq!(read(&plain), plain_user, "a file without Kolux's entries is left as it was");
+    assert!(!backup_of(&plain).exists(), "and no copy of it was made");
+    assert!(!claude_prev.exists() && !claude_prev.with_extension("json").exists(), "the status line slot is cleared");
+
+    // What `kolux agent hooks status` reads afterwards.
+    assert_eq!(switch::inspect(&claude, &CLAUDE_EVENTS).0, "not installed");
+    assert_eq!(switch::inspect(&codex, &CODEX_EVENTS).0, "not installed");
+    let rows = vendors::rows(&home);
+    assert!(rows.iter().all(|r| r["state"] == "not installed"), "{rows:?}");
+    println!("status after off: claude not installed, codex not installed, {}", rows.iter().map(|r| format!("{} {}", r["agent"].as_str().unwrap(), r["state"].as_str().unwrap())).collect::<Vec<_>>().join(", "));
+
+    // A second off finds nothing of Kolux's and writes nothing.
+    assert_eq!(remove_claude(&claude, &claude_prev), Ok(false));
+    assert_eq!(remove_codex(&codex_home), Ok(false));
+    assert_eq!(vendors::remove_hooks(&home, &gemini), Ok(false));
+    assert_eq!(vendors::remove_antigravity(&home, &antigravity), Ok(false));
+    assert_eq!(vendors::remove_amp(&amp), Ok(false));
+    assert_eq!((read(&claude), read(&codex), read(&gemini), read(&antigravity)), (shaped(), codex_user.into(), gemini_user.into(), antigravity_user.into()));
     let _ = fs::remove_dir_all(&dir);
 }

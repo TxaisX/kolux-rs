@@ -62,6 +62,9 @@ pub struct Track {
     /// The terminal the pane runs in and whether that terminal is still open (filled by the command).
     pub terminal: Option<u32>,
     pub live: bool,
+    /// T-260-b: the pane of the session this one was started under, when the stored tasks and
+    /// dispatches say so and that session has a lane too (filled by the command).
+    pub parent: Option<u32>,
 }
 
 #[derive(Default)]
@@ -309,15 +312,66 @@ pub fn activity_get(store: StoreState<'_>) -> Result<BTreeMap<String, u64>, Stri
     Ok(workspace_times(&*store.lock().map_err(|e| e.to_string())?))
 }
 
+/// VIEW-013 (T-260-b): child sessions nest under their parent. A lane is a child when the dispatch
+/// that runs in its terminal belongs to a task with a parent task (same Run) and a dispatch of that
+/// parent task ran in the terminal of another lane. Dispatches stamped by an earlier start of Kolux
+/// are ignored (terminal ids count up again), the newest dispatch of the parent that has a lane
+/// wins, and a lane is never its own ancestor.
+pub fn nest_lanes(lanes: &mut [Track], tasks: &[serde_json::Value], dispatches: &[serde_json::Value], runtime: u64) {
+    let mine = |d: &&serde_json::Value| d["runtime"].as_u64().is_none_or(|r| r == runtime);
+    let pane_of = |terminal: u64| lanes.iter().find(|l| l.terminal.is_some_and(|t| u64::from(t) == terminal)).map(|l| l.pane);
+    let mut parent: Vec<Option<u32>> = lanes
+        .iter()
+        .map(|l| {
+            let own = dispatches.iter().rev().filter(mine).find(|d| d["terminal"].as_u64().is_some() && d["terminal"].as_u64() == l.terminal.map(u64::from))?;
+            // A record with no runId (null == null in Value equality) is never "the same Run".
+            let task = tasks.iter().find(|t| t["id"] == own["taskId"] && t["runId"].is_string() && t["runId"] == own["runId"])?;
+            let up = task["parent"].as_str()?;
+            dispatches
+                .iter()
+                .rev()
+                .filter(mine)
+                .filter(|d| d["taskId"] == up && d["runId"] == task["runId"])
+                .find_map(|d| d["terminal"].as_u64().and_then(pane_of))
+                .filter(|p| *p != l.pane)
+        })
+        .collect();
+    // Drop every link that sits on a loop (two tasks naming each other).
+    let panes: Vec<u32> = lanes.iter().map(|l| l.pane).collect();
+    let up = |p: u32, parent: &[Option<u32>]| panes.iter().position(|x| *x == p).and_then(|i| parent[i]);
+    let looped: Vec<bool> = panes
+        .iter()
+        .map(|start| {
+            let mut at = *start;
+            (0..=panes.len()).any(|_| match up(at, &parent) {
+                Some(p) if p == *start => true,
+                Some(p) => {
+                    at = p;
+                    false
+                }
+                None => false,
+            })
+        })
+        .collect();
+    for (i, l) in lanes.iter_mut().enumerate() {
+        l.parent = if looped[i] { None } else { parent[i].take() };
+    }
+}
+
 /// VIEW-013: the Floor timeline's lanes. A lane whose terminal is no longer open is not live: the
 /// page shows its quiet stretches as unverifiable rather than idle.
 #[tauri::command]
-pub fn activity_timeline(terminals: tauri::State<'_, crate::terminal::Terminals>) -> Vec<Track> {
+pub fn activity_timeline(terminals: tauri::State<'_, crate::terminal::Terminals>, store: StoreState<'_>) -> Vec<Track> {
     let mut lanes = with(|a| a.timeline(now_ms()));
     for l in &mut lanes {
         l.terminal = crate::status::terminal_of(l.pane);
         l.live = l.ended.is_none() && l.terminal.is_some_and(|t| terminals.started(t).is_some());
     }
+    // T-260-b: the store is read once, apart from the activity lock; unreadable means flat lanes.
+    let load = |k: &str| -> Vec<serde_json::Value> {
+        store.lock().ok().and_then(|s| s.get(k).ok().flatten()).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+    };
+    nest_lanes(&mut lanes, &load(crate::orchestration::TASKS_KEY), &load(crate::orchestration::DISPATCHES_KEY), u64::from(std::process::id()));
     lanes
 }
 
@@ -605,6 +659,100 @@ mod tests {
         let back = Activity::load(Some(&at_quit), 9_999);
         assert_eq!(back.counts, Counts { since: 42, agents_started: 1, working_ms: 300, prs_created: 1 });
         assert!(Activity::load(Some("not json"), 7).counts.since == 7, "unreadable counts start again");
+    }
+
+    fn lane(pane: u32, terminal: Option<u32>) -> Track {
+        Track { pane, terminal, live: true, ..Track::default() }
+    }
+
+    fn parents(lanes: &[Track]) -> Vec<(u32, Option<u32>)> {
+        lanes.iter().map(|l| (l.pane, l.parent)).collect()
+    }
+
+    #[test]
+    fn t260b_a_child_session_nests_under_the_pane_of_its_parent_task_and_nothing_else_does() {
+        use serde_json::json;
+        let me = u64::from(std::process::id());
+        let tasks = vec![
+            json!({ "id": "task-1", "runId": "run-1" }),
+            json!({ "id": "task-2", "runId": "run-1", "parent": "task-1" }),
+            json!({ "id": "task-3", "runId": "run-1", "parent": "task-2" }),
+            json!({ "id": "task-4", "runId": "run-1" }),
+        ];
+        let dispatches = vec![
+            json!({ "id": "dispatch-1", "runtime": me, "runId": "run-1", "taskId": "task-1", "status": "completed", "terminal": 10 }),
+            json!({ "id": "dispatch-2", "runtime": me, "runId": "run-1", "taskId": "task-2", "status": "running", "terminal": 11 }),
+            json!({ "id": "dispatch-3", "runtime": me, "runId": "run-1", "taskId": "task-3", "status": "running", "terminal": 12 }),
+            json!({ "id": "dispatch-4", "runtime": me, "runId": "run-1", "taskId": "task-4", "status": "running", "terminal": 13 }),
+        ];
+        // The panes are not numbered like the terminals, and the child comes before its parent.
+        let mut lanes = vec![lane(7, Some(12)), lane(5, Some(11)), lane(3, Some(10)), lane(9, Some(13)), lane(8, None)];
+        nest_lanes(&mut lanes, &tasks, &dispatches, me);
+        assert_eq!(parents(&lanes), vec![(7, Some(5)), (5, Some(3)), (3, None), (9, None), (8, None)], "a grandchild nests under the child, a task with no parent stays on top");
+        let json = serde_json::to_value(&lanes[1]).unwrap();
+        assert_eq!(json["parent"], 3, "the Floor reads the parent as a pane number");
+        assert!(serde_json::to_value(&lanes[2]).unwrap()["parent"].is_null());
+    }
+
+    #[test]
+    fn t260b_a_link_nobody_can_vouch_for_leaves_the_lane_on_top() {
+        use serde_json::json;
+        let me = u64::from(std::process::id());
+        let task = |id: &str, parent: Option<&str>, run: &str| json!({ "id": id, "runId": run, "parent": parent });
+        let dispatch = |id: &str, task: &str, run: &str, terminal: u32, runtime: u64| json!({ "id": id, "runtime": runtime, "runId": run, "taskId": task, "status": "running", "terminal": terminal });
+        // A dispatch stamped by an earlier start of Kolux names a terminal that is someone else now.
+        let mut lanes = vec![lane(1, Some(10)), lane(2, Some(11))];
+        let tasks = vec![task("task-1", None, "run-1"), task("task-2", Some("task-1"), "run-1")];
+        nest_lanes(&mut lanes, &tasks, &[dispatch("d-1", "task-1", "run-1", 10, me + 1), dispatch("d-2", "task-2", "run-1", 11, me)], me);
+        assert_eq!(parents(&lanes), vec![(1, None), (2, None)], "the parent's dispatch is from another start");
+        // A parent task of another Run is not the parent.
+        let tasks = vec![task("task-1", None, "run-2"), task("task-2", Some("task-1"), "run-1")];
+        nest_lanes(&mut lanes, &tasks, &[dispatch("d-1", "task-1", "run-2", 10, me), dispatch("d-2", "task-2", "run-1", 11, me)], me);
+        assert_eq!(parents(&lanes), vec![(1, None), (2, None)]);
+        // A parent whose worker has no lane (its terminal never reported) leaves the child on top, and a retry picks the newest dispatch that has a lane.
+        let tasks = vec![task("task-1", None, "run-1"), task("task-2", Some("task-1"), "run-1")];
+        let ds = vec![dispatch("d-1", "task-1", "run-1", 10, me), dispatch("d-2", "task-2", "run-1", 11, me), dispatch("d-3", "task-1", "run-1", 99, me)];
+        nest_lanes(&mut lanes, &tasks, &ds, me);
+        assert_eq!(parents(&lanes), vec![(1, None), (2, Some(1))], "the retry's terminal 99 has no lane, so the earlier dispatch's lane is the parent");
+        // Two tasks that name each other, and a task that names itself, never make a lane its own ancestor.
+        let tasks = vec![task("task-1", Some("task-2"), "run-1"), task("task-2", Some("task-1"), "run-1"), task("task-3", Some("task-3"), "run-1")];
+        let mut lanes = vec![lane(1, Some(10)), lane(2, Some(11)), lane(3, Some(12))];
+        let ds = vec![dispatch("d-1", "task-1", "run-1", 10, me), dispatch("d-2", "task-2", "run-1", 11, me), dispatch("d-3", "task-3", "run-1", 12, me)];
+        nest_lanes(&mut lanes, &tasks, &ds, me);
+        assert!(lanes.iter().all(|l| l.parent.is_none()), "{:?}", parents(&lanes));
+        // Nothing stored at all: every lane stays on top.
+        nest_lanes(&mut lanes, &[], &[], me);
+        assert!(lanes.iter().all(|l| l.parent.is_none()));
+    }
+
+    #[test]
+    fn fix1_a_task_and_a_dispatch_with_no_run_id_never_count_as_the_same_run() {
+        use serde_json::json;
+        let me = u64::from(std::process::id());
+        // Legacy records: a null runId on either side. null == null is not a match.
+        for (parent_run, child_run, d_parent, d_child) in [
+            (json!(null), json!(null), json!(null), json!(null)),
+            (json!(null), json!("run-1"), json!(null), json!("run-1")),
+            (json!("run-1"), json!(null), json!("run-1"), json!(null)),
+        ] {
+            let tasks = vec![json!({ "id": "task-1", "runId": parent_run }), json!({ "id": "task-2", "runId": child_run, "parent": "task-1" })];
+            let ds = vec![
+                json!({ "id": "d-1", "runtime": me, "runId": d_parent, "taskId": "task-1", "terminal": 10 }),
+                json!({ "id": "d-2", "runtime": me, "runId": d_child, "taskId": "task-2", "terminal": 11 }),
+            ];
+            let mut lanes = vec![lane(1, Some(10)), lane(2, Some(11))];
+            nest_lanes(&mut lanes, &tasks, &ds, me);
+            assert_eq!(parents(&lanes), vec![(1, None), (2, None)], "tasks {tasks:?} dispatches {ds:?}");
+        }
+        // A real runId on both sides still nests.
+        let tasks = vec![json!({ "id": "task-1", "runId": "run-1" }), json!({ "id": "task-2", "runId": "run-1", "parent": "task-1" })];
+        let ds = vec![
+            json!({ "id": "d-1", "runtime": me, "runId": "run-1", "taskId": "task-1", "terminal": 10 }),
+            json!({ "id": "d-2", "runtime": me, "runId": "run-1", "taskId": "task-2", "terminal": 11 }),
+        ];
+        let mut lanes = vec![lane(1, Some(10)), lane(2, Some(11))];
+        nest_lanes(&mut lanes, &tasks, &ds, me);
+        assert_eq!(parents(&lanes), vec![(1, None), (2, Some(1))]);
     }
 
     #[test]
