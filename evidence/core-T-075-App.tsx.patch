@@ -1,0 +1,36 @@
+# T-075 slice a (lane/core): the layout goes through the debounced layoutWriter (src/terminal/layoutSave.ts) and is flushed in onCloseRequested. Apply: git apply evidence/core-T-075-App.tsx.patch. tsc clean with it applied.
+diff --git a/src/App.tsx b/src/App.tsx
+index d5fe60ef..972616d4 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -122,6 +122,7 @@ import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, ru
+ import { folderName, NESTING_KEY, workItem, type Created, type WorkItem, type CliWorkspace, type Project, type Worktree } from "./projects/model";
+ import { focusIn, panesIn, sameDir, nameOf } from "./workspaces";
+ import { LAYOUT_FIELD, layoutOf, type SavedLayout } from "./terminal/layout";
++import { layoutWriter } from "./terminal/layoutSave";
+ import { Kbd, KeymapProvider, useKeymap } from "./keys/KeymapContext";
+ import { recording } from "./keys/record";
+ import { matchEvent } from "./keys/keymap";
+@@ -1180,9 +1181,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+   const unsaved = useRef<string[]>([]);
+   unsaved.current = panes.filter((p) => dirty[p.key]).map((p) => baseName(p.path ?? p.title ?? "Untitled"));
+   const quitting = useRef(false);
++  // T-075 (APP-048 / APP-050): a burst of layout changes is one write, and the pending one is
++  // flushed before the window closes, so a change made right before quitting is back on relaunch.
++  const layoutSaver = useRef(layoutWriter((l: SavedLayout) => void saveLayout(l, (v) => saveChanged({}, { [LAYOUT_FIELD]: v })).catch((err) => setNotice(String(err))))).current;
+   useEffect(() => {
+     const off = getCurrentWindow().onCloseRequested((e) => {
+       screenWriter.flush();
++      layoutSaver.flush();
+       if (quitting.current || unsaved.current.length === 0) return;
+       e.preventDefault();
+       setQuitAsk([...unsaved.current]);
+@@ -1198,7 +1203,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     const l = layoutOf(panes, activeTab, focused, activeDir, stacked);
+     if (JSON.stringify(settings[LAYOUT_FIELD] ?? null) === JSON.stringify(l)) return;
+     setSettings({ ...settings, [LAYOUT_FIELD]: l });
+-    saveLayout(l, (v) => saveChanged({}, { [LAYOUT_FIELD]: v })).catch((err) => setNotice(String(err)));
++    layoutSaver.set(l);
+   }, [panes, activeTab, focused, activeDir, stacked]);
+ 
+   // VIEW-046: every workspace and page shown is a stop for back and forward; a step back lands on

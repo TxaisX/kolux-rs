@@ -1,0 +1,178 @@
+# T-075 slice a (lane/core): corrupt or half-written settings.json falls back to settings.json.bak; the corrupt bytes are set aside as settings.json.corrupt-<secs>, the backup is kept until the main file reads again. Apply: git apply evidence/core-T-075-state.rs.patch. Tests inside (cargo test --lib state::), run green in the lane before export (7/7).
+diff --git a/src-tauri/src/state.rs b/src-tauri/src/state.rs
+index 93f71b26..b5eab24b 100644
+--- a/src-tauri/src/state.rs
++++ b/src-tauri/src/state.rs
+@@ -56,16 +56,40 @@ impl Store {
+     }
+ 
+     /// User settings as JSON. No file yet reads as an empty object; a file that cannot be read or
+-    /// is not a JSON object is an error, never an empty set (T-441).
++    /// is not a JSON object is an error, never an empty set (T-441), unless the last good copy
++    /// (settings.json.bak) still reads: then that copy is what the user gets (T-075, APP-048).
+     pub fn try_settings(&self) -> std::io::Result<serde_json::Value> {
+         let read = self.read_file();
+         self.read_failed.store(read.is_err(), Ordering::SeqCst);
+-        Ok(read?.map_or_else(|| serde_json::json!({}), |(_, v)| v))
++        Ok(match read? {
++            Read::None => serde_json::json!({}),
++            Read::File(_, v) | Read::Backup(v) => v,
++        })
++    }
++
++    fn bak_path(&self) -> PathBuf {
++        self.settings_path.with_extension("json.bak")
++    }
++
++    /// What a settings read found: no file yet, the file itself (its bytes kept for the backup), or
++    /// the last good copy because the file itself is corrupt or half-written (T-075, APP-048).
++    fn read_file(&self) -> std::io::Result<Read> {
++        match Self::read_json(&self.settings_path) {
++            Ok(None) => Ok(Read::None),
++            Ok(Some((bytes, v))) => Ok(Read::File(bytes, v)),
++            Err(e) => match Self::read_json(&self.bak_path()) {
++                Ok(Some((_, v))) => {
++                    eprintln!("kolux: {} could not be read ({e}); using the last good copy {}", self.settings_path.display(), self.bak_path().display());
++                    Ok(Read::Backup(v))
++                }
++                _ => Err(e),
++            },
++        }
+     }
+ 
+     /// The file's bytes and the object they hold; `None` when there is no file yet.
+-    fn read_file(&self) -> std::io::Result<Option<(Vec<u8>, serde_json::Value)>> {
+-        let bytes = match fs::read(&self.settings_path) {
++    fn read_json(path: &Path) -> std::io::Result<Option<(Vec<u8>, serde_json::Value)>> {
++        let bytes = match fs::read(path) {
+             Ok(b) => b,
+             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+             Err(e) => return Err(e),
+@@ -108,11 +132,20 @@ impl Store {
+             f.write_all(bytes)?;
+             f.sync_all()
+         };
+-        if let Some((bytes, old)) = current {
+-            let bak = self.settings_path.with_extension("json.bak");
+-            if !bak.exists() || old.as_object().is_some_and(|o| !o.is_empty()) {
+-                write_synced(&bak, &bytes)?;
++        match current {
++            Read::File(bytes, old) => {
++                let bak = self.bak_path();
++                if !bak.exists() || old.as_object().is_some_and(|o| !o.is_empty()) {
++                    write_synced(&bak, &bytes)?;
++                }
+             }
++            // T-075 (APP-048): the save is built on the last good copy, so that copy stays as it is
++            // until the main file reads again; the corrupt bytes are set aside, never deleted.
++            Read::Backup(_) => {
++                let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
++                let _ = fs::rename(&self.settings_path, self.settings_path.with_extension(format!("json.corrupt-{secs}")));
++            }
++            Read::None => {}
+         }
+         let tmp = self.settings_path.with_extension("json.tmp");
+         write_synced(&tmp, &serde_json::to_vec_pretty(&crate::import::without_retired(value.clone()))?)?; // HID-036: never written back
+@@ -128,6 +161,13 @@ impl Store {
+     }
+ }
+ 
++/// One settings read (see `Store::read_file`).
++enum Read {
++    None,
++    File(Vec<u8>, serde_json::Value),
++    Backup(serde_json::Value),
++}
++
+ /// `value` with the keys in `set` laid over it and the keys in `remove` taken out.
+ pub fn patched(mut value: serde_json::Value, set: &serde_json::Map<String, serde_json::Value>, remove: &[String]) -> serde_json::Value {
+     if !value.is_object() {
+@@ -191,6 +231,8 @@ mod tests {
+         let bak: serde_json::Value = serde_json::from_slice(&fs::read(dir.join("settings.json.bak")).unwrap()).unwrap();
+         assert_eq!(bak["theme"], "classic");
+ 
++        // T-075: with no readable backup either, the read fails closed as T-441 had it.
++        fs::write(dir.join("settings.json.bak"), b"{ not json").unwrap();
+         for planted in [&b"{\"theme\": \"new\", \"defaultAg"[..], b"", b"[1,2]"] {
+             fs::write(dir.join("settings.json"), planted).unwrap();
+             assert!(s.try_settings().is_err());
+@@ -199,9 +241,78 @@ mod tests {
+             assert!(err.to_string().contains("settings.json.bak"), "{err}");
+             assert!(s.save_settings(&serde_json::json!({})).is_err());
+             assert_eq!(fs::read(dir.join("settings.json")).unwrap(), planted, "the planted file is untouched");
++            assert_eq!(fs::read(dir.join("settings.json.bak")).unwrap(), b"{ not json", "the backup is untouched too");
++        }
++        drop(s);
++        fs::remove_dir_all(&dir).unwrap();
++    }
++
++    /// T-075 (APP-048): a corrupt or half-written settings.json falls back to the last good copy.
++    /// Reads give the backup's settings, a save lays the change over them and sets the corrupt bytes
++    /// aside (never deletes them), and the backup is not replaced until the main file reads again.
++    #[test]
++    fn t075_a_corrupt_or_half_written_settings_fall_back_to_the_last_good_copy_without_wiping_it() {
++        let dir = temp_dir("t075-bak");
++        let s = Store::open(&dir).unwrap();
++        s.save_settings(&serde_json::json!({ "theme": "classic", "defaultAgent": "codex" })).unwrap();
++        s.patch_settings(&serde_json::Map::from_iter([("zoom".into(), serde_json::json!(1.5))]), &[]).unwrap();
++        let good = fs::read(dir.join("settings.json")).unwrap();
++        let bak_bytes = fs::read(dir.join("settings.json.bak")).unwrap();
++        // Half-written: the first half of the good file, as a torn write or a cut drive leaves it.
++        let half = &good[..good.len() / 2];
++        for planted in [half, &b"\0\0\0\0"[..], b"", b"[1,2]"] {
++            fs::write(dir.join("settings.json"), planted).unwrap();
++            let read = s.try_settings().unwrap();
++            assert_eq!(read["theme"], "classic", "reads come from the last good copy");
++            assert_eq!(read["defaultAgent"], "codex");
++            assert!(read.get("zoom").is_none(), "the backup predates the last save");
++            assert_eq!(fs::read(dir.join("settings.json")).unwrap(), planted, "a read changes nothing on disk");
++            // A save lays the change over the good copy; the corrupt bytes are set aside, the backup kept.
++            s.patch_settings(&serde_json::Map::from_iter([("uiLook".into(), serde_json::json!("new"))]), &[]).unwrap();
++            let now = s.try_settings().unwrap();
++            assert_eq!((now["theme"].as_str(), now["uiLook"].as_str(), now["defaultAgent"].as_str()), (Some("classic"), Some("new"), Some("codex")));
++            assert_eq!(fs::read(dir.join("settings.json.bak")).unwrap(), bak_bytes, "the last good copy was not replaced");
++            let aside: Vec<_> = fs::read_dir(&dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("settings.json.corrupt-")).collect();
++            assert!(aside.iter().any(|e| fs::read(e.path()).unwrap() == planted), "the corrupt bytes are kept aside, not deleted");
++            for e in aside {
++                fs::remove_file(e.path()).unwrap();
++            }
++            // The next save, built on a file that reads, moves the backup on as usual.
++            s.patch_settings(&serde_json::Map::from_iter([("zoom".into(), serde_json::json!(2))]), &[]).unwrap();
+             let bak: serde_json::Value = serde_json::from_slice(&fs::read(dir.join("settings.json.bak")).unwrap()).unwrap();
+-            assert_eq!(bak["theme"], "classic", "the last good copy is untouched");
++            assert_eq!(bak["uiLook"], "new");
++            // Back to the starting point for the next planted file.
++            fs::write(dir.join("settings.json"), &good).unwrap();
++            fs::write(dir.join("settings.json.bak"), &bak_bytes).unwrap();
+         }
++        // A quit mid-write leaves settings.json.tmp behind: the main file is still the good one and
++        // the next save replaces the leftover.
++        fs::write(dir.join("settings.json.tmp"), b"{ \"theme\": \"half").unwrap();
++        assert_eq!(s.try_settings().unwrap()["zoom"], 1.5);
++        s.save_settings(&serde_json::json!({ "theme": "classic", "zoom": 3 })).unwrap();
++        assert!(!dir.join("settings.json.tmp").exists());
++        assert_eq!(s.try_settings().unwrap()["zoom"], 3);
++        drop(s);
++        fs::remove_dir_all(&dir).unwrap();
++    }
++
++    /// T-075 (APP-048): everything saved as the user goes (settings, the layout inside them, and the
++    /// key/value rows the projects and worktrees live in) reads back the same after a reopen.
++    #[test]
++    fn t075_a_settings_layout_and_kv_rows_round_trip_through_a_reopen() {
++        let dir = temp_dir("t075-trip");
++        let layout = serde_json::json!({ "panes": [{ "key": 1, "cwd": "C:\\w\\a", "branch": null, "agent": "shell", "program": null, "args": [] }, { "key": 2, "cwd": "C:\\w\\a", "branch": null, "agent": "shell", "program": null, "args": [], "kind": "editor", "path": "C:\\w\\a\\README.md" }], "activeTab": { "1": 2 }, "focused": 2, "activeDir": "C:\\w\\a", "stacked": {} });
++        {
++            let s = Store::open(&dir).unwrap();
++            s.save_settings(&serde_json::json!({ "theme": "classic", "savedLayout": layout })).unwrap();
++            s.set_all(&[("projects", "[{\"path\":\"C:\\\\w\\\\a\"}]"), ("worktrees", "[\"C:\\\\w\\\\a\"]")]).unwrap();
++        }
++        let s = Store::open(&dir).unwrap();
++        let settings = s.try_settings().unwrap();
++        assert_eq!(settings["theme"], "classic");
++        assert_eq!(settings["savedLayout"], layout);
++        assert_eq!(s.get("projects").unwrap().as_deref(), Some("[{\"path\":\"C:\\\\w\\\\a\"}]"));
++        assert_eq!(s.get("worktrees").unwrap().as_deref(), Some("[\"C:\\\\w\\\\a\"]"));
+         drop(s);
+         fs::remove_dir_all(&dir).unwrap();
+     }

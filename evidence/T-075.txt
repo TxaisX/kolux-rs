@@ -1,0 +1,49 @@
+T-075 · APP-048 saved as they go and survives quits/updates · APP-050 final save without freezing · APP-052 terminals survive restarts and a replaced terminal service
+lane/core, BEFORE 2e428da5 (= merge of main b603fb22 into lane/core), 2026-10-19, Routing v3 (build first, fix later).
+No app launched (absolute). Logs: G:\Temp\core-v3-logs\. Scratch env: G:\Temp\core-v3\ (CLAUDE_CONFIG_DIR, CODEX_HOME, HOME, USERPROFILE overridden).
+
+== Existing code reused (found by grep before writing anything; nothing of it rebuilt) ==
+- src-tauri/src/state.rs save_settings (T-441/T-441-b): settings.json written to settings.json.tmp, synced, renamed into place; the bytes
+  just read become settings.json.bak; a save after a failed read is refused (fail closed). SQLite kv rows (projects, worktrees,
+  activity, grants) are atomic by the database itself (WAL).
+- PROJ-067 saved layout (src/terminal/layout.ts layoutOf / restoreLayout / stillThere, read back in src/main.tsx): panes per worktree,
+  active tab per cell, focus, active workspace, stacking; editor / browser / diff / changes tabs come back on the same path in the same
+  worktree = the T-093-a piece ("keep each worktree's open editor tabs"), already built and covered by layout.test.ts lines 13-19 and
+  35-47 (editor tab with path kept, editor tab without a path dropped). T-154-c keeps the picked-file grants so a restored tab opens.
+- TERM-106 (terminal.rs History): each pane's output in <app data>/history/<key>.log, append-only, compacted through tmp + rename,
+  replayed by TerminalPane when a pane comes back with `restored`.
+- secrets::within (ACCT-025): one quit step on its own thread with a time limit. activity::save holds its lock through the write so a
+  batched save in flight finishes before the one at quit.
+- settings/general.ts lastWriter (VIEW-005): the debounce-with-flush shape; the screen in front already flushes in onCloseRequested.
+
+== Slice a · APP-048 ==
+What was missing and is now built:
+1. A corrupt or half-written settings.json falls back to the last good copy instead of defaults (state.rs, PATCH
+   evidence/core-T-075-state.rs.patch because state.rs is a hard-stop shared file): reads give settings.json.bak's settings; a save lays
+   the change over them, moves the corrupt bytes to settings.json.corrupt-<secs> (kept, never deleted) and writes the new file through
+   tmp + rename; the .bak is not replaced until the main file reads again. With no readable backup either, T-441 behaviour is unchanged
+   (reads as defaults, every save refused, nothing on disk touched). The T-441 test was re-pointed at that both-bad path.
+   Tests (inside the patch, run in the lane with the patch applied, G:\Temp\core-v3-logs\a-cargo-test-state.log):
+     t075_a_corrupt_or_half_written_settings_fall_back_to_the_last_good_copy_without_wiping_it: planted = the first half of the good
+       file, four NUL bytes, an empty file, a JSON array; plus a leftover settings.json.tmp from a quit mid-write (the good file is
+       what loads; the next save replaces the leftover).
+     t075_a_settings_layout_and_kv_rows_round_trip_through_a_reopen: theme + savedLayout (a shell tab and an editor tab of one
+       worktree) in settings.json, projects + worktrees kv rows, read back equal after Store::open again.
+     RED FIRST: against the unpatched state.rs the fallback test fails at its first assertion (reads give {} there; the old
+       t441_a test asserted exactly that, `assert_eq!(s.settings(), serde_json::json!({}))`).
+     Result: test result: ok. 7 passed; 0 failed (state::).
+2. Settings writes off the window thread: settings_patch is #[tauri::command(async)] (lib.rs, PATCH evidence/core-T-075-lib.rs.patch);
+   the write (two fsyncs) runs on a runtime worker, so typing never waits on the profile drive. clippy -D warnings clean with the
+   patch applied (a-clippy-patched.log: Finished dev profile, 30.92s).
+3. Debounced layout writes with a flush at quit: src/terminal/layoutSave.ts layoutWriter (400 ms quiet time, one write of the newest
+   layout, equal layouts not written again, flush() writes what is pending at once). App.tsx uses it in the PROJ-067 effect and
+   flushes it in onCloseRequested beside screenWriter (PATCH evidence/core-T-075-App.tsx.patch). tsc clean with the patch applied.
+   Tests: src/terminal/layoutSave.test.ts (4): burst -> one write of the newest after the quiet time; flush writes pending at once and
+   clears the timer, no-op when nothing pending; an equal layout is not written twice; the worktree's editor tab is in what is
+   written (T-093-a). Result: Test Files 1 passed, Tests 4 passed (a-vitest-layoutSave.log).
+Gates, slice a (lane tree, patches exported and reverted): cargo unchanged in the lane (no Rust change left in the tree after the
+   revert; the Rust gates above ran with the patches applied), pnpm exec tsc --noEmit clean (a-tsc.log, 0 lines),
+   vitest layoutSave 4/4.
+Decision for the coordinator (contradicts nothing in a card; narrows T-441's "never overwritten"): the corrupt file is MOVED ASIDE
+   (settings.json.corrupt-<secs>) when a good backup exists, so the user keeps working on the last good copy; it is still never
+   deleted. DECISIONS.md amendment is the resolver's (shared file).

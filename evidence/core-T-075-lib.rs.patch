@@ -1,0 +1,16 @@
+# T-075 (lane/core): settings_patch runs off the window thread (slice a). Apply: git apply evidence/core-T-075-lib.rs.patch. clippy -D warnings clean with it applied.
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index a7788cb2..66eaff34 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -101,7 +101,9 @@ fn get_settings(store: tauri::State<'_, Mutex<Store>>) -> Result<serde_json::Val
+ 
+ /// Writes only the settings the window changed (`set`, and `remove` for ones it cleared) over what
+ /// is on disk, so a key Kolux itself wrote meanwhile (a printed pull request link) is kept.
+-#[tauri::command]
++/// T-075 (APP-048): `async`, so the synced write (two files, fsync each) runs off the window's
++/// thread; typing never waits on the profile drive.
++#[tauri::command(async)]
+ fn settings_patch(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, set: serde_json::Map<String, serde_json::Value>, remove: Vec<String>) -> Result<(), String> {
+     write_settings(&app, &store, |old| state::patched(old, &set, &remove))
+ }
