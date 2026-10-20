@@ -6,14 +6,15 @@
 // (the git status watcher, scm/watch.ts) while the tab is in front, or when it comes to the front
 // after a move, so a change made in a terminal, or a stage made elsewhere, shows without
 // reopening. A markdown file's diff is source text, never the rich view. GIT-040: a review note
-// hangs under a line of the new side, in both layouts; the plus in the note gutter or the Add
+// hangs under a line of the new side, in both layouts, and in the side-by-side layout also under a
+// line of the old (left) side; the plus in the note gutter or the Add
 // Review Note command's chord (Mod+Shift+A unless the user rebinds it) on a selection opens the
 // note popover.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
 import { Decoration, EditorView, GutterMarker, WidgetType, gutter, type DecorationSet } from "@codemirror/view";
-import { ChangeSet, Compartment, EditorState, StateEffect, StateField, type Extension } from "@codemirror/state";
+import { ChangeSet, Compartment, EditorState, StateEffect, Text, StateField, type Extension } from "@codemirror/state";
 import { syntaxHighlighting } from "@codemirror/language";
 import { languageFor } from "./languages";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
@@ -21,7 +22,8 @@ import { diff, getChunks, getOriginalDoc, goToNextChunk, goToPreviousChunk, Merg
 import { ChevronDown, Close, Dots, FileCode, TRASH_PATH } from "../chrome/icons";
 import { attach, baseName, detach, isDirty, relay, replaceAll, subscribe, textOf } from "./buffers";
 import { editors, look, saveFile, StaleNotice } from "./EditorPane";
-import { editedText, type LineNote } from "./diffNotes";
+import { editedText, notesOn, sideOf, where, type LineNote, type Side } from "./diffNotes";
+import { oldSideDoc, withOldSideNote } from "./oldSide";
 import { noteCommand } from "./noteCommands";
 import { useKeymap } from "../keys/KeymapContext";
 import { watchStatus } from "../scm/watch";
@@ -37,9 +39,9 @@ export const withoutWhitespace = (a: string, b: string) => diff(a, b).filter((c)
 
 // GIT-040: the note cards are block widgets under their line, so their height is part of the
 // document's layout and the lines below never jump when a card draws.
-type NoteActions = { add: (line: number, end: number, at: { x: number; y: number }) => void; edit: (n: LineNote, at: { x: number; y: number }) => void; remove: (n: LineNote) => void };
-const setNotes = StateEffect.define<LineNote[]>();
-const noteSpan = (n: LineNote) => (n.end && n.end !== n.line ? `lines ${n.line}-${n.end}` : `line ${n.line}`);
+export type NoteActions = { add: (line: number, end: number, at: { x: number; y: number }, side?: Side) => void; edit: (n: LineNote, at: { x: number; y: number }) => void; remove: (n: LineNote) => void };
+export const setNotes = StateEffect.define<LineNote[]>();
+const noteSpan = where;
 class NoteCard extends WidgetType {
   constructor(
     readonly note: LineNote,
@@ -48,7 +50,7 @@ class NoteCard extends WidgetType {
     super();
   }
   eq(o: NoteCard) {
-    return o.note.id === this.note.id && o.note.text === this.note.text && o.note.sent === this.note.sent && o.note.line === this.note.line;
+    return o.note.id === this.note.id && o.note.text === this.note.text && o.note.sent === this.note.sent && o.note.line === this.note.line && o.note.side === this.note.side;
   }
   get estimatedHeight() {
     return 56;
@@ -75,7 +77,7 @@ class NoteCard extends WidgetType {
     return card;
   }
 }
-const noteField = (act: NoteActions) =>
+export const noteField = (act: NoteActions, side: Side) =>
   // A note belongs to a line number, so the cards are laid out again from the notes whenever the
   // text changes (a new read of the file replaces it whole).
   StateField.define<{ notes: LineNote[]; deco: DecorationSet }>({
@@ -83,10 +85,11 @@ const noteField = (act: NoteActions) =>
     update(was, tr) {
       const set = tr.effects.find((e) => e.is(setNotes));
       if (!set && !tr.docChanged) return was;
-      const notes = set ? (set.value as LineNote[]) : was.notes;
+      const notes = set ? notesOn(set.value as LineNote[], side) : was.notes;
       const doc = tr.state.doc;
       const at = (n: LineNote) => Math.min(n.end ?? n.line, doc.lines);
-      const ranges = notes.filter((n) => n.line >= 1 && n.line <= doc.lines).map((n) => Decoration.widget({ widget: new NoteCard(n, act), block: true, side: 1 }).range(doc.line(at(n)).to));
+      // An added file has nothing on its old side to hang a card on.
+      const ranges = (side === "old" && doc.length === 0 ? [] : notes).filter((n) => n.line >= 1 && n.line <= doc.lines).map((n) => Decoration.widget({ widget: new NoteCard(n, act), block: true, side: 1 }).range(doc.line(at(n)).to));
       return { notes, deco: Decoration.set(ranges, true) };
     },
     provide: (f) => EditorView.decorations.from(f, (v) => v.deco),
@@ -98,17 +101,17 @@ class Plus extends GutterMarker {
 }
 const plus = new Plus();
 /** The popover for the lines a view has selected, under the last of them. */
-const noteAtSelection = (view: EditorView, act: NoteActions) => {
+const noteAtSelection = (view: EditorView, act: NoteActions, side: Side = "new") => {
   const sel = view.state.selection.main;
   const doc = view.state.doc;
   const end = doc.lineAt(sel.to).number;
   const c = view.coordsAtPos(doc.line(end).to);
-  act.add(doc.lineAt(sel.from).number, end, { x: c?.left ?? 200, y: c?.bottom ?? 200 });
+  act.add(doc.lineAt(sel.from).number, end, { x: c?.left ?? 200, y: c?.bottom ?? 200 }, side);
 };
 /** The note gutter and the cards, for the new side of a diff. The Add Review Note chord is read
  * from the user's keymap by the pane (a rebinding is the one that works). */
-const noteTools = (act: NoteActions): Extension => [
-  noteField(act),
+const noteTools = (act: NoteActions, side: Side = "new"): Extension => [
+  noteField(act, side),
   gutter({
     class: "cm-note-gutter",
     lineMarker: () => plus,
@@ -116,15 +119,15 @@ const noteTools = (act: NoteActions): Extension => [
     domEventHandlers: {
       mousedown: (view, line, ev) => {
         const n = view.state.doc.lineAt(line.from).number;
-        act.add(n, n, { x: (ev as MouseEvent).clientX, y: (ev as MouseEvent).clientY });
+        act.add(n, n, { x: (ev as MouseEvent).clientX, y: (ev as MouseEvent).clientY }, side);
         return true;
       },
     },
   }),
 ];
-type Pop = { line: number; end: number; note?: LineNote; text: string; x: number; y: number; refused?: boolean };
+type Pop = { line: number; end: number; side?: Side; note?: LineNote; text: string; x: number; y: number; refused?: boolean };
 
-type Props = { id: number; path: string; staged: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; notes?: LineNote[]; onSaveNote?: (n: LineNote) => void; onDeleteNote?: (n: LineNote) => void; jump?: { line: number; at: number } };
+type Props = { id: number; path: string; staged: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; notes?: LineNote[]; onSaveNote?: (n: LineNote) => void; onDeleteNote?: (n: LineNote) => void; jump?: { line: number; at: number; side?: "old" } };
 
 export default function DiffPane({ id, path, staged, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, notes = [], onSaveNote, onDeleteNote, jump }: Props) {
   const host = useRef<HTMLDivElement>(null);
@@ -150,8 +153,14 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
   const noteRef = useRef({ notes, onDeleteNote, canNote: !!onSaveNote });
   noteRef.current = { notes, onDeleteNote, canNote: !!onSaveNote };
   const act = useRef<NoteActions>({
-    add: (line, end, at) => noteRef.current.canNote && setPop({ line, end, text: "", ...at }),
-    edit: (note, at) => setPop({ line: note.line, end: note.end ?? note.line, note, text: note.text, ...at }),
+    add: (line, end, at, side = "new") => {
+      if (!noteRef.current.canNote) return;
+      // The old side is the left view's text; a line is only offered where that text has one.
+      const old = side === "old" ? oldSideDoc(views.current?.a?.state.doc ?? Text.empty, line, end) : null;
+      if (side === "old" && !old) return;
+      setPop({ line: old?.line ?? line, end: old?.end ?? end, side, text: "", ...at });
+    },
+    edit: (note, at) => setPop({ line: note.line, end: note.end ?? note.line, side: sideOf(note), note, text: note.text, ...at }),
     remove: (note) => noteRef.current.onDeleteNote?.(note),
   });
   const notesKey = JSON.stringify(notes);
@@ -162,8 +171,10 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
     if (noteCommand(keys, e.nativeEvent) !== "add") return;
     e.preventDefault();
     e.stopPropagation();
-    const b = views.current?.b;
-    if (!e.repeat && b) noteAtSelection(b, act.current);
+    const v = views.current;
+    const old = !!v?.a?.hasFocus;
+    const view = old ? v?.a : v?.b;
+    if (!e.repeat && view) noteAtSelection(view, act.current, old ? "old" : "new");
   };
 
   // The sides, now and whenever git state moves; a move while the tab is hidden is read on its return.
@@ -207,7 +218,7 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
       ...common,
       EditorState.lineSeparator.of(modified.includes("\r\n") ? "\r\n" : "\n"),
       staged ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [],
-      noteTools(act.current),
+      noteTools(act.current, "new"),
       EditorView.updateListener.of((u) => {
         count(u.state);
         if (!staged) u.transactions.forEach((tr) => relay(path, u.view, tr));
@@ -218,13 +229,14 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
     let b: EditorView;
     let merge: MergeView | null = null;
     if (split) {
-      merge = new MergeView({ a: { doc: s.original, extensions: [...common, EditorState.readOnly.of(true), EditorView.editable.of(false)] }, b: { doc: modified, extensions: right }, parent: host.current, gutter: true, diffConfig });
+      merge = new MergeView({ a: { doc: s.original, extensions: [...common, EditorState.readOnly.of(true), EditorView.editable.of(false), noteTools(act.current, "old")] }, b: { doc: modified, extensions: right }, parent: host.current, gutter: true, diffConfig });
       a = merge.a;
       b = merge.b;
     } else {
       b = new EditorView({ doc: modified, parent: host.current, extensions: [...right, unifiedMergeView({ original: s.original, mergeControls: false, gutter: true, diffConfig })] });
     }
     views.current = { a, b };
+    a?.dispatch({ effects: setNotes.of(noteRef.current.notes) });
     b.dispatch({ effects: setNotes.of(noteRef.current.notes) });
     count(b.state);
     if (!staged) attach(path, b, s.modified);
@@ -279,18 +291,26 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
   }, [id, path, staged]);
 
   // GIT-040 / GIT-041: the cards follow the notes; opening a note from Source Control scrolls to it.
-  useEffect(() => views.current?.b.dispatch({ effects: setNotes.of(noteRef.current.notes) }), [notesKey]);
   useEffect(() => {
-    const b = views.current?.b;
-    if (!b || !jump) return;
-    const at = b.state.doc.line(Math.min(Math.max(jump.line, 1), b.state.doc.lines)).from;
-    b.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: "center" }) });
+    views.current?.a?.dispatch({ effects: setNotes.of(noteRef.current.notes) });
+    views.current?.b.dispatch({ effects: setNotes.of(noteRef.current.notes) });
+  }, [notesKey]);
+  // A note on the old side only shows in the side-by-side layout, so opening one switches to it.
+  useEffect(() => {
+    if (jump?.side === "old") setSplit(true);
+  }, [jump?.at]);
+  useEffect(() => {
+    const v = views.current;
+    const target = jump?.side === "old" ? v?.a : v?.b;
+    if (!target || !jump) return;
+    const at = target.state.doc.line(Math.min(Math.max(jump.line, 1), target.state.doc.lines)).from;
+    target.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: "center" }) });
   }, [jump?.at, ready, split]);
   const savePop = () => {
     if (!pop) return;
     const text = editedText(pop.text);
     if (text === null) return setPop({ ...pop, refused: true });
-    onSaveNote?.(pop.note ? { ...pop.note, text, sent: undefined } : { id: crypto.randomUUID(), path, line: pop.line, ...(pop.end !== pop.line ? { end: pop.end } : {}), text, staged });
+    onSaveNote?.(pop.note ? { ...pop.note, text, sent: undefined } : withOldSideNote({ id: crypto.randomUUID(), path, line: pop.line, ...(pop.end !== pop.line ? { end: pop.end } : {}), text, staged }, pop.side ?? "new"));
     setPop(null);
   };
 
@@ -377,7 +397,7 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
         <>
           <div className="menu-backdrop" onMouseDown={() => setPop(null)} />
           <div className="diff-note-pop" role="dialog" aria-label={pop.note ? "Edit review note" : "Add review note"} style={{ left: Math.max(8, Math.min(pop.x, window.innerWidth - 336)), top: Math.max(8, Math.min(pop.y + 12, window.innerHeight - 190)) }}>
-            <div className="what">{`${pop.note ? "Edit the note on" : "Note on"} ${pop.end !== pop.line ? `lines ${pop.line}-${pop.end}` : `line ${pop.line}`}`}</div>
+            <div className="what">{`${pop.note ? "Edit the note on" : "Note on"} ${where({ id: "", path: "", text: "", staged: false, line: pop.line, end: pop.end, side: pop.side === "old" ? "old" : undefined })}`}</div>
             <textarea
               autoFocus
               aria-label="review note"

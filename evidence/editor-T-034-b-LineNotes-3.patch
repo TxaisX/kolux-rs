@@ -1,0 +1,20 @@
+--- a/src/scm/LineNotes.tsx
++++ b/src/scm/LineNotes.tsx
+@@ -3,7 +3,7 @@
+ // into the workspace's agent as one message and marks them sent.
+ import { useState } from "react";
+ import { Close, Trash } from "../chrome/icons";
+-import { noteBlocks, notesByFile, shortPath, type LineNote } from "../editor/diffNotes";
++import { lineLabel, noteBlocks, notesByFile, shortPath, type LineNote } from "../editor/diffNotes";
+ import { emptyNotesHint } from "../editor/fileNotes";
+ import { useLabel } from "../keys/KeymapContext";
+ 
+@@ -81,7 +81,7 @@
+               {ns.map((n) => (
+                 <div key={n.id} className="scm-note" data-note={n.id}>
+                   <button className="scm-note-open" title={repoless ? "Open the file at this note" : "Open the diff at this note"} onClick={() => onOpen(n)}>
+-                    <span className="line">{n.end && n.end !== n.line ? `${n.line}-${n.end}` : n.line}</span>
++                    <span className="line">{lineLabel(n)}</span>
+                     <span className="text">{n.text}</span>
+                     {n.sent && <span className="sent">sent</span>}
+                   </button>
