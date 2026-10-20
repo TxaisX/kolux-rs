@@ -13,6 +13,7 @@ use super::{back_up, backup_of, drop_created, fenced, kept, names_mine, read_opt
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 pub const GEMINI_SCRIPT: &str = "gemini.cmd";
 pub const ANTIGRAVITY_SCRIPT: &str = "antigravity.cmd";
@@ -52,26 +53,42 @@ pub fn agent_of(path: &str) -> Option<&'static str> {
 /// after a fully idle Stop, Amp threads after an agent end. A late event naming one is discarded
 /// until a fresh invocation or agent start names it again. The ids are the vendor's own and unique
 /// per transcript, so one pane's ended thread never silences another's; the list is bounded, the
-/// oldest end forgotten first.
+/// oldest end forgotten first. hooks FIX-2 (stand-in review hooks-146904a2 FIX-SOON 1): an end is
+/// remembered for ENDED_FOR only. A late event arrives close to the end by definition, so after
+/// that a tool event counts as working again even when the new turn's PreInvocation or agent.start
+/// was lost (it came without its id, or fell into the holding file while the listener was busy);
+/// before, one lost event silenced the whole turn.
 #[derive(Default)]
-pub struct Ended(std::collections::VecDeque<(&'static str, String)>);
+pub struct Ended(std::collections::VecDeque<(&'static str, String, Instant)>);
 const ENDED_CAP: usize = 256;
+pub const ENDED_FOR: Duration = Duration::from_secs(60);
 
 impl Ended {
     fn is_ended(&self, agent: &str, id: &str) -> bool {
-        self.0.iter().any(|(a, i)| *a == agent && i == id)
+        self.is_ended_at(agent, id, Instant::now())
+    }
+
+    /// `is_ended` as of `now`: an end older than ENDED_FOR no longer counts.
+    fn is_ended_at(&self, agent: &str, id: &str, now: Instant) -> bool {
+        self.0.iter().any(|(a, i, at)| *a == agent && i == id && now.duration_since(*at) < ENDED_FOR)
     }
 
     fn ended(&mut self, agent: &'static str, id: &str) {
+        self.ended_at(agent, id, Instant::now())
+    }
+
+    fn ended_at(&mut self, agent: &'static str, id: &str, now: Instant) {
         self.fresh(agent, id);
-        self.0.push_back((agent, id.to_string()));
+        // Ends past their minute are dropped on the way, so the list holds only ends that still count.
+        self.0.retain(|(_, _, at)| now.duration_since(*at) < ENDED_FOR);
+        self.0.push_back((agent, id.to_string(), now));
         while self.0.len() > ENDED_CAP {
             self.0.pop_front();
         }
     }
 
     fn fresh(&mut self, agent: &str, id: &str) {
-        self.0.retain(|(a, i)| !(*a == agent && i == id));
+        self.0.retain(|(a, i, _)| !(*a == agent && i == id));
     }
 }
 
@@ -98,6 +115,11 @@ pub fn normalize(path: &str, event: &Value) -> Option<Value> {
 
 /// `normalize` with the ended-turn memory given (STAT-062).
 pub fn normalize_with(ended: &mut Ended, path: &str, event: &Value) -> Option<Value> {
+    normalize_at(ended, path, event, Instant::now())
+}
+
+/// `normalize_with` as of `now` (hooks FIX-2: the memory's time limit under an injected clock).
+pub fn normalize_at(ended: &mut Ended, path: &str, event: &Value, now: Instant) -> Option<Value> {
     let path = format!("/{}", path.trim_start_matches('/'));
     let str_of = |k: &str| event.get(k).and_then(Value::as_str).filter(|s| !s.is_empty());
     let (name, session, mut out, memory) = if path == "/gemini" {
@@ -139,8 +161,8 @@ pub fn normalize_with(ended: &mut Ended, path: &str, event: &Value) -> Option<Va
     if let (Some((agent, turn)), Some(id)) = (memory, session) {
         match turn {
             Turn::Fresh => ended.fresh(agent, id),
-            Turn::End | Turn::Within if ended.is_ended(agent, id) => return None,
-            Turn::End => ended.ended(agent, id),
+            Turn::End | Turn::Within if ended.is_ended_at(agent, id, now) => return None,
+            Turn::End => ended.ended_at(agent, id, now),
             Turn::Within => {}
         }
     }
@@ -416,7 +438,7 @@ fn amp_mine(text: &str) -> bool {
 
 pub fn remove_amp(file: &Path) -> Result<bool, String> {
     match read_opt(file)? {
-        Some(t) if amp_mine(&t) =>fs::remove_file(file).map(|_| true).map_err(|e| format!("{}: {e}", file.display())),
+        Some(t) if amp_mine(&t) => fs::remove_file(file).map(|_| true).map_err(|e| format!("{}: {e}", file.display())),
         _ => Ok(false),
     }
 }
@@ -580,6 +602,31 @@ mod tests {
         assert!(!m.is_ended("amp", "x1"));
         assert_eq!(normalize_with(&mut m, "/amp", &json!({"event":"tool.call","thread":"x2","tool":"Bash"})), None);
         assert!(normalize_with(&mut m, "/amp", &json!({"event":"tool.call","thread":"x1","tool":"Bash"})).is_some());
+    }
+
+    /// hooks FIX-2 (stand-in review hooks-146904a2 FIX-SOON 1): an end is remembered for ENDED_FOR
+    /// (60 s). A tool event 61 s after the end counts as working again, with no fresh start in
+    /// between, so a lost PreInvocation or agent.start costs at most a minute, not the whole turn.
+    /// The clock is injected: no sleeps.
+    #[test]
+    fn fix_2_an_ended_turn_is_forgotten_after_a_minute() {
+        let t0 = Instant::now();
+        let mut m = Ended::default();
+        let end = json!({"event":"agent.end","thread":"t-fix2","status":"done"});
+        let tool = json!({"event":"tool.call","thread":"t-fix2","tool":"Bash"});
+        assert_eq!(normalize_at(&mut m, "/amp", &end, t0).map(|e| e["hook_event_name"].clone()), Some(json!("Stop")));
+        assert_eq!(normalize_at(&mut m, "/amp", &tool, t0 + Duration::from_secs(59)), None, "within the minute a late tool event is still discarded");
+        assert_eq!(normalize_at(&mut m, "/amp", &end, t0 + Duration::from_secs(59)), None, "and so is a repeated end");
+        let late = normalize_at(&mut m, "/amp", &tool, t0 + Duration::from_secs(61));
+        assert_eq!(late.as_ref().map(|e| e["hook_event_name"].clone()), Some(json!("PreToolUse")), "61 s after the end a tool event counts as working: {late:?}");
+        // The same for Antigravity, through the memory directly.
+        m.ended_at("antigravity", "c-fix2", t0);
+        assert!(m.is_ended_at("antigravity", "c-fix2", t0 + ENDED_FOR - Duration::from_millis(1)));
+        assert!(!m.is_ended_at("antigravity", "c-fix2", t0 + ENDED_FOR), "forgotten once ENDED_FOR has passed");
+        assert!(m.is_ended_at("antigravity", "c-fix2", t0), "a clock that has not moved still remembers it");
+        // An end after the minute is a new end: remembered again from then on.
+        assert_eq!(normalize_at(&mut m, "/amp", &end, t0 + Duration::from_secs(62)).map(|e| e["hook_event_name"].clone()), Some(json!("Stop")));
+        assert_eq!(normalize_at(&mut m, "/amp", &tool, t0 + Duration::from_secs(63)), None);
     }
 
     #[test]
