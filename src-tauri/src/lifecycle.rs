@@ -14,10 +14,6 @@
 //! steps as the quit's final save, and a step that failed or timed out cancels the restart.
 //! APP-020: a pane's search path takes in entries the stored user and system Path gained since the
 //! app started, after what the process already had, nothing dropped or repeated.
-//!
-//! Until evidence/shell-T-182-lib.rs.patch lands lib.rs only declares this module; the patch wires
-//! it in and removes the next line.
-#![allow(dead_code)]
 
 use serde_json::{json, Value};
 use std::ffi::{OsStr, OsString};

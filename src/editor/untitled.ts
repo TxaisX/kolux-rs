@@ -15,6 +15,10 @@ export function isUntitled(path: string, root: string | null): boolean {
   return lower(path.slice(0, path.length - leaf(path).length)) === lower(root);
 }
 
+/** EDIT-054: whether a save must ask for the name first: an untitled note whose file is still the empty one Kolux made
+ * (once it is saved with any text, even under the suggested name, it saves in place like any file). */
+export const needsName = (path: string, root: string | null, disk: string | null): boolean => disk === "" && isUntitled(path, root);
+
 /** The name the first-save prompt suggests: the current file name. */
 export const suggestedName = (path: string) => leaf(path);
 

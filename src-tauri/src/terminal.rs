@@ -713,7 +713,9 @@ impl Terminals {
             if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(std::path::Path::to_path_buf)) {
                 let bin = dir.join("bin");
                 let dir = if bin.join(if cfg!(windows) { "kolux.exe" } else { "kolux" }).is_file() { bin } else { dir };
-                let path = cli_first(&dir, command.get_env("PATH").map(std::ffi::OsStr::to_os_string));
+                // T-182 (APP-020): a tool installed after the app started is on the stored Path, not
+                // the process's; the pane gets both, the process's entries first.
+                let path = cli_first(&dir, Some(crate::lifecycle::fresh_path(command.get_env("PATH").map(std::ffi::OsStr::to_os_string))));
                 command.env("PATH", path);
             }
             if let Ok(dir) = tauri::Manager::path(&out_app).app_data_dir() {
