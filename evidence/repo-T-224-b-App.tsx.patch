@@ -1,16 +1,16 @@
 diff --git a/src/App.tsx b/src/App.tsx
-index c21ca38a..8ec46d89 100644
+index 17ffcdf6..42095a48 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
-@@ -52,6 +52,7 @@ import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
- import BrowserPane, { OPEN_IN_BROWSER, openInBrowser } from "./browser/BrowserPane";
+@@ -55,6 +55,7 @@ import PreviewButton from "./browser/PreviewButton";
  import { chordPlan } from "./browser/chord";
+ import { livePages, pageRows, rememberClosed, takeClosed } from "./browser/pages";
  import { writerOf } from "./scm/generate";
 +import { usePrRows } from "./scm/usePrRows";
  import EditorPane, { editors } from "./editor/EditorPane";
  import FloatingLayer, { floatingKeys } from "./floating/FloatingLayer";
  import { baseName, keyOf } from "./editor/buffers";
-@@ -307,6 +308,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -318,6 +319,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
    const { projects, setProjects, owner, setOwner, names, setNames, refresh, setRefresh, deleteRequest, setDeleteRequest, recentDirs, activeRef, createRequest, setCreateRequest, standIns, setStandIns, createName, setCreateName, hist, setHist } = useWorkspaces(activeDir);
    const [stacked, setStacked] = useState<Record<string, boolean>>(layout?.stacked ?? {}); // TERM-006: a single pane split down makes a stacked pair
    const { palette, setPalette, notice, setNotice, toast, setToast } = useChrome();
@@ -18,15 +18,15 @@ index c21ca38a..8ec46d89 100644
    const switchAccount = useMemo(() => pickWithNotice(accountSwitcher.pick, setNotice), [accountSwitcher.pick, setNotice]); // T-548 FIX-1 (memoised at merge, FIX-3 note): a switch from a key or the palette that fails says why in the notice bar
    const [weights, setWeights] = useState<Record<string, number[]>>({}); // TERM-010: dragged column / row weights, per folder and pane count
    const dragRef = useRef<{ gap: Gap; at: number; start: number[]; px: number } | null>(null);
-@@ -1332,6 +1334,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -1354,6 +1356,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
    };
    // PROJ-057 / VIEW-037: the palette's rows besides worktrees and projects.
    const paletteItems = (): PaletteItem[] => [
 +    ...prRows,
      ...panes
-       .filter((p) => !p.seats)
+       .filter((p) => !p.seats && p.kind !== "browser")
        .map((p) => ({
-@@ -2188,7 +2191,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+@@ -2239,7 +2242,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
            <WorktreePalette
              projects={projects}
              items={paletteItems()}

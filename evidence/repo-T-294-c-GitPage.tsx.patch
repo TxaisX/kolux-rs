@@ -1,5 +1,5 @@
 diff --git a/src/settings/GitPage.tsx b/src/settings/GitPage.tsx
-index 7320a52e..95ff63fc 100644
+index 47f4c59d..ea1442df 100644
 --- a/src/settings/GitPage.tsx
 +++ b/src/settings/GitPage.tsx
 @@ -10,6 +10,7 @@ import { useSettings } from "./useSettings";
@@ -9,8 +9,8 @@ index 7320a52e..95ff63fc 100644
 +import SetupPolicyRow from "./SetupPolicyRow";
  
  const REFRESH_FIELD = "refreshBaseFirst";
- 
-@@ -140,6 +141,7 @@ export function GitView({ settings, save, draft, setDraft, check, budget = { row
+ /** SET-031 / PROJ-039: branches are renamed after the work; on unless saved as false. */
+@@ -152,6 +153,7 @@ export function GitView({ settings, save, draft, setDraft, check, budget = { row
          </label>
          <p className="conn-detail">With this off, a workspace with nothing uncommitted is deleted at once. One with changes, a lock or another workspace inside it always asks.</p>
        </section>

@@ -1,0 +1,42 @@
+T-313-b evidence, 2026-10-20, lane/repo from 2fa3eb87 (STEP 0 merge of main). STATUS: PARTS DONE, task stays open.
+
+BUILT (unit-tested, gates green with the patches applied, then reverted)
+- GIT-010 fork push flagged: src-tauri/src/pr_checkout.rs push_target() reads branch.<b>.pushRemote, remote.pushDefault,
+  branch.<b>.remote and branch.<b>.merge; a fork is a push remote other than origin whose URL names a different repo.
+  push_args() pushes a renamed fork branch as `git push <remote> HEAD:refs/heads/<remote branch>`. Opening a fork PR never
+  reuses a leftover local ref and sets branch.<b>.pushRemote. scm_push_target command. src/scm/forkPush.ts + SourceControlPanel
+  notice ("Pushes to the fork ... not to origin"). Tests: git010_* (2 Rust), forkPush.test.ts (4).
+- Submodule warning on worktree removal: src-tauri/src/sub_work.rs (git status --porcelain=2 --ignore-submodules=none, so a
+  submodule marked ignore=all still counts); rows annotated "(submodule: state)", refusal adds a sentence naming it.
+  Tests: git013_* (3 Rust, one with a real submodule). projects.rs change is evidence/repo-T-313-b-projects.rs.patch.
+- Editable Open in app list from the file menu: src/scm/openWith.ts, FileOpenWith.tsx (menu items, Edit the app list: up, down,
+  remove, add preset, add custom, using settings/openIn rules), src-tauri/src/scm_open.rs scm_open_with (path fenced inside the
+  worktree, command must be code or a saved app). Tests: git014_* (2 Rust), openWith.test.ts (3).
+- GIT-034 stacked pull requests: src/scm/stack.ts (chainThrough, planStackedCreate, withStackNote, mergeThrough; 10 tests),
+  pr_review.rs scm_stack_prs (git034_* 1 Rust test), StackMap.tsx mounted in ChecksPanel (collapsible map, open next PR,
+  merge through #n after a confirmation naming the PRs, refused when a lower PR cannot merge).
+- GIT-019 per action and per repository: src/scm/recipes.ts (recipe rules, variable chips per action, issue variable only in
+  commit and PR, invalid recipe reasons, migration from the old single agent choice, per-repository follow/on/off),
+  src/settings/AiRecipesSection.tsx (switch, four recipe editors, per-repository list), SourceControlPanel generate and
+  Fix with AI controls follow aiShownFor(). Tests: recipes.test.ts (6).
+
+STILL OPEN (ids): GIT-019 running a recipe (generate.ts and Fix with AI do not read scmRecipes yet; command-template expansion
+of {variables} on the Rust side); GIT-034 creating the next stacked PR and recording the note (stack.ts planStackedCreate and
+withStackNote are ready; no gh create/edit command is wired).
+
+PATCHES, apply in order (all LF unified diffs, git apply --ignore-whitespace):
+  repo-T-224-b-ProjectsPanel.tsx, repo-T-224-b-App.tsx (regenerated), repo-T-230-d-lib.rs, repo-T-294-c-GitPage.tsx (regenerated),
+  repo-T-313-b-GitPage.tsx, repo-T-313-b-lib.rs, repo-T-313-b-scm.rs, repo-T-313-b-projects.rs
+
+GATES (logs G:/Temp/repo-v3-logs/t313-*.log, all 8 patches applied, then reverted)
+  cargo build 0 · clippy --all-targets -D warnings 0 · tsc 0
+  cargo test --lib pr_checkout sub_work scm_open pr_review: 30 passed 0 failed
+  cargo test --lib projects:: scm::: 187 passed 0 failed
+  vitest src/scm src/settings: 62 files, 381 tests passed
+
+LIVE PROOF PENDING (batched)
+  1. Fork: open a PR from a fork in a workspace; Source Control shows "Pushes to the fork <name> (remote <r>) ..., not to origin"; push lands on the fork.
+  2. Submodule: put an uncommitted file inside a submodule of a workspace and delete it; the dialog row reads "(submodule: untracked files)" and says work inside it would be lost.
+  3. Right-click a changed file: the saved apps show as "Open in X"; Edit the app list reorders, removes and adds, and the change shows in General settings.
+  4. Checks tab of a PR in a stack: Stack lists the chain; Merge through the top PR asks first and merges lowest first; with the lower PR conflicting it is refused with the reason.
+  5. Settings, Git, Source Control AI actions: switch off hides the generate and Fix with AI buttons; a repository set to off hides them only there.

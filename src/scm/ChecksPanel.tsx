@@ -9,6 +9,7 @@ import { Refresh } from "../chrome/icons";
 import { openInBrowser } from "../browser/BrowserPane";
 import { useSettings } from "../settings/useSettings";
 import CommentsPanel from "./CommentsPanel";
+import StackMap from "./StackMap";
 import ConflictPanel from "./ConflictPanel";
 import GhBanner, { classify } from "../tasks/GhBanner";
 import PrStart from "./PrStart";
@@ -182,6 +183,7 @@ ${reviewHint(inKolux)}`.trim()}
                 </div>
               );
             })()}
+            <StackMap dir={dir} pr={pr} />
             <CommentsPanel dir={dir} url={pr.url} visible={visible} />
           </>
         )}

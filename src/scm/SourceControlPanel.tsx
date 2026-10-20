@@ -19,9 +19,13 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type Re
 import { invoke } from "@tauri-apps/api/core";
 import Ask from "../chrome/Ask";
 import { ChevronDown, Close, FileCode, Funnel, List, Minus, Plus, Refresh, Spark, Stop, Undo } from "../chrome/icons";
+import { useSettings } from "../settings/useSettings";
+import { aiShownFor } from "./recipes";
 import { dismissGenerate, generate, genState, genSubscribe, genVersion, stopGenerate, writerName, DEFAULT_WRITER, type Writer } from "./generate";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
+import FileOpenWith from "./FileOpenWith";
+import { forkNotice, loadPushTarget, type PushTarget } from "./forkPush";
 import { watchStatus } from "./watch";
 import { afterRefresh, commitBox, failureSummary, mainStep, statusGuard } from "./rules";
 import { DIFF_SPLITS, type DiffSplit } from "./split";
@@ -132,7 +136,10 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
   // GIT-017: Claude Code writes the message from what is staged; the run belongs to this worktree.
   useSyncExternalStore(genSubscribe, genVersion);
   const gen = dir === null ? null : genState(dir);
-  const canGenerate = writer.mode === "custom" || (writer.mode === "agent" && agents.some((a) => a.id === writer.agent && a.installed));
+  // GIT-019: the generate and Fix with AI controls follow the global switch and this repository's own mode.
+  const { settings: appSettings } = useSettings();
+  const aiOn = aiShownFor(appSettings, ghRepo ? `${ghRepo.owner}/${ghRepo.name}` : null);
+  const canGenerate = aiOn && (writer.mode === "custom" || (writer.mode === "agent" && agents.some((a) => a.id === writer.agent && a.installed)));
   // GIT-036: Explain changes starts an agent with a prompt about the commit.
   const explain = (c: Commit) => {
     const prompt = explainPrompt(c);
@@ -209,6 +216,17 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
   // VIEW-068: the branch summary is measured while the panel is open, when HEAD moves and at
   // least every 30 s; the last one stays on screen while the next is worked out.
   const [summary, setSummary] = useState<Summary | null>(null);
+  // GIT-010: the fork the branch pushes to, when it is not the project's own repository.
+  const [pushTo, setPushTo] = useState<PushTarget | null>(null);
+  const pushKey = status?.branch ? `${status.branch}|${status.upstream ?? ""}` : "";
+  useEffect(() => {
+    let live = true;
+    setPushTo(null);
+    if (dir !== null && pushKey) void loadPushTarget(dir).then((t) => live && setPushTo(t));
+    return () => {
+      live = false;
+    };
+  }, [dir, pushKey]);
   const [measureTick, setMeasureTick] = useState(0);
   const [baseDraft, setBaseDraft] = useState<string | null>(null);
   useEffect(() => setSummary(null), [dir]);
@@ -976,6 +994,11 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
                 </div>
               </div>
             )}
+            {forkNotice(pushTo) && (
+              <div className="note" role="status" data-fork-push>
+                {forkNotice(pushTo)}
+              </div>
+            )}
             {info && (
               <div className="note ok" role="status">
                 {info}
@@ -1003,7 +1026,7 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
                     ))}
                   </div>
                 )}
-                {failure.fix !== null && !failure.policy && (
+                {aiOn && failure.fix !== null && !failure.policy && (
                   <button className="btn" onClick={() => onFix(failure.fix ?? failure.output)}>
                     Fix with AI
                   </button>
@@ -1192,6 +1215,7 @@ export default function SourceControlPanel({ dir, writer = DEFAULT_WRITER, draft
                       <span className="name">{item.label}</span>
                     </button>
                   ))}
+                  <FileOpenWith dir={dir} path={fileCtx.path} done={() => setFileCtx(null)} onError={(m) => setError(m)} />
                 </div>
               </>
             )}

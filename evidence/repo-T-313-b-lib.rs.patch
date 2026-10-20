@@ -1,0 +1,30 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 890df35c..0824d945 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -64,6 +64,7 @@ mod projects;
+ mod prompt_answer;
+ mod prompt_scan;
+ mod scm;
++mod scm_open;
+ mod pr_review;
+ mod skills;
+ mod pasted_image;
+@@ -80,6 +81,7 @@ mod shell_history;
+ mod skill_delete;
+ mod state;
+ mod status;
++mod sub_work;
+ mod sysmem;
+ mod terminal;
+ #[cfg(test)]
+@@ -572,6 +574,9 @@ pub fn run() {
+             github::pull_requests::pr_react,
+             github::pull_requests::pr_reply,
+             github::pull_requests::pr_merge,
++            pr_checkout::scm_push_target,
++            scm_open::scm_open_with,
++            pr_review::scm_stack_prs,
+             scm::scm_task_labels,
+             scm::scm_task_body,
+             scm::scm_stage,

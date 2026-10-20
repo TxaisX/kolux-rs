@@ -1,0 +1,20 @@
+diff --git a/src/settings/GitPage.tsx b/src/settings/GitPage.tsx
+index ea1442df..74d33d4b 100644
+--- a/src/settings/GitPage.tsx
++++ b/src/settings/GitPage.tsx
+@@ -11,6 +11,7 @@ import { WRITER_INSTRUCTIONS_KEY } from "../scm/generate";
+ import WriterPicker from "../scm/WriterPicker";
+ import { autoBranchOn, autoBranchPatch } from "../scm/autoBranch";
+ import SetupPolicyRow from "./SetupPolicyRow";
++import AiRecipesSection from "./AiRecipesSection";
+ 
+ const REFRESH_FIELD = "refreshBaseFirst";
+ /** SET-031 / PROJ-039: branches are renamed after the work; on unless saved as false. */
+@@ -154,6 +155,7 @@ export function GitView({ settings, save, draft, setDraft, check, budget = { row
+         <p className="conn-detail">With this off, a workspace with nothing uncommitted is deleted at once. One with changes, a lock or another workspace inside it always asks.</p>
+       </section>
+       <SetupPolicyRow settings={settings} save={save} />
++      <AiRecipesSection settings={settings} save={save} />
+     </>
+   );
+ }
