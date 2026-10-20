@@ -173,7 +173,7 @@ export function LanguageView({ value, onPick, os = navigator.languages }: { valu
           ))}
         </select>
       </label>
-      <p className="conn-detail">Dates, times and sorted lists follow the language. Kolux's own words stay in English until its language packs arrive.</p>
+      <p className="conn-detail">Dates, times and sorted lists follow the language. Some of Kolux's own words are machine-translated; any text a language lacks stays in English.</p>
     </section>
   );
 }

@@ -10,6 +10,7 @@ import VendorMark from "../chrome/VendorMark";
 import { actionLabel, keyCard, ownSignInLine, RESUME_FIELD, resumeOn, type KeyAction, type KeyStatus, type OwnSignIn } from "./claudeKey";
 import ClaudeAccounts, { addClaudeAccount } from "./ClaudeAccounts";
 import AgentCredentials from "./AgentCredentials";
+import ProviderUsage from "./ProviderUsage";
 import CodexAccounts from "./CodexAccounts";
 import CodexCard from "./CodexCard";
 import { ConnectGrid, liveCheck, OtherWays, taglineOf } from "./ConnectGrid";
@@ -200,6 +201,9 @@ function PageBody({ page, repo, onSaved }: { page: Page; repo?: Project; onSaved
             </div>
             <div data-section="agent-folders">
               <AgentCredentials />
+            </div>
+            <div data-section="provider-usage">
+              <ProviderUsage />
             </div>
           </div>
         </>

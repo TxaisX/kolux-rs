@@ -42,7 +42,7 @@ export const LAST_SCREEN_FIELD = "lastScreen";
 export function startScreen(s: Record<string, unknown>): Screen {
   const classic = readLook(s) === "classic";
   const last = s[LAST_SCREEN_FIELD];
-  if (last === "terminals" || last === "artifacts" || last === "inbox") return last;
+  if (last === "terminals" || last === "artifacts" || last === "inbox" || last === "skills") return last; // VIEW-011 (T-189-b): the Skills page left open at quit is shown again
   if (last === "agents" || last === "board") return classic ? "terminals" : last;
   return classic ? "terminals" : savedFirst(s);
 }

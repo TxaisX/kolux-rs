@@ -240,6 +240,8 @@ pub fn at_start(store: &Store) {
         Ok(r) => eprintln!("orchestration store upgraded from layout {} to {}: {}", r.from, r.to, r.steps.join(" / ")),
         Err(e) => eprintln!("orchestration store not upgraded: {e}"),
     }
+    // ORCH-038 (T-173-d): workers an earlier Kolux process left live come back cut short.
+    super::restart::at_start(store, super::wall_ms());
 }
 
 #[cfg(test)]
