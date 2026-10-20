@@ -168,17 +168,19 @@ import { hooksOn } from "./onboarding/hooksOn";
 import ToolNotices from "./launch/ToolNotices";
 import { AgentsChat } from "./chat/ChatView";
 import { answeredElsewhere } from "./chat/ask";
+import { fileJump, linksOpenInKolux } from "./chat/chatLinks";
 import { useTeamsHost, withTeams } from "./launch/teams";
 import { answered as cardAnswered, hearStates, hearingNow, holdFor, outcomeNote, pasteToPane, setHooksOn, writeTerminal } from "./chat/send";
 import { copyPrompt, hooksAbsent, kitTickEntry, kitWait, noticeSeen, sendPrompt } from "./chat/kitPrompt";
 import { KitPromptNotices } from "./chat/KitNotice";
+import { editChatBox } from "./chat/menuEdit";
 import PlanSheet from "./terminal/PlanSheet";
 import { draftKey, feedbackMessage, keepDraft, showsReview, startFeedback, stillPending, type PendingSend, type PlanDraft } from "./terminal/planReview";
 
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-export type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; resumed?: boolean; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number; side?: "old" } };
+export type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; resumed?: boolean; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number; col?: number; side?: "old" } };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 /** TERM-058: a terminal tab follows the running program's title (`live`) unless the user named it; a worker's task label (ORCH-066) comes first. */
@@ -477,6 +479,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // APP-009 / T-248-a: the menu mirrors the screen, the look, the chrome switches and the shortcuts;
   // a menu click the page carries out runs the same code as its shortcut.
   useMenuBar(menuBarState(settings, screen, (id) => keymap.bindings.get(id)?.chords, classic), (id) => {
+    // CHAT-017: with the chat's message box on screen, Select All and Paste act on it (menuEdit.ts); anything else falls through.
+    if ((id === "edit.selectAll" || id === "edit.paste") && editChatBox(id === "edit.paste" ? "paste" : "selectAll", document as never, () => navigator.clipboard.readText())) return;
     const flip = menuSettingFlip(settings, id);
     const to = menuScreen(id);
     const el = document.activeElement;
@@ -699,6 +703,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         case "zoom.in":
         case "zoom.out":
         case "zoom.reset":
+          // CHAT-026 (T-334): inside a chat the same chords zoom the chat text; the chat hears them itself.
+          if (document.activeElement?.closest(".chat")) return;
           // BROW-012: a browser tab zooms its own page in its own steps.
           if (kind === "browser") {
             browserAction(focused, hit.id === "zoom.in" ? "zoomIn" : hit.id === "zoom.out" ? "zoomOut" : "zoomReset");
@@ -1017,11 +1023,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
 
   // EDIT-001: a file opens as a tab beside the focused pane; a file already open in that cell
   // comes to the front instead of opening twice.
-  const openFile = (path: string, line?: number) => {
+  const openFile = (path: string, line?: number, column?: number) => {
     const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
     const same = here && panes.find((p) => p.kind === "editor" && groupOf(p) === groupOf(here) && keyOf(p.path ?? "") === keyOf(path));
     // CHAT-025: a file link names a line; the pane keeps it as `jump` (the editor pane reads it once it takes that prop).
-    const jump = typeof line === "number" ? { line, at: Date.now() } : undefined;
+    // T-329-b: the column of path:line:column counts too (fileJump turns it into the editor's own, from 0).
+    const spot = fileJump(line, column);
+    const jump = spot ? { ...spot, at: Date.now() } : undefined;
     if (same) {
       if (jump) setPanes((ps) => ps.map((p) => (p.key === same.key ? { ...p, jump } : p)));
       return setFocused(same.key);
@@ -2664,7 +2672,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           )}
           {screen === "skills" && <SkillsPage workspace={activeDir} onClose={() => closeSkills(setScreen)} />}
           {inbox && <InboxView items={inboxItems(inboxSeen.sources, now)} now={now} onOpen={openPane} />}
-          {screen === "agents" && <AgentsChat open={{ onOpenFile: (path, line) => openFile(path, line), onOpenLink: openInBrowser, inKolux: settings.linksOpenInKolux === true, onReview: (k, plan, cut) => setReviewing({ key: k, plan, cut }) }} taskOf={(k) => workerNames[`term-${ptys.current[k]}`]} panes={panes.filter((p) => !p.kind && !p.seats).map((p) => ({ key: p.key, cwd: p.cwd, title: p.title, program: p.program }))} focused={selected ?? focused} ptyOf={(k) => ptys.current[k]} hook={hook} stateOf={(k) => hookRef.current[k]} onPick={(key) => {
+          {screen === "agents" && <AgentsChat open={{ onOpenFile: (path, line, column) => openFile(path, line, column), onOpenLink: openInBrowser, inKolux: linksOpenInKolux(settings), onReview: (k, plan, cut) => setReviewing({ key: k, plan, cut }) }} taskOf={(k) => workerNames[`term-${ptys.current[k]}`]} panes={panes.filter((p) => !p.kind && !p.seats).map((p) => ({ key: p.key, cwd: p.cwd, title: p.title, program: p.program }))} focused={selected ?? focused} ptyOf={(k) => ptys.current[k]} hook={hook} stateOf={(k) => hookRef.current[k]} onPick={(key) => {
                 setAgentSel(key);
                 setFocused(key);
               }} />}
