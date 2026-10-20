@@ -15,6 +15,8 @@ pub mod pointer;
 /// ORCH-017 (T-172-d): worker-start waits for the window to run the trust question and the setup once.
 #[allow(dead_code)] // T-172-d: called from cli.rs and lib.rs by evidence/orchestration-T-172-d-cli.patch and -lib.patch
 pub mod setup_gate;
+/// ORCH-038 (T-173-d): workers cut short by a quit or crash come back with an unknown outcome.
+pub mod restart;
 /// ORCH-034 (T-173-c): the orchestration store upgrades in place from every earlier layout of its own.
 pub mod upgrade;
 /// ORCH-062..064 (T-312): the runtime commands agents call for files, git and GitHub, past sessions
@@ -772,7 +774,7 @@ pub fn worker_show(tasks: &[Value], dispatches: &[Value], id: &str, run: Option<
     };
     let flag = self::attention(d, live, attention, wall_ms());
     let task = tasks.iter().find(|t| t["id"] == d["taskId"]).map(|t| t["status"].clone()).unwrap_or(Value::Null);
-    Ok(json!({ "dispatchId": d["id"], "taskId": d["taskId"], "taskStatus": task, "status": d["status"], "terminalState": terminal_state(d, live), "terminal": handle, "worktree": d["worktree"], "agent": d["agent"], "waiting": waiting, "waitingWhy": why, "archive": d["archive"], "attention": flag.as_ref().map(|f| f.0), "attentionWhy": flag.map(|f| f.1) }))
+    Ok(json!({ "dispatchId": d["id"], "taskId": d["taskId"], "taskStatus": task, "status": d["status"], "terminalState": terminal_state(d, live), "terminal": handle, "worktree": d["worktree"], "agent": d["agent"], "waiting": waiting, "waitingWhy": why, "archive": d["archive"], "cutShort": d["cutShort"], "attention": flag.as_ref().map(|f| f.0), "attentionWhy": flag.map(|f| f.1) }))
 }
 
 /// ORCH-037: how long a working worker may stay quiet (no heartbeat) before it is flagged stale.
