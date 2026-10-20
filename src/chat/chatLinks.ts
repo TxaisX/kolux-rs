@@ -143,3 +143,16 @@ export function webClick(e: { ctrlKey: boolean; metaKey: boolean; shiftKey: bool
   const main: Browser = inKolux ? "kolux" : "system";
   return e.shiftKey ? (main === "kolux" ? "system" : "kolux") : main;
 }
+
+/** T-329-b: the settings key behind "Open links in Kolux" (off unless it is exactly true). Settings > General writes it, the chat reads it. */
+export const LINKS_IN_KOLUX_FIELD = "linksOpenInKolux";
+export const linksOpenInKolux = (settings: Record<string, unknown> | null | undefined): boolean => settings?.[LINKS_IN_KOLUX_FIELD] === true;
+
+/** T-329-b: where the editor puts the cursor for a file link `path:line:column`. Lines and columns are counted from 1 in the
+ * text and the editor's column from 0; a missing, zero, negative or fractional number gives nothing for the line (no jump)
+ * or the line's start for the column. */
+export function fileJump(line?: number, column?: number): { line: number; col: number } | undefined {
+  if (typeof line !== "number" || !Number.isFinite(line) || line < 1) return undefined;
+  const col = typeof column === "number" && Number.isFinite(column) && column >= 1 ? Math.floor(column) - 1 : 0;
+  return { line: Math.floor(line), col };
+}

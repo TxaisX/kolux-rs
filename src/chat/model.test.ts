@@ -186,3 +186,9 @@ test("FIX-SOON 1 of the 38be105 review: a hand-over longer than a draft can be r
   expect(handOver(5, "api", "y".repeat(DRAFT_LIMIT + 1), io)).toBe(false);
   expect(drafts.has(5)).toBe(false);
 });
+
+test("CHAT-002 (T-325-b): omp is offered chat like Codex; Grok has no reader yet so it stays a terminal", () => {
+  expect(chatOffer({ ...base, credited: "omp" }).chat).toBe(true);
+  expect(chatOffer({ ...base, credited: "omp", screen: "terminals" }).chat).toBe(false);
+  expect(chatOffer({ ...base, credited: "grok" }).chat).toBe(false);
+});

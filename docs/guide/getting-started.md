@@ -84,7 +84,7 @@ The bar across the top is 36 pixels tall and replaces the Windows title bar. Dra
 | Right-panel button | Shows or hides the right panel, which holds Source Control. Hidden while a full page is open |
 | Search box | Jump to a worktree, tab, project or setting (Ctrl+Shift+J) |
 | Bell | Opens the Inbox. Press it again to return to Terminals |
-| Usage pill | Shows how much of your weekly AI allowance is left, for example "Claude 80% left". Read-only. Hover for the reset time |
+| Usage pill | Shows how much of your weekly AI allowance is left, for example "Claude 80% left". Click it to open Settings at Accounts & keys. Hover for the reset time |
 | Minimize, Maximize, Close | The usual window controls |
 
 The usage pill turns to a warning tint at 70% used and a danger tint above 90%. A Codex pill shows only when Codex is installed and you have added at least one Codex account. It reads "Codex N% left", or "Codex · sign in again" when its sign-in has lapsed. A pill shows only for an AI program that is installed and reports a weekly figure.

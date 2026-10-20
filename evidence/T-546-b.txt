@@ -38,3 +38,16 @@ Live proof (evidence/T-070-run.mjs launcher + evidence/T-070-proof.mjs step `car
    card's label is "Claude usage", as the two raw lines above show. The filter is corrected in the driver.)
 
 Gates: vitest src/tower 8 passed; pnpm exec tsc --noEmit clean with and without the T-546 wiring applied.
+
+ADDENDUM 2026-10-20 (v3 batch, lane/look from 17a0bd18): what was left on the card after the merge
+Item 1 (wiring) is on main already: chrome/TopBar.tsx has "tower" in the Screen union and the screens list; keys/actions.ts
+registers view.tower with no chord; App.tsx mounts TowerView and builds towerSeats / towerUsage; keys/keymap.test.ts counts
+134 actions and 55 unbound (other lanes added actions since the 129/53 the card quoted; recounted against this tree, the
+test passes). No patch is needed.
+Items 3, 4, 5 are choices, not behaviour, and are filed in kolux-rs-after.md (coordinator default; Txais may overrule):
+  3 view.tower keeps no default chord; 4 the Needs-you strip count is not linked to the Tower; 5 rows keep the pane title or
+  the program word (a row also shows the chip's line, so several Claude panes still differ by what they are doing).
+Gates (this tree): vitest run src/keys src/tower src/chrome src/usage -> 36 files, 210 passed (log G:/Temp/look-v3-logs/t546b-vitest.log);
+node node_modules/typescript/bin/tsc --noEmit -> exit 0, empty log (t546b-tsc.log). No Rust changed: cargo skipped.
+LIVE PROOF PENDING (batched): launch the app, press the Tower tab in the top bar -> the Tower screen shows; with two Claude
+panes under two accounts one Claude usage card shows with both accounts listed; Command palette "Show Tower" toggles it.
