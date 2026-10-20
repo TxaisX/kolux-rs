@@ -161,6 +161,9 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const [outbound, setOutbound] = useState<string | null>(null);
   // T-272-c (BROW-016): tabs this tab's family asked for past its allowance, said in the toolbar.
   const [blocked, setBlocked] = useState<Blocked>(null);
+  // T-272-b (BROW-032): the last permission a page here was refused, named in plain words.
+  const [refused, setRefused] = useState<string | null>(null);
+  const refusedTimer = useRef<number | undefined>(undefined);
   const blockedTimer = useRef<number | undefined>(undefined);
   // T-074 (BROW-008, BROW-009): the page's health. The engine says only started / finished, so the
   // pane probes the page (browser_probe) and feeds loadState's machine; the overlay it decides on
@@ -283,6 +286,15 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
           setBlocked((b) => blockedAgain(b, Date.now()));
           window.clearTimeout(blockedTimer.current);
           blockedTimer.current = window.setTimeout(() => setBlocked(null), BLOCKED_SHOW_MS);
+        }),
+      );
+      // T-272-b (BROW-032): a page here was refused a permission; the toolbar names it.
+      unlisteners.push(
+        await listen<{ id: number; text: string }>("browser-permission", (e) => {
+          if (e.payload.id !== id) return;
+          setRefused(e.payload.text);
+          window.clearTimeout(refusedTimer.current);
+          refusedTimer.current = window.setTimeout(() => setRefused(null), BLOCKED_SHOW_MS);
         }),
       );
       // T-159 (BROW-040): a previewed document asked to leave its folder; the full address is
@@ -506,6 +518,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   const navigateTo = (url: string) => {
     setNote(null);
     setBlocked(null); // T-272-c: the user's own navigation clears the note
+    setRefused(null);
     typing.current = false;
     setMenu((m) => menuClosed(m));
     pending.current = null;
@@ -716,6 +729,11 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
         {blockedLabel(blocked, blocked?.at ?? 0) && (
           <span className="zoom-badge" data-popups-blocked role="status" title="This page tried to open more tabs than it may; the rest were blocked">
             {blockedLabel(blocked, blocked?.at ?? 0)}
+          </span>
+        )}
+        {refused && (
+          <span className="zoom-badge" data-permission-refused role="status" title="This page asked for a permission the browser does not give">
+            {refused}
           </span>
         )}
         {/* The app runs these for a chord pressed in the app or inside the page (App's browserAction

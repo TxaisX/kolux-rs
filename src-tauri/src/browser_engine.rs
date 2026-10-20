@@ -19,6 +19,8 @@
 //! - T-239-b (BROW-025): at every navigation start a page (and a popup) is given desktop Firefox
 //!   with no client hints on the sign-in hosts, its own identity elsewhere, unless its profile is
 //!   in native mode (`profiles::firefox_at` decides).
+//! - T-272-b (BROW-032): a page's permission requests are answered by `permissions::answer`; a
+//!   refusal is told to its pane (PERMISSION_EVENT) with the permission named.
 use std::path::PathBuf;
 use std::time::Duration;
 use tauri::{AppHandle, Webview};
@@ -28,9 +30,10 @@ mod imp {
     use crate::browser::certs;
     use webview2_com::Microsoft::Web::WebView2::Win32::*;
     use std::sync::mpsc::Sender;
-    use crate::browser::{crash, holder, profiles};
+    use crate::browser::{crash, holder, permissions, profiles};
+    use tauri::Emitter;
     use std::path::PathBuf;
-    use webview2_com::{AcceleratorKeyPressedEventHandler, CallDevToolsProtocolMethodCompletedHandler, ClearServerCertificateErrorActionsCompletedHandler, NavigationStartingEventHandler, PrintToPdfCompletedHandler, ProcessFailedEventHandler, ServerCertificateErrorDetectedEventHandler, WebResourceRequestedEventHandler};
+    use webview2_com::{AcceleratorKeyPressedEventHandler, CallDevToolsProtocolMethodCompletedHandler, ClearServerCertificateErrorActionsCompletedHandler, NavigationStartingEventHandler, PermissionRequestedEventHandler, PrintToPdfCompletedHandler, ProcessFailedEventHandler, ServerCertificateErrorDetectedEventHandler, WebResourceRequestedEventHandler};
     use windows::core::{w, Interface, HSTRING, PWSTR};
     use windows::Win32::System::Com::CoTaskMemFree;
 
@@ -214,6 +217,27 @@ mod imp {
         let _ = unsafe { core.AddScriptToExecuteOnDocumentCreated(&script, None::<&ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>) };
     }
 
+    /// T-272-b (BROW-032): answers each permission request of a page by `permissions::answer`; a
+    /// refusal reaches the page's pane as a notice naming the permission.
+    pub fn permissions(id: u32, controller: &ICoreWebView2Controller, app: tauri::AppHandle) {
+        // SAFETY: CoreWebView2 hands back the page's engine object.
+        let Ok(core) = (unsafe { controller.CoreWebView2() }) else { return };
+        let handler = PermissionRequestedEventHandler::create(Box::new(move |_sender, args| {
+            let Some(args) = args else { return Ok(()) };
+            let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
+            // SAFETY: PermissionKind only writes a plain value; SetState only records the answer.
+            unsafe { args.PermissionKind(&mut kind) }?;
+            if let permissions::Answer::Deny(text) = permissions::answer(kind.0) {
+                unsafe { args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY) }?;
+                let _ = app.emit(crate::browser::PERMISSION_EVENT, serde_json::json!({ "id": id, "text": text }));
+            }
+            Ok(())
+        }));
+        let mut token = 0i64;
+        // SAFETY: the handler lives as long as the engine holds it; the token is written once.
+        let _ = unsafe { core.add_PermissionRequested(&handler, &mut token) };
+    }
+
     /// One DevTools call on the page's engine; its JSON answer (or why not) goes to `tx`.
     pub fn devtools(controller: &ICoreWebView2Controller, method: &str, params: &str, tx: Sender<Result<String, String>>) {
         let fail = tx.clone();
@@ -262,6 +286,13 @@ pub fn attach(id: u32, pw: &tauri::webview::PlatformWebview) {
 #[cfg(windows)]
 pub fn identity(pw: &tauri::webview::PlatformWebview, spoof: bool) {
     imp::identity(&pw.controller(), spoof);
+}
+
+/// T-272-b (BROW-032): a page's permission requests are answered by the permission rules (main
+/// thread, from `browser_open`'s web view callback).
+#[cfg(windows)]
+pub fn permissions(id: u32, pw: &tauri::webview::PlatformWebview, app: AppHandle) {
+    imp::permissions(id, &pw.controller(), app);
 }
 
 /// T-239-b (BROW-025): a popup follows the mode of its tab's profile. A popup opened straight onto

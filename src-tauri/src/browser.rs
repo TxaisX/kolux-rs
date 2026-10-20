@@ -60,6 +60,9 @@ pub mod engine;
 // T-286-b (APP-040): which engine process failures are real crashes, and their records.
 #[path = "browser_crash.rs"]
 pub mod crash;
+// T-272-b (BROW-032): how a page's permission requests are answered.
+#[path = "browser_permissions.rs"]
+pub mod permissions;
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
@@ -71,6 +74,8 @@ pub const ICON_EVENT: &str = "browser-icon";
 /// T-272-c (BROW-016): a page on screen asked for another tab and its family's allowance was used
 /// up; the pane shows "popups blocked" in its toolbar.
 pub const BLOCKED_EVENT: &str = "browser-blocked";
+/// T-272-b (BROW-032): a page's permission request was refused; `text` names the permission.
+pub const PERMISSION_EVENT: &str = "browser-permission";
 /// T-239 (BROW-017): a right-click inside a page (`kind: "menu"`, with the pointer, the page's
 /// size, the link under it and whether text is selected) or an entry picked in the menu it opened
 /// (`kind: "pick"`, with the entry and its address).
@@ -989,6 +994,7 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
     let load_app = app.clone();
     let chord_app = app.clone();
     let window_app = app.clone();
+    let permission_app = app.clone();
     let window_dev = dev.clone();
     let icon_dev = dev.clone();
     let download_app = app.clone();
@@ -1201,6 +1207,8 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         engine::attach(id, &pw);
         // T-239-b (BROW-025): Firefox on the sign-in hosts unless the profile is in native mode.
         engine::identity(&pw, spoof);
+        // T-272-b (BROW-032): the page's permission requests are answered by the permission rules.
+        engine::permissions(id, &pw, permission_app);
         // T-286-b (APP-040): the engine's process failures become crash records when real.
         engine::watch_page_failures(id, &pw, crash_dir);
     });
