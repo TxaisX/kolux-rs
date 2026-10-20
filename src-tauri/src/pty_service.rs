@@ -140,6 +140,9 @@ struct Term {
     session: PtySession,
     program: String,
     cwd: String,
+    /// T-184-b: what the window that started it keeps about it (its handle, pane, secret, program),
+    /// handed back to the window that takes it back after a restart.
+    meta: Value,
 }
 
 #[derive(Default)]
@@ -188,7 +191,7 @@ impl Service {
     }
 
     fn row(id: u32, t: &Term) -> Value {
-        json!({ "id": id, "pid": t.session.pid(), "program": t.session.program(), "requested": t.program, "cwd": t.cwd })
+        json!({ "id": id, "pid": t.session.pid(), "program": t.session.program(), "requested": t.program, "cwd": t.cwd, "meta": t.meta })
     }
 
     /// Starts one terminal: a program with its arguments, or with no program the user's shell.
@@ -198,7 +201,12 @@ impl Service {
         let args: Vec<String> = a["args"].as_array().map(|v| v.iter().filter_map(|s| s.as_str().map(str::to_string)).collect()).unwrap_or_default();
         let cols = a["cols"].as_u64().and_then(|c| u16::try_from(c).ok()).filter(|c| *c > 0).unwrap_or(80);
         let rows = a["rows"].as_u64().and_then(|r| u16::try_from(r).ok()).filter(|r| *r > 0).unwrap_or(24);
-        let mut cmds = if program.is_empty() { crate::pty::shell_commands(cwd.as_deref(), None) } else { vec![crate::pty::program_command(&program, &args, cwd.as_deref())] };
+        // T-184-b: a window sends the commands it built (program, folder, its whole environment,
+        // fallbacks in order), so a pane starts exactly as it would in the window.
+        let built: Vec<_> = a["commands"].as_array().into_iter().flatten().filter_map(crate::pty::link::command_from).collect();
+        let mut cmds = if !built.is_empty() {
+            built
+        } else if program.is_empty() { crate::pty::shell_commands(cwd.as_deref(), None) } else { vec![crate::pty::program_command(&program, &args, cwd.as_deref())] };
         if let Some(env) = a["env"].as_object() {
             for cmd in &mut cmds {
                 for (k, v) in env {
@@ -240,7 +248,7 @@ impl Service {
         let mut g = self.lock();
         match started {
             Ok(session) => {
-                let term = Term { session, program, cwd: cwd.unwrap_or_default() };
+                let term = Term { session, program, cwd: cwd.unwrap_or_default(), meta: a["meta"].clone() };
                 let row = Self::row(id, &term);
                 // A program that ended before this line already removed its tail: it is not kept.
                 if g.snaps.contains_key(&id) {
@@ -413,6 +421,13 @@ pub fn main(args: &[String]) -> i32 {
         return 2;
     };
     let Some(_held) = lock(identifier) else { return crate::lifecycle::DUPLICATE_EXIT };
+    // TERM-115: the service is started in its own process group, which hands "ignore Ctrl+C" down to
+    // every shell it starts; cleared before the first one, so a pane's Ctrl+C reaches its program.
+    #[cfg(windows)]
+    // SAFETY: a documented call on this process's own console state; no pointers are passed.
+    unsafe {
+        windows_sys::Win32::System::Console::SetConsoleCtrlHandler(None, 0);
+    }
     let dir = PathBuf::from(dir);
     let listener = match TcpListener::bind(("127.0.0.1", 0)) {
         Ok(l) => l,
@@ -458,6 +473,11 @@ impl Client {
             return Err(reply["error"].as_str().unwrap_or("the terminal service refused the connection").to_string());
         }
         Ok(Client { lines, out, next: 0, hello: reply["result"].clone() })
+    }
+
+    /// How long a read waits (None: for as long as it takes, the window's event connection).
+    pub fn set_wait(&mut self, wait: Option<Duration>) -> Result<(), String> {
+        self.out.set_read_timeout(wait).map_err(|e| e.to_string())
     }
 
     /// The service's protocol, from its hello.

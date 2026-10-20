@@ -25,12 +25,20 @@ pub const PROTOCOL: u32 = 1;
 /// (owns); output events carry it so a window drops events from a replaced run. Kept below 2^53
 /// so the window reads it as a plain number.
 pub fn generation() -> u64 {
+    // T-184-b: a window linked to the background service answers for the service's run.
+    let linked = LINKED.load(std::sync::atomic::Ordering::SeqCst);
+    if linked != 0 {
+        return linked;
+    }
     static GENERATION: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *GENERATION.get_or_init(|| {
         let millis = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(1);
         millis * 1000 + u64::from(std::process::id() % 1000)
     })
 }
+
+/// T-184-b: the run of the background service this window is linked to (0: none).
+static LINKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// APP-052: typing meant for another run of the service never reaches this one's terminals
 /// (None: a caller from before generations, let through).
@@ -47,12 +55,14 @@ pub struct Terminals {
     /// CLI-023: where each terminal sits in the window (worktree pane, tab, title, in view), as the
     /// window last reported it, plus the command-line requests it could not open.
     layout: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// T-184-b: the link to the background terminal service.
+    service: Arc<ServiceLink>,
 }
 
 #[derive(Default)]
 struct Inner {
     next_id: u32,
-    sessions: HashMap<u32, PtySession>,
+    sessions: HashMap<u32, Session>,
     /// The folder each session was started in, so a workspace can close its shells before its
     /// folder is deleted.
     dirs: HashMap<u32, String>,
@@ -95,6 +105,85 @@ impl Inner {
         }
     }
 }
+
+/// T-184-b: a session the window runs itself, or one the background terminal service runs for it
+/// (it outlives the window: quitting leaves it running, closing its pane ends it).
+pub(crate) enum Session {
+    Local(PtySession),
+    Remote(crate::pty::link::Remote),
+}
+
+impl From<PtySession> for Session {
+    fn from(s: PtySession) -> Self {
+        Session::Local(s)
+    }
+}
+
+impl Session {
+    fn writer(&self) -> Result<crate::pty::SharedWriter, String> {
+        match self {
+            Session::Local(s) => s.writer(),
+            Session::Remote(r) => Ok(r.writer()),
+        }
+    }
+
+    fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
+        match self {
+            Session::Local(s) => s.resize(cols, rows),
+            Session::Remote(r) => r.resize(cols, rows),
+        }
+    }
+
+    fn program(&self) -> &str {
+        match self {
+            Session::Local(s) => s.program(),
+            Session::Remote(r) => &r.program,
+        }
+    }
+
+    fn pid(&self) -> Option<u32> {
+        match self {
+            Session::Local(s) => s.pid(),
+            Session::Remote(r) => r.pid,
+        }
+    }
+
+    fn foreground_group(&self) -> Option<i32> {
+        match self {
+            Session::Local(s) => s.foreground_group(),
+            Session::Remote(_) => None,
+        }
+    }
+
+    fn kill(&mut self) {
+        match self {
+            Session::Local(s) => s.kill(),
+            Session::Remote(r) => r.kill(),
+        }
+    }
+}
+
+/// T-184-b: where the window's link to the background terminal service stands.
+#[derive(Default)]
+enum Linking {
+    /// No service (a development build, or it could not be reached): panes run in the window.
+    #[default]
+    Off,
+    /// Linking and taking back the service's terminals; a pane asking for its terminal waits.
+    Starting,
+    Linked(Arc<crate::pty::link::Link>),
+}
+
+#[derive(Default)]
+struct ServiceLink {
+    state: Mutex<Linking>,
+    ready: Condvar,
+    /// The app's data folder: the service's `terminals.json` and the window's seen record.
+    dir: Mutex<Option<std::path::PathBuf>>,
+}
+
+/// How long a pane's first question waits for the link (a service that has to start included).
+const LINK_WAIT: Duration = Duration::from_secs(10);
 
 /// ACCT-054: how far a session's output has run ahead of what its pane has drawn. Past
 /// `FLOW_HIGH` unacknowledged bytes the reader thread stops reading the PTY (so the program blocks
@@ -250,6 +339,13 @@ pub(crate) struct Snap {
 }
 
 impl Snap {
+    /// T-184-b: a terminal taken back from the service: its output count there and its recent output.
+    pub(crate) fn seeded(seq: u64, tail: &[u8]) -> Snap {
+        let mut s = Snap { seq: seq.saturating_sub(tail.len() as u64), tail: Default::default() };
+        s.push(tail);
+        s
+    }
+
     pub(crate) fn push(&mut self, chunk: &[u8]) -> u64 {
         self.seq += chunk.len() as u64;
         self.tail.extend(chunk);
@@ -755,17 +851,11 @@ impl Terminals {
         inner.next_id += 1;
         let id = inner.next_id;
         inner.fresh_incarnation(id);
-        let out_app = app.clone();
-        let exit_dir = log_dir.clone();
         let history = pane_key.and_then(|k| log_dir.as_deref().and_then(|d| History::open(d, k)));
         let label = program.clone().unwrap_or_else(|| "shell".to_string());
         let exit_app = app;
-        let registry = self.inner.clone();
-        let out_registry = self.inner.clone();
         // Council MERGE 51: a shell (a chosen default shell too, SET-026) stays a plain terminal, not a program session.
         let is_program = program.as_deref().map(str::trim).is_some_and(|p| !p.is_empty() && !is_shell_program(p));
-        // GIT-026: a pull-request link printed in any pane, hidden or parked ones too, attaches to its workspace.
-        let mut prs = crate::scm::PrScan::default();
         let link_dir = cwd.clone();
         let key = crate::cli::secret();
         let strip_key = crate::claude_key::strip_inherited(program.as_deref(), &env);
@@ -809,7 +899,7 @@ impl Terminals {
                 let path = cli_first(&dir, Some(crate::lifecycle::fresh_path(command.get_env("PATH").map(std::ffi::OsStr::to_os_string))));
                 command.env("PATH", path);
             }
-            if let Ok(dir) = tauri::Manager::path(&out_app).app_data_dir() {
+            if let Ok(dir) = tauri::Manager::path(&exit_app).app_data_dir() {
                 // CLI-007 / ORCH-054: the pane reaches the Kolux that opened it, so the other-build
                 // override (COMPAT 7) it may have inherited from the shell that started Kolux, stripped
                 // above with the rest of the noise (CLI-010), is pointed at this app's own folder.
@@ -835,12 +925,60 @@ impl Terminals {
             }
         }
         let flow = Arc::new(Flow::default());
-        let out_flow = flow.clone();
-        let session = PtySession::spawn_first(
-            commands,
-            cols.max(2),
-            rows.max(1),
-            move |chunk| {
+        // T-184-b: through the background service when the window is linked to one (a start it
+        // refuses runs here instead). The service's events share one reader, so it never waits on a pane.
+        let remote = self.linked().and_then(|link| {
+            let meta = serde_json::json!({ "id": id, "pane": pane_key, "key": key.clone(), "program": program.clone(), "cwd": cwd.clone() });
+            link.spawn(&commands, cols.max(2), rows.max(1), meta).map(|r| (link, r)).ok()
+        });
+        let (on_output, on_exit) = self.handlers(&exit_app, id, pane_key, link_dir, is_program, remote.is_none().then(|| flow.clone()));
+        let mut flush = None;
+        let session = match remote {
+            Some((link, r)) => {
+                link.register(r.id, on_output, on_exit);
+                flush = Some((link, r.id));
+                Session::Remote(r)
+            }
+            None => PtySession::spawn_first(commands, cols.max(2), rows.max(1), on_output, on_exit)?.into(),
+        };
+        inner.sessions.insert(id, session);
+        inner.flow.insert(id, flow);
+        if let Some(d) = &log_dir {
+            crate::diag::write(d, &format!("terminal {id} started ({label})"));
+        }
+        inner.keys.insert(id, key);
+        if let Some(k) = pane_key {
+            inner.panes.insert(k, id);
+        }
+        if let Some(h) = history {
+            inner.hist.insert(id, h);
+        }
+        if is_program {
+            let agent = program.as_deref().and_then(crate::tools::credited_program);
+            inner.marks.insert(id, Mark { started: Instant::now(), last_output: None, program: program.unwrap_or_default().trim().to_string(), agent, pane: pane_key, home_env, cwd: chat_cwd });
+        }
+        if let Some(dir) = cwd {
+            inner.dirs.insert(id, dir);
+        }
+        drop(inner);
+        if let Some((link, sid)) = flush {
+            link.flush(sid);
+        }
+        Ok(id)
+    }
+
+    /// T-184-b: what a session's output and end do in the window, the same for a terminal the window
+    /// runs and one the background service runs (started here, or adopted after a restart). With
+    /// `flow` the reader waits while the pane is behind (ACCT-054): only a terminal's own reader may.
+    #[allow(clippy::too_many_arguments)]
+    fn handlers(&self, app: &AppHandle, id: u32, pane_key: Option<u32>, link_dir: Option<String>, is_program: bool, flow: Option<Arc<Flow>>) -> (crate::pty::link::OnOutput, crate::pty::link::OnExit) {
+        let (out_app, exit_app) = (app.clone(), app.clone());
+        let exit_dir = app.path().app_data_dir().ok();
+        let (registry, out_registry) = (self.inner.clone(), self.inner.clone());
+        // GIT-026: a pull-request link printed in any pane, hidden or parked ones too, attaches to its workspace.
+        let mut prs = crate::scm::PrScan::default();
+        (
+            Box::new(move |chunk: &[u8]| {
                 let data = base64::engine::general_purpose::STANDARD.encode(chunk);
                 // ORCH-057: the count is taken under the registry lock with the snapshot tail, so a snapshot
                 // holds exactly the chunks whose count is not past its own.
@@ -873,9 +1011,11 @@ impl Terminals {
                     }
                 }
                 // ACCT-054: after the bookkeeping, so no lock is held while the pane catches up.
-                out_flow.sent(chunk.len() as u64);
-            },
-            move |code| {
+                if let Some(f) = &flow {
+                    f.sent(chunk.len() as u64);
+                }
+            }),
+            Box::new(move |code: Option<u32>| {
                 // Drop the session so the PTY closes and the reader thread can finish. A session
                 // still listed ended by itself: Kolux's own kills take it off the list first.
                 let mut by_itself = false;
@@ -920,28 +1060,8 @@ impl Terminals {
                     crate::diag::write(d, &format!("terminal {id} exited ({code:?})"));
                 }
                 let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code, outcome: outcome_of(code) });
-            },
-        )?;
-        inner.sessions.insert(id, session);
-        inner.flow.insert(id, flow);
-        if let Some(d) = &log_dir {
-            crate::diag::write(d, &format!("terminal {id} started ({label})"));
-        }
-        inner.keys.insert(id, key);
-        if let Some(k) = pane_key {
-            inner.panes.insert(k, id);
-        }
-        if let Some(h) = history {
-            inner.hist.insert(id, h);
-        }
-        if is_program {
-            let agent = program.as_deref().and_then(crate::tools::credited_program);
-            inner.marks.insert(id, Mark { started: Instant::now(), last_output: None, program: program.unwrap_or_default().trim().to_string(), agent, pane: pane_key, home_env, cwd: chat_cwd });
-        }
-        if let Some(dir) = cwd {
-            inner.dirs.insert(id, dir);
-        }
-        Ok(id)
+            }),
+        )
     }
 
     /// The newest program session started in window pane `pane` (CHAT-002, CHAT-006).
@@ -1104,7 +1224,7 @@ impl Terminals {
             same(d, dir) || d.ancestors().skip(1).any(|a| same(a, dir))
         };
         let found: Vec<(u32, Option<u32>)> = match self.inner.lock() {
-            Ok(inner) => inner.dirs.iter().filter(|(_, d)| wanted(d)).map(|(id, _)| (*id, inner.sessions.get(id).and_then(PtySession::pid))).collect(),
+            Ok(inner) => inner.dirs.iter().filter(|(_, d)| wanted(d)).map(|(id, _)| (*id, inner.sessions.get(id).and_then(Session::pid))).collect(),
             Err(_) => return Stopped::default(),
         };
         for (id, pid) in &found {
@@ -1207,7 +1327,7 @@ impl Terminals {
         let long_ago = Instant::now() - Duration::from_secs(5);
         let mut inner = self.inner.lock().unwrap();
         inner.fresh_incarnation(id);
-        inner.sessions.insert(id, PtySession::fake(Box::new(std::io::sink())));
+        inner.sessions.insert(id, PtySession::fake(Box::new(std::io::sink())).into());
         inner.dirs.insert(id, dir.to_string());
         inner.logs.insert(id, OutputLog { written: Some(long_ago), ..OutputLog::default() });
         if let Some(program) = program {
@@ -1228,10 +1348,134 @@ impl Terminals {
         self.inner.lock().map(|i| i.sessions.contains_key(&id)).unwrap_or(false)
     }
 
-    /// Ends every session: the window is closing, nothing may be left running.
+    /// T-184-b: the link to the background terminal service, while it is up.
+    fn linked(&self) -> Option<Arc<crate::pty::link::Link>> {
+        match &*self.service.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner) {
+            Linking::Linked(l) if l.alive() => Some(l.clone()),
+            _ => None,
+        }
+    }
+
+    /// T-184-b: waits (up to `limit`) while the link is starting, so a pane's question about its
+    /// terminal is answered after the service's terminals were taken back.
+    fn wait_linked(&self, limit: Duration) {
+        let g = self.service.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ = self.service.ready.wait_timeout_while(g, limit, |s| matches!(s, Linking::Starting));
+    }
+
+    /// T-184-b (TERM-105, APP-052): links the window to the background terminal service, starting it
+    /// when none runs, and takes back the terminals it kept running, on a thread; a pane asking
+    /// meanwhile waits (`wait_linked`). Panes then start, type, resize and close through it, and
+    /// quitting leaves them running. An installed build only, unless `KOLUX_TERMINAL_SERVICE` says
+    /// otherwise (`link::wanted`); without the service, panes run in the window as before.
+    pub fn use_service(&self, app: &AppHandle) {
+        let release = !cfg!(debug_assertions);
+        if !crate::pty::link::wanted(release, std::env::var("KOLUX_TERMINAL_SERVICE").ok().as_deref()) {
+            return;
+        }
+        let Ok(dir) = app.path().app_data_dir() else { return };
+        *self.service.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Linking::Starting;
+        *self.service.dir.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(dir.clone());
+        let (me, app) = (self.clone(), app.clone());
+        std::thread::spawn(move || {
+            use crate::pty::service;
+            let identifier = app.config().identifier.clone();
+            let linked = std::env::current_exe().map_err(|e| e.to_string()).and_then(|exe| {
+                let (ep, events) = service::ensure(&dir, || service::launch_detached(&exe, &identifier, &dir), service::START_LIMIT)?;
+                crate::pty::link::Link::connect(ep, events)
+            });
+            let state = match linked {
+                Ok((link, rows)) => {
+                    LINKED.store(link.generation(), std::sync::atomic::Ordering::SeqCst);
+                    me.adopt(&app, &link, &rows, &crate::pty::link::read_seen(&dir, link.generation()));
+                    crate::diag::write(&dir, &format!("terminal service linked ({} terminals taken back)", rows.len()));
+                    Linking::Linked(link)
+                }
+                Err(e) => {
+                    crate::diag::write(&dir, &format!("terminal service not linked, panes run in the window: {e}"));
+                    Linking::Off
+                }
+            };
+            *me.service.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = state;
+            me.service.ready.notify_all();
+        });
+    }
+
+    /// T-184-b (TERM-105): takes back the terminals the service kept running since the last window.
+    /// Each keeps its handle, pane, secret, folder and program mark; its pane's saved output gets
+    /// what was printed while no window was open (`seen`: what the last window drew, by service id),
+    /// so the pane's replay shows it before the pane reattaches.
+    fn adopt(&self, app: &AppHandle, link: &Arc<crate::pty::link::Link>, rows: &[serde_json::Value], seen: &HashMap<u32, u64>) {
+        use crate::pty::link::{adopted_id, missed, row_tail, Remote};
+        let dir = app.path().app_data_dir().ok();
+        let mut taken = Vec::new();
+        if let Ok(mut inner) = self.inner.lock() {
+            for row in rows {
+                let Some(remote) = Remote::from_row(link, row, None) else { continue };
+                let meta = &row["meta"];
+                let as_u32 = |v: &serde_json::Value| v.as_u64().and_then(|n| u32::try_from(n).ok());
+                let id = adopted_id(as_u32(&meta["id"]), &|i| inner.sessions.contains_key(&i), inner.next_id + 1);
+                inner.next_id = inner.next_id.max(id);
+                inner.fresh_incarnation(id);
+                let pane = as_u32(&meta["pane"]);
+                let program = meta["program"].as_str().map(str::trim).filter(|p| !p.is_empty()).map(str::to_string);
+                let is_program = program.as_deref().is_some_and(|p| !is_shell_program(p));
+                let cwd = meta["cwd"].as_str().map(str::to_string);
+                let (seq, tail) = (row["seq"].as_u64().unwrap_or(0), row_tail(row));
+                if let Some(mut h) = pane.and_then(|k| dir.as_deref().and_then(|d| History::open(d, k))) {
+                    h.append(missed(seen.get(&remote.id).copied(), seq, &tail));
+                    inner.hist.insert(id, h);
+                }
+                inner.snaps.insert(id, Snap::seeded(seq, &tail));
+                inner.logs.entry(id).or_default().push(&tail);
+                let (on_output, on_exit) = self.handlers(app, id, pane, cwd.clone(), is_program, None);
+                link.register(remote.id, on_output, on_exit);
+                taken.push(remote.id);
+                if let Some(key) = meta["key"].as_str() {
+                    inner.keys.insert(id, key.to_string());
+                }
+                if let Some(k) = pane {
+                    inner.panes.insert(k, id);
+                }
+                if let Some(p) = program.filter(|_| is_program) {
+                    let agent = crate::tools::credited_program(&p);
+                    inner.marks.insert(id, Mark { started: Instant::now(), last_output: None, program: p, agent, pane, home_env: Vec::new(), cwd: cwd.clone() });
+                }
+                if let Some(d) = cwd {
+                    inner.dirs.insert(id, d);
+                }
+                inner.flow.insert(id, Arc::new(Flow::default()));
+                inner.sessions.insert(id, Session::Remote(remote));
+            }
+        }
+        for sid in taken {
+            link.flush(sid);
+        }
+    }
+
+    /// Ends every session the window runs: the window is closing. T-184-b: the ones the background
+    /// service runs go on (DT-C27 reversed); the window lets go of them and records how much of
+    /// each one's output it drew, so the next window adds only what it missed.
     pub fn kill_all(&self) {
         crate::automations::QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.let_go();
+    }
+
+    /// `kill_all` without the app-wide quitting flag (a test runs it alone).
+    fn let_go(&self) {
+        let link = match std::mem::take(&mut *self.service.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)) {
+            Linking::Linked(l) => Some(l),
+            _ => None,
+        };
+        if let Some(l) = &link {
+            l.detach();
+        }
         if let Ok(mut inner) = self.inner.lock() {
+            let seen: Vec<(u32, u64)> = inner.sessions.iter().filter_map(|(id, s)| if let Session::Remote(r) = s { Some((r.id, inner.snaps.get(id).map_or(0, |n| n.seq))) } else { None }).collect();
+            let dir = self.service.dir.lock().ok().and_then(|d| d.clone());
+            if let (Some(l), Some(dir), false) = (&link, dir, seen.is_empty()) {
+                crate::pty::link::write_seen(&dir, l.generation(), &seen);
+            }
             inner.dirs.clear();
             inner.keys.clear();
             inner.hist.clear();
@@ -1239,8 +1483,10 @@ impl Terminals {
             for (_, f) in inner.flow.drain() {
                 f.release();
             }
-            for (_, mut s) in inner.sessions.drain() {
-                s.kill();
+            for (_, s) in inner.sessions.drain() {
+                if let Session::Local(mut s) = s {
+                    s.kill();
+                }
             }
         }
     }
@@ -1263,8 +1509,11 @@ pub struct ServiceInfo {
     pub protocol: u32,
 }
 
-#[tauri::command]
-pub fn terminal_service_info() -> ServiceInfo {
+/// T-184-b: async, and answered once the window has linked to the background service (when it
+/// uses one), so the pane gets the service's run.
+#[tauri::command(async)]
+pub fn terminal_service_info(terminals: tauri::State<'_, Terminals>) -> ServiceInfo {
+    terminals.wait_linked(LINK_WAIT);
     ServiceInfo { generation: generation(), protocol: PROTOCOL }
 }
 
@@ -1297,6 +1546,7 @@ pub fn attach_answer(ours: u64, running: Option<u32>, asked: u64) -> Attach {
 /// lock is taken off the window's thread.
 #[tauri::command(async)]
 pub fn terminal_attach(terminals: tauri::State<'_, Terminals>, pane_key: u32, generation: u64) -> Attach {
+    terminals.wait_linked(LINK_WAIT);
     attach_answer(self::generation(), terminals.attached(pane_key), generation)
 }
 
@@ -1477,6 +1727,36 @@ fn shell_hook_dir(base: &std::path::Path) -> std::path::PathBuf {
 mod tests {
     use super::*;
 
+    /// T-184-b: quitting ends the panes the window runs and leaves the service's running, after
+    /// recording how much of each one's output the window drew (by its id in the service).
+    #[test]
+    fn t184b_quitting_leaves_the_service_terminals_running_and_records_what_was_drawn() {
+        use crate::pty::link::{read_seen, tests as svc};
+        let (r, dir) = svc::start("quit");
+        let (link, _) = svc::link(&r);
+        let remote = link.spawn(&svc::shell(), 80, 24, serde_json::json!({})).unwrap();
+        let sid = remote.id;
+        let t = Terminals::default();
+        {
+            let mut inner = t.inner.lock().unwrap();
+            inner.sessions.insert(1, Session::Remote(remote));
+            inner.snaps.insert(1, Snap::seeded(40, b"abc"));
+            inner.sessions.insert(2, PtySession::fake(Box::new(std::io::sink())).into());
+        }
+        *t.service.state.lock().unwrap() = Linking::Linked(link.clone());
+        *t.service.dir.lock().unwrap() = Some(dir.clone());
+        assert!(t.linked().is_some());
+        t.let_go();
+        assert!(t.inner.lock().unwrap().sessions.is_empty());
+        assert!(t.linked().is_none(), "the window let go of the service");
+        assert_eq!(r.service.counts().0, 1, "the service's terminal goes on");
+        assert_eq!(read_seen(&dir, link.generation()), HashMap::from([(sid, 40)]));
+        assert_eq!(Snap::seeded(40, b"abc").push(b"d"), 41, "a taken-back terminal counts on from the service's count");
+        drop(r);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+
     /// TERM-137: hook files of one build go to a folder named after their contents; a folder another build
     /// left beside it is kept exactly as it was when this build writes its hooks again.
     #[test]
@@ -1570,8 +1850,8 @@ mod tests {
         let t = Arc::new(Terminals::default());
         {
             let mut inner = t.inner.lock().unwrap();
-            inner.sessions.insert(1, PtySession::fake(Box::new(Slow)));
-            inner.sessions.insert(2, PtySession::fake(Box::new(std::io::sink())));
+            inner.sessions.insert(1, PtySession::fake(Box::new(Slow)).into());
+            inner.sessions.insert(2, PtySession::fake(Box::new(std::io::sink())).into());
             inner.flow.insert(2, Arc::new(Flow::default()));
         }
         let slow = Arc::clone(&t);
@@ -1896,7 +2176,7 @@ mod tests {
         let pid = s.pid().expect("the platform reports the shell's pid");
         {
             let mut inner = t.inner.lock().unwrap();
-            inner.sessions.insert(1, s);
+            inner.sessions.insert(1, s.into());
             inner.dirs.insert(1, dir.to_string_lossy().into_owned());
             // A stale record: the folder above, with no session behind it.
             inner.dirs.insert(2, std::env::temp_dir().to_string_lossy().into_owned());
@@ -1920,7 +2200,7 @@ mod tests {
         let mut cmd = shell_commands(None, None);
         let s = PtySession::spawn(cmd.remove(0), 80, 24, |_| {}, |_| {}).expect("spawn a shell");
         let started = s.program().to_string();
-        t.inner.lock().unwrap().sessions.insert(7, s);
+        t.inner.lock().unwrap().sessions.insert(7, s.into());
         let every = t.every();
         let home = crate::pty::home_dir().map(|h| h.to_string_lossy().into_owned());
         assert!(home.is_some(), "this account has a home folder");
@@ -1963,7 +2243,7 @@ mod tests {
         {
             let mut inner = t.inner.lock().unwrap();
             for id in [7, 8] {
-                inner.sessions.insert(id, PtySession::fake(Box::new(std::io::sink())));
+                inner.sessions.insert(id, PtySession::fake(Box::new(std::io::sink())).into());
                 inner.dirs.insert(id, dir.to_string_lossy().into_owned());
                 inner.logs.insert(id, OutputLog { written: Some(long_ago), ..OutputLog::default() });
             }

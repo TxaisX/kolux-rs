@@ -1018,3 +1018,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · look T-302-c (web places of the project icon card) · no new outside sources: the guarded icon client, address rules and lookup are Kolux RS code already in browser.rs; URL host parsing per the url crate behaviour already used there
 > 2026-10-20 · look T-266-b (PROJ-062 ports and task on the workspace card hover) · no new outside sources: Kolux RS own ports.rs scan and Worktree.number
 > 2026-10-20 · core T-075-b · APP-052, TERM-105, CLI-011, ACCT-051 cards and Txais's DT-C27 reversal as relayed by the coordinator; this tree's own pty.rs, terminal.rs (Snap, generation), lifecycle.rs (claim_named), cli.rs (secret, open); no outside source
+> 2026-10-20 · core T-184-b · cards TERM-105, APP-052, ACCT-051 and DT-C27 (Txais 2026-10-20); this tree's own pty::service (T-075-b), terminal.rs and reattach.ts; no outside source

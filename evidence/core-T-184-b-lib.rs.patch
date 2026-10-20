@@ -1,0 +1,13 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index e24f8024..ddcdde74 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -307,6 +307,8 @@ pub fn run() {
+                 });
+             }
+             app.manage(Terminals::default());
++            // T-184-b (TERM-105): panes run in the background terminal service and outlive the window.
++            app.state::<Terminals>().use_service(app.handle());
+             notifications::first_run_welcome(app.handle()); // VIEW-111: a Mac's one welcome notification
+             app.manage(resources::Sampler::default());
+             app.manage(resume::Registry::default());
