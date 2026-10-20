@@ -1,0 +1,20 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 3b51a0c4..9c7f45d0 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -52,6 +52,7 @@ import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./pro
+ import { renameOnFirstPrompt, useRenameOnFirstPrompt } from "./projects/renameOnWork";
+ import FolderRenameAsk from "./projects/FolderRenameAsk";
+ import AboutPanel from "./shell/AboutPanel";
++import { ABOUT_MENU_ID, openAbout } from "./shell/about";
+ import LinkAskHost from "./shell/LinkAskDialog";
+ import TabSearch from "./shell/TabSearch";
+ import { openTabSearch, tabSearchCommand } from "./shell/findTab";
+@@ -504,6 +505,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
+     else if (ed && "field" in ed) document.execCommand(ed.field);
+     else if (ed) focusedTerminalEdit.current?.(ed.terminal);
+     else if (id === "zoom.in" || id === "zoom.out" || id === "zoom.reset") void stepZoom(id.slice(5) as ZoomStep).catch(() => {});
++    else if (id === ABOUT_MENU_ID) openAbout(); // VIEW-106
+     else if (id === "app.settings") {
+       setSettingsAt((a) => ({ target: null, n: a.n }));
+       setSettingsOpen(true);

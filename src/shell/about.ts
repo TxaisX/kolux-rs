@@ -28,3 +28,11 @@ export function aboutRows(f: AboutFacts): AboutRow[] {
 
 /** Window event that opens the panel (the Help menu item and the page both send it). */
 export const ABOUT_EVENT = "kolux-about";
+
+/** The Help > About menu item (src-tauri menu.rs sends this id to the page). */
+export const ABOUT_MENU_ID = "help.about";
+
+/** Opens the About panel; the menu item calls it. */
+export function openAbout(target: EventTarget = window): void {
+  target.dispatchEvent(new Event(ABOUT_EVENT));
+}

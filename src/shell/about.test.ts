@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aboutRows, gpuText } from "./about";
+import { ABOUT_EVENT, ABOUT_MENU_ID, aboutRows, gpuText, openAbout } from "./about";
 
 describe("view-106 About panel", () => {
   it("puts Safe Graphics Mode ahead of the browser engine's GPU status, and says so when it is on", () => {
@@ -15,5 +15,16 @@ describe("view-106 About panel", () => {
   it("reads the three GPU states", () => {
     expect(gpuText({ webgl2: true, software: false })).toBe("hardware accelerated");
     expect(gpuText({ webgl2: false, software: false })).toMatch(/WebGL 2 is not available/);
+  });
+});
+
+describe("view-106 Help > About", () => {
+  it("the menu item's id opens the panel's own window event, and nothing else does", () => {
+    const target = new EventTarget();
+    let opened = 0;
+    target.addEventListener(ABOUT_EVENT, () => opened++);
+    expect(ABOUT_MENU_ID).toBe("help.about");
+    openAbout(target);
+    expect(opened).toBe(1);
   });
 });
