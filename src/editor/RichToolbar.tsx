@@ -4,7 +4,9 @@
 // Image opens the system file picker for a picture and writes its markdown at the caret.
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { applyFormat, applyImage, applyLink, imageLink, linkAt, MORE_BLOCKS, RICH_BUTTONS, type RichAction } from "./richFormat";
+import { invoke } from "@tauri-apps/api/core";
+import { insertError, insertPicked } from "./pictureBytes";
+import { applyFormat, applyImage, applyLink, linkAt, MORE_BLOCKS, RICH_BUTTONS, type RichAction } from "./richFormat";
 import type { Rich } from "./markdown";
 import { LINK_EVENT } from "./richKeys";
 
@@ -28,10 +30,10 @@ export default function RichToolbar({ get, notePath = "", onNote }: { get: () =>
     try {
       const file = await open({ multiple: false, directory: false, filters: [{ name: "Pictures", extensions: PICTURES }] });
       if (typeof file !== "string") return;
-      if (!applyImage(r.editor, imageLink(notePath, file))) onNote?.("Put the caret in the note first, then choose a picture.");
+      if (!applyImage(r.editor, await insertPicked(notePath, file, invoke))) onNote?.("Put the caret in the note first, then choose a picture.");
       back();
     } catch (e) {
-      onNote?.(`Could not insert the picture: ${String(e)}`);
+      onNote?.(insertError(e));
     }
   };
   const run = (a: RichAction) => {

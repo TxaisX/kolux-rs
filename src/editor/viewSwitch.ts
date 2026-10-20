@@ -16,7 +16,7 @@ export function viewsFor(f: FileFacts): Offer {
   const e = ext(f.path);
   if (f.kind) return { views: [] }; // diff and conflict tabs show changes already and have no switch
   if (e === "ipynb") return { views: ["source", "rendered"] };
-  const base: View[] = e === "md" || e === "markdown" ? ["source", "rich"] : DIAGRAM.has(e) || TABLE.has(e) ? ["source", "rendered"] : ["edit"];
+  const base: View[] = e === "md" || e === "markdown" ? ["source", "rich"] : DIAGRAM.has(e) || TABLE.has(e) || e === "svg" ? ["source", "rendered"] : ["edit"];
   const changes = !f.untitled && f.inWorktree !== false && !f.binary;
   return changes ? { views: [...base, "changes"], why: { changes: "Compares with the last commit (uncommitted work), not with the base branch." } } : { views: base };
 }

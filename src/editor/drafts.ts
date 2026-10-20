@@ -32,7 +32,7 @@ const real: Timers = { set: (f, ms) => setTimeout(f, ms), clear: (t) => clearTim
 
 export function createDrafts(io: DraftIo, ms = 600, timers: Timers = real) {
   const loaded = new Map<string, Promise<Map<string, Draft>>>();
-  const timersOf = new Map<string, unknown>();
+  const timersOf = new Map<string, { t: unknown; worktree: string; path: string }>();
   const mirror = (worktree: string) => {
     const k = keyOf(worktree);
     let p = loaded.get(k);
@@ -42,7 +42,7 @@ export function createDrafts(io: DraftIo, ms = 600, timers: Timers = real) {
   const pk = (worktree: string, path: string) => keyOf(worktree) + "\n" + keyOf(path);
   const stop = (k: string) => {
     const t = timersOf.get(k);
-    if (t !== undefined) timers.clear(t);
+    if (t !== undefined) timers.clear(t.t);
     timersOf.delete(k);
   };
   /** Writes the draft for the file as it is now (or clears it when the tab is clean). */
@@ -69,10 +69,13 @@ export function createDrafts(io: DraftIo, ms = 600, timers: Timers = real) {
       if (readOnly) return;
       const k = pk(worktree, path);
       stop(k);
-      timersOf.set(k, timers.set(() => void flushOne(worktree, path), ms));
+      timersOf.set(k, { t: timers.set(() => void flushOne(worktree, path), ms), worktree, path });
     },
     /** Writes a waiting draft at once (the window is closing, the tab is leaving). */
     flush: (worktree: string, path: string) => flushOne(worktree, path),
+    /** Row 135: writes every waiting draft at once (the window lost focus, was hidden or is closing),
+     *  so the last moment of typing is not missing from the draft. */
+    flushAll: () => Promise.all([...timersOf.values()].map(({ worktree, path }) => flushOne(worktree, path))),
     /** The user closed the tab or chose to drop the edits: the draft goes. */
     async discard(worktree: string, path: string) {
       stop(pk(worktree, path));
@@ -85,6 +88,24 @@ export function createDrafts(io: DraftIo, ms = 600, timers: Timers = real) {
 
 /** The window's drafts. */
 export const drafts = createDrafts(tauriIo);
+
+/** Row 135: the waiting drafts are written when the window loses focus (a tray Quit takes the focus
+ *  first), is hidden, or unloads; a close from the window itself asks first while a tab is unsaved. */
+export function flushOnLeave(target: Pick<Window, "addEventListener" | "removeEventListener">, flushAll: () => unknown): () => void {
+  const go = () => void flushAll();
+  const hidden = () => {
+    if (typeof document === "undefined" || document.visibilityState === "hidden") go();
+  };
+  target.addEventListener("blur", go);
+  target.addEventListener("pagehide", go);
+  target.addEventListener("visibilitychange", hidden);
+  return () => {
+    target.removeEventListener("blur", go);
+    target.removeEventListener("pagehide", go);
+    target.removeEventListener("visibilitychange", hidden);
+  };
+}
+if (typeof window !== "undefined") flushOnLeave(window, drafts.flushAll);
 
 /** The worktree a draft is kept under: the tab's worktree root, else the file's own folder. */
 export const worktreeOf = (root: string | null | undefined, path: string): string => root ?? path.replace(/[\\/][^\\/]*$/, "");

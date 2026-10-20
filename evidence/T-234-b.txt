@@ -73,3 +73,51 @@ LIVE PROOF PENDING (batched)
    this name" flag.
 STILL OPEN IN T-234-b: code colouring (no tokenizer package), link hover bubble, missing-file toast (App.tsx), images
   (showing, paste and save, data-picture size check), source-view [[note]] underline, equal-share column width.
+
+PIECE 7 (lane/editor, 2026-10-20)
+BUILT
+- linkBubble.ts (pure: bubblePlace, cleanHref refusing javascript:/data:/vbscript:/blob: and control characters, linkKeyAt,
+  setLinkUrl) + LinkHover.tsx: hovering a link in the rich view shows a bubble with Open, Edit (inline address box) and Copy,
+  z-index 60 so it draws above the side panels. Open goes through openHref (linkClicks.ts, shared with Mod+click).
+- sourceLinks.ts: CodeMirror extension for notes in source view: markdown links and [[notes]] underlined (dashed when the
+  name is shared), Ctrl/Cmd+click follows through the same resolver; ambiguous or missing [[name]] gives a toast.
+- linkClicks.ts: missingFileToast(path, stamps) -> "Cannot open <name>: the file is not there (or is outside this project)."
+  App.tsx wiring is evidence/editor-T-234-b-App.tsx.patch (git apply --check clean; with it applied tsc exit 0, then reverted).
+- notePictures.ts: inline data: pictures over 4 MB, not a picture type or with damaged data are replaced by a short note in
+  the preview (PreviewPane.renderMarkdown wraps the sanitiser output); file pictures untouched.
+TESTS: linkBubble.test.ts, sourceLinks.test.ts 7, linkClicks.test.ts +2, notePictures.test.ts.
+READINGS: vitest run src/editor: 62 files, 405 tests passed; tsc --noEmit exit 0 (also with the patch applied); vite build exit 0
+  (logs g-vit.log g-tsc.log g-build.log). No Rust.
+LIVE PROOF PENDING (batched)
+1. Rich view: hover a link: bubble with Open, Edit, Copy; Edit changes the address; it draws over an open side panel.
+2. Source view of a .md: [[Other note]] and [text](file.md) underlined; Ctrl+click opens; a shared name toasts "N notes are named X".
+3. After applying the App.tsx patch: Ctrl+click a link to a deleted file: toast names the file.
+4. Preview of a note with a 5 MB data picture: "Picture not shown: ..." in its place.
+STILL OPEN IN T-234-b: code colouring (waits on a code highlighter library on main), local pictures in notes (waits on a
+  file-bytes read/write in files.rs), equal-share new column width (not expressible in markdown).
+
+PIECE 8 (lane/editor, 2026-10-20, batch H): local pictures in notes, paste and save. Needs the same two Rust patches as T-235-b
+(evidence/editor-T-235-b-files.rs.patch then evidence/editor-T-235-b-lib.rs.patch); without them every picture shows its "not
+shown" line and an insert reports an error in words.
+BUILT:
+- Preview tab: each <img> whose address is a file on disk (relative, ../, %20, backslash, file:, or a full drive path; never web,
+  data, blob or a share) is read through file_bytes only when it comes within ~1200px of the view (IntersectionObserver), shown
+  from a blob address that is let go when the page changes; one that cannot be read is replaced by one line saying why (empty, too
+  large, outside your projects, not there, could not be read) (pictureDom.ts, PreviewPane.tsx).
+- Insert: the toolbar's picture button links a picture already beside or below the note as is, otherwise saves a copy beside the
+  note under a free name (a-2.png, never over a file) and links it relatively, spaces escaped; a failure shows a toast in words.
+- Paste (rich and source view of a markdown file): a picture on the clipboard is saved beside the note as pasted-YYYYMMDD-HHMMSS.ext
+  and linked; one Windows path to a picture pasted from a terminal is treated as picking that picture; anything else pastes as before.
+  The Lexical rich view refuses notes that already hold pictures ("it has images"), so pictures show in Preview and Source; the
+  rich view needs no picture panel.
+DECISIONS (coordinator default; Txais may overrule): pasted pictures go beside the note; a picked picture outside the note's
+  folder is copied beside it.
+TESTS: imageFiles.test.ts (address resolving, picture refs, free names, clock names, pasted path), pictureBytes.test.ts (read, write
+  headers, insert in place or copy, collision, errors, clipboard classification, lazy show and failure line).
+GATES: as T-235-b piece 4 (same run).
+LIVE PROOF PENDING (batched) - after the resolver applies both patches:
+1. A note with ![a](pic.png) and ![b](img/my%20pic.png) beside real files: Preview shows both; a long note shows pictures as you scroll.
+2. Point one at a missing file: Preview shows "Picture not shown: x.png is not there." in its place.
+3. Copy a screenshot, click in the note (rich or Source), paste: pasted-<date>.png appears beside the note and the link is inserted.
+4. Toolbar picture button, choose a picture from another folder: a copy appears beside the note and the link is relative.
+STILL OPEN IN T-234-b: code colouring (no highlighter library on main), equal-share new column width (not expressible in markdown).

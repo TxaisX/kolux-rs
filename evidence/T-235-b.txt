@@ -39,3 +39,77 @@ LIVE PROOF PENDING (batched), after the dependency is in
 2. A bad diagram shows its code plus "Diagram could not be drawn". "$E=mc^2$" and a $$ block render as maths;
    "costs $5 and $10" stays text.
 STILL OPEN IN T-235-b: diagrams and maths in the rich view, image viewer, PDF viewer, CI check tab (unchanged).
+
+PIECE 3 (lane/editor, 2026-10-20, main d11cc803 with mermaid 11.4.1 and katex 0.16.11 landed; diagramLibs.ts is on the tree)
+BUILT: diagrams and maths in the rich view.
+- richDraw.ts: drawable() (a mermaid fence of any spelling, or text holding $x$ / $$ spans; "$5 and $10" is not maths),
+  drawnAtCaret() (the block the caret is in; a list item or quote paragraph counts), allDrawable(), mathHtml() (the
+  preview's restoreMath: KaTeX with trust off, else the escaped source), diagramPanel() (strict mermaid -> DOMPurify SVG
+  clean -> the preview's locked page; a failure gives a one-line reason).
+- DrawPanel.tsx: a floating panel just below the block the caret is in; the diagram is an iframe with an EMPTY sandbox
+  and the no-script page policy, maths goes through the same sanitiser as the preview. The note text is never touched,
+  so the rich view's round trip is unchanged (test: markdown out equals markdown in with the caret in the fence).
+- EditorPane.tsx: one mount line (rich view, not in Changes view). editor-extras.css: .rich-draw.
+DECISION (coordinator default; Txais may overrule): the rich view draws a block as a panel under the caret, not in place of
+  the block, because replacing the fence in the document would change what the file round-trips to.
+TESTS: richDraw.test.ts 9 (drawable, caret block, list item, order and no text change, maths fallback and escaping, locked page,
+  failed diagram reason, missing renderer).
+READINGS: vitest run src/editor/richDraw.test.ts: 9 passed (g-draw.log); tsc --noEmit exit 0 (g-tsc.log).
+  No Rust, no shared file, no patch. The earlier editor-T-235-b-package.json patch is moot: both libraries are on main.
+LIVE PROOF PENDING (batched)
+1. Rich view of a note with a mermaid fence: click inside the fence; a panel with the drawn diagram shows just under it;
+   click elsewhere, it goes. A broken diagram shows one line "Diagram could not be drawn". Switch to source: the fence is unchanged.
+2. Click in a paragraph with $E=mc^2$ or a $$ block: the rendered maths shows in a panel under it; "costs $5 and $10" shows nothing.
+STILL OPEN IN T-235-b: image viewer and PDF viewer (need a file-bytes read in files.rs, a reliability-lane file, and a PDF library
+  that is not on main), CI check tab (waits on the Checks panel's data).
+
+PIECE 4 (lane/editor, 2026-10-20, batch H; from merge e4be1027 of main 5a4c4e35): the image viewer and the file-bytes read.
+BUILT:
+- Rust, as PATCHES (files.rs and lib.rs are the reliability lane's / shared; apply in this order, files first):
+  evidence/editor-T-235-b-files.rs.patch (166 lines) adds file_bytes (bounded read of any file inside the fence, raw bytes
+  back through tauri::ipc::Response, 32 MB cap, refuses a folder) and file_write_picture (raw body is the picture, path in the
+  x-file-path header, same fence, WRITES lock; ONLY a new file with a picture ending (png jpg jpeg gif webp bmp), never over an
+  existing file, never an empty or over-16-MB body, a missing folder reports instead of being made, a partial file is removed
+  on a write error); evidence/editor-T-235-b-lib.rs.patch registers both in generate_handler! (2 lines after files::file_write).
+  Both `git apply --check` clean on lane/editor at e4be1027.
+- ImageView.tsx (tab for PNG, JPEG, GIF, WebP, BMP, ICO, AVIF; bytes via file_bytes into a blob address let go on close;
+  header with name, path, Copy, Retry on failure, Close), ImageCanvas.tsx (a small picture opens at 100%, a big one fits;
+  Ctrl/Cmd+wheel zooms toward the pointer between 5% and 3200%; plain wheel and drag move it; two-finger pinch zooms with the
+  same limits; - + 100% Fit buttons; the size line; a failure or undecodable file says why in words instead of a blank tab),
+  imageFiles.ts (the rules: types, zoom maths, error words), pictureBytes.ts (bytes layer, Tauri call injected).
+- SvgView.tsx: an SVG file is a picture and text. viewSwitch gives it Source and Picture; the picture is drawn from the tab's
+  open text through an <img> (scripts never run), so Source can be edited and diffed as any text file.
+- EditorPane.tsx: default export now chooses ImageView for a raster picture, else the text editor (renamed TextEditorPane); SVG
+  uses the existing CSV/notebook "grid" slot. No App.tsx change: openFile already hands any path to EditorPane.
+DECISIONS (coordinator default; Txais may overrule): read cap 32 MB; picture write cap 16 MB; new-file-only writes; SVG opens
+  on its picture with Source one click away.
+TESTS: imageFiles.test.ts 17, pictureBytes.test.ts 16, viewSwitch.test.ts +1 (SVG gets Source and Picture).
+GATES (g = G:/Temp/editor-v3-logs/): cargo build exit 0 and clippy --all-targets -D warnings exit 0 and `cargo test files::`
+  43 passed 0 failed, all with the two patches applied (h-build.log, h-clippy.log, h-test.log), tree reverted after;
+  tsc --noEmit exit 0 (h-tsc.log); vitest run src/editor 66 files 455 tests passed (h-vitest.log); vite build exit 0 (h-vite.log).
+LIVE PROOF PENDING (batched) - after the resolver applies both patches:
+1. Open a PNG from the explorer: it opens in an image tab; a small one at 100%, a large one fitted. Ctrl+wheel zooms toward the
+   pointer and stops at 5% and 3200%; drag and plain wheel move it; the 100% and Fit buttons work; the size line reads
+   "W x H px, N KB". Close the tab: nothing is left over.
+2. Rename a copy of a text file to .png and open it: the tab says the file is not a picture this window understands (no blank).
+   Delete the file while its tab is open, press Retry: it says the file is not there any more.
+3. Open a .svg: it shows the drawing; Source shows its text; type in Source and switch back: the picture follows without saving.
+STILL OPEN IN T-235-b: PDF viewer (no PDF library is approved or on main; none added), CI check tab (waits on the Checks panel's data).
+
+PIECE 5 (lane/editor, 2026-10-20): PDF viewer tab (EDIT-029), Txais approved a PDF library.
+LIBRARY: pdfjs-dist 5.4.624 (Mozilla, Apache-2.0), exact pin, published 2026-02-01 (over two weeks old). Package changes are patches only:
+  evidence/editor-T-235-b-pdf-package.json.patch and evidence/editor-T-235-b-pdf-pnpm-lock.yaml.patch (apply together with this commit; the code
+  imports pdfjs-dist, so tsc fails on a tree without them). The lock also lists pdfjs-dist's OPTIONAL @napi-rs/canvas* native packages; the app never uses them.
+FILES: src/editor/pdfFiles.ts (pure rules), pdfFiles.test.ts (8 tests), PdfView.tsx (the tab), EditorPane.tsx (a .pdf path opens PdfView), editor-extras.css.
+LOCKED: getDocument options isEvalSupported/useWorkerFetch/useWasm/enableXfa false, stopAtErrors, disableAutoFetch/Stream/Range; bytes only from file_bytes
+  (readPicture); worker is the app's own file via the Vite ?worker import (script-src 'self'). Ad-hoc Node check (G:/Temp/editor-v3/pdfcheck.mjs) with a
+  throwing fetch: a 2-page PDF opened, viewport and text read, nothing fetched.
+GATES (g = G:/Temp/editor-v3-logs/): tsc exit 0 (l-tsc.log); vitest run src/editor 67 files 465 passed (l-vitest.log); vite build exit 0, emits pdf and worker chunks (l-vite.log).
+LIVE PROOF PENDING (batched) - after the resolver applies both package patches and pnpm install:
+1. Open a multi-page .pdf from the explorer: it opens in a tab filling the width; "Page 1 of N" updates while scrolling; text is sharp.
+2. Zoom with - / + and Ctrl+wheel; scroll to page 3; switch to another tab and back: zoom and place are as left. Close the tab and open the file again: back to fill-width at the top.
+3. Open a non-PDF renamed to .pdf, and a password-protected PDF: each says why in words, with Retry.
+4. Devtools network panel while opening: no requests other than the app's own.
+STILL OPEN IN T-235-b: CI check tab (Checks panel data), PDF text selection and annotations, JPX images (wasm off).
+T-316-b EDIT-018 (note to PDF): left open. PrintToPdf exists only in browser_engine.rs for a browser page by id; a note needs a hidden page with the rendered
+  note and a new command in the browser lane's files. Not started.
