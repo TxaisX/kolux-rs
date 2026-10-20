@@ -1,0 +1,12 @@
+diff --git a/package.json b/package.json
+index adef3174..5a1a1fe0 100644
+--- a/package.json
++++ b/package.json
+@@ -41,6 +41,7 @@
+     "lexical": "^0.52.0",
+     "marked": "^18.1.0",
+     "mermaid": "11.4.1",
++    "pdfjs-dist": "5.4.624",
+     "react": "^19.1.0",
+     "react-dom": "^19.1.0"
+   },

@@ -95,3 +95,21 @@ LIVE PROOF PENDING (batched) - after the resolver applies both patches:
    Delete the file while its tab is open, press Retry: it says the file is not there any more.
 3. Open a .svg: it shows the drawing; Source shows its text; type in Source and switch back: the picture follows without saving.
 STILL OPEN IN T-235-b: PDF viewer (no PDF library is approved or on main; none added), CI check tab (waits on the Checks panel's data).
+
+PIECE 5 (lane/editor, 2026-10-20): PDF viewer tab (EDIT-029), Txais approved a PDF library.
+LIBRARY: pdfjs-dist 5.4.624 (Mozilla, Apache-2.0), exact pin, published 2026-02-01 (over two weeks old). Package changes are patches only:
+  evidence/editor-T-235-b-pdf-package.json.patch and evidence/editor-T-235-b-pdf-pnpm-lock.yaml.patch (apply together with this commit; the code
+  imports pdfjs-dist, so tsc fails on a tree without them). The lock also lists pdfjs-dist's OPTIONAL @napi-rs/canvas* native packages; the app never uses them.
+FILES: src/editor/pdfFiles.ts (pure rules), pdfFiles.test.ts (8 tests), PdfView.tsx (the tab), EditorPane.tsx (a .pdf path opens PdfView), editor-extras.css.
+LOCKED: getDocument options isEvalSupported/useWorkerFetch/useWasm/enableXfa false, stopAtErrors, disableAutoFetch/Stream/Range; bytes only from file_bytes
+  (readPicture); worker is the app's own file via the Vite ?worker import (script-src 'self'). Ad-hoc Node check (G:/Temp/editor-v3/pdfcheck.mjs) with a
+  throwing fetch: a 2-page PDF opened, viewport and text read, nothing fetched.
+GATES (g = G:/Temp/editor-v3-logs/): tsc exit 0 (l-tsc.log); vitest run src/editor 67 files 465 passed (l-vitest.log); vite build exit 0, emits pdf and worker chunks (l-vite.log).
+LIVE PROOF PENDING (batched) - after the resolver applies both package patches and pnpm install:
+1. Open a multi-page .pdf from the explorer: it opens in a tab filling the width; "Page 1 of N" updates while scrolling; text is sharp.
+2. Zoom with - / + and Ctrl+wheel; scroll to page 3; switch to another tab and back: zoom and place are as left. Close the tab and open the file again: back to fill-width at the top.
+3. Open a non-PDF renamed to .pdf, and a password-protected PDF: each says why in words, with Retry.
+4. Devtools network panel while opening: no requests other than the app's own.
+STILL OPEN IN T-235-b: CI check tab (Checks panel data), PDF text selection and annotations, JPX images (wasm off).
+T-316-b EDIT-018 (note to PDF): left open. PrintToPdf exists only in browser_engine.rs for a browser page by id; a note needs a hidden page with the rendered
+  note and a new command in the browser lane's files. Not started.

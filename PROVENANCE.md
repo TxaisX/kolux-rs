@@ -1041,3 +1041,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · orchestration T-260-d (no-parent nesting) · PLAN T-260-d line and T-260-b evidence; this tree's own activity.rs nest_lanes and cli.rs dispatch record; no outside source
 > 2026-10-20 · editor T-323-b piece 3 (Open in for a single file in the Explorer menu) · spec SET-039 / EDIT-043 cards as given in PLAN; this tree's own scm_open.rs and settings/openIn.ts; no outside source
 > 2026-10-20 · editor T-317 third piece (searchable Base box in the pull request composer, worktree_branches) · spec EDIT-048 card as given in PLAN; this tree's own projects.rs branches, SearchPick.tsx; no outside source
+> 2026-10-20 · editor T-235-b piece 5 (PDF viewer tab) · spec EDIT-029 card as given in PLAN; pdf.js public API docs (pdfjs-dist 5.4.624, Apache-2.0, approved by Txais); this tree's imageFiles.ts, pictureBytes.ts; no outside source
