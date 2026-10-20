@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { ITerminalOptions } from "@xterm/xterm";
 import { monoFont, SPAN } from "../theme";
 import { fontStack } from "../settings/fonts";
+import { applyInput } from "./inputWire";
 
 export const FIELDS = {
   size: "terminalFontSize",
@@ -107,6 +108,7 @@ export const TEXT_EVENT = "kolux-terminal-text";
 
 export function applyText(s: Record<string, unknown> | null | undefined): void {
   current = readText(s ?? {});
+  applyInput(s); // T-247-d: the input preferences ride the same settings reads
   if (typeof window !== "undefined") window.dispatchEvent(new Event(TEXT_EVENT));
 }
 

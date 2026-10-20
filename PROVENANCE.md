@@ -835,3 +835,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-19 · shell T-247-b · rules from the SET-022/025/026/043 cards; this tree's own terminal/text.ts, renderer.ts, shellChoice.ts, closing.ts, pin.ts and projects/deleting.ts; no outside source
 > 2026-10-19 · shell T-247-c · coordinator call 2026-10-19 on the SET-022 font-size rule; this tree's own terminal/text.ts and theme.ts; no outside source
 > 2026-10-19 · shell T-246-d · rules from the SET-007/009/015/019 cards; this tree's own keys/, settings/search.ts and ShortcutsPage; no outside source
+> 2026-10-19 · shell T-247-d · rules from the SET-022/025/026 cards; this tree's own terminal/inputPrefs.ts, text.ts and TerminalPage; npm registry metadata for the addon's version; no outside source
