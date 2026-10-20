@@ -1026,3 +1026,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-20 · hooks T-167-b batch 8 (sleep record) · spec/04 STAT-030/STAT-037 as given in PLAN; this tree's own agent_hooks/saved.rs and projects.rs workspace_sleep; no outside source
 > 2026-10-20 · repo T-127-b (second piece) · spec/05 VIEW-073, VIEW-084, VIEW-088, VIEW-093 cards as given in the brief; this tree's own session_list.rs, sessions.rs, ChecksPanel.tsx, App.tsx; Claude Code transcript shapes as already recorded for T-169, sub-agent files read both beside the session and under its subagents folder; no outside code
 > 2026-10-20 · repo T-224-b (second piece) · spec/05 VIEW-059, VIEW-060, VIEW-061 cards as given in the brief; this tree's own Explorer.tsx, explorerView.ts, ContentSearch.tsx, desktopDrops.ts; no outside code
+> 2026-10-20 · worktrees T-110-b close · COMPAT 5.5 as given; this tree's own setup.rs and the lane's T-110-b code; no outside source
