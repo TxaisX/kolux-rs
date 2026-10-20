@@ -36,6 +36,13 @@ pub struct PortRow {
     /// The deepest workspace folder holding the program's working folder; `None` = external.
     pub worktree: Option<String>,
     pub external: bool,
+    /// When the program started, as text: the window sends it back with Stop, and a stop is refused
+    /// when the live program's start time differs. Text, not a number, because the system's tick
+    /// count is past what the window's numbers hold exactly (2^53), and a rounded value would never match.
+    pub started: Option<String>,
+    /// The terminal whose pane shell is this program or one of its ancestors; `None` when no pane
+    /// started it. A printed address binds only to a program under the terminal that printed it.
+    pub terminal: Option<u32>,
 }
 
 /// What a stop did.
@@ -46,11 +53,13 @@ pub enum Stop {
     Stopped(Vec<u32>),
 }
 
-/// What the status bar asks to stop: the port and the program it showed on it.
+/// What the status bar asks to stop: the port, the program it showed on it, and that program's start
+/// time as the row carried it (`None` when the scan could not read it: such a row never licenses a stop).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StopRequest {
     pub port: u16,
     pub pid: u32,
+    pub started: Option<u64>,
 }
 
 /// What a stop is checked against besides the request.
@@ -118,12 +127,30 @@ pub fn is_home_or_above(path: &str, home: &str) -> bool {
     p.is_empty() || p == h || h.starts_with(&format!("{p}/"))
 }
 
+/// Every folder the environment calls home, each once: `USERPROFILE`, `HOMEDRIVE` + `HOMEPATH` and
+/// `HOME`. Windows keeps two of these and they need not agree (a redirected home drive), so the home
+/// rule refuses all of them rather than the one the rest of the app happens to prefer.
+pub fn candidate_homes(var: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |h: Option<String>| {
+        if let Some(h) = h {
+            if !norm(&h).is_empty() && !out.iter().any(|o| norm(o) == norm(&h)) {
+                out.push(h);
+            }
+        }
+    };
+    push(var("USERPROFILE"));
+    push(var("HOMEDRIVE").zip(var("HOMEPATH")).map(|(d, p)| format!("{d}{p}")));
+    push(var("HOME"));
+    out
+}
+
 /// The workspace folders a stop may act in: real folders with a `.git` entry (a worktree or a
-/// checkout), at least two levels deep, and never the home folder or a folder above it. Depth alone
-/// keeps out only drive roots and top-level folders: `C:\Users\<name>` and `/home/<name>` are two
-/// levels deep and may well hold a `.git`, so the home rule is its own check.
-pub fn valid_worktrees(worktrees: &[String], home: Option<&str>) -> Vec<String> {
-    valid_worktrees_by(worktrees, home, &|w| {
+/// checkout), at least two levels deep, and never one of the home folders or a folder above one.
+/// Depth alone keeps out only drive roots and top-level folders: `C:\Users\<name>` and `/home/<name>`
+/// are two levels deep and may well hold a `.git`, so the home rule is its own check.
+pub fn valid_worktrees(worktrees: &[String], homes: &[String]) -> Vec<String> {
+    valid_worktrees_by(worktrees, homes, &|w| {
         let p = std::path::Path::new(w);
         p.join(".git").exists() && p.is_dir()
     })
@@ -132,11 +159,11 @@ pub fn valid_worktrees(worktrees: &[String], home: Option<&str>) -> Vec<String> 
 /// `valid_worktrees` with the on-disk check (the folder is real and holds a `.git` entry) supplied by
 /// the caller, so the depth and home rules can be proven on paths a test must never create, such as
 /// a drive root or a top-level folder.
-pub fn valid_worktrees_by(worktrees: &[String], home: Option<&str>, is_repo_dir: &dyn Fn(&str) -> bool) -> Vec<String> {
+pub fn valid_worktrees_by(worktrees: &[String], homes: &[String], is_repo_dir: &dyn Fn(&str) -> bool) -> Vec<String> {
     let mut out = Vec::new();
     for w in worktrees {
         if !deep_enough(w) { continue; } // G:depth
-        if home.is_some_and(|h| is_home_or_above(w, h)) { continue; } // G:home
+        if homes.iter().any(|h| is_home_or_above(w, h)) { continue; } // G:home
         if !is_repo_dir(w) { continue; } // G:git
         out.push(w.clone());
     }
@@ -168,16 +195,24 @@ pub fn own_helper(l: &Listener, own_pid: u32, pane_pids: &[u32]) -> bool {
     under_app && !under_pane
 }
 
+/// The terminal (by id) whose pane shell is the program itself or its nearest pane ancestor, from
+/// `panes` as (terminal id, shell pid). `None` when no pane started the program.
+pub fn pane_of(l: &Listener, panes: &[(u32, u32)]) -> Option<u32> {
+    let shell = |pid: u32| panes.iter().find(|(_, p)| *p == pid).map(|(id, _)| *id);
+    shell(l.pid).or_else(|| l.ancestors.iter().find_map(|a| shell(*a)))
+}
+
 /// Every listener as a row: one row per program and port (IPv4 and IPv6 twins fold into one),
-/// ordered by port, tied to its workspace folder when it has one.
-pub fn classify(listeners: &[Listener], worktrees: &[String]) -> Vec<PortRow> {
+/// ordered by port, tied to its workspace folder when it has one and to the terminal whose pane
+/// started it. `panes` is (terminal id, shell pid) for every open pane.
+pub fn classify(listeners: &[Listener], worktrees: &[String], panes: &[(u32, u32)]) -> Vec<PortRow> {
     let mut rows: Vec<PortRow> = Vec::new();
     for l in listeners {
         if rows.iter().any(|r| r.port == l.port && r.pid == l.pid) {
             continue;
         }
         let worktree = l.cwd.as_deref().and_then(|c| deepest_worktree(c, worktrees)).cloned();
-        rows.push(PortRow { port: l.port, address: l.address.clone(), pid: l.pid, name: l.name.clone(), external: worktree.is_none(), worktree });
+        rows.push(PortRow { port: l.port, address: l.address.clone(), pid: l.pid, name: l.name.clone(), external: worktree.is_none(), worktree, started: l.started.map(|s| s.to_string()), terminal: pane_of(l, panes) });
     }
     rows.sort_by_key(|r| (r.port, r.pid));
     rows
@@ -185,7 +220,8 @@ pub fn classify(listeners: &[Listener], worktrees: &[String]) -> Vec<PortRow> {
 
 /// Stops the program the user saw on `port`, but only inside a licensed workspace folder. Every
 /// program on the port is checked before any is touched, so one outside program, a system or
-/// Kolux process, or a program the user did not see refuses the whole stop.
+/// Kolux process, or a program the user did not see (another process number, or the same number with
+/// another start time than the row carried) refuses the whole stop.
 pub fn stop_in(listeners: &[Listener], licensed: &[String], req: StopRequest, g: &Guards, kill: &mut dyn FnMut(u32)) -> Result<Stop, String> {
     let here: Vec<&Listener> = listeners.iter().filter(|l| l.port == req.port).collect();
     if here.is_empty() {
@@ -207,6 +243,9 @@ pub fn stop_in(listeners: &[Listener], licensed: &[String], req: StopRequest, g:
     let names: Vec<String> = here.iter().map(|l| format!("{} ({})", name(l), l.pid)).collect();
     if pids != [req.pid] { return Err(format!("Port {} is now held by {}, not the program that was shown. The list was refreshed; look again before stopping it", req.port, names.join(", "))); } // G:pid
     for l in &here {
+        // the program the row showed (its start time at scan) must be the one found now, and that one
+        // must still be there right before the kill
+        if !same_program(req.started, l.started) { return Err(format!("Port {}: the {} shown has ended and another program now has its process number; nothing was stopped. The list was refreshed", req.port, name(l))); } // G:seen
         if !same_program(l.started, (g.started_now)(l.pid)) { return Err(format!("Port {}: {} has ended and its process number now belongs to another program; nothing was stopped", req.port, name(l))); } // G:started
     }
     for p in &pids {
@@ -217,8 +256,8 @@ pub fn stop_in(listeners: &[Listener], licensed: &[String], req: StopRequest, g:
 
 /// The whole stop: the window's list is cut to real worktrees outside the home folder, then to what
 /// the project store knows, and the program on the port is checked against the request.
-pub fn stop_request(listeners: &[Listener], worktrees: &[String], known: &[String], home: Option<&str>, req: StopRequest, g: &Guards, kill: &mut dyn FnMut(u32)) -> Result<Stop, String> {
-    let lic = licensed(&valid_worktrees(worktrees, home), known);
+pub fn stop_request(listeners: &[Listener], worktrees: &[String], known: &[String], homes: &[String], req: StopRequest, g: &Guards, kill: &mut dyn FnMut(u32)) -> Result<Stop, String> {
+    let lic = licensed(&valid_worktrees(worktrees, homes), known);
     stop_in(listeners, &lic, req, g, kill)
 }
 
@@ -520,8 +559,17 @@ pub fn listeners() -> Result<Vec<Listener>, String> {
     imp::listeners()
 }
 
-fn home() -> Option<String> {
-    crate::pty::home_dir().map(|p| p.to_string_lossy().into_owned())
+/// Every home folder on this machine: the environment's candidates plus the one the rest of the app
+/// uses, so whichever a tool or the user means by "home", a stop never acts in it.
+fn homes() -> Vec<String> {
+    let mut out = candidate_homes(&|k| std::env::var(k).ok());
+    if let Some(p) = crate::pty::home_dir() {
+        let p = p.to_string_lossy().into_owned();
+        if !out.iter().any(|o| norm(o) == norm(&p)) {
+            out.push(p);
+        }
+    }
+    out
 }
 
 /// Every folder the project store knows: each project's root and the worktrees git lists for it.
@@ -534,16 +582,15 @@ fn known_workspaces(git: &crate::git::Git, store: &std::sync::Mutex<crate::state
         .collect())
 }
 
-/// The status bar's scan: the listeners as rows, workspace ones tied to their folder. Only folders
-/// that could license a stop count as workspaces, so a row never shows a Stop the backend refuses.
-#[tauri::command]
-pub async fn ports_scan(worktrees: Vec<String>) -> Result<Vec<PortRow>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let ok = valid_worktrees(&worktrees, home().as_deref());
-        listeners().map(|l| classify(&l, &ok))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+/// The status bar's scan: the listeners as rows, workspace ones tied to their folder and to the pane
+/// that started them. The window's folders are cut by the depth, home and git rules here; the project
+/// store rule is applied only at the stop (it costs a git call per project), so a row inside a folder
+/// the store does not know can still show a Stop that the backend then refuses with a message.
+#[tauri::command(async)]
+pub fn ports_scan(terminals: tauri::State<'_, crate::terminal::Terminals>, worktrees: Vec<String>) -> Result<Vec<PortRow>, String> {
+    let panes: Vec<(u32, u32)> = terminals.list().into_iter().filter_map(|(id, pid, _)| pid.map(|p| (id, p))).collect();
+    let ok = valid_worktrees(&worktrees, &homes());
+    listeners().map(|l| classify(&l, &ok, &panes))
 }
 
 /// Stops the program the status bar showed on `port`. Returns "stopped" or "gone" (it had already
@@ -551,18 +598,22 @@ pub async fn ports_scan(worktrees: Vec<String>) -> Result<Vec<PortRow>, String> 
 /// program must be the one shown, inside such a folder, not a system process, not Kolux or one of
 /// its own helpers, and still the same program (same start time) just before the kill.
 #[tauri::command(async)]
-pub fn ports_stop(git: tauri::State<'_, crate::git::Git>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, terminals: tauri::State<'_, crate::terminal::Terminals>, worktrees: Vec<String>, port: u16, pid: u32) -> Result<String, String> {
+pub fn ports_stop(git: tauri::State<'_, crate::git::Git>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, terminals: tauri::State<'_, crate::terminal::Terminals>, worktrees: Vec<String>, port: u16, pid: u32, started: Option<String>) -> Result<String, String> {
     let known = known_workspaces(&git, &store)?;
     let pane_pids: Vec<u32> = terminals.list().into_iter().filter_map(|(_, pid, _)| pid).collect();
     let now = listeners()?;
-    let home = home();
+    let homes = homes();
     let g = Guards { own_pid: std::process::id(), pane_pids: &pane_pids, started_now: &imp::started };
     let mut killed = Vec::new();
-    // The start-time check runs inside `stop_in` right before this closure, so the gap between the
-    // check and the kill is the microseconds of one process spawn, not the scan-to-click window.
+    // Three readings of the program's start time must agree before the kill: the row's (taken at the
+    // scan the user saw, sent back by the window), the stop's own re-scan above, and one taken inside
+    // `stop_in` right before this closure runs. What is NOT covered: the milliseconds between that last
+    // reading and `taskkill` (or the Unix kill) reaching the process; no process handle is held across
+    // them, so a program that ends and has its number reused inside that window could be hit.
     // `taskkill /T` (and the Unix kill_tree) ends the program's descendants as well, its workers and
     // child servers, without a folder check of their own: that is what stopping a dev server means.
-    let done = stop_request(&now, &worktrees, &known, home.as_deref(), StopRequest { port, pid }, &g, &mut |p| {
+    let shown = started.as_deref().and_then(|s| s.parse::<u64>().ok());
+    let done = stop_request(&now, &worktrees, &known, &homes, StopRequest { port, pid, started: shown }, &g, &mut |p| {
         crate::procs::kill_tree(p);
         killed.push(p);
     })?;
@@ -605,9 +656,12 @@ mod tests {
         Guards { own_pid: 99, pane_pids: &[50], started_now: &same }
     }
 
+    /// A request from a row that showed `pid` with the start time every test listener carries.
     fn req(port: u16, pid: u32) -> StopRequest {
-        StopRequest { port, pid }
+        StopRequest { port, pid, started: Some(SEEN) }
     }
+
+    const NO_HOME: &[String] = &[];
 
     /// A worktree folder deep enough to license a stop, with its `.git` entry.
     fn tree(tmp: &std::path::Path) -> String {
@@ -649,8 +703,9 @@ mod tests {
             l(9000, 13, None),
             l(80, 4, None),
         ];
-        let rows = classify(&ls, &trees);
+        let rows = classify(&ls, &trees, &[]);
         assert_eq!(rows.iter().map(|r| r.port).collect::<Vec<_>>(), vec![80, 3000, 5173, 8080, 9000], "one row per program and port, by port");
+        assert_eq!(rows[2].started.as_deref(), Some("7"), "a row carries its program's start time as text, for Stop to send back");
         assert!(rows[0].external, "a system listener (pid 4) is shown as external, not hidden");
         assert_eq!(rows[1].worktree.as_deref(), Some("C:/work/app/nested"));
         assert_eq!(rows[2].worktree.as_deref(), Some("C:/work/app"));
@@ -681,8 +736,58 @@ mod tests {
         // through the licence check, with the disk check standing in (a test must not plant a .git in a
         // drive root): a root or top-level folder is refused even when it does hold a .git entry
         let any_repo = |_: &str| true;
-        assert_eq!(valid_worktrees_by(&w(&["C:\\", "/", "C:\\work", "/srv", "C:\\work\\app", "/srv/a/b"]), None, &any_repo), w(&["C:\\work\\app", "/srv/a/b"]));
-        assert_eq!(valid_worktrees_by(&w(&["C:\\work\\app"]), None, &|_| false), Vec::<String>::new(), "no .git entry, however deep");
+        assert_eq!(valid_worktrees_by(&w(&["C:\\", "/", "C:\\work", "/srv", "C:\\work\\app", "/srv/a/b"]), NO_HOME, &any_repo), w(&["C:\\work\\app", "/srv/a/b"]));
+        assert_eq!(valid_worktrees_by(&w(&["C:\\work\\app"]), NO_HOME, &|_| false), Vec::<String>::new(), "no .git entry, however deep");
+    }
+
+    #[test]
+    fn view_078_fix2_every_home_folder_the_machine_names_and_its_parents_are_refused() {
+        // Windows with a redirected home drive: USERPROFILE and HOMEDRIVE+HOMEPATH disagree
+        let env = |k: &str| match k {
+            "USERPROFILE" => Some("C:\\Users\\me".to_string()),
+            "HOMEDRIVE" => Some("H:".to_string()),
+            "HOMEPATH" => Some("\\Users\\me".to_string()),
+            _ => None,
+        };
+        let homes = candidate_homes(&env);
+        assert_eq!(homes, w(&["C:\\Users\\me", "H:\\Users\\me"]), "both homes are candidates");
+        // Unix, and a machine where every variable names the same folder: one candidate
+        assert_eq!(candidate_homes(&|k| (k == "HOME").then(|| "/home/me".to_string())), w(&["/home/me"]));
+        assert_eq!(candidate_homes(&|k| matches!(k, "HOME" | "USERPROFILE").then(|| if k == "HOME" { "C:/Users/me/".to_string() } else { "C:\\Users\\me".to_string() })), w(&["C:\\Users\\me"]), "one spelling per folder");
+        assert_eq!(candidate_homes(&|_| None), Vec::<String>::new());
+        assert_eq!(candidate_homes(&|k| (k == "HOMEDRIVE").then(|| "H:".to_string())), Vec::<String>::new(), "a drive without a path is no home");
+        // both homes are refused, each at two levels deep with a .git standing in, and so are their parents;
+        // a project under either home is kept
+        let any_repo = |_: &str| true;
+        let asked = w(&["C:\\Users\\me", "H:\\Users\\me", "C:\\Users", "H:\\Users", "C:\\Users\\me\\proj", "H:\\Users\\me\\app"]);
+        assert_eq!(valid_worktrees_by(&asked, &homes, &any_repo), w(&["C:\\Users\\me\\proj", "H:\\Users\\me\\app"]));
+        // and through the whole stop: a program in the second home is refused like one in the first
+        let mut killed = Vec::new();
+        for home in &homes {
+            let r = stop_request(&[l(1, 10, Some(home))], &asked, &asked, &homes, req(1, 10), &guards(), &mut |p| killed.push(p));
+            assert!(r.unwrap_err().contains("outside your workspaces"), "{home} is a home folder");
+        }
+        assert!(killed.is_empty());
+    }
+
+    #[test]
+    fn view_078_fix2_a_row_names_the_terminal_whose_pane_started_its_program() {
+        let trees = w(&["C:/work/app"]);
+        // terminal 1's shell is pid 50, terminal 2's is pid 60; Kolux is 99
+        let panes = [(1u32, 50u32), (2, 60)];
+        let ls = vec![
+            Listener { ancestors: vec![50, 99], ..l(5173, 10, Some("C:/work/app")) },
+            Listener { ancestors: vec![61, 60, 99], ..l(3000, 11, Some("C:/work/app")) },
+            l(8080, 12, Some("C:/work/app")),
+            Listener { ancestors: vec![99], ..l(9000, 50, Some("C:/work/app")) },
+        ];
+        let rows = classify(&ls, &trees, &panes);
+        let terminal = |port: u16| rows.iter().find(|r| r.port == port).unwrap().terminal;
+        assert_eq!(terminal(5173), Some(1), "a program under terminal 1's shell");
+        assert_eq!(terminal(3000), Some(2), "two levels under terminal 2's shell");
+        assert_eq!(terminal(8080), None, "no pane in its chain: not a terminal's program");
+        assert_eq!(terminal(9000), Some(1), "the pane's shell itself");
+        assert_eq!(classify(&ls, &trees, &[])[0].terminal, None, "no panes open: no terminal");
     }
 
     #[test]
@@ -706,10 +811,11 @@ mod tests {
         std::fs::create_dir_all(tmp.join(".git")).unwrap();
         let s = |p: &std::path::Path| p.to_string_lossy().into_owned();
         let list = [s(&home_dir), s(&tmp), s(&proj)];
-        assert_eq!(valid_worktrees(&list, Some(&s(&home_dir))), vec![s(&proj)]);
+        let homes = [s(&home_dir)];
+        assert_eq!(valid_worktrees(&list, &homes), vec![s(&proj)]);
         // and through the whole stop: a program started in the home folder is refused even though home holds a .git
         let mut killed = Vec::new();
-        let r = stop_request(&[l(1, 10, Some(&s(&home_dir)))], &list, &list, Some(&s(&home_dir)), req(1, 10), &guards(), &mut |p| killed.push(p));
+        let r = stop_request(&[l(1, 10, Some(&s(&home_dir)))], &list, &list, &homes, req(1, 10), &guards(), &mut |p| killed.push(p));
         assert!(r.unwrap_err().contains("outside your workspaces"));
         assert!(killed.is_empty());
     }
@@ -726,11 +832,11 @@ mod tests {
         let request = [a.clone(), b.clone()];
         let mut killed = Vec::new();
         // the window asks with both folders, but the store knows only `a`: a program in `b` is refused
-        let r = stop_request(&[l(1, 10, Some(&b))], &request, std::slice::from_ref(&a), None, req(1, 10), &guards(), &mut |p| killed.push(p));
+        let r = stop_request(&[l(1, 10, Some(&b))], &request, std::slice::from_ref(&a), NO_HOME, req(1, 10), &guards(), &mut |p| killed.push(p));
         assert!(r.unwrap_err().contains("outside your workspaces"));
         assert!(killed.is_empty());
         // once the store knows `b` too, the same program is stopped
-        assert_eq!(stop_request(&[l(1, 10, Some(&b))], &request, &request, None, req(1, 10), &guards(), &mut |p| killed.push(p)), Ok(Stop::Stopped(vec![10])));
+        assert_eq!(stop_request(&[l(1, 10, Some(&b))], &request, &request, NO_HOME, req(1, 10), &guards(), &mut |p| killed.push(p)), Ok(Stop::Stopped(vec![10])));
         assert_eq!(killed, vec![10]);
     }
 
@@ -824,6 +930,26 @@ mod tests {
     }
 
     #[test]
+    fn view_078_fix2_a_stop_is_refused_when_the_rows_start_time_is_not_the_live_programs() {
+        let tmp = crate::test_dir::temp("ports-seen");
+        let tree_s = tree(&tmp);
+        let lic = std::slice::from_ref(&tree_s);
+        let mut killed: Vec<u32> = Vec::new();
+        let shown = |started: Option<u64>| StopRequest { port: 5173, pid: 10, started };
+        // the row the user saw was scanned while an earlier program held pid 10; by the click a new
+        // program with the same number and port is live (its start time differs from the row's), and the
+        // stop's re-scan and the pre-kill reading agree with each other: still refused
+        let e = stop_in(&[l(5173, 10, Some(&tree_s))], lic, shown(Some(SEEN + 1)), &guards(), &mut |p| killed.push(p)).unwrap_err();
+        assert!(e.contains("shown has ended"), "{e}");
+        // a row whose start time the scan could not read never licenses a stop
+        assert!(stop_in(&[l(5173, 10, Some(&tree_s))], lic, shown(None), &guards(), &mut |p| killed.push(p)).is_err());
+        assert!(killed.is_empty(), "nothing was touched: {killed:?}");
+        // the row's, the re-scan's and the pre-kill reading agree: stopped
+        assert_eq!(stop_in(&[l(5173, 10, Some(&tree_s))], lic, shown(Some(SEEN)), &guards(), &mut |p| killed.push(p)), Ok(Stop::Stopped(vec![10])));
+        assert_eq!(killed, vec![10]);
+    }
+
+    #[test]
     fn view_078_a_folder_that_is_not_a_worktree_or_is_a_root_cannot_license_a_stop() {
         let tmp = crate::test_dir::temp("ports-valid");
         let plain = tmp.join("plain");
@@ -831,14 +957,14 @@ mod tests {
         let real = tmp.join("repo");
         std::fs::create_dir_all(real.join(".git")).unwrap();
         let as_string = |p: &std::path::Path| p.to_string_lossy().into_owned();
-        assert_eq!(valid_worktrees(&[as_string(&plain), as_string(&real), "C:\\".into(), "/".into(), as_string(&tmp.join("missing"))], None), vec![as_string(&real)]);
+        assert_eq!(valid_worktrees(&[as_string(&plain), as_string(&real), "C:\\".into(), "/".into(), as_string(&tmp.join("missing"))], NO_HOME), vec![as_string(&real)]);
         let mut killed = Vec::new();
         for root in ["C:\\", "/", ""] {
-            let r = stop_request(&[l(1, 10, Some("C:\\anything"))], &[root.to_string()], &[root.to_string()], None, req(1, 10), &guards(), &mut |p| killed.push(p));
+            let r = stop_request(&[l(1, 10, Some("C:\\anything"))], &[root.to_string()], &[root.to_string()], NO_HOME, req(1, 10), &guards(), &mut |p| killed.push(p));
             assert!(r.is_err(), "{root:?} must not license a stop");
         }
         let p = as_string(&plain);
-        assert!(stop_request(&[l(1, 10, Some(&p))], std::slice::from_ref(&p), std::slice::from_ref(&p), None, req(1, 10), &guards(), &mut |k| killed.push(k)).is_err(), "no .git entry");
+        assert!(stop_request(&[l(1, 10, Some(&p))], std::slice::from_ref(&p), std::slice::from_ref(&p), NO_HOME, req(1, 10), &guards(), &mut |k| killed.push(k)).is_err(), "no .git entry");
         assert!(killed.is_empty());
     }
 
@@ -864,8 +990,28 @@ mod tests {
         drop(socket);
     }
 
+    /// A throwaway server this test started, ended when dropped, so a failed assertion mid-test never
+    /// leaves node listening for its 60 s.
+    struct Server(std::process::Child);
+
+    impl Drop for Server {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    impl Server {
+        fn id(&self) -> u32 {
+            self.0.id()
+        }
+        fn running(&mut self) -> bool {
+            self.0.try_wait().unwrap().is_none()
+        }
+    }
+
     /// A throwaway server this test starts: node listening on a free loopback port, run in `dir`.
-    fn server(dir: &std::path::Path) -> (std::process::Child, u16) {
+    fn server(dir: &std::path::Path) -> (Server, u16) {
         let mut child = Command::new("node")
             .args(["-e", "require('net').createServer().listen(0,'127.0.0.1',function(){console.log(this.address().port)});setTimeout(()=>{},60000)"])
             .current_dir(dir)
@@ -875,21 +1021,21 @@ mod tests {
             .expect("node is on the PATH: this test needs it and must not pass without it");
         let mut line = String::new();
         BufReader::new(child.stdout.take().expect("stdout")).read_line(&mut line).expect("the server prints its port");
-        let port = line.trim().parse().unwrap_or_else(|_| {
-            let _ = child.kill();
-            panic!("the server printed {line:?}, not a port")
-        });
+        let child = Server(child);
+        let port = line.trim().parse().unwrap_or_else(|_| panic!("the server printed {line:?}, not a port"));
         (child, port)
     }
 
-    /// The whole stop against the live machine. The test process stands for Kolux and, when
-    /// `pane` is set, also for the pane's shell that started the server.
+    /// The whole stop against the live machine, as the window would ask it: the row's start time is
+    /// what the scan read. The test process stands for Kolux and, when `pane` is set, also for the
+    /// pane's shell that started the server.
     fn stop_for_real(worktrees: &[String], port: u16, pid: u32, pane: bool) -> Result<Stop, String> {
         let now = listeners()?;
+        let started = now.iter().find(|x| x.port == port && x.pid == pid).and_then(|x| x.started);
         let me = std::process::id();
         let panes: &[u32] = if pane { std::slice::from_ref(&me) } else { &[] };
         let g = Guards { own_pid: me, pane_pids: panes, started_now: &imp::started };
-        stop_request(&now, worktrees, worktrees, None, StopRequest { port, pid }, &g, &mut |p| crate::procs::kill_tree(p))
+        stop_request(&now, worktrees, worktrees, NO_HOME, StopRequest { port, pid, started }, &g, &mut |p| crate::procs::kill_tree(p))
     }
 
     #[test]
@@ -903,27 +1049,30 @@ mod tests {
         let (mut inside, in_port) = server(&tree);
         let (mut apart, out_port) = server(&outside);
         let all = listeners().unwrap();
-        let rows = classify(&all, std::slice::from_ref(&tree_s));
+        // this test process stands for terminal 7's pane shell
+        let rows = classify(&all, std::slice::from_ref(&tree_s), &[(7, std::process::id())]);
         let mine = rows.iter().find(|r| r.port == in_port).expect("the server in the worktree is listed");
         assert_eq!((mine.external, mine.pid), (false, inside.id()));
         assert_eq!(mine.worktree.as_deref(), Some(tree_s.as_str()));
+        assert_eq!(mine.terminal, Some(7), "the row names the terminal whose pane started the server");
+        assert_eq!(mine.started.as_deref().and_then(|s| s.parse::<u64>().ok()), imp::started(inside.id()), "the row carries the server's start time as text");
         assert!(rows.iter().find(|r| r.port == out_port).expect("the other server is listed").external, "outside the worktree = external");
         let seen = all.iter().find(|x| x.port == in_port).unwrap();
         assert!(seen.ancestors.contains(&std::process::id()), "the server's parent chain reaches the process that started it: {:?}", seen.ancestors);
         // the outside one is refused and keeps running
         let refused = stop_for_real(std::slice::from_ref(&tree_s), out_port, apart.id(), true);
         assert!(refused.is_err(), "{refused:?}");
-        assert!(apart.try_wait().unwrap().is_none(), "the outside server must still be running");
+        assert!(apart.running(), "the outside server must still be running");
         // the inside one, asked for by another process number, is refused too
         let wrong = stop_for_real(std::slice::from_ref(&tree_s), in_port, inside.id() + 1, true);
         assert!(wrong.unwrap_err().contains("not the program that was shown"));
         // started under Kolux with no pane in between: a helper, refused
         let helper = stop_for_real(std::slice::from_ref(&tree_s), in_port, inside.id(), false);
         assert!(helper.unwrap_err().contains("no pane started"));
-        assert!(inside.try_wait().unwrap().is_none(), "the inside server must still be running");
+        assert!(inside.running(), "the inside server must still be running");
         // the inside one, as the pane's own program, is stopped and disappears
         assert!(matches!(stop_for_real(std::slice::from_ref(&tree_s), in_port, inside.id(), true), Ok(Stop::Stopped(_))));
-        let _ = inside.wait();
+        let _ = inside.0.wait();
         let gone = (0..40).any(|_| {
             std::thread::sleep(std::time::Duration::from_millis(50));
             !listeners().unwrap().iter().any(|x| x.port == in_port)
@@ -931,7 +1080,6 @@ mod tests {
         assert!(gone, "the stopped port is no longer listed");
         // stopping it again counts as success
         assert_eq!(stop_for_real(&[tree_s], in_port, inside.id(), true), Ok(Stop::Gone));
-        let _ = apart.kill();
-        let _ = apart.wait();
+        drop(apart);
     }
 }

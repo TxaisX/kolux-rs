@@ -6,7 +6,9 @@ import { applyScan, countOf, folderName, openTarget, sections, stopRequest, type
 import { openUrl, printedUrls, stripAnsi, UrlBook } from "./urls";
 import { ChunkDecoder } from "./usePorts";
 
-const row = (port: number, o: Partial<PortRow> = {}): PortRow => ({ port, address: "127.0.0.1", pid: port, name: "node.exe", worktree: "C:\\work\\app", external: false, ...o });
+const row = (port: number, o: Partial<PortRow> = {}): PortRow => ({ port, address: "127.0.0.1", pid: port, name: "node.exe", worktree: "C:\\work\\app", external: false, started: "7", terminal: 1, ...o });
+/** What a scan reports for one holder: `terminal` is the pane that started it (null: none). */
+const live = (port: number, pid: number, terminal: number | null = 1) => ({ port, pid, terminal });
 
 test("VIEW-078: the address a dev server printed is picked out of coloured terminal output", () => {
   const vite = "\u001b[32m  ➜\u001b[39m  \u001b[1mLocal\u001b[22m:   \u001b[36mhttp://localhost:\u001b[1m5173\u001b[22m/\u001b[39m\r\n";
@@ -39,7 +41,7 @@ test("VIEW-078: an address cut by the edge of an output chunk is joined, and one
   expect(book.get(5173)).toBe("http://localhost:5173/");
   expect(book.get(51)).toBe("http://localhost:51");
   // the cut-off guess for port 51 is dropped as soon as the scan shows nothing listens there
-  book.sync([{ port: 5173, pid: 10 }]);
+  book.sync([live(5173, 10)]);
   expect(book.get(51)).toBeUndefined();
   expect(book.get(5173)).toBe("http://localhost:5173/");
 });
@@ -55,10 +57,10 @@ test("VIEW-078: when a port stops listening its printed address is forgotten, so
 test("VIEW-078 (FIX-1): a printed address belongs to the program first seen on its port and to the terminal that printed it", () => {
   const book = new UrlBook();
   book.feed(1, "  Local: http://localhost:5173/\n");
-  book.sync([{ port: 5173, pid: 10 }]);
-  book.sync([{ port: 5173, pid: 10 }]);
+  book.sync([live(5173, 10)]);
+  book.sync([live(5173, 10)]);
   expect(book.get(5173), "the same program keeps its address across scans").toBe("http://localhost:5173/");
-  book.sync([{ port: 5173, pid: 11 }]);
+  book.sync([live(5173, 11)]);
   expect(book.get(5173), "another program on the port does not inherit the address").toBeUndefined();
   // a terminal's addresses go with it when it ends
   book.feed(3, "http://localhost:4000/\n");
@@ -66,6 +68,30 @@ test("VIEW-078 (FIX-1): a printed address belongs to the program first seen on i
   book.forget(3);
   expect(book.get(4000)).toBeUndefined();
   expect(book.get(4100)).toBe("http://localhost:4100/");
+});
+
+test("VIEW-078 (FIX-2): a printed address binds only to a program under the terminal that printed it", () => {
+  const book = new UrlBook();
+  // terminal 1 prints :3000 (a log line, a README, a server that then fails to bind) while terminal 2's
+  // server holds 3000: terminal 2's row gets no address from terminal 1
+  book.feed(1, "  Local: http://localhost:3000/\n");
+  book.sync([live(3000, 20, 2)]);
+  expect(book.get(3000), "another terminal's program never inherits the address").toBeUndefined();
+  // a holder no pane started (started outside Kolux) does not get it either
+  book.feed(1, "  Local: http://localhost:3000/\n");
+  book.sync([live(3000, 20, null)]);
+  expect(book.get(3000)).toBeUndefined();
+  // the printing terminal's own program on the port: bound, and kept across scans
+  book.feed(1, "  Local: http://localhost:3000/\n");
+  book.sync([live(3000, 21, 1)]);
+  book.sync([live(3000, 21, 1)]);
+  expect(book.get(3000)).toBe("http://localhost:3000/");
+  // two programs on the port (IPv4 and IPv6 sockets of two servers): the one under the terminal is the owner
+  book.feed(4, "http://localhost:4000/\n");
+  book.sync([live(4000, 30, 2), live(4000, 31, 4)]);
+  expect(book.get(4000), "the second holder on the list is still found").toBe("http://localhost:4000/");
+  book.sync([live(4000, 30, 2)]);
+  expect(book.get(4000), "its program left; the other holder does not inherit the address").toBeUndefined();
 });
 
 test("VIEW-078 (FIX-1): terminal output is decoded as a stream per terminal, so a non-ASCII address split across chunks keeps its letters", () => {
@@ -77,7 +103,7 @@ test("VIEW-078 (FIX-1): terminal output is decoded as a stream per terminal, so 
   // another terminal's split does not mix in
   expect(d.decode(8, bytes.slice(0, cut)) + d.decode(7, new TextEncoder().encode("\n"))).toBe("http://localhost:3000/caf\n");
   d.forget(8);
-  expect(d.decode(8, bytes.slice(cut)), "a forgotten terminal starts a fresh decoder").not.toBe("é");
+  expect(d.decode(8, bytes.slice(cut)), "a forgotten terminal starts a fresh decoder: a lone continuation byte is the replacement character").toBe("�");
 });
 
 test("VIEW-078: the workspace's ports come first and an external one is listed apart", () => {
@@ -99,12 +125,15 @@ test("VIEW-078 (FIX-1): with an active workspace, other workspaces' ports are li
   expect(sections(rows, "C:\\nowhere").external.map((r) => r.port)).toEqual([3000, 5173, 8080, 4000]);
 });
 
-test("VIEW-078 (FIX-1): Stop names the program the user saw and is licensed by the active workspace alone", () => {
-  expect(stopRequest(row(5173, { pid: 42 }), "C:\\work\\app")).toEqual({ worktrees: ["C:\\work\\app"], port: 5173, pid: 42 });
+test("VIEW-078 (FIX-1, FIX-2): Stop names the program the user saw, with its start time, and is licensed by the active workspace alone", () => {
+  expect(stopRequest(row(5173, { pid: 42, started: "133000000000000000" }), "C:\\work\\app")).toEqual({ worktrees: ["C:\\work\\app"], port: 5173, pid: 42, started: "133000000000000000" });
   expect(stopRequest(row(5173, { pid: 42 }), "C:\\work\\app")).not.toHaveProperty("worktrees", expect.arrayContaining(["C:\\work\\other"]));
+  // the start time travels as the text the scan gave, never through a JS number (the system's tick count is past 2^53)
+  expect(stopRequest(row(5173, { pid: 42, started: "133000000000000001" }), "C:\\work\\app").started).toBe("133000000000000001");
+  expect(stopRequest(row(5173, { pid: 42, started: null }), "C:\\work\\app").started, "a row with no start time sends none, and the Rust side refuses").toBeNull();
   // without an active workspace the row's own folder is the licence; an external row licenses nothing
-  expect(stopRequest(row(3000, { pid: 7, worktree: "C:\\work\\other" }))).toEqual({ worktrees: ["C:\\work\\other"], port: 3000, pid: 7 });
-  expect(stopRequest(row(8080, { pid: 9, external: true, worktree: null }))).toEqual({ worktrees: [], port: 8080, pid: 9 });
+  expect(stopRequest(row(3000, { pid: 7, worktree: "C:\\work\\other" }))).toEqual({ worktrees: ["C:\\work\\other"], port: 3000, pid: 7, started: "7" });
+  expect(stopRequest(row(8080, { pid: 9, external: true, worktree: null }))).toEqual({ worktrees: [], port: 8080, pid: 9, started: "7" });
 });
 
 test("VIEW-078: a failed scan names the problem and keeps the last good list; the next good scan clears it", () => {

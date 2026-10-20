@@ -1,0 +1,121 @@
+ports FIX-2 (lane/ports from 66f8d29b) · stand-in review ports-66f8d29b, Send-to-build items 5-8
+Card: VIEW-078 Ports in the status bar (task T-226 stays ticked; this is a fix pass, no new feature)
+Built 2026-10-19 by one builder (Fable 5.1), one commit. No app launches on this lane.
+
+WHAT CHANGED (what the user gets)
+- A Stop sends back the start time of the program the row showed. The Rust side refuses the Stop when
+  that start time is not the live program's, so a row that went stale (the program ended and another
+  one took its process number before the click) stops nothing and says why. Three readings of the
+  start time must now agree: the scan the user saw, the stop's own re-scan at the click, and one taken
+  right before the kill. NOT covered, and now said so in the code: the milliseconds between that last
+  reading and taskkill reaching the process; no process handle is held across them. FIX-1's claim
+  "a reused process number is never stopped" was too strong; the exact claim is the one above.
+- The start time travels as text, not a JSON number: Windows counts it in 100 ns ticks since 1601
+  (about 1.3e17, past 2^53), so a JS number would round it and every match would fail.
+- Every home folder the machine names refuses a stop, and so does each of their parents: USERPROFILE,
+  HOMEDRIVE+HOMEPATH and HOME are all taken (plus the pty home the terminal code already resolves),
+  deduplicated, so a pane whose HOME differs from USERPROFILE is covered too. Pure function, tested with
+  two different homes.
+- A printed address binds only to a program under the terminal that printed it: each row names the
+  terminal whose pane (shell pid) is the program or its nearest ancestor; UrlBook ties the address to a
+  holder with that terminal, so terminal A printing :3000 while terminal B's server holds 3000 gives B's
+  row no address, and a server nothing in Kolux started never inherits one.
+- The real-process Rust test kills its node servers when the test ends, pass or fail (Drop guard).
+- The stream-decoder test asserts the replacement character itself ("\uFFFD"), not a loose shape.
+- ports_scan's doc no longer claims the store rule for the scan: the rule is applied at stop time
+  only (it costs a git call per project), so a row inside a folder the store does not know can show a
+  Stop that the backend then refuses with a message.
+
+FILES: src-tauri/src/ports.rs, src/ports/rows.ts, src/ports/urls.ts, src/ports/PortsItem.tsx (comment),
+src/ports/ports.test.ts, this file, PLAN.md (T-226 line), STATE.md (--write-state), STATE-history.md (one line).
+usePorts.ts unchanged (sync(rows) and stopRequest already carry the new fields).
+evidence/ports-T-226-lib.rs.patch and evidence/ports-FIX-1-App.patch UNCHANGED (ports_scan/ports_stop keep
+their names; the new tauri::State parameter needs no registration change), re-checked below.
+
+TESTS ADDED (Rust, cargo test --lib ports::, 18 total, 3 new; rows test now also asserts started = "7"):
+  view_078_fix2_every_home_folder_the_machine_names_and_its_parents_are_refused
+  view_078_fix2_a_row_names_the_terminal_whose_pane_started_its_program
+  view_078_fix2_a_stop_is_refused_when_the_rows_start_time_is_not_the_live_programs
+  (the real-server test additionally asserts terminal == Some(7) and the row's started == imp::started(pid))
+  Rust red first (API grown, behaviour left as before; G:/Temp/ports-w16-logs/fix2-red.log):
+    test result: FAILED. 14 passed; 4 failed  — home: second home kept; terminal: None vs Some(1);
+    seen: Ok(Stopped([10])) where Err expected; real server: terminal None vs Some(7). All assertion failures.
+  Rust green (fix2-green.log): test result: ok. 18 passed; 0 failed.
+TESTS ADDED (vitest, src/ports/ports.test.ts, 14 total, 1 new + 1 extended):
+  "VIEW-078 (FIX-2): a printed address binds only to a program under the terminal that printed it"
+  "VIEW-078 (FIX-1, FIX-2): Stop names the program the user saw, with its start time, and is licensed by the
+   active workspace alone" (asserts started travels as the string "133000000000000000" and null stays null)
+  TS red first (fix2-ts-red-vitest.log): Tests 2 failed | 47 passed (49): ports.test.ts:79 received
+    "http://localhost:3000/" (B's row got A's address); :129 missing `started`.
+  TS green (fix2-ts-green-vitest.log): Tests 49 passed (49); tsc exit 0.
+
+RED RUNS (item 8: per-guard logs). One Stop guard switched off per run (`if false && ...` on the line
+tagged `// G:<guard>`), cargo test --lib ports:: --no-fail-fast, ports.rs restored from a copy taken at the
+start and compared equal after. Summary G:/Temp/ports-w16-logs/red-guards-fix2.log, per-run red-fix2-<guard>.log.
+  guard    rule                                                     red tests (passed/failed)
+  depth    no drive root / top-level folder                          fix1_the_depth_rule_keeps_out_drive_roots_and_top_level_folders (17/1)
+  home     no candidate home folder or anything above it             fix2_every_home_folder_the_machine_names_and_its_parents_are_refused,
+                                                                     fix1_the_home_folder_and_every_folder_above_it_never_license_a_stop (16/2)
+  git      folder must be a git folder                               fix1_the_depth_rule..., a_folder_that_is_not_a_worktree_or_is_a_root_cannot_license_a_stop (16/2)
+  store    only workspaces the project store knows                   fix1_a_stop_is_licensed_only_by_workspaces_the_project_store_knows (17/1)
+  seen     the row's start time must be the live program's (NEW)     fix2_a_stop_is_refused_when_the_rows_start_time_is_not_the_live_programs (17/1)
+  started  start time re-read right before the kill must match       fix1_a_stop_ends_only_the_program_the_user_saw_and_never_a_reused_process_number (17/1)
+  (size, inside, system, self, helper, pid: unchanged since FIX-1; their red runs are in evidence/ports-FIX-1.txt.)
+
+GATES (2026-10-19, logs G:/Temp/ports-w16-logs/fix2-*.log; every run under scratch CLAUDE_CONFIG_DIR/CODEX_HOME/
+USERPROFILE/HOME in G:/Temp/ports-w16, binaries called through node, one build slot held per run;
+lib.rs `mod ports;` + registrations applied temporarily for the cargo runs and restored after: git status
+shows only the owned files)
+  cargo build                                   exit 0
+  cargo test --lib ports::                      test result: ok. 18 passed; 0 failed
+  cargo clippy --all-targets -- -D warnings     exit 0, 0 warnings
+  tsc --noEmit (node)                           exit 0
+  vitest src/ports src/chrome (node)            Test Files 7 passed (7), Tests 49 passed (49)
+  full cargo test --no-fail-fast                993 passed; 1 failed; 2 ignored (lib) + 3 passed + 3 empty, 203 s.
+                                                The one failure is scm::watch::tests::a_broken_watch_falls_back_to_reading_every_4_s_and_says_so_once
+                                                (src-tauri/src/scm_watch.rs:991, "every 4 s: [45.5µs, 6.02s, 10.34s]"): a wall-clock
+                                                timing test, not a ports file, run while six builders shared the machine; it passes
+                                                alone (fix2-watch-rerun.log: 1 passed, 10.67 s). Reported, not touched.
+  full vitest (node)                            Test Files 227 passed (227), Tests 1549 passed (1549)
+  plan-check --write-state                      see the commit body
+  duplicate T- id grep                          see the commit body
+  firewall-check -Baseline                      see the commit body
+  patches on main f04cdeaa (temp GIT_INDEX_FILE, git read-tree f04cdeaa, git apply --cached --check):
+    evidence/ports-T-226-lib.rs.patch OK · evidence/ports-FIX-1-App.patch OK (both unchanged by FIX-2)
+
+COMMANDS (from the checkout, env from G:/Temp/ports-w16/env.sh)
+  bash G:/Temp/ports-w16/fix2-red.sh fix2-red        cargo test --manifest-path src-tauri/Cargo.toml --lib ports:: --no-fail-fast
+  bash G:/Temp/ports-w16/fix2-red.sh fix2-green      same, after the green code
+  bash G:/Temp/ports-w16/fix2-ts.sh fix2-ts-red      node node_modules/vitest/vitest.mjs run src/ports src/chrome
+  bash G:/Temp/ports-w16/fix2-ts.sh fix2-ts-green tsc   + node node_modules/typescript/bin/tsc --noEmit
+  bash G:/Temp/ports-w16/fix2-gates.sh card          build, test ports::, clippy -D warnings, tsc, vitest src/ports src/chrome
+  bash G:/Temp/ports-w16/fix2-gates.sh red depth home git store seen started
+  bash G:/Temp/ports-w16/fix2-gates.sh full          cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast
+  bash G:/Temp/ports-w16/fix2-gates.sh vitest        node node_modules/vitest/vitest.mjs run
+
+DECISIONS (item 8 parts not applied, and why)
+- Store check in ports_scan: NOT applied. It needs load_projects plus a `git worktree list` per project
+  on every 1.5-3 s scan; the rule stays at stop time and the ports_scan doc now says so (the comment
+  softening the review offered as the alternative).
+- Lazy ancestors/start time: NOT applied. Item 7 (terminal per row) and item 5 (start time per row) now
+  need both on every row of every scan, so there is nothing left to make lazy.
+- A process handle held across the stop (the only way to close the last gap) was not taken: it needs a
+  Windows handle and TerminateProcess path the module does not have; the gap is stated in the code instead.
+
+PATCHES FOR THE COORDINATOR (not lane files; unchanged, re-checked on f04cdeaa)
+  evidence/ports-T-226-lib.rs.patch   adds `mod ports;` and registers ports_scan and ports_stop in lib.rs
+  evidence/ports-FIX-1-App.patch      passes the active workspace to the Ports item in App.tsx
+
+LIVE PROOF PENDING (batched) - the coordinator runs these on the merged app, dark, new look, 1920:
+  1. Open a throwaway repo under G:/Temp as a project; in its pane run a dev server (e.g. a node http
+     server on 5173 that prints http://localhost:5173/). The status bar Ports item counts 1; the popover
+     lists port 5173 under the workspace with the printed address, Open and Stop.
+  2. Start a second server outside every workspace (G:/Temp/outside). It shows under External with no Stop.
+     In a THIRD pane print the text "http://localhost:<outside port>/" with echo: the outside row keeps
+     its plain address (the printed one binds only to that pane's own programs).
+  3. Switch the active workspace to another project: the first port moves to External, no Stop.
+  4. Switch back, click Stop on 5173: the server ends, the row leaves on the next scan; the outside
+     server keeps running. Start the server again on 5173, wait for the row, end it from its pane
+     (Ctrl-C) and start it once more before the next scan; click Stop on the stale row: the note says the
+     program shown has ended and nothing was stopped, and the list refreshes.
+  5. Close both servers, remove the throwaway repo and its project entry.

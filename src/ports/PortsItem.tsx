@@ -45,8 +45,9 @@ export default function PortsItem({ workspaces, active }: Props) {
   const stop = async (row: PortRow) => {
     setBusy(row.port);
     try {
-      // the program the user saw, licensed by the active workspace only; the Rust side checks the
-      // folder against the project store and refuses if another program holds the port by now
+      // the program the user saw (process number and start time), licensed by the active workspace
+      // only; the Rust side checks the folder against the project store and refuses if another program,
+      // or the same number with another start time, holds the port by now
       const done = await invoke<string>("ports_stop", stopRequest(row, active));
       setNote(done === "gone" ? `Port ${row.port} had already stopped` : `Stopped port ${row.port}`);
     } catch (err) {

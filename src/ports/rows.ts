@@ -1,7 +1,18 @@
 // VIEW-078: what the ports popover shows, worked out from the scan: the active workspace's ports first,
 // every other program's port after them as external, and how a click on Open or Stop is routed.
 
-export type PortRow = { port: number; address: string; pid: number; name: string; worktree: string | null; external: boolean };
+export type PortRow = {
+  port: number;
+  address: string;
+  pid: number;
+  name: string;
+  worktree: string | null;
+  external: boolean;
+  /** The program's start time as the system counts it, as text (too large for a JS number); Stop sends it back. */
+  started: string | null;
+  /** The terminal whose pane started the program, or null when none did. */
+  terminal: number | null;
+};
 export type Scan = { rows: PortRow[]; problem: string | null };
 
 /** A scan that failed names the problem and keeps the last good list; a good one clears the problem. */
@@ -22,13 +33,14 @@ export function sections(rows: PortRow[], active?: string): { mine: PortRow[]; e
 }
 
 /**
- * What Stop sends: the port and the program the row showed on it (the Rust side refuses when a
- * different program holds the port by then), licensed by the active workspace alone, or by the row's
+ * What Stop sends: the port, the program the row showed on it and that program's start time as the
+ * scan gave it (the Rust side refuses when a different program holds the port by then, or the same
+ * process number with another start time), licensed by the active workspace alone, or by the row's
  * own folder when no workspace is active. An external row licenses nothing.
  */
-export function stopRequest(row: PortRow, active?: string): { worktrees: string[]; port: number; pid: number } {
+export function stopRequest(row: PortRow, active?: string): { worktrees: string[]; port: number; pid: number; started: string | null } {
   const tree = active ?? row.worktree;
-  return { worktrees: tree === null ? [] : [tree], port: row.port, pid: row.pid };
+  return { worktrees: tree === null ? [] : [tree], port: row.port, pid: row.pid, started: row.started };
 }
 
 /** Open goes to the Kolux browser; Shift with the link modifier (Ctrl, or Cmd on a Mac) goes to the system browser. */

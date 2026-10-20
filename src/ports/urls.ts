@@ -28,14 +28,17 @@ export function printedUrls(text: string): Printed[] {
   return out;
 }
 
-/** A printed address with the terminal that printed it and, once a scan has seen the port, the program holding it. */
+/** A printed address with the terminal that printed it and, once a scan has seen the port, the terminal's own program holding it. */
 type Entry = { url: string; terminal: number; pid?: number };
+
+/** One holder of a port as the scan reports it: the program and the terminal whose pane started it. */
+type Holder = { port: number; pid: number; terminal: number | null };
 
 /**
  * The addresses terminals printed, by port; a later print of a port replaces an earlier one. A web
  * address cut by a chunk edge is joined from the tail kept per terminal. Each address stays tied to
- * the terminal that printed it and to the program first seen on its port, so neither a later
- * program on the port nor another terminal inherits it.
+ * the terminal that printed it and binds only to a program under that terminal's pane, so neither a
+ * program another terminal (or nothing in Kolux) started nor a later program on the port inherits it.
  */
 export class UrlBook {
   private byPort = new Map<number, Entry>();
@@ -60,17 +63,20 @@ export class UrlBook {
   }
 
   /**
-   * After each scan: an address whose port nothing listens on is dropped; the first scan after a
-   * print ties the address to the program on the port; when another program (another pid) holds
-   * the port later, the address is dropped rather than handed to it.
+   * After each scan: an address whose port no program under its terminal holds is dropped (nothing
+   * listens, or only a program another terminal or nothing in Kolux started); the first such scan
+   * after a print ties the address to the terminal's program on the port; when that program is gone,
+   * the address goes with it rather than to whoever holds the port next. A port may have several
+   * holders (two servers' IPv4 and IPv6 sockets), so every holder is looked at.
    */
-  sync(listening: Iterable<{ port: number; pid: number }>) {
-    const live = new Map<number, number>();
-    for (const l of listening) live.set(l.port, l.pid);
+  sync(listening: Iterable<Holder>) {
+    const live = new Map<number, Holder[]>();
+    for (const l of listening) live.set(l.port, [...(live.get(l.port) ?? []), l]);
     for (const [port, e] of [...this.byPort]) {
-      const pid = live.get(port);
-      if (pid === undefined || (e.pid !== undefined && e.pid !== pid)) this.byPort.delete(port);
-      else if (e.pid === undefined) e.pid = pid;
+      const holders = live.get(port) ?? [];
+      const own = e.pid === undefined ? holders.find((h) => h.terminal === e.terminal) : holders.find((h) => h.pid === e.pid && h.terminal === e.terminal);
+      if (own === undefined) this.byPort.delete(port);
+      else e.pid = own.pid;
     }
   }
 }
