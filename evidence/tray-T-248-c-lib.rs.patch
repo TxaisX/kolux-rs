@@ -1,0 +1,16 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -362,6 +362,12 @@ pub fn run() {
+                     tray::window_shown(window.app_handle());
+                 }
+             }
++            // STAT-047 / T-248-c: a minimised window is out of sight, so the tray's dot may light.
++            if let tauri::WindowEvent::Resized(_) = event {
++                if window.label() == "main" && window.is_minimized().unwrap_or(false) {
++                    tray::window_minimised(window.app_handle());
++                }
++            }
+             // ACCT-055: files dropped in from outside may be copied into the Explorer, nothing else.
+             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                 window.state::<fence::Fence>().dropped(paths);

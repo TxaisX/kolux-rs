@@ -65,8 +65,31 @@ pub struct Dot {
     hidden: bool,
 }
 
+/// STAT-047: the icon file the tray shows; a development copy keeps its DEV marker when the
+/// attention version is swapped in. (From the watch lane's T-125 model; this lane paints the same
+/// four states in code with `paint`, so nothing calls it yet.)
+pub fn icon(dev: bool, dot: bool) -> &'static str {
+    match (dev, dot) {
+        (false, false) => "tray.png",
+        (false, true) => "tray-dot.png",
+        (true, false) => "tray-dev.png",
+        (true, true) => "tray-dev-dot.png",
+    }
+}
+
+/// STAT-047: closing the window hides it to the tray only when the user turned that on; the saved
+/// choice carries over, the default is off. (From the watch lane's T-125 model; this lane's live
+/// rule is `close_hides`.)
+pub fn close_to_tray(saved: Option<bool>) -> bool {
+    saved == Some(true)
+}
+
 impl Dot {
     pub fn window_hidden(&mut self) {
+        self.hidden = true;
+    }
+    /// STAT-047: a minimised window is out of sight like a hidden one.
+    pub fn window_minimised(&mut self) {
         self.hidden = true;
     }
     pub fn window_shown(&mut self) {
@@ -312,6 +335,15 @@ pub fn window_shown(app: &tauri::AppHandle) {
     if matches!(was_on, Ok(true)) {
         refresh(app, false);
     }
+}
+
+/// The main window was minimised: the dot learns the window is out of sight, so the next ping lights it
+/// even before that ping re-reads the window. Called from the lib.rs resize hook
+/// (`evidence/tray-T-248-c-lib.rs.patch`); a restore comes back through `window_shown`.
+pub fn window_minimised(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    let Some(state) = app.try_state::<TrayState>() else { return };
+    let _ = state.dot.lock().map(|mut d| d.window_minimised());
 }
 
 /// Open Kolux from the tray: the main window is shown, restored and focused, and the dot clears.
@@ -772,5 +804,24 @@ mod tests {
         assert!(!d.on);
         d.window_hidden();
         assert!(d.ping(Ping::Bell));
+    }
+
+    #[test]
+    fn stat047_a_minimised_window_takes_the_dot_and_restoring_clears_it() {
+        let mut d = Dot::default();
+        d.window_minimised();
+        assert!(d.ping(Ping::AgentFinished) && d.on);
+        d.window_shown();
+        assert!(!d.on);
+        assert!(!d.ping(Ping::AgentFinished), "visible again: a finish leaves no dot");
+    }
+
+    #[test]
+    fn stat047_dev_copies_keep_their_marker_on_the_attention_icon_and_close_to_tray_is_off_by_default() {
+        assert_eq!(icon(false, true), "tray-dot.png");
+        assert_eq!(icon(true, false), "tray-dev.png");
+        assert_eq!(icon(true, true), "tray-dev-dot.png");
+        assert!(!close_to_tray(None) && !close_to_tray(Some(false)));
+        assert!(close_to_tray(Some(true)), "a saved choice carries over");
     }
 }
