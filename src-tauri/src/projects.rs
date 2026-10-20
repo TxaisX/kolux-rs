@@ -997,7 +997,6 @@ pub fn suggest_name<S: std::ops::Deref<Target = Store>>(git: &Git, lock: impl Fn
     Ok(pick_name(&store, &retired_scope(place, project), taken, seed))
 }
 
-#[allow(dead_code)] // T-212: registered by the lib.rs hunk the coordinator applies
 #[tauri::command(async)]
 pub fn workspace_suggest_name(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<String, String> {
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);

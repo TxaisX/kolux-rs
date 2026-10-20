@@ -2601,7 +2601,6 @@ pub async fn scm_status(worktree: String) -> Result<Status, String> {
 }
 
 /// GIT-012: the cut-short banner's offer; only inside a project or worktree (ACCT-055, fence.rs).
-#[allow(dead_code)] // registered by evidence/tasks-T-281-lib.patch
 #[tauri::command]
 pub async fn scm_ignore_heavy(worktree: String, folders: Vec<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
     ignore_heavy(&fence.allow(&worktree, &store, &git, false)?, &folders)
