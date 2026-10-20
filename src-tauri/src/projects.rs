@@ -416,10 +416,16 @@ pub fn wsl_path(path: &str, distro: Option<&str>) -> String {
     }
 }
 
+/// PROJ-040: the folder workspace at `path`, when that is one (the folder of a project without Git).
+fn folder_workspace_at(store: &Store, path: &str) -> Option<String> {
+    load_projects(store).iter().find_map(|p| crate::folder_projects::folder_only(store, p).filter(|f| same_folder(Path::new(&f.path), Path::new(path))).map(|f| f.path))
+}
+
 /// PROJ-040: records the composer's parent for a workspace just made. A parent removed in the
-/// meantime is dropped with a warning and the workspace sits at the top level. Git scans the
+/// meantime (or one that cannot hold it) is dropped with a warning; the workspace then sits under
+/// `active_folder` when that is a folder workspace, else at the top level. Git scans the
 /// worktrees with the store unlocked (T-442-b); only the store work holds the lock.
-pub fn nest_under(git: &Git, store: &Mutex<Store>, project: &Project, made: &mut Created, parent: Option<&str>) -> Result<(), String> {
+pub fn nest_under(git: &Git, store: &Mutex<Store>, project: &Project, made: &mut Created, parent: Option<&str>, active_folder: Option<&str>) -> Result<(), String> {
     let Some(parent) = non_blank(parent) else { return Ok(()) };
     let moved = match git.worktrees(Path::new(&project.path)) {
         Ok(all) => reparent_in(&*store.lock().map_err(|e| e.to_string())?, project, all, &made.worktree.path, Some(parent)),
@@ -427,7 +433,23 @@ pub fn nest_under(git: &Git, store: &Mutex<Store>, project: &Project, made: &mut
     };
     match moved {
         Ok(()) => made.worktree.parent = Some(parent.to_string()),
-        Err(why) => made.warnings.push(format!("not nested under the parent you picked ({why}), so it sits at the top level")),
+        Err(why) => {
+            let home = {
+                let store = store.lock().map_err(|e| e.to_string())?;
+                let home = non_blank(active_folder).and_then(|f| folder_workspace_at(&store, f));
+                if let Some(h) = &home {
+                    set_parent(&store, &made.worktree.path, Some(h))?;
+                }
+                home
+            };
+            match home {
+                Some(h) => {
+                    made.warnings.push(format!("not nested under the parent you picked ({why}), so it sits under the active folder workspace"));
+                    made.worktree.parent = Some(h);
+                }
+                None => made.warnings.push(format!("not nested under the parent you picked ({why}), so it sits at the top level")),
+            }
+        }
     }
     Ok(())
 }
@@ -1249,7 +1271,8 @@ pub fn workspace_branches(store: StoreState<'_>, project_id: String) -> Result<V
 
 // PROJ-020: off the main thread, so a newer create (and its cancel) can reach Kolux while Git works.
 #[tauri::command(async)]
-pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project_id: String, branch: String, folder: Option<String>, parent: Option<String>, ticket: Option<u64>) -> Result<Created, String> {
+#[allow(clippy::too_many_arguments)]
+pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project_id: String, branch: String, folder: Option<String>, parent: Option<String>, ticket: Option<u64>, active_folder: Option<String>) -> Result<Created, String> {
     let (project, place) = locked_place(&store, &project_id)?;
     let made = open_branch_workspace_until(&git, &place, &project, &branch, folder.as_deref(), &|| dropped(ticket));
     if let Some(t) = ticket {
@@ -1261,7 +1284,7 @@ pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project
         set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "existingBranch": true })))?;
         note_seen(&store, &project, &made.worktree.path)?;
     }
-    nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
+    nest_under(&git, &store, &project, &mut made, parent.as_deref(), active_folder.as_deref())?;
     let _ = crate::activity::touch(&*store.lock().map_err(|e| e.to_string())?, &made.worktree.path); // PROJ-051
     Ok(made)
 }
@@ -1277,7 +1300,7 @@ pub fn workspace_prs(store: StoreState<'_>, project_id: String) -> Result<Vec<cr
 /// fork is fetched through a remote for the fork, at the same kind of address as origin.
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
-pub fn workspace_open_pr(app: tauri::AppHandle, git: State<'_, Git>, store: StoreState<'_>, project_id: String, number: u64, folder: Option<String>, name: Option<String>, parent: Option<String>, ticket: Option<u64>) -> Result<Created, String> {
+pub fn workspace_open_pr(app: tauri::AppHandle, git: State<'_, Git>, store: StoreState<'_>, project_id: String, number: u64, folder: Option<String>, name: Option<String>, parent: Option<String>, ticket: Option<u64>, active_folder: Option<String>) -> Result<Created, String> {
     let (project, place) = locked_place(&store, &project_id)?;
     let repo = Path::new(&project.path);
     let pr = crate::pr_checkout::view(&crate::scm::gh_program()?, repo, number)?;
@@ -1305,7 +1328,7 @@ pub fn workspace_open_pr(app: tauri::AppHandle, git: State<'_, Git>, store: Stor
         set_name(&store, &made.worktree.path, Some(&shown))?;
         made.worktree.name = Some(shown);
     }
-    nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
+    nest_under(&git, &store, &project, &mut made, parent.as_deref(), active_folder.as_deref())?;
     let _ = crate::activity::touch(&*store.lock().map_err(|e| e.to_string())?, &made.worktree.path); // PROJ-051
     Ok(made)
 }
@@ -1358,7 +1381,7 @@ pub fn workspace_from_item(app: tauri::AppHandle, git: State<'_, Git>, store: St
         .find(|p| crate::pr_checkout::has_repo(&crate::pr_checkout::remotes(Path::new(&p.path)), &item.host, &item.owner, &item.repo))
         .ok_or_else(|| format!("No project here has {}/{}/{} as a remote; add that repository as a project first.", item.host, item.owner, item.repo))?;
     if item.kind == "pull" {
-        return workspace_open_pr(app, git, store, project.id, item.number, None, None, None, None);
+        return workspace_open_pr(app, git, store, project.id, item.number, None, None, None, None, None);
     }
     let issue = crate::pr_checkout::issue(&crate::scm::gh_program()?, Path::new(&project.path), item.number)?;
     let made = create_named(&git, &store, &project.id, &issue.title, None, None)?;
@@ -1841,7 +1864,7 @@ pub fn create_named_until(git: &Git, store: &Mutex<Store>, project_id: &str, nam
 // PROJ-020: off the main thread, so a newer create (and its cancel) can reach Kolux while Git works.
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
-pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: String, name: String, base: Option<String>, branch: Option<String>, parent: Option<String>, ticket: Option<u64>, issue: Option<crate::pr_checkout::Linkable>) -> Result<Created, String> {
+pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: String, name: String, base: Option<String>, branch: Option<String>, parent: Option<String>, ticket: Option<u64>, issue: Option<crate::pr_checkout::Linkable>, active_folder: Option<String>) -> Result<Created, String> {
     let made = create_named_until(&git, &store, &project_id, &name, base.as_deref(), branch.as_deref(), &|| dropped(ticket));
     if let Some(t) = ticket {
         settle_create(t);
@@ -1856,7 +1879,7 @@ pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: 
         }
         find_project(&store, &project_id)?
     };
-    nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
+    nest_under(&git, &store, &project, &mut made, parent.as_deref(), active_folder.as_deref())?;
     let _ = crate::activity::touch(&*store.lock().map_err(|e| e.to_string())?, &made.worktree.path); // PROJ-051
     Ok(made)
 }
@@ -3435,14 +3458,32 @@ c"), Some("a[31mb c".into()), "control characters drop, a line break is a space"
         let parent_of = |p: &str| list_workspaces(&git, &store.lock().unwrap(), &project).unwrap().into_iter().find(|w| w.path == p).unwrap().parent;
         let mut made = make("late");
         remove_workspace(&git, &project, &b.path, false).unwrap();
-        nest_under(&git, &store, &project, &mut made, Some(&b.path)).unwrap();
+        nest_under(&git, &store, &project, &mut made, Some(&b.path), None).unwrap();
         assert_eq!(made.worktree.parent, None);
         assert!(made.warnings.iter().any(|w| w.contains("top level")), "{:?}", made.warnings);
         assert_eq!(parent_of(&made.worktree.path), None);
         let mut nested_ok = make("under-a");
-        nest_under(&git, &store, &project, &mut nested_ok, Some(&a.path)).unwrap();
+        nest_under(&git, &store, &project, &mut nested_ok, Some(&a.path), None).unwrap();
         assert_eq!(parent_of(&nested_ok.worktree.path).as_deref(), Some(a.path.as_str()));
         assert!(nested_ok.warnings.is_empty());
+        // PROJ-040: with a folder workspace active, the dropped parent's place is the folder workspace; any other workspace does not count.
+        let plain = temp("root-proj040-plain");
+        let folder = crate::folder_projects::add_folder(&store.lock().unwrap(), &plain).unwrap();
+        let folder_ws = crate::folder_projects::folder_only(&store.lock().unwrap(), &folder).unwrap().path;
+        let mut fell = make("fell");
+        nest_under(&git, &store, &project, &mut fell, Some(&b.path), Some(&folder_ws)).unwrap();
+        assert_eq!(fell.worktree.parent.as_deref(), Some(folder_ws.as_str()));
+        assert_eq!(parent_of(&fell.worktree.path).as_deref(), Some(folder_ws.as_str()));
+        assert!(fell.warnings.iter().any(|w| w.contains("active folder workspace")), "{:?}", fell.warnings);
+        let mut not_folder = make("not-folder");
+        nest_under(&git, &store, &project, &mut not_folder, Some(&b.path), Some(&a.path)).unwrap();
+        assert_eq!(not_folder.worktree.parent, None);
+        assert!(not_folder.warnings.iter().any(|w| w.contains("top level")), "{:?}", not_folder.warnings);
+        // a parent that is still there wins over the active folder workspace
+        let mut kept = make("kept");
+        nest_under(&git, &store, &project, &mut kept, Some(&a.path), Some(&folder_ws)).unwrap();
+        assert_eq!(parent_of(&kept.worktree.path).as_deref(), Some(a.path.as_str()));
+        let _ = fs::remove_dir_all(plain);
         drop(store);
         for d in [profile, repo, root] {
             let _ = fs::remove_dir_all(d);
