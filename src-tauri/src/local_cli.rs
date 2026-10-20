@@ -128,6 +128,9 @@ const SUMMARIES: &[(&str, &str)] = &[
     ("open", "Start Kolux, or bring its window to the front, and wait until it answers."),
     ("status", "Say whether Kolux is running, not running, stale or still loading its workspaces."),
     ("diagnostics memory", "Show the Resource Manager's memory figures: resident and committed for Kolux, each terminal session and the total."),
+    ("file open", "Open a file in the editor of a worktree."),
+    ("file diff", "Open the diff of one file in a worktree, staged or not."),
+    ("file open-changed", "Open every changed file of a worktree as a diff, in the editor, or both."),
     ("repo list", "List the repos Kolux knows."),
     ("repo add", "Add a folder as a repo."),
     ("repo show", "Show one repo."),
@@ -197,6 +200,7 @@ pub fn bare(path: &[String]) -> Option<&'static str> {
     match (path.len(), path.first().map(String::as_str), path.get(1).map(String::as_str)) {
         (3, Some("automations"), _) => Some("id"),
         (3, Some("skills"), Some("get" | "show")) => Some("topic"),
+        (3, Some("file"), Some("open" | "diff")) => Some("path"),
         _ => None,
     }
 }
